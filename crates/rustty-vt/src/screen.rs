@@ -59,6 +59,7 @@ use crate::selection::Selection;
 use crate::size;
 use crate::string_map::StringMap;
 use crate::style;
+use crate::terminal::PrintStringError;
 
 // PORT NOTE: the reference `Allocator.Error` maps to `pagelist::OutOfMemory`;
 // the general-purpose allocator maps to `allocator_api2::alloc::Global`, the
@@ -501,9 +502,13 @@ fn selection_string_tw_check(point: SelectionStringFp) -> Result<(), OutOfMemory
 
 // PORT NOTE: `04810273a`'s rollback test uses `std.testing.FailingAllocator` on
 // `alloc.create(Hyperlink)`. The Rust analogue of that allocation is the
-// `Box::new(source.dupe())` in `start_hyperlink_once`, which aborts rather than
-// returning on OOM, so the injectable seam is a tripwire fail point (same idiom
-// as `SELECTION_STRING_TW` above).
+// `Hyperlink` heap allocation in `start_hyperlink_once`, which IS now fallible
+// and returns `OutOfMemory` exactly like the reference — but Rust has no
+// per-call FailingAllocator to make the global allocator fail on demand, so the
+// injection seam stays a tripwire fail point (same idiom as
+// `SELECTION_STRING_TW` above) placed at that allocation. It simulates what a
+// FailingAllocator does; the error it returns is the one the real allocation
+// path returns.
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum StartHyperlinkFp {
@@ -631,6 +636,24 @@ impl PromptClickMove {
 enum StartHyperlinkOnceError {
     OutOfMemory,
     Insert(crate::page::InsertHyperlinkError),
+}
+
+// PORT NOTE: the error set for `dumpStringAlloc`/`dumpStringAllocUnwrapped` is
+// inferred in the reference as `(Allocator.Error || error{UnknownPoint})`: the
+// `getBottomRight(tl) orelse return error.UnknownPoint` arm (Screen.zig:3616,
+// :3635) is reachable for a `.history` point on a screen with no scrollback
+// (PageList.getBottomRight returns null when the active top-left has no row
+// above it). Ported as an explicit enum so the two errors stay distinct.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DumpStringAllocError {
+    OutOfMemory,
+    UnknownPoint,
+}
+
+impl From<OutOfMemory> for DumpStringAllocError {
+    fn from(_: OutOfMemory) -> DumpStringAllocError {
+        DumpStringAllocError::OutOfMemory
+    }
 }
 
 // PORT NOTE: inline anonymous param struct for `cursorCopy`'s `opts`.
@@ -3776,29 +3799,60 @@ impl Screen {
         // Create our pending entry. This copies both byte slices out of caller
         // memory BEFORE anything below can release the current hyperlink, which
         // is what makes the aliasing contract above work.
+        //
+        // PORT NOTE (OOM contract): these copies are `try alloc.dupe`'s Rust
+        // equivalent (`hyperlink::try_dupe_bytes`), NOT `to_vec` — this function
+        // ADVERTISES `IncreaseCapacityError!void` exactly like the reference's
+        // `startHyperlink`, so an allocation failure must RETURN, not abort the
+        // process. Both copies happen before the implicit-ID counter is bumped,
+        // so their failure needs no rollback (the reference's `errdefer` covers
+        // the same window because its `dupe` runs after the bump — the
+        // observable state, "counter unchanged", is identical).
+        // SAFETY: caller contract — `uri` is a readable slice on entry.
+        let uri_owned = unsafe { hyperlink::try_dupe_bytes(&*uri) }
+            .map_err(|_| pagelist::grow::IncreaseCapacityError::OutOfMemory)?;
+        let link_id: hyperlink::HyperlinkId = if let Some(id) = id_ {
+            // SAFETY: caller contract — `id_` is a readable slice on entry.
+            hyperlink::HyperlinkId::Explicit(
+                unsafe { hyperlink::try_dupe_bytes(&*id) }
+                    .map_err(|_| pagelist::grow::IncreaseCapacityError::OutOfMemory)?,
+            )
+        } else {
+            let implicit = self.cursor.hyperlink_implicit_id;
+            // defer self.cursor.hyperlink_implicit_id +%= 1;
+            self.cursor.hyperlink_implicit_id = self.cursor.hyperlink_implicit_id.wrapping_add(1);
+            hyperlink::HyperlinkId::Implicit(implicit)
+        };
         let link: hyperlink::Hyperlink = hyperlink::Hyperlink {
-            // SAFETY: caller contract — `uri` is a readable slice on entry.
-            uri: unsafe { (*uri).to_vec() },
-            id: if let Some(id) = id_ {
-                // SAFETY: caller contract — `id_` is a readable slice on entry.
-                hyperlink::HyperlinkId::Explicit(unsafe { (*id).to_vec() })
-            } else {
-                let implicit = self.cursor.hyperlink_implicit_id;
-                // defer self.cursor.hyperlink_implicit_id +%= 1;
-                self.cursor.hyperlink_implicit_id =
-                    self.cursor.hyperlink_implicit_id.wrapping_add(1);
-                hyperlink::HyperlinkId::Implicit(implicit)
-            },
+            uri: uri_owned,
+            id: link_id,
         };
         // PORT NOTE: the reference `errdefer` decrements `hyperlink_implicit_id`
-        // on the implicit path. The fallible work below is the
-        // `increaseCapacity` calls; on those errors we restore the counter to
-        // mirror the `errdefer`.
+        // on the implicit path. The fallible work below is the per-attempt
+        // `dupe` and the `increaseCapacity` calls; on those errors we restore
+        // the counter to mirror the `errdefer`.
         let implicit_inc = matches!(link.id, hyperlink::HyperlinkId::Implicit(_));
 
         // Loop until we have enough page memory to add the hyperlink
         loop {
-            match self.start_hyperlink_once(link.clone()) {
+            // PORT NOTE: the reference passes `link` (borrowed slices, no
+            // allocation) and `startHyperlinkOnce` does `try source.dupe(alloc)`
+            // itself. We hand the callee an OWNED per-attempt copy instead (it
+            // moves it straight into its heap allocation), so this is still
+            // exactly one deep copy per attempt — but it must be the FALLIBLE
+            // one, not `Clone`, which aborts.
+            let attempt = match link.dupe() {
+                Ok(v) => v,
+                Err(hyperlink::OutOfMemory) => {
+                    if implicit_inc {
+                        // .implicit => self.cursor.hyperlink_implicit_id -%= 1
+                        self.cursor.hyperlink_implicit_id =
+                            self.cursor.hyperlink_implicit_id.wrapping_sub(1);
+                    }
+                    return Err(pagelist::grow::IncreaseCapacityError::OutOfMemory);
+                }
+            };
+            match self.start_hyperlink_once(attempt) {
                 Ok(()) => return Ok(()),
                 Err(StartHyperlinkOnceError::OutOfMemory) => {
                     // An actual self.alloc OOM is a fatal error.
@@ -3848,14 +3902,32 @@ impl Screen {
     ) -> Result<(), StartHyperlinkOnceError> {
         // Allocate our new Hyperlink entry in non-page memory. This
         // lets us quickly get access to URI, ID.
-        // PORT NOTE: `alloc.create(Hyperlink)` + `link.* = source.dupe(alloc)`
-        // maps to a heap `Box`; `Box::into_raw` yields the `*mut Hyperlink` the
-        // cursor stores. On the insert-error path we reclaim the box (mirroring
-        // the reference's `errdefer alloc.destroy(link)` / `link.deinit`).
+        // PORT NOTE: `try alloc.create(Hyperlink)` + `link.* = try
+        // source.dupe(alloc)` maps to a heap allocation; `Box::from_raw` (the
+        // reclaim paths below and in `end_hyperlink`) requires it to come from
+        // the global allocator with `Layout::new::<Hyperlink>()`, which is
+        // exactly what `Box::new` does — but `Box::new` ABORTS on failure, and
+        // this function's error set includes `Allocator.Error` precisely so the
+        // caller can recover. So we do the same allocation FALLIBLY and move
+        // `source` (already the caller's per-attempt owned dupe, i.e. the
+        // reference's `source.dupe(alloc)` result) into it. On the insert-error
+        // path we reclaim the box (mirroring the reference's `errdefer
+        // alloc.destroy(link)` / `link.deinit`).
         #[cfg(test)]
         start_hyperlink_tw_check(StartHyperlinkFp::DupeLink)
             .map_err(|_| StartHyperlinkOnceError::OutOfMemory)?;
-        let link: *mut hyperlink::Hyperlink = Box::into_raw(Box::new(source.dupe()));
+        let link: *mut hyperlink::Hyperlink = {
+            let layout = core::alloc::Layout::new::<hyperlink::Hyperlink>();
+            // SAFETY: `Hyperlink` is not a ZST, so `layout.size() > 0`.
+            let raw = unsafe { std::alloc::alloc(layout) } as *mut hyperlink::Hyperlink;
+            if raw.is_null() {
+                return Err(StartHyperlinkOnceError::OutOfMemory);
+            }
+            // SAFETY: `raw` is a fresh, correctly-sized/aligned, uninitialized
+            // allocation; `write` initializes it without dropping the old value.
+            unsafe { raw.write(source) };
+            raw
+        };
 
         // End any prior hyperlink only after duplicating the new value. The
         // source slices are allowed to reference our current hyperlink.
@@ -3863,7 +3935,20 @@ impl Screen {
 
         // Insert the hyperlink into page memory
         let page: *mut Page = unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
-        let id: hyperlink::Id = match unsafe { (*page).insert_hyperlink((*link).clone()) } {
+        // PORT NOTE: the reference passes `link.*` BY VALUE with borrowed slices
+        // — no allocation. `Hyperlink` owns its `Vec`s here, so the by-value
+        // `insert_hyperlink` argument needs a copy; it must be the fallible
+        // `dupe`, not `Clone`, for the same reason as above.
+        let insert_arg = match unsafe { (*link).dupe() } {
+            Ok(v) => v,
+            Err(hyperlink::OutOfMemory) => {
+                let boxed = unsafe { Box::from_raw(link) };
+                boxed.deinit();
+                drop(boxed);
+                return Err(StartHyperlinkOnceError::OutOfMemory);
+            }
+        };
+        let id: hyperlink::Id = match unsafe { (*page).insert_hyperlink(insert_arg) } {
             Ok(id) => id,
             Err(e) => {
                 let boxed = unsafe { Box::from_raw(link) };
@@ -4098,8 +4183,9 @@ impl Screen {
     ///
     /// For more flexibility, use a ScreenFormatter directly.
     // PORT NOTE: the reference returns `[:0]const u8` (NUL-terminated); the
-    // faithful map is `Vec<u8>` carrying the NUL-termination invariant (never a
-    // lossy `String`).
+    // faithful map is an UNSENTINELED `Vec<u8>` (never a lossy `String`) whose
+    // `len()` equals the Zig slice's sentinel-EXCLUSIVE `len`. No NUL byte is
+    // stored — see the sink note below.
     pub fn selection_string(
         &mut self,
         alloc: Allocator,
@@ -4108,10 +4194,15 @@ impl Screen {
         // We'll use this as our buffer to build our string.
         // PORT NOTE: the reference builds a `std.Io.Writer.Allocating` over
         // `alloc` and returns `toOwnedSliceSentinel(0)`. A `Vec<u8>` is the
-        // faithful sink (the same convention as `dumpStringAlloc`); the
-        // NUL-termination invariant of the `[:0]const u8` return is carried by
-        // the `Vec<u8>` (its length excludes the sentinel, matching
-        // `toOwnedSliceSentinel`).
+        // faithful sink (the same convention as `dumpStringAlloc`): its length
+        // is the sentinel-EXCLUSIVE length `toOwnedSliceSentinel(0)` reports.
+        // The port stores NO trailing NUL — neither here nor in the `StringMap`
+        // copy below (the reference's `alloc.dupeZ`). That is safe because no
+        // consumer on either side ever reads the sentinel: `StringMap`'s regex
+        // search passes explicit start/end byte bounds into oniguruma, and
+        // `rustty-core`'s `link_at_pin` goes through that same bounded API. See
+        // the `StringMap.string` PORT NOTE (`string_map.rs`), which also explains
+        // why appending a 0 byte here would BREAK parity rather than restore it.
         let mut aw: Vec<u8> = Vec::new();
 
         // Create a formatter and use that to emit our text.
@@ -4895,23 +4986,17 @@ impl Screen {
         &self,
         alloc: Allocator,
         tl: point::Point,
-    ) -> Result<Vec<u8>, OutOfMemory> {
+    ) -> Result<Vec<u8>, DumpStringAllocError> {
         // PORT NOTE: the reference builds an `Allocating` writer over `alloc`
         // and returns `toOwnedSlice()`. A `Vec<u8>` is the faithful sink; the
         // allocator is the crate's `Global` seam (matching the rest of Screen).
         let _ = alloc;
         let mut builder: Vec<u8> = Vec::new();
 
-        // PORT NOTE: `getBottomRight(tl) orelse return error.UnknownPoint`. The
-        // skeleton signature for this convenience helper returns
-        // `Result<_, OutOfMemory>`; the reference's `error.UnknownPoint` cannot
-        // occur for the valid screen/active/viewport points the unit tests pass
-        // (those tags always resolve), so we surface it as `OutOfMemory` (the
-        // only error variant in this seam) rather than introducing a new error
-        // type that would ripple through every caller.
+        // `getBottomRight(tl) orelse return error.UnknownPoint`.
         let br = match self.pages.get_bottom_right(tl.tag()) {
             Some(p) => p,
-            None => return Err(OutOfMemory),
+            None => return Err(DumpStringAllocError::UnknownPoint),
         };
 
         self.dump_string(
@@ -4922,7 +5007,7 @@ impl Screen {
                 unwrap: false,
             },
         )
-        .map_err(|_| OutOfMemory)?;
+        .map_err(|_| DumpStringAllocError::OutOfMemory)?;
 
         Ok(builder)
     }
@@ -4933,13 +5018,13 @@ impl Screen {
         &self,
         alloc: Allocator,
         tl: point::Point,
-    ) -> Result<Vec<u8>, OutOfMemory> {
+    ) -> Result<Vec<u8>, DumpStringAllocError> {
         let _ = alloc;
         let mut builder: Vec<u8> = Vec::new();
 
         let br = match self.pages.get_bottom_right(tl.tag()) {
             Some(p) => p,
-            None => return Err(OutOfMemory),
+            None => return Err(DumpStringAllocError::UnknownPoint),
         };
 
         self.dump_string(
@@ -4950,7 +5035,7 @@ impl Screen {
                 unwrap: true,
             },
         )
-        .map_err(|_| OutOfMemory)?;
+        .map_err(|_| DumpStringAllocError::OutOfMemory)?;
 
         Ok(builder)
     }
@@ -4958,14 +5043,15 @@ impl Screen {
     /// This is basically a really jank version of Terminal.printString. We
     /// have to reimplement it here because we want a way to print to the screen
     /// to test it but don't want all the features of Terminal.
-    pub fn test_write_string(&mut self, text: &[u8]) -> Result<(), OutOfMemory> {
+    pub fn test_write_string(&mut self, text: &[u8]) -> Result<(), PrintStringError> {
         // const view = try std.unicode.Utf8View.init(text);
         // var iter = view.iterator();
         // while (iter.nextCodepoint()) |c| { ... }
         // PORT NOTE: `std.unicode.Utf8View.init` validates UTF-8 then iterates
-        // codepoints; an invalid sequence is an error. We decode via
-        // `str::from_utf8` (the same validation) and iterate `chars()`.
-        let s = core::str::from_utf8(text).map_err(|_| OutOfMemory)?;
+        // codepoints; an invalid sequence is `error.InvalidUtf8`. We decode via
+        // `str::from_utf8` (the same validation) and iterate `chars()`; the
+        // interior allocation failures convert via `From<OutOfMemory>`.
+        let s = core::str::from_utf8(text).map_err(|_| PrintStringError::InvalidUtf8)?;
         for ch in s.chars() {
             let c = ch as u32;
 
@@ -6057,6 +6143,52 @@ mod tests {
         s.deinit();
     }
 
+    // (no reference test) PORT-ADDITIVE proving test (W29-B02): invalid UTF-8
+    // must surface as `PrintStringError::InvalidUtf8` — the Zig
+    // `try std.unicode.Utf8View.init` error — not `OutOfMemory`, and must
+    // write nothing (validation happens before any codepoint is written).
+    #[test]
+    fn screen_test_write_string_invalid_utf8() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 80,
+                rows: 24,
+                max_scrollback_bytes: Some(1000),
+                max_scrollback_lines: None,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            s.test_write_string(b"foo\xFFbar"),
+            Err(PrintStringError::InvalidUtf8)
+        );
+
+        // Nothing was written: validation fails before iteration begins.
+        let str = s
+            .dump_string_alloc(
+                Allocator,
+                point::Point::Screen(point::Coordinate::default()),
+            )
+            .unwrap();
+        assert_eq!(str, b"");
+
+        // Valid input still writes (regression arm).
+        s.test_write_string(b"hello, world").unwrap();
+        let str = s
+            .dump_string_alloc(
+                Allocator,
+                point::Point::Screen(point::Coordinate::default()),
+            )
+            .unwrap();
+        assert_eq!(str, b"hello, world");
+
+        s.deinit();
+    }
+
     // test "Screen read and write newline"
     #[test]
     fn screen_read_and_write_newline() {
@@ -6284,6 +6416,54 @@ mod tests {
     }
     fn dump(s: &Screen, pt: point::Point) -> Vec<u8> {
         s.dump_string_alloc(Allocator, pt).unwrap()
+    }
+
+    // PORT NOTE: no reference test; this pins the `error.UnknownPoint` arm of
+    // `dumpStringAlloc`/`dumpStringAllocUnwrapped` (Screen.zig:3616, :3635),
+    // which is reachable for a `.history` point when there is no scrollback
+    // (PageList.getBottomRight(.history) returns null because the active
+    // top-left has no row above it).
+    #[test]
+    fn screen_dump_string_alloc_history_unknown_point() {
+        let mut s = mkscreen(10, 3, 0);
+
+        // No scrollback: there is no history region, so both helpers report
+        // `UnknownPoint` rather than collapsing onto the OOM variant.
+        assert_eq!(
+            Err(DumpStringAllocError::UnknownPoint),
+            s.dump_string_alloc(
+                Allocator,
+                point::Point::History(point::Coordinate::default())
+            )
+        );
+        assert_eq!(
+            Err(DumpStringAllocError::UnknownPoint),
+            s.dump_string_alloc_unwrapped(
+                Allocator,
+                point::Point::History(point::Coordinate::default())
+            )
+        );
+        s.deinit();
+
+        // Positive control: once rows have scrolled into history, the same
+        // point resolves and the dump succeeds.
+        let mut s = mkscreen(10, 3, 1000);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n4MNOP").unwrap();
+        assert_eq!(
+            Ok(b"1ABCD".to_vec()),
+            s.dump_string_alloc(
+                Allocator,
+                point::Point::History(point::Coordinate::default())
+            )
+        );
+        assert_eq!(
+            Ok(b"1ABCD".to_vec()),
+            s.dump_string_alloc_unwrapped(
+                Allocator,
+                point::Point::History(point::Coordinate::default())
+            )
+        );
+        s.deinit();
     }
 
     // test "Screen: resize (no reflow) more rows"
@@ -7274,12 +7454,12 @@ mod tests {
     // test "Screen: resize errors preserve state"
     //
     // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    // fail point. `tripwire::Module::enabled()` is the union of `cfg!(test)`,
+    // `cfg!(debug_assertions)` and the `tripwire-test` feature, which this crate
+    // turns on as a DEV-dependency (Cargo.toml) — reproducing Zig's
+    // `builtin.is_test`, true at ANY optimize mode. So this runs in BOTH the debug
+    // and the release test lanes, like the reference test does. No `ignore`.
     #[test]
-    #[cfg_attr(not(debug_assertions), ignore)]
     fn screen_resize_errors_preserve_state() {
         // for (std.meta.tags(resize_tw.FailPoint)) |tag| { ... }
         for tag in ResizeFp::ALL {
@@ -7323,8 +7503,34 @@ mod tests {
                 let sc = s.saved_cursor.as_ref().unwrap();
                 (sc.x, sc.y, sc.protected, sc.pending_wrap, sc.origin)
             };
+            // The reference compares the WHOLE saved cursor with
+            // `std.meta.eql`, which also covers `style` and `charset`; neither
+            // has `PartialEq` here, so snapshot them alongside the tuple above.
+            let before_saved_style = s.saved_cursor.as_ref().unwrap().style;
+            let before_saved_charset = {
+                let cs = &s.saved_cursor.as_ref().unwrap().charset;
+                (
+                    cs.gl,
+                    cs.gr,
+                    cs.single_shift,
+                    cs.charsets.g0,
+                    cs.charsets.g1,
+                    cs.charsets.g2,
+                    cs.charsets.g3,
+                )
+            };
             let before_selection_is_none = s.selection.is_none();
-            let before_charset = (s.charset.gl, s.charset.gr, s.charset.single_shift);
+            // `std.meta.eql(before.charset, s.charset)` also covers the
+            // charsets table, so compare g0..g3 too.
+            let before_charset = (
+                s.charset.gl,
+                s.charset.gr,
+                s.charset.single_shift,
+                s.charset.charsets.g0,
+                s.charset.charsets.g1,
+                s.charset.charsets.g2,
+                s.charset.charsets.g3,
+            );
             let before_protected_mode = s.protected_mode;
             let before_kitty_keyboard = s.kitty_keyboard;
             let before_semantic_prompt = (s.semantic_prompt.seen, s.semantic_prompt.click);
@@ -7381,11 +7587,32 @@ mod tests {
                     before_saved_cursor,
                     (sc.x, sc.y, sc.protected, sc.pending_wrap, sc.origin)
                 );
+                assert!(before_saved_style.eql(&sc.style));
+                assert_eq!(
+                    before_saved_charset,
+                    (
+                        sc.charset.gl,
+                        sc.charset.gr,
+                        sc.charset.single_shift,
+                        sc.charset.charsets.g0,
+                        sc.charset.charsets.g1,
+                        sc.charset.charsets.g2,
+                        sc.charset.charsets.g3,
+                    )
+                );
             }
             assert_eq!(before_selection_is_none, s.selection.is_none());
             assert_eq!(
                 before_charset,
-                (s.charset.gl, s.charset.gr, s.charset.single_shift)
+                (
+                    s.charset.gl,
+                    s.charset.gr,
+                    s.charset.single_shift,
+                    s.charset.charsets.g0,
+                    s.charset.charsets.g1,
+                    s.charset.charsets.g2,
+                    s.charset.charsets.g3,
+                )
             );
             assert!(before_protected_mode == s.protected_mode);
             assert_eq!(before_kitty_keyboard, s.kitty_keyboard);
@@ -12363,14 +12590,33 @@ mod tests {
         s.deinit();
     }
 
+    // PORT PARITY GUARD (no Zig twin — it needs none): Zig's
+    // `tripwire.zig: pub const enabled = builtin.is_test` is true for every test
+    // build at EVERY optimize mode, so the reference's allocation-failure tests
+    // inject in `zig build test -Doptimize=ReleaseFast` exactly as in Debug. This
+    // crate reproduces that cross-crate by enabling `rustty-util/tripwire-test` as
+    // a DEV-dependency, which is what keeps the two fail-point tests below out of
+    // the release lane's `ignored` bucket. Asserting it directly means the wiring
+    // cannot be silently dropped (a `cargo test --release` run would otherwise
+    // just report the tests as "ignored" and stay green).
+    #[test]
+    fn tripwire_fail_points_enabled_in_test_builds_at_any_profile() {
+        assert!(
+            rustty_util::tripwire::Module::<SelectionStringFp, OutOfMemory>::enabled(),
+            "tripwire fail points must be armed in ALL test builds (Zig: \
+             `enabled = builtin.is_test`); if this fires in `--release`, the \
+             `rustty-util/tripwire-test` dev-dependency feature was lost"
+        );
+    }
+
     // test "selectionString map allocation failure cleanup"
     #[test]
     // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // fail point. `tripwire::Module::enabled()` is the union of `cfg!(test)`,
+    // `cfg!(debug_assertions)` and the `tripwire-test` feature, which this crate
+    // turns on as a DEV-dependency (Cargo.toml) — reproducing Zig's
+    // `builtin.is_test`, true at ANY optimize mode. So this runs in BOTH the debug
+    // and the release test lanes, like the reference test does. No `ignore`.
     fn selection_string_map_allocation_failure_cleanup() {
         use rustty_util::tripwire::ResetMode;
 
@@ -14032,6 +14278,22 @@ mod tests {
                 .count() as usize
         });
 
+        // The dense row is still the bottom row of the active area.
+        for x in 0..s.pages.cols {
+            let list_cell = s
+                .pages
+                .get_cell(point::Point::Active(point::Coordinate { x, y: 4 }))
+                .unwrap();
+            assert!(unsafe { (*list_cell.cell).hyperlink() });
+            let page: *mut Page = unsafe { crate::pagelist::Node::page(list_cell.node) };
+            let id = unsafe { (*page).lookup_hyperlink(list_cell.cell) }.unwrap();
+            let link = unsafe { &*(*page).hyperlink_set.get((*page).memory_ptr(), id) };
+            let expected = format!("http://example.com/{x}");
+            assert_eq!(expected.as_bytes(), unsafe {
+                link.uri.slice((*page).memory_ptr())
+            });
+        }
+
         s.deinit();
     }
 
@@ -14298,11 +14560,11 @@ mod tests {
     // original value as well.
     #[test]
     // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // fail point. `tripwire::Module::enabled()` is the union of `cfg!(test)`,
+    // `cfg!(debug_assertions)` and the `tripwire-test` feature, which this crate
+    // turns on as a DEV-dependency (Cargo.toml) — reproducing Zig's
+    // `builtin.is_test`, true at ANY optimize mode. So this runs in BOTH the debug
+    // and the release test lanes, like the reference test does. No `ignore`.
     fn screen_implicit_hyperlink_id_wrap_rolls_back_on_allocation_failure() {
         let mut s = mkscreen(5, 5, 0);
 

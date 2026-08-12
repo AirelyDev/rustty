@@ -12,6 +12,8 @@ mod wasm_patch_growable_table;
 
 mod dist;
 
+mod release;
+
 mod archives;
 
 use std::path::PathBuf;
@@ -19,6 +21,7 @@ use std::process::{Command, ExitCode};
 
 mod main_build_data;
 mod res_editor;
+mod res_linux;
 mod res_misc;
 mod res_shell;
 mod res_shell_integration;
@@ -64,7 +67,17 @@ SUBCOMMANDS:
     header-gen         Generate include/rustty.h from rustty-vt-c via cbindgen (R2)
     header-gen-apprt   Generate include/rustty-apprt.h from rustty-apprt-c via cbindgen (R2)
     xcframework        Package rustty-apprt-c into dist/RusttyKit.xcframework (macOS Swift-app tier)
-    resources          Generate zig-out/share/{terminfo,<app>,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase (<app> = rustty by default, ghostty under identity-oracle)
+    resources [--target-os <os>] [--prefix <prefix>] [--flatpak] [--debug] [--system-package]
+                       Generate zig-out/share/{terminfo,<app>,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase (<app> = rustty by default, ghostty under identity-oracle).
+                       --target-os (linux|macos|freebsd|windows|…, default: host) selects the
+                       TARGET layout like ghostty's cfg.target: freebsd puts the terminfo tree
+                       under share/site-terminfo, windows emits only the terminfo source, and
+                       linux ALSO stages the desktop-app resources (dist/linux templates +
+                       hicolor icons — GhosttyResources.zig addLinuxAppResources). For the
+                       linux arm: --prefix is the FINAL install prefix baked into Exec= lines
+                       (default /usr), --flatpak swaps the D-Bus service + caps icons at 512,
+                       --debug uses the -debug app id, --system-package puts the systemd user
+                       unit under zig-out/lib instead of zig-out/share.
     update-translations
                        Regenerate po/io.airely.rustty.pot from the GTK-apprt + Nautilus
                        sources and msgmerge every po/*.po catalog (needs xgettext+msgmerge
@@ -77,6 +90,11 @@ SUBCOMMANDS:
                        CLI; the same bytes `resources` writes into zig-out/share.
     dist               Build the source tarball at dist/rustty-<version>.tar.gz (git archive)
     distcheck          Build the source tarball, extract it, and build it to validate self-containment
+    release-info [--version <vX.Y.Z>] [--ref <refs/tags/vX.Y.Z>] [--no-workspace-check]
+                       Emit the release metadata (version, build, commit, commit_long)
+                       the .github/workflows/release-{tag,tip}.yml pipelines consume,
+                       to stdout and to $GITHUB_OUTPUT. Port of those workflows'
+                       `setup` job. `--help` for details.
     wasm-patch-growable-table <in.wasm> <out.wasm>
                        Patch a WASM binary's table section to be growable (R2)
     help               Show this help
@@ -122,7 +140,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Some("resources") => match resources() {
+        Some("resources") => match resources(&mut args) {
             Ok(out) => {
                 println!("wrote {}", out.display());
                 ExitCode::SUCCESS
@@ -159,6 +177,13 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("xtask: distcheck failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("release-info") => match release::run(&mut args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("xtask: release-info failed: {e}");
                 ExitCode::FAILURE
             }
         },
@@ -224,12 +249,16 @@ fn header_gen() -> Result<PathBuf, String> {
         .arg("rustty-vt-c")
         .arg("--output")
         .arg(&output)
-        // Run from the WORKSPACE ROOT (not the crate dir). With `parse_deps =
-        // true` cbindgen must resolve the sibling workspace crates that define
-        // the cross-crate C-ABI types (rustty-vt / rustty-lib /
-        // rustty-render-types); resolving those is reliable only from the root
-        // (matches the documented manual `cbindgen --config ... --crate
-        // rustty-vt-c --output include/rustty.h` invocation run at the root).
+        // Run from the WORKSPACE ROOT (not the crate dir): `--crate
+        // rustty-vt-c` is resolved against the Cargo metadata of the working
+        // directory, so the root is where it is reliably found. It also matches
+        // the documented manual `cbindgen --config ... --crate rustty-vt-c
+        // --output include/rustty.h` invocation, and the A5 arm (a3) that
+        // re-runs cbindgen and diffs the result against the checked-in header —
+        // both run at the root, so all three produce the SAME bytes.
+        // (W12-02: this note used to say `parse_deps = true`; the config has set
+        // `parse_deps = false` with the cross-crate C-ABI layouts hand-pinned in
+        // `after_includes` since well before the note was written.)
         .current_dir(&root)
         .status()
         .map_err(|e| format!("spawn cbindgen (install via `cargo install cbindgen`): {e}"))?;
@@ -484,18 +513,63 @@ fn xcframework() -> Result<PathBuf, String> {
 /// All ten folders end up present so the Xcode Copy-Resources phase resolves
 /// every reference. As of WS1 every subtree carries REAL generated/vendored
 /// content — no placeholder DEFERRALS notes are emitted anywhere (R5).
-fn resources() -> Result<PathBuf, String> {
+///
+/// The generation is TARGET-AWARE like ghostty's `cfg.target`-driven install
+/// (`--target-os`, defaulting to the host): FreeBSD selects the
+/// `share/site-terminfo` layout, Windows emits only the terminfo source
+/// (W2-03), and a `linux` target ALSO stages the desktop-application
+/// resources — templates, actions, icons — exactly as `GhosttyResources.zig`
+/// gates `addLinuxAppResources` on `os == .linux` (F-018). The macOS default
+/// keeps the Xcode Copy-Resources tree byte-identical (no new dirs).
+fn resources(args: &mut impl Iterator<Item = String>) -> Result<PathBuf, String> {
+    // Defaults mirror ghostty's: target = host, prefix = the standard system
+    // prefix packagers install under, release, no flatpak, no system-package.
+    let mut target_os = std::env::consts::OS.to_string();
+    let mut prefix = String::from("/usr");
+    let mut flatpak = false;
+    let mut debug = false;
+    let mut system_package = false;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--target-os" => {
+                target_os = args.next().ok_or("--target-os requires a value")?;
+            }
+            "--prefix" => {
+                prefix = args.next().ok_or("--prefix requires a value")?;
+            }
+            "--flatpak" => flatpak = true,
+            "--debug" => debug = true,
+            "--system-package" => system_package = true,
+            other => return Err(format!("unknown `resources` flag `{other}`")),
+        }
+    }
+
     let root = workspace_root();
     let share = root.join("zig-out/share");
     std::fs::create_dir_all(&share).map_err(|e| format!("create zig-out/share/: {e}"))?;
 
-    res_terminfo::gen_terminfo(&share).map_err(|e| format!("gen_terminfo: {e}"))?;
+    res_terminfo::gen_terminfo(&share, &target_os).map_err(|e| format!("gen_terminfo: {e}"))?;
     res_shell::gen_shell(&share).map_err(|e| format!("gen_shell: {e}"))?;
     res_editor::gen_editor(&share).map_err(|e| format!("gen_editor: {e}"))?;
     res_misc::gen_misc(&share).map_err(|e| format!("gen_misc: {e}"))?;
     res_themes::gen_themes(&share).map_err(|e| format!("gen_themes: {e}"))?;
     res_shell_integration::gen_shell_integration(&share)
         .map_err(|e| format!("gen_shell_integration: {e}"))?;
+
+    // App (Linux) — GhosttyResources.zig gates addLinuxAppResources on
+    // `cfg.target.result.os.tag == .linux` (F-018).
+    if target_os == "linux" {
+        res_linux::gen_linux_app_resources(
+            &share,
+            &res_linux::Options {
+                exe_abs_path: format!("{prefix}/bin/{APP}"),
+                flatpak,
+                debug,
+                system_package_mode: system_package,
+            },
+        )
+        .map_err(|e| format!("gen_linux_app_resources: {e}"))?;
+    }
 
     Ok(share)
 }

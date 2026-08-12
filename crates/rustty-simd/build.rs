@@ -27,6 +27,16 @@
 use std::path::PathBuf;
 
 fn main() {
+    // Check-only cross lane (W2D_WINDOWS_OS / F-001): type-checking a target
+    // this host has no C toolchain/sysroot for (e.g. `cargo check --target
+    // x86_64-pc-windows-msvc` on a macOS host). `cargo check` never links, so
+    // the native objects are not needed; opt-in via env so a real build can
+    // never silently skip.
+    println!("cargo:rerun-if-env-changed=RUSTTY_SYS_CHECK_ONLY");
+    if std::env::var_os("RUSTTY_SYS_CHECK_ONLY").is_some() {
+        return;
+    }
+
     // WASM DIVERGENCE (`wasm32`): the freestanding `wasm32-unknown-unknown`
     // browser target (and the `wasm32-wasip1` VT build) compile PURE-RUST scalar
     // fallbacks instead of the C++ SIMD kernels — the `highway-sys`/`simdutf-sys`

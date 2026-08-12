@@ -17,9 +17,18 @@
 //! `std.os.windows` to lean on, so this module has always declared its own
 //! constants and `extern`s. The rewrite is a CONVERGENCE, not a delta. The
 //! constants and `extern`s upstream added for symbols no rustty code calls
-//! (`MEM_*`/`PAGE_READWRITE`/`FILE_NON_DIRECTORY_FILE`, the `PROC_THREAD_*`
-//! numeric set, and the `ntdll` `NtCreateFile` path) are deliberately not
-//! transcribed: they would be dead surface a `dead_code` sweep removes again.
+//! (`FILE_NON_DIRECTORY_FILE`, the `PROC_THREAD_*` numeric set, and the `ntdll`
+//! `NtCreateFile` path) are deliberately not transcribed: they would be dead
+//! surface a `dead_code` sweep removes again.
+//!
+//! PORT NOTE (W2D_WINDOWS_OS WI-5): `MEM_COMMIT`/`MEM_RELEASE`/`MEM_RESERVE`
+//! and `PAGE_READWRITE` (`src/os/windows.zig:84-88`) plus
+//! `exp.kernel32.VirtualAlloc`/`VirtualFree` (`:205-216`) used to be covered by
+//! that "dead surface" carve-out. That rationale is now OBSOLETE: the port of
+//! `terminal/page.zig`'s `AllocWindows` (`rustty-vt/src/page.rs`) is their live
+//! caller — the same caller the reference has (`page.zig:62,76`), reaching them
+//! through this module exactly as the reference reaches
+//! `windows.exp.kernel32.VirtualAlloc`. They are transcribed below.
 //!
 //! PORT NOTE: the reference is `const std = @import("std"); const windows =
 //! std.os.windows;` followed by a set of re-exports of Win32 constants, types,
@@ -188,7 +197,11 @@ pub const HANDLE_FLAG_INHERIT: DWORD = 0x00000001;
 pub const INFINITE: DWORD = 0xFFFFFFFF;
 pub const INVALID_HANDLE_VALUE: HANDLE = !0usize as HANDLE;
 pub const MAX_PATH: usize = 260;
+pub const MEM_COMMIT: DWORD = 0x1000;
+pub const MEM_RELEASE: DWORD = 0x8000;
+pub const MEM_RESERVE: DWORD = 0x2000;
 pub const OPEN_EXISTING: DWORD = 3; // Known as FILE_OPEN in Windows docs
+pub const PAGE_READWRITE: DWORD = 0x04;
 pub const PIPE_ACCESS_OUTBOUND: DWORD = 0x00000002;
 pub const PIPE_TYPE_BYTE: DWORD = 0x00000000;
 pub const S_OK: HRESULT = 0;
@@ -207,7 +220,10 @@ pub const TRUE: BOOL = 1;
 // four types would be dead surface.
 
 pub mod exp {
-    use super::{c_void, BOOL, DWORD, DWORD_PTR, HANDLE, LPWSTR, PVOID, SIZE_T};
+    // Only the names `exp`'s OWN items use: `exp::kernel32` below has its own
+    // import list, and `HPCON`/`STARTUPINFOEX` name their types through
+    // `super::`.
+    use super::{c_void, DWORD};
 
     pub type HPCON = super::LPVOID;
 
@@ -286,6 +302,24 @@ pub mod exp {
                 lpOverlapped: super::super::LPVOID,
             ) -> BOOL;
             pub fn CancelIoEx(hFile: HANDLE, lpOverlapped: super::super::LPVOID) -> BOOL;
+            // The reference declares these two right after `CloseHandle` in
+            // `exp.kernel32` (`src/os/windows.zig:205-216`). Their live caller
+            // is `terminal/page.zig`'s `AllocWindows`, which reaches them as
+            // `windows.exp.kernel32.VirtualAlloc/VirtualFree` — i.e. THROUGH
+            // this module, exactly as the port's `rustty-vt/src/page.rs`
+            // windows arm does. The reference's `?LPVOID` optionals are Rust
+            // raw pointers, which are already nullable.
+            pub fn VirtualAlloc(
+                lpAddress: super::super::LPVOID,
+                dwSize: SIZE_T,
+                flAllocationType: DWORD,
+                flProtect: DWORD,
+            ) -> super::super::LPVOID;
+            pub fn VirtualFree(
+                lpAddress: super::super::LPVOID,
+                dwSize: SIZE_T,
+                dwFreeType: DWORD,
+            ) -> BOOL;
             pub fn TerminateProcess(hProcess: HANDLE, uExitCode: super::super::UINT) -> BOOL;
             // Duplicated here because lpCommandLine is not marked optional in zig std
             pub fn CreateProcessW(

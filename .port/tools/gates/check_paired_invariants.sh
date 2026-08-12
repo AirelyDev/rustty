@@ -67,7 +67,10 @@ ANCHORS=(
   "crates/rustty-vt/src/screen.rs|fn manual_style_update"
   # INV-3 kitty placements <-> renderer atlas
   "crates/rustty-vt/src/kitty/graphics_storage.rs|pub dirty"
-  "crates/rustty-renderer/src/image.rs|fn kitty_requires_update"
+  # `image.rs` became a dispatcher over a monomorphic twin pair (W2 F-005 added
+  # the OpenGL twin), so the consumer end is anchored in BOTH arms.
+  "crates/rustty-renderer/src/image/macos_impl.rs|fn kitty_requires_update"
+  "crates/rustty-renderer/src/image/linux_impl.rs|fn kitty_requires_update"
   # INV-4 mode-state <-> key-encoder
   "crates/rustty-vt/src/modes.rs|pub fn set"
   "crates/rustty-vt/src/input/key_encode.rs|fn from_terminal"

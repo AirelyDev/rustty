@@ -645,6 +645,9 @@ mod tests {
         let ctx = match OffscreenContext::init() {
             Ok(ctx) => ctx,
             Err(err) => {
+                // W8-03 strict mode: under RUSTTY_REQUIRE_GL=1 an unavailable
+                // context is a FAILURE, not a skip (see test_support docs).
+                test_support::require_gl_or_skip("offscreen_egl_context_reaches_gl43_core", &err);
                 eprintln!(
                     "no headless OpenGL {MIN_VERSION_MAJOR}.{MIN_VERSION_MINOR} core context \
                      ({err}); skipping offscreen_egl_context_reaches_gl43_core"
@@ -669,6 +672,8 @@ mod tests {
             // plan's OPEN RISK), not a defect. This — not the assert below — is
             // the gate that a sub-4.3 host actually trips.
             Err(err @ (Error::VersionUnavailable | Error::OpenGLOutdated { .. })) => {
+                // W8-03 strict mode: same pivot as the context-creation arm.
+                test_support::require_gl_or_skip("offscreen_egl_context_reaches_gl43_core", &err);
                 eprintln!(
                     "no headless OpenGL {MIN_VERSION_MAJOR}.{MIN_VERSION_MINOR} core context \
                      ({err}); skipping offscreen_egl_context_reaches_gl43_core"

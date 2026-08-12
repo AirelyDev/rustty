@@ -6,13 +6,13 @@
 //! hand-rolled `gtk::App::run` loop (`class/application.zig:474-592`), replacing
 //! the deferred `unimplemented!()` placeholder that stood at `main_rustty.rs:292`.
 //!
-//! R5: the whole file is gated `all(target_os = "linux", feature = "gtk")` — off
+//! R5: the whole file is gated `all(any(linux, freebsd), feature = "gtk")` — off
 //! the gate the GTK backend (and its gtk4-rs bindings) is compiled out entirely
 //! and the leaf stays the deferred placeholder, so there is nothing to assert.
 //! `gtk_runtime_leaf_is_reachable` is a non-display compile-gate (normal gate);
 //! `rustty_gtk_launch_and_quit` boots real GTK and is `#[ignore]`d out of the
 //! headless default gate.
-#![cfg(all(target_os = "linux", feature = "gtk"))]
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};

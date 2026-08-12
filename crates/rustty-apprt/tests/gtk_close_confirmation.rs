@@ -7,8 +7,8 @@
 //! (a 2-level custom subclass of adw::AlertDialog), and (3) emitting a response maps to
 //! the `close-request` / `cancel` signals. This test drives all three.
 //!
-//! R5: gated `all(target_os = "linux", feature = "gtk")`.
-#![cfg(all(target_os = "linux", feature = "gtk"))]
+//! R5: gated `all(any(linux, freebsd), feature = "gtk")`.
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 #![allow(non_snake_case)]
 
 use std::cell::Cell;

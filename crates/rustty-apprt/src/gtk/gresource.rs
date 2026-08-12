@@ -38,9 +38,18 @@
 //!
 //! # Vendored-asset provenance (byte-for-byte, `sha256`)
 //!
-//! Copied verbatim from the pinned oracle (`ghostty @ 4749c4e9`,
-//! `src/apprt/gtk/{ui,css}` + `images/gnome`). Mirrors the
+//! The `ui`/`css` trees are copied verbatim from the pinned oracle
+//! (`ghostty @ 4749c4e9`, `src/apprt/gtk/{ui,css}`). Mirrors the
 //! `.port/tools/oracle-ghostty-h.sha256` precedent. `cmp` reported 0 diffs.
+//!
+//! `images/gnome` is the ONE deliberate byte deviation (W14-01): the icons are
+//! byte-copies of the committed RUSTTY artwork at `<repo>/images/gnome`, NOT
+//! the oracle's PNGs. The gresource aliases (`build.rs`) serve these bytes
+//! under `rustty_identity::BUNDLE_ID` — Rustty's application identity — so the
+//! R2 identity fork requires Rustty art here, exactly as the oracle serves
+//! Ghostty art under `com.mitchellh.ghostty` (identity-consistent routing, not
+//! byte parity). `tests/gtk_icon_identity.rs` enforces the byte identity
+//! against the top-level art on every host.
 //!
 //! ```text
 //! ui/1.2/close-confirmation-dialog.blp   a1bec4d6632151bb45edefc9708da853c20e6cc9b8bfda6ff21fde8374c60d1a
@@ -66,14 +75,14 @@
 //! css/style-dark.css                     2a31164b2b601c8b875c4c0cb25c5a34fdae64b5d696c932f744acd05b2eed7e
 //! css/style-hc.css                       45c9c179c042b2f0ef7147b3a250ef159a50916abf107d33dfa4eaf3512504bc
 //! css/style-hc-dark.css                  45c9c179c042b2f0ef7147b3a250ef159a50916abf107d33dfa4eaf3512504bc
-//! images/gnome/16.png                    40cb5e3c7aebe04ce1c5f33e92dfb5f65b6e6ee76c9876f58ecb7aeb4a52d939
-//! images/gnome/32.png                    e1ee75c40ed8c83e18c4a2aa0dab25de0c89a834dacd8a846d46088aa55a5d19
-//! images/gnome/64.png                    dc03df27409b8ddbe8c68febdfeb6e6a2feb22e235ce52af5acb09d84f2c17bb
-//! images/gnome/128.png                   c842b35e891890aa398ee06dd25dbd03a5dfe5a8352b278bd9d9b44be970bd3b
-//! images/gnome/256.png                   66bcc7453e59d84c221ee5790ce4347bf53b57a367e9f485521341591f65c127
-//! images/gnome/512.png                   0f457f162622dfa12888d617caaa1e0877d8f7ba550a2dd5ddbbf1bda47a3757
-//! images/gnome/1024.png                  7a29e436a1492341a53f9668f2493d497e8202e63d99a462d37b3244ffec95ba
-//! images/gnome/2048.png                  19569f70e72ab4fdef586121bd214a15d3f342a5a6632db094e1ce77c3b46e85
+//! images/gnome/16.png                    9dcea9e0c499930871c9278d1628fe45e52eefd3f20ab597d3c6c0cec0f425ac  (rustty art)
+//! images/gnome/32.png                    0a6a4e0d148b19c8489d30f304c2a5a69a58755d5e7502e70662d3cdca5a7f64  (rustty art)
+//! images/gnome/64.png                    3207a731ecbd0e9e47b3f8ca93340eee9ddc9b112d4694642670d4a3cbe1e514  (rustty art)
+//! images/gnome/128.png                   cdddfc86ca696ad65a39da85d856172bb326279e8bcce6561d1fff19e991418e  (rustty art)
+//! images/gnome/256.png                   755aa39a43df0bfae9feb0e4a57b5e20694b2eeaeb6b9ef75b53154e9c01ccaf  (rustty art)
+//! images/gnome/512.png                   55970c4441f0196b57ce4bd4d0d0acbd83d463a8fff5fdd9ea01a35d21a30c40  (rustty art)
+//! images/gnome/1024.png                  a4597f2fe758e643533b3f55cc144bc872ba1a48cc37f4171370b1a33b6ee0ee  (rustty art)
+//! images/gnome/2048.png                  2e753310f80e7b0ce75f260411c29d28445740c7622a5962020cfd34703e3fc1  (rustty art)
 //! ```
 
 #![allow(clippy::doc_markdown)]

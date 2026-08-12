@@ -7,8 +7,8 @@
 //! callbacks) and EMITS `response` (firing the AlertDialog response vfunc → confirm/deny),
 //! and confirms none abort and the behavior matches ghostty.
 //!
-//! R5: gated `all(target_os = "linux", feature = "gtk")`.
-#![cfg(all(target_os = "linux", feature = "gtk"))]
+//! R5: gated `all(any(linux, freebsd), feature = "gtk")`.
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 #![allow(non_snake_case)]
 
 use std::cell::Cell;

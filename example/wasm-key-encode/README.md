@@ -11,7 +11,10 @@ First, build the WebAssembly module:
 .port/tools/build-vt-wasm.sh
 ```
 
-This will create `target/wasm32-unknown-unknown/release/rustty_vt_c.wasm`.
+This will create `zig-out/bin/rustty-vt.wasm` — the analog of ghostty's
+installed `zig-out/bin/ghostty-vt.wasm`, linked with the indirect function
+table exported and patched growable so browser JS can install effect
+callbacks.
 
 ## Running
 

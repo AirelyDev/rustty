@@ -64,31 +64,25 @@ pub type Discover = CoreText;
 #[cfg(all(target_os = "windows", not(target_arch = "wasm32")))]
 pub type Discover = Windows;
 
-/// Deferred discoverer stub for the remaining targets (the Fontconfig discoverer is
-/// DEFERRED). Present only so `CodepointResolver`/`Collection` type-check; the
-/// real Fontconfig discoverer lands with the full Fontconfig backend. On wasm32
-/// this resolves to the `wasm_noop` `Fontconfig` (the `.web_canvas => void` arm).
+/// Linux/BSD default `fontconfig_freetype` → `Fontconfig` (the live Fontconfig
+/// discoverer). On wasm32 this resolves to the `wasm_noop` `Fontconfig` instead
+/// (the `.web_canvas => void` arm, which genuinely means "no discovery").
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 pub type Discover = Fontconfig;
 
 // ---------------------------------------------------------------------------
-// Fontconfig (Linux default `fontconfig_freetype`) discoverer — typed stub.
+// Fontconfig (Linux default `fontconfig_freetype`) discoverer.
 //
-// PORT NOTE: the real Fontconfig discoverer is DEFERRED (its full reference body
-// is recorded verbatim in the comment block further below, and it lands in L3
-// Task 6/7). This module exists so the crate TYPE-CHECKS on Linux: `Collection`,
-// `CodepointResolver` and `SharedGridSet` name `Discover::init`/`.deinit`/
-// `.discover`/`.discover_fallback` and a `DiscoverIterator{next,deinit}`
-// unconditionally (the reference comptime-elides them when `Discover == void`,
-// but Rust type-checks them on every target).
+// PORT NOTE: this is the LIVE Fontconfig discoverer (`discovery.zig`'s
+// `Fontconfig`) — `init`/`deinit`/`discover`/`discoverFallback` and the
+// `DiscoverIterator{next,deinit}` are all fully ported below; no
+// `unimplemented!()` leaf remains on this path. `Collection`,
+// `CodepointResolver` and `SharedGridSet` name those methods unconditionally
+// (the reference comptime-elides them when `Discover == void`, but Rust
+// type-checks them on every target), and they bind against these real bodies.
 //
-// Unlike the wasm arm below — which is a FUNCTIONAL noop, because `.web_canvas
-// => void` genuinely means "no discovery" — Linux discovery is a real,
-// not-yet-written feature. So these bodies are HONEST `unimplemented!()` leaves
-// rather than silent `Ok(None)`s: a Linux caller that reaches them gets a loud
-// panic naming the deferral, matching the convention already used by the
-// non-macOS `DeferredFace` stubs (`deferred_face.rs`). The SIGNATURES are real
-// and mirror the reference exactly, so call sites bind against the final shape.
+// The wasm arm further below is the one that stays a FUNCTIONAL noop, because
+// `.web_canvas => void` genuinely means "no discovery".
 #[cfg(all(
     not(target_os = "macos"),
     not(target_os = "windows"),
@@ -272,6 +266,36 @@ mod fontconfig_impl {
         i: usize,
     }
 
+    #[cfg(test)]
+    thread_local! {
+        /// Test-only, PER-THREAD counter of how many `deinit` calls actually
+        /// destroyed their native handles (idempotent no-op calls don't count).
+        /// Thread-local so the `Drop` proving test below is unaffected by the
+        /// other tests in this crate discovering fonts in parallel.
+        static DEINIT_DESTROYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Test-only accessor for this thread's `deinit`-destroy count.
+    #[cfg(test)]
+    pub(super) fn deinit_destroys() -> usize {
+        DEINIT_DESTROYS.with(|c| c.get())
+    }
+
+    // PORT NOTE (W9F-01): the reference relies on `defer disco_it.deinit()` at
+    // every construction site (`SharedGridSet.zig:197,228`,
+    // `CodepointResolver.zig:182`) to free the owned `FcFontSet`/`FcPattern`.
+    // Rust's equivalent "runs on every scope exit" primitive is `Drop`, so that
+    // `defer` is expressed here ONCE instead of being re-materialized at each
+    // exit path (the port's call sites missed the `?`-propagation, `break` and
+    // early-`return` exits, leaking both handles). The explicit `deinit()` calls
+    // the port already has stay valid — they become the destroy, and the drop a
+    // no-op — via the idempotence below.
+    impl Drop for DiscoverIterator {
+        fn drop(&mut self) {
+            self.deinit();
+        }
+    }
+
     impl DiscoverIterator {
         // pub fn deinit(self: *DiscoverIterator) void {
         //     self.set.destroy();
@@ -279,14 +303,33 @@ mod fontconfig_impl {
         //     self.* = undefined;
         // }
         pub fn deinit(&mut self) {
+            // PORT NOTE (W9F-01): idempotent. The reference's `self.* = undefined`
+            // makes a second `deinit` illegal (and its `defer` guarantees exactly
+            // one call); rustty instead nulls the handles so that the materialized
+            // explicit `deinit()` calls at the call sites AND the `Drop` above
+            // (which makes the reference's `defer disco_it.deinit()` true on
+            // EVERY exit — `?` propagation, `break`, early `return`) together
+            // destroy the native handles exactly once.
+            if self.set.is_null() {
+                // Already deinited: nothing owned, nothing to destroy.
+                return;
+            }
             // SAFETY: `set`/`pattern` are the non-null handles this iterator owns
             // (from `discover`), not yet destroyed.
             unsafe {
                 (*self.set).destroy();
                 (*self.pattern).destroy();
             }
+            self.set = std::ptr::null_mut();
+            self.pattern = std::ptr::null_mut();
             // self.* = undefined; — the `Vec` fields drop; the raw handles above
-            // are consumed by `destroy`.
+            // are consumed by `destroy`. `fonts` borrowed its pattern pointers
+            // from the (now destroyed) set, so it is cleared too: a post-deinit
+            // `next()` then yields `None` instead of reading freed patterns.
+            self.fonts.clear();
+            self.i = 0;
+            #[cfg(test)]
+            DEINIT_DESTROYS.with(|c| c.set(c.get() + 1));
         }
 
         // pub fn next(self: *DiscoverIterator) fontconfig.Error!?DeferredFace {
@@ -2436,10 +2479,12 @@ mod tests {
     ///
     /// PORT NOTE: this mirrors the `refAllDecls` convention used across this crate
     /// (e.g. `face/mod.rs`'s `ref_all_decls`): the methods are coerced to function
-    /// pointers with their exact expected signatures rather than CALLED, because
-    /// their bodies are honest `unimplemented!()` leaves until the real Fontconfig
-    /// discoverer lands (L3 Task 6/7). Coercion still fails to compile if a
-    /// signature drifts, which is exactly the guarantee this test exists to hold.
+    /// pointers with their exact expected signatures rather than CALLED, so the
+    /// gate holds without needing a live system font database in the test
+    /// environment. Coercion still fails to compile if a signature drifts, which
+    /// is exactly the guarantee this test exists to hold. (The bodies themselves
+    /// are the live Fontconfig discoverer — they are exercised end-to-end by the
+    /// ungated `SharedGridSet` / discovered-font shaping tests on Linux.)
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
     #[test]
     fn discover_impl_typechecks() {
@@ -2504,6 +2549,66 @@ mod tests {
 
         // defers run in reverse: it.deinit, fc.deinit, lib.deinit.
         it.deinit();
+        fc.deinit();
+        lib.deinit();
+    }
+
+    /// W9F-01 proving test (no reference counterpart — the reference gets this
+    /// for free from `defer disco_it.deinit()` at every construction site).
+    ///
+    /// Rustty's `DiscoverIterator` owns raw `FcFontSet`/`FcPattern` handles, and
+    /// the call sites that only COMMENT the reference's defer (shared_grid_set,
+    /// codepoint_resolver) relied on a "RAII scope drop" that did not exist.
+    /// Asserts (a) dropping an iterator destroys its handles exactly once, and
+    /// (b) `deinit` is idempotent, so the explicit `deinit()` calls the port
+    /// already makes do not double-destroy when the drop follows.
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    #[test]
+    fn discover_iterator_drops_native_handles() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `fc::FC_GLOBAL`).
+        let _fc = crate::fc::global_shared();
+        if crate::options::BACKEND != crate::Backend::FontconfigFreetype {
+            return;
+        }
+
+        use super::fontconfig_impl::deinit_destroys;
+        use crate::library::Library;
+
+        let mut lib = Library::init().unwrap();
+        let mut fc = Fontconfig::init(lib);
+
+        let desc = Descriptor {
+            family: Some(b"monospace".to_vec()),
+            size: 12.0,
+            ..Descriptor::default()
+        };
+
+        let before = deinit_destroys();
+
+        // (a) An iterator that is never explicitly deinited — the shape of every
+        // early exit at the call sites — must still free its handles on drop.
+        {
+            let _it = fc.discover(desc.clone()).unwrap();
+        }
+        assert_eq!(
+            deinit_destroys() - before,
+            1,
+            "dropping a DiscoverIterator must destroy its FcFontSet/FcPattern \
+             (the reference's `defer disco_it.deinit()`)"
+        );
+
+        // (b) An explicit `deinit()` followed by the drop must destroy ONCE.
+        let mut it = fc.discover(desc).unwrap();
+        it.deinit();
+        drop(it);
+        assert_eq!(
+            deinit_destroys() - before,
+            2,
+            "deinit() must be idempotent: the drop after an explicit deinit must \
+             not destroy the handles a second time"
+        );
+
         fc.deinit();
         lib.deinit();
     }

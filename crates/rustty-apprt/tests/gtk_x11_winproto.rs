@@ -34,9 +34,9 @@
 //! `gtk_x11_winproto.rs` (this file, arm selection), `gtk_x11_xkb_init.rs`,
 //! `gtk_x11_event_mods.rs`, `gtk_x11_windowid.rs`.
 //!
-//! R5: gated `all(target_os = "linux", feature = "x11")` (the `x11` feature implies
+//! R5: gated `all(any(linux, freebsd), feature = "x11")` (the `x11` feature implies
 //! `gtk`).
-#![cfg(all(target_os = "linux", feature = "x11"))]
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "x11"))]
 #![allow(non_snake_case)]
 
 use rustty_apprt::gtk::winproto::{App, Protocol};

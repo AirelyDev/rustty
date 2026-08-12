@@ -34,7 +34,7 @@
 // near-leaf), and this `FileFormatter` (which needs `Config`) lives in
 // `rustty-config`. Same intent, enforced by the acyclicity gate.
 
-use rustty_cfg_fmt::Writer;
+use rustty_cfg_fmt::{FormatError, Writer};
 
 use crate::config_struct::{Config, CONFIG_FIELDS};
 
@@ -81,7 +81,7 @@ impl<'a> FileFormatter<'a> {
     //     self: FileFormatter,
     //     writer: *std.Io.Writer,
     // ) std.Io.Writer.Error!void {
-    pub fn format<W: Writer>(&self, writer: &mut W) -> Result<(), W::Error> {
+    pub fn format<W: Writer>(&self, writer: &mut W) -> Result<(), FormatError<W::Error>> {
         // @setEvalBranchQuota(10_000);
 
         // If we're change-tracking then we need the default config to
@@ -151,6 +151,14 @@ impl<'a> FileFormatter<'a> {
                 //     value,
                 //     writer,
                 // ) catch return error.WriteFailed;
+                //
+                // PORT NOTE: the reference collapses every `formatEntry` error
+                // (writer failures AND the fixed-buffer `error.OutOfMemory`)
+                // into `error.WriteFailed` here. The port cannot fabricate a
+                // `W::Error` value for the OutOfMemory case, so `format`
+                // surfaces the full `FormatError` union instead — the same
+                // failure behavior (formatting aborts with an error), with the
+                // variant preserved.
                 self.config.format_entry_field(name, writer)?;
 
                 // if (do_docs) try writer.print("\n", .{});

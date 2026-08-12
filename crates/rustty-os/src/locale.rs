@@ -419,19 +419,52 @@ pub struct NoSpaceLeft;
 // `setlocale`, `newlocale`, `freelocale`. These come from `libc` (R3 binding to
 // the SAME C library). `LC_ALL_MASK`/`newlocale`/`freelocale` are unused by the
 // reference's runtime paths but are kept as part of the imported surface.
+//
+// PORT NOTE (§3.4 laziness, windows arm — W2D_WINDOWS_OS WI-3): this file IS
+// windows-reachable (`ghostty src/os/locale.zig:35-46` is `ensureLocale`'s
+// windows arm), but the aliases at `locale.zig:224-229` are LAZY decls: on
+// windows Zig only ever analyzes the two `ensureLocale` names — `LC_ALL`
+// (`:224`) and `setlocale` (`:227`). `LC_ALL_MASK`/`locale_t`/`newlocale`/
+// `freelocale` are POSIX-only symbols the Windows UCRT does not export, and
+// the reference never analyzes them there, so their Rust image is cfg'd to
+// unix (the analog of not being analyzed). `LC_ALL` and `setlocale` must still
+// compile on windows, hence the split below.
+#[cfg(unix)]
 const LC_ALL: std::ffi::c_int = libc::LC_ALL;
+// `LC_ALL` as the ucrt's <locale.h> defines it (0 on every Windows CRT —
+// MSVC/mingw both, and the `libc` crate's own `windows` module agrees).
+#[cfg(windows)]
+const LC_ALL: std::ffi::c_int = 0;
+#[cfg(unix)]
 #[allow(dead_code)]
 const LC_ALL_MASK: std::ffi::c_int = libc::LC_ALL_MASK;
 // PARITY: the reference type alias is `locale_t` (snake_case, from the C lib).
+#[cfg(unix)]
 #[allow(dead_code, non_camel_case_types)]
 type locale_t = libc::locale_t;
+
+// R3: bind the SAME CRT entry point the reference's `c.setlocale` resolves to
+// on windows (ucrtbase's `setlocale`), hand-rolled per the `windows.rs`
+// pattern, because the `libc` dependency is unix-gated in Cargo.toml.
+#[cfg(windows)]
+mod c_locale {
+    extern "C" {
+        pub fn setlocale(
+            category: std::ffi::c_int,
+            locale: *const std::ffi::c_char,
+        ) -> *mut std::ffi::c_char;
+    }
+}
 
 /// `c.setlocale`: returns the active locale C-string or `None` on failure.
 fn setlocale(
     category: std::ffi::c_int,
     locale: &std::ffi::CStr,
 ) -> Option<&'static std::ffi::CStr> {
+    #[cfg(unix)]
     let p = unsafe { libc::setlocale(category, locale.as_ptr()) };
+    #[cfg(windows)]
+    let p = unsafe { c_locale::setlocale(category, locale.as_ptr()) };
     if p.is_null() {
         None
     } else {
@@ -439,6 +472,8 @@ fn setlocale(
     }
 }
 
+// `c.newlocale` / `c.freelocale`: unix-only, per the laziness note above.
+#[cfg(unix)]
 #[allow(dead_code)]
 unsafe fn newlocale(
     category_mask: std::ffi::c_int,
@@ -448,6 +483,7 @@ unsafe fn newlocale(
     unsafe { libc::newlocale(category_mask, locale, base) }
 }
 
+#[cfg(unix)]
 #[allow(dead_code)]
 unsafe fn freelocale(loc: locale_t) {
     unsafe { libc::freelocale(loc) };

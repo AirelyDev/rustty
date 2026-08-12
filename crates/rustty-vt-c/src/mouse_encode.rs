@@ -841,6 +841,45 @@ mod tests {
         });
     }
 
+    // W81-B01-01 (Rust-only proving test; the reference has none — it inherits
+    // the behavior from `std.Io.Writer.fixed`, which makes the CALLER buffer
+    // its own internal buffer and therefore leaves the fitting PREFIX behind
+    // before reporting `error.WriteFailed`). The shared `writer::FixedWriter`
+    // used to reject an overflowing write whole, so `out_of_space` left the
+    // caller buffer untouched here too (W82-B04/W82-B05 dedupe to the same
+    // root).
+    #[test]
+    fn encode_out_of_space_leaves_the_fitting_prefix_in_the_caller_buffer() {
+        with_test_allocator(|calloc| {
+            let (encoder_new_result, encoder) = make_sgr_any_encoder(calloc);
+            assert_eq!(Result::Success, encoder_new_result);
+
+            let mut event: Event = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                mouse_event::new(Some(calloc), &mut event)
+            });
+            unsafe { mouse_event::set_action(event, mouse_event::Action::Press) };
+            unsafe { mouse_event::set_button(event, mouse_event::Button::Left) };
+            unsafe { mouse_event::set_position(event, mouse_event::Position { x: 0.0, y: 0.0 }) };
+
+            // Full encoding is "\x1b[<0;1;1M" (9 bytes); the CSI introducer is
+            // written as one chunk, so a 2-byte buffer overflows on the very
+            // first write — the shape the whole-write rejection hid.
+            let mut buf = *b"XY";
+            let mut written: usize = 0;
+            assert_eq!(Result::OutOfSpace, unsafe {
+                encode(encoder, event, buf.as_mut_ptr(), buf.len(), &mut written)
+            });
+            // The required length is still reported in full.
+            assert_eq!(9usize, written);
+            // ...and the prefix that fit is in the caller buffer.
+            assert_eq!(b"\x1b[", &buf);
+
+            unsafe { mouse_event::free(event) };
+            unsafe { free(encoder) };
+        });
+    }
+
     // test "encode: motion dedupe and reset" {
     #[test]
     fn encode_motion_dedupe_and_reset() {

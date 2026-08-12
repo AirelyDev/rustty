@@ -29,6 +29,15 @@ use std::mem::{align_of, size_of};
 use std::os::raw::c_int;
 
 // const log = std.log.scoped(.selection_c);
+//
+// PORT NOTE (W35-B03): rustty's scoped-log sink is `sys::log_fn` (the port of
+// `terminal/c/sys.zig`'s `logFn`), which is silent until a C caller installs a
+// log callback via `rustty_sys_set(RUSTTY_SYS_OPT_LOG, ...)`. `LOG_SCOPE` is
+// the `@tagName` of the reference's scope, which `log_fn` forwards to the
+// callback as the scope text. The `adjust`/`ordered` guards themselves narrow
+// the raw `c_int` in the `extern "C"` wrappers (lib.rs), which emit on this
+// scope.
+pub(crate) const LOG_SCOPE: &str = "selection_c";
 
 // pub const Adjustment = Selection.Adjustment;
 // pub const Order = Selection.Order;

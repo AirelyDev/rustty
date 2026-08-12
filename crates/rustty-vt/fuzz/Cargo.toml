@@ -1,0 +1,68 @@
+# rustty-vt-fuzz — cargo-fuzz targets for the VT engine (GATE G5).
+#
+# Port of the reference AFL++ harness package `test/fuzz-libghostty/` (three
+# harnesses: fuzz_{osc,parser,stream}.zig). The harness BODIES live in the
+# library (`rustty_vt::fuzz_harness`) so the deterministic corpus-replay test
+# (`crates/rustty-vt/tests/fuzz_corpus_replay.rs`) shares identical semantics;
+# each target here is only the libFuzzer entry shim (the `zig_fuzz_test`
+# export analog). `vt_diff` is the G5-named smoke target
+# (.port/phase-0/plan/DEFINITION_OF_PARITY.md §G5,
+#  .port/tools/gates/run_fuzz_smoke.sh).
+#
+# Run (nightly): cargo +nightly fuzz run <target> -- -max_total_time=10
+# Seed corpora:  .port/phase-0/corpora/cvt/{osc,parser,stream}-initial (copied
+#                from the reference) + the reference corpus/*-cmin sets
+#                (pulled on demand from the read-only oracle checkout).
+
+[package]
+name = "rustty-vt-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.rustty-vt]
+path = ".."
+
+[[bin]]
+name = "fuzz_osc"
+path = "fuzz_targets/fuzz_osc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_parser"
+path = "fuzz_targets/fuzz_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_stream"
+path = "fuzz_targets/fuzz_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vt_diff"
+path = "fuzz_targets/vt_diff.rs"
+test = false
+doc = false
+bench = false
+
+# Deliberately its own workspace (NOT a member of the root rustty workspace):
+# libFuzzer bins must never enter plain `cargo build/test --workspace` sweeps,
+# and the fuzz build keeps its own target dir (fuzz/target) so instrumented
+# builds don't thrash the workspace target-dir lock.
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1

@@ -27,12 +27,23 @@ pub struct DecodeResult {
     pub decoded: usize,
 }
 
+// PORT NOTE (Miri): Miri cannot execute the C/C++ side of the FFI ("can't call
+// foreign function"), so under Miri this entry point takes the scalar lane
+// instead — the exact code the reference builds when `build_options.simd` is
+// off, with identical output by construction. `cfg!(miri)` is const-false in
+// every real build, so the SIMD lane is untouched everywhere else (in-repo
+// precedent: `base64.rs`'s two entry points and the `cfg(miri)` std-heap
+// allocator fallback in rustty-vt `pagelist/mod.rs`). The SIMD lane itself
+// stays covered by this crate's ASan G6 route and `cargo test`. This became
+// load-bearing when the shipping tiers flipped `simd` on by default
+// (codex-vet W16-TARGET-01): `Stream::next_slice`'s SIMD arm reaches here from
+// the rustty-vt/-vt-c/-core/-apprt-c Miri lanes.
 #[allow(non_snake_case)]
 pub fn utf8DecodeUntilControlSeq(input: &[u8], output: &mut [u32]) -> DecodeResult {
     assert(output.len() >= input.len());
 
     #[cfg(not(target_arch = "wasm32"))]
-    if SIMD {
+    if SIMD && !cfg!(miri) {
         let mut decoded: usize = 0;
         let consumed = unsafe {
             rustty_simd_decode_utf8_until_control_seq(

@@ -4817,6 +4817,108 @@ mod tests {
         }
     }
 
+    // test "async: notify first" (watcher/async.zig) through the Dynamic union,
+    // on BOTH candidate backends — a notification sent BEFORE the wait is
+    // registered must still wake the waiter (the eventfd counter retains it).
+    #[test]
+    fn dynamic_async_notify_first() {
+        let _guard = lock_backend();
+
+        for be in CANDIDATES {
+            assert!(prefer(be));
+
+            let mut loop_ = Loop::init(Options::default()).unwrap();
+            let mut notifier = Async::init().unwrap();
+
+            // Send a notification
+            notifier.notify().unwrap();
+
+            // Wait
+            let mut wake = false;
+            let mut c_wait = Completion::default();
+            let cb = |ud: *mut bool,
+                      _l: *mut Loop,
+                      _c: *mut Completion,
+                      r: core::result::Result<(), WaitError>| {
+                r.unwrap(); // _ = r catch unreachable
+                unsafe { *ud = true };
+                CallbackAction::Disarm
+            };
+            unsafe {
+                notifier.wait(
+                    &mut loop_ as *mut Loop,
+                    ptr::addr_of_mut!(c_wait),
+                    ptr::addr_of_mut!(wake),
+                    cb,
+                );
+            }
+
+            // Wait for wake
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert!(wake, "backend {be:?}: pre-registered notify did not wake");
+
+            notifier.deinit();
+            loop_.deinit();
+        }
+    }
+
+    // test "async batches multiple notifications" (watcher/async.zig) through
+    // the Dynamic union, on BOTH candidate backends — N notifications before
+    // (5) and after (1) the wait is registered must coalesce into EXACTLY ONE
+    // callback (the eventfd read drains the counter), even across 10 extra
+    // `no_wait` ticks with a rearming waiter.
+    #[test]
+    fn dynamic_async_batches_multiple_notifications() {
+        let _guard = lock_backend();
+
+        for be in CANDIDATES {
+            assert!(prefer(be));
+
+            let mut loop_ = Loop::init(Options::default()).unwrap();
+            let mut notifier = Async::init().unwrap();
+
+            // Send a notification many times
+            notifier.notify().unwrap();
+            notifier.notify().unwrap();
+            notifier.notify().unwrap();
+            notifier.notify().unwrap();
+            notifier.notify().unwrap();
+
+            // Wait
+            let mut count: u32 = 0;
+            let mut c_wait = Completion::default();
+            let cb = |ud: *mut u32,
+                      _l: *mut Loop,
+                      _c: *mut Completion,
+                      r: core::result::Result<(), WaitError>| {
+                r.unwrap(); // _ = r catch unreachable
+                unsafe { *ud += 1 };
+                CallbackAction::Rearm
+            };
+            unsafe {
+                notifier.wait(
+                    &mut loop_ as *mut Loop,
+                    ptr::addr_of_mut!(c_wait),
+                    ptr::addr_of_mut!(count),
+                    cb,
+                );
+            }
+
+            // Send a notification
+            notifier.notify().unwrap();
+
+            // Wait for wake
+            loop_.run(RunMode::Once).unwrap();
+            for _ in 0..10 {
+                loop_.run(RunMode::NoWait).unwrap();
+            }
+            assert_eq!(count, 1, "backend {be:?}: notifications must coalesce");
+
+            notifier.deinit();
+            loop_.deinit();
+        }
+    }
+
     // KAT — Timer through the Dynamic union, driven from a ZERO-INITIALIZED
     // completion. This is the exact scenario dynamic.zig:244-248 says the
     // completion tag exists for: `Completion::default()` is epoll-tagged, so under
@@ -5046,6 +5148,135 @@ mod tests {
         }
     }
 
+    // test "process wait with non-zero exit code" (watcher/process.zig) through
+    // the Dynamic union, on BOTH candidate backends — the reference's
+    // `ProcessTests` instantiation for `ProcessDynamic`. Asserts the pidfd
+    // waitid reap surfaces the REAL `si_status`, not just zero.
+    #[test]
+    #[allow(clippy::zombie_processes)]
+    fn dynamic_process_wait_with_non_zero_exit_code() {
+        let _guard = lock_backend();
+
+        for be in CANDIDATES {
+            assert!(prefer(be));
+
+            // posix_spawn `sh -c "exit 42"` (the reference's argv_42).
+            let mut pid: libc::pid_t = 0;
+            let path = b"/bin/sh\0";
+            let arg_c = b"-c\0";
+            let arg_script = b"exit 42\0";
+            let mut argv: [*mut libc::c_char; 4] = [
+                path.as_ptr() as *mut libc::c_char,
+                arg_c.as_ptr() as *mut libc::c_char,
+                arg_script.as_ptr() as *mut libc::c_char,
+                ptr::null_mut(),
+            ];
+            let mut envp: [*mut libc::c_char; 1] = [ptr::null_mut()];
+            let rc = unsafe {
+                libc::posix_spawn(
+                    &mut pid,
+                    path.as_ptr() as *const libc::c_char,
+                    ptr::null(),
+                    ptr::null(),
+                    argv.as_mut_ptr() as *const *mut libc::c_char,
+                    envp.as_mut_ptr() as *const *mut libc::c_char,
+                )
+            };
+            assert_eq!(rc, 0, "posix_spawn sh -c 'exit 42'");
+
+            let mut loop_ = Loop::init(Options::default()).unwrap();
+            let mut p = Process::init(pid).unwrap();
+
+            let mut code: Option<u32> = None;
+            let mut c_wait = Completion::default();
+            let cb = |ud: *mut Option<u32>,
+                      _l: *mut Loop,
+                      _c: *mut Completion,
+                      r: core::result::Result<u32, ProcessWaitError>| {
+                unsafe { *ud = Some(r.unwrap()) }; // ud.?.* = r catch unreachable
+                CallbackAction::Disarm
+            };
+            unsafe {
+                p.wait(
+                    &mut loop_ as *mut Loop,
+                    ptr::addr_of_mut!(c_wait),
+                    ptr::addr_of_mut!(code),
+                    cb,
+                );
+            }
+
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert_eq!(code, Some(42), "backend {be:?}: exit status 42");
+
+            p.deinit();
+            loop_.deinit();
+        }
+    }
+
+    // test "process wait on a process that already exited" (watcher/process.zig)
+    // through the Dynamic union, on BOTH candidate backends — Process::init
+    // FIRST (the pidfd must be opened while the child exists), then the child
+    // is reaped OUT FROM UNDER the watcher via waitpid; the subsequent loop
+    // wait exercises the ECHILD → `InvalidChild` path (`r catch 0`).
+    #[test]
+    fn dynamic_process_wait_on_a_process_that_already_exited() {
+        let _guard = lock_backend();
+
+        for be in CANDIDATES {
+            assert!(prefer(be));
+
+            // posix_spawn /bin/true (the reference's argv_0 equivalent).
+            let mut pid: libc::pid_t = 0;
+            let path = b"/bin/true\0";
+            let mut argv: [*mut libc::c_char; 2] =
+                [path.as_ptr() as *mut libc::c_char, ptr::null_mut()];
+            let mut envp: [*mut libc::c_char; 1] = [ptr::null_mut()];
+            let rc = unsafe {
+                libc::posix_spawn(
+                    &mut pid,
+                    path.as_ptr() as *const libc::c_char,
+                    ptr::null(),
+                    ptr::null(),
+                    argv.as_mut_ptr() as *const *mut libc::c_char,
+                    envp.as_mut_ptr() as *const *mut libc::c_char,
+                )
+            };
+            assert_eq!(rc, 0, "posix_spawn /bin/true");
+
+            let mut loop_ = Loop::init(Options::default()).unwrap();
+            let mut p = Process::init(pid).unwrap();
+
+            // _ = try child.wait();  — reap the child before the watcher does.
+            let mut status: libc::c_int = 0;
+            let reaped = unsafe { libc::waitpid(pid, &mut status, 0) };
+            assert_eq!(reaped, pid, "waitpid must reap the child");
+
+            let mut code: Option<u32> = None;
+            let mut c_wait = Completion::default();
+            let cb = |ud: *mut Option<u32>,
+                      _l: *mut Loop,
+                      _c: *mut Completion,
+                      r: core::result::Result<u32, ProcessWaitError>| {
+                unsafe { *ud = Some(r.unwrap_or(0)) }; // ud.?.* = r catch 0
+                CallbackAction::Disarm
+            };
+            unsafe {
+                p.wait(
+                    &mut loop_ as *mut Loop,
+                    ptr::addr_of_mut!(c_wait),
+                    ptr::addr_of_mut!(code),
+                    cb,
+                );
+            }
+
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert_eq!(code, Some(0), "backend {be:?}: already-reaped wait");
+
+            p.deinit();
+            loop_.deinit();
+        }
+    }
+
     // KAT — Pty write round-trip through the Dynamic union: `Stream::read` on the
     // child end + `Stream::queue_write` on the parent end. Exercises the dynamic
     // `WriteQueue`/`WriteRequest` tagging + the `ReadBuffer`/`WriteBuffer`
@@ -5119,6 +5350,271 @@ mod tests {
             assert!(read_len.is_some(), "backend {be:?} read did not complete");
             assert_eq!(payload, &read_buf[0..read_len.unwrap()]);
             assert!(write_queue.empty());
+
+            pty.deinit();
+            loop_.deinit();
+        }
+    }
+
+    // test "pty: child to parent" (watcher/stream.zig) through the Dynamic
+    // union, on BOTH candidate backends — direct `Stream::write` on the child
+    // end, read on the parent end.
+    #[test]
+    fn dynamic_pty_child_to_parent() {
+        let _guard = lock_backend();
+
+        for be in CANDIDATES {
+            assert!(prefer(be));
+
+            let mut pty = Pty::init().unwrap();
+            let mut loop_ = Loop::init(Options::default()).unwrap();
+
+            let parent = Stream::init_fd(pty.parent);
+            let child = Stream::init_fd(pty.child);
+
+            // Read
+            let mut read_buf = [0u8; 128];
+            let mut read_len: Option<usize> = None;
+            let mut c_read = Completion::default();
+            let read_cb = |ud: *mut Option<usize>,
+                           _l: *mut Loop,
+                           _c: *mut Completion,
+                           _s: Stream,
+                           _b: ReadBuffer,
+                           r: core::result::Result<usize, ReadError>| {
+                unsafe { *ud = Some(r.unwrap()) }; // ud.?.* = r catch unreachable
+                CallbackAction::Disarm
+            };
+            unsafe {
+                parent.read(
+                    &mut loop_ as *mut Loop,
+                    ptr::addr_of_mut!(c_read),
+                    ReadBuffer::Slice(&mut read_buf[..] as *mut [u8]),
+                    ptr::addr_of_mut!(read_len),
+                    read_cb,
+                );
+            }
+
+            // This should not block!
+            loop_.run(RunMode::NoWait).unwrap();
+            assert!(read_len.is_none());
+
+            // Send
+            let send_buf = b"hello, world!";
+            let mut c_write = Completion::default();
+            let write_cb = |_ud: *mut (),
+                            _l: *mut Loop,
+                            _c: *mut Completion,
+                            _s: Stream,
+                            _b: WriteBuffer,
+                            r: core::result::Result<usize, WriteError>| {
+                r.unwrap(); // _ = r catch unreachable
+                CallbackAction::Disarm
+            };
+            unsafe {
+                child.write::<(), _>(
+                    &mut loop_ as *mut Loop,
+                    ptr::addr_of_mut!(c_write),
+                    WriteBuffer::Slice(send_buf.as_slice() as *const [u8]),
+                    ptr::null_mut(),
+                    write_cb,
+                );
+            }
+
+            // The write and read should trigger
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert!(read_len.is_some(), "backend {be:?} read did not complete");
+            assert_eq!(send_buf, &read_buf[0..read_len.unwrap()]);
+
+            pty.deinit();
+            loop_.deinit();
+        }
+    }
+
+    // test "pty: parent to child" (watcher/stream.zig) through the Dynamic
+    // union, on BOTH candidate backends — direct `Stream::write` on the parent
+    // end, read on the child end.
+    #[test]
+    fn dynamic_pty_parent_to_child() {
+        let _guard = lock_backend();
+
+        for be in CANDIDATES {
+            assert!(prefer(be));
+
+            let mut pty = Pty::init().unwrap();
+            let mut loop_ = Loop::init(Options::default()).unwrap();
+
+            let parent = Stream::init_fd(pty.parent);
+            let child = Stream::init_fd(pty.child);
+
+            // Read
+            let mut read_buf = [0u8; 128];
+            let mut read_len: Option<usize> = None;
+            let mut c_read = Completion::default();
+            let read_cb = |ud: *mut Option<usize>,
+                           _l: *mut Loop,
+                           _c: *mut Completion,
+                           _s: Stream,
+                           _b: ReadBuffer,
+                           r: core::result::Result<usize, ReadError>| {
+                unsafe { *ud = Some(r.unwrap()) };
+                CallbackAction::Disarm
+            };
+            unsafe {
+                child.read(
+                    &mut loop_ as *mut Loop,
+                    ptr::addr_of_mut!(c_read),
+                    ReadBuffer::Slice(&mut read_buf[..] as *mut [u8]),
+                    ptr::addr_of_mut!(read_len),
+                    read_cb,
+                );
+            }
+
+            // This should not block!
+            loop_.run(RunMode::NoWait).unwrap();
+            assert!(read_len.is_none());
+
+            // Send (note the newline at the end of the buf is important
+            // since we're in cooked mode)
+            let send_buf = b"hello, world!\n";
+            let mut c_write = Completion::default();
+            let write_cb = |_ud: *mut (),
+                            _l: *mut Loop,
+                            _c: *mut Completion,
+                            _s: Stream,
+                            _b: WriteBuffer,
+                            r: core::result::Result<usize, WriteError>| {
+                r.unwrap();
+                CallbackAction::Disarm
+            };
+            unsafe {
+                parent.write::<(), _>(
+                    &mut loop_ as *mut Loop,
+                    ptr::addr_of_mut!(c_write),
+                    WriteBuffer::Slice(send_buf.as_slice() as *const [u8]),
+                    ptr::null_mut(),
+                    write_cb,
+                );
+            }
+
+            // The write and read should trigger
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert!(read_len.is_some(), "backend {be:?} read did not complete");
+            assert_eq!(send_buf, &read_buf[0..read_len.unwrap()]);
+
+            pty.deinit();
+            loop_.deinit();
+        }
+    }
+
+    // test "pty: queued writes" (watcher/stream.zig) through the Dynamic union,
+    // on BOTH candidate backends — TWO `queue_write` requests must drain FIFO
+    // ("hello, " then "world!\n" concatenate). The `WriteRequest.from(c_result)`
+    // identity assert is OMITTED here: the reference guards it with
+    // `if (!xev.dynamic)` (stream.zig:1373), so it is NOT part of the dynamic
+    // contract (the outer Completion is embedded differently per arm).
+    #[test]
+    fn dynamic_pty_queued_writes() {
+        // this test fails on x86_64 with a strange error but passes
+        // on aarch64. for now, just let it go until we investigate.
+        // (`if (xev.dynamic and builtin.cpu.arch == .x86_64) return
+        // error.SkipZigTest;` — stream.zig:1281: upstream skips the DYNAMIC
+        // instantiation of this test on x86_64.)
+        if cfg!(target_arch = "x86_64") {
+            return;
+        }
+
+        let _guard = lock_backend();
+
+        for be in CANDIDATES {
+            assert!(prefer(be));
+
+            let mut pty = Pty::init().unwrap();
+            let mut loop_ = Loop::init(Options::default()).unwrap();
+
+            let parent = Stream::init_fd(pty.parent);
+            let child = Stream::init_fd(pty.child);
+
+            // Read
+            let mut read_buf = [0u8; 128];
+            let mut read_len: Option<usize> = None;
+            let mut c_read = Completion::default();
+            let read_cb = |ud: *mut Option<usize>,
+                           _l: *mut Loop,
+                           _c: *mut Completion,
+                           _s: Stream,
+                           _b: ReadBuffer,
+                           r: core::result::Result<usize, ReadError>| {
+                unsafe { *ud = Some(r.unwrap()) };
+                CallbackAction::Disarm
+            };
+            unsafe {
+                child.read(
+                    &mut loop_ as *mut Loop,
+                    ptr::addr_of_mut!(c_read),
+                    ReadBuffer::Slice(&mut read_buf[..] as *mut [u8]),
+                    ptr::addr_of_mut!(read_len),
+                    read_cb,
+                );
+            }
+
+            // This should not block!
+            loop_.run(RunMode::NoWait).unwrap();
+            assert!(read_len.is_none());
+
+            let mut write_queue: WriteQueue = WriteQueue::default();
+            let mut write_req: [WriteRequest; 2] =
+                [WriteRequest::default(), WriteRequest::default()];
+
+            // Send (note the newline at the end of the buf is important
+            // since we're in cooked mode)
+            let hello_cb = |_ud: *mut (),
+                            _l: *mut Loop,
+                            _c: *mut Completion,
+                            _s: Stream,
+                            _b: WriteBuffer,
+                            r: core::result::Result<usize, WriteError>| {
+                r.unwrap();
+                CallbackAction::Disarm
+            };
+            unsafe {
+                parent.queue_write::<(), _>(
+                    &mut loop_ as *mut Loop,
+                    ptr::addr_of_mut!(write_queue),
+                    ptr::addr_of_mut!(write_req[0]),
+                    WriteBuffer::Slice(b"hello, ".as_slice() as *const [u8]),
+                    ptr::null_mut(),
+                    hello_cb,
+                );
+            }
+
+            let mut c_result: Option<*mut Completion> = None;
+            let world_cb = |ud: *mut Option<*mut Completion>,
+                            _l: *mut Loop,
+                            c: *mut Completion,
+                            _s: Stream,
+                            _b: WriteBuffer,
+                            r: core::result::Result<usize, WriteError>| {
+                r.unwrap();
+                unsafe { *ud = Some(c) }; // ud.?.* = c
+                CallbackAction::Disarm
+            };
+            unsafe {
+                parent.queue_write(
+                    &mut loop_ as *mut Loop,
+                    ptr::addr_of_mut!(write_queue),
+                    ptr::addr_of_mut!(write_req[1]),
+                    WriteBuffer::Slice(b"world!\n".as_slice() as *const [u8]),
+                    ptr::addr_of_mut!(c_result),
+                    world_cb,
+                );
+            }
+
+            // The write and read should trigger
+            loop_.run(RunMode::UntilDone).unwrap();
+            assert!(read_len.is_some(), "backend {be:?} read did not complete");
+            assert_eq!(b"hello, world!\n", &read_buf[0..read_len.unwrap()]);
+            assert!(c_result.is_some());
 
             pty.deinit();
             loop_.deinit();

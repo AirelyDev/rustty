@@ -112,11 +112,22 @@ pub type AutoOffsetHashMap<K, V, const MAX_LOAD_PERCENTAGE: u8> =
 /// `fn AutoContext(comptime K: type) type` — the auto-generated context built
 /// from `std.hash_map.getAutoHashFn` / `getAutoEqlFn`.
 //
-// PORT NOTE: the reference auto context hashes the key with `autoHash` (Wyhash
-// over the key's bytes) and compares with `std.meta.eql`. The hash-map tests
-// only assert behavioral correctness (round-trips, counts, tombstone reuse),
-// which hold for any deterministic `hash: K -> u64` plus value equality, so we
-// build the context on Rust's `Hash`/`Eq` with a deterministic hasher.
+// PORT NOTE: the reference auto context hashes the key with seed-0 Wyhash over
+// the key's bytes (`std.hash.Wyhash.hash(0, std.mem.asBytes(&key))` for
+// `hasUniqueRepresentation` keys, `std.hash.autoHash` into a `Wyhash.init(0)`
+// otherwise) and compares with `std.meta.eql`. The port reproduces that hash
+// BIT-EXACTLY via the `std.hash.Wyhash` port in rustty-zigstd: the hash is not
+// an implementation detail here, because the map lives inside the page's single
+// backing allocation, so it decides home slots (`hash & mask`), metadata
+// fingerprints (top 7 bits), probe/iterator order, and therefore the raw page
+// bytes `compress/page.rs` hands to LZ4. Equality stays Rust's `Eq`, the direct
+// map of `std.meta.eql` for these key types.
+//
+// The keys are fed through Rust's `Hash`, which for the port's key types
+// (integers, and `#[repr(transparent)]` `Offset<T>` over a `u32`, whose `Hash`
+// impl hashes just that field) writes exactly the native-endian bytes
+// `std.mem.asBytes(&key)` yields — see the hasher note in
+// `rustty_zigstd::wyhash`.
 pub struct AutoContext<K>(PhantomData<K>);
 
 impl<K> Default for AutoContext<K> {
@@ -138,12 +149,14 @@ impl<K: core::hash::Hash + PartialEq> HashMapContext<K> for AutoContext<K> {
     // body (see the note above), so the portable half of that change is the
     // inlining hint — `#[inline]` is the Rust spelling of
     // `@call(.always_inline, ...)` across the crate boundary. The
-    // `hasUniqueRepresentation` split has no counterpart: it selects between two
-    // Zig std hashers, and this port has one.
+    // `hasUniqueRepresentation` split has no counterpart: it selects between the
+    // one-shot and the iterative form of the SAME (Wyhash, seed 0) hash, which
+    // agree on the same byte sequence, and this port always takes the iterative
+    // form.
     #[inline]
     fn hash(&self, key: K) -> u64 {
         use core::hash::Hasher;
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = rustty_zigstd::wyhash::Wyhash::init(0);
         key.hash(&mut hasher);
         hasher.finish()
     }
@@ -1002,10 +1015,39 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
         // if @sizeOf(K) == 0 then there is at most one item in the hash
         // map, which is assumed to exist as key_ptr must be valid.  This
         // item must be at index 0.
+        //
+        // PORT NOTE (DELIBERATE DIVERGENCE, W24-B03-ZST-01): the reference's
+        // zero-sized-key fallback is `idx = 0`, and the first half of its
+        // comment is right (a ZST key type has exactly one possible key, so the
+        // map holds at most one entry) while the conclusion is not: that single
+        // entry sits at its home slot `hash(key) & (capacity - 1)`, which is 0
+        // only when the hash happens to end in enough zero bits. With seed-0
+        // Wyhash, `hash(void) = Wyhash.hash(0, "") = 0x0409638ee2bde459`, so at
+        // capacity 16 the entry lives at slot 9 and the reference removes the
+        // FREE slot 0 instead — decrementing `size` while leaving the used
+        // metadata behind, after which the key is neither findable nor
+        // re-insertable. The oracle has the same bug (its named
+        // "removeByPtr 0 sized key" test uses a non-ZST `i32` key, so nothing
+        // exercises the path), but it is unreachable there and here: every
+        // product caller keys on `Offset(Cell)` (grapheme/hyperlink maps). The
+        // port scans for the one used slot instead, which is invisible to every
+        // non-ZST caller (the branch is `size_of::<K>() == 0` only) and correct
+        // for the generic contract the tests below now pin.
         let idx = if core::mem::size_of::<K>() > 0 {
             ((key_ptr as usize) - (unsafe { self.keys() } as usize)) / core::mem::size_of::<K>()
         } else {
-            0
+            let metadata = self.metadata.unwrap();
+            let capacity = self.capacity() as usize;
+            let mut found: Option<usize> = None;
+            for i in 0..capacity {
+                if unsafe { (*metadata.add(i)).is_used() } {
+                    found = Some(i);
+                    break;
+                }
+            }
+            // `key_ptr` must be valid, so the entry exists (same precondition
+            // the reference relies on to justify its fallback).
+            found.expect("removeByPtr with a zero-sized key on an empty map")
         };
 
         self.remove_by_index_context(idx, ctx);
@@ -1271,6 +1313,69 @@ mod tests {
             i += 1;
         }
         assert_eq!(total, sum);
+    }
+
+    // ADDITIVE (no reference counterpart): pins `AutoContext` to the ORACLE's
+    // physical table layout, not merely to logically-correct lookups. The map
+    // lives inside the page's backing allocation, so the home slot
+    // (`hash & mask`), the metadata fingerprint and hence the slot each key
+    // lands in are observable in the raw page bytes that `compress/page.rs`
+    // compresses. The expected order below is the slot order ghostty produces
+    // for this exact insertion sequence at capacity 8 (seed-0 Wyhash over
+    // `asBytes(&key)`); it is NOT the order a differently-seeded/algorithm
+    // hasher gives.
+    #[test]
+    fn HashMap_auto_context_matches_reference_wyhash_layout() {
+        type Map = AutoHashMapUnmanaged<u32, u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
+        let cap = 8;
+
+        let layout = Map::layout_for_capacity(cap);
+        let buf = AlignedBuf::new(layout.total_size, Map::base_align());
+        let mut map = unsafe { Map::init(buf.offset_buf(), layout) };
+        let c = ctx::<u32>();
+
+        // The per-key hashes the oracle's `AutoContext.hash` produces.
+        for (key, expected) in [
+            (0u32, 0x14b8_3016_dc46_0955u64),
+            (1, 0xd145_1a1b_34d5_fb64),
+            (2, 0xb52d_3031_bc13_56f4),
+            (3, 0x3579_1793_81f3_5bc6),
+            (4, 0x63b2_677c_5d80_f97a),
+            (8, 0xe850_de3f_7e60_b2fa),
+            (16, 0x052a_446e_fa88_3433),
+            (24, 0xa226_4b2b_07f9_9c5a),
+        ] {
+            assert_eq!(expected, c.hash(key), "hash({key})");
+        }
+
+        for key in [0u32, 1, 2, 3, 4, 8, 16, 24] {
+            map.put_context(key, 1000 + key, &c).unwrap();
+        }
+        assert_eq!(8, map.count());
+
+        let mut order: Vec<(u32, u32)> = Vec::new();
+        let mut it = map.iterator();
+        while let Some(kv) = it.next() {
+            order.push(unsafe { (*kv.key_ptr, *kv.value_ptr) });
+        }
+        assert_eq!(
+            vec![
+                (16, 1016),
+                (24, 1024),
+                (4, 1004),
+                (8, 1008),
+                (1, 1001),
+                (0, 1000),
+                (2, 1002),
+                (3, 1003),
+            ],
+            order,
+        );
+
+        // Lookups agree with the oracle too, of course.
+        for key in [0u32, 1, 2, 3, 4, 8, 16, 24] {
+            assert_eq!(Some(1000 + key), map.get_context(key, &c));
+        }
     }
 
     #[test]
@@ -2027,6 +2132,10 @@ mod tests {
         // PORT NOTE: despite the reference test's name "0 sized key", it uses
         // `AutoHashMapUnmanaged(i32, u64)` (a non-zero-sized key); the name
         // refers to exercising the `removeByPtr` path with a single element.
+        // The `size_of::<K>() == 0` branch of `remove_by_ptr_context` is
+        // therefore NOT covered by this test; `HashMap_removeByPtr_true_zero
+        // _sized_key` below covers it (and pins the deliberate divergence from
+        // the reference's `idx = 0` fallback documented there).
         type Map = AutoHashMapUnmanaged<i32, u64, DEFAULT_MAX_LOAD_PERCENTAGE>;
         let cap = 64;
 
@@ -2047,6 +2156,43 @@ mod tests {
         }
 
         assert!(map.count() == 0);
+    }
+
+    // ADDITIVE (no reference counterpart — the reference's same-named test uses
+    // a non-ZST key, see the note above): exercises `remove_by_ptr_context` with
+    // a TRUE zero-sized key, the case the reference's `idx = 0` fallback gets
+    // wrong. `hash(()) = Wyhash.hash(0, "") = 0x0409638ee2bde459`, so at
+    // capacity 16 the single entry lives at slot 9; removing slot 0 would
+    // decrement `size` while leaving slot 9 used, so the key would afterwards be
+    // neither findable nor re-insertable.
+    #[test]
+    fn HashMap_removeByPtr_true_zero_sized_key() {
+        type Map = AutoHashMapUnmanaged<(), u32, DEFAULT_MAX_LOAD_PERCENTAGE>;
+        let cap = 16;
+
+        let layout = Map::layout_for_capacity(cap);
+        let buf = AlignedBuf::new(layout.total_size, Map::base_align());
+        let mut map = unsafe { Map::init(buf.offset_buf(), layout) };
+        let c = ctx::<()>();
+
+        // The home slot is NOT 0 — this is what makes the reference fallback
+        // wrong rather than merely lucky.
+        assert_eq!(0x0409_638e_e2bd_e459, c.hash(()));
+        assert_eq!(9, (c.hash(()) & (map.capacity() as u64 - 1)) as usize);
+
+        map.put_context((), 123, &c).unwrap();
+        assert_eq!(1, map.count());
+
+        let key_ptr = map.get_key_ptr_context((), &c).unwrap();
+        unsafe { map.remove_by_ptr_context(key_ptr, &c) };
+
+        assert_eq!(0, map.count());
+        assert_eq!(None, map.get_context((), &c));
+
+        // The slot is genuinely free again, not a stale used entry.
+        map.put_context((), 456, &c).unwrap();
+        assert_eq!(1, map.count());
+        assert_eq!(Some(456), map.get_context((), &c));
     }
 
     #[test]

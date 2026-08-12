@@ -68,9 +68,28 @@ use std::collections::HashMap;
 // same 4-byte storage as `u32` (`@sizeOf(u21) == 4`), and codepoint values fit
 // in 21 bits. We alias `u21 = u32` so codepoint-typed signatures read like the
 // reference; the packed `Cell` storage masks to exactly 21/24 bits per the
-// bit-layout tests, so no out-of-range bits leak.
+// bit-layout tests, so no out-of-range bits leak beyond the field.
+//
+// Masking alone is NOT the whole story, in two places. (1) The packed `Cell`
+// content union is 24 bits wide (sized to its widest member, RGB), so a
+// codepoint write masked only to the field would persist bits 21..23 and build
+// a cell the reference cannot represent — nonzero backing bits whose logical
+// codepoint (low 21 bits) reads as zero, so `is_zero()` and `has_text()`
+// disagree. (2) Grapheme TAILS never pass through a packed field at all: they
+// are stored verbatim in the page's grapheme arena (`set_graphemes`/
+// `append_grapheme`, read back by `lookup_grapheme`). In both cases the alias
+// alone would let a direct Cell/Page-API caller persist a value outside the
+// `u21` domain that the reference's type system rejects outright (a compile
+// error for a constant, a safety-checked `@intCast` panic otherwise). Those
+// entry points therefore `debug_assert!(cp <= U21_MAX)`, which is the port's
+// standing map of a Zig safe-build check (Debug/ReleaseSafe trap, ReleaseFast
+// unchecked).
 #[allow(non_camel_case_types)]
 pub type u21 = u32;
+
+/// `std.math.maxInt(u21)` — the largest value the reference's `u21` codepoint
+/// type can hold.
+pub(crate) const U21_MAX: u21 = 0x1F_FFFF;
 
 use rustty_render_types::term_size as size;
 use rustty_render_types::term_size::{get_offset, Offset, OffsetBuf, OffsetSlice};
@@ -225,10 +244,12 @@ const fn page_size_min_default() -> usize {
     }
 }
 
-// PORT NOTE: the reference selects `AllocWindows` or `AllocPosix` at comptime.
-// We implement the POSIX mmap path (the platforms this crate targets) and keep
-// the reference comments for both. The allocation must be page-aligned and
-// zeroed; mmap(MAP_PRIVATE|MAP_ANONYMOUS) guarantees both.
+// PORT NOTE: the reference selects `AllocWindows` or `AllocPosix` at comptime
+// (`const PageAlloc = switch (builtin.os.tag) { .windows => AllocWindows, else
+// => AllocPosix }`). Both arms are ported below, each behind the matching
+// `cfg`; wasm32 is a third host with neither syscall (see its own PORT NOTE).
+// The allocation must be page-aligned and zeroed; mmap(MAP_PRIVATE|
+// MAP_ANONYMOUS) and VirtualAlloc(MEM_COMMIT|MEM_RESERVE) each guarantee both.
 mod page_alloc {
     //! Page-aligned allocator used for terminal page backing memory. Pages
     //! require page-aligned, zeroed memory obtained directly from the OS
@@ -238,9 +259,8 @@ mod page_alloc {
     //! Allocate page-aligned, zeroed backing memory using mmap with
     //! MAP_PRIVATE | MAP_ANONYMOUS which guarantees zeroed pages.
     //!
-    //! PORT NOTE: the reference also has `AllocWindows` using VirtualAlloc with
-    //! MEM_COMMIT | MEM_RESERVE which guarantees zeroed pages. We port the POSIX
-    //! variant; the Windows variant's comments are preserved here for fidelity.
+    //! Allocate page-aligned, zeroed backing memory using VirtualAlloc with
+    //! MEM_COMMIT | MEM_RESERVE which guarantees zeroed pages.
 
     /// A page-aligned, zeroed mmap allocation. The pointer/len pair mirrors the
     /// reference's `[]align(page_size_min) u8`.
@@ -249,21 +269,21 @@ mod page_alloc {
         pub len: usize,
     }
 
-    /// pub fn alloc(n: usize) ![]align(page_size_min) u8
-    #[cfg(not(target_arch = "wasm32"))]
+    /// `AllocPosix`: pub fn alloc(n: usize) ![]align(page_size_min) u8
+    #[cfg(not(any(target_arch = "wasm32", windows)))]
     pub fn alloc(n: usize) -> Option<Backing> {
         // posix.mmap(null, n, PROT.READ|PROT.WRITE, .{ .TYPE=.PRIVATE, .ANONYMOUS=true }, -1, 0)
         let ptr = unsafe {
-            libc_mmap(
+            libc::mmap(
                 core::ptr::null_mut(),
                 n,
-                PROT_READ | PROT_WRITE,
-                MAP_PRIVATE | MAP_ANONYMOUS,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
                 -1,
                 0,
             )
         };
-        if ptr == MAP_FAILED {
+        if ptr == libc::MAP_FAILED {
             return None;
         }
         Some(Backing {
@@ -272,49 +292,69 @@ mod page_alloc {
         })
     }
 
-    /// pub fn free(mem: []align(page_size_min) u8) void
-    #[cfg(not(target_arch = "wasm32"))]
+    /// `AllocPosix`: pub fn free(mem: []align(page_size_min) u8) void
+    #[cfg(not(any(target_arch = "wasm32", windows)))]
     pub fn free(b: &Backing) {
         unsafe {
-            libc_munmap(b.ptr as *mut core::ffi::c_void, b.len);
+            libc::munmap(b.ptr as *mut libc::c_void, b.len);
         }
     }
 
-    // Minimal libc bindings for mmap/munmap. We avoid pulling the `libc` crate
-    // as a new dependency; these signatures are stable across the platforms we
-    // target.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub const PROT_READ: i32 = 0x1;
-    #[cfg(not(target_arch = "wasm32"))]
-    pub const PROT_WRITE: i32 = 0x2;
+    // PORT NOTE (windows): `AllocWindows` (`src/terminal/page.zig:58-83`). The
+    // reference reaches VirtualAlloc/VirtualFree as
+    // `windows.exp.kernel32.VirtualAlloc` — i.e. THROUGH `os/windows.zig`, whose
+    // port is `rustty_os::windows` (this crate already depends on rustty-os, so
+    // the import adds no crate edge). `?LPVOID` optionals are Rust raw pointers,
+    // which are already nullable, so `orelse return error.OutOfMemory` becomes
+    // the null check below.
 
-    #[cfg(target_os = "macos")]
-    pub const MAP_PRIVATE: i32 = 0x0002;
-    #[cfg(target_os = "macos")]
-    pub const MAP_ANONYMOUS: i32 = 0x1000;
-    #[cfg(target_os = "linux")]
-    pub const MAP_PRIVATE: i32 = 0x0002;
-    #[cfg(target_os = "linux")]
-    pub const MAP_ANONYMOUS: i32 = 0x0020;
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub const MAP_FAILED: *mut core::ffi::c_void = (-1isize) as *mut core::ffi::c_void;
-
-    #[cfg(not(target_arch = "wasm32"))]
-    extern "C" {
-        #[link_name = "mmap"]
-        fn libc_mmap(
-            addr: *mut core::ffi::c_void,
-            len: usize,
-            prot: i32,
-            flags: i32,
-            fd: i32,
-            offset: i64,
-        ) -> *mut core::ffi::c_void;
-
-        #[link_name = "munmap"]
-        fn libc_munmap(addr: *mut core::ffi::c_void, len: usize) -> i32;
+    /// `AllocWindows`: pub fn alloc(n: usize) error{OutOfMemory}![]align(page_size_min) u8
+    #[cfg(windows)]
+    pub fn alloc(n: usize) -> Option<Backing> {
+        use rustty_os::windows;
+        let addr = unsafe {
+            windows::exp::kernel32::VirtualAlloc(
+                core::ptr::null_mut(),
+                n,
+                windows::MEM_COMMIT | windows::MEM_RESERVE,
+                windows::PAGE_READWRITE,
+            )
+        };
+        if addr.is_null() {
+            // orelse return error.OutOfMemory
+            return None;
+        }
+        Some(Backing {
+            ptr: addr as *mut u8,
+            len: n,
+        })
     }
+
+    /// `AllocWindows`: pub fn free(mem: []align(page_size_min) u8) void
+    #[cfg(windows)]
+    pub fn free(b: &Backing) {
+        use rustty_os::windows;
+        unsafe {
+            windows::exp::kernel32::VirtualFree(
+                b.ptr as *mut core::ffi::c_void,
+                0,
+                windows::MEM_RELEASE,
+            );
+        }
+    }
+
+    // PORT NOTE: the reference calls `std.posix.mmap`/`std.posix.munmap` with
+    // SYMBOLIC flags (`.{ .TYPE = .PRIVATE, .ANONYMOUS = true }`), so its
+    // `AllocPosix` compiles on every POSIX target Zig supports. An earlier
+    // revision of this port hand-rolled the mmap/munmap externs plus a
+    // per-target `MAP_PRIVATE`/`MAP_ANONYMOUS` constant table to avoid a new
+    // dependency; that table only had macOS and Linux arms, so the module (which
+    // is compiled for every non-wasm target) failed to resolve those constants
+    // on FreeBSD/NetBSD/OpenBSD/DragonFly/illumos. `libc` is already a direct
+    // dependency of this crate (kitty/graphics_image's POSIX shm medium uses the
+    // very same `libc::mmap`/`libc::MAP_FAILED`), so we take the flags from it:
+    // that is the Rust analog of `std.posix`'s symbolic constants and is correct
+    // on every POSIX target, exactly like the reference.
 
     // PORT NOTE (wasm32): the reference selects `AllocPosix` (mmap) or
     // `AllocWindows` (VirtualAlloc) at comptime. wasm32 is a THIRD host with no
@@ -636,6 +676,17 @@ impl Cell {
     }
     #[inline]
     pub fn set_content_codepoint(&mut self, cp: u21) {
+        // PORT NOTE: the reference's parameter is typed `u21`, so a value above
+        // `maxInt(u21)` is unrepresentable at the API boundary (a compile error
+        // for a constant, a safety-checked `@intCast` panic otherwise). The
+        // `u21 = u32` alias cannot enforce that, and the 24-bit union slot below
+        // would happily persist bits 21..23 — producing states the reference
+        // cannot build (e.g. `0x20_0000` stores nonzero backing bits while
+        // `content_codepoint()`/`has_text()` read the low 21 bits as zero, so
+        // `is_zero()` and `has_text()` disagree). Assert the domain instead,
+        // matching the port's standing map of a Zig safe-build check
+        // (Debug/ReleaseSafe trap, ReleaseFast unchecked).
+        debug_assert!(cp <= U21_MAX, "codepoint out of u21 domain");
         // Writing the union overwrites the whole content field (24 bits): the
         // high 3 bits of the union storage become 0, matching Zig's behavior of
         // writing a u21 into the 24-bit union slot (upper bits zeroed by the
@@ -1536,6 +1587,18 @@ impl Packed for Row {
 /// reference's `@Vector(group_len, Backing)` becomes `[Backing; GROUP_LEN]` —
 /// LLVM auto-vectorizes fixed-size array ANDs/compares the same way, and unlike
 /// `@Vector` it needs no target-feature gate.
+///
+/// A `group_len` of zero is rejected exactly where the reference rejects it:
+/// naming the type is fine, but instantiating any group operation is a compile
+/// error (the reference's `@reduce` refuses a zero-lane vector). Without this
+/// the array port would silently return vacuous results.
+///
+/// ```compile_fail
+/// use rustty_vt::page::{cell_field_mask, Cell, CellField, Mask};
+/// type M = Mask<Cell, { cell_field_mask(&[CellField::ContentTag, CellField::StyleId]) }, 0>;
+/// let cells: [Cell; 0] = [];
+/// let _ = M::match_group(&cells, 0);
+/// ```
 pub struct Mask<T: Packed, const MASK: Backing, const GROUP_LEN: usize> {
     _p: core::marker::PhantomData<T>,
 }
@@ -1547,10 +1610,29 @@ impl<T: Packed, const MASK: Backing, const GROUP_LEN: usize> Mask<T, MASK, GROUP
     /// The field bits this mask covers.
     pub const MASK: Backing = MASK;
 
+    /// PORT NOTE: the reference's group type is `@Vector(group_len, Backing)`
+    /// and every group op reduces it with `@reduce`, which Zig rejects outright
+    /// ("@reduce operation requires a vector with nonzero length") for a
+    /// zero-lane vector. The zero-lane vector TYPE is legal there, so the error
+    /// fires lazily — exactly when a group method is analyzed. `[Backing; 0]`
+    /// has no such restriction, so the array port would compile the group ops
+    /// and return vacuous results (`match_group`/`eql`/`eql_exact` all `true`,
+    /// `eql_prefix` `0`). This associated const restores the reference's
+    /// rejection: associated consts are evaluated at monomorphization only when
+    /// referenced, and `load` (referenced below) is reached by all four group
+    /// ops, so `GROUP_LEN == 0` is a compile error precisely when a group method
+    /// is instantiated, while the scalar helpers (`bits`/`pattern`/`strip`/
+    /// `match_scalar`/`eql_scalar`) stay usable.
+    const GROUP_NONZERO: () = assert!(
+        GROUP_LEN > 0,
+        "Mask group operations require a nonzero group length"
+    );
+
     /// Load a group of values from the slice starting at index `i`.
     /// Panics (asserts) unless at least `GROUP_LEN` values are available.
     #[inline]
     fn load(values: &[T], i: usize) -> [Backing; GROUP_LEN] {
+        let () = Self::GROUP_NONZERO;
         let mut out = [0 as Backing; GROUP_LEN];
         let src = &values[i..i + GROUP_LEN];
         let mut k = 0;

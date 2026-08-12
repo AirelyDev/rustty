@@ -39,11 +39,27 @@ cd "$ROOT"
 
 IDENTITY="${DEVELOPER_ID:--}"
 ENTITLEMENTS="${ENTITLEMENTS:-$ROOT/macos/Rustty.entitlements}"
+# Must match the configuration build-rustty.sh built (it honors the same
+# variable): the release workflows set CONFIGURATION=Release, local dev gets
+# the Debug default.
+CONFIGURATION="${CONFIGURATION:-Debug}"
 
 if [ "$IDENTITY" = "-" ]; then
   echo "== signing identity: ad-hoc (\"-\") — set DEVELOPER_ID for a real cert =="
+  # Ad-hoc signatures cannot be timestamped, and an offline/local run must not
+  # block on Apple's timestamp service.
+  TS_FLAG=(--timestamp=none)
 else
   echo "== signing identity: $IDENTITY =="
+  # A REAL Developer ID signature MUST carry a secure timestamp: Apple rejects
+  # notarization submissions without one ("The signature does not include a
+  # secure timestamp"), which would then fail `stapler staple` in the release
+  # workflows. Bare `--timestamp` selects Apple's default timestamp authority,
+  # i.e. the same signature the oracle's inline block produces by omitting the
+  # flag (ghostty .github/workflows/release-tag.yml:229-237). It is spelled
+  # explicitly rather than left empty because this script runs under `set -u`
+  # on macOS's bash 3.2, where expanding an empty array is an error.
+  TS_FLAG=(--timestamp)
 fi
 echo "== entitlements: $ENTITLEMENTS =="
 
@@ -57,7 +73,7 @@ fi
 
 # 2) Locate the built app bundle.
 APP="$(cd "$ROOT/macos" && xcodebuild -project Rustty.xcodeproj -scheme Rustty \
-  -configuration Debug -showBuildSettings 2>/dev/null \
+  -configuration "$CONFIGURATION" -showBuildSettings 2>/dev/null \
   | awk -F' = ' '/ BUILT_PRODUCTS_DIR = /{d=$2} / FULL_PRODUCT_NAME = /{p=$2} END{print d"/"p}')"
 if [ ! -d "$APP" ]; then
   echo "!! built app not found at: $APP" >&2
@@ -66,7 +82,7 @@ fi
 echo "== app: $APP =="
 
 # codesign wrapper: force, hardened runtime, verbose.
-sign() { /usr/bin/codesign --force --options runtime --timestamp=none \
+sign() { /usr/bin/codesign --force --options runtime "${TS_FLAG[@]}" \
   --sign "$IDENTITY" "$@"; }
 
 echo "== 1/3 signing nested code (inside-out) =="
@@ -94,7 +110,7 @@ for d in "$APP"/Contents/MacOS/*.dylib; do
 done
 
 echo "== 2/3 signing the app bundle (with entitlements) =="
-/usr/bin/codesign --force --options runtime --timestamp=none \
+/usr/bin/codesign --force --options runtime "${TS_FLAG[@]}" \
   --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
 
 echo "== 3/3 verifying (codesign --verify --deep --strict) =="

@@ -51,6 +51,49 @@ pub(crate) fn gl_lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// RUSTTY-ONLY strict mode (audit W8-03): `RUSTTY_REQUIRE_GL=1` in the
+/// environment turns every clean skip — [`offscreen_gl`]'s two arms here and
+/// the sibling skip arms in `sys`, `opengl_impl` and `generic::linux_impl` —
+/// into a hard test failure. Without it, a CI leg that is SUPPOSED to provide a
+/// live GL context can go green after skipping all 11 live-GL tests, proving
+/// nothing; the Ubuntu CI leg installs Mesa (llvmpipe, surfaceless EGL) and
+/// exports this variable so those tests are EXECUTED evidence there. Unset (the
+/// default, and every macOS build) preserves the clean-skip contract — the
+/// `metal.rs` "no device ⇒ skip" precedent — byte-for-byte.
+pub(crate) fn gl_required() -> bool {
+    gl_required_from(std::env::var_os("RUSTTY_REQUIRE_GL").as_deref())
+}
+
+/// The env-independent core of [`gl_required`], split out so the unit tests
+/// below can drive both arms WITHOUT mutating process-global environment
+/// (`set_var` would race every concurrently running GL test that consults the
+/// same variable under the parallel libtest harness).
+fn gl_required_from(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
+}
+
+/// The strict-mode pivot. EVERY clean-skip arm calls this immediately before
+/// printing its `skipping <test>` line: a no-op by default, a panic under
+/// `RUSTTY_REQUIRE_GL=1` — so in strict mode an unavailable context is a
+/// FAILURE, never a silent green. `err` is the context/version error that
+/// would have justified the skip, carried into the panic message so the
+/// strict-mode failure is as diagnosable as the skip line it replaces.
+#[track_caller]
+pub(crate) fn require_gl_or_skip(test_name: &str, err: &dyn std::fmt::Display) {
+    require_gl_or_skip_impl(gl_required(), test_name, err);
+}
+
+/// The env-independent core of [`require_gl_or_skip`] (same rationale as
+/// [`gl_required_from`]: unit-testable without touching process env).
+#[track_caller]
+fn require_gl_or_skip_impl(required: bool, test_name: &str, err: &dyn std::fmt::Display) {
+    assert!(
+        !required,
+        "GL context required but unavailable (RUSTTY_REQUIRE_GL=1): \
+         {test_name} would have skipped: {err}"
+    );
+}
+
 /// A live, GL-loaded context for one test, plus the [`gl_lock`] guard.
 pub(crate) struct GlTestContext {
     /// FIELD ORDER IS LOAD-BEARING: Rust drops fields in declaration order, so
@@ -77,6 +120,7 @@ pub(crate) fn offscreen_gl(test_name: &str) -> Option<GlTestContext> {
     let ctx = match OffscreenContext::init() {
         Ok(ctx) => ctx,
         Err(err) => {
+            require_gl_or_skip(test_name, &err);
             eprintln!(
                 "no headless OpenGL {}.{} core context ({err}); skipping {test_name}",
                 sys::MIN_VERSION_MAJOR,
@@ -89,6 +133,7 @@ pub(crate) fn offscreen_gl(test_name: &str) -> Option<GlTestContext> {
     match sys::load_gl(&ctx) {
         Ok(_) => {}
         Err(err @ (sys::Error::VersionUnavailable | sys::Error::OpenGLOutdated { .. })) => {
+            require_gl_or_skip(test_name, &err);
             eprintln!(
                 "no headless OpenGL {}.{} core context ({err}); skipping {test_name}",
                 sys::MIN_VERSION_MAJOR,
@@ -107,4 +152,37 @@ pub(crate) fn offscreen_gl(test_name: &str) -> Option<GlTestContext> {
         _ctx: ctx,
         _guard: guard,
     })
+}
+
+/// PROVING tests for the W8-03 strict mode: the pivot must be a no-op by
+/// default and a panic under `RUSTTY_REQUIRE_GL=1`. They drive the
+/// `*_from`/`*_impl` cores directly — never `std::env::set_var` — so they are
+/// race-free under the parallel harness and require no GL context (they run
+/// everywhere, including hosts where every live-GL test skips).
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+
+    use super::{gl_required_from, require_gl_or_skip_impl};
+
+    #[test]
+    fn gl_required_only_when_env_is_exactly_one() {
+        assert!(!gl_required_from(None));
+        assert!(!gl_required_from(Some(OsStr::new(""))));
+        assert!(!gl_required_from(Some(OsStr::new("0"))));
+        assert!(!gl_required_from(Some(OsStr::new("true"))));
+        assert!(gl_required_from(Some(OsStr::new("1"))));
+    }
+
+    #[test]
+    fn skip_pivot_is_noop_when_gl_not_required() {
+        // Must return, preserving the clean-skip contract.
+        require_gl_or_skip_impl(false, "some_test", &"no context");
+    }
+
+    #[test]
+    #[should_panic(expected = "GL context required but unavailable (RUSTTY_REQUIRE_GL=1)")]
+    fn skip_pivot_panics_when_gl_required() {
+        require_gl_or_skip_impl(true, "some_test", &"no context");
+    }
 }

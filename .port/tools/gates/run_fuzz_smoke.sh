@@ -7,9 +7,13 @@
 # Pass:    exit 0, ZERO new entries in fuzz/artifacts/ for the configured budget;
 #          the regression corpus replays clean.
 #
-# THIS IS A WIRED PROGRESS-MODE RUNNER. The fuzz target does not exist while the
-# port is empty, and cargo builds are out of scope for this gate authoring task.
-# So this runner:
+# STATUS (codex-vet F-017, 2026-08-11): the `vt_diff` target NOW EXISTS
+# (crates/rustty-vt/fuzz/, cargo-fuzz), so wherever nightly + cargo-fuzz are
+# installed this runner takes the REAL branch below and G5 is a real gate —
+# measured GREEN locally (3,299 runs over the 3,295-file seed corpus, no
+# artifact). Progress mode survives only as the honest fallback for legs
+# WITHOUT cargo-fuzz (e.g. GitHub CI, which does not install it); ci.sh still
+# classes G5 as PROGRESS for that reason. This runner:
 #   * if `cargo fuzz` + the `vt_diff` target are present, runs a SMOKE budget
 #     (short -max_total_time) and fails on any new artifact (the real gate),
 #   * otherwise runs in progress mode: it verifies the fuzz INVENTORY + corpus
@@ -89,7 +93,9 @@ if [ "$MODE" = "auto" ] && [ "$have_cargo_fuzz" = "1" ] && [ -d "$FUZZ_DIR" ]; t
   before=0
   [ -d "$ARTIFACTS" ] && before="$(ls -1 "$ARTIFACTS" 2>/dev/null | wc -l | tr -d ' ')"
   set +e
-  ( cd "$RUSTTY_ROOT" && cargo +nightly fuzz run vt_diff -- \
+  # cargo-fuzz resolves `fuzz/` relative to cwd, so run from the crate that
+  # owns the fuzz dir (crates/rustty-vt), not the workspace root.
+  ( cd "$RUSTTY_ROOT/crates/rustty-vt" && cargo +nightly fuzz run vt_diff -- \
       -max_total_time="$FUZZ_SECS" ${FUZZ_RUNS:+-runs=$FUZZ_RUNS} )
   rc=$?
   set -e
@@ -106,11 +112,13 @@ if [ "$MODE" = "auto" ] && [ "$have_cargo_fuzz" = "1" ] && [ -d "$FUZZ_DIR" ]; t
 fi
 
 # --- progress mode ---
-echo "--- PROGRESS mode: cargo-fuzz target 'vt_diff' not built yet ---"
+echo "--- PROGRESS mode: cannot run the REAL smoke on this leg ---"
 echo "    fuzz dir: $FUZZ_DIR (exists: $([ -d "$FUZZ_DIR" ] && echo yes || echo no))"
 echo "    cargo fuzz available: $([ "$have_cargo_fuzz" = "1" ] && echo yes || echo no)"
+echo "    (both must be 'yes' for the real smoke; the vt_diff target ships in-tree,"
+echo "     so a 'no' on cargo fuzz means nightly+cargo-fuzz are not installed here)"
 if run_self_test; then
-  echo "FUZZ-WIRED (port empty): fuzz inventory + corpus wiring present; G5 in progress mode"
+  echo "FUZZ-WIRED: fuzz inventory + corpus wiring present; G5 in progress mode on this leg"
   exit 0
 else
   echo "BLOCKED: fuzz wiring incomplete"

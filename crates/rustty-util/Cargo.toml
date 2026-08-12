@@ -15,4 +15,15 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Restores Zig's `builtin.is_test` semantics for the `tripwire` fail-point
+# module ACROSS crate boundaries. `builtin.is_test` is true for the WHOLE
+# compilation unit under `zig build test` at ANY optimize mode (including
+# ReleaseFast), so the reference's fail-point tests run in release test builds.
+# Rust has no cross-crate `cfg(test)`, so a consumer crate turns this on as a
+# DEV-dependency feature: dev-dep features unify only into test/bench/example
+# builds, so a production `cargo build --release` (which builds no dev-deps)
+# still compiles `check` away exactly as before.
+tripwire-test = []
+
 [dependencies]

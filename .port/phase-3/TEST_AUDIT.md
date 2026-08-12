@@ -103,7 +103,7 @@ as `pagelist_incremental_compression_restarts_after_replacement` and
 `pagelist_incremental_compression_restarts_after_reset`. **A green name match is
 not evidence that the assertions exist.**
 
-### Accepted absence (1)
+### Accepted absence (1) — RESOLVED 2026-08-11 (F-015), now ported
 
 - `src/terminal/PageList.zig::PageList incremental compression advances after allocation failure`
 
@@ -112,16 +112,32 @@ The oracle test's entire content is an allocator seam: it wraps the list in
 allocation** inside `compress.Page.init` fails, and asserts that the pass moves on
 to the next page rather than retrying the failed candidate.
 
-rustty has no injectable analogue. The encoded buffer is
-`scratch[..encoded_len].to_vec()` in `crates/rustty-vt/src/compress/page.rs` — a
-global-allocator `Vec` that **aborts** on OOM under the crate's DG5 abort policy
-rather than returning an error, and no allocator parameter reaches this path. The
-port deliberately does not carry an allocator through `compress_page`, so there is
-no failpoint to arm and no `libc`/global-allocator shim may be added for one test.
+The argument recorded below was that rustty had no injectable analogue, because
+the encoded buffer was `scratch[..encoded_len].to_vec()` in
+`crates/rustty-vt/src/compress/page.rs` — a global-allocator `Vec` that **aborts**
+on OOM rather than returning an error. **That argument was wrong on its premise,
+not on its reasoning**: the abort was a port divergence, not an unavoidable
+property of Rust. `Vec::try_reserve_exact` is a real fallible seam and needs no
+allocator parameter. The vet finding F-015 confirmed the divergence (the oracle
+degrades gracefully — `error.OutOfMemory => return false`, page stays resident —
+where the port aborted the process), and the same review corrected the attribution
+of the abort to "the crate's DG5 abort policy": DG5 (`PORT_RULES.md:139`) is the
+C-ABI panic-at-boundary policy, not an internal-allocation doctrine.
+
+`CompressedPage::init` now returns `Result<_, compress::InitError>` with an
+`OutOfMemory` arm and retains the encoded bytes through `try_reserve_exact`;
+`PageList::compress_page` already mapped that `Err` to `return false`. The oracle
+test is ported as
+`pagelist_incremental_compression_advances_after_allocation_failure`, with the
+`FailingAllocator` replaced by the `compress::page::InitFp::Encoded` tripwire fail
+point sitting immediately before that allocation (the established idiom for OOM
+arms in this crate — `COMPRESS_PAGE_TW`, `Screen`'s `startHyperlink`/`resize`
+modules). `compressed_page_reports_a_failed_encoded_allocation` covers the same
+arm at the `compress/page.rs` unit level.
 
 The *structural* claim — a failed candidate does not stall the pass, and the next
-step continues at the following serial — is not lost. It is asserted twice over,
-through the two failure seams that do exist, and both are mutation-proved:
+step continues at the following serial — was already asserted twice over, through
+the two failure seams that existed before, and both are mutation-proved:
 
 - `pagelist_incremental_compression_advances_after_failure` (incompressible page,
   `compress_page` returns false at the codec),
@@ -130,8 +146,8 @@ through the two failure seams that do exist, and both are mutation-proved:
 
 Rewinding the continuation marker on failure (`last_serial = None` in the
 non-compressing arm of `compress_incremental`) fails **both** of them on
-`assertion failed: unsafe { super::Node::is_compressed(second) }`. What is
-genuinely unported is only the allocation-shaped instance of that same claim.
+`assertion failed: unsafe { super::Node::is_compressed(second) }`. The
+allocation-shaped instance of that same claim is now asserted alongside them.
 
 ## Note on the matcher — it was wrong five times
 

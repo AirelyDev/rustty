@@ -3678,4 +3678,98 @@ mod tests {
             unsafe { terminal_c::free(t) };
         });
     }
+
+    // ==================================================================
+    // W33-B02-SELECTOR-01: out-of-range raw selectors return
+    // RUSTTY_INVALID_VALUE.
+    //
+    // DELIBERATE DIVERGENCE (D11, `.port/phase-3/README.md`): the reference's
+    // `get`/`image_get`/`placement_get` take the selector as an `enum(c_int)`
+    // parameter and `switch` on it, so an undeclared integer is a corrupt enum
+    // tag — a safety-checked Zig build panics ("switch on corrupt value") and a
+    // ReleaseFast build is UB, i.e. there is no defined oracle behavior to
+    // match. Rust cannot receive an out-of-range `#[repr(C)]` enum by value at
+    // all (it is materialized in the callee prologue, before any check could
+    // run), so these exports take the selector as a plain `c_int` and narrow it
+    // via `from_c_int`, returning `.invalid_value` — the same disposition the
+    // reference gives `placement_iterator_set`, where it DOES carry an explicit
+    // `std.enums.fromInt` guard. These tests pin that contract so it cannot
+    // regress silently.
+
+    // The narrowing itself: undeclared integers are rejected, declared ones
+    // (including `invalid = 0`) are not.
+    #[test]
+    fn selector_from_c_int_rejects_out_of_range() {
+        // (the selector enums derive no `Debug`, so these are `is_none`/
+        // `matches!` rather than `assert_eq!`)
+        assert!(Data::from_c_int(99).is_none());
+        assert!(ImageData::from_c_int(99).is_none());
+        assert!(PlacementData::from_c_int(99).is_none());
+
+        // -1 (a sign-extended C `int`) is out of range too.
+        assert!(Data::from_c_int(-1).is_none());
+        assert!(ImageData::from_c_int(-1).is_none());
+        assert!(PlacementData::from_c_int(-1).is_none());
+
+        // The declared `invalid = 0` tag IS in range; it keeps its
+        // `.invalid_value` disposition inside `get`, not here.
+        assert!(matches!(Data::from_c_int(0), Some(Data::Invalid)));
+        assert!(matches!(ImageData::from_c_int(0), Some(ImageData::Invalid)));
+        assert!(matches!(
+            PlacementData::from_c_int(0),
+            Some(PlacementData::Invalid)
+        ));
+    }
+
+    // The exported C entry points: an undeclared selector returns
+    // RUSTTY_INVALID_VALUE (-2) WITHOUT dereferencing the handle, and the
+    // declared `invalid = 0` selector is the matched in-range control.
+    #[test]
+    fn exported_getters_reject_out_of_range_selector() {
+        const INVALID_VALUE: std::os::raw::c_int = -2;
+        assert_eq!(INVALID_VALUE, Result::InvalidValue.to_c_int());
+
+        // rustty_kitty_graphics_get
+        assert_eq!(INVALID_VALUE, unsafe {
+            crate::rustty_kitty_graphics_get(core::ptr::null_mut(), 99, core::ptr::null_mut())
+        });
+        assert_eq!(INVALID_VALUE, unsafe {
+            crate::rustty_kitty_graphics_get(core::ptr::null_mut(), 0, core::ptr::null_mut())
+        });
+
+        // rustty_kitty_graphics_image_get
+        assert_eq!(INVALID_VALUE, unsafe {
+            crate::rustty_kitty_graphics_image_get(core::ptr::null(), 99, core::ptr::null_mut())
+        });
+        assert_eq!(INVALID_VALUE, unsafe {
+            crate::rustty_kitty_graphics_image_get(core::ptr::null(), 0, core::ptr::null_mut())
+        });
+
+        // rustty_kitty_graphics_placement_get
+        assert_eq!(INVALID_VALUE, unsafe {
+            crate::rustty_kitty_graphics_placement_get(
+                core::ptr::null_mut(),
+                99,
+                core::ptr::null_mut(),
+            )
+        });
+        assert_eq!(INVALID_VALUE, unsafe {
+            crate::rustty_kitty_graphics_placement_get(
+                core::ptr::null_mut(),
+                0,
+                core::ptr::null_mut(),
+            )
+        });
+
+        // The matched control the reference DOES implement with an explicit
+        // guard: `placement_iterator_set` rejects an undeclared option the same
+        // way in both trees.
+        assert_eq!(INVALID_VALUE, unsafe {
+            crate::rustty_kitty_graphics_placement_iterator_set(
+                core::ptr::null_mut(),
+                99,
+                core::ptr::null(),
+            )
+        });
+    }
 }

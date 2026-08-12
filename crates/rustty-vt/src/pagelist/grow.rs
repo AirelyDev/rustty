@@ -14,6 +14,37 @@ use crate::page::{Capacity, Page};
 use rustty_render_types::term_size as size;
 use rustty_render_types::term_size::OffsetBuf;
 
+/// Fail points for `grow`.
+//
+// PORT NOTE: the reference has NO `tripwire.module` for `grow`; it exercises
+// `grow`'s `Allocator.Error` from callers with `std.testing.failing_allocator`.
+// The port's page memory comes from an owned pool rather than a swappable
+// `Allocator`, so a failing allocator cannot be substituted from a test. This
+// port-local `cfg(test)` tripwire is the stand-in fail-injection seam for
+// exactly the one allocation `grow` can fail on (`create_page` in the
+// `grow_alloc` tail), which is what a failing allocator would have failed. It
+// uses the same `#[cfg(test)] thread_local!` idiom as the `init`/`initPages`
+// modules in `mod.rs`.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum GrowFp {
+    /// The `try self.createPage(...)` that allocates the new page node.
+    CreatePage,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static GROW_TW: core::cell::RefCell<
+        rustty_util::tripwire::Module<GrowFp, super::OutOfMemory>,
+    > = core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+#[cfg(test)]
+#[inline]
+fn grow_tw_check(point: GrowFp) -> Result<(), super::OutOfMemory> {
+    GROW_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
 impl PageList {
     /// Split the given node in the PageList at the given pin.
     ///
@@ -446,6 +477,8 @@ impl PageList {
     /// (including its `defer self.assertIntegrity()` exit).
     fn grow_alloc(&mut self, cap: Capacity) -> Result<Option<*mut Node>, super::OutOfMemory> {
         // We need to allocate a new memory buffer.
+        #[cfg(test)]
+        grow_tw_check(GrowFp::CreatePage)?;
         let next_node = self.create_page(super::CreatePage::new(cap))?;
         // we don't errdefer this because we've added it to the linked
         // list and its fine to have dangling unused pages.

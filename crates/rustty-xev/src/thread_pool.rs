@@ -927,6 +927,7 @@ impl Event {
 // PORT NOTE: `std.Thread.Futex.wait/wake` — Rust's std futex is not public, so
 // this binds the same OS primitives std itself uses: Linux `futex(2)`
 // (FUTEX_WAIT/WAKE_PRIVATE), Darwin `__ulock_wait/wake` (UL_COMPARE_AND_WAIT),
+// FreeBSD `_umtx_op` (UMTX_OP.WAIT_UINT_PRIVATE/WAKE_PRIVATE, W2D),
 // Windows `ntdll.RtlWaitOnAddress`/`RtlWakeAddress{Single,All}` (WS20), and — for
 // every remaining target, all of which are `builtin.single_threaded` in the
 // reference — Zig's `SingleThreadedImpl` (WS20).
@@ -966,6 +967,61 @@ fn futex_wake(atomic: &AtomicU32, n: u32) {
             atomic.as_ptr(),
             libc::FUTEX_WAKE | libc::FUTEX_PRIVATE_FLAG,
             n,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `FreebsdImpl` (std/Thread/Futex.zig:303) — W2D. `Impl` selects it for
+// `builtin.os.tag == .freebsd` (Futex.zig:77-78), between the Linux and OpenBSD
+// arms. `_umtx_op` is the FreeBSD userland-mutex syscall:
+// https://www.freebsd.org/cgi/man.cgi?query=_umtx_op&sektion=2&n=1
+// ---------------------------------------------------------------------------
+
+#[cfg(all(target_os = "freebsd", not(miri)))]
+fn futex_wait(atomic: &AtomicU32, expect: u32) {
+    // `const rc = c._umtx_op(@intFromPtr(&ptr.raw), @intFromEnum(c.UMTX_OP.
+    //  WAIT_UINT_PRIVATE), @as(c_ulong, expect), tm_size, @intFromPtr(tm_ptr));`
+    // (Futex.zig:319-325). The pool never passes a timeout, so `tm_size == 0` and
+    // `tm_ptr == null` — both tail slots are the null pointer here.
+    //
+    // rc DISCARDED, same discipline as this file's linux arm: the reference's
+    // switch maps `.SUCCESS` and `.INTR` (a spurious wake) to a plain return, and
+    // `.TIMEDOUT` is unreachable without a timeout; every caller re-checks state
+    // in a loop (Futex.zig:327-337).
+    //
+    // SAFETY: `atomic` is a live, aligned `u32` for the duration of the call; the
+    // two tail arguments are null, which is what the no-timeout path passes.
+    unsafe {
+        libc::_umtx_op(
+            atomic.as_ptr().cast::<libc::c_void>(),
+            libc::UMTX_OP_WAIT_UINT_PRIVATE,
+            expect as libc::c_ulong,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        );
+    }
+}
+
+#[cfg(all(target_os = "freebsd", not(miri)))]
+fn futex_wake(atomic: &AtomicU32, n: u32) {
+    // `c._umtx_op(@intFromPtr(&ptr.raw), @intFromEnum(c.UMTX_OP.WAKE_PRIVATE),
+    //  @as(c_ulong, max_waiters), 0, 0)` (Futex.zig:340-347).
+    //
+    // NO CLAMP, deliberately (R1): unlike `LinuxImpl.wake`, `FreebsdImpl.wake`
+    // passes `max_waiters` straight through. The linux arm's `min(i32::MAX)` is an
+    // artifact of FUTEX_WAKE's C `int` count slot; `_umtx_op`'s `val` slot is a
+    // `c_ulong`, so `u32::MAX` ("wake all") arrives intact and must NOT be clamped
+    // here.
+    //
+    // SAFETY: as `futex_wait` above.
+    unsafe {
+        libc::_umtx_op(
+            atomic.as_ptr().cast::<libc::c_void>(),
+            libc::UMTX_OP_WAKE_PRIVATE,
+            n as libc::c_ulong,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
         );
     }
 }
@@ -1093,9 +1149,21 @@ fn futex_wake(atomic: &AtomicU32, n: u32) {
 // arm of the reference's dispatch chain, and every target left over here (WASI
 // without the threads proposal, freestanding wasm) is single-threaded. Verbatim
 // reference comments preserved (R3).
+//
+// W2D: `freebsd` is EXCLUDED from this arm — it is a multithreaded target with
+// its own `FreebsdImpl` above. Landing it here would have made the first pool
+// sleep hit `unreachable!("deadlock detected")`.
 // ---------------------------------------------------------------------------
 
-#[cfg(all(not(any(target_os = "linux", target_os = "macos", windows)), not(miri)))]
+#[cfg(all(
+    not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        windows
+    )),
+    not(miri)
+))]
 fn futex_wait(atomic: &AtomicU32, expect: u32) {
     // if (ptr.raw != expect) return;
     if atomic.load(Relaxed) != expect {
@@ -1112,7 +1180,15 @@ fn futex_wait(atomic: &AtomicU32, expect: u32) {
     unreachable!("deadlock detected");
 }
 
-#[cfg(all(not(any(target_os = "linux", target_os = "macos", windows)), not(miri)))]
+#[cfg(all(
+    not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        windows
+    )),
+    not(miri)
+))]
 fn futex_wake(atomic: &AtomicU32, n: u32) {
     // There are no other threads to possibly wake up
     let _ = atomic;

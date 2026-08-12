@@ -138,7 +138,10 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
     // Find the preferred path.
     // const path = try configpkg.preferredDefaultFilePath(alloc);
     // defer alloc.free(path);
-    let path = preferred_default_file_path()?;
+    //   (W94-B02-01: `preferredDefaultFilePath` returns raw path bytes; the
+    //   `{s}` display sites below go through `show`, the exec/OSC8 sites use
+    //   the raw bytes.)
+    let path: Vec<u8> = preferred_default_file_path()?;
 
     // We don't currently support Windows because we use the exec syscall.
     // if (comptime builtin.os.tag == .windows) {
@@ -159,6 +162,7 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
              \n\
              {path}\n",
             app = rustty_identity::APP_NAME,
+            path = show(&path),
         )?;
         // return 1;
         return Ok(1);
@@ -239,7 +243,13 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
         //     "\x1b]8;;file://{s}\x1b\\{s}\x1b]8;;\x1b\\\n",
         //     .{ path, path },
         // );
-        writeln!(stderr, "\x1b]8;;file://{path}\x1b\\{path}\x1b]8;;\x1b\\")?;
+        //   (W94-B02-01: `{s}` writes the RAW path bytes; segmented `write_all`
+        //   keeps that byte-exact for a non-UTF-8 path.)
+        stderr.write_all(b"\x1b]8;;file://")?;
+        stderr.write_all(&path)?;
+        stderr.write_all(b"\x1b\\")?;
+        stderr.write_all(&path)?;
+        stderr.write_all(b"\x1b]8;;\x1b\\\n")?;
 
         // return 1;
         return Ok(1);
@@ -266,7 +276,7 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
         buffer.writeByte(b' ')?;
         {
             let mut sh = ShellEscapeWriter::init(&mut buffer);
-            sh.writeAll(path.as_bytes())?;
+            sh.writeAll(&path)?;
             // sh.writer.flush() — the allocating writer has no buffered state.
         }
         // writer.flush() — no-op for the allocating writer.
@@ -319,6 +329,7 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
              Editor: {editor}\n\
              Path: {path}",
             editor = show(editor),
+            path = show(&path),
             err = errno_suffix(&err),
         )?;
         // return 1;

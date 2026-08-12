@@ -356,6 +356,18 @@ impl LogEmitter<'_> {
     }
 }
 
+// The `std.Io.Writer` the reference builds over the `LogEmitter` buffer
+// (`sys.zig`'s `.writer = .{ .buffer = &log_emitter_buffer, .vtable = ... }`).
+// `core::fmt::Write` is rustty's writer seam: `core::fmt::write` streams the
+// formatted fragments straight into the stack buffer, exactly like Zig's
+// `writer.print(format, args)`, so no heap allocation is involved.
+impl core::fmt::Write for LogEmitter<'_> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        self.write(s.as_bytes());
+        Ok(())
+    }
+}
+
 /// Custom std.log sink for C ABI builds.
 ///
 /// When a log callback is installed via rustty_sys_set(), messages are
@@ -390,11 +402,11 @@ pub fn log_fn(level: StdLevel, scope: &str, args: core::fmt::Arguments) {
     };
     // const writer: std.io.GenericWriter(...) = .{ .context = &ctx };
     // nosuspend writer.print(format, args) catch {};
-    // PORT NOTE: `writer.print(format, args)` formats into the `LogEmitter`. We
-    // format `args` into an owned string and feed it through `LogEmitter::write`,
-    // which is the same byte stream the GenericWriter would produce.
-    let formatted = std::fmt::format(args);
-    ctx.write(formatted.as_bytes());
+    // PORT NOTE: `core::fmt::write` over the `core::fmt::Write` impl above is
+    // the direct analogue of `writer.print(format, args)`: the formatted
+    // fragments stream into the `LogEmitter`'s stack buffer with no heap
+    // allocation. A formatting error is swallowed, mirroring the `catch {}`.
+    let _ = core::fmt::write(&mut ctx, args);
     // ctx.flush();
     ctx.flush();
 }
@@ -473,7 +485,7 @@ pub unsafe fn log_stderr(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     // PORT NOTE: the reference tests share the module `var global` and Zig runs
@@ -493,7 +505,10 @@ mod tests {
     // Reset GLOBAL + the rustty-vt decode_png slot to a known empty state. Holds
     // and returns the serialization guard so the whole test body runs without
     // another sys test mutating GLOBAL concurrently (mirroring Zig's serial run).
-    fn reset_global() -> std::sync::MutexGuard<'static, ()> {
+    // `pub(crate)`: other modules' tests that install a log callback (e.g. the
+    // render-state scoped-log tests) must serialize against these, since GLOBAL
+    // is process-wide.
+    pub(crate) fn reset_global() -> std::sync::MutexGuard<'static, ()> {
         let guard = lock_tests();
         GLOBAL.clear_poison();
         let mut g = GLOBAL.lock().unwrap();

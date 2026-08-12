@@ -15,6 +15,7 @@ copy the crate directory into your project.
 
 The current crates are:
 
+- `breakpad-sys`
 - `dcimgui-sys`
 - `fontconfig-sys`
 - `freetype-sys`

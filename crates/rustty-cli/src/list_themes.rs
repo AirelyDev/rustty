@@ -2160,7 +2160,8 @@ fn resolve_auto_theme_path() -> Result<Vec<u8>, Error> {
     // const main_cfg_path = try configpkg.preferredDefaultFilePath(alloc);
     let main_cfg_path = rustty_config::file_load::preferred_default_file_path()?;
     // const base_dir = std.fs.path.dirname(main_cfg_path) orelse return error.BadPathName;
-    let base_dir = std::path::Path::new(&main_cfg_path)
+    // (W94-B02-01: `preferred_default_file_path` returns raw path bytes.)
+    let base_dir = std::path::Path::new(os_str_from_bytes(&main_cfg_path))
         .parent()
         .ok_or_else(|| std::io::Error::other("BadPathName"))?;
     // return try std.fs.path.join(alloc, &.{ base_dir, "auto", "theme.ghostty" });

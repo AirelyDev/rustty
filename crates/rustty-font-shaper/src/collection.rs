@@ -201,6 +201,16 @@ impl Collection {
         // We have some special indexes so we must never pass those.
         let idx = self.faces.get(opts.style).count();
         if idx >= (Index::SPECIAL_START as usize) - 1 {
+            // PORT NOTE (W9F-02): the collection refused ownership of the moved
+            // face, and `Drop` does not run the backend `deinit` (the HarfBuzz
+            // font — plus the FT face/mutex on FreeType — are raw handles), so
+            // it must be torn down manually before the error return. The
+            // reference's callers own their copy and `defer face.deinit()`
+            // themselves (Zig pass-by-value); with Rust move semantics this
+            // callee is the only owner left, so the deinit lands here —
+            // net-equivalent cleanup.
+            let mut face = face;
+            face.deinit();
             return Err(Error::CollectionFull);
         }
 
@@ -214,9 +224,13 @@ impl Collection {
         if let Some(load_opts) = self.load_options {
             let mut new_opts = load_opts;
             new_opts.size.points *= scale_factor as f32;
-            owned_face
-                .set_size(new_opts.face_options())
-                .map_err(|_| Error::SetSizeFailed)?;
+            // owned_face.setSize(new_opts.faceOptions()) catch return error.SetSizeFailed;
+            if owned_face.set_size(new_opts.face_options()).is_err() {
+                // PORT NOTE (W9F-02): manual teardown of the moved face — see
+                // the `CollectionFull` arm above.
+                owned_face.deinit();
+                return Err(Error::SetSizeFailed);
+            }
         }
 
         // try list.append(alloc, .{ .entry = .{ ... } });
@@ -238,12 +252,24 @@ impl Collection {
     // pub fn addDeferred(self, alloc, face: DeferredFace, opts) AddDeferredError!Index {
     pub fn add_deferred(&mut self, face: DeferredFace, opts: AddOptions) -> Result<Index, Error> {
         if self.load_options.is_none() {
+            // PORT NOTE (W9F-02): the collection refused ownership of the moved
+            // deferred face, so it is deinitialized here — `Drop` does not
+            // destroy the Fontconfig pattern it may own. The reference's
+            // callers `deferred_face.deinit()` their own copy on an
+            // `addDeferred` error (CodepointResolver.zig:198/212); with Rust
+            // move semantics this callee is the only owner left, so the deinit
+            // lands here — net-equivalent cleanup.
+            let mut face = face;
+            face.deinit();
             return Err(Error::DeferredLoadingUnavailable);
         }
 
         // We have some special indexes so we must never pass those.
         let idx = self.faces.get(opts.style).count();
         if idx >= (Index::SPECIAL_START as usize) - 1 {
+            // PORT NOTE (W9F-02): see the arm above.
+            let mut face = face;
+            face.deinit();
             return Err(Error::CollectionFull);
         }
 
@@ -322,6 +348,8 @@ impl Collection {
                 // Load the face.
                 let mut face = d.load(opts.library, opts.face_options())?;
                 // errdefer face.deinit();
+                //   (materialized on the fallible `set_size` below — the only
+                //   `try` this errdefer covers; W9F-02.)
 
                 // Calculate the scale factor for this
                 // entry now that we have a loaded face.
@@ -335,7 +363,14 @@ impl Collection {
                 if let ScaleFactor::Scale(scale) = entry_ref.scale_factor {
                     if scale != 1.0 {
                         opts.size.points *= scale as f32;
-                        face.set_size(opts.face_options())?;
+                        if let Err(e) = face.set_size(opts.face_options()) {
+                            // The reference's `errdefer face.deinit()` — the
+                            // loaded face is not yet owned by the entry, and
+                            // `Drop` does not run the backend `deinit`, so tear
+                            // it down manually before the error propagates.
+                            face.deinit();
+                            return Err(e.into());
+                        }
                     }
                 }
 
@@ -1395,11 +1430,13 @@ mod tests {
         .unwrap();
         // We have to deinit it manually since the
         // collection doesn't do it if adding fails.
-        // PORT NOTE: the reference `defer face.deinit()` frees the face the failed
-        // `add` didn't take ownership of. Here `add` takes `face` by value and, on
-        // the `CollectionFull` early return (before it stores anything), drops it —
-        // releasing the underlying font. The reference's manual deinit is subsumed
-        // by that move + `Drop`.
+        // PORT NOTE (W9F-02): the reference `defer face.deinit()` frees the face
+        // the failed `add` didn't take ownership of. Here `add` takes `face` by
+        // value, so on the `CollectionFull` early return it deinits the moved
+        // face itself (`Drop` alone would leak the raw native handles — the
+        // HarfBuzz font, plus the FT face/mutex on FreeType). The deinit probe
+        // proves that teardown fires exactly once.
+        let deinits_before = crate::face::test_probe::face_deinits();
         assert!(matches!(
             c.add(
                 face,
@@ -1411,6 +1448,117 @@ mod tests {
             ),
             Err(Error::CollectionFull)
         ));
+        assert_eq!(crate::face::test_probe::face_deinits(), deinits_before + 1);
+
+        c.deinit();
+        lib.deinit();
+    }
+
+    // W9F-02 proving test (no reference analog — Zig's test allocator catches
+    // leaks structurally; Rust needs the explicit probe): when `add` fails with
+    // `SetSizeFailed`, the moved face must be torn down via `deinit` (the
+    // reference's callers hold their own copy and clean it; here `add` is the
+    // only remaining owner). Fails without the error-arm `deinit` in `add`.
+    #[test]
+    fn add_set_size_failure_deinits_face() {
+        let test_font = embedded::REGULAR;
+
+        let mut lib = Library::init().unwrap();
+
+        let mut c = Collection::init();
+        // Load options make `add` call `set_size` on the moved face.
+        c.load_options = Some(LoadOptions {
+            library: lib,
+            ..Default::default()
+        });
+
+        let face = Face::init(
+            lib,
+            test_font,
+            opts(DesiredSize {
+                points: 12.0,
+                xdpi: crate::face::DEFAULT_DPI,
+                ydpi: crate::face::DEFAULT_DPI,
+            }),
+        )
+        .unwrap();
+
+        let deinits_before = crate::face::test_probe::face_deinits();
+        crate::face::test_probe::arm_set_size_failpoint(0);
+        let result = c.add(
+            face,
+            AddOptions {
+                style: Style::Regular,
+                fallback: false,
+                size_adjustment: SizeAdjustment::None,
+            },
+        );
+        crate::face::test_probe::disarm_set_size_failpoint();
+
+        assert!(matches!(result, Err(Error::SetSizeFailed)));
+        // The failed `set_size` returned before any internal teardown, so the
+        // single deinit observed is the error-arm cleanup of the moved face.
+        assert_eq!(crate::face::test_probe::face_deinits(), deinits_before + 1);
+
+        c.deinit();
+        lib.deinit();
+    }
+
+    // W9F-02 proving test: `getFaceFromEntry`'s `errdefer face.deinit()` — when
+    // the deferred face loads but the post-load `set_size` (scale != 1.0) fails,
+    // the freshly loaded face must be deinitialized before the error propagates.
+    // Fails without the materialized errdefer in `get_face_from_entry`.
+    // (macOS-only: it builds the deferred face from a CTFont; the Linux
+    // Fontconfig deferred payload requires a live fontconfig pattern.)
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn get_face_deferred_set_size_failure_deinits_face() {
+        use crate::deferred_face::{new_cfstring, CoreTextData};
+        use objc2_core_text::CTFont;
+
+        let mut lib = Library::init().unwrap();
+
+        let mut c = Collection::init();
+        c.load_options = Some(LoadOptions {
+            library: lib,
+            ..Default::default()
+        });
+
+        // A real deferred face backed by a system font.
+        let name = new_cfstring("Menlo").unwrap();
+        let ct_font = unsafe { CTFont::with_name(&name, 12.0, core::ptr::null()) };
+        let deferred = DeferredFace {
+            ct: Some(CoreTextData {
+                font: ct_font,
+                variations: Vec::new(),
+            }),
+        };
+
+        let idx = c
+            .add_deferred(
+                deferred,
+                AddOptions {
+                    style: Style::Regular,
+                    fallback: false,
+                    size_adjustment: SizeAdjustment::None,
+                },
+            )
+            .unwrap();
+
+        // Force the post-load resize: a non-1.0 scale factor makes
+        // `get_face_from_entry` call `set_size` on the loaded face.
+        let entry = c.get_entry(idx).unwrap();
+        unsafe { (*entry).scale_factor = ScaleFactor::Scale(2.0) };
+
+        let deinits_before = crate::face::test_probe::face_deinits();
+        crate::face::test_probe::arm_set_size_failpoint(0);
+        let result = c.get_face(idx);
+        crate::face::test_probe::disarm_set_size_failpoint();
+
+        assert!(result.is_err());
+        // The failed `set_size` returned before any internal teardown, so the
+        // single deinit observed is the errdefer cleanup of the loaded face.
+        assert_eq!(crate::face::test_probe::face_deinits(), deinits_before + 1);
 
         c.deinit();
         lib.deinit();
@@ -1981,15 +2129,30 @@ mod tests {
 
     // test "face metrics"
     #[test]
+    // PORT NOTE (W9-04): the reference reports this test as `SkipZigTest` on
+    // every backend but `web_canvas`; rustty's inverted guard made it report a
+    // green PASS with ZERO assertions instead. `#[ignore]` is the faithful
+    // signal (reported IGNORED, not passed). The body stays deferred: the
+    // upstream oracle is unexecutable even on its only non-skip backend —
+    // `Collection.zig:1448,1468,1482,1502` mark `.web_canvas => unreachable`
+    // for every expected-value switch, and ghostty's `face/web_canvas.zig` has
+    // no `getMetrics`/`FaceMetrics` at all — so a faithful body would need a
+    // browser-hosted wasm runner measuring live Canvas metrics, not ported
+    // constants.
+    #[ignore = "web_canvas-only (reference: SkipZigTest, Collection.zig:1398); needs a browser-hosted wasm runner"]
     fn face_metrics() {
         // The web canvas backend doesn't calculate face metrics, only cell metrics
         // if (options.backend != .web_canvas) return error.SkipZigTest;
         //
         // PORT NOTE: `web_canvas` is never the active backend for the macOS/Linux
         // parity targets, so this test always takes the skip path (its body needs
-        // the `cozette`/`geist_mono` embeds + web_canvas measurements). The full
-        // body lands with the wasm/web_canvas backend port. The `!= web_canvas`
-        // skip is expressed as an inverted `== web_canvas` guard (clippy-clean).
+        // the `cozette`/`geist_mono` embeds + web_canvas measurements). W9-04:
+        // `web_canvas::Face` has since landed (live on wasm32), but the body has
+        // not — and cannot be ported faithfully, because the reference's own
+        // expected values are `.web_canvas => unreachable` (see the `#[ignore]`
+        // rationale above); it needs a browser-hosted wasm runner instead. The
+        // `!= web_canvas` skip is expressed as an inverted `== web_canvas` guard
+        // (clippy-clean).
         // The reference body (DEFERRED) is preserved verbatim:
         //
         //   const narrowFont = font.embedded.cozette;

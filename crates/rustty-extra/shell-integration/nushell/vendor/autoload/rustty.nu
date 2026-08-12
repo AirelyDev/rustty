@@ -6,6 +6,7 @@ export module rustty {
 
   # Wrap `ssh` with `rustty +ssh` and translate the shell-integration
   # feature flags into command options.
+  @complete external
   export def --wrapped ssh [...args] {
     if not ((has_feature "ssh-env") or (has_feature "ssh-terminfo")) {
       ^ssh ...$args
@@ -24,6 +25,7 @@ export module rustty {
   }
 
   # Wrap `sudo` to preserve Rustty's TERMINFO environment variable
+  @complete external
   export def --wrapped sudo [...args] {
     mut sudo_args = $args
 

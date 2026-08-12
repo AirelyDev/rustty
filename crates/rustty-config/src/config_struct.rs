@@ -76,7 +76,8 @@ use rustty_args::args::{
 use rustty_args::diagnostics::DiagnosticList;
 use rustty_cfg_fmt::{
     entry_formatter, format_entry_display, format_entry_enum, format_entry_float,
-    format_entry_optional, format_entry_string, format_entry_void, FormatEntry, Writer,
+    format_entry_optional, format_entry_string, format_entry_void, FormatEntry, FormatError,
+    Writer,
 };
 
 use crate::command::Command;
@@ -5306,14 +5307,32 @@ impl From<ParseError> for LoadError {
     }
 }
 
-/// `std.log.info` / `std.log.warn` scoped `.config`. The parity harness does not
-/// assert log output; these go to stderr like the reference's scoped logger.
+/// `std.log.info` / `std.log.warn` scoped `.config`. The reference routes these
+/// through `main_ghostty.zig`'s `logFn`, whose stderr branch is gated on
+/// `global.logging().stderr` (`if (!global.logging().stderr) break :stderr;`) —
+/// set false by `global.zig` `init` when a CLI action is detected, so action
+/// output stays clean. The port honors the same gate via the
+/// `rustty_global::logging()` process-global; formatting is split from the
+/// write so the gate is unit-testable without capturing stderr.
+fn format_log(kind: &str, msg: &str, logging: rustty_global::Logging) -> Option<String> {
+    if !logging.stderr {
+        return None;
+    }
+    // `level_txt ++ "(" ++ @tagName(scope) ++ "): "` — logFn's prefix for the
+    // `.config` scope; `warning` is `std.log.Level.warn.asText()`.
+    Some(format!("{kind}(config): {msg}"))
+}
+
 fn log_info(msg: String) {
-    eprintln!("info(config): {msg}");
+    if let Some(line) = format_log("info", &msg, rustty_global::logging()) {
+        eprintln!("{line}");
+    }
 }
 
 fn log_warn(msg: String) {
-    eprintln!("warning(config): {msg}");
+    if let Some(line) = format_log("warning", &msg, rustty_global::logging()) {
+        eprintln!("{line}");
+    }
 }
 
 /// `std.fs.path.dirname` — the directory portion of `path`, or `None` if there
@@ -5885,14 +5904,11 @@ impl Config {
         // Load XDG first
         // const legacy_xdg_path = try file_load.legacyDefaultXdgPath(alloc);
         // defer alloc.free(legacy_xdg_path);
-        let legacy_xdg_path = crate::file_load::legacy_default_xdg_path()
-            .map(String::into_bytes)
-            .unwrap_or_default();
+        // (W94-B02-01: the XDG helpers are byte-typed now — no `into_bytes`.)
+        let legacy_xdg_path = crate::file_load::legacy_default_xdg_path().unwrap_or_default();
         // const xdg_path = try file_load.defaultXdgPath(alloc);
         // defer alloc.free(xdg_path);
-        let xdg_path = crate::file_load::default_xdg_path()
-            .map(String::into_bytes)
-            .unwrap_or_default();
+        let xdg_path = crate::file_load::default_xdg_path().unwrap_or_default();
         // const xdg_loaded: bool = xdg_loaded: {
         let xdg_loaded: bool = {
             // const legacy_xdg_action = self.loadOptionalFile(alloc, legacy_xdg_path);
@@ -8311,7 +8327,7 @@ impl Config {
         &self,
         key: &[u8],
         writer: &mut W,
-    ) -> Result<(), W::Error> {
+    ) -> Result<(), FormatError<W::Error>> {
         // `.bool` / `.int` arm: `writer.print("{s} = {}\n", .{ name, value })`.
         macro_rules! f_display {
             ($f:ident) => {
@@ -11465,6 +11481,75 @@ mod machinery_tests {
             // );
             assert_eq!(2500, cfg.abnormal_command_exit_runtime);
         }
+    }
+
+    // No reference `test {}` — PROVING tests for the `.config` scoped logger's
+    // stderr gate (reference logFn: `if (!global.logging().stderr) break
+    // :stderr;`, main_ghostty.zig; `global.zig` init sets `logging.stderr =
+    // false` when a CLI action runs). `format_log` is the SINGLE formatting
+    // site `log_info`/`log_warn` write through, so gating is asserted on its
+    // return instead of fragile stderr capture.
+    #[test]
+    fn config_log_gate_honors_logging_stderr() {
+        let gated = rustty_global::Logging {
+            stderr: false,
+            macos: false,
+        };
+        let ungated = rustty_global::Logging {
+            stderr: true,
+            macos: false,
+        };
+
+        // Action path (stderr=false): NOTHING is emitted for either level.
+        assert_eq!(
+            format_log("info", "skipping UTF-8 byte order mark", gated),
+            None
+        );
+        assert_eq!(
+            format_log("warning", "loading them both in that order", gated),
+            None
+        );
+
+        // Non-action path (stderr=true): logFn's `.config`-scope prefix bytes.
+        assert_eq!(
+            format_log("info", "reading configuration file path=/tmp/c", ungated).as_deref(),
+            Some("info(config): reading configuration file path=/tmp/c"),
+        );
+        assert_eq!(
+            format_log("warning", "error expanding paths err=X", ungated).as_deref(),
+            Some("warning(config): error expanding paths err=X"),
+        );
+    }
+
+    // End-to-end through the process-global accessor the live `log_info` reads:
+    // publish the action-detected value (as `rustty_apprt::init_with_action`
+    // does), run the BOM'd-config load (a `log_info` call site), and assert the
+    // published gate reaches `format_log`. Publishing is safe crate-wide: no
+    // other test in this binary asserts stderr contents or calls `set_logging`.
+    #[test]
+    fn config_log_gate_reads_published_global() {
+        rustty_global::set_logging(rustty_global::Logging {
+            stderr: false,
+            macos: false,
+        });
+        assert!(!rustty_global::logging().stderr);
+
+        // The load still succeeds; its `log_info` lines are gated off.
+        let data: &[u8] = b"\xef\xbb\xbfabnormal-command-exit-runtime = 2500\n";
+        let mut cfg = Config::default_config();
+        cfg.load_reader(data, b"/home/ghostty/.config/ghostty/config.ghostty")
+            .unwrap();
+        assert_eq!(2500, cfg.abnormal_command_exit_runtime);
+
+        // What every `log_info`/`log_warn` in that path consulted:
+        assert_eq!(
+            format_log(
+                "info",
+                "skipping UTF-8 byte order mark",
+                rustty_global::logging()
+            ),
+            None,
+        );
     }
 }
 

@@ -220,20 +220,6 @@ where
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use std::collections::HashMap;
-
-        // var buffer: [2048]u8 = undefined;
-        // var stdout_writer = std.fs.File.stdout().writer(&buffer);
-        // const stdout = &stdout_writer.interface;
-        let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
-
-        // We'll be putting our fonts into a list categorized by family
-        // so it is easier to read the output.
-        // var families: std.ArrayList([]const u8) = .empty;
-        let mut families: Vec<Vec<u8>> = Vec::new();
-        // var map: std.StringHashMap(std.ArrayListUnmanaged([]const u8)) = .init(alloc);
-        let mut map: HashMap<Vec<u8>, Vec<Vec<u8>>> = HashMap::new();
-
         // Look up all available fonts. The library is only used by backends
         // that need it (the Windows backend opens candidate font files with
         // FreeType); other backends ignore it.
@@ -251,22 +237,68 @@ where
         // var disco = font.Discover.init(font_lib);
         let mut disco = font::Discover::init(font_lib);
         // defer disco.deinit();
-        // var disco_it = try disco.discover(alloc, .{
-        //     .family = config.family,
-        //     .style = config.style,
-        //     .bold = config.bold,
-        //     .italic = config.italic,
-        //     .monospace = config.family == null,
-        // });
-        let mut disco_it = disco.discover(font::Descriptor {
-            family: config.family.clone(),
-            style: config.style.clone(),
-            bold: config.bold,
-            italic: config.italic,
-            monospace: config.family.is_none(),
-            ..font::Descriptor::default()
-        })?;
-        // defer disco_it.deinit();
+        //
+        // PORT NOTE (W9F-02): the reference `defer`s run on EVERY exit,
+        // including the error returns, and these owners hold raw native
+        // handles (on the Fontconfig backend) that only manual `deinit` frees.
+        // Rust has no defer, so the fallible body runs in immediately-invoked
+        // closures and each owner's `deinit` runs unconditionally on the way
+        // out, whatever the result.
+        let result = (|| -> Result<u8, Error> {
+            // var disco_it = try disco.discover(alloc, .{
+            //     .family = config.family,
+            //     .style = config.style,
+            //     .bold = config.bold,
+            //     .italic = config.italic,
+            //     .monospace = config.family == null,
+            // });
+            let mut disco_it = disco.discover(font::Descriptor {
+                family: config.family.clone(),
+                style: config.style.clone(),
+                bold: config.bold,
+                italic: config.italic,
+                monospace: config.family.is_none(),
+                ..font::Descriptor::default()
+            })?;
+            // defer disco_it.deinit(); — see the W9F-02 PORT NOTE above.
+            let result = run_discovery(&config, &mut disco_it);
+            disco_it.deinit();
+            result
+        })();
+        disco.deinit();
+        font_lib.deinit();
+        config.deinit();
+
+        // return 0; — (`run_discovery`'s `Ok(0)` success value flows out here,
+        // after the materialized `defer`s above.)
+        result
+    }
+}
+
+/// The body of `runArgs` between the reference's `disco_it` creation and the
+/// final `return 0` — split out (W9F-02) so `run_args` can run the trailing
+/// `deinit`s unconditionally, materializing the reference `defer`s on the error
+/// paths too.
+#[cfg(not(target_arch = "wasm32"))]
+fn run_discovery(
+    config: &Options,
+    disco_it: &mut font::discovery::DiscoverIterator,
+) -> Result<u8, Error> {
+    use std::collections::HashMap;
+
+    // var buffer: [2048]u8 = undefined;
+    // var stdout_writer = std.fs.File.stdout().writer(&buffer);
+    // const stdout = &stdout_writer.interface;
+    let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
+
+    // We'll be putting our fonts into a list categorized by family
+    // so it is easier to read the output.
+    // var families: std.ArrayList([]const u8) = .empty;
+    let mut families: Vec<Vec<u8>> = Vec::new();
+    // var map: std.StringHashMap(std.ArrayListUnmanaged([]const u8)) = .init(alloc);
+    let mut map: HashMap<Vec<u8>, Vec<Vec<u8>>> = HashMap::new();
+
+    {
         // while (try disco_it.next()) |face| {
         while let Some(face) = disco_it.next()? {
             // var buf: [1024]u8 = undefined;
@@ -360,10 +392,10 @@ where
         // try stdout.flush();
         stdout.flush()?;
 
-        disco_it.deinit();
-        disco.deinit();
-        font_lib.deinit();
-        config.deinit();
+        // defer disco_it.deinit(); / defer disco.deinit(); / defer
+        // font_lib.deinit(); / defer config.deinit(); — the reference's trailing
+        // `defer`s now run in `run_args` on EVERY exit (W9F-02), so they are no
+        // longer duplicated on this success path.
 
         // return 0;
         Ok(0)

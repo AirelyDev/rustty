@@ -1,0 +1,37 @@
+# breakpad-sys — vendored C++ dependency (R3: self-contained, no ghostty dep)
+#
+# This crate vendors the SAME upstream library the reference uses — google
+# breakpad at commit b99f444b (the reference's pkg/breakpad build.zig.zon pin,
+# fetched from the deps.files.ghostty.org mirror) — copied in-tree under
+# `vendor/` and built standalone via `cc`. It mirrors the reference's
+# pkg/breakpad/build.zig: the same `common` sources on every target, the same
+# per-target `common_apple`/`common_mac`/`common_linux` and
+# `client_apple`/`client_mac`/`client_ios`/`client_linux` client/minidump-writer
+# source lists, no extra `-D` flags, `link_libcpp`. Only the compiled client
+# subtree + its transitive header closure is vendored (the processor/tools/
+# dump_syms trees the reference build.zig never compiles are NOT vendored).
+# breakpad has no C API of its own and the reference exposes no Zig module for
+# it: it is a link-only static library consumed by sentry-sys (the reference's
+# pkg/sentry `backend = .breakpad` links `breakpad_dep.artifact("breakpad")`),
+# so this crate generates NO bindings — `links` declares the native lib so
+# Cargo enforces one-version linking and exports `DEP_BREAKPAD_INCLUDE`.
+[package]
+name = "breakpad-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+links = "breakpad"
+build = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[build-dependencies]
+# R3: compile the vendored breakpad C++/ObjC++/asm client sources standalone,
+# mirroring the reference's pkg/breakpad/build.zig source lists.
+cc = "1"

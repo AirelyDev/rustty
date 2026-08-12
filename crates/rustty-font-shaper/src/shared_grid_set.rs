@@ -242,7 +242,12 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
                 font_size,
                 config,
             )?;
-            // errdefer c.deinit(self.alloc); — `c` drops on the `?` error path.
+            // errdefer c.deinit(self.alloc); — `collection` deinits the
+            // partially-built collection itself before its error propagates
+            // through this `?` (W9F-02); after it returns, nothing fallible
+            // runs before `c` is moved into the resolver below (the reference
+            // errdefer's remaining coverage, `try self.discover()`, maps to the
+            // infallible `discover_impl`).
 
             // Setup our enabled/disabled styles
             let mut styles = StyleStatus::init_fill(true);
@@ -302,10 +307,37 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
         };
 
         let mut c = Collection::init();
-        // errdefer c.deinit(self.alloc); — `c` drops on any `?` error below.
+        // errdefer c.deinit(self.alloc);
+        //
+        // PORT NOTE (W9F-02): `Collection` has no `Drop` — its entries own raw
+        // native handles torn down only by `deinit` — so the reference errdefer
+        // is materialized by running the fallible remainder in
+        // `collection_fill` and deiniting `c` before propagating its error.
         c.load_options = Some(load_options);
         c.metric_modifiers = key.metric_modifiers.clone();
 
+        match Self::collection_fill(&mut c, font_discover, font_lib, key, config, load_options) {
+            Ok(()) => Ok(c),
+            Err(e) => {
+                // The materialized `errdefer c.deinit(self.alloc)`
+                // (SharedGridSet.zig:175).
+                c.deinit();
+                Err(e)
+            }
+        }
+    }
+
+    /// The fallible remainder of `collection` — everything the reference runs
+    /// under `errdefer c.deinit(self.alloc)` — split out so the error path can
+    /// deinit the partially-built collection (W9F-02).
+    fn collection_fill(
+        c: &mut Collection,
+        font_discover: &mut Option<Discover>,
+        font_lib: Library,
+        key: &Key,
+        config: &DerivedConfig,
+        load_options: LoadOptions,
+    ) -> Result<(), Error> {
         // Search for fonts
         // if (Discover != void) discover: { ... }
         'discover: {
@@ -407,7 +439,7 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
         c.add(
             Face::init(
                 font_lib,
-                rustty_font::embedded::VARIABLE,
+                embedded_face_source(rustty_font::embedded::VARIABLE),
                 load_options.face_options(),
             )?,
             AddOptions {
@@ -421,7 +453,7 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
             let idx = c.add(
                 Face::init(
                     font_lib,
-                    rustty_font::embedded::VARIABLE,
+                    embedded_face_source(rustty_font::embedded::VARIABLE),
                     load_options.face_options(),
                 )?,
                 AddOptions {
@@ -443,7 +475,7 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
         c.add(
             Face::init(
                 font_lib,
-                rustty_font::embedded::VARIABLE_ITALIC,
+                embedded_face_source(rustty_font::embedded::VARIABLE_ITALIC),
                 load_options.face_options(),
             )?,
             AddOptions {
@@ -457,7 +489,7 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
             let idx = c.add(
                 Face::init(
                     font_lib,
-                    rustty_font::embedded::VARIABLE_ITALIC,
+                    embedded_face_source(rustty_font::embedded::VARIABLE_ITALIC),
                     load_options.face_options(),
                 )?,
                 AddOptions {
@@ -481,7 +513,7 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
         c.add(
             Face::init(
                 font_lib,
-                rustty_font::embedded::SYMBOLS_NERD_FONT,
+                embedded_face_source(rustty_font::embedded::SYMBOLS_NERD_FONT),
                 load_options.face_options(),
             )?,
             AddOptions {
@@ -535,7 +567,7 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
             c.add(
                 Face::init(
                     font_lib,
-                    rustty_font::embedded::EMOJI,
+                    embedded_face_source(rustty_font::embedded::EMOJI),
                     load_options.face_options(),
                 )?,
                 AddOptions {
@@ -548,7 +580,7 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
             c.add(
                 Face::init(
                     font_lib,
-                    rustty_font::embedded::EMOJI_TEXT,
+                    embedded_face_source(rustty_font::embedded::EMOJI_TEXT),
                     load_options.face_options(),
                 )?,
                 AddOptions {
@@ -560,7 +592,7 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
             )?;
         }
 
-        Ok(c)
+        Ok(())
     }
 
     /// Decrement the ref count for the given key. If the ref count is zero,
@@ -623,6 +655,32 @@ fn discover_impl(font_discover: &mut Option<Discover>, font_lib: Library) -> Opt
     *font_discover = Some(Discover::init(font_lib));
     // return &self.font_discover.?;
     Some(font_discover.as_mut().unwrap() as *mut Discover)
+}
+
+/// The `source` handed to `Face::init` for the BUILT-IN (embedded) fallback
+/// faces — the reference's `font.embedded.variable` / `…variable_italic` /
+/// `…symbols_nerd_font` / `…emoji` / `…emoji_text` byte slices.
+///
+/// PORT NOTE (wasm divergence): the reference `SharedGridSet.zig` is never
+/// instantiated with the `web_canvas` face (it has no wasm section, and Zig would
+/// reject `Face.init(lib, bytes, opts)` at compile time because the browser face
+/// has no bytes-based initializer). In rustty `face::Face` IS `web_canvas::Face`
+/// on `wasm32`, so these call sites would hand raw TTF bytes to a face that
+/// interprets `source` as a CSS "font" string — which the browser rejects,
+/// silently keeping its previous/fallback font (and now, since the face validates
+/// its input, fails loudly with `Error::InvalidFontStr`). The browser has no way
+/// to consume our embedded font files here, so on wasm the built-in fallbacks
+/// resolve to the CSS generic family the browser picks for them; the embedded
+/// bytes stay unused. Native targets pass the bytes through unchanged.
+#[cfg(not(target_arch = "wasm32"))]
+fn embedded_face_source(bytes: &'static [u8]) -> &'static [u8] {
+    bytes
+}
+
+/// See the `cfg(not(wasm32))` twin above.
+#[cfg(target_arch = "wasm32")]
+fn embedded_face_source(_bytes: &'static [u8]) -> &'static [u8] {
+    b"monospace"
 }
 
 /// Map of font configurations to grid instances. The grid
@@ -1188,17 +1246,64 @@ mod tests {
         let _ = alloc;
     }
 
+    // W9F-02 proving test (no reference analog — Zig's test allocator catches
+    // leaks structurally): when `collection()` fails partway through, the
+    // materialized `errdefer c.deinit(self.alloc)` (SharedGridSet.zig:175) must
+    // tear down the faces already owned by the partially-built collection.
+    // Discovery is skipped (`font_discover = None`) so the build reduces to the
+    // embedded-font `add`s; the set-size fail-point makes the SECOND `add`
+    // fail. Fails without the error-path `c.deinit()` in `collection`.
+    #[test]
+    fn collection_error_exit_deinits_collection() {
+        let alloc = Global;
+        let mut set = SharedGridSet::init(alloc).unwrap();
+        let mut cfg = Config::default_config();
+        let mut keycfg = DerivedConfig::init(&cfg);
+        let mut key = Key::init(&keycfg, size_points(12.0));
+
+        let deinits_before = crate::face::test_probe::face_deinits();
+        // Fail the second `set_size` call: the first embedded `add` succeeds
+        // (one loaded face owned by the collection), the second fails.
+        crate::face::test_probe::arm_set_size_failpoint(1);
+        let result = SharedGridSet::<Global>::collection(
+            &mut None,
+            set.font_lib,
+            &key,
+            size_points(12.0),
+            &keycfg,
+        );
+        crate::face::test_probe::disarm_set_size_failpoint();
+        assert!(result.is_err());
+
+        // Expected teardown:
+        //   +1 — the second `add`'s moved face (deinit in `add`'s error arm),
+        //   +1 — the first entry's loaded face (the error-path `c.deinit()`).
+        // The CoreText backend's `set_size` additionally deinits the face it
+        // replaces on the ONE successful resize (+1, macOS only; FreeType
+        // resizes in place).
+        #[cfg(target_os = "macos")]
+        let expected = deinits_before + 3;
+        #[cfg(not(target_os = "macos"))]
+        let expected = deinits_before + 2;
+        assert_eq!(crate::face::test_probe::face_deinits(), expected);
+
+        key.deinit();
+        keycfg.deinit();
+        cfg.deinit();
+        set.deinit();
+    }
+
     // test SharedGridSet
     //
     // PORT NOTE: `set.ref` resolves the configured font families through the
-    // active backend discoverer (`Discover::init` + `.discover`). On macOS that
-    // is the fully-ported CoreText discoverer, so the test runs as written. On
-    // the Linux `fontconfig_freetype` backend the discoverer is an honest
-    // `unimplemented!()` stub (`discovery.rs`'s `fontconfig_impl`) until the real
-    // Fontconfig discoverer lands, so this test is gated to macOS for now and is
-    // re-enabled for Linux by L3 Task 6/7. This gate does not weaken the macOS
-    // assertion in any way — the test body is unchanged and still runs there.
-    #[cfg(target_os = "macos")]
+    // active backend discoverer (`Discover::init` + `.discover`). Every native
+    // backend now has a live discoverer — the CoreText one on macOS, the real
+    // Fontconfig one on Linux/BSD (`discovery.rs`'s `fontconfig_impl`: `init`/
+    // `discover`/`discover_fallback`/`next`), and the directory scanner on
+    // Windows — so the test is ungated on native exactly like the reference.
+    // The only skip the reference has is `Discover == void`, which is the
+    // `.web_canvas => void` wasm arm; that is the `not(wasm32)` gate below.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn shared_grid_set() {
         let alloc = Global;

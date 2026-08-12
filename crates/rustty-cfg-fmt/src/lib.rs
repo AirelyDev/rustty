@@ -20,6 +20,6 @@ pub mod writer;
 pub use formatter::{
     entry_formatter, format_entry_display, format_entry_enum, format_entry_float,
     format_entry_optional, format_entry_packed_struct, format_entry_string, format_entry_void,
-    EntryFormatter, FloatEntry, FormatEntry,
+    EntryFormatter, FloatEntry, FormatEntry, FormatError,
 };
 pub use writer::{AllocatingWriter, Writer};

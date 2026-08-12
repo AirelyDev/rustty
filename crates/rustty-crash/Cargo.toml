@@ -15,6 +15,15 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# The explicit `zig build -Dsentry=true` user override of the reference's
+# src/build/Config.zig `sentry` option (W15-04): forces `build_options::SENTRY`
+# on for ANY target — the Linux opt-in enablement. Without it the per-target
+# `orelse` default applies (macOS/iOS on, everything else off). Cargo features
+# are additive, so the `-Dsentry=false` direction has no cargo seam (see
+# src/build_options.rs).
+sentry = []
+
 [dependencies]
 # `internal_os = @import("../os/main.zig")` — xdg state/cache dirs + the macOS
 # NSCachesDirectory / pthread_setname_np paths.
@@ -26,7 +35,8 @@ rustty-build-config = { workspace = true }
 # XDG subdirs (and the `.ghosttycrash` report extension) comes from the identity
 # source-of-truth crate instead of being hardcoded.
 rustty-identity = { workspace = true }
-# R3: the vendored sentry-native 0.7.8 (ghostty's fixed `backend = .inproc`,
+# R3: the vendored sentry-native 0.7.8 (ghostty's product `backend = .breakpad`
+# — SharedDeps.zig; breakpad client provided by breakpad-sys — and
 # `transport = .none` build) behind the ported pkg/sentry wrapper (`sentry_pkg`).
 sentry-sys = { workspace = true }
 # Zig `std.json` equivalent (ObjectMap == insertion-order-preserving map; see

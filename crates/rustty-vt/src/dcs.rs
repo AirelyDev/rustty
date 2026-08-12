@@ -137,15 +137,22 @@ impl<A: Allocator> Handler<A> {
                     // PORT NOTE: the reference builds the parser as a struct
                     // literal (`.max_bytes = self.max_bytes, .buffer = try
                     // .initCapacity(alloc, 128)`); `ControlParser`'s fields are
-                    // private, so `init_options` is its constructor mirror (the
+                    // private, so `init_options` is its constructor mirror. The
                     // parser's buffer is an owning global `Vec` per its own PORT
-                    // NOTE, so the `alloc`/`try` of `initCapacity` does not
-                    // thread through here).
+                    // NOTE, so the `alloc` does not thread through here, but the
+                    // `try` does: `init_options` reserves fallibly and its
+                    // `OutOfMemory` propagates out of `hook` like the reference's.
                     break 'tmux Some(Hook {
-                        state: State::Tmux(TmuxState::init_options(
-                            self.max_bytes,
-                            128, // Arbitrary choice to limit initial reallocs
-                        )),
+                        state: State::Tmux(
+                            TmuxState::init_options(
+                                self.max_bytes,
+                                128, // Arbitrary choice to limit initial reallocs
+                            )
+                            // The tmux parser reports the crate-wide pagelist
+                            // `OutOfMemory`; map it onto this module's marker,
+                            // exactly as `try_put`'s tmux arm does (:212-218).
+                            .map_err(|_| OutOfMemory)?,
+                        ),
                         // .command = .{ .tmux = .enter },
                         command: Some(Command::Tmux(TmuxCommand::Enter)),
                     });

@@ -22,10 +22,12 @@ pub(crate) fn encode_1x1_png(rgb: [u8; 3]) -> Vec<u8> {
     out
 }
 
-/// A minimal PNG whose IHDR DECLARES 65536×65536 (⇒ `65536·65536·4 = 16 GiB`,
-/// past the 4 GiB `maximum_image_size`). `decode_image_config` reads the IHDR
-/// dimensions BEFORE any frame decode, so the overflow guard fires on a
-/// few-dozen-byte input (F5 — no multi-MB blob). wuffs' `decode_image_config`
+/// A minimal PNG whose IHDR DECLARES 32769×32768 — the EXACT dimensions the
+/// reference `too_big.png` blob declares (⇒ `32769·32768·4 = 4 GiB + 131072`,
+/// just past the 4 GiB `maximum_image_size`, so the fixture stays sensitive to
+/// any widening of the guard's effective threshold). `decode_image_config`
+/// reads the IHDR dimensions BEFORE any frame decode, so the overflow guard
+/// fires on a few-dozen-byte input (F5 — no multi-MB blob). wuffs' `decode_image_config`
 /// reads past IHDR to the first IDAT before it reports the config complete (an
 /// IHDR-only stream reads as "truncated input"), so a token IDAT + IEND follow;
 /// their content is never decompressed by `decode_image_config`.
@@ -33,12 +35,12 @@ pub(crate) fn overflow_png() -> Vec<u8> {
     // PNG signature.
     let mut out: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
-    // IHDR data: width=65536, height=65536, bit depth 8, color type 6 (RGBA),
+    // IHDR data: width=32769, height=32768, bit depth 8, color type 6 (RGBA),
     // compression 0, filter 0, interlace 0.
     let mut ihdr: Vec<u8> = Vec::new();
     ihdr.extend_from_slice(b"IHDR");
-    ihdr.extend_from_slice(&0x0001_0000u32.to_be_bytes()); // width  = 65536
-    ihdr.extend_from_slice(&0x0001_0000u32.to_be_bytes()); // height = 65536
+    ihdr.extend_from_slice(&0x0000_8001u32.to_be_bytes()); // width  = 32769
+    ihdr.extend_from_slice(&0x0000_8000u32.to_be_bytes()); // height = 32768
     ihdr.push(8); // bit depth
     ihdr.push(6); // color type: RGBA
     ihdr.push(0); // compression

@@ -23,16 +23,18 @@ pub enum DirError {
     NoHomeDir,
 }
 
+// PORT NOTE (W94-B02-01): the reference fields are `?[]const u8` — raw path
+// bytes, NOT UTF-8 text. Byte-typed accordingly (R1 byte-slice rule).
 #[derive(Default)]
 pub struct Options<'a> {
     /// Subdirectories to join to the base. This avoids extra allocations
     /// when building up the directory. This is commonly the application.
-    pub subdir: Option<&'a str>,
+    pub subdir: Option<&'a [u8]>,
 
     /// The home directory for the user. If this is not set, we will attempt
     /// to look it up which is an expensive process. By setting this, you can
     /// avoid lookups.
-    pub home: Option<&'a str>,
+    pub home: Option<&'a [u8]>,
 }
 
 /// Get the XDG user config directory. The returned value is allocated.
@@ -40,8 +42,11 @@ pub struct Options<'a> {
 // PORT NOTE (P3-W7 T3 / area-E `E15`): upstream's signature became
 // `config(alloc, environ_map, opts)` — the `XDG_*_HOME` lookup reads a
 // caller-supplied map instead of the process environment. The allocator half
-// has no Rust counterpart (the `String` return owns its allocation).
-pub fn config(environ_map: &rustty_global::EnvMap, opts: Options) -> Result<String, DirError> {
+// has no Rust counterpart (the `Vec<u8>` return owns its allocation).
+// PORT NOTE (W94-B02-01): the reference returns `![]u8` — raw path bytes. The
+// pre-fix `String` surface silently treated a non-UTF-8 `XDG_*_HOME` as unset;
+// Ghostty joins the raw env bytes, so this returns `Vec<u8>`.
+pub fn config(environ_map: &rustty_global::EnvMap, opts: Options) -> Result<Vec<u8>, DirError> {
     dir(
         environ_map,
         opts,
@@ -54,7 +59,7 @@ pub fn config(environ_map: &rustty_global::EnvMap, opts: Options) -> Result<Stri
 }
 
 /// Get the XDG cache directory. The returned value is allocated.
-pub fn cache(environ_map: &rustty_global::EnvMap, opts: Options) -> Result<String, DirError> {
+pub fn cache(environ_map: &rustty_global::EnvMap, opts: Options) -> Result<Vec<u8>, DirError> {
     dir(
         environ_map,
         opts,
@@ -67,7 +72,7 @@ pub fn cache(environ_map: &rustty_global::EnvMap, opts: Options) -> Result<Strin
 }
 
 /// Get the XDG state directory. The returned value is allocated.
-pub fn state(environ_map: &rustty_global::EnvMap, opts: Options) -> Result<String, DirError> {
+pub fn state(environ_map: &rustty_global::EnvMap, opts: Options) -> Result<Vec<u8>, DirError> {
     dir(
         environ_map,
         opts,
@@ -92,13 +97,13 @@ fn dir(
     environ_map: &rustty_global::EnvMap,
     opts: Options,
     internal_opts: InternalOptions,
-) -> Result<String, DirError> {
+) -> Result<Vec<u8>, DirError> {
     // If we have a cached home dir, use that.
     if let Some(home) = opts.home {
         return Ok(path_join(&[
             home,
-            internal_opts.default_subdir,
-            opts.subdir.unwrap_or(""),
+            internal_opts.default_subdir.as_bytes(),
+            opts.subdir.unwrap_or(b""),
         ]));
     }
 
@@ -112,11 +117,10 @@ fn dir(
     //                   environ_map.get(internal_opts.windows_env) orelse "",
     //       else => environ_map.get(internal_opts.env) orelse "",
     //   };
-    // PORT NOTE (P3-W7 T2 residual): this module's public surface still returns
-    // `String` paths, so a non-UTF-8 `XDG_*_HOME` is treated as unset here —
-    // exactly the pre-existing behaviour, not a new one. Byte-typing the XDG
-    // path surface ripples into `rustty-cli`/`rustty-config` and is NOT part of
-    // this task; it is recorded as residual in the P3-W7 report.
+    // PORT NOTE (W94-B02-01): this surface is byte-typed. The reference keeps
+    // the raw env bytes and only checks `env.len > 0`; the former `String`
+    // surface (P3-W7 T2 residual) silently treated a non-UTF-8 `XDG_*_HOME`
+    // as unset and fell back to `$HOME`, which Ghostty does not do.
     let env_: Option<&[u8]> = {
         let primary = environ_map
             .get(internal_opts.env.as_bytes())
@@ -134,32 +138,31 @@ fn dir(
             primary
         }
     };
-    let env_: Option<String> = env_
-        .filter(|v| !v.is_empty())
-        .and_then(|v| String::from_utf8(v.to_vec()).ok());
-    // PORT NOTE: `defer if (env_) |env| env.deinit(alloc);` — `GetEnvResult`'s deinit
-    // is Drop in Rust, so `env_` is released automatically when this function
-    // returns.
+    // if (env.len > 0) — the ONLY filter the reference applies to the env
+    // value; the raw bytes are used as-is (no UTF-8 validation).
+    let env_: Option<&[u8]> = env_.filter(|v| !v.is_empty());
 
-    if let Some(env) = &env_ {
+    if let Some(env) = env_ {
         // If we have a subdir, then we use the env as-is to avoid a copy.
         if let Some(subdir) = opts.subdir {
             return Ok(path_join(&[env, subdir]));
         }
 
-        return Ok(env.clone());
+        // return try alloc.dupe(u8, env);
+        return Ok(env.to_vec());
     }
 
     // Get our home dir
     let mut buf = [0u8; 1024];
     if let Some(home) = homedir::home(environ_map, &mut buf).map_err(|_| DirError::NoHomeDir)? {
-        // PORT NOTE: `homedir.home` returns `[]const u8`; convert to `&str` for the
-        // path-join shim (home paths are UTF-8 on the supported platforms).
-        let home = std::str::from_utf8(home).map_err(|_| DirError::NoHomeDir)?;
+        // PORT NOTE (W94-B02-01): `homedir.home` returns `[]const u8`; the raw
+        // bytes feed the byte-typed path join directly (the former `&str`
+        // round-trip rejected a non-UTF-8 home dir with `NoHomeDir`, which the
+        // reference does not do).
         return Ok(path_join(&[
             home,
-            internal_opts.default_subdir,
-            opts.subdir.unwrap_or(""),
+            internal_opts.default_subdir.as_bytes(),
+            opts.subdir.unwrap_or(b""),
         ]));
     }
 
@@ -206,24 +209,26 @@ fn is_sep(c: u8) -> bool {
 // `std.fs.path.join`: join path components with the native separator,
 // collapsing duplicated separators at the boundaries (faithful reproduction of
 // Zig's `joinSepMaybeZ`).
-fn path_join(paths: &[&str]) -> String {
+// PORT NOTE (W94-B02-01): operates on raw path bytes (`[]const u8` in Zig),
+// so non-UTF-8 components join losslessly.
+fn path_join(paths: &[&[u8]]) -> Vec<u8> {
     if paths.is_empty() {
-        return String::new();
+        return Vec::new();
     }
 
     // Find first non-empty path index.
     let first_path_index = match paths.iter().position(|p| !p.is_empty()) {
         Some(i) => i,
         // All paths provided were empty, so return early.
-        None => return String::new(),
+        None => return Vec::new(),
     };
 
-    let mut buf = String::new();
-    buf.push_str(paths[first_path_index]);
-    let mut prev_path = paths[first_path_index].as_bytes();
+    let mut buf: Vec<u8> = Vec::new();
+    buf.extend_from_slice(paths[first_path_index]);
+    let mut prev_path = paths[first_path_index];
     let mut i = first_path_index + 1;
     while i < paths.len() {
-        let this_path = paths[i].as_bytes();
+        let this_path = paths[i];
         if this_path.is_empty() {
             i += 1;
             continue;
@@ -231,14 +236,14 @@ fn path_join(paths: &[&str]) -> String {
         let prev_sep = is_sep(prev_path[prev_path.len() - 1]);
         let this_sep = is_sep(this_path[0]);
         if !prev_sep && !this_sep {
-            buf.push(SEP as char);
+            buf.push(SEP);
         }
         let adjusted_path = if prev_sep && this_sep {
-            &paths[i][1..]
+            &this_path[1..]
         } else {
-            paths[i]
+            this_path
         };
-        buf.push_str(adjusted_path);
+        buf.extend_from_slice(adjusted_path);
         prev_path = this_path;
         i += 1;
     }
@@ -288,10 +293,10 @@ mod tests {
     // test "cache directory paths" {
     #[test]
     fn cache_directory_paths() {
-        let mock_home = if cfg!(windows) {
-            "C:\\Users\\test"
+        let mock_home: &[u8] = if cfg!(windows) {
+            b"C:\\Users\\test"
         } else {
-            "/Users/test"
+            b"/Users/test"
         };
         let environ_map = EnvMap::new();
 
@@ -307,7 +312,7 @@ mod tests {
                     },
                 )
                 .unwrap();
-                let expected = path_join(&[mock_home, ".cache"]);
+                let expected = path_join(&[mock_home, b".cache"]);
                 assert_eq!(expected, cache_path);
             }
 
@@ -317,17 +322,17 @@ mod tests {
                     &environ_map,
                     Options {
                         home: Some(mock_home),
-                        subdir: Some("rustty"),
+                        subdir: Some(b"rustty"),
                     },
                 )
                 .unwrap();
-                let expected = path_join(&[mock_home, ".cache", "rustty"]);
+                let expected = path_join(&[mock_home, b".cache", b"rustty"]);
                 assert_eq!(expected, cache_path);
             }
         }
     }
 
-    type DirFn = fn(&EnvMap, Options) -> Result<String, DirError>;
+    type DirFn = fn(&EnvMap, Options) -> Result<Vec<u8>, DirError>;
 
     struct DirCase {
         name: &'static str,
@@ -367,7 +372,7 @@ mod tests {
             let temp_home = "/tmp/rustty-test-home";
             environ_map.insert(b"HOME".to_vec(), temp_home.as_bytes().to_vec());
 
-            let expected = path_join(&[temp_home, case.default_subdir]);
+            let expected = path_join(&[temp_home.as_bytes(), case.default_subdir.as_bytes()]);
 
             // Test with empty string - should fallback to home
             environ_map.insert(case.name.as_bytes().to_vec(), Vec::new());
@@ -389,19 +394,86 @@ mod tests {
             let temp_home = "/tmp/rustty-test-home";
             environ_map.insert(b"HOME".to_vec(), temp_home.as_bytes().to_vec());
 
-            let expected = path_join(&[temp_home, case.default_subdir, "rustty"]);
+            let expected = path_join(&[
+                temp_home.as_bytes(),
+                case.default_subdir.as_bytes(),
+                b"rustty",
+            ]);
 
             // Test with empty string - should fallback to home
             environ_map.insert(case.name.as_bytes().to_vec(), Vec::new());
             let actual = (case.func)(
                 &environ_map,
                 Options {
-                    subdir: Some("rustty"),
+                    subdir: Some(b"rustty"),
                     ..Options::default()
                 },
             )
             .unwrap();
 
+            assert_eq!(expected, actual);
+        }
+    }
+
+    // PROVING TEST (W94-B02-01, no reference counterpart): Ghostty's `dir`
+    // applies exactly one filter to the env value — `env.len > 0` — and then
+    // joins the RAW bytes. A non-UTF-8 `XDG_*_HOME` must be used as-is, not
+    // silently discarded in favor of the `$HOME` fallback (the pre-fix
+    // `String::from_utf8` surface did the latter).
+    #[test]
+    fn non_utf8_xdg_env_is_used_raw() {
+        if cfg!(windows) {
+            return; // error.SkipZigTest
+        }
+
+        for case in dir_cases() {
+            let mut environ_map = EnvMap::new();
+            environ_map.insert(b"HOME".to_vec(), b"/tmp/rustty-test-home".to_vec());
+            // 0xFF is never valid in UTF-8.
+            environ_map.insert(case.name.as_bytes().to_vec(), b"/tmp/w94-\xff-xdg".to_vec());
+
+            // With a subdir: the raw env bytes are joined with the subdir.
+            let actual = (case.func)(
+                &environ_map,
+                Options {
+                    subdir: Some(b"rustty"),
+                    ..Options::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(b"/tmp/w94-\xff-xdg/rustty".to_vec(), actual);
+
+            // Without a subdir: the raw env bytes are duplicated as-is.
+            let actual = (case.func)(&environ_map, Options::default()).unwrap();
+            assert_eq!(b"/tmp/w94-\xff-xdg".to_vec(), actual);
+        }
+    }
+
+    // PROVING TEST (W94-B02-01 companion): a non-UTF-8 `$HOME` also flows
+    // through the byte-typed join instead of being rejected as `NoHomeDir`.
+    #[test]
+    fn non_utf8_home_fallback_is_used_raw() {
+        if cfg!(windows) {
+            return; // error.SkipZigTest
+        }
+
+        for case in dir_cases() {
+            let mut environ_map = EnvMap::new();
+            environ_map.insert(b"HOME".to_vec(), b"/tmp/w94-\xfe-home".to_vec());
+
+            let expected = path_join(&[
+                b"/tmp/w94-\xfe-home",
+                case.default_subdir.as_bytes(),
+                b"rustty",
+            ]);
+            let actual = (case.func)(
+                &environ_map,
+                Options {
+                    subdir: Some(b"rustty"),
+                    ..Options::default()
+                },
+            )
+            .unwrap();
             assert_eq!(expected, actual);
         }
     }

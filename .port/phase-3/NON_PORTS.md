@@ -423,9 +423,32 @@ port was **not** completed, and the size is the reason.
    * `crates/rustty-xev/src/io_uring.rs:7393` — the reference test's redundant
      second `loop.add(&c_read_cancel)` after `loop.cancel` already added it.
      **Still present upstream:** new `backend/io_uring.zig:1786`. Re-affirmed.
+   * `COMPLETION_SIZE` tripwires (codex `W13A-03`): the new revision re-pins
+     its own size contracts — epoll 208 -> **184** (`backend/epoll.zig:1458`),
+     io_uring 152 -> **128** (`backend/io_uring.zig:1130`), and kqueue's
+     `== 256` equality became a `<= 256` **ceiling**
+     (`backend/kqueue.zig:1949`). Unabsorbed per point 2; the Rust tripwires
+     (epoll 224 / io_uring 152 / kqueue 264) stay pinned to Rust-local layout
+     per the `WS19 T10` `[R1-DIVERGENCE]` entry in
+     `.port/phase-2/DEFERRALS.md`. A future bump absorption re-measures
+     against 184/128/`<=256`, not 208/152/`==256`; each backend's PORT NOTE
+     now carries a matching `UPSTREAM DRIFT (unabsorbed)` paragraph.
 4. **What holds the line.** The three PORT NOTEs themselves, now carrying the
    re-check; and `crates/rustty-xev`'s ported test suite, which encodes the
    quirky behaviour (the double-cancel test asserts success twice).
+5. **Partial absorption (codex `W13A-02`, 2026-08-10).** Point 1's delta
+   enumeration missed one semantic item: the new revision's
+   `watcher/file.zig:318` `test "queuePWrite"` final-content KAT (two
+   `queueWrite` "1234"/"5678", then `queuePWrite` "000"@3 **reusing**
+   `&write_req[1]`; asserts `"123000"`). Now ported as
+   `epoll_file_queue_pwrite_kat` / `io_uring_file_queue_pwrite_kat`
+   (`epoll.rs`/`io_uring.rs`, beside the `*_file_queued_writes` twins); the
+   `queue_pwrite` request init in both backends now matches the new
+   `file.zig:171` `.{ .full_write_buffer = buf }` body (behavior-neutral — the
+   trampoline never reads `full_write_buffer`); and `check_test_counts.py`
+   gained an `xev_file` row bound against the CURRENT 9ce8e8e6 checkout
+   (`GHXEV_CUR`) plus corrected "exact commit ghostty pins" comments. The rest
+   of the bump (point 3's tripwires included) remains unabsorbed per point 2.
 
 ## G4 — `z2d` 0.10.0 -> 0.12.1 — owned elsewhere, cross-reference only
 
@@ -651,6 +674,21 @@ that is ported.
      gate.
    * `check-apple-libghostty-vt.nu` is N/A **with a precondition**, recorded in
      G7 above rather than here.
+5. **AMENDED (wave 2, W2-05) — the release lane is no longer N/A.** The premise
+   of §2 above ("`ls .github/workflows` is `ci.yml`, `clean-artifacts.yml`,
+   `milestone.yml`") no longer holds for the release workflows: `release-tag.yml`,
+   `release-tip.yml` and `publish-tag.yml` are now PORTED (Cargo/xtask shape:
+   `xtask distcheck` for `zig build distcheck`, `macos/build-rustty{,-signed}.sh`
+   for the inline xcodebuild/codesign blocks, the already-ported
+   `dist/macos/update_appcast_{tag,tip}.py`), together with
+   `.github/scripts/rustty-tip` (bash port of the nushell `ghostty-tip` probe).
+   §3's objection is answered by construction: every job is gated on the
+   `RUSTTY_RELEASE_ENABLED` repository variable, so on this repo as shipped —
+   and on any fork — they are inert and can produce no red. `xtask/tests/
+   release_workflows.rs` proves that gating on every CI run.
+   **Still N/A here:** `snap.yml`, `flatpak.yml`, `nix.yml`, all of `nix/` and
+   `flatpak/`, and `build.zig.zon*` — those remain Nix/flake- and GTK-app-coupled
+   with no rustty counterpart.
 
 ---
 

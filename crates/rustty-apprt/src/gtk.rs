@@ -33,10 +33,18 @@
 //! }
 //! ```
 //!
-//! PORT NOTE (R5): the whole module is gated `#[cfg(all(target_os = "linux",
-//! feature = "gtk"))]` at its `pub mod gtk;` declaration site (`lib.rs`), and
-//! the gtk4-rs deps are BOTH Linux-target-gated and `gtk`-feature-optional
+//! PORT NOTE (R5): the whole module is gated
+//! `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]`
+//! at its `pub mod gtk;` declaration site (`lib.rs`), and the gtk4-rs deps are
+//! BOTH target-gated (the same two OSes) and `gtk`-feature-optional
 //! (`Cargo.toml`). The macOS/embedded build never sees a line of this tree.
+//!
+//! PORT NOTE (W2D/F-002): the OS half of that gate is `any(linux, freebsd)`
+//! because the reference puts NO os.tag guard on the gtk apprt — the only OS
+//! input is `Runtime.default()` (`apprt/runtime.zig:14-24`
+//! `.linux, .freebsd => .gtk`), so FreeBSD runs this exact backend. Nothing
+//! under `src/gtk/` carries a per-file OS cfg, matching the reference (see
+//! `cgroup.rs`, whose systemd path is runtime-guarded by config, not by os.tag).
 //!
 //! PORT NOTE (R3): `glib`/`gio`/`gdk4`/`gtk4`/`libadwaita` are gtk-rs *bindings*
 //! to the SAME C libraries the reference links (`pkg-config gtk4 4.22.4`,
@@ -118,6 +126,17 @@ pub mod winproto;
 pub use app::App;
 pub use surface::Surface;
 pub use weak_ref::WeakRef;
+
+// PORTS: `apprt/gtk.zig:4` `pub const resourcesDir = @import("gtk/flatpak.zig")
+// .resourcesDir;` — the THIRD member of the required comptime apprt API (the
+// other two are `App`/`Surface` above). Every apprt exports this name
+// (`none.zig:6`, `browser.zig:2`, `embedded.zig:28` all alias
+// `internal_os.resourcesDir`); the gtk one is the Flatpak-aware override, and
+// `global.zig:214` (`self.resources_dir = try apprt.runtime.resourcesDir(...)`)
+// is its single consumer. Rustty's `runtime` selector is a `cfg` rather than a
+// comptime switch, so [`crate::init_with_action`] picks this arm under the same
+// `all(any(linux, freebsd), feature = "gtk")` gate that declares `mod gtk`.
+pub use flatpak::resources_dir;
 
 // The gresource accessor emitted by `build.rs`'s `glib-compile-resources`
 // (`--c-name rustty --manual-register`): returns the process-static

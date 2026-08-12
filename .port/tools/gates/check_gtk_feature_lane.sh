@@ -48,15 +48,19 @@
 #     feature stops compiling its backend, those binaries stop existing and this
 #     arm goes RED even though the clippy run is still green.
 #
-# NON-LINUX: BLOCKED, NEVER A SILENT GREEN
-# ----------------------------------------
-# `src/gtk.rs` is `#[cfg(all(target_os = "linux", feature = "gtk"))]` and every
-# GTK dependency is Linux-tabled, so on macOS `--features gtk` resolves to a
-# no-op: the command would exit 0 while checking nothing, which is precisely the
-# vacuity above wearing a different hat. On a non-Linux host — or a Linux host
-# without the gtk4/wayland/x11 development libraries — this gate exits 3
-# (BLOCKED), which `ci.sh`'s `run_gate` renders as a WARNING and never counts as
-# a pass. Run it on the Linux VM.
+# NON-GTK-TARGET HOST: BLOCKED, NEVER A SILENT GREEN
+# --------------------------------------------------
+# `src/gtk.rs` is
+# `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]`
+# (W2D/F-002 widened the OS half; the oracle gives FreeBSD the same `.gtk`
+# runtime, `apprt/runtime.zig:14-24`) and every GTK dependency is tabled on those
+# same two targets, so on macOS `--features gtk` resolves to a no-op: the command
+# would exit 0 while checking nothing, which is precisely the vacuity above
+# wearing a different hat. On a host that is neither Linux nor FreeBSD — or on
+# one of those without the gtk4/wayland/x11 development libraries — this gate
+# exits 3 (BLOCKED), which `ci.sh`'s `run_gate` renders as a WARNING and never
+# counts as a pass. Run it on the Linux VM (a FreeBSD host would work too; none
+# exists in this project yet).
 #
 # EXIT CODES
 #   0  clean
@@ -74,20 +78,28 @@ FEATURES="gtk,wayland,x11"
 # --list` lists 153 tests, the default-feature arm lists 13 -> 140 are gated.
 # Raise these floors when gated tests are added; never lower one without saying
 # why in the same commit.
-GTK_DELTA_FLOOR=140
+# 2026-08-11 (W2D/W16-GTK-02): +1 gated test —
+# `tests/gtk_seam.rs::gtk_exports_resources_dir_and_global_init_routes_through_it`,
+# the KAT that global init routes `resources_dir` through the gtk apprt's
+# Flatpak-aware override. 140 -> 141.
+GTK_DELTA_FLOOR=141
 WAYLAND_NAME_FLOOR=3
 X11_NAME_FLOOR=4
 
 echo "G-GTKFEAT: the --features $FEATURES lane (no other CI lane compiles it)"
 
 # ---- environment ---------------------------------------------------------
-if [ "$(uname -s)" != "Linux" ]; then
-  echo "  BLOCKED: this host is $(uname -s), not Linux. crates/rustty-apprt/src/gtk"
-  echo "  is cfg(target_os = \"linux\") and its deps are Linux-tabled, so the lint"
-  echo "  would pass here WITHOUT COMPILING ANY OF THE GATED CODE. Run this gate on"
-  echo "  the Linux box; a skip here is a WARNING, not a pass."
-  exit 3
-fi
+case "$(uname -s)" in
+  Linux | FreeBSD) ;;
+  *)
+    echo "  BLOCKED: this host is $(uname -s), which is neither Linux nor FreeBSD."
+    echo "  crates/rustty-apprt/src/gtk is cfg(any(target_os = \"linux\", target_os ="
+    echo "  \"freebsd\")) and its deps are tabled on those two targets, so the lint"
+    echo "  would pass here WITHOUT COMPILING ANY OF THE GATED CODE. Run this gate on"
+    echo "  the Linux box; a skip here is a WARNING, not a pass."
+    exit 3
+    ;;
+esac
 missing=""
 for pc in gtk4 wayland-client x11; do
   pkg-config --exists "$pc" 2>/dev/null || missing="$missing $pc"

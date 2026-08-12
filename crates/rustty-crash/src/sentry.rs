@@ -295,7 +295,9 @@ fn initThread() -> Result<(), InitThreadError> {
     };
 
     // Determine the Sentry cache directory.
-    let cache_dir: String = 'cache_dir: {
+    // (W94-B02-01: raw path bytes — `xdg::cache` is byte-typed; the macOS
+    // `cacheDir` arm's UTF-8 `String` converts losslessly via `into_bytes`.)
+    let cache_dir: Vec<u8> = 'cache_dir: {
         // On macOS, we prefer to use the NSCachesDirectory value to be
         // a more idiomatic macOS application. But if XDG env vars are set
         // we will respect them.
@@ -316,7 +318,8 @@ fn initThread() -> Result<(), InitThreadError> {
         {
             if !rustty_global::environ::environ().contains_unempty_constant(b"XDG_CACHE_HOME") {
                 break 'cache_dir internal_os::macos::cacheDir("sentry")
-                    .map_err(InitThreadError::AppleApi)?;
+                    .map_err(InitThreadError::AppleApi)?
+                    .into_bytes();
             }
         }
 
@@ -334,7 +337,7 @@ fn initThread() -> Result<(), InitThreadError> {
         break 'cache_dir internal_os::xdg::cache(
             &rustty_global::environ_map(),
             internal_os::xdg::Options {
-                subdir: Some(&subdir),
+                subdir: Some(subdir.as_bytes()),
                 ..Default::default()
             },
         )
@@ -689,7 +692,8 @@ impl Transport {
         // const dir = try crash.defaultDir(alloc);
         let dir = crash::defaultDir()?;
         // try std.fs.cwd().makePath(dir.path);
-        std::fs::create_dir_all(&dir.path)?;
+        // (W94-B02-01: `dir.path` is raw path bytes now — via `OsStr`.)
+        std::fs::create_dir_all(crate::dir::os_str_from_bytes(&dir.path))?;
 
         // Build our final path and write to it.
         // const path = try std.fs.path.join(alloc, &.{
@@ -697,7 +701,7 @@ impl Transport {
         //     try std.fmt.allocPrint(alloc, "{s}.ghosttycrash", .{uuid.string()}),
         // });
         let uuid_string = uuid.string();
-        let path = std::path::Path::new(&dir.path).join(format!(
+        let path = std::path::Path::new(crate::dir::os_str_from_bytes(&dir.path)).join(format!(
             "{}.{}crash",
             // (PORT NOTE: `uuid.string()` is `[36:0]u8` — `{s}` formats the 36
             // UUID chars before the NUL sentinel.)

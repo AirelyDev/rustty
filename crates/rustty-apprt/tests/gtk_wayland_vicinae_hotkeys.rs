@@ -30,8 +30,8 @@
 //!
 //! ONE HEADED TEST PER BINARY: its own file (G-GTKINIT).
 //!
-//! R5: gated `all(target_os = "linux", feature = "wayland")`.
-#![cfg(all(target_os = "linux", feature = "wayland"))]
+//! R5: gated `all(any(linux, freebsd), feature = "wayland")`.
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "wayland"))]
 
 use rustty_apprt::gtk::class::global_shortcuts::GlobalShortcuts;
 use rustty_apprt::gtk::winproto::{App, Protocol};

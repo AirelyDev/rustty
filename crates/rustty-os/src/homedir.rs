@@ -10,7 +10,13 @@
 // module, the standard library, and `objc2`/`objc2-foundation` (R3: bindings to
 // the SAME Objective-C runtime/Foundation framework the reference uses).
 
-#[cfg(not(target_os = "macos"))]
+// PORT NOTE (W2D_WINDOWS_OS WI-4): EXTENDS the existing macOS exclusion rather
+// than replacing it. `passwd::get` has no windows image (the reference's
+// `@compileError` mapped to absence), and `homeWindows` reads
+// `USERPROFILE`/`GetTempPathW` and never touches passwd — so on windows this
+// import would be unused. The macOS arm of the gate must stay: `home()`'s
+// passwd block below is cfg'd out there too.
+#[cfg(not(any(target_os = "macos", windows)))]
 use crate::passwd;
 
 #[derive(Debug, PartialEq, Eq)]

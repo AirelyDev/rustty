@@ -236,9 +236,12 @@ pub unsafe extern "C" fn rustty_config_get_diagnostic(self_: *mut Config, idx: u
     // return .{ .message = message.ptr };
     //
     // PORT NOTE: the reference's precomputed message is a `[:0]const u8`; the
-    // rustty precompute stores `Vec<u8>`, so the pointer is the `Vec`'s data
-    // pointer (`precompute_message`). The C contract's NUL termination is the
-    // shared property of the precompute representation (see rustty-args).
+    // rustty precompute stores the same bytes in a `Vec<u8>` WITH a trailing
+    // NUL that `precompute_message` excludes from the returned slice (exactly
+    // the reference's `toOwnedSliceSentinel(0)` view), so `as_ptr()` is a valid
+    // `[*:0]const u8` for C. `None` (precompute disabled, i.e. a non-`.lib`
+    // artifact) keeps the empty default rather than the reference's
+    // comptime-impossible `void` field access.
     match cfg._diagnostics.precompute_message(idx as usize) {
         Some(message) => Diagnostic {
             message: message.as_ptr().cast(),

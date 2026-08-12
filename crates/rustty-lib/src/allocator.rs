@@ -29,6 +29,22 @@ impl Alignment {
     pub fn to_byte_units(self) -> usize {
         1usize << self.0
     }
+
+    /// PORT NOTE (W36-B06): `std.mem.Alignment.backward(addr)` — round `addr`
+    /// down to this alignment. Used for the Zig zero-length/zero-sized
+    /// sentinel pointer (`alignBackward(maxInt(usize), alignment)`).
+    pub fn backward(self, addr: usize) -> usize {
+        addr & !(self.to_byte_units() - 1)
+    }
+}
+
+/// PORT NOTE (W36-B06): the Zig typed-helper zero-length sentinel — the
+/// highest address of this alignment (`@ptrFromInt(alignment.backward(
+/// maxInt(usize)))`, Zig 0.16 `std.mem.Allocator`). Non-null, aligned, and
+/// dereference-free; returned by the typed helpers WITHOUT calling the raw
+/// allocator so custom C allocators never observe zero-length callbacks.
+fn zero_len_sentinel(alignment: Alignment) -> *mut u8 {
+    alignment.backward(usize::MAX) as *mut u8
 }
 
 /// PORT NOTE: The Rust embodiment of a Zig `[]u8` slice — a `(ptr, len)` pair
@@ -67,6 +83,80 @@ pub trait ZigAllocator {
     fn remap(&self, memory: ZigSlice, alignment: Alignment, new_len: usize, ra: usize) -> *mut u8;
     /// `free(ctx, memory, alignment, ret_addr) void`
     fn free(&self, memory: ZigSlice, alignment: Alignment, ra: usize);
+
+    /// PORT NOTE (W36-B06): the Zig TYPED helper `allocator.alloc(u8, len)` —
+    /// allocate `len` bytes at byte (1) alignment. Mirrors Zig 0.16
+    /// `std.mem.Allocator.alloc`: a zero-length request short-circuits to the
+    /// non-null aligned sentinel WITHOUT calling the raw allocator (custom C
+    /// allocators never observe zero-length alloc callbacks). Returns a null
+    /// ptr on failure (Zig returns `error.OutOfMemory`). `ret_addr` stays 0:
+    /// stable Rust has no `@returnAddress()`; it is a hint per the Zig
+    /// allocator contract (documented residual of W36-B06).
+    fn alloc_bytes(&self, len: usize) -> *mut u8 {
+        if len == 0 {
+            // if (byte_count == 0) return @ptrFromInt(alignment.backward(maxInt(usize)));
+            return zero_len_sentinel(Alignment(0));
+        }
+        self.alloc(len, Alignment(0), 0)
+    }
+
+    /// PORT NOTE (W36-B06): the Zig TYPED helper `allocator.free(memory)` for
+    /// a byte (1) aligned `[]u8`. Mirrors Zig 0.16 `std.mem.Allocator.free`:
+    /// a zero-length slice returns BEFORE the raw free (custom C allocators
+    /// never observe zero-length free callbacks). `ret_addr` stays 0 (see
+    /// `alloc_bytes`).
+    fn free_bytes(&self, memory: ZigSlice) {
+        if memory.len == 0 {
+            // if (non_const_ptr.len == 0) return; (before rawFree)
+            return;
+        }
+        self.free(memory, Alignment(0), 0);
+    }
+}
+
+/// PORT NOTE (F-008/W12-01): Zig `error.OutOfMemory` as carried by the raw
+/// create/destroy helpers below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutOfMemory;
+
+/// PORT NOTE (F-008/W12-01): the Rust embodiment of Zig `alloc.create(T)` for
+/// a C-resolved allocator — allocate UNINITIALIZED storage for one `T` through
+/// the allocator's raw `alloc`, mapping rejection (null) to the recoverable
+/// `OutOfMemory` (the reference's `alloc.create(...) catch return
+/// error.OutOfMemory` arm). The caller initializes the storage with
+/// `ptr::write` (Zig `ptr.* = ...`) and later releases it with `destroy_raw`.
+/// Zero-sized `T` short-circuits to the aligned non-null sentinel without
+/// calling the allocator, exactly like Zig's `Allocator.create`.
+pub fn create_raw<T>(alloc: &dyn ZigAllocator) -> Result<*mut T, OutOfMemory> {
+    let size = std::mem::size_of::<T>();
+    let alignment = Alignment::from_byte_units(std::mem::align_of::<T>());
+    if size == 0 {
+        // if (@sizeOf(T) == 0) return @ptrFromInt(alignment.backward(maxInt(usize)));
+        return Ok(zero_len_sentinel(alignment) as *mut T);
+    }
+    let ptr = alloc.alloc(size, alignment, 0);
+    if ptr.is_null() {
+        return Err(OutOfMemory);
+    }
+    Ok(ptr as *mut T)
+}
+
+/// PORT NOTE (F-008/W12-01): Zig `alloc.destroy(ptr)` — release the storage of
+/// one `T` previously obtained from `create_raw`, WITHOUT dropping the value
+/// (Zig has no destructors; run `ptr::drop_in_place` — or move the value out
+/// with `ptr::read` — first when the value owns resources). Zero-sized `T` is
+/// a no-op, exactly like Zig's `Allocator.destroy`.
+///
+/// # Safety
+/// `ptr` must have been returned by `create_raw::<T>` with the same `alloc`
+/// and not yet destroyed; the pointee must not be dropped again afterwards.
+pub unsafe fn destroy_raw<T>(alloc: &dyn ZigAllocator, ptr: *mut T) {
+    let size = std::mem::size_of::<T>();
+    if size == 0 {
+        return;
+    }
+    let alignment = Alignment::from_byte_units(std::mem::align_of::<T>());
+    alloc.free(ZigSlice::new(ptr as *mut u8, size), alignment, 0);
 }
 
 /// PORT NOTE: The Rust embodiment of a `*const std.mem.Allocator` value — a
@@ -201,8 +291,12 @@ impl CAllocatorAsZig {
     /// PORT NOTE: convenience mirroring Zig's `alloc.alloc(u8, n)` — allocate
     /// `n` bytes with byte (1) alignment as a slice. Returns null ptr on
     /// failure (Zig returns `error.OutOfMemory`).
+    ///
+    /// PORT NOTE (W36-B06): delegates to the trait typed helper so the
+    /// zero-length short-circuit (non-null sentinel, no raw callback) applies
+    /// here too, exactly like the Zig typed helper it mirrors.
     pub fn alloc_bytes(&self, n: usize) -> *mut u8 {
-        self.alloc(n, Alignment(0), 0)
+        ZigAllocator::alloc_bytes(self, n)
     }
 }
 
@@ -366,8 +460,11 @@ impl ZigAllocator for GlobalZigAllocator {
     fn alloc(&self, len: usize, alignment: Alignment, _ra: usize) -> *mut u8 {
         if len == 0 {
             // Match Zig: a zero-length alloc returns a valid, aligned,
-            // dereference-free pointer (the alignment itself).
-            return alignment.to_byte_units() as *mut u8;
+            // dereference-free pointer.
+            // PORT NOTE (W36-B06): the sentinel is Zig 0.16's
+            // `alignment.backward(maxInt(usize))` (the HIGHEST aligned
+            // address), not the alignment value itself.
+            return zero_len_sentinel(alignment);
         }
         let layout = Self::layout(len, alignment);
         unsafe { std::alloc::alloc(layout) }
@@ -526,6 +623,112 @@ mod tests {
         let mem = ZigSlice::new(ptr, str_len);
         assert_eq!(10, mem.len);
         alloc.free(mem, Alignment(0), 0);
+    }
+
+    // PORT NOTE (W36-B06 proving test, Rust-only — the reference has no unit
+    // test here): a counting `ZigAllocator` that records every RAW call, so we
+    // can assert the typed helpers short-circuit zero lengths WITHOUT touching
+    // the raw surface (the Zig `std.mem.Allocator` typed-helper contract).
+    struct CountingZigAllocator {
+        allocs: std::cell::Cell<usize>,
+        frees: std::cell::Cell<usize>,
+    }
+
+    impl ZigAllocator for CountingZigAllocator {
+        fn alloc(&self, len: usize, alignment: Alignment, ra: usize) -> *mut u8 {
+            self.allocs.set(self.allocs.get() + 1);
+            GlobalZigAllocator.alloc(len, alignment, ra)
+        }
+        fn resize(
+            &self,
+            memory: ZigSlice,
+            alignment: Alignment,
+            new_len: usize,
+            ra: usize,
+        ) -> bool {
+            GlobalZigAllocator.resize(memory, alignment, new_len, ra)
+        }
+        fn remap(
+            &self,
+            memory: ZigSlice,
+            alignment: Alignment,
+            new_len: usize,
+            ra: usize,
+        ) -> *mut u8 {
+            GlobalZigAllocator.remap(memory, alignment, new_len, ra)
+        }
+        fn free(&self, memory: ZigSlice, alignment: Alignment, ra: usize) {
+            self.frees.set(self.frees.get() + 1);
+            GlobalZigAllocator.free(memory, alignment, ra)
+        }
+    }
+
+    #[test]
+    fn typed_helpers_zero_length_short_circuit() {
+        let counting = CountingZigAllocator {
+            allocs: std::cell::Cell::new(0),
+            frees: std::cell::Cell::new(0),
+        };
+        // Zig `allocator.alloc(u8, 0)`: non-null aligned sentinel, no rawAlloc.
+        let ptr = counting.alloc_bytes(0);
+        assert!(!ptr.is_null());
+        assert_eq!(usize::MAX, ptr as usize); // alignBackward(maxInt(usize), 1)
+        assert_eq!(0, counting.allocs.get());
+        // Zig `allocator.free(mem[0..0])`: returns before rawFree.
+        counting.free_bytes(ZigSlice::new(ptr, 0));
+        assert_eq!(0, counting.frees.get());
+        // Nonzero paths still hit the raw surface.
+        let p = counting.alloc_bytes(16);
+        assert!(!p.is_null());
+        assert_eq!(1, counting.allocs.get());
+        counting.free_bytes(ZigSlice::new(p, 16));
+        assert_eq!(1, counting.frees.get());
+    }
+
+    #[test]
+    fn global_zero_length_sentinel_matches_zig() {
+        // Zig 0.16: `alignment.backward(maxInt(usize))`, NOT the alignment value.
+        let p1 = GlobalZigAllocator.alloc(0, Alignment(0), 0);
+        assert_eq!(usize::MAX, p1 as usize);
+        let p8 = GlobalZigAllocator.alloc(0, Alignment(3), 0);
+        assert_eq!(usize::MAX & !7, p8 as usize);
+        GlobalZigAllocator.free(ZigSlice::new(p1, 0), Alignment(0), 0);
+        GlobalZigAllocator.free(ZigSlice::new(p8, 0), Alignment(3), 0);
+    }
+
+    // PORT NOTE (F-008/W12-01 proving test, Rust-only): `create_raw` must
+    // route through the RAW allocator (caller-observable) and map a rejecting
+    // allocator to `OutOfMemory`; `destroy_raw` must return the storage.
+    struct RejectingZigAllocator;
+    impl ZigAllocator for RejectingZigAllocator {
+        fn alloc(&self, _len: usize, _alignment: Alignment, _ra: usize) -> *mut u8 {
+            std::ptr::null_mut()
+        }
+        fn resize(&self, _m: ZigSlice, _a: Alignment, _n: usize, _ra: usize) -> bool {
+            false
+        }
+        fn remap(&self, _m: ZigSlice, _a: Alignment, _n: usize, _ra: usize) -> *mut u8 {
+            std::ptr::null_mut()
+        }
+        fn free(&self, _m: ZigSlice, _a: Alignment, _ra: usize) {}
+    }
+
+    #[test]
+    fn create_raw_via_caller_allocator() {
+        let counting = CountingZigAllocator {
+            allocs: std::cell::Cell::new(0),
+            frees: std::cell::Cell::new(0),
+        };
+        // alloc.create(u64) goes through the raw allocator...
+        let ptr = create_raw::<u64>(&counting).expect("create must succeed");
+        assert_eq!(1, counting.allocs.get());
+        unsafe { std::ptr::write(ptr, 42u64) };
+        assert_eq!(42, unsafe { *ptr });
+        // ...and alloc.destroy(ptr) returns the storage through it.
+        unsafe { destroy_raw(&counting, ptr) };
+        assert_eq!(1, counting.frees.get());
+        // A rejecting allocator is a recoverable error.OutOfMemory.
+        assert_eq!(Err(OutOfMemory), create_raw::<u64>(&RejectingZigAllocator));
     }
 
     #[test]

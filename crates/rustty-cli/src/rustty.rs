@@ -73,11 +73,30 @@ pub enum Error {
     /// paths (`list_colors`/`list_keybinds`). Reference: `vaxis.Tty.init` /
     /// `vaxis.Tty.getWinsize` `try`d into the inferred `!u8` error set.
     Tty(rustty_vaxis::tty::TtyError),
+    /// `error.OutOfMemory` propagated from config formatting
+    /// (`show_config`'s `configfmt.format` / `list_keybinds`'
+    /// `formatEntryDocs`): a value-type `formatEntry` fixed buffer overflowed
+    /// (`rustty_cfg_fmt::FormatError::OutOfMemory`), folded into the inferred
+    /// `!u8` error sets exactly as the reference's `error.OutOfMemory`.
+    OutOfMemory,
 }
 
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Error::Io(e)
+    }
+}
+
+/// The config-formatting error union (`formatEntry`'s writer error +
+/// `error.OutOfMemory`) folds into the action error set: writer failures are
+/// IO failures here (every cli formatting writer's `Error` is
+/// `std::io::Error`), and `OutOfMemory` maps to [`Error::OutOfMemory`].
+impl From<rustty_cfg_fmt::FormatError<std::io::Error>> for Error {
+    fn from(e: rustty_cfg_fmt::FormatError<std::io::Error>) -> Self {
+        match e {
+            rustty_cfg_fmt::FormatError::Writer(w) => Error::Io(w),
+            rustty_cfg_fmt::FormatError::OutOfMemory => Error::OutOfMemory,
+        }
     }
 }
 

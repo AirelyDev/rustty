@@ -19,8 +19,10 @@
 //! # R5 / guard
 //!
 //! The whole pipeline runs only when BOTH `CARGO_FEATURE_GTK` and
-//! `CARGO_CFG_TARGET_OS == "linux"` hold — the exact gate the `gtk` module
-//! carries (`lib.rs`). On macOS, or a default (no-`gtk`) Linux build, this
+//! `CARGO_CFG_TARGET_OS in {"linux", "freebsd"}` hold — the exact gate the `gtk`
+//! module carries (`lib.rs`; W2D/F-002 widened it to the two OSes whose default
+//! app runtime is `.gtk`, `apprt/runtime.zig:18`). On macOS, or a default
+//! (no-`gtk`) Linux/FreeBSD build, this
 //! script returns immediately: no `blueprint-compiler` is spawned, no `.c` is
 //! linked, and the compiled artifact is byte-behavior-identical.
 //!
@@ -193,16 +195,22 @@ fn main() {
     // so all this script owes the codegen is the staleness edge: a proc macro that
     // reads a file gets no automatic `rerun-if-changed`, and without this line an
     // edit to the vendored XML would NOT rebuild the crate. Emitted before the
-    // Linux+gtk guard below because the `wayland` feature is what selects the
+    // gtk-target guard below because the `wayland` feature is what selects the
     // codegen, and unconditional emission is harmless (the file always exists).
     if env::var_os("CARGO_FEATURE_WAYLAND").is_some() {
         println!("cargo:rerun-if-changed=protocols/vicinae-hotkey-v1.xml");
     }
 
-    // R5 guard: only the native Linux+gtk build runs the asset pipeline.
+    // R5 guard: only a native gtk build runs the asset pipeline. The OS half
+    // mirrors `lib.rs`'s `any(target_os = "linux", target_os = "freebsd")` gate
+    // (W2D/F-002) — the two targets `Runtime.default()` maps to `.gtk`
+    // (`apprt/runtime.zig:14-24`).
     let gtk = env::var_os("CARGO_FEATURE_GTK").is_some();
-    let linux = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux");
-    if !(gtk && linux) {
+    let gtk_target = matches!(
+        env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("linux") | Ok("freebsd")
+    );
+    if !(gtk && gtk_target) {
         return;
     }
 

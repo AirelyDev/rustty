@@ -12,15 +12,21 @@
 //! (any/in/in6/un), `Ip4Address`/`Ip6Address`, `parseIp4`/`initIp4`,
 //! `getOsSockLen`, and the `posix.sockaddr.{in,in6,un}` extern structs they wrap.
 //! Ported byte-faithfully from Zig 0.15 `std/net.zig` and `std/c.zig` (the macOS
-//! `sockaddr` arm), with Zig field names preserved. Module is macOS-gated in
-//! lib.rs, like the whole kqueue port.
+//! `sockaddr` arm), with Zig field names preserved. Module is gated with the whole
+//! kqueue port in lib.rs.
 //
 // PORT NOTE: `posix.socklen_t`/`sa_family_t`/`in_port_t` are the platform C ints;
 // `posix.AF.{INET,INET6,UNIX}` are the address-family selectors. On macOS
 // `sa_family_t` is `u8` (the `sockaddr.len`/`.family` byte pair), matching the
 // `std.c` darwin `sockaddr` arm. These are bound from `libc` where present.
+//
+// PORT NOTE (W2D): the "darwin `sockaddr` arm" IS the shared BSD layout — the
+// `{ len: u8, family: u8, ... }` byte pair with the leading `sin_len`/`sin6_len`
+// — and FreeBSD's `sockaddr`/`sockaddr_in`/`sockaddr_in6`/`sockaddr_un` are
+// byte-identical to it (Zig's `std/c.zig` gives the two the same shape). So this
+// module needs NO freebsd arm; widening its gate is enough.
 
-// (module is `#[cfg(target_os = "macos")]`-gated in lib.rs)
+// (module is `#[cfg(any(target_os = "macos", target_os = "freebsd"))]`-gated in lib.rs)
 #![allow(non_camel_case_types)]
 
 use core::mem::size_of;

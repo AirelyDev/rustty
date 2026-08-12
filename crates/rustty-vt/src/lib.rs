@@ -17,8 +17,14 @@
 //! slice (`src/input/{key,key_encode,mouse,mouse_encode,paste}.zig`). The
 //! module structure below is the verbatim-retargeted translation of
 //! `terminal/main.zig`'s `@import`/`pub const` surface: every top-level
-//! `terminal/*.zig` file gets a `pub mod`, and every `pub const` re-export gets
-//! a `pub use`.
+//! `terminal/*.zig` file gets a `pub mod`, and every `pub const` re-export is
+//! carried here as its verbatim reference line. Those aliases whose Rust
+//! spelling adds something the module path does not (a root name the port's
+//! consumers or the reference's own `lib_vt.zig` surface use) additionally get a
+//! `pub use`; the rest stay comment-only, reachable at `module::Type`, because a
+//! Rust `pub use` of a type that is already public at its module path is a
+//! second name for the same item rather than the single canonical name a Zig
+//! `pub const` gives.
 //!
 //! NOTE: `terminal/size.zig` is NOT in this crate — its types are hoisted into
 //! `rustty-render-types` (ambiguity A1) and imported from `rustty_render_types`.
@@ -179,8 +185,18 @@ pub mod terminal;
 // stream can reference it; ported as a leaf in this sub-batch.
 pub mod utf8_decoder;
 // pub const TerminalStream = stream_terminal.Stream;
+pub use stream_terminal::Stream as TerminalStream;
 // pub const Stream = stream.Stream;
+pub use stream::Stream;
 // pub const StreamAction = stream.Action;
+// PORT NOTE: `stream.Action` has NO port counterpart, so there is nothing for
+// `StreamAction` to name. The reference `Action` is a tagged union whose fields
+// are the dispatch surface; this port models that surface directly as the
+// `stream::Handler` trait (one method per union field) plus the payload structs,
+// with the C-ABI mirror of the union living in `rustty-vt-c` — see the PORT NOTE
+// at `stream.rs` ("The possible actions that can be emitted by the Stream"). The
+// omission of a root `StreamAction` is therefore a consequence of that settled
+// design fork, not an unported alias.
 // pub const Cursor = Screen.Cursor;
 // pub const CursorStyle = Screen.CursorStyle;
 // pub const CursorStyleReq = ansi.CursorStyle;
@@ -284,3 +300,11 @@ pub mod input;
 pub mod bitmap_allocator;
 pub mod hash_map;
 pub mod ref_counted_set;
+
+// PORT NOTE: port of the reference AFL++ harness package
+// `test/fuzz-libghostty/src/fuzz_{osc,parser,stream}.zig` (which lives OUTSIDE
+// the terminal module in the reference tree). Declared here so the cargo-fuzz
+// targets (`crates/rustty-vt/fuzz/`) and the deterministic corpus-replay test
+// (`tests/fuzz_corpus_replay.rs`) share one set of harness entry points.
+// Test/fuzz infrastructure only — never called by production code.
+pub mod fuzz_harness;

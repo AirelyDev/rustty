@@ -10,6 +10,7 @@
 // const assert = @import("../quirks.zig").inlineAssert;
 // const Allocator = std.mem.Allocator;
 // const internal_os = @import("../os/main.zig");
+use crate::path::is_absolute;
 use rustty_util::quirks::inlineAssert as assert;
 
 // const log = std.log.scoped(.config);
@@ -62,7 +63,10 @@ impl From<std::io::Error> for FileLoadError {
 // these come from `rustty_identity::{CONFIG_DIR, CONFIG_FILE}` (`rustty` /
 // `config.rustty`), flipped back to ghostty's under the `identity-oracle`
 // harness feature.
-pub fn default_xdg_path() -> Result<String, FileLoadError> {
+// PORT NOTE (W94-B02-01): the reference returns `![]const u8` — raw path
+// bytes; `xdg::config` is byte-typed so a non-UTF-8 `XDG_CONFIG_HOME`
+// participates in discovery exactly as in Ghostty.
+pub fn default_xdg_path() -> Result<Vec<u8>, FileLoadError> {
     // WS14 T6 (wasm32 arm): no XDG base directory exists in a browser.
     #[cfg(target_family = "wasm")]
     {
@@ -78,7 +82,7 @@ pub fn default_xdg_path() -> Result<String, FileLoadError> {
         Ok(rustty_os::xdg::config(
             &rustty_global::environ_map(),
             rustty_os::xdg::Options {
-                subdir: Some(&subdir),
+                subdir: Some(subdir.as_bytes()),
                 ..Default::default()
             },
         )?)
@@ -95,7 +99,7 @@ pub fn default_xdg_path() -> Result<String, FileLoadError> {
 // }
 //
 // PORT NOTE (R2): the legacy subdir literal `"ghostty/config"` -> `<CONFIG_DIR>/config`.
-pub fn legacy_default_xdg_path() -> Result<String, FileLoadError> {
+pub fn legacy_default_xdg_path() -> Result<Vec<u8>, FileLoadError> {
     // WS14 T6 (wasm32 arm): no XDG base directory exists in a browser.
     #[cfg(target_family = "wasm")]
     {
@@ -107,7 +111,7 @@ pub fn legacy_default_xdg_path() -> Result<String, FileLoadError> {
         Ok(rustty_os::xdg::config(
             &rustty_global::environ_map(),
             rustty_os::xdg::Options {
-                subdir: Some(&subdir),
+                subdir: Some(subdir.as_bytes()),
                 ..Default::default()
             },
         )?)
@@ -117,7 +121,7 @@ pub fn legacy_default_xdg_path() -> Result<String, FileLoadError> {
 /// Preferred default path for the XDG home configuration file.
 /// Returned value must be freed by the caller.
 // pub fn preferredXdgPath(alloc: Allocator) ![]const u8 {
-pub fn preferred_xdg_path() -> Result<String, FileLoadError> {
+pub fn preferred_xdg_path() -> Result<Vec<u8>, FileLoadError> {
     // If the XDG path exists, use that.
     // const xdg_path = try defaultXdgPath(alloc);
     let xdg_path = default_xdg_path()?;
@@ -125,7 +129,7 @@ pub fn preferred_xdg_path() -> Result<String, FileLoadError> {
     //     f.close();
     //     return xdg_path;
     // } else |_| {}
-    if let Ok(_f) = open(xdg_path.as_bytes()) {
+    if let Ok(_f) = open(&xdg_path) {
         return Ok(xdg_path);
     }
 
@@ -138,7 +142,7 @@ pub fn preferred_xdg_path() -> Result<String, FileLoadError> {
     //     alloc.free(xdg_path);
     //     return legacy_xdg_path;
     // } else |_| {}
-    if let Ok(_f) = open(legacy_xdg_path.as_bytes()) {
+    if let Ok(_f) = open(&legacy_xdg_path) {
         return Ok(legacy_xdg_path);
     }
 
@@ -241,7 +245,10 @@ pub fn preferred_app_support_path() -> Result<String, FileLoadError> {
 //         else => return try preferredXdgPath(alloc),
 //     }
 // }
-pub fn preferred_default_file_path() -> Result<String, FileLoadError> {
+// PORT NOTE (W94-B02-01): returns raw path bytes (`![]const u8` in the
+// reference). The macOS Application Support paths are UTF-8 `String`s from the
+// Apple APIs and convert losslessly via `into_bytes`.
+pub fn preferred_default_file_path() -> Result<Vec<u8>, FileLoadError> {
     #[cfg(target_os = "macos")]
     {
         // macOS prefers the Application Support directory
@@ -250,19 +257,19 @@ pub fn preferred_default_file_path() -> Result<String, FileLoadError> {
         match open(app_support_path.as_bytes()) {
             Ok(_app_support_file) => {
                 // app_support_file.close();
-                Ok(app_support_path)
+                Ok(app_support_path.into_bytes())
             }
             Err(_) => {
                 // Try the XDG path if it exists
                 let xdg_path = preferred_xdg_path()?;
-                match open(xdg_path.as_bytes()) {
+                match open(&xdg_path) {
                     Ok(_xdg_file) => {
                         // xdg_file.close();
                         Ok(xdg_path)
                     }
                     Err(_) => {
                         // If neither file exists, use app support
-                        Ok(app_support_path)
+                        Ok(app_support_path.into_bytes())
                     }
                 }
             }
@@ -348,10 +355,13 @@ pub fn open(path: &[u8]) -> Result<std::fs::File, OpenFileError> {
     Ok(file)
 }
 
-/// PORTS: `std.fs.path.isAbsolute(path)` for POSIX.
-fn is_absolute(path: &[u8]) -> bool {
-    !path.is_empty() && path[0] == b'/'
-}
+// `std.fs.path.isAbsolute(path)` is the target-dispatched helper ported once in
+// `crate::path` (imported at the top of this module).
+//
+// PORT NOTE: this file previously carried its own leading-`/`-only copy, so the
+// `assert(std.fs.path.isAbsolute(path))` above would have fired on a Windows build
+// for every drive-qualified or UNC config path (and the assert is ACTIVE in release
+// — `inlineAssert`, not `debug_assert!`).
 
 /// Convert raw path bytes to an `OsStr`.
 #[cfg(unix)]

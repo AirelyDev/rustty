@@ -40,10 +40,10 @@ pub mod shape;
 // keyed by config/font descriptors).
 pub mod shared_grid;
 pub mod shared_grid_set;
-// FFI-glue modules backing the FreeType face (thin `unsafe` wrappers over the
-// `-sys` crates; see each module's PORT NOTE). Not part of any reference file's
-// test contract — the full `pkg/freetype`, `pkg/harfbuzz`, `src/font/Library.zig`
-// and `src/stb` ports supersede them.
+// The `pkg/freetype` and `pkg/harfbuzz` package ports (`unsafe` wrappers over the
+// `-sys` crates; see each module's PORT NOTE). Both are now fully carved — the
+// whole pinned public surface plus all of each package's own `test { ... }`
+// blocks. `stb` remains the `src/stb` glue subset.
 //
 // WASM DIVERGENCE: the `wasm32` web_canvas backend has no FreeType/HarfBuzz/stb
 // (freestanding wasm has no C deps), so these `-sys` FFI-glue modules are gated

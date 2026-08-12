@@ -301,7 +301,15 @@ impl DiagnosticList {
 
             // const owned: [:0]const u8 = try stream.toOwnedSliceSentinel(0);
             // errdefer alloc.free(owned);
-            let owned: Vec<u8> = stream;
+            //
+            // PORT NOTE: `toOwnedSliceSentinel(0)` appends a NUL that is NOT
+            // counted in the slice length. The `Vec<u8>` therefore stores the
+            // formatted bytes PLUS a trailing 0; `precompute_message` hands back
+            // the sentinel-excluded slice (the `[:0]const u8` view), while the
+            // pointer it exposes to C (`ghostty_config_get_diagnostic` ->
+            // `message.ptr`) is genuinely NUL-terminated.
+            let mut owned: Vec<u8> = stream;
+            owned.push(0);
 
             // try self.precompute.messages.append(alloc, owned);
             // errdefer _ = self.precompute.messages.pop();
@@ -328,8 +336,17 @@ impl DiagnosticList {
     /// reference's `self.precompute.messages.items[idx]`. Used by the
     /// `ghostty_config_get_diagnostic` C ABI to hand a stable message pointer to
     /// C. Returns `None` when precompute is disabled or `idx` is out of range.
+    ///
+    /// The returned slice is the reference's `[:0]const u8` VIEW: the trailing
+    /// NUL that `append` stores is excluded from the length (so the bytes equal
+    /// `Diagnostic::format`'s output) but is present one past the end, making
+    /// `slice.as_ptr()` a valid `[*:0]const u8` for C.
     pub fn precompute_message(&self, idx: usize) -> Option<&[u8]> {
-        self.precompute.messages.get(idx).map(Vec::as_slice)
+        self.precompute
+            .messages
+            .get(idx)
+            // Every stored message ends with the `toOwnedSliceSentinel(0)` NUL.
+            .map(|msg| &msg[..msg.len() - 1])
     }
 
     /// Returns true if there are any diagnostics for the given
@@ -345,5 +362,71 @@ impl DiagnosticList {
         }
 
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Diagnostic, DiagnosticList, Location};
+
+    /// `precompute_enabled` is `builtin.is_test` for the `.exe` artifact, so the
+    /// precompute logic is exercised (and semantically analyzed) by this crate's
+    /// own unit tests — exactly the reason the reference enables it for tests.
+    #[test]
+    fn precompute_is_enabled_under_test() {
+        assert!(super::precompute_enabled());
+    }
+
+    /// codex-vet W93-B01-DIAG-01 (secondary hazard): the reference stores
+    /// `try stream.toOwnedSliceSentinel(0)`, a `[:0]const u8` whose `.ptr` is
+    /// handed straight to C by `ghostty_config_get_diagnostic`. The port must
+    /// store the same trailing NUL, and must NOT count it in the slice length.
+    #[test]
+    fn precomputed_message_is_nul_terminated_but_excludes_the_sentinel() {
+        let diag = Diagnostic {
+            location: Location::Cli(3),
+            key: b"font-size".to_vec(),
+            message: b"unknown field".to_vec(),
+        };
+
+        let mut expected: Vec<u8> = Vec::new();
+        diag.format(&mut expected);
+        assert_eq!(expected, b"cli:3:font-size: unknown field");
+
+        let mut list = DiagnosticList::default();
+        list.append(diag);
+
+        // The stored buffer carries the sentinel one past the visible end.
+        let stored = &list.precompute.messages[0];
+        assert_eq!(stored.len(), expected.len() + 1);
+        assert_eq!(stored.last().copied(), Some(0));
+
+        // The `[:0]const u8` VIEW is sentinel-free and equals `format`.
+        let message = list.precompute_message(0).expect("precompute enabled");
+        assert_eq!(message, expected.as_slice());
+
+        // Therefore the pointer handed to C is a valid `[*:0]const u8`.
+        // SAFETY: the buffer above is NUL-terminated at `message.len()`.
+        let as_c = unsafe { std::ffi::CStr::from_ptr(message.as_ptr().cast()) };
+        assert_eq!(as_c.to_bytes(), expected.as_slice());
+
+        // Out of range is `None` (the C ABI's empty-default arm).
+        assert!(list.precompute_message(1).is_none());
+    }
+
+    /// `clone` deep-copies the precompute, sentinel included.
+    #[test]
+    fn cloned_precompute_keeps_the_sentinel() {
+        let mut list = DiagnosticList::default();
+        list.append(Diagnostic {
+            location: Location::None,
+            key: Vec::new(),
+            message: b"boom".to_vec(),
+        });
+
+        let cloned = list.clone_in();
+        assert_eq!(cloned.precompute.messages[0].last().copied(), Some(0));
+        assert_eq!(cloned.precompute_message(0), Some(&b"boom"[..]));
+        assert_eq!(cloned, list);
     }
 }

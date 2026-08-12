@@ -242,6 +242,35 @@ mod tests {
         assert!(written > 1);
     }
 
+    // W88-B02-01 (Rust-only proving test; the reference has none — the behavior
+    // comes from `std.Io.Writer.fixed`, whose `fixedDrain` fills the available
+    // buffer before returning `error.WriteFailed`). A too-small NON-NULL caller
+    // buffer must come back holding the fitting PREFIX of the report, across
+    // the MULTI-PIECE encoder (each piece lands in order until one overflows).
+    #[test]
+    fn encode_with_insufficient_buffer_keeps_the_fitting_prefix() {
+        let mut buf = [0xAAu8; 3];
+        let mut written: usize = 0;
+        let tag: modes::ModeTagBacking = (modes::ModeTag {
+            value: 1,
+            ansi: false,
+        })
+        .to_backing();
+        let result = unsafe {
+            report_encode(
+                tag,
+                report_state(1),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut written,
+            )
+        };
+        assert_eq!(Result::OutOfSpace, result);
+        assert_eq!(8, written);
+        // "\x1B[?1;1$y" truncated to the 3 bytes that fit.
+        assert_eq!(b"\x1B[?", &buf);
+    }
+
     #[test]
     fn encode_with_invalid_state() {
         let mut buf = [0u8; modes::Report::MAX_SIZE];

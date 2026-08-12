@@ -7,7 +7,12 @@
 // This is a MOCK for headless verification only; the real browser harness
 // (example/wasm-web-canvas/index.html) uses actual `document.createElement`.
 
-export function makeMockCanvas() {
+// Options:
+//   pixel: [r, g, b, a] — when given, `getImageData` returns EVERY pixel with
+//     this RGBA value (canvas ImageData is always RGBA) instead of the default
+//     alpha ramp. Used to assert the atlas byte ORDER for a BGRA atlas: a
+//     non-symmetric color such as opaque red distinguishes RGBA from BGRA.
+export function makeMockCanvas({ pixel } = {}) {
   return () => {
     const c = { width: 0, height: 0, style: {} };
     let font = "10px monospace";
@@ -16,6 +21,12 @@ export function makeMockCanvas() {
     const ctx = {
       canvas: c,
       set font(v) {
+        // Browsers PARSE the CSS "font" shorthand and IGNORE an invalid value,
+        // leaving the previous one in place (that is why the reference face
+        // reads the property back and warns when it didn't take). Model that:
+        // anything with a control character (e.g. raw font-FILE bytes) is not a
+        // CSS value, so the assignment is a no-op.
+        if (/[\u0000-\u001f\u007f]/.test(v)) return;
         font = v;
       },
       get font() {
@@ -50,9 +61,17 @@ export function makeMockCanvas() {
       getImageData(x, y, w, h) {
         // Mock a rendered glyph: a grayscale wedge in the alpha channel so the
         // face's presentation inspection + atlas store have real bytes to copy.
+        // ImageData is ALWAYS RGBA (the byte order the face has to convert from).
         const data = new Uint8ClampedArray(w * h * 4);
         for (let i = 0; i < w * h; i++) {
-          data[i * 4 + 3] = (i * 37) % 256; // alpha ramp
+          if (pixel) {
+            data[i * 4 + 0] = pixel[0];
+            data[i * 4 + 1] = pixel[1];
+            data[i * 4 + 2] = pixel[2];
+            data[i * 4 + 3] = pixel[3];
+          } else {
+            data[i * 4 + 3] = (i * 37) % 256; // alpha ramp
+          }
         }
         return { data, width: w, height: h };
       },

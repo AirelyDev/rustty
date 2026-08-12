@@ -42,6 +42,18 @@ From **vt-7 (kitty)** — these need `Screen`/`Terminal`/`ImageStorage`:
    `dirty=true` scroll/resize hooks) under the `crate::options::KITTY_GRAPHICS` gate;
    the self-referential `&mut Screen` borrows are made sound via `mem::take`
    move-out/move-back (Miri-clean). Scoped graphics_storage.zig G3b → missing=0.
+   - **Terminal-level hooks (W29-B04/B05/B06, codex-vet w1).** This row originally
+     wired only the 4 **Screen**-level hooks; the **Terminal**-level ones were left
+     behind stale "vt-12 deferral" PORT NOTEs in `terminal.rs` even though
+     `KITTY_GRAPHICS` is true. Now wired, matching the oracle 1:1:
+     `kitty_images.dirty = true` in `index` / `scroll_up` / `insert_lines` /
+     `delete_lines` / `switch_screen` (Terminal.zig:2264, 2471, 2720, 2886, 4509 —
+     `reverse_index`/`scroll_down` inherit it through `insert_lines`, as upstream
+     does), and `kitty_images.delete(.{ .all = true })` in `erase_display`
+     `.scroll_complete` / `.complete` (Terminal.zig:3329-3337, 3387-3397; DECCOLM
+     inherits it), via the same `mem::take` move-out/move-back. 11 proving tests in
+     `terminal.rs` (`terminal_kitty_dirty_*`, `*_deletes_kitty_images`), all of
+     which fail without the writes; the 3 delete tests are Miri-clean.
 
 3. ~~**`kitty/graphics_exec.zig` (575 loc, 8 tests)** — full file. Needs `Terminal`.~~
    **RESOLVED (vt-12c-kitty).** `execute` (+ `query`/`transmit`/`display`/`delete`/
@@ -142,10 +154,36 @@ From **vt-9 (stream)**:
    `consumeUntilGround` + the `nextSlice` SIMD branch, wired to
    `rustty_simd::vt::utf8DecodeUntilControlSeq` (the now-ported `simd/vt.zig`
    analogue). The seam remains gated on `options::SIMD` (the reference's
-   `comptime debug or !build_options.simd`): `SIMD` defaults to `false`
-   (`cfg!(feature = "simd")`), so the scalar fallback — the reference's own
-   non-SIMD arm — still runs unconditionally by default and the SIMD arm is
-   exercised under `--features simd`. All 38 stream tests pass in both modes.
+   `comptime debug or !build_options.simd`): `SIMD` is `cfg!(feature = "simd")`,
+   and `rustty-vt` itself declares no default (the Zig terminal module has no
+   self-default either — consumers thread the knob), so `cargo test -p
+   rustty-vt` still exercises the scalar fallback and `--features simd` the SIMD
+   arm. All 38 stream tests pass in both modes.
+
+   **UPDATE (codex-vet W16-TARGET-01):** the SHIPPING tiers no longer default the
+   knob off. `build/Config.zig:196-206` defaults `-Dsimd` to true for every
+   non-WASM target, and `GhosttyZig.zig` force-disables only `oniguruma` for the
+   lib-vt module (:67-72) while still adding the SIMD deps when `cfg.simd`
+   (:140-143) — so the reference app AND libghostty-vt both run the SIMD arm out
+   of the box. Rustty now matches: `rustty-core` (the SharedDeps analog) enables
+   `rustty-vt/simd`, and `rustty-vt-c` + `rustty-apprt-c` declare
+   `default = ["simd"]`. `--no-default-features` is the `-Dsimd=false` analog
+   (the CMake wrapper's `RUSTTY_VT_SIMD=OFF` passes it). Proving tests:
+   `rustty-vt-c` `build_info::tests::default_build_reports_simd_on`,
+   `rustty-core` `tests/vt_build_options.rs`, `rustty-apprt-c`
+   `tests/build_defaults.rs`.
+   The default is TARGET-CONDITIONAL, though: `Config.zig:200-206` is
+   `orelse simd: { if (target.result.cpu.arch.isWasm()) break :simd false; break
+   :simd true; }`, which is why ghostty ships `ghostty-vt.wasm` built simd=false.
+   Cargo cannot express a per-target `default`, so the wasm arm is resolved in
+   `rustty-vt`'s `options::SIMD` (`resolve_simd`), alongside the port's other
+   `Options.add` target synthesis (`KITTY_GRAPHICS`) — a wasm build resolves the
+   option off even with `default = ["simd"]` active. Proving tests: `rustty-vt`
+   `options::tests::simd_default_is_target_conditional` +
+   `simd_const_uses_the_target_conditional_resolution`, plus a
+   `#[cfg(target_arch = "wasm32")] const _: () = assert!(!SIMD)` that every wasm
+   build evaluates (verified RED by mutation; `cargo build -p rustty-vt-c
+   --target wasm32-unknown-unknown --release` is GREEN with the carve-out).
    The `cp_buf`/max-codepoints chunk-size consts and the `@setEvalBranchQuota`
    test-comptime comments are restored verbatim. `initAlloc` was already ported
    (stream.rs `init_alloc`) as part of closing the vt-9 comment-fidelity gap.
@@ -168,6 +206,20 @@ ABI const-asserts pinned (ScrollViewport `[2]u64`, sgr Attribute `[8]u64`), the 
 Effects trampoline (offset_of! container_of, exposed-provenance) **Miri-clean (SB+TB)**,
 **ASan-clean** (after fixing the SIMD test-buffer sentinel over-read, 387d04c). rustty-vt
 untouched (2019). ScrollViewport + sgr-Attribute C-ABI surfaces are now RESOLVED here.
+
+**W12-02 (2026-08-11).** The "regenerated + compile clean" clause above was a
+one-time snapshot, and `include/rustty.h` had since gone stale (it predated the
+whole D11 `c_int`-narrowing pass and was missing
+`RUSTTY_TERMINAL_DATA_VT_PROCESSING_ERROR = 33`); it also declared
+`rustty_style_default`'s pointee as a 4-byte enum, because `size_report::Style`
+and `style::Style` collided on the single flat C type name `Style` and cbindgen
+silently emitted only the enum. The enum is now `size_report::SizeReportStyle`
+(C name unchanged: `RusttySizeReportStyle`), the header is regenerated, and A5
+(`.port/tools/gates/check_rustty_vt_headers.sh`) grew two arms so the claim is
+CHECKED rather than asserted: **(a3)** re-runs cbindgen and fails on any diff vs
+the checked-in header, **(a4)** re-derives `rustty_style_default`'s pointee type
+out of the generated header and requires a struct whose `sizeof` equals the
+curated `RusttyStyle` (72).
 
 1. **`stream.zig` `c_union`** (the Action type's `lib.TaggedUnion(...)` C-ABI
    representation, ref stream.zig:228-234) — carries the
@@ -593,6 +645,15 @@ of the five tiers have since LANDED and the stale list was never resolved here):
   See `docs/superpowers/plans/2026-07-19-gtk-inspector-opengl.md`.
 
 **RESIDUAL — NONE. The last bullet is resolved:**
+
+> **SCOPE CORRECTION [F-020 vet, 2026-08-11].** Every "RESOLVED" bullet above is
+> about the **macOS/Metal** twin (and, for the ImGui bullet, the GTK inspector
+> WINDOW). It said nothing about the **OpenGL/`linux_impl`** twin, whose
+> `overlayFeatures`/`rebuildOverlay`/`overlayUpdate`/`.overlay`-draw stages were
+> still cut when this was written — reading "RESIDUAL — NONE" as covering Linux
+> was the conflation F-020 flagged. Those stages, plus the Linux bg-image and
+> kitty-graphics paths, are tracked (and now RESOLVED) in the **L4 (OpenGL
+> `linux_impl`) draw-path scope cuts** section immediately below.
 - ~~the **WebGL** backend (wasm) — out of the monomorphic Metal scope; a
   whole-backend follow-up port, no in-crate `unimplemented!()`. (Metal = macOS and
   OpenGL3 = GTK/Linux are both done.)~~ **RESOLVED — WS14, 2026-07-30. The premise
@@ -618,6 +679,79 @@ of the five tiers have since LANDED and the stale list was never resolved here):
 
   > **OWNER [WS19 T14, 2026-07-29 — audit row O16]: WS14 (wasm/WebGL).** ~~This row previously named "out of the monomorphic Metal scope" with no owner, which is not a workstream, so it was ORPHANED.~~ Gate **G-P2** (`.port/tools/gates/check_phase2_closure.py`) now FAILS on any open row without an owner in an OPEN workstream, so this attribution is enforced rather than aspirational. **CLOSED by WS14 (2026-07-30)** — the "L" size estimate the WS19 audit carried for O16 was itself a product of the oracle never being read; the real task was ~15 lines.
 
+
+### rustty-renderer L4 (OpenGL `linux_impl`) draw-path scope cuts — ✅ FULLY RESOLVED [F-013, 2026-08-10; F-005 / F-012 / F-020, 2026-08-11]
+
+The L4 plan (`docs/superpowers/plans/2026-07-17-L4-opengl-renderer.md`
+§"Deferred (out of L4 scope, documented in DEFERRALS.md)") deferred the
+`linux_impl` `draw_frame` call-site wirings for background image / kitty
+graphics placement / custom shaders / debug overlay, but the promised
+DEFERRALS.md entry was never added (bookkeeping miss flagged by the F-013 vet).
+This entry records the backlog:
+
+- **RESOLVED (F-013, 2026-08-10): custom (post-process) shaders.** The full
+  apply side is wired in `crates/rustty-renderer/src/generic/linux_impl.rs`,
+  copy-adapted from the green macOS twin against oracle `generic.zig`:
+  `update_custom_shader_uniforms_from_state` (called from `update_frame`) +
+  `update_custom_shader_uniforms_for_frame` (per-frame, in `draw_frame_raw`),
+  the lazy per-frame `CustomShaderState` setup/teardown (explicit `deinit` —
+  the OpenGL leaves have no `Drop`), the base-pass retarget to `back_texture`,
+  and the ping-pong post-pipeline loop (generic.zig:1691-1719). Gated by two
+  offscreen goldens (`golden_renders_custom_shader_passthrough`,
+  `golden_custom_shader_inverts_colors` — the inversion golden fails without
+  the wiring); they run for real under `LIBGL_ALWAYS_SOFTWARE=1` on Linux.
+- **RESOLVED (F-005, 2026-08-11): kitty graphics placement (OpenGL).** The
+  shared blocker — `crate::image` embedding `metal::Texture` — is gone:
+  `crate::image` is now a MONOMORPHIC TWIN PAIR (`image/macos_impl.rs` over
+  `crate::metal`, `image/linux_impl.rs` over `crate::opengl`, dispatched by
+  `image.rs` on the same cfg predicate `generic.rs` uses). `linux_impl` gained
+  real `images: image::State` / `bg_image` / `bg_image_changed` fields, the
+  `kitty_requires_update`/`kitty_update` walk in `update_frame`
+  (generic.zig:1229-1248), the `images.upload` sweep in `draw_frame_raw`
+  (:1548-1549), and the three `images.draw` bands (:1628-1679). Because the GL
+  leaves have manual `deinit` and no `Drop`, `Image::deinit` explicitly deletes
+  the GL texture and `Renderer::deinit` frees `images`/`bg_image` while the
+  owned context is still current. Gated by `kitty_image_pixel_path` (state
+  asserts ported verbatim from the Metal twin + a GL-only pixel readback) and
+  `kitty_eviction_removes_image` (upload → draw → evict).
+- **RESOLVED (F-012, 2026-08-11): background image (OpenGL).** `init` calls
+  `prep_background_image` (generic.zig:795), `change_config` gained the
+  `bg_image_changed` compare + decode branch (:1878-1897), `draw_frame_raw`
+  calls `upload_background_image` (:1551-1552), and the base pass now takes the
+  `if (self.bg_image) |img| switch (img) { .ready => bg_image step } else {
+  bg_color step }` arm (:1611-1628) instead of an unconditional `bg_color`
+  step. The linux `Error` enum gained the `ImageDecode` variant + the
+  `rustty_wuffs::Error` mapping it was missing (its doc comment claimed the
+  variant "has no analogue here" — corrected). Gated by
+  `golden_renders_background_image` (temp solid PNG → decode → upload → draw →
+  FBO readback, with a no-bg negative control), plus
+  `clearing_bg_image_config_unloads_the_image`,
+  `update_bg_image_buffer_maps_config` and the pure
+  `wuffs_error_maps_to_image_decode`.
+- **RESOLVED (F-020, 2026-08-11): inspector debug overlay (OpenGL draw pass).**
+  Distinct from the RESOLVED GTK/OpenGL3 ImGui inspector WINDOW above — this is
+  the renderer-side, in-frame overlay. All four stages are wired in
+  `linux_impl`: `Critical.overlay_features` read through the renderer-owned
+  `*mut dyn InspectorOverlay` seam inside the mutex-guarded critical section
+  (generic.zig:1269-1283), `rebuild_overlay` (:1356-1365, ported verbatim — it
+  is pure CPU/z2d), `images.overlay_update` (:1416-1424), and the guarded
+  `images.draw(..., .overlay)` band (:1681-1688). Gated by
+  `overlay_draws_on_inspector_features` (a test-local `InspectorOverlay` impl
+  drives the seam; the `inspector: None` arm is the negative control) and
+  `rebuild_overlay_builds_and_clears`.
+
+**Ledger drift closed by this row (F-012/F-020 `.vet` notes).**
+`linux_impl.rs:29` used to dangling-cite a DEFERRALS.md "GL image" entry that
+the L4 plan ordered (plan line 170) but nobody ever wrote; and the R-d section
+above declares "RESIDUAL — NONE", which conflated the RESOLVED GTK ImGui
+inspector WINDOW backend with the then-still-cut renderer overlay DRAW stages.
+Both are now accurate: this section is the durable record of the whole GL-image
+deferral arc (deferred by
+`docs/superpowers/plans/2026-07-17-L4-opengl-renderer.md:54-60,143-144,170`;
+resolved by w1 F-013 and w2 F-005/F-012/F-020), and the dangling in-source cite
+was rewritten. Verification: `grep -c MILESTONE-SCOPE-CUT
+crates/rustty-renderer/src/generic/linux_impl.rs` is **0** — there are no scope
+cuts left in the Linux update/draw path.
 
 ## rustty-crash (integration-tier stage 1) — `ThreadStateSurface` seam; concrete `ThreadState` impl deferred
 
@@ -2588,8 +2722,10 @@ apprt-layer `OptionAsAlt`, so it cannot live on vt's `Mods`); the `orelse` fallb
 `KeyTarget::Surface(surface)` (vs E6 `_app`'s `KeyTarget::App`). `_key_is_binding`'s
 `?*input.Binding.Flags.C` out-param is a raw `*mut FlagsC` written under a null-check
 (the `if (c_flags) |ptr|` capture); `Flags.cval()` is the `rustty-input` serializer.
-`_mouse_pressure`'s `intToEnum(MousePressureStage, ...)` guard is inlined on the raw
-`u32` (the E7 `set_color_scheme` precedent). `_ime_point` writes the four `apprt.IMEPos`
+`_mouse_pressure`'s `std.enums.fromInt(MousePressureStage, ...) orelse return` guard is
+inlined on the raw `u32` (the E7 `set_color_scheme` precedent) and is SILENT — no
+diagnostic on an out-of-range stage, matching the pinned oracle (embedded.zig:1880).
+`_ime_point` writes the four `apprt.IMEPos`
 fields through the caller's `*mut f64` out-params. `_text`/`_preedit` build `&[u8]`
 (preedit: `Option<&[u8]>`, `None` when `len == 0`) from the `[*]const u8`+`len` pair.
 
@@ -2831,6 +2967,22 @@ generation + the C compile+link+run KAT and audits the completed 71-export surfa
    > its own sake, the trigger is a CONSUMER asking for one** — at which point it is a
    > cbindgen invocation in `xtask` beside the existing two. No owner is needed for a
    > test-fixture convenience.
+
+   > **DOCUMENTED IN THE HEADER [codex-vet W92-B02-02, 2026-08-11].** The absence was
+   > silent: a host reading `include/rustty-apprt.h` had no way to learn that 14
+   > `rustty_*` exports the library ships (13 `rustty_config_*` + `rustty_benchmark_cli`)
+   > are declared only by the umbrella `include/rustty-embed.h`. The generated header's
+   > banner now names all 14 and points at the umbrella, and
+   > `crates/rustty-apprt-c/tests/smoke.rs`
+   > `generated_header_declares_in_crate_tail_and_documents_the_rest` pins the set
+   > bidirectionally (apprt.h ⊆ embed.h, and embed.h \ apprt.h == exactly those 14), so
+   > the list cannot rot. Hand-pinning the prototypes was rejected: unlike the
+   > cross-crate TYPES pinned in `cbindgen.toml`'s `after_includes` (gated by the
+   > `@embed-abi` const-asserts + `check_embed_h_abi.sh`), a hand-transcribed prototype
+   > has no gate tying it to the Rust signature. The SAME vet pass also found the header
+   > STALE (it predated `rustty_info`/`rustty_translate`/`rustty_cli_try_action` and the
+   > D11 `c_int` narrowing); it has been regenerated and gate A5 arm (a3b) now
+   > re-derives it every run.
 
 4. **Cross-crate ABI-pin const-asserts** (`capi.rs`, the E11 audit): `Options`==64,
    `SurfaceOptions`==88, `EnvVar`==16, `PlatformC`==8, `TargetC`==16, `ActionC`==32 +
@@ -3419,12 +3571,30 @@ bin is the top sink over cli+apprt). New bin Cargo deps: `rustty-global`,
   the `sudo log stream …` view predicate, R2-renamed to the `io.airely.rustty`
   bundle id). The action path sets `logging.stderr = false` (reference global.zig
   line 107) so action stdout stays clean; on the headless `.none` build stderr
-  logging is off by default regardless. NOTE: the config/os crates emit their OWN
+  logging is off by default regardless. ~~NOTE: the config/os crates emit their OWN
   `info(config):` log lines (a separate pre-existing facade) that the bin's
   `logging.stderr` flag does not gate — a documented consequence of the rustty
   log-facade split, not a C6 regression; the KAT reads stdout (diagnostics/banner)
-  separately from that stderr noise. **Target:** un-defer with the unified log-facade
-  follow-up.
+  separately from that stderr noise.~~ **RESOLVED for the config facade (codex-vet
+  W10-01 fix, 2026-08-10):** `rustty-apprt::init_with_action` now mirrors the
+  computed logging into `rustty_global::set_logging`, and the config crate's
+  `log_info`/`log_warn` (`config_struct.rs` `format_log`) consult
+  `rustty_global::logging().stderr` — the reference `global.logging()` gate —
+  so action stderr is clean and `RUSTTY_LOG=stderr` re-enables (both verified
+  live on `+show-config`). The rustty-os facade's own lines remain ungated
+  (out of W10-01's scope). **ALSO RESOLVED for the vt-c C-ABI root (codex-vet
+  W36-B07 fix, 2026-08-11):** this row never covered `lib_vt.zig:363-381`'s
+  `options.logFn = terminal/c/sys.zig logFn` — that sink (`sys::log_fn`, incl.
+  2048-byte chunking) was already ported, but the crate-root wrappers in
+  `crates/rustty-vt-c/src/lib.rs` still wrote their `log.warn` diagnostics to
+  stderr via `eprintln!` and never reached an installed callback. All 7 root
+  wrapper sites (build_info / key_event ×2 / mouse_event ×2 /
+  selection_gesture ×2) now call `sys::log_fn` with the reference's
+  `std.log.scoped` tags, so they are delivered to a `RUSTTY_SYS_OPT_LOG`
+  callback and silently discarded when none is installed. Remaining vt-c
+  `eprintln!` diagnostics live in the per-module files (`mouse_encode.rs`,
+  `key_encode.rs`, `sgr.rs`, `osc.rs`) and want the same one-line wiring.
+  **Target:** un-defer the rest with the unified log-facade follow-up.
 
 - ~~**`version.zig` renderer/libxev/toolchain STUB lines (continued from C1, ADV-FIX
   1).** The `+version` KAT asserts ONLY exit 0 + stdout starts `rustty ` — it does
@@ -3718,6 +3888,23 @@ below for the file/commit map). The current authoritative count is `cargo test
 `tests/surface_parity.rs` integration tests = **83**, all green (Task 6
 verification pass, including the one net-new test this task adds —
 `dynamic_tcp_accept_connect_send_recv_close`).
+
+**[codex remediation w1-L07-b03, 2026-08-10 — findings W4-03/W4-04/W4-05]:** the
+LT8/Task-6 tallies above never included the LINUX instantiations of the generic
+watcher test suites — upstream instantiates `ProcessTests`/`AsyncTests`/
+`StreamTests` per backend via anon `test{}` blocks that `zig_count` skips, so the
+count gate was structurally blind to their omission. Now ported, per surface
+(`epoll.rs`, `io_uring.rs`, `dynamic.rs`): +2 process tests (`process wait with
+non-zero exit code` — exit 42; `process wait on a process that already exited` —
+reap-first `r catch 0`, the ECHILD → `InvalidChild` path), +2 async tests
+(`async: notify first`; `async batches multiple notifications` — 5-pre + 1-post
+notify → exactly 1 callback), +3 pty Stream tests (`pty: child to parent`;
+`pty: parent to child`; `pty: queued writes` — the dynamic variant omits the
+`WriteRequest.from` identity assert and skips on x86_64, per stream.zig's
+`!xev.dynamic` guard and dynamic+x86_64 skip). +21 Linux `#[test]`s over the
+Task-6 tally; the macOS lane also gains `async.rs`'s kqueue stale-timer
+regression test (finding W13A-01, `timer_next` now `update_now()`s per
+kqueue.zig — the deadline is no longer derived from pre-block cached time).
 
 STILL DEFERRED on Linux (documented; each is a REFERENCE decision or a ledgered
 follow-up, not a weakening of a live path):
@@ -5458,7 +5645,17 @@ rustty_vt_c.wasm` (~1.02 MB, valid WASM MVP, 157 exports)** — the rustty analo
   (faithful to ghostty's `!link_libc` gate); the C++ `-sys` `cpp_link_stdlib(None)`.
 - `xtask wasm-patch-growable-table` — verbatim port of
   `src/build/wasm_patch_growable_table.zig` + its 7 reference tests (mirrors the
-  table-patch step of `GhosttyLibVt.initWasm`).
+  table-patch step of `GhosttyLibVt.initWasm`). **WIRED (2026-08-10, codex-vet
+  F-006):** the port used to have zero call sites — `build-vt-wasm.sh` was a
+  plain `cargo build`, so the shipped module had a PRIVATE, non-growable table
+  and browser embedders had no way to install the effect callbacks
+  `rustty_sys_set` accepts (on wasm a fn pointer IS a table index). The script
+  now mirrors all three steps of `GhosttyLibVt.initWasm`: link with
+  `-C link-arg=--export-table` (`exe.export_table = true`), run this patcher to
+  drop the table max, and install the result as `zig-out/bin/rustty-vt.wasm`
+  (analog of `zig-out/bin/ghostty-vt.wasm`), which the three wasm examples and
+  `.port/tools/wasm-parity.mjs` now load. Gate:
+  `node .port/tools/wasm-parity.mjs --table-only`.
 
 **RESIDUAL (small, documented):**
 1. ~~**`web_canvas.zig` NOT ported (dead upstream)**~~ **RESOLVED — PORTED &
@@ -5525,6 +5722,29 @@ rustty_vt_c.wasm` (~1.02 MB, valid WASM MVP, 157 exports)** — the rustty analo
    link. Built by `.port/tools/build-main-wasm.sh`; shape-asserted by
    `crates/rustty-wasm/tests/artifact_shape.rs`; rendered and pixel-gated by
    `example/wasm-webgl/`.
+   **COMPLETED — codex-vet W16-FONT-01 fix, 2026-08-10.** The WS14 claim above
+   ("retention set is now the reference's") was OVERSTATED: `font/main.zig`'s
+   `comptime` block retains FOUR wasm groups (`Atlas.Wasm` + `DeferredFace.Wasm`
+   + `face.web_canvas.Wasm` + `shape.web_canvas.Wasm`), and WS14 retained only
+   `Atlas.Wasm` — the omission of the other three was never ledgered. Fixed:
+   the unprefixed Ghostty-ABI exports `deferred_face_new/free/load`
+   (`DeferredFace.zig:423-466`), `face_new/free/render_glyph/debug_canvas`
+   (`face/web_canvas.zig:489-557`; `face_new` takes `pts: u16` per the export
+   signature; `face_render_glyph` returns a heap `*Glyph` via the resurrected
+   `rustty_os::wasm::to_host_owned`, freed by the exported `free`) and
+   `shaper_new/free/test` (`shaper/web_canvas.zig:231-305`; `shaper_test`'s
+   `*font.GroupCache` param — a type deleted upstream in the `Group`→`SharedGrid`
+   refactor — is modernized to `*SharedGrid`, and its terminal row walk drives
+   the same `shape()` primitive per the file's FAITHFUL MODERNIZATION header) now
+   live in `rustty-font-shaper` behind the `ghostty-wasm-abi` feature, ON in
+   `rustty-wasm` only, so `rustty_web_canvas.wasm` keeps its `rustty_wc_*`-only
+   surface. Note the upstream oracle surface is DEAD code at pin `6ad1fe7d`
+   (`main_wasm.zig` is referenced nowhere in `build.zig`, and
+   `face/web_canvas.zig:557` calls `wasm.toHostOwned`, deleted by `9dc2e5978`,
+   so it cannot even compile) — the faithful port compiles where the oracle does
+   not, on the same resurrection precedent as WS14 T3. Shape-asserted (all 10
+   names) by `crates/rustty-wasm/tests/artifact_shape.rs` (mutation-proven RED
+   against the pre-fix artifact).
 
 ## rustty-font-shaper — Linux fontconfig backend + web_canvas [added 2026-07-10, T14 reconciliation — VALIDATION_REPORT §3b]
 
@@ -5564,8 +5784,15 @@ fork:
   **Falsifiable gate** (this port is wasm-only, so a host `#[test]` cannot reach
   it): six LOCAL `rustty_wc_deferred_*` harness exports were added to the
   `rustty-web-canvas` cdylib root — the same "local helper export" class as
-  `rustty_wc_atlas_*`, NOT a port of anything (the reference `DeferredFace.zig`
-  carries no `Wasm` C-ABI) — and `.port/tools/web-canvas-instantiate.mjs` gained a
+  `rustty_wc_atlas_*`, NOT a port of anything ~~(the reference `DeferredFace.zig`
+  carries no `Wasm` C-ABI)~~ **[CORRECTED — codex-vet W16-FONT-01, 2026-08-10:
+  that premise was FALSE — `DeferredFace.zig:423-466` carries a real `Wasm`
+  C-ABI (`deferred_face_new/free/load`), retained by `font/main.zig`. It is now
+  ported in `deferred_face.rs`'s `ghostty_wasm_abi` module (feature
+  `ghostty-wasm-abi`, ON only in `rustty-wasm`); the `rustty_wc_deferred_*`
+  harness exports here remain the local (non-port) gate surface of
+  `rustty_web_canvas.wasm`, whose export set is unchanged]** — and
+  `.port/tools/web-canvas-instantiate.mjs` gained a
   `(c4)` block that ASSERTS values, not merely "did not trap":
   `name`/`family_name` must equal the payload's font string exactly, and
   `has_codepoint` must be `true` for a null presentation, `true` for a matching
@@ -5576,6 +5803,36 @@ fork:
   `FAIL: deferred has_codepoint('A', emoji) should be false`; truncating the `name`
   copy (`&wc.font_str[..1]`) → `FAIL: deferred name = "b"`. Both reverted, green
   re-confirmed.
+- **`face/web_canvas.rs` — two codex-vet parity fixes (2026-08-11, W9F-03 /
+  W9F-04).** (1) **W9F-03:** `renderGlyph`'s 4-byte-atlas arm stored the Canvas
+  `getImageData` RGBA bytes VERBATIM under `Format::Bgra` (the reference writes
+  them under an `.rgba` format its own `Atlas.zig` enum does not define), so an
+  opaque-red glyph reached the GL/Metal BGRA texture upload as blue. Now swizzled
+  by `rgba_to_bgra` (faithful divergence 4 in the file head). (2) **W9F-04:** the
+  bytes-based `Face::init` shim handed embedded TTF bytes to `ctx.font` as a
+  "CSS" string — the browser rejects the assignment and silently keeps its
+  fallback font, and the reference's post-set read-back check was DISCARDED
+  (`let _ = font_val == check…`). `init_named` now rejects non-CSS payloads
+  (`Error::InvalidFontStr`, `validate_css_font_str`: font-file magics, invalid
+  UTF-8, control bytes) and the read-back mismatch routes to `font_did_not_set`,
+  which emits the reference's `log.warn` through `os/wasm/log`'s `env.log` sink in
+  the Ghostty-ABI artifact (`rustty_wasm.wasm`); the standalone
+  `rustty_web_canvas.wasm` has no host log sink by design, so its import set is
+  UNCHANGED (still 14 `rustty_wc_*` `env` imports). The wasm `SharedGridSet`
+  built-in-fallback arms now go through `shared_grid_set::embedded_face_source`,
+  which passes the embedded bytes on native and a CSS generic family on wasm.
+  **Falsifiable gate** (wasm-only port — a host `#[test]` cannot reach it):
+  `.port/tools/web-canvas-instantiate.mjs` gained `(c5)` (a second instance whose
+  mock canvas paints opaque RED; the format-2 atlas must read back
+  `[0,0,255,255]`) and `(c6)` (`rustty_wc_face_new` with the first 256 bytes of
+  `crates/rustty-font/res/JetBrainsMono-Variable.ttf` must return null, with a
+  `monospace` control that still succeeds); `web-canvas-mock.mjs` now models the
+  browser's IGNORE-invalid-`ctx.font` behavior and takes a `pixel` option. Recipe:
+  `sh .port/tools/build-web-canvas-wasm.sh --release && node
+  .port/tools/web-canvas-instantiate.mjs`. **Mutation-proven RED twice:** the
+  pre-fix `.wasm` → `FAIL: BGRA atlas stores [255,0,0,255]`; disabling
+  `validate_css_font_str` → `FAIL: face_new accepted embedded TTF bytes as a CSS
+  font value`. Both reverted, green re-confirmed.
 
 The cli C2 entry's "Non-macOS Fontconfig discovery is still DEFERRED in the
 shaper" note points here.
@@ -5735,6 +5992,31 @@ KATs: sys.rs `default_decoder_*` + stream_terminal.rs
 `kitty_graphics_png_transmit_decodes_via_default_hook` (run with
 `--features wuffs`); graphics_image.rs `image_load_png_not_compressed_regular_file`
 no longer skips under the feature.
+
+**ADDENDUM — combined-build feature-unification hazard + publish rule (2026-08-10,
+codex-vet W36-B03, GATED).** The WS3 resolution above holds only per SELECTION.
+Ghostty compiles libghostty-vt as a SEPARATE artifact with
+`vt_options.artifact = .lib` (GhosttyZig.zig:67-68), so its lib-vt default is
+*always* null no matter what the app tier links. Cargo cannot give one compiled
+`rustty-vt` two artifact identities: any COMBINED selection containing both
+tiers (`cargo build/test --workspace`, or `-p rustty-vt-c -p rustty-core`)
+resolves ONE `rustty-vt` with `wuffs` unified in (measured:
+`cargo tree -p rustty-vt-c -p rustty-core -e features` shows
+`rustty-vt feature "wuffs"`), flipping the vt-c C artifact's default decoder to
+`Some(decode_png_wuffs)` — a divergence the oracle cannot exhibit. **Publish
+rule:** librustty-vt artifacts must be produced by ISOLATED
+`cargo <cmd> -p rustty-vt-c` invocations (that resolution is wuffs-free and
+matches the oracle's null default); combined workspace builds intentionally
+unify and are never release artifacts. Enforced by **G-VTCLIB**
+(`.port/tools/gates/check_vtc_lib_isolation.sh`, registered HARD in ci.sh with
+a `-SELF` fail-arm entry): isolated `cargo tree` graph pinned wuffs-free +
+detector control + the `#[ignore]`d vt-c KAT
+`isolated_vtc_selection_keeps_lib_null_decode_default`
+(crates/rustty-vt-c/tests/lib_feature_isolation.rs) run under the one selection
+where it binds; `--self-test` proves the KAT goes red under
+`--features rustty-vt/wuffs`. A stronger code-level artifact seam (separate
+lib-profile compilation) belongs to the R2 publish milestone
+(options.rs:30-32 PORT NOTE).
 
 ### 3. ~~rustty-termio `shell_integration.rs` — lossy path byte source (LOW, cleanup)~~ **RESOLVED — WS19 T15, 2026-07-29 (audit row O21)**
 
@@ -7248,8 +7530,19 @@ else:
   SIGHUP)` + `waitpid(pid, WNOHANG)` + 10ms sleep, repeated. Not one signal,
   argument or ordering differs.
 - at `KILL_ABANDON` — stop waiting and return `KillError::Abandoned` instead of
-  looping forever. The child is left alive (or wedged) and reparented to
-  launchd; the caller (`stop`) proceeds with teardown.
+  looping forever. The child is left alive (or wedged) untracked and — on macOS
+  — reparented to launchd once we exit; the caller (`stop`) proceeds with
+  teardown.
+
+**Non-macOS scope [Codex W4-02, 2026-08-10]:** the deadline is guarded only by
+`#[cfg(not(windows))]`, so Linux and FreeBSD are swept in (FreeBSD impact is
+latent behind F-002/F-003/F-004 — the product does not build there yet). The
+"reparented to launchd" phrasing above is macOS-only language and does NOT
+describe those platforms: on Linux/FreeBSD there is no launchd and no
+reparenting at abandon time — rustty remains the parent of the forgotten pid
+(there is no `Drop` reaper on `Command`), so a child that exits after abandon
+stays an unreaped zombie until the app itself exits. Where the oracle loops
+forever, that is the accepted non-macOS cost of the deadline.
 
 **Why fidelity is overruled (liveness > R1):** on macOS a child can become
 permanently unreapable. A `login(1)` — a session leader — that is SIGHUP'd while
@@ -7322,9 +7615,11 @@ pathological:
 2. **Alive, reapable, but SLOW** — a shell trapping/ignoring SIGHUP, a
    `zshexit`/history flush over a stalled network filesystem, an ssh
    multiplexer or a DB client flushing state. **ACCEPTED CONSEQUENCE:** we stop
-   waiting for such a child and no longer collect its exit status; it is
-   reparented to launchd. Note what we deliberately do *not* do: we do not kill
-   it. Its cleanup runs to completion, so there is **no data loss**, and the
+   waiting for such a child and no longer collect its exit status; on macOS it
+   is reparented to launchd once we exit (on Linux/FreeBSD it remains our
+   unreaped child — see the non-macOS scope note above). Note what we
+   deliberately do *not* do: we do not kill it. Its cleanup runs to
+   completion, so there is **no data loss**, and the
    signals it received are exactly the ones the oracle would have sent. The
    entire observable difference is "rustty finished closing while the child was
    still tidying up".
@@ -7729,3 +8024,218 @@ The three still-live instances are reopened above.
    mis-scored path segments on Windows).
 5. Four stale "still `todo!()`" claims corrected (`Colors::default()` is implemented;
    two were justifying duplicated test helpers).
+
+# F-008/W12-01 Tier 2 — caller C allocator does not drive rustty-vt INTERNALS (codex-vet w1, 2026-08-10)
+
+**Tier 1 is FIXED** (batch w1-L02-b02): all six C-ABI constructor/free lifecycles
+(`rustty_terminal_new`/`free`, render_state `new`/`free`,
+`row_iterator_new`/`free`, `row_cells_new`/`free`, selection-gesture
+`new`/`free`, `event_new`/`event_free`) now allocate their wrapper storage via
+the caller-supplied C allocator (`create_raw`/`destroy_raw` in
+`rustty-lib/src/allocator.rs`), return recoverable `RUSTTY_OUT_OF_MEMORY` +
+null out-param on rejection, and fire the caller free callback on free. The
+terminal's OSC stream is also caller-allocator-backed (`initAlloc(alloc, ...)`
+parity). Proving tests: `CountingCAllocator` (`rustty-vt-c/src/test_util.rs`)
+counting/rejecting arms in `terminal.rs`, `render/tests.rs`,
+`selection_gesture/tests.rs`; W36-B06 zero-length typed-helper short-circuit in
+`rustty-vt-c/src/allocator.rs` + `rustty-lib/src/allocator.rs`.
+
+**Tier 2 REMAINS OPEN** (structural, cross-crate — the reference threads
+`alloc` into `t.init(alloc, ...)` and every owned growth path):
+
+1. `rustty-vt` `Terminal`/`Screen`/`PageList`/`RenderState` internals hardwire
+   `allocator_api2::alloc::Global` (`rustty-vt/src/terminal.rs:94`,
+   `rustty-vt/src/render.rs:47`), so screen/pagelist/render-row growth and
+   `update`/`begin_update` bypass the caller allocator (oracle: `state.alloc`).
+2. `grid_ref_track`'s `TrackedGridRef` is `Box::into_raw`'d on Global (oracle:
+   `t.gpa()` create — depends on 1).
+3. selection-gesture event codepoint copy (`selection_gesture.rs`
+   `try_set_word_boundary_codepoints`) uses an owned `Vec` on Global (oracle:
+   `event.alloc.alloc(u21, len)`).
+
+Unblocking requires making rustty-vt runtime-allocator-polymorphic (an
+`allocator_api2::Allocator` adapter over `ZigAllocator` threaded through
+`Terminal::init`). Until then, a caller allocator observes only the
+wrapper-level lifecycle (macOS app path — null allocator — is unaffected).
+Vet record: `.port/codex-vet/STATE.json` F-008/W12-01 fix_plans (Tier split).
+
+## `std.fs.path.resolveWindows` not ported — `config/path.zig` `expand`'s two-component `resolve` stays POSIX-shaped [W10-02, 2026-08-11]
+
+**Status: OPEN, owned by the `platform-linux-windows` workstream** (GAP_ANALYSIS
+§6). Dormant on every target that builds today — rustty does not compile for
+Windows at all (F-001 / W1-02, P1).
+
+Vet row **W10-02** confirmed that `rustty-config`'s three `std.fs.path` helper
+sites were POSIX-only while the oracle uses the target-dispatched `std.fs.path`
+functions (`config/path.zig:147,154`, `config/theme.zig:122,156`,
+`config/file_load.zig:141`). Two of the three are now FIXED:
+
+- `crates/rustty-config/src/path.rs` ports `std.fs.path`'s `getWin32PathType`
+  (+ `getDriveLetter` / `parseUNC` / `parsePathWindows` root length) and the real
+  `isAbsoluteWindows` / `isAbsolutePosix` / `basenameWindows` / `basenamePosix`
+  bodies, with `is_absolute` / `basename` dispatching on the target. BOTH arms are
+  always compiled, so the Windows semantics are unit-tested from the POSIX hosts
+  (`path::tests::std_fs_path_is_absolute_and_basename` — the expectation table is
+  the literal output of the zig 0.16 functions).
+- `theme.rs` and `file_load.rs` now call those shared helpers instead of their own
+  `MAIN_SEPARATOR`/leading-`/` one-liners. That also removes the three-way
+  inconsistency the review flagged (theme.rs used to accept a UNC `\\server\...`
+  theme while rejecting a drive-qualified `C:\...` one).
+
+**RESOLVED [w2, 2026-08-11]** — the third site is now fixed too.
+`std.fs.path.resolveWindows` IS ported (`crates/rustty-config/src/path.rs`
+`resolve_windows`, with `parse_unc` / `parse_path_windows` /
+`compare_disk_designators_drive` / `eql_ignore_case_wtf8` /
+`tokenize_any_windows_sep`), `resolvePosix` was re-ported verbatim
+(`resolve_posix` — the previous body was a lexical approximation that dropped
+leading `..` on relative results), and `resolve` now dispatches on the target
+with BOTH arms always compiled. Proof: `path::tests::std_fs_path_resolve_windows`
+(all 69 cases of zig 0.16 `std.fs.path`'s `test resolveWindows` + the windows
+half of its `test resolve`, verbatim) and `path::tests::std_fs_path_resolve_posix`
+(all 17 `test resolvePosix` cases), both running on the POSIX host.
+
+**Residue (narrow, documented in-code):** `to_upper_wtf16`'s non-windows arm is
+ASCII-only. The reference resolves `std.os.windows.toUpperWtf16` to
+`ntdll.RtlUpcaseUnicodeChar` on windows — which this port binds directly, so a
+real Windows run is exact — and to the vendored `nls.upcaseW` table
+(2544 `u16` entries copied out of `l_intl.nls`) off windows, which is NOT
+vendored here. The only caller is drive-letter equality
+(`compareDiskDesignators(.drive, …)`), so the divergence is confined to
+NON-ASCII drive letters (`λ:` vs `Λ:`) evaluated on a non-windows host, i.e. to
+unit tests. The reference's `.unc` arm of `compareDiskDesignators` has no ported
+caller (`resolveWindows` only ever passes `.drive`) and is likewise not
+reproduced.
+
+## VT dispatch allocation shape — the parser's boxed `Action` payloads stay; the recoverable-OOM sites do not [W5-01, 2026-08-11]
+
+Vet row **W5-01** confirmed that routine VT dispatch adds allocations the oracle
+does not make, and that two of those sites also LOSE a recoverable
+`error.OutOfMemory` the reference threads. The recoverable-OOM half is now
+FIXED; the representation half is recorded here as an accepted, measured
+divergence so it is registered rather than silent.
+
+**Fixed (no longer a divergence):**
+
+- `crates/rustty-vt/src/stream_terminal.rs` `clipboard_contents` — the OSC 52
+  decode scratch was `vec![0u8; decoded_len]` (aborts on OOM). The reference
+  (`stream_terminal.zig:443-448`) allocates it from the terminal allocator with
+  `try` and the dispatch arm (`:339-345`) swallows the error. It is now an
+  `allocator_api2::vec::Vec<u8, _>` over `self.term().gpa()` reserved with
+  `try_reserve_exact` (the shape `dcs::Allocating::init_capacity` already used),
+  and an allocation failure returns WITHOUT invoking the `clipboard_write`
+  effect. The oracle test previously declined ("clipboard_write allocation
+  failure is ignored", `stream_terminal.zig:2309-2339`) is ported as
+  `clipboard_write_allocation_failure_is_ignored`. rustty's allocator seam is the
+  zero-sized `allocator_api2::alloc::Global`, so `testing.failing_allocator`
+  cannot be swapped in; the injection point is the new `CLIPBOARD_CONTENTS_TW`
+  tripwire, sitting exactly where the reference's `try alloc.alloc` is (same
+  `#[cfg(test)] thread_local!` idiom as the neighbouring `COLOR_OPERATION_TW`).
+- `crates/rustty-vt/src/tmux/control.rs` `Parser::init_options` — was
+  `Vec::with_capacity(capacity)` (aborts). The reference's tmux DCS hook builds
+  the buffer with `try .initCapacity(alloc, 128)` (`dcs.zig:67-70`), whose
+  `error.OutOfMemory` propagates out of `dcs.hook`. `init_options` now reserves
+  with `try_reserve_exact` and returns `Result<Parser, OutOfMemory>`; the hook
+  site (`dcs.rs`, tmux arm) threads it with `?`. The parser's buffer remains an
+  owning global-allocator `Vec` — only the fallibility, not the allocator,
+  threads through. Proving test:
+  `tmux::control::tests::tmux_init_options_reports_allocation_failure`.
+
+**Deferred / accepted (registered, not scheduled):**
+
+- **The parser's boxed dispatch payloads** (`crates/rustty-vt/src/parser.rs:137-149`;
+  `Box::new` at the CSI/ESC/OSC/DCS dispatch sites). The reference returns actions
+  by value / fixed-buffer slices with zero allocation per dispatch
+  (`Parser.zig:251-310`); rustty allocates one `Box` per CSI/ESC/OSC/DCS dispatch,
+  and that box aborts on OOM. This is a **locked, measured** decision, documented
+  in the `PERF(port)` note at `parser.rs:128-136`: by-value payloads inflate the
+  per-byte `[Option<Action>;3]` return that cannot be dead-code-eliminated,
+  costing ~200 B of dead stores on EVERY printed byte (+25 % on
+  `terminal-parser`), and the boxing NET-REDUCES allocator traffic per escape
+  sequence (it replaced two per-dispatch `Vec`s for CSI/DCS and one for ESC).
+  Observable contents are identical. No surgical alloc-free representation exists
+  without re-litigating the `Action` layout, so this stays. Un-defer only
+  together with a re-benchmarked `Action` redesign (a fixed-capacity inline
+  payload) that holds the perf baseline.
+- **`device_attributes.rs` `encode`'s `String` response buffers** (`:324+`) and
+  **`x11_color.rs`'s per-lookup `to_ascii_lowercase` + lazy map** (`:43`, `:174`,
+  vs the reference's comptime static map). Both are normal-path
+  allocation-per-call divergences under the project-wide abort-on-OOM policy
+  (ALLOC_AUDIT.md §1); neither loses a recoverable error the reference threads.
+  The x11 one needs a PHF/static table to fix and is separable from this family.
+
+---
+
+## FreeBSD — the platform's explicit ledger row [W2D / F-002 + F-003 + F-004, 2026-08-11]
+
+FreeBSD was never a named deferral: it was only ever *implicitly* covered by the
+macOS-first plan's "GTK last" tier (GAP_ANALYSIS.md §3.7) and by
+XEV_BLUEPRINT.md's "keep the FreeBSD `posix.Kevent` fast-path cfg-gated for
+later". The codex-vet rows **F-002** (apprt/GTK), **F-003** (renderer/OpenGL) and
+**F-004** (xev/kqueue) each asked for this row, because the oracle treats FreeBSD
+as a first-class target: `apprt/runtime.zig:14-24` selects `.gtk` for
+`.linux, .freebsd`, `renderer/backend.zig:20-22` gives every non-Darwin native
+target `.opengl`, and `libxev`'s `backend.zig:20,38` maps freebsd onto Kqueue
+(its own `main.zig:115-117` runs the whole Kqueue suite on freebsd).
+
+**LANDED (W2D — type-check parity: a FreeBSD build resolves the names the oracle
+resolves).**
+
+- `rustty-os`: the `IUTF8` shim (`pty.rs`) — `libc` 0.2's freebsd12 ABI carries no
+  `IUTF8`, the oracle's `c.IUTF8` resolves through the target's own `termios.h`.
+- `rustty-xev`: the real kqueue backend on freebsd (kevent ABI arms, the machport
+  gating, the oracle's own FreeBSD wakeup stub, `AsyncEventFd`, the `_umtx_op`
+  futex arm, and the `any(macos, freebsd)` module/re-export/seam gates).
+- `rustty-apprt` / `rustty` / `rustty-cli` (**F-002**): every
+  `all(target_os = "linux", feature = "gtk")` gate is now
+  `all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk")` — the
+  `pub mod gtk` declaration, both gtk4-rs dep tables, `build.rs`'s asset-pipeline
+  guard, all 30 gated integration-test headers, the `main_rustty.rs` GUI launch
+  arm + `run_gtk`, `rustty`'s gui-leaf dev-dep table and KAT, and the 8
+  `new_window` / `toggle_quick_terminal` ipc arms. Before this a FreeBSD build had
+  `app_runtime() == .gtk` (already faithful in rustty-build-config) and NO
+  compiled backend, so it hit the deferred-leaf `unimplemented!` where the oracle
+  launches its GUI.
+- `rustty-apprt` (**W16-GTK-02**, folded in here because it is the same seam):
+  `gtk.rs` now re-exports `resources_dir` (`apprt/gtk.zig:4`, the third member of
+  the required comptime apprt API) and `init_with_action` selects it under the
+  gtk cfg, so the ported Flatpak resources-dir override is reachable from global
+  init instead of dead (`global.zig:214`).
+- `rustty-renderer` (**F-003**) is the sibling W2D item; it is tracked by its own
+  batch and is NOT part of this row's evidence.
+
+**STILL OPEN (nothing below is scheduled; this row is where it is registered).**
+
+1. **Runtime bring-up on a real FreeBSD >= 13 host.** Nothing here has ever been
+   executed on FreeBSD. The follow-up is the concrete command set: `cargo test -p
+   rustty-xev` (the kqueue loop, EVFILT_PROC delivery, the thread-pool futex),
+   `cargo build -p rustty && cargo run -p rustty` (GTK launch), and a
+   gtk-featured `cargo check -p rustty-apprt --features gtk`.
+2. **The gtk-featured FreeBSD build is HOST-UNVERIFIABLE here and stays argued by
+   construction.** gtk4-rs's `-sys` crates probe **pkg-config for the target**, so
+   no macOS-side `cargo check --target x86_64-unknown-freebsd --features gtk`
+   exists short of a full FreeBSD GTK install. What IS machine-checked on this
+   host: `cargo tree -p rustty --target x86_64-unknown-freebsd` resolves the same
+   gtk4/libadwaita/gdk4-wayland/gdk4-x11/wayland-client set as the Linux graph,
+   while the macOS graph resolves none of them — gate
+   `.port/tools/gates/check_default_linux_winproto.sh` (G-WINPROTO-DEFAULT), whose
+   FreeBSD arm fails if any gtk gate reverts to linux-only. The remaining claim is
+   textual: every widened site is the *exact* Linux pattern with `any()` around the
+   OS, and FreeBSD ports ships gtk4, libadwaita, gtk4-layer-shell, wayland and x11.
+3. **The oracle-faithful loop-wakeup panic stub** (`libxev` `kqueue.zig:1488-1510`
+   "TODO: We should use eventfd for FreeBSD"). Ported bug-for-bug (R1). Blast
+   radius, precisely: pool completions are push-only on freebsd
+   (`kqueue.zig:965-968` gates the wakeup call on `isDarwin()`), so the stub fires
+   only on an explicit `Loop::wakeup()` — added cross-thread wakeup latency, not a
+   pool crash. An eventfd wakeup must land upstream first, or be recorded here as
+   an R1 divergence.
+4. **The ios/visionos kqueue-availability nit.** The oracle's `kqueue.zig:31`
+   includes them; rustty gates `any(macos, freebsd)` only. Pre-existing and
+   unchanged by W2D.
+5. **libc ABI pin.** `libc` 0.2's default freebsd ABI is freebsd12, so
+   `libc::kevent` carries `ext: [u64; 4]` and `data: i64`. The port never names
+   `ext` on freebsd (the freebsd `kevent_init` arm zero-initializes), so a future
+   freebsd11 build would still type-check.
+6. **`crates/rustty/tests/cli_smoke.rs`'s version-string arms** cover macos and
+   linux only; on FreeBSD neither block runs, so the `renderer`/`libxev` lines go
+   unasserted there. Harmless today (the test does not fail), noted so the gap is
+   not rediscovered as a bug.

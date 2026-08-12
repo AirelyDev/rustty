@@ -544,9 +544,12 @@ impl PageList {
         // errdefer self.limits = old_limits;
 
         // PORT NOTE: the reference `errdefer self.limits = old_limits`
-        // restores `limits` on any error below. Both fallible paths
-        // (`resizeWithoutReflowGrowCols` and `grow`) restore it before returning
-        // the error; on success the restore is skipped.
+        // restores `limits` on any error below. Every fallible path
+        // (`resizeWithoutReflowGrowCols` and both row-growth `grow` loops)
+        // restores it before returning the error; on success the restore is
+        // skipped. When `opts.reflow` is set the restore is a no-op (the
+        // assignment above was skipped), exactly as the reference's `errdefer`
+        // is when `old_limits == self.limits`.
 
         // Important! We have to do cols first because cols may cause us to
         // destroy pages if we're increasing cols which will free up page_size
@@ -681,7 +684,11 @@ impl PageList {
                             let delta = rows - self.rows;
                             self.rows = rows;
                             for _ in 0..delta {
-                                let _ = self.grow()?;
+                                if let Err(e) = self.grow() {
+                                    // errdefer self.limits = old_limits;
+                                    self.limits = old_limits;
+                                    return Err(e);
+                                }
                             }
                             break 'gt;
                         }
@@ -719,7 +726,11 @@ impl PageList {
                     if !reached {
                         assert!(count < rows as usize);
                         for _ in count..(rows as usize) {
-                            let _ = self.grow()?;
+                            if let Err(e) = self.grow() {
+                                // errdefer self.limits = old_limits;
+                                self.limits = old_limits;
+                                return Err(e);
+                            }
                         }
                     }
 

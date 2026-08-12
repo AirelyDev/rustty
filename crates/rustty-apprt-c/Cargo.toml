@@ -35,6 +35,14 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 # the reference ghostty values, for the parity/differential harness — never for a
 # published rustty artifact.
 [features]
+# `-Dsimd` defaults to TRUE for every non-WASM target
+# (`ghostty/src/build/Config.zig:196-206`), and `SharedDeps` threads `cfg.simd`
+# into the terminal module the app links, so the reference libghostty runs
+# `stream.zig`'s SIMD `nextSlice` fast path out of the box. A default
+# `cargo build -p rustty-apprt-c` (and therefore the shipped
+# RusttyKit.xcframework, which builds with the DEFAULT feature set) now matches;
+# `--no-default-features` is the `-Dsimd=false` analog.
+default = ["simd"]
 # Enabling apprt-c's `identity-oracle` also turns on rustty-config's + rustty-bench's
 # `identity-oracle` (which themselves flip via `rustty-identity`), and flips
 # `rustty-identity` directly too so the whole linked staticlib sees one consistent
@@ -45,10 +53,10 @@ identity-oracle = [
     "rustty-identity/identity-oracle",
 ]
 # SIMD acceleration passthrough (mirrors rustty-vt-c's `simd`): forwards to
-# rustty-vt's `simd` feature so the shipped RusttyKit.xcframework can be built
+# rustty-vt's `simd` feature so the shipped RusttyKit.xcframework is built
 # SIMD-on — matching upstream Ghostty's default-on library and consistent with
-# the CMake wrapper's RUSTTY_VT_SIMD default. Off by default (rustty's default
-# for a plain `cargo build`); `xtask xcframework` enables it.
+# the CMake wrapper's RUSTTY_VT_SIMD default. ON by default now (see `default`
+# above), so `xtask xcframework`'s DEFAULT-feature-set build gets it.
 simd = ["rustty-vt/simd"]
 
 [dependencies]
@@ -110,7 +118,13 @@ rustty-datastruct = { workspace = true }
 # `ghostty_info` reads `build_config.version_string` + `builtin.mode` (main_c.zig:131);
 # rustty-build-config supplies `VERSION_STRING` + `mode_string()`. Forward edge (member 2,
 # far below apprt-c the top sink) — check_acyclic.sh stays GREEN.
-rustty-build-config = { workspace = true }
+#
+# `artifact-lib`: this crate IS the librustty artifact (cdylib/staticlib), i.e. the
+# `libghostty` build whose `builtin.output_mode == .Lib` makes `build_config.artifact`
+# `.lib` in the reference. Turning the feature on here reproduces that comptime fact, so
+# `cli.diagnostics`' `precompute_enabled` is TRUE for the C ABI (`rustty_config_get_diagnostic`
+# hands out real message pointers instead of `""`), matching `config/CApi.zig:128-133`.
+rustty-build-config = { workspace = true, features = ["artifact-lib"] }
 # WS13: `rustty_translate` forwards to the gettext `_` wrapper
 # (`main_c.zig:150` -> `internal_os.i18n._`), i.e. `rustty_os::i18n::gettext_`, which
 # WS9's vendored libintl (`crates-sys/gettext-sys` -> `librustty_intl.a`) makes

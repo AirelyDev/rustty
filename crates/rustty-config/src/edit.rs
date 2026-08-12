@@ -167,9 +167,10 @@ fn config_path_candidates() -> Result<Vec<Vec<u8>>, FileLoadError> {
     }
 
     // paths.appendAssumeCapacity(try file_load.defaultXdgPath(alloc_arena));
-    paths.push(file_load::default_xdg_path()?.into_bytes());
+    // (W94-B02-01: the XDG helpers are byte-typed now — no `into_bytes`.)
+    paths.push(file_load::default_xdg_path()?);
     // paths.appendAssumeCapacity(try file_load.legacyDefaultXdgPath(alloc_arena));
-    paths.push(file_load::legacy_default_xdg_path()?.into_bytes());
+    paths.push(file_load::legacy_default_xdg_path()?);
 
     // return paths.items;
     Ok(paths)

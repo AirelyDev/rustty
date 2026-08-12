@@ -148,6 +148,7 @@ members = [
     "crates-sys/zlib-sys",
     "crates-sys/gettext-sys",
     "crates-sys/libpng-sys",
+    "crates-sys/breakpad-sys",
     "crates-sys/sentry-sys",
     "crates-sys/dcimgui-sys",
 
@@ -271,10 +272,16 @@ glslang-sys = { path = "crates-sys/glslang-sys" }
 # reference links; C API 0.59). The FFI leaf the renderer's Metal path builds on
 # to cross-compile SPIR-V into MSL/GLSL (spirv_cross_c C interface).
 spirv-cross-sys = { path = "crates-sys/spirv-cross-sys" }
+# R3: vendored google breakpad client at pin b99f444b (the SAME commit the
+# reference links via pkg/breakpad). Link-only C++ leaf (no C API, no
+# bindings): backs sentry-sys's `backend = .breakpad` minidump capture, exactly
+# as the reference's pkg/sentry links the pkg/breakpad artifact.
+breakpad-sys = { path = "crates-sys/breakpad-sys" }
 # R3: vendored sentry-native 0.7.8 (the SAME `getsentry/sentry-native` release
 # the reference links via pkg/sentry). The FFI leaf backing the crash-reporting
-# path, built with ghostty's fixed `backend = .inproc` / `transport = .none`
-# options. KAT-only today (no consumer yet).
+# path, built with the product's `backend = .breakpad` (SharedDeps.zig passes
+# `.backend = .breakpad` whenever sentry is enabled; breakpad-sys provides the
+# archive) / `transport = .none` options.
 sentry-sys = { path = "crates-sys/sentry-sys" }
 # R3: vendored Dear ImGui 1.92.5 (docking) + Dear Bindings 0.17 C API (the SAME
 # `ocornut/imgui` release + `dearimgui/dear_bindings` generator the reference

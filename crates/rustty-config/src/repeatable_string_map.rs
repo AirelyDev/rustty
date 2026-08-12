@@ -13,7 +13,7 @@
 // const Allocator = std.mem.Allocator;
 //
 // const formatterpkg = @import("formatter.zig");
-use rustty_cfg_fmt::{format_entry_string, format_entry_void, FormatEntry, Writer};
+use rustty_cfg_fmt::{format_entry_string, format_entry_void, FormatEntry, FormatError, Writer};
 use rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged;
 
 // const Map = std.ArrayHashMapUnmanaged(
@@ -198,7 +198,11 @@ impl RepeatableStringMap {
 
 impl FormatEntry for RepeatableStringMap {
     // pub fn formatEntry(self: RepeatableStringMap, formatter: formatterpkg.EntryFormatter) !void {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // If no items, we want to render an empty field.
         // if (self.map.count() == 0) {
         //     try formatter.formatEntry(void, {});
@@ -217,7 +221,18 @@ impl FormatEntry for RepeatableStringMap {
         //     try formatter.formatEntry([]const u8, value);
         // }
         for (key_ptr, value_ptr) in self.map.iter() {
-            // const value = std.fmt.bufPrint(&buf, "{s}={s}", .{ key, value });
+            // const value = std.fmt.bufPrint(&buf, "{s}={s}", .{ key, value }) catch |err| switch (err) {
+            //     error.NoSpaceLeft => return error.OutOfMemory,
+            // };
+            //
+            // PORT NOTE: the reference formats each entry through a FIXED
+            // `[256]u8` stack buffer; `key=value` exceeding it is
+            // `error.NoSpaceLeft` -> `error.OutOfMemory`. The growable Vec is
+            // only the scratch — the fixed capacity is enforced by the bound
+            // check (byte-identical output when it fits).
+            if key_ptr.len() + 1 + value_ptr.len() > 256 {
+                return Err(FormatError::OutOfMemory);
+            }
             let mut value: Vec<u8> = Vec::new();
             value.extend_from_slice(key_ptr);
             value.push(b'=');
@@ -331,6 +346,53 @@ mod tests {
             f.format_entry(&map).unwrap();
             // try std.testing.expectEqualSlices(u8, "a = A=B\n", buf.written());
             assert_eq!(b"a = A=B\n".as_slice(), buf.written());
+        }
+    }
+
+    // rustty-only test (parity fix W95-B04-01): the reference formats each
+    // `key=value` entry through a FIXED `[256]u8` buffer
+    // (`error.NoSpaceLeft` -> `return error.OutOfMemory`). A payload
+    // (`key` + `=` + `value`) of exactly 256 bytes fits; 257 and 300 overflow.
+    // Lock both sides of the boundary.
+    #[test]
+    fn repeatable_string_map_format_config_fixed_buffer_boundary() {
+        use rustty_cfg_fmt::FormatError;
+
+        // key "k" + '=' + 254-byte value == 256: fits.
+        {
+            let mut buf = AllocatingWriter::init();
+            let mut map = RepeatableStringMap::default();
+            let mut input: Vec<u8> = b"k=".to_vec();
+            input.extend_from_slice(&vec![b'v'; 254]);
+            map.parse_cli(Some(&input)).unwrap();
+            let mut f = entry_formatter(b"a", &mut buf);
+            f.format_entry(&map).unwrap();
+            let mut expected: Vec<u8> = b"a = k=".to_vec();
+            expected.extend_from_slice(&vec![b'v'; 254]);
+            expected.push(b'\n');
+            assert_eq!(expected.as_slice(), buf.written());
+        }
+
+        // key "k" + '=' + 255-byte value == 257: overflows -> OutOfMemory.
+        {
+            let mut buf = AllocatingWriter::init();
+            let mut map = RepeatableStringMap::default();
+            let mut input: Vec<u8> = b"k=".to_vec();
+            input.extend_from_slice(&vec![b'v'; 255]);
+            map.parse_cli(Some(&input)).unwrap();
+            let mut f = entry_formatter(b"a", &mut buf);
+            assert_eq!(Err(FormatError::OutOfMemory), f.format_entry(&map));
+        }
+
+        // key "k" + '=' + 298-byte value == 300: overflows -> OutOfMemory.
+        {
+            let mut buf = AllocatingWriter::init();
+            let mut map = RepeatableStringMap::default();
+            let mut input: Vec<u8> = b"k=".to_vec();
+            input.extend_from_slice(&vec![b'v'; 298]);
+            map.parse_cli(Some(&input)).unwrap();
+            let mut f = entry_formatter(b"a", &mut buf);
+            assert_eq!(Err(FormatError::OutOfMemory), f.format_entry(&map));
         }
     }
 

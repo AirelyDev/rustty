@@ -8,8 +8,10 @@
 //! PORT STATUS: complete (vt-11g). `StringMap` + `deinit` always; the oniguruma
 //! search surface (`SearchIterator`/`Match`/`searchIterator`/`oni::*`) plus its
 //! 3 tests are gated behind `#[cfg(feature = "oniguruma")]`, off by default.
-//! The `oni` binding crate does not exist yet, so the gated code is NOT compiled
-//! in the default build, faithful to the Zig `SkipZigTest`.
+//! The `oni` binding crate (`rustty-oniguruma`, lib name `oni`) HAS landed and
+//! the gated surface builds and passes under `--features oniguruma`; the feature
+//! stays off in the default build, so that code is not compiled there — faithful
+//! to the Zig `SkipZigTest` for a build without the optional dependency.
 // PORT NOTE: `search_iterator`/`shallow_copy` and the gated test module are only
 // reachable under `#[cfg(feature = "oniguruma")]`; `should_implement_trait`
 // suppresses the `SearchIterator::next`/`Iterator` advisory (the reference is a
@@ -40,8 +42,20 @@ const ONI_SEARCH_RETRY_LIMIT: usize = 100_000;
 /// A string along with the mapping of each individual byte in the string
 /// to the point in the screen.
 pub struct StringMap {
-    // PORT NOTE: `string: [:0]const u8` -> `Vec<u8>` carrying the NUL-terminated
-    // invariant (never a lossy `String`).
+    // PORT NOTE: `string: [:0]const u8` -> an UNSENTINELED `Vec<u8>` (never a
+    // lossy `String`). Its `len()` equals the Zig slice's sentinel-EXCLUSIVE
+    // `len`, and NO NUL byte is stored: `Screen.selection_string` fills it with
+    // the emitted bytes exactly (the reference's `alloc.dupeZ(u8, text)` is what
+    // appends the sentinel there). Do NOT "restore" the sentinel by pushing a 0 —
+    // that would change `string.len()` and break the offset/loop bounds in
+    // `SearchIterator::next` against the reference's sentinel-exclusive `len`.
+    //
+    // Parity holds because nothing in the port or the reference ever reads the
+    // sentinel: every consumer passes explicit byte bounds. `search_with_param`
+    // below hands a `&[u8]` to `oni::Regex::search_impl` (the `rustty-oniguruma`
+    // wrapper crate, whose lib name IS `oni`), which calls
+    // `onig_search_with_param` with `str_ptr` / `str_ptr + len` / start / end —
+    // the same four bounds the reference's oniguruma binding passes.
     pub string: Vec<u8>,
     // PORT NOTE: `map: []Pin` -> `Vec<Pin>`.
     pub map: Vec<Pin>,
@@ -80,10 +94,12 @@ impl StringMap {
     // value type for the `oni` search surface (`SearchIterator.next` copies
     // `self.map` into each `Match`). In Zig this is a shallow copy of the
     // `string`/`map` slice headers — a non-owning view whose backing data is
-    // only freed by `StringMap.deinit`. The faithful non-owning mirror lands
-    // with the `oni` binding crate; this whole surface is gated off by default
-    // (the binding crate does not exist yet) and is not compiled in the default
-    // build, so the precise ownership model is finalized when the crate arrives.
+    // only freed by `StringMap.deinit`. The port instead makes an OWNING deep
+    // copy of both `Vec`s (an extra allocation per `Match`, freed with that
+    // `Match`); the surface is read-only, so the copy is indistinguishable to
+    // the search API. The `oni` binding crate (`rustty-oniguruma`) HAS landed —
+    // this surface is gated only because the `oniguruma` feature is off by
+    // default, mirroring a reference build without the optional dependency.
     #[cfg(feature = "oniguruma")]
     fn shallow_copy(&self) -> StringMap {
         StringMap {
@@ -154,10 +170,10 @@ impl SearchIterator {
         // `StringMap` value type, which in Zig is a *shallow* copy of the two
         // slice headers (`string`, `map`) — `Match` does NOT own the backing
         // data (only `StringMap.deinit` frees it). The faithful Rust mirror of
-        // this non-owning header copy lands with the `oni` binding crate; this
-        // whole `#[cfg(feature = "oniguruma")]` surface is off by default (the
-        // binding crate does not exist yet) and is not compiled in the default
-        // build.
+        // this non-owning header copy is the owning deep copy `shallow_copy`
+        // makes (see its PORT NOTE); this whole `#[cfg(feature = "oniguruma")]`
+        // surface is off by default — the binding crate HAS landed, the feature
+        // is simply not enabled in the default build.
         let result = Match {
             map: self.map.shallow_copy(),
             offset: self.offset,
@@ -205,7 +221,8 @@ impl Match {
 // mirror is to gate the whole test module behind `#[cfg(feature = "oniguruma")]`
 // (off by default); with the feature off the tests are not compiled, exactly as
 // the Zig `SkipZigTest` returns before touching `oni`. The `oni` binding crate
-// does not exist yet, so this surface lands compiled only once it does.
+// (`rustty-oniguruma`) has landed, so `--features oniguruma` compiles and runs
+// them.
 
 // PORT NOTE (config-layering fixture): the reference StringMap.zig URL tests
 // import `../config/url.zig` and use `url.regex` as a fixture
@@ -324,6 +341,90 @@ mod tests {
     use crate::point;
     use crate::screen::{Options, Screen, SelectLine, SelectionString};
     use allocator_api2::alloc::Global;
+
+    // ADDITIVE (no reference counterpart): codifies the `[:0]const u8` ->
+    // `Vec<u8>` representation contract that the PORT NOTEs on
+    // `StringMap.string` and `Screen::selection_string` describe, so the wording
+    // and the code cannot drift apart again (W22-B08-01).
+    //
+    // The reference stores a real sentinel byte (`toOwnedSliceSentinel(0)` /
+    // `alloc.dupeZ`) whose `len` EXCLUDES it; the port stores no sentinel at all
+    // and the same `len`. This is only parity-safe because no consumer reads the
+    // sentinel — the regex path passes explicit byte bounds — so the test asserts
+    // BOTH halves: no NUL is stored, and a search over the unsentineled buffer
+    // still matches. It fails if anyone "restores" the sentinel by pushing a 0
+    // (which would also desynchronize `string.len()` from `map.len()` and from
+    // the reference's sentinel-exclusive loop bounds in `SearchIterator::next`).
+    #[test]
+    fn string_map_string_is_unsentineled_and_searchable() {
+        let alloc = Global;
+
+        oni::testing::ensure_init().unwrap();
+        let re = oni::Regex::init(
+            b"[A-B]{2}",
+            oni::RegexOptions::default(),
+            oni::Encoding::utf8(),
+            oni::Syntax::default(),
+            None,
+        )
+        .unwrap();
+
+        let mut s = Screen::init(
+            alloc,
+            Options {
+                cols: 5,
+                rows: 5,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: crate::kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        s.test_write_string(b"1ABCD2EFGH\n3IJKL").unwrap();
+        let line = s
+            .select_line(SelectLine {
+                pin: s
+                    .pages
+                    .pin(point::Point::Active(point::Coordinate { x: 2, y: 1 }))
+                    .unwrap(),
+                whitespace: None,
+                semantic_prompt_boundary: false,
+            })
+            .unwrap();
+        let mut map: StringMap = StringMap {
+            string: Vec::new(),
+            map: Vec::new(),
+        };
+        let sel_str = s
+            .selection_string(
+                alloc,
+                SelectionString {
+                    sel: line,
+                    trim: false,
+                    map: Some(&mut map),
+                },
+            )
+            .unwrap();
+
+        // `map.string` is the reference's `dupeZ` of the returned text: the same
+        // bytes, and the same (sentinel-exclusive) length.
+        assert_eq!(sel_str, map.string);
+        assert!(!map.string.is_empty());
+        // NOT NUL-terminated, and no interior NUL either.
+        assert!(!map.string.contains(&0));
+        // One pin per byte of `string` — the invariant `Match::selection` indexes
+        // by, which a stored sentinel would break.
+        assert_eq!(map.string.len(), map.map.len());
+
+        // The sentinel is never observed: the search passes explicit start/end
+        // byte bounds, so an unsentineled buffer matches just the same.
+        let mut it = map.search_iterator(re);
+        let mut match_ = it.next().unwrap().unwrap();
+        assert_eq!(1, match_.region.starts()[0]);
+        assert_eq!(3, match_.region.ends()[0]);
+        match_.deinit();
+    }
 
     // test "StringMap searchIterator"
     #[test]

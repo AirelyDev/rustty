@@ -239,9 +239,12 @@ mod tests {
     // }
     //
     // PORT NOTE (F5): the 12.5 MB `too_big.jpg` blob is replaced by the minimal
-    // black fixture with its SOF0 dimensions patched to 65535×65535 (⇒
-    // 65535·65535·4 ≈ 17 GiB > 4 GiB), read by `decode_image_config` BEFORE any
-    // frame decode ⇒ the `> maximum_image_size` guard fires.
+    // black fixture with its SOF0 dimensions patched to the reference blob's EXACT
+    // declared dimensions, height=32768 × width=32769 (SOF stores height first; ⇒
+    // 32769·32768·4 = 4 GiB + 131072, just past the 4 GiB limit — so this test
+    // discriminates any widening of the guard, W14-02), read by
+    // `decode_image_config` BEFORE any frame decode ⇒ the `> maximum_image_size`
+    // guard fires.
     #[test]
     fn jpeg_too_big() {
         let data = decode(Global, include_bytes!("../fixtures/too_big.jpg"));

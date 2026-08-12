@@ -7,13 +7,13 @@
 //! instance, installs it as the process-global default, and proves `default()`
 //! round-trips back to the very same GObject.
 //!
-//! R5: gated `all(target_os = "linux", feature = "gtk")` — off the gate the module
+//! R5: gated `all(any(linux, freebsd), feature = "gtk")` — off the gate the module
 //! (and the gtk4-rs bindings it uses) is compiled out. Instantiating a
 //! `GhosttyApplication` (an `adw::Application` subclass) touches GTK, so per the L5
 //! test policy it is `#[ignore]`d out of the headless default gate and run
 //! explicitly:
 //!   xvfb-run -a cargo test -p rustty-apprt --features gtk --test gtk_application -- --ignored
-#![cfg(all(target_os = "linux", feature = "gtk"))]
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 
 use std::ffi::c_void;
 

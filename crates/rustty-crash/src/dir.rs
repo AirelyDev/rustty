@@ -27,10 +27,12 @@ pub fn defaultDir() -> Result<Dir, internal_os::xdg::DirError> {
     //   defer environ_map.deinit();
     //   const crash_dir = try internal_os.xdg.state(alloc, &environ_map, ..);
     let environ_map = rustty_global::environ_map();
+    // (W94-B02-01: `xdg::state` is byte-typed — raw path bytes in and out, so
+    // a non-UTF-8 `XDG_STATE_HOME` is honored as in the reference.)
     let crash_dir = internal_os::xdg::state(
         &environ_map,
         internal_os::xdg::Options {
-            subdir: Some(&subdir),
+            subdir: Some(subdir.as_bytes()),
             ..Default::default()
         },
     )?;
@@ -42,7 +44,9 @@ pub fn defaultDir() -> Result<Dir, internal_os::xdg::DirError> {
 pub struct Dir {
     /// The directory where crash reports are stored. This memory is owned
     /// by the caller.
-    pub path: String,
+    // PORT NOTE (W94-B02-01): `path: []const u8` — raw path bytes (R1
+    // byte-slice rule), not a UTF-8 `String`.
+    pub path: Vec<u8>,
 }
 
 impl Dir {
@@ -54,7 +58,7 @@ impl Dir {
         //     self.path,
         //     .{ .iterate = true },
         // ) catch return .{};
-        let dir = match std::fs::read_dir(&self.path) {
+        let dir = match std::fs::read_dir(os_str_from_bytes(&self.path)) {
             Ok(dir) => dir,
             Err(_) => return Ok(ReportIterator::default()),
         };
@@ -125,6 +129,19 @@ pub struct Report {
     // are raw bytes on POSIX).
     pub name: Vec<u8>,
     pub mtime: i128,
+}
+
+/// Convert raw path bytes to an `OsStr` (W94-B02-01: the byte-typed XDG paths
+/// map losslessly to POSIX `OsStr`s).
+#[cfg(unix)]
+pub(crate) fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::OsStr::from_bytes(bytes)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
+    std::ffi::OsStr::new(std::str::from_utf8(bytes).unwrap_or(""))
 }
 
 // PORT NOTE: helper: Zig `std.fs.Dir.statFile(...).mtime` is signed nanoseconds

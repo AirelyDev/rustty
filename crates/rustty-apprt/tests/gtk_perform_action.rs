@@ -16,7 +16,7 @@
 //!   LIBGL_ALWAYS_SOFTWARE=1 cargo test -p rustty-apprt --features gtk \
 //!     --test gtk_perform_action <name> -- --ignored --exact
 
-#![cfg(all(target_os = "linux", feature = "gtk"))]
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 
 use rustty_apprt_api::action::{
     CloseTabMode, ColorChange, ColorKind, CommandFinished, DesktopNotification, FloatWindow,

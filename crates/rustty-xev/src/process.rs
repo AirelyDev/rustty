@@ -21,7 +21,7 @@
 // `#[cfg(target_os = "macos")]` (EVFILT_PROC + Darwin waitpid reap) exactly as the
 // whole kqueue port is.
 
-// (module is `#[cfg(target_os = "macos")]`-gated in lib.rs)
+// (module is `#[cfg(any(target_os = "macos", target_os = "freebsd"))]`-gated in lib.rs)
 
 use crate::kqueue::{pid_t, Completion, Loop, Operation, ProcError, Result, NOTE_EXIT_FLAGS};
 use crate::looppkg::CallbackAction;
@@ -295,10 +295,18 @@ mod tests {
         miri,
         ignore = "MIRI EXCEPTION (rustty-xev C5, .port/phase-2/MIRI_EXCEPTIONS.md): real posix_spawn/waitpid + EVFILT_PROC via the live kqueue loop -- Miri cannot execute foreign functions; runs natively (ci.sh HARD `cargo test --workspace`) + the G6 ASan companion arm (check_leaks.sh `live_ffi_unit_filters`, re-verified 2026-07-31: 31 tests, 0 findings)."
     )]
+    // PORT NOTE (W2D): `if (builtin.os.tag == .freebsd) return error.SkipZigTest;`
+    // (watcher/process.zig:514) — the reference's own skip, now that this module
+    // also compiles for FreeBSD. Zig's runtime skip maps to `#[ignore]`, so the
+    // body still type-checks there (the reference's does too).
+    #[cfg_attr(
+        target_os = "freebsd",
+        ignore = "oracle skip: watcher/process.zig:514 `if (builtin.os.tag == .freebsd) return error.SkipZigTest;`"
+    )]
     #[allow(clippy::zombie_processes)]
     fn process_wait_with_non_zero_exit_code() {
         // if (builtin.os.tag == .freebsd) return error.SkipZigTest;
-        // (macOS is not freebsd; the freebsd skip does not apply here.)
+        // (ported as the `#[cfg_attr(target_os = "freebsd", ignore = ...)]` above.)
         let child = Command::new(ARGV_42[0])
             .args(&ARGV_42[1..])
             .spawn()

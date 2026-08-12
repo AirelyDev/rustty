@@ -33,7 +33,7 @@
 // distinctive reference doc comments are preserved below (R3). Everything is
 // `#[cfg(target_os = "macos")]` via the module gate in lib.rs.
 
-// (module is `#[cfg(target_os = "macos")]`-gated in lib.rs)
+// (module is `#[cfg(any(target_os = "macos", target_os = "freebsd"))]`-gated in lib.rs)
 
 use crate::common::userdata_value;
 use crate::kqueue::{

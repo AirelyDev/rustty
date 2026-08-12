@@ -71,6 +71,23 @@ jobs:
         with:
           version: 0.15.2
 
+      # W8-03: the live-GL renderer tests clean-skip when no GL 4.3-core
+      # context exists, and this leg previously shipped NO GL stack — so a
+      # green Ubuntu run proved nothing about live-GL execution (11 tests
+      # reported "ok" with zero live-GL assertions run). Mesa's llvmpipe gives
+      # a software GL 4.5-core context over surfaceless EGL;
+      # LIBGL_ALWAYS_SOFTWARE=1 forces it, and RUSTTY_REQUIRE_GL=1 flips every
+      # clean-skip arm into a hard failure (opengl::gl::test_support docs), so
+      # those tests are EXECUTED evidence here, not silent skips. Env setup,
+      # not a check — the check sequence stays solely in ci.sh.
+      - name: Install Mesa llvmpipe + require live GL (Ubuntu only, W8-03)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libegl-mesa0 libgl1 libgl1-mesa-dri
+          echo "RUSTTY_REQUIRE_GL=1" >> "$GITHUB_ENV"
+          echo "LIBGL_ALWAYS_SOFTWARE=1" >> "$GITHUB_ENV"
+
       - name: Cache cargo registry + target
         uses: actions/cache@v4
         with:

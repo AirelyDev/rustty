@@ -9,11 +9,19 @@
 //! which only *reads* `/proc/<pid>/cgroup`). This module *creates* the transient
 //! scope over D-Bus.
 //!
-//! R5 / platform gating: the whole `gtk` module is `#[cfg(all(target_os =
-//! "linux", feature = "gtk"))]` (`lib.rs`), and every gtk4-rs dep is
-//! `[target.'cfg(target_os = "linux")'.dependencies]` **and** `optional`. So
-//! this file is not compiled by a macOS build nor by a default-feature Linux
-//! build — the same structural gate every other file under `src/gtk/` relies on.
+//! R5 / platform gating: the whole `gtk` module is
+//! `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]`
+//! (`lib.rs`), and every gtk4-rs dep is
+//! `[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]`
+//! **and** `optional`. So this file is not compiled by a macOS build nor by a
+//! default-feature Linux/FreeBSD build — the same structural gate every other
+//! file under `src/gtk/` relies on.
+//!
+//! PORT NOTE (W2D/F-002): this file stays COMPILED on FreeBSD, exactly as the
+//! reference compiles `apprt/gtk/cgroup.zig` for it (the file carries no os.tag
+//! guard). Its body is pure gio/glib D-Bus — no Linux-only API is named — and
+//! the systemd path is reached only when the `linux-cgroup` config says so
+//! (`gtk/post_fork.zig:40`), which is a runtime decision, not a target one.
 //!
 //! PORT NOTE: the reference's `log = std.log.scoped(.gtk_systemd_cgroup)`; our
 //! diagnostics carry the same scope in their prefix.

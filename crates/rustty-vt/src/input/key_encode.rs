@@ -169,7 +169,7 @@ fn kitty<W: Write>(writer: &mut W, event: &key::KeyEvent, opts: Options) -> std:
     // Find the entry for this key in the kitty table.
     let entry_: Option<KittyEntry> = 'entry: {
         // Functional or predefined keys
-        for entry in kitty_entries() {
+        for &entry in kitty_entries() {
             if entry.key == event.key {
                 break 'entry Some(entry);
             }
@@ -564,7 +564,7 @@ fn legacy<W: Write>(writer: &mut W, event: &key::KeyEvent, opts: Options) -> std
             };
 
             if should_modify {
-                for (code, modset) in function_keys::modifiers().into_iter().enumerate() {
+                for (code, modset) in function_keys::modifiers().iter().copied().enumerate() {
                     let code = code + 2;
                     if !mods.equal(modset) {
                         continue;

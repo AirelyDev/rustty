@@ -69,15 +69,22 @@ use std::mem::{align_of, offset_of, size_of};
 use std::os::raw::c_int;
 
 // const log = std.log.scoped(.terminal_c);
+//
+// PORT NOTE (W35-B03/B06/B08): rustty's scoped-log sink is `sys::log_fn` (the
+// port of `terminal/c/sys.zig`'s `logFn`), which is silent until a C caller
+// installs a log callback via `rustty_sys_set(RUSTTY_SYS_OPT_LOG, ...)`.
+// `LOG_SCOPE` is the `@tagName` of the reference's scope, which `log_fn`
+// forwards to the callback as the scope text.
+pub(crate) const LOG_SCOPE: &str = "terminal_c";
 
-// PORT NOTE (D3, Rust-only glue): the reference threads the C allocator into the
-// OSC parser via `Stream.initAlloc(alloc, ...)`. rustty's OSC parser wants a
+// PORT NOTE (F-008, supersedes the D3-era `GLOBAL_ZIG_ALLOCATOR_FOR_OSC`
+// static): the reference threads the C allocator into the OSC parser via
+// `Stream.initAlloc(alloc, ...)`. rustty's OSC parser wants a
 // `ZigAllocatorRef`, and the wrapper's `Stream<'static>` requires a `'static`
-// backing allocator (the same constraint `Terminal::vt_stream` resolves by
-// backing the parser with a process-static global zig allocator). We mirror that
-// choice here so dynamic OSC payloads (e.g. OSC 52 clipboard) can grow.
-static GLOBAL_ZIG_ALLOCATOR_FOR_OSC: rustty_lib::allocator::GlobalZigAllocator =
-    rustty_lib::allocator::GlobalZigAllocator;
+// backing allocator; that is now satisfied by the wrapper's OWN resolved
+// C allocator (heap-held via `Box::into_raw`, reclaimed last in `free`), so
+// dynamic OSC payloads (e.g. OSC 52 clipboard) grow through the CALLER's
+// allocator exactly like the reference.
 
 /// PORT NOTE (oracle `e8525c0fd`/`960c2cca5`): `wrapper.tmp_dir_path` is a
 /// `[std.fs.max_path_bytes]u8` field whose only role is to OWN the temp-dir
@@ -106,7 +113,8 @@ const MAX_PATH_BYTES: usize = if cfg!(any(
 /// such as the persistent VT stream needed to handle escape sequences split
 /// across multiple vt_write calls.
 // PORT NOTE (internal, NOT C-ABI): `terminal: *ZigTerminal` is the raw owning
-// back-pointer to the heap `ZigTerminal` (`Box::into_raw`'d in `new_`). `stream:
+// back-pointer to the heap `ZigTerminal` (allocated by `new_` through the
+// C-resolved allocator via `create_raw`, F-008). `stream:
 // Stream<'static>` is the persistent VT stream whose handler aliases that
 // terminal; the self-referential aliasing is resolved by storing the terminal as
 // a raw pointer (the handler holds `*mut Terminal`) and exposing the wrapper's
@@ -116,6 +124,18 @@ const MAX_PATH_BYTES: usize = if cfg!(any(
 // `AutoArrayHashMapUnmanaged(*TrackedGridRef, void)`).
 pub struct TerminalWrapper {
     pub terminal: *mut ZigTerminal,
+
+    // PORT NOTE (F-008, internal): the C-resolved allocator (`lib.alloc
+    // .default(alloc_)`) that owns the wrapper-level lifecycle: the terminal
+    // and wrapper STORAGE (`alloc.create`/`alloc.destroy`) and the OSC stream
+    // allocator (`.initAlloc(alloc, ...)`). The reference recovers it in
+    // `free` via `t.gpa()`; rustty's `Terminal::gpa()` is the (Global)
+    // internals allocator, so the resolved allocator is stored here instead.
+    // A raw pointer (from `Box::into_raw`) rather than a `Box` field: the
+    // sibling `stream` holds a `ZigAllocatorRef` aliasing the pointee, and a
+    // `Box` field would retag on the wrapper move in `free` and invalidate
+    // that reference under Stacked Borrows. `free` reclaims it LAST.
+    pub alloc: *mut dyn rustty_lib::allocator::ZigAllocator,
 
     // /// We need to keep an I/O instance here as part of the terminal since we
     // /// have no way of taking it in the C API. This is set up in `new` and
@@ -943,13 +963,16 @@ pub unsafe fn new(
 //     return wrapper;
 // }
 //
-// PORT NOTE (D3 lifecycle): the reference allocates `t` and `wrapper` via the C
-// allocator. rustty's `ZigTerminal` is allocated/freed exclusively through its
-// own `Allocator` (`allocator_api2::alloc::Global`; the C `alloc_` only selects
-// the rustty-lib resolution and never drives `ZigTerminal`'s internal pools), so
-// the wrapper and terminal storage are `Box::into_raw`'d on the Rust global heap
-// per the signed-off D3 storage plan. The two `errdefer`s become explicit hand
-// unwinds (Box drops + `deinit`) on each fallible step.
+// PORT NOTE (F-008, supersedes the D3-lifecycle substitution): the terminal
+// and wrapper STORAGE now flow through the C-resolved allocator exactly like
+// the reference (`alloc.create(...) catch return error.OutOfMemory`, with the
+// `errdefer alloc.destroy(...)`s as explicit hand unwinds), and the OSC stream
+// is backed by the same allocator (`.initAlloc(alloc, handler)`). A rejecting
+// caller allocator therefore yields a recoverable `RUSTTY_OUT_OF_MEMORY`
+// instead of silently succeeding on the Rust global heap. REMAINING Tier-2
+// residual (DEFERRALS.md "F-008/W12-01 Tier 2"): rustty-vt's `Terminal`
+// INTERNALS still allocate through their own `allocator_api2::alloc::Global`
+// (`t.init(gpa, ...)` below vs the reference's `t.init(alloc, ...)`).
 fn new_(
     alloc_: Option<&CAllocator>,
     cols: size::CellCountInt,
@@ -961,16 +984,43 @@ fn new_(
     }
 
     // const alloc = lib.alloc.default(alloc_);
-    // PORT NOTE: resolved for parity with the reference (selects the global
-    // default when null); `ZigTerminal` itself uses `Global`, so this is unused
-    // beyond validating the C allocator handle.
-    let _alloc = rustty_lib::allocator::default(alloc_);
+    // PORT NOTE (F-008): held as a raw heap pointer so the stream's
+    // `ZigAllocatorRef` can alias it for the wrapper's lifetime (see the
+    // `TerminalWrapper.alloc` field note); `free` reclaims it last.
+    let alloc_holder: *mut dyn rustty_lib::allocator::ZigAllocator =
+        Box::into_raw(rustty_lib::allocator::default(alloc_));
+    // SAFETY: `alloc_holder` is a live heap allocation until `free` (or the
+    // unwind arms below) reclaims it.
+    let alloc: &'static dyn rustty_lib::allocator::ZigAllocator = unsafe { &*alloc_holder };
     let gpa = allocator_api2::alloc::Global;
 
     // const t = alloc.create(ZigTerminal) catch return error.OutOfMemory;
-    // errdefer alloc.destroy(t);
+    let terminal_ptr: *mut ZigTerminal = match rustty_lib::allocator::create_raw(alloc) {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            // SAFETY: reclaim the holder created above; nothing else refers to it.
+            drop(unsafe { Box::from_raw(alloc_holder) });
+            return Err(NewError::OutOfMemory);
+        }
+    };
+
+    // const wrapper = alloc.create(TerminalWrapper) catch return error.OutOfMemory;
+    // (errdefer alloc.destroy(t) — the explicit unwind in the Err arm)
+    let wrapper_ptr: *mut TerminalWrapper = match rustty_lib::allocator::create_raw(alloc) {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            // SAFETY: `terminal_ptr` is still uninitialized storage from
+            // `create_raw` above; free it without dropping.
+            unsafe { rustty_lib::allocator::destroy_raw(alloc, terminal_ptr) };
+            drop(unsafe { Box::from_raw(alloc_holder) });
+            return Err(NewError::OutOfMemory);
+        }
+    };
+
     // t.* = try .init(alloc, .{ ... });
     // errdefer t.deinit(alloc);
+    // PORT NOTE (F-008 Tier-2 residual): the reference threads `alloc` into
+    // `t.init`; rustty-vt's `Terminal` is `Global`-backed internally (`gpa`).
     let mut terminal = match ZigTerminal::init(
         gpa,
         ZigTerminalOptions {
@@ -995,7 +1045,14 @@ fn new_(
         },
     ) {
         Ok(t) => t,
-        Err(_oom) => return Err(NewError::OutOfMemory),
+        Err(_oom) => {
+            // Zig errdefers in reverse order: destroy(wrapper), destroy(t).
+            // SAFETY: both are still uninitialized storage from `create_raw`.
+            unsafe { rustty_lib::allocator::destroy_raw(alloc, wrapper_ptr) };
+            unsafe { rustty_lib::allocator::destroy_raw(alloc, terminal_ptr) };
+            drop(unsafe { Box::from_raw(alloc_holder) });
+            return Err(NewError::OutOfMemory);
+        }
     };
 
     // libghostty-vt embedders don't necessarily install Ghostty's shell
@@ -1004,9 +1061,10 @@ fn new_(
     // t.flags.shell_redraws_prompt = .false;
     terminal.flags.shell_redraws_prompt = rustty_vt::osc::semantic_prompt::Redraw::False;
 
-    // const t = ...; — move the terminal to the heap so the wrapper's stream
-    // handler can alias a stable address.
-    let terminal_ptr: *mut ZigTerminal = Box::into_raw(Box::new(terminal));
+    // t.* = ...; — move the terminal value into its caller-allocated storage
+    // so the wrapper's stream handler can alias a stable address.
+    // SAFETY: `terminal_ptr` is valid uninitialized `ZigTerminal` storage.
+    unsafe { std::ptr::write(terminal_ptr, terminal) };
 
     // Setup our stream with trampolines always installed so that
     // setting C callbacks at any time takes effect immediately.
@@ -1045,21 +1103,27 @@ fn new_(
     //     .tmp_dir_path = undefined, // Only used if temporary directory is set with API calls
     //     .stream = .initAlloc(alloc, handler),
     // };
-    // PORT NOTE: the reference threads the C allocator into the OSC parser; we
-    // back it with the process-static global zig allocator (the same choice
-    // `Terminal::vt_stream` makes), which supports dynamic OSC growth.
-    let wrapper = TerminalWrapper {
-        terminal: terminal_ptr,
-        stream: Stream::init_alloc(
-            rustty_lib::allocator::ZigAllocatorRef::new(&GLOBAL_ZIG_ALLOCATOR_FOR_OSC),
-            handler,
-        ),
-        effects: Effects::default(),
-        tracked_grid_refs: HashSet::new(),
+    // PORT NOTE (F-008): the C-resolved allocator now backs the OSC parser,
+    // exactly like the reference's `.initAlloc(alloc, handler)` — dynamic OSC
+    // growth (e.g. OSC 52 clipboard) goes through the CALLER's allocator.
+    // SAFETY: `wrapper_ptr` is valid uninitialized `TerminalWrapper` storage.
+    unsafe {
+        std::ptr::write(
+            wrapper_ptr,
+            TerminalWrapper {
+                terminal: terminal_ptr,
+                alloc: alloc_holder,
+                stream: Stream::init_alloc(
+                    rustty_lib::allocator::ZigAllocatorRef::new(alloc),
+                    handler,
+                ),
+                effects: Effects::default(),
+                tracked_grid_refs: HashSet::new(),
+            },
+        )
     };
 
     // return wrapper;
-    let wrapper_ptr = Box::into_raw(Box::new(wrapper));
     // PROVENANCE: expose the whole wrapper allocation so the effect trampolines
     // can recover it (siblings of the stream handler) via
     // `with_exposed_provenance_mut` — see `wrapper_from_handler`.
@@ -1460,9 +1524,15 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
                 return Result::Success;
             }
             // const limit: usize = if (value) |v| @intCast(v.*) else 0;
+            // PORT NOTE (W33-B07): `@intCast` is a CHECKED narrowing — a
+            // safety-checked build traps when the `uint64_t` limit exceeds
+            // `usize` (only reachable where `usize` is 32-bit). Per the port's
+            // binding table (`@intCast` -> `T::try_from(x).unwrap()`) this is
+            // `usize::try_from`, not a bare `as`, which would silently wrap.
+            // On 64-bit targets the conversion is infallible.
             let ptr = value as *const u64;
             let limit: usize = if !ptr.is_null() {
-                unsafe { *ptr as usize }
+                usize::try_from(unsafe { *ptr }).unwrap()
             } else {
                 0
             };
@@ -1713,16 +1783,23 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
         // },
         Option_::DefaultCursorStyle => {
             // const style = (if (value) |ptr| ptr.* else .block).toZig() orelse return .invalid_value;
-            let ptr = value as *const TerminalCursorStyle;
-            let c_style = if !ptr.is_null() {
+            //
+            // D11: the incoming value is read as the raw `c_int` it is on the
+            // wire, NOT as the closed Rust `TerminalCursorStyle` — the oracle's
+            // enum is non-exhaustive, so any `c_int` is representable there,
+            // while a Rust closed-enum read of an out-of-range discriminant is
+            // UB. `from_c_int` reproduces the reference `_ => null` arm.
+            let ptr = value as *const c_int;
+            let raw = if !ptr.is_null() {
                 unsafe { *ptr }
             } else {
-                TerminalCursorStyle::Block
+                TerminalCursorStyle::Block as c_int
             };
-            let style = match c_style.to_zig() {
-                Some(s) => s,
-                None => return Result::InvalidValue,
-            };
+            let style =
+                match TerminalCursorStyle::from_c_int(raw).and_then(TerminalCursorStyle::to_zig) {
+                    Some(s) => s,
+                    None => return Result::InvalidValue,
+                };
             // wrapper.terminal.setDefaultCursorStyle(style);
             //
             // PORT NOTE (oracle c594031d5): the C API no longer writes the
@@ -1796,6 +1873,29 @@ pub enum TerminalCursorStyle {
 }
 
 impl TerminalCursorStyle {
+    /// Narrow a wire `c_int` to a declared enumerator, `None` for anything else.
+    ///
+    /// PORT NOTE (D11): the reference enum is non-exhaustive (`_`), so every
+    /// `c_int` is a representable value in Zig and `toZig`'s `_ => null` arm is
+    /// what rejects unknown discriminants. Rust has no non-exhaustive
+    /// `#[repr(C)]` enum, so the narrowing must happen at the read: this is a
+    /// soundness requirement of the Rust representation (loading an
+    /// out-of-range discriminant into the closed enum is UB), not a behavioural
+    /// divergence. The public header declares
+    /// `RUSTTY_TERMINAL_CURSOR_STYLE_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE`
+    /// (INT_MAX), so out-of-range values are reachable from a conforming
+    /// caller and must return `.invalid_value` exactly as the oracle does.
+    fn from_c_int(value: c_int) -> Option<Self> {
+        match value {
+            0 => Some(TerminalCursorStyle::Bar),
+            1 => Some(TerminalCursorStyle::Block),
+            2 => Some(TerminalCursorStyle::Underline),
+            3 => Some(TerminalCursorStyle::BlockHollow),
+            // `_ => null`
+            _ => None,
+        }
+    }
+
     // fn toZig(self: TerminalCursorStyle) ?Screen.CursorStyle {
     //     return switch (self) {
     //         .bar => .bar,
@@ -1807,9 +1907,10 @@ impl TerminalCursorStyle {
     // }
     // PORT NOTE: the reference enum is non-exhaustive (`_`), mapping any unknown
     // discriminant to `null`. The Rust `#[repr(C)]` enum carries only the four
-    // named variants; an out-of-range C value is already rejected at the
-    // `*ptr` read (it would be an invalid enum value), so the four-arm match is
-    // exhaustive and the reference `_ => null` arm is structurally unreachable.
+    // named variants, so that arm lives in `from_c_int` above, which is what
+    // callers must use to build this type out of a wire `c_int`. The signature
+    // stays `Option` so the call site is a verbatim `orelse return
+    // .invalid_value`.
     fn to_zig(self) -> Option<rustty_vt::screen::CursorStyle> {
         match self {
             // .bar => .bar,
@@ -1929,12 +2030,23 @@ pub unsafe fn scroll_viewport(terminal_: Terminal, behavior: ScrollViewport) {
     let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
     // D11 (P3-W6 T2): the narrowing point for `behavior.tag`. Exactly the shape
     // `compress` uses for its `mode_` (`:960`): an explicit `match` on the
-    // incoming C integer, the sound analog of `std.meta.intToEnum`. This export
-    // returns `void` — as the reference's does — so an undeclared tag takes the
-    // same early return as a null terminal handle above.
+    // incoming C integer, the sound analog of `std.meta.intToEnum`. The
+    // reference switches directly on the typed tag, so its safety-checked
+    // builds (Debug/ReleaseSafe) panic "switch on corrupt value" on an
+    // undeclared tag; the `debug_assert!` below mirrors that trap in debug
+    // builds (W35-B07). Release builds keep the defined early return — the
+    // same path as a null terminal handle above — which is strictly safer
+    // than the reference's ReleaseFast, where the same input is UB.
     let zig_behavior = match ScrollViewportTag::from_c_int(behavior.tag) {
         Some(t) => t,
-        None => return,
+        None => {
+            debug_assert!(
+                false,
+                "corrupt RusttyTerminalScrollViewportTag: {}",
+                behavior.tag
+            );
+            return;
+        }
     };
     let zig_behavior = match zig_behavior {
         ScrollViewportTag::Top => ZigScrollViewport::Top,
@@ -2188,6 +2300,48 @@ pub enum TerminalData {
     // reference contract for each arm's expected pointee type.
 }
 
+// D11 (P3-W6 T2), see `render::Data::from_c_int`: proves reading this value out
+// of C memory as a `c_int` leaves the ABI unchanged (the published header
+// declares `const RusttyTerminalData *keys` for `get_multi`).
+const _: () = assert!(std::mem::size_of::<TerminalData>() == std::mem::size_of::<c_int>());
+
+// PORT NOTE: range-checked `c_int -> enum` projection for the terminal get
+// guard (the `std.meta.intToEnum` guard on the raw `c_int` crossing the C
+// boundary). `TerminalData` is contiguous TODAY but has not always been.
+//
+// It went non-contiguous at `P3-W3` T5 (oracle `a27e04e8f` added
+// `scrollback_max_bytes = 34` / `scrollback_max_lines = 35` while `33`,
+// `vt_processing_error`, was not yet ported) and is CONTIGUOUS AGAIN as of
+// `P3-W4` T5, which lands 33 (oracle `439d35e27`). A plain `0..N` range check
+// would `transmute` a hole into an UNINHABITED enum value — instant UB — so
+// holes are rejected explicitly. The MECHANISM stays even though the list is
+// now empty: 36+ may reopen a hole, and re-deriving it from scratch under time
+// pressure is exactly how that UB gets reintroduced.
+const TERMINAL_DATA_MAX: c_int = 35;
+const TERMINAL_DATA_HOLES: &[c_int] = &[];
+
+impl TerminalData {
+    /// Narrow an inbound C integer to a `TerminalData`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range (or on a hole).
+    /// `Invalid = 0` is IN range and keeps its `.invalid_value` disposition
+    /// inside `get`.
+    // PORT NOTE (W35-B08): the reference's guard is
+    // `std.enums.fromInt(TerminalData, @intFromEnum(data))`. This used to live
+    // in `lib.rs` (`terminal_data_from_c_int`), reachable only from the single
+    // `rustty_terminal_get` wrapper; it lives here now so `get_multi` reaches
+    // it per array element too, exactly as the reference's `get_multi` reaches
+    // the guard by calling `get`.
+    pub fn from_c_int(v: c_int) -> Option<TerminalData> {
+        if (0..=TERMINAL_DATA_MAX).contains(&v) && !TERMINAL_DATA_HOLES.contains(&v) {
+            // SAFETY: `v` is a valid `TerminalData` discriminant (checked
+            // above).
+            Some(unsafe { std::mem::transmute::<c_int, TerminalData>(v) })
+        } else {
+            None
+        }
+    }
+}
+
 // pub fn get(terminal_: Terminal, data: TerminalData, out: ?*anyopaque) ... {
 //     if (comptime std.debug.runtime_safety) {
 //         _ = std.meta.intToEnum(TerminalData, @intFromEnum(data)) catch { ... return .invalid_value; };
@@ -2199,10 +2353,11 @@ pub enum TerminalData {
 // }
 //
 // PORT NOTE: the reference `intToEnum` runtime-safety guard lives on the raw
-// `c_int` crossing the C boundary (the `extern "C"` wrapper in lib.rs); a valid
-// `TerminalData` here cannot be out of range. The `inline else => getTyped`
-// comptime dispatch becomes a direct `get_typed` call (the typed `out` cast is
-// performed per-arm inside `get_typed`).
+// `c_int` crossing the C boundary (`get_checked` below, shared by the
+// `extern "C"` wrapper in lib.rs AND by `get_multi`); a valid `TerminalData`
+// here cannot be out of range. The `inline else => getTyped` comptime dispatch
+// becomes a direct `get_typed` call (the typed `out` cast is performed per-arm
+// inside `get_typed`).
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle; `out`, if non-null,
 /// must point to storage of the type required by `data` (`TerminalData::out_type`).
@@ -2213,6 +2368,33 @@ pub unsafe fn get(terminal_: Terminal, data: TerminalData, out: *mut c_void) -> 
     }
     // inline else => |comptime_data| getTyped(terminal_, comptime_data, @ptrCast(@alignCast(out)))
     unsafe { get_typed(terminal_, data, out) }
+}
+
+// PORT NOTE (W35-B08): the reference carries the runtime-safety guard INSIDE
+// `get`, so every caller reaches it — including `get_multi`, which calls `get`
+// per array element. rustty's `get` takes the already-narrowed `TerminalData`
+// (a `#[repr(C)]` enum cannot even hold an out-of-range tag), so the guard
+// lives here, in the raw-`c_int` entry point shared by the `extern "C"` wrapper
+// in `lib.rs` AND by `get_multi` — the same "every path goes through the guard"
+// shape as the reference.
+/// # Safety
+/// `terminal_`, if non-null, must be a live terminal handle; `out`, if non-null,
+/// must point to storage of the type required by `data`.
+pub unsafe fn get_checked(terminal_: Terminal, data: c_int, out: *mut c_void) -> Result {
+    // _ = std.meta.intToEnum(TerminalData, @intFromEnum(data)) catch {
+    //     log.warn("terminal_get invalid data value={d}", .{@intFromEnum(data)});
+    //     return .invalid_value;
+    // };
+    let Some(d) = TerminalData::from_c_int(data) else {
+        crate::sys::log_fn(
+            crate::sys::StdLevel::Warn,
+            LOG_SCOPE,
+            format_args!("terminal_get invalid data value={data}"),
+        );
+        return Result::InvalidValue;
+    };
+    // SAFETY: `terminal_`/`out` validity is the caller's contract.
+    unsafe { get(terminal_, d, out) }
 }
 
 // fn getTyped(terminal_: Terminal, comptime data: TerminalData, out: *data.OutType()) Result {
@@ -2523,10 +2705,16 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
 /// `terminal_`, if non-null, must be a live terminal handle; `keys`/`values`, if
 /// non-null, must point to `count` valid elements; `out_written`, if non-null,
 /// must be a valid writable pointer.
+// PORT NOTE (W35-B08): `keys` is C memory typed `const RusttyTerminalData *` in
+// the published header; each element is read as a raw `c_int` (ABI-identical —
+// `TerminalData` is `#[repr(C)]`, asserted int-sized above) and range-checked
+// by `get_checked`. Reading an element straight into a `TerminalData` would
+// materialize an out-of-range discriminant, which is UB in Rust in EVERY build
+// mode (where the reference merely loses its `runtime_safety` guard).
 pub unsafe fn get_multi(
     terminal_: Terminal,
     count: usize,
-    keys: *const TerminalData,
+    keys: *const c_int,
     values: *mut *mut c_void,
     out_written: *mut usize,
 ) -> Result {
@@ -2546,7 +2734,7 @@ pub unsafe fn get_multi(
         // contract).
         let key = unsafe { *keys.add(i) };
         let value = unsafe { *values.add(i) };
-        let result = unsafe { get(terminal_, key, value) };
+        let result = unsafe { get_checked(terminal_, key, value) };
         // if (result != .success) { if (out_written) |w| w.* = i; return result; }
         if result != Result::Success {
             if !out_written.is_null() {
@@ -2755,11 +2943,16 @@ pub unsafe fn point_from_grid_ref(
 //     alloc.destroy(wrapper);
 // }
 //
-// PORT NOTE (D3 lifecycle): the reference frees `t` and `wrapper` via the C
-// allocator (`alloc.destroy`). rustty allocated both via `Box::into_raw` on the
-// Rust global heap (see `new_`), so we reclaim them with `Box::from_raw`. The
-// terminal is freed AFTER the stream (the stream's handler aliases it), matching
-// the reference order (`t.deinit` + `destroy(t)` after `stream.deinit`).
+// PORT NOTE (F-008, supersedes the D3-lifecycle substitution): the reference
+// frees `t` and `wrapper` via the C allocator (`alloc.destroy`), recovered as
+// `t.gpa()`. rustty allocated both through the C-resolved allocator stored on
+// the wrapper (see `new_`), so the storage is returned through it — the caller
+// allocator's free callback fires. rustty's `t.gpa()` is the Terminal
+// INTERNALS allocator (`Global`), used only for `t.deinit`. The terminal is
+// freed AFTER the stream (the stream's handler aliases it), matching the
+// reference order (`t.deinit` + `destroy(t)` after `stream.deinit`); the
+// resolved-allocator holder itself is reclaimed LAST (everything above frees
+// through it).
 /// # Safety
 /// `terminal_`, if non-null, must be a live terminal handle previously returned
 /// by `new` and not yet freed.
@@ -2768,29 +2961,30 @@ pub unsafe fn free(terminal_: Terminal) {
     if terminal_.is_null() {
         return;
     }
-    // const wrapper = ...; reclaim the heap wrapper.
-    // SAFETY: `terminal_` is a `new`-returned wrapper pointer, not yet freed
-    // (caller contract).
-    let mut wrapper: Box<TerminalWrapper> = unsafe { Box::from_raw(terminal_) };
 
     // const t = wrapper.terminal;
-    let t: *mut ZigTerminal = wrapper.terminal;
-    // const alloc = t.gpa();
+    // SAFETY: `terminal_` is a `new`-returned wrapper pointer, not yet freed
+    // (caller contract); raw-ptr reads of its sibling fields.
+    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
+    // const alloc = t.gpa(); — rustty: the INTERNALS (Global) allocator for
+    // `t.deinit`; the storage-owning C allocator is the wrapper's `alloc`.
     // SAFETY: `t` is the wrapper's live, owned terminal.
     let alloc = unsafe { (*t).gpa() };
+    let alloc_holder: *mut dyn rustty_lib::allocator::ZigAllocator = unsafe { (*terminal_).alloc };
 
     // for (wrapper.tracked_grid_refs.keys()) |ref| ref.terminal = null;
-    for &ref_ in wrapper.tracked_grid_refs.iter() {
-        // SAFETY: each tracked-ref pointer was inserted by `grid_ref_track` and
-        // is still live (it back-references this wrapper); detach it so a later
-        // tracked-ref free does not dereference the freed terminal.
+    // SAFETY: each tracked-ref pointer was inserted by `grid_ref_track` and
+    // is still live (it back-references this wrapper); detach it so a later
+    // tracked-ref free does not dereference the freed terminal.
+    for &ref_ in unsafe { (*terminal_).tracked_grid_refs.iter() } {
         unsafe { (*ref_).terminal = std::ptr::null_mut() };
     }
-    // wrapper.tracked_grid_refs.deinit(alloc); — the HashSet frees on drop.
-    wrapper.tracked_grid_refs.clear();
+    // wrapper.tracked_grid_refs.deinit(alloc); — the HashSet frees when the
+    // wrapper value drops below.
+    unsafe { (*terminal_).tracked_grid_refs.clear() };
 
     // wrapper.stream.deinit();
-    wrapper.stream.deinit();
+    unsafe { (*terminal_).stream.deinit() };
 
     // if (builtin.os.tag != .freestanding) {
     //     // Deinit is always safe to call, even for single-threaded instances
@@ -2801,11 +2995,28 @@ pub unsafe fn free(terminal_: Terminal) {
 
     // t.deinit(alloc);
     unsafe { (*t).deinit(alloc) };
-    // alloc.destroy(t); — reclaim the heap terminal AFTER the stream's handler
-    // (which aliased it) is torn down.
-    // SAFETY: `t` was `Box::into_raw`'d in `new_` and is now uniquely owned.
-    drop(unsafe { Box::from_raw(t) });
-    // alloc.destroy(wrapper); — `wrapper` (the Box) drops at end of scope.
+    // alloc.destroy(t); — drop the terminal value in place (Rust must run its
+    // Drop; Zig has no destructors), then return its storage through the
+    // C-resolved allocator, AFTER the stream's handler (which aliased it) is
+    // torn down.
+    // SAFETY: `t` was created by `new_` via `create_raw` and is uniquely owned.
+    unsafe { std::ptr::drop_in_place(t) };
+    unsafe { rustty_lib::allocator::destroy_raw(&*alloc_holder, t) };
+
+    // alloc.destroy(wrapper); — move the wrapper value out of the caller
+    // storage (its `alloc` field is a raw pointer, so no double reclaim),
+    // return the storage through the C-resolved allocator, then drop the
+    // value (stream buffers/tracked set) while the allocator is still alive.
+    // SAFETY: `terminal_` was created by `new_` via `create_raw`; after this
+    // read the storage is treated as uninitialized and freed exactly once.
+    let wrapper_val: TerminalWrapper = unsafe { std::ptr::read(terminal_) };
+    unsafe { rustty_lib::allocator::destroy_raw(&*alloc_holder, terminal_) };
+    drop(wrapper_val);
+
+    // Reclaim the resolved-allocator holder LAST (see `TerminalWrapper.alloc`).
+    // SAFETY: `alloc_holder` came from `Box::into_raw` in `new_`; nothing
+    // refers to it anymore.
+    drop(unsafe { Box::from_raw(alloc_holder) });
 }
 
 // PORT NOTE: `TerminalData` aliases `color.PaletteC` / `color.RGB.C` /
@@ -2864,6 +3075,53 @@ mod tests {
             // free(t);
             unsafe { free(t) };
         });
+    }
+
+    // PORT NOTE (F-008 proving tests, Rust-only — the reference has no unit
+    // test for this; the contract is `new_`'s `alloc.create(...) catch return
+    // error.OutOfMemory` + `free`'s `alloc.destroy`): the caller-supplied C
+    // allocator must OWN the wrapper-level lifecycle storage.
+    #[test]
+    fn new_free_uses_caller_allocator() {
+        let stats = crate::test_util::CountingCAllocator::new();
+        let calloc = stats.c_allocator();
+        let mut t: Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            new(&calloc as *const CAllocator, &mut t, 80, 24)
+        });
+        assert!(!t.is_null());
+        // At least the ZigTerminal + TerminalWrapper storage (Ghostty:
+        // `alloc.create(ZigTerminal)` + `alloc.create(TerminalWrapper)`).
+        assert!(
+            stats.alloc_calls.get() >= 2,
+            "terminal/wrapper storage must come from the caller allocator (got {} allocs)",
+            stats.alloc_calls.get()
+        );
+        unsafe { free(t) };
+        // free must return every caller-allocator byte (`alloc.destroy` x2).
+        assert!(stats.free_calls.get() >= 2);
+        assert_eq!(
+            0,
+            stats.live_bytes.get(),
+            "free must balance the caller allocator"
+        );
+    }
+
+    #[test]
+    fn new_rejecting_allocator_returns_out_of_memory() {
+        let stats = crate::test_util::CountingCAllocator::new();
+        stats.reject.set(true);
+        let calloc = stats.c_allocator();
+        let mut t: Terminal = std::ptr::null_mut();
+        // Ghostty: a rejecting caller allocator makes `alloc.create` fail and
+        // `new` return `.out_of_memory` with `result.* = null` — NOT a silent
+        // success on some other heap.
+        assert_eq!(Result::OutOfMemory, unsafe {
+            new(&calloc as *const CAllocator, &mut t, 80, 24)
+        });
+        assert!(t.is_null());
+        assert!(stats.alloc_calls.get() >= 1);
+        assert_eq!(0, stats.live_bytes.get());
     }
 
     // test "new invalid value"
@@ -3150,6 +3408,58 @@ mod tests {
                 },
             )
         };
+    }
+
+    // PROVING TEST (W35-B07): no reference analog. The reference switches
+    // directly on the typed tag, so its safety-checked builds panic "switch on
+    // corrupt value" on an undeclared tag while ReleaseFast is UB. The port's
+    // parity: debug builds trap via `debug_assert!`; release builds take the
+    // defined silent return. `catch_unwind` (not `#[should_panic]`) so the
+    // terminal is freed on every path and Miri sweeps stay leak-free.
+    #[test]
+    fn scroll_viewport_invalid_tag() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 5, 2);
+            assert_eq!(Result::Success, new_result);
+
+            // A valid call must still work: "hello" into scrollback, then Top
+            // brings it back into view.
+            unsafe { vt_write(t, b"hello".as_ptr(), 5) };
+            unsafe { vt_write(t, b"\x1bD\x1bD\x1bD".as_ptr(), 6) };
+            assert_eq!(b"", plain_string(t).as_slice());
+            unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC {
+                        tag: ScrollViewportTag::Top as c_int,
+                        value: ScrollViewportCValue { _padding: [0; 2] },
+                    },
+                )
+            };
+            assert_eq!(b"hello", plain_string(t).as_slice());
+
+            // An undeclared tag: debug builds panic (parity with the
+            // reference's safety-checked "switch on corrupt value"), release
+            // builds return silently with the viewport untouched.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                scroll_viewport(
+                    t,
+                    ScrollViewportC {
+                        tag: c_int::MAX,
+                        value: ScrollViewportCValue { _padding: [0; 2] },
+                    },
+                )
+            }));
+            if cfg!(debug_assertions) {
+                assert!(result.is_err(), "undeclared tag must trap in debug builds");
+            } else {
+                assert!(result.is_ok());
+            }
+            // Either way the viewport is untouched: "hello" still visible.
+            assert_eq!(b"hello", plain_string(t).as_slice());
+
+            unsafe { free(t) };
+        });
     }
 
     // test "scroll_viewport row" (oracle 3a2e28329)
@@ -4243,6 +4553,52 @@ mod tests {
                 (*(*(*t).terminal).screens.active).cursor.cursor_style
             });
             assert!(unsafe { (*(*t).terminal).modes.get(modes::Mode::CursorBlinking) });
+            unsafe { free(t) };
+        });
+    }
+
+    // Rust-only regression test (no oracle counterpart): the oracle's
+    // `TerminalCursorStyle` is a non-exhaustive `enum(c_int)`, so an unknown
+    // discriminant reaches `toZig`'s `_ => null` arm and yields
+    // `.invalid_value`. The header exposes
+    // `RUSTTY_TERMINAL_CURSOR_STYLE_MAX_VALUE` (= INT_MAX), so a conforming
+    // caller can send one. This pins that the closed Rust enum never sees such
+    // a value (which would be UB) and that the option is rejected, not applied.
+    #[test]
+    fn set_default_cursor_style_rejects_unknown_enum_values() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+
+            // Control: a declared enumerator is accepted and applied.
+            let mut style = TerminalCursorStyle::Underline;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::DefaultCursorStyle,
+                    &mut style as *mut _ as *const c_void,
+                )
+            });
+            assert_eq!(rustty_vt::screen::CursorStyle::Underline, unsafe {
+                (*(*(*t).terminal).screens.active).cursor.cursor_style
+            });
+
+            // Out-of-range discriminants: the header sentinel and the first
+            // unnamed value. Both are rejected and change nothing.
+            for raw in [c_int::MAX, 4, -1] {
+                let mut raw = raw;
+                assert_eq!(Result::InvalidValue, unsafe {
+                    set(
+                        t,
+                        Option_::DefaultCursorStyle,
+                        &mut raw as *mut c_int as *const c_void,
+                    )
+                });
+                assert_eq!(rustty_vt::screen::CursorStyle::Underline, unsafe {
+                    (*(*(*t).terminal).screens.active).cursor.cursor_style
+                });
+            }
+
             unsafe { free(t) };
         });
     }
@@ -5463,10 +5819,15 @@ mod tests {
         with_test_allocator(|alloc| {
             let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
+            // S.count = 0; S.last_userdata = null; S.last_size = 0;
+            // S.last_state = .remove; S.last_progress = -1;
             unsafe {
                 COUNT = 0;
                 LAST_TERMINAL = std::ptr::null_mut();
                 LAST_USERDATA = std::ptr::null_mut();
+                LAST_SIZE = 0;
+                LAST_STATE = ProgressState::Remove;
+                LAST_PROGRESS = -1;
             }
 
             let mut sentinel: u8 = 88;
@@ -5481,31 +5842,48 @@ mod tests {
                 set(t, Option_::ProgressReport, progress_report as *const c_void)
             });
 
-            // Split across writes to exercise the persistent VT parser.
-            vtw(t, b"\x1B]9;4;1;");
-            assert_eq!(0usize, unsafe { COUNT });
-            vtw(t, b"42\x1B\\");
-            assert_eq!(1usize, unsafe { COUNT });
-            assert_eq!(t, unsafe { LAST_TERMINAL });
-            assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe {
-                LAST_USERDATA
-            });
-            assert_eq!(std::mem::size_of::<ProgressReport>(), unsafe { LAST_SIZE });
-            assert_eq!(ProgressState::Set, unsafe { LAST_STATE });
-            assert_eq!(42i8, unsafe { LAST_PROGRESS });
+            // const cases = [_]struct { sequence, state, progress }{
+            //     .{ "\x1B]9;4;0;\x1B\\",   .remove,        -1 },
+            //     .{ "\x1B]9;4;1;42\x07",   .set,           42 },
+            //     .{ "\x1B]9;4;2;7\x1B\\",  .@"error",       7 },
+            //     .{ "\x1B]9;4;3\x1B\\",    .indeterminate, -1 },
+            //     .{ "\x1B]9;4;4;75\x1B\\", .pause,         75 },
+            // };
+            // Every state the ABI can carry, including the BEL-terminated form.
+            let cases: [(&[u8], ProgressState, i8); 5] = [
+                (b"\x1B]9;4;0;\x1B\\", ProgressState::Remove, -1),
+                (b"\x1B]9;4;1;42\x07", ProgressState::Set, 42),
+                (b"\x1B]9;4;2;7\x1B\\", ProgressState::Error, 7),
+                (b"\x1B]9;4;3\x1B\\", ProgressState::Indeterminate, -1),
+                (b"\x1B]9;4;4;75\x1B\\", ProgressState::Pause, 75),
+            ];
 
-            // An omitted percentage crosses the ABI as -1, not as 0.
-            vtw(t, b"\x1B]9;4;3\x1B\\");
-            assert_eq!(2usize, unsafe { COUNT });
-            assert_eq!(ProgressState::Indeterminate, unsafe { LAST_STATE });
-            assert_eq!(-1i8, unsafe { LAST_PROGRESS });
+            // for (cases, 1..) |case, expected_count| { ... }
+            for (i, (sequence, state, progress)) in cases.iter().enumerate() {
+                let expected_count = i + 1;
+                // Split at the midpoint to exercise the persistent VT parser.
+                let midpoint = sequence.len() / 2;
+                vtw(t, &sequence[..midpoint]);
+                assert_eq!(expected_count - 1, unsafe { COUNT });
+                vtw(t, &sequence[midpoint..]);
+                assert_eq!(expected_count, unsafe { COUNT });
+                assert_eq!(t, unsafe { LAST_TERMINAL });
+                assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe {
+                    LAST_USERDATA
+                });
+                // The sized-struct contract: a header/library ABI drift shows here.
+                assert_eq!(std::mem::size_of::<ProgressReport>(), unsafe { LAST_SIZE });
+                assert_eq!(*state, unsafe { LAST_STATE });
+                // An omitted percentage crosses the ABI as -1, not as 0.
+                assert_eq!(*progress, unsafe { LAST_PROGRESS });
+            }
 
             // Removing the callback takes effect immediately.
             assert_eq!(Result::Success, unsafe {
                 set(t, Option_::ProgressReport, std::ptr::null())
             });
-            vtw(t, b"\x1B]9;4;1;7\x1B\\");
-            assert_eq!(2usize, unsafe { COUNT });
+            vtw(t, b"\x1B]9;4;1;90\x1B\\");
+            assert_eq!(cases.len(), unsafe { COUNT });
 
             unsafe { free(t) };
         });
@@ -5681,6 +6059,13 @@ mod tests {
             assert_eq!(b"\x89PNG".as_slice(), unsafe {
                 (&*std::ptr::addr_of!(LAST_DATA))[4].as_slice()
             });
+
+            // Removing the callback takes effect immediately.
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ClipboardWrite, std::ptr::null())
+            });
+            vtw(t, b"\x1B]52;c;eA==\x1B\\");
+            assert_eq!(7, unsafe { COUNT });
 
             unsafe {
                 LAST_MIMES = Vec::new();
@@ -6889,7 +7274,10 @@ mod tests {
                 get_multi(
                     t,
                     keys.len(),
-                    keys.as_ptr(),
+                    // PORT NOTE (W35-B08): the `keys` array crosses the C
+                    // boundary as raw ints; `get_multi` reads each element as a
+                    // `c_int` and range-checks it.
+                    keys.as_ptr().cast(),
                     values.as_mut_ptr(),
                     &mut written,
                 )
@@ -6927,7 +7315,10 @@ mod tests {
                 get_multi(
                     t,
                     keys.len(),
-                    keys.as_ptr(),
+                    // PORT NOTE (W35-B08): the `keys` array crosses the C
+                    // boundary as raw ints; `get_multi` reads each element as a
+                    // `c_int` and range-checks it.
+                    keys.as_ptr().cast(),
                     values.as_mut_ptr(),
                     &mut written,
                 )
@@ -6936,6 +7327,196 @@ mod tests {
             assert_eq!(80, cols);
             unsafe { free(t) };
         });
+    }
+
+    // W35-B08-01 (Rust-only proving test; the reference's guard is a
+    // `runtime_safety` block, so it has no unit test for it): a `get_multi`
+    // KEY ARRAY is C memory. Before the fix the wrapper loaded each element
+    // straight into a `TerminalData`, which materializes an out-of-range
+    // discriminant — UB in Rust in EVERY build mode. The reference reaches its
+    // `std.enums.fromInt` guard per element (its `get_multi` calls `get`), so
+    // the parity disposition is `.invalid_value` + the failing index.
+    #[test]
+    fn get_multi_out_of_range_raw_key_is_rejected_with_the_failing_index() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+
+            let mut cols: u16 = 0;
+            let mut rows: u16 = 0;
+            let mut written: usize = 99;
+
+            // Element 1 is a raw C integer no `TerminalData` tag can hold.
+            let keys: [c_int; 3] = [TerminalData::Cols as c_int, 99, TerminalData::Rows as c_int];
+            // SB: raw out-pointers (see `get_multi_error_sets_out_written`).
+            let mut values: [*mut c_void; 3] = [
+                core::ptr::addr_of_mut!(cols) as *mut c_void,
+                core::ptr::addr_of_mut!(rows) as *mut c_void,
+                core::ptr::addr_of_mut!(rows) as *mut c_void,
+            ];
+            assert_eq!(Result::InvalidValue, unsafe {
+                get_multi(
+                    t,
+                    keys.len(),
+                    keys.as_ptr(),
+                    values.as_mut_ptr(),
+                    &mut written,
+                )
+            });
+            // The failing index, exactly as the reference's `get_multi` reports.
+            assert_eq!(1, written);
+            // Element 0 ran to completion before the guard tripped.
+            assert_eq!(80, cols);
+            // Element 2 was never reached.
+            assert_eq!(0, rows);
+
+            // The same array through the published `extern "C"` entry point.
+            written = 99;
+            assert_eq!(Result::InvalidValue.to_c_int(), unsafe {
+                crate::rustty_terminal_get_multi(
+                    t,
+                    keys.len(),
+                    keys.as_ptr().cast(),
+                    values.as_mut_ptr(),
+                    &mut written,
+                )
+            });
+            assert_eq!(1, written);
+
+            unsafe { free(t) };
+        });
+    }
+
+    // W35-B03/B06/B08-02 (Rust-only proving test): the invalid-selector
+    // diagnostics are the reference's `log.warn` on the `.terminal_c` /
+    // `.selection_c` scopes, which `terminal/c/sys.zig`'s `logFn` routes to the
+    // installed C log callback and DROPS when none is installed
+    // (`if (global.log == null) return;`). They must never go to stderr.
+    mod log_capture {
+        use crate::sys::LogLevel;
+        use std::ffi::c_void;
+        use std::sync::Mutex;
+
+        pub(super) static CAPTURED: Mutex<Vec<(LogLevel, String, String)>> = Mutex::new(Vec::new());
+
+        pub(super) extern "C" fn log_cb(
+            _userdata: *mut c_void,
+            level: LogLevel,
+            scope_ptr: *const u8,
+            scope_len: usize,
+            message_ptr: *const u8,
+            message_len: usize,
+        ) {
+            // SAFETY: the sink hands us the scope/message byte ranges.
+            let scope = unsafe { std::slice::from_raw_parts(scope_ptr, scope_len) };
+            // SAFETY: as above.
+            let message = unsafe { std::slice::from_raw_parts(message_ptr, message_len) };
+            CAPTURED.lock().unwrap().push((
+                level,
+                String::from_utf8_lossy(scope).into_owned(),
+                String::from_utf8_lossy(message).into_owned(),
+            ));
+        }
+    }
+
+    #[test]
+    fn terminal_invalid_selector_warns_through_the_scoped_log_sink() {
+        // Serialize against the other tests that mutate the process-wide sys
+        // GLOBAL (the sys tests and the render-state scoped-log test).
+        let _guard = crate::sys::tests::reset_global();
+        log_capture::CAPTURED.lock().unwrap().clear();
+
+        // A selector value used by no other test, so the capture can be
+        // filtered: these tests run in parallel and other terminal tests also
+        // trip invalid-selector warnings while this callback is installed.
+        const SEL: c_int = 31338;
+        const C_INVALID_VALUE: c_int = -2;
+
+        // No callback installed: silently discarded (the C-ABI contract), and
+        // the call still reports `.invalid_value`.
+        assert_eq!(C_INVALID_VALUE, unsafe {
+            crate::rustty_terminal_set(std::ptr::null_mut(), SEL, std::ptr::null())
+        });
+        assert_eq!(C_INVALID_VALUE, unsafe {
+            crate::rustty_terminal_get(std::ptr::null_mut(), SEL, std::ptr::null_mut())
+        });
+        assert!(log_capture::CAPTURED.lock().unwrap().is_empty());
+
+        // Install a capturing callback.
+        assert_eq!(Result::Success, unsafe {
+            crate::sys::set(
+                crate::sys::Option_::Log,
+                log_capture::log_cb as *const c_void,
+            )
+        });
+
+        assert_eq!(C_INVALID_VALUE, unsafe {
+            crate::rustty_terminal_set(std::ptr::null_mut(), SEL, std::ptr::null())
+        });
+        assert_eq!(C_INVALID_VALUE, unsafe {
+            crate::rustty_terminal_get(std::ptr::null_mut(), SEL, std::ptr::null_mut())
+        });
+        // The `get_multi` key array reaches the same guard, per element.
+        let keys: [c_int; 1] = [SEL];
+        let mut values: [*mut c_void; 1] = [std::ptr::null_mut()];
+        let mut written: usize = 99;
+        assert_eq!(C_INVALID_VALUE, unsafe {
+            crate::rustty_terminal_get_multi(
+                std::ptr::null_mut(),
+                1,
+                keys.as_ptr().cast(),
+                values.as_mut_ptr(),
+                &mut written,
+            )
+        });
+        assert_eq!(0, written);
+        // `selection_c`-scoped guards.
+        assert_eq!(C_INVALID_VALUE, unsafe {
+            crate::rustty_terminal_selection_adjust(std::ptr::null_mut(), std::ptr::null_mut(), SEL)
+        });
+        assert_eq!(C_INVALID_VALUE, unsafe {
+            crate::rustty_terminal_selection_ordered(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                SEL,
+                std::ptr::null_mut(),
+            )
+        });
+
+        // Clear the callback before asserting, so a failure cannot strand it.
+        assert_eq!(Result::Success, unsafe {
+            crate::sys::set(crate::sys::Option_::Log, std::ptr::null())
+        });
+
+        let all = log_capture::CAPTURED.lock().unwrap().clone();
+        // Every diagnostic — whoever emitted it — carries the reference's level.
+        for (level, _, _) in all.iter() {
+            assert_eq!(crate::sys::LogLevel::Warning, *level);
+        }
+        let captured: Vec<(&String, &String)> = all
+            .iter()
+            .filter(|(_, _, m)| m.ends_with("=31338"))
+            .map(|(_, s, m)| (s, m))
+            .collect();
+        let expected = [
+            (LOG_SCOPE, "terminal_set invalid option value=31338"),
+            (LOG_SCOPE, "terminal_get invalid data value=31338"),
+            // `get_multi`'s per-element guard is `get`'s, so is its message.
+            (LOG_SCOPE, "terminal_get invalid data value=31338"),
+            (
+                crate::selection::LOG_SCOPE,
+                "terminal_selection_adjust invalid adjustment value=31338",
+            ),
+            (
+                crate::selection::LOG_SCOPE,
+                "terminal_selection_ordered invalid desired value=31338",
+            ),
+        ];
+        assert_eq!(expected.len(), captured.len(), "captured: {all:?}");
+        for (i, (scope, message)) in captured.iter().enumerate() {
+            assert_eq!(expected[i].0, scope.as_str());
+            assert_eq!(expected[i].1, message.as_str());
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -6960,6 +7541,76 @@ mod tests {
             return Vec::new();
         }
         unsafe { core::slice::from_raw_parts(out.ptr, out.len) }.to_vec()
+    }
+
+    // W33-B07-32BIT-01: the reference narrows the `uint64_t` storage limit with
+    // `@intCast` — a CHECKED conversion that traps in safety-checked builds when
+    // the value exceeds `usize`. The port must use `usize::try_from(...)`, not a
+    // bare `as`, which would silently truncate. On 64-bit targets the conversion
+    // is infallible, so a limit above 2^32 must round-trip byte-exactly (a
+    // 32-bit-wide truncation would be visible here); see the companion
+    // `#[cfg(target_pointer_width = "32")]` test below for the trapping arm.
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn kitty_image_storage_limit_round_trips_above_32_bits() {
+        if !rustty_vt::options::KITTY_GRAPHICS {
+            return;
+        }
+        with_test_allocator(|alloc| {
+            let (r, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, r);
+
+            for limit in [0u64, 1 << 20, (1u64 << 32) + 7, u32::MAX as u64 + 1] {
+                assert_eq!(Result::Success, unsafe {
+                    set(
+                        t,
+                        Option_::KittyImageStorageLimit,
+                        core::ptr::addr_of!(limit) as *const c_void,
+                    )
+                });
+
+                let mut out: u64 = 0;
+                assert_eq!(Result::Success, unsafe {
+                    get(
+                        t,
+                        TerminalData::KittyImageStorageLimit,
+                        &mut out as *mut u64 as *mut c_void,
+                    )
+                });
+                assert_eq!(limit, out);
+            }
+
+            unsafe { free(t) };
+        });
+    }
+
+    // The trapping arm of `@intCast`: only reachable where `usize` is narrower
+    // than `u64` (e.g. wasm32, which is a Kitty-graphics-ENABLED target). A bare
+    // `as` would wrap the limit to a small value instead of trapping.
+    #[test]
+    #[cfg(target_pointer_width = "32")]
+    #[should_panic]
+    fn kitty_image_storage_limit_over_usize_traps() {
+        if !rustty_vt::options::KITTY_GRAPHICS {
+            // Keep the `should_panic` contract meaningful on a build where the
+            // option returns early.
+            panic!("kitty graphics disabled");
+        }
+        with_test_allocator(|alloc| {
+            let (r, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, r);
+
+            let limit: u64 = u64::from(u32::MAX) + 1;
+            let _ = unsafe {
+                set(
+                    t,
+                    Option_::KittyImageStorageLimit,
+                    core::ptr::addr_of!(limit) as *const c_void,
+                )
+            };
+
+            unsafe { free(t) };
+        });
     }
 
     #[test]

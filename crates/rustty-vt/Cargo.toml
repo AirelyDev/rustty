@@ -26,7 +26,14 @@ workspace = true
 # wrapper (imported as `oni`, the reference module binding) so the gated
 # `string_map.rs` search surface compiles.
 oniguruma = ["dep:rustty-oniguruma"]
-# Whether to build SIMD-accelerated code paths (reference `simd`). Off by default.
+# Whether to build SIMD-accelerated code paths (reference `-Dsimd`). Off in THIS
+# crate's own default set — the Zig terminal module has no self-default either,
+# consumers thread the knob (rustty-core / rustty-vt-c / rustty-apprt-c turn it
+# on, matching `-Dsimd`'s non-wasm default) — so `cargo test -p rustty-vt` keeps
+# its scalar-arm coverage and `--features simd` its SIMD arm. NOTE the reference
+# default is target-conditional (`build/Config.zig:200-206` forces it false for
+# wasm); that arm lives in `options::SIMD`, which overrides this feature on
+# wasm32 targets.
 simd = []
 # P3-W0 T7 step 3 — the decommit SIMULATION, gated CRATE-EXTERNALLY.
 #
@@ -148,6 +155,15 @@ zlib-sys = { workspace = true }
 # tracking wrapper is compiled into the `cfg(test)` PageList page pool and is
 # absent from the production library.
 rustty-zigstd = { workspace = true, features = ["tracking"] }
+# TEST-ONLY: enable rustty-util's `tripwire-test` feature so this crate's
+# fail-point tests trip in the RELEASE test lane too. Zig's `builtin.is_test`
+# (tripwire.zig: `pub const enabled = builtin.is_test`) is true for the whole
+# compilation unit at ANY optimize mode, so the reference's allocation-failure
+# tests run under `zig build test -Doptimize=Release*`; approximating it with
+# `cfg!(debug_assertions)` alone lost that half of the coverage. A
+# dev-dependency activates the feature ONLY for test/bench/example builds, so
+# `cargo build --release` (no dev-deps) still compiles `tripwire::check` away.
+rustty-util = { workspace = true, features = ["tripwire-test"] }
 # TEST-ONLY: the §4 alloc/latency/RSS bench harness (pagelist::bench) calls
 # getrusage(RUSAGE_SELF) for peak RSS. Same libc the reference's std.posix binds
 # (R3); dev-only so it never enters the production library.

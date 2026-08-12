@@ -206,4 +206,21 @@ mod tests {
         ) -> Result<ImageData<allocator_api2::alloc::Global>, Error> = jpeg::decode;
         let _e = Error::WuffsError;
     }
+
+    // NOT a reference test{} (test-add, W14-02): pins the guard's threshold
+    // arithmetic against the reference `too_big` fixtures' declared dimensions.
+    // 32768×32768 RGBA is EXACTLY the 4 GiB limit (allowed: the guard is `>`,
+    // not `>=`), while the fixtures' 32769×32768 is the first width past it —
+    // so any widening of the effective limit (or a `>` -> `>=` flip) fails here.
+    #[test]
+    fn maximum_image_size_threshold_matrix() {
+        let at_limit = 32768usize * 32768 * 4;
+        let past_limit = 32769usize * 32768 * 4;
+        assert_eq!(at_limit, MAXIMUM_IMAGE_SIZE);
+        // The guards in `png.rs`/`jpeg.rs` reject on `size > MAXIMUM_IMAGE_SIZE`,
+        // so the exactly-at-limit size must NOT be rejected.
+        assert!(at_limit <= MAXIMUM_IMAGE_SIZE);
+        assert!(past_limit > MAXIMUM_IMAGE_SIZE);
+        assert_eq!(past_limit - MAXIMUM_IMAGE_SIZE, 131_072);
+    }
 }

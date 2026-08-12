@@ -222,6 +222,13 @@ impl ResizeInPlace for PageAllocator {
     // arena's manual-realloc fallback remains correct there). Under Miri/wasm
     // the backing is the std heap (no mmap), which cannot resize in place, so
     // those builds keep the default refusal too.
+    //
+    // PORT NOTE (windows): the reference's windows `realloc` shrink
+    // (`NtAllocateVirtualMemory(.., MEM_RESET, PAGE_NOACCESS)` over the
+    // page-rounded tail, zstd:std/heap/PageAllocator.zig:160-178) is likewise
+    // NOT wired — same standing decision as the generic-unix arm. It is a PERF
+    // path only: refusing simply routes the arena through its manual realloc,
+    // which is correct. Stated so the deferral is explicit, not silent.
     #[cfg(all(not(miri), any(target_os = "macos", target_os = "ios")))]
     unsafe fn resize_in_place(&self, ptr: NonNull<u8>, old_layout: Layout, new_len: usize) -> bool {
         // The reference vtable `resize` asserts nothing about zero sizes; our
@@ -332,9 +339,26 @@ fn page_size() -> usize {
     unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
 }
 
-#[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+// PORT NOTE: `std.heap.pageSize()` is `inline fn` and starts with
+// `if (page_size_min == page_size_max) return page_size_min;` (zig 0.15.2
+// std/heap.zig:64-67). On windows `page_size_min == page_size_max == 4 << 10`
+// for EVERY supported arch (std/heap.zig:702-712 and :850-860), so the call
+// folds at comptime to the constant 4096 — no `GetSystemInfo` query is emitted.
+// This mirrors that fold rather than re-querying the OS.
+#[cfg(windows)]
+fn page_size() -> usize {
+    4 << 10
+}
+
+#[cfg(any(windows, all(unix, not(any(target_os = "macos", target_os = "ios")))))]
 fn mem_align_forward(addr: usize, alignment: usize) -> usize {
     (addr + alignment - 1) & !(alignment - 1)
+}
+
+/// `mem.isAligned` — alignment is a power of two by the `Allocator` contract.
+#[cfg(all(not(miri), windows))]
+fn mem_is_aligned(addr: usize, alignment: usize) -> bool {
+    addr & (alignment - 1) == 0
 }
 
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
@@ -347,22 +371,216 @@ fn align_pointer(ptr: *mut u8, align: usize) -> Option<*mut u8> {
     Some(aligned as *mut u8)
 }
 
-// PORT NOTE: the reference's non-darwin, non-unix path is Zig's windows
-// `std.heap.PageAllocator` (ntdll NtAllocateVirtualMemory == VirtualAlloc). This
-// crate establishes no windows VM bindings yet; like `mach.rs`'s deferred
-// `mremap` branch, the windows mapping path is left unported until a windows
-// target lands. Compiling for windows is a deliberate error until then so the
-// gap is explicit rather than silently wrong.
-// wasm32 is excluded here: it never reaches `map_pages`/`unmap_pages` (its trait
-// impl above serves from the std heap, like Miri), so no mapping path is needed.
-#[cfg(all(not(unix), not(target_arch = "wasm32")))]
+// Windows path: faithful port of the windows branch of Zig 0.15.2
+// `std.heap.PageAllocator.map`/`unmap` (the same vendored-std oracle as the
+// posix branch above — `std/heap/PageAllocator.zig:23-88` and `:144-152`):
+// `ntdll.NtAllocateVirtualMemory` / `ntdll.NtFreeVirtualMemory` with
+// `MEM_COMMIT | MEM_RESERVE` + `PAGE_READWRITE`, falling back to a
+// `MEM_RESERVE_PLACEHOLDER` reservation that is split
+// (`MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER`) and re-committed at the aligned
+// address when the requested alignment exceeds what the first mapping happened
+// to give. Memory is zeroed on handout by the OS, exactly like the posix
+// `mmap(MAP_ANON)` path.
+//
+// The ntdll externs live in `win_ntdll` below (NOT `crate::windows`): they are
+// vendored Zig-STD surface, not part of the reference's `os/windows.zig` (whose
+// port `windows.rs` mirrors 1:1), matching how `mach.rs`/`mem.rs`/`page.rs`
+// declare their own private syscall bindings.
+//
+// wasm32 needs no mapping path at all: it never reaches
+// `map_pages`/`unmap_pages` (its trait impl above serves from the std heap,
+// like Miri).
+#[cfg(all(not(miri), windows))]
 impl PageAllocator {
-    fn map_pages(&self, _n: usize, _align: usize) -> Option<NonNull<u8>> {
-        compile_error!("rustty-os::page_allocator: windows VM mapping path is not yet ported");
+    fn map_pages(&self, n: usize, align: usize) -> Option<NonNull<u8>> {
+        use win_ntdll::*;
+
+        let page_size = page_size();
+        if n >= usize::MAX - page_size {
+            return None;
+        }
+        let alignment_bytes = align;
+
+        let mut base_addr: PVOID = core::ptr::null_mut();
+        let mut size: SIZE_T = n;
+
+        let mut status = unsafe {
+            NtAllocateVirtualMemory(
+                GetCurrentProcess(),
+                &mut base_addr,
+                0,
+                &mut size,
+                MEM_COMMIT | MEM_RESERVE,
+                PAGE_READWRITE,
+            )
+        };
+
+        if status == SUCCESS && mem_is_aligned(base_addr as usize, alignment_bytes) {
+            return NonNull::new(base_addr.cast());
+        }
+
+        if status == SUCCESS {
+            let mut region_size: SIZE_T = 0;
+            unsafe {
+                NtFreeVirtualMemory(
+                    GetCurrentProcess(),
+                    &mut base_addr,
+                    &mut region_size,
+                    MEM_RELEASE,
+                )
+            };
+        }
+
+        // PORT NOTE: verbatim from the oracle (`n + alignment_bytes -
+        // page_size`, zstd:std/heap/PageAllocator.zig:44). On the
+        // aligned-MISS path this cannot underflow (the first mapping is
+        // 64K-aligned, so a miss implies `alignment_bytes > 64K > page_size`).
+        // On the first-alloc-FAILURE (OOM) path with `alignment_bytes <
+        // page_size` and small `n` the oracle's own expression underflows
+        // (Zig safe modes panic identically) — inherited as-is per R1, do not
+        // "fix".
+        let overalloc_len = n + alignment_bytes - page_size;
+        let aligned_len = mem_align_forward(n, page_size);
+
+        base_addr = core::ptr::null_mut();
+        size = overalloc_len;
+
+        status = unsafe {
+            NtAllocateVirtualMemory(
+                GetCurrentProcess(),
+                &mut base_addr,
+                0,
+                &mut size,
+                MEM_RESERVE | MEM_RESERVE_PLACEHOLDER,
+                PAGE_NOACCESS,
+            )
+        };
+
+        if status != SUCCESS {
+            return None;
+        }
+
+        let placeholder_addr = base_addr as usize;
+        let aligned_addr = mem_align_forward(placeholder_addr, alignment_bytes);
+        let prefix_size = aligned_addr - placeholder_addr;
+
+        if prefix_size > 0 {
+            let mut prefix_base = base_addr;
+            let mut prefix_size_param: SIZE_T = prefix_size;
+            unsafe {
+                NtFreeVirtualMemory(
+                    GetCurrentProcess(),
+                    &mut prefix_base,
+                    &mut prefix_size_param,
+                    MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER,
+                )
+            };
+        }
+
+        let suffix_start = aligned_addr + aligned_len;
+        let suffix_size = (placeholder_addr + overalloc_len) - suffix_start;
+        if suffix_size > 0 {
+            let mut suffix_base = suffix_start as PVOID;
+            let mut suffix_size_param: SIZE_T = suffix_size;
+            unsafe {
+                NtFreeVirtualMemory(
+                    GetCurrentProcess(),
+                    &mut suffix_base,
+                    &mut suffix_size_param,
+                    MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER,
+                )
+            };
+        }
+
+        base_addr = aligned_addr as PVOID;
+        size = aligned_len;
+
+        status = unsafe {
+            NtAllocateVirtualMemory(
+                GetCurrentProcess(),
+                &mut base_addr,
+                0,
+                &mut size,
+                MEM_COMMIT | MEM_PRESERVE_PLACEHOLDER,
+                PAGE_READWRITE,
+            )
+        };
+
+        if status == SUCCESS {
+            return NonNull::new(base_addr.cast());
+        }
+
+        base_addr = aligned_addr as PVOID;
+        size = aligned_len;
+        unsafe { NtFreeVirtualMemory(GetCurrentProcess(), &mut base_addr, &mut size, MEM_RELEASE) };
+
+        None
     }
 
-    fn unmap_pages(&self, _memory: &mut [u8]) {
-        compile_error!("rustty-os::page_allocator: windows VM mapping path is not yet ported");
+    fn unmap_pages(&self, memory: &mut [u8]) {
+        use win_ntdll::*;
+        let mut base_addr: PVOID = memory.as_mut_ptr().cast();
+        let mut region_size: SIZE_T = 0;
+        unsafe {
+            NtFreeVirtualMemory(
+                GetCurrentProcess(),
+                &mut base_addr,
+                &mut region_size,
+                MEM_RELEASE,
+            )
+        };
+    }
+}
+
+// Vendored Zig-std windows VM surface (Zig 0.15.2 `std.os.windows`): the exact
+// constants/externs the `std.heap.PageAllocator` windows branch names
+// (`zstd:std/os/windows.zig:3595-3626`, `zstd:std/os/windows/ntdll.zig:363-380`).
+// Private to this module (see the layering note above).
+#[cfg(all(not(miri), windows))]
+mod win_ntdll {
+    pub type PVOID = *mut core::ffi::c_void;
+    // The Win32 spelling is `SIZE_T`; renaming it would break the 1:1 read
+    // against `zstd:std/os/windows.zig`. Scoped to this one alias (the same
+    // reason `windows.rs` allows the lint for its whole typedef block).
+    #[allow(non_camel_case_types)]
+    pub type SIZE_T = usize;
+    pub type HANDLE = PVOID;
+    pub type NTSTATUS = i32;
+    /// `NTSTATUS.SUCCESS`
+    pub const SUCCESS: NTSTATUS = 0;
+
+    pub const MEM_COMMIT: u32 = 0x1000;
+    pub const MEM_RESERVE: u32 = 0x2000;
+    pub const MEM_RELEASE: u32 = 0x8000;
+    pub const MEM_RESERVE_PLACEHOLDER: u32 = 0x00040000;
+    pub const MEM_PRESERVE_PLACEHOLDER: u32 = 0x00000400;
+    pub const PAGE_NOACCESS: u32 = 0x01;
+    pub const PAGE_READWRITE: u32 = 0x04;
+
+    #[link(name = "ntdll")]
+    extern "system" {
+        pub fn NtAllocateVirtualMemory(
+            ProcessHandle: HANDLE,
+            BaseAddress: *mut PVOID,
+            ZeroBits: usize,
+            RegionSize: *mut SIZE_T,
+            AllocationType: u32,
+            Protect: u32,
+        ) -> NTSTATUS;
+        pub fn NtFreeVirtualMemory(
+            ProcessHandle: HANDLE,
+            BaseAddress: *mut PVOID,
+            RegionSize: *mut SIZE_T,
+            FreeType: u32,
+        ) -> NTSTATUS;
+    }
+
+    /// `windows.GetCurrentProcess()` — the process pseudo-handle; the Zig
+    /// oracle inlines `@bitCast(@as(isize, -1))`
+    /// (`zstd:std/os/windows.zig:158-161`) rather than calling kernel32.
+    #[allow(non_snake_case)]
+    pub fn GetCurrentProcess() -> HANDLE {
+        usize::MAX as HANDLE
     }
 }
 
@@ -374,6 +592,28 @@ impl PageAllocator {
 #[cfg(all(test, not(miri)))]
 mod tests {
     use super::*;
+
+    /// KATs for the vendored-std alignment helpers shared by the generic-unix
+    /// and windows mapping arms (`mem.alignForward` / `mem.isAligned`,
+    /// zstd:std/heap/PageAllocator.zig:44,52 and :57). Runs on every target
+    /// that compiles those arms (the Linux rvm lane, a future windows host);
+    /// Darwin uses `mach.rs`'s own copies and skips this.
+    #[cfg(any(windows, all(unix, not(any(target_os = "macos", target_os = "ios")))))]
+    #[test]
+    fn align_helpers_match_reference() {
+        assert_eq!(mem_align_forward(0, 4096), 0);
+        assert_eq!(mem_align_forward(1, 4096), 4096);
+        assert_eq!(mem_align_forward(4096, 4096), 4096);
+        assert_eq!(mem_align_forward(4097, 4096), 8192);
+        #[cfg(windows)]
+        {
+            assert!(mem_is_aligned(0, 4096));
+            assert!(mem_is_aligned(8192, 4096));
+            assert!(!mem_is_aligned(4097, 4096));
+            // `std.heap.pageSize()` folds to the comptime windows constant.
+            assert_eq!(page_size(), 4096);
+        }
+    }
 
     /// A page-sized region is page-aligned, readable, and zero-initialized; and
     /// freeing it works.

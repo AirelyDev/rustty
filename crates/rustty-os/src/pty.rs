@@ -197,6 +197,20 @@ pub type PosixPtyFd = libc::c_int;
 #[cfg(not(any(windows, target_os = "ios")))]
 const MAX_PATH_BYTES: usize = libc::PATH_MAX as usize;
 
+// PORT NOTE (W2D/WI-1): `c.IUTF8` resolves through the `pty-c` translate-C module
+// (`build/SharedDeps.zig:235`) over the TARGET's `termios.h`, so the reference
+// picks up whatever the platform header defines. The `libc` crate binds `IUTF8`
+// for macOS/Linux but NOT for freebsd (it pins the `freebsd12` ABI, whose header
+// snapshot predates the constant), so bind it locally there. The value is the
+// real FreeBSD header's: `sys/sys/_termios.h:100` @ releng/14.3 —
+// `#define IUTF8 0x00004000 /* assume input is utf-8 encoded */` (verified
+// 2026-08-10 against cgit.freebsd.org). Non-freebsd targets keep naming
+// `libc::IUTF8` verbatim.
+#[cfg(all(not(any(windows, target_os = "ios")), not(target_os = "freebsd")))]
+use libc::IUTF8;
+#[cfg(all(not(any(windows, target_os = "ios")), target_os = "freebsd"))]
+const IUTF8: libc::tcflag_t = 0x0000_4000;
+
 #[cfg(not(any(windows, target_os = "ios")))]
 #[derive(Debug, PartialEq, Eq)]
 pub enum PosixPtyError {
@@ -264,7 +278,7 @@ impl PosixPty {
         if unsafe { libc::tcgetattr(master_fd, &mut attrs) } != 0 {
             return Err(PosixPtyError::OpenptyFailed);
         }
-        attrs.c_iflag |= libc::IUTF8;
+        attrs.c_iflag |= IUTF8;
         if unsafe { libc::tcsetattr(master_fd, libc::TCSANOW, &attrs) } != 0 {
             return Err(PosixPtyError::OpenptyFailed);
         }
@@ -532,6 +546,25 @@ pub enum WindowsPtyError {
     ResizeFailed,
 }
 
+// PORT NOTE: `pub const OpenError = error{Unexpected};` (`src/pty.zig:341`) and
+// `pub const SetSizeError = error{ResizeFailed};` (`:472`). Zig error values
+// format as their names (`{}` on an error prints `error.Unexpected`'s tag), so
+// `Display` writes the tag verbatim. `open` returns these through the
+// `Box<dyn std::error::Error>` seam (it must also carry the `io::Error` that
+// `unexpectedError` produces), which requires the std `Error` trait.
+#[cfg(windows)]
+impl std::fmt::Display for WindowsPtyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WindowsPtyError::Unexpected => write!(f, "Unexpected"),
+            WindowsPtyError::ResizeFailed => write!(f, "ResizeFailed"),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl std::error::Error for WindowsPtyError {}
+
 // Process-wide counter for pipe names
 #[cfg(windows)]
 static pipe_name_counter: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
@@ -705,6 +738,26 @@ impl WindowsPty {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W2D/WI-1 tripwire for the FreeBSD `IUTF8` shim (the value `open` ORs into
+    /// `c_iflag`). The reference resolves `c.IUTF8` through `pty-c` against the
+    /// TARGET's `termios.h`, and every platform rustty builds for defines it as
+    /// the SAME bit: macOS `sys/termios.h` 0x00004000 (= `libc::IUTF8`), Linux
+    /// `bits/termios.h` 0040000 == 0x4000, FreeBSD `sys/sys/_termios.h:100`
+    /// @ releng/14.3 `#define IUTF8 0x00004000`. This runs on the host against the
+    /// LIVE `libc::IUTF8` and pins that number, so if the freebsd shim above ever
+    /// drifts from the value the other platforms' headers agree on, this fails.
+    /// (It cannot execute the freebsd arm — see the FreeBSD row in DEFERRALS.md —
+    /// but it does prove the constant the shim is a stand-in FOR.)
+    #[cfg(not(any(windows, target_os = "ios")))]
+    #[test]
+    fn iutf8_is_the_shared_header_bit() {
+        assert_eq!(
+            IUTF8, 0x0000_4000 as libc::tcflag_t,
+            "IUTF8 must stay the 0x4000 bit every supported platform's termios.h \
+             defines (freebsd binds it locally — sys/sys/_termios.h:100)"
+        );
+    }
 
     #[test]
     #[cfg_attr(miri, ignore)] // real-OS pty: openpty/ioctl/ptsname syscalls

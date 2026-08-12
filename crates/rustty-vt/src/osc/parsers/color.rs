@@ -262,9 +262,9 @@ fn parse_get_set_ansi_color(op: Operation, it: &mut TokenizeScalar<'_>) -> List 
         }
 
         // const rgb = RGB.parse(spec_str) catch return result;
-        let rgb = match str_from_bytes(spec_str).and_then(|s| RGB::parse(s).ok()) {
-            Some(v) => v,
-            None => return result,
+        let rgb = match RGB::parse(spec_str) {
+            Ok(v) => v,
+            Err(_) => return result,
         };
         // const req = try result.addOne(alloc);
         // req.* = .{ .set = .{ .target = target, .color = rgb } };
@@ -372,9 +372,9 @@ fn parse_get_set_dynamic_color(start: DynamicColor, it: &mut TokenizeScalar<'_>)
             result.push(Request::Query(Target::Dynamic(color)));
         } else {
             // const rgb = RGB.parse(spec_str) catch return result;
-            let rgb = match str_from_bytes(spec_str).and_then(|s| RGB::parse(s).ok()) {
-                Some(v) => v,
-                None => return result,
+            let rgb = match RGB::parse(spec_str) {
+                Ok(v) => v,
+                Err(_) => return result,
             };
             // const req = try result.addOne(alloc);
             // req.* = .{ .set = .{ .target = .{ .dynamic = color }, .color = rgb } };
@@ -522,9 +522,13 @@ fn int_to_special(v: u8) -> Option<SpecialColor> {
     }
 }
 
-// PORT NOTE: glue to view a byte slice as `&str` for the `&str`-based ported
-// `RGB::parse`. Non-UTF-8 bytes yield `None`, which the callers fold into the
-// reference's parse-failure path. The tokens here are always ASCII in practice.
+// PORT NOTE: glue to view a byte slice as `&str` for the `str`-based Rust
+// integer parse in `parse_int_u9`. Non-UTF-8 bytes yield `None`, which folds
+// into the reference's parse-failure path (`std.fmt.parseInt` rejects any
+// non-ASCII byte too). `RGB::parse` does NOT go through here: it takes
+// `&[u8]` like the reference's `parse(value: []const u8)`, because its
+// sub-slices are chosen by byte index and a `&str` view would panic on a
+// mid-scalar cut instead of failing the parse (see `color.rs`).
 fn str_from_bytes(s: &[u8]) -> Option<&str> {
     std::str::from_utf8(s).ok()
 }
@@ -915,6 +919,82 @@ mod tests {
             18 => Operation::osc_18,
             19 => Operation::osc_19,
             _ => unreachable!(),
+        }
+    }
+
+    // REGRESSION (fuzz finding, `cargo fuzz run fuzz_osc`, 2026-08-11): a color
+    // spec holding a multi-byte UTF-8 scalar used to PANIC inside `RGB::parse`
+    // (byte ranges applied to a `&str`). The reference's
+    // `RGB.parse(value: []const u8)` (ghostty src/terminal/color.zig:657) byte-
+    // slices and returns `error.InvalidFormat`, which `parseColor` turns into
+    // "stop and return the requests accumulated so far" (`catch return result`).
+    #[test]
+    fn osc_4_non_ascii_spec_stops_the_list_instead_of_panicking() {
+        // The exact crashing payload from
+        // `crates/rustty-vt/fuzz/findings/osc4-rgb-parse-char-boundary`
+        // (fuzz input `\x00` + `4;1;aebcd` with a real 'e-acute'): 'aébcd' is
+        // valid UTF-8, 6 BYTES, so `parse` takes its 6-byte arm and cuts
+        // `input[2..4]` inside 'é'.
+        let list = parse_color(Operation::osc_4, "1;aébcd".as_bytes());
+        assert!(list.is_empty());
+
+        // Raw invalid UTF-8 in the spec is equally just a failed parse.
+        let list = parse_color(Operation::osc_4, b"1;U\x8evv");
+        assert!(list.is_empty());
+
+        // The bail is "return what we have", not "drop everything": a good
+        // pair before the bad one survives.
+        let list = parse_color(Operation::osc_4, "0;red;1;aébcd".as_bytes());
+        assert_eq!(1, list.len());
+        assert_eq!(
+            Request::Set(ColoredTarget {
+                target: Target::Palette(0),
+                color: RGB { r: 255, g: 0, b: 0 },
+            }),
+            list[0],
+        );
+    }
+
+    // Same regression through the DYNAMIC color path (`OSC 10/11/12/...`),
+    // which has its own `RGB.parse` call site.
+    #[test]
+    fn osc_10_non_ascii_spec_stops_the_list_instead_of_panicking() {
+        let list = parse_color(Operation::osc_10, "aébcd".as_bytes());
+        assert!(list.is_empty());
+
+        let list = parse_color(Operation::osc_11, b"U\x8evv");
+        assert!(list.is_empty());
+
+        // A query for the foreground, then a bad background spec: the query
+        // survives, the bad spec ends the list.
+        let list = parse_color(Operation::osc_10, "?;aébcd".as_bytes());
+        assert_eq!(1, list.len());
+        assert_eq!(
+            Request::Query(Target::Dynamic(DynamicColor::Foreground)),
+            list[0],
+        );
+    }
+
+    // The same input driven through the REAL `osc::Parser` byte loop, i.e. the
+    // exact path `fuzz_harness::fuzz_osc` (and therefore the live fuzzer) takes.
+    #[test]
+    fn osc_parser_non_ascii_color_spec_is_not_a_crash() {
+        for input in [
+            "4;1;aébcd".as_bytes(),
+            "10;aébcd".as_bytes(),
+            "11;#aébcd".as_bytes(),
+            "104;aébcd".as_bytes(),
+            b"4;1;U\x8evv",
+        ] {
+            for terminator in [Some(b'\x07'), Some(b'\x9c'), None] {
+                let mut p = crate::osc::Parser::init(None);
+                for &ch in input {
+                    p.next(ch);
+                }
+                // The assertion is that this returns at all: pre-fix it aborted
+                // the VT thread with "byte index N is not a char boundary".
+                let _ = p.end(terminator);
+            }
         }
     }
 

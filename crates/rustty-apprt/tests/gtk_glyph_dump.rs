@@ -8,8 +8,8 @@
 //! Run:  RUSTTY_DUMP_PPM=/path/out.ppm \
 //!         cargo test -p rustty-apprt --features gtk --test gtk_glyph_dump -- --ignored --exact glyph_dump
 //!
-//! R5: gated `all(target_os = "linux", feature = "gtk")` — compiles out off the gate.
-#![cfg(all(target_os = "linux", feature = "gtk"))]
+//! R5: gated `all(any(linux, freebsd), feature = "gtk")` — compiles out off the gate.
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 #![allow(non_snake_case)]
 
 use std::cell::{Cell, RefCell};

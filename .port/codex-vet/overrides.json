@@ -1,0 +1,30 @@
+{
+ "W5-01": {
+  "status": "verified",
+  "note": "orchestrator: verifier recorded no problems; both allocator seams (OSC-52 clipboard scratch, tmux control Parser::init_options) restored to recoverable OOM with tripwire-proved tests. Agent self-reported 'partial' only because a third sub-site was argued out of scope."
+ },
+ "W10-02": {
+  "status": "verified",
+  "note": "orchestrator: verifier said 'Clean'. Accepted residue: std.fs.path.resolveWindows (~215 lines) not ported; path.rs resolve stays resolvePosix. Windows-only, dormant behind the F-001 compile blocker -> folded into wave 2 (W2D_WINDOWS_OS.md scope)."
+ },
+ "F-017": {
+  "status": "verified",
+  "note": "orchestrator 2026-08-11: verifier CONFIRMED the substantive P1 fix (RGB::parse byte-slicing, non-vacuity proven from git history, real osc::Parser probe, 4001-file corpus replay clean, Miri+fuzz-smoke green) and rejected ONLY on 3 clippy lints in the batch's own test file. Fixed: doc example wrapped in a ```sh fence (doc_overindented_list_items x2) + `type Tier<'a>` alias (type_complexity). `cargo clippy -p rustty-vt --test fuzz_corpus_replay -- -D warnings` clean; the independent clippy sweep then confirmed the whole workspace gate exits 0."
+ },
+ "F-001": {
+  "status": "verified",
+  "note": "orchestrator: both Windows half-batches self-reported 'partial' (honest residue: type-check only, no Windows host) but BOTH verifiers passed them independently. Treated as verified-with-declared-residue, which is the wave-2 acceptance bar the user set."
+ },
+ "F-004": {
+  "status": "verified",
+  "note": "orchestrator 2026-08-11: verifier passed the FreeBSD kqueue port on fidelity but blocked on a clippy REGRESSION it proved was introduced (freebsd target went from green to red: `Operation::Machport { .. }` is a struct pattern over a unit variant off Darwin). Fixed by cfg-splitting both arms (kqueue.rs perform + syscall_result) exactly as WI-3 specified and as the file already does at its other 2 Machport sites. Re-verified by orchestrator: `cargo clippy -p rustty-xev --target x86_64-unknown-freebsd --all-targets -- -D warnings` clean; `cargo test -p rustty-xev --lib` 50/50 on macOS."
+ },
+ "F-005": {
+  "status": "verified",
+  "note": "orchestrator 2026-08-11: verifier passed the OpenGL image twin (llvmpipe-executed on the VM) but blocked on a gate regression: the `git mv` of image.rs into a twin pair orphaned the D5 paired-invariants anchor `image.rs|fn kitty_requires_update` and dangled 4 INV-3 line citations. Fixed by anchoring BOTH twins in check_paired_invariants.sh and rewriting the INV-3 consumer entry in VT_INVARIANTS.md to cite macos_impl.rs:328/336/466/646 and linux_impl.rs:406/414/544/724. Re-verified: `.port/tools/gates/check_paired_invariants.sh` >> D5 PASS, exit 0."
+ },
+ "W2-05": {
+  "status": "verified",
+  "note": "orchestrator 2026-08-11: verifier found a REAL runtime defect the residue had not declared - macos/build-rustty-signed.sh signed with `--timestamp=none`, and this batch made that script the only codesigning step of both release workflows, so notarization would have been rejected ('signature does not include a secure timestamp') and stapler would then fail. Fixed by gating the flag on identity: ad-hoc keeps --timestamp=none (cannot be timestamped, must work offline), a real DEVELOPER_ID gets bare --timestamp (Apple's default TSA = the oracle's signature shape). Spelled explicitly rather than as an empty array because the script runs under `set -u` on macOS bash 3.2, where expanding an empty array aborts - verified both paths execute clean."
+ }
+}

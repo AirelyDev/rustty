@@ -65,6 +65,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "breakpad-sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "cairo-rs"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1435,6 +1442,7 @@ dependencies = [
  "objc2-core-text",
  "rustty-datastruct",
  "rustty-font",
+ "rustty-os",
  "rustty-render-types",
  "rustty-unicode",
  "rustty-util",
@@ -1674,6 +1682,7 @@ version = "0.1.0"
 dependencies = [
  "rustty-config",
  "rustty-font",
+ "rustty-font-shaper",
  "rustty-os",
  "rustty-vt",
 ]
@@ -1747,6 +1756,7 @@ name = "sentry-sys"
 version = "0.1.0"
 dependencies = [
  "bindgen",
+ "breakpad-sys",
  "cc",
 ]
 

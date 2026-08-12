@@ -59,7 +59,18 @@ pub mod freestanding {
 
     // We wrap our externs in this namespace so we can reuse symbols, otherwise
     // "log" would collide.
+    //
+    // PORT NOTE: `#[link(wasm_import_module = "env")]` is REQUIRED, not
+    // decoration. The reference declares this as `extern "env" fn log(...)`, and
+    // Zig's freestanding link has nothing else named `log`. Without the explicit
+    // import module, rustc emits a plain undefined symbol named `log`, which
+    // `wasm-ld` resolves against the Rust sysroot's libm `log` (`f64 -> f64`):
+    // the link then silently produces a `signature_mismatch:log` trap stub and
+    // NO `env.log` import at all, so every logged line would trap instead of
+    // reaching the host. The sibling wasm externs use the same attribute
+    // (`rustty-font` `atlas.rs`, `rustty-font-shaper` `face/web_canvas.rs`).
     mod js {
+        #[link(wasm_import_module = "env")]
         extern "C" {
             #[link_name = "log"]
             pub fn log(ptr: *const u8, len: usize);

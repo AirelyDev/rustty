@@ -35,6 +35,30 @@
 
 use crate::writer::Writer;
 
+/// PORTS: the inferred error union of the reference's `formatEntry` (`!void`) —
+/// the writer's error set plus `error{OutOfMemory}`.
+///
+/// Several value-type `formatEntry` impls format through FIXED stack buffers
+/// (`Path`/`RepeatablePath` `[std.fs.max_path_bytes + 1]u8`, `ReadableIO`
+/// `[4096]u8`, `RepeatableStringMap` `[256]u8`, ...) and map the buffer's
+/// `error.NoSpaceLeft` to `return error.OutOfMemory`. Zig's inferred error set
+/// carries that alongside the writer error; Rust spells the union as this enum.
+/// The `From<E>` impl lets plain writer errors propagate with `?` unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatError<E> {
+    /// The underlying writer failed (`std.Io.Writer.Error`).
+    Writer(E),
+    /// `error.OutOfMemory` — a value-type's fixed formatting buffer overflowed
+    /// (the reference's `error.NoSpaceLeft => return error.OutOfMemory` arms).
+    OutOfMemory,
+}
+
+impl<E> From<E> for FormatError<E> {
+    fn from(e: E) -> FormatError<E> {
+        FormatError::Writer(e)
+    }
+}
+
 /// Returns a single entry formatter for the given field name and writer.
 // pub fn entryFormatter(
 //     name: []const u8,
@@ -73,7 +97,7 @@ impl<W: Writer> EntryFormatter<'_, W> {
     // FormatEntry`. The reference dispatches to the free `formatter.formatEntry`;
     // here we call the value's own `FormatEntry::format_entry`, which performs the
     // same `@typeInfo(T)` dispatch.
-    pub fn format_entry<V: FormatEntry>(&mut self, value: &V) -> Result<(), W::Error> {
+    pub fn format_entry<V: FormatEntry>(&mut self, value: &V) -> Result<(), FormatError<W::Error>> {
         value.format_entry(self.name, self.writer)
     }
 }
@@ -95,7 +119,11 @@ pub trait FormatEntry {
     /// Format a single value with the given `name`, writing to `writer`. This is
     /// the per-type body of the reference's
     /// `formatEntry(comptime T, name, value, writer)`.
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error>;
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -124,13 +152,13 @@ pub fn format_entry_display<W: Writer, V: core::fmt::Display>(
     name: &[u8],
     value: &V,
     writer: &mut W,
-) -> Result<(), W::Error> {
+) -> Result<(), FormatError<W::Error>> {
     // try writer.print("{s} = {}\n", .{ name, value });
     // return;
     writer.write_all(name)?;
     writer.write_all(b" = ")?;
     writer.write_all(format!("{value}").as_bytes())?;
-    writer.write_all(b"\n")
+    Ok(writer.write_all(b"\n")?)
 }
 
 /// The float primitives the `.float` arm accepts (`f32`/`f64` config fields).
@@ -172,7 +200,7 @@ pub fn format_entry_float<W: Writer, V: FloatEntry>(
     name: &[u8],
     value: &V,
     writer: &mut W,
-) -> Result<(), W::Error> {
+) -> Result<(), FormatError<W::Error>> {
     // try writer.print("{s} = {d}\n", .{ name, value });
     // return;
     writer.write_all(name)?;
@@ -186,7 +214,7 @@ pub fn format_entry_float<W: Writer, V: FloatEntry>(
     } else {
         writer.write_all(format!("{value}").as_bytes())?;
     }
-    writer.write_all(b"\n")
+    Ok(writer.write_all(b"\n")?)
 }
 
 /// `.@"enum" => try writer.print("{s} = {t}\n", .{ name, value });`
@@ -198,21 +226,24 @@ pub fn format_entry_enum<W: Writer>(
     name: &[u8],
     tag_name: &[u8],
     writer: &mut W,
-) -> Result<(), W::Error> {
+) -> Result<(), FormatError<W::Error>> {
     // try writer.print("{s} = {t}\n", .{ name, value });
     // return;
     writer.write_all(name)?;
     writer.write_all(b" = ")?;
     writer.write_all(tag_name)?;
-    writer.write_all(b"\n")
+    Ok(writer.write_all(b"\n")?)
 }
 
 /// `.void => try writer.print("{s} = \n", .{name});`
-pub fn format_entry_void<W: Writer>(name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+pub fn format_entry_void<W: Writer>(
+    name: &[u8],
+    writer: &mut W,
+) -> Result<(), FormatError<W::Error>> {
     // try writer.print("{s} = \n", .{name});
     // return;
     writer.write_all(name)?;
-    writer.write_all(b" = \n")
+    Ok(writer.write_all(b" = \n")?)
 }
 
 /// `.optional => |info| { if (value) |inner| formatEntry(info.child, ...) else
@@ -225,7 +256,7 @@ pub fn format_entry_optional<W: Writer, V: FormatEntry>(
     name: &[u8],
     value: Option<&V>,
     writer: &mut W,
-) -> Result<(), W::Error> {
+) -> Result<(), FormatError<W::Error>> {
     // if (value) |inner| {
     if let Some(inner) = value {
         // try formatEntry(
@@ -255,13 +286,13 @@ pub fn format_entry_string<W: Writer>(
     name: &[u8],
     value: &[u8],
     writer: &mut W,
-) -> Result<(), W::Error> {
+) -> Result<(), FormatError<W::Error>> {
     // try writer.print("{s} = {s}\n", .{ name, value });
     // return;
     writer.write_all(name)?;
     writer.write_all(b" = ")?;
     writer.write_all(value)?;
-    writer.write_all(b"\n")
+    Ok(writer.write_all(b"\n")?)
 }
 
 // Structs of all types require a "formatEntry" function
@@ -304,7 +335,7 @@ pub fn format_entry_packed_struct<W: Writer>(
     name: &[u8],
     fields: &[(&[u8], bool)],
     writer: &mut W,
-) -> Result<(), W::Error> {
+) -> Result<(), FormatError<W::Error>> {
     // try writer.print("{s} = ", .{name});
     writer.write_all(name)?;
     writer.write_all(b" = ")?;
@@ -324,7 +355,7 @@ pub fn format_entry_packed_struct<W: Writer>(
         writer.write_all(field_name)?;
     }
     // try writer.print("\n", .{});
-    writer.write_all(b"\n")
+    Ok(writer.write_all(b"\n")?)
     // return;
 }
 
@@ -356,7 +387,7 @@ mod tests {
     // `super::` (rather than glob-imported) so a test fn may carry the canonical
     // snake_case slug of its reference test name (e.g. `format_entry_float`)
     // without shadowing the like-named helper it calls.
-    use super::{FormatEntry, Writer};
+    use super::{FormatEntry, FormatError, Writer};
     use crate::writer::AllocatingWriter;
 
     // PORT NOTE: the optional test formats `?bool`; `bool` implements
@@ -365,7 +396,11 @@ mod tests {
     // This impl is hoisted to the test-module level (rather than nested in the
     // test fn) to keep it a local trait impl.
     impl FormatEntry for bool {
-        fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+        fn format_entry<W: Writer>(
+            &self,
+            name: &[u8],
+            writer: &mut W,
+        ) -> Result<(), FormatError<W::Error>> {
             super::format_entry_display(name, self, writer)
         }
     }

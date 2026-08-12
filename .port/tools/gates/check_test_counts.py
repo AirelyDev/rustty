@@ -169,13 +169,23 @@ RSCORE = f"{RS_ROOT}/crates/rustty-core/src"
 
 # rustty-xev: the libxev event-loop crate (D6, XEV_BLUEPRINT §7 / [ADV-FIX F7]).
 # The count-gate cannot see libxev via ghostty/src — libxev is a content-addressed
-# zig-cache DEPENDENCY package (mitchellh/libxev, the exact commit ghostty pins),
-# NOT ghostty src. Its base path is therefore the pinned zig cache src dir. SCOPE =
+# zig-cache DEPENDENCY package (mitchellh/libxev), NOT ghostty src. Its base path
+# is therefore a pinned zig cache src dir. COMMIT: GHXEV is libxev 34fa5087, the
+# revision this port TRACKS (D6 Zig-port-defer; the ghostty pin 6ad1fe7d has since
+# bumped to 9ce8e8e6 — reviewed as a non-port, `.port/phase-3/NON_PORTS.md` §G3,
+# "rustty-xev is not tracking libxev revisions"). GHXEV_CUR below is the CURRENT
+# 9ce8e8e6 pin, used only by rows whose oracle content exists solely there
+# (watcher/file.zig's queuePWrite KAT — codex W13A-02). SCOPE =
 # macOS/kqueue only (XEV_BLUEPRINT §0-§1); other backends/file/tcp/udp are DEFERRED
 # (DEFERRALS.md), so only the in-scope files are mapped. C1 seeds the mapping with
 # the three pure intrusive data-structure files (queue/queue_mpsc/heap); later
 # chunks add darwin/loop/kqueue/async/timer/process/stream entries.
 GHXEV = "/Users/gael/.cache/zig/p/libxev-0.0.0-86vtc4IcEwCqEYxEYoN_3KXmc6A9VLcm22aVImfvecYs/src"
+# The CURRENT ghostty pin (libxev 9ce8e8e6, hash 86vtcwIR…), extracted from the
+# tarball ghostty's build.zig.zon names. If this checkout is absent, re-extract
+# /Users/gael/.cache/zig/p/libxev-0.0.0-86vtcwIRFADbH4hk-EjROXxlrKIRPQdA41XiTSytYO-F.tar.gz
+# to this path (the R3 guard below turns its absence into BLOCKED, never green).
+GHXEV_CUR = "/Users/gael/projects/ghostty/zig-pkg/libxev-0.0.0-86vtcwIRFADbH4hk-EjROXxlrKIRPQdA41XiTSytYO-F/src"
 RSXEV = f"{RS_ROOT}/crates/rustty-xev/src"
 
 # rustty-wuffs: the pkg/wuffs safe-wrapper parity crate (the renderer's
@@ -841,9 +851,11 @@ MAP = {
     # SAME base path as every xev row above (GHXEV = the pinned content-addressed
     # libxev zig-cache package). No new base path or in-repo manifest is needed:
     # the Linux port's own read-only oracle checkout is the SAME libxev commit
-    # ghostty pins (34fa5087), so these rows bind against the existing GHXEV like
-    # their macOS siblings, and the R3 missing-ref guard below still protects
-    # them from vacuous greens.
+    # this port tracks (34fa5087 — which WAS the ghostty pin when these rows
+    # landed; ghostty 6ad1fe7d has since bumped to 9ce8e8e6, a reviewed non-port,
+    # NON_PORTS.md §G3, and rustty-xev deliberately stays on 34fa5087), so these
+    # rows bind against the existing GHXEV like their macOS siblings, and the R3
+    # missing-ref guard below still protects them from vacuous greens.
     # ---------------------------------------------------------------------
     # backend/epoll.zig: 12 quoted `test "epoll: ..."` → zig=12. epoll.rs ports all
     # 12 as live #[test] + rustty KATs → rust=15 >= 12.
@@ -867,6 +879,21 @@ MAP = {
     # inline in watcher/async.zig's `AsyncEventFd`, and the other two are a
     # std.net/loop.zig-twin slice), so there is nothing to count them against.
     "xev_timerfd":       ([f"{GHXEV}/linux/timerfd.zig"], [f"{RSXEV}/linux/timerfd.rs"], 0),
+    # watcher/file.zig (codex W13A-02): previously the ONE in-scope watcher input
+    # the map never bound. Rustty has no file.rs — the File watcher twins live
+    # INSIDE the backend files (epoll.rs/io_uring.rs `epoll_file_*`/
+    # `io_uring_file_*`; macOS xev.File is a documented divergence, DEFERRALS.md
+    # O10) — so the rust side of this row is the two backend files and OVER-COUNTS
+    # (they also hold every non-file backend test). The count-bind is therefore
+    # WEAK (bookkeeping, not proof); the row's real teeth are (a) the R3
+    # missing-ref guard binding the CURRENT 9ce8e8e6 pin (GHXEV_CUR — the ONLY
+    # revision carrying `test "queuePWrite"`, file.zig:318, whose final-content
+    # "123000" KAT is ported as epoll_file_queue_pwrite_kat +
+    # io_uring_file_queue_pwrite_kat), and (b) making a future file.zig test-count
+    # jump past the combined backend total impossible to miss. Current pin zig=7
+    # ("queuePWrite", "File: Stream decls", "kqueue: zero-length read for
+    # readiness", "poll", "read/write", "pread/pwrite", "queued writes").
+    "xev_file":          ([f"{GHXEV_CUR}/watcher/file.zig"], [f"{RSXEV}/epoll.rs", f"{RSXEV}/io_uring.rs"], 0),
     # ---------------------------------------------------------------------
     # WS20: the last two reference backends. These were previously UNMAPPED
     # because they were (wrongly) recorded as out-of-scope-by-platform. They are

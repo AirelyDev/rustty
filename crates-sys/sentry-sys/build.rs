@@ -1,6 +1,6 @@
 //! Build script for sentry-sys (sentry-native 0.7.8 crash-reporting SDK).
 //!
-//! PORT STATUS: vendored (ghostty's fixed configuration)
+//! PORT STATUS: vendored (ghostty's product configuration)
 //!
 //! R3 — self-contained, no ghostty dependency:
 //!   1. The upstream C sources for sentry-native 0.7.8 are vendored in-tree
@@ -11,14 +11,19 @@
 //!      relative includes (`"../vendor/mpack.h"`, `"transports/…"`, `<sentry.h>`)
 //!      resolve unchanged. This build NEVER references /Users/gael/projects/ghostty.
 //!   2. The sources are compiled with the `cc` crate, mirroring the reference's
-//!      pkg/sentry/build.zig with ghostty's fixed options (`backend = .inproc`,
-//!      `transport = .none`): the same `SRCS` translation-unit list, the same
-//!      per-target path/symbolizer/unwinder/pageallocator/modulefinder file
-//!      selection, the Linux-only `vendor/stb_sprintf.c`, the fixed
-//!      `sentry_transport_none.c` transport and `sentry_backend_inproc.c`
-//!      backend, and the same `-D` flags
+//!      pkg/sentry/build.zig with ghostty's PRODUCT options
+//!      (`backend = .breakpad`, `transport = .none` — src/build/SharedDeps.zig
+//!      passes `.backend = .breakpad` whenever sentry is enabled; pkg/sentry's
+//!      standalone `orelse .inproc` default is never what the product builds):
+//!      the same `SRCS` translation-unit list, the same per-target
+//!      path/symbolizer/unwinder/pageallocator/modulefinder file selection,
+//!      the Linux-only `vendor/stb_sprintf.c`, the fixed
+//!      `sentry_transport_none.c` transport and the C++
+//!      `sentry_backend_breakpad.cpp` backend (compiled against the
+//!      breakpad-sys headers and linked against its archive, the reference's
+//!      `breakpad_dep.artifact("breakpad")`), and the same `-D` flags
 //!      (`-DSENTRY_WITH_UNWINDER_LIBBACKTRACE` off-Windows /
-//!      `-DSENTRY_WITH_UNWINDER_DBGHELP` on Windows; `-DSENTRY_BACKEND_INPROC`).
+//!      `-DSENTRY_WITH_UNWINDER_DBGHELP` on Windows; `-DSENTRY_BACKEND_BREAKPAD`).
 //!      Platform detection (`SENTRY_PLATFORM_*`) is auto-derived by `sentry.h`
 //!      from the compiler's predefined macros, so no extra defines are needed.
 //!      Vendored upstream warnings are silenced; on MSVC the reference's ubsan
@@ -97,8 +102,9 @@ fn main() {
     } else {
         build.define("SENTRY_WITH_UNWINDER_LIBBACKTRACE", None);
     }
-    // ghostty fixes `backend = .inproc`.
-    build.define("SENTRY_BACKEND_INPROC", None);
+    // ghostty's product build fixes `backend = .breakpad` (SharedDeps.zig
+    // passes `.backend = .breakpad` whenever `config.sentry` is enabled).
+    build.define("SENTRY_BACKEND_BREAKPAD", None);
 
     // The reference disables ubsan on MSVC (Zig's ubsan runtime cannot be
     // bundled on Windows, leaving __ubsan_handle_* unresolved).
@@ -160,8 +166,52 @@ fn main() {
     // Transport: ghostty fixes `transport = .none`.
     files.push("src/transports/sentry_transport_none.c".into());
 
-    // Backend: ghostty fixes `backend = .inproc`.
-    files.push("src/backends/sentry_backend_inproc.c".into());
+    // Backend: ghostty's product build fixes `backend = .breakpad`
+    // (SharedDeps.zig). `sentry_backend_breakpad.cpp` is C++ where the rest of
+    // sentry-native is C, so it is compiled by a C++ sub-build (the reference's
+    // `zig build` dispatches per-extension within one library) and its object
+    // is archived into the same `libsentry.a`. It compiles against the
+    // breakpad client headers re-exported by breakpad-sys
+    // (`DEP_BREAKPAD_INCLUDE` — the reference's installed pkg/breakpad header
+    // dir + its lss `vendor/` include, see pkg/sentry/build.zig `.breakpad`
+    // arm), and the final link resolves its `google_breakpad::*` symbols
+    // against breakpad-sys's archive (`breakpad_dep.artifact("breakpad")`).
+    // breakpad-sys also emits the platform C++ runtime link (the reference's
+    // linkLibCpp), covering this object's libc++ references.
+    let breakpad_include = env::var("DEP_BREAKPAD_INCLUDE")
+        .expect("DEP_BREAKPAD_INCLUDE (exported by breakpad-sys) must be set");
+    let mut backend_build = cc::Build::new();
+    backend_build
+        .cpp(true)
+        // Match breakpad-sys: the breakpad headers this backend includes are
+        // C++17 (the reference's zig-clang default is gnu++17).
+        .std("gnu++17")
+        .include(vendor.join("include"))
+        .include(vendor.join("src"))
+        .include(&breakpad_include)
+        .warnings(false)
+        .flag_if_supported("-w");
+    // Same global `-D` flags as the C build (the reference passes one `flags`
+    // list to every translation unit).
+    if is_windows {
+        backend_build.define("SENTRY_WITH_UNWINDER_DBGHELP", None);
+    } else {
+        backend_build.define("SENTRY_WITH_UNWINDER_LIBBACKTRACE", None);
+    }
+    backend_build.define("SENTRY_BACKEND_BREAKPAD", None);
+    if target_env == "msvc" {
+        backend_build
+            .flag_if_supported("-fno-sanitize=undefined")
+            .flag_if_supported("-fno-sanitize-trap=undefined");
+    }
+    if target_os == "freebsd" || target_env == "musl" {
+        backend_build.flag_if_supported("-fPIC");
+    }
+    backend_build.file(vendor.join("src/backends/sentry_backend_breakpad.cpp"));
+    println!("cargo:rerun-if-changed=vendor/src/backends/sentry_backend_breakpad.cpp");
+    for obj in backend_build.compile_intermediates() {
+        build.object(obj);
+    }
 
     for src in &files {
         build.file(vendor.join(src));
@@ -172,6 +222,15 @@ fn main() {
     // `cargo:rustc-link-lib=static=sentry` + search-path directives. Because the
     // crate declares `links = "sentry"`, Cargo enforces a single linkage.
     build.compile("sentry");
+
+    // Expose the built archive to the crate's own backend-selection KAT test
+    // (which asserts the breakpad backend object is really archived and the
+    // inproc backend is not).
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    println!(
+        "cargo:rustc-env=SENTRY_SYS_ARCHIVE={}",
+        out_dir.join("libsentry.a").display()
+    );
 
     // System libraries the archive references (the equivalent of the reference's
     // `lib.linkLibC()` pulling these into the final link). On Darwin they live in

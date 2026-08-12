@@ -269,6 +269,15 @@ impl CodepointResolver {
                         Err(_) => break 'discover,
                     };
                     // defer disco_it.deinit();
+                    //
+                    // PORT NOTE (W9F-02): materialized after the loop below, so
+                    // every exit from this block (the `return`, the reference's
+                    // `break :discover`, and both loop exits) runs it.
+                    // (W9F-01: `DiscoverIterator` now also impls `Drop`, which
+                    // covers the exits that jump PAST the materialized call —
+                    // e.g. the `break 'discover`s above; the explicit call below
+                    // stays valid because `deinit` is idempotent.)
+                    let mut found = None;
 
                     // PORT NOTE (WS20): the faithful shape of the reference's
                     // `while (true) { const deferred_face = (disco_it.next() catch
@@ -319,7 +328,12 @@ impl CodepointResolver {
                         let mut buf = [0u8; 256];
                         // log.info("found codepoint 0x{X} in fallback face={s}", .{ cp, deferred_face.name(&buf) catch "<error>" });
                         let _ = deferred_face.name(&mut buf);
-                        return match self.collection.add_deferred(
+                        // return self.collection.addDeferred(...) catch { ... };
+                        //   The `match` keeps the reference's two arms (and the
+                        //   `catch` body's comment) visible; `.ok()` would erase
+                        //   them, so clippy's suggestion is declined here.
+                        #[allow(clippy::manual_ok_err)]
+                        let added = match self.collection.add_deferred(
                             deferred_face,
                             collection::AddOptions {
                                 style,
@@ -329,15 +343,30 @@ impl CodepointResolver {
                         ) {
                             Ok(idx) => Some(idx),
                             Err(_) => {
-                                // The deferred face was moved into `add_deferred`
-                                // and dropped there on error (releasing its CTFont),
-                                // reproducing the reference's `deferred_face.deinit()`.
-                                break 'discover;
+                                // deferred_face.deinit(); break :discover;
+                                //   The deferred face was moved into
+                                //   `add_deferred`, which deinits it on its error
+                                //   arms (W9F-02) — reproducing the reference's
+                                //   caller-side `deferred_face.deinit()`.
+                                None
                             }
                         };
+                        found = added;
+                        break;
+                    }
+
+                    // The materialized `defer disco_it.deinit()` — see the
+                    // W9F-02 PORT NOTE above. It runs before the `return` below
+                    // and on the reference's `break :discover`/loop exits alike.
+                    disco_it.deinit();
+                    if found.is_some() {
+                        return found;
                     }
 
                     // log.debug("no fallback face found for cp={X}", .{cp});
+                    //   (The reference's `break :discover` skips this log; it is
+                    //   a comment here, so the merged fall-through is behavior
+                    //   -identical.)
                 }
             }
         }
@@ -409,31 +438,40 @@ impl CodepointResolver {
                     .discover(desc.clone())
                     .map_err(|_| OverrideError::Discover)?;
                 // defer disco_it.deinit();
+                //   (The reference defer also runs on the error returns below,
+                //   so every exit deinits the iterator — W9F-02.)
 
-                let face = match disco_it.next().map_err(|_| OverrideError::Discover)? {
-                    Some(f) => f,
-                    None => {
+                let face = match disco_it.next() {
+                    Ok(Some(f)) => f,
+                    Ok(None) => {
                         // log.warn("font lookup for codepoint map failed codepoint={} err=FontNotFound", .{cp});
                         // Add null to the cache so we don't do a lookup again later.
                         self.descriptor_cache.put(desc, None);
                         disco_it.deinit();
                         return Ok(None);
                     }
+                    Err(_) => {
+                        disco_it.deinit();
+                        return Err(OverrideError::Discover);
+                    }
                 };
 
                 // Add the font to our list of fonts so we can get an index for it,
                 // and ensure the index is stored in the descriptor cache for next time.
-                let idx = self
-                    .collection
-                    .add_deferred(
-                        face,
-                        collection::AddOptions {
-                            style: Style::Regular,
-                            fallback: false,
-                            size_adjustment: crate::DEFAULT_FALLBACK_ADJUSTMENT,
-                        },
-                    )
-                    .map_err(|_| OverrideError::Add)?;
+                let idx = match self.collection.add_deferred(
+                    face,
+                    collection::AddOptions {
+                        style: Style::Regular,
+                        fallback: false,
+                        size_adjustment: crate::DEFAULT_FALLBACK_ADJUSTMENT,
+                    },
+                ) {
+                    Ok(idx) => idx,
+                    Err(_) => {
+                        disco_it.deinit();
+                        return Err(OverrideError::Add);
+                    }
+                };
                 self.descriptor_cache.put(desc, Some(idx));
 
                 disco_it.deinit();

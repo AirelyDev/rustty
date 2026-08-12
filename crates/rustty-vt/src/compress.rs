@@ -15,4 +15,4 @@ mod lz4_differential;
 
 /// The compressed terminal page representation.
 pub mod page;
-pub use page::{required_scratch, CompressedPage};
+pub use page::{required_scratch, CompressedPage, InitError};

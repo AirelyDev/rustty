@@ -199,7 +199,11 @@ fn page_pointer_survives_sibling_accessors() {
     let _ = unsafe { Node::storage(node) };
     let _ = unsafe { Node::page_if_resident(node) };
     let _ = unsafe { Node::page_assume_resident(node) };
-    let mut preserved = unsafe { Node::page_preserving_state(node) };
+    // `page_preserving_state` is fallible since codex-vet F-015 restored the
+    // oracle's recoverable-OOM contract (`Allocator.Error!PreservedPage`,
+    // PageList.zig:155-163). The harness exercises the success path.
+    let mut preserved =
+        unsafe { Node::page_preserving_state(node) }.expect("preserving read must not OOM here");
     preserved.deinit();
     let _ = unsafe { Node::page(node) };
 
@@ -241,7 +245,8 @@ fn compress_restore_round_trip() {
     assert_eq!(unsafe { Node::storage(node) }, Storage::Compressed);
 
     // Preserving read: decodes into an owned buffer, node stays compressed.
-    let mut preserved = unsafe { Node::page_preserving_state(node) };
+    let mut preserved =
+        unsafe { Node::page_preserving_state(node) }.expect("preserving read must not OOM here");
     assert_eq!(unsafe { (*preserved.page()).size.rows }, meta_rows);
     preserved.deinit();
     assert_eq!(

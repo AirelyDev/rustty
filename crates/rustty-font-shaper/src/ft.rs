@@ -1,40 +1,332 @@
-//! Thin, faithful FFI wrappers around `freetype-sys` used by the FreeType face.
+//! Port of the reference `freetype` package
+//! (`pkg/freetype/{main,Library,face,tag,computations,errors,test,c}.zig`) — a
+//! hand-written Zig wrapper over the FreeType C API, here implemented as `unsafe`
+//! wrappers over `freetype-sys`.
 //!
-//! PORT NOTE (glue): the reference imports the `freetype` package
-//! (`pkg/freetype/{Library,face,tag,computations,errors,c}.zig`) — a hand-written
-//! Zig wrapper over the FreeType C API. That package is its own port target with
-//! its own test contract; it is not yet carved. Until it is, this module provides
-//! the MINIMAL wrapper surface that `face/freetype.zig` actually calls
-//! (`freetype.Library`, `freetype.Face`, `freetype.LoadFlags`, `freetype.mulFix`,
-//! `freetype.Tag`, `freetype.c.*`), implemented as `unsafe` wrappers over
-//! `freetype-sys` (R1: additive glue around C FFI — nothing from the ported file
-//! is lost; the full `pkg/freetype` port, with its own tests, lands separately).
+//! The whole pinned package surface is carved: [`Library`] (+ [`Version`]),
+//! [`Face`], [`LoadFlags`] (+ [`Target`]), [`Tag`], [`Encoding`], [`RenderMode`],
+//! [`SfntTag`], [`mul_fix`], the named [`FtError`] set with [`int_to_error`] /
+//! [`error_to_int`], and the [`testing`] fixture module. All 7 of the package's
+//! `test { ... }` blocks are ported below (`errors.zig` "error conversion",
+//! `Library.zig` "basics", `face.zig`'s three `LoadFlags` tables + "loading
+//! memory font", and `main.zig`'s `refAllDecls` reification).
 //!
-//! The FreeType error set (`errors.zig`, 200+ variants) is represented here by a
-//! single opaque [`FtError`] carrying the raw `FT_Error` code, because
-//! `face/freetype.zig` only ever propagates these errors (`try`) — it never
-//! matches on a specific variant. The exhaustive code→variant table is part of
-//! the `pkg/freetype/errors.zig` port.
+//! PORT NOTE (`c.zig`): the reference re-exports the raw C namespace as
+//! `freetype.c`; rustty's equivalent is the `freetype_sys` crate itself, which
+//! callers (`face/freetype.rs`) import directly.
+//!
+//! PORT NOTE (`getSfntTable`): Zig's `comptime tag: SfntTag` + `tag.DataType()`
+//! returns a differently-typed pointer per tag. Rust has no comptime return-type
+//! dispatch, so [`Face`] exposes one typed accessor per tag that the reference's
+//! `DataType()` actually models (`head`/`os2`/`post`/`hhea` — the others are
+//! `unreachable` there).
 
 use freetype_sys as c;
 
-/// Opaque FreeType error carrying the raw `FT_Error` code.
-// PORT NOTE: stands in for `pkg/freetype/errors.zig`'s `Error` set (see module
-// note). `code` is always non-zero (zero is `FT_Err_Ok`, mapped to `Ok`).
+/// The FreeType error set.
+//
+// PORT NOTE: `pkg/freetype/errors.zig`'s `Error` set, ported variant-for-variant
+// (89 mapped codes + the `UnknownFreetypeError` catch-all). Named `FtError` (not
+// bare `Error`) because this module is a submodule of the shaper crate rather
+// than its own `freetype` package namespace; `Error` below is the alias that
+// mirrors `main.zig:10`'s `pub const Error = errors.Error;`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FtError {
-    pub code: c::FT_Error,
+pub enum FtError {
+    CannotOpenResource,
+    UnknownFileFormat,
+    InvalidFileFormat,
+    InvalidVersion,
+    LowerModuleVersion,
+    InvalidArgument,
+    UnimplementedFeature,
+    InvalidTable,
+    InvalidOffset,
+    ArrayTooLarge,
+    MissingModule,
+    MissingProperty,
+    InvalidGlyphIndex,
+    InvalidCharacterCode,
+    InvalidGlyphFormat,
+    CannotRenderGlyph,
+    InvalidOutline,
+    InvalidComposite,
+    TooManyHints,
+    InvalidPixelSize,
+    InvalidHandle,
+    InvalidLibraryHandle,
+    InvalidDriverHandle,
+    InvalidFaceHandle,
+    InvalidSizeHandle,
+    InvalidSlotHandle,
+    InvalidCharMapHandle,
+    InvalidCacheHandle,
+    InvalidStreamHandle,
+    TooManyDrivers,
+    TooManyExtensions,
+    OutOfMemory,
+    UnlistedObject,
+    CannotOpenStream,
+    InvalidStreamSeek,
+    InvalidStreamSkip,
+    InvalidStreamRead,
+    InvalidStreamOperation,
+    InvalidFrameOperation,
+    NestedFrameAccess,
+    InvalidFrameRead,
+    RasterUninitialized,
+    RasterCorrupted,
+    RasterOverflow,
+    RasterNegativeHeight,
+    TooManyCaches,
+    InvalidOpcode,
+    TooFewArguments,
+    StackOverflow,
+    CodeOverflow,
+    BadArgument,
+    DivideByZero,
+    InvalidReference,
+    DebugOpCode,
+    ENDFInExecStream,
+    NestedDEFS,
+    InvalidCodeRange,
+    ExecutionTooLong,
+    TooManyFunctionDefs,
+    TooManyInstructionDefs,
+    TableMissing,
+    HorizHeaderMissing,
+    LocationsMissing,
+    NameTableMissing,
+    CMapTableMissing,
+    HmtxTableMissing,
+    PostTableMissing,
+    InvalidHorizMetrics,
+    InvalidCharMapFormat,
+    InvalidPPem,
+    InvalidVertMetrics,
+    CouldNotFindContext,
+    InvalidPostTableFormat,
+    InvalidPostTable,
+    Syntax,
+    StackUnderflow,
+    Ignore,
+    NoUnicodeGlyphName,
+    MissingStartfontField,
+    MissingFontField,
+    MissingSizeField,
+    MissingFontboundingboxField,
+    MissingCharsField,
+    MissingStartcharField,
+    MissingEncodingField,
+    MissingBbxField,
+    BbxTooBig,
+    CorruptedFontHeader,
+    CorruptedFontGlyphs,
+    UnknownFreetypeError,
 }
 
-/// Map a raw `FT_Error` to `Result`: `FT_Err_Ok` (0) → `Ok`, else `Err`.
+/// `pub const Error = errors.Error;` (`main.zig:10`).
+pub type Error = FtError;
+
+/// Map a raw `FT_Error` to `Result`: `FT_Err_Ok` (0) → `Ok`, else the named error.
 // PORT NOTE: `errors.intToError`.
-#[inline]
 pub fn int_to_error(err: c::FT_Error) -> Result<(), FtError> {
-    if err == 0 {
-        Ok(())
-    } else {
-        Err(FtError { code: err })
-    }
+    // The bindgen `FT_Err_*` constants are `c_uint`; `FT_Error` is `c_int`. Match
+    // on the unsigned reinterpretation so the constants can be used as patterns
+    // (all FreeType error codes are small positive values).
+    Err(match err as core::ffi::c_uint {
+        c::FT_Err_Ok => return Ok(()),
+        c::FT_Err_Cannot_Open_Resource => FtError::CannotOpenResource,
+        c::FT_Err_Unknown_File_Format => FtError::UnknownFileFormat,
+        c::FT_Err_Invalid_File_Format => FtError::InvalidFileFormat,
+        c::FT_Err_Invalid_Version => FtError::InvalidVersion,
+        c::FT_Err_Lower_Module_Version => FtError::LowerModuleVersion,
+        c::FT_Err_Invalid_Argument => FtError::InvalidArgument,
+        c::FT_Err_Unimplemented_Feature => FtError::UnimplementedFeature,
+        c::FT_Err_Invalid_Table => FtError::InvalidTable,
+        c::FT_Err_Invalid_Offset => FtError::InvalidOffset,
+        c::FT_Err_Array_Too_Large => FtError::ArrayTooLarge,
+        c::FT_Err_Missing_Module => FtError::MissingModule,
+        c::FT_Err_Missing_Property => FtError::MissingProperty,
+        c::FT_Err_Invalid_Glyph_Index => FtError::InvalidGlyphIndex,
+        c::FT_Err_Invalid_Character_Code => FtError::InvalidCharacterCode,
+        c::FT_Err_Invalid_Glyph_Format => FtError::InvalidGlyphFormat,
+        c::FT_Err_Cannot_Render_Glyph => FtError::CannotRenderGlyph,
+        c::FT_Err_Invalid_Outline => FtError::InvalidOutline,
+        c::FT_Err_Invalid_Composite => FtError::InvalidComposite,
+        c::FT_Err_Too_Many_Hints => FtError::TooManyHints,
+        c::FT_Err_Invalid_Pixel_Size => FtError::InvalidPixelSize,
+        c::FT_Err_Invalid_Handle => FtError::InvalidHandle,
+        c::FT_Err_Invalid_Library_Handle => FtError::InvalidLibraryHandle,
+        c::FT_Err_Invalid_Driver_Handle => FtError::InvalidDriverHandle,
+        c::FT_Err_Invalid_Face_Handle => FtError::InvalidFaceHandle,
+        c::FT_Err_Invalid_Size_Handle => FtError::InvalidSizeHandle,
+        c::FT_Err_Invalid_Slot_Handle => FtError::InvalidSlotHandle,
+        c::FT_Err_Invalid_CharMap_Handle => FtError::InvalidCharMapHandle,
+        c::FT_Err_Invalid_Cache_Handle => FtError::InvalidCacheHandle,
+        c::FT_Err_Invalid_Stream_Handle => FtError::InvalidStreamHandle,
+        c::FT_Err_Too_Many_Drivers => FtError::TooManyDrivers,
+        c::FT_Err_Too_Many_Extensions => FtError::TooManyExtensions,
+        c::FT_Err_Out_Of_Memory => FtError::OutOfMemory,
+        c::FT_Err_Unlisted_Object => FtError::UnlistedObject,
+        c::FT_Err_Cannot_Open_Stream => FtError::CannotOpenStream,
+        c::FT_Err_Invalid_Stream_Seek => FtError::InvalidStreamSeek,
+        c::FT_Err_Invalid_Stream_Skip => FtError::InvalidStreamSkip,
+        c::FT_Err_Invalid_Stream_Read => FtError::InvalidStreamRead,
+        c::FT_Err_Invalid_Stream_Operation => FtError::InvalidStreamOperation,
+        c::FT_Err_Invalid_Frame_Operation => FtError::InvalidFrameOperation,
+        c::FT_Err_Nested_Frame_Access => FtError::NestedFrameAccess,
+        c::FT_Err_Invalid_Frame_Read => FtError::InvalidFrameRead,
+        c::FT_Err_Raster_Uninitialized => FtError::RasterUninitialized,
+        c::FT_Err_Raster_Corrupted => FtError::RasterCorrupted,
+        c::FT_Err_Raster_Overflow => FtError::RasterOverflow,
+        c::FT_Err_Raster_Negative_Height => FtError::RasterNegativeHeight,
+        c::FT_Err_Too_Many_Caches => FtError::TooManyCaches,
+        c::FT_Err_Invalid_Opcode => FtError::InvalidOpcode,
+        c::FT_Err_Too_Few_Arguments => FtError::TooFewArguments,
+        c::FT_Err_Stack_Overflow => FtError::StackOverflow,
+        c::FT_Err_Code_Overflow => FtError::CodeOverflow,
+        c::FT_Err_Bad_Argument => FtError::BadArgument,
+        c::FT_Err_Divide_By_Zero => FtError::DivideByZero,
+        c::FT_Err_Invalid_Reference => FtError::InvalidReference,
+        c::FT_Err_Debug_OpCode => FtError::DebugOpCode,
+        c::FT_Err_ENDF_In_Exec_Stream => FtError::ENDFInExecStream,
+        c::FT_Err_Nested_DEFS => FtError::NestedDEFS,
+        c::FT_Err_Invalid_CodeRange => FtError::InvalidCodeRange,
+        c::FT_Err_Execution_Too_Long => FtError::ExecutionTooLong,
+        c::FT_Err_Too_Many_Function_Defs => FtError::TooManyFunctionDefs,
+        c::FT_Err_Too_Many_Instruction_Defs => FtError::TooManyInstructionDefs,
+        c::FT_Err_Table_Missing => FtError::TableMissing,
+        c::FT_Err_Horiz_Header_Missing => FtError::HorizHeaderMissing,
+        c::FT_Err_Locations_Missing => FtError::LocationsMissing,
+        c::FT_Err_Name_Table_Missing => FtError::NameTableMissing,
+        c::FT_Err_CMap_Table_Missing => FtError::CMapTableMissing,
+        c::FT_Err_Hmtx_Table_Missing => FtError::HmtxTableMissing,
+        c::FT_Err_Post_Table_Missing => FtError::PostTableMissing,
+        c::FT_Err_Invalid_Horiz_Metrics => FtError::InvalidHorizMetrics,
+        c::FT_Err_Invalid_CharMap_Format => FtError::InvalidCharMapFormat,
+        c::FT_Err_Invalid_PPem => FtError::InvalidPPem,
+        c::FT_Err_Invalid_Vert_Metrics => FtError::InvalidVertMetrics,
+        c::FT_Err_Could_Not_Find_Context => FtError::CouldNotFindContext,
+        c::FT_Err_Invalid_Post_Table_Format => FtError::InvalidPostTableFormat,
+        c::FT_Err_Invalid_Post_Table => FtError::InvalidPostTable,
+        c::FT_Err_Syntax_Error => FtError::Syntax,
+        c::FT_Err_Stack_Underflow => FtError::StackUnderflow,
+        c::FT_Err_Ignore => FtError::Ignore,
+        c::FT_Err_No_Unicode_Glyph_Name => FtError::NoUnicodeGlyphName,
+        c::FT_Err_Missing_Startfont_Field => FtError::MissingStartfontField,
+        c::FT_Err_Missing_Font_Field => FtError::MissingFontField,
+        c::FT_Err_Missing_Size_Field => FtError::MissingSizeField,
+        c::FT_Err_Missing_Fontboundingbox_Field => FtError::MissingFontboundingboxField,
+        c::FT_Err_Missing_Chars_Field => FtError::MissingCharsField,
+        c::FT_Err_Missing_Startchar_Field => FtError::MissingStartcharField,
+        c::FT_Err_Missing_Encoding_Field => FtError::MissingEncodingField,
+        c::FT_Err_Missing_Bbx_Field => FtError::MissingBbxField,
+        c::FT_Err_Bbx_Too_Big => FtError::BbxTooBig,
+        c::FT_Err_Corrupted_Font_Header => FtError::CorruptedFontHeader,
+        c::FT_Err_Corrupted_Font_Glyphs => FtError::CorruptedFontGlyphs,
+        _ => FtError::UnknownFreetypeError,
+    })
+}
+
+/// Map a named error back to its raw `FT_Error` code.
+// PORT NOTE: `errors.errorToInt`. The reference switch omits `UnknownFreetypeError`
+// (it is never analyzed by the Zig compiler — `errorToInt` is not reachable from
+// `main.zig`'s `refAllDecls`, so the non-exhaustive switch never trips). Rust
+// requires exhaustiveness, so that one variant maps to `FT_Err_Max`, the sentinel
+// FreeType places one past the last real error code — it is not any real error.
+pub fn error_to_int(err: FtError) -> c::FT_Error {
+    (match err {
+        FtError::CannotOpenResource => c::FT_Err_Cannot_Open_Resource,
+        FtError::UnknownFileFormat => c::FT_Err_Unknown_File_Format,
+        FtError::InvalidFileFormat => c::FT_Err_Invalid_File_Format,
+        FtError::InvalidVersion => c::FT_Err_Invalid_Version,
+        FtError::LowerModuleVersion => c::FT_Err_Lower_Module_Version,
+        FtError::InvalidArgument => c::FT_Err_Invalid_Argument,
+        FtError::UnimplementedFeature => c::FT_Err_Unimplemented_Feature,
+        FtError::InvalidTable => c::FT_Err_Invalid_Table,
+        FtError::InvalidOffset => c::FT_Err_Invalid_Offset,
+        FtError::ArrayTooLarge => c::FT_Err_Array_Too_Large,
+        FtError::MissingModule => c::FT_Err_Missing_Module,
+        FtError::MissingProperty => c::FT_Err_Missing_Property,
+        FtError::InvalidGlyphIndex => c::FT_Err_Invalid_Glyph_Index,
+        FtError::InvalidCharacterCode => c::FT_Err_Invalid_Character_Code,
+        FtError::InvalidGlyphFormat => c::FT_Err_Invalid_Glyph_Format,
+        FtError::CannotRenderGlyph => c::FT_Err_Cannot_Render_Glyph,
+        FtError::InvalidOutline => c::FT_Err_Invalid_Outline,
+        FtError::InvalidComposite => c::FT_Err_Invalid_Composite,
+        FtError::TooManyHints => c::FT_Err_Too_Many_Hints,
+        FtError::InvalidPixelSize => c::FT_Err_Invalid_Pixel_Size,
+        FtError::InvalidHandle => c::FT_Err_Invalid_Handle,
+        FtError::InvalidLibraryHandle => c::FT_Err_Invalid_Library_Handle,
+        FtError::InvalidDriverHandle => c::FT_Err_Invalid_Driver_Handle,
+        FtError::InvalidFaceHandle => c::FT_Err_Invalid_Face_Handle,
+        FtError::InvalidSizeHandle => c::FT_Err_Invalid_Size_Handle,
+        FtError::InvalidSlotHandle => c::FT_Err_Invalid_Slot_Handle,
+        FtError::InvalidCharMapHandle => c::FT_Err_Invalid_CharMap_Handle,
+        FtError::InvalidCacheHandle => c::FT_Err_Invalid_Cache_Handle,
+        FtError::InvalidStreamHandle => c::FT_Err_Invalid_Stream_Handle,
+        FtError::TooManyDrivers => c::FT_Err_Too_Many_Drivers,
+        FtError::TooManyExtensions => c::FT_Err_Too_Many_Extensions,
+        FtError::OutOfMemory => c::FT_Err_Out_Of_Memory,
+        FtError::UnlistedObject => c::FT_Err_Unlisted_Object,
+        FtError::CannotOpenStream => c::FT_Err_Cannot_Open_Stream,
+        FtError::InvalidStreamSeek => c::FT_Err_Invalid_Stream_Seek,
+        FtError::InvalidStreamSkip => c::FT_Err_Invalid_Stream_Skip,
+        FtError::InvalidStreamRead => c::FT_Err_Invalid_Stream_Read,
+        FtError::InvalidStreamOperation => c::FT_Err_Invalid_Stream_Operation,
+        FtError::InvalidFrameOperation => c::FT_Err_Invalid_Frame_Operation,
+        FtError::NestedFrameAccess => c::FT_Err_Nested_Frame_Access,
+        FtError::InvalidFrameRead => c::FT_Err_Invalid_Frame_Read,
+        FtError::RasterUninitialized => c::FT_Err_Raster_Uninitialized,
+        FtError::RasterCorrupted => c::FT_Err_Raster_Corrupted,
+        FtError::RasterOverflow => c::FT_Err_Raster_Overflow,
+        FtError::RasterNegativeHeight => c::FT_Err_Raster_Negative_Height,
+        FtError::TooManyCaches => c::FT_Err_Too_Many_Caches,
+        FtError::InvalidOpcode => c::FT_Err_Invalid_Opcode,
+        FtError::TooFewArguments => c::FT_Err_Too_Few_Arguments,
+        FtError::StackOverflow => c::FT_Err_Stack_Overflow,
+        FtError::CodeOverflow => c::FT_Err_Code_Overflow,
+        FtError::BadArgument => c::FT_Err_Bad_Argument,
+        FtError::DivideByZero => c::FT_Err_Divide_By_Zero,
+        FtError::InvalidReference => c::FT_Err_Invalid_Reference,
+        FtError::DebugOpCode => c::FT_Err_Debug_OpCode,
+        FtError::ENDFInExecStream => c::FT_Err_ENDF_In_Exec_Stream,
+        FtError::NestedDEFS => c::FT_Err_Nested_DEFS,
+        FtError::InvalidCodeRange => c::FT_Err_Invalid_CodeRange,
+        FtError::ExecutionTooLong => c::FT_Err_Execution_Too_Long,
+        FtError::TooManyFunctionDefs => c::FT_Err_Too_Many_Function_Defs,
+        FtError::TooManyInstructionDefs => c::FT_Err_Too_Many_Instruction_Defs,
+        FtError::TableMissing => c::FT_Err_Table_Missing,
+        FtError::HorizHeaderMissing => c::FT_Err_Horiz_Header_Missing,
+        FtError::LocationsMissing => c::FT_Err_Locations_Missing,
+        FtError::NameTableMissing => c::FT_Err_Name_Table_Missing,
+        FtError::CMapTableMissing => c::FT_Err_CMap_Table_Missing,
+        FtError::HmtxTableMissing => c::FT_Err_Hmtx_Table_Missing,
+        FtError::PostTableMissing => c::FT_Err_Post_Table_Missing,
+        FtError::InvalidHorizMetrics => c::FT_Err_Invalid_Horiz_Metrics,
+        FtError::InvalidCharMapFormat => c::FT_Err_Invalid_CharMap_Format,
+        FtError::InvalidPPem => c::FT_Err_Invalid_PPem,
+        FtError::InvalidVertMetrics => c::FT_Err_Invalid_Vert_Metrics,
+        FtError::CouldNotFindContext => c::FT_Err_Could_Not_Find_Context,
+        FtError::InvalidPostTableFormat => c::FT_Err_Invalid_Post_Table_Format,
+        FtError::InvalidPostTable => c::FT_Err_Invalid_Post_Table,
+        FtError::Syntax => c::FT_Err_Syntax_Error,
+        FtError::StackUnderflow => c::FT_Err_Stack_Underflow,
+        FtError::Ignore => c::FT_Err_Ignore,
+        FtError::NoUnicodeGlyphName => c::FT_Err_No_Unicode_Glyph_Name,
+        FtError::MissingStartfontField => c::FT_Err_Missing_Startfont_Field,
+        FtError::MissingFontField => c::FT_Err_Missing_Font_Field,
+        FtError::MissingSizeField => c::FT_Err_Missing_Size_Field,
+        FtError::MissingFontboundingboxField => c::FT_Err_Missing_Fontboundingbox_Field,
+        FtError::MissingCharsField => c::FT_Err_Missing_Chars_Field,
+        FtError::MissingStartcharField => c::FT_Err_Missing_Startchar_Field,
+        FtError::MissingEncodingField => c::FT_Err_Missing_Encoding_Field,
+        FtError::MissingBbxField => c::FT_Err_Missing_Bbx_Field,
+        FtError::BbxTooBig => c::FT_Err_Bbx_Too_Big,
+        FtError::CorruptedFontHeader => c::FT_Err_Corrupted_Font_Header,
+        FtError::CorruptedFontGlyphs => c::FT_Err_Corrupted_Font_Glyphs,
+        FtError::UnknownFreetypeError => c::FT_Err_Max,
+    }) as c::FT_Error
 }
 
 /// Compute (a*b)/0x10000 with maximum accuracy.
@@ -70,38 +362,83 @@ impl Tag {
     pub fn to_u32(self) -> u32 {
         ((self.a as u32) << 24) | ((self.b as u32) << 16) | ((self.c as u32) << 8) | (self.d as u32)
     }
-}
 
-/// Character-set encoding tags for `FT_Select_Charmap`.
-// PORT NOTE: `face.zig`'s `Encoding` (only the variants the face uses are carved).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Encoding {
-    Unicode,
-}
-
-impl Encoding {
-    fn to_ft(self) -> c::FT_Encoding {
-        match self {
-            Encoding::Unicode => c::FT_Encoding__FT_ENCODING_UNICODE as c::FT_Encoding,
-        }
+    /// Converts the ID to a string.
+    // PORT NOTE: `tag.zig`'s `Tag.str`. The reference returns `[4]u8` BY VALUE
+    // (its doc comment about "the lifetime of the self pointer" predates that);
+    // the Rust return is the same owned 4-byte array — a byte array, never a
+    // lossy `String` (the tag bytes are not required to be UTF-8).
+    pub fn str(self) -> [u8; 4] {
+        [self.a, self.b, self.c, self.d]
     }
 }
 
-/// Render modes for `FT_Render_Glyph`.
-// PORT NOTE: `face.zig`'s `RenderMode` (only `normal`/`mono` are carved — the only
-// modes the face requests).
+/// An enumeration to specify character sets supported by charmaps. Used in the
+/// FT_Select_Charmap API function.
+// PORT NOTE: `face.zig`'s `Encoding = enum(u31)` — all 14 variants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Encoding {
+    None,
+    MsSymbol,
+    Unicode,
+    Sjis,
+    Prc,
+    Big5,
+    Wansung,
+    Johab,
+    AdobeStandard,
+    AdobeExpert,
+    AdobeCustom,
+    AdobeLatin1,
+    OldLatin2,
+    AppleRoman,
+}
+
+impl Encoding {
+    /// `@intFromEnum(encoding)` — the raw `FT_Encoding` tag value.
+    pub fn to_ft(self) -> c::FT_Encoding {
+        (match self {
+            Encoding::None => c::FT_Encoding__FT_ENCODING_NONE,
+            Encoding::MsSymbol => c::FT_Encoding__FT_ENCODING_MS_SYMBOL,
+            Encoding::Unicode => c::FT_Encoding__FT_ENCODING_UNICODE,
+            Encoding::Sjis => c::FT_Encoding__FT_ENCODING_SJIS,
+            Encoding::Prc => c::FT_Encoding__FT_ENCODING_PRC,
+            Encoding::Big5 => c::FT_Encoding__FT_ENCODING_BIG5,
+            Encoding::Wansung => c::FT_Encoding__FT_ENCODING_WANSUNG,
+            Encoding::Johab => c::FT_Encoding__FT_ENCODING_JOHAB,
+            Encoding::AdobeStandard => c::FT_Encoding__FT_ENCODING_ADOBE_STANDARD,
+            Encoding::AdobeExpert => c::FT_Encoding__FT_ENCODING_ADOBE_EXPERT,
+            Encoding::AdobeCustom => c::FT_Encoding__FT_ENCODING_ADOBE_CUSTOM,
+            Encoding::AdobeLatin1 => c::FT_Encoding__FT_ENCODING_ADOBE_LATIN_1,
+            Encoding::OldLatin2 => c::FT_Encoding__FT_ENCODING_OLD_LATIN_2,
+            Encoding::AppleRoman => c::FT_Encoding__FT_ENCODING_APPLE_ROMAN,
+        }) as c::FT_Encoding
+    }
+}
+
+/// <https://freetype.org/freetype2/docs/reference/ft2-glyph_retrieval.html#ft_render_mode>
+// PORT NOTE: `face.zig`'s `RenderMode = enum(c_uint)` — all 6 variants.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderMode {
     Normal,
+    Light,
     Mono,
+    Lcd,
+    LcdV,
+    Sdf,
 }
 
 impl RenderMode {
-    fn to_ft(self) -> c::FT_Render_Mode {
-        match self {
-            RenderMode::Normal => c::FT_Render_Mode__FT_RENDER_MODE_NORMAL as c::FT_Render_Mode,
-            RenderMode::Mono => c::FT_Render_Mode__FT_RENDER_MODE_MONO as c::FT_Render_Mode,
-        }
+    /// `@intFromEnum(render_mode)` — the raw `FT_Render_Mode` value.
+    pub fn to_ft(self) -> c::FT_Render_Mode {
+        (match self {
+            RenderMode::Normal => c::FT_Render_Mode__FT_RENDER_MODE_NORMAL,
+            RenderMode::Light => c::FT_Render_Mode__FT_RENDER_MODE_LIGHT,
+            RenderMode::Mono => c::FT_Render_Mode__FT_RENDER_MODE_MONO,
+            RenderMode::Lcd => c::FT_Render_Mode__FT_RENDER_MODE_LCD,
+            RenderMode::LcdV => c::FT_Render_Mode__FT_RENDER_MODE_LCD_V,
+            RenderMode::Sdf => c::FT_Render_Mode__FT_RENDER_MODE_SDF,
+        }) as c::FT_Render_Mode
     }
 }
 
@@ -209,26 +546,76 @@ impl LoadFlags {
         set(&mut v, self.no_svg, 24);
         v as c::FT_Int32
     }
+
+    /// The inverse of [`LoadFlags::to_bits`] — reproduces the reference
+    /// `@as(LoadFlags, @bitCast(cval))` over the same LSB-first layout.
+    pub fn from_bits(v: c::FT_Int32) -> LoadFlags {
+        let v = v as u32;
+        let get = |bit: u32| (v & (1 << bit)) != 0;
+        LoadFlags {
+            no_scale: get(0),
+            no_hinting: get(1),
+            render: get(2),
+            no_bitmap: get(3),
+            vertical_layout: get(4),
+            force_autohint: get(5),
+            crop_bitmap: get(6),
+            pedantic: get(7),
+            advance_only: get(8),
+            ignore_global_advance_width: get(9),
+            no_recurse: get(10),
+            ignore_transform: get(11),
+            monochrome: get(12),
+            linear_design: get(13),
+            sbits_only: get(14),
+            no_autohint: get(15),
+            target: match (v >> 16) & 0xF {
+                1 => Target::Light,
+                2 => Target::Mono,
+                3 => Target::Lcd,
+                4 => Target::LcdV,
+                // The `enum(u4)` has only 5 named values; FreeType never emits
+                // any other target, so anything else decodes as `.normal`.
+                _ => Target::Normal,
+            },
+            color: get(20),
+            compute_metrics: get(21),
+            bitmap_metrics_only: get(22),
+            svg_only: get(23),
+            no_svg: get(24),
+        }
+    }
 }
 
-/// SFNT table tags for `FT_Get_Sfnt_Table`.
-// PORT NOTE: `face.zig`'s `SfntTag`. Rust has no comptime `DataType()`; instead the
-// [`Face`] exposes one typed accessor per tag the face reads.
-#[derive(Clone, Copy, Debug)]
+/// An enumeration to specify indices of SFNT tables loaded and parsed by
+/// FreeType during initialization of an SFNT font. Used in the
+/// FT_Get_Sfnt_Table API function.
+// PORT NOTE: `face.zig`'s `SfntTag = enum(c_int)` — all 7 variants. Rust has no
+// comptime `DataType()`; instead the [`Face`] exposes one typed accessor per tag
+// the reference's `DataType()` models (`head`/`os2`/`post`/`hhea`; the rest are
+// `unreachable` there).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SfntTag {
     Head,
+    Maxp,
     Os2,
-    Post,
     Hhea,
+    Vhea,
+    Post,
+    Pclt,
 }
 
 impl SfntTag {
-    fn to_ft(self) -> c::FT_Sfnt_Tag {
+    /// `@intFromEnum(tag)` — the raw `FT_Sfnt_Tag` value.
+    pub fn to_ft(self) -> c::FT_Sfnt_Tag {
         (match self {
             SfntTag::Head => c::FT_Sfnt_Tag__FT_SFNT_HEAD,
+            SfntTag::Maxp => c::FT_Sfnt_Tag__FT_SFNT_MAXP,
             SfntTag::Os2 => c::FT_Sfnt_Tag__FT_SFNT_OS2,
-            SfntTag::Post => c::FT_Sfnt_Tag__FT_SFNT_POST,
             SfntTag::Hhea => c::FT_Sfnt_Tag__FT_SFNT_HHEA,
+            SfntTag::Vhea => c::FT_Sfnt_Tag__FT_SFNT_VHEA,
+            SfntTag::Post => c::FT_Sfnt_Tag__FT_SFNT_POST,
+            SfntTag::Pclt => c::FT_Sfnt_Tag__FT_SFNT_PCLT,
         }) as c::FT_Sfnt_Tag
     }
 }
@@ -255,6 +642,22 @@ impl Library {
         unsafe {
             c::FT_Done_FreeType(self.handle);
         }
+    }
+
+    /// Return the version of the FreeType library being used. This is useful when
+    /// dynamically linking to the library, since one cannot use the macros
+    /// FREETYPE_MAJOR, FREETYPE_MINOR, and FREETYPE_PATCH.
+    // PORT NOTE: `Library.version`.
+    pub fn version(self) -> Version {
+        let mut v = Version {
+            major: 0,
+            minor: 0,
+            patch: 0,
+        };
+        unsafe {
+            c::FT_Library_Version(self.handle, &mut v.major, &mut v.minor, &mut v.patch);
+        }
+        v
     }
 
     /// Call FT_New_Face to open a font from a file.
@@ -294,6 +697,39 @@ impl Library {
     }
 }
 
+/// The FreeType library version triple.
+// PORT NOTE: `Library.zig`'s `Version`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Version {
+    pub major: i32,
+    pub minor: i32,
+    pub patch: i32,
+}
+
+/// `std.fmt.bufPrint` ran out of room.
+// PORT NOTE: the reference's `toString` propagates `std.fmt.BufPrintError`
+// (`error.NoSpaceLeft`); this is that single-atom error set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NoSpaceLeft;
+
+impl Version {
+    /// Convert the version to a string. The buffer should be able to
+    /// accommodate the size, recommended to be at least 8 chars wide.
+    /// The returned slice will be a slice of buf that contains the full
+    /// version string.
+    // PORT NOTE: `Version.toString`. Returns the written BYTE slice of `buf`
+    // (never a lossy `String`), mirroring `bufPrint`'s `[]const u8`.
+    #[allow(clippy::wrong_self_convention)]
+    pub fn to_string(self, buf: &mut [u8]) -> Result<&[u8], NoSpaceLeft> {
+        use std::io::Write;
+        // return try std.fmt.bufPrint(buf, "{d}.{d}.{d}", .{ major, minor, patch });
+        let mut cursor = std::io::Cursor::new(&mut buf[..]);
+        write!(cursor, "{}.{}.{}", self.major, self.minor, self.patch).map_err(|_| NoSpaceLeft)?;
+        let n = cursor.position() as usize;
+        Ok(&buf[..n])
+    }
+}
+
 /// A FreeType face object.
 // PORT NOTE: `pkg/freetype/face.zig`'s `Face`.
 #[derive(Clone, Copy, Debug)]
@@ -328,6 +764,13 @@ impl Face {
     // PORT NOTE: `Face.hasColor` (`c.FT_HAS_COLOR`).
     pub fn has_color(self) -> bool {
         (unsafe { (*self.handle).face_flags } & (c::FT_FACE_FLAG_COLOR as c::FT_Long)) != 0
+    }
+
+    /// True whenever a face object contains an 'sbix' OpenType table and outline
+    /// glyphs.
+    // PORT NOTE: `Face.hasSBIX` (`c.FT_HAS_SBIX`).
+    pub fn has_sbix(self) -> bool {
+        (unsafe { (*self.handle).face_flags } & (c::FT_FACE_FLAG_SBIX as c::FT_Long)) != 0
     }
 
     /// True whenever a face object contains some multiple masters.
@@ -483,6 +926,24 @@ impl Face {
         Ok(Some(buf))
     }
 
+    /// Check whether a given SFNT table is available in a face.
+    // PORT NOTE: `Face.hasSfntTable`.
+    pub fn has_sfnt_table(self, tag: Tag) -> bool {
+        // const tag_c: c_ulong = @intCast(@as(u32, @bitCast(tag)));
+        let tag_c: std::os::raw::c_ulong = tag.to_u32() as std::os::raw::c_ulong;
+        // var len: c_ulong = 0;
+        let mut len: std::os::raw::c_ulong = 0;
+        // const res = c.FT_Load_Sfnt_Table(self.handle, tag_c, 0, null, &len);
+        let res =
+            unsafe { c::FT_Load_Sfnt_Table(self.handle, tag_c, 0, std::ptr::null_mut(), &mut len) };
+        // _ = intToError(res) catch return false;
+        if int_to_error(res).is_err() {
+            return false;
+        }
+        // return len != 0;
+        len != 0
+    }
+
     /// Retrieve the font variation descriptor for a font.
     // PORT NOTE: `Face.getMMVar`.
     pub fn get_mm_var(self) -> Result<*mut c::FT_MM_Var, FtError> {
@@ -513,5 +974,357 @@ impl Face {
                 coords.as_mut_ptr(),
             )
         })
+    }
+
+    /// Set the transformation that is applied to glyph images when they are
+    /// loaded into a glyph slot through FT_Load_Glyph.
+    // PORT NOTE: `Face.setTransform`. The reference takes `?*const c.FT_Matrix` /
+    // `?*const c.FT_Vector` and `@constCast`s them for the C prototype (FreeType
+    // does not write through either pointer); rustty takes the same optional
+    // shared references and casts them the same way.
+    pub fn set_transform(self, matrix: Option<&c::FT_Matrix>, delta: Option<&c::FT_Vector>) {
+        let matrix: *mut c::FT_Matrix = match matrix {
+            Some(m) => (m as *const c::FT_Matrix).cast_mut(),
+            None => std::ptr::null_mut(),
+        };
+        let delta: *mut c::FT_Vector = match delta {
+            Some(d) => (d as *const c::FT_Vector).cast_mut(),
+            None => std::ptr::null_mut(),
+        };
+        unsafe {
+            c::FT_Set_Transform(self.handle, matrix, delta);
+        }
+    }
+}
+
+/// The test fixtures the package's own tests load.
+// PORT NOTE: `pkg/freetype/test.zig` (`pub const font_regular = @embedFile(...)`).
+// The reference ships the fixture at `pkg/freetype/res/FiraCode-Regular.ttf`; the
+// byte-identical file is vendored here at `res/FiraCode-Regular.ttf`.
+pub mod testing {
+    /// `pub const font_regular = @embedFile("res/FiraCode-Regular.ttf");`
+    pub const FONT_REGULAR: &[u8] = include_bytes!("../res/FiraCode-Regular.ttf");
+}
+
+// The `test { ... }` blocks of `pkg/freetype` (7 total): `errors.zig:290`
+// "error conversion", `Library.zig:81` "basics", `face.zig`'s three `LoadFlags`
+// tables (`:294` "bitcast", `:311` "all flags individually", `:348` "all load
+// targets"), `face.zig:364` "loading memory font", and `main.zig:16`'s
+// `refAllDecls`.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // test "error conversion" {
+    //     try intToError(c.FT_Err_Ok);
+    //     try expectError(Error.OutOfMemory, intToError(c.FT_Err_Out_Of_Memory));
+    // }
+    #[test]
+    fn error_conversion() {
+        assert_eq!(Ok(()), int_to_error(c::FT_Err_Ok as c::FT_Error));
+        assert_eq!(
+            Err(FtError::OutOfMemory),
+            int_to_error(c::FT_Err_Out_Of_Memory as c::FT_Error)
+        );
+
+        // PORT NOTE (additive): the reference never exercises `errorToInt` (it is
+        // not reachable from `main.zig`'s `refAllDecls`, so Zig never analyzes it).
+        // Round-trip every mapped code so the two tables can never drift.
+        for &(code, err) in &[
+            (c::FT_Err_Cannot_Open_Resource, FtError::CannotOpenResource),
+            (c::FT_Err_Out_Of_Memory, FtError::OutOfMemory),
+            (c::FT_Err_Invalid_Argument, FtError::InvalidArgument),
+            (
+                c::FT_Err_Corrupted_Font_Glyphs,
+                FtError::CorruptedFontGlyphs,
+            ),
+            (c::FT_Err_Bbx_Too_Big, FtError::BbxTooBig),
+        ] {
+            assert_eq!(Err(err), int_to_error(code as c::FT_Error));
+            assert_eq!(code as c::FT_Error, error_to_int(err));
+        }
+
+        // An unmapped (out-of-range) code lands on the catch-all.
+        assert_eq!(
+            Err(FtError::UnknownFreetypeError),
+            int_to_error(0x7FFF as c::FT_Error)
+        );
+    }
+
+    // test "basics" {
+    //     var lib = try init(); defer lib.deinit();
+    //     const vsn = lib.version();
+    //     try testing.expect(vsn.major > 1);
+    //     var buf: [32]u8 = undefined;
+    //     _ = try vsn.toString(&buf);
+    // }
+    #[test]
+    fn basics() {
+        let lib = Library::init().unwrap();
+
+        let vsn = lib.version();
+        assert!(vsn.major > 1);
+
+        let mut buf = [0u8; 32];
+        let s = vsn.to_string(&mut buf).unwrap();
+
+        // PORT NOTE (additive): the reference discards the `toString` result; assert
+        // the exact `{d}.{d}.{d}` rendering so the format cannot drift.
+        assert_eq!(
+            format!("{}.{}.{}", vsn.major, vsn.minor, vsn.patch).as_bytes(),
+            s
+        );
+
+        lib.deinit();
+    }
+
+    // test "bitcast" (face.zig's LoadFlags)
+    #[test]
+    fn load_flags_bitcast() {
+        // const cval: i32 = c.FT_LOAD_RENDER | c.FT_LOAD_PEDANTIC | c.FT_LOAD_COLOR;
+        let cval: c::FT_Int32 =
+            (c::FT_LOAD_RENDER | c::FT_LOAD_PEDANTIC | c::FT_LOAD_COLOR) as c::FT_Int32;
+        let flags = LoadFlags::from_bits(cval);
+        assert!(!flags.no_hinting);
+        assert!(flags.render);
+        assert!(flags.render);
+        assert!(flags.pedantic);
+        assert!(flags.color);
+
+        // Verify bit alignment (for bit 9)
+        let cval2: c::FT_Int32 = c::FT_LOAD_IGNORE_GLOBAL_ADVANCE_WIDTH as c::FT_Int32;
+        let flags2 = LoadFlags::from_bits(cval2);
+        assert!(flags2.ignore_global_advance_width);
+        assert!(!flags2.no_recurse);
+    }
+
+    // test "all flags individually" (face.zig's LoadFlags)
+    #[test]
+    fn load_flags_all_flags_individually() {
+        // try testing.expectEqual(c.FT_LOAD_DEFAULT, @as(c_int, @bitCast(LoadFlags{})));
+        assert_eq!(
+            c::FT_LOAD_DEFAULT as c::FT_Int32,
+            LoadFlags::default().to_bits()
+        );
+
+        // The reference's `inline for` over (c-constant, field-name) pairs; Rust has
+        // no `@field`, so each pair carries a setter closure instead.
+        type Setter = fn(&mut LoadFlags);
+        let table: &[(u32, Setter)] = &[
+            (c::FT_LOAD_NO_SCALE, |f| f.no_scale = true),
+            (c::FT_LOAD_NO_HINTING, |f| f.no_hinting = true),
+            (c::FT_LOAD_RENDER, |f| f.render = true),
+            (c::FT_LOAD_NO_BITMAP, |f| f.no_bitmap = true),
+            (c::FT_LOAD_VERTICAL_LAYOUT, |f| f.vertical_layout = true),
+            (c::FT_LOAD_FORCE_AUTOHINT, |f| f.force_autohint = true),
+            (c::FT_LOAD_CROP_BITMAP, |f| f.crop_bitmap = true),
+            (c::FT_LOAD_PEDANTIC, |f| f.pedantic = true),
+            (c::FT_LOAD_ADVANCE_ONLY, |f| f.advance_only = true),
+            (c::FT_LOAD_IGNORE_GLOBAL_ADVANCE_WIDTH, |f| {
+                f.ignore_global_advance_width = true
+            }),
+            (c::FT_LOAD_NO_RECURSE, |f| f.no_recurse = true),
+            (c::FT_LOAD_IGNORE_TRANSFORM, |f| f.ignore_transform = true),
+            (c::FT_LOAD_MONOCHROME, |f| f.monochrome = true),
+            (c::FT_LOAD_LINEAR_DESIGN, |f| f.linear_design = true),
+            (c::FT_LOAD_SBITS_ONLY, |f| f.sbits_only = true),
+            (c::FT_LOAD_NO_AUTOHINT, |f| f.no_autohint = true),
+            (c::FT_LOAD_COLOR, |f| f.color = true),
+            (c::FT_LOAD_COMPUTE_METRICS, |f| f.compute_metrics = true),
+            (c::FT_LOAD_BITMAP_METRICS_ONLY, |f| {
+                f.bitmap_metrics_only = true
+            }),
+            (c::FT_LOAD_SVG_ONLY, |f| f.svg_only = true),
+            (c::FT_LOAD_NO_SVG, |f| f.no_svg = true),
+        ];
+        for &(expected, set) in table {
+            let mut flags = LoadFlags::default();
+            set(&mut flags);
+            assert_eq!(expected as c::FT_Int32, flags.to_bits());
+            // PORT NOTE (additive): the round-trip through `from_bits` pins the
+            // decoder against the same table.
+            assert_eq!(
+                flags.to_bits(),
+                LoadFlags::from_bits(flags.to_bits()).to_bits()
+            );
+        }
+    }
+
+    // test "all load targets" (face.zig's LoadFlags)
+    #[test]
+    fn load_flags_all_load_targets() {
+        // PORT NOTE: `FT_LOAD_TARGET_*` are function-like C macros
+        // (`FT_LOAD_TARGET_( x ) = ((FT_Int32)((x) & 15) << 16)` over the
+        // `FT_RENDER_MODE_*` values), which bindgen cannot const-evaluate; they are
+        // reproduced here from the same header definition.
+        fn ft_load_target(render_mode: u32) -> c::FT_Int32 {
+            ((render_mode & 15) << 16) as c::FT_Int32
+        }
+
+        for &(expected, target) in &[
+            (
+                ft_load_target(c::FT_Render_Mode__FT_RENDER_MODE_NORMAL),
+                Target::Normal,
+            ),
+            (
+                ft_load_target(c::FT_Render_Mode__FT_RENDER_MODE_LIGHT),
+                Target::Light,
+            ),
+            (
+                ft_load_target(c::FT_Render_Mode__FT_RENDER_MODE_MONO),
+                Target::Mono,
+            ),
+            (
+                ft_load_target(c::FT_Render_Mode__FT_RENDER_MODE_LCD),
+                Target::Lcd,
+            ),
+            (
+                ft_load_target(c::FT_Render_Mode__FT_RENDER_MODE_LCD_V),
+                Target::LcdV,
+            ),
+        ] {
+            let flags = LoadFlags {
+                target,
+                ..Default::default()
+            };
+            assert_eq!(expected, flags.to_bits());
+        }
+    }
+
+    // test "loading memory font" (face.zig:364)
+    #[test]
+    fn loading_memory_font() {
+        // const font_data = @import("test.zig").font_regular;
+        let font_data = testing::FONT_REGULAR;
+
+        // var lib = try Library.init(); defer lib.deinit();
+        let lib = Library::init().unwrap();
+        // var face = try lib.initMemoryFace(font_data, 0); defer face.deinit();
+        let face = lib.init_memory_face(font_data, 0).unwrap();
+
+        // Try APIs
+        // try face.selectCharmap(.unicode);
+        face.select_charmap(Encoding::Unicode).unwrap();
+        // try testing.expect(!face.hasFixedSizes());
+        assert!(!face.has_fixed_sizes());
+        // try face.setCharSize(12, 0, 0, 0);
+        face.set_char_size(12, 0, 0, 0).unwrap();
+
+        // Try loading
+        // const idx = face.getCharIndex('A').?;
+        let idx = face.get_char_index('A' as u32).unwrap();
+        // try face.loadGlyph(idx, .{});
+        face.load_glyph(idx, LoadFlags::default()).unwrap();
+
+        // Try getting a truetype table
+        // const os2 = face.getSfntTable(.os2);
+        // try testing.expect(os2 != null);
+        assert!(face.get_sfnt_os2().is_some());
+
+        // PORT NOTE (additive): exercise the rest of the newly carved surface on the
+        // same fixture — the pinned package has no test for these, but they are the
+        // declarations this port previously omitted.
+        assert!(face.is_scalable());
+        assert!(!face.has_sbix());
+        assert!(face.has_sfnt_table(Tag::init(b"OS/2")));
+        assert!(!face.has_sfnt_table(Tag::init(b"zzzz")));
+        assert!(face.load_sfnt_table(Tag::init(b"OS/2")).unwrap().is_some());
+        // An absent table makes the length probe itself fail with `TableMissing`
+        // (`loadSfntTable` propagates it — only a present-but-empty table yields
+        // `null`), which is exactly what `hasSfntTable` swallows into `false`.
+        assert_eq!(
+            Err(FtError::TableMissing),
+            face.load_sfnt_table(Tag::init(b"zzzz"))
+                .map(|o| o.is_none())
+        );
+        // An identity transform must not disturb a subsequent render.
+        let matrix = c::FT_Matrix {
+            xx: 0x10000,
+            xy: 0,
+            yx: 0,
+            yy: 0x10000,
+        };
+        let delta = c::FT_Vector { x: 0, y: 0 };
+        face.set_transform(Some(&matrix), Some(&delta));
+        face.load_glyph(idx, LoadFlags::default()).unwrap();
+        face.render_glyph(RenderMode::Normal).unwrap();
+        face.set_transform(None, None);
+
+        face.deinit();
+        lib.deinit();
+    }
+
+    // test { @import("std").testing.refAllDecls(@This()); } — `main.zig:16`.
+    //
+    // PORT NOTE: mirrors the crate's `ref_all_decls` convention (`face/mod.rs`):
+    // every public declaration `main.zig` re-exports is reified so a signature
+    // drift is a compile error.
+    #[test]
+    fn ref_all_decls() {
+        let _ = core::mem::size_of::<Library>();
+        let _ = core::mem::size_of::<Version>();
+        let _ = core::mem::size_of::<Face>();
+        let _ = core::mem::size_of::<LoadFlags>();
+        let _ = core::mem::size_of::<Target>();
+        let _ = core::mem::size_of::<FtError>();
+        let _ = core::mem::size_of::<Error>();
+        let _ = testing::FONT_REGULAR.len();
+
+        let _ = Library::init as fn() -> Result<Library, FtError>;
+        let _ = Library::deinit as fn(Library);
+        let _ = Library::version as fn(Library) -> Version;
+        let _ = Library::init_face as fn(Library, &std::ffi::CStr, i32) -> Result<Face, FtError>;
+        let _ = Library::init_memory_face as fn(Library, &[u8], i32) -> Result<Face, FtError>;
+        let _ = Library::done_mm_var as fn(Library, *mut c::FT_MM_Var);
+        let _ = Version::to_string
+            as for<'a> fn(Version, &'a mut [u8]) -> Result<&'a [u8], NoSpaceLeft>;
+
+        let _ = Face::deinit as fn(Face);
+        let _ = Face::ref_ as fn(Face);
+        let _ = Face::has_fixed_sizes as fn(Face) -> bool;
+        let _ = Face::has_color as fn(Face) -> bool;
+        let _ = Face::has_sbix as fn(Face) -> bool;
+        let _ = Face::has_multiple_masters as fn(Face) -> bool;
+        let _ = Face::is_scalable as fn(Face) -> bool;
+        let _ = Face::select_charmap as fn(Face, Encoding) -> Result<(), FtError>;
+        let _ = Face::set_char_size as fn(Face, i32, i32, u16, u16) -> Result<(), FtError>;
+        let _ = Face::select_size as fn(Face, i32) -> Result<(), FtError>;
+        let _ = Face::get_char_index as fn(Face, u32) -> Option<u32>;
+        let _ = Face::load_glyph as fn(Face, u32, LoadFlags) -> Result<(), FtError>;
+        let _ = Face::render_glyph as fn(Face, RenderMode) -> Result<(), FtError>;
+        let _ = Face::get_sfnt_name_count as fn(Face) -> usize;
+        let _ = Face::has_sfnt_table as fn(Face, Tag) -> bool;
+        let _ = Face::set_transform as fn(Face, Option<&c::FT_Matrix>, Option<&c::FT_Vector>);
+
+        let _ = Tag::init as fn(&[u8; 4]) -> Tag;
+        let _ = Tag::str as fn(Tag) -> [u8; 4];
+        let _ = Tag::to_u32 as fn(Tag) -> u32;
+        let _ = Encoding::to_ft as fn(Encoding) -> c::FT_Encoding;
+        let _ = RenderMode::to_ft as fn(RenderMode) -> c::FT_Render_Mode;
+        let _ = SfntTag::to_ft as fn(SfntTag) -> c::FT_Sfnt_Tag;
+        let _ = LoadFlags::to_bits as fn(LoadFlags) -> c::FT_Int32;
+        let _ = LoadFlags::from_bits as fn(c::FT_Int32) -> LoadFlags;
+        let _ = int_to_error as fn(c::FT_Error) -> Result<(), FtError>;
+        let _ = error_to_int as fn(FtError) -> c::FT_Error;
+        let _ = mul_fix as fn(i32, i32) -> i32;
+
+        // Every `SfntTag` maps to a distinct raw value (the 7-variant table).
+        let tags = [
+            SfntTag::Head,
+            SfntTag::Maxp,
+            SfntTag::Os2,
+            SfntTag::Hhea,
+            SfntTag::Vhea,
+            SfntTag::Post,
+            SfntTag::Pclt,
+        ];
+        for (i, a) in tags.iter().enumerate() {
+            for b in &tags[i + 1..] {
+                assert_ne!(a.to_ft(), b.to_ft());
+            }
+        }
+
+        // `Tag.str` is the inverse of `Tag.init`.
+        assert_eq!(*b"OS/2", Tag::init(b"OS/2").str());
     }
 }

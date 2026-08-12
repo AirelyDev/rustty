@@ -13,10 +13,14 @@ extern "C" {
     fn rustty_simd_index_of(needle: u8, input: *const u8, count: usize) -> usize;
 }
 
+// PORT NOTE (Miri): see `base64.rs` / `vt.rs` — Miri cannot execute the C/C++
+// kernel, so it takes the pure-Rust `index_of_scalar` lane, which is identical
+// output by construction (`std.mem.indexOfScalar`). `cfg!(miri)` is const-false
+// in every real build; the SIMD lane stays covered by the ASan G6 route.
 #[allow(non_snake_case)]
 pub fn indexOf(input: &[u8], needle: u8) -> Option<usize> {
     #[cfg(not(target_arch = "wasm32"))]
-    if SIMD {
+    if SIMD && !cfg!(miri) {
         let result = unsafe { rustty_simd_index_of(needle, input.as_ptr(), input.len()) };
         return if result == input.len() {
             None

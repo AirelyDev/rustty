@@ -43,7 +43,8 @@ output over the resulting Screen/PageList, exactly as
 `example/c-vt-formatter` and `example/c-vt-stream` do:
 
 ```
-ghostty_terminal_new(opts{cols,rows,max_scrollback})
+ghostty_terminal_new(NULL, &terminal, cols, rows)   # oracle 03d5fa268 ABI
+  -> ghostty_terminal_set(SCROLLBACK_MAX_BYTES, &scrollback)
   -> ghostty_terminal_vt_write(buf, len)          # feed identical VT bytes
   -> ghostty_formatter_terminal_new(emit, trim, unwrap)
   -> ghostty_formatter_format_alloc(&buf, &len)   # canonical bytes

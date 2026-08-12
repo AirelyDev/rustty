@@ -178,6 +178,31 @@ impl Meta {
     }
 }
 
+/// `try alloc.dupe(u8, src)` — a fallible byte-slice copy.
+///
+/// PORT NOTE: `SlidingWindow.init` is `Allocator.Error!SlidingWindow` in the
+/// reference and EVERY allocation in it is `try`'d, so allocation failure is
+/// recoverable (the search thread catches it). Rust's `to_vec`/`vec![]` abort
+/// instead, which voided that advertised contract; `Vec::try_reserve_exact` is
+/// the fallible equivalent.
+fn try_dupe_bytes(src: &[u8]) -> Result<Vec<u8>, OutOfMemory> {
+    let mut v: Vec<u8> = Vec::new();
+    v.try_reserve_exact(src.len()).map_err(|_| OutOfMemory)?;
+    v.extend_from_slice(src);
+    Ok(v)
+}
+
+/// `try alloc.alloc(u8, n)` — a fallible byte-buffer allocation. See
+/// `try_dupe_bytes`. (The reference's `alloc.alloc` leaves the bytes undefined;
+/// we zero them, as the previous `vec![0u8; n]` did.)
+fn try_alloc_bytes(n: usize) -> Result<Vec<u8>, OutOfMemory> {
+    let mut v: Vec<u8> = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| OutOfMemory)?;
+    // Reserved above, so this cannot reallocate.
+    v.resize(n, 0);
+    Ok(v)
+}
+
 impl SlidingWindow {
     // pub fn init(
     //     alloc: Allocator,
@@ -199,7 +224,7 @@ impl SlidingWindow {
 
         // const needle = try alloc.dupe(u8, needle_unowned);
         // errdefer alloc.free(needle);
-        let mut needle: Vec<u8> = needle_unowned.to_vec();
+        let mut needle: Vec<u8> = try_dupe_bytes(needle_unowned)?;
         // switch (direction) {
         //     .forward => {},
         //     .reverse => std.mem.reverse(u8, needle),
@@ -211,7 +236,7 @@ impl SlidingWindow {
 
         // const overlap_buf = try alloc.alloc(u8, needle.len * 2);
         // errdefer alloc.free(overlap_buf);
-        let overlap_buf: Vec<u8> = vec![0u8; needle.len() * 2];
+        let overlap_buf: Vec<u8> = try_alloc_bytes(needle.len() * 2)?;
 
         Ok(SlidingWindow {
             alloc,
@@ -898,7 +923,7 @@ impl SlidingWindow {
         // INSPECT, NOT RESTORE: search must never decompress history it is only
         // reading (oracle 0d015b2fc). `page_preserving_state` decodes into a
         // temporary buffer and leaves the node compressed.
-        let mut preserved = unsafe { crate::pagelist::Node::page_preserving_state(node) };
+        let mut preserved = unsafe { crate::pagelist::Node::page_preserving_state(node) }?;
         let page = preserved.page();
         let last_row_wrapped = unsafe { (*(*page).get_row((*page).size.rows as usize - 1)).wrap() };
         let result = self.append_page(node, page, last_row_wrapped);
@@ -919,7 +944,7 @@ impl SlidingWindow {
         &mut self,
         node: *mut Node,
     ) -> Result<Option<AppendResult>, OutOfMemory> {
-        let mut preserved = unsafe { crate::pagelist::Node::page_preserving_state(node) };
+        let mut preserved = unsafe { crate::pagelist::Node::page_preserving_state(node) }?;
         let page = preserved.page();
         let last_row_wrapped = unsafe { (*(*page).get_row((*page).size.rows as usize - 1)).wrap() };
         if !last_row_wrapped {
@@ -1548,6 +1573,30 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    // rustty-only test (no reference twin: in Zig every allocation in `init` is
+    // `try`'d, so the contract is carried by the signature). `init` ADVERTISES
+    // `Allocator.Error!SlidingWindow`, so an allocation failure must be REPORTED,
+    // not abort the process the way `to_vec`/`vec![]` do.
+    #[test]
+    fn sliding_window_init_allocations_are_fallible() {
+        // A genuinely impossible request: the allocator reports, nothing aborts.
+        assert_eq!(Err(OutOfMemory), try_alloc_bytes(isize::MAX as usize));
+        // (`try_dupe_bytes` uses the same primitive; a slice big enough to make
+        // it fail cannot be constructed without UB, so we pin the primitive it
+        // relies on and its success path.)
+        assert!(Vec::<u8>::new()
+            .try_reserve_exact(isize::MAX as usize)
+            .is_err());
+        assert_eq!(Ok(vec![1u8, 2, 3]), try_dupe_bytes(&[1u8, 2, 3]));
+
+        // The success path is unchanged: the needle is duplicated byte-exactly
+        // and the overlap buffer is `needle.len() * 2` zeroed bytes.
+        let mut w = SlidingWindow::init(Allocator, Direction::Forward, b"bo\xffo").unwrap();
+        assert_eq!(b"bo\xffo".to_vec(), w.needle);
+        assert_eq!(vec![0u8; 8], w.overlap_buf);
+        w.deinit();
     }
 
     // test "SlidingWindow empty on init"

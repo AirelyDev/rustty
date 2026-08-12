@@ -785,7 +785,10 @@ fn render_row_cells_get_selected() {
                     row_cells_get_multi(
                         cells,
                         keys.len(),
-                        keys.as_ptr(),
+                        // PORT NOTE (W34-B02): the `keys` array crosses the C
+                        // boundary as raw ints; `*_get_multi` reads each element
+                        // as a `c_int` and range-checks it.
+                        keys.as_ptr().cast(),
                         values.as_mut_ptr(),
                         &mut written,
                     )
@@ -867,7 +870,10 @@ fn render_row_cells_get_has_styling() {
                     row_cells_get_multi(
                         cells,
                         keys.len(),
-                        keys.as_ptr(),
+                        // PORT NOTE (W34-B02): the `keys` array crosses the C
+                        // boundary as raw ints; `*_get_multi` reads each element
+                        // as a `c_int` and range-checks it.
+                        keys.as_ptr().cast(),
                         values.as_mut_ptr(),
                         &mut written,
                     )
@@ -1607,7 +1613,10 @@ fn render_get_multi_success() {
                     get_multi(
                         state,
                         keys.len(),
-                        keys.as_ptr(),
+                        // PORT NOTE (W34-B02): the `keys` array crosses the C
+                        // boundary as raw ints; `*_get_multi` reads each element
+                        // as a `c_int` and range-checks it.
+                        keys.as_ptr().cast(),
                         values.as_mut_ptr(),
                         &mut written,
                     )
@@ -1675,7 +1684,10 @@ fn render_row_get_multi_success() {
                     row_get_multi(
                         it,
                         keys.len(),
-                        keys.as_ptr(),
+                        // PORT NOTE (W34-B02): the `keys` array crosses the C
+                        // boundary as raw ints; `*_get_multi` reads each element
+                        // as a `c_int` and range-checks it.
+                        keys.as_ptr().cast(),
                         values.as_mut_ptr(),
                         &mut written,
                     )
@@ -1754,7 +1766,10 @@ fn render_row_cells_get_multi_success() {
                     row_cells_get_multi(
                         cells,
                         keys.len(),
-                        keys.as_ptr(),
+                        // PORT NOTE (W34-B02): the `keys` array crosses the C
+                        // boundary as raw ints; `*_get_multi` reads each element
+                        // as a `c_int` and range-checks it.
+                        keys.as_ptr().cast(),
                         values.as_mut_ptr(),
                         &mut written,
                     )
@@ -1842,5 +1857,474 @@ fn render_begin_end_update() {
             assert!(row_data[0].cells.get(0).style.flags.bold);
             assert!(row_data[0].cells.get(1).style.flags.bold);
         });
+    });
+}
+
+// PORT NOTE (W12-01 proving tests, Rust-only — the reference has no unit test
+// for this; the contract is each constructor's `alloc.create(...) catch {
+// result.* = null; return .out_of_memory; }` + each free's `alloc.destroy`):
+// the caller-supplied C allocator must OWN each wrapper's lifecycle storage.
+
+// render_state new/free through a counting caller allocator.
+#[test]
+fn render_new_free_uses_caller_allocator() {
+    let stats = crate::test_util::CountingCAllocator::new();
+    let calloc = stats.c_allocator();
+    let mut state: RenderState = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut state) });
+    assert!(!state.is_null());
+    assert_eq!(1, stats.alloc_calls.get());
+    unsafe { free(state) };
+    assert_eq!(1, stats.free_calls.get());
+    assert_eq!(0, stats.live_bytes.get());
+}
+
+#[test]
+fn render_new_rejecting_allocator_out_of_memory() {
+    let stats = crate::test_util::CountingCAllocator::new();
+    stats.reject.set(true);
+    let calloc = stats.c_allocator();
+    let mut state: RenderState = std::ptr::null_mut();
+    assert_eq!(Result::OutOfMemory, unsafe {
+        new(Some(&calloc), &mut state)
+    });
+    assert!(state.is_null());
+    assert_eq!(1, stats.alloc_calls.get());
+}
+
+#[test]
+fn row_iterator_new_free_uses_caller_allocator() {
+    let stats = crate::test_util::CountingCAllocator::new();
+    let calloc = stats.c_allocator();
+    let mut it: RowIterator = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe {
+        row_iterator_new(Some(&calloc), &mut it)
+    });
+    assert!(!it.is_null());
+    assert_eq!(1, stats.alloc_calls.get());
+    unsafe { row_iterator_free(it) };
+    assert_eq!(1, stats.free_calls.get());
+    assert_eq!(0, stats.live_bytes.get());
+}
+
+#[test]
+fn row_iterator_new_rejecting_allocator_out_of_memory() {
+    let stats = crate::test_util::CountingCAllocator::new();
+    stats.reject.set(true);
+    let calloc = stats.c_allocator();
+    let mut it: RowIterator = std::ptr::null_mut();
+    assert_eq!(Result::OutOfMemory, unsafe {
+        row_iterator_new(Some(&calloc), &mut it)
+    });
+    assert!(it.is_null());
+    assert_eq!(1, stats.alloc_calls.get());
+}
+
+#[test]
+fn row_cells_new_free_uses_caller_allocator() {
+    let stats = crate::test_util::CountingCAllocator::new();
+    let calloc = stats.c_allocator();
+    let mut cells: RowCells = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe {
+        row_cells_new(Some(&calloc), &mut cells)
+    });
+    assert!(!cells.is_null());
+    assert_eq!(1, stats.alloc_calls.get());
+    unsafe { row_cells_free(cells) };
+    assert_eq!(1, stats.free_calls.get());
+    assert_eq!(0, stats.live_bytes.get());
+}
+
+#[test]
+fn row_cells_new_rejecting_allocator_out_of_memory() {
+    let stats = crate::test_util::CountingCAllocator::new();
+    stats.reject.set(true);
+    let calloc = stats.c_allocator();
+    let mut cells: RowCells = std::ptr::null_mut();
+    assert_eq!(Result::OutOfMemory, unsafe {
+        row_cells_new(Some(&calloc), &mut cells)
+    });
+    assert!(cells.is_null());
+    assert_eq!(1, stats.alloc_calls.get());
+}
+
+// ======================================================================
+// W34-B02 / W34-B03 regression tests (no reference `test {}` block; these
+// pin C-boundary contracts the reference gets from its Zig-level guards).
+// ======================================================================
+
+// W34-B02-01: the `keys` array of a multi-get is C memory. Each element must be
+// range-checked before it becomes a `Data`/`RowData`/`RowCellsData`, exactly as
+// the reference reaches its `std.enums.fromInt` guard by routing every element
+// through the guarded `get`/`row_get`/`row_cells_get`. On an undeclared element
+// the call returns `.invalid_value` and reports `out_written = i` (the number
+// of elements that DID succeed).
+const C_INVALID_VALUE: c_int = -2;
+
+#[test]
+fn render_get_multi_out_of_range_key_is_rejected() {
+    with_test_allocator(|alloc| {
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                assert_eq!(Result::Success, terminal_new_result);
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+                let mut cols: u16 = 0;
+                let mut unused: u32 = 0;
+                let mut written: usize = usize::MAX;
+
+                // keys[1] is an UNDECLARED selector.
+                let keys: [c_int; 2] = [Data::Cols as c_int, 999];
+                let mut values = [
+                    &mut cols as *mut _ as *mut c_void,
+                    &mut unused as *mut _ as *mut c_void,
+                ];
+
+                assert_eq!(C_INVALID_VALUE, unsafe {
+                    crate::rustty_render_state_get_multi(
+                        state,
+                        keys.len(),
+                        keys.as_ptr().cast(),
+                        values.as_mut_ptr(),
+                        &mut written,
+                    )
+                });
+                // The first element still ran; the second aborted the loop.
+                assert_eq!(1, written);
+                assert_eq!(80, cols);
+            },
+        );
+    });
+}
+
+#[test]
+fn render_row_get_multi_out_of_range_key_is_rejected() {
+    with_test_allocator(|alloc| {
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                assert_eq!(Result::Success, terminal_new_result);
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+                let mut it: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it)
+                });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_iterator_next(it) });
+
+                let mut dirty: bool = false;
+                let mut unused: u32 = 0;
+                let mut written: usize = usize::MAX;
+
+                let keys: [c_int; 2] = [RowData::Dirty as c_int, 999];
+                let mut values = [
+                    &mut dirty as *mut _ as *mut c_void,
+                    &mut unused as *mut _ as *mut c_void,
+                ];
+
+                assert_eq!(C_INVALID_VALUE, unsafe {
+                    crate::rustty_render_state_row_get_multi(
+                        it,
+                        keys.len(),
+                        keys.as_ptr().cast(),
+                        values.as_mut_ptr(),
+                        &mut written,
+                    )
+                });
+                assert_eq!(1, written);
+
+                unsafe { row_iterator_free(it) };
+            },
+        );
+    });
+}
+
+#[test]
+fn render_row_cells_get_multi_out_of_range_key_is_rejected() {
+    with_test_allocator(|alloc| {
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                assert_eq!(Result::Success, terminal_new_result);
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+                let mut it: RowIterator = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_iterator_new(Some(alloc), &mut it)
+                });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_iterator_next(it) });
+
+                let mut cells: RowCells = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    row_cells_new(Some(alloc), &mut cells)
+                });
+                assert_eq!(Result::Success, unsafe {
+                    row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
+                });
+                assert!(unsafe { row_cells_next(cells) });
+
+                let mut raw: page::Cell = Default::default();
+                let mut unused: u32 = 0;
+                let mut written: usize = usize::MAX;
+
+                let keys: [c_int; 2] = [RowCellsData::Raw as c_int, 999];
+                let mut values = [
+                    &mut raw as *mut _ as *mut c_void,
+                    &mut unused as *mut _ as *mut c_void,
+                ];
+
+                assert_eq!(C_INVALID_VALUE, unsafe {
+                    crate::rustty_render_state_row_cells_get_multi(
+                        cells,
+                        keys.len(),
+                        keys.as_ptr().cast(),
+                        values.as_mut_ptr(),
+                        &mut written,
+                    )
+                });
+                assert_eq!(1, written);
+
+                unsafe { row_cells_free(cells) };
+                unsafe { row_iterator_free(it) };
+            },
+        );
+    });
+}
+
+// W34-B02-02: the invalid-selector diagnostic is the reference's
+// `log.warn` on the `.render_state_c` scope, which `terminal/c/sys.zig`'s
+// `logFn` routes to the C log callback and DROPS when no callback is installed
+// (`if (global.log == null) return;`). It must not go to stderr directly.
+mod log_capture {
+    use crate::sys::LogLevel;
+    use std::sync::Mutex;
+
+    pub(super) static CAPTURED: Mutex<Vec<(LogLevel, String, String)>> = Mutex::new(Vec::new());
+
+    pub(super) extern "C" fn log_cb(
+        _userdata: *mut std::ffi::c_void,
+        level: LogLevel,
+        scope_ptr: *const u8,
+        scope_len: usize,
+        message_ptr: *const u8,
+        message_len: usize,
+    ) {
+        let scope = unsafe { std::slice::from_raw_parts(scope_ptr, scope_len) };
+        let message = unsafe { std::slice::from_raw_parts(message_ptr, message_len) };
+        CAPTURED.lock().unwrap().push((
+            level,
+            String::from_utf8_lossy(scope).into_owned(),
+            String::from_utf8_lossy(message).into_owned(),
+        ));
+    }
+}
+
+#[test]
+fn render_invalid_selector_warns_through_the_scoped_log_sink() {
+    // Serialize against the other tests that mutate the process-wide sys GLOBAL.
+    let _guard = crate::sys::tests::reset_global();
+    log_capture::CAPTURED.lock().unwrap().clear();
+
+    // A selector value used by no other test, so the capture can be filtered:
+    // the render tests run in parallel and several of them also trip the
+    // invalid-selector warning while this callback is installed.
+    const SEL: c_int = 31337;
+
+    // No callback installed: silently discarded (the C-ABI contract), and the
+    // call still reports `.invalid_value`.
+    assert_eq!(C_INVALID_VALUE, unsafe {
+        crate::rustty_render_state_get(std::ptr::null_mut(), SEL, std::ptr::null_mut())
+    });
+    assert!(log_capture::CAPTURED.lock().unwrap().is_empty());
+
+    // Install a capturing callback: every render invalid-selector/option
+    // diagnostic arrives on the `render_state_c` scope at warning level.
+    assert_eq!(Result::Success, unsafe {
+        crate::sys::set(
+            crate::sys::Option_::Log,
+            log_capture::log_cb as *const std::ffi::c_void,
+        )
+    });
+
+    assert_eq!(C_INVALID_VALUE, unsafe {
+        crate::rustty_render_state_get(std::ptr::null_mut(), SEL, std::ptr::null_mut())
+    });
+    assert_eq!(C_INVALID_VALUE, unsafe {
+        crate::rustty_render_state_row_get(std::ptr::null_mut(), SEL, std::ptr::null_mut())
+    });
+    assert_eq!(C_INVALID_VALUE, unsafe {
+        crate::rustty_render_state_row_cells_get(std::ptr::null_mut(), SEL, std::ptr::null_mut())
+    });
+    assert_eq!(C_INVALID_VALUE, unsafe {
+        crate::rustty_render_state_set(std::ptr::null_mut(), SEL, std::ptr::null())
+    });
+    assert_eq!(C_INVALID_VALUE, unsafe {
+        crate::rustty_render_state_row_set(std::ptr::null_mut(), SEL, std::ptr::null())
+    });
+
+    // Clear the callback before asserting, so a failure cannot strand it.
+    assert_eq!(Result::Success, unsafe {
+        crate::sys::set(crate::sys::Option_::Log, std::ptr::null())
+    });
+
+    let all = log_capture::CAPTURED.lock().unwrap().clone();
+    // Every render diagnostic — whoever emitted it — carries the reference's
+    // scope and level.
+    for (level, scope, _) in all.iter() {
+        assert_eq!(crate::sys::LogLevel::Warning, *level);
+        assert_eq!(LOG_SCOPE, scope);
+    }
+    let captured: Vec<&String> = all
+        .iter()
+        .filter(|(_, _, m)| m.ends_with("=31337"))
+        .map(|(_, _, m)| m)
+        .collect();
+    let expected = [
+        "render_state_get invalid data value=31337",
+        "render_state_row_get invalid data value=31337",
+        "render_state_row_cells_get invalid data value=31337",
+        "render_state_set invalid option value=31337",
+        "render_state_row_set invalid option value=31337",
+    ];
+    assert_eq!(expected.len(), captured.len(), "captured: {all:?}");
+    for (i, message) in captured.iter().enumerate() {
+        assert_eq!(expected[i], *message);
+    }
+}
+
+// W34-B03: `RusttyRenderStateDirty` is an int-sized C enum (the header declares
+// `RUSTTY_ENUM_MAX_VALUE`, and the reference's `lib.Enum` is `c_int`-backed), so
+// `get(.dirty)` must write — and `set(.dirty)` must read — the caller's FULL
+// int slot, not one byte of it.
+#[test]
+fn render_dirty_payload_is_int_sized() {
+    assert_eq!(std::mem::size_of::<c_int>(), std::mem::size_of::<Dirty>());
+    assert_eq!(std::mem::align_of::<c_int>(), std::mem::align_of::<Dirty>());
+    assert_eq!(0, Dirty::False as c_int);
+    assert_eq!(1, Dirty::Partial as c_int);
+    assert_eq!(2, Dirty::Full as c_int);
+}
+
+#[test]
+fn render_get_dirty_fills_the_whole_int_slot() {
+    with_test_allocator(|alloc| {
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                assert_eq!(Result::Success, terminal_new_result);
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+                for (want, tag) in [
+                    (Dirty::False, 0 as c_int),
+                    (Dirty::Partial, 1),
+                    (Dirty::Full, 2),
+                ] {
+                    // Set through the full-width C payload.
+                    assert_eq!(Result::Success, unsafe {
+                        set(
+                            state,
+                            SetOption::Dirty,
+                            &tag as *const c_int as *const c_void,
+                        )
+                    });
+
+                    // A C caller's `RusttyRenderStateDirty dirty;` local is an
+                    // UNINITIALIZED int: model that with poisoned high bytes.
+                    // `get` must overwrite all four, or the caller's `switch`
+                    // matches no case.
+                    let mut slot: c_int = 0x7F7F_7F01u32 as c_int;
+                    assert_eq!(Result::Success, unsafe {
+                        get(state, Data::Dirty, &mut slot as *mut c_int as *mut c_void)
+                    });
+                    assert_eq!(tag, slot);
+
+                    // ...and the typed read agrees.
+                    let mut dirty = Dirty::False;
+                    assert_eq!(Result::Success, unsafe {
+                        get(state, Data::Dirty, &mut dirty as *mut _ as *mut c_void)
+                    });
+                    assert_eq!(want, dirty);
+                }
+            },
+        );
+    });
+}
+
+#[test]
+fn render_set_dirty_reads_the_whole_int_slot() {
+    with_test_allocator(|alloc| {
+        with_terminal_state(
+            alloc,
+            80,
+            24,
+            |terminal_new_result, terminal, state_new_result, state| {
+                assert_eq!(Result::Success, terminal_new_result);
+                assert_eq!(Result::Success, state_new_result);
+                assert_eq!(Result::Success, unsafe { update(state, terminal) });
+
+                // A full-width payload whose LOW byte alone would be `.full`
+                // but whose high bytes are junk is NOT a declared value: the
+                // reference's `c_int`-backed load sees the whole word, and Rust
+                // must not transmute the low byte into a `Dirty`.
+                // Park the state on `.partial` so the junk value below (whose
+                // LOW byte is `.full`) would be observable if it were applied.
+                let partial: c_int = Dirty::Partial as c_int;
+                assert_eq!(Result::Success, unsafe {
+                    set(
+                        state,
+                        SetOption::Dirty,
+                        &partial as *const c_int as *const c_void,
+                    )
+                });
+
+                let junk: c_int = 0x7F7F_7F02u32 as c_int;
+                assert_eq!(Result::InvalidValue, unsafe {
+                    set(
+                        state,
+                        SetOption::Dirty,
+                        &junk as *const c_int as *const c_void,
+                    )
+                });
+                // ...and the state is untouched.
+                let mut dirty = Dirty::False;
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::Dirty, &mut dirty as *mut _ as *mut c_void)
+                });
+                assert_eq!(Dirty::Partial, dirty);
+
+                // The declared full-width value is accepted.
+                let full: c_int = Dirty::Full as c_int;
+                assert_eq!(Result::Success, unsafe {
+                    set(
+                        state,
+                        SetOption::Dirty,
+                        &full as *const c_int as *const c_void,
+                    )
+                });
+                assert_eq!(Result::Success, unsafe {
+                    get(state, Data::Dirty, &mut dirty as *mut _ as *mut c_void)
+                });
+                assert_eq!(Dirty::Full, dirty);
+            },
+        );
     });
 }

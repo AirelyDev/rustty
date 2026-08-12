@@ -20,6 +20,8 @@
 //!  * macOS: `candidates() == &.{.kqueue}`, and `Xev(bes)` short-circuits at
 //!    `if (bes.len == 1) return bes[0].Api();` (dynamic.zig:38) — so the surface
 //!    IS the flat kqueue `Api()` (XEV_BLUEPRINT §0).
+//!  * FreeBSD (W2D/F-004): also `candidates() == &.{.kqueue}` (backend.zig:38),
+//!    so the SAME single-candidate collapse — the flat kqueue `Api()`.
 //!  * Linux: `candidates() == &.{.io_uring, .epoll}` — two candidates, so the
 //!    real `Dynamic` struct is generated and IS the surface.
 //!
@@ -37,7 +39,7 @@
 
 /// The names + bounds forwarded on BOTH live targets (macOS/kqueue and
 /// Linux/Dynamic). Naming a type is what forces its `pub use` to exist.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd"))]
 const _: fn() = || {
     fn needs_copy<T: Copy>() {}
     fn needs_default<T: Default>() {}
@@ -138,6 +140,48 @@ const _: fn(rustty_xev::Options) -> Result<rustty_xev::Loop, rustty_xev::Error> 
     rustty_xev::Loop::init;
 
 // ---------------------------------------------------------------------------
+// W2D/F-004: THE CONSUMER PREDICATE — every `xev::*` name `rustty-termio`
+// actually spells, pinned on EVERY live target.
+//
+// The blocks above pin the reference's forwarded-decl list. This one pins the
+// downstream fact the F-004 finding was ABOUT: rustty-termio's `xev_seam` is a
+// flat `pub use rustty_xev::*`, and its sources name exactly the 19 items below
+// (`grep -rho 'xev::[A-Za-z_][A-Za-z0-9_]*' crates/rustty-termio/src | sort -u`).
+// On FreeBSD the crate used to fall into `no_backend_seam`, so most of these did
+// not exist and no real consumer could type-check. Naming them HERE makes
+// `cargo check --target x86_64-unknown-freebsd -p rustty-xev --all-targets`
+// a direct check of that predicate, without needing a FreeBSD sysroot to build
+// termio's vendored-C dependency closure (see the FreeBSD row in DEFERRALS.md).
+//
+// NOT cfg-split: the point is that ONE list resolves on kqueue (macOS, FreeBSD)
+// AND on Dynamic (Linux) — the per-target forks live inside the modules.
+// ---------------------------------------------------------------------------
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd"))]
+const _: fn() = || {
+    fn needs_sized<T: Sized>() {}
+
+    needs_sized::<rustty_xev::Async>();
+    needs_sized::<rustty_xev::CallbackAction>();
+    needs_sized::<rustty_xev::Completion>();
+    needs_sized::<rustty_xev::CompletionState>();
+    needs_sized::<rustty_xev::Error>();
+    needs_sized::<rustty_xev::Loop>();
+    needs_sized::<rustty_xev::NotifyError>();
+    needs_sized::<rustty_xev::Options>();
+    needs_sized::<rustty_xev::Process>();
+    needs_sized::<rustty_xev::ProcessWaitError>();
+    needs_sized::<rustty_xev::RunMode>();
+    needs_sized::<rustty_xev::Stream>();
+    needs_sized::<rustty_xev::Timer>();
+    needs_sized::<rustty_xev::TimerRunError>();
+    needs_sized::<rustty_xev::WaitError>();
+    needs_sized::<rustty_xev::WriteBuffer>();
+    needs_sized::<rustty_xev::WriteError>();
+    needs_sized::<rustty_xev::WriteQueue>();
+    needs_sized::<rustty_xev::WriteRequest>();
+};
+
+// ---------------------------------------------------------------------------
 // Linux-only: the `Dynamic`-specific decls `main.zig` forwards only when the
 // candidate list has more than one entry (dynamic.zig:44-48, 91-119). On macOS
 // these are comptime-elided (§0) and are correctly absent.
@@ -183,7 +227,7 @@ const _: fn() = || {
 // pass the whole compile-time contract while being incapable of running a loop.
 // Only actually driving the public surface distinguishes the two.
 // ---------------------------------------------------------------------------
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd"))]
 #[test]
 // MIRI EXCEPTION (rustty-xev C3, .port/phase-2/MIRI_EXCEPTIONS.md): this test
 // drives a REAL `Loop::init` -> live `kqueue(2)`/`kevent64` (macOS) or
@@ -210,7 +254,9 @@ fn public_loop_surface_is_live() {
         );
         rustty_xev::Loop::init(rustty_xev::Options::default()).expect("Loop::init")
     };
-    #[cfg(target_os = "macos")]
+    // W2D: FreeBSD is the same single-candidate static-kqueue Api() as macOS
+    // (backend.zig:20,38), so it takes the same flat `Loop::init` arm.
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     let mut l = rustty_xev::Loop::init(rustty_xev::Options::default()).expect("Loop::init");
 
     // A real loop: it ticks, it stops, it reports stopped.
@@ -234,7 +280,7 @@ fn public_loop_surface_is_live() {
 // call (exec.rs:799, thread.rs:1022/1173) — so the Linux side must answer to it
 // too, or `pub use rustty_xev::*` is only nominally the same surface. Asserted
 // here rather than left to Task 9 to trip over.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "freebsd"))]
 #[test]
 fn public_zero_values_construct() {
     let c: rustty_xev::Completion = rustty_xev::Completion::default();

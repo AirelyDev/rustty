@@ -75,7 +75,17 @@ pub mod i18n_locales;
 pub mod kernel_info;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod locale;
-#[cfg(not(target_arch = "wasm32"))]
+// PORT NOTE (§3.4 laziness, windows arm): `os/main.zig:24`'s
+// `pub const mach = @import("mach.zig");` is a LAZY decl — the reference only
+// ever analyzes it from darwin code (`terminal/PageList.zig:518-530`'s
+// `pageAllocator()` reaches `@import("../os/mach.zig")` inside the
+// `isDarwin()` branch; `os/main.zig:66-69`'s `_ = mach;` sits in the
+// `isDarwin()` arm of the test). It is never analyzed on windows. `mach.rs` is
+// posix-`mmap`/`sysconf`-bound (raw `libc`), so Rust's eager compilation needs
+// the analog of that laziness spelled as a cfg: the unix gate. (wasm32 is not
+// `target_family = "unix"`, so this subsumes the previous wasm32 exclusion.)
+// See `.port/codex-vet/designs/W2D_WINDOWS_OS.md` WI-1.
+#[cfg(target_family = "unix")]
 pub mod mach;
 pub mod macos;
 pub mod mouse;

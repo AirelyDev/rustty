@@ -344,18 +344,30 @@ impl Inspector {
                     // defer preserved.deinit();
                     // widgets.page.inspector(preserved.page());
                     //
-                    // PORT NOTE (WS7): `page_preserving_state` is infallible in
-                    // rustty — it panics on OOM (Rust's global-allocator
-                    // contract) rather than returning an error, so there is no
-                    // counterpart to the reference's `catch` arm and its
-                    // "(unable to copy compressed page)" text is unreachable.
-                    // The `defer preserved.deinit()` is spelled as a sequential
-                    // call: a `Defer` closure would have to capture `preserved`
-                    // mutably while `page()` still borrows it.
-                    let mut preserved =
-                        unsafe { rustty_vt::pagelist::Node::page_preserving_state(page_node) };
-                    super::page::inspector(unsafe { &*preserved.page() });
-                    preserved.deinit();
+                    // PORT NOTE (WS7, revised by F-015): the decode buffer is a
+                    // fallible allocation in rustty too, so the reference's
+                    // `catch` arm and its "(unable to copy compressed page)"
+                    // text are ported verbatim. The `defer preserved.deinit()`
+                    // is spelled as a sequential call: a `Defer` closure would
+                    // have to capture `preserved` mutably while `page()` still
+                    // borrows it.
+                    //
+                    // The reference's `continue` only skips the two statements
+                    // below (its `defer ImGui_TreePop()` still runs, as does
+                    // `_tree_pop` here), so the arm is expressed as a `match`
+                    // rather than a `continue` — the loop's advance step lives
+                    // at the END of this body, not in a continue-expression.
+                    match unsafe { rustty_vt::pagelist::Node::page_preserving_state(page_node) } {
+                        Err(_) => unsafe {
+                            dcimgui_sys::ImGui_TextDisabled(
+                                c"(unable to copy compressed page)".as_ptr(),
+                            )
+                        },
+                        Ok(mut preserved) => {
+                            super::page::inspector(unsafe { &*preserved.page() });
+                            preserved.deinit();
+                        }
+                    }
                 }
 
                 // : (node = page_node.prev)
@@ -1741,18 +1753,28 @@ impl CellChooser {
         // };
         // defer preserved.deinit();
         //
-        // PORT NOTE: rustty's `page_preserving_state` panics on internal codec
-        // corruption instead of returning an error (see its doc comment), so there is
-        // no `catch` arm to port and the reference's "(unable to copy compressed
-        // page)" branch has no reachable analogue. The `defer preserved.deinit()` is
-        // the explicit call at the END of this function — it MUST outlive every use
-        // of `page`, because for a compressed node `page` points INTO `preserved`'s
-        // owned buffer.
+        // PORT NOTE (revised by F-015): the decode buffer is a fallible allocation
+        // in rustty too, so the reference's `catch` arm is ported verbatim.
+        // `page_preserving_state` still panics on internal codec corruption (see its
+        // doc comment), which is the reference's `@panic` as well. The
+        // `defer preserved.deinit()` is the explicit call at the END of this
+        // function — it MUST outlive every use of `page`, because for a compressed
+        // node `page` points INTO `preserved`'s owned buffer.
         //
         // SAFETY: `pin.node` is a live node from `pages.pin`, and this widget holds
         // exclusive access to the PageList for the duration (display-only reads under
         // the renderer-state mutex), which is `page_preserving_state`'s contract.
-        let mut preserved = unsafe { rustty_vt::pagelist::Node::page_preserving_state(pin.node) };
+        let mut preserved = match unsafe {
+            rustty_vt::pagelist::Node::page_preserving_state(pin.node)
+        } {
+            Ok(preserved) => preserved,
+            Err(_) => {
+                unsafe {
+                    dcimgui_sys::ImGui_TextDisabled(c"(unable to copy compressed page)".as_ptr())
+                };
+                return;
+            }
+        };
 
         // const page = preserved.page();
         let page: *const rustty_vt::page::Page = preserved.page();

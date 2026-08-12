@@ -174,6 +174,29 @@ mod tests {
         assert_eq!(terminal_focus::MAX_ENCODE_SIZE, written);
     }
 
+    // W88-B02-01 (Rust-only proving test; the reference has none — the behavior
+    // comes from `std.Io.Writer.fixed`, whose `fixedDrain` fills the available
+    // buffer before returning `error.WriteFailed`). A too-small NON-NULL caller
+    // buffer must come back holding the fitting PREFIX of the encoding, not the
+    // caller's pre-call bytes. See `writer.rs`'s `FixedWriter`.
+    #[test]
+    fn encode_with_insufficient_buffer_keeps_the_fitting_prefix() {
+        let mut buf = [0xAAu8; 2];
+        let mut written: usize = 0;
+        let result = unsafe {
+            encode(
+                terminal_focus::Event::Gained,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut written,
+            )
+        };
+        assert_eq!(Result::OutOfSpace, result);
+        assert_eq!(terminal_focus::MAX_ENCODE_SIZE, written);
+        // "\x1B[I" truncated to the 2 bytes that fit.
+        assert_eq!(b"\x1B[", &buf);
+    }
+
     #[test]
     fn encode_with_null_buffer() {
         let mut written: usize = 0;

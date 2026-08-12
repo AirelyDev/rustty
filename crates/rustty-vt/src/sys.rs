@@ -57,6 +57,17 @@ pub type DecodePngFn = fn(&[u8]) -> Result<Image, DecodeError>;
 // wuffs binding rides the `wuffs` cargo feature (rustty-core — the SharedDeps
 // `.ghostty` analog — enables it for the application tier; rustty-vt-c — the
 // GhosttyZig `.lib` analog — does not, keeping the reference `null` default).
+//
+// CAVEAT (codex-vet W36-B03): that split holds PER CARGO SELECTION, not
+// per artifact — the reference compiles lib-vt separately (GhosttyZig.zig
+// `vt_options.artifact = .lib`), but a COMBINED Cargo selection containing
+// both tiers (`--workspace`, or `-p rustty-vt-c -p rustty-core`) feature-
+// unifies `wuffs` into the single compiled rustty-vt, flipping the vt-c
+// artifact's default to `Some`. Publish rule: librustty-vt artifacts come
+// from ISOLATED `-p rustty-vt-c` invocations only; gated by G-VTCLIB
+// (.port/tools/gates/check_vtc_lib_isolation.sh) and ledgered in
+// DEFERRALS.md §"decode_png" ADDENDUM.
+//
 // We use a `RwLock` so the global is safely mutable across threads (the
 // reference relies on Zig's `var` being mutated only at startup).
 pub static decode_png: RwLock<Option<DecodePngFn>> = RwLock::new(DECODE_PNG_DEFAULT);

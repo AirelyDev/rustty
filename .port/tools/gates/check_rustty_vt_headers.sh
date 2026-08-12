@@ -68,6 +68,112 @@ printf '#include <rustty/vt.h>\nint main(){return 0;}\n' > "$T/a2vt.cpp"
 "$CXX" -std=c++17 -fsyntax-only -Wall -Wextra $SYSROOT -Iinclude "$T/a2vt.cpp"
 echo "  OK  rustty/vt.h (c++17; the (a) probe covers C)"
 
+# --- (a3) the checked-in cbindgen header is not STALE (W12-02) ---------------
+# `include/rustty.h` is GENERATED, but nothing regenerated it here, so it drifted
+# silently: on main @ d34cc154 the checked file predated the whole D11 pass (the
+# `c_int`-narrowed enum parameters/fields) and was missing
+# `RUSTTY_TERMINAL_DATA_VT_PROCESSING_ERROR = 33`. Arm (b') catches only the
+# staleness class that DROPS a `rustty_*` NAME token; a stale enum variant, a
+# stale parameter type or a stale struct field is invisible to a name-token
+# intersection. The design contract this gate implements
+# (docs/superpowers/specs/2026-07-15-rustty-c-header-family-design.md:54-66) asks
+# for a compatible SIGNATURE, not a compatible name list. Regenerate and diff:
+# that is the only check that binds every future drift at once.
+echo "== (a3) include/rustty.h is byte-identical to a fresh cbindgen run =="
+if ! command -v cbindgen >/dev/null 2>&1; then
+  echo "  BLOCKED: cbindgen is not on PATH, so the generated header cannot be"
+  echo "           re-derived and this arm cannot bind. Install it with"
+  echo "           \`cargo install cbindgen\`. This is NOT a pass."
+  exit 3
+fi
+# Run from the workspace root — the invocation `xtask header-gen` uses.
+if ! cbindgen --config crates/rustty-vt-c/cbindgen.toml \
+              --crate rustty-vt-c \
+              --output "$T/rustty_regen.h" 2>"$T/rustty_regen.err"; then
+  echo "  FAIL — cbindgen could not generate the header:" >&2
+  grep -v '^WARN: Skip' "$T/rustty_regen.err" | tail -20 >&2
+  exit 1
+fi
+if ! diff -u include/rustty.h "$T/rustty_regen.h" > "$T/rustty_regen.diff"; then
+  echo "  STALE — include/rustty.h does not match what cbindgen generates from"
+  echo "  the current rustty-vt-c sources. Re-run \`cargo run -p xtask -- header-gen\`"
+  echo "  and commit the result. Do NOT hand-edit the generated header."
+  sed -n '1,60p' "$T/rustty_regen.diff" | sed 's/^/    /'
+  exit 1
+fi
+echo "  OK (regenerated and byte-identical)"
+
+# --- (a3b) the OTHER checked-in cbindgen header is not STALE (W92-B02-02) ----
+# Exactly the (a3) argument, for `include/rustty-apprt.h`: it is GENERATED but
+# nothing regenerated it here either, and it HAD drifted — it predated
+# `rustty_info`/`rustty_translate`/`rustty_cli_try_action` (landed 33da59bc) and
+# the D11 `c_int` narrowing of `Point.tag`/`Point.coord_tag`/`KeyEvent.action`,
+# so the published header declared a surface the crate no longer had. Arm (a2)
+# only compiles it; a compile cannot see a MISSING declaration.
+echo "== (a3b) include/rustty-apprt.h is byte-identical to a fresh cbindgen run =="
+if ! cbindgen --config crates/rustty-apprt-c/cbindgen.toml \
+              --crate rustty-apprt-c \
+              --output "$T/rustty_apprt_regen.h" 2>"$T/rustty_apprt_regen.err"; then
+  echo "  FAIL — cbindgen could not generate the header:" >&2
+  grep -v '^WARN: ' "$T/rustty_apprt_regen.err" | tail -20 >&2
+  exit 1
+fi
+if ! diff -u include/rustty-apprt.h "$T/rustty_apprt_regen.h" > "$T/rustty_apprt_regen.diff"; then
+  echo "  STALE — include/rustty-apprt.h does not match what cbindgen generates"
+  echo "  from the current rustty-apprt-c sources. Re-run"
+  echo "  \`cargo run -p xtask -- header-gen-apprt\` and commit the result."
+  echo "  Do NOT hand-edit the generated header."
+  sed -n '1,60p' "$T/rustty_apprt_regen.diff" | sed 's/^/    /'
+  exit 1
+fi
+echo "  OK (regenerated and byte-identical)"
+
+# --- (a4) the generated header's `Style` pointee is the SIZED STRUCT (W12-02) -
+# C has ONE flat type namespace. `rustty-vt-c` exported TWO Rust types named
+# `Style` — `size_report::Style` (a 4-byte `#[repr(C)]` enum) and `style::Style`
+# (the 72-byte sized `RusttyStyle` struct) — and cbindgen SILENTLY emitted only
+# the enum, so the published `include/rustty.h` declared
+# `void rustty_style_default(Style *result)` against a 4-byte pointee. A C caller
+# writing through that pointer overruns its object by 68 bytes; the callee writes
+# the full struct regardless. Nothing above sees it: (a2) compiles the header
+# (both spellings compile), (b)/(b') compare NAME tokens, (c)/(e) read the
+# CURATED headers, which are correct. The fix renamed the Rust enum to
+# `SizeReportStyle`; this arm is the regression test for the whole
+# same-name-collision class — it re-derives the pointee type FROM the generated
+# header and requires it to be a struct whose size matches the curated
+# `RusttyStyle`.
+echo "== (a4) generated rustty_style_default pointee == curated RusttyStyle =="
+cat > "$T/a4_gen.cpp" <<'A4GEN'
+#include <cstdio>
+#include "rustty.h"
+// Recover the first parameter's pointee type straight out of the declaration.
+template <class T> struct rustty_param_of;
+template <class T> struct rustty_param_of<void (*)(T *)> { using type = T; };
+using StyleParam = rustty_param_of<decltype(&rustty_style_default)>::type;
+static_assert(!__is_enum(StyleParam),
+              "include/rustty.h: rustty_style_default's pointee is an ENUM. Two "
+              "Rust types collided on the C name `Style`; rename one.");
+static_assert(__is_class(StyleParam) || __is_union(StyleParam),
+              "include/rustty.h: rustty_style_default's pointee is not a struct.");
+int main(void) { std::printf("%zu\n", sizeof(StyleParam)); return 0; }
+A4GEN
+cat > "$T/a4_cur.c" <<'A4CUR'
+#include <stdio.h>
+#include <rustty/vt.h>
+int main(void) { printf("%zu\n", sizeof(RusttyStyle)); return 0; }
+A4CUR
+"$CXX" -std=c++17 -Wall -Wextra $SYSROOT -Iinclude "$T/a4_gen.cpp" -o "$T/a4_gen"
+"$CC"  -std=c11   -Wall -Wextra $SYSROOT -Iinclude "$T/a4_cur.c"   -o "$T/a4_cur"
+a4_gen_size=$("$T/a4_gen")
+a4_cur_size=$("$T/a4_cur")
+if [ "$a4_gen_size" != "$a4_cur_size" ]; then
+  echo "  MISMATCH — the generated header's rustty_style_default pointee is"
+  echo "  $a4_gen_size bytes; the curated RusttyStyle is $a4_cur_size bytes."
+  echo "  A caller using include/rustty.h would overrun/underrun the style object."
+  exit 1
+fi
+echo "  OK (pointee is a $a4_gen_size-byte struct, == sizeof(RusttyStyle))"
+
 echo "== (b) every declared+cbindgen rustty_* symbol is a real export =="
 grep -rhoE 'rustty_[a-z0-9_]+' include/rustty/vt.h include/rustty/vt | sort -u > "$T/vt_decl.txt"
 wasm=target/wasm32-unknown-unknown/release/rustty_vt_c.wasm

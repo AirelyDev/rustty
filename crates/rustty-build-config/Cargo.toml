@@ -15,6 +15,17 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[features]
+# `build_config.artifact == .lib` — the reference derives this from Zig's
+# `builtin.output_mode` (`Artifact.detect()`), which is `.Lib` exactly when the
+# build produces libghostty. Rust has no equivalent introspection, so the
+# embeddable-library artifact is selected by this additive feature, which
+# `rustty-apprt-c` (the librustty cdylib/staticlib hub) turns on for its own
+# dependency edge. Everything it gates is additive (diagnostics precompute, the
+# macOS launch-source probe); see `Artifact::detect` for the feature-unification
+# caveat.
+artifact-lib = []
+
 [dependencies]
 # Version/identity source-of-truth (R2). identity has no deps so this adds no
 # cycle; BREAK #3 keeps build-config a leaf above only util/identity.

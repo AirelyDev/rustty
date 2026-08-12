@@ -68,11 +68,13 @@ use glib::subclass::prelude::*;
 use rustty_apprt_api::{Action, ApprtError, CoreSurfaceHandle, Target};
 use rustty_config::Config as CoreConfig;
 
+use super::close_confirmation_dialog::{CloseConfirmationDialog, Target as DialogTarget};
 use super::command_palette::ActionBoxed;
 use super::config::Config;
 use super::config_errors_dialog::ConfigErrorsDialog;
 use super::global_shortcuts::{BindFailed, GlobalShortcuts};
 use super::tab::TabOverrides;
+use super::window::Window;
 use crate::gtk::i18n::tr;
 use crate::gtk::portal::OpenUri;
 use crate::gtk::surface::Surface as ApprtSurface;
@@ -2194,17 +2196,19 @@ impl Application {
         self.property("config")
     }
 
-    /// PORTS: `application.zig` `savedLanguage` — the `LANG` value captured at
-    /// startup, applied to child-process environments by
-    /// [`crate::gtk::class::surface`]'s `defaultTermioEnv` (`surface.zig:1598`).
+    /// PORTS: `application.zig:475-478` `savedLanguage` — the launch-time `LANG`
+    /// captured by [`Application::new`] BEFORE the `config.language` override
+    /// (`application.zig:279-290`), applied to child-process environments by
+    /// [`crate::gtk::class::surface`]'s `defaultTermioEnv` (`surface.zig:1602-1606`,
+    /// the sole consumer). `None` when `LANG` was unset at launch — the consumer
+    /// then removes `LANG` from the child env (the reference's `else` branch).
     ///
-    /// **Placeholder-leaf (language-override tier):** the startup `LANG`
-    /// capture/override lands with that work; until then this reports `None`, so
-    /// `defaultTermioEnv` removes `LANG` (the reference's `else` branch) rather
-    /// than pinning a stale one.
+    /// PORT NOTE: the reference returns a pointer to internal memory that "must be
+    /// copied by callers"; the [`CString`] clone here IS that copy (the stored
+    /// field is the reference's sentinel-terminated `?[:0]const u8`).
     #[must_use]
-    pub fn saved_language(&self) -> Option<String> {
-        None
+    pub fn saved_language(&self) -> Option<CString> {
+        self.imp().saved_language.borrow().clone()
     }
 
     /// Test-only: build **and register** a default `GhosttyApplication` so widget
@@ -2854,18 +2858,25 @@ impl Application {
         }
 
         // Find the active toplevel to parent the dialog on (`:609-623`). In the
-        // rare case there is none we simply skip so we don't crash.
-        let _parent = find_active_window();
+        // rare case there is none we present unparented so we don't crash.
+        let parent = find_active_window();
 
-        // PORT NOTE (INHABITED placeholder): the `CloseConfirmationDialog`
-        // (`:625-636`) lands with Task 24; its `.new(.app)` + `close-request`
-        // connect (→ [`Application::quit_now`]) + `present(parent)` drop in there.
-        // Until then a confirm-quit request is surfaced on stderr and the loop keeps
-        // running (the user has not confirmed), which is the faithful pre-dialog
-        // behavior (we must NOT quit without confirmation).
-        eprintln!(
-            "warn(gtk): quit requires confirmation; the CloseConfirmationDialog lands with Task 24"
-        );
+        // Show a confirmation dialog whose `close-request` routes to
+        // [`Application::quit_now`] (`:625-637`; `handleCloseConfirmation`,
+        // `:1552-1558`). Mirrors the window-close wiring in
+        // `window.rs` `on_close_request` (`window.zig:1400-1422`).
+        let dialog = CloseConfirmationDialog::new(DialogTarget::App);
+        let app_weak = self.downgrade();
+        dialog.connect_local("close-request", false, move |_args| {
+            if let Some(app) = app_weak.upgrade() {
+                app.quit_now();
+            }
+            None
+        });
+
+        // Show it (`:639-640`). Present keeps the dialog referenced by GTK until
+        // dismissed.
+        dialog.present(parent.as_ref().map(|w| w.upcast_ref::<gtk4::Widget>()));
     }
 
     /// PORTS: `application.zig:639-665` `quitNow`. Destroys our windows (forcing
@@ -2881,13 +2892,13 @@ impl Application {
         // subclass (`gobject.ext.isA(window, Window)`), which own every other window
         // type and thus trigger a proper cascading shutdown.
         for window in gtk4::Window::list_toplevels() {
-            // PORT NOTE (INHABITED placeholder): the `isA(window, Window)` guard +
-            // `window.destroy()` need our `Window` GObject subclass, which lands
-            // with Task 12. Until then no `Window` toplevels exist (no window is
-            // created yet), so the loop body is dormant — but the guard is
-            // essential (never destroy foreign toplevels) and drops in with that
-            // class. Referencing `window` keeps the port shape explicit.
-            let _ = window;
+            // `if (gobject.ext.isA(window, Window)) window.destroy();` (`:657-660`)
+            // — the `downcast_ref` succeeds exactly when the toplevel is (or
+            // derives) our `Window` subclass, the gtk4-rs analogue of `isA`.
+            if let Some(window) = window.downcast_ref::<Window>() {
+                use gtk4::prelude::GtkWindowExt as _;
+                window.destroy();
+            }
         }
 
         // Trigger our runloop exit (`:664`).
@@ -4960,6 +4971,158 @@ mod tests {
             !app.imp().running.get(),
             "quit_now must have cleared the running flag"
         );
+    }
+
+    /// F-011 KAT: `saved_language` reports the launch-time `LANG` stored in
+    /// `priv.saved_language` (`application.zig:475-478`) — not a hardcoded `None`
+    /// (the regressed placeholder), which made `defaultTermioEnv`
+    /// (`surface.zig:1602-1606`) strip `LANG` from every default child
+    /// environment.
+    #[test]
+    #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn saved_language_reads_the_captured_launch_lang() {
+        if gtk4::init().is_err() {
+            return;
+        }
+        let _ = libadwaita::init();
+
+        let app = build_test_app(std::ptr::null_mut());
+
+        // `LANG` unset at launch → `None` (the consumer then removes `LANG`).
+        app.imp().saved_language.replace(None);
+        assert_eq!(app.saved_language(), None);
+
+        // Captured at launch → returned verbatim (a copy of the stored bytes).
+        let lang = CString::new("en_US.UTF-8").unwrap();
+        app.imp().saved_language.replace(Some(lang.clone()));
+        assert_eq!(app.saved_language(), Some(lang));
+    }
+
+    /// Recursively find a presented [`CloseConfirmationDialog`] in a widget tree
+    /// (presented unparented, the dialog floats inside its own toplevel host).
+    fn find_close_confirmation(widget: &gtk4::Widget) -> Option<CloseConfirmationDialog> {
+        use gtk4::prelude::WidgetExt as _;
+        if let Some(dialog) = widget.downcast_ref::<CloseConfirmationDialog>() {
+            return Some(dialog.clone());
+        }
+        let mut child = widget.first_child();
+        while let Some(c) = child {
+            if let Some(found) = find_close_confirmation(&c) {
+                return Some(found);
+            }
+            child = c.next_sibling();
+        }
+        None
+    }
+
+    /// F-009 KAT (`application.zig:603-644` `quit` + `:1552-1558`
+    /// `handleCloseConfirmation`): when the core needs quit confirmation, `quit`
+    /// must NOT stop the loop; it must present a `CloseConfirmationDialog(.app)`
+    /// whose `close-request` routes to `quit_now`. Against the pre-fix
+    /// placeholder (a stderr warning, no dialog) the toplevel scan finds nothing
+    /// and this fails.
+    #[test]
+    #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn quit_needing_confirmation_presents_dialog_and_close_request_quits() {
+        use libadwaita::prelude::AdwDialogExt as _;
+
+        if gtk4::init().is_err() {
+            return;
+        }
+        let _ = libadwaita::init();
+        crate::gtk::register_resources();
+
+        let app = build_test_app(std::ptr::null_mut());
+        app.imp().running.set(true);
+        app.imp()
+            .needs_confirm_quit_thunk
+            .replace(Some(Box::new(|| true)));
+
+        app.quit();
+        while glib::MainContext::default().iteration(false) {}
+
+        // Not confirmed yet → the loop keeps running (`:609` comment: we must
+        // NOT quit without confirmation).
+        assert!(
+            app.imp().running.get(),
+            "quit must not stop the loop before the dialog is confirmed"
+        );
+
+        // The dialog was presented (unparented here: no active window exists).
+        let dialog = gtk4::Window::list_toplevels()
+            .iter()
+            .find_map(find_close_confirmation)
+            .expect("quit presents a CloseConfirmationDialog");
+        assert_eq!(dialog.target(), DialogTarget::App);
+
+        // Confirming — the dialog's `close-request` — routes to `quit_now`
+        // (`handleCloseConfirmation`, `application.zig:1552-1558`).
+        dialog.emit_by_name::<()>("close-request", &[]);
+        assert!(
+            !app.imp().running.get(),
+            "close-request must route to quit_now"
+        );
+
+        dialog.close();
+        while glib::MainContext::default().iteration(false) {}
+    }
+
+    /// F-010 KAT (`application.zig:646-666` `quitNow`): destroys the toplevels
+    /// that are OUR `Window` subclass (forcing the ordered widget-teardown
+    /// cascade), spares foreign toplevels (the fcitx-IME double-free guard,
+    /// `:652-656`), then trips the run-loop exit flag. Against the pre-fix
+    /// placeholder (`let _ = window;`) the `Window` survives and this fails.
+    #[test]
+    #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn quit_now_destroys_our_windows_and_spares_foreign_toplevels() {
+        use gio::prelude::ApplicationExt as _;
+        use gtk4::prelude::GtkWindowExt as _;
+
+        if gtk4::init().is_err() {
+            return;
+        }
+        let _ = libadwaita::init();
+        crate::gtk::register_resources();
+
+        // A registered app: `Window::new` binds `application`, and `startup`
+        // installs us as the default `GApplication` for the template machinery.
+        let app = build_test_app(std::ptr::null_mut());
+        app.register(gio::Cancellable::NONE)
+            .expect("register the application");
+        app.imp().running.set(true);
+
+        // One of OUR windows, and a foreign toplevel we must NOT destroy (the
+        // fcitx-IME stand-in).
+        let ours = Window::new(&app, None);
+        let foreign = gtk4::Window::new();
+        let foreign_widget = foreign.upcast_ref::<gtk4::Widget>().clone();
+        assert!(
+            gtk4::Window::list_toplevels()
+                .iter()
+                .any(|w| w.downcast_ref::<Window>().is_some()),
+            "precondition: our Window is a live toplevel"
+        );
+
+        app.quit_now();
+
+        let toplevels = gtk4::Window::list_toplevels();
+        assert!(
+            !toplevels
+                .iter()
+                .any(|w| w.downcast_ref::<Window>().is_some()),
+            "quit_now destroys our Window toplevels (application.zig:657-660)"
+        );
+        assert!(
+            toplevels.contains(&foreign_widget),
+            "foreign toplevels are spared (the fcitx guard, application.zig:652-656)"
+        );
+        assert!(
+            !app.imp().running.get(),
+            "quit_now clears the running flag (application.zig:664)"
+        );
+
+        foreign.destroy();
+        drop(ours);
     }
 
     /// PORTS: `application.zig:823-846` `startQuitTimer` + `:849-864`

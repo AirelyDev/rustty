@@ -27,9 +27,9 @@
 //!   LIBGL_ALWAYS_SOFTWARE=1 [xvfb-run -a] \
 //!     cargo test -p rustty-apprt --features gtk --test gtk_window_live -- --ignored
 //!
-//! R5: gated `all(target_os = "linux", feature = "gtk")` — off the gate the whole
+//! R5: gated `all(any(linux, freebsd), feature = "gtk")` — off the gate the whole
 //! file compiles out.
-#![cfg(all(target_os = "linux", feature = "gtk"))]
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 // PARITY: the renderer-seam entry points are camelCase (`drawFrame`), matching the
 // reference `Renderer` API the port preserves verbatim (R1/R2).
 #![allow(non_snake_case)]

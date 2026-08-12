@@ -3,12 +3,15 @@
 # This crate vendors the SAME upstream library the reference uses —
 # sentry-native 0.7.8 (getsentry/sentry-native), the crash-reporting SDK —
 # copied in-tree under `vendor/` and built standalone via `cc` + `bindgen`. It
-# mirrors the reference's pkg/sentry/build.zig with ghostty's fixed options
-# (`backend = .inproc`, `transport = .none`): the same `srcs` translation-unit
-# list, the same per-target path/symbolizer/unwinder/modulefinder selection, and
-# the same `-D` flags (`-DSENTRY_WITH_UNWINDER_LIBBACKTRACE` off-Windows /
-# `-DSENTRY_WITH_UNWINDER_DBGHELP` on Windows; `-DSENTRY_BACKEND_INPROC`). The
-# unused backends (crashpad/breakpad), transports (curl/winhttp), the Qt
+# mirrors the reference's pkg/sentry/build.zig with ghostty's PRODUCT options
+# (`backend = .breakpad`, `transport = .none` — src/build/SharedDeps.zig passes
+# `.backend = .breakpad` whenever sentry is enabled): the same `srcs`
+# translation-unit list, the same per-target path/symbolizer/unwinder/
+# modulefinder selection, the C++ `sentry_backend_breakpad.cpp` backend built
+# against breakpad-sys (the reference's pkg/breakpad artifact), and the same
+# `-D` flags (`-DSENTRY_WITH_UNWINDER_LIBBACKTRACE` off-Windows /
+# `-DSENTRY_WITH_UNWINDER_DBGHELP` on Windows; `-DSENTRY_BACKEND_BREAKPAD`).
+# The unused backends (crashpad/inproc), transports (curl/winhttp), the Qt
 # integration, the AIX modulefinder and the Android libunwindstack unwinder are
 # NOT vendored (the reference build.zig does not compile them for this config).
 # `links` declares the native lib so Cargo enforces one-version linking.
@@ -33,6 +36,11 @@ doctest = false
 workspace = true
 
 [dependencies]
+# R3: the breakpad client archive + headers backing the `backend = .breakpad`
+# sentry backend — the reference's pkg/sentry `.breakpad` arm links
+# `breakpad_dep.artifact("breakpad")` and adds its include paths; Cargo exports
+# them to build.rs as `DEP_BREAKPAD_INCLUDE` (via breakpad-sys `links`).
+breakpad-sys = { workspace = true }
 
 [build-dependencies]
 # R3: compile the vendored sentry-native C standalone (`cc`) with the

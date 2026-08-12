@@ -122,8 +122,7 @@ pub fn parse_palette_entry(value: &[u8]) -> Result<PaletteEntry, ParsePaletteEnt
     let index = parse_int_u8_base0(index_str)?;
     // const rgb = try RGB.parse(value[eql_idx + 1 ..]);
     let rest = &value[eql_idx + 1..];
-    let rest_str = std::str::from_utf8(rest).map_err(|_| ParsePaletteEntryError::InvalidFormat)?;
-    let rgb = RGB::parse(rest_str).map_err(|_| ParsePaletteEntryError::InvalidFormat)?;
+    let rgb = RGB::parse(rest).map_err(|_| ParsePaletteEntryError::InvalidFormat)?;
     Ok(PaletteEntry { index, color: rgb })
 }
 
@@ -131,34 +130,257 @@ pub fn parse_palette_entry(value: &[u8]) -> Result<PaletteEntry, ParsePaletteEnt
 /// else decimal. `Overflow` (value > 255) is distinguished from
 /// `InvalidCharacter` (mapped to InvalidFormat), matching the oracle.
 fn parse_int_u8_base0(s: &[u8]) -> Result<u8, ParsePaletteEntryError> {
-    let (digits, radix): (&[u8], u32) = if s.len() > 2 && s[0] == b'0' {
-        match s[1] {
-            b'x' | b'X' => (&s[2..], 16),
-            b'o' | b'O' => (&s[2..], 8),
-            b'b' | b'B' => (&s[2..], 2),
-            _ => (s, 10),
-        }
-    } else {
-        (s, 10)
-    };
-    if digits.is_empty() {
-        return Err(ParsePaletteEntryError::InvalidFormat);
+    // `catch |err| switch (err) { error.Overflow => return error.Overflow,
+    //   error.InvalidCharacter => return error.InvalidFormat }`
+    parse_int_u8(s, 0).map_err(|err| match err {
+        ParseIntError::Overflow => ParsePaletteEntryError::Overflow,
+        ParseIntError::InvalidCharacter => ParsePaletteEntryError::InvalidFormat,
+    })
+}
+
+/// PORTS: `std.fmt.ParseIntError` — the error set of `std.fmt.parseInt` and
+/// `std.fmt.parseUnsigned`.
+// pub const ParseIntError = error{ Overflow, InvalidCharacter };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ParseIntError {
+    Overflow,
+    InvalidCharacter,
+}
+
+/// PORTS: `std.fmt.parseInt(u8, buf, base)` — an optional leading `+`/`-` sign
+/// followed by `parseIntWithSign`.
+//
+// PORT NOTE: monomorphized to `u8` (`Result`/`Character` are both `u8` at every
+// call site in the ported tree); `Accumulate` is then
+// `std.meta.Int(.unsigned, @max(8, 8))` == `u8`, so every intermediate is
+// checked at `u8` width exactly as the reference does.
+// pub fn parseInt(comptime T: type, buf: []const u8, base: u8) ParseIntError!T {
+//     return parseIntWithGenericCharacter(T, u8, buf, base);
+// }
+pub(crate) fn parse_int_u8(buf: &[u8], base: u8) -> Result<u8, ParseIntError> {
+    // if (buf.len == 0) return error.InvalidCharacter;
+    if buf.is_empty() {
+        return Err(ParseIntError::InvalidCharacter);
     }
-    let mut acc: u32 = 0;
-    for &b in digits {
-        // Zig parseInt allows '_' separators; preserve that.
-        if b == b'_' {
+    // if (buf[0] == '+') return parseIntWithSign(.., buf[1..], base, .pos);
+    if buf[0] == b'+' {
+        return parse_int_u8_with_sign(&buf[1..], base, false);
+    }
+    // if (buf[0] == '-') return parseIntWithSign(.., buf[1..], base, .neg);
+    if buf[0] == b'-' {
+        return parse_int_u8_with_sign(&buf[1..], base, true);
+    }
+    // return parseIntWithSign(.., buf, base, .pos);
+    parse_int_u8_with_sign(buf, base, false)
+}
+
+/// PORTS: `std.fmt.parseUnsigned(u8, buf, base)` — `parseIntWithSign` with a
+/// positive sign and NO sign prefix accepted (`"+1"`/`"-1"` are
+/// `error.InvalidCharacter`).
+// pub fn parseUnsigned(comptime T: type, buf: []const u8, base: u8) ParseIntError!T {
+//     return parseIntWithSign(T, u8, buf, base, .pos);
+// }
+pub(crate) fn parse_unsigned_u8(buf: &[u8], base: u8) -> Result<u8, ParseIntError> {
+    parse_int_u8_with_sign(buf, base, false)
+}
+
+/// PORTS: `std.fmt.parseUnsigned(u16, buf, base)` — `parseIntWithSign` with a
+/// positive sign and NO sign prefix accepted (`"+f"`/`"-f"` are
+/// `error.InvalidCharacter`), and with `_` accepted as an interior digit
+/// separator (but never leading/trailing).
+//
+// PORT NOTE: the `u16` monomorphization of `parseIntWithSign` used by
+// `RGB.fromHex`. `Accumulate` is `std.meta.Int(.unsigned, @max(16, 8))` == `u16`,
+// so every intermediate is checked at `u16` width exactly as the reference does.
+// The `.neg` arm is not instantiated (`parseUnsigned` is always `.pos`), so it is
+// not ported here; see `parse_int_u8_with_sign` for the sign-carrying form.
+// pub fn parseUnsigned(comptime T: type, buf: []const u8, base: u8) ParseIntError!T {
+//     return parseIntWithSign(T, u8, buf, base, .pos);
+// }
+pub(crate) fn parse_unsigned_u16(buf: &[u8], base: u8) -> Result<u16, ParseIntError> {
+    // if (buf.len == 0) return error.InvalidCharacter;
+    if buf.is_empty() {
+        return Err(ParseIntError::InvalidCharacter);
+    }
+
+    // var buf_base = base;
+    // var buf_start = buf;
+    let mut buf_base = base;
+    let mut buf_start = buf;
+    // if (base == 0) {
+    if base == 0 {
+        // Treat is as a decimal number by default.
+        buf_base = 10;
+        // Detect the base by looking at buf prefix.
+        if buf.len() > 2 && buf[0] == b'0' {
+            match buf[1].to_ascii_lowercase() {
+                b'b' => {
+                    buf_base = 2;
+                    buf_start = &buf[2..];
+                }
+                b'o' => {
+                    buf_base = 8;
+                    buf_start = &buf[2..];
+                }
+                b'x' => {
+                    buf_base = 16;
+                    buf_start = &buf[2..];
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // var accumulate: Accumulate = 0;
+    let mut accumulate: u16 = 0;
+
+    // if (buf_start[0] == '_' or buf_start[buf_start.len - 1] == '_') return error.InvalidCharacter;
+    if buf_start[0] == b'_' || buf_start[buf_start.len() - 1] == b'_' {
+        return Err(ParseIntError::InvalidCharacter);
+    }
+
+    // for (buf_start) |c| {
+    for &c in buf_start {
+        // if (c == '_') continue;
+        if c == b'_' {
             continue;
         }
-        let d = (b as char)
-            .to_digit(radix)
-            .ok_or(ParsePaletteEntryError::InvalidFormat)?;
-        acc = acc * radix + d;
-        if acc > 255 {
-            return Err(ParsePaletteEntryError::Overflow);
+        // const digit = try charToDigit(..., buf_base);
+        let digit = char_to_digit(c, buf_base)?;
+        // if (accumulate != 0) accumulate = try math.mul(Accumulate, accumulate, buf_base);
+        if accumulate != 0 {
+            accumulate = accumulate
+                .checked_mul(u16::from(buf_base))
+                .ok_or(ParseIntError::Overflow)?;
+        }
+        // accumulate = try add(Accumulate, accumulate, digit);
+        accumulate = accumulate
+            .checked_add(u16::from(digit))
+            .ok_or(ParseIntError::Overflow)?;
+    }
+
+    Ok(accumulate)
+}
+
+// fn parseIntWithSign(
+//     comptime Result: type,
+//     comptime Character: type,
+//     buf: []const Character,
+//     base: u8,
+//     comptime sign: enum { pos, neg },
+// ) ParseIntError!Result {
+fn parse_int_u8_with_sign(buf: &[u8], base: u8, neg: bool) -> Result<u8, ParseIntError> {
+    // if (buf.len == 0) return error.InvalidCharacter;
+    if buf.is_empty() {
+        return Err(ParseIntError::InvalidCharacter);
+    }
+
+    // var buf_base = base;
+    // var buf_start = buf;
+    let mut buf_base = base;
+    let mut buf_start = buf;
+    // if (base == 0) {
+    if base == 0 {
+        // Treat is as a decimal number by default.
+        buf_base = 10;
+        // Detect the base by looking at buf prefix.
+        // if (buf.len > 2 and buf[0] == '0') { ... std.ascii.toLower(c) ... }
+        if buf.len() > 2 && buf[0] == b'0' {
+            match buf[1].to_ascii_lowercase() {
+                b'b' => {
+                    buf_base = 2;
+                    buf_start = &buf[2..];
+                }
+                b'o' => {
+                    buf_base = 8;
+                    buf_start = &buf[2..];
+                }
+                b'x' => {
+                    buf_base = 16;
+                    buf_start = &buf[2..];
+                }
+                _ => {}
+            }
         }
     }
-    Ok(acc as u8)
+
+    // const add = switch (sign) { .pos => math.add, .neg => math.sub };
+    //
+    // accumulate into Accumulate which is always 8 bits or larger.  this prevents
+    // `buf_base` from overflowing Result.
+    // var accumulate: Accumulate = 0;
+    let mut accumulate: u8 = 0;
+
+    // if (buf_start[0] == '_' or buf_start[buf_start.len - 1] == '_') return error.InvalidCharacter;
+    if buf_start[0] == b'_' || buf_start[buf_start.len() - 1] == b'_' {
+        return Err(ParseIntError::InvalidCharacter);
+    }
+
+    // for (buf_start) |c| {
+    for &c in buf_start {
+        // if (c == '_') continue;
+        if c == b'_' {
+            continue;
+        }
+        // const digit = try charToDigit(math.cast(u8, c) orelse return error.InvalidCharacter, buf_base);
+        let digit = char_to_digit(c, buf_base)?;
+        // if (accumulate != 0) {
+        //     accumulate = try math.mul(Accumulate, accumulate, math.cast(Accumulate, buf_base) orelse return error.Overflow);
+        // } else if (sign == .neg) {
+        if accumulate != 0 {
+            // `math.cast(u8, buf_base)`: `buf_base` is at most 36, always
+            // representable in the `u8` accumulator width.
+            accumulate = accumulate
+                .checked_mul(buf_base)
+                .ok_or(ParseIntError::Overflow)?;
+        } else if neg {
+            // The first digit of a negative number.
+            // Consider parsing "-4" as an i3.
+            // This should work, but positive 4 overflows i3, so we can't cast the digit to T and subtract.
+            // accumulate = math.cast(Accumulate, -@as(i8, @intCast(digit))) orelse return error.Overflow;
+            //
+            // `Accumulate` is unsigned here, so the cast of `-digit` only
+            // succeeds for `digit == 0` (`"-0"` parses; `"-1"` overflows).
+            if digit != 0 {
+                return Err(ParseIntError::Overflow);
+            }
+            // continue;
+            continue;
+        }
+        // accumulate = try add(Accumulate, accumulate, math.cast(Accumulate, digit) orelse return error.Overflow);
+        accumulate = if neg {
+            accumulate
+                .checked_sub(digit)
+                .ok_or(ParseIntError::Overflow)?
+        } else {
+            accumulate
+                .checked_add(digit)
+                .ok_or(ParseIntError::Overflow)?
+        };
+    }
+
+    Ok(accumulate)
+}
+
+/// PORTS: `std.fmt.charToDigit(c, base)`.
+// pub fn charToDigit(c: u8, base: u8) (error{InvalidCharacter}!u8) {
+fn char_to_digit(c: u8, base: u8) -> Result<u8, ParseIntError> {
+    // const value = switch (c) { '0'...'9' => c - '0', 'A'...'Z' => c - 'A' + 10,
+    //     'a'...'z' => c - 'a' + 10, else => return error.InvalidCharacter };
+    let value = match c {
+        b'0'..=b'9' => c - b'0',
+        b'A'..=b'Z' => c - b'A' + 10,
+        b'a'..=b'z' => c - b'a' + 10,
+        _ => return Err(ParseIntError::InvalidCharacter),
+    };
+
+    // if (value >= base) return error.InvalidCharacter;
+    if value >= base {
+        return Err(ParseIntError::InvalidCharacter);
+    }
+
+    // return value;
+    Ok(value)
 }
 
 fn trim_space_tab(s: &[u8]) -> &[u8] {
@@ -904,12 +1126,33 @@ impl RGB {
     /// Parse a color from a floating point intensity value.
     ///
     /// The value should be between 0.0 and 1.0, inclusive.
-    fn from_intensity(value: &str) -> Result<u8, InvalidFormat> {
+    // PORT NOTE: `[]const u8`, NOT `&str`. The reference slices `parse`'s input
+    // by BYTE index; taking a `&str` here would make those slices panic on a
+    // non-char-boundary index instead of failing the parse (see `parse`).
+    fn from_intensity(value: &[u8]) -> Result<u8, InvalidFormat> {
+        // const i = std.fmt.parseFloat(f64, value) catch return error.InvalidFormat;
+        //
+        // PORT NOTE: `parseFloat` only ever accepts ASCII (digits, `.`, `eE`,
+        // sign, `inf`/`nan`, `0x` hex floats, `_` separators), so non-UTF-8
+        // bytes are an `InvalidFormat` in the reference too; rejecting them
+        // here before the `f64` parse is behavior-preserving.
+        let value = std::str::from_utf8(value).map_err(|_| InvalidFormat)?;
         let i = value.parse::<f64>().map_err(|_| InvalidFormat)?;
-        if !(0.0..=1.0).contains(&i) {
+        // if (i < 0.0 or i > 1.0) return error.InvalidFormat;
+        //
+        // PORT NOTE: written as two comparisons, NOT `(0.0..=1.0).contains(&i)`.
+        // The reference lets NaN through (`NaN < 0.0` and `NaN > 1.0` are both
+        // false) whereas `contains` rejects it; Ghostty therefore accepts
+        // `rgbi:NaN/0/0` as black. `+inf` is still rejected (`inf > 1.0`).
+        #[allow(clippy::manual_range_contains)]
+        if i < 0.0 || i > 1.0 {
             return Err(InvalidFormat);
         }
 
+        // return @intFromFloat(i * std.math.maxInt(u8));
+        //
+        // PORT NOTE: Rust's saturating `as u8` maps NaN → 0, reproducing the
+        // observed `@intFromFloat(NaN * 255)` == 0 of the reference without UB.
         Ok((i * u8::MAX as f64) as u8)
     }
 
@@ -917,12 +1160,20 @@ impl RGB {
     ///
     /// The string can contain 1, 2, 3, or 4 characters and represents the color
     /// value scaled in 4, 8, 12, or 16 bits, respectively.
-    fn from_hex(value: &str) -> Result<u8, InvalidFormat> {
+    // PORT NOTE: `[]const u8`, NOT `&str` — see `from_intensity`/`parse`. The
+    // length switch below is over a BYTE length, exactly like the reference.
+    fn from_hex(value: &[u8]) -> Result<u8, InvalidFormat> {
         if value.is_empty() || value.len() > 4 {
             return Err(InvalidFormat);
         }
 
-        let color = u16::from_str_radix(value, 16).map_err(|_| InvalidFormat)?;
+        // const color = std.fmt.parseUnsigned(u16, value, 16) catch return error.InvalidFormat;
+        //
+        // PORT NOTE: `parse_unsigned_u16`, NOT `u16::from_str_radix`. The
+        // reference rejects a leading sign (`"+f"`/`"-f"`) but accepts `_` as an
+        // interior digit separator (`"f_f"` == 255); `from_str_radix` does the
+        // opposite on both counts.
+        let color = parse_unsigned_u16(value, 16).map_err(|_| InvalidFormat)?;
 
         let divisor: usize = match value.len() {
             1 => 0xF, // std.math.maxInt(u4)
@@ -960,15 +1211,25 @@ impl RGB {
     ///    compatibility with Rustty config/theme color values.
     ///
     /// 4. X11 color names
-    pub fn parse(value: &str) -> Result<RGB, InvalidFormat> {
+    // PORT NOTE: `value: []const u8`, NOT `&str`. This signature is load-bearing
+    // for fidelity, not a style choice: the reference picks every sub-slice
+    // below by BYTE index off a BYTE length (`input.len`), and a byte slice of
+    // `[]const u8` can never trap — a mid-scalar cut just yields bytes that
+    // fail `fromHex`/`parseFloat`, i.e. `error.InvalidFormat`. With a `&str`
+    // receiver those same indices hit `str`'s `Index<Range>` char-boundary
+    // assertion and PANIC, which is reachable from untrusted terminal input on
+    // every color-spec OSC (`OSC 4/10/11/12/104`, kitty `OSC 21`): e.g.
+    // `OSC 4;1;aébcd` is valid UTF-8 whose byte length is 6, selecting the
+    // 6-byte arm, whose `input[2..4]` cut lands inside `é`. Found by
+    // `cargo fuzz run fuzz_osc`; see `crates/rustty-vt/fuzz/findings/`.
+    pub fn parse(value: &[u8]) -> Result<RGB, InvalidFormat> {
         // const input = std.mem.trim(u8, value, " \t");
-        let input = value.trim_matches(|c| c == ' ' || c == '\t');
+        let input = trim_space_tab(value);
         if input.is_empty() {
             return Err(InvalidFormat);
         }
 
-        let bytes = input.as_bytes();
-        if bytes[0] == b'#' {
+        if input[0] == b'#' {
             return match input.len() {
                 4 => Ok(RGB {
                     r: RGB::from_hex(&input[1..2])?,
@@ -996,8 +1257,16 @@ impl RGB {
         }
 
         // Check for X11 named colors. We allow whitespace around the edges.
-        if let Some(rgb) = x11_color::map.get(input) {
-            return Ok(rgb);
+        //
+        // PORT NOTE: `x11_color.map.get(input)` — the reference map is keyed by
+        // `[]const u8` and compares ASCII-case-insensitively. Every key in
+        // `rgb.txt` is ASCII, so non-UTF-8 input can never match; viewing the
+        // bytes as `&str` for the (Rust-side `&str`-keyed) lookup and treating
+        // an invalid-UTF-8 view as "no match" is exactly the same decision.
+        if let Ok(input_str) = std::str::from_utf8(input) {
+            if let Some(rgb) = x11_color::map.get(input_str) {
+                return Ok(rgb);
+            }
         }
 
         // switch (input.len) { 3 => ..., 6 => ..., else => {} }
@@ -1019,20 +1288,20 @@ impl RGB {
             _ => {}
         }
 
-        if input.len() < "rgb:a/a/a".len() || &input[0..3] != "rgb" {
+        if input.len() < "rgb:a/a/a".len() || &input[0..3] != b"rgb" {
             return Err(InvalidFormat);
         }
 
         let mut i: usize = 3;
 
-        let use_intensity = if bytes[i] == b'i' {
+        let use_intensity = if input[i] == b'i' {
             i += 1;
             true
         } else {
             false
         };
 
-        if bytes[i] != b':' {
+        if input[i] != b':' {
             return Err(InvalidFormat);
         }
 
@@ -1040,7 +1309,7 @@ impl RGB {
 
         let r = {
             // PORT NOTE: `std.mem.indexOfScalarPos(u8, input, i, '/')`.
-            let slice = match input[i..].find('/') {
+            let slice = match input[i..].iter().position(|&b| b == b'/') {
                 Some(end_rel) => &input[i..i + end_rel],
                 None => return Err(InvalidFormat),
             };
@@ -1055,7 +1324,7 @@ impl RGB {
         };
 
         let g = {
-            let slice = match input[i..].find('/') {
+            let slice = match input[i..].iter().position(|&b| b == b'/') {
                 Some(end_rel) => &input[i..i + end_rel],
                 None => return Err(InvalidFormat),
             };
@@ -1386,6 +1655,79 @@ mod tests {
         );
     }
 
+    // PARITY (rustty-added): `std.fmt.parseInt(u8, .., 0)` sign and `_`-separator
+    // semantics the oracle's own `parsePaletteEntry` test does not exercise. Each
+    // expectation below was cross-checked against zig 0.16 `std.fmt.parseInt`.
+    #[test]
+    fn parse_palette_entry_zig_parse_int_semantics() {
+        // A leading sign is accepted by `parseInt` (unlike `parseUnsigned`).
+        assert_eq!(parse_palette_entry(b"+1=#AABBCC").unwrap().index, 1);
+        assert_eq!(parse_palette_entry(b"-0=#AABBCC").unwrap().index, 0);
+        // `-1` for a `u8` is `error.Overflow`, NOT `error.InvalidCharacter`.
+        assert_eq!(
+            parse_palette_entry(b"-1=#AABBCC"),
+            Err(ParsePaletteEntryError::Overflow)
+        );
+
+        // `_` separators are legal strictly BETWEEN digits.
+        assert_eq!(parse_palette_entry(b"1_2=#AABBCC").unwrap().index, 12);
+        assert_eq!(parse_palette_entry(b"1__2=#AABBCC").unwrap().index, 12);
+        assert_eq!(parse_palette_entry(b"0x1_1=#AABBCC").unwrap().index, 17);
+        assert_eq!(parse_palette_entry(b"+0b1_11=#AABBCC").unwrap().index, 7);
+        for bad in [
+            &b"_1=#AABBCC"[..],
+            &b"1_=#AABBCC"[..],
+            &b"_=#AABBCC"[..],
+            &b"0x_F=#AABBCC"[..],
+            &b"0b_10=#AABBCC"[..],
+            &b"0xF_=#AABBCC"[..],
+            &b"+=#AABBCC"[..],
+            &b"-=#AABBCC"[..],
+        ] {
+            assert_eq!(
+                parse_palette_entry(bad),
+                Err(ParsePaletteEntryError::InvalidFormat),
+                "expected InvalidFormat for {:?}",
+                std::str::from_utf8(bad).unwrap()
+            );
+        }
+
+        // Radix bounds still report Overflow (not InvalidFormat).
+        assert_eq!(parse_palette_entry(b"0xFF=#AABBCC").unwrap().index, 255);
+        assert_eq!(
+            parse_palette_entry(b"0x100=#AABBCC"),
+            Err(ParsePaletteEntryError::Overflow)
+        );
+    }
+
+    // PARITY (rustty-added): the `std.fmt.parseUnsigned(u8, .., 10)` half of the
+    // same helper, used by the Kitty OSC 21 key parser.
+    #[test]
+    fn parse_unsigned_u8_base10_zig_semantics() {
+        assert_eq!(parse_unsigned_u8(b"0", 10), Ok(0));
+        assert_eq!(parse_unsigned_u8(b"255", 10), Ok(255));
+        assert_eq!(parse_unsigned_u8(b"1_2", 10), Ok(12));
+        assert_eq!(parse_unsigned_u8(b"2_5_5", 10), Ok(255));
+        // No sign prefix is accepted.
+        assert_eq!(
+            parse_unsigned_u8(b"+1", 10),
+            Err(ParseIntError::InvalidCharacter)
+        );
+        assert_eq!(
+            parse_unsigned_u8(b"-1", 10),
+            Err(ParseIntError::InvalidCharacter)
+        );
+        assert_eq!(parse_unsigned_u8(b"256", 10), Err(ParseIntError::Overflow));
+        for bad in [&b"_1"[..], &b"1_"[..], &b""[..], &b"0x1"[..], &b" "[..]] {
+            assert_eq!(
+                parse_unsigned_u8(bad, 10),
+                Err(ParseIntError::InvalidCharacter),
+                "expected InvalidCharacter for {:?}",
+                std::str::from_utf8(bad).unwrap()
+            );
+        }
+    }
+
     // new "RGB.parse" assertions (oracle 2970e9a2a)
     #[test]
     fn rgb_parse_bare_hex_and_trim() {
@@ -1395,7 +1737,7 @@ mod tests {
                 g: 11,
                 b: 12
             },
-            RGB::parse("0A0B0C").unwrap()
+            RGB::parse(b"0A0B0C").unwrap()
         );
         assert_eq!(
             RGB {
@@ -1403,7 +1745,7 @@ mod tests {
                 g: 255,
                 b: 255
             },
-            RGB::parse("FFFFFF").unwrap()
+            RGB::parse(b"FFFFFF").unwrap()
         );
         assert_eq!(
             RGB {
@@ -1411,7 +1753,7 @@ mod tests {
                 g: 255,
                 b: 255
             },
-            RGB::parse("FFF").unwrap()
+            RGB::parse(b"FFF").unwrap()
         );
         assert_eq!(
             RGB {
@@ -1419,7 +1761,7 @@ mod tests {
                 g: 68,
                 b: 85
             },
-            RGB::parse("#345").unwrap()
+            RGB::parse(b"#345").unwrap()
         );
         assert_eq!(
             RGB {
@@ -1427,7 +1769,7 @@ mod tests {
                 g: 187,
                 b: 204
             },
-            RGB::parse(" #AABBCC   ").unwrap()
+            RGB::parse(b" #AABBCC   ").unwrap()
         );
     }
 
@@ -1521,14 +1863,14 @@ mod tests {
 
     #[test]
     fn rgb_parse() {
-        assert_eq!(Ok(RGB { r: 255, g: 0, b: 0 }), RGB::parse("rgbi:1.0/0/0"));
+        assert_eq!(Ok(RGB { r: 255, g: 0, b: 0 }), RGB::parse(b"rgbi:1.0/0/0"));
         assert_eq!(
             Ok(RGB {
                 r: 127,
                 g: 160,
                 b: 0
             }),
-            RGB::parse("rgb:7f/a0a0/0")
+            RGB::parse(b"rgb:7f/a0a0/0")
         );
         assert_eq!(
             Ok(RGB {
@@ -1536,7 +1878,7 @@ mod tests {
                 g: 255,
                 b: 255
             }),
-            RGB::parse("rgb:f/ff/fff")
+            RGB::parse(b"rgb:f/ff/fff")
         );
         assert_eq!(
             Ok(RGB {
@@ -1544,7 +1886,7 @@ mod tests {
                 g: 255,
                 b: 255
             }),
-            RGB::parse("#ffffff")
+            RGB::parse(b"#ffffff")
         );
         assert_eq!(
             Ok(RGB {
@@ -1552,7 +1894,7 @@ mod tests {
                 g: 255,
                 b: 255
             }),
-            RGB::parse("#fff")
+            RGB::parse(b"#fff")
         );
         assert_eq!(
             Ok(RGB {
@@ -1560,7 +1902,7 @@ mod tests {
                 g: 255,
                 b: 255
             }),
-            RGB::parse("#fffffffff")
+            RGB::parse(b"#fffffffff")
         );
         assert_eq!(
             Ok(RGB {
@@ -1568,7 +1910,7 @@ mod tests {
                 g: 255,
                 b: 255
             }),
-            RGB::parse("#ffffffffffff")
+            RGB::parse(b"#ffffffffffff")
         );
         assert_eq!(
             Ok(RGB {
@@ -1576,20 +1918,20 @@ mod tests {
                 g: 0,
                 b: 16
             }),
-            RGB::parse("#ff0010")
+            RGB::parse(b"#ff0010")
         );
 
-        assert_eq!(Ok(RGB { r: 0, g: 0, b: 0 }), RGB::parse("black"));
-        assert_eq!(Ok(RGB { r: 255, g: 0, b: 0 }), RGB::parse("red"));
-        assert_eq!(Ok(RGB { r: 0, g: 255, b: 0 }), RGB::parse("green"));
-        assert_eq!(Ok(RGB { r: 0, g: 0, b: 255 }), RGB::parse("blue"));
+        assert_eq!(Ok(RGB { r: 0, g: 0, b: 0 }), RGB::parse(b"black"));
+        assert_eq!(Ok(RGB { r: 255, g: 0, b: 0 }), RGB::parse(b"red"));
+        assert_eq!(Ok(RGB { r: 0, g: 255, b: 0 }), RGB::parse(b"green"));
+        assert_eq!(Ok(RGB { r: 0, g: 0, b: 255 }), RGB::parse(b"blue"));
         assert_eq!(
             Ok(RGB {
                 r: 255,
                 g: 255,
                 b: 255
             }),
-            RGB::parse("white")
+            RGB::parse(b"white")
         );
 
         assert_eq!(
@@ -1598,7 +1940,7 @@ mod tests {
                 g: 252,
                 b: 0
             }),
-            RGB::parse("LawnGreen")
+            RGB::parse(b"LawnGreen")
         );
         assert_eq!(
             Ok(RGB {
@@ -1606,7 +1948,7 @@ mod tests {
                 g: 250,
                 b: 154
             }),
-            RGB::parse("medium spring green")
+            RGB::parse(b"medium spring green")
         );
         assert_eq!(
             Ok(RGB {
@@ -1614,25 +1956,174 @@ mod tests {
                 g: 139,
                 b: 34
             }),
-            RGB::parse(" Forest Green ")
+            RGB::parse(b" Forest Green ")
         );
 
         // Invalid format
-        assert_eq!(Err(InvalidFormat), RGB::parse("rgb;"));
-        assert_eq!(Err(InvalidFormat), RGB::parse("rgb:"));
-        assert_eq!(Err(InvalidFormat), RGB::parse(":a/a/a"));
-        assert_eq!(Err(InvalidFormat), RGB::parse("a/a/a"));
-        assert_eq!(Err(InvalidFormat), RGB::parse("rgb:a/a/a/"));
-        assert_eq!(Err(InvalidFormat), RGB::parse("rgb:00000///"));
-        assert_eq!(Err(InvalidFormat), RGB::parse("rgb:000/"));
-        assert_eq!(Err(InvalidFormat), RGB::parse("rgbi:a/a/a"));
-        assert_eq!(Err(InvalidFormat), RGB::parse("rgb:0.5/0.0/1.0"));
-        assert_eq!(Err(InvalidFormat), RGB::parse("rgb:not/hex/zz"));
-        assert_eq!(Err(InvalidFormat), RGB::parse("#"));
-        assert_eq!(Err(InvalidFormat), RGB::parse("#ff"));
-        assert_eq!(Err(InvalidFormat), RGB::parse("#ffff"));
-        assert_eq!(Err(InvalidFormat), RGB::parse("#fffff"));
-        assert_eq!(Err(InvalidFormat), RGB::parse("#gggggg"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb;"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b":a/a/a"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"a/a/a"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:a/a/a/"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:00000///"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:000/"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgbi:a/a/a"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:0.5/0.0/1.0"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:not/hex/zz"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"#"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"#ff"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"#ffff"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"#fffff"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"#gggggg"));
+    }
+
+    /// PORT NOTE: no reference test — these pin the `fromIntensity`/`fromHex`
+    /// edge semantics of the oracle (`src/terminal/color.zig:593-628`) that a
+    /// naive Rust translation gets wrong.
+    #[test]
+    fn rgb_parse_intensity_and_hex_zig_edge_semantics() {
+        // `if (i < 0.0 or i > 1.0)` lets NaN through; `@intFromFloat(NaN * 255)`
+        // is observed to be 0, so a NaN intensity parses as black.
+        assert_eq!(Ok(RGB { r: 0, g: 0, b: 0 }), RGB::parse(b"rgbi:NaN/0/0"));
+        assert_eq!(Ok(RGB { r: 0, g: 0, b: 0 }), RGB::parse(b"rgbi:nan/0/0"));
+        assert_eq!(
+            Ok(RGB { r: 0, g: 255, b: 0 }),
+            RGB::parse(b"rgbi:nan/1.0/0")
+        );
+
+        // Infinities are still out of range (`inf > 1.0`, `-inf < 0.0`).
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgbi:inf/0/0"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgbi:-inf/0/0"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgbi:1.5/0/0"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgbi:-0.5/0/0"));
+
+        // `std.fmt.parseUnsigned` accepts NO sign prefix.
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:+f/0/0"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:+0/0/0"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:+ff/0/0"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:-f/0/0"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"#+f0010"));
+
+        // ...but it does accept `_` as an interior digit separator. The divisor
+        // stays keyed on the RAW component length (3 here, not 2), so "f_f"
+        // (== 255) scales as a 12-bit value: 255 * 255 / 0xFFF == 15.
+        assert_eq!(Ok(RGB { r: 15, g: 0, b: 0 }), RGB::parse(b"rgb:f_f/0/0"));
+        // Same for a 4-char component: "f_ff" == 0xfff scaled as 16-bit.
+        assert_eq!(Ok(RGB { r: 15, g: 0, b: 0 }), RGB::parse(b"rgb:f_ff/0/0"));
+        // Leading/trailing `_` are rejected.
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:_f/0/0"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:f_/0/0"));
+    }
+
+    // REGRESSION (fuzz finding, `cargo fuzz run fuzz_osc`, 2026-08-11):
+    // `RGB::parse` used to take `&str` and index it with the reference's BYTE
+    // ranges, so any spec holding a multi-byte scalar hit `str`'s char-boundary
+    // assertion and PANICKED — reachable from untrusted terminal input via
+    // `OSC 4/10/11/12/104` and kitty `OSC 21`. The reference
+    // (ghostty src/terminal/color.zig:657 `parse(value: []const u8)`) slices
+    // BYTES, which never traps: the cut bytes just fail `fromHex`/`parseFloat`
+    // and it returns `error.InvalidFormat`. Every case below is an
+    // `InvalidFormat`, and the test's real assertion is that none of them abort.
+    #[test]
+    fn parse_byte_slices_never_panics_on_a_non_char_boundary() {
+        // The exact crashing spec from `fuzz/findings/osc4-rgb-parse-char-boundary`
+        // (`OSC 4;1;aébcd`): valid UTF-8, 6 BYTES, so the 6-byte arm runs and
+        // its `input[2..4]` cut lands inside 'é' (bytes 1..3 of the string).
+        assert_eq!(Err(InvalidFormat), RGB::parse("aébcd".as_bytes()));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"a\xc3\xa9bcd"));
+
+        // 3-byte arm: `input[1..2]` cuts 'é' in half.
+        assert_eq!(Err(InvalidFormat), RGB::parse("aé".as_bytes()));
+        // ...and a 3-byte arm that is a SINGLE scalar (all three cuts split it).
+        assert_eq!(Err(InvalidFormat), RGB::parse("€".as_bytes()));
+
+        // Every `#` length arm (4/7/10/13 bytes) with a scalar straddling a cut.
+        assert_eq!(Err(InvalidFormat), RGB::parse("#aé".as_bytes()));
+        assert_eq!(Err(InvalidFormat), RGB::parse("#aébcd".as_bytes()));
+        assert_eq!(Err(InvalidFormat), RGB::parse("#aébcdefg".as_bytes()));
+        assert_eq!(Err(InvalidFormat), RGB::parse("#aébcdefghij".as_bytes()));
+
+        // The `rgb:`/`rgbi:` forms: the component slices are found by byte
+        // scanning for '/', so a scalar inside a component is just bad hex.
+        assert_eq!(Err(InvalidFormat), RGB::parse("rgb:é/0/0".as_bytes()));
+        assert_eq!(Err(InvalidFormat), RGB::parse("rgbi:é/0/0".as_bytes()));
+        assert_eq!(Err(InvalidFormat), RGB::parse("rgb:0/0/é".as_bytes()));
+        // A multi-byte scalar where the `rgb`/`i`/`:` sigil bytes are read.
+        assert_eq!(Err(InvalidFormat), RGB::parse("rgbé:0/0/0".as_bytes()));
+        assert_eq!(Err(InvalidFormat), RGB::parse("rgé:a/a/a".as_bytes()));
+
+        // Trimming is byte-wise (" \t" only), so a leading/trailing scalar stays.
+        assert_eq!(Err(InvalidFormat), RGB::parse("  aébcd  ".as_bytes()));
+
+        // Raw INVALID UTF-8 — impossible to hand to a `&str`-based parse at all,
+        // but a plain byte slice for the reference. Includes the payload from
+        // `fuzz/findings/osc21-kitty-color-lossy-char-boundary` (`U\x8evv`),
+        // whose 4 raw bytes must NOT be widened to 6 by a lossy decode.
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"U\x8evv"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"\xff\xfe\xfd"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"\x80\x80\x80\x80\x80\x80"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"#\xff\xff\xff\xff\xff\xff"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:\xff/\xff/\xff"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgbi:\xff/\xff/\xff"));
+        // An invalid byte cannot match an X11 name either.
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"re\xffd"));
+
+        // Sanity: the byte-slice signature did not break the ASCII forms that
+        // share these arms.
+        assert_eq!(Ok(RGB { r: 255, g: 0, b: 0 }), RGB::parse(b"f00"));
+        assert_eq!(Ok(RGB { r: 255, g: 0, b: 0 }), RGB::parse(b"ff0000"));
+        assert_eq!(Ok(RGB { r: 255, g: 0, b: 0 }), RGB::parse(b"red"));
+    }
+
+    // REGRESSION (same fuzz finding, the `parse_palette_entry` entry point):
+    // `parsePaletteEntry` forwards the raw bytes after '=' to `RGB.parse`.
+    #[test]
+    fn parse_palette_entry_non_ascii_spec_is_invalid_format_not_a_panic() {
+        assert_eq!(
+            Err(ParsePaletteEntryError::InvalidFormat),
+            parse_palette_entry("1=aébcd".as_bytes())
+        );
+        assert_eq!(
+            Err(ParsePaletteEntryError::InvalidFormat),
+            parse_palette_entry(b"1=U\x8evv")
+        );
+    }
+
+    #[test]
+    fn parse_unsigned_u16_base16_zig_semantics() {
+        assert_eq!(Ok(0xffff), parse_unsigned_u16(b"ffff", 16));
+        assert_eq!(Ok(0x0f), parse_unsigned_u16(b"F", 16));
+        assert_eq!(Ok(0xff), parse_unsigned_u16(b"f_f", 16));
+        // Signs are `charToDigit` failures, not sign prefixes.
+        assert_eq!(
+            Err(ParseIntError::InvalidCharacter),
+            parse_unsigned_u16(b"+f", 16)
+        );
+        assert_eq!(
+            Err(ParseIntError::InvalidCharacter),
+            parse_unsigned_u16(b"-f", 16)
+        );
+        // Leading/trailing separators.
+        assert_eq!(
+            Err(ParseIntError::InvalidCharacter),
+            parse_unsigned_u16(b"_f", 16)
+        );
+        assert_eq!(
+            Err(ParseIntError::InvalidCharacter),
+            parse_unsigned_u16(b"f_", 16)
+        );
+        assert_eq!(
+            Err(ParseIntError::InvalidCharacter),
+            parse_unsigned_u16(b"", 16)
+        );
+        // `u16` width accumulate: overflow, not truncation.
+        assert_eq!(
+            Err(ParseIntError::Overflow),
+            parse_unsigned_u16(b"fffff", 16)
+        );
+        // base 0 prefix detection.
+        assert_eq!(Ok(255), parse_unsigned_u16(b"0xff", 0));
+        assert_eq!(Ok(10), parse_unsigned_u16(b"10", 0));
     }
 
     #[test]

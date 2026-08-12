@@ -22,24 +22,39 @@ path = "src/main.rs"
 # The NATIVE GTK4/libadwaita apprt backend leaf (L5.1 T12): turns
 # `main_rustty`'s GUI launch path (`App::create` + `gtk::App::init/run`) on for
 # the `Runtime::Gtk` build. DEFAULT-ON so a plain `cargo build -p rustty` on
-# Linux — where `Runtime::Gtk` is the build-config default
-# (`rustty-build-config/src/apprt.rs:30`) — enters the GTK app instead of the
-# deferred placeholder leaf.
+# Linux or FreeBSD — where `Runtime::Gtk` is the build-config default
+# (`rustty-build-config/src/apprt.rs:26-36`, the port of `apprt/runtime.zig:14-24`
+# `.linux, .freebsd => .gtk`) — enters the GTK app instead of the deferred
+# placeholder leaf.
 #
-# R5: a NO-OP off Linux. `rustty-apprt/gtk` only pulls the gtk4-rs stack behind
-# its own `cfg(target_os = "linux")` table, and the GTK arm in `main_rustty.rs`
-# is `#[cfg(all(target_os = "linux", feature = "gtk"))]`-gated — so on macOS the
-# default `gtk` feature compiles no gtk4-rs and changes no behavior (the None
-# runtime takes the usage-banner path). `--no-default-features` yields the
-# headless / deferred-leaf build.
-default = ["gtk"]
+# R5: a NO-OP off those two targets. `rustty-apprt/gtk` only pulls the gtk4-rs
+# stack behind its own `cfg(any(target_os = "linux", target_os = "freebsd"))`
+# table, and the GTK arm in `main_rustty.rs` is
+# `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]`-gated
+# — so on macOS the default `gtk` feature compiles no gtk4-rs and changes no
+# behavior (the None runtime takes the usage-banner path).
+# `--no-default-features` yields the headless / deferred-leaf build.
+default = ["gtk", "wayland", "x11"]
 gtk = ["rustty-apprt/gtk", "rustty-cli/gtk", "dep:allocator-api2"]
 # Windowing-protocol arms of the GTK apprt's `winproto` union, passed through to
-# rustty-apprt. Both imply `gtk` and are OFF by default (R5: the macOS/embedded
-# build never selects them, and a plain `--features gtk` build stays noop-only,
-# pulling zero protocol crates). A Linux distro build enables the arms its target
-# sessions need — typically both. `x11` additionally makes `GDK_BACKEND=x11` runs
-# land on the real X11 arm rather than falling through to noop.
+# rustty-apprt. Both imply `gtk` and are DEFAULT-ON (F-007): ghostty derives its
+# gtk-wayland/gtk-x11 build defaults from `pkg-config --variable=targets gtk4`
+# (src/build/gtk.zig probing the distro GTK), which on a normal distro GTK
+# enables BOTH arms. Cargo has no declarative pkg-config autodetection, so
+# default-on is the closest analogue — a default Linux/FreeBSD build gets the same
+# winproto arms ghostty's default build gets. Still a NO-OP off those targets
+# (R5): every protocol dep lives in rustty-apprt's
+# `[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]`
+# table and all winproto code is
+# `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = ...))]`-gated,
+# so macOS/embedded builds compile zero protocol crates and are byte-identical
+# (same mechanism as the default-on `gtk` feature). Distros packaging a
+# single-target GTK (Wayland-only or X11-only — the case ghostty's pkg-config
+# probe detects) opt out with `--no-default-features --features gtk,wayland`
+# (or `gtk,x11`); a
+# plain `--no-default-features --features gtk` build stays noop-only. `x11`
+# additionally makes `GDK_BACKEND=x11` runs land on the real X11 arm rather
+# than falling through to noop.
 wayland = ["gtk", "rustty-apprt/wayland"]
 x11 = ["gtk", "rustty-apprt/x11"]
 
@@ -80,8 +95,10 @@ rustty-build-config = { workspace = true }
 # The GUI-leaf KAT (`tests/gui_leaf.rs`) names `rustty_apprt::gtk::App` as a
 # compile-gate that the `Runtime::Gtk` arm wires the NATIVE backend (integration
 # tests reach only dev-dependencies, not the crate's regular `rustty-apprt`
-# edge). Linux-target-gated to mirror the backend's own `cfg(target_os =
-# "linux")` deps; the test file is itself `#[cfg(all(target_os = "linux",
-# feature = "gtk"))]`, so without the feature nothing here is referenced.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+# edge). Target-gated to mirror the backend's own
+# `cfg(any(target_os = "linux", target_os = "freebsd"))` deps (W2D/F-002); the
+# test file is itself
+# `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]`,
+# so without the feature nothing here is referenced.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dev-dependencies]
 rustty-apprt = { workspace = true, features = ["gtk"] }

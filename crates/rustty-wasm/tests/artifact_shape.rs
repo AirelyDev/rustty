@@ -146,8 +146,11 @@ fn artifact_shape() {
     }
 
     // The reference retention set's C-ABI exports: `config.zig`'s `Wasm` block and
-    // `font/Atlas.zig`'s `Wasm` block. Names are UNPREFIXED by design (the JS host
-    // binds them bare) — see the R2 exception in the WS14 plan.
+    // ALL FOUR of `font/main.zig`'s wasm groups (`Atlas.Wasm`,
+    // `DeferredFace.Wasm`, `face.web_canvas.Wasm`, `shape.web_canvas.Wasm` —
+    // the latter three from the D1 shaper tier, feature `ghostty-wasm-abi`).
+    // Names are UNPREFIXED by design (the JS host binds them bare) — see the R2
+    // exception in the WS14 plan.
     for want in [
         "config_new",
         "config_free",
@@ -160,6 +163,19 @@ fn artifact_shape() {
         "atlas_grow",
         "atlas_clear",
         "atlas_debug_canvas",
+        // `DeferredFace.Wasm` (`DeferredFace.zig:423-466`).
+        "deferred_face_new",
+        "deferred_face_free",
+        "deferred_face_load",
+        // `face.web_canvas.Wasm` (`face/web_canvas.zig:489-557`).
+        "face_new",
+        "face_free",
+        "face_render_glyph",
+        "face_debug_canvas",
+        // `shape.web_canvas.Wasm` (`shaper/web_canvas.zig:231-305`).
+        "shaper_new",
+        "shaper_free",
+        "shaper_test",
     ] {
         assert!(
             exports.iter().any(|e| e == want),
@@ -171,5 +187,19 @@ fn artifact_shape() {
     assert!(
         exports.iter().any(|e| e == "memory"),
         "the module must export its `memory`; exports = {exports:?}"
+    );
+
+    // `os/wasm/log.zig`'s `extern "env" fn log(ptr, len)` — the sink
+    // `main_wasm.zig` installs as `std_options.logFn` and that `config.Wasm`'s
+    // error arms log through (`log.err("error loading config err={}")`). It is a
+    // REQUIRED import of the artifact: without it those errors would be silent in
+    // the browser. NOTE that `#[link(wasm_import_module = "env")]` on the extern
+    // block is what makes this an import at all — a bare `extern "C"` block leaves
+    // an undefined `log` that `wasm-ld` binds to the sysroot libm `log`, producing
+    // a `signature_mismatch:log` trap stub and NO import.
+    assert!(
+        imports.iter().any(|(m, f)| m == "env" && f == "log"),
+        "the module must import `env.log` (the `os/wasm/log.zig` host sink); \
+         imports = {imports:?}"
     );
 }

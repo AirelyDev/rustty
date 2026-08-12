@@ -34,11 +34,19 @@ fn main() {
     // Recompile the metallib when the shader source changes.
     println!("cargo::rerun-if-changed={SHADER_SRC}");
 
-    // Linux/OpenGL: pre-resolve the GLSL `#include`s and stage the results in
-    // `$OUT_DIR/glsl/` for `opengl::shaders` to `include_bytes!`. This ports
-    // ghostty's comptime `loadShaderCode`/`processIncludes`
+    // Linux/FreeBSD (i.e. OpenGL): pre-resolve the GLSL `#include`s and stage the
+    // results in `$OUT_DIR/glsl/` for `opengl::shaders` to `include_bytes!`. This
+    // ports ghostty's comptime `loadShaderCode`/`processIncludes`
     // (`src/renderer/opengl/shaders.zig:341-376`) to build time.
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+    //
+    // W2D/F-003: the predicate must be the exact set of targets on which
+    // `crate::opengl` is compiled (`any(target_os = "linux", target_os =
+    // "freebsd")` — `renderer/backend.zig:20-21`'s non-Darwin `.opengl` arm),
+    // otherwise the FreeBSD build compiles the module without its staged assets.
+    if matches!(
+        std::env::var("CARGO_CFG_TARGET_OS").as_deref(),
+        Ok("linux") | Ok("freebsd")
+    ) {
         resolve_glsl_includes();
     }
 

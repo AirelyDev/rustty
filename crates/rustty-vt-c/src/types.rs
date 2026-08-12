@@ -21,18 +21,27 @@
 // const mouse_encode = @import("mouse_encode.zig");
 // const grid_ref = @import("grid_ref.zig");
 //
-// PORT NOTE (R3, runtime vs comptime): the reference generates `json` at COMPTIME
-// by reflecting over each extern struct (`@typeInfo`, `@offsetOf`, `@sizeOf`,
-// `@alignOf`). Rust has no comptime type reflection, so the SAME metadata is
-// computed at runtime from `core::mem::offset_of!` / `size_of` / `align_of` over
-// the identical `#[repr(C)]` projections, cached in a `OnceLock`. The produced
-// JSON is byte-identical to the reference's (same struct order, same field
-// order, same `std.json.Stringify` formatting). The per-field `type` strings
-// reproduce the reference `typeName` map (bool/f32/f64/i*/u*/enum/struct/
-// pointer/array/opaque) applied to each Zig field type.
+// PORT NOTE (R3, comptime): the reference generates `json` at COMPTIME by
+// reflecting over each extern struct (`@typeInfo`, `@offsetOf`, `@sizeOf`,
+// `@alignOf`). Rust has no comptime type reflection, so the metadata ROWS are
+// spelled out below, but everything else is the same comptime story: the rows
+// are `const` (`core::mem::offset_of!` / `size_of` / `align_of` are all
+// const-evaluable over the identical `#[repr(C)]` projections) and the JSON is
+// serialized by `const fn`s into a `static` byte array with a NUL sentinel,
+// exactly like the reference's `json: [:0]const u8`.
+//
+// This must NOT be a lazily-built runtime cache: `rustty_type_json` is a getter
+// that WASM embedders call while holding `DataView`/`TypedArray` views over
+// `wasmMemory.buffer` (see `include/rustty/vt/wasm.h`), and a first-call heap
+// allocation grows the linear memory, DETACHING every one of those views. The
+// reference cannot do that because its string is static data; neither can this.
+//
+// The produced JSON is byte-identical to the reference's (same struct order,
+// same field order, same `std.json.Stringify` formatting). The per-field `type`
+// strings reproduce the reference `typeName` map (bool/f32/f64/i*/u*/enum/
+// struct/pointer/array/opaque) applied to each Zig field type.
 use std::ffi::c_char;
 use std::os::raw::c_int;
-use std::sync::OnceLock;
 
 use core::mem::{align_of, offset_of, size_of};
 
@@ -70,7 +79,7 @@ struct StructInfo {
     // omitted here.
     size: usize,
     align: usize,
-    fields: Vec<FieldInfo>,
+    fields: &'static [FieldInfo],
 }
 
 impl StructInfo {
@@ -78,46 +87,94 @@ impl StructInfo {
     //     beginObject; "size":size; "align":align; "fields": beginObject;
     //     for fields: "name": { "offset":O, "size":S, "type":T }; endObject; endObject;
     // }
-    fn json_stringify(&self, out: &mut String) {
-        out.push('{');
+    const fn json_stringify(&self, out: &mut [u8], len: &mut usize) {
+        push_str(out, len, "{");
         // "size"
-        out.push_str("\"size\":");
-        push_usize(out, self.size);
+        push_str(out, len, "\"size\":");
+        push_usize(out, len, self.size);
         // "align"
-        out.push_str(",\"align\":");
-        push_usize(out, self.align);
+        push_str(out, len, ",\"align\":");
+        push_usize(out, len, self.align);
         // "fields"
-        out.push_str(",\"fields\":{");
-        for (i, f) in self.fields.iter().enumerate() {
+        push_str(out, len, ",\"fields\":{");
+        let mut i = 0;
+        while i < self.fields.len() {
             if i > 0 {
-                out.push(',');
+                push_str(out, len, ",");
             }
-            push_json_string(out, f.name);
-            out.push_str(":{\"offset\":");
-            push_usize(out, f.offset);
-            out.push_str(",\"size\":");
-            push_usize(out, f.size);
-            out.push_str(",\"type\":");
-            push_json_string(out, f.ty);
-            out.push('}');
+            let f = &self.fields[i];
+            push_json_string(out, len, f.name);
+            push_str(out, len, ":{\"offset\":");
+            push_usize(out, len, f.offset);
+            push_str(out, len, ",\"size\":");
+            push_usize(out, len, f.size);
+            push_str(out, len, ",\"type\":");
+            push_json_string(out, len, f.ty);
+            push_str(out, len, "}");
+            i += 1;
         }
-        out.push_str("}}");
+        push_str(out, len, "}}");
     }
 }
 
 // PORT NOTE: `std.json.Stringify` writes integers in decimal and escapes strings
 // minimally; these helpers reproduce that for the small, ASCII-only key set used
-// here.
-fn push_usize(out: &mut String, v: usize) {
-    out.push_str(&v.to_string());
+// here. They are `const fn` over a caller-owned byte buffer because the whole
+// document is built at COMPILE TIME (see the module PORT NOTE): no allocator,
+// no `String`, nothing that could run on a first call.
+const fn push_str(out: &mut [u8], len: &mut usize, s: &str) {
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        out[*len] = b[i];
+        *len += 1;
+        i += 1;
+    }
 }
 
-fn push_json_string(out: &mut String, s: &str) {
-    out.push('"');
+const fn push_usize(out: &mut [u8], len: &mut usize, v: usize) {
+    // Decimal, no separators — `std.json.Stringify`'s integer format.
+    let mut digits = [0u8; 20];
+    let mut n = 0;
+    let mut v = v;
+    if v == 0 {
+        digits[0] = b'0';
+        n = 1;
+    }
+    while v > 0 {
+        digits[n] = b'0' + (v % 10) as u8;
+        v /= 10;
+        n += 1;
+    }
+    while n > 0 {
+        n -= 1;
+        out[*len] = digits[n];
+        *len += 1;
+    }
+}
+
+const fn push_json_string(out: &mut [u8], len: &mut usize, s: &str) {
+    push_str(out, len, "\"");
     // The struct/field names here are all simple ASCII identifiers; no escaping
     // is required, matching the reference output.
-    out.push_str(s);
-    out.push('"');
+    push_str(out, len, s);
+    push_str(out, len, "\"");
+}
+
+/// `&str` equality usable in `const fn` (`==` on `str` is not const).
+const fn str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 // PORT NOTE: reproduce the reference's target-aware integer type strings.
@@ -127,16 +184,17 @@ fn push_json_string(out: &mut String, s: &str) {
 // on 64-bit); deriving the label from the real `size_of` narrows it correctly on
 // wasm32 while leaving 64-bit output byte-identical. Non-integer labels
 // (`enum`/`bool`/`opaque`/`struct`) and fixed-width ints pass through unchanged.
-fn resolve_ty(ty: &'static str, size: usize) -> &'static str {
-    match ty {
-        "u8" | "u16" | "u32" | "u64" => match size {
+const fn resolve_ty(ty: &'static str, size: usize) -> &'static str {
+    if str_eq(ty, "u8") || str_eq(ty, "u16") || str_eq(ty, "u32") || str_eq(ty, "u64") {
+        match size {
             1 => "u8",
             2 => "u16",
             4 => "u32",
             8 => "u64",
             _ => ty,
-        },
-        _ => ty,
+        }
+    } else {
+        ty
     }
 }
 
@@ -145,11 +203,11 @@ fn resolve_ty(ty: &'static str, size: usize) -> &'static str {
 // `@sizeOf`; here `offset_of!`/`size_of` of the identical `#[repr(C)]` types
 // produce the same numbers and the type strings reproduce `typeName(field.type)`.
 macro_rules! struct_info {
-    ($T:ty, [ $( ($name:literal, $ft:ty, $field:tt, $tystr:literal) ),* $(,)? ]) => {{
+    ($T:ty, [ $( ($name:literal, $ft:ty, $field:tt, $tystr:literal) ),* $(,)? ]) => {
         StructInfo {
             size: size_of::<$T>(),
             align: align_of::<$T>(),
-            fields: vec![
+            fields: &[
                 $(
                     FieldInfo {
                         name: $name,
@@ -160,15 +218,15 @@ macro_rules! struct_info {
                 )*
             ],
         }
-    }};
+    };
 }
 
 /// All C API structs and their Rustty C names.
 // pub const structs: std.StaticStringMap(StructInfo) = ...;
 //
 // PORT NOTE: an ordered `(name, StructInfo)` list (the reference `StaticStringMap`
-// preserves insertion order in `keys()`/`values()`), built lazily.
-fn build_structs() -> Vec<(&'static str, StructInfo)> {
+// preserves insertion order in `keys()`/`values()`), evaluated at compile time.
+const STRUCTS: &[(&str, StructInfo)] = {
     use crate::color::RgbC;
     use crate::formatter::{ScreenOptionsExtra, TerminalOptions, TerminalOptionsExtra};
     use crate::grid_ref::CGridRef;
@@ -185,7 +243,7 @@ fn build_structs() -> Vec<(&'static str, StructInfo)> {
     use rustty_lib::types::{Buffer, String as LibString};
     use rustty_vt::point::Coordinate as PointCoordinate;
 
-    vec![
+    &[
         // .{ "GhosttyBuffer", StructInfo.init(lib.Buffer) },
         (
             "RusttyBuffer",
@@ -214,7 +272,8 @@ fn build_structs() -> Vec<(&'static str, StructInfo)> {
                 crate::terminal::ClipboardWrite,
                 [
                     ("size", usize, size, "u64"),
-                    ("location", rustty_vt::clipboard::Location, location, "i32"),
+                    // location: clipboard.Location (enum(c_int)) -> "enum"
+                    ("location", rustty_vt::clipboard::Location, location, "enum"),
                     ("contents", *const crate::terminal::ClipboardContent, contents, "opaque"),
                     ("contents_len", usize, contents_len, "u64"),
                 ]
@@ -604,89 +663,113 @@ fn build_structs() -> Vec<(&'static str, StructInfo)> {
             ),
         ),
         // .{ "GhosttyTerminalScrollbar", StructInfo.init(terminal.TerminalScrollbar) },
+        //
+        // PORT NOTE: `TerminalScrollbar` is `PageList.Scrollbar.C`, a plain
+        // extern struct of three `u64`s — NOT a union — so it reflects field by
+        // field exactly like every other registered struct.
         (
             "RusttyTerminalScrollbar",
-            scrollbar_info::<TerminalScrollbar>(),
+            struct_info!(
+                TerminalScrollbar,
+                [
+                    ("total", u64, total, "u64"),
+                    ("offset", u64, offset, "u64"),
+                    ("len", u64, len, "u64"),
+                ]
+            ),
         ),
         // .{ "GhosttyTerminalScrollViewport", StructInfo.init(terminal.ScrollViewport) },
+        //
+        // PORT NOTE: `ScrollViewport` is `lib.TaggedUnion(...).C`, the extern
+        // struct `{ tag: Tag, value: CValue }`; `StructInfo.init` reflects those
+        // TWO fields, mapping `Tag` (an enum) to `"enum"` and `CValue` (a union,
+        // which `typeName` does not name) to `"opaque"`. Rustty holds the tag as
+        // the ABI-identical `c_int` (D11, see terminal.rs) — that is a Rust
+        // soundness narrowing, not an ABI or reflection change, so the emitted
+        // label stays `"enum"` as the reference reports it.
         (
             "RusttyTerminalScrollViewport",
-            scrollviewport_info::<ScrollViewport>(),
+            struct_info!(
+                ScrollViewport,
+                [
+                    ("tag", c_int, tag, "enum"),
+                    (
+                        "value",
+                        crate::terminal::ScrollViewportCValue,
+                        value,
+                        "opaque"
+                    ),
+                ]
+            ),
         ),
     ]
-}
+};
 
-// PORT NOTE: `TerminalScrollbar`/`ScrollViewport` are hand-authored `[N]u64`
-// unions (D2). They have a single observable field in the reflection registry
-// matching the reference projection; `@typeInfo` over the union yields its
-// `extern union` field set, but `StructInfo.init` requires a `.@"struct"` — the
-// reference registers `PageList.Scrollbar.C` / `ScrollViewport` which ARE extern
-// structs over the union payload. We record them by their size/align and the
-// union payload as a single `opaque` field, matching the reference layout
-// (size/align are what the WASM consumers need; the field detail for a union is
-// `opaque` per `typeName`).
-fn scrollbar_info<T>() -> StructInfo {
-    StructInfo {
-        size: size_of::<T>(),
-        align: align_of::<T>(),
-        fields: vec![FieldInfo {
-            name: "value",
-            offset: 0,
-            size: size_of::<T>(),
-            ty: "opaque",
-        }],
-    }
-}
-
-fn scrollviewport_info<T>() -> StructInfo {
-    StructInfo {
-        size: size_of::<T>(),
-        align: align_of::<T>(),
-        fields: vec![FieldInfo {
-            name: "value",
-            offset: 0,
-            size: size_of::<T>(),
-            ty: "opaque",
-        }],
-    }
-}
+/// Scratch capacity for the counting pass. Only ever alive during const
+/// evaluation; the shipped `static` is exactly `JSON_LEN + 1` bytes.
+const JSON_SCRATCH: usize = 32 * 1024;
 
 // fn jsonWriteAll(writer) ... {
 //     beginObject; for (structs.keys(), structs.values()) |name, *info| {
 //         objectField(name); info.jsonStringify(&jws);
 //     } endObject;
 // }
-fn json_write_all() -> String {
-    let structs = build_structs();
-    let mut out = String::new();
-    out.push('{');
-    for (i, (name, info)) in structs.iter().enumerate() {
+const fn json_write_all(out: &mut [u8], len: &mut usize) {
+    push_str(out, len, "{");
+    let mut i = 0;
+    while i < STRUCTS.len() {
         if i > 0 {
-            out.push(',');
+            push_str(out, len, ",");
         }
-        push_json_string(&mut out, name);
-        out.push(':');
-        info.json_stringify(&mut out);
+        let (name, info) = &STRUCTS[i];
+        push_json_string(out, len, name);
+        push_str(out, len, ":");
+        info.json_stringify(out, len);
+        i += 1;
     }
-    out.push('}');
+    push_str(out, len, "}");
+}
+
+// PORT NOTE: the reference's two-pass comptime build —
+//   var counter: std.Io.Writer.Discarding = .init(&.{});
+//   jsonWriteAll(&counter.writer); var buf: [counter.count:0]u8 = undefined;
+//   jsonWriteAll(&(std.Io.Writer.fixed(&buf)));
+// Same shape here: pass 1 writes into an oversized const scratch buffer purely
+// to learn `JSON_LEN`, pass 2 copies exactly that many bytes into the shipped
+// `static` and appends the `[:0]` sentinel. Both passes run at compile time, so
+// nothing but the final byte array reaches the binary.
+const fn json_len() -> usize {
+    // The scratch buffer is a const-eval LOCAL, so it never reaches the binary;
+    // only the `usize` it yields does.
+    let mut buf = [0u8; JSON_SCRATCH];
+    let mut len = 0usize;
+    json_write_all(&mut buf, &mut len);
+    len
+}
+
+const JSON_LEN: usize = json_len();
+
+const fn json_bytes() -> [u8; JSON_LEN + 1] {
+    let mut out = [0u8; JSON_LEN + 1];
+    let mut len = 0usize;
+    json_write_all(&mut out, &mut len);
+    // [:0] sentinel — `out` is one byte longer and already zeroed.
     out
 }
 
-/// The (runtime-generated, cached) NUL-terminated JSON string of all structs.
+/// The comptime-generated NUL-terminated JSON string of all structs.
 // /// The comptime-generated JSON string of all structs.
 // pub const json: [:0]const u8 = ...;
-// PORT NOTE: cached `String` + its NUL-terminated bytes (a stable address for
-// the `[*:0]const u8` the C API returns). (Reference `json` is comptime-generated;
-// here it is generated at runtime once and cached — see the module PORT NOTE.)
+// PORT NOTE: a `static` (not a `const`) so the C API returns ONE stable address
+// for the `[*:0]const u8`, and so no code runs — and no allocator is touched —
+// on the first `rustty_type_json` call. See the module PORT NOTE for why a lazy
+// cache is not an option here (WASM view detachment).
+static JSON: [u8; JSON_LEN + 1] = json_bytes();
+
+/// The NUL-terminated bytes behind `get_json`, for the tests below.
+#[cfg(test)]
 fn json_cstring() -> &'static [u8] {
-    static JSON: OnceLock<Vec<u8>> = OnceLock::new();
-    JSON.get_or_init(|| {
-        let mut bytes = json_write_all().into_bytes();
-        // [:0] sentinel
-        bytes.push(0);
-        bytes
-    })
-    .as_slice()
+    &JSON
 }
 
 // /// Returns a pointer to the comptime-generated JSON string describing
@@ -696,11 +779,12 @@ fn json_cstring() -> &'static [u8] {
 //     return json.ptr;
 // }
 //
-/// Returns a pointer to the (cached) JSON string describing the layout of all
-/// C API extern structs, and writes its length to `len`.
+/// Returns a pointer to the comptime-generated JSON string describing the layout
+/// of all C API extern structs, and writes its length to `len`.
 /// Exported as `rustty_type_json` for FFI consumers.
 pub fn get_json() -> *const c_char {
-    json_cstring().as_ptr() as *const c_char
+    // return json.ptr;
+    JSON.as_ptr() as *const c_char
 }
 
 #[cfg(test)]
@@ -777,6 +861,110 @@ mod tests {
         }
     }
 
+    // Rust-only regression test (no oracle counterpart): the reflected FIELD
+    // MAPS of the two scroll structs and the `typeName` label of every enum
+    // field. The oracle registers `PageList.Scrollbar.C` (an extern struct of
+    // three u64s) and `Terminal.ScrollViewport.C` (`extern struct { tag: Tag,
+    // value: CValue }`), so `ghostty_type_json` reports named fields for both,
+    // and `typeName` maps any enum — `clipboard.Location` included — to
+    // "enum", never to an integer label. Verified field-for-field against
+    // `ghostty-vt.wasm`'s own `ghostty_type_json` output.
+    #[test]
+    fn scroll_struct_field_maps_and_enum_labels() {
+        use crate::terminal::{ScrollViewport, TerminalScrollbar};
+
+        let root = parsed_json();
+        let root = root.as_object();
+
+        // GhosttyTerminalScrollbar: {"total","offset","len"}, all u64.
+        let sb = get(root, "RusttyTerminalScrollbar").as_object();
+        let sb_fields = get(sb, "fields").as_object();
+        assert_eq!(3, sb_fields.len());
+        let expected: [(&str, usize); 3] = [
+            ("total", offset_of!(TerminalScrollbar, total)),
+            ("offset", offset_of!(TerminalScrollbar, offset)),
+            ("len", offset_of!(TerminalScrollbar, len)),
+        ];
+        for (i, (name, offset)) in expected.iter().enumerate() {
+            assert_eq!(*name, sb_fields[i].0, "scrollbar field {i}");
+            let f = sb_fields[i].1.as_object();
+            assert_eq!(*offset as i64, get(f, "offset").as_int());
+            assert_eq!(size_of::<u64>() as i64, get(f, "size").as_int());
+            assert_eq!("u64", get(f, "type").as_str());
+        }
+
+        // GhosttyTerminalScrollViewport: {"tag" (enum), "value" (opaque)} —
+        // consumers must be able to find the tag at offset 0 and the payload
+        // at its own offset, which a single whole-struct "value" field hides.
+        let sv = get(root, "RusttyTerminalScrollViewport").as_object();
+        let sv_fields = get(sv, "fields").as_object();
+        assert_eq!(2, sv_fields.len());
+        assert_eq!("tag", sv_fields[0].0);
+        let tag = sv_fields[0].1.as_object();
+        assert_eq!(
+            offset_of!(ScrollViewport, tag) as i64,
+            get(tag, "offset").as_int()
+        );
+        assert_eq!(size_of::<c_int>() as i64, get(tag, "size").as_int());
+        assert_eq!("enum", get(tag, "type").as_str());
+        assert_eq!("value", sv_fields[1].0);
+        let value = sv_fields[1].1.as_object();
+        assert_eq!(
+            offset_of!(ScrollViewport, value) as i64,
+            get(value, "offset").as_int()
+        );
+        assert_eq!(
+            size_of::<crate::terminal::ScrollViewportCValue>() as i64,
+            get(value, "size").as_int()
+        );
+        assert_eq!("opaque", get(value, "type").as_str());
+
+        // Every enum-typed field is labelled "enum" (`typeName`), never by the
+        // integer that carries it.
+        let clip_write = get(root, "RusttyClipboardWrite").as_object();
+        let clip_write_fields = get(clip_write, "fields").as_object();
+        let location = get(clip_write_fields, "location").as_object();
+        assert_eq!("enum", get(location, "type").as_str());
+        let progress = get(root, "RusttyTerminalProgressReport").as_object();
+        let progress_fields = get(progress, "fields").as_object();
+        assert_eq!(
+            "enum",
+            get(get(progress_fields, "state").as_object(), "type").as_str()
+        );
+    }
+
+    // Rust-only regression test (no oracle counterpart, because the oracle
+    // cannot express the bug): the JSON must be STATIC data built at compile
+    // time, exactly like the reference's `pub const json: [:0]const u8`. A
+    // lazily built runtime cache allocates on the first `rustty_type_json`
+    // call, which under WASM grows the linear memory and DETACHES every
+    // `DataView`/`TypedArray` the embedder holds over `wasmMemory.buffer` —
+    // the very views `include/rustty/vt/wasm.h` tells embedders to keep.
+    // The constant IS the subject: `LEN` is a `const` binding of `JSON_LEN`
+    // (the length of the `static`'s array type), so the assertion is what pins
+    // the document to non-empty comptime data — and it guards the `LEN - 1`
+    // index below.
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn json_is_comptime_static_data() {
+        // The document's length is a CONST — it is the length of the `static`'s
+        // array type — which is only possible if the whole document is built
+        // during const evaluation rather than on the first call.
+        const LEN: usize = JSON_LEN;
+        assert!(LEN > 0);
+        assert_eq!(b'{', JSON[0]);
+        assert_eq!(b'}', JSON[LEN - 1]);
+
+        // The `[:0]` sentinel lives in the same static allocation.
+        assert_eq!(LEN + 1, JSON.len());
+        assert_eq!(0u8, JSON[LEN]);
+
+        // `get_json` hands out the address of that static — no per-call and no
+        // lazily allocated buffer can be involved.
+        assert!(std::ptr::eq(get_json() as *const u8, JSON.as_ptr()));
+        assert_eq!(get_json(), get_json());
+    }
+
     // --- tiny JSON value + parser (test-only) ---
     fn get<'a>(obj: &'a [(String, JsonValue)], key: &str) -> &'a JsonValue {
         obj.iter().find(|(k, _)| k == key).map(|(_, v)| v).unwrap()
@@ -785,10 +973,7 @@ mod tests {
     enum JsonValue {
         Object(Vec<(String, JsonValue)>),
         Int(i64),
-        // The parser produces string values (e.g. the `type` fields) but the
-        // ported assertions only inspect objects/ints; the payload is retained
-        // for a faithful value tree but not read.
-        Str(#[allow(dead_code)] String),
+        Str(String),
     }
 
     impl JsonValue {
@@ -802,6 +987,12 @@ mod tests {
             match self {
                 JsonValue::Int(n) => *n,
                 _ => panic!("not an int"),
+            }
+        }
+        fn as_str(&self) -> &str {
+            match self {
+                JsonValue::Str(s) => s,
+                _ => panic!("not a string"),
             }
         }
     }

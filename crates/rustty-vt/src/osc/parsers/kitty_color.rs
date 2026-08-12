@@ -90,11 +90,16 @@ pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'
             // list.append(alloc, .{ .query = key }) catch ...
             list.push(kitty_color::Request::Query(key));
         } else {
-            // PORT NOTE: `RGB.parse(value)` accepts ASCII color specs; invalid
-            // UTF-8 cannot be a valid spec, so a lossy decode is faithful (the
-            // parse fails with InvalidFormat either way).
-            let value_str = String::from_utf8_lossy(value);
-            let color = match RGB::parse(&value_str) {
+            // PORT NOTE: the byte slice is passed THROUGH, unconverted, like
+            // the reference's `RGB.parse(value)` on `[]const u8`. A lossy
+            // decode would NOT be faithful here even though the parse is
+            // ASCII-only: `String::from_utf8_lossy` turns each invalid byte
+            // into a 3-byte U+FFFD, which changes `value.len()` and so selects
+            // a different length arm inside `parse` than the reference sees
+            // (e.g. 4 bytes -> 6), and it plants a multi-byte scalar for
+            // `parse`'s byte indices to land inside — a panic. Found by
+            // `cargo fuzz run fuzz_osc`; see `crates/rustty-vt/fuzz/findings/`.
+            let color = match RGB::parse(value) {
                 Ok(color) => color,
                 Err(InvalidFormat) => {
                     // log.warn("invalid color format in kitty color protocol: {s}", .{value});
@@ -132,6 +137,64 @@ mod tests {
     // Rust `Vec` (self-owning), so the parser only needs the allocator's
     // *presence* (the `parser.alloc orelse` gate). `GlobalZigAllocator` is the
     // always-available stateless backend that satisfies that gate.
+
+    // REGRESSION (fuzz finding, `cargo fuzz run fuzz_osc`, 2026-08-11): the
+    // kitty color value used to be decoded with `String::from_utf8_lossy`
+    // before `RGB::parse`. That is NOT what the reference does — it hands the
+    // raw `[]const u8` to `RGB.parse` (ghostty src/terminal/color.zig:657) —
+    // and it was doubly wrong: each invalid byte became a 3-byte U+FFFD, which
+    // both changed the byte length `parse` switches on AND planted a multi-byte
+    // scalar for `parse`'s byte indices to land inside, i.e. a PANIC. An
+    // unparseable value must simply be skipped (`continue`), leaving the other
+    // requests in the list.
+    #[test]
+    fn osc_21_invalid_utf8_value_is_skipped_not_a_crash() {
+        let backend = GlobalZigAllocator;
+        let alloc = ZigAllocatorRef::new(&backend);
+        let mut p: Parser = Parser::init(Some(alloc));
+
+        // The exact minimized fuzz input from
+        // `crates/rustty-vt/fuzz/findings/osc21-kitty-color-lossy-char-boundary`
+        // is `01 32 31 3b 31 3d 55 8e 76 76` = selector 1 (ST) + `21;1=U\x8evv`.
+        // `U\x8evv` is 4 raw bytes; lossy-decoding widened it to 6 and selected
+        // `parse`'s 6-byte arm, whose `input[1..3]` cut split the U+FFFD.
+        let input: &[u8] = b"21;1=U\x8evv";
+        for &ch in input {
+            p.next(ch);
+        }
+
+        let cmd = p.end(Some(0x9c)).unwrap().clone();
+        let osc = match cmd {
+            Command::KittyColorProtocol(osc) => osc,
+            _ => panic!("expected a kitty color protocol command"),
+        };
+        // The one and only request had an unparseable value, so it is dropped.
+        assert_eq!(0usize, osc.list.len());
+    }
+
+    // Valid UTF-8 with a multi-byte scalar reaches the same byte indices; the
+    // lossy decode was not required for the crash, only for the second route.
+    #[test]
+    fn osc_21_non_ascii_value_is_skipped_not_a_crash() {
+        let backend = GlobalZigAllocator;
+        let alloc = ZigAllocatorRef::new(&backend);
+        let mut p: Parser = Parser::init(Some(alloc));
+
+        // `1=aébcd` is 6 BYTES of value, hitting the 6-byte arm whose
+        // `input[2..4]` cut lands inside 'é'; `2=?` after it must still land.
+        let input = "21;1=aébcd;2=?";
+        for ch in input.bytes() {
+            p.next(ch);
+        }
+
+        let cmd = p.end(Some(0x1b)).unwrap().clone();
+        let osc = match cmd {
+            Command::KittyColorProtocol(osc) => osc,
+            _ => panic!("expected a kitty color protocol command"),
+        };
+        assert_eq!(1usize, osc.list.len());
+        assert_eq!(Request::Query(Kind::Palette(2)), osc.list[0]);
+    }
 
     #[test]
     fn osc_21_kitty_color_protocol() {

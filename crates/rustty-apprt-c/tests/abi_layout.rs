@@ -43,6 +43,7 @@ use rustty_apprt_api::structs::{ClipboardRequestType, ColorScheme};
 use rustty_apprt_api::surface::NewSurfaceContext;
 use rustty_apprt_c::capi::{KeyEvent, Point, PointCoordTag, PointTag, Selection, SurfaceSize};
 use rustty_apprt_c::String as GhosttyString;
+use rustty_apprt_c::{BuildMode, Info};
 
 // The C-`enum` width on the Apple LP64 ABI is `int` == 4 bytes. Every
 // `enum(c_int)`/`#[repr(i32)]` type below is pinned to this.
@@ -239,14 +240,25 @@ const _: () = assert!(ActionKey::Quit as c_int == 0);
 const _: () = assert!(ActionKey::CopyTitleToClipboard as c_int == 65);
 
 // ── Info.BuildMode (ghostty_info_s / ghostty_build_mode_e, ghostty.h:385-396) ──
-// DEFERRED: `ghostty_info()` and its `Info`/`build_mode` types are NOT yet ported
-// into `rustty-apprt-c` (the app export set currently omits `rustty_info`), so
-// there is no Rust `#[repr(C)]` type to `const`-assert here. The header side —
-// `ghostty_info_s` {enum build_mode@0(4→pad), const char* version@8(8),
-// uintptr_t version_len@16(8)} = 24B align-8, and `ghostty_build_mode_e`
-// {DEBUG=0, RELEASE_SAFE=1, RELEASE_FAST=2, RELEASE_SMALL=3} — is frozen by the
-// `check_ghostty_h_abi.sh` byte-diff against the pinned upstream header. When the
-// port lands `rustty_info`, add its size/align/ordinal asserts here.
+// `rustty_info()` and its `Info`/`BuildMode` types ARE ported (lib.rs:945-1040), so
+// the header side — `ghostty_info_s` {enum build_mode@0(4→pad), const char*
+// version@8(8), uintptr_t version_len@16(8)} = 24B align-8, and
+// `ghostty_build_mode_e` {DEBUG=0, RELEASE_SAFE=1, RELEASE_FAST=2,
+// RELEASE_SMALL=3}, frozen by the `check_rustty_h_abi.sh` byte-diff against the
+// pinned upstream header — is pinned on the Rust side here. (`Info`'s size/align
+// and field offsets are ALSO const-asserted at their definition site with
+// `@embed-abi` annotations that `check_embed_h_abi.sh` cross-checks against the
+// clang-probed header; the `BuildMode` ordinals/width below are pinned ONLY here.)
+const _: () = assert!(core::mem::size_of::<Info>() == 24);
+const _: () = assert!(core::mem::align_of::<Info>() == 8);
+const _: () = assert!(core::mem::offset_of!(Info, mode) == 0);
+const _: () = assert!(core::mem::offset_of!(Info, version) == 8);
+const _: () = assert!(core::mem::offset_of!(Info, version_len) == 16);
+const _: () = assert!(core::mem::size_of::<BuildMode>() == C_ENUM);
+const _: () = assert!(BuildMode::Debug as c_int == 0);
+const _: () = assert!(BuildMode::ReleaseSafe as c_int == 1);
+const _: () = assert!(BuildMode::ReleaseFast as c_int == 2);
+const _: () = assert!(BuildMode::ReleaseSmall as c_int == 3);
 
 // ============================================================================
 // Runtime re-checks (readable diagnostics + a runnable test target).
@@ -412,6 +424,23 @@ fn struct_sizes_and_aligns() {
         "ghostty_action_u size"
     );
     assert_eq!(core::mem::size_of::<ActionC>(), 32, "ghostty_action_s size");
+    assert_eq!(core::mem::size_of::<Info>(), 24, "ghostty_info_s size");
+    assert_eq!(core::mem::align_of::<Info>(), 8, "ghostty_info_s align");
+    assert_eq!(
+        core::mem::offset_of!(Info, mode),
+        0,
+        "ghostty_info_s.build_mode offset"
+    );
+    assert_eq!(
+        core::mem::offset_of!(Info, version),
+        8,
+        "ghostty_info_s.version offset"
+    );
+    assert_eq!(
+        core::mem::offset_of!(Info, version_len),
+        16,
+        "ghostty_info_s.version_len offset"
+    );
 }
 
 #[test]
@@ -452,6 +481,11 @@ fn enum_widths() {
         core::mem::size_of::<ClipboardRequestType>(),
         1,
         "ClipboardRequestType repr"
+    );
+    assert_eq!(
+        core::mem::size_of::<BuildMode>(),
+        C_ENUM,
+        "ghostty_build_mode_e width"
     );
 }
 
@@ -522,6 +556,25 @@ fn pinned_enum_ordinals() {
         NewSurfaceContext::Split as c_int,
         2,
         "GHOSTTY_SURFACE_CONTEXT_SPLIT"
+    );
+    // ghostty_build_mode_e (ghostty.h:385-390). The four ordinals are the ABI: a
+    // Rust-side variant reorder would silently mis-report the build mode to the
+    // host (the header is frozen by the byte-diff gate and would NOT catch it).
+    assert_eq!(BuildMode::Debug as c_int, 0, "GHOSTTY_BUILD_MODE_DEBUG");
+    assert_eq!(
+        BuildMode::ReleaseSafe as c_int,
+        1,
+        "GHOSTTY_BUILD_MODE_RELEASE_SAFE"
+    );
+    assert_eq!(
+        BuildMode::ReleaseFast as c_int,
+        2,
+        "GHOSTTY_BUILD_MODE_RELEASE_FAST"
+    );
+    assert_eq!(
+        BuildMode::ReleaseSmall as c_int,
+        3,
+        "GHOSTTY_BUILD_MODE_RELEASE_SMALL"
     );
 }
 

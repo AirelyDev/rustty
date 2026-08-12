@@ -48,6 +48,64 @@
 use super::lz4;
 use crate::page::Page;
 
+/// Errors which can occur while building a compressed representation.
+///
+/// PORTS: oracle@main compress/Page.zig `init`'s
+/// `(Allocator.Error || lz4.CompressError)` error set, flattened the way Zig
+/// flattens an error-set union.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitError {
+    /// `error.OutOfMemory`: the exact-sized encoded allocation failed.
+    ///
+    /// This is the oracle's `try alloc.dupe(u8, ...)`. The candidate is simply
+    /// not built; the source page is untouched and stays resident.
+    OutOfMemory,
+
+    /// `error.InputTooLarge` from the codec.
+    InputTooLarge,
+
+    /// `error.OutputTooSmall` from the codec, or a scratch buffer smaller than
+    /// `required_scratch`.
+    OutputTooSmall,
+}
+
+impl From<lz4::CompressError> for InitError {
+    fn from(err: lz4::CompressError) -> Self {
+        match err {
+            lz4::CompressError::InputTooLarge => InitError::InputTooLarge,
+            lz4::CompressError::OutputTooSmall => InitError::OutputTooSmall,
+        }
+    }
+}
+
+/// Failure injection for `CompressedPage::init`'s exact-sized encoded
+/// allocation.
+///
+/// PORT NOTE (F-015): the oracle exercises this branch with
+/// `testing.FailingAllocator`, which has no counterpart for Rust's global
+/// allocator. The injectable seam is a tripwire fail point placed immediately
+/// before the fallible `Vec::try_reserve_exact`, the same idiom used for
+/// `PageList::compress_page`'s decommit step and `Screen`'s OOM fail points.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum InitFp {
+    /// The `try alloc.dupe(u8, scratch[0..encoded_len])` allocation.
+    Encoded,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static INIT_TW: core::cell::RefCell<
+        rustty_util::tripwire::Module<InitFp, InitError>,
+    > = core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+#[cfg(test)]
+#[inline]
+fn init_tw_check(point: InitFp) -> Result<(), InitError> {
+    INIT_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
 /// Complete page metadata together with the retained resident mapping.
 pub struct CompressedPage {
     /// The bytes in `page`'s mapping may have been discarded by the OS while
@@ -114,7 +172,7 @@ impl CompressedPage {
         source: *const Page,
         scratch: &mut [u8],
         table: &mut lz4::HashTable,
-    ) -> Result<Option<CompressedPage>, lz4::CompressError> {
+    ) -> Result<Option<CompressedPage>, InitError> {
         // SAFETY: caller contract — `source` is a live Page. We read only the
         // two mapping fields through the raw pointer, never forming a `&Page`.
         let (raw_ptr, raw_len) = unsafe {
@@ -126,7 +184,7 @@ impl CompressedPage {
 
         let required = required_scratch(raw_len)?;
         if scratch.len() < required {
-            return Err(lz4::CompressError::OutputTooSmall);
+            return Err(InitError::OutputTooSmall);
         }
         if required == 0 {
             return Ok(None);
@@ -141,7 +199,7 @@ impl CompressedPage {
             // memory, rather than that the caller failed to provide the
             // documented size.
             Err(lz4::CompressError::OutputTooSmall) => return Ok(None),
-            Err(e) => return Err(e),
+            Err(e) => return Err(e.into()),
         };
 
         // required_scratch already accounts for the representation structs. The
@@ -152,10 +210,25 @@ impl CompressedPage {
                 < core::mem::size_of::<Page>() + raw_len
         );
 
+        // .encoded = try alloc.dupe(u8, scratch[0..encoded_len]),
+        //
+        // PORT NOTE (F-015): this is the oracle's ONE fallible allocation in
+        // `init`, and its failure is recoverable all the way up (PageList's
+        // `compressPage` maps `error.OutOfMemory => return false` and leaves
+        // the page resident). A plain `to_vec()` would abort the process
+        // instead, so the retain goes through `try_reserve_exact`.
+        #[cfg(test)]
+        init_tw_check(InitFp::Encoded)?;
+        let mut encoded: Vec<u8> = Vec::new();
+        encoded
+            .try_reserve_exact(encoded_len)
+            .map_err(|_| InitError::OutOfMemory)?;
+        encoded.extend_from_slice(&scratch[..encoded_len]);
+
         Ok(Some(CompressedPage {
             // SAFETY: caller contract — `source` is a live Page.
             page: unsafe { (*source).shallow_copy() },
-            encoded: scratch[..encoded_len].to_vec(),
+            encoded,
         }))
     }
 
@@ -402,7 +475,7 @@ mod tests {
         assert_eq!(
             unsafe { CompressedPage::init(&resident as *const Page, &mut scratch, &mut table) }
                 .err(),
-            Some(lz4::CompressError::OutputTooSmall),
+            Some(InitError::OutputTooSmall),
         );
         assert_eq!(bytes(resident.memory_ptr(), memory_len), expected);
 
@@ -412,11 +485,12 @@ mod tests {
     /// PORTS: oracle@main compress/Page.zig
     /// `test "compressed Page rejects a representation without savings"`
     ///
-    /// PORT NOTE (WS7 B3): the oracle proves "no allocation happened" with a
-    /// `FailingAllocator` whose `fail_index` is 0. rustty's `Vec` uses the
-    /// infallible global allocator, so the equivalent assertion is that `init`
-    /// returns `Ok(None)` — the early return is taken before any allocation —
-    /// and that the source page's bytes are unchanged.
+    /// PORT NOTE (WS7 B3, revised by F-015): the oracle proves "no allocation
+    /// happened" with a `FailingAllocator` whose `fail_index` is 0. rustty has
+    /// no allocator parameter, so the stand-in is the `InitFp::Encoded`
+    /// tripwire fail point armed below: reaching the encoded allocation at all
+    /// would surface as `Err(OutOfMemory)`, and `Ok(None)` therefore proves the
+    /// early return was taken before it. The source page's bytes are unchanged.
     #[test]
     fn compressed_page_rejects_a_representation_without_savings() {
         let mut resident = Page::init(Capacity {
@@ -444,12 +518,70 @@ mod tests {
         let mut scratch = vec![0u8; required_scratch(memory_len).unwrap()];
         let mut table: lz4::HashTable = [0; lz4::HASH_TABLE_LEN];
 
+        // var failing = std.testing.FailingAllocator.init(alloc, .{ .fail_index = 0 });
+        INIT_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(InitFp::Encoded, InitError::OutOfMemory)
+        });
         assert!(unsafe {
             CompressedPage::init(&resident as *const Page, &mut scratch, &mut table)
         }
         .unwrap()
         .is_none());
+        // The fail point is expected NOT to trip, so clear it with `reset`
+        // rather than `end` (which reports untripped expectations).
+        INIT_TW.with(|tw| tw.borrow_mut().reset());
         assert_eq!(bytes(ptr, memory_len), expected);
+
+        resident.deinit();
+    }
+
+    /// A failed encoded allocation is REPORTED, not fatal: `init` returns
+    /// `Err(OutOfMemory)` and the source page is left untouched.
+    ///
+    /// PORTS: the `error.OutOfMemory` arm of oracle@main compress/Page.zig
+    /// `init` (`try alloc.dupe`), which the oracle exercises through
+    /// PageList.zig `test "PageList incremental compression advances after
+    /// allocation failure"`.
+    ///
+    /// PORT NOTE (WS7 B10 convention): tripwire injection is compiled out when
+    /// `debug_assertions` is off, so this test is ignored under `--release`.
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "tripwire failure injection is disabled without debug_assertions"
+    )]
+    #[test]
+    fn compressed_page_reports_a_failed_encoded_allocation() {
+        use rustty_util::tripwire::ResetMode;
+
+        let mut resident = Page::init(Capacity::new(8, 8)).unwrap();
+        let memory_ptr = resident.memory_ptr() as *mut u8;
+        let memory_len = resident.memory_len();
+        let expected = bytes(memory_ptr, memory_len);
+
+        let mut scratch = vec![0u8; required_scratch(memory_len).unwrap()];
+        let mut table: lz4::HashTable = [0; lz4::HASH_TABLE_LEN];
+
+        INIT_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(InitFp::Encoded, InitError::OutOfMemory)
+        });
+        assert_eq!(
+            unsafe { CompressedPage::init(&resident as *const Page, &mut scratch, &mut table) }
+                .err(),
+            Some(InitError::OutOfMemory),
+        );
+        INIT_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+
+        // The source page never changes: the candidate is simply not built.
+        assert_eq!(bytes(memory_ptr, memory_len), expected);
+
+        // With the fail point disarmed the same page compresses normally.
+        assert!(unsafe {
+            CompressedPage::init(&resident as *const Page, &mut scratch, &mut table)
+        }
+        .unwrap()
+        .is_some());
 
         resident.deinit();
     }

@@ -2987,6 +2987,76 @@ mod tests {
         }
     }
 
+    /// W62-B06-001. The reference's group ops reduce a
+    /// `@Vector(group_len, Backing)` with `@reduce`, which Zig rejects for a
+    /// zero-lane vector; the array port must reject `GROUP_LEN == 0` the same
+    /// way (see the `compile_fail` doctest on `Mask`) WITHOUT disturbing small
+    /// positive group lengths. `GROUP_LEN = 1` is the boundary case: it is the
+    /// smallest length the reference accepts, and it is used in the port
+    /// (`render.rs` group_len 1), so it must keep computing real answers rather
+    /// than tripping the nonzero assert.
+    #[test]
+    fn mask_group_len_one() {
+        type M1 = Mask<Cell, { cell_field_mask(&[CellField::ContentTag, CellField::StyleId]) }, 1>;
+
+        let plain: Cell = Cell::init('A' as u32);
+        let mut styled: Cell = Cell::init('B' as u32);
+        styled.set_style_id(5);
+        let mut styled2: Cell = Cell::init('C' as u32);
+        styled2.set_style_id(5);
+
+        // match_group: content_tag is nonzero for a codepoint cell, so a plain
+        // cell only matches the style-id half; use the style-id mask alone for
+        // the "all masked bits zero" question.
+        type MS = Mask<Cell, { cell_field_mask(&[CellField::StyleId]) }, 1>;
+        assert!(MS::match_group(&[plain], 0));
+        assert!(!MS::match_group(&[styled], 0));
+
+        // eql / eql_prefix: masked fields equal, other fields may vary.
+        let expected = M1::pattern(styled);
+        assert!(M1::eql(&[styled2], 0, expected));
+        assert_eq!(1, M1::eql_prefix(&[styled2], 0, expected));
+        assert!(!M1::eql(&[plain], 0, expected));
+        assert_eq!(0, M1::eql_prefix(&[plain], 0, expected));
+
+        // eql_exact: bit-identical only.
+        assert!(M1::eql_exact(&[styled], 0, M1::bits(styled)));
+        assert!(!M1::eql_exact(&[styled2], 0, M1::bits(styled)));
+    }
+
+    /// W62-B04-001. The reference's `Cell.init(cp: u21)` cannot be handed a
+    /// value above `maxInt(u21)`; the port's `u21 = u32` alias can, and the
+    /// 24-bit content union would persist bits 21..23 — building a cell the
+    /// reference cannot represent, whose backing bits are nonzero while
+    /// `content_codepoint()`/`has_text()` read zero. `set_content_codepoint`
+    /// therefore traps in safe builds, mirroring Zig's `@intCast` check.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "codepoint out of u21 domain")]
+    fn cell_init_rejects_out_of_u21_codepoint() {
+        // Exactly bit 21: fits the 24-bit content slot, so without the assert
+        // it stores silently and yields `is_zero() == false` with
+        // `codepoint() == 0`.
+        let _ = Cell::init(0x20_0000);
+    }
+
+    /// Companion to `cell_init_rejects_out_of_u21_codepoint`: the largest
+    /// in-domain codepoint must still round-trip untouched.
+    #[test]
+    fn cell_init_max_u21_round_trip() {
+        let c = Cell::init(U21_MAX);
+        assert_eq!(U21_MAX, c.content_codepoint());
+        assert_eq!(U21_MAX, c.codepoint());
+        assert!(c.has_text());
+        assert!(!c.is_zero());
+
+        // The largest real Unicode scalar, too.
+        let c = Cell::init(0x10_FFFF);
+        assert_eq!(0x10_FFFF, c.content_codepoint());
+        assert_eq!(0x10_FFFF, c.codepoint());
+        assert!(c.has_text());
+    }
+
     /// `P3-W1 T4` (oracle c442eb4b3). A zero-row page would leave the pool's
     /// stale free-list node in the first pointer-size bytes of a REUSED buffer,
     /// because `init_buf`'s row loop — the only thing that overwrites those
@@ -3004,4 +3074,134 @@ mod tests {
         });
     }
 
+    /// Carve a deliberately page-UNaligned (but still 64-byte aligned, so every
+    /// `Row`/`Cell`/set alignment inside the page is satisfied) buffer of `len`
+    /// bytes out of a page-aligned allocation. Deliberately leaks: every user
+    /// panics before returning.
+    fn leak_page_unaligned_buf(len: usize) -> &'static mut [u8] {
+        let l = std::alloc::Layout::from_size_align(len + PAGE_SIZE_MIN, PAGE_SIZE_MIN).unwrap();
+        // SAFETY: non-zero size; the returned block is PAGE_SIZE_MIN-aligned, so
+        // `+64` is exactly one page-alignment violation and nothing else.
+        let base = unsafe { std::alloc::alloc_zeroed(l) };
+        assert!(!base.is_null());
+        assert_eq!(base as usize % PAGE_SIZE_MIN, 0);
+        unsafe { core::slice::from_raw_parts_mut(base.add(64), len) }
+    }
+
+    /// PORT NOTE: `cloneBuf(buf: []align(std.heap.page_size_min) u8)` — the
+    /// reference's alignment contract is TYPE-level, so this call would not
+    /// compile there. Rust's `&mut [u8]` carries no alignment, so the contract
+    /// is an always-on assert; without it the clone silently produced a page
+    /// whose backing memory is not page-aligned.
+    #[test]
+    #[should_panic(expected = "page_size_min-aligned")]
+    fn page_cloneBuf_rejects_unaligned_buffer() {
+        let page = Page::init(Capacity::new(10, 10)).unwrap();
+        let buf = leak_page_unaligned_buf(page.memory_len);
+        let _ = page.clone_buf(buf);
+    }
+
+    /// PORT NOTE: `initBuf` stores `@alignCast(buf.start()[0..l.total_size])`,
+    /// which traps in the reference's Debug/ReleaseSafe builds. A `+64` base is
+    /// aligned for `Row`/`Cell`/the sets, so the pre-existing per-type
+    /// `Offset::ptr` asserts did NOT catch it.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "page_size_min-aligned")]
+    fn page_initBuf_rejects_unaligned_buffer() {
+        let l = Page::layout(Capacity::new(10, 10));
+        let buf = leak_page_unaligned_buf(l.total_size);
+        let _ = Page::init_buf(OffsetBuf::init(buf.as_ptr()), l);
+    }
+
+    // PORT NOTE: the reference types the grapheme-tail APIs `u21`
+    // (`setGraphemes(cps: []const u21)`, `appendGrapheme(cp: u21)`), so an
+    // out-of-domain value cannot cross the API at all: a constant is a compile
+    // error and a runtime `@intCast` traps in Debug/ReleaseSafe. Our `u21` alias
+    // is `u32` and grapheme tails are stored verbatim in the page's grapheme
+    // arena, so the domain is enforced by `debug_assert!` instead — these tests
+    // (no reference twin; the type system is the reference's test) pin that.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "u21 domain")]
+    fn page_appendGrapheme_rejects_out_of_u21_domain() {
+        let mut page = Page::init(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+
+        let rac = page.get_row_and_cell(0, 0);
+        unsafe {
+            *rac.cell = Cell::init(0x09);
+        }
+
+        // maxInt(u21) + 1
+        let _ = page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x20_0000);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "u21 domain")]
+    fn page_setGraphemes_rejects_out_of_u21_domain() {
+        let mut page = Page::init(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+
+        let rac = page.get_row_and_cell(0, 0);
+        unsafe {
+            *rac.cell = Cell::init(0x09);
+        }
+
+        let _ = page.set_graphemes(
+            unsafe { &mut *rac.row },
+            unsafe { &mut *rac.cell },
+            &[0x0Au32, 0x20_0000],
+        );
+    }
+
+    /// The domain BOUNDARY is still accepted and round-trips unchanged: the
+    /// assert must not narrow the reference's `u21` range (e.g. to Unicode's
+    /// 0x10FFFF), since `u21` holds up to 0x1F_FFFF.
+    #[test]
+    fn page_grapheme_u21_domain_boundary_roundtrips() {
+        let mut page = Page::init(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+
+        let rac = page.get_row_and_cell(0, 0);
+        unsafe {
+            *rac.cell = Cell::init(0x09);
+        }
+
+        page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x10FFFF)
+            .unwrap();
+        page.append_grapheme(unsafe { &mut *rac.row }, unsafe { &mut *rac.cell }, 0x1F_FFFF)
+            .unwrap();
+        assert_eq!(
+            &[0x10FFFFu32, 0x1F_FFFF][..],
+            page.lookup_grapheme(unsafe { &*rac.cell }).unwrap()
+        );
+
+        let rac2 = page.get_row_and_cell(1, 0);
+        unsafe {
+            *rac2.cell = Cell::init(0x09);
+        }
+        page.set_graphemes(
+            unsafe { &mut *rac2.row },
+            unsafe { &mut *rac2.cell },
+            &[0x1F_FFFFu32],
+        )
+        .unwrap();
+        assert_eq!(
+            &[0x1F_FFFFu32][..],
+            page.lookup_grapheme(unsafe { &*rac2.cell }).unwrap()
+        );
+
+        page.deinit();
+    }
 }

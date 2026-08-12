@@ -6,7 +6,7 @@
 //! `getTyped` bodies + all `test {}` blocks are ported.
 
 use crate::result::Result;
-use std::ffi::c_void;
+use std::ffi::{c_int, c_void};
 
 // const page = @import("../page.zig");
 // const Row = page.Row;
@@ -66,6 +66,36 @@ pub enum RowData {
     Dirty = 8,
 }
 
+// D11-style ABI anchor (see `render::Data::from_c_int`): proves reading a
+// `get_multi` key element out of C memory as a `c_int` leaves the ABI unchanged
+// (the published header declares `const RusttyRowData *keys`).
+const _: () = assert!(std::mem::size_of::<RowData>() == std::mem::size_of::<c_int>());
+
+// PORT NOTE (W84-B01-01): range-checked `c_int -> RowData` projection — the
+// reference's `std.enums.fromInt(RowData, @intFromEnum(data))` guard. `RowData`
+// is a contiguous `#[repr(C)]` enum, so the range check IS `intToEnum`, after
+// which a `transmute` from the validated `c_int` is the enum. This used to live
+// in `lib.rs` (`row_data_from_c_int`), reachable only from the single
+// `rustty_row_get` wrapper; it lives here now so `get_multi` reaches it per
+// array element too, exactly as the reference's `get_multi` reaches the guard
+// by calling `get`.
+const ROW_DATA_COUNT: c_int = 9; // contiguous 0..=8
+
+impl RowData {
+    /// Narrow an inbound C integer to a `RowData`, mirroring
+    /// `std.enums.fromInt`; `None` outside the declared range. `Invalid = 0` is
+    /// IN range and keeps its `.invalid_value` disposition inside `get`.
+    pub fn from_c_int(v: c_int) -> Option<RowData> {
+        if (0..ROW_DATA_COUNT).contains(&v) {
+            // SAFETY: `v` is a valid `RowData` discriminant (range-checked
+            // above).
+            Some(unsafe { std::mem::transmute::<c_int, RowData>(v) })
+        } else {
+            None
+        }
+    }
+}
+
 // Output type expected for querying the data of the given kind.
 // PORT NOTE: `pub fn OutType(comptime self: RowData) type`:
 //     .invalid => void,
@@ -81,9 +111,10 @@ pub enum RowData {
 /// `out` must point to writable storage of the type required by `data`.
 pub unsafe fn get(row_: CRow, data: RowData, out: *mut c_void) -> Result {
     // PORT NOTE: the runtime-safety `intToEnum(RowData, @intFromEnum(data))`
-    // guard on the raw `c_int` crossing the C boundary lives in the `extern "C"`
-    // wrapper in `lib.rs` (`rustty_row_get`); by the time `get` is reached the
-    // `data` enum is already validated.
+    // guard on the raw `c_int` crossing the C boundary lives in `get_checked`
+    // below (shared by the `extern "C"` wrapper in `lib.rs` AND by
+    // `get_multi`); by the time `get` is reached the `data` enum is already
+    // validated.
 
     // return switch (data) {
     //     .invalid => .invalid_value,
@@ -96,14 +127,41 @@ pub unsafe fn get(row_: CRow, data: RowData, out: *mut c_void) -> Result {
     }
 }
 
+// PORT NOTE (W84-B01-01): the reference carries the runtime-safety guard INSIDE
+// `get`, so every caller reaches it — including `get_multi`, which calls `get`
+// per array element. rustty's `get` takes the already-narrowed `RowData` (a
+// `#[repr(C)]` enum cannot even hold an out-of-range tag), so the guard lives
+// here, in the raw-`c_int` entry point shared by the `extern "C"` wrapper in
+// `lib.rs` AND by `get_multi` — the same "every path goes through the guard"
+// shape as the reference.
+///
+/// # Safety
+/// `out` must point to writable storage of the type required by `data`.
+pub unsafe fn get_checked(row_: CRow, data: c_int, out: *mut c_void) -> Result {
+    // _ = std.enums.fromInt(RowData, @intFromEnum(data)) orelse {
+    //     return .invalid_value;
+    // };
+    let Some(d) = RowData::from_c_int(data) else {
+        return Result::InvalidValue;
+    };
+    // SAFETY: `out` validity/type is the caller's contract.
+    unsafe { get(row_, d, out) }
+}
+
 /// PORT NOTE: `pub fn get_multi(row_, count, keys, values, out_written) Result`.
 ///
 /// # Safety
 /// `keys`/`values`/`out_written` validity is the caller's contract.
+// PORT NOTE (W84-B01-01): `keys` is C memory typed `const RusttyRowData *` in
+// the published header; each element is read as a raw `c_int` (ABI-identical —
+// `RowData` is `#[repr(C)]`, asserted int-sized above) and range-checked by
+// `get_checked`. Reading an element straight into a `RowData` would materialize
+// an out-of-range discriminant, which is UB in Rust in EVERY build mode (where
+// the reference merely loses its `runtime_safety` guard).
 pub unsafe fn get_multi(
     row_: CRow,
     count: usize,
-    keys: *const RowData,
+    keys: *const c_int,
     values: *mut *mut c_void,
     out_written: *mut usize,
 ) -> Result {
@@ -128,7 +186,7 @@ pub unsafe fn get_multi(
         let key = unsafe { *keys.add(i) };
         let value = unsafe { *values.add(i) };
         // SAFETY: `value` validity/type is the caller's contract.
-        let result = unsafe { get(row_, key, value) };
+        let result = unsafe { get_checked(row_, key, value) };
         if result != Result::Success {
             if !out_written.is_null() {
                 // SAFETY: caller-provided out pointer, checked non-null.
@@ -281,7 +339,9 @@ mod tests {
         let mut written: usize = 0;
 
         // const keys = [_]RowData{ .wrap, .dirty };
-        let keys = [RowData::Wrap, RowData::Dirty];
+        // PORT NOTE (W84-B01-01): the key array crosses the C boundary as raw
+        // ints; `get_multi` reads each element as a `c_int` and guards it.
+        let keys: [c_int; 2] = [RowData::Wrap as c_int, RowData::Dirty as c_int];
         // var values = [_]?*anyopaque{ @ptrCast(&wrap), @ptrCast(&dirty) };
         let mut values = [
             &mut wrap as *mut bool as *mut c_void,
@@ -317,7 +377,7 @@ mod tests {
         let mut written: usize = 99;
 
         // const keys = [_]RowData{ .wrap, .invalid };
-        let keys = [RowData::Wrap, RowData::Invalid];
+        let keys: [c_int; 2] = [RowData::Wrap as c_int, RowData::Invalid as c_int];
         // var values = [_]?*anyopaque{ @ptrCast(&wrap), @ptrCast(&wrap) };
         let wrap_ptr = &mut wrap as *mut bool as *mut c_void;
         let mut values = [wrap_ptr, wrap_ptr];
@@ -355,5 +415,61 @@ mod tests {
                 std::ptr::null_mut(),
             )
         });
+    }
+
+    // W84-B01-01 (Rust-only proving test; the reference's guard is a
+    // `runtime_safety` block, so it has no unit test for it): a `get_multi` KEY
+    // ARRAY is C memory. Before the fix the wrapper loaded each element
+    // straight into a `RowData`, which materializes an out-of-range
+    // discriminant — UB in Rust in EVERY build mode, and the audited C probe
+    // observed `success` + `out_written=2`. The reference reaches its
+    // `std.enums.fromInt` guard per element (its `get_multi` calls `get`), so
+    // the parity disposition is `.invalid_value` + the failing index.
+    #[test]
+    fn get_multi_out_of_range_raw_key_is_rejected_with_the_failing_index() {
+        let mut zig_row = Row::from_bits(0u64);
+        zig_row.set_wrap(true);
+        zig_row.set_dirty(true);
+        let row_val: CRow = zig_row.to_bits();
+
+        let mut wrap: bool = false;
+        let mut dirty: bool = false;
+        let mut written: usize = 99;
+
+        // Element 1 is a raw C integer no `RowData` tag can hold.
+        let keys: [c_int; 3] = [RowData::Wrap as c_int, 999, RowData::Dirty as c_int];
+        let mut values = [
+            core::ptr::addr_of_mut!(wrap) as *mut c_void,
+            core::ptr::addr_of_mut!(dirty) as *mut c_void,
+            core::ptr::addr_of_mut!(dirty) as *mut c_void,
+        ];
+        assert_eq!(Result::InvalidValue, unsafe {
+            get_multi(
+                row_val,
+                keys.len(),
+                keys.as_ptr(),
+                values.as_mut_ptr(),
+                &mut written,
+            )
+        });
+        // The failing index, exactly as the reference's `get_multi` reports.
+        assert_eq!(1, written);
+        // Element 0 ran to completion before the guard tripped.
+        assert!(wrap);
+        // Element 2 was never reached.
+        assert!(!dirty);
+
+        // The same array through the published `extern "C"` entry point.
+        written = 99;
+        assert_eq!(Result::InvalidValue.to_c_int(), unsafe {
+            crate::rustty_row_get_multi(
+                row_val,
+                keys.len(),
+                keys.as_ptr().cast(),
+                values.as_mut_ptr(),
+                &mut written,
+            )
+        });
+        assert_eq!(1, written);
     }
 }

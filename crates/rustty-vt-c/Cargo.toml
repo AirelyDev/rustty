@@ -22,6 +22,21 @@ workspace = true
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [features]
+# `-Dsimd` defaults to TRUE for every non-WASM target
+# (`ghostty/src/build/Config.zig:196-206`), and `GhosttyZig.zig` force-disables
+# only `oniguruma` for the lib-vt module (:67-72) while still adding the SIMD
+# deps when `cfg.simd` (:140-143) — so the reference's DEFAULT libghostty-vt
+# runs `stream.zig`'s SIMD `nextSlice` fast path and reports `.simd = true`
+# through the build-info C ABI. A default `cargo build -p rustty-vt-c` matches.
+# (The default is TARGET-CONDITIONAL though: Config.zig:200-206 breaks
+# `simd = false` for wasm because the reference "can't build our SIMD
+# dependencies for Wasm", which is why ghostty ships `ghostty-vt.wasm` built
+# simd=false. Cargo cannot express a per-target `default`, so that arm of the
+# `orelse` is resolved in `rustty-vt`'s `options::SIMD` instead — see
+# `crates/rustty-vt/src/options.rs` — and a wasm build of THIS crate resolves the
+# option off even though `default = ["simd"]` is active. Verified: `cargo build
+# -p rustty-vt-c --target wasm32-unknown-unknown --release`.)
+default = ["simd"]
 # Parity-harness identity profile (R2). Forwards to `rustty-vt`'s feature of
 # the same name (which forwards to `rustty-identity`), flipping the vt LIBRARY
 # version reported by `build_info.rs` to the reference's separate libghostty
@@ -29,8 +44,10 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 # c-vt-build-info golden matches byte-for-byte. Harness only — never enable
 # for a published rustty artifact.
 identity-oracle = ["rustty-vt/identity-oracle"]
-# Expose rustty-vt's SIMD build knob at the C-ABI level so the oracle-parity
-# build (c-vt examples vs ghostty's default simd=true) can enable it.
+# rustty-vt's SIMD build knob, exposed at the C-ABI level (the `-Dsimd` analog).
+# ON by default (see `default` above, matching ghostty's non-WASM default); the
+# c-vt examples still name it explicitly, and `--no-default-features` is the
+# `-Dsimd=false` analog.
 simd = ["rustty-vt/simd"]
 
 [dependencies]

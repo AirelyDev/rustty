@@ -9,7 +9,7 @@
 // const Allocator = std.mem.Allocator;
 // const ArenaAllocator = std.heap.ArenaAllocator;
 // const formatterpkg = @import("formatter.zig");
-use rustty_cfg_fmt::{FormatEntry, Writer};
+use rustty_cfg_fmt::{FormatEntry, FormatError, Writer};
 
 /// A command to execute (argv0 and args).
 ///
@@ -254,7 +254,11 @@ enum Tag {
 
 impl FormatEntry for Command {
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // switch (self) {
         match self {
             // .shell => |v| try formatter.formatEntry([]const u8, v),
@@ -300,7 +304,11 @@ impl FormatEntry for Command {
 struct StringField<'a>(&'a [u8]);
 
 impl FormatEntry for StringField<'_> {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         rustty_cfg_fmt::format_entry_string(name, self.0, writer)
     }
 }

@@ -77,6 +77,57 @@ if [ "$blocked" = "1" ]; then exit 3; fi
 REF_DRIVER="$HARNESS/bin/vt_driver_ref"
 PORT_DRIVER="${RUSTTY_VT_DRIVER:-$HARNESS/bin/vt_driver_port}"
 DIAG_DIR="$HARNESS/results/diag"
+GHOSTTY="${GHOSTTY:-/Users/gael/projects/ghostty}"
+
+# ---------------------------------------------------------------------------
+# Driver-source staleness guard (F-016): the shared vt_driver.c must still
+# COMPILE against the pinned oracle headers. A pin advance that changes the C
+# ABI out from under the driver source must be RED here, never a silent skip
+# and never stale binaries voting green (same lesson as the dc054bb G6 fix:
+# a broken probe is a silent skip). Runs wherever the oracle include tree is
+# present (the gate is oracle-local; without the oracle it BLOCKS elsewhere).
+#   $1 = path to the driver source to check (parameterized for the self-test)
+# Returns 0 fresh / 1 stale / 2 probe-unavailable (caller decides).
+check_driver_source_fresh() {
+  local src="${1:-$HARNESS/ref_driver/vt_driver.c}"
+  local inc="$GHOSTTY/zig-out/include"
+  [ -d "$inc" ] || { echo "    staleness guard: oracle include dir missing ($inc)"; return 2; }
+  # `cc` is aliased in this environment; resolve a real clang explicitly.
+  local cc="" sysroot_flag=()
+  if command -v xcrun >/dev/null 2>&1; then
+    cc="$(xcrun --find clang 2>/dev/null || true)"
+    local sysroot
+    sysroot="$(xcrun --show-sdk-path 2>/dev/null || true)"
+    [ -n "$sysroot" ] && sysroot_flag=(-isysroot "$sysroot")
+  fi
+  [ -n "$cc" ] || { [ -x /usr/bin/clang ] && cc=/usr/bin/clang; }
+  [ -n "$cc" ] || { echo "    staleness guard: no real C compiler found"; return 2; }
+  if "$cc" -std=c11 -fsyntax-only "${sysroot_flag[@]}" -I"$inc" "$src" 2>"$DIAG_DIR/.staleness.err"; then
+    rm -f "$DIAG_DIR/.staleness.err"
+    return 0
+  fi
+  return 1
+}
+
+# Enforce the guard for a gate run (auto/progress; self-test proves the flip
+# itself). Stale source is BLOCKED exit 3: the binaries on disk can no longer
+# be rebuilt from source, so any green they produce is unre-derivable.
+enforce_driver_source_fresh() {
+  mkdir -p "$DIAG_DIR"
+  local rc=0
+  check_driver_source_fresh || rc=$?
+  case "$rc" in
+    0) echo "--- staleness guard: vt_driver.c compiles against the pinned oracle headers: OK ---" ;;
+    1)
+      echo "BLOCKED: vt_driver.c no longer compiles against the pinned oracle headers"
+      echo "         ($GHOSTTY/zig-out/include) — the drivers cannot be rebuilt from"
+      echo "         source; fix the driver for the new ABI before trusting this gate."
+      sed 's/^/    | /' "$DIAG_DIR/.staleness.err" | head -20
+      exit 3
+      ;;
+    2) echo "    (staleness guard skipped: probe unavailable; oracle-absent runs BLOCK below)" ;;
+  esac
+}
 
 # ---------------------------------------------------------------------------
 # Diag helper: write $DIAG_DIR/<case>.diag with the failure class, exit codes,
@@ -278,7 +329,30 @@ EOF
   else
     echo "  FAIL: reference driver missing ($REF_DRIVER) — cannot prove the flip"; ok=0
   fi
-  # 5. RED-flip injection (golden leg): a copied golden must cmp-equal itself;
+  # 5. Staleness-guard flip proof (F-016): the CURRENT driver source must pass
+  #    the guard; a copy with a resurrected pre-03d5fa268 call (the removed
+  #    Options-struct 3-arg ghostty_terminal_new) must flip it to STALE.
+  local stale_rc
+  stale_rc=0; check_driver_source_fresh >/dev/null || stale_rc=$?
+  if [ "$stale_rc" = "0" ]; then
+    echo "  staleness guard (current vt_driver.c => fresh): OK"
+    local tmps
+    tmps="$(mktemp -d)"
+    sed 's/ghostty_terminal_new(NULL, &terminal, cols, rows)/ghostty_terminal_new(NULL, \&terminal, (GhosttyTerminalOptions){0})/' \
+      "$HARNESS/ref_driver/vt_driver.c" > "$tmps/stale_driver.c"
+    stale_rc=0; check_driver_source_fresh "$tmps/stale_driver.c" >/dev/null 2>&1 || stale_rc=$?
+    if [ "$stale_rc" = "1" ]; then
+      echo "  staleness guard injection (old-ABI source => STALE): OK"
+    else
+      echo "  FAIL: staleness guard did NOT flag the old-ABI driver source (rc=$stale_rc)"; ok=0
+    fi
+    rm -rf "$tmps" "$DIAG_DIR/.staleness.err"
+  elif [ "$stale_rc" = "2" ]; then
+    echo "  staleness guard: probe unavailable here (oracle include/compiler missing); flip proof skipped"
+  else
+    echo "  FAIL: staleness guard reports the CURRENT vt_driver.c as stale"; ok=0
+  fi
+  # 6. RED-flip injection (golden leg): a copied golden must cmp-equal itself;
   #    corrupting one byte must be detected; restoring must be clean again.
   local g tmpg
   g="$(ls "$CORPUS"/*.golden 2>/dev/null | head -1)"
@@ -328,6 +402,7 @@ if [ "$MODE" = "auto" ] && [ -x "$PORT_DRIVER" ]; then
     echo "BLOCKED: reference driver missing ($REF_DRIVER); run build_ref_driver.sh"
     exit 3
   fi
+  enforce_driver_source_fresh
   fail=0
   run_fixture_leg "$PORT_DRIVER" || fail=1
   run_cvt_golden_leg || fail=1
@@ -350,6 +425,7 @@ fi
 echo "--- PROGRESS mode: port driver not armed for this run ($PORT_DRIVER) ---"
 echo "    G4 cannot be parity-GREEN without the port driver; running the"
 echo "    harness self-test (proves the comparator detects total divergence)."
+enforce_driver_source_fresh
 if [ -x "$HARNESS/gate_empty_divergence.sh" ]; then
   if RUSTTY_VT_DRIVER="/nonexistent/empty-port-stub" bash "$HARNESS/gate_empty_divergence.sh"; then
     echo "HARNESS-WIRED (port empty): comparator self-test PASS; G4 in progress mode"

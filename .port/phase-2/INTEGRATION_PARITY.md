@@ -271,11 +271,21 @@ Each attested behavior-preserving unless flagged.
    **Behavior-preserving** (only *when* the layer attaches shifts, unobservably).
 
 3. **`rustty_info` collapses Zig's 4 build modes to Debug xor ReleaseFast**
-   (`lib.rs:895-910`) — Rust has no 4-mode reflection; an optimized build always
-   reports ReleaseFast. ghostty's default release IS ReleaseFast, so it matches
-   in practice; the app uses `build_mode` only for display/logging. Cosmetic;
-   version/version_len faithful. **Behavior-preserving for the two modes rustty
-   can be built in.**
+   (`rustty-apprt-c/src/lib.rs`, the `rustty_info` `build_mode` field) — an
+   optimized build always reports ReleaseFast. ghostty's default release IS
+   ReleaseFast, so it matches in practice; the app uses `build_mode` only for
+   display/logging. Cosmetic; version/version_len faithful.
+   **AMENDED 2026-08-11 (W36-B02-OPTIMIZE-01)** — the "two modes rustty can be
+   built in" premise is stale: `Cargo.toml` also defines the `release-safe`
+   profile (`inherits = release` + `debug-assertions = true`), the DG4/CI lane
+   that stands for the oracle's ReleaseSafe semantics, under which the collapse
+   reports the WRONG mode. "Rust has no 4-mode reflection" is also overstated:
+   `debug_assertions` (safety axis) + `OPT_LEVEL` (optimize axis, read in a
+   `build.rs`) distinguish all four analogs. The vt-c C-ABI site
+   (`rustty-vt-c/src/build_info.rs` `optimize_mode()`, C
+   `RUSTTY_BUILD_INFO_OPTIMIZE`) now does exactly that and is FIXED/faithful.
+   This `rustty_info` site still collapses — remaining cosmetic gap, fixable by
+   mirroring the vt-c `build.rs` cfg pair into `rustty-apprt-c`.
 
 4. **`rustty_translate` identity return** (§2.7) — **FLAGGED**: behavior-
    preserving *only* while no message catalog is bound. In a localized locale it

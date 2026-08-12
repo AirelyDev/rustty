@@ -94,8 +94,11 @@ pub unsafe extern "C" fn rustty_build_info(data: c_int, out: *mut std::ffi::c_vo
     // PORT NOTE: the integer-range guard (`std.meta.intToEnum(BuildInfo, ...)
     // catch { log.warn(...); return .invalid_value; }`) lives here, on the raw
     // `c_int` crossing the C boundary (the typed `get` cannot receive an invalid
-    // tag). `log.warn("build_info invalid data value={d}", ...)` is preserved as
-    // the eprintln below (no scoped-log sink in this leaf).
+    // tag). `log.warn(...)` routes through the C-ABI log sink (`sys::log_fn`,
+    // the `std_options.logFn` analog installed by `lib_vt.zig:363-381`) with
+    // the reference's scope (`build_info.zig:7` `std.log.scoped(.build_info_c)`):
+    // delivered to an installed `rustty_sys_set(RUSTTY_SYS_OPT_LOG, ...)`
+    // callback, silently discarded when none is installed.
     let info = match data {
         0 => BuildInfo::Invalid,
         1 => BuildInfo::Simd,
@@ -110,7 +113,11 @@ pub unsafe extern "C" fn rustty_build_info(data: c_int, out: *mut std::ffi::c_vo
         10 => BuildInfo::VersionBuild,
         _ => {
             // log.warn("build_info invalid data value={d}", .{@intFromEnum(data)});
-            eprintln!("build_info invalid data value={data}");
+            sys::log_fn(
+                sys::StdLevel::Warn,
+                "build_info_c",
+                format_args!("build_info invalid data value={data}"),
+            );
             return result::Result::InvalidValue.to_c_int();
         }
     };
@@ -473,7 +480,7 @@ pub unsafe extern "C" fn rustty_size_report_encode(
     out_len: usize,
     out_written: *mut usize,
 ) -> c_int {
-    let style = match size_report::Style::from_c_int(style) {
+    let style = match size_report::SizeReportStyle::from_c_int(style) {
         Some(s) => s,
         None => return result::Result::InvalidValue.to_c_int(),
     };
@@ -523,7 +530,11 @@ pub unsafe extern "C" fn rustty_key_event_set_action(event: key_event::Event, ac
     // _ = std.meta.intToEnum(key.Action, ...) catch { log.warn(...); return; };
     let Some(a) = key_action_from_c_int(action) else {
         // log.warn("set_action invalid action value={d}", .{...});
-        eprintln!("set_action invalid action value={action}");
+        sys::log_fn(
+            sys::StdLevel::Warn,
+            "key_event",
+            format_args!("set_action invalid action value={action}"),
+        );
         return;
     };
     // SAFETY: `event` validity is the caller's contract.
@@ -551,7 +562,11 @@ pub unsafe extern "C" fn rustty_key_event_set_key(event: key_event::Event, k: c_
     // _ = std.meta.intToEnum(key.Key, ...) catch { log.warn(...); return; };
     let Some(key) = key_key_from_c_int(k) else {
         // log.warn("set_key invalid key value={d}", .{...});
-        eprintln!("set_key invalid key value={k}");
+        sys::log_fn(
+            sys::StdLevel::Warn,
+            "key_event",
+            format_args!("set_key invalid key value={k}"),
+        );
         return;
     };
     // SAFETY: `event` validity is the caller's contract.
@@ -864,7 +879,11 @@ pub unsafe extern "C" fn rustty_mouse_event_set_action(event: mouse_event::Event
     // _ = std.meta.intToEnum(Action, ...) catch { log.warn(...); return; };
     let Some(a) = mouse_action_from_c_int(action) else {
         // log.warn("set_action invalid action value={d}", .{...});
-        eprintln!("set_action invalid action value={action}");
+        sys::log_fn(
+            sys::StdLevel::Warn,
+            "mouse_event",
+            format_args!("set_action invalid action value={action}"),
+        );
         return;
     };
     // SAFETY: `event` validity is the caller's contract.
@@ -892,7 +911,11 @@ pub unsafe extern "C" fn rustty_mouse_event_set_button(event: mouse_event::Event
     // _ = std.meta.intToEnum(Button, ...) catch { log.warn(...); return; };
     let Some(b) = mouse_button_from_c_int(button) else {
         // log.warn("set_button invalid button value={d}", .{...});
-        eprintln!("set_button invalid button value={button}");
+        sys::log_fn(
+            sys::StdLevel::Warn,
+            "mouse_event",
+            format_args!("set_button invalid button value={button}"),
+        );
         return;
     };
     // SAFETY: `event` validity is the caller's contract.
@@ -1076,9 +1099,13 @@ pub unsafe extern "C" fn rustty_mouse_encoder_encode(
 }
 
 // ----- cell -----
-// PORT NOTE: the `cell_get` `intToEnum(CellData, ...)` runtime-safety guard lives
-// here on the raw `c_int` crossing the C boundary; an out-of-range value returns
-// `INVALID_VALUE` (mirroring the reference early return).
+// PORT NOTE (W83-B01-01): the `cell_get` `intToEnum(CellData, ...)`
+// runtime-safety guard on the raw `c_int` crossing the C boundary MOVED to
+// `cell::CellData::from_c_int` / `cell::get_checked`, so the guard is shared by
+// this single-get wrapper AND by the `cell_get_multi` element loop — matching
+// the reference, where `get_multi` reaches the guard by calling the guarded
+// `get`. An out-of-range value returns `INVALID_VALUE` (mirroring the reference
+// early return).
 
 // pub const cell_get = cell.get;  (ghostty_cell_get)
 /// C: rustty_cell_get
@@ -1091,11 +1118,8 @@ pub unsafe extern "C" fn rustty_cell_get(
     data: c_int,
     out: *mut std::ffi::c_void,
 ) -> c_int {
-    let Some(d) = cell_data_from_c_int(data) else {
-        return result::Result::InvalidValue.to_c_int();
-    };
     // SAFETY: `out` validity is the caller's contract.
-    unsafe { cell::get(cell_, d, out) }.to_c_int()
+    unsafe { cell::get_checked(cell_, data, out) }.to_c_int()
 }
 
 // pub const cell_get_multi = cell.get_multi;  (ghostty_cell_get_multi)
@@ -1111,8 +1135,14 @@ pub unsafe extern "C" fn rustty_cell_get_multi(
     values: *mut *mut std::ffi::c_void,
     out_written: *mut usize,
 ) -> c_int {
+    // PORT NOTE (W83-B01-01): the parameter type stays `*const cell::CellData`
+    // so the published C signature keeps `const RusttyCellData *keys`, but the
+    // ARRAY ELEMENTS are C-supplied integers: they are read as raw `c_int`
+    // (ABI-identical — `CellData` is `#[repr(C)]`, asserted int-sized) and
+    // range-checked per element, because materializing an out-of-range
+    // discriminant as a Rust enum is UB in every build mode.
     // SAFETY: pointer validity is the caller's contract.
-    unsafe { cell::get_multi(cell_, count, keys, values, out_written) }.to_c_int()
+    unsafe { cell::get_multi(cell_, count, keys as *const c_int, values, out_written) }.to_c_int()
 }
 
 // ----- row -----
@@ -1127,11 +1157,8 @@ pub unsafe extern "C" fn rustty_row_get(
     data: c_int,
     out: *mut std::ffi::c_void,
 ) -> c_int {
-    let Some(d) = row_data_from_c_int(data) else {
-        return result::Result::InvalidValue.to_c_int();
-    };
     // SAFETY: `out` validity is the caller's contract.
-    unsafe { row::get(row_, d, out) }.to_c_int()
+    unsafe { row::get_checked(row_, data, out) }.to_c_int()
 }
 
 // pub const row_get_multi = row.get_multi;  (ghostty_row_get_multi)
@@ -1147,8 +1174,14 @@ pub unsafe extern "C" fn rustty_row_get_multi(
     values: *mut *mut std::ffi::c_void,
     out_written: *mut usize,
 ) -> c_int {
+    // PORT NOTE (W84-B01-01): the parameter type stays `*const row::RowData` so
+    // the published C signature keeps `const RusttyRowData *keys`, but the
+    // ARRAY ELEMENTS are C-supplied integers: they are read as raw `c_int`
+    // (ABI-identical — `RowData` is `#[repr(C)]`, asserted int-sized) and
+    // range-checked per element, because materializing an out-of-range
+    // discriminant as a Rust enum is UB in every build mode.
     // SAFETY: pointer validity is the caller's contract.
-    unsafe { row::get_multi(row_, count, keys, values, out_written) }.to_c_int()
+    unsafe { row::get_multi(row_, count, keys as *const c_int, values, out_written) }.to_c_int()
 }
 
 // ----- style -----
@@ -1174,54 +1207,21 @@ pub unsafe extern "C" fn rustty_style_is_default(s: *const style::Style) -> bool
     unsafe { style::style_is_default(s) }
 }
 
-// PORT NOTE: range-checked `c_int -> enum` projections for the cell/row getters
-// (the `std.meta.intToEnum` guard). `CellData`/`RowData` are contiguous
-// `#[repr(C)]` enums; the range check IS `intToEnum`, after which a `transmute`
-// from the validated `c_int` is the enum.
-const CELL_DATA_COUNT: c_int = 12; // contiguous 0..=11
-fn cell_data_from_c_int(v: c_int) -> Option<cell::CellData> {
-    if (0..CELL_DATA_COUNT).contains(&v) {
-        // SAFETY: `v` is a valid `CellData` discriminant (range-checked above).
-        Some(unsafe { std::mem::transmute::<c_int, cell::CellData>(v) })
-    } else {
-        None
-    }
-}
+// PORT NOTE: the range-checked `c_int -> enum` projections for the cell/row
+// getters (the `std.meta.intToEnum` guards) MOVED to `cell::CellData::from_c_int`
+// / `row::RowData::from_c_int` under W83-B01-01/W84-B01-01, so each guard (and
+// its `get_checked` entry point) is shared by the single-get wrappers above and
+// by the `*_get_multi` element loops — matching the reference, where `get_multi`
+// reaches the guard by calling the guarded `get`.
 
-const ROW_DATA_COUNT: c_int = 9; // contiguous 0..=8
-fn row_data_from_c_int(v: c_int) -> Option<row::RowData> {
-    if (0..ROW_DATA_COUNT).contains(&v) {
-        // SAFETY: `v` is a valid `RowData` discriminant (range-checked above).
-        Some(unsafe { std::mem::transmute::<c_int, row::RowData>(v) })
-    } else {
-        None
-    }
-}
-
-// PORT NOTE: range-checked `c_int -> enum` projections for the terminal get/set
-// guards (the `std.meta.intToEnum` guard on the raw `c_int` crossing the C
-// boundary). `Option` is a contiguous `#[repr(C)]` enum; `TerminalData` is NOT
-// (see below).
+// PORT NOTE: range-checked `c_int -> enum` projection for the terminal set
+// guard (the `std.meta.intToEnum` guard on the raw `c_int` crossing the C
+// boundary). `Option` is a contiguous `#[repr(C)]` enum.
 //
-// `TerminalData` went non-contiguous at `P3-W3` T5 (oracle `a27e04e8f` added
-// `scrollback_max_bytes = 34` / `scrollback_max_lines = 35` while `33`,
-// `vt_processing_error`, was not yet ported) and is CONTIGUOUS AGAIN as of
-// `P3-W4` T5, which lands 33 (oracle `439d35e27`). A plain `0..N` range check
-// would `transmute` a hole into an UNINHABITED enum value — instant UB — so
-// holes are rejected explicitly. The MECHANISM stays even though the list is
-// now empty: 36+ may reopen a hole, and re-deriving it from scratch under time
-// pressure is exactly how that UB gets reintroduced.
-const TERMINAL_DATA_MAX: c_int = 35;
-const TERMINAL_DATA_HOLES: &[c_int] = &[];
-fn terminal_data_from_c_int(v: c_int) -> Option<terminal::TerminalData> {
-    if (0..=TERMINAL_DATA_MAX).contains(&v) && !TERMINAL_DATA_HOLES.contains(&v) {
-        // SAFETY: `v` is a valid `TerminalData` discriminant (checked above).
-        Some(unsafe { std::mem::transmute::<c_int, terminal::TerminalData>(v) })
-    } else {
-        None
-    }
-}
-
+// The `TerminalData` projection (with its explicit hole list) moved to
+// `terminal::TerminalData::from_c_int` under W35-B08 — `get_multi` must reach
+// the same guard per array element, so it can no longer live in this file.
+//
 // contiguous 0..=30 (27/28 = scrollback max bytes/lines; 29/30 = the
 // desktop-notification and progress-report effects, oracle c3655ba25 47d602c42)
 const TERMINAL_OPTION_COUNT: c_int = 31;
@@ -1974,13 +1974,11 @@ pub unsafe extern "C" fn rustty_render_state_get(
     out: *mut std::ffi::c_void,
 ) -> c_int {
     // _ = std.meta.intToEnum(Data, ...) catch { log.warn(...); return .invalid_value; }
-    let Some(d) = render_data_from_c_int(data) else {
-        // log.warn("render_state_get invalid data value={d}", .{...});
-        eprintln!("render_state_get invalid data value={data}");
-        return result::Result::InvalidValue.to_c_int();
-    };
+    // PORT NOTE (W34-B02): the guard + `log.warn` live in `render::get_checked`
+    // so that `get_multi` reaches them per array element, exactly as the
+    // reference's `get_multi` reaches the guard by calling `get`.
     // SAFETY: `out` validity/type is the caller's contract.
-    unsafe { render::get(state, d, out) }.to_c_int()
+    unsafe { render::get_checked(state, data, out) }.to_c_int()
 }
 
 // pub const render_state_get_multi = render.get_multi;
@@ -1996,8 +1994,14 @@ pub unsafe extern "C" fn rustty_render_state_get_multi(
     values: *mut *mut std::ffi::c_void,
     out_written: *mut usize,
 ) -> c_int {
+    // PORT NOTE (W34-B02): the parameter type stays `*const render::Data` so the
+    // published C signature keeps `const RusttyRenderStateData *keys`, but the
+    // ARRAY ELEMENTS are C-supplied integers: they are read as raw `c_int`
+    // (ABI-identical — `Data` is `#[repr(C)]`, asserted int-sized) and
+    // range-checked per element, because materializing an out-of-range
+    // discriminant as a Rust enum is UB in every build mode.
     // SAFETY: pointer validity is the caller's contract.
-    unsafe { render::get_multi(state, count, keys, values, out_written) }.to_c_int()
+    unsafe { render::get_multi(state, count, keys as *const c_int, values, out_written) }.to_c_int()
 }
 
 // pub const render_state_set = render.set;
@@ -2017,7 +2021,11 @@ pub unsafe extern "C" fn rustty_render_state_set(
         0 => SetOption::Dirty,
         _ => {
             // log.warn("render_state_set invalid option value={d}", .{...});
-            eprintln!("render_state_set invalid option value={option}");
+            sys::log_fn(
+                sys::StdLevel::Warn,
+                render::LOG_SCOPE,
+                format_args!("render_state_set invalid option value={option}"),
+            );
             return result::Result::InvalidValue.to_c_int();
         }
     };
@@ -2090,13 +2098,10 @@ pub unsafe extern "C" fn rustty_render_state_row_get(
     out: *mut std::ffi::c_void,
 ) -> c_int {
     // _ = std.meta.intToEnum(RowData, ...) catch { log.warn(...); return .invalid_value; }
-    let Some(d) = render_row_data_from_c_int(data) else {
-        // log.warn("render_state_row_get invalid data value={d}", .{...});
-        eprintln!("render_state_row_get invalid data value={data}");
-        return result::Result::InvalidValue.to_c_int();
-    };
+    // PORT NOTE (W34-B02): guard + `log.warn` live in `render::row_get_checked`
+    // so `row_get_multi` reaches them per array element.
     // SAFETY: `out` validity/type is the caller's contract.
-    unsafe { render::row_get(iterator, d, out) }.to_c_int()
+    unsafe { render::row_get_checked(iterator, data, out) }.to_c_int()
 }
 
 // pub const render_state_row_get_multi = render.row_get_multi;
@@ -2112,8 +2117,11 @@ pub unsafe extern "C" fn rustty_render_state_row_get_multi(
     values: *mut *mut std::ffi::c_void,
     out_written: *mut usize,
 ) -> c_int {
+    // PORT NOTE (W34-B02): see `rustty_render_state_get_multi` — the elements
+    // are read as raw `c_int` and range-checked per element.
     // SAFETY: pointer validity is the caller's contract.
-    unsafe { render::row_get_multi(iterator, count, keys, values, out_written) }.to_c_int()
+    unsafe { render::row_get_multi(iterator, count, keys as *const c_int, values, out_written) }
+        .to_c_int()
 }
 
 // pub const render_state_row_set = render.row_set;
@@ -2133,7 +2141,11 @@ pub unsafe extern "C" fn rustty_render_state_row_set(
         0 => RowOption::Dirty,
         _ => {
             // log.warn("render_state_row_set invalid option value={d}", .{...});
-            eprintln!("render_state_row_set invalid option value={option}");
+            sys::log_fn(
+                sys::StdLevel::Warn,
+                render::LOG_SCOPE,
+                format_args!("render_state_row_set invalid option value={option}"),
+            );
             return result::Result::InvalidValue.to_c_int();
         }
     };
@@ -2204,13 +2216,11 @@ pub unsafe extern "C" fn rustty_render_state_row_cells_get(
     out: *mut std::ffi::c_void,
 ) -> c_int {
     // _ = std.meta.intToEnum(RowCellsData, ...) catch { log.warn(...); return .invalid_value; }
-    let Some(d) = render_row_cells_data_from_c_int(data) else {
-        // log.warn("render_state_row_cells_get invalid data value={d}", .{...});
-        eprintln!("render_state_row_cells_get invalid data value={data}");
-        return result::Result::InvalidValue.to_c_int();
-    };
+    // PORT NOTE (W34-B02): guard + `log.warn` live in
+    // `render::row_cells_get_checked` so `row_cells_get_multi` reaches them per
+    // array element.
     // SAFETY: `out` validity/type is the caller's contract.
-    unsafe { render::row_cells_get(cells, d, out) }.to_c_int()
+    unsafe { render::row_cells_get_checked(cells, data, out) }.to_c_int()
 }
 
 // pub const render_state_row_cells_get_multi = render.row_cells_get_multi;
@@ -2226,43 +2236,19 @@ pub unsafe extern "C" fn rustty_render_state_row_cells_get_multi(
     values: *mut *mut std::ffi::c_void,
     out_written: *mut usize,
 ) -> c_int {
+    // PORT NOTE (W34-B02): see `rustty_render_state_get_multi` — the elements
+    // are read as raw `c_int` and range-checked per element.
     // SAFETY: pointer validity is the caller's contract.
-    unsafe { render::row_cells_get_multi(cells, count, keys, values, out_written) }.to_c_int()
+    unsafe { render::row_cells_get_multi(cells, count, keys as *const c_int, values, out_written) }
+        .to_c_int()
 }
 
-// PORT NOTE: range-checked `c_int -> enum` projections for the render getters/
-// setters (the `std.meta.intToEnum` guards). `Data`/`RowData`/`RowCellsData` are
-// contiguous `#[repr(C)]` enums; the range check IS `intToEnum`, after which a
-// `transmute` from the validated `c_int` is the enum.
-const RENDER_DATA_COUNT: c_int = 18; // contiguous 0..=17
-fn render_data_from_c_int(v: c_int) -> Option<render::Data> {
-    if (0..RENDER_DATA_COUNT).contains(&v) {
-        // SAFETY: `v` is a valid `render::Data` discriminant (range-checked above).
-        Some(unsafe { std::mem::transmute::<c_int, render::Data>(v) })
-    } else {
-        None
-    }
-}
-
-const RENDER_ROW_DATA_COUNT: c_int = 5; // contiguous 0..=4
-fn render_row_data_from_c_int(v: c_int) -> Option<render::RowData> {
-    if (0..RENDER_ROW_DATA_COUNT).contains(&v) {
-        // SAFETY: `v` is a valid `render::RowData` discriminant (range-checked).
-        Some(unsafe { std::mem::transmute::<c_int, render::RowData>(v) })
-    } else {
-        None
-    }
-}
-
-const RENDER_ROW_CELLS_DATA_COUNT: c_int = 10; // contiguous 0..=9
-fn render_row_cells_data_from_c_int(v: c_int) -> Option<render::RowCellsData> {
-    if (0..RENDER_ROW_CELLS_DATA_COUNT).contains(&v) {
-        // SAFETY: `v` is a valid `render::RowCellsData` discriminant (range-checked).
-        Some(unsafe { std::mem::transmute::<c_int, render::RowCellsData>(v) })
-    } else {
-        None
-    }
-}
+// PORT NOTE (W34-B02): the range-checked `c_int -> enum` projections for the
+// render getters (the `std.meta.intToEnum` guards) MOVED to `render.rs` as
+// `Data::from_c_int` / `RowData::from_c_int` / `RowCellsData::from_c_int`, so
+// the guard (and its `log.warn`) is shared by the single-get wrappers above and
+// by the `*_get_multi` element loops — matching the reference, where `get_multi`
+// reaches the guard by calling the guarded `get`.
 
 // ----- selection_gesture -----
 // PORT NOTE: 1:1 with the 9 `@export(&c.selection_gesture_*, ...)` lines in
@@ -2345,13 +2331,12 @@ pub unsafe extern "C" fn rustty_selection_gesture_get(
     out: *mut std::ffi::c_void,
 ) -> c_int {
     // _ = std.meta.intToEnum(Data, ...) catch { log.warn(...); return .invalid_value; }
-    let Some(d) = selection_gesture_data_from_c_int(data) else {
-        // log.warn("selection_gesture_get invalid data value={d}", .{...});
-        eprintln!("selection_gesture_get invalid data value={data}");
-        return result::Result::InvalidValue.to_c_int();
-    };
+    // PORT NOTE (W66-GETMULTI-RAW-01): the guard + `log.warn` live in
+    // `selection_gesture::get_checked` so that `get_multi` reaches them per
+    // array element, exactly as the reference's `get_multi` reaches the guard
+    // by calling `get`.
     // SAFETY: `out` validity/type is the caller's contract.
-    unsafe { selection_gesture::get(gesture, terminal, d, out) }.to_c_int()
+    unsafe { selection_gesture::get_checked(gesture, terminal, data, out) }.to_c_int()
 }
 
 // pub const selection_gesture_get_multi = selection_gesture.get_multi;
@@ -2368,9 +2353,25 @@ pub unsafe extern "C" fn rustty_selection_gesture_get_multi(
     values: *mut *mut std::ffi::c_void,
     out_written: *mut usize,
 ) -> c_int {
+    // PORT NOTE (W66-GETMULTI-RAW-01): the parameter type stays
+    // `*const selection_gesture::Data` so the published C signature keeps
+    // `const RusttySelectionGestureData *keys`, but the ARRAY ELEMENTS are
+    // C-supplied integers: they are read as raw `c_int` (ABI-identical —
+    // `Data` is `#[repr(C)]`, asserted int-sized) and range-checked per
+    // element, because materializing an out-of-range discriminant as a Rust
+    // enum is UB in every build mode.
     // SAFETY: pointer validity is the caller's contract.
-    unsafe { selection_gesture::get_multi(gesture, terminal, count, keys, values, out_written) }
-        .to_c_int()
+    unsafe {
+        selection_gesture::get_multi(
+            gesture,
+            terminal,
+            count,
+            keys as *const c_int,
+            values,
+            out_written,
+        )
+    }
+    .to_c_int()
 }
 
 // pub const selection_gesture_event_new = selection_gesture.event_new;
@@ -2418,7 +2419,11 @@ pub unsafe extern "C" fn rustty_selection_gesture_event_set(
     // if (comptime std.debug.runtime_safety) { _ = intToEnum(EventOption, ...) catch { log.warn(...); return .invalid_value; } }
     let Some(opt) = selection_gesture_event_option_from_c_int(option) else {
         // log.warn("selection_gesture_event_set invalid option value={d}", .{...});
-        eprintln!("selection_gesture_event_set invalid option value={option}");
+        sys::log_fn(
+            sys::StdLevel::Warn,
+            selection_gesture::LOG_SCOPE,
+            format_args!("selection_gesture_event_set invalid option value={option}"),
+        );
         return result::Result::InvalidValue.to_c_int();
     };
     // SAFETY: `value` validity for `opt` is the caller's contract.
@@ -2426,17 +2431,9 @@ pub unsafe extern "C" fn rustty_selection_gesture_event_set(
 }
 
 // PORT NOTE: range-checked `c_int -> enum` projections for the selection_gesture
-// guards. `Data`/`EventType`/`EventOption` are contiguous `#[repr(C)]` enums.
-const SELECTION_GESTURE_DATA_COUNT: c_int = 5; // contiguous 0..=4
-fn selection_gesture_data_from_c_int(v: c_int) -> Option<selection_gesture::Data> {
-    if (0..SELECTION_GESTURE_DATA_COUNT).contains(&v) {
-        // SAFETY: `v` is a valid `Data` discriminant (range-checked above).
-        Some(unsafe { std::mem::transmute::<c_int, selection_gesture::Data>(v) })
-    } else {
-        None
-    }
-}
-
+// guards. `EventType`/`EventOption` are contiguous `#[repr(C)]` enums. (`Data`'s
+// projection lives in the module as `selection_gesture::Data::from_c_int`, since
+// `get_multi` must reach it per array element — W66-GETMULTI-RAW-01.)
 const SELECTION_GESTURE_EVENT_TYPE_COUNT: c_int = 5; // contiguous 0..=4
 fn selection_gesture_event_type_from_c_int(v: c_int) -> Option<selection_gesture::EventType> {
     if (0..SELECTION_GESTURE_EVENT_TYPE_COUNT).contains(&v) {
@@ -2537,7 +2534,15 @@ pub unsafe extern "C" fn rustty_terminal_set(
     // _ = std.meta.intToEnum(Option, ...) catch { log.warn(...); return .invalid_value; }
     let Some(opt) = terminal_option_from_c_int(option) else {
         // log.warn("terminal_set invalid option value={d}", .{...});
-        eprintln!("terminal_set invalid option value={option}");
+        // PORT NOTE (W35-B06): the reference's `log.warn` on the `.terminal_c`
+        // scope reaches `terminal/c/sys.zig`'s `logFn`, which routes to the
+        // installed C log callback and DROPS the message when none is installed
+        // — it never writes to stderr. `sys::log_fn` is that sink.
+        sys::log_fn(
+            sys::StdLevel::Warn,
+            terminal::LOG_SCOPE,
+            format_args!("terminal_set invalid option value={option}"),
+        );
         return result::Result::InvalidValue.to_c_int();
     };
     // SAFETY: `terminal`/`value` validity is the caller's contract.
@@ -2652,13 +2657,11 @@ pub unsafe extern "C" fn rustty_terminal_get(
     out: *mut std::ffi::c_void,
 ) -> c_int {
     // _ = std.meta.intToEnum(TerminalData, ...) catch { log.warn(...); return .invalid_value; }
-    let Some(d) = terminal_data_from_c_int(data) else {
-        // log.warn("terminal_get invalid data value={d}", .{...});
-        eprintln!("terminal_get invalid data value={data}");
-        return result::Result::InvalidValue.to_c_int();
-    };
+    // PORT NOTE (W35-B08): the guard + `log.warn` live in `terminal::get_checked`
+    // so that `get_multi` reaches them per array element, exactly as the
+    // reference's `get_multi` reaches the guard by calling `get`.
     // SAFETY: `terminal`/`out` validity is the caller's contract.
-    unsafe { terminal::get(terminal, d, out) }.to_c_int()
+    unsafe { terminal::get_checked(terminal, data, out) }.to_c_int()
 }
 
 // pub const terminal_get_multi = terminal.get_multi;  (ghostty_terminal_get_multi)
@@ -2674,8 +2677,15 @@ pub unsafe extern "C" fn rustty_terminal_get_multi(
     values: *mut *mut std::ffi::c_void,
     out_written: *mut usize,
 ) -> c_int {
+    // PORT NOTE (W35-B08): the parameter type stays `*const terminal::TerminalData`
+    // so the published C signature keeps `const RusttyTerminalData *keys`, but the
+    // ARRAY ELEMENTS are C-supplied integers: they are read as raw `c_int`
+    // (ABI-identical — `TerminalData` is `#[repr(C)]`, asserted int-sized) and
+    // range-checked per element, because materializing an out-of-range
+    // discriminant as a Rust enum is UB in every build mode.
     // SAFETY: pointer validity is the caller's contract.
-    unsafe { terminal::get_multi(terminal, count, keys, values, out_written) }.to_c_int()
+    unsafe { terminal::get_multi(terminal, count, keys as *const c_int, values, out_written) }
+        .to_c_int()
 }
 
 // pub const terminal_select_word = selection.word;  (ghostty_terminal_select_word)
@@ -2812,7 +2822,19 @@ pub unsafe extern "C" fn rustty_terminal_selection_adjust(
 ) -> c_int {
     let adjustment = match selection::Adjustment::from_c_int(adjustment) {
         Some(a) => a,
-        None => return result::Result::InvalidValue.to_c_int(),
+        // log.warn("terminal_selection_adjust invalid adjustment value={d}", .{...});
+        // PORT NOTE (W35-B03): the reference's `.selection_c`-scoped `log.warn`
+        // is routed by `terminal/c/sys.zig`'s `logFn` to the installed C log
+        // callback (and dropped when none is installed); `sys::log_fn` is that
+        // sink. The disposition (`.invalid_value`) is unchanged.
+        None => {
+            sys::log_fn(
+                sys::StdLevel::Warn,
+                selection::LOG_SCOPE,
+                format_args!("terminal_selection_adjust invalid adjustment value={adjustment}"),
+            );
+            return result::Result::InvalidValue.to_c_int();
+        }
     };
     // SAFETY: pointer validity is the caller's contract.
     unsafe { selection::adjust(terminal, selection, adjustment) }.to_c_int()
@@ -2850,7 +2872,18 @@ pub unsafe extern "C" fn rustty_terminal_selection_ordered(
 ) -> c_int {
     let desired = match selection::Order::from_c_int(desired) {
         Some(o) => o,
-        None => return result::Result::InvalidValue.to_c_int(),
+        // log.warn("terminal_selection_ordered invalid desired value={d}", .{...});
+        // PORT NOTE (W35-B03): see `rustty_terminal_selection_adjust` — the
+        // reference's `.selection_c`-scoped `log.warn` goes to the C log
+        // callback via `sys::log_fn`, never to stderr.
+        None => {
+            sys::log_fn(
+                sys::StdLevel::Warn,
+                selection::LOG_SCOPE,
+                format_args!("terminal_selection_ordered invalid desired value={desired}"),
+            );
+            return result::Result::InvalidValue.to_c_int();
+        }
     };
     // SAFETY: pointer validity is the caller's contract.
     unsafe { selection::ordered(terminal, selection, desired, out_selection) }.to_c_int()
@@ -3146,5 +3179,134 @@ mod main_tests {
         // _ = unicode; (main.zig)
         let _ = super::unicode::codepoint_width as fn(_) -> _;
         let _ = super::unicode::grapheme_width as unsafe fn(_, _, _) -> _;
+    }
+}
+
+// W36-B07 (Rust-only proving tests): the root-level wrapper guards in THIS file
+// emit the reference's `log.warn` diagnostics. Ghostty routes them through
+// `std_options.logFn` (`lib_vt.zig:363-381` selects `terminal/c/sys.zig`'s
+// `logFn` for c_abi builds), which delivers them to the installed C log
+// callback and DROPS them when none is installed (`if (global.log == null)
+// return;`). They must never reach stderr.
+#[cfg(test)]
+mod log_root_tests {
+    use super::sys::LogLevel;
+    use std::ffi::c_void;
+    use std::os::raw::c_int;
+    use std::sync::Mutex;
+
+    static CAPTURED: Mutex<Vec<(LogLevel, String, String)>> = Mutex::new(Vec::new());
+
+    extern "C" fn log_cb(
+        _userdata: *mut c_void,
+        level: LogLevel,
+        scope_ptr: *const u8,
+        scope_len: usize,
+        message_ptr: *const u8,
+        message_len: usize,
+    ) {
+        // SAFETY: the sink hands us the scope/message byte ranges.
+        let scope = unsafe { std::slice::from_raw_parts(scope_ptr, scope_len) };
+        // SAFETY: as above.
+        let message = unsafe { std::slice::from_raw_parts(message_ptr, message_len) };
+        CAPTURED.lock().unwrap().push((
+            level,
+            String::from_utf8_lossy(scope).into_owned(),
+            String::from_utf8_lossy(message).into_owned(),
+        ));
+    }
+
+    /// Trip every root-wrapper guard that carries a diagnostic. Each guard
+    /// rejects the selector BEFORE touching its handle argument, so the null
+    /// handles are never dereferenced (that ordering is itself asserted here:
+    /// a regression that dereferenced first would crash this test).
+    fn trip_all_guards(sel: c_int) {
+        const C_INVALID_VALUE: c_int = -2;
+
+        assert_eq!(C_INVALID_VALUE, unsafe {
+            super::rustty_build_info(sel, std::ptr::null_mut())
+        });
+        // The key/mouse setters return void: the reference's guard `return`s.
+        unsafe { super::rustty_key_event_set_action(std::ptr::null_mut(), sel) };
+        unsafe { super::rustty_key_event_set_key(std::ptr::null_mut(), sel) };
+        unsafe { super::rustty_mouse_event_set_action(std::ptr::null_mut(), sel) };
+        unsafe { super::rustty_mouse_event_set_button(std::ptr::null_mut(), sel) };
+        assert_eq!(C_INVALID_VALUE, unsafe {
+            super::rustty_selection_gesture_get(
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                sel,
+                std::ptr::null_mut(),
+            )
+        });
+        assert_eq!(C_INVALID_VALUE, unsafe {
+            super::rustty_selection_gesture_event_set(std::ptr::null_mut(), sel, std::ptr::null())
+        });
+    }
+
+    #[test]
+    fn root_wrapper_invalid_selectors_warn_through_the_c_log_callback() {
+        // Serialize against every other test that mutates the process-wide sys
+        // GLOBAL (the sys tests, the terminal/render scoped-log tests).
+        let _guard = super::sys::tests::reset_global();
+        CAPTURED.lock().unwrap().clear();
+
+        // A selector value used by no other test, so the capture can be
+        // filtered: tests run in parallel and other tests also trip
+        // invalid-selector warnings while this callback is installed.
+        const SEL: c_int = 31339;
+
+        // No callback installed: `logFn` returns immediately, so nothing is
+        // emitted anywhere (in particular NOT to stderr), and the return codes
+        // are unchanged.
+        trip_all_guards(SEL);
+        assert!(CAPTURED.lock().unwrap().is_empty());
+
+        // Install a capturing callback: now every diagnostic is delivered.
+        assert_eq!(super::result::Result::Success, unsafe {
+            super::sys::set(super::sys::Option_::Log, log_cb as *const c_void)
+        });
+
+        trip_all_guards(SEL);
+
+        // Clear the callback before asserting, so a failure cannot strand it.
+        assert_eq!(super::result::Result::Success, unsafe {
+            super::sys::set(super::sys::Option_::Log, std::ptr::null())
+        });
+
+        let all = CAPTURED.lock().unwrap().clone();
+        // Every diagnostic — whoever emitted it — carries the reference's level.
+        for (level, _, _) in all.iter() {
+            assert_eq!(LogLevel::Warning, *level);
+        }
+        let captured: Vec<(&String, &String)> = all
+            .iter()
+            .filter(|(_, _, m)| m.ends_with("=31339"))
+            .map(|(_, s, m)| (s, m))
+            .collect();
+        // Scopes are the reference's `std.log.scoped` tags: `.build_info_c`
+        // (build_info.zig:7), `.key_event` (key_event.zig:8), `.mouse_event`
+        // (mouse_event.zig:11), `.selection_gesture_c`
+        // (selection_gesture.zig:15).
+        let expected = [
+            ("build_info_c", "build_info invalid data value=31339"),
+            ("key_event", "set_action invalid action value=31339"),
+            ("key_event", "set_key invalid key value=31339"),
+            ("mouse_event", "set_action invalid action value=31339"),
+            ("mouse_event", "set_button invalid button value=31339"),
+            (
+                "selection_gesture_c",
+                "selection_gesture_get invalid data value=31339",
+            ),
+            (
+                "selection_gesture_c",
+                "selection_gesture_event_set invalid option value=31339",
+            ),
+        ];
+        assert_eq!(expected.len(), captured.len(), "captured: {all:?}");
+        for (i, (scope, message)) in captured.iter().enumerate() {
+            assert_eq!(expected[i].0, scope.as_str());
+            assert_eq!(expected[i].1, message.as_str());
+        }
     }
 }

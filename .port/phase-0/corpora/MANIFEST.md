@@ -58,14 +58,14 @@ $EX/<dir>/zig-out/bin/<exe> > cvt/<dir>.golden 2>&1
 | c-vt.golden                  | c_vt                  |   39 | 0 | empty |
 | c-vt-build-info.golden       | c_vt_build_info       |  177 | 0 | empty |
 | c-vt-colors.golden           | c_vt_colors           |  964 | 0 | empty |
-| c-vt-effects.golden          | c_vt_effects          |  195 | 0 | empty |
+| c-vt-effects.golden          | c_vt_effects          |  306 | 0 | empty |
 | c-vt-encode-focus.golden     | c_vt_encode_focus     |   21 | 0 | empty |
 | c-vt-encode-key.golden       | c_vt_encode_key       |  **0** | 0 | empty |
 | c-vt-encode-mouse.golden     | c_vt_encode_mouse     |    9 | 0 | empty |
 | c-vt-formatter.golden        | c_vt_formatter        |  184 | 0 | empty |
 | c-vt-grid-ref-tracked.golden | c_vt_grid_ref_tracked |   97 | 0 | empty |
 | c-vt-grid-traverse.golden    | c_vt_grid_traverse    |  128 | 0 | empty |
-| c-vt-kitty-graphics.golden   | c_vt_kitty_graphics   |  329 | 0 | empty |
+| c-vt-kitty-graphics.golden   | c_vt_kitty_graphics   |  364 | 0 | empty |
 | c-vt-modes.golden            | c_vt_modes            |   86 | 0 | empty |
 | c-vt-paste.golden            | c_vt_paste            |  136 | 0 | empty |
 | c-vt-render.golden           | c_vt_render           | 1221 | 0 | empty |
@@ -76,6 +76,20 @@ $EX/<dir>/zig-out/bin/<exe> > cvt/<dir>.golden 2>&1
 | c-vt-static.golden           | c_vt_static           |   39 | 0 | empty |
 | c-vt-stream.golden           | c_vt_stream           |   76 | 0 | empty |
 | cpp-vt-stream.golden         | cpp_vt_stream         |   27 | 0 | empty |
+
+**Refresh 2026-08-10 (F-016):** `c-vt-effects.golden` (195→306 B) and
+`c-vt-kitty-graphics.golden` (329→364 B) were re-captured — the originals
+predated the 2026-07-31 pin advance, whose example sources gained the
+clipboard-write effect and "Storage generation" output. The pre-pin
+`examples-out/` zig-built binaries no longer exist (and the ghostty tree's own
+`example/*/zig-out` binaries abort against the advanced dylib), so the refresh
+capture is the PIN's example `src/main.c` compiled with clang against the
+pin's Mach-O static lib
+(`$GHOSTTY/zig-out/lib/ghostty-vt.xcframework/macos-arm64_x86_64/libghostty-vt.a`)
+— the same recipe `build_port_driver.sh` uses for the port side, so both sides
+of G4 leg B are captured identically. Determinism re-verified (two runs,
+identical bytes); exit 0, stderr empty for both. The other 19 goldens still
+byte-match the pinned oracle and were left untouched.
 
 **Observations (faithful, not defects):**
 - `c-vt-encode-key.golden` is **0 bytes** (exit 0). The program encodes a

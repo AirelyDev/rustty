@@ -745,7 +745,13 @@ mod tests {
             // driver on this host, per the plan's EMPIRICAL HOST FINDING), or a
             // reported version under the floor. All are a CLEAN SKIP, mirroring
             // `test_support::offscreen_gl` (every context-creation error skips).
+            // W8-03 strict mode: under RUSTTY_REQUIRE_GL=1 the clean skip
+            // becomes a hard failure (see test_support docs).
             Err(e) => {
+                test_support::require_gl_or_skip(
+                    "opengl_init_offscreen_then_deinit_round_trips",
+                    &e,
+                );
                 eprintln!(
                     "no headless OpenGL {}.{} core context ({e}); skipping \
                      opengl_init_offscreen_then_deinit_round_trips",

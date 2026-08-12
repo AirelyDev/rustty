@@ -27,7 +27,7 @@ use rustty_vt::terminal::Terminal as ZigTerminal;
 use std::mem::size_of;
 use std::os::raw::c_int;
 
-use crate::cwrap::{create, destroy};
+use crate::cwrap::{alloc_uninit, destroy, free_uninit};
 
 // PORT NOTE (rebuild-on-format): the reference `FormatterWrapper` stores a live
 // `formatterpkg.TerminalFormatter` and re-invokes `t.format(&writer)` for each
@@ -354,6 +354,26 @@ unsafe fn terminal_new_(
     // SAFETY: `terminal_` is a live handle (caller contract; non-null checked).
     let t: *const ZigTerminal = unsafe { terminal_c::zig_terminal(terminal_) };
 
+    // const alloc = lib.alloc.default(alloc_);
+    // const ptr = alloc.create(FormatterWrapper) catch return error.OutOfMemory;
+    // errdefer alloc.destroy(ptr);
+    //
+    // PORT NOTE (W90-B04-01): the allocation happens HERE — BEFORE the fallible
+    // selection narrowing below — because the reference allocates the wrapper
+    // right after the terminal null check and guards it with
+    // `errdefer alloc.destroy(ptr)` (formatter.zig:138-140). That ordering is
+    // OBSERVABLE through a caller-supplied C `Allocator`: for a non-null
+    // terminal with an invalid selection the reference's allocator sees exactly
+    // one alloc callback and one free callback before `invalid_value`. Doing
+    // the narrowing first (as this port used to) showed such an allocator ZERO
+    // callbacks. `alloc_uninit` is `alloc.create` without initialization, so
+    // each error arm below can free the still-uninitialized storage — Rust's
+    // stand-in for `errdefer` — and the success path writes the wrapper into it.
+    let ptr: *mut FormatterWrapper = unsafe { alloc_uninit(alloc_) };
+    if ptr.is_null() {
+        return Err(NewError::OutOfMemory);
+    }
+
     // var formatter: formatterpkg.TerminalFormatter = .init(t, .{ .emit, .unwrap, .trim });
     // formatter.extra = opts.extra.toZig();
     let mut content = formatterpkg::Content::Selection(None);
@@ -366,8 +386,13 @@ unsafe fn terminal_new_(
         let sel = unsafe { *opts.selection };
         match sel.to_zig() {
             Some(selection) => content = formatterpkg::Content::Selection(Some(selection)),
-            // orelse return error.InvalidValue,
-            None => return Err(NewError::InvalidValue),
+            // orelse return error.InvalidValue,   (runs the `errdefer`)
+            None => {
+                // SAFETY: `ptr` came from `alloc_uninit` with this `alloc_` and
+                // was never initialized.
+                unsafe { free_uninit(alloc_, ptr) };
+                return Err(NewError::InvalidValue);
+            }
         }
     }
 
@@ -375,9 +400,17 @@ unsafe fn terminal_new_(
     // a live formatter. The `emit/unwrap/trim/extra/content` are exactly what the
     // reference's `formatter` carries after `init` + the field assignments above.
     // D11 (P3-W6 T2): the narrowing point for `opts.emit`. See the field doc.
+    // It sits INSIDE the `errdefer` window too (W90-B04-01): the reference
+    // cannot express an invalid `emit` (typed enum ABI), so the port's extra
+    // guard must show a caller allocator the same 1 alloc + 1 free that every
+    // other non-null-terminal error arm shows.
     let emit = match Format::from_c_int(opts.emit) {
         Some(f) => f.to_zig(),
-        None => return Err(NewError::InvalidValue),
+        None => {
+            // SAFETY: as above — uninitialized storage from `alloc_uninit`.
+            unsafe { free_uninit(alloc_, ptr) };
+            return Err(NewError::InvalidValue);
+        }
     };
 
     let inputs = TerminalInputs {
@@ -389,20 +422,16 @@ unsafe fn terminal_new_(
         content,
     };
 
-    // const ptr = alloc.create(FormatterWrapper) catch return error.OutOfMemory;
     // ptr.* = .{ .kind = .{ .terminal = formatter }, .alloc = alloc };
-    let ptr = unsafe {
-        create(
-            alloc_,
-            FormatterWrapper {
-                kind: Kind::Terminal(inputs),
-                alloc: alloc_.copied(),
-            },
-        )
+    // SAFETY: `ptr` is non-null, correctly aligned storage for exactly one
+    // `FormatterWrapper` (from `alloc_uninit`); `write` initializes it without
+    // dropping the uninitialized prior contents.
+    unsafe {
+        ptr.write(FormatterWrapper {
+            kind: Kind::Terminal(inputs),
+            alloc: alloc_.copied(),
+        })
     };
-    if ptr.is_null() {
-        return Err(NewError::OutOfMemory);
-    }
     // return ptr;
     Ok(ptr)
 }
@@ -705,6 +734,130 @@ mod tests {
             // try testing.expect(f == null);
             assert!(f.is_null());
         });
+    }
+
+    // W90-B04-01 (Rust-only proving tests; the reference has no unit test for
+    // its allocator callback ORDER — it falls out of
+    // `alloc.create(FormatterWrapper)` + `errdefer alloc.destroy(ptr)` sitting
+    // ABOVE the `sel.toZig() orelse return error.InvalidValue`
+    // (formatter.zig:138-152)). A caller-supplied C allocator therefore sees
+    // exactly one alloc and one free on the invalid-selection path. This port
+    // used to narrow the selection FIRST, so such an allocator saw NOTHING.
+    #[test]
+    fn terminal_new_invalid_selection_allocates_then_frees_like_the_reference() {
+        with_test_allocator(|calloc| {
+            let mut t: terminal_c::Terminal = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::new(calloc, &mut t, 80, 24)
+            });
+
+            // The formatter wrapper storage comes from a SEPARATE, counting
+            // caller allocator so the terminal's allocations do not pollute the
+            // callback counts.
+            let stats = crate::test_util::CountingCAllocator::new();
+            let wrapper_alloc = stats.c_allocator();
+
+            // A zeroed `CGridRef` has a null node, so `toPin()` (and with it
+            // `CSelection.toZig()`) fails — the reference's `orelse return
+            // error.InvalidValue`.
+            let sel = CSelection::default();
+            assert!(sel.to_zig().is_none());
+
+            let extra = make_extra(
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                make_screen(false, false, false, false, false, false),
+            );
+            let mut f: Formatter = std::ptr::null_mut();
+            assert_eq!(Result::InvalidValue, unsafe {
+                terminal_new(
+                    Some(&wrapper_alloc),
+                    &mut f,
+                    t,
+                    make_opts(Format::Plain, false, true, extra, &sel),
+                )
+            });
+            assert!(f.is_null());
+            // One `alloc.create(FormatterWrapper)` ...
+            assert_eq!(1, stats.alloc_calls.get());
+            // ... and the `errdefer alloc.destroy(ptr)` that undoes it.
+            assert_eq!(1, stats.free_calls.get());
+            assert_eq!(0, stats.live_bytes.get());
+
+            unsafe { terminal_c::free(t) };
+        });
+    }
+
+    // The port-only `opts.emit` narrowing (D11) sits inside the same `errdefer`
+    // window, so it shows the same 1 alloc + 1 free.
+    #[test]
+    fn terminal_new_invalid_emit_allocates_then_frees() {
+        with_test_allocator(|calloc| {
+            let mut t: terminal_c::Terminal = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::new(calloc, &mut t, 80, 24)
+            });
+
+            let stats = crate::test_util::CountingCAllocator::new();
+            let wrapper_alloc = stats.c_allocator();
+
+            let extra = make_extra(
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                make_screen(false, false, false, false, false, false),
+            );
+            let mut f: Formatter = std::ptr::null_mut();
+            let opts = TerminalOptions {
+                emit: 999,
+                ..make_opts(Format::Plain, false, true, extra, std::ptr::null())
+            };
+            assert_eq!(Result::InvalidValue, unsafe {
+                terminal_new(Some(&wrapper_alloc), &mut f, t, opts)
+            });
+            assert!(f.is_null());
+            assert_eq!(1, stats.alloc_calls.get());
+            assert_eq!(1, stats.free_calls.get());
+            assert_eq!(0, stats.live_bytes.get());
+
+            unsafe { terminal_c::free(t) };
+        });
+    }
+
+    // The null-terminal arm returns BEFORE the reference's `alloc.create`
+    // (formatter.zig:135 precedes :138), so a caller allocator sees nothing.
+    #[test]
+    fn terminal_new_null_terminal_makes_no_allocator_calls() {
+        let stats = crate::test_util::CountingCAllocator::new();
+        let wrapper_alloc = stats.c_allocator();
+        let extra = make_extra(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            make_screen(false, false, false, false, false, false),
+        );
+        let mut f: Formatter = std::ptr::null_mut();
+        assert_eq!(Result::InvalidValue, unsafe {
+            terminal_new(
+                Some(&wrapper_alloc),
+                &mut f,
+                std::ptr::null_mut(),
+                make_opts(Format::Plain, false, true, extra, std::ptr::null()),
+            )
+        });
+        assert!(f.is_null());
+        assert_eq!(0, stats.alloc_calls.get());
+        assert_eq!(0, stats.free_calls.get());
     }
 
     // test "free null" {

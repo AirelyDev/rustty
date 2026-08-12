@@ -13,7 +13,7 @@
 // `rustty_lib::allocator::Allocator`; `lib.alloc.default(...)` is
 // `rustty_lib::allocator::default(...)`.
 
-use rustty_lib::allocator::{default, Alignment, Allocator as CAllocator, ZigSlice};
+use rustty_lib::allocator::{default, Allocator as CAllocator, ZigSlice};
 
 /// Allocate a buffer of `len` bytes using the given allocator
 /// (or the default allocator if NULL).
@@ -32,7 +32,11 @@ pub unsafe fn alloc(alloc_: Option<&CAllocator>, len: usize) -> *mut u8 {
     // PORT NOTE: `allocator.alloc(u8, len)` allocates `len` bytes at byte (1)
     // alignment. The rustty allocator returns a null `*mut u8` on failure (Zig
     // returns `error.OutOfMemory`), so the null check IS the `catch return null`.
-    let buf = allocator.alloc(len, Alignment(0), 0);
+    // PORT NOTE (W36-B06): `alloc_bytes` is the Zig TYPED helper — a
+    // zero-length request short-circuits to the non-null aligned sentinel
+    // WITHOUT invoking the raw allocator, so custom C allocators never observe
+    // zero-length alloc callbacks (Zig 0.16 `std.mem.Allocator.alloc`).
+    let buf = allocator.alloc_bytes(len);
     if buf.is_null() {
         return std::ptr::null_mut();
     }
@@ -59,13 +63,17 @@ pub unsafe fn free(alloc_: Option<&CAllocator>, ptr: *mut u8, len: usize) {
     // const allocator = lib.alloc.default(alloc_);
     let allocator = default(alloc_);
     // allocator.free(mem[0..len]);
-    allocator.free(ZigSlice::new(mem, len), Alignment(0), 0);
+    // PORT NOTE (W36-B06): `free_bytes` is the Zig TYPED helper — a
+    // zero-length slice returns BEFORE the raw free callback (Zig 0.16
+    // `std.mem.Allocator.free`), so custom C allocators never observe
+    // zero-length free callbacks.
+    allocator.free_bytes(ZigSlice::new(mem, len));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustty_lib::allocator::{GlobalZigAllocator, ZigAllocatorRef};
+    use rustty_lib::allocator::{Alignment, GlobalZigAllocator, ZigAllocatorRef};
 
     // PORT NOTE: the reference passes `&lib.alloc.test_allocator` — Zig's
     // leak-detecting testing allocator. rustty has no such global; the parity
@@ -131,6 +139,36 @@ mod tests {
             // free(&lib.alloc.test_allocator, mem.ptr, mem.len);
             unsafe { free(Some(ta), mem, 16) };
         });
+    }
+
+    // PORT NOTE (W36-B06 proving test, Rust-only — the reference has no unit
+    // test here): a CUSTOM counting C allocator must never observe the
+    // zero-length paths (Ghostty's typed helpers short-circuit them), and the
+    // nonzero paths must reach its callbacks with the exact lengths.
+    #[test]
+    fn custom_allocator_zero_length_short_circuit() {
+        let stats = crate::test_util::CountingCAllocator::new();
+        let ta = stats.c_allocator();
+
+        // alloc(custom, 0): Ghostty returns the non-null aligned sentinel
+        // WITHOUT calling the raw allocator callback.
+        let ptr = unsafe { alloc(Some(&ta), 0) };
+        assert!(!ptr.is_null());
+        assert_eq!(0, stats.alloc_calls.get());
+
+        // free(custom, sentinel, 0): returns before the raw free callback.
+        unsafe { free(Some(&ta), ptr, 0) };
+        assert_eq!(0, stats.free_calls.get());
+
+        // Nonzero paths still hit the callbacks with the correct lengths.
+        let p = unsafe { alloc(Some(&ta), 16) };
+        assert!(!p.is_null());
+        assert_eq!(1, stats.alloc_calls.get());
+        assert_eq!(Some(16), stats.last_alloc_len.get());
+        unsafe { free(Some(&ta), p, 16) };
+        assert_eq!(1, stats.free_calls.get());
+        assert_eq!(Some(16), stats.last_free_len.get());
+        assert_eq!(0, stats.live_bytes.get());
     }
 
     #[test]

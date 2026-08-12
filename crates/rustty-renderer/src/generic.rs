@@ -57,10 +57,12 @@
 //! `#[allow(dead_code)]`. The visibility widening is documented per type.
 
 use allocator_api2::alloc::Global;
+use core::fmt;
 use core::sync::atomic::{AtomicI32, Ordering};
 // `CStr` is named by `Path::slice()` (the byte-faithful null-terminated path
 // carrier); `CString` by the `Path::{Optional,Required}` arms + `font_features`.
 use std::ffi::{CStr, CString};
+use std::sync::Arc;
 
 use rustty_font_shaper::codepoint_resolver::StyleStatus;
 use rustty_font_shaper::SharedGrid;
@@ -71,6 +73,7 @@ use rustty_render_types::{
 };
 use rustty_vt::color::RGB;
 use rustty_vt::style::BoldColor;
+use rustty_vt::Scrollbar;
 use rustty_zigstd::arena_allocator::ArenaAllocator;
 
 use crate::config::RendererConfig;
@@ -749,18 +752,265 @@ mod derived_config_tests {
 }
 
 // ===========================================================================
+// Surface mailbox seam (apprt.surface.Mailbox) — RESOLVED
+// ===========================================================================
+//
+// PORT NOTE (surface-mailbox seam, GPU_RD_CHUNK3A_DESIGN §B.2 — RESOLVED):
+// `apprt.surface.Mailbox` cannot be NAMED here — `rustty-apprt-api ->
+// rustty-renderer` (apprt-api/Cargo.toml), so a `renderer -> apprt-api` edge
+// would CYCLE (check_acyclic). The design's prescribed resolution (taken now that
+// `drawFrame` has landed) is a RENDERER-LOCAL mailbox trait that core binds to the
+// real `apprt.surface.Mailbox`: the renderer declares [`SurfaceMessage`] (the only
+// two `apprt.surface.Message` variants `generic.zig` ever pushes) plus the
+// [`SurfaceMailboxSink`] trait, and `rustty-core` implements the trait over its
+// `surface::SurfaceMailbox<A>` and hands it in through [`Options`]. Same acyclic
+// shape as the `RendererConfig` accessor trait (`crate::config`): the renderer
+// never names an apprt type; the apprt-typed side lives in core.
+//
+// These items are SHARED by both `Renderer` monomorphizations (`macos_impl`'s
+// `Renderer(Metal)` and `linux_impl`'s `Renderer(OpenGL)`) — `generic.zig`
+// instantiates ONE generic function for both — so they live at the module level
+// rather than being duplicated per platform arm.
+
+/// The surface messages the renderer pushes onto the surface mailbox.
+//
+// PORT NOTE: the renderer's slice of `apprt.surface.Message` (src/apprt/
+// surface.zig) — `generic.zig` constructs exactly two of its variants,
+// `.{ .scrollbar = self.scrollbar }` (:1452-1454) and
+// `.{ .renderer_health = health }` (:1735-1737). Core re-wraps these into the
+// full `apprt::surface::Message` at the seam.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SurfaceMessage {
+    /// The scrollbar state changed for the surface (generic.zig:1452-1454).
+    Scrollbar(Scrollbar),
+
+    /// Health status change for the renderer (generic.zig:1735-1737).
+    RendererHealth(Health),
+}
+
+/// The push timeout mode for [`SurfaceMailbox::push`].
+//
+// PORT NOTE: `App.Mailbox.Queue.Timeout`. The reference uses `.instant` at
+// `drawFrame` (:1454) and `.{ .forever = {} }` at `frameCompleted` (:1735) — the
+// only two modes the renderer ever asks for, so the renderer-local enum carries
+// exactly those two (core maps them onto
+// `rustty_datastruct::blocking_queue::Timeout`, whose third `Ns` mode no renderer
+// call site uses).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MailboxTimeout {
+    Instant,
+    Forever,
+}
+
+/// The core-supplied sink behind [`SurfaceMailbox`] — the renderer's half of
+/// `apprt.surface.Mailbox`.
+//
+// PORT NOTE: one method, mirroring the reference's single
+// `Mailbox.push(msg, timeout) App.Mailbox.Queue.Size` entry point (the reference
+// pushes both message kinds through the SAME call). No `Send`/`Sync` bound: the
+// `Renderer` itself is not `Send` (it holds `*mut SharedGrid` and graphics-API
+// handles) and is moved onto the render thread through a raw `*mut Renderer`
+// (renderer_seam `Thread<A>`), exactly as the reference's raw `*Renderer` field.
+pub trait SurfaceMailboxSink {
+    /// `apprt.surface.Mailbox.push(msg, timeout)` — returns the number of
+    /// messages pushed (0 means the queue refused it).
+    fn push(&self, msg: SurfaceMessage, timeout: MailboxTimeout) -> usize;
+}
+
+/// The mailbox for communicating with the window (`apprt.surface.Mailbox`).
+//
+// PORT NOTE: the reference field is a by-value `apprt.surface.Mailbox` struct
+// (`{ surface: *Surface, app: App.Mailbox }`) which is always present. Rust
+// models it as a handle that may be DETACHED, because the renderer crate's own
+// offscreen entry points (the golden/unit-test `Renderer::init`, which has no
+// surface at all) have no mailbox to attach — a detached push returns 0, which is
+// exactly the "queue refused it" answer the reference's own `.instant` push can
+// give, so both push sites stay verbatim.
+#[derive(Clone, Default)]
+pub struct SurfaceMailbox {
+    sink: Option<Arc<dyn SurfaceMailboxSink>>,
+}
+
+impl SurfaceMailbox {
+    /// An unattached mailbox: every push is a no-op returning 0.
+    pub const DETACHED: SurfaceMailbox = SurfaceMailbox { sink: None };
+
+    /// Attach a core-supplied sink (`renderer_seam::Options.surface_mailbox`).
+    pub fn new(sink: Arc<dyn SurfaceMailboxSink>) -> SurfaceMailbox {
+        SurfaceMailbox { sink: Some(sink) }
+    }
+
+    /// Whether a sink is attached (a detached mailbox always pushes 0).
+    pub fn is_attached(&self) -> bool {
+        self.sink.is_some()
+    }
+
+    /// `self.surface_mailbox.push(msg, timeout)` — the number of messages pushed.
+    pub fn push(&self, msg: SurfaceMessage, timeout: MailboxTimeout) -> usize {
+        match &self.sink {
+            Some(sink) => sink.push(msg, timeout),
+            None => 0,
+        }
+    }
+}
+
+// `dyn SurfaceMailboxSink` is not `Debug`, so `Debug` is hand-written (the
+// `Renderer`'s other handles print the same way).
+impl fmt::Debug for SurfaceMailbox {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SurfaceMailbox")
+            .field("attached", &self.is_attached())
+            .finish()
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod surface_mailbox_tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::{MailboxTimeout, SurfaceMailbox, SurfaceMailboxSink, SurfaceMessage};
+    use crate::Health;
+    use rustty_vt::Scrollbar;
+
+    /// A recording [`SurfaceMailboxSink`] — stands in for core's real
+    /// `apprt.surface.Mailbox` adapter (`renderer_seam::SurfaceMailboxAdapter`).
+    ///
+    /// `accept` is what `push` returns, i.e. the reference's
+    /// `App.Mailbox.Queue.Size`: `1` = the message was enqueued, `0` = the queue
+    /// refused it (a full queue on an `.instant` push — the case `drawFrame`'s
+    /// scrollbar `defer` explicitly handles by KEEPING `scrollbar_dirty`).
+    pub(crate) struct RecordingSink {
+        // `Mutex` (not `RefCell`) so the sink is `Send + Sync` — the production
+        // sink is shared with the render thread through the `Renderer`.
+        pushed: Mutex<Vec<(SurfaceMessage, MailboxTimeout)>>,
+        accept: usize,
+    }
+
+    impl RecordingSink {
+        /// A sink whose queue always accepts (`push` returns 1).
+        pub(crate) fn accepting() -> RecordingSink {
+            RecordingSink {
+                pushed: Mutex::new(Vec::new()),
+                accept: 1,
+            }
+        }
+
+        /// A sink whose queue is FULL (`push` returns 0).
+        pub(crate) fn refusing() -> RecordingSink {
+            RecordingSink {
+                pushed: Mutex::new(Vec::new()),
+                accept: 0,
+            }
+        }
+
+        pub(crate) fn pushed(&self) -> Vec<(SurfaceMessage, MailboxTimeout)> {
+            self.pushed.lock().unwrap().clone()
+        }
+    }
+
+    impl SurfaceMailboxSink for RecordingSink {
+        fn push(&self, msg: SurfaceMessage, timeout: MailboxTimeout) -> usize {
+            self.pushed.lock().unwrap().push((msg, timeout));
+            self.accept
+        }
+    }
+
+    fn scrollbar() -> Scrollbar {
+        Scrollbar {
+            total: 120,
+            offset: 7,
+            len: 24,
+        }
+    }
+
+    /// A DETACHED mailbox (offscreen renderers — no surface) swallows every push
+    /// and reports 0, exactly like the pre-resolution placeholder did, so the
+    /// goldens keep observing no mailbox.
+    #[test]
+    fn detached_mailbox_pushes_nothing() {
+        let mailbox = SurfaceMailbox::DETACHED;
+        assert!(!mailbox.is_attached());
+        assert_eq!(
+            mailbox.push(
+                SurfaceMessage::Scrollbar(scrollbar()),
+                MailboxTimeout::Instant
+            ),
+            0
+        );
+        assert_eq!(
+            mailbox.push(
+                SurfaceMessage::RendererHealth(Health::Unhealthy),
+                MailboxTimeout::Forever
+            ),
+            0
+        );
+        assert!(!SurfaceMailbox::default().is_attached());
+    }
+
+    /// An ATTACHED mailbox routes both reference message kinds — and both
+    /// reference timeout modes — through to the core-supplied sink, and returns
+    /// the sink's push count verbatim (the `> 0` test at generic.zig:1454).
+    #[test]
+    fn attached_mailbox_routes_pushes_to_the_sink() {
+        let sink = Arc::new(RecordingSink::accepting());
+        let mailbox = SurfaceMailbox::new(sink.clone());
+        assert!(mailbox.is_attached());
+
+        assert_eq!(
+            mailbox.push(
+                SurfaceMessage::Scrollbar(scrollbar()),
+                MailboxTimeout::Instant
+            ),
+            1
+        );
+        assert_eq!(
+            mailbox.push(
+                SurfaceMessage::RendererHealth(Health::Unhealthy),
+                MailboxTimeout::Forever
+            ),
+            1
+        );
+        assert_eq!(
+            sink.pushed(),
+            vec![
+                (
+                    SurfaceMessage::Scrollbar(scrollbar()),
+                    MailboxTimeout::Instant
+                ),
+                (
+                    SurfaceMessage::RendererHealth(Health::Unhealthy),
+                    MailboxTimeout::Forever
+                ),
+            ]
+        );
+
+        // A FULL queue reports 0 — the `.instant` refusal the scrollbar `defer`
+        // must survive.
+        let full = Arc::new(RecordingSink::refusing());
+        assert_eq!(
+            SurfaceMailbox::new(full.clone()).push(
+                SurfaceMessage::Scrollbar(scrollbar()),
+                MailboxTimeout::Instant
+            ),
+            0
+        );
+        assert_eq!(full.pushed().len(), 1);
+    }
+}
+
+// ===========================================================================
 // Options (renderer/Options.zig, minus the apprt-typed fields)
 // ===========================================================================
 
 /// The options that are used to configure a renderer.
 //
 // PORT NOTE (ports `renderer/Options.zig`): three reference fields are
-// apprt-typed and DEFERRED with the surface-mailbox seam (GPU_RD_CHUNK3A_DESIGN
-// §B.2) — `surface_mailbox: apprt.surface.Mailbox`, `rt_surface: *apprt.Surface`,
-// `thread: *renderer.Thread`. `rustty-apprt-api -> rustty-renderer`
-// (apprt-api/Cargo.toml), so naming any apprt type here would CYCLE
-// (check_acyclic). They land with `drawFrame`/`Renderer::init` routed through the
-// renderer-local mailbox trait. The remaining three fields are platform-neutral.
+// apprt-typed. `surface_mailbox: apprt.surface.Mailbox` is now CARRIED (as the
+// renderer-local [`SurfaceMailbox`] handle — the §B.2 seam is resolved above);
+// `rt_surface: *apprt.Surface` and `thread: *renderer.Thread` are still DEFERRED
+// and stay in core's `renderer_seam::Options<A>`, since `rustty-apprt-api ->
+// rustty-renderer` (apprt-api/Cargo.toml) means naming an apprt type here would
+// CYCLE (check_acyclic) and the real renderer never reads either of them.
 pub struct Options {
     /// The derived configuration for this renderer implementation.
     pub config: DerivedConfig,
@@ -773,10 +1023,15 @@ pub struct Options {
 
     /// The size of everything.
     pub size: Size,
+
+    /// The mailbox for sending the surface messages. This is only valid
+    /// once the thread has started and should not be used outside of the thread.
+    //
+    // PORT NOTE: `surface_mailbox: apprt.surface.Mailbox` — the renderer-local
+    // handle (seam §B.2, resolved). Offscreen callers pass
+    // [`SurfaceMailbox::DETACHED`].
+    pub surface_mailbox: SurfaceMailbox,
     // DEFERRED (surface-mailbox seam §B.2):
-    //   /// The mailbox for sending the surface messages. This is only valid
-    //   /// once the thread has started and should not be used outside of the thread.
-    //   surface_mailbox: apprt.surface.Mailbox,
     //   /// The apprt surface.
     //   rt_surface: *apprt.Surface,
     //   /// The renderer thread.
@@ -879,7 +1134,10 @@ mod macos_impl {
     // (`prepBackgroundImage`). Renderer deps rustty-util.
     use rustty_util::file_type::FileType;
 
-    use super::{path_extension, AtomicHealth, DerivedConfig, Options, TerminalColor};
+    use super::{
+        path_extension, AtomicHealth, DerivedConfig, MailboxTimeout, Options, SurfaceMailbox,
+        SurfaceMessage, TerminalColor,
+    };
     use crate::cell::{self, Contents, Key};
     use crate::cursor;
     use crate::image::{self, DrawPlacements};
@@ -1066,43 +1324,12 @@ mod macos_impl {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct Defunct;
 
-    /// PORT NOTE (DEFERRED SEAM — surface-mailbox): stands in for the Renderer's
-    /// `surface_mailbox: apprt.surface.Mailbox` field. `apprt::surface::Mailbox`
-    /// does not exist in rustty (apprt-api replaced the reference struct with the
-    /// `AppMailbox` trait, apprt-api/src/surface.rs), and `rustty-apprt-api ->
-    /// rustty-renderer` (apprt-api/Cargo.toml) so a `renderer -> apprt-api` edge
-    /// would CYCLE (check_acyclic). `generic.zig` pushes exactly two messages onto
-    /// it — `.scrollbar` (:1454) and `.renderer_health` (:1735), both inside the
-    /// deferred `drawFrame`. Until `drawFrame` lands the field is an inhabited,
-    /// default-constructible placeholder; then it routes through a renderer-local
-    /// mailbox trait bound to `AppMailbox` in core (GPU_RD_CHUNK3A_DESIGN §B.2).
-    #[derive(Clone, Copy, Debug, Default)]
-    pub struct SurfaceMailbox;
-
-    /// PORT NOTE (DEFERRED SEAM — mailbox push timeout): the `apprt.surface.Mailbox`
-    /// push timeout mode. The reference uses `.instant` at `drawFrame` (:1454) and
-    /// `.{ .forever = {} }` at `frameCompleted` (:1735). Inhabited placeholder
-    /// preserving the two reference modes (R1); the real timeout routing lands with
-    /// the apprt tier.
-    #[derive(Clone, Copy, Debug)]
-    pub enum MailboxTimeout {
-        Instant,
-        Forever,
-    }
-
-    impl SurfaceMailbox {
-        /// PORT NOTE (DEFERRED SEAM — no-op): `apprt.surface.Mailbox.push(msg,
-        /// timeout)` returns the number of messages pushed. This placeholder returns
-        /// 0 so the two verbatim reference push sites (`drawFrame`'s `.scrollbar`
-        /// :1454 and `frameCompleted`'s `.renderer_health` :1735) port unchanged as
-        /// harmless no-ops: `if (push(...) > 0)` is never taken offscreen, so the
-        /// golden observes no mailbox. Generic over the message payload `M` (the
-        /// faithful `Scrollbar`/`Health` value is threaded through and dropped — the
-        /// real routing is the deferred apprt seam).
-        pub fn push<M>(&self, _msg: M, _timeout: MailboxTimeout) -> usize {
-            0
-        }
-    }
+    // PORT NOTE (surface-mailbox seam RESOLVED — was a per-arm no-op placeholder):
+    // `SurfaceMailbox`/`MailboxTimeout`/`SurfaceMessage`/`SurfaceMailboxSink` are now
+    // SHARED module-level types (`super::`, one copy for both `Renderer(GraphicsAPI)`
+    // monomorphizations) and the mailbox is REAL: core attaches a
+    // `SurfaceMailboxSink` over `apprt.surface.Mailbox` through `Options`
+    // (GPU_RD_CHUNK3A_DESIGN §B.2). Imported at the `use super::{…}` line above.
 
     // PORT NOTE (W2 — un-deferred): reference `const DisplayLink =
     // switch (builtin.os.tag) { .macos => *macos.video.DisplayLink, else => void }`.
@@ -2014,9 +2241,8 @@ mod macos_impl {
                 // ---- generic.zig:701-787 (spelled out in the reference literal) ----
                 alloc,
                 config: options.config,
-                // .surface_mailbox = options.surface_mailbox,  (704) — the mailbox stays
-                // in renderer_seam::Options<A> in core (R4); the ZST placeholder here.
-                surface_mailbox: SurfaceMailbox,
+                // .surface_mailbox = options.surface_mailbox,  (704)
+                surface_mailbox: options.surface_mailbox,
                 grid_metrics, // font_critical.metrics
                 size: options.size,
                 focused: true,
@@ -5359,8 +5585,9 @@ mod macos_impl {
         //
         // PORT NOTE (`&self` narrowing, faithful): reference `pub fn frameCompleted(
         // self: *Self, health)`. Every op it performs is `&self`-safe — `health.store`
-        // (AtomicHealth, &self), the `surface_mailbox.push` (a no-op placeholder), and
-        // `swap_chain.release_frame` (&self, posts the semaphore). Narrowing `*Self →
+        // (AtomicHealth, &self), the `surface_mailbox.push` (`&self` — the sink is
+        // behind an `Arc`), and `swap_chain.release_frame` (&self, posts the
+        // semaphore). Narrowing `*Self →
         // &self` is faithful (no mutation of a non-atomic field) AND makes the
         // trampoline's reborrow a SHARED reborrow (SB/TB-cleaner; frame is unused after
         // `complete()`, so the whole-`&self` reborrow is clean — mirihar).
@@ -5375,11 +5602,13 @@ mod macos_impl {
                 // Our health value changed, so we notify the surface so that it
                 // can do something about it.
                 // _ = self.surface_mailbox.push(.{ .renderer_health = health }, .{ .forever = {} });
-                //   — SurfaceMailbox is the deferred no-op placeholder (§ generic.rs
-                //     seam); the real mailbox routing lands with the apprt tier. The
-                //     faithful `health` payload is threaded through and dropped (push
-                //     returns 0).
-                let _ = self.surface_mailbox.push(health, MailboxTimeout::Forever);
+                //   — REAL (seam §B.2 resolved): core's sink re-wraps this into
+                //     `apprt::surface::Message::RendererHealth` and enqueues it.
+                //     Detached (offscreen) mailboxes still return 0.
+                let _ = self.surface_mailbox.push(
+                    SurfaceMessage::RendererHealth(health),
+                    MailboxTimeout::Forever,
+                );
             }
 
             // Always release our semaphore
@@ -5464,14 +5693,16 @@ mod macos_impl {
                     //     if (self.surface_mailbox.push(.{ .scrollbar = self.scrollbar },
                     //         .instant) > 0) self.scrollbar_dirty = false;
                     // };
-                    // (push is the no-op placeholder ⇒ returns 0 ⇒ the branch is never
-                    //  taken offscreen — the golden observes no mailbox.)
+                    // (REAL, seam §B.2 resolved: core's sink enqueues
+                    //  `apprt::surface::Message::Scrollbar`. A DETACHED mailbox —
+                    //  the offscreen golden/unit renderers, which have no surface —
+                    //  still returns 0, so the golden observes no mailbox.)
                     unsafe {
                         if (*self.0).scrollbar_dirty
-                            && (*self.0)
-                                .surface_mailbox
-                                .push((*self.0).scrollbar, MailboxTimeout::Instant)
-                                > 0
+                            && (*self.0).surface_mailbox.push(
+                                SurfaceMessage::Scrollbar((*self.0).scrollbar),
+                                MailboxTimeout::Instant,
+                            ) > 0
                         {
                             (*self.0).scrollbar_dirty = false;
                         }
@@ -6249,7 +6480,7 @@ mod macos_impl {
                 alloc: Global,
                 draw_mutex: Mutex::new(),
                 config: derived_config_for_test(),
-                surface_mailbox: SurfaceMailbox,
+                surface_mailbox: SurfaceMailbox::DETACHED,
                 grid_metrics,
                 size,
                 focused: true,
@@ -6405,6 +6636,8 @@ mod macos_impl {
                 config: derived_config_for_test(),
                 font_grid,
                 size,
+                // Offscreen: no surface, hence no mailbox (push returns 0).
+                surface_mailbox: SurfaceMailbox::DETACHED,
             };
             Some(Renderer::init(Global, opts).expect("Renderer::init (Metal probed above)"))
         }
@@ -6454,6 +6687,8 @@ mod macos_impl {
                     config: derived_config_for_test(),
                     font_grid,
                     size,
+                    // Offscreen: no surface, hence no mailbox (push returns 0).
+                    surface_mailbox: SurfaceMailbox::DETACHED,
                 };
                 let mut r =
                     Renderer::init(Global, opts).expect("Renderer::init (Metal probed above)");
@@ -6464,6 +6699,133 @@ mod macos_impl {
 
                 // The windowed teardown must not panic/leak.
                 r.deinit();
+            }
+        }
+
+        // F-014 PROVING TESTS: the surface-mailbox seam (GPU_RD_CHUNK3A_DESIGN §B.2)
+        // is RESOLVED — the two `generic.zig` pushes actually reach the mailbox.
+        // Before the fix `SurfaceMailbox::push` was a hard-coded `0`, so BOTH of
+        // these tests observed an EMPTY sink and the scrollbar `defer` could never
+        // clear `scrollbar_dirty`.
+        mod surface_mailbox_routing {
+            use std::sync::Arc;
+
+            use super::*;
+            use crate::generic::surface_mailbox_tests::RecordingSink;
+
+            /// Drive one real frame: `update_frame` (which refreshes the scrollbar
+            /// cache from the terminal and raises `scrollbar_dirty`) then
+            /// `draw_frame(true)` (whose `defer` runs the scrollbar push). Returns
+            /// the scrollbar value the push must carry.
+            fn update_and_draw(r: &mut Renderer) -> Scrollbar {
+                let mut mutex = Mutex::new();
+                let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+                {
+                    let mut s = t.vt_stream();
+                    s.next_slice(b"Ab");
+                    s.deinit();
+                }
+                let st = state::State {
+                    mutex: &mut mutex,
+                    terminal: &mut t,
+                    inspector: None,
+                    inspector_ptr: None,
+                    preedit: None,
+                    mouse: state::Mouse::default(),
+                    demand: Default::default(),
+                    handoff_gen: Default::default(),
+                    handoff_park: Default::default(),
+                };
+                r.update_frame(&st, true).unwrap();
+                // Guard against a vacuous test: the fresh terminal's scrollbar must
+                // differ from the `Scrollbar::ZERO` the renderer was built with, so
+                // `update_frame` raised the dirty flag (generic.zig:1247-1250).
+                assert!(
+                    r.scrollbar_dirty,
+                    "update_frame must have cached a fresh scrollbar (dirty)"
+                );
+                let scrollbar = r.scrollbar;
+                r.draw_frame(true).unwrap();
+                scrollbar
+            }
+
+            /// generic.zig:1725-1737 — `frameCompleted` pushes `.renderer_health`
+            /// with `.forever` ONLY on a health TRANSITION.
+            #[test]
+            fn frame_completed_pushes_renderer_health_on_transition_only() {
+                let mut r = match golden_renderer(10, 3) {
+                    Some(r) => r,
+                    None => return, // Metal-skip
+                };
+                let sink = Arc::new(RecordingSink::accepting());
+                r.surface_mailbox = SurfaceMailbox::new(sink.clone());
+
+                // `health` starts `.healthy`, so this IS a transition → one push.
+                r.frame_completed(crate::Health::Unhealthy);
+                // Identical health → `if (self.health.load(...) != health)` is false
+                // → NO second push.
+                r.frame_completed(crate::Health::Unhealthy);
+
+                assert_eq!(
+                    sink.pushed(),
+                    vec![(
+                        SurfaceMessage::RendererHealth(crate::Health::Unhealthy),
+                        MailboxTimeout::Forever
+                    )]
+                );
+            }
+
+            /// generic.zig:1449-1456 — the `drawFrame` `defer` pushes `.scrollbar`
+            /// with `.instant` and clears `scrollbar_dirty` when the push lands.
+            #[test]
+            fn draw_frame_pushes_scrollbar_and_clears_dirty() {
+                let mut r = match golden_renderer(10, 3) {
+                    Some(r) => r,
+                    None => return, // Metal-skip
+                };
+                let sink = Arc::new(RecordingSink::accepting());
+                r.surface_mailbox = SurfaceMailbox::new(sink.clone());
+
+                let scrollbar = update_and_draw(&mut r);
+
+                assert_eq!(
+                    sink.pushed(),
+                    vec![(
+                        SurfaceMessage::Scrollbar(scrollbar),
+                        MailboxTimeout::Instant
+                    )]
+                );
+                assert!(
+                    !r.scrollbar_dirty,
+                    "a landed scrollbar push must clear scrollbar_dirty"
+                );
+            }
+
+            /// The other arm of the same `if (... > 0)`: "Fail instantly if the
+            /// surface mailbox if full, we'll just get it on the next frame" —
+            /// a refused push must KEEP `scrollbar_dirty` set.
+            #[test]
+            fn draw_frame_keeps_scrollbar_dirty_when_the_mailbox_is_full() {
+                let mut r = match golden_renderer(10, 3) {
+                    Some(r) => r,
+                    None => return, // Metal-skip
+                };
+                let sink = Arc::new(RecordingSink::refusing());
+                r.surface_mailbox = SurfaceMailbox::new(sink.clone());
+
+                let scrollbar = update_and_draw(&mut r);
+
+                assert_eq!(
+                    sink.pushed(),
+                    vec![(
+                        SurfaceMessage::Scrollbar(scrollbar),
+                        MailboxTimeout::Instant
+                    )]
+                );
+                assert!(
+                    r.scrollbar_dirty,
+                    "a refused scrollbar push must keep scrollbar_dirty set"
+                );
             }
         }
 
@@ -7601,12 +7963,20 @@ mod macos_impl {
 #[cfg(target_os = "macos")]
 pub use macos_impl::*;
 
-// L4 (Linux-only): the SECOND `generic.zig` `Renderer(GraphicsAPI)` instantiation,
+// L4 (Linux/FreeBSD): the SECOND `generic.zig` `Renderer(GraphicsAPI)` instantiation,
 // over `crate::opengl::OpenGL` — the sibling to `macos_impl`'s `Renderer(Metal)`.
 // ADDITIVE (R5): not one byte of `macos_impl` changes; the two arms are mutually
 // exclusive by target. Copy-adapted from `macos_impl` (READ-ONLY reference) against
 // the same `generic.zig` oracle. (docs/superpowers/plans/2026-07-17-L4-opengl-renderer.md)
-#[cfg(target_os = "linux")]
+//
+// PORT NOTE (W2D/F-003): `linux_impl` is the `GenericRenderer(OpenGL)` arm
+// (`renderer.zig:38` `.opengl`) — it serves linux AND freebsd since W2D, because
+// `backend.zig:20-21` returns `.opengl` for every native target that is not Darwin
+// and FreeBSD is a real windowed target at the pin (`apprt/runtime.zig:18`). The
+// module keeps its `linux_impl` NAME deliberately: renaming it would churn a file
+// several concurrent lanes are editing for zero fidelity gain (the oracle has no
+// per-OS name here at all — it is one comptime instantiation).
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux_impl;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub use linux_impl::*;

@@ -51,6 +51,16 @@ rustty-vt = { workspace = true }
 # This edge was MISSING before WS14: the reference retains `font/main.zig`, so the
 # `atlas_*` exports belong in this artifact.
 rustty-font = { workspace = true, features = ["wasm"] }
+# `_ = @import("font/main.zig");`, continued — the OTHER THREE wasm groups that
+# comptime block retains (`_ = DeferredFace.Wasm; _ = face.web_canvas.Wasm;
+# _ = shape.web_canvas.Wasm;`): the unprefixed `deferred_face_*`/`face_*`/
+# `shaper_*` C-ABI exports. Under the D1 three-tier split those modules live in
+# the SHAPER tier, so the `font/main.zig` retention needs this second edge
+# (legal: the layering doctrine only forbids `rustty-font` → shaper edges, and
+# `rustty-web-canvas` already links the shaper freestanding). The exports are
+# behind the `ghostty-wasm-abi` feature so the separate `rustty_web_canvas.wasm`
+# deliverable keeps its documented `rustty_wc_*`-only surface.
+rustty-font-shaper = { workspace = true, features = ["ghostty-wasm-abi"] }
 
 # NOT depended on: `_ = @import("App.zig").Wasm;`. The reference's `App.Wasm` is an
 # EMPTY struct whose three exports are commented out upstream (App.zig:577-604), so

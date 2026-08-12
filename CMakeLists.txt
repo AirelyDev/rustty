@@ -72,8 +72,9 @@ project(rustty-vt VERSION 0.1.0 LANGUAGES C)
 set(RUSTTY_CARGO_BUILD_FLAGS "" CACHE STRING "Additional flags to pass to cargo build")
 
 # Build librustty-vt with SIMD acceleration. Defaults ON to match upstream
-# Ghostty's semantics (its `simd` build option defaults true), even though
-# rustty-vt-c's underlying cargo feature defaults OFF. Turn OFF for a minimal
+# Ghostty's semantics (its `simd` build option defaults true for every non-WASM
+# target); rustty-vt-c's underlying cargo feature is now default-ON too, so OFF
+# has to actively opt out with --no-default-features. Turn OFF for a minimal
 # static archive with no vendored C++ SIMD runtime (highway/simdutf) — this is
 # the analog of Ghostty's `-Dsimd=false`.
 option(RUSTTY_VT_SIMD "Build librustty-vt with SIMD acceleration (matches upstream default-on)" ON)
@@ -81,6 +82,8 @@ option(RUSTTY_VT_SIMD "Build librustty-vt with SIMD acceleration (matches upstre
 set(_RUSTTY_FEATURE_FLAGS "")
 if(RUSTTY_VT_SIMD)
     list(APPEND _RUSTTY_FEATURE_FLAGS --features simd)
+else()
+    list(APPEND _RUSTTY_FEATURE_FLAGS --no-default-features)
 endif()
 
 # Map CMake build types to Cargo profiles. The result is stored in
@@ -321,6 +324,10 @@ function(rustty_vt_add_target)
     )
     if(RUSTTY_VT_SIMD)
         list(APPEND _flags --features simd)
+    else()
+        # rustty-vt-c's `simd` feature is default-ON (ghostty's non-WASM
+        # `-Dsimd` default), so OFF must actively opt out.
+        list(APPEND _flags --no-default-features)
     endif()
     if(_RVT_CARGO_FLAGS)
         list(APPEND _flags ${_RVT_CARGO_FLAGS})

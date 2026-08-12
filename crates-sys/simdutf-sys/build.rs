@@ -16,6 +16,16 @@
 use std::path::PathBuf;
 
 fn main() {
+    // Check-only cross lane (W2D_WINDOWS_OS / F-001): type-checking a target
+    // this host has no C toolchain/sysroot for (e.g. `cargo check --target
+    // x86_64-pc-windows-msvc` on a macOS host). `cargo check` never links, so
+    // the native objects are not needed; opt-in via env so a real build can
+    // never silently skip.
+    println!("cargo:rerun-if-env-changed=RUSTTY_SYS_CHECK_ONLY");
+    if std::env::var_os("RUSTTY_SYS_CHECK_ONLY").is_some() {
+        return;
+    }
+
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let vendor = manifest_dir.join("vendor");
 

@@ -148,16 +148,52 @@ unsafe fn get_typed(data: BuildInfo, out: *mut std::ffi::c_void) -> Result {
 
 // switch (builtin.mode) { .Debug => .debug, .ReleaseSafe => .release_safe,
 //     .ReleaseSmall => .release_small, .ReleaseFast => .release_fast }
-// PORT NOTE: Rust's build profile has no 1:1 mapping to Zig's four optimize
-// modes. The faithful analog is: `cfg!(debug_assertions)` => Debug (the
-// safety-checked default), else ReleaseFast (the optimized default). This is the
-// rustty stand-in for `builtin.mode`; the test below derives its expected value
-// from the SAME analog (mirroring the reference test, which also switches on
-// `builtin.mode`).
+// PORT NOTE: Rust has no single `builtin.mode` reflection value, but Zig's four
+// optimize modes ARE the cross product of the two axes Rust does expose at
+// build time — runtime safety (`cfg!(debug_assertions)`) and optimization
+// (`OPT_LEVEL`, surfaced by this crate's `build.rs` as the `rustty_optimized` /
+// `rustty_opt_small` cfgs). So the analog is a faithful FOUR-way mapping, not a
+// two-way collapse:
+//
+//   safety + unoptimized      => Debug         (cargo `dev`)
+//   safety + optimized        => ReleaseSafe   (cargo `release-safe`: the DG4 /
+//                                               CI lane that runs the oracle's
+//                                               ReleaseSafe assert semantics)
+//   no safety + optimize-size => ReleaseSmall  (`opt-level = "s"` / `"z"`)
+//   no safety + optimized     => ReleaseFast   (cargo `release`/`release-fast`)
+//
+// The test below derives its expected value from the SAME predicates (mirroring
+// the reference test, which also switches on `builtin.mode`), and a
+// profile-pinned env-gated test asserts the concrete ordinal per profile.
 fn optimize_mode() -> OptimizeMode {
-    if cfg!(debug_assertions) {
-        OptimizeMode::Debug
+    optimize_mode_for(
+        cfg!(debug_assertions),
+        cfg!(rustty_opt_small),
+        cfg!(rustty_optimized),
+    )
+}
+
+/// The `builtin.mode` analog as a pure function of the three build predicates,
+/// so the mapping is testable independently of the profile this binary was
+/// compiled with. `debug_assertions` is Zig's `runtime_safety` axis;
+/// `opt_small`/`optimized` are the `OPT_LEVEL` axis (see `build.rs`).
+const fn optimize_mode_for(
+    debug_assertions: bool,
+    opt_small: bool,
+    optimized: bool,
+) -> OptimizeMode {
+    if debug_assertions {
+        // Safety checks on: Debug when unoptimized, ReleaseSafe when optimized.
+        if optimized {
+            OptimizeMode::ReleaseSafe
+        } else {
+            OptimizeMode::Debug
+        }
+    } else if opt_small {
+        // Safety off, optimizing for size.
+        OptimizeMode::ReleaseSmall
     } else {
+        // Safety off, optimizing for speed (ghostty's default release mode).
         OptimizeMode::ReleaseFast
     }
 }
@@ -165,6 +201,71 @@ fn optimize_mode() -> OptimizeMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::c_int;
+
+    /// rustty-only (W16-TARGET-01). The reference's `-Dsimd` defaults to TRUE
+    /// for every non-WASM target (`ghostty/src/build/Config.zig:196-206`), and
+    /// `GhosttyZig.zig` force-disables only `oniguruma` for the lib-vt module
+    /// (:67-72) while still adding the SIMD deps when `cfg.simd` (:140-143) —
+    /// so a DEFAULT libghostty-vt runs `stream.zig`'s SIMD `nextSlice` fast
+    /// path and answers `.simd = true` through THIS C ABI. A default
+    /// `cargo build -p rustty-vt-c` used to answer `false`.
+    ///
+    /// Two arms, because the resolved value alone cannot tell "the default
+    /// feature set turns SIMD on" apart from "this run happened to be invoked
+    /// with `--features simd`":
+    ///   1. the MANIFEST arm reads `[features] default` out of this crate's own
+    ///      Cargo.toml. It binds however the test was invoked, and it is the arm
+    ///      that was RED before the fix (`simd` was opt-in only, no `default`
+    ///      key existed at all).
+    ///   2. the ABI arm asserts that whenever the default feature set is active
+    ///      the C ABI answers `true` — the observable a C host actually sees.
+    ///      `--no-default-features` is rustty's `-Dsimd=false` analog, and this
+    ///      arm correctly stands down there.
+    // The constant IS the subject: `build_options::SIMD` is a `const bool`
+    // resolved from the cargo feature graph, and the ABI arm below asserts the
+    // Rust-side const directly so a `get()` that hardcoded `true` cannot pass.
+    #[allow(clippy::assertions_on_constants)]
+    #[test]
+    fn default_build_reports_simd_on() {
+        // 1. Manifest arm.
+        let manifest = include_str!("../Cargo.toml");
+        let features = manifest
+            .split_once("\n[features]")
+            .expect("rustty-vt-c Cargo.toml has a [features] section")
+            .1;
+        let default_line = features
+            .lines()
+            .find(|l| l.trim_start().starts_with("default"))
+            .expect(
+                "rustty-vt-c declares no `default` feature: a plain \
+                 `cargo build -p rustty-vt-c` therefore leaves `rustty-vt/simd` \
+                 OFF, while ghostty's `-Dsimd` defaults to true for every \
+                 non-WASM target (build/Config.zig:196-206)",
+            );
+        assert!(
+            default_line.contains("\"simd\""),
+            "rustty-vt-c's default feature set does not include `simd` \
+             ({default_line:?}); ghostty's default libghostty-vt is SIMD-on"
+        );
+
+        // 2. ABI arm.
+        if cfg!(feature = "default") {
+            let mut value: bool = false;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    BuildInfo::Simd,
+                    &mut value as *mut bool as *mut std::ffi::c_void,
+                )
+            });
+            assert!(
+                value,
+                "the DEFAULT rustty-vt-c build reports Simd=false through the \
+                 build-info C ABI; ghostty reports true"
+            );
+            assert!(build_options::SIMD);
+        }
+    }
 
     #[test]
     fn get_simd() {
@@ -216,12 +317,67 @@ mod tests {
             )
         });
         // try testing.expectEqual(switch (builtin.mode) { ... }, value);
-        let expected = if cfg!(debug_assertions) {
-            OptimizeMode::Debug
-        } else {
-            OptimizeMode::ReleaseFast
-        };
+        let expected = optimize_mode_for(
+            cfg!(debug_assertions),
+            cfg!(rustty_opt_small),
+            cfg!(rustty_optimized),
+        );
         assert_eq!(expected, value);
+
+        // Profile-pinned arm: the DG4/CI lanes run this test once per profile
+        // with `RUSTTY_EXPECT_OPTIMIZE=<ordinal>` set, pinning the C-ABI answer
+        // to the oracle ordinal that profile stands for —
+        //   cargo test -p rustty-vt-c                       => 0 (Debug)
+        //   cargo test -p rustty-vt-c --profile release-safe => 1 (ReleaseSafe)
+        //   cargo test -p rustty-vt-c --release              => 3 (ReleaseFast)
+        // Unset (the plain developer run) skips the pin.
+        if let Ok(want) = std::env::var("RUSTTY_EXPECT_OPTIMIZE") {
+            let want: c_int = want.trim().parse().expect("RUSTTY_EXPECT_OPTIMIZE integer");
+            assert_eq!(
+                want,
+                value as c_int,
+                "profile-pinned optimize ordinal mismatch (debug_assertions={}, \
+                 rustty_optimized={}, rustty_opt_small={})",
+                cfg!(debug_assertions),
+                cfg!(rustty_optimized),
+                cfg!(rustty_opt_small),
+            );
+        }
+    }
+
+    /// The four-way `builtin.mode` analog itself (`build_info.zig:72-77`): every
+    /// (safety, opt-level) combination maps to the oracle's mode of the same
+    /// ordinal. Independent of the profile this test binary was built with.
+    #[test]
+    fn optimize_mode_mapping_is_four_way() {
+        // debug_assertions && !optimized => Debug
+        assert_eq!(OptimizeMode::Debug, optimize_mode_for(true, false, false));
+        // debug_assertions && optimized => ReleaseSafe (cargo `release-safe`)
+        assert_eq!(
+            OptimizeMode::ReleaseSafe,
+            optimize_mode_for(true, false, true)
+        );
+        // `opt-level = "s"/"z"` implies optimized; safety on still means ReleaseSafe.
+        assert_eq!(
+            OptimizeMode::ReleaseSafe,
+            optimize_mode_for(true, true, true)
+        );
+        // !debug_assertions && opt_small => ReleaseSmall
+        assert_eq!(
+            OptimizeMode::ReleaseSmall,
+            optimize_mode_for(false, true, true)
+        );
+        // !debug_assertions && optimized for speed => ReleaseFast
+        assert_eq!(
+            OptimizeMode::ReleaseFast,
+            optimize_mode_for(false, false, true)
+        );
+
+        // Ordinals are the oracle's (build_info.zig:10-14).
+        assert_eq!(0, OptimizeMode::Debug as c_int);
+        assert_eq!(1, OptimizeMode::ReleaseSafe as c_int);
+        assert_eq!(2, OptimizeMode::ReleaseSmall as c_int);
+        assert_eq!(3, OptimizeMode::ReleaseFast as c_int);
     }
 
     #[test]

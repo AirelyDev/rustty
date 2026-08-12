@@ -16,6 +16,8 @@
 // `std` is used only for the comptime table builders (`std.EnumArray`,
 // `std.fmt.comptimePrint`) and the test. `key` provides `key.Key` / `key.Mods`.
 
+use std::sync::LazyLock;
+
 use super::key::Key;
 use super::key_mods::{ModSide, Mods, Side};
 
@@ -125,25 +127,33 @@ const fn m(shift: bool, alt: bool, ctrl: bool, super_: bool) -> Mods {
 
 /// The list of modifier combinations for modify other key sequences.
 /// The mode value is index + 2.
-pub fn modifiers() -> Vec<Mods> {
-    vec![
-        m(true, false, false, false), // .{ .shift = true },
-        m(false, true, false, false), // .{ .alt = true },
-        m(true, true, false, false),  // .{ .shift = true, .alt = true },
-        m(false, false, true, false), // .{ .ctrl = true },
-        m(true, false, true, false),  // .{ .shift = true, .ctrl = true },
-        m(false, true, true, false),  // .{ .alt = true, .ctrl = true },
-        m(true, true, true, false),   // .{ .shift = true, .alt = true, .ctrl = true },
-        m(false, false, false, true), // .{ .super = true },
-        m(true, false, false, true),  // .{ .shift = true, .super = true },
-        m(false, true, false, true),  // .{ .alt = true, .super = true },
-        m(true, true, false, true),   // .{ .shift = true, .alt = true, .super = true },
-        m(false, false, true, true),  // .{ .ctrl = true, .super = true },
-        m(true, false, true, true),   // .{ .shift = true, .ctrl = true, .super = true },
-        m(false, true, true, true),   // .{ .alt = true, .ctrl = true, .super = true },
-        m(true, true, true, true), // .{ .shift = true, .alt = true, .ctrl = true, .super = true },
-    ]
+///
+/// PORT NOTE: the reference `modifiers` is a `const` slice (`[]const key.Mods`)
+/// materialized at comptime and borrowed by every caller. `Mods` contains no
+/// `const fn`-hostile field, so the table is a true `static` here and this
+/// accessor hands out the same borrowed slice the reference does — no
+/// per-lookup construction.
+pub fn modifiers() -> &'static [Mods] {
+    &MODIFIERS
 }
+
+static MODIFIERS: [Mods; 15] = [
+    m(true, false, false, false), // .{ .shift = true },
+    m(false, true, false, false), // .{ .alt = true },
+    m(true, true, false, false),  // .{ .shift = true, .alt = true },
+    m(false, false, true, false), // .{ .ctrl = true },
+    m(true, false, true, false),  // .{ .shift = true, .ctrl = true },
+    m(false, true, true, false),  // .{ .alt = true, .ctrl = true },
+    m(true, true, true, false),   // .{ .shift = true, .alt = true, .ctrl = true },
+    m(false, false, false, true), // .{ .super = true },
+    m(true, false, false, true),  // .{ .shift = true, .super = true },
+    m(false, true, false, true),  // .{ .alt = true, .super = true },
+    m(true, true, false, true),   // .{ .shift = true, .alt = true, .super = true },
+    m(false, false, true, true),  // .{ .ctrl = true, .super = true },
+    m(true, false, true, true),   // .{ .shift = true, .ctrl = true, .super = true },
+    m(false, true, true, true),   // .{ .alt = true, .ctrl = true, .super = true },
+    m(true, true, true, true),    // .{ .shift = true, .alt = true, .ctrl = true, .super = true },
+];
 
 /// This is the array of entries for the PC style function keys as mapped to
 /// our set of possible key codes. Not every key has any entries.
@@ -160,9 +170,21 @@ pub type KeyEntryArray = Vec<(Key, Vec<Entry>)>;
 // more than a couple dozen or so.
 //
 // PORT NOTE: the reference `keys` is a comptime-evaluated `KeyEntryArray`. Rust
-// has no comptime table-of-formatted-strings, so this is built once at runtime
-// by `keys()`; the produced data is identical to the reference comptime value.
-pub fn keys() -> KeyEntryArray {
+// has no comptime table-of-formatted-strings (the `pcStyle` entries hold
+// formatted `String`s), so this is built once — lazily, on first use — into the
+// `KEYS` static and borrowed thereafter. Callers get the same borrowed table the
+// reference's comptime value hands out: no per-lookup (i.e. per-key-event)
+// construction or allocation. The produced data is identical to the reference
+// comptime value.
+static KEYS: LazyLock<KeyEntryArray> = LazyLock::new(build_keys);
+
+/// Returns the (built-once) key entry table. Analogue of the reference's
+/// comptime `keys` constant.
+pub fn keys() -> &'static KeyEntryArray {
+    &KEYS
+}
+
+fn build_keys() -> KeyEntryArray {
     let mut result: KeyEntryArray = Vec::new();
 
     let mut set = |k: Key, entries: Vec<Entry>| result.push((k, entries));
@@ -794,16 +816,17 @@ pub fn keys() -> KeyEntryArray {
 ///
 /// PORT NOTE: the reference `keys` is an `EnumArray` whose `.get(keyval)` is an
 /// O(1) lookup returning the entry slice (an empty slice for keys with no
-/// entries). This helper reproduces that by scanning the runtime-built table;
-/// keys not present in the table map to an empty slice, exactly as the reference
-/// `EnumArray` does.
-pub fn keys_get(keyval: Key) -> Vec<Entry> {
-    for (k, entries) in keys() {
-        if k == keyval {
+/// entries). This helper reproduces that by scanning the built-once table and
+/// *borrowing* the entry slice (the reference borrows its comptime slice too —
+/// no allocation on the lookup path); keys not present in the table map to an
+/// empty slice, exactly as the reference `EnumArray` does.
+pub fn keys_get(keyval: Key) -> &'static [Entry] {
+    for (k, entries) in keys().iter() {
+        if *k == keyval {
             return entries;
         }
     }
-    Vec::new()
+    &[]
 }
 
 /// PORT NOTE: the reference uses Zig's `++` array concatenation on `[]const
@@ -866,7 +889,7 @@ fn pc_style(fmt: &str) -> Vec<Entry> {
     let mods = modifiers();
     // for (modifiers, 2.., 0..) |mods, code, i|
     let mut entries: Vec<Entry> = Vec::with_capacity(mods.len());
-    for (i, mods_v) in mods.into_iter().enumerate() {
+    for (i, mods_v) in mods.iter().copied().enumerate() {
         let code = i + 2;
         entries.push(Entry {
             mods: mods_v,
@@ -917,10 +940,38 @@ mod tests {
         // explicitly avoids importing it into libghostty-vt), so the constant
         // is inlined here as its reference value 38.
         let max: usize = 38;
-        for (_key, entries) in &keys {
+        for (_key, entries) in keys.iter() {
             for entry in entries {
                 assert!(entry.sequence.len() <= max);
             }
         }
+    }
+
+    /// PORT NOTE: the reference `keys` is a comptime constant — every
+    /// `function_keys.keys.get(keyval)` borrows the SAME static table and
+    /// allocates nothing. This proves the Rust port has the same property: the
+    /// table is built exactly once and both `keys()` and `keys_get()` hand out
+    /// borrows into that one instance (before the fix each call rebuilt the
+    /// whole table, including freshly formatted `String` sequences, so the
+    /// pointers differed on every call).
+    #[test]
+    fn keys_table_built_once() {
+        // The table itself is one instance.
+        assert!(std::ptr::eq(keys(), keys()));
+
+        // And per-key lookups borrow into it rather than rebuilding.
+        let a = keys_get(Key::ArrowUp);
+        let b = keys_get(Key::ArrowUp);
+        assert!(!a.is_empty());
+        assert!(std::ptr::eq(a.as_ptr(), b.as_ptr()));
+        assert_eq!(a.len(), b.len());
+
+        // A key with no entries yields the empty slice, matching the
+        // reference `EnumArray`'s unset fill value.
+        assert!(keys_get(Key::Unidentified).is_empty());
+
+        // `modifiers()` is likewise a single static table.
+        assert!(std::ptr::eq(modifiers().as_ptr(), modifiers().as_ptr()));
+        assert_eq!(modifiers().len(), 15);
     }
 }

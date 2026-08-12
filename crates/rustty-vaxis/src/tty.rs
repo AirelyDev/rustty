@@ -83,24 +83,29 @@ pub type Tty = TestTty;
 #[cfg(windows)]
 pub type Tty = windows_tty::WindowsTty;
 
-/// The restore-relevant state of the [`global_tty`]. Zig stores a COPY of the whole
+/// The restore-relevant state of the [`GLOBAL_TTY`]. Zig stores a COPY of the whole
 /// `Tty` in `global_tty`; a Rust `static` cannot hold a non-`Copy` `Tty` (its
 /// `TtyWriter` owns a `Vec`), so we keep only the panic-restore fields (`fd` +
 /// `termios`) — a documented divergence.
-// fd/termios are stored for a future panic-time restore (Zig's `global_tty` is read by
-// the panic handler); that handler is not yet ported, so they are write-only for now.
-#[cfg(all(not(windows), not(test)))]
-#[allow(dead_code)]
-struct GlobalTty {
-    fd: c_int,
-    termios: libc::termios,
+// fd/termios are read by `crate::recover()` (the panic-time restore, `main.zig:66-78`);
+// `crate::install_panic_recovery()` is the opt-in `Panic`-export analogue
+// (W16-EXPLICIT-01).
+#[cfg(not(windows))]
+pub(crate) struct GlobalTty {
+    pub(crate) fd: c_int,
+    pub(crate) termios: libc::termios,
 }
 
 /// global tty instance, used in case of a panic. Not guaranteed to work if
 /// for some reason there are multiple TTYs open under a single vaxis
 /// compilation unit - but this is better than nothing
-#[cfg(all(not(windows), not(test)))]
-static GLOBAL_TTY: Mutex<Option<GlobalTty>> = Mutex::new(None);
+///
+/// Zig `pub var global_tty: ?Tty` (`tty.zig:27`) — crate-visible so `crate::recover()`
+/// (the `main.zig` port) can read it. Under `cfg(test)` the writer `PosixTty::init`
+/// is not compiled (Tty = TestTty, and Zig's `TestTty.init` does not set `global_tty`
+/// either), but the static itself exists so the recover tests can seed it.
+#[cfg(not(windows))]
+pub(crate) static GLOBAL_TTY: Mutex<Option<GlobalTty>> = Mutex::new(None);
 
 /// A buffered writer over the raw tty `fd` that does NOT own/close it (see the module
 /// PORT NOTE). `write` appends to `buf`; `flush` drains it via `libc::write`.
@@ -755,17 +760,18 @@ pub mod windows_tty {
     /// `static` cannot hold a non-`Copy` `Tty` (its `TtyWriter` owns a `Vec`), so only
     /// the panic-restore fields are kept. Handles are stored as `usize` so the static
     /// is `Send`; they are pure kernel handles, never dereferenced.
-    #[allow(dead_code)]
-    struct GlobalTty {
-        stdin: usize,
-        stdout: usize,
-        initial_codepage: UINT,
-        initial_input_mode: DWORD,
-        initial_output_mode: DWORD,
+    // Read by `crate::recover()` (the panic-time restore, `main.zig:66-78`) —
+    // W16-EXPLICIT-01.
+    pub(crate) struct GlobalTty {
+        pub(crate) stdin: usize,
+        pub(crate) stdout: usize,
+        pub(crate) initial_codepage: UINT,
+        pub(crate) initial_input_mode: DWORD,
+        pub(crate) initial_output_mode: DWORD,
     }
 
     /// global tty instance, used in case of a panic.
-    static GLOBAL_TTY: Mutex<Option<GlobalTty>> = Mutex::new(None);
+    pub(crate) static GLOBAL_TTY: Mutex<Option<GlobalTty>> = Mutex::new(None);
 
     /// `nextEvent`'s decode state: the partially-accumulated ANSI escape sequence and
     /// the pending UTF-16 high surrogate (`tty.zig:404-409`).
@@ -1436,6 +1442,9 @@ pub struct TestTty {
     pipe_read: c_int,
     pipe_write: c_int,
     tty_writer: TtyWriter,
+    /// Rustty-only test hook: lets a test observe that `deinit` actually ran
+    /// (the vxfw `App::deinit` tty-teardown parity test, W17-B05-NORMAL-01).
+    pub(crate) deinit_observer: Option<std::sync::Arc<AtomicBool>>,
 }
 
 #[cfg(all(test, not(windows)))]
@@ -1453,10 +1462,14 @@ impl TestTty {
             pipe_read: r,
             pipe_write: w,
             tty_writer: TtyWriter::new(w, buffer),
+            deinit_observer: None,
         })
     }
 
     pub fn deinit(self) {
+        if let Some(observer) = &self.deinit_observer {
+            observer.store(true, Ordering::SeqCst);
+        }
         unsafe {
             libc::close(self.pipe_read);
             libc::close(self.pipe_write);

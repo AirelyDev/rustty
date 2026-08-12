@@ -7,8 +7,21 @@
 //! the `tic -x -o share/terminfo` compile step (ghostty runs `tic` in its
 //! `install` recipe). rustty already ported the terminfo model (`rustty-terminfo`:
 //! `entry::rustty()` builds the `Source`, `Source::encode` writes tic-compilable
-//! text), so this module drives those directly and shells out to the system
-//! `/usr/bin/tic`.
+//! text), so this module drives those directly and shells out to `tic`,
+//! resolved BY NAME on `PATH` exactly like ghostty's `RunStep` (W2-03: this
+//! used to hardcode `/usr/bin/tic`, breaking Nix/prefix hosts where ncurses
+//! lives elsewhere; ghostty never pins the path).
+//!
+//! W2-03 target layout: the generator is TARGET-AWARE like ghostty's
+//! `cfg.target`-driven build. FreeBSD installs the tree under
+//! `share/site-terminfo` (GhosttyResources.zig `terminfo_share_dir`, matching
+//! the runtime lookup sentinels in `rustty-os`'s `resourcesdir.rs`); every
+//! other target uses `share/terminfo`. Windows emits only the terminfo
+//! *source* and skips `tic`/`infotocap` entirely (the oracle's
+//! `if (os_tag == .windows) break :terminfo;` — those binaries don't exist
+//! there). Since xtask runs on the HOST, [`gen_terminfo`] takes the target OS
+//! as a parameter (`xtask resources --target-os <os>`, defaulting to the
+//! host).
 //!
 //! R2 identity note (Task 18): `xterm-rustty` is rustty's CANONICAL primary
 //! terminfo name (`rustty-identity::TERMINFO_PRIMARY_NAME`, the value of `TERM`
@@ -32,9 +45,9 @@
 //! `emit_termcap` installs of ghostty's `GhosttyResources.zig` (P1.3,
 //! INTEGRATION_PARITY §2.8). ghostty defaults those FALSE for Release and TRUE
 //! for Debug; rustty emits them unconditionally so `infocmp`/Debug tooling has
-//! byte-identical inputs regardless of profile. The termcap is produced by the
-//! system `/usr/bin/infotocap` reading that same source (exactly ghostty's
-//! `RunStep "infotocap" <source>`), whose stderr — capability-translation
+//! byte-identical inputs regardless of profile. The termcap is produced by
+//! `infotocap` (resolved by name on `PATH`) reading that same source (exactly
+//! ghostty's `RunStep "infotocap" <source>`), whose stderr — capability-translation
 //! warnings + the 1023-byte-truncation notices termcap inherently requires — is
 //! captured and discarded, matching ghostty's `captureStdErr()`.
 //!
@@ -57,25 +70,55 @@
 use std::path::Path;
 use std::process::Command;
 
-/// Compile the terminfo entry into `share/terminfo/…` and create the
-/// `share/{APP}/` resource root.
+/// The terminfo tree's directory name under `share/` for a target OS: FreeBSD
+/// uses `site-terminfo` (its base system owns `share/terminfo`; third-party
+/// entries belong in the local site tree), everything else `terminfo`.
+///
+/// Byte-for-byte the oracle's `terminfo_share_dir` pick
+/// (`GhosttyResources.zig`: `if (os_tag == .freebsd) "site-terminfo" else
+/// "terminfo"`), and the value the runtime lookup expects — `rustty-os`'s
+/// `resourcesdir.rs` FreeBSD sentinels are `site-terminfo/<letter>/{rustty,
+/// xterm-rustty}` under `local/share`, so a `share/terminfo` tree would be
+/// undiscoverable there (W2-03).
+fn terminfo_dir_name(target_os: &str) -> &'static str {
+    if target_os == "freebsd" {
+        "site-terminfo"
+    } else {
+        "terminfo"
+    }
+}
+
+/// Compile the terminfo entry into `share/terminfo/…` (`share/site-terminfo/…`
+/// on FreeBSD — see [`terminfo_dir_name`]) and create the `share/{APP}/`
+/// resource root.
 ///
 /// `share_dir` is the `share/` directory (e.g. `zig-out/share`), matching the
-/// `gen_*` convention of the sibling resource modules.
+/// `gen_*` convention of the sibling resource modules. `target_os` is the
+/// TARGET's OS in `std::env::consts::OS` spelling (`"linux"`, `"macos"`,
+/// `"freebsd"`, `"windows"`, …) — the analogue of ghostty's
+/// `cfg.target.result.os.tag`; xtask runs on the host, so cross-target trees
+/// are selected via `xtask resources --target-os <os>`.
 ///
 /// Pipeline (mirrors ghostty's `GhosttyResources.zig` terminfo install):
 ///   1. Build the `Source` via `rustty_terminfo::entry::rustty()` (identity-oracle
 ///      spelling — see the R2 note above) and `encode` it to tic source text.
-///   2. Write that text to a temporary `.terminfo` file.
-///   3. Run `/usr/bin/tic -x -o <share>/terminfo <tmp>` to compile it, producing
-///      `share/terminfo/<dir>/xterm-rustty` by default (`xterm-ghostty` under
+///   2. Write that text to `share/<dir>/{APP}.terminfo` (the `emit_terminfo`
+///      source install — see [`emit_termcap`]'s doc for the emit policy). On a
+///      **windows** target, STOP here (plus the `share/{APP}` root): ghostty's
+///      `if (os_tag == .windows) break :terminfo;` — `tic`/`infotocap` don't
+///      exist there, and the runtime lookup sentinel on Windows is exactly this
+///      source file (`terminfo/rustty.terminfo`, `resourcesdir.rs`).
+///   3. Run `tic -x -o <share>/<dir> <source>` to compile it, producing
+///      `share/<dir>/<subdir>/xterm-rustty` by default (`xterm-ghostty` under
 ///      `identity-oracle`; + the `rustty`/`Rustty` or `ghostty`/`Ghostty` alias
 ///      entries — same profile as [`crate::APP`], see the R2 note above).
 ///      macOS's case-insensitive filesystem makes `tic` use hashed
 ///      two-hex-digit subdirectories (e.g. `78/xterm-rustty`) rather than the
 ///      single-letter `x/…` layout used on Linux; both are valid terminfo trees.
-///   4. Create the `share/{APP}/` root (see [`gen_app_root`]).
-pub fn gen_terminfo(share_dir: &Path) -> Result<(), String> {
+///   4. Translate the source to `{APP}.termcap` via `infotocap` (see
+///      [`emit_termcap`]).
+///   5. Create the `share/{APP}/` root (see [`gen_app_root`]).
+pub fn gen_terminfo(share_dir: &Path, target_os: &str) -> Result<(), String> {
     // 1. Build + encode the terminfo source.
     let source = rustty_terminfo::entry::rustty();
     let mut src_bytes: Vec<u8> = Vec::new();
@@ -86,22 +129,27 @@ pub fn gen_terminfo(share_dir: &Path) -> Result<(), String> {
         return Err("terminfo source encoded to empty output".to_string());
     }
 
-    // 2. Write the source to a temp file for tic to consume. tic requires a real
-    //    path argument; we place it under the system temp dir keyed by pid so
-    //    concurrent xtask runs don't collide, and remove it afterwards.
-    let tmp = std::env::temp_dir().join(format!("rustty-{}.terminfo", std::process::id()));
-    std::fs::write(&tmp, &src_bytes)
-        .map_err(|e| format!("write temp terminfo source {}: {e}", tmp.display()))?;
-
-    // 3. Compile with tic into share/terminfo.
-    let terminfo_dir = share_dir.join("terminfo");
+    // 2. Emit the SOURCE into the target-appropriate tree (P1.3 /
+    //    INTEGRATION_PARITY §2.8; ghostty `emit_terminfo`). tic and infotocap
+    //    below consume this same installed file, exactly like the oracle's
+    //    WriteFiles `ghostty.terminfo` feeding all three steps.
+    let terminfo_dir = share_dir.join(terminfo_dir_name(target_os));
     std::fs::create_dir_all(&terminfo_dir)
         .map_err(|e| format!("create {}: {e}", terminfo_dir.display()))?;
+    let src_path = terminfo_dir.join(format!("{}.terminfo", crate::APP));
+    std::fs::write(&src_path, &src_bytes)
+        .map_err(|e| format!("write {}: {e}", src_path.display()))?;
 
-    let result = run_tic(&terminfo_dir, &tmp);
-    // Best-effort cleanup of the temp source regardless of tic's outcome.
-    let _ = std::fs::remove_file(&tmp);
-    result?;
+    // Windows: no tic/infotocap binaries exist — the oracle breaks out of the
+    // terminfo block right after the source install (`break :terminfo`), and
+    // the Windows runtime lookup keys off the source file itself.
+    if target_os == "windows" {
+        gen_app_root(share_dir)?;
+        return Ok(());
+    }
+
+    // 3. Compile with tic into the tree.
+    run_tic(&terminfo_dir, &src_path)?;
 
     // Verify tic actually produced the compiled entry (runtime-critical resource).
     // The expected primary name follows the active profile — `xterm-rustty` by
@@ -117,29 +165,33 @@ pub fn gen_terminfo(share_dir: &Path) -> Result<(), String> {
         ));
     }
 
-    // 3b. Emit the terminfo SOURCE + termcap alongside the compiled DB
-    //     (P1.3 / INTEGRATION_PARITY §2.8; ghostty GhosttyResources.zig
-    //     `emit_terminfo` + `emit_termcap` installs).
-    emit_source_and_termcap(&terminfo_dir, &src_bytes)?;
+    // 4. The termcap translation alongside the compiled DB (ghostty
+    //    `emit_termcap`).
+    emit_termcap(&terminfo_dir, &src_path)?;
 
-    // 4. The share/{APP} resource root.
+    // 5. The share/{APP} resource root.
     gen_app_root(share_dir)?;
 
     Ok(())
 }
 
-/// Run `/usr/bin/tic -x -o <out_dir> <src>`. `-x` includes the user-defined
+/// Run `tic -x -o <out_dir> <src>`. `-x` includes the user-defined
 /// (extended) capabilities rustty's entry relies on (`Smulx`, `Setulc`, `Sync`,
 /// …). tic emits capability warnings to stderr for entries newer than the host
 /// ncurses; those are non-fatal. We only fail on a non-zero exit.
+///
+/// W2-03: `tic` is resolved BY NAME on `PATH` — ghostty's `RunStep` args are
+/// bare `"tic"` — never a hardcoded `/usr/bin/tic` (which breaks Nix/prefix
+/// hosts whose ncurses lives elsewhere; where `/usr/bin` is on `PATH` the
+/// behavior is unchanged).
 fn run_tic(out_dir: &Path, src: &Path) -> Result<(), String> {
-    let output = Command::new("/usr/bin/tic")
+    let output = Command::new("tic")
         .arg("-x")
         .arg("-o")
         .arg(out_dir)
         .arg(src)
         .output()
-        .map_err(|e| format!("spawn /usr/bin/tic: {e}"))?;
+        .map_err(|e| format!("spawn tic (must be on PATH): {e}"))?;
     if !output.status.success() {
         return Err(format!(
             "tic exited with {}: {}",
@@ -150,27 +202,21 @@ fn run_tic(out_dir: &Path, src: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Emit the terminfo *source* (`{APP}.terminfo`) and its `termcap` translation
-/// (`{APP}.termcap`) into `terminfo_dir`, mirroring ghostty's
-/// `GhosttyResources.zig` `emit_terminfo`/`emit_termcap` installs (P1.3,
-/// INTEGRATION_PARITY §2.8).
+/// Emit the `termcap` translation (`{APP}.termcap`) of the already-installed
+/// terminfo source next to it, mirroring ghostty's `GhosttyResources.zig`
+/// `emit_termcap` install (P1.3, INTEGRATION_PARITY §2.8).
 ///
-/// * `{APP}.terminfo` — the exact tic source bytes we compiled above (the
-///   captured stdout of ghostty's `+terminfo` build-data run).
-/// * `{APP}.termcap` — `/usr/bin/infotocap <source>` (ghostty's
-///   `RunStep "infotocap"`). termcap is a strictly lossier legacy format bounded
-///   to 1023 bytes/entry, so `infotocap` prints translation + truncation notices
-///   to stderr; we capture and DISCARD them (ghostty `captureStdErr()`), failing
-///   only on a non-zero exit or empty stdout.
-fn emit_source_and_termcap(terminfo_dir: &Path, src_bytes: &[u8]) -> Result<(), String> {
-    let src_path = terminfo_dir.join(format!("{}.terminfo", crate::APP));
-    std::fs::write(&src_path, src_bytes)
-        .map_err(|e| format!("write {}: {e}", src_path.display()))?;
-
-    let output = Command::new("/usr/bin/infotocap")
-        .arg(&src_path)
+/// `{APP}.termcap` — `infotocap <source>` (ghostty's `RunStep "infotocap"`,
+/// resolved by name on `PATH` — W2-03, same as [`run_tic`]). termcap is a
+/// strictly lossier legacy format bounded to 1023 bytes/entry, so `infotocap`
+/// prints translation + truncation notices to stderr; we capture and DISCARD
+/// them (ghostty `captureStdErr()`), failing only on a non-zero exit or empty
+/// stdout.
+fn emit_termcap(terminfo_dir: &Path, src_path: &Path) -> Result<(), String> {
+    let output = Command::new("infotocap")
+        .arg(src_path)
         .output()
-        .map_err(|e| format!("spawn /usr/bin/infotocap: {e}"))?;
+        .map_err(|e| format!("spawn infotocap (must be on PATH): {e}"))?;
     if !output.status.success() {
         return Err(format!(
             "infotocap exited with {}: {}",
@@ -235,6 +281,91 @@ fn gen_app_root(share_dir: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// W2-03: the tree's directory name matches the runtime lookup
+    /// (`rustty-os` `resourcesdir.rs` sentinels) per target, byte-for-byte the
+    /// oracle's `terminfo_share_dir` pick: FreeBSD alone uses `site-terminfo`.
+    #[test]
+    fn terminfo_dir_name_matches_runtime_lookup() {
+        assert_eq!(terminfo_dir_name("freebsd"), "site-terminfo");
+        assert_eq!(terminfo_dir_name("linux"), "terminfo");
+        assert_eq!(terminfo_dir_name("macos"), "terminfo");
+        assert_eq!(terminfo_dir_name("windows"), "terminfo");
+    }
+
+    /// W2-03: a FreeBSD-target run lands the WHOLE tree (compiled DB + source +
+    /// termcap) under `share/site-terminfo`, never `share/terminfo` — the
+    /// layout `rustty-os`'s FreeBSD sentinels
+    /// (`site-terminfo/<letter>/{rustty,xterm-rustty}` under `local/share`)
+    /// actually probe. Runs the host tic, so this is host-independent.
+    #[test]
+    fn gen_terminfo_freebsd_uses_site_terminfo() {
+        let base = std::env::temp_dir().join(format!(
+            "rustty-xtask-tinfo-fbsd-test-{}",
+            std::process::id()
+        ));
+        let share = base.join("share");
+        std::fs::create_dir_all(&share).unwrap();
+
+        gen_terminfo(&share, "freebsd").expect("gen_terminfo freebsd");
+
+        let tree = share.join("site-terminfo");
+        let primary_name = rustty_terminfo::entry::rustty().names[0].clone();
+        let primary_name = String::from_utf8(primary_name).unwrap();
+        assert!(
+            compiled_entry_exists(&tree, &primary_name),
+            "no compiled {primary_name} entry under {}",
+            tree.display()
+        );
+        assert!(tree.join(format!("{}.terminfo", crate::APP)).is_file());
+        assert!(tree.join(format!("{}.termcap", crate::APP)).is_file());
+        // The non-FreeBSD layout must NOT appear (this is the exact
+        // generator/consumer contradiction W2-03 fixed).
+        assert!(
+            !share.join("terminfo").exists(),
+            "freebsd target must not emit share/terminfo"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// W2-03: a Windows-target run emits ONLY the terminfo source (plus the
+    /// share/{APP} root) — the oracle's `break :terminfo` before the
+    /// tic/infotocap steps, whose binaries don't exist on Windows. The Windows
+    /// runtime sentinel is exactly this source file
+    /// (`terminfo/rustty.terminfo`).
+    #[test]
+    fn gen_terminfo_windows_emits_source_only() {
+        let base = std::env::temp_dir().join(format!(
+            "rustty-xtask-tinfo-win-test-{}",
+            std::process::id()
+        ));
+        let share = base.join("share");
+        std::fs::create_dir_all(&share).unwrap();
+
+        gen_terminfo(&share, "windows").expect("gen_terminfo windows");
+
+        let tree = share.join("terminfo");
+        let src = tree.join(format!("{}.terminfo", crate::APP));
+        assert!(src.is_file(), "windows target must emit the source");
+        assert!(std::fs::metadata(&src).unwrap().len() > 0);
+        // No termcap, no compiled subdirectories: the source file must be the
+        // tree's ONLY entry.
+        assert!(!tree.join(format!("{}.termcap", crate::APP)).exists());
+        let entries: Vec<_> = std::fs::read_dir(&tree)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(
+            entries,
+            vec![std::ffi::OsString::from(format!("{}.terminfo", crate::APP))],
+            "windows tree must contain only the source file"
+        );
+        assert!(share.join(crate::APP).is_dir());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// End-to-end: gen_terminfo compiles a real terminfo tree with tic and creates
     /// the share/{APP} root. Verifies the runtime-critical resource actually
     /// materializes (not just that the pipeline returns Ok).
@@ -245,7 +376,7 @@ mod tests {
         let share = base.join("share");
         std::fs::create_dir_all(&share).unwrap();
 
-        gen_terminfo(&share).expect("gen_terminfo");
+        gen_terminfo(&share, std::env::consts::OS).expect("gen_terminfo");
 
         // Compiled terminfo entry exists under the active profile's primary
         // name (`xterm-rustty` by default, `xterm-ghostty` under

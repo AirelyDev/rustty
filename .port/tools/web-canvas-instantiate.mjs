@@ -164,6 +164,90 @@ console.log('shaper_shape "' + text + '": OK (' + count + " cells produced)");
   ex.rustty_wc_deferred_free(df);
 }
 
+// (c5) ATLAS BYTE ORDER (W9F-03). Canvas `getImageData` is RGBA; the `Atlas`
+// format 2 is BGRA (and is uploaded as a BGRA texture by the GL/Metal
+// renderers), so the face MUST swizzle R<->B. A fresh instance is used whose
+// mock canvas paints every pixel opaque RED — a non-symmetric color, so RGBA
+// (255,0,0,255) and BGRA (0,0,255,255) are distinguishable.
+{
+  let inst2;
+  const env2 = makeWebCanvasEnv({
+    memory: () => inst2.exports.memory,
+    createCanvas: makeMockCanvas({ pixel: [255, 0, 0, 255] }),
+  });
+  inst2 = await WebAssembly.instantiate(mod, { env: env2 });
+  const e2 = inst2.exports;
+
+  const fb = enc.encode("monospace");
+  const fp = e2.rustty_wc_alloc(fb.length);
+  new Uint8Array(e2.memory.buffer).set(fb, fp);
+  const f2 = e2.rustty_wc_face_new(fp, fb.length, 16.0, 0);
+  e2.rustty_wc_free(fp, fb.length);
+  if (f2 === 0) throw new Error("FAIL: face_new(monospace) returned null (BGRA case)");
+
+  const a2 = e2.rustty_wc_atlas_new(512, 2); // 2 = BGRA
+  if (a2 === 0) throw new Error("FAIL: atlas_new(BGRA) returned null");
+  const gb = e2.rustty_wc_alloc(64);
+  const rc2 = e2.rustty_wc_face_render_glyph(f2, a2, "A".codePointAt(0), gb);
+  if (rc2 !== 0) throw new Error("FAIL: render_glyph into a BGRA atlas rc=" + rc2);
+  e2.rustty_wc_free(gb, 64);
+
+  const lp = e2.rustty_wc_alloc(4);
+  const dp = e2.rustty_wc_atlas_data(a2, lp);
+  const alen = new DataView(e2.memory.buffer, lp, 4).getUint32(0, true);
+  const d = new Uint8Array(e2.memory.buffer, dp, alen);
+  let px = null;
+  for (let i = 0; i + 4 <= d.length; i += 4) {
+    if (d[i] || d[i + 1] || d[i + 2] || d[i + 3]) {
+      px = [d[i], d[i + 1], d[i + 2], d[i + 3]];
+      break;
+    }
+  }
+  e2.rustty_wc_free(lp, 4);
+  if (px === null) throw new Error("FAIL: BGRA atlas has no glyph pixels");
+  const want = [0, 0, 255, 255];
+  if (px.join(",") !== want.join(","))
+    throw new Error(
+      "FAIL: BGRA atlas stores [" +
+        px.join(",") +
+        "]; opaque red must be stored as [" +
+        want.join(",") +
+        "] (RGBA bytes handed through unconverted?)",
+    );
+  console.log("atlas byte order: OK (canvas RGBA red -> BGRA [0,0,255,255])");
+
+  e2.rustty_wc_face_free(f2);
+  e2.rustty_wc_atlas_free(a2);
+}
+
+// (c6) FONT-FILE BYTES ARE NOT A CSS FONT (W9F-04). The Canvas face takes a CSS
+// "font" value; handing it real font FILE bytes (what the modern generic
+// `Face::init` loader passes on every other backend) must FAIL, not silently
+// succeed on whatever font the canvas already had.
+{
+  const ttf = readFileSync(
+    new URL("../../crates/rustty-font/res/JetBrainsMono-Variable.ttf", import.meta.url),
+  ).subarray(0, 256);
+  const bp = writeBytes(ttf);
+  const bad = ex.rustty_wc_face_new(bp, ttf.length, 16.0, 0);
+  ex.rustty_wc_free(bp, ttf.length);
+  if (bad !== 0) {
+    ex.rustty_wc_face_free(bad);
+    throw new Error(
+      "FAIL: face_new accepted embedded TTF bytes as a CSS font value " +
+        "(the canvas silently keeps its fallback font)",
+    );
+  }
+  // Control: a real CSS value still works on the same instance.
+  const okBytes = enc.encode("monospace");
+  const op = writeBytes(okBytes);
+  const okFace = ex.rustty_wc_face_new(op, okBytes.length, 16.0, 0);
+  ex.rustty_wc_free(op, okBytes.length);
+  if (okFace === 0) throw new Error("FAIL: face_new(monospace) control returned null");
+  ex.rustty_wc_face_free(okFace);
+  console.log("face_new(font-file bytes): OK (rejected; monospace control accepted)");
+}
+
 // cleanup
 ex.rustty_wc_free(cpsPtr, n * 4);
 ex.rustty_wc_free(clPtr, n * 4);

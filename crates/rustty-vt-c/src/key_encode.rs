@@ -611,4 +611,112 @@ mod tests {
             unsafe { free(encoder) };
         });
     }
+
+    // W81-B01-01 (Rust-only proving test; the reference has none — it inherits
+    // the behavior from `std.Io.Writer.fixed`). `key_encode.zig` hands the
+    // CALLER buffer to `std.Io.Writer.fixed`, so an encode that does not fit
+    // still leaves the fitting PREFIX in that buffer before reporting
+    // `out_of_space`. Probed on zig 0.16.0:
+    //     buf = "XY"; fixed(buf).writeAll("abc")
+    //         => result=error.WriteFailed end=2 buf="ab"
+    // rustty's `FixedWriter` used to reject an overflowing write WHOLE, so the
+    // C probe saw `text_short_result=-3` with the buffer still "XY". The plain
+    // text path writes `event.utf8` in a single `write_all`, so it is the exact
+    // shape that manifests.
+    #[test]
+    fn encode_out_of_space_leaves_the_fitting_prefix_in_the_caller_buffer() {
+        with_test_allocator(|calloc| {
+            let mut encoder: Encoder = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut encoder) });
+
+            let mut event: KeyEvent = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                key_event::new(Some(calloc), &mut event)
+            });
+            unsafe { key_event::set_action(event, key::Action::Press) };
+            unsafe { key_event::set_key(event, key::Key::KeyA) };
+            let text = b"hello";
+            unsafe { key_event::set_utf8(event, text.as_ptr(), text.len()) };
+
+            // The full encoding is the 5 text bytes.
+            let mut required: usize = 0;
+            assert_eq!(Result::OutOfSpace, unsafe {
+                encode(encoder, event, std::ptr::null_mut(), 0, &mut required)
+            });
+            assert_eq!(text.len(), required);
+
+            // Two bytes of room: `out_of_space` + the required length, AND the
+            // prefix that fit is now in the caller buffer (was left as "XY").
+            let mut buf = *b"XY";
+            let mut written: usize = 0;
+            assert_eq!(Result::OutOfSpace, unsafe {
+                encode(encoder, event, buf.as_mut_ptr(), buf.len(), &mut written)
+            });
+            assert_eq!(text.len(), written);
+            assert_eq!(b"he", &buf);
+
+            // A buffer that fits is unaffected.
+            let mut buf2 = [0u8; 16];
+            assert_eq!(Result::Success, unsafe {
+                encode(encoder, event, buf2.as_mut_ptr(), buf2.len(), &mut written)
+            });
+            assert_eq!(text.len(), written);
+            assert_eq!(&text[..], &buf2[..written]);
+
+            unsafe { key_event::free(event) };
+            unsafe { free(encoder) };
+        });
+    }
+
+    // W80-B02-01 (Rust-only proving test; the reference has none — the borrow
+    // is simply what `event.utf8 = ptr[0..len]` means). The reference encodes
+    // from the caller's live slice, so mutating that buffer AFTER `set_utf8`
+    // changes what `encode` emits. rustty's wrapper keeps the borrow and
+    // refreshes the owned rustty-vt vec from it at use time (`event_ref`), so
+    // the encoder reads the same live bytes; the earlier copy-at-`set_utf8`
+    // implementation would still have emitted "hi".
+    #[test]
+    fn encode_reads_the_live_caller_utf8_buffer() {
+        with_test_allocator(|calloc| {
+            let mut encoder: Encoder = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut encoder) });
+
+            let mut event: KeyEvent = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                key_event::new(Some(calloc), &mut event)
+            });
+            unsafe { key_event::set_action(event, key::Action::Press) };
+            unsafe { key_event::set_key(event, key::Key::KeyA) };
+
+            let mut text = *b"hi";
+            let text_len = text.len();
+            // ALIASING NOTE (Stacked Borrows): the event KEEPS this pointer and
+            // the encoder reads through it after the mutation below, so the
+            // caller-side buffer is reached through a SINGLE provenance root —
+            // one raw `*mut u8`, used for both the mutation and the readback.
+            // Naming the local again (`text[0] = ...`) would create a fresh
+            // borrow whose write invalidates the tag the event stored, making
+            // the encoder's read UB under the G6 Miri lane.
+            let base: *mut u8 = text.as_mut_ptr();
+            unsafe { key_event::set_utf8(event, base.cast_const(), text_len) };
+
+            // Mutate the caller's buffer after the set. (The read below is what
+            // the encoder does through the borrow, which the compiler cannot
+            // see — assert on the buffer so the store is not "never read".)
+            unsafe { *base = b'H' };
+            assert_eq!(b"Hi", unsafe {
+                std::slice::from_raw_parts(base.cast_const(), text_len)
+            });
+
+            let mut buf = [0u8; 16];
+            let mut written: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                encode(encoder, event, buf.as_mut_ptr(), buf.len(), &mut written)
+            });
+            assert_eq!(b"Hi", &buf[..written]);
+
+            unsafe { key_event::free(event) };
+            unsafe { free(encoder) };
+        });
+    }
 }

@@ -6,8 +6,8 @@
 //! is present in the widget tree. (The async `choose` present + "set" emission needs a
 //! real dialog response; that path is verified by running the app.)
 //!
-//! R5: gated `all(target_os = "linux", feature = "gtk")`.
-#![cfg(all(target_os = "linux", feature = "gtk"))]
+//! R5: gated `all(any(linux, freebsd), feature = "gtk")`.
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 #![allow(non_snake_case)]
 
 use std::time::Duration;

@@ -248,9 +248,11 @@ mod tests {
     // }
     //
     // PORT NOTE (F5): the 1.0 MB `too_big.png` blob is replaced by a minimal PNG
-    // whose IHDR DECLARES 65536×65536 (⇒ 65536·65536·4 = 16 GiB > 4 GiB), which
-    // `decode_image_config` reads BEFORE any frame decode ⇒ the `> maximum_image_size`
-    // guard fires with a few-hundred-byte input.
+    // whose IHDR DECLARES the reference blob's EXACT dimensions, 32769×32768
+    // (⇒ 32769·32768·4 = 4 GiB + 131072, just past the 4 GiB limit — so this test
+    // discriminates any widening of the guard, W14-02), which `decode_image_config`
+    // reads BEFORE any frame decode ⇒ the `> maximum_image_size` guard fires with
+    // a few-hundred-byte input.
     #[test]
     fn png_too_big() {
         let bytes = overflow_png();

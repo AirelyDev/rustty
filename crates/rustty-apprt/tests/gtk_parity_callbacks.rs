@@ -7,8 +7,8 @@
 //! surface search_stop/changed/next/previous; the DropTarget `drop` (the former live
 //! crash); and construction of the new CommandPalette / GlobalShortcuts classes.
 //!
-//! R5: gated `all(target_os = "linux", feature = "gtk")`.
-#![cfg(all(target_os = "linux", feature = "gtk"))]
+//! R5: gated `all(any(linux, freebsd), feature = "gtk")`.
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 #![allow(non_snake_case)]
 
 use allocator_api2::alloc::Global;

@@ -179,3 +179,328 @@ fn c_abi_smoke_compile_link_run() {
     // Best-effort cleanup.
     let _ = std::fs::remove_dir_all(&out_dir);
 }
+
+//-------------------------------------------------------------------
+// Generated-header contract arms (W92-B02-01 / -02 / -04).
+//
+// These are SOURCE checks on the checked-in `include/rustty-apprt.h` — the
+// header the compile+link KAT above consumes. They are cheap, need no build
+// artifacts, and each one fails on the pre-fix header.
+
+/// The header source, as checked in.
+fn apprt_header_src() -> String {
+    let path = workspace_root().join("include").join("rustty-apprt.h");
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+}
+
+/// Strip C block (`/* … */`) and line (`// …`) comments, replacing each with a
+/// single space so tokens on either side stay separated. Deliberately naive
+/// about string literals: the generated header has none that contain comment
+/// introducers.
+fn strip_c_comments(src: &str) -> String {
+    let b = src.as_bytes();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0usize;
+    while i < b.len() {
+        if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                // Keep newlines so line-oriented checks below stay sane.
+                if b[i] == b'\n' {
+                    out.push('\n');
+                }
+                i += 1;
+            }
+            i = (i + 2).min(b.len());
+            out.push(' ');
+        } else if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'/' {
+            while i < b.len() && b[i] != b'\n' {
+                i += 1;
+            }
+            out.push(' ');
+        } else {
+            out.push(b[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Drop preprocessor lines (`#…`) from already-comment-stripped C source.
+fn strip_pp_lines(src: &str) -> String {
+    src.lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Every `rustty_*` identifier that is immediately applied to a `(` — i.e. a
+/// function declaration's name. Run on comment-stripped source so prose
+/// mentions never count.
+fn c_fn_names(src: &str) -> std::collections::BTreeSet<String> {
+    let b = src.as_bytes();
+    let mut out = std::collections::BTreeSet::new();
+    let mut i = 0usize;
+    while let Some(rel) = src[i..].find("rustty_") {
+        let start = i + rel;
+        // Must start an identifier (not be a suffix of a longer one).
+        let is_boundary = start == 0 || {
+            let p = b[start - 1];
+            !(p.is_ascii_alphanumeric() || p == b'_')
+        };
+        let mut end = start;
+        while end < b.len() && (b[end].is_ascii_alphanumeric() || b[end] == b'_') {
+            end += 1;
+        }
+        let mut j = end;
+        while j < b.len() && (b[j] == b' ' || b[j] == b'\t' || b[j] == b'\n') {
+            j += 1;
+        }
+        if is_boundary && j < b.len() && b[j] == b'(' {
+            out.insert(src[start..end].to_string());
+        }
+        i = end.max(start + 1);
+    }
+    out
+}
+
+/// W92-B02-01: the generated header must DEFINE the `RUSTTY_API`
+/// visibility/import-export macro (token-identical to the public umbrella
+/// `include/rustty-embed.h`, itself the R2 rename of the oracle's
+/// `GHOSTTY_API` in `ghostty/include/ghostty.h`) and APPLY it to every
+/// prototype it declares.
+///
+/// Pre-fix this header contained ZERO occurrences of `RUSTTY_API`.
+#[test]
+fn generated_header_defines_and_applies_rustty_api() {
+    let src = apprt_header_src();
+
+    // (1) The macro is defined, with the same five arms as the umbrella.
+    for needle in [
+        "#ifndef RUSTTY_API",
+        "#if defined(RUSTTY_STATIC)",
+        "#define RUSTTY_API __declspec(dllexport)",
+        "#define RUSTTY_API __declspec(dllimport)",
+        "#define RUSTTY_API __attribute__((visibility(\"default\")))",
+    ] {
+        assert!(
+            src.contains(needle),
+            "include/rustty-apprt.h is missing the RUSTTY_API macro line `{needle}` \
+             (it must mirror include/rustty-embed.h). Regenerate with \
+             `cargo run -p xtask -- header-gen-apprt`."
+        );
+    }
+
+    // The umbrella's block must be reproduced verbatim, so a host including
+    // BOTH headers sees an identical (idempotent) definition.
+    let umbrella = std::fs::read_to_string(workspace_root().join("include/rustty-embed.h"))
+        .expect("read include/rustty-embed.h");
+    let block = |s: &str| -> String {
+        let start = s.find("#ifndef RUSTTY_API").expect("RUSTTY_API block");
+        let rest = &s[start..];
+        // The block ends at the second `#endif` at column 0 after the start.
+        let mut ends = rest.match_indices("\n#endif");
+        ends.next().expect("inner #endif");
+        let (e, _) = ends.next().expect("outer #endif");
+        rest[..e + "\n#endif".len()].to_string()
+    };
+    assert_eq!(
+        block(&src),
+        block(&umbrella),
+        "the RUSTTY_API block in include/rustty-apprt.h drifted from the one in \
+         include/rustty-embed.h; they must be token-identical."
+    );
+
+    // (2) Every declared prototype carries it. Split the comment- and
+    // preprocessor-stripped body on `;`: each statement that applies a
+    // `rustty_*` identifier to `(` is a prototype and must start with the macro.
+    // (`extern "C" {` is the cpp_compat opener, not part of a declaration.)
+    let body = strip_pp_lines(&strip_c_comments(&src)).replace("extern \"C\" {", " ");
+    let mut checked = 0usize;
+    for stmt in body.split(';') {
+        let t = stmt.trim();
+        if c_fn_names(t).is_empty() {
+            continue;
+        }
+        checked += 1;
+        assert!(
+            t.starts_with("RUSTTY_API"),
+            "prototype without the RUSTTY_API visibility macro in \
+             include/rustty-apprt.h:\n    {}\n(set `[fn] prefix = \"RUSTTY_API\"` in \
+             crates/rustty-apprt-c/cbindgen.toml and regenerate)",
+            t.replace('\n', " ")
+        );
+    }
+    // Anti-vacuity: the scan must actually have seen the whole export surface.
+    assert_eq!(
+        checked,
+        c_fn_names(&strip_c_comments(&src)).len(),
+        "the RUSTTY_API prefix scan did not cover every declared prototype"
+    );
+    assert!(
+        checked >= 76,
+        "only {checked} prototypes found in include/rustty-apprt.h; the header \
+         looks truncated or stale"
+    );
+}
+
+/// The 14 `rustty_*` exports the published library ships from SIBLING crates
+/// (`rustty-config`, `rustty-bench`). cbindgen runs with `parse_deps = false`,
+/// so they can never appear in this generated header; the public umbrella
+/// `include/rustty-embed.h` declares them and the header banner says so.
+const SIBLING_CRATE_TAIL: &[&str] = &[
+    "rustty_benchmark_cli",
+    "rustty_config_clone",
+    "rustty_config_diagnostics_count",
+    "rustty_config_finalize",
+    "rustty_config_free",
+    "rustty_config_get",
+    "rustty_config_get_diagnostic",
+    "rustty_config_load_cli_args",
+    "rustty_config_load_default_files",
+    "rustty_config_load_file",
+    "rustty_config_load_recursive_files",
+    "rustty_config_new",
+    "rustty_config_open_path",
+    "rustty_config_trigger",
+];
+
+/// W92-B02-02: the checked-in header must not be STALE, and the part of the
+/// umbrella's export tail it structurally cannot declare must be documented in
+/// its banner rather than silently absent.
+///
+/// Pre-fix, `rustty_cli_try_action` / `rustty_info` / `rustty_translate` were
+/// exported by THIS crate (`src/lib.rs`) but missing from the header, which had
+/// not been regenerated since those landed.
+#[test]
+fn generated_header_declares_in_crate_tail_and_documents_the_rest() {
+    let src = apprt_header_src();
+    let declared = c_fn_names(&strip_c_comments(&src));
+
+    // (1) The three in-crate exports the stale header dropped.
+    for name in ["rustty_cli_try_action", "rustty_info", "rustty_translate"] {
+        assert!(
+            declared.contains(name),
+            "include/rustty-apprt.h does not declare `{name}`, which \
+             crates/rustty-apprt-c/src/lib.rs exports — the checked-in header is \
+             STALE. Regenerate with `cargo run -p xtask -- header-gen-apprt`."
+        );
+    }
+
+    // (2) Bidirectional cross-check against the public umbrella: this header's
+    // declarations are a SUBSET of the umbrella's, and the difference is EXACTLY
+    // the documented sibling-crate tail. Neither side can go vacuous — deleting
+    // a declaration here grows the difference and fails.
+    let umbrella = std::fs::read_to_string(workspace_root().join("include/rustty-embed.h"))
+        .expect("read include/rustty-embed.h");
+    let umbrella_fns = c_fn_names(&strip_c_comments(&umbrella));
+    let extra: Vec<_> = declared.difference(&umbrella_fns).cloned().collect();
+    assert!(
+        extra.is_empty(),
+        "include/rustty-apprt.h declares names the public umbrella \
+         include/rustty-embed.h does not: {extra:?}"
+    );
+    let missing: Vec<String> = umbrella_fns.difference(&declared).cloned().collect();
+    let expected: Vec<String> = SIBLING_CRATE_TAIL.iter().map(|s| s.to_string()).collect();
+    assert_eq!(
+        missing, expected,
+        "the set of umbrella exports NOT declared by include/rustty-apprt.h \
+         changed. It must be exactly the sibling-crate tail (rustty-config / \
+         rustty-bench, unreachable with cbindgen `parse_deps = false`). A new \
+         entry usually means the header is stale — regenerate it."
+    );
+
+    // (3) …and the banner names every one of them, so a host reading only this
+    // header is told where the declarations live.
+    let banner_end = src.find("#ifndef RUSTTY_APPRT_H").expect("include guard");
+    let banner = &src[..banner_end];
+    assert!(
+        banner.contains("include/rustty-embed.h"),
+        "the header banner must point hosts at the public umbrella for the \
+         sibling-crate export tail"
+    );
+    for name in SIBLING_CRATE_TAIL {
+        assert!(
+            banner.contains(name),
+            "the header banner does not mention `{name}`, an export the umbrella \
+             declares but this header structurally cannot"
+        );
+    }
+}
+
+/// W92-B02-04: the Apple-only exports must be preprocessor-gated on
+/// `__APPLE__`, matching the oracle (`ghostty/include/ghostty.h` `#ifdef
+/// __APPLE__`) and rustty's own umbrella `include/rustty-embed.h`.
+///
+/// Pre-fix, `include/rustty-apprt.h` contained ZERO `__APPLE__` occurrences and
+/// declared all six unconditionally, so a non-Apple host saw declarations the
+/// library does not export (the Rust side IS `cfg(any(macos, ios))`-gated).
+#[test]
+fn apple_only_declarations_are_gated_on_apple() {
+    const APPLE_ONLY: &[&str] = &[
+        "rustty_surface_set_display_id",
+        "rustty_surface_quicklook_font",
+        "rustty_surface_quicklook_word",
+        "rustty_inspector_metal_init",
+        "rustty_inspector_metal_render",
+        "rustty_inspector_metal_shutdown",
+    ];
+
+    let root = workspace_root();
+    let include_dir = root.join("include");
+    let cc = c_compiler();
+    let out_dir = std::env::temp_dir().join(format!("rustty_apprt_apple_{}", std::process::id()));
+    std::fs::create_dir_all(&out_dir).expect("create temp out dir");
+    let tu = out_dir.join("apple_probe.c");
+    std::fs::write(&tu, "#include \"rustty-apprt.h\"\n").expect("write probe TU");
+
+    let preprocess = |apple: bool| -> String {
+        let out = Command::new(&cc)
+            .arg("-E")
+            .arg("-P")
+            .arg(if apple { "-D__APPLE__" } else { "-U__APPLE__" })
+            .arg("-I")
+            .arg(&include_dir)
+            .arg(&tu)
+            .output()
+            .expect("spawn C preprocessor");
+        assert!(
+            out.status.success(),
+            "preprocessing rustty-apprt.h (apple={apple}) failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let non_apple = preprocess(false);
+    for name in APPLE_ONLY {
+        assert!(
+            !non_apple.contains(name),
+            "`{name}` is declared by include/rustty-apprt.h in a NON-Apple \
+             preprocessing lane. It is `#[cfg(any(target_os = \"macos\", \
+             target_os = \"ios\"))]` in the crate, so the library does not export \
+             it there. Add the cfg->`__APPLE__` map to cbindgen.toml `[defines]` \
+             and regenerate."
+        );
+    }
+
+    // Control arm: they ARE declared under __APPLE__ (so the arm above cannot
+    // pass by the names having been dropped altogether).
+    let apple = preprocess(true);
+    for name in APPLE_ONLY {
+        assert!(
+            apple.contains(name),
+            "`{name}` is missing from include/rustty-apprt.h even under \
+             __APPLE__ — the declaration was dropped, not gated"
+        );
+    }
+
+    // The non-Apple lane must still carry the portable surface, so the check
+    // above is not passing on an empty translation unit.
+    assert!(
+        non_apple.contains("rustty_app_new") && non_apple.contains("rustty_surface_new"),
+        "the non-Apple preprocessing lane lost the portable declarations too"
+    );
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}

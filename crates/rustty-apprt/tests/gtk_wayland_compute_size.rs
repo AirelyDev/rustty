@@ -40,8 +40,8 @@
 //! process panics. Both arms are the SAME `#[test]`, selected by env var, run in
 //! separate processes. See `gtk_wayland_set_urgent.rs` for the full rationale.
 //!
-//! R5: gated `all(target_os = "linux", feature = "wayland")` (wayland implies gtk).
-#![cfg(all(target_os = "linux", feature = "wayland"))]
+//! R5: gated `all(any(linux, freebsd), feature = "wayland")` (wayland implies gtk).
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "wayland"))]
 
 use std::time::{Duration, Instant};
 

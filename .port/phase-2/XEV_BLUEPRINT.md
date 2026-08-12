@@ -512,12 +512,25 @@ the loop actually runs on kqueue (Miri can't — real syscalls):
 - **`kevent64_s` vs `kevent`.** libc lacks the 64 variant. *Mitigation:* declare
   `kevent64_s` + `kevent64` extern (darwin.zig precedent); macOS always takes the
   64 branch; keep the FreeBSD `posix.Kevent` fast-path cfg-gated for later.
+  **[LANDED — W2D/F-004, 2026-08-11.]** The FreeBSD arm is no longer "for later":
+  `Kevent` is `libc::kevent64_s` on macos and `libc::kevent` on freebsd
+  (`kqueue.zig:1861-1865`), with the identity `kevent_init` arm (`:1935`) and the
+  plain `libc::kevent` syscall arm (`:1876-1899`) both ported. Residual runtime
+  verification is the FreeBSD row in `DEFERRALS.md`.
 - **ThreadPool deferral.** If a future consumer needs the pool (xev.File), it's a
   clean follow-up: `ThreadPool.zig` is self-contained (0 tests) — port then. The
   deferred body is isolated behind the already-ported type surface.
 - **cfg-gating discipline.** Everything is `#[cfg(target_os="macos")]` (or a
   `kqueue` feature). Linux/Windows arms are ported later as whole backends, not
   interleaved — avoids a cfg maze in the loop core.
+  **[SUPERSEDED — W2D/F-004, 2026-08-11.]** The kqueue tree's gate is now
+  `#[cfg(any(target_os = "macos", target_os = "freebsd"))]`, and that is the
+  normal form for every module/re-export/seam in it — libxev maps BOTH tags onto
+  the same Kqueue backend (`backend.zig:20,38`), so this is one backend on two
+  tags, not the interleaving the bullet warns against. The macOS-only spelling is
+  reserved for genuinely Darwin-only surface (`darwin.rs`, the mach-port
+  `Wakeup`/`AsyncMachPort`, the `Machport` op payload — all of which the oracle
+  itself gates on `isDarwin()`).
 
 ---
 

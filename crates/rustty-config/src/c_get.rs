@@ -277,7 +277,7 @@ pub unsafe fn get(config: &Config, k: Key, ptr_raw: *mut std::ffi::c_void) -> bo
         Key::AutoUpdateChannel => g_opt_enum_fn!(auto_update_channel, release_channel_to_name_z),
         Key::Background => g_cval!(background),
         Key::BackgroundBlur => g_cval_fn!(background_blur, background_blur_cval),
-        Key::BackgroundImage => false,
+        Key::BackgroundImage => g_opt_cval!(background_image),
         Key::BackgroundImageFit => g_enum_fn!(background_image_fit, background_image_fit_to_name_z),
         Key::BackgroundImageOpacity => g_float!(background_image_opacity, f32),
         Key::BackgroundImagePosition => {
@@ -289,7 +289,7 @@ pub unsafe fn get(config: &Config, k: Key, ptr_raw: *mut std::ffi::c_void) -> bo
         Key::BackgroundImageRepeat => g_bool!(background_image_repeat),
         Key::BackgroundOpacity => g_float!(background_opacity, f64),
         Key::BackgroundOpacityCells => g_bool!(background_opacity_cells),
-        Key::BellAudioPath => false,
+        Key::BellAudioPath => g_opt_cval!(bell_audio_path),
         Key::BellAudioVolume => g_float!(bell_audio_volume, f64),
         Key::BellFeatures => g_packed!(bell_features),
         Key::BoldColor => false,
@@ -476,6 +476,7 @@ pub unsafe fn get(config: &Config, k: Key, ptr_raw: *mut std::ffi::c_void) -> bo
 mod tests {
     use super::get;
     use crate::config_struct::{Config, Key};
+    use crate::path::{Path, PathC};
     use crate::value_types::{BackgroundBlur, Color, ColorC, WindowTheme};
     use std::ffi::CStr;
     use std::os::raw::{c_char, c_uint};
@@ -669,5 +670,66 @@ mod tests {
         });
         // try testing.expectEqual(@as(c_uint, 1), bits);
         assert_eq!(bits, 1 as c_uint);
+    }
+
+    // PARITY (rustty-added): the `?Path` keys (`background-image`,
+    // `bell-audio-path`) resolve through the reference's generic `.optional` ->
+    // `.@"union"` -> `cval()` arms of `getValue`, so a POPULATED key must return
+    // true and write a `Path.C` (`rustty_config_path_s`); only a null optional
+    // returns false. The reference has no dedicated test for this (its coverage is
+    // the comptime-generic `getValue`), so this is the rustty proving test for the
+    // projection.
+    #[test]
+    fn c_get_optional_path() {
+        // The out-parameter layout must match `rustty_config_path_s`
+        // (`const char* path; bool optional;`).
+        assert_eq!(
+            std::mem::size_of::<PathC>(),
+            std::mem::size_of::<*const c_char>() * 2
+        );
+        assert_eq!(
+            std::mem::align_of::<PathC>(),
+            std::mem::align_of::<*const c_char>()
+        );
+
+        let null_cval = || PathC {
+            path: std::ptr::null(),
+            optional: false,
+        };
+
+        #[allow(clippy::type_complexity)]
+        let fields: [(Key, fn(&mut Config, Option<Path>)); 2] = [
+            (Key::BackgroundImage, |c, v| c.background_image = v),
+            (Key::BellAudioPath, |c, v| c.bell_audio_path = v),
+        ];
+        for (key, set) in fields {
+            let mut c = Config::default_config();
+
+            // Unset optional -> false (`const unwrapped = value orelse return false`).
+            set(&mut c, None);
+            let mut cval = null_cval();
+            assert!(!unsafe { get(&c, key, std::ptr::from_mut(&mut cval).cast()) });
+
+            // `.required` -> `.{ .path = path.ptr, .optional = false }`.
+            set(&mut c, Some(Path::Required(b"/tmp/bg.png".to_vec())));
+            let mut cval = null_cval();
+            assert!(unsafe { get(&c, key, std::ptr::from_mut(&mut cval).cast()) });
+            assert!(!cval.optional);
+            assert!(!cval.path.is_null());
+            // The `[:0]` sentinel is not stored (crate-wide `Vec<u8>` convention),
+            // so read exactly the value bytes rather than through `CStr`.
+            let bytes =
+                unsafe { std::slice::from_raw_parts(cval.path.cast::<u8>(), "/tmp/bg.png".len()) };
+            assert_eq!(bytes, b"/tmp/bg.png");
+
+            // `.optional` -> `.{ .path = path.ptr, .optional = true }`.
+            set(&mut c, Some(Path::Optional(b"/tmp/bg.png".to_vec())));
+            let mut cval = null_cval();
+            assert!(unsafe { get(&c, key, std::ptr::from_mut(&mut cval).cast()) });
+            assert!(cval.optional);
+            let bytes =
+                unsafe { std::slice::from_raw_parts(cval.path.cast::<u8>(), "/tmp/bg.png".len()) };
+            assert_eq!(bytes, b"/tmp/bg.png");
+        }
     }
 }

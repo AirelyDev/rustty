@@ -19,12 +19,19 @@ workspace = true
 # The NATIVE GTK4/libadwaita apprt backend (`src/gtk.rs`, port of
 # `src/apprt/gtk/**`). OFF by default (R5): the macOS/embedded build never
 # enables it, so it stays byte-behavior-identical. The module itself is gated
-# `#[cfg(all(target_os = "linux", feature = "gtk"))]` (lib.rs), and every dep
-# below is ALSO `cfg(target_os = "linux")`-tabled — so `--features gtk` on a
-# non-Linux host resolves to a no-op rather than a broken dep graph.
+# `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]`
+# (lib.rs), and every dep below is ALSO
+# `cfg(any(target_os = "linux", target_os = "freebsd"))`-tabled — so `--features
+# gtk` on a host that is neither resolves to a no-op rather than a broken dep
+# graph.
 #
-# `Runtime::Gtk` (rustty-build-config) is already `default_for(Linux)`; the
-# `rustty` bin turns this on via a Linux-gated `features = ["gtk"]` edge (L5.5).
+# `Runtime::Gtk` (rustty-build-config) is already `default_for` BOTH Linux and
+# FreeBSD (`apprt.rs:26-36`, the port of `apprt/runtime.zig:14-24`
+# `.linux, .freebsd => .gtk`); the `rustty` bin turns this on via a matching
+# target-gated `features = ["gtk"]` edge (L5.5). W2D/F-002 widened the OS half of
+# every gate here from `linux` to `any(linux, freebsd)`: the reference puts NO
+# os.tag guard on the gtk apprt, and gtk4-rs finds its libraries via pkg-config
+# (FreeBSD ports ships gtk4/libadwaita/gtk4-layer-shell/wayland/x11).
 # `rustty-vt/imgui` turns on `Key::imgui_key` (the Key->cimgui-constant mapping)
 # so the gtk inspector's ImGui key routing has the real mapping — it is an
 # apprt-layer GUI-glue dependency (R3) that only the gtk backend needs.
@@ -107,7 +114,7 @@ dcimgui-sys = { workspace = true }
 # first-light KAT; that entry is now redundant and removed. Plain
 # (non-optional), like the other lower-tier crates here: on a macOS / default
 # build it is compiled but unreferenced (the sole consumers are
-# `#[cfg(all(target_os = "linux", feature = "gtk"))]`).
+# `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]`).
 rustty-termio = { workspace = true }
 rustty-config = { workspace = true }
 rustty-input = { workspace = true }
@@ -124,7 +131,8 @@ rustty-os = { workspace = true }
 # onto the core `App<A>` mailbox with the reference's `.forever` timeout
 # (`application.zig:1464-1466`). Plain (non-optional) dep like the other pure
 # lower-tier crates here: on a macOS/default build it is compiled but unreferenced
-# (the sole consumer is `#[cfg(all(target_os = "linux", feature = "gtk"))]`).
+# (the sole consumer is
+# `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]`).
 rustty-datastruct = { workspace = true }
 # WS4 full `GlobalState.init` wiring (the BREAK #1 body, global.zig):
 # crash.init (sentry), oni.init (regex), the Logging type + ResourceLimits
@@ -285,7 +293,12 @@ objc2 = { version = "0.6" }
 # DEFERRALS:3625 ratifies as live. Under the rule, `at_least` degenerates to
 # `runtime_at_least` (the oracle only distinguishes them BECAUSE of the header
 # fold). T2 must either implement it as a live delegate or get plan:96 amended.
-[target.'cfg(target_os = "linux")'.dependencies]
+# W2D/F-002: `any(linux, freebsd)`, not `linux` — FreeBSD's default app runtime
+# is GTK too (`apprt/runtime.zig:18` `.linux, .freebsd => .gtk`) and the whole
+# gtk4-rs stack below discovers its libraries through pkg-config, which FreeBSD
+# ports satisfies. Every crate here is still `optional` behind `gtk`, so the
+# FreeBSD default build (no `--features gtk`) pulls none of them.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 # glib 0.22 — `glib::Object`/`WeakRef`/`Variant`/`MainContext` + the
 # `#[glib::object_subclass]`/`#[derive(glib::Properties)]` macro triad that
 # re-expresses ghostty's `class.zig::Common(Self, Private)` helper (PREPORT_GTK
@@ -364,11 +377,12 @@ cc = "1"
 # `gio` is the lib's own (gtk-feature-gated, Linux-target-gated) binding; an
 # integration test (`tests/gtk_resources.rs`) needs it in scope to look up the
 # registered gresource, and integration tests can only reach dev-dependencies,
-# not the lib's optional deps. Linux-target-gated to mirror the `[dependencies]`
-# edge; the test file itself is `#[cfg(feature = "gtk")]`, so without `--features
-# gtk` nothing here is referenced. Resolves to the SAME `gio` 0.22 instance as
-# the library edge, so the process-global gresource registry is shared.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+# not the lib's optional deps. Target-gated to mirror the `[dependencies]`
+# edge (W2D/F-002: Linux AND FreeBSD, the two `.gtk` runtimes); the test file
+# itself is `#[cfg(feature = "gtk")]`, so without `--features gtk` nothing here is
+# referenced. Resolves to the SAME `gio` 0.22 instance as the library edge, so the
+# process-global gresource registry is shared.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dev-dependencies]
 gio = { version = "0.22" }
 # `glib` in scope for the integration KATs: `tests/gtk_application.rs` builds a
 # `GhosttyApplication` via `glib::Object::builder` and compares GObject identity.
@@ -383,9 +397,9 @@ glib = { version = "0.22" }
 # dev-dependencies (not the lib's optional gtk4-rs edges), so the same versions +
 # features as the library's `[dependencies]` are declared here so cargo unifies to
 # ONE instance of each — the GType registry / GApplication default the KAT shares
-# with the library. Linux-target-gated like `gio`/`glib` above; the test file is
-# `#[cfg(all(target_os = "linux", feature = "gtk"))]`, so a non-gtk build compiles
-# none of it.
+# with the library. Target-gated like `gio`/`glib` above; the test file is
+# `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]`,
+# so a non-gtk build compiles none of it.
 gtk4 = { version = "0.11", features = ["v4_14"] }
 libadwaita = { version = "0.9", features = ["v1_5"] }
 # `rustty_vt::input::key_mods::Mods` in scope for the X11 winproto KATs
@@ -404,7 +418,8 @@ rustty-os = { workspace = true }
 # window's XID to check `WINDOWID`. Same version + features as the library's
 # Linux-gated optional edge so cargo unifies to ONE instance. Unconditional here
 # (like `gtk4`/`libadwaita` above) — the test files are
-# `#[cfg(all(target_os = "linux", feature = "x11"))]`, so nothing of them compiles on
+# `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "x11"))]`,
+# so nothing of them compiles on
 # a non-x11 build; the cost is that a Linux `cargo test -p rustty-apprt` needs
 # `libX11-devel` present (it is, on the VM).
 gdk4-x11 = { version = "0.11", features = ["xlib"] }

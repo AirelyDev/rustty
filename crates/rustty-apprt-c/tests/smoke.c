@@ -3,8 +3,9 @@
  * EMBEDDED_BLUEPRINT §6.3 [ADV-FIX 2]).
  *
  * This is a REAL C host that consumes the published rustty embedding C ABI:
- *   - it #includes the cbindgen-generated `include/rustty-apprt.h` (the 71
- *     `rustty_*` exports + the hand-pinned extern structs), and
+ *   - it #includes the cbindgen-generated `include/rustty-apprt.h` (the
+ *     `rustty_*` exports DEFINED IN rustty-apprt-c + the hand-pinned extern
+ *     structs), and
  *   - it links the `rustty-apprt-c` staticlib (which bundles the config C-ABI —
  *     `rustty_config_*` from rustty-config — as a transitive dependency).
  *
@@ -32,12 +33,16 @@
 
 /*
  * The config C-ABI (rustty-config `src/c_api.rs`, config C3) is ALREADY shipped
- * as `rustty_config_*` symbols but does not yet emit its own cbindgen header
- * (that is a separate config-milestone deliverable). A real host builds the
- * `Config` the app needs via these three functions, so we forward-declare just
- * the ones the KAT uses. `Config` itself is the opaque handle declared in
- * rustty-apprt.h. [ADV-FIX 2]: the KAT links BOTH apprt-c and this config C-ABI;
- * it does not fabricate a `&cfg`.
+ * as `rustty_config_*` symbols, and the public embedding umbrella
+ * `include/rustty-embed.h` declares them — but rustty-apprt.h cannot: cbindgen
+ * runs with `parse_deps = false`, so it never sees a sibling crate (the header's
+ * own banner lists the whole sibling-crate tail, W92-B02-02). A dedicated
+ * generated config header stays consumer-triggered (DEFERRALS.md, WS19 T19).
+ * This KAT deliberately includes ONLY rustty-apprt.h — that is the artifact
+ * under test — so it forward-declares just the three config entrypoints it
+ * calls. `Config` itself is the opaque handle declared in rustty-apprt.h.
+ * [ADV-FIX 2]: the KAT links BOTH apprt-c and this config C-ABI; it does not
+ * fabricate a `&cfg`.
  */
 Config *rustty_config_new(void);
 void rustty_config_finalize(Config *self);

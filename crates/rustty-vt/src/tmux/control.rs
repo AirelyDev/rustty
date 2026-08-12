@@ -102,15 +102,23 @@ impl Parser {
     //   .{ .max_bytes = self.max_bytes,
     //      .buffer = try .initCapacity(alloc, 128) }
     // `Parser`'s fields are private to this module, so the DCS handler uses
-    // this constructor mirror. The reference `initCapacity` threads the DCS
-    // allocator; this Parser's buffer is an owning global-allocator `Vec` (see
-    // the `buffer` field PORT NOTE above), so only the capacity carries over.
-    pub fn init_options(max_bytes: usize, capacity: usize) -> Parser {
-        Parser {
+    // this constructor mirror. This Parser's buffer is an owning
+    // global-allocator `Vec` (see the `buffer` field PORT NOTE above), so the
+    // allocator does not thread through — but the `try` DOES: the reference's
+    // `initCapacity` is a fallible allocation whose `error.OutOfMemory`
+    // propagates out of `dcs.hook`, so we reserve with `try_reserve_exact`
+    // (like `dcs::Allocating::init_capacity`) instead of the aborting
+    // `Vec::with_capacity`, and return `OutOfMemory` to the DCS hook site.
+    pub fn init_options(max_bytes: usize, capacity: usize) -> Result<Parser, OutOfMemory> {
+        let mut buffer: Vec<u8> = Vec::new();
+        buffer
+            .try_reserve_exact(capacity)
+            .map_err(|_| OutOfMemory)?;
+        Ok(Parser {
             state: State::Idle,
-            buffer: Vec::with_capacity(capacity),
+            buffer,
             max_bytes,
-        }
+        })
     }
 
     pub fn deinit(&mut self) {
@@ -967,6 +975,26 @@ fn trim_both<'a>(slice: &'a [u8], strip: &[u8]) -> &'a [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // PORT NOTE: no reference test; this pins the fallible-allocation contract
+    // of `init_options`, the mirror of the reference's
+    // `.buffer = try .initCapacity(alloc, 128)` in `dcs.zig`'s tmux hook. An
+    // aborting `Vec::with_capacity` would kill the process instead of
+    // returning `error.OutOfMemory` to `dcs.hook`.
+    #[test]
+    fn tmux_init_options_reports_allocation_failure() {
+        // The nominal capacity succeeds and the options are applied.
+        let mut p = Parser::init_options(4096, 128).unwrap();
+        assert_eq!(4096, p.max_bytes);
+        assert!(p.buffer.capacity() >= 128);
+        p.deinit();
+
+        // A capacity that cannot be satisfied is reported, not aborted.
+        assert_eq!(
+            Err(OutOfMemory),
+            Parser::init_options(4096, usize::MAX / 2).map(|_| ())
+        );
+    }
 
     // test "tmux begin/end empty"
     #[test]

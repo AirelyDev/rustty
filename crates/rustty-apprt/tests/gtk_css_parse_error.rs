@@ -15,8 +15,8 @@
 //!
 //! G-GTKINIT: exactly ONE headed `#[test]` lives in this binary.
 //!
-//! R5: gated `all(target_os = "linux", feature = "gtk-v4_16")`.
-#![cfg(all(target_os = "linux", feature = "gtk-v4_16"))]
+//! R5: gated `all(any(linux, freebsd), feature = "gtk-v4_16")`.
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk-v4_16"))]
 
 use std::cell::RefCell;
 use std::rc::Rc;

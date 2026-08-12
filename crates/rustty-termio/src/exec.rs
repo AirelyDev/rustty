@@ -3309,8 +3309,14 @@ pub enum KillError {
 //                         signal, argument or ordering differs.
 //   * at KILL_ABANDON   — stop waiting and return `KillError::Abandoned`
 //                         instead of looping forever. The child is left alive
-//                         (or wedged) and reparented to launchd; the caller
-//                         (`stop`) proceeds with teardown.
+//                         (or wedged) untracked and — on macOS — reparented to
+//                         launchd once we exit; the caller (`stop`) proceeds
+//                         with teardown. On Linux/FreeBSD there is NO launchd
+//                         and NO reparenting at abandon time: rustty remains
+//                         the parent of the forgotten pid, and a child that
+//                         exits later stays an unreaped zombie until the app
+//                         itself exits (nothing ever waits on it again).
+//                         [Codex W4-02]
 //
 // PRECISE GUARANTEE (do not over-claim this): rustty is observationally
 // identical to the oracle for any teardown that COMPLETES WITHIN
@@ -3324,8 +3330,9 @@ pub enum KillError {
 //   2. The child is alive and reapable but slow — a shell trapping/ignoring
 //      SIGHUP, a `zshexit`/history flush over a stalled network filesystem, an
 //      ssh multiplexer or DB client flushing state. ACCEPTED CONSEQUENCE: we
-//      stop waiting for it and no longer collect its exit status; it is
-//      reparented to launchd. Note what we deliberately do NOT do: we do not
+//      stop waiting for it and no longer collect its exit status; on macOS it
+//      is reparented to launchd once we exit, on Linux/FreeBSD it remains our
+//      unreaped child (see above). Note what we deliberately do NOT do: we do not
 //      kill it. Its cleanup runs to completion, so there is no data loss, and
 //      the signals it received are exactly the ones the oracle would have sent.
 //

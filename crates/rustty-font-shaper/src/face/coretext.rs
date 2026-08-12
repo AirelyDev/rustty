@@ -343,6 +343,8 @@ impl Face {
         // FreeType face does — it is destroyed here (`harfbuzz_shaper == true`).
         // All faces are torn down through `deinit` (the Collection walks entries
         // calling `deinit`; the face tests call it explicitly), so this runs once.
+        #[cfg(test)]
+        crate::face::test_probe::note_face_deinit();
         self.hb_font.destroy();
     }
 
@@ -400,6 +402,13 @@ impl Face {
     /// Resize the font in-place. If this succeeds, the caller is responsible
     /// for clearing any glyph caches, font atlas data, etc.
     pub fn set_size(&mut self, opts: Options) -> Result<(), Error> {
+        // Test-only fail-point (W9F-02): lets unit tests force the fallible
+        // `setSize` arm so its error-path cleanup can be proven.
+        #[cfg(test)]
+        if crate::face::test_probe::set_size_failpoint_should_fail() {
+            return Err(Error::FontInitFailure);
+        }
+
         // We just create a copy and replace ourself
         let face = Face::init_font_copy(&self.font, opts)?;
         self.deinit();

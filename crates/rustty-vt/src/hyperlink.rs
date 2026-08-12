@@ -94,14 +94,39 @@ impl Hyperlink {
     /// Duplicate a hyperlink by allocating all values with the
     /// given allocator. The returned hyperlink should have deinit
     /// called.
-    pub fn dupe(&self) -> Hyperlink {
-        let uri = self.uri.clone();
+    ///
+    /// PORT NOTE: the reference is
+    /// `dupe(self, alloc) Allocator.Error!Hyperlink` — every `alloc.dupe` is
+    /// `try`'d, so allocation failure is RECOVERABLE and propagates to
+    /// `Screen.startHyperlink`'s `IncreaseCapacityError!void`. A plain
+    /// `Vec::clone` aborts the process instead, which silently voided that
+    /// contract for every caller; the copies therefore go through
+    /// `try_dupe_bytes` (`Vec::try_reserve_exact`, the Rust fallible-allocation
+    /// primitive) and the signature is `Result<_, OutOfMemory>` like the
+    /// reference's.
+    pub fn dupe(&self) -> Result<Hyperlink, OutOfMemory> {
+        // const uri = try alloc.dupe(u8, self.uri);
+        let uri = try_dupe_bytes(&self.uri)?;
+        // errdefer alloc.free(uri) — the owned Vec is dropped on the `?` below.
         let id: HyperlinkId = match &self.id {
             HyperlinkId::Implicit(_) => self.id.clone(),
-            HyperlinkId::Explicit(v) => HyperlinkId::Explicit(v.clone()),
+            HyperlinkId::Explicit(v) => HyperlinkId::Explicit(try_dupe_bytes(v)?),
         };
-        Hyperlink { id, uri }
+        Ok(Hyperlink { id, uri })
     }
+}
+
+/// `alloc.dupe(u8, src)` — a fallible byte-slice copy.
+///
+/// PORT NOTE: Zig's `Allocator.dupe` RETURNS `error.OutOfMemory`; Rust's
+/// `[T]::to_vec`/`Vec::clone` abort. `Vec::try_reserve_exact` is the fallible
+/// equivalent (it also rejects a capacity that overflows `isize`, which Zig's
+/// allocator interface reports the same way).
+pub(crate) fn try_dupe_bytes(src: &[u8]) -> Result<Vec<u8>, OutOfMemory> {
+    let mut v: Vec<u8> = Vec::new();
+    v.try_reserve_exact(src.len()).map_err(|_| OutOfMemory)?;
+    v.extend_from_slice(src);
+    Ok(v)
 }
 
 /// A hyperlink that has been committed to page memory. This
@@ -482,3 +507,57 @@ impl RefCountedSetContext<PageEntry> for SetContext {
 /// The set of hyperlinks. This is ref-counted so that a set of cells
 /// can share the same hyperlink without duplicating the data.
 pub type Set = RefCountedSet<PageEntry, Id, size::CellCountInt, SetContext>;
+
+// rustty-only tests (the reference's `dupe` contract is carried by its
+// `Allocator.Error!Hyperlink` signature, which Zig callers must `try`): pin that
+// the ported `dupe` is FALLIBLE rather than an aborting `Vec::clone`, and that
+// it is a byte-exact deep copy.
+#[cfg(test)]
+mod hyperlink_dupe_tests {
+    use super::*;
+
+    #[test]
+    fn dupe_is_fallible_and_byte_exact() {
+        // Raw (non-UTF-8) bytes: the reference's `[]const u8` is a byte slice.
+        let src = Hyperlink {
+            id: HyperlinkId::Explicit(vec![0xFF, 0x00, 0x80]),
+            uri: b"http://example.com/\xC3\x28".to_vec(),
+        };
+
+        // `Result`, not a bare `Hyperlink` — an OOM here must be RETURNED, the
+        // way `Screen.startHyperlink`'s `IncreaseCapacityError!void` promises.
+        let copy: Result<Hyperlink, OutOfMemory> = src.dupe();
+        let copy = copy.unwrap();
+
+        assert_eq!(src.uri, copy.uri);
+        match (&src.id, &copy.id) {
+            (HyperlinkId::Explicit(a), HyperlinkId::Explicit(b)) => assert_eq!(a, b),
+            _ => unreachable!(),
+        }
+        // Deep copy: the buffers are independent.
+        assert!(!std::ptr::eq(src.uri.as_ptr(), copy.uri.as_ptr()));
+    }
+
+    #[test]
+    fn dupe_preserves_implicit_id() {
+        let src = Hyperlink {
+            id: HyperlinkId::Implicit(1234),
+            uri: b"x".to_vec(),
+        };
+        let copy = src.dupe().unwrap();
+        match copy.id {
+            HyperlinkId::Implicit(v) => assert_eq!(1234, v),
+            HyperlinkId::Explicit(_) => unreachable!(),
+        }
+    }
+
+    // A genuine allocation failure REPORTS instead of aborting the process:
+    // `try_reserve_exact` of an impossible capacity is the only portable way to
+    // drive a real allocator failure, and it is the same primitive `dupe` uses.
+    #[test]
+    fn try_dupe_bytes_reports_allocation_failure() {
+        let mut v: Vec<u8> = Vec::new();
+        assert!(v.try_reserve_exact(isize::MAX as usize).is_err());
+        assert_eq!(Ok(vec![1u8, 2, 3]), try_dupe_bytes(&[1u8, 2, 3]));
+    }
+}

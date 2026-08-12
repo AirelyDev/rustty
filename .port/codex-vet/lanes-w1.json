@@ -1,0 +1,1461 @@
+{
+ "wave": "w1",
+ "lanes": [
+  {
+   "lane": "w1-L01",
+   "batches": [
+    {
+     "bid": "w1-L01-b01",
+     "findings": [
+      {
+       "gid": "W13C-01",
+       "title": "no live Rustty VT fuzz target consumes Ghostty's three fuzz harnesses or 3,947 fuzz corpus files",
+       "fix_category": "test-add"
+      }
+     ],
+     "files": [
+      ".port/phase-0/corpora/cvt/",
+      ".port/phase-2/DEFERRALS.md",
+      "crates/rustty-vt/fuzz/Cargo.toml",
+      "crates/rustty-vt/fuzz/fuzz_targets/fuzz_osc.rs",
+      "crates/rustty-vt/fuzz/fuzz_targets/fuzz_parser.rs",
+      "crates/rustty-vt/fuzz/fuzz_targets/fuzz_stream.rs",
+      "crates/rustty-vt/fuzz/fuzz_targets/vt_diff.rs",
+      "crates/rustty-vt/tests/fuzz_corpus_replay.rs"
+     ]
+    },
+    {
+     "bid": "w1-L01-b02",
+     "findings": [
+      {
+       "gid": "W29-B02",
+       "title": "Rustty `print_string` maps invalid UTF-8 validation failure to `OutOfMemory`, while Ghostty propagates the Unicode validator error (`Invalid",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-core/src/surface.rs",
+      "crates/rustty-termio/src/thread.rs",
+      "crates/rustty-vt/src/screen.rs",
+      "crates/rustty-vt/src/terminal.rs"
+     ]
+    },
+    {
+     "bid": "w1-L01-b03",
+     "findings": [
+      {
+       "gid": "F-015",
+       "title": "VT core, principally Linux",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-inspector/src/widgets/pagelist.rs",
+      "crates/rustty-vt/src/compress/page.rs",
+      "crates/rustty-vt/src/pagelist/compress.rs",
+      "crates/rustty-vt/src/pagelist/mod.rs",
+      "crates/rustty-vt/src/pagelist/tests.rs",
+      "crates/rustty-vt/src/search/sliding_window.rs"
+     ]
+    },
+    {
+     "bid": "w1-L01-b04",
+     "findings": [
+      {
+       "gid": "W57-B03",
+       "title": "Implicit hyperlink ID wrap runtime behavior and debug rollback test passed, but release tests ignore the allocation-failure rollback asserti",
+       "fix_category": "build-config"
+      },
+      {
+       "gid": "W59-B04",
+       "title": "`selectionString` map allocation cleanup passes in debug but the release test is ignored and forced release execution fails because the trip",
+       "fix_category": "build-config"
+      }
+     ],
+     "files": [
+      "crates/rustty-util/Cargo.toml",
+      "crates/rustty-util/src/tripwire.rs",
+      "crates/rustty-vt/Cargo.toml",
+      "crates/rustty-vt/src/screen.rs"
+     ]
+    },
+    {
+     "bid": "w1-L01-b05",
+     "findings": [
+      {
+       "gid": "F-017",
+       "title": "Test infrastructure",
+       "fix_category": "test-add"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt/fuzz/Cargo.toml",
+      "crates/rustty-vt/fuzz/fuzz_targets/osc.rs",
+      "crates/rustty-vt/fuzz/fuzz_targets/parser.rs",
+      "crates/rustty-vt/fuzz/fuzz_targets/stream.rs",
+      "crates/rustty-vt/fuzz/fuzz_targets/vt_diff.rs"
+     ]
+    },
+    {
+     "bid": "w1-L01-b06",
+     "findings": [
+      {
+       "gid": "W22-B08-01",
+       "title": "`StringMap.string` uses plain `Vec<u8>` and comments/tests overstate Ghostty's `[:0]const u8` sentinel contract; current regex/link paths pa",
+       "fix_category": "docs"
+      },
+      {
+       "gid": "W24-B01-F1",
+       "title": "Rustty `AutoContext` uses Rust `DefaultHasher` rather than Ghostty seed-0 Wyhash, preserving logical lookups but changing physical hash-map ",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W24-B03-ZST-01",
+       "title": "`removeByPtr` zero-sized-key fallback uses slot 0 even when a true ZST key hashes to another slot at capacity greater than one; Ghostty's na",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W25-B01-API-01",
+       "title": "Rustty omits Ghostty's public VT root-module `TerminalStream`, `Stream`, and first-class `StreamAction` symbols; module-qualified Rustty str",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt/src/hash_map.rs",
+      "crates/rustty-vt/src/lib.rs",
+      "crates/rustty-vt/src/screen.rs",
+      "crates/rustty-vt/src/string_map.rs",
+      "crates/rustty-zigstd/src/lib.rs",
+      "crates/rustty-zigstd/src/wyhash.rs"
+     ]
+    },
+    {
+     "bid": "w1-L01-b07",
+     "findings": [
+      {
+       "gid": "W27-B02-STMODE-001",
+       "title": "Rustty's stream mode `set_mode`/`reset_mode`/`restore_mode` trait arms discard fallible `do_set_mode` errors, so alt-screen mode failures ca",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W27-B04-001",
+       "title": "Rustty emits unbounded XTVERSION callback responses from a `Vec`, while Ghostty's fixed `[288]u8` `bufPrintZ` response can encode at most 28",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W27-B06-HYPERLINK-001",
+       "title": "Rustty drops fallible OSC 8 `start_hyperlink` errors at the stream trait boundary, while Ghostty routes the terminal-owned screen/capacity f",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W28-B03-T01",
+       "title": "Rustty's clipboard null-callback test omits Ghostty's follow-on printable-text assertion after a valid OSC 52 write is ignored because no cl",
+       "fix_category": "test-add"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt/src/stream_terminal.rs",
+      "crates/rustty-vt/src/terminal.rs"
+     ]
+    },
+    {
+     "bid": "w1-L01-b08",
+     "findings": [
+      {
+       "gid": "W29-B03",
+       "title": "Terminal scalar print/cursor normal behavior matched, but independent replay found an extra Rustty allocation during cross-page wide-graphem",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W29-B04",
+       "title": "Rustty Terminal scroll/index routes omit some Ghostty `kitty_images.dirty = true` updates despite live Kitty image storage, but full-screen ",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W29-B05",
+       "title": "Terminal region mutation, erase, attributes, Kitty/Glyph, DECCOLM, and resize mostly matched; independent replay corrected W29-B05-001 to du",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W29-B06",
+       "title": "Rustty does not mark already-created destination-screen Kitty image storage dirty on screen switch, while Ghostty sets `new.kitty_images.dir",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt/src/terminal.rs"
+     ]
+    },
+    {
+     "bid": "w1-L01-b09",
+     "findings": [
+      {
+       "gid": "W43-B01",
+       "title": "Screen dump helpers matched formatter/plain/trim setup, `Content::Selection` construction, top-left/bottom-right defaults, wrapped vs unwrap",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W45-B09",
+       "title": "Hyperlink-dense row moved to a fresh page behaves correctly, but Rustty's committed test omits Ghostty's final active-row exact URI-by-colum",
+       "fix_category": "test-add"
+      },
+      {
+       "gid": "W48-B04",
+       "title": "Resize error rollback behavior passed, but Rustty's rollback test omits saved-cursor `style` and `charset` comparisons that Ghostty covers w",
+       "fix_category": "test-add"
+      },
+      {
+       "gid": "W5-01",
+       "title": "routine VT dispatch adds aborting allocations and loses recoverable OOM",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt/src/dcs.rs",
+      "crates/rustty-vt/src/device_attributes.rs",
+      "crates/rustty-vt/src/parser.rs",
+      "crates/rustty-vt/src/screen.rs",
+      "crates/rustty-vt/src/stream_terminal.rs",
+      "crates/rustty-vt/src/terminal.rs",
+      "crates/rustty-vt/src/tmux/control.rs",
+      "crates/rustty-vt/src/x11_color.rs"
+     ]
+    },
+    {
+     "bid": "w1-L01-b10",
+     "findings": [
+      {
+       "gid": "W6-02",
+       "title": "hyperlink/search constructors advertise recoverable OOM but abort",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W60-B01-001",
+       "title": "FreeBSD/other non-Linux POSIX shared VT page allocator is compiled under broad non-wasm cfgs but defines `MAP_PRIVATE`/`MAP_ANONYMOUS` only ",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W60-PAGE-ALIGN-01",
+       "title": "Public manual page-buffer APIs weaken Ghostty's aligned-buffer contract: release `Page::init_buf(OffsetBuf, Layout)` and debug/release `Page",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W61-B05-001",
+       "title": "Rustty direct page grapheme APIs accept and persist `u32` grapheme tail values outside Ghostty's `u21` domain; normal terminal/parser paths ",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt/src/hyperlink.rs",
+      "crates/rustty-vt/src/page.rs",
+      "crates/rustty-vt/src/page_impl.rs",
+      "crates/rustty-vt/src/page_tests.rs",
+      "crates/rustty-vt/src/screen.rs",
+      "crates/rustty-vt/src/search/sliding_window.rs",
+      "crates/rustty-vt/src/stream_terminal.rs"
+     ]
+    },
+    {
+     "bid": "w1-L01-b11",
+     "findings": [
+      {
+       "gid": "W62-B04-001",
+       "title": "Rustty direct `Cell::init`/`set_content_codepoint` APIs accept out-of-`u21` `u32` values and can leave nonzero high content bits while logic",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W62-B06-001",
+       "title": "Rustty `Mask<..., GROUP_LEN = 0>` group operations compile and return vacuous results, while Ghostty rejects zero-lane vector reductions onc",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt/src/page.rs"
+     ]
+    },
+    {
+     "bid": "w1-L01-b12",
+     "findings": [
+      {
+       "gid": "W7-01",
+       "title": "live key encoding rebuilds Ghostty's compile-time lookup tables on every event",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt/src/input/function_keys.rs",
+      "crates/rustty-vt/src/input/key_encode.rs",
+      "crates/rustty-vt/src/input/kitty.rs"
+     ]
+    },
+    {
+     "bid": "w1-L01-b13",
+     "findings": [
+      {
+       "gid": "W32-B02",
+       "title": "Direct Kitty graphics command parser error classification differs for unsigned negative fields: Rustty maps values such as `i=-1` to `Invali",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt/src/kitty/graphics_command.rs"
+     ]
+    },
+    {
+     "bid": "w1-L01-b14",
+     "findings": [
+      {
+       "gid": "W37-B03",
+       "title": "Rustty explicit no-reflow row-growth `grow()` OOM can return after resized PageList limits remain installed, while Ghostty restores old limi",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt/src/pagelist/resize.rs"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L02",
+   "batches": [
+    {
+     "bid": "w1-L02-b01",
+     "findings": [
+      {
+       "gid": "W35-B07",
+       "title": "Terminal cursor/viewport/resize/modes/data-front valid behavior matched, but invalid raw scroll viewport tags silently return in Rustty whil",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      ".port/phase-2/DEFERRALS.md",
+      "crates/rustty-vt-c/src/terminal.rs"
+     ]
+    },
+    {
+     "bid": "w1-L02-b02",
+     "findings": [
+      {
+       "gid": "F-008",
+       "title": "C ABI",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W12-01",
+       "title": "caller allocator/OOM divergence extends canonical F-008 across five more constructors plus render/selection owned allocation paths",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W36-B06",
+       "title": "Allocator C convenience wrappers use the supplied allocator for normal nonzero calls, but Rustty calls the raw allocator surface with zero-l",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-lib/src/allocator.rs",
+      "crates/rustty-vt-c/src/allocator.rs",
+      "crates/rustty-vt-c/src/lib.rs",
+      "crates/rustty-vt-c/src/render.rs",
+      "crates/rustty-vt-c/src/selection_gesture.rs",
+      "crates/rustty-vt-c/src/terminal.rs",
+      "crates/rustty-vt/src/render.rs"
+     ]
+    },
+    {
+     "bid": "w1-L02-b03",
+     "findings": [
+      {
+       "gid": "W36-B02",
+       "title": "Build-info C module matched for ordinals/output mapping/version packing/tests, but Rustty `release-safe` C build-info reports Debug; SIMD de",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt-c/build.rs",
+      "crates/rustty-vt-c/src/build_info.rs"
+     ]
+    },
+    {
+     "bid": "w1-L02-b04",
+     "findings": [
+      {
+       "gid": "W12-04",
+       "title": "clipboard callback-removal assertions are absent from the mapped Rustty test",
+       "fix_category": "test-add"
+      },
+      {
+       "gid": "W12-05",
+       "title": "public `type_json()` hides scroll-viewport/scrollbar field maps and labels one enum as `i32`",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W16-CABI-01",
+       "title": "first `rustty_type_json()` call grows WASM memory and detaches existing JavaScript views",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W19-B03-CABI-01",
+       "title": "C `default_cursor_style` option accepts the public cursor-style sentinel instead of Ghostty's clean `invalid_value` path for unknown enum va",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt-c/src/terminal.rs",
+      "crates/rustty-vt-c/src/types.rs"
+     ]
+    },
+    {
+     "bid": "w1-L02-b05",
+     "findings": [
+      {
+       "gid": "W33-B02",
+       "title": "Kitty graphics exported-symbol wiring matched for 16 symbols, header reachability, platform gates, and declared selectors; independent repla",
+       "fix_category": "test-add"
+      },
+      {
+       "gid": "W33-B07",
+       "title": "Terminal C integration mostly matched; Rustty truncates overlarge `uint64_t` Kitty image storage limits to `usize` on 32-bit targets, while ",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W34-B02",
+       "title": "Render exported-symbol wiring matched for all 21 symbols, but C-boundary selector handling diverges for multi-get arrays and invalid-selecto",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W34-B03",
+       "title": "Render wrapper front mostly matched, but public `RusttyRenderStateDirty` C enum storage is 4 bytes while Rustty's wrapper uses the internal ",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt-c/src/kitty_graphics.rs",
+      "crates/rustty-vt-c/src/lib.rs",
+      "crates/rustty-vt-c/src/render.rs",
+      "crates/rustty-vt-c/src/sys.rs",
+      "crates/rustty-vt-c/src/terminal.rs"
+     ]
+    },
+    {
+     "bid": "w1-L02-b06",
+     "findings": [
+      {
+       "gid": "W35-B03",
+       "title": "Terminal exported-symbol/header/oracle wiring matched, but invalid raw terminal/selection selector diagnostics do not route through Ghostty'",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W35-B06",
+       "title": "Terminal option ordinals/input behavior and setters matched for normal behavior, but invalid `terminal_set` selector diagnostics bypass the ",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W35-B08",
+       "title": "Terminal getter normal behavior matched, but `terminal_get_multi` selector arrays bypass raw C selector validation before Rust enum material",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W35-B12",
+       "title": "Terminal callback/title/resize tests mostly matched, but Rustty lacks two Ghostty C test assertions: progress callback remove/error/pause pl",
+       "fix_category": "test-add"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt-c/src/lib.rs",
+      "crates/rustty-vt-c/src/sys.rs",
+      "crates/rustty-vt-c/src/terminal.rs",
+      "include/rustty.h"
+     ]
+    },
+    {
+     "bid": "w1-L02-b07",
+     "findings": [
+      {
+       "gid": "W36-B04",
+       "title": "Sys set/log implementation matched for setters, callback reentrancy, and successful chunk counts, but Rustty's C ABI log sink allocates the ",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W36-B07",
+       "title": "Root/lib export wiring for focused build/sys/allocator/type-json/WASM helpers matched, but Rustty lacks Ghostty's C ABI root log hook and th",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W66-BEHAVIOR-RAW-01",
+       "title": "Public VT-C SelectionGesture event behavior table accepts raw out-of-range nested `Behavior` enum fields and returns success, while Ghostty ",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W66-GETMULTI-RAW-01",
+       "title": "Public VT-C `rustty_selection_gesture_get_multi` accepts a typed Rust enum key array, so raw out-of-range C selector storage bypasses the di",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt-c/src/lib.rs",
+      "crates/rustty-vt-c/src/selection_gesture.rs",
+      "crates/rustty-vt-c/src/selection_gesture/tests.rs",
+      "crates/rustty-vt-c/src/sys.rs"
+     ]
+    },
+    {
+     "bid": "w1-L02-b08",
+     "findings": [
+      {
+       "gid": "W80-B02-01",
+       "title": "`rustty_key_event_set_utf8` copies caller bytes into Rust-owned storage, so `rustty_key_event_get_utf8` returns a different pointer and does",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W81-B01",
+       "title": "Key-encoder implementation matched allocation/free, valid option parsing, terminal-derived options, length-only query, success encode bytes,",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W83-B01",
+       "title": "Cell getter implementation matched valid single-get/multi-get behavior, null array handling, optional `out_written`, typed field extraction,",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W84-B01",
+       "title": "Row getter implementation matched valid single-get/multi-get behavior, null array handling, optional `out_written`, typed field extraction, ",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt-c/src/cell.rs",
+      "crates/rustty-vt-c/src/key_encode.rs",
+      "crates/rustty-vt-c/src/key_event.rs",
+      "crates/rustty-vt-c/src/lib.rs",
+      "crates/rustty-vt-c/src/mouse_encode.rs",
+      "crates/rustty-vt-c/src/row.rs",
+      "crates/rustty-vt-c/src/writer.rs"
+     ]
+    },
+    {
+     "bid": "w1-L02-b09",
+     "findings": [
+      {
+       "gid": "W84-B04",
+       "title": "Adversarial C-boundary probe confirmed single `rustty_row_get` rejects raw `999`, valid multi-get works, `.invalid` sentinel returns `invali",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W88-B02-01",
+       "title": "Public small encoder wrappers can leave fewer failure-prefix bytes in too-small non-null caller buffers than Ghostty's fixed-writer path: `r",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W90-B04-01",
+       "title": "`rustty_formatter_terminal_new` validates an invalid non-null selection before allocating its formatter wrapper, so a successful custom allo",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt-c/src/color_scheme.rs",
+      "crates/rustty-vt-c/src/cwrap.rs",
+      "crates/rustty-vt-c/src/focus.rs",
+      "crates/rustty-vt-c/src/formatter.rs",
+      "crates/rustty-vt-c/src/lib.rs",
+      "crates/rustty-vt-c/src/modes.rs",
+      "crates/rustty-vt-c/src/row.rs",
+      "crates/rustty-vt-c/src/size_report.rs",
+      "crates/rustty-vt-c/src/writer.rs"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L03",
+   "batches": [
+    {
+     "bid": "w1-L03-b01",
+     "findings": [
+      {
+       "gid": "W94-B01-01",
+       "title": "Overlong optional `Path` and `RepeatablePath` formatter values succeed in Rustty because it allocates `path.len() + 1`, while Ghostty format",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W95-B02-01",
+       "title": "`ReadableIO.formatEntry` formats overlong `raw:`/`path:` values in Rustty through a growable buffer, while Ghostty builds the intermediate `",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W95-B04-01",
+       "title": "`RepeatableStringMap` formats overlong `key=value` entries in Rustty through a growable buffer, while Ghostty formats each entry through a f",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-cfg-fmt/src/formatter.rs",
+      "crates/rustty-cfg-fmt/src/writer.rs",
+      "crates/rustty-config/src/command.rs",
+      "crates/rustty-config/src/io.rs",
+      "crates/rustty-config/src/path.rs",
+      "crates/rustty-config/src/repeatable_string_map.rs",
+      "crates/rustty-config/src/value_types.rs",
+      "crates/rustty-input/src/binding.rs",
+      "crates/rustty-input/src/key_mods.rs"
+     ]
+    },
+    {
+     "bid": "w1-L03-b02",
+     "findings": [
+      {
+       "gid": "W94-B02-01",
+       "title": "Non-UTF-8 POSIX `XDG_CONFIG_HOME` is discarded before Rustty default config-file discovery because the XDG helper converts non-empty env byt",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-cli/src/ssh_cache/disk_cache.rs",
+      "crates/rustty-config/src/config_struct.rs",
+      "crates/rustty-config/src/edit.rs",
+      "crates/rustty-config/src/file_load.rs",
+      "crates/rustty-config/src/theme.rs",
+      "crates/rustty-crash/src/dir.rs",
+      "crates/rustty-crash/src/sentry.rs",
+      "crates/rustty-os/src/xdg.rs"
+     ]
+    },
+    {
+     "bid": "w1-L03-b03",
+     "findings": [
+      {
+       "gid": "W10-02",
+       "title": "POSIX-only helpers mishandle Windows drive/UNC config and expansion paths plus drive-qualified themes",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W18-B07-PLUS-01",
+       "title": "Kitty color OSC 21 palette key parsing accepts `+1` as palette 1 in Rustty while Ghostty rejects the key via `std.fmt.parseUnsigned(u8, ...,",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W93-B02-01",
+       "title": "`rustty_config_get` returns unsupported for populated optional `Path` config keys `background-image` and `bell-audio-path` even though the p",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W93-B03-02",
+       "title": "Browser config helper error paths call Rustty `eprintln!`, and the emitted `rustty_wasm.wasm` imports no `env.log`, whereas Ghostty's wasm c",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-config/src/c_get.rs",
+      "crates/rustty-config/src/config_struct.rs",
+      "crates/rustty-config/src/file_load.rs",
+      "crates/rustty-config/src/path.rs",
+      "crates/rustty-config/src/theme.rs",
+      "crates/rustty-config/src/value_types.rs",
+      "crates/rustty-config/src/wasm.rs",
+      "crates/rustty-vt-c/src/color.rs",
+      "crates/rustty-vt/src/color.rs",
+      "crates/rustty-vt/src/kitty/color.rs"
+     ]
+    },
+    {
+     "bid": "w1-L03-b04",
+     "findings": [
+      {
+       "gid": "W94-B03-01",
+       "title": "Malformed theme name/path bytes are replaced with U+FFFD in Rustty theme diagnostics via `String::from_utf8_lossy`, while Ghostty `{s}` form",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W95-B03-01",
+       "title": "Escaped surrogate `\\u{D800}` through config `string.parse` is reported as `OutOfMemory` by Rustty's `char::from_u32` mapping, while Ghostty ",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W95-B04-02",
+       "title": "`clipboard-codepoint-map` wrapper formatting accepts overlong string replacements in Rustty through a growable buffer, while Ghostty seriali",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W96-B01-001",
+       "title": "Config `os` conditionals on NetBSD/OpenBSD/DragonFly-style targets cannot match their real OS tag in Rustty because `OsTag::host()` maps eve",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-config/src/conditional.rs",
+      "crates/rustty-config/src/io.rs",
+      "crates/rustty-config/src/string.rs",
+      "crates/rustty-config/src/theme.rs",
+      "crates/rustty-config/src/value_types.rs"
+     ]
+    },
+    {
+     "bid": "w1-L03-b05",
+     "findings": [
+      {
+       "gid": "W97-B04-C1",
+       "title": "Rustty omits Ghostty-style config package root aliases for shared field types such as `BoldColor`, `Command`, `Path`, `FontStyle`, and `Wind",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W98-B02-01",
+       "title": "`background-blur` numeric radius parsing accepts malformed underscore placements such as `0x_10`, `_12`, and `12_`, where Ghostty's `std.fmt",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W98-B04-01",
+       "title": "`Keybinds.formatEntry` accepts overlong table-binding prefixes in Rustty through a growable buffer, while Ghostty formats through a fixed `[",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W99-B01-02",
+       "title": "`clipboard-codepoint-map` replacement codepoints reject Ghostty-accepted `std.fmt.parseInt(u21, ..., 16)` forms such as `+002D` and `00_2D` ",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-config/src/config_struct.rs",
+      "crates/rustty-config/src/lib.rs",
+      "crates/rustty-config/src/value_types.rs",
+      "crates/rustty-input/src/binding.rs"
+     ]
+    },
+    {
+     "bid": "w1-L03-b06",
+     "findings": [
+      {
+       "gid": "W99-B01-03",
+       "title": "`RepeatableCodepointMap.equal` compares font family bytes by content in Rustty, while Ghostty's `std.meta.eql` observes slice pointer identi",
+       "fix_category": "test-add"
+      },
+      {
+       "gid": "W99-B03-01",
+       "title": "`quick-terminal-size` rejects Ghostty-accepted numeric spellings such as `+69px`, `1_0px`, and `1_0%` because Rustty uses stricter Rust inte",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W99-B04-01",
+       "title": "`window-padding-*` rejects Ghostty-accepted leading-plus and underscore decimal spellings such as `+1`, `+1,+2`, `1_0`, `1_0,2`, and `1__0` ",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-config/src/value_types.rs"
+     ]
+    },
+    {
+     "bid": "w1-L03-b07",
+     "findings": [
+      {
+       "gid": "W21-B02-RGB-01",
+       "title": "RGB parser edge cases diverge: Ghostty accepts NaN `rgbi` intensities as black while Rustty rejects them, and Rustty accepts signed hex comp",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vt/src/color.rs"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L04",
+   "batches": [
+    {
+     "bid": "w1-L04-b01",
+     "findings": [
+      {
+       "gid": "F-007",
+       "title": "Default Linux build",
+       "fix_category": "build-config"
+      },
+      {
+       "gid": "F-018",
+       "title": "Linux distribution",
+       "fix_category": "build-config"
+      },
+      {
+       "gid": "W2-01",
+       "title": "promised offline/self-contained source archive lacks Cargo vendor inputs",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W2-03",
+       "title": "terminfo generation contradicts FreeBSD layout and hardcodes Unix tools",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "PACKAGING.md",
+      "crates/rustty-apprt/Cargo.toml",
+      "crates/rustty/Cargo.toml",
+      "xtask/src/dist.rs",
+      "xtask/src/main.rs",
+      "xtask/src/res_linux.rs",
+      "xtask/src/res_terminfo.rs"
+     ]
+    },
+    {
+     "bid": "w1-L04-b02",
+     "findings": [
+      {
+       "gid": "W36-B03",
+       "title": "Sys decode/front ABI matched and callback copy/free is normal-use safe, but combined Rustty Cargo builds can feature-unify app-tier `wuffs` ",
+       "fix_category": "build-config"
+      }
+     ],
+     "files": [
+      ".port/phase-2/DEFERRALS.md",
+      "crates/rustty-vt-c/Cargo.toml",
+      "crates/rustty-vt/src/options.rs",
+      "crates/rustty-vt/src/sys.rs"
+     ]
+    },
+    {
+     "bid": "w1-L04-b03",
+     "findings": [
+      {
+       "gid": "F-006",
+       "title": "Browser/WASM",
+       "fix_category": "build-config"
+      }
+     ],
+     "files": [
+      ".port/tools/build-vt-wasm.sh",
+      ".port/tools/wasm-parity.mjs",
+      "xtask/src/main.rs"
+     ]
+    },
+    {
+     "bid": "w1-L04-b04",
+     "findings": [
+      {
+       "gid": "W12-02",
+       "title": "checked generated verification header is reproducibly stale and both checked/fresh versions alias 72-byte terminal Style to a 4-byte size-re",
+       "fix_category": "build-config"
+      }
+     ],
+     "files": [
+      ".port/tools/gates/check_rustty_vt_headers.sh",
+      "crates/rustty-vt-c/cbindgen.toml",
+      "include/rustty.h",
+      "xtask/src/main.rs"
+     ]
+    },
+    {
+     "bid": "w1-L04-b05",
+     "findings": [
+      {
+       "gid": "W16-TARGET-01",
+       "title": "default non-WASM app/VT-C builds leave `rustty-vt/simd` off while Ghostty defaults terminal SIMD on",
+       "fix_category": "build-config"
+      },
+      {
+       "gid": "W92-B02-01",
+       "title": "Generated implementation header `include/rustty-apprt.h` declares 73 exported functions without defining or applying `RUSTTY_API`, unlike th",
+       "fix_category": "build-config"
+      },
+      {
+       "gid": "W92-B02-02",
+       "title": "Generated implementation header `include/rustty-apprt.h` omits the public config/info/translate/CLI/benchmark tail (`rustty_cli_try_action`,",
+       "fix_category": "build-config"
+      },
+      {
+       "gid": "W92-B02-04",
+       "title": "Generated implementation header `include/rustty-apprt.h` exposes Apple-only display-id, quicklook, and Metal inspector declarations in a non",
+       "fix_category": "build-config"
+      }
+     ],
+     "files": [
+      "crates/rustty-apprt-c/Cargo.toml",
+      "crates/rustty-apprt-c/cbindgen.toml",
+      "crates/rustty-apprt-c/tests/smoke.c",
+      "crates/rustty-apprt-c/tests/smoke.rs",
+      "crates/rustty-core/Cargo.toml",
+      "crates/rustty-vt-c/Cargo.toml",
+      "include/rustty-apprt.h",
+      "xtask/src/main.rs"
+     ]
+    },
+    {
+     "bid": "w1-L04-b06",
+     "findings": [
+      {
+       "gid": "W93-B01-DIAG-01",
+       "title": "Public config C diagnostics can report a nonzero in-range diagnostic count while `rustty_config_get_diagnostic(cfg, 0)` returns the empty de",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-apprt-c/Cargo.toml",
+      "crates/rustty-args/src/diagnostics.rs",
+      "crates/rustty-build-config/Cargo.toml",
+      "crates/rustty-build-config/src/lib.rs",
+      "crates/rustty-config/src/c_api.rs"
+     ]
+    },
+    {
+     "bid": "w1-L04-b07",
+     "findings": [
+      {
+       "gid": "W22-B02-DIAG-01",
+       "title": "Invalid `rustty_surface_mouse_pressure` raw stage prints a stderr diagnostic before returning, while Ghostty silently returns",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W92-B04-02",
+       "title": "`rustty_info_s` / `rustty_build_mode_e` are implemented and publicly declared, but `crates/rustty-apprt-c/tests/abi_layout.rs` still marks t",
+       "fix_category": "test-add"
+      }
+     ],
+     "files": [
+      "crates/rustty-apprt-c/src/lib.rs",
+      "crates/rustty-apprt-c/tests/abi_layout.rs"
+     ]
+    },
+    {
+     "bid": "w1-L04-b08",
+     "findings": [
+      {
+       "gid": "W22-B01-TEST-01",
+       "title": "MouseShape header parity test is self-derived from the descriptor under test and does not actually read the checked-in/generated header, tho",
+       "fix_category": "test-add"
+      }
+     ],
+     "files": [
+      "crates/rustty-lib/src/enum.rs",
+      "crates/rustty-vt/src/mouse.rs"
+     ]
+    },
+    {
+     "bid": "w1-L04-b09",
+     "findings": [
+      {
+       "gid": "W12-03",
+       "title": "public terminal header omits both scrollback page-granularity/accuracy contracts",
+       "fix_category": "docs"
+      }
+     ],
+     "files": [
+      "include/rustty/vt/terminal.h"
+     ]
+    },
+    {
+     "bid": "w1-L04-b10",
+     "findings": [
+      {
+       "gid": "W14-C01",
+       "title": "resource generation does not enforce the declared gettext locale set",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "xtask/src/res_misc.rs",
+      "xtask/src/translations.rs"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L05",
+   "batches": [
+    {
+     "bid": "w1-L05-b01",
+     "findings": [
+      {
+       "gid": "W16-FONT-01",
+       "title": "`rustty_wasm.wasm` retains Atlas exports but omits Ghostty's DeferredFace/WebCanvas face/shaper exports",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      ".port/phase-2/DEFERRALS.md",
+      "crates/rustty-font-shaper/src/deferred_face.rs",
+      "crates/rustty-font-shaper/src/face/web_canvas.rs",
+      "crates/rustty-font-shaper/src/shaper/web_canvas.rs",
+      "crates/rustty-wasm/Cargo.toml",
+      "crates/rustty-wasm/src/lib.rs",
+      "crates/rustty-wasm/tests/artifact_shape.rs"
+     ]
+    },
+    {
+     "bid": "w1-L05-b02",
+     "findings": [
+      {
+       "gid": "W9F-02",
+       "title": "Native font owners on recoverable construction/error paths are dropped without their required manual destructors",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-cli/src/list_fonts.rs",
+      "crates/rustty-font-shaper/src/codepoint_resolver.rs",
+      "crates/rustty-font-shaper/src/collection.rs",
+      "crates/rustty-font-shaper/src/shared_grid_set.rs"
+     ]
+    },
+    {
+     "bid": "w1-L05-b03",
+     "findings": [
+      {
+       "gid": "W15-01",
+       "title": "public Fontconfig carve omits package API and five pinned tests despite claiming package/test completeness",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W15-02",
+       "title": "public FreeType carve is explicitly minimal and omits the pinned package's seven tests",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W15-03",
+       "title": "public HarfBuzz carve is explicitly minimal and omits six shared/native package tests",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W9-03",
+       "title": "Five live native non-macOS font/shaping tests are incorrectly macOS-only",
+       "fix_category": "test-add"
+      }
+     ],
+     "files": [
+      "crates/rustty-font-shaper/src/discovery.rs",
+      "crates/rustty-font-shaper/src/fc.rs",
+      "crates/rustty-font-shaper/src/ft.rs",
+      "crates/rustty-font-shaper/src/hb.rs",
+      "crates/rustty-font-shaper/src/lib.rs",
+      "crates/rustty-font-shaper/src/shaper/harfbuzz_tests.rs",
+      "crates/rustty-font-shaper/src/shared_grid_set.rs",
+      "crates/rustty-font-shaper/testdata/FiraCode-Regular.ttf"
+     ]
+    },
+    {
+     "bid": "w1-L05-b04",
+     "findings": [
+      {
+       "gid": "W9-04",
+       "title": "The live WebCanvas `face_metrics` counterpart is a named zero-assertion test",
+       "fix_category": "test-add"
+      },
+      {
+       "gid": "W9F-01",
+       "title": "Shared-grid and glyph-fallback Fontconfig iterators leak their owned native pattern/font-set handles",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W9R-01",
+       "title": "Unicode 16 emoji classification rejects all seven Unicode 17 default-emoji native fallbacks",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-font-shaper/src/collection.rs",
+      "crates/rustty-font-shaper/src/discovery.rs",
+      "crates/rustty-font-shaper/src/uucode.rs"
+     ]
+    },
+    {
+     "bid": "w1-L05-b05",
+     "findings": [
+      {
+       "gid": "W9F-03",
+       "title": "WebCanvas returns RGBA bytes through an atlas ABI declared BGRA",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W9F-04",
+       "title": "WASM SharedGridSet passes embedded TTF bytes as a CSS font name and silently keeps the fallback font",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-font-shaper/src/face/web_canvas.rs",
+      "crates/rustty-font-shaper/src/shared_grid_set.rs"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L06",
+   "batches": [
+    {
+     "bid": "w1-L06-b01",
+     "findings": [
+      {
+       "gid": "W14-01",
+       "title": "live Linux GTK application-icon resources route pinned Ghostty PNG bytes under Rustty's application identity",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-apprt/assets/images/gnome/1024.png",
+      "crates/rustty-apprt/assets/images/gnome/128.png",
+      "crates/rustty-apprt/assets/images/gnome/16.png",
+      "crates/rustty-apprt/assets/images/gnome/2048.png",
+      "crates/rustty-apprt/assets/images/gnome/256.png",
+      "crates/rustty-apprt/assets/images/gnome/32.png",
+      "crates/rustty-apprt/assets/images/gnome/512.png",
+      "crates/rustty-apprt/assets/images/gnome/64.png",
+      "crates/rustty-apprt/src/gtk/gresource.rs",
+      "crates/rustty-apprt/tests/gtk_assets.rs"
+     ]
+    },
+    {
+     "bid": "w1-L06-b02",
+     "findings": [
+      {
+       "gid": "W10-01",
+       "title": "Native CLI actions leak internal configuration reads to stderr despite the action logging gate",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-apprt/src/lib.rs",
+      "crates/rustty-config/src/config_struct.rs",
+      "crates/rustty-global/src/lib.rs"
+     ]
+    },
+    {
+     "bid": "w1-L06-b03",
+     "findings": [
+      {
+       "gid": "F-009",
+       "title": "Linux GTK",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "F-010",
+       "title": "Linux GTK",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "F-011",
+       "title": "Linux GTK",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "F-019",
+       "title": "Linux GTK",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-apprt/src/gtk/class/application.rs",
+      "crates/rustty-apprt/src/gtk/class/debug_warning.rs",
+      "crates/rustty-apprt/src/gtk/class/surface.rs",
+      "crates/rustty-apprt/tests/gtk_close_confirmation.rs"
+     ]
+    },
+    {
+     "bid": "w1-L06-b04",
+     "findings": [
+      {
+       "gid": "W16-GTK-01",
+       "title": "GTK terminal child environment does not use Ghostty's Flatpak empty-env baseline",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-apprt/src/gtk/class/surface.rs"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L07",
+   "batches": [
+    {
+     "bid": "w1-L07-b01",
+     "findings": [
+      {
+       "gid": "W13A-03",
+       "title": "epoll/io_uring/kqueue completion and termio-message layout/assertion contracts are larger and non-equivalent in Rustty",
+       "fix_category": "docs"
+      }
+     ],
+     "files": [
+      ".port/phase-3/NON_PORTS.md",
+      "crates/rustty-termio/src/message.rs",
+      "crates/rustty-xev/src/epoll.rs",
+      "crates/rustty-xev/src/io_uring.rs",
+      "crates/rustty-xev/src/kqueue.rs"
+     ]
+    },
+    {
+     "bid": "w1-L07-b02",
+     "findings": [
+      {
+       "gid": "W13A-02",
+       "title": "current pinned libxev `queuePWrite` final-content KAT is absent; the gate uses a stale package and does not map `watcher/file.zig`; current ",
+       "fix_category": "test-add"
+      }
+     ],
+     "files": [
+      ".port/tools/gates/check_test_counts.py",
+      "crates/rustty-xev/src/epoll.rs",
+      "crates/rustty-xev/src/io_uring.rs"
+     ]
+    },
+    {
+     "bid": "w1-L07-b03",
+     "findings": [
+      {
+       "gid": "W13A-01",
+       "title": "kqueue timers armed after a blocking callback derive their deadline from stale cached time and can fire immediately",
+       "fix_category": "code-fix"
+      },
+      {
+       "gid": "W4-03",
+       "title": "Linux process watcher omits nonzero/already-reaped assertions",
+       "fix_category": "test-add"
+      },
+      {
+       "gid": "W4-04",
+       "title": "Linux async watcher omits notify-first/coalescing assertions",
+       "fix_category": "test-add"
+      },
+      {
+       "gid": "W4-05",
+       "title": "Linux PTY stream omits direction/direct-write/ordering assertions",
+       "fix_category": "test-add"
+      }
+     ],
+     "files": [
+      "crates/rustty-xev/src/async.rs",
+      "crates/rustty-xev/src/dynamic.rs",
+      "crates/rustty-xev/src/epoll.rs",
+      "crates/rustty-xev/src/io_uring.rs",
+      "crates/rustty-xev/src/kqueue.rs"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L08",
+   "batches": [
+    {
+     "bid": "w1-L08-b01",
+     "findings": [
+      {
+       "gid": "W8-03",
+       "title": "live Linux GPU tests can pass after skipping all live-GL assertions",
+       "fix_category": "test-add"
+      }
+     ],
+     "files": [
+      ".github/workflows/ci.yml",
+      "crates/rustty-renderer/src/generic/linux_impl.rs",
+      "crates/rustty-renderer/src/opengl/gl/sys.rs",
+      "crates/rustty-renderer/src/opengl/gl/test_support.rs",
+      "crates/rustty-renderer/src/opengl/opengl_impl.rs"
+     ]
+    },
+    {
+     "bid": "w1-L08-b02",
+     "findings": [
+      {
+       "gid": "F-013",
+       "title": "Linux",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      ".port/phase-2/DEFERRALS.md",
+      "crates/rustty-renderer/src/generic/linux_impl.rs"
+     ]
+    },
+    {
+     "bid": "w1-L08-b03",
+     "findings": [
+      {
+       "gid": "F-014",
+       "title": "Linux GTK",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-core/src/renderer_seam.rs",
+      "crates/rustty-core/src/surface.rs",
+      "crates/rustty-renderer/src/generic.rs",
+      "crates/rustty-renderer/src/generic/linux_impl.rs"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L09",
+   "batches": [
+    {
+     "bid": "w1-L09-b01",
+     "findings": [
+      {
+       "gid": "W17-B05-NORMAL-01",
+       "title": "vxfw `App.deinit` skips `Tty::deinit()` on normal shutdown/error, unlike libvaxis 0.5.1",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-cli/src/boo.rs",
+      "crates/rustty-vaxis/src/tty.rs",
+      "crates/rustty-vaxis/src/vxfw/app.rs"
+     ]
+    },
+    {
+     "bid": "w1-L09-b02",
+     "findings": [
+      {
+       "gid": "W16-EXPLICIT-01",
+       "title": "`rustty-vaxis` stores panic-recovery TTY state but never installs Ghostty/libvaxis's panic recovery path",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-vaxis/src/lib.rs",
+      "crates/rustty-vaxis/src/tty.rs"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L10",
+   "batches": [
+    {
+     "bid": "w1-L10-b01",
+     "findings": [
+      {
+       "gid": "F-016",
+       "title": "Test infrastructure",
+       "fix_category": "infra"
+      }
+     ],
+     "files": [
+      ".port/phase-0/harness/build_ref_driver.sh",
+      ".port/phase-0/harness/ref_driver/vt_driver.c",
+      ".port/tools/gates/run_differential.sh"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L11",
+   "batches": [
+    {
+     "bid": "w1-L11-b01",
+     "findings": [
+      {
+       "gid": "W11-01",
+       "title": "Nushell `ssh` and `sudo` wrappers omit external-completer delegation",
+       "fix_category": "code-fix"
+      }
+     ],
+     "files": [
+      "crates/rustty-extra/shell-integration/VENDORING.md",
+      "crates/rustty-extra/shell-integration/nushell/vendor/autoload/rustty.nu"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L12",
+   "batches": [
+    {
+     "bid": "w1-L12-b01",
+     "findings": [
+      {
+       "gid": "W15-04",
+       "title": "explicit Linux Sentry/Breakpad feature contract is unavailable and the retained backend is in-process only",
+       "fix_category": "build-config"
+      }
+     ],
+     "files": [
+      "crates-sys/breakpad-sys/ (new crate)",
+      "crates-sys/sentry-sys/Cargo.toml",
+      "crates-sys/sentry-sys/build.rs",
+      "crates/rustty-crash/Cargo.toml",
+      "crates/rustty-crash/src/build_options.rs",
+      "crates/rustty-crash/src/sentry_pkg/mod.rs"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L13",
+   "batches": [
+    {
+     "bid": "w1-L13-b01",
+     "findings": [
+      {
+       "gid": "W4-02",
+       "title": "Linux/FreeBSD teardown abandons live child reap after ten seconds",
+       "fix_category": "docs"
+      }
+     ],
+     "files": [
+      ".port/phase-2/DEFERRALS.md",
+      "crates/rustty-termio/src/exec.rs"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L14",
+   "batches": [
+    {
+     "bid": "w1-L14-b01",
+     "findings": [
+      {
+       "gid": "W13B-02",
+       "title": "current zf defaults `rank` to case-sensitive while Rustty's public old-port default remains case-insensitive",
+       "fix_category": "test-add"
+      }
+     ],
+     "files": [
+      "crates/rustty-zf/src/zf.rs"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L15",
+   "batches": [
+    {
+     "bid": "w1-L15-b01",
+     "findings": [
+      {
+       "gid": "W14-02",
+       "title": "substitute Wuffs `too_big` fixtures do not detect an effective guard widened to 8 GiB",
+       "fix_category": "test-add"
+      }
+     ],
+     "files": [
+      "crates/rustty-wuffs/fixtures/too_big.jpg",
+      "crates/rustty-wuffs/src/jpeg.rs",
+      "crates/rustty-wuffs/src/png.rs",
+      "crates/rustty-wuffs/src/test_fixtures.rs"
+     ]
+    }
+   ]
+  },
+  {
+   "lane": "w1-L16",
+   "batches": [
+    {
+     "bid": "w1-L16-b01",
+     "findings": [
+      {
+       "gid": "W9-02",
+       "title": "Sprite and glyf visual KATs omit Ghostty's encoded-PNG integrity assertion",
+       "fix_category": "test-add"
+      }
+     ],
+     "files": [
+      "crates/rustty-font/res/ (36 sprite reference PNGs U+*.png)",
+      "crates/rustty-font/res/glyf_rasterize.png",
+      "crates/rustty-font/src/glyf_rasterize/glyf_rasterize_png_test.rs",
+      "crates/rustty-font/src/sprite/face.rs"
+     ]
+    }
+   ]
+  }
+ ]
+}

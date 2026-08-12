@@ -2,7 +2,7 @@
 //!
 //! PORTS: Zig stdlib types AS THE PORT USES THEM — std.heap.ArenaAllocator,
 //! std.heap.MemoryPool / MemoryPoolAligned, std.array_hash_map.AutoArrayHashMap,
-//! std.Thread.Mutex.
+//! std.Thread.Mutex, std.hash.Wyhash.
 //!
 //! PORT STATUS: done (infra; Zig stdlib equivalents; not in the 3234 contract)
 //!
@@ -22,6 +22,10 @@
 //!     (CORE_BLUEPRINT §3; renderer `State.mutex`); and `std.Thread.Semaphore`,
 //!     the counting semaphore `generic.zig`'s `SwapChain` uses for triple-buffer
 //!     GPU-frame backpressure.
+//!   * wyhash — `std.hash.Wyhash`, the hash `src/terminal/hash_map.zig`'s
+//!     `AutoContext` uses (`Wyhash.hash(0, asBytes(&key))`). Bit-exact, because
+//!     it decides the physical slot/fingerprint layout inside a page's backing
+//!     memory and therefore the compressed page bytes.
 //!
 //! Backing memory is the Rust system allocator (`std::alloc`), the faithful map
 //! of Zig's `gpa`/`page_allocator`. This crate is unsafe-heavy; its UB/leak gate
@@ -34,6 +38,7 @@ pub mod arena_allocator;
 pub mod array_hash_map;
 pub mod memory_pool;
 pub mod thread;
+pub mod wyhash;
 
 // TEST-ONLY leak-counting allocator (scoped faithful equivalent of Zig's
 // `std.testing.allocator`). Compiled under `cfg(test)` for this crate's own unit

@@ -11,6 +11,11 @@ run/build dependency on the ghostty checkout** (R3 self-contained).
 - Initially copied byte-for-byte (R1 fidelity), then rebranded in full (see
   below). If re-vendoring from a newer ghostty checkout, re-apply the same
   rename pass rather than reverting to the raw upstream bytes.
+- Backport (W11-01): the `@complete external` attributes on the Nushell
+  `ssh`/`sudo` wrappers in `nushell/vendor/autoload/rustty.nu` were added
+  upstream after the `4749c4e9` copy (ghostty `7fa43764`, present at the
+  audit pin `6ad1fe7d`) and backported here to restore external-completer
+  delegation parity.
 
 ## Rebranded identifiers (Task 13 — R2 product identity)
 

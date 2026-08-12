@@ -152,6 +152,31 @@ fn rank_library_interface() {
     assert!(rank_token(b"a", b"", RankTokenOptions::default()).is_none());
 }
 
+// PORT NOTE (W13B-02 / NON_PORTS.md §G2): zf is deliberately pinned at 0.10.3,
+// whose `RankOptions.to_lower` defaults to `true` ⇒ the public `rank` default is
+// case-INsensitive (the HAYSTACK is lowered; tokens are never lowered, so
+// case-insensitive matching means lowercase tokens against any-case strings).
+// zf 0.11.0 (the Ghostty oracle pin's version) renames the field to
+// `case_sensitive` with default `true` — the OPPOSITE polarity — and its
+// "rank library interface" test binds that default (zf-0.11.0 src/zf/zf.zig:
+// 66-68: `rank("abcdefg", &.{ "a", "B" }, .{}) == null` and
+// `rank("aBcdefg", &.{ "a", "B" }, .{}) != null`). This test pins the 0.10.3
+// default so it cannot be silently flipped; when the G2 dependency bump lands,
+// these assertions must be CONSCIOUSLY inverted to match zf 0.11.0's.
+#[test]
+fn rank_options_default_is_case_insensitive() {
+    // Lowercase tokens match a mixed-case haystack under the default
+    // (`to_lower = true` lowers the haystack byte before comparing). Under
+    // zf 0.11.0's case-sensitive default both of these would be `is_none()`
+    // — a silent default flip fails here.
+    assert!(rank(b"aBcdefg", &[b"a", b"b"], RankOptions::default()).is_some());
+    assert!(rank(b"ABCDEFG", &[b"abc"], RankOptions::default()).is_some());
+    // An UPPERCASE token does not match its lowered haystack byte — the exact
+    // input pair zf 0.11.0's test binds the other way (`!= null`); under a
+    // flipped (case-sensitive) default this would be `is_some()`.
+    assert!(rank(b"aBcdefg", &[b"a", b"B"], RankOptions::default()).is_none());
+}
+
 // Maybe all that needs to be done is to sort the highlight integers? That would probably save some work in implementation
 // Or maybe could sort and then make ranges out of the pairs? Return a list of ranges?
 // for the Zig api that could be reasonable... but the C api maybe not

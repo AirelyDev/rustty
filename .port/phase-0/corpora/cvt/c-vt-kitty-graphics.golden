@@ -3,8 +3,9 @@ Sending Kitty graphics PNG image:
 PNG decode calls: 1
 
 Kitty graphics storage is available.
+Storage generation: 2
   placement #1: image_id=2147483647 placement_id=0 virtual=false z=0
-    image: number=0 size=1x1 format=1 data_len=4
+    image: number=0 size=1x1 format=1 data_len=4 generation=1
     rendered pixel size: 1x1
     grid size: 1 cols x 1 rows
 Total placements: 1

@@ -2334,23 +2334,42 @@ impl Surface {
         }
     }
 
-    /// PORTS: `surface.zig:1592-1641` `defaultTermioEnv`. The default environment
-    /// for the surface's termio subprocess: the inherited process env with the
-    /// language override applied and the GTK / desktop-activation vars stripped so
-    /// they don't leak to the child.
+    /// The baseline environment `defaultTermioEnv` starts from
+    /// (`surface.zig:1596-1599`, oracle `b988efcfe`): under Flatpak the child env
+    /// starts EMPTY (`std.process.Environ.Map.init(alloc)`) so the sandbox's own
+    /// environment is not leaked to the host command; otherwise it is the
+    /// inherited process env (`global.environMap()`).
     ///
-    /// PORT NOTE (deferred): the snap-path filtering (`:1621-1626`, comptime
+    /// Extracted with the predicate as an argument so it is testable without a
+    /// live Flatpak sandbox.
+    #[must_use]
+    fn termio_env_baseline(is_flatpak: bool) -> rustty_global::EnvMap {
+        if is_flatpak {
+            rustty_global::EnvMap::default()
+        } else {
+            // PORT NOTE (P3-W7 T4): `internal_os.getEnvMap(alloc)` ->
+            // `global.environMap()` (`src/os/env.zig` was DELETED by `e8525c0fd`).
+            rustty_global::environ_map()
+        }
+    }
+
+    /// PORTS: `surface.zig:1593-1645` `defaultTermioEnv`. The default environment
+    /// for the surface's termio subprocess: the Flatpak-aware baseline env
+    /// (`:1596-1599`) with the language override applied and the GTK /
+    /// desktop-activation vars stripped so they don't leak to the child.
+    ///
+    /// PORT NOTE (deferred): the snap-path filtering (`:1625-1630`, comptime
     /// `build_config.snap` — false in this build) lands with its own tier. The
     /// winproto `addSubprocessEnv` hook and the quick-terminal env var
-    /// (`:1629-1638`) ARE ported below.
+    /// (`:1636-1642`) ARE ported below.
     #[must_use]
     pub fn default_termio_env(&self) -> rustty_global::EnvMap {
         let app = Application::default();
-        // PORT NOTE (P3-W7 T4): `internal_os.getEnvMap(alloc)` -> `global.environMap()`
-        // (`src/os/env.zig` was DELETED by `e8525c0fd`).
-        let mut env = rustty_global::environ_map();
+        // `var env = if (internal_os.isFlatpak()) std.process.Environ.Map.init(alloc)
+        // else try global.environMap();` (`:1596-1599`).
+        let mut env = Self::termio_env_baseline(rustty_os::flatpak::isFlatpak());
 
-        // Language override (`:1598-1602`).
+        // Language override (`:1602-1606`).
         match app.saved_language() {
             Some(language) => {
                 env.put(b"LANG", language.as_bytes());
@@ -2361,7 +2380,7 @@ impl Surface {
         }
 
         // Don't leak GTK debug / desktop-activation vars to children
-        // (`:1604-1617`).
+        // (`:1608-1621`).
         for key in [
             b"GDK_DEBUG".as_slice(),
             b"GDK_DISABLE",
@@ -2379,7 +2398,7 @@ impl Surface {
 
         // `if (ext.getAncestor(Window, self.as(gtk.Widget))) |window| { try
         // window.winproto().addSubprocessEnv(&env); if (window.isQuickTerminal())
-        // try env.put("GHOSTTY_QUICK_TERMINAL", "1"); }` (`surface.zig:1629-1638`).
+        // try env.put("GHOSTTY_QUICK_TERMINAL", "1"); }` (`surface.zig:1636-1642`).
         //
         // The reference's own comment calls this a hack that ties the Surface to the
         // Window class, and says the right fix is a signal whose handler mutates the
@@ -4258,6 +4277,35 @@ mod tests {
         ));
     }
 
+    /// PROVING TEST (W16-GTK-01): the `defaultTermioEnv` baseline is
+    /// Flatpak-aware (`surface.zig:1596-1599`, oracle `b988efcfe`). Under
+    /// Flatpak the child env starts EMPTY; otherwise it is the inherited
+    /// process env. Before the fix the baseline was unconditionally
+    /// `environ_map()`, so the `is_flatpak = true` arm below failed (the
+    /// sandbox env leaked to every child).
+    ///
+    /// Headless: no widget, no display, no live Flatpak sandbox — the
+    /// predicate is an argument (gate `G-GTKINIT`).
+    #[test]
+    fn termio_env_baseline_is_flatpak_aware() {
+        let host = Surface::termio_env_baseline(false);
+        // The inherited env is non-empty under any test runner (PATH is always
+        // set), which is what makes the Flatpak arm below a real assertion and
+        // not a vacuous one.
+        assert_eq!(host, rustty_global::environ_map());
+        assert!(
+            !host.is_empty(),
+            "off Flatpak the baseline must be the inherited process env",
+        );
+
+        let flatpak = Surface::termio_env_baseline(true);
+        assert!(
+            flatpak.is_empty(),
+            "under Flatpak the baseline env must be empty, got {} entries",
+            flatpak.len()
+        );
+    }
+
     /// The `#[template]` literal must equal the const-folded resolver
     /// (`surface.zig:3600-3604`), so the two never drift.
     #[test]
@@ -4306,6 +4354,46 @@ mod tests {
         // `gl_area` is a GLArea (the render context source).
         let gl_area: &gtk4::GLArea = &imp.gl_area;
         assert_eq!(gl_area.type_(), gtk4::GLArea::static_type());
+    }
+
+    /// F-011 KAT (`surface.zig:1602-1606`): the default termio env keeps the
+    /// launch-time `LANG` reported by `Application::saved_language`
+    /// (`application.zig:475-478`) and removes `LANG` only when it was absent at
+    /// launch. Against the pre-fix hardcoded-`None` accessor the `Some` arm is
+    /// unreachable — every child env lost `LANG` — and this fails.
+    #[test]
+    #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
+    fn default_termio_env_keeps_launch_lang() {
+        use rustty_global::EnvMapExt as _;
+
+        if gtk4::init().is_err() {
+            return;
+        }
+        let _ = libadwaita::init();
+        crate::gtk::register_resources();
+
+        let app = crate::gtk::class::application::Application::build_default_for_test();
+        let surface = Surface::new(SurfaceOverrides::default());
+
+        // `LANG` captured at launch → pinned into the child env.
+        app.imp()
+            .saved_language
+            .replace(Some(std::ffi::CString::new("de_DE.UTF-8").unwrap()));
+        let env = surface.default_termio_env();
+        assert_eq!(
+            env.getv(b"LANG"),
+            Some(b"de_DE.UTF-8".as_slice()),
+            "the launch-time LANG is kept in the default child env"
+        );
+
+        // `LANG` absent at launch → removed from the child env.
+        app.imp().saved_language.replace(None);
+        let env = surface.default_termio_env();
+        assert_eq!(
+            env.getv(b"LANG"),
+            None,
+            "LANG absent at launch is removed from the default child env"
+        );
     }
 
     /// PORTS: `surface.zig:4122-4127` `test "computeFraction"`. Display-free.

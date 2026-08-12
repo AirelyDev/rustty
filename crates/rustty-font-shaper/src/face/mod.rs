@@ -158,6 +158,62 @@ pub const FREETYPE_LOAD_FLAGS_DEFAULT: FreetypeLoadFlags = FreetypeLoadFlags { _
 #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
 pub const FREETYPE_LOAD_FLAGS_DEFAULT: FreetypeLoadFlags = freetype::FreetypeLoadFlags::DEFAULT;
 
+/// Test-only instrumentation proving the manual-destructor discipline on the
+/// recoverable construction/error paths (W9F-02). The backend `Face` types own
+/// raw native handles (HarfBuzz font; FT face/mutex on FreeType) that `Drop`
+/// does NOT free — teardown must go through `deinit`. These thread-local probes
+/// let unit tests assert that an error path actually ran `deinit` on a moved
+/// face it refused ownership of (thread-local so parallel tests don't observe
+/// each other's faces). Not part of the reference (Zig tests rely on
+/// `std.testing.allocator` leak detection instead, which has no Rust analog for
+/// non-allocator native handles).
+#[cfg(test)]
+pub(crate) mod test_probe {
+    use core::cell::Cell;
+
+    thread_local! {
+        /// Bumped by every backend `Face::deinit` on this thread.
+        static FACE_DEINITS: Cell<usize> = const { Cell::new(0) };
+        /// Fail-point for the backend `Face::set_size`: `None` = disarmed;
+        /// `Some(n)` = the (n+1)-th `set_size` call on this thread fails.
+        static FAIL_SET_SIZE: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    /// Number of `Face::deinit` calls seen on this thread.
+    pub fn face_deinits() -> usize {
+        FACE_DEINITS.with(|c| c.get())
+    }
+
+    /// Called by the backend `Face::deinit` impls.
+    pub fn note_face_deinit() {
+        FACE_DEINITS.with(|c| c.set(c.get() + 1));
+    }
+
+    /// Arm the `set_size` fail-point: the call after `after` successful
+    /// countdowns fails (0 = the very next call fails).
+    pub fn arm_set_size_failpoint(after: usize) {
+        FAIL_SET_SIZE.with(|c| c.set(Some(after)));
+    }
+
+    /// Disarm the `set_size` fail-point.
+    pub fn disarm_set_size_failpoint() {
+        FAIL_SET_SIZE.with(|c| c.set(None));
+    }
+
+    /// Called at the top of the backend `Face::set_size` impls; counts down and
+    /// reports whether this call must fail.
+    pub fn set_size_failpoint_should_fail() -> bool {
+        FAIL_SET_SIZE.with(|c| match c.get() {
+            None => false,
+            Some(0) => true,
+            Some(n) => {
+                c.set(Some(n - 1));
+                false
+            }
+        })
+    }
+}
+
 /// Options for initializing a font face.
 // pub const Options = struct {
 //     size: DesiredSize,

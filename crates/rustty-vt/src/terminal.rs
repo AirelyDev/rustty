@@ -666,6 +666,27 @@ impl From<OutOfMemory> for ResizeError {
     }
 }
 
+// PORT NOTE: the reference `printString` has an inferred error set: the
+// `std.unicode.Utf8View.init` validation propagates `error.InvalidUtf8`
+// while the print/linefeed paths propagate `Allocator.Error` (OutOfMemory).
+// This enum names that inferred set. `Screen.testWriteString` shares it
+// (same `try Utf8View.init` + allocation error surface).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrintStringError {
+    /// Printing requires allocation (Zig `Allocator.Error`).
+    OutOfMemory,
+
+    /// The input was not valid UTF-8 (Zig `error.InvalidUtf8` from
+    /// `std.unicode.Utf8View.init`).
+    InvalidUtf8,
+}
+
+impl From<OutOfMemory> for PrintStringError {
+    fn from(_: OutOfMemory) -> PrintStringError {
+        PrintStringError::OutOfMemory
+    }
+}
+
 /// Modal screen changes. These map to the literal terminal
 /// modes to enable or disable alternate screen modes. They each
 /// have subtle behaviors so we define them as an enum here.
@@ -1147,14 +1168,14 @@ impl Terminal {
     }
 
     /// Print UTF-8 encoded string to the terminal.
-    pub fn print_string(&mut self, str: &[u8]) -> Result<(), OutOfMemory> {
+    pub fn print_string(&mut self, str: &[u8]) -> Result<(), PrintStringError> {
         // const view = try std.unicode.Utf8View.init(str);
         // var it = view.iterator();
         // while (it.nextCodepoint()) |cp| { ... }
         // PORT NOTE: `std.unicode.Utf8View.init` validates UTF-8 then iterates
-        // codepoints; an invalid sequence is an error. We decode via
+        // codepoints; an invalid sequence is `error.InvalidUtf8`. We decode via
         // `str::from_utf8` (the same validation) and iterate `chars()`.
-        let view = core::str::from_utf8(str).map_err(|_| OutOfMemory)?;
+        let view = core::str::from_utf8(str).map_err(|_| PrintStringError::InvalidUtf8)?;
         for cp in view.chars() {
             match cp {
                 '\n' => {
@@ -2100,14 +2121,32 @@ impl Terminal {
                                     } else {
                                         let old_page: *mut Page =
                                             unsafe { crate::pagelist::Node::page(old_pin.node) };
-                                        let cps =
-                                            unsafe { (*old_page).lookup_grapheme(old_rac.cell) }
-                                                .unwrap();
-                                        // PORT NOTE: `appendGrapheme` mutates the
-                                        // page; collect the codepoints first so we
-                                        // don't alias the borrow across the call.
-                                        let cps: Vec<u21> = cps.to_vec();
-                                        for cp in cps {
+                                        // PORT NOTE: the reference iterates the
+                                        // old page's grapheme slice in place. Rust
+                                        // cannot hold that borrow across
+                                        // `append_grapheme` (which takes
+                                        // `&mut Screen`), so we keep it as a raw
+                                        // ptr+len (the port's raw-pointer doctrine)
+                                        // rather than copying it into a `Vec`: a
+                                        // copy would add a Rust-only allocation
+                                        // whose failure ABORTS instead of
+                                        // propagating as `OutOfMemory`. This is
+                                        // sound for exactly the reason the
+                                        // reference's in-place iteration is: this
+                                        // arm requires `old_pin.node !=
+                                        // new_pin.node`, and `Screen::append_grapheme`
+                                        // only mutates/reallocates the CURSOR's
+                                        // node, so the old page (a separate
+                                        // allocation) is untouched across the loop.
+                                        let (cps_ptr, cps_len): (*const u21, usize) = {
+                                            let cps = unsafe {
+                                                (*old_page).lookup_grapheme(old_rac.cell)
+                                            }
+                                            .unwrap();
+                                            (cps.as_ptr(), cps.len())
+                                        };
+                                        for i in 0..cps_len {
+                                            let cp: u21 = unsafe { *cps_ptr.add(i) };
                                             self.active_mut()
                                                 .append_grapheme(new_rac.cell, cp)
                                                 .map_err(|_| OutOfMemory)?;
@@ -3433,9 +3472,12 @@ impl Terminal {
             //     // Scrolling dirties the images because it updates their placements pins.
             //     screen.kitty_images.dirty = true;
             // }
-            // PORT NOTE (vt-12 deferral): Kitty graphics `ImageStorage` is
-            // deferred, so the `kitty_images.dirty = true` flag set under
-            // `if (comptime build_options.kitty_graphics)` is omitted.
+            if crate::options::KITTY_GRAPHICS {
+                // Scrolling dirties the images because it updates their placements pins.
+                // SAFETY: `screen` is the active screen's stable heap pointer,
+                // owned by `self.screens`; we hold `&mut self`.
+                unsafe { (*screen).kitty_images.dirty = true };
+            }
 
             // If our scrolling region is at the top, we create scrollback,
             // but only if our screen retains scrollback. If our screen
@@ -3778,10 +3820,11 @@ impl Terminal {
             // if (comptime build_options.kitty_graphics) {
             //     self.screens.active.kitty_images.dirty = true;
             // }
-            // PORT NOTE (vt-12 deferral): Kitty graphics `ImageStorage` is
-            // deferred, so the `kitty_images.dirty = true` flag set under
-            // `if (comptime build_options.kitty_graphics)` is omitted (matches
-            // the other Kitty-graphics seam deferrals in this file).
+            if crate::options::KITTY_GRAPHICS {
+                // SAFETY: `self.screens.active` is a stable heap pointer owned
+                // by `self.screens`; we hold `&mut self`.
+                unsafe { (*self.screens.active).kitty_images.dirty = true };
+            }
 
             // Clamp count to the scroll region height.
             // const region_height = self.scrolling_region.bottom + 1;
@@ -4093,7 +4136,11 @@ impl Terminal {
         //     // Scrolling dirties the images because it updates their placements pins.
         //     self.screens.active.kitty_images.dirty = true;
         // }
-        // PORT NOTE (vt-12 deferral): Kitty graphics `kitty_images.dirty` is omitted.
+        if crate::options::KITTY_GRAPHICS {
+            // SAFETY: `self.screens.active` is a stable heap pointer owned by
+            // `self.screens`; we hold `&mut self`.
+            unsafe { (*self.screens.active).kitty_images.dirty = true };
+        }
 
         // At the end we need to return the cursor to the row it started on.
         // const start_y = self.screens.active.cursor.y;
@@ -4342,7 +4389,11 @@ impl Terminal {
         //     // Scrolling dirties the images because it updates their placements pins.
         //     self.screens.active.kitty_images.dirty = true;
         // }
-        // PORT NOTE (vt-12 deferral): Kitty graphics `kitty_images.dirty` is omitted.
+        if crate::options::KITTY_GRAPHICS {
+            // SAFETY: `self.screens.active` is a stable heap pointer owned by
+            // `self.screens`; we hold `&mut self`.
+            unsafe { (*self.screens.active).kitty_images.dirty = true };
+        }
 
         // At the end we need to return the cursor to the row it started on.
         // const start_y = self.screens.active.cursor.y;
@@ -4917,6 +4968,27 @@ impl Terminal {
             .clear_unprotected_cells(page, row, cells_slice);
     }
 
+    /// Delete every Kitty graphics image and placement on the active screen
+    /// (the reference's `kitty_images.delete(.., .{ .all = true })`).
+    ///
+    /// PORT NOTE: the reference writes this inline as
+    /// `self.screens.active.kitty_images.delete(self.screens.active.alloc, self, .{ .all = true })`,
+    /// which aliases the storage field and the whole terminal at once. Rust
+    /// cannot, so — exactly as `kitty::graphics_exec::delete` and
+    /// `set_kitty_graphics_size_limit` already do — the storage is MOVED out of
+    /// the screen, `delete` runs against the borrowed terminal, and the storage
+    /// is moved back. `ImageStorage::delete` only reaches the active screen
+    /// itself through `t` (never its `kitty_images` slot), so the
+    /// temporarily-defaulted slot is never observed.
+    fn delete_active_kitty_images(&mut self) {
+        // SAFETY: `self.screens.active` is a stable heap pointer owned by
+        // `self.screens`; we hold `&mut self`, so no other alias exists.
+        let alloc = unsafe { (*self.screens.active).alloc };
+        let mut storage = core::mem::take(unsafe { &mut (*self.screens.active).kitty_images });
+        storage.delete(alloc, self, kitty::graphics_command::Delete::All(true));
+        unsafe { (*self.screens.active).kitty_images = storage };
+    }
+
     /// Erase the display.
     pub fn erase_display(&mut self, mode: csi::EraseDisplay, protected_req: bool) {
         // We respect protected attributes if explicitly requested (probably
@@ -4938,11 +5010,6 @@ impl Terminal {
                 // Unsets pending wrap state
                 unsafe { (*self.screens.active).cursor.pending_wrap = false };
 
-                // PORT NOTE: the reference clears Kitty graphics state here inside
-                // `if (comptime build_options.kitty_graphics)`. Kitty graphics
-                // `ImageStorage` is DEFERRED to vt-12 so we omit the
-                // `kitty_images.delete` call (matching `scroll_clear`/`clear_rows`
-                // which likewise defer the Kitty graphics seam).
                 // if (comptime build_options.kitty_graphics) {
                 //     // Clear all Kitty graphics state for this screen
                 //     self.screens.active.kitty_images.delete(
@@ -4951,6 +5018,10 @@ impl Terminal {
                 //         .{ .all = true },
                 //     );
                 // }
+                if crate::options::KITTY_GRAPHICS {
+                    // Clear all Kitty graphics state for this screen
+                    self.delete_active_kitty_images();
+                }
             }
 
             csi::EraseDisplay::Complete => {
@@ -5023,10 +5094,6 @@ impl Terminal {
                 // Unsets pending wrap state
                 unsafe { (*self.screens.active).cursor.pending_wrap = false };
 
-                // PORT NOTE: the reference clears Kitty graphics state here inside
-                // `if (comptime build_options.kitty_graphics)`. Kitty graphics
-                // `ImageStorage` is DEFERRED to vt-12; omitted here (see the
-                // `scroll_complete` note above).
                 // if (comptime build_options.kitty_graphics) {
                 //     // Clear all Kitty graphics state for this screen
                 //     self.screens.active.kitty_images.delete(
@@ -5035,6 +5102,10 @@ impl Terminal {
                 //         .{ .all = true },
                 //     );
                 // }
+                if crate::options::KITTY_GRAPHICS {
+                    // Clear all Kitty graphics state for this screen
+                    self.delete_active_kitty_images();
+                }
 
                 // Cleared screen dirty bit
                 self.flags.dirty.clear = true;
@@ -6129,8 +6200,18 @@ impl Terminal {
         //     // the screen only tracks the terminal grid, not the images).
         //     new.kitty_images.dirty = true;
         // }
-        // PORT NOTE (vt-12 deferral): Kitty graphics is the disabled case, so
-        // the `kitty_images.dirty = true` set is omitted.
+        // PORT NOTE (WS8 T16, same correction as the storage-limit inheritance
+        // above): Kitty graphics IS enabled in rustty
+        // (`options::KITTY_GRAPHICS`), so this set is NOT the disabled case. It
+        // matters for re-entry into an ALREADY-CREATED screen (the primary
+        // always exists) whose `dirty` a renderer has since cleared: without it
+        // the destination screen's images never redraw, because
+        // `flags.dirty.clear` below only tracks the terminal grid.
+        if crate::options::KITTY_GRAPHICS {
+            // SAFETY: `new` is a stable heap pointer owned by `self.screens`
+            // (either an existing screen or the one just created above).
+            unsafe { (*new).kitty_images.dirty = true };
+        }
 
         // Mark our terminal as dirty to redraw the grid.
         // self.flags.dirty.clear = true;
@@ -6284,19 +6365,27 @@ impl Terminal {
     /// encoded as "\n". This omits any formatting such as fg/bg.
     ///
     /// The caller must free the string.
+    // PORT NOTE: the reference's inferred error set here also carries
+    // `error.UnknownPoint` from `dumpStringAlloc`, but that arm is unreachable
+    // for a `.viewport` point (the viewport tag always resolves a bottom-right),
+    // so these keep the `OutOfMemory`-only skeleton signature their callers
+    // (e.g. rustty-core surface.rs) expect and fold the impossible variant in.
     pub fn plain_string(&mut self, alloc: Allocator) -> Result<Vec<u8>, OutOfMemory> {
         // return try self.screens.active.dumpStringAlloc(alloc, .{ .viewport = .{} });
         self.active_mut()
             .dump_string_alloc(alloc, point::Point::Viewport(point::Coordinate::default()))
+            .map_err(|_| OutOfMemory)
     }
 
     /// Same as plainString, but respects row wrap state when building the string.
     pub fn plain_string_unwrapped(&mut self, alloc: Allocator) -> Result<Vec<u8>, OutOfMemory> {
         // return try self.screens.active.dumpStringAllocUnwrapped(alloc, .{ .viewport = .{} });
-        self.active_mut().dump_string_alloc_unwrapped(
-            alloc,
-            point::Point::Viewport(point::Coordinate::default()),
-        )
+        self.active_mut()
+            .dump_string_alloc_unwrapped(
+                alloc,
+                point::Point::Viewport(point::Coordinate::default()),
+            )
+            .map_err(|_| OutOfMemory)
     }
 
     /// Full reset.
@@ -8822,6 +8911,35 @@ mod tests {
                 unsafe { (*list_cell.row).semantic_prompt() },
                 pagepkg::SemanticPrompt::PromptContinuation
             );
+        }
+
+        t.deinit(Global);
+    }
+
+    // (no reference test) PORT-ADDITIVE proving test (W29-B02): invalid UTF-8
+    // must surface as `PrintStringError::InvalidUtf8` — the Zig
+    // `try std.unicode.Utf8View.init` error — not `OutOfMemory`, and must
+    // print nothing (validation happens before any codepoint is printed).
+    #[test]
+    fn terminal_print_string_invalid_utf8() {
+        let mut t = Terminal::init(Global, opts(20, 5)).unwrap();
+
+        assert_eq!(
+            t.print_string(b"foo\xFFbar"),
+            Err(PrintStringError::InvalidUtf8)
+        );
+
+        // Nothing was printed: validation fails before iteration begins.
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "".as_bytes());
+        }
+
+        // Valid input still prints (regression arm).
+        t.print_string(b"hello").unwrap();
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "hello".as_bytes());
         }
 
         t.deinit(Global);
@@ -20374,6 +20492,379 @@ mod tests {
 
         let str = t.plain_string(Global).unwrap();
         assert_eq!(b"a\xE2\x80\x8B\xCC\x81".as_slice(), str.as_slice());
+
+        t.deinit(Global);
+    }
+
+    // =========================================================================
+    // Kitty graphics state on the scroll / erase-display / screen-switch routes.
+    //
+    // PORT NOTE: NOT ports of reference `test {}` blocks — the reference has no
+    // tests for these writes. They are the parity gate for the
+    // `kitty_images.dirty = true` sets in `index` / `scroll_up` / `insert_lines`
+    // / `delete_lines` / `switch_screen` (Terminal.zig:2264, 2471, 2720, 2886,
+    // 4509) and for the `kitty_images.delete(.{ .all = true })` calls in
+    // `erase_display` (Terminal.zig:3329-3337 and 3387-3397). All of those were
+    // omitted behind a stale "vt-12 deferral" PORT NOTE even though Kitty
+    // graphics is ENABLED (`options::KITTY_GRAPHICS`) and `ImageStorage` is
+    // live. Every case below is one the pre-fix tree got wrong: the routes are
+    // chosen so the flag can NOT come from the `Screen`-level helpers
+    // (`cursor_down_scroll` / `cursor_scroll_above` / `scroll`), i.e. they are
+    // the region / margin routes, not the full-screen scrollback ones.
+    // =========================================================================
+
+    fn kitty_dirty(t: &Terminal) -> bool {
+        // SAFETY: `screens.active` is a stable heap pointer owned by `screens`.
+        unsafe { (*t.screens.active).kitty_images.dirty }
+    }
+
+    /// Clear the `dirty` flag on EVERY screen, which is what a renderer does
+    /// once it has drawn the images.
+    fn clear_kitty_dirty(t: &mut Terminal) {
+        for slot in t.screens.all.iter() {
+            if let Some(s) = *slot {
+                // SAFETY: stable heap pointers owned by `screens`.
+                unsafe { (*s).kitty_images.dirty = false };
+            }
+        }
+    }
+
+    // Terminal.zig:2264 — index() inside a top/bottom scrolling region.
+    #[test]
+    fn terminal_kitty_dirty_index_top_bottom_region() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(2, 4);
+        t.set_cursor_pos(4, 1);
+        clear_kitty_dirty(&mut t);
+        t.index().unwrap();
+
+        assert!(kitty_dirty(&t));
+
+        t.deinit(Global);
+    }
+
+    // Terminal.zig:2264 — index() inside left/right margins.
+    #[test]
+    fn terminal_kitty_dirty_index_left_right_margin() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        t.scrolling_region.left = 3;
+        t.scrolling_region.right = 5;
+        t.set_cursor_pos(3, 4);
+        clear_kitty_dirty(&mut t);
+        t.index().unwrap();
+
+        assert!(kitty_dirty(&t));
+
+        t.deinit(Global);
+    }
+
+    // Terminal.zig:2471 — scrollUp's scrollback branch with a partial region.
+    #[test]
+    fn terminal_kitty_dirty_scroll_up_top_partial_region() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        clear_kitty_dirty(&mut t);
+        t.scroll_up(1).unwrap();
+
+        assert!(kitty_dirty(&t));
+
+        t.deinit(Global);
+    }
+
+    // Terminal.zig:2471/2886 — scrollUp with left/right margins routes through
+    // deleteLines, which has its own dirty write.
+    #[test]
+    fn terminal_kitty_dirty_scroll_up_left_right_margin() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(1, 3);
+        t.scrolling_region.left = 3;
+        t.scrolling_region.right = 5;
+        t.set_cursor_pos(1, 4);
+        clear_kitty_dirty(&mut t);
+        t.scroll_up(1).unwrap();
+
+        assert!(kitty_dirty(&t));
+
+        t.deinit(Global);
+    }
+
+    // Terminal.zig:2720 — insertLines.
+    #[test]
+    fn terminal_kitty_dirty_insert_lines() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(2, 4);
+        t.set_cursor_pos(2, 1);
+        clear_kitty_dirty(&mut t);
+        t.insert_lines(1);
+
+        assert!(kitty_dirty(&t));
+
+        t.deinit(Global);
+    }
+
+    // Terminal.zig:2886 — deleteLines.
+    #[test]
+    fn terminal_kitty_dirty_delete_lines() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(2, 4);
+        t.set_cursor_pos(2, 1);
+        clear_kitty_dirty(&mut t);
+        t.delete_lines(1);
+
+        assert!(kitty_dirty(&t));
+
+        t.deinit(Global);
+    }
+
+    // Terminal.zig:2320 -> 2423 -> 2720 — reverseIndex at the top of the region
+    // inherits the dirty write from scrollDown/insertLines, exactly as the
+    // reference does (it has no write of its own).
+    #[test]
+    fn terminal_kitty_dirty_reverse_index_at_region_top() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        t.set_top_and_bottom_margin(2, 4);
+        t.set_cursor_pos(2, 1);
+        clear_kitty_dirty(&mut t);
+        t.reverse_index();
+
+        assert!(kitty_dirty(&t));
+
+        t.deinit(Global);
+    }
+
+    // Terminal.zig:4509 — switchScreen marks the DESTINATION screen's images
+    // dirty on every switch, including re-entry into an already-created screen
+    // whose flag a renderer has since cleared.
+    #[test]
+    fn terminal_kitty_dirty_switch_screen_marks_destination() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        // First switch: the alternate screen is lazily created here.
+        clear_kitty_dirty(&mut t);
+        t.switch_screen(crate::screen_set::Key::Alternate).unwrap();
+        assert!(kitty_dirty(&t), "alternate screen, first entry");
+
+        // Re-entry into the ALREADY-CREATED primary (the primary always
+        // exists, so this arm can never be excused as "fresh screens have no
+        // images yet").
+        clear_kitty_dirty(&mut t);
+        t.switch_screen(crate::screen_set::Key::Primary).unwrap();
+        assert!(kitty_dirty(&t), "primary screen, re-entry");
+
+        // Re-entry into the already-created alternate.
+        clear_kitty_dirty(&mut t);
+        t.switch_screen(crate::screen_set::Key::Alternate).unwrap();
+        assert!(kitty_dirty(&t), "alternate screen, re-entry");
+
+        t.deinit(Global);
+    }
+
+    /// Put one image plus one (non-virtual) placement into the active screen's
+    /// Kitty image storage, the state `kitty_images.delete(.{ .all = true })`
+    /// is supposed to tear down.
+    fn seed_kitty_image(t: &mut Terminal) {
+        use crate::kitty::graphics_image::Image;
+        use crate::kitty::graphics_storage::{Location, Placement};
+
+        // SAFETY: `screens.active` is a stable heap pointer owned by `screens`
+        // and we hold `&mut t`.
+        let s = unsafe { &mut *t.screens.active };
+        s.kitty_images
+            .add_image(
+                Global,
+                Image {
+                    id: 1,
+                    width: 4,
+                    height: 4,
+                    ..Image::default()
+                },
+            )
+            .unwrap();
+        let pin = {
+            let pin = s
+                .pages
+                .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+                .unwrap();
+            s.pages.track_pin(pin).unwrap()
+        };
+        s.kitty_images
+            .add_placement(Global, 1, 0, Placement::with_location(Location::Pin(pin)))
+            .unwrap();
+
+        assert_eq!(1, s.kitty_images.images.len());
+        assert_eq!(1, s.kitty_images.placements.len());
+    }
+
+    fn kitty_image_counts(t: &Terminal) -> (usize, usize) {
+        // SAFETY: `screens.active` is a stable heap pointer owned by `screens`.
+        let s = unsafe { &(*t.screens.active).kitty_images };
+        (s.images.len(), s.placements.len())
+    }
+
+    // Terminal.zig:3387-3397 — ED complete clears all Kitty graphics state.
+    #[test]
+    fn terminal_erase_display_complete_deletes_kitty_images() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+        seed_kitty_image(&mut t);
+
+        t.erase_display(csi::EraseDisplay::Complete, false);
+
+        assert_eq!((0, 0), kitty_image_counts(&t));
+
+        t.deinit(Global);
+    }
+
+    // Terminal.zig:3329-3337 — ED scroll-complete clears all Kitty graphics
+    // state too.
+    #[test]
+    fn terminal_erase_display_scroll_complete_deletes_kitty_images() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+        seed_kitty_image(&mut t);
+
+        t.erase_display(csi::EraseDisplay::ScrollComplete, false);
+
+        assert_eq!((0, 0), kitty_image_counts(&t));
+
+        t.deinit(Global);
+    }
+
+    // Terminal.zig:5512-ish — DECCOLM inherits the clear through
+    // eraseDisplay(.complete).
+    #[test]
+    fn terminal_deccolm_deletes_kitty_images() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+        t.modes.set(modespkg::Mode::EnableMode3, true);
+        seed_kitty_image(&mut t);
+
+        t.deccolm(Global, DeccolmMode::Cols132).unwrap();
+
+        assert_eq!((0, 0), kitty_image_counts(&t));
+
+        t.deinit(Global);
+    }
+
+    // =========================================================================
+    // W29-B03: cross-page wide-grapheme transfer (`print`'s `transfer_graphemes`
+    // block, Terminal.zig:1247-1266).
+    //
+    // PORT NOTE: NOT a port of a reference `test {}` block — the reference has
+    // no test for this block at all. It is the correctness gate for the
+    // raw-ptr+len iteration of the OLD page's grapheme slice: the copy it
+    // replaced (`cps.to_vec()`) was a Rust-only allocation, and the ONLY thing
+    // that makes iterating the old page in place legal is that this arm requires
+    // `old_pin.node != new_pin.node` while `Screen::append_grapheme` mutates and
+    // reallocates the CURSOR's node only. The negative control for the
+    // allocation itself lives in `tests/print_grapheme_transfer_alloc.rs`, which
+    // counts allocations; this one gates the DATA.
+    // =========================================================================
+
+    /// Drive `print` until a wide-grapheme wrap lands on a freshly-created page
+    /// (`new_pin.node != old_pin.node`), then hand back the terminal parked
+    /// right after that print. `None` if the seam never happened.
+    const COLS: size::CellCountInt = 120;
+
+    /// Drive `print` until a wide-grapheme wrap lands on a freshly-created page
+    /// (`new_pin.node != old_pin.node`, the cross-page arm of
+    /// `transfer_graphemes`). Returns false if that never happened.
+    fn drive_wide_grapheme_page_seam(t: &mut Terminal) -> bool {
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+
+        // Pad the pagelist with blank rows until the cursor's page has EXACTLY
+        // one free row left. Then the `linefeed` below takes that last row and
+        // the soft wrap after it is forced to start a new page — which is the
+        // only way to reach the `old_pin.node != new_pin.node` arm.
+        let mut guard = 0usize;
+        loop {
+            // SAFETY: stable pointers owned by the active screen; the cursor is
+            // parked on the last page because it sits on the bottom row.
+            let node = unsafe { (*(*t.screens.active).cursor.page_pin).node };
+            let page = unsafe { crate::pagelist::Node::page(node) };
+            let free = unsafe { (*page).capacity.rows - (*page).size.rows };
+            if free == 1 {
+                break;
+            }
+            guard += 1;
+            if guard > 100_000 {
+                return false;
+            }
+            t.carriage_return();
+            t.linefeed().unwrap();
+        }
+
+        t.carriage_return();
+        t.linefeed().unwrap();
+
+        // Park the cursor on the last column with a NARROW base that already
+        // carries grapheme data...
+        for _ in 0..(COLS - 1) {
+            t.print('a' as u32).unwrap();
+        }
+        t.print(0x261D).unwrap(); // U+261D BLACK UP POINTING INDEX (ExtPict, width 1)
+        for _ in 0..7 {
+            t.print(0x0301).unwrap(); // U+0301 COMBINING ACUTE ACCENT
+        }
+        t.print(0x200D).unwrap(); // U+200D ZERO WIDTH JOINER
+
+        // SAFETY: stable pointers owned by the active screen.
+        let before = unsafe { (*(*t.screens.active).cursor.page_pin).node };
+        // ...then make the cluster WIDE, which wraps it to the next row and has
+        // to carry the old page's grapheme data with it.
+        t.print(0x1F600).unwrap(); // U+1F600 GRINNING FACE (ExtPict, width 2)
+        let after = unsafe { (*(*t.screens.active).cursor.page_pin).node };
+
+        !core::ptr::eq(before, after)
+    }
+
+    #[test]
+    fn terminal_print_wide_grapheme_transfers_across_a_page_seam() {
+        let mut t = Terminal::init(Global, opts(COLS, 5)).unwrap();
+
+        assert!(
+            drive_wide_grapheme_page_seam(&mut t),
+            "VACUOUS: never produced a wrap that crossed a page seam, so the \
+             cross-page arm of `transfer_graphemes` was never exercised"
+        );
+
+        // SAFETY: stable pointers owned by the active screen.
+        let pin = unsafe { *(*t.screens.active).cursor.page_pin };
+
+        // The wide cluster now lives at x=0 of the new page's row, carrying
+        // every codepoint that was on the old page plus the one just printed.
+        let mut new_pin = pin;
+        new_pin.x = 0;
+        let new_rac = new_pin.row_and_cell();
+        let new_page = unsafe { crate::pagelist::Node::page(new_pin.node) };
+        assert_eq!(0x261D, unsafe { (*new_rac.cell).content_codepoint() });
+        assert_eq!(pagepkg::Wide::Wide, unsafe { (*new_rac.cell).wide() });
+        assert!(unsafe { (*new_rac.cell).has_grapheme() });
+        assert_eq!(
+            &[0x0301, 0x0301, 0x0301, 0x0301, 0x0301, 0x0301, 0x0301, 0x200D, 0x1F600][..],
+            unsafe { (*new_page).lookup_grapheme(new_rac.cell) }.unwrap(),
+        );
+        assert!(unsafe { (*new_rac.row).grapheme() });
+
+        // ...and the old page's cell has been emptied: it is the spacer head of
+        // the wrap, with its grapheme data cleared.
+        let mut old_pin = new_pin.up(1).unwrap();
+        old_pin.x = COLS - 1;
+        assert!(
+            !core::ptr::eq(old_pin.node, new_pin.node),
+            "VACUOUS: the rows are on the same page"
+        );
+        let old_rac = old_pin.row_and_cell();
+        let old_page = unsafe { crate::pagelist::Node::page(old_pin.node) };
+        assert_eq!(0, unsafe { (*old_rac.cell).content_codepoint() });
+        assert_eq!(pagepkg::Wide::SpacerHead, unsafe { (*old_rac.cell).wide() });
+        assert!(!unsafe { (*old_rac.cell).has_grapheme() });
+        assert!(unsafe { (*old_page).lookup_grapheme(old_rac.cell) }.is_none());
 
         t.deinit(Global);
     }

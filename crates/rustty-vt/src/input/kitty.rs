@@ -8,6 +8,8 @@
 //   const key = @import("key.zig");
 // `key` provides `key.Key`. `u21` is modeled by `key::u21` (a `u32`).
 
+use std::sync::LazyLock;
+
 use super::key;
 use super::key::Key;
 
@@ -26,10 +28,19 @@ pub struct Entry {
 ///
 /// PORT NOTE: the reference `entries` is a comptime-evaluated `[]const Entry`
 /// built from `raw_entries` (a list of tuples). Rust has no comptime tuple→struct
-/// table builder, so this is built once at runtime by `entries()`; the produced
-/// data is identical to the reference comptime value. The reference field name
-/// `final` is a Rust keyword, so it is rendered `final_`.
-pub fn entries() -> Vec<Entry> {
+/// table builder, so this is built once — lazily, on first use — into the
+/// `ENTRIES` static and borrowed thereafter, so callers (notably the per-key-event
+/// kitty encoder) get the same borrowed slice the reference's comptime value
+/// hands out, with no per-lookup construction. The produced data is identical to
+/// the reference comptime value. The reference field name `final` is a Rust
+/// keyword, so it is rendered `final_`.
+static ENTRIES: LazyLock<Vec<Entry>> = LazyLock::new(build_entries);
+
+pub fn entries() -> &'static [Entry] {
+    &ENTRIES
+}
+
+fn build_entries() -> Vec<Entry> {
     let mut result: Vec<Entry> = Vec::with_capacity(RAW_ENTRIES.len());
     for raw in RAW_ENTRIES.iter() {
         result.push(Entry {
@@ -154,5 +165,18 @@ mod tests {
     fn force_comptime() {
         // To force comptime to test it
         let _ = entries();
+    }
+
+    /// PORT NOTE: the reference `entries` is a comptime constant borrowed by
+    /// every caller (`for (kitty_entries) |entry|` in key_encode). This proves
+    /// the Rust port has the same property: the table is built exactly once and
+    /// `entries()` borrows it (before the fix every call — i.e. every kitty key
+    /// event — rebuilt the whole vector).
+    #[test]
+    fn entries_table_built_once() {
+        let a = entries();
+        let b = entries();
+        assert_eq!(a.len(), RAW_ENTRIES.len());
+        assert!(std::ptr::eq(a.as_ptr(), b.as_ptr()));
     }
 }

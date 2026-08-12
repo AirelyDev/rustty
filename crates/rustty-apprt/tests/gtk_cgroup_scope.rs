@@ -13,8 +13,8 @@
 //! Needs a user session bus and a running `systemd --user`. No GTK init, no
 //! display (G-GTKINIT: zero `gtk4::init()` here).
 //!
-//! R5: gated `all(target_os = "linux", feature = "gtk")`.
-#![cfg(all(target_os = "linux", feature = "gtk"))]
+//! R5: gated `all(any(linux, freebsd), feature = "gtk")`.
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 
 use std::process::{Command, Stdio};
 

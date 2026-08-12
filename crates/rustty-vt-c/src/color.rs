@@ -184,10 +184,12 @@ pub unsafe fn parse(value_: *const u8, len: usize, out: *mut RgbC) -> Result {
     // SAFETY: caller contract.
     let value = unsafe { std::slice::from_raw_parts(value_, len) };
     // const rgb = color.RGB.parse(value) catch return .invalid_value;
-    let Ok(value_str) = std::str::from_utf8(value) else {
-        return Result::InvalidValue;
-    };
-    match RGB::parse(value_str) {
+    //
+    // PORT NOTE: the C-ABI bytes go straight through — `RGB::parse` takes
+    // `&[u8]` like the reference's `parse(value: []const u8)`, so no UTF-8
+    // pre-check is needed (non-UTF-8 has no valid spec form and simply fails
+    // the parse, exactly as in the reference).
+    match RGB::parse(value) {
         Ok(rgb) => {
             // SAFETY: caller contract.
             unsafe { *out = rgb };
@@ -488,7 +490,20 @@ mod tests {
     // test "color: parse invalid"
     #[test]
     fn parse_invalid() {
-        for case in [&b""[..], b"notacolor", b"#12345"] {
+        // REGRESSION (fuzz finding in rustty-vt, 2026-08-11): the C-ABI bytes
+        // now reach `RGB::parse` unconverted (it takes `&[u8]` like the
+        // reference's `parse(value: []const u8)`), so a value holding a
+        // multi-byte scalar or raw invalid UTF-8 must be `.invalid_value`,
+        // never a char-boundary panic across the FFI boundary.
+        for case in [
+            &b""[..],
+            b"notacolor",
+            b"#12345",
+            "a\u{e9}bcd".as_bytes(),
+            "#a\u{e9}bcd".as_bytes(),
+            b"U\x8evv",
+            b"\xff\xfe\xfd",
+        ] {
             let mut out = RGB { r: 0, g: 0, b: 0 };
             assert_eq!(Result::InvalidValue, unsafe {
                 parse(case.as_ptr(), case.len(), &mut out)

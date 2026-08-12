@@ -50,8 +50,14 @@
 //!     accessor trait (state.rs; the `RendererConfig`-precedent acyclic shape),
 //!     `state.inspector` being the `*mut dyn InspectorOverlay` fat pointer. No
 //!     `unimplemented!()` remains for this seam.
-//!   - the OpenGL backend (Linux) and GTK — out of the monomorphic Metal scope
-//!     (whole-backend follow-up ports). The **WebGL** backend is NOT in this list
+//!   - GTK — out of the monomorphic Metal scope (a whole-backend follow-up port).
+//!     The **OpenGL backend (Linux)** is NOT in this list any more: L4 ported the
+//!     `crate::opengl` leaves + the `generic::linux_impl` twin, and wave 2 closed
+//!     the last draw-path elisions — custom shaders (F-013), kitty graphics
+//!     (F-005), background image (F-012) and the inspector overlay (F-020) — so
+//!     `linux_impl` carries no `MILESTONE-SCOPE-CUT` markers (DEFERRALS.md
+//!     "rustty-renderer L4 (OpenGL `linux_impl`) draw-path scope cuts").
+//!     The **WebGL** backend is NOT in this list
 //!     any more: WS14 established that the reference `src/renderer/WebGL.zig` is a
 //!     2-line placeholder (no fields, no methods, no shaders, no tests, identical
 //!     on the oracle's `origin/main`), and it is ported COMPLETE at
@@ -95,14 +101,23 @@ mod test_support;
 #[cfg(target_os = "macos")]
 pub mod metal;
 
-// PORT STATUS (L4, Linux-only): the OpenGL graphics-API backend, the second
+// PORT STATUS (L4, Linux/FreeBSD): the OpenGL graphics-API backend, the second
 // concrete graphics API alongside `metal` (R5: purely additive — not one byte of
 // the Metal lane changes). Task 1 lands only the headless-EGL context + the raw
 // `gl` loader (`opengl::gl::sys`), i.e. the `OpenGL.zig::prepareContext` half; the
 // `pkg/opengl` leaf wrappers and the monomorphic `GenericRenderer(OpenGL)`
 // (`generic::linux_impl`) are later tasks.
 // (docs/superpowers/plans/2026-07-17-L4-opengl-renderer.md)
-#[cfg(target_os = "linux")]
+//
+// PORT NOTE (W2D/F-003): the gate is `any(linux, freebsd)`, not `linux`, because
+// `renderer/backend.zig:20-21` picks `.metal` iff `target.os.tag.isDarwin()` and
+// `.opengl` for EVERY other native target — and FreeBSD is a real windowed target
+// at the pin (`apprt/runtime.zig:18` `.linux, .freebsd => .gtk`). The L4 milestone
+// scoped itself to Linux only because the macOS-first plan sequenced the GTK tier
+// last; the OpenGL arm itself names nothing Linux-specific (EGL via a dlopen'd
+// `libEGL.so.1`, and `gl` is pure generated bindings loaded through
+// `gl::load_with`), so FreeBSD gets the identical arm rather than a second twin.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub mod opengl;
 
 // PORT: the reference `renderer.zig`'s own module doc comment (`:1-8`). The crate
@@ -133,20 +148,30 @@ pub use webgl::WebGL;
 // §1.1). The new `rustty-renderer -> rustty-z2d` edge (Overlay's z2d) is a
 // downward, acyclic edge to a pure-Rust sink (check_acyclic.sh stays GREEN).
 //
-// `image` is macOS-only: `image::Image` embeds `crate::metal::Texture` (the `Ready`
-// variant), `image::Replace`/`ImageEntry` carry it, and `image::State`'s draw path
-// is written against the `crate::metal` leaves.
-#[cfg(target_os = "macos")]
+// `image` is a MONOMORPHIC TWIN PAIR, gated exactly where `generic`'s renderer
+// arms are: `image::Image` embeds the backend's `Texture` (the `Ready` variant),
+// `image::Replace`/`ImageEntry` carry it, and `image::State`'s draw path is
+// written against the backend leaves — `crate::metal` on macOS,
+// `crate::opengl` on Linux/FreeBSD (see the `image.rs` dispatcher). On every other
+// target there is no `generic` renderer arm, so there is no `image` twin either.
+//
+// PORT NOTE (W2D/F-003): this predicate tracks `generic`'s dispatcher arms exactly
+// — it gained `freebsd` in lock-step with the `opengl`/`linux_impl` widening above
+// (`backend.zig:20-21` gives every non-Darwin native target `.opengl`).
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
 pub mod image;
 // `overlay` is NOT gated: `Overlay` renders on the CPU via z2d (`Overlay.zig`'s
-// whole point — see the module docs) and names no Metal type. Its ONLY `image`-typed
-// leaf, `pending_image() -> image::Pending`, is gated WITHIN `overlay.rs` instead, so
-// the metal-free surface resolves on every target. That surface is load-bearing
-// off-macOS: `state::InspectorOverlay::overlay_features` names [`overlay::Feature`]
+// whole point — see the module docs) and names no backend type. Its ONLY
+// `image`-typed leaf, `pending_image() -> image::Pending`, is gated WITHIN
+// `overlay.rs` instead, so the backend-free surface resolves on every target. That
+// surface is load-bearing on the backend-less targets:
+// `state::InspectorOverlay::overlay_features` names [`overlay::Feature`]
 // UNCONDITIONALLY (it is the acyclic inspector seam's only return type), and
-// `overlay::InitError` is named by the macOS-gated `generic::macos_impl`. The
-// `pending_image` leaf returns once the L4 OpenGL backend ungates a
-// graphics-API-generic `image` (docs/superpowers/plans/2026-07-17-L4-opengl-renderer.md).
+// `overlay::InitError` is named by both `generic` twins. The `pending_image` leaf's
+// own gate now tracks the `image` dispatcher's `any(macos, linux, freebsd)`: the L4
+// OpenGL image twin (docs/superpowers/plans/2026-07-17-L4-opengl-renderer.md) landed
+// it on Linux, so the overlay's Kitty-independent draw path is live on both
+// backends — and on every target the OpenGL backend serves (W2D/F-003: FreeBSD).
 pub mod overlay;
 // The GPU_RD_TRAIT_DESIGN §D field names `overlay: Option<Overlay>` via
 // `crate::Overlay`.
@@ -180,12 +205,20 @@ pub use generic::Renderer;
 
 // L4 SWAP (first light): the Linux renderer is `GenericRenderer(OpenGL)` — the
 // monomorphic `generic::linux_impl::Renderer` (renderer.zig:38's `.opengl` arm),
-// re-exported by `generic`'s own `#[cfg(target_os = "linux")] pub use
-// linux_impl::*;` (generic.rs:7565). This mirrors the macOS line above (the
+// re-exported by `generic`'s own `#[cfg(any(target_os = "linux", target_os =
+// "freebsd"))] pub use linux_impl::*;`. This mirrors the macOS line above (the
 // `.metal` arm) so `rustty_renderer::Renderer` resolves on Linux; core's
 // `renderer_seam::Renderer` newtype now forwards to the REAL renderer on both
 // targets. Additive Linux `pub use` — the macOS export is unchanged.
-#[cfg(target_os = "linux")]
+//
+// PORT NOTE (W2D/F-003): widened to `any(linux, freebsd)`. `renderer.zig:37-41`
+// switches on `build_config.renderer`, which `backend.zig:20-21` resolves to
+// `.opengl` for every non-Darwin native target, so the `GenericRenderer(OpenGL)`
+// arm is what FreeBSD selects too. core's `renderer_seam` needs NO change: its
+// `Renderer`/`RendererError` arms are the EXACT COMPLEMENT of the macOS export
+// (`#[cfg(not(target_os = "macos"))]`, renderer_seam.rs), an invariant that
+// comment already pins — it starts resolving on FreeBSD the moment this line does.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub use generic::Renderer;
 
 // PORT: `.webgl => WebGL` (renderer.zig:41) — the ONLY arm that is NOT

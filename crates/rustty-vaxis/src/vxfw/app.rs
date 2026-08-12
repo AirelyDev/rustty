@@ -79,12 +79,16 @@ impl<'a> App<'a> {
         Ok(App { tty, vx })
     }
 
-    pub fn deinit(&mut self) {
+    pub fn deinit(mut self) {
         // self.vx.deinit(allocator, self.tty.writer());  self.tty.deinit();
         let writer = self.tty.writer();
         self.vx.deinit(writer);
-        // `tty.deinit()` consumes the Tty; performed by the caller dropping `self`
-        // (Rust frees the tty on drop — the reset already happened via vx.deinit).
+        // `tty.deinit()` consumes the Tty (tcsetattr TCSAFLUSH termios restore +
+        // close on non-macOS), so `deinit` consumes `self` and moves the field out
+        // (App has no Drop impl). `vx.deinit` only emits reset escape sequences —
+        // it does NOT undo raw mode; skipping this left the terminal raw
+        // (W17-B05-NORMAL-01).
+        self.tty.deinit();
     }
 
     pub fn run(&mut self, widget: Widget<'a>, opts: Options) -> Result<(), Error> {
@@ -717,5 +721,30 @@ impl<'a> FocusHandler<'a> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// PORT NOTE (rustty-only, W17-B05-NORMAL-01): the reference `App.deinit`
+    /// (vxfw/App.zig) calls BOTH `self.vx.deinit(...)` AND `self.tty.deinit()`.
+    /// The port used to stop after `vx.deinit` (escape-sequence resets only),
+    /// never restoring termios — `rustty +boo` left the terminal raw. Under
+    /// cfg(test) `Tty = TestTty`, whose `deinit_observer` hook records that
+    /// `deinit` ran; this test fails without the `self.tty.deinit()` call.
+    #[test]
+    fn deinit_deinitializes_the_tty() {
+        let observed = Arc::new(AtomicBool::new(false));
+        let mut app = App::init().expect("App::init");
+        app.tty.deinit_observer = Some(Arc::clone(&observed));
+        app.deinit();
+        assert!(
+            observed.load(Ordering::SeqCst),
+            "App::deinit must call Tty::deinit (App.zig: vx.deinit then tty.deinit)"
+        );
     }
 }

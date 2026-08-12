@@ -15,8 +15,8 @@
 //! **DO NOT merge this test back into `gtk_wayland_winproto.rs`** — that
 //! reintroduces the two-init defect. One `gtk4::init()` per test binary, always.
 //!
-//! R5: gated `all(target_os = "linux", feature = "wayland")` (wayland implies gtk).
-#![cfg(all(target_os = "linux", feature = "wayland"))]
+//! R5: gated `all(any(linux, freebsd), feature = "wayland")` (wayland implies gtk).
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "wayland"))]
 #![allow(non_snake_case)]
 
 use gtk4::glib;

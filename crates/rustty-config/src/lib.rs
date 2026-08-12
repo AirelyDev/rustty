@@ -59,3 +59,68 @@ pub use repeatable_string_map::RepeatableStringMap;
 pub use theme::{
     open as theme_open, open_absolute as theme_open_absolute, Location, LocationIterator,
 };
+// PORT NOTE: `config.zig:14` exposes `conditional.State` at the package root under
+// the name `ConditionalState`. Rustty additionally keeps the bare `State` re-export
+// above (long-standing internal name); both point at the same type.
+pub use conditional::State as ConditionalState;
+
+// Field types (ghostty src/config.zig:19-49). These mirror the reference's
+// package-root aliases for the `Config` field types, in the same order. In Zig
+// they are `Config.X` decls; here they live in the leaf modules that own them,
+// so the root aliases chain through `value_types` / `command` / `path`.
+pub use command::Command;
+pub use path::{Path, RepeatablePath};
+pub use value_types::{
+    BackgroundImageFit, BackgroundImagePosition, BoldColor, ClipboardAccess, ConfirmCloseSurface,
+    CopyOnSelect, CustomShaderAnimation, FontShapingBreak, FontStyle, FontSyntheticStyle,
+    FreetypeLoadFlags, Fullscreen, Keybinds, LinkPreviews, MiddleClickAction,
+    MouseScrollMultiplier, MouseShiftCapture, NonNativeFullscreen, RepeatableCodepointMap,
+    RepeatableFontVariation, RepeatableString, RightClickAction, ShellIntegrationFeatures,
+    WindowDecoration, WindowPaddingColor, WorkingDirectory,
+};
+
+#[cfg(test)]
+mod root_alias_tests {
+    //! PORT NOTE: the Rust analog of `config.zig:55-57`'s `refAllDecls(@This())`
+    //! for the package-root field-type aliases: naming each one as
+    //! `crate::X` fails to compile if the alias is missing.
+
+    #[test]
+    fn root_aliases_resolve() {
+        fn assert_named<T>() {}
+
+        assert_named::<crate::ConditionalState>();
+
+        // Field types, in ghostty src/config.zig:19-49 order.
+        assert_named::<crate::BoldColor>();
+        assert_named::<crate::ClipboardAccess>();
+        assert_named::<crate::Command>();
+        assert_named::<crate::ConfirmCloseSurface>();
+        assert_named::<crate::CopyOnSelect>();
+        assert_named::<crate::RightClickAction>();
+        assert_named::<crate::MiddleClickAction>();
+        assert_named::<crate::CustomShaderAnimation>();
+        assert_named::<crate::FontSyntheticStyle>();
+        assert_named::<crate::FontShapingBreak>();
+        assert_named::<crate::FontStyle>();
+        assert_named::<crate::FreetypeLoadFlags>();
+        assert_named::<crate::Keybinds>();
+        assert_named::<crate::MouseShiftCapture>();
+        assert_named::<crate::MouseScrollMultiplier>();
+        assert_named::<crate::NonNativeFullscreen>();
+        assert_named::<crate::Fullscreen>();
+        assert_named::<crate::RepeatableCodepointMap>();
+        assert_named::<crate::RepeatableFontVariation>();
+        assert_named::<crate::RepeatableString>();
+        assert_named::<crate::RepeatableStringMap>();
+        assert_named::<crate::RepeatablePath>();
+        assert_named::<crate::Path>();
+        assert_named::<crate::ShellIntegrationFeatures>();
+        assert_named::<crate::WindowDecoration>();
+        assert_named::<crate::WindowPaddingColor>();
+        assert_named::<crate::BackgroundImagePosition>();
+        assert_named::<crate::BackgroundImageFit>();
+        assert_named::<crate::LinkPreviews>();
+        assert_named::<crate::WorkingDirectory>();
+    }
+}

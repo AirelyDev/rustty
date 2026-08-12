@@ -1,0 +1,100 @@
+# Promote a staged tagged release to the auto-update channel.
+#
+# PORTS: ghostty `.github/workflows/publish-tag.yml` @6ad1fe7d. release-tag.yml
+# uploads every artifact plus an `appcast-staged.xml`; nothing tells existing
+# installs about the release until this workflow copies that staged appcast to
+# the live `/appcast.xml`. Splitting the two is what keeps Sparkle from
+# advertising a build whose artifacts are not all fetchable yet.
+#
+# ============================ INERT BY DEFAULT ============================
+# Manual dispatch only, and gated on the repository variable
+# `RUSTTY_RELEASE_ENABLED` being `true` plus the canonical repository — so it
+# cannot publish from a fork or from this repo as shipped.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to deploy (format: vX.Y.Z)"
+        required: true
+
+name: Publish Tagged Release
+
+# We must only run one release workflow at a time to prevent corrupting
+# our release artifacts.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    if: |-
+      vars.RUSTTY_RELEASE_ENABLED == 'true' &&
+      github.repository == 'AirelyDev/rustty'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release_info.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      # Same validator release-tag.yml uses (xtask/src/release.rs): rejects
+      # anything that is not `vX.Y.Z`. `--no-workspace-check` because this
+      # workflow promotes an ALREADY-BUILT release, which may predate the
+      # manifest's current version.
+      - name: Validate and extract the version
+        id: release_info
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: cargo run -q -p xtask -- release-info --version "$INPUT_VERSION" --no-workspace-check
+
+  upload:
+    needs: [setup]
+    runs-on: ubuntu-latest
+    env:
+      RUSTTY_VERSION: ${{ needs.setup.outputs.version }}
+    steps:
+      - name: Validate Release Files
+        run: |
+          BASE="https://rustty.sh/${RUSTTY_VERSION}"
+          for f in \
+            "rustty-${RUSTTY_VERSION}.tar.gz" \
+            "rustty-${RUSTTY_VERSION}.tar.gz.minisig" \
+            "rustty-source.tar.gz" \
+            "rustty-source.tar.gz.minisig" \
+            "rustty-macos-arm64.zip" \
+            "Rustty.dmg" \
+            "appcast-staged.xml"; do
+            code="$(curl -I -s -o /dev/null -w '%{http_code}' "${BASE}/${f}")"
+            if [ "$code" != "200" ]; then
+              echo "missing staged release file: ${BASE}/${f} (HTTP ${code})" >&2
+              exit 1
+            fi
+            echo "ok: ${f}"
+          done
+
+      - name: Download Staged Appcast
+        run: |
+          curl -fsSL "https://rustty.sh/${RUSTTY_VERSION}/appcast-staged.xml" > appcast-staged.xml
+          mv appcast-staged.xml appcast.xml
+
+      - name: Prep Appcast
+        run: |
+          rm -rf blob
+          mkdir blob
+          mv appcast.xml blob/appcast.xml
+
+      - name: Upload Appcast to R2
+        uses: ryand56/r2-upload-action@b801a390acbdeb034c5e684ff5e1361c06639e7c # v1.4
+        with:
+          r2-account-id: ${{ secrets.CF_R2_RELEASE_ACCOUNT_ID }}
+          r2-access-key-id: ${{ secrets.CF_R2_RELEASE_AWS_KEY }}
+          r2-secret-access-key: ${{ secrets.CF_R2_RELEASE_SECRET_KEY }}
+          r2-bucket: rustty-release
+          source-dir: blob
+          destination-dir: ./

@@ -14,7 +14,7 @@
 // PORT NOTE: the reference is `fn Timer(comptime xev: type) type` → `if
 // (xev.dynamic) TimerDynamic else TimerLoop`. On macOS `xev.dynamic == false`
 // (§0), so this is the `TimerLoop` instantiation (`xev = kqueue`).
-// (module is `#[cfg(target_os = "macos")]`-gated in lib.rs)
+// (module is `#[cfg(any(target_os = "macos", target_os = "freebsd"))]`-gated in lib.rs)
 
 use crate::kqueue::{CancelError, Completion, Loop, Operation, Result, TimerTrigger};
 use crate::looppkg::CallbackAction;

@@ -280,10 +280,19 @@ pub fn main() {
     // (`app_runtime != .none`); the headless `.none` bin never does (it exits via
     // the usage banner above). For the NATIVE GTK backend the whole leaf
     // (`App.create` + `apprt.App.init`/`terminate`/`run`) is [`run_gtk`], selected
-    // on `app_runtime() == .gtk` and gated `#[cfg(all(target_os = "linux", feature
-    // = "gtk"))]` (R5). A full window still needs the Surface tasks (T13+) and the
+    // on `app_runtime() == .gtk` and gated
+    // `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]`
+    // (R5). A full window still needs the Surface tasks (T13+) and the
     // L4 Renderer; today this enters the hand-rolled loop and ticks the core app.
-    #[cfg(all(target_os = "linux", feature = "gtk"))]
+    //
+    // PORT NOTE (W2D/F-002): the OS half is `any(linux, freebsd)` because the
+    // reference's own reach-condition is `app_runtime != .none`, and
+    // `Runtime.default()` is `.gtk` for BOTH (`apprt/runtime.zig:14-24`
+    // `.linux, .freebsd => .gtk`). Before this widening a FreeBSD build had
+    // `app_runtime() == .gtk` but no compiled arm, so it fell through to the
+    // `unimplemented!` below — a deterministic panic where the reference
+    // launches its GUI.
+    #[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
     if build_config::app_runtime() == build_config::Runtime::Gtk {
         // `run_gtk` diverges (`-> !`): every arm ends in `std::process::exit`
         // after running the reference's `terminate`/`destroy` teardown, so control
@@ -292,14 +301,14 @@ pub fn main() {
     }
 
     // Any configured runtime whose backend is NOT compiled into this build — a
-    // Linux `--no-default-features` build with the GTK backend off, or a target
-    // that is neither `.none` (usage-banner, handled above) nor a built GUI
+    // Linux/FreeBSD `--no-default-features` build with the GTK backend off, or a
+    // target that is neither `.none` (usage-banner, handled above) nor a built GUI
     // backend — remains the deferred placeholder leaf. On macOS `app_runtime()`
     // is `.none`, so this is unreachable there (R5: byte-identical).
     unimplemented!(
         "GUI launch has no compiled backend in this build (app_runtime={:?}); the \
-         GTK backend lands via `--features gtk` (default on Linux), the headless \
-         `rustty` CLI (build_config.app_runtime == .none) runs today",
+         GTK backend lands via `--features gtk` (default on Linux/FreeBSD), the \
+         headless `rustty` CLI (build_config.app_runtime == .none) runs today",
         build_config::app_runtime()
     );
 }
@@ -329,7 +338,7 @@ pub fn main() {
 /// reference `try`): both are performed explicitly before the final
 /// `std::process::exit`, which — like the reference `posix.exit` / normal `main`
 /// return — is the process end (`run_gtk` returns `!`).
-#[cfg(all(target_os = "linux", feature = "gtk"))]
+#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 fn run_gtk(logging: &Logging) -> ! {
     use allocator_api2::alloc::Global;
     use rustty_apprt::gtk;

@@ -8,14 +8,14 @@
 //! (`src/apprt/gtk/class/application.zig:1867-1881`) and the compiled UI is then
 //! reachable at `gresource.blueprint(...)` (`build/gresource.zig:103-123`).
 //!
-//! R5: gated `all(target_os = "linux", feature = "gtk")` — off the gate the
+//! R5: gated `all(any(linux, freebsd), feature = "gtk")` — off the gate the
 //! module (and the `gio` binding it uses) is compiled out. Because it registers
 //! a live gresource against the process-global gio registry it needs no display,
 //! so it is `#[ignore]`d out of the normal gate and run explicitly:
 //!   xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored
 //! (it does not actually need a display; `#[ignore]` keeps GTK-touching tests
 //! out of the headless default gate per the L5 test policy).
-#![cfg(all(target_os = "linux", feature = "gtk"))]
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 
 /// Registering the compiled resources makes every blueprint `.ui` resolvable at
 /// its resource path — the end-to-end proof that `build.rs` compiled the `.blp`,

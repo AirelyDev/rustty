@@ -11,6 +11,7 @@ use crate::selection as selection_c;
 use crate::terminal as terminal_c;
 use rustty_vt::point::Coordinate;
 use std::ffi::c_void;
+use std::os::raw::c_int;
 
 // const std = @import("std");
 // const testing = std.testing;
@@ -31,6 +32,13 @@ use rustty_vt::selection_gesture as sg;
 use rustty_vt::selection_gesture::SelectionGesture;
 
 // const log = std.log.scoped(.selection_gesture_c);
+//
+// PORT NOTE: rustty's scoped-log sink is `sys::log_fn` (the port of
+// `terminal/c/sys.zig`'s `logFn`), which is silent until a C caller installs a
+// log callback via `rustty_sys_set(RUSTTY_SYS_OPT_LOG, ...)`. `LOG_SCOPE` is
+// the `@tagName` of the reference's scope, which `log_fn` forwards to the
+// callback as the scope text.
+pub(crate) const LOG_SCOPE: &str = "selection_gesture_c";
 
 // PORT NOTE (types.zig deferred): the reference imports `types.SurfacePosition`
 // and `types.Codepoints` from `c/types.zig`, which has NOT yet landed (it
@@ -420,7 +428,30 @@ pub enum Behavior {
     Output = 3,
 }
 
+// The C-ABI storage width the published header declares
+// (`include/rustty/vt/selection.h`:
+// `RUSTTY_SELECTION_GESTURE_BEHAVIOR_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE`), which
+// is what makes reading a C-supplied behavior field as a raw `c_int` ABI-neutral.
+const _: () = assert!(std::mem::size_of::<Behavior>() == std::mem::size_of::<c_int>());
+
 impl Behavior {
+    /// Narrow an inbound C integer to a `Behavior`, mirroring
+    /// `std.enums.fromInt`; `None` outside the declared range.
+    ///
+    /// D11 idiom (see `render::Data::from_c_int`): a `#[repr(C)]` enum
+    /// materialized from out-of-range C memory is UB in every build mode, so
+    /// C-supplied behavior fields are range-checked before conversion. This IS
+    /// the reference's `validBehavior` check (`selection_gesture.zig:745-748`).
+    pub fn from_c_int(v: c_int) -> Option<Behavior> {
+        match v {
+            0 => Some(Behavior::Cell),
+            1 => Some(Behavior::Word),
+            2 => Some(Behavior::Line),
+            3 => Some(Behavior::Output),
+            _ => None,
+        }
+    }
+
     pub fn from_zig(b: sg::Behavior) -> Behavior {
         match b {
             sg::Behavior::Cell => Behavior::Cell,
@@ -477,6 +508,26 @@ pub struct Behaviors {
     pub triple_click: Behavior,
 }
 
+// PORT NOTE (W66-BEHAVIOR-RAW-01): the reference reads a caller-supplied
+// `Behaviors` as three `Behavior`s and range-checks each with `validBehavior`
+// (`selection_gesture.zig:495-499`). In Rust the fields of `Behaviors` are a
+// 4-variant `#[repr(C)]` enum, but the header declares them as a plain C enum,
+// so a C caller can store ANY int in them: reading the caller's buffer as
+// `*const Behaviors` would materialize an invalid discriminant (UB in every
+// build mode) and would sail past the range check. The inbound read therefore
+// uses this layout-identical raw view, and each field goes through
+// `Behavior::from_c_int` — exactly the reference's per-field guard.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct BehaviorsRaw {
+    single_click: c_int,
+    double_click: c_int,
+    triple_click: c_int,
+}
+
+const _: () = assert!(std::mem::size_of::<BehaviorsRaw>() == std::mem::size_of::<Behaviors>());
+const _: () = assert!(std::mem::align_of::<BehaviorsRaw>() == std::mem::align_of::<Behaviors>());
+
 /// C: GhosttySelectionGestureData -> RusttySelectionGestureData (R2)
 // pub const Data = enum(c_int) { click_count = 0, dragged = 1, autoscroll = 2, behavior = 3, anchor = 4 };
 #[repr(C)]
@@ -487,6 +538,30 @@ pub enum Data {
     Autoscroll = 2,
     Behavior = 3,
     Anchor = 4,
+}
+
+// The C-ABI storage width the published header declares
+// (`include/rustty/vt/selection.h`: `RUSTTY_SELECTION_GESTURE_DATA_MAX_VALUE =
+// RUSTTY_ENUM_MAX_VALUE`), which is what makes reading a `get_multi` key array
+// element as a raw `c_int` ABI-neutral.
+const _: () = assert!(std::mem::size_of::<Data>() == std::mem::size_of::<c_int>());
+
+impl Data {
+    /// Narrow an inbound C integer to a `Data`, mirroring `std.enums.fromInt`;
+    /// `None` outside the declared range.
+    // PORT NOTE: this is the reference's
+    // `std.enums.fromInt(Data, @intFromEnum(data))` guard from `get`
+    // (`selection_gesture.zig:361-373`); `Data` is a contiguous `#[repr(C)]`
+    // enum here, so the range check IS `fromInt`.
+    pub fn from_c_int(v: c_int) -> Option<Data> {
+        // contiguous 0..=4
+        if (0..=4).contains(&v) {
+            // SAFETY: `v` is a valid `Data` discriminant (range-checked above).
+            Some(unsafe { std::mem::transmute::<c_int, Data>(v) })
+        } else {
+            None
+        }
+    }
 }
 
 // Output type expected for querying the data of the given kind.
@@ -604,12 +679,28 @@ pub unsafe fn new(alloc_: Option<&CAllocator>, out_gesture: *mut Gesture) -> Res
     }
     // const alloc = lib.alloc.default(alloc_);
     let alloc = rustty_lib::allocator::default(alloc_);
-    // const gesture = alloc.create(GestureWrapper) catch { ... };
+    // const gesture = alloc.create(GestureWrapper) catch { out.* = null; return .out_of_memory; };
+    // PORT NOTE (W12-01): through the C-resolved allocator; a rejecting caller
+    // allocator yields `.out_of_memory` + null out-param like the reference.
+    let gesture: *mut GestureWrapper = match rustty_lib::allocator::create_raw(&*alloc) {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            // SAFETY: `out_gesture` is a non-null valid writable `Gesture`.
+            unsafe { *out_gesture = std::ptr::null_mut() };
+            return Result::OutOfMemory;
+        }
+    };
     // gesture.* = .{ .alloc = alloc };  (SelectionGesture.init via field default)
-    let gesture = Box::into_raw(Box::new(GestureWrapper {
-        alloc,
-        gesture: SelectionGesture::INIT,
-    }));
+    // SAFETY: `gesture` is valid uninitialized `GestureWrapper` storage.
+    unsafe {
+        std::ptr::write(
+            gesture,
+            GestureWrapper {
+                alloc,
+                gesture: SelectionGesture::INIT,
+            },
+        )
+    };
     // out.* = gesture;
     // SAFETY: `out_gesture` is a non-null valid writable `Gesture`.
     unsafe { *out_gesture = gesture };
@@ -644,21 +735,37 @@ pub unsafe fn event_new(
     }
     // const alloc = lib.alloc.default(alloc_);
     let alloc = rustty_lib::allocator::default(alloc_);
-    // const event = alloc.create(EventWrapper) catch { ... };
+    // const event = alloc.create(EventWrapper) catch { out.* = null; return .out_of_memory; };
+    // PORT NOTE (W12-01): through the C-resolved allocator; a rejecting caller
+    // allocator yields `.out_of_memory` + null out-param like the reference.
+    let event: *mut EventWrapper = match rustty_lib::allocator::create_raw(&*alloc) {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            // SAFETY: `out_event` is a non-null valid writable `Event`.
+            unsafe { *out_event = std::ptr::null_mut() };
+            return Result::OutOfMemory;
+        }
+    };
     // event.* = .{ .alloc = alloc, .event = undefined };  (other fields via defaults)
-    let mut event_box = Box::new(EventWrapper {
-        alloc,
-        // PORT NOTE: `.event = undefined`, immediately overwritten by `init`. The
-        // placeholder is the `Release{ pin: None }` variant (never observed).
-        event: EventPayload::Release(sg::Release { pin: None }),
-        event_validation: EventValidation::default(),
-        word_boundary_codepoints: None,
-        // .behaviors = SelectionGesture.default_behaviors
-        behaviors: sg::DEFAULT_BEHAVIORS,
-    });
+    // SAFETY: `event` is valid uninitialized `EventWrapper` storage.
+    unsafe {
+        std::ptr::write(
+            event,
+            EventWrapper {
+                alloc,
+                // PORT NOTE: `.event = undefined`, immediately overwritten by `init`. The
+                // placeholder is the `Release{ pin: None }` variant (never observed).
+                event: EventPayload::Release(sg::Release { pin: None }),
+                event_validation: EventValidation::default(),
+                word_boundary_codepoints: None,
+                // .behaviors = SelectionGesture.default_behaviors
+                behaviors: sg::DEFAULT_BEHAVIORS,
+            },
+        )
+    };
     // event.init(event_type);
-    event_box.init(event_type);
-    let event = Box::into_raw(event_box);
+    // SAFETY: `event` was just initialized; narrow `&mut` for the init call.
+    unsafe { (*event).init(event_type) };
     // out.* = event;
     // SAFETY: `out_event` is a non-null valid writable `Event`.
     unsafe { *out_event = event };
@@ -679,8 +786,13 @@ pub unsafe fn free(gesture_: Gesture, terminal: terminal_c::Terminal) {
     if gesture_.is_null() {
         return;
     }
-    // SAFETY: `gesture_` is a live `new`-returned wrapper (caller contract).
-    let mut wrapper = unsafe { Box::from_raw(gesture_) };
+    // PORT NOTE (W12-01): move the wrapper value out of the caller-allocator
+    // storage, deinit, return the STORAGE through the resolved allocator
+    // (`alloc.destroy(wrapper)` — the caller free callback fires), then drop
+    // the value (which drops the `alloc` box itself last).
+    // SAFETY: `gesture_` is a live `new`-returned wrapper (caller contract);
+    // after the read the storage is treated as uninitialized and freed once.
+    let mut wrapper = unsafe { std::ptr::read(gesture_) };
     // if (terminal_c.zigTerminal(terminal)) |t| wrapper.gesture.deinit(t);
     // SAFETY: `terminal` is null or a live wrapper; `zig_terminal` raw-ptr reads.
     let t = unsafe { terminal_c::zig_terminal(terminal) };
@@ -690,7 +802,10 @@ pub unsafe fn free(gesture_: Gesture, terminal: terminal_c::Terminal) {
         let t_ref = unsafe { &mut *t };
         wrapper.gesture.deinit(t_ref);
     }
-    // const alloc = wrapper.alloc; alloc.destroy(wrapper);  (Box frees on drop)
+    // const alloc = wrapper.alloc; alloc.destroy(wrapper);
+    // SAFETY: `gesture_` was created by `new` via `create_raw` with this same
+    // resolved allocator.
+    unsafe { rustty_lib::allocator::destroy_raw(&*wrapper.alloc, gesture_) };
     drop(wrapper);
 }
 
@@ -707,11 +822,19 @@ pub unsafe fn event_free(event_: Event) {
     if event_.is_null() {
         return;
     }
-    // SAFETY: `event_` is a live `event_new`-returned wrapper.
-    let mut event = unsafe { Box::from_raw(event_) };
+    // PORT NOTE (W12-01): move the wrapper value out of the caller-allocator
+    // storage, deinit, return the STORAGE through the resolved allocator
+    // (`alloc.destroy(event)` — the caller free callback fires), then drop
+    // the value (which drops the `alloc` box itself last).
+    // SAFETY: `event_` is a live `event_new`-returned wrapper; after the read
+    // the storage is treated as uninitialized and freed exactly once.
+    let mut event = unsafe { std::ptr::read(event_) };
     // event.deinit();
     event.deinit();
-    // const alloc = event.alloc; alloc.destroy(event);  (Box frees on drop)
+    // const alloc = event.alloc; alloc.destroy(event);
+    // SAFETY: `event_` was created by `event_new` via `create_raw` with this
+    // same resolved allocator.
+    unsafe { rustty_lib::allocator::destroy_raw(&*event.alloc, event_) };
     drop(event);
 }
 
@@ -906,8 +1029,11 @@ pub unsafe fn event_set(event_: Event, option: EventOption, value: *const c_void
 //     return switch (data) { inline else => |comptime_data| getTyped(gesture_, terminal, comptime_data, @ptrCast(@alignCast(out_ptr))) };
 // }
 //
-// PORT NOTE: the `intToEnum(Data, ...)` guard lives in the `extern "C"` wrapper
-// in `lib.rs`.
+// PORT NOTE (W66-GETMULTI-RAW-01): the `intToEnum(Data, ...)` guard + its
+// `log.warn` live in `get_checked` below, on the raw `c_int`, so that
+// `get_multi` reaches them PER ARRAY ELEMENT — exactly as the reference's
+// `get_multi` reaches the guard by calling `get`. (`get` itself keeps the typed
+// `Data`, which by construction cannot be out of range.)
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
 pub unsafe fn get(
@@ -924,14 +1050,49 @@ pub unsafe fn get(
     unsafe { get_typed(gesture_, terminal, data, out) }
 }
 
+// The raw-`c_int` half of `get`: the reference's
+// `if (comptime std.debug.runtime_safety) { _ = intToEnum(Data, ...) catch {
+//     log.warn("selection_gesture_get invalid data value={d}", ...);
+//     return .invalid_value; } }`
+// (`selection_gesture.zig:361-373`). Every C entry point that carries a
+// caller-supplied data selector — the `rustty_selection_gesture_get` wrapper
+// AND each element of `get_multi`'s key array — goes through here.
+/// # Safety
+/// `out` must point to writable storage of the type required by `data`.
+pub unsafe fn get_checked(
+    gesture_: Gesture,
+    terminal: terminal_c::Terminal,
+    data: c_int,
+    out: *mut c_void,
+) -> Result {
+    let Some(d) = Data::from_c_int(data) else {
+        // log.warn("selection_gesture_get invalid data value={d}", .{...});
+        crate::sys::log_fn(
+            crate::sys::StdLevel::Warn,
+            LOG_SCOPE,
+            format_args!("selection_gesture_get invalid data value={data}"),
+        );
+        return Result::InvalidValue;
+    };
+    // SAFETY: `out` validity/type is the caller's contract per `data`.
+    unsafe { get(gesture_, terminal, d, out) }
+}
+
 // pub fn get_multi(gesture_, terminal, count, keys, values, out_written) ... Result { ... }
 /// # Safety
 /// `keys`/`values`/`out_written` validity is the caller's contract.
+// PORT NOTE (W66-GETMULTI-RAW-01): `keys` is C memory typed
+// `const RusttySelectionGestureData *` in the published header; each element is
+// read as a raw `c_int` (ABI-identical — `Data` is `#[repr(C)]`, asserted
+// int-sized above) and range-checked by `get_checked`, mirroring the
+// reference's per-element `get` guard (first failing index reported through
+// `out_written`). Reading an element straight into a `Data` would materialize
+// an out-of-range discriminant, which is UB in Rust in EVERY build mode.
 pub unsafe fn get_multi(
     gesture_: Gesture,
     terminal: terminal_c::Terminal,
     count: usize,
-    keys: *const Data,
+    keys: *const c_int,
     values: *mut *mut c_void,
     out_written: *mut usize,
 ) -> Result {
@@ -949,7 +1110,7 @@ pub unsafe fn get_multi(
         let key = unsafe { *keys.add(i) };
         let value = unsafe { *values.add(i) };
         // const result = get(gesture_, terminal, k[i], v[i]);
-        let result = unsafe { get(gesture_, terminal, key, value) };
+        let result = unsafe { get_checked(gesture_, terminal, key, value) };
         if result != Result::Success {
             if !out_written.is_null() {
                 // SAFETY: caller-provided out pointer, checked non-null.
@@ -1194,18 +1355,22 @@ unsafe fn press_set_typed(
         //     press.behaviors = &event.behaviors;
         // },
         EventOption::Behaviors => {
-            // SAFETY: `value` points to a readable `Behaviors`.
-            let v = unsafe { &*(value as *const Behaviors) };
-            if !valid_behavior(v.single_click)
-                || !valid_behavior(v.double_click)
-                || !valid_behavior(v.triple_click)
-            {
+            // SAFETY: `value` points to a readable `Behaviors`, whose three C
+            // enum fields are read as their raw `c_int` storage (see
+            // `BehaviorsRaw`) so the range check below can reject out-of-range
+            // values without materializing an invalid discriminant.
+            let v = unsafe { &*(value as *const BehaviorsRaw) };
+            let (Some(single_click), Some(double_click), Some(triple_click)) = (
+                valid_behavior(v.single_click),
+                valid_behavior(v.double_click),
+                valid_behavior(v.triple_click),
+            ) else {
                 return Result::InvalidValue;
-            }
+            };
             event.behaviors = [
-                v.single_click.to_zig(),
-                v.double_click.to_zig(),
-                v.triple_click.to_zig(),
+                single_click.to_zig(),
+                double_click.to_zig(),
+                triple_click.to_zig(),
             ];
         }
         // .rectangle, .geometry, .viewport => return .invalid_value,
@@ -1604,12 +1769,13 @@ fn instant_from_ns(ns: u64) -> sg::Time {
 //     return true;
 // }
 //
-// PORT NOTE: the C `Behavior` is the `#[repr(C)]` projection above; a value that
-// crosses the C ABI is already a valid discriminant by Rust's enum invariant, so
-// `validBehavior` is always true here. Kept for parity with the reference range
-// check (`intToEnum`).
-fn valid_behavior(_behavior: Behavior) -> bool {
-    true
+// PORT NOTE (W66-BEHAVIOR-RAW-01): the C `Behavior` is a plain C enum in the
+// published header, so the value a C caller stores is an arbitrary `c_int` —
+// NOT already a valid discriminant. The guard therefore takes the raw integer
+// and narrows it, returning the converted `Behavior` on success and `None`
+// (the reference's `false`) outside the declared range.
+fn valid_behavior(behavior: c_int) -> Option<Behavior> {
+    Behavior::from_c_int(behavior)
 }
 
 #[cfg(test)]

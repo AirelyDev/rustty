@@ -14,14 +14,25 @@
 //!
 //! `is_emoji_presentation` is the Unicode `Emoji_Presentation` property (whether a
 //! codepoint defaults to an emoji, rather than text, presentation). The range
-//! table below is reproduced bit-for-bit from Unicode 16.0.0
-//! `emoji/emoji-data.txt` (the version uucode 0.2.0 ships), filtered to the
+//! table below is reproduced bit-for-bit from Unicode 17.0
+//! `emoji/emoji-data.txt` (the version uucode 0.2.0 ships — `ucd/emoji/
+//! emoji-data.txt` in the `uucode-0.2.0-ZZjBP…` package ghostty's
+//! `build.zig.zon` pins, `# Version: 17.0`), filtered to the
 //! `Emoji_Presentation` property and collapsed to sorted, inclusive
-//! `(start, end)` scalar ranges (R1: comptime-generated artifacts reproduced
-//! bit-for-bit).
+//! `(start, end)` scalar ranges, ONE TUPLE PER SOURCE LINE (R1:
+//! comptime-generated artifacts reproduced bit-for-bit).
+//!
+//! PORT NOTE (W9R-01): this header previously said "Unicode 16.0.0", and the
+//! table was the Unicode 16 data — uucode 0.2.0 in fact ships Unicode 17, so
+//! the seven U17 default-emoji scalars (U+1F6D8, U+1FA8A, U+1FA8E, U+1FAC8,
+//! U+1FACD, U+1FAEA, U+1FAEF) were classified as text-presentation, making
+//! `CodepointResolver` request `PresentationMode::Default(Text)` for them and
+//! reject capable color-emoji fallbacks. The table is now line-for-line equal
+//! to the pinned package's `Emoji_Presentation` lines (296 lines, 1219
+//! scalars).
 
 /// Sorted, non-overlapping inclusive `Emoji_Presentation` scalar ranges
-/// (Unicode 16.0.0).
+/// (Unicode 17.0).
 #[rustfmt::skip]
 const EMOJI_PRESENTATION: &[(u32, u32)] = &[
     (0x231A, 0x231B),
@@ -225,6 +236,7 @@ const EMOJI_PRESENTATION: &[(u32, u32)] = &[
     (0x1F6D1, 0x1F6D2),
     (0x1F6D5, 0x1F6D5),
     (0x1F6D6, 0x1F6D7),
+    (0x1F6D8, 0x1F6D8),
     (0x1F6DC, 0x1F6DC),
     (0x1F6DD, 0x1F6DF),
     (0x1F6EB, 0x1F6EC),
@@ -289,6 +301,8 @@ const EMOJI_PRESENTATION: &[(u32, u32)] = &[
     (0x1FA83, 0x1FA86),
     (0x1FA87, 0x1FA88),
     (0x1FA89, 0x1FA89),
+    (0x1FA8A, 0x1FA8A),
+    (0x1FA8E, 0x1FA8E),
     (0x1FA8F, 0x1FA8F),
     (0x1FA90, 0x1FA95),
     (0x1FA96, 0x1FAA8),
@@ -302,6 +316,8 @@ const EMOJI_PRESENTATION: &[(u32, u32)] = &[
     (0x1FAC0, 0x1FAC2),
     (0x1FAC3, 0x1FAC5),
     (0x1FAC6, 0x1FAC6),
+    (0x1FAC8, 0x1FAC8),
+    (0x1FACD, 0x1FACD),
     (0x1FACE, 0x1FACF),
     (0x1FAD0, 0x1FAD6),
     (0x1FAD7, 0x1FAD9),
@@ -311,6 +327,8 @@ const EMOJI_PRESENTATION: &[(u32, u32)] = &[
     (0x1FAE0, 0x1FAE7),
     (0x1FAE8, 0x1FAE8),
     (0x1FAE9, 0x1FAE9),
+    (0x1FAEA, 0x1FAEA),
+    (0x1FAEF, 0x1FAEF),
     (0x1FAF0, 0x1FAF6),
     (0x1FAF7, 0x1FAF8),
 ];
@@ -337,7 +355,7 @@ mod tests {
     use super::is_emoji_presentation;
 
     // Spot-checks anchoring the table to the codepoints the CodepointResolver
-    // tests exercise (and their `Emoji_Presentation` status per Unicode 16.0.0).
+    // tests exercise (and their `Emoji_Presentation` status per Unicode 17.0).
     #[test]
     fn emoji_presentation_spot_checks() {
         assert!(is_emoji_presentation(0x1F978)); // 🥸 disguised face
@@ -346,5 +364,46 @@ mod tests {
         assert!(!is_emoji_presentation(0x2500)); // box drawing
         assert!(!is_emoji_presentation(0x1FB00)); // legacy computing sprite
         assert!(is_emoji_presentation(0x231A)); // ⌚ watch (first range)
+    }
+
+    /// W9R-01 proving test: the seven scalars that Unicode 17 adds to
+    /// `Emoji_Presentation` (all `E17.0` in the pinned uucode 0.2.0 package's
+    /// `ucd/emoji/emoji-data.txt`) must classify as emoji-presentation, or
+    /// `CodepointResolver` computes `PresentationMode::Default(Text)` for them
+    /// and the deferred-face presentation predicate rejects capable color-emoji
+    /// fallbacks.
+    #[test]
+    fn emoji_presentation_unicode_17_additions() {
+        assert!(is_emoji_presentation(0x1F6D8)); // 🛘 landslide
+        assert!(is_emoji_presentation(0x1FA8A)); // 🪊 trombone
+        assert!(is_emoji_presentation(0x1FA8E)); // 🪎 treasure chest
+        assert!(is_emoji_presentation(0x1FAC8)); // 🫈 hairy creature
+        assert!(is_emoji_presentation(0x1FACD)); // 🫍 orca
+        assert!(is_emoji_presentation(0x1FAEA)); // 🫪 distorted face
+        assert!(is_emoji_presentation(0x1FAEF)); // 🫯 fight cloud
+
+        // Neighbor controls: unassigned/non-Emoji_Presentation scalars adjacent
+        // to the insertions must stay false (the singleton ranges must not have
+        // been widened when they were spliced in).
+        assert!(!is_emoji_presentation(0x1F6D9));
+        assert!(!is_emoji_presentation(0x1FA8B));
+        assert!(!is_emoji_presentation(0x1FAC7));
+        assert!(!is_emoji_presentation(0x1FACC));
+        assert!(!is_emoji_presentation(0x1FAEB));
+        assert!(!is_emoji_presentation(0x1FAEE));
+    }
+
+    /// W9R-01: the table must cover exactly the pinned uucode 0.2.0 (Unicode
+    /// 17.0) `Emoji_Presentation` set — 1219 scalars over 296 source lines.
+    #[test]
+    fn emoji_presentation_total_point_count() {
+        let ranges = super::EMOJI_PRESENTATION;
+        assert_eq!(
+            ranges.len(),
+            296,
+            "one tuple per emoji-data.txt source line"
+        );
+        let total: u32 = ranges.iter().map(|&(lo, hi)| hi - lo + 1).sum();
+        assert_eq!(total, 1219, "Unicode 17.0 Emoji_Presentation scalar count");
     }
 }

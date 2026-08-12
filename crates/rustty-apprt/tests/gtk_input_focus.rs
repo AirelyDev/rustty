@@ -11,8 +11,8 @@
 //! (`resize-overlay.blp: visible:false; can-target:false`, `search-overlay.blp:
 //! visible: bind template.active`, `key-state-overlay.blp: visible: bind $has_state(...)`).
 //!
-//! R5: gated `all(target_os = "linux", feature = "gtk")`.
-#![cfg(all(target_os = "linux", feature = "gtk"))]
+//! R5: gated `all(any(linux, freebsd), feature = "gtk")`.
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 #![allow(non_snake_case)]
 
 use std::time::{Duration, Instant};

@@ -120,11 +120,16 @@ creation.
   (`:227`, `:279`, `:354`, `:479`, `:530`, `:558`, `:592`, ... `self.dirty =
   true`). *Producer assert status:* `dirty` is a bare change-notification `bool`
   with no reference-implied precondition to assert; **documented, not edited.**
-- **Consumer (rustty-renderer):** `crates/rustty-renderer/src/image.rs:328
+- **Consumer (rustty-renderer):** `image.rs` is a DISPATCHER over a monomorphic
+  twin pair (`image/macos_impl.rs` over `crate::metal`, `image/linux_impl.rs`
+  over `crate::opengl` — the latter added by W2 F-005), so the consumer end
+  exists once per backend and BOTH are anchored by the D5 gate.
+  macOS: `crates/rustty-renderer/src/image/macos_impl.rs:328
   (fn kitty_requires_update)` reads `(*screen).kitty_images.dirty`
-  (`image.rs:336`); `crates/rustty-renderer/src/image.rs:466 (fn kitty_update)`
-  re-lays the atlas and clears it at `image.rs:646
-  ((*screen).kitty_images.dirty = false)`. Graceful-degrade: a spurious dirty
+  (`macos_impl.rs:336`); `macos_impl.rs:466 (fn kitty_update)` re-lays the atlas
+  and clears it at `macos_impl.rs:646 ((*screen).kitty_images.dirty = false)`.
+  Linux: the same four points are `image/linux_impl.rs:406`, `:414`, `:544`,
+  `:724`. Graceful-degrade: a spurious dirty
   just re-uploads identical images; a missed dirty self-heals on the next cell
   change that re-raises it.
 - **Integration test through the seam:** **cross-crate** (VT storage produces,

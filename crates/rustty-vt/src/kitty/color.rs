@@ -102,11 +102,16 @@ impl Kind {
             return Some(Kind::Special(s));
         }
         // PORT NOTE: `std.fmt.parseUnsigned(u8, key, 10) catch return null` —
-        // base-10 unsigned parse; on failure return null.
-        Some(Kind::Palette(match key.parse::<u8>() {
-            Ok(p) => p,
-            Err(_) => return None,
-        }))
+        // base-10 unsigned parse; on failure return null. This is NOT Rust's
+        // `str::parse::<u8>()`: `parseUnsigned` rejects a sign prefix (`"+1"`)
+        // and accepts `_` digit separators between digits (`"1_2"` == 12), so
+        // the faithful `std.fmt` helper is used instead.
+        Some(Kind::Palette(
+            match crate::color::parse_unsigned_u8(key.as_bytes(), 10) {
+                Ok(p) => p,
+                Err(_) => return None,
+            },
+        ))
     }
 
     /// Returns true when a terminal has built-in state for this key.
@@ -158,5 +163,31 @@ mod tests {
         assert!(Kind::Palette(42).has_terminal_query_color());
         assert!(Kind::Special(Special::Foreground).has_terminal_query_color());
         assert!(!Kind::Special(Special::SelectionBackground).has_terminal_query_color());
+    }
+
+    // PARITY (rustty-added): `Kind.parse` routes the palette key through
+    // `std.fmt.parseUnsigned(u8, key, 10)`, which is NOT Rust's
+    // `str::parse::<u8>()`: it rejects a sign prefix and accepts `_` digit
+    // separators between digits. Cross-checked against zig 0.16.
+    #[test]
+    fn osc_kitty_color_protocol_kind_parse_unsigned_semantics() {
+        assert_eq!(Kind::parse("42"), Some(Kind::Palette(42)));
+        assert_eq!(Kind::parse("255"), Some(Kind::Palette(255)));
+        // `parseUnsigned` accepts `_` separators between digits.
+        assert_eq!(Kind::parse("1_2"), Some(Kind::Palette(12)));
+        assert_eq!(Kind::parse("2_5_5"), Some(Kind::Palette(255)));
+        // `parseUnsigned` accepts NO sign prefix.
+        assert_eq!(Kind::parse("+1"), None);
+        assert_eq!(Kind::parse("-1"), None);
+        assert_eq!(Kind::parse("-0"), None);
+        // Everything else that the base-10 unsigned parse rejects.
+        for bad in ["_1", "1_", "_", "", " 1", "1 ", "256", "0x1", "0b1"] {
+            assert_eq!(Kind::parse(bad), None, "expected None for {bad:?}");
+        }
+        // Special keys still win over the numeric parse.
+        assert_eq!(
+            Kind::parse("foreground"),
+            Some(Kind::Special(Special::Foreground))
+        );
     }
 }

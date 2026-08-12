@@ -1,5 +1,9 @@
-//! PORT STATUS (L4, Linux-only): the OpenGL graphics-API backend — the second
-//! concrete graphics API alongside `crate::metal`.
+//! PORT STATUS (L4, Linux/FreeBSD): the OpenGL graphics-API backend — the second
+//! concrete graphics API alongside `crate::metal`. `renderer/backend.zig:20-21`
+//! selects `.metal` iff the target is Darwin and `.opengl` for EVERY other native
+//! target, so this module is gated `any(target_os = "linux", target_os =
+//! "freebsd")` — the two windowed non-Darwin targets the oracle ships an app for
+//! (`apprt/runtime.zig:18` `.linux, .freebsd => .gtk`). W2D/F-003.
 //!
 //! PORTS: ghostty `src/renderer/OpenGL.zig` + `src/renderer/opengl/*.zig`, layered
 //! over [`gl`] — this crate's hand-port of ghostty's own low-level `pkg/opengl`

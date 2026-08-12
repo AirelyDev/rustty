@@ -39,11 +39,20 @@ pub mod embedded;
 // GObject widgets, NOT an app over the libghostty C ABI (that is the
 // macOS/Swift path, `rustty-apprt-c`, which this leaves untouched).
 //
-// The gtk4-rs deps are BOTH Linux-target-gated and `gtk`-feature-optional
-// (`Cargo.toml`), so the macOS/embedded build is byte-behavior-identical whether
-// or not the feature is named. `Runtime::Gtk` is already the Linux default
-// (`rustty-build-config/src/apprt.rs:30`); the `rustty` bin binds it in L5.5.
-#[cfg(all(target_os = "linux", feature = "gtk"))]
+// The gtk4-rs deps are BOTH target-gated (Linux/FreeBSD) and `gtk`-feature-
+// optional (`Cargo.toml`), so the macOS/embedded build is byte-behavior-identical
+// whether or not the feature is named. `Runtime::Gtk` is already the Linux AND
+// FreeBSD default (`rustty-build-config/src/apprt.rs:26-36`, the port of
+// `apprt/runtime.zig:14-24` `.linux, .freebsd => .gtk`); the `rustty` bin binds
+// it in L5.5.
+//
+// PORT NOTE (W2D/F-002): the OS half of the gate is `any(linux, freebsd)`, not
+// `linux` — the reference has NO os.tag guard on the gtk apprt at all; the only
+// OS input is `Runtime.default()` (`runtime.zig:18` `.linux, .freebsd => .gtk`),
+// so FreeBSD builds and launches the SAME GTK application Linux does. gtk4-rs
+// discovers its libraries through pkg-config with no OS assumption, and FreeBSD
+// ports ships gtk4/libadwaita/gtk4-layer-shell/wayland/x11.
+#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 pub mod gtk;
 pub mod none;
 
@@ -328,6 +337,20 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     // Find our resources directory once for the app so every launch
     // hereafter can use this cached value.
     // self.resources_dir = try apprt.runtime.resourcesDir(self.alloc);
+    //
+    // PORT NOTE (W16-GTK-02): `apprt.runtime` is the comptime-selected apprt
+    // (`apprt.zig:41-49`), and EVERY apprt exports `resourcesDir`: `none`,
+    // `browser` and `embedded` alias `internal_os.resourcesDir` verbatim
+    // (`none.zig:6`, `browser.zig:2`, `embedded.zig:28`) while `gtk` overrides it
+    // with the Flatpak-aware helper (`gtk.zig:4` -> `gtk/flatpak.zig:7-29`).
+    // Rustty's runtime selector is the `cfg` that declares `mod gtk` (the
+    // documented cfg-as-comptime-switch, top of this file), so the dispatch is
+    // spelled as the same two-arm cfg here. Off the gtk gate this is byte-
+    // identical to the previous unconditional `rustty_os::resourcesDir()` — the
+    // none/embedded/browser alias.
+    #[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
+    let resources_dir = gtk::resources_dir().map_err(InitError::ResourcesDir)?;
+    #[cfg(not(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk")))]
     let resources_dir = rustty_os::resourcesDir().map_err(InitError::ResourcesDir)?;
 
     // Populate the config crate's `.resources` theme-search seam (BREAK #1)
@@ -355,6 +378,12 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     state.logging = logging;
     state.rlimits = rlimits;
     let _ = rustty_core::STATE.set(state);
+    // Mirror the SAME computed logging into the leaf process-global so crates
+    // below rustty-core (rustty-config's `.config` scoped logger) see the
+    // reference `global.logging()` accessor's value — the stderr gate that
+    // keeps action output clean (`if (self.action != null) self.logging.stderr
+    // = false;`). One computation site (`compute_logging` above), two mirrors.
+    rustty_global::set_logging(logging);
 
     *done = true;
     Ok(logging)

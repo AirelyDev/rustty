@@ -43,6 +43,13 @@
 #                                    The workspace lanes already RUN the crate;
 #                                    what they cannot see is a test being
 #                                    DELETED. WS10 T4.
+#   G-WINPROTO-DEFAULT               the DEFAULT GUI dep graph per target
+#     check_default_linux_winproto.sh (Linux + FreeBSD: gtk4/libadwaita and both
+#                                    winproto arms; macOS: none)     -> HARD-FAIL
+#                                    F-007 wrote it; W2D/F-002 added the FreeBSD
+#                                    arm, the only machine-checkable half of
+#                                    "FreeBSD builds the GTK app" off a FreeBSD
+#                                    host. `cargo tree` only — no build.
 #   G1  check_tests_ported.py        100% test{} ported (==3234)     -> PROGRESS*
 #   G1b check_test_counts.py         per-module rust #[test] >= zig  -> PROGRESS*
 #                                    test{} (minus documented apc-deferred) —
@@ -397,6 +404,22 @@ GATE_REGISTRY=(
   "G-CENSUS-SELF|HARD|$PY $GATES/check_census_staleness.py --self-test"
   "G-CENSUS|HARD|$PY $GATES/check_census_staleness.py"
   "G-ONIG|HARD|bash $GATES/check_oniguruma_lane.sh"
+  # G-VTCLIB (2026-08-10, codex-vet W36-B03) — the lib-vt C artifact must keep
+  # the oracle's NULL decode_png default (sys.zig:16-20 `.lib => null`;
+  # GhosttyZig.zig:67-68 pins artifact=.lib). Cargo feature UNIFICATION is the
+  # hazard: any combined selection containing rustty-core resolves ONE rustty-vt
+  # with `wuffs` unified in, flipping the vt-c artifact's default decoder — so
+  # librustty-vt artifacts must come from ISOLATED `-p rustty-vt-c` invocations
+  # only (the publish rule, ledgered in DEFERRALS.md §"decode_png"). The gate
+  # pins the isolated graph wuffs-free (cargo tree, no compile), proves its own
+  # detector on a simulated unification, and runs the `#[ignore]`d vt-c
+  # null-default test under the one selection where it is binding. The SELF
+  # entry first (G-CENSUS-SELF/G-TESTS-SELF convention): the runtime arm's FAIL
+  # path is proven reachable by re-running the test with
+  # `--features rustty-vt/wuffs`, which must go red — if it cannot, the main
+  # entry's green means nothing.
+  "G-VTCLIB-SELF|HARD|bash $GATES/check_vtc_lib_isolation.sh --self-test"
+  "G-VTCLIB|HARD|bash $GATES/check_vtc_lib_isolation.sh"
   # G-GTKFEAT (2026-07-31) — the same hole as G-ONIG, one crate over. The
   # workspace clippy lane above builds with DEFAULT features, and rustty-apprt's
   # gtk/wayland/x11 features are default-OFF, so ~30k lines of ported GTK4/
@@ -421,6 +444,32 @@ GATE_REGISTRY=(
   # count arm is mutation-proven both synthetically (`--self-test`, 4 arms) and
   # live (floor raised to 15 against the real crate -> exit 1).
   "G-BENCH|HARD|bash $GATES/check_bench_tests.sh"
+  # G-WINCHK (2026-08-11, codex-vet F-001 / W2D_WINDOWS_OS) — the shared OS layer
+  # plus VT and VT-C must TYPE-CHECK for `x86_64-pc-windows-msvc`. The oracle
+  # CI-tests exactly this surface (`build-libghostty-vt-windows`,
+  # `.github/workflows/test.yml`); rustty's `rustty-os` had never compiled for
+  # windows at all (25 errors: unix-gated `libc` used from windows-visible
+  # modules, two eager `compile_error!`s, a `WindowsPtyError` with no `Error`
+  # impl), which cut vt / vt-c / termio off entirely. No windows host exists here,
+  # so this proves TYPE-CHECKING ONLY — never linking or execution; that limit is
+  # restated in the script's own header rather than left implicit. Step 2 re-runs
+  # the host check with `RUSTTY_SYS_CHECK_ONLY` UNSET, so the check-only `-sys`
+  # skip cannot silently swallow the native build. Exits 3 BLOCKED (a warning,
+  # never a pass) when the windows rust-std is not installed.
+  "G-WINCHK|HARD|bash $GATES/w2f001_windows_check_gate.sh"
+  # G-WINPROTO-DEFAULT (wired 2026-08-11, W2D §E/WI-14; the script predates this
+  # and had never been on any roster) — the DEFAULT GUI dependency graph, pinned
+  # per target. It was F-007's Linux/macOS predicate (both winproto arms on Linux,
+  # neither on macOS) and now also carries W2D/F-002's FreeBSD arm: the oracle
+  # gives FreeBSD the same `.gtk` runtime Linux gets (`apprt/runtime.zig:14-24`),
+  # so the FreeBSD graph must resolve the same gtk4/libadwaita/winproto set. This
+  # is the ONLY machine-checkable half of F-002 available off a FreeBSD host — the
+  # gtk4-rs `-sys` crates probe pkg-config for the target, so a gtk-featured
+  # `cargo check --target x86_64-unknown-freebsd` cannot run here (DEFERRALS.md
+  # "FreeBSD — the platform's explicit ledger row"). `cargo tree` resolves without
+  # building, so this is cheap and host-agnostic; the macOS control arm keeps it
+  # from passing merely because a target gate stopped gating.
+  "G-WINPROTO-DEFAULT|HARD|bash $GATES/check_default_linux_winproto.sh"
   "G1|PROGRESS|$PY $GATES/check_tests_ported.py"
   "G1b|PROGRESS|run_test_counts"
   "G2|PROGRESS|$PY $GATES/check_assertions.py"

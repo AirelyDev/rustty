@@ -83,6 +83,14 @@ use rustty_os as internal_os;
 
 use crate::surface::SurfaceMailbox;
 
+// PORT NOTE (surface-mailbox seam): the adapter below is owned by an `Arc` inside
+// the renderer's `generic::SurfaceMailbox` handle, and it pushes through the
+// `AppMailbox` trait (apprt-api's replacement for the reference
+// `apprt.surface.Mailbox` struct) with the queue's own `Timeout` modes.
+use apprt::surface::AppMailbox;
+use rustty_datastruct::blocking_queue::Timeout;
+use std::sync::Arc;
+
 // Thread.zig:19-20
 const DRAW_INTERVAL: u64 = 8; // 120 FPS
 const CURSOR_BLINK_INTERVAL: u64 = 600;
@@ -219,6 +227,57 @@ pub type RendererError = rustty_renderer::generic::Error;
 // own `rustty_renderer::thread::DerivedConfig` (`custom_shader_animation`),
 // which `Thread<A>.config` below embeds.
 
+/// The core side of the renderer's surface-mailbox seam: adapts core's real
+/// `apprt.surface.Mailbox` (`crate::surface::SurfaceMailbox<A>`) to the
+/// renderer-defined [`rustty_renderer::generic::SurfaceMailboxSink`] trait.
+//
+// PORT NOTE (surface-mailbox seam RESOLVED, GPU_RD_CHUNK3A_DESIGN §B.2): the
+// reference simply copies `apprt.surface.Mailbox` BY VALUE into the renderer
+// (`renderer/Options.zig` -> `generic.zig:704 .surface_mailbox =
+// options.surface_mailbox`). rustty cannot: `rustty-apprt-api ->
+// rustty-renderer`, so the renderer may not name an apprt type (check_acyclic).
+// The design's prescribed resolution is this adapter — the renderer declares the
+// trait + its own two-variant `SurfaceMessage`, core implements the trait and
+// re-wraps into the full `apprt::surface::Message`. The apprt-typed side stays in
+// core exactly as the `RendererConfig` accessor trait keeps the config-typed side
+// in rustty-config.
+//
+// Owned by an `Arc` inside `generic::SurfaceMailbox`, so `push` takes `&self`
+// (the reference's `push` receiver is a by-VALUE `Mailbox`, itself `Copy`).
+struct SurfaceMailboxAdapter<A: apprt::App + 'static> {
+    surface_mailbox: SurfaceMailbox<A>,
+}
+
+impl<A: apprt::App + 'static> rustty_renderer::generic::SurfaceMailboxSink
+    for SurfaceMailboxAdapter<A>
+{
+    // _ = self.surface_mailbox.push(msg, timeout);
+    fn push(
+        &self,
+        msg: rustty_renderer::generic::SurfaceMessage,
+        timeout: rustty_renderer::generic::MailboxTimeout,
+    ) -> usize {
+        use rustty_renderer::generic::MailboxTimeout as RTimeout;
+        use rustty_renderer::generic::SurfaceMessage as RMessage;
+
+        // `.instant` (drawFrame :1454) / `.{ .forever = {} }` (frameCompleted
+        // :1735) -> the queue's own timeout modes.
+        let timeout = match timeout {
+            RTimeout::Instant => Timeout::Instant,
+            RTimeout::Forever => Timeout::Forever,
+        };
+        // Re-wrap the renderer's two-variant message into the full
+        // `apprt.surface.Message` union the surface handles
+        // (`Surface::handleMessage` -> `updateScrollbar`/`updateRendererHealth`).
+        let msg = match msg {
+            RMessage::Scrollbar(scrollbar) => apprt::surface::Message::Scrollbar(scrollbar),
+            RMessage::RendererHealth(health) => apprt::surface::Message::RendererHealth(health),
+        };
+        // `App.Mailbox.Queue.Size` (u32) -> the trait's `usize` count.
+        usize::try_from(self.surface_mailbox.push(msg, timeout)).unwrap_or(0)
+    }
+}
+
 /// The renderer implementation — the monomorphic `rustty_renderer::Renderer`,
 /// wrapped so core keeps the camelCase seam names + the `Options<A>` ctor whose
 /// apprt-typed fields the real `generic::Options` cannot hold (surface-mailbox
@@ -299,7 +358,18 @@ impl Renderer {
             rt_surface,
             thread,
         } = options;
-        let _ = (surface_mailbox, rt_surface, thread); // held-in-core seam bits
+        let _ = (rt_surface, thread); // held-in-core seam bits
+
+        // SURFACE-MAILBOX SEAM RESOLVED (GPU_RD_CHUNK3A_DESIGN §B.2): the real
+        // `apprt.surface.Mailbox` is no longer DISCARDED here — it is wrapped in
+        // the renderer-defined `SurfaceMailboxSink` and handed to the renderer, so
+        // `drawFrame`'s `.scrollbar` push (generic.zig:1452-1454) and
+        // `frameCompleted`'s `.renderer_health` push (:1735-1737) reach
+        // `Surface::handleMessage` for real.
+        let surface_mailbox =
+            rustty_renderer::generic::SurfaceMailbox::new(Arc::new(SurfaceMailboxAdapter {
+                surface_mailbox,
+            }));
         #[cfg(target_os = "macos")]
         {
             let inner = rustty_renderer::Renderer::init(
@@ -308,6 +378,7 @@ impl Renderer {
                     config,
                     font_grid,
                     size,
+                    surface_mailbox,
                 },
             )?;
             Ok(Renderer(inner))
@@ -328,6 +399,7 @@ impl Renderer {
                     config,
                     font_grid,
                     size,
+                    surface_mailbox,
                 },
             )?;
             Ok(Renderer(inner))
@@ -2074,11 +2146,14 @@ mod compression_tests {
 
     /// The fake apprt runtime. Only `App::Surface` matters here: no method on it
     /// is reachable from the compression paths.
-    struct TestApp;
+    //
+    // `pub(super)` so the sibling `surface_mailbox_seam_tests` module can reuse the
+    // fake runtime instead of duplicating ~100 lines of `unimplemented!()` stubs.
+    pub(super) struct TestApp;
 
     /// The fake runtime surface. `Core = crate::surface::Surface<TestApp>` is what
     /// satisfies the `changeConfig` impl block's bound.
-    struct TestSurface;
+    pub(super) struct TestSurface;
 
     impl apprt::App for TestApp {
         type Surface = TestSurface;
@@ -2417,5 +2492,140 @@ mod compression_tests {
         // Drain the pass the first wake armed so the loop has no live completion
         // when the harness tears down.
         h.run();
+    }
+}
+
+// ===========================================================================
+// F-014 PROVING TESTS — the core half of the surface-mailbox seam
+// ===========================================================================
+//
+// Before the fix, `Renderer::init` DISCARDED the real `apprt.surface.Mailbox`
+// (`let _ = (surface_mailbox, rt_surface, thread);`) and the renderer's mailbox
+// was a unit struct whose `push` returned 0, so the renderer's `.scrollbar` /
+// `.renderer_health` pushes reached NOTHING. These tests drive the shipped
+// adapter and assert the messages land on the REAL app queue in the exact
+// `apprt.surface.Message` shape `Surface::handleMessage` dispatches on.
+#[cfg(test)]
+mod surface_mailbox_seam_tests {
+    use rustty_renderer::generic::{
+        MailboxTimeout as RTimeout, SurfaceMailboxSink, SurfaceMessage as RMessage,
+    };
+    use rustty_renderer::Health;
+    use rustty_vt::pagelist::grow::Scrollbar;
+
+    use super::compression_tests::TestApp;
+    use super::*;
+    use crate::app::{Mailbox as AppMailboxHandle, Message as AppMessage, Queue};
+
+    fn scrollbar() -> Scrollbar {
+        Scrollbar {
+            total: 120,
+            offset: 7,
+            len: 24,
+        }
+    }
+
+    /// The renderer's two pushes, driven through the shipped
+    /// [`SurfaceMailboxAdapter`], must land on the real `App.Mailbox.Queue` as
+    /// `App.Message.surface_message` envelopes carrying the surface pointer and
+    /// the matching `apprt.surface.Message` variant — the exact shape
+    /// `App.surfaceMessage` -> `Surface::handleMessage` ->
+    /// `updateScrollbar`/`updateRendererHealth` consumes.
+    #[test]
+    fn adapter_enqueues_scrollbar_and_health_onto_the_real_app_queue() {
+        let mut rt_app = TestApp;
+        let mut queue: Box<Queue<TestApp>> = Queue::create();
+
+        // The envelope only CARRIES the surface pointer (the app thread dispatches
+        // on it later); nothing on this path dereferences it, so a null stand-in
+        // keeps the test free of a full `Surface` stand-up.
+        let surface: *mut crate::surface::Surface<TestApp> = core::ptr::null_mut();
+        let adapter = SurfaceMailboxAdapter {
+            surface_mailbox: SurfaceMailbox::<TestApp> {
+                surface,
+                app: AppMailboxHandle::<TestApp> {
+                    rt_app: &raw mut rt_app,
+                    mailbox: &raw mut *queue,
+                },
+            },
+        };
+
+        // `push` returns the queue size AFTER the push (the reference's
+        // `App.Mailbox.Queue.Size`) — the `> 0` the scrollbar `defer` tests.
+        assert_eq!(
+            adapter.push(RMessage::Scrollbar(scrollbar()), RTimeout::Instant),
+            1
+        );
+        assert_eq!(
+            adapter.push(
+                RMessage::RendererHealth(Health::Unhealthy),
+                RTimeout::Forever
+            ),
+            2
+        );
+
+        let mut drained: Vec<AppMessage<TestApp>> = Vec::new();
+        while let Some(msg) = queue.pop() {
+            drained.push(msg);
+        }
+        assert_eq!(drained.len(), 2, "both renderer pushes must be queued");
+
+        match &drained[0] {
+            AppMessage::SurfaceMessage(env) => {
+                assert_eq!(env.surface, surface);
+                match env.message {
+                    apprt::surface::Message::Scrollbar(got) => assert_eq!(got, scrollbar()),
+                    _ => panic!("expected apprt.surface.Message.scrollbar"),
+                }
+            }
+            _ => panic!("expected App.Message.surface_message"),
+        }
+        match &drained[1] {
+            AppMessage::SurfaceMessage(env) => {
+                assert_eq!(env.surface, surface);
+                match env.message {
+                    apprt::surface::Message::RendererHealth(got) => {
+                        assert_eq!(got, Health::Unhealthy)
+                    }
+                    _ => panic!("expected apprt.surface.Message.renderer_health"),
+                }
+            }
+            _ => panic!("expected App.Message.surface_message"),
+        }
+    }
+
+    /// A FULL queue makes the adapter report 0 — the value `drawFrame`'s
+    /// scrollbar `defer` needs in order to KEEP `scrollbar_dirty` set ("Fail
+    /// instantly if the surface mailbox if full, we'll just get it on the next
+    /// frame", generic.zig:1450-1455).
+    #[test]
+    fn adapter_reports_zero_when_the_queue_is_full() {
+        let mut rt_app = TestApp;
+        let mut queue: Box<Queue<TestApp>> = Queue::create();
+        let surface: *mut crate::surface::Surface<TestApp> = core::ptr::null_mut();
+        let adapter = SurfaceMailboxAdapter {
+            surface_mailbox: SurfaceMailbox::<TestApp> {
+                surface,
+                app: AppMailboxHandle::<TestApp> {
+                    rt_app: &raw mut rt_app,
+                    mailbox: &raw mut *queue,
+                },
+            },
+        };
+
+        // `Queue<A> = BlockingQueue<Message<A>, 64>`; fill it to capacity.
+        for i in 0..64 {
+            assert!(
+                adapter.push(RMessage::Scrollbar(scrollbar()), RTimeout::Instant) > 0,
+                "push {i} should still fit"
+            );
+        }
+        assert_eq!(
+            adapter.push(RMessage::Scrollbar(scrollbar()), RTimeout::Instant),
+            0,
+            "a full queue must refuse an .instant push"
+        );
+
+        while queue.pop().is_some() {}
     }
 }

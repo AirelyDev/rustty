@@ -32,7 +32,25 @@ workspace = true
 [lib]
 doctest = false
 
+[features]
+# The Ghostty-ABI wasm C-ABI export groups the reference retains via
+# `comptime { _ = DeferredFace.Wasm; _ = face.web_canvas.Wasm; _ = shape.web_canvas.Wasm; }`
+# in `src/font/main.zig` — the UNPREFIXED `deferred_face_*`/`face_*`/`shaper_*`
+# exports (`DeferredFace.zig:423-466`, `face/web_canvas.zig:489-557`,
+# `shaper/web_canvas.zig:231-305`). OFF by default so the separate
+# `rustty_web_canvas.wasm` deliverable keeps its documented `rustty_wc_*`-only
+# surface; `rustty-wasm` (the `main_wasm.zig` artifact) turns it ON. Pulls in
+# `rustty-os` for the resurrected `os/wasm.zig` host-ownership tracker
+# (`face_render_glyph` returns a `wasm.toHostOwned` heap `*Glyph`).
+ghostty-wasm-abi = ["dep:rustty-os"]
+
 [dependencies]
+# Optional (feature `ghostty-wasm-abi` only): the resurrected pre-`9dc2e5978`
+# `os/wasm.zig` host-ownership tracker (`toHostOwned`), which the reference
+# `face_render_glyph` uses to hand a heap `*Glyph` to the JS host for the
+# exported `free` to release. Acyclic: `rustty-os` sits below the shaper tier
+# (rustty-vt-adjacent leaf) and depends on nothing in this crate's graph.
+rustty-os = { workspace = true, features = ["wasm-host-owned"], optional = true }
 # The crown-jewel terminal crate: the shaper tier sits ABOVE vt (D1). vt's
 # apc/glyph deps `rustty-font` below; this tier consumes vt types for shaping.
 rustty-vt = { workspace = true }

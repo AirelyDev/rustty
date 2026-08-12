@@ -27,10 +27,11 @@ use rustty_args::args::{
 };
 use rustty_cfg_fmt::{
     format_entry_display, format_entry_packed_struct, format_entry_string, format_entry_void,
-    FormatEntry, Writer,
+    FormatEntry, FormatError, Writer,
 };
 // PORTS: `u21` (Zig's 21-bit codepoint type) -> `rustty_vt::page::u21` (= u32).
 use rustty_vt::page::u21;
+use std::borrow::Cow;
 
 // PORT NOTE (R1): the value-type parse/format/clone/equal bodies below are the
 // fill of the C2 skeleton (sub-batch). Each reproduces the reference method
@@ -127,7 +128,11 @@ impl<T: LimitInt, const DEFAULT: u128> Limit<T, DEFAULT> {
     /// Formats the maximum integer value as "unlimited" and all other
     /// values as integers.
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // if (self.value == std.math.maxInt(T)) {
         //     try formatter.formatEntry([]const u8, "unlimited");
         // } else {
@@ -166,7 +171,11 @@ impl<T: LimitInt, const DEFAULT: u128> Default for Limit<T, DEFAULT> {
 }
 
 impl<T: LimitInt, const DEFAULT: u128> FormatEntry for Limit<T, DEFAULT> {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         Limit::format_entry(self, name, writer)
     }
 }
@@ -1713,7 +1722,11 @@ packed_to_c_uint!(NotifyOnCommandFinishAction { bell, notify });
 
 // packed struct { bold, italic, "bold-italic" }
 impl FormatEntry for FontSyntheticStyle {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         format_entry_packed_struct(
             name,
             &[
@@ -1736,13 +1749,17 @@ pub(crate) fn font_shaping_break_format_entry<W: Writer>(
     v: FontShapingBreak,
     name: &[u8],
     writer: &mut W,
-) -> Result<(), W::Error> {
+) -> Result<(), FormatError<W::Error>> {
     format_entry_packed_struct(name, &[(b"cursor", v.cursor)], writer)
 }
 
 // packed struct { cursor, sudo, title, "ssh-env", "ssh-terminfo", path }
 impl FormatEntry for ShellIntegrationFeatures {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         format_entry_packed_struct(
             name,
             &[
@@ -1760,14 +1777,22 @@ impl FormatEntry for ShellIntegrationFeatures {
 
 // packed struct { navigation }
 impl FormatEntry for SplitPreserveZoom {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         format_entry_packed_struct(name, &[(b"navigation", self.navigation)], writer)
     }
 }
 
 // packed struct { "clipboard-copy", "config-reload" }
 impl FormatEntry for AppNotifications {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         format_entry_packed_struct(
             name,
             &[
@@ -1781,7 +1806,11 @@ impl FormatEntry for AppNotifications {
 
 // packed struct { system, audio, attention, title, border }
 impl FormatEntry for BellFeatures {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         format_entry_packed_struct(
             name,
             &[
@@ -1798,7 +1827,11 @@ impl FormatEntry for BellFeatures {
 
 // packed struct { hinting, "force-autohint", monochrome, autohint, light }
 impl FormatEntry for FreetypeLoadFlags {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         format_entry_packed_struct(
             name,
             &[
@@ -1815,7 +1848,11 @@ impl FormatEntry for FreetypeLoadFlags {
 
 // packed struct { keystroke, output }
 impl FormatEntry for ScrollToBottom {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         format_entry_packed_struct(
             name,
             &[(b"keystroke", self.keystroke), (b"output", self.output)],
@@ -1826,7 +1863,11 @@ impl FormatEntry for ScrollToBottom {
 
 // packed struct { bell, notify }
 impl FormatEntry for NotifyOnCommandFinishAction {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         format_entry_packed_struct(
             name,
             &[(b"bell", self.bell), (b"notify", self.notify)],
@@ -1974,7 +2015,11 @@ impl WorkingDirectory {
     }
 
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // switch (self) {
         match self {
             // .home, .inherit => try formatter.formatEntry([]const u8, @tagName(self)),
@@ -1987,7 +2032,11 @@ impl WorkingDirectory {
 }
 
 impl FormatEntry for WorkingDirectory {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         WorkingDirectory::format_entry(self, name, writer)
     }
 }
@@ -2045,11 +2094,11 @@ impl Color {
         let input = input_.ok_or(Error::ValueRequired)?;
         // const rgb: terminal.color.RGB = terminal.color.RGB.parse(input) catch return error.InvalidValue;
         //
-        // PORT NOTE: `RGB::parse` takes `&str`; non-UTF-8 input has no valid
-        // parse in any accepted form (hex/name/rgb:), so it maps to InvalidValue,
-        // matching the reference (whose byte-level parse likewise rejects it).
-        let s = core::str::from_utf8(input).map_err(|_| Error::InvalidValue)?;
-        let rgb = rustty_vt::color::RGB::parse(s).map_err(|_| Error::InvalidValue)?;
+        // PORT NOTE: `RGB::parse` takes `&[u8]`, matching the reference's
+        // `parse(value: []const u8)`, so the CLI bytes are passed through
+        // unconverted; non-UTF-8 input has no valid parse in any accepted form
+        // (hex/name/rgb:) and maps to InvalidValue, as in the reference.
+        let rgb = rustty_vt::color::RGB::parse(input).map_err(|_| Error::InvalidValue)?;
         // return .{ .r = rgb.r, .g = rgb.g, .b = rgb.b };
         Ok(Color {
             r: rgb.r,
@@ -2076,7 +2125,7 @@ impl Color {
         self: Color,
         name: &[u8],
         writer: &mut W,
-    ) -> Result<(), W::Error> {
+    ) -> Result<(), FormatError<W::Error>> {
         // var buf: [128]u8 = undefined;
         // try formatter.formatEntry([]const u8, try self.formatBuf(&buf));
         let mut buf = [0u8; 128];
@@ -2104,7 +2153,11 @@ impl Color {
 }
 
 impl FormatEntry for Color {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         Color::format_entry(*self, name, writer)
     }
 }
@@ -2154,7 +2207,7 @@ impl TerminalColor {
         self: TerminalColor,
         name: &[u8],
         writer: &mut W,
-    ) -> Result<(), W::Error> {
+    ) -> Result<(), FormatError<W::Error>> {
         // switch (self) {
         match self {
             // .color => try self.color.formatEntry(formatter),
@@ -2168,7 +2221,11 @@ impl TerminalColor {
 }
 
 impl FormatEntry for TerminalColor {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         TerminalColor::format_entry(*self, name, writer)
     }
 }
@@ -2213,7 +2270,7 @@ impl BoldColor {
         self: BoldColor,
         name: &[u8],
         writer: &mut W,
-    ) -> Result<(), W::Error> {
+    ) -> Result<(), FormatError<W::Error>> {
         // switch (self) {
         match self {
             // .color => try self.color.formatEntry(formatter),
@@ -2225,7 +2282,11 @@ impl BoldColor {
 }
 
 impl FormatEntry for BoldColor {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         BoldColor::format_entry(*self, name, writer)
     }
 }
@@ -2301,7 +2362,11 @@ impl FontStyle {
     }
 
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // switch (self) {
         match self {
             // .default, .false => try formatter.formatEntry([]const u8, @tagName(self)),
@@ -2314,7 +2379,11 @@ impl FontStyle {
 }
 
 impl FormatEntry for FontStyle {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         FontStyle::format_entry(self, name, writer)
     }
 }
@@ -2459,7 +2528,7 @@ pub(crate) fn background_blur_format_entry<W: Writer>(
     v: BackgroundBlur,
     name: &[u8],
     writer: &mut W,
-) -> Result<(), W::Error> {
+) -> Result<(), FormatError<W::Error>> {
     // switch (self) {
     match v {
         // .false => try formatter.formatEntry(bool, false),
@@ -2545,12 +2614,21 @@ fn parse_unsigned_base0(buf: &[u8]) -> Result<u128, ParseIntError> {
         return Err(ParseIntError::InvalidCharacter);
     }
 
+    // if (buf_start[0] == '_' or buf_start[buf_start.len - 1] == '_') return error.InvalidCharacter;
+    //
+    // `std.fmt.parseInt` rejects a `_` separator only at the FIRST or LAST
+    // position of the post-sign/post-prefix digit run; interior (including
+    // doubled) separators are skipped by the loop below. `_12`, `12_` and
+    // `0x_10` are therefore `error.InvalidCharacter`, while `1__2` is 12.
+    let digits = &buf[i..];
+    if digits[0] == b'_' || digits[digits.len() - 1] == b'_' {
+        return Err(ParseIntError::InvalidCharacter);
+    }
+
     let mut acc: u128 = 0;
     let mut any = false;
-    for &c in &buf[i..] {
-        // `_` digit separators are allowed by std.fmt.parseInt (but not as the
-        // first/last char or doubled; we accept them anywhere, which is a
-        // superset never exercised by config inputs).
+    for &c in digits {
+        // if (c == '_') continue;
         if c == b'_' {
             continue;
         }
@@ -2684,7 +2762,11 @@ impl ColorList {
     }
 
     // pub fn formatEntry(self: Self, formatter: anytype) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // If no items, we want to render an empty field.
         // if (self.colors.items.len == 0) { try formatter.formatEntry(void, {}); return; }
         if self.colors.is_empty() {
@@ -2716,7 +2798,11 @@ impl ColorList {
 }
 
 impl FormatEntry for ColorList {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         ColorList::format_entry(self, name, writer)
     }
 }
@@ -2823,7 +2909,11 @@ impl Palette {
     }
 
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // var buf: [128]u8 = undefined;
         // for (0.., self.value) |k, v| {
         //     try formatter.formatEntry([]const u8,
@@ -2839,7 +2929,11 @@ impl Palette {
 }
 
 impl FormatEntry for Palette {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         Palette::format_entry(self, name, writer)
     }
 }
@@ -2933,7 +3027,11 @@ impl RepeatableString {
 
     /// Used by Formatter
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // If no items, we want to render an empty field.
         // if (self.list.items.len == 0) { try formatter.formatEntry(void, {}); return; }
         if self.list.is_empty() {
@@ -2949,7 +3047,11 @@ impl RepeatableString {
 }
 
 impl FormatEntry for RepeatableString {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         RepeatableString::format_entry(self, name, writer)
     }
 }
@@ -3024,7 +3126,11 @@ impl SelectionWordChars {
 
     /// Used by Formatter
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // Convert codepoints back to UTF-8 string for display
         // var buf: [4096]u8 = undefined;
         // var pos: usize = 0;
@@ -3058,7 +3164,11 @@ impl SelectionWordChars {
 }
 
 impl FormatEntry for SelectionWordChars {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         SelectionWordChars::format_entry(self, name, writer)
     }
 }
@@ -3139,7 +3249,11 @@ impl RepeatableFontVariation {
 
     /// Used by Formatter
     // pub fn formatEntry(self: Self, formatter: anytype) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // if (self.list.items.len == 0) { try formatter.formatEntry(void, {}); return; }
         if self.list.is_empty() {
             return format_entry_void(name, writer);
@@ -3163,7 +3277,11 @@ impl RepeatableFontVariation {
 }
 
 impl FormatEntry for RepeatableFontVariation {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         RepeatableFontVariation::format_entry(self, name, writer)
     }
 }
@@ -4952,7 +5070,7 @@ impl Keybinds {
         &self,
         formatter: &mut rustty_cfg_fmt::EntryFormatter<W>,
         docs: bool,
-    ) -> Result<(), W::Error> {
+    ) -> Result<(), FormatError<W::Error>> {
         use rustty_input::binding::{write_trigger_to_buffer, RewindBuffer};
         use rustty_input::helpgen_actions::{HelpStrings, RealHelpStrings};
 
@@ -4967,8 +5085,11 @@ impl Keybinds {
 
         // var buf: [1024]u8 = undefined;
         //
-        // PORT NOTE: the reference's fixed 1024-byte stack buffer is the growable
-        // `RewindBuffer` (its `format_entries` callers rewind via the `end` cursor).
+        // PORT NOTE: the reference's fixed 1024-byte stack buffer is the
+        // `RewindBuffer` (its `format_entries` callers rewind via the `end`
+        // cursor), which is capped at the same `REWIND_BUFFER_CAPACITY` = 1024 so
+        // an overlong prefix fails here exactly as `std.Io.Writer.fixed` does
+        // (`catch return error.OutOfMemory`).
         let help_strings = RealHelpStrings;
 
         // Format root set bindings
@@ -5010,7 +5131,7 @@ impl Keybinds {
             // var writer: std.Io.Writer = .fixed(&buf);
             // writer.print("{f}", .{k}) catch return error.OutOfMemory;
             let mut writer = RewindBuffer::new();
-            write_trigger_to_buffer(k, &mut writer).map_err(|_| ()).ok();
+            write_trigger_to_buffer(k, &mut writer).map_err(|_| FormatError::OutOfMemory)?;
             // try v.formatEntries(&writer, formatter);
             format_entries_into(v, &mut writer, formatter)?;
         }
@@ -5031,9 +5152,13 @@ impl Keybinds {
                 // var writer: std.Io.Writer = .fixed(&buf);
                 // writer.print("{s}/{f}", .{ table_name, k }) catch return error.OutOfMemory;
                 let mut writer = RewindBuffer::new();
-                writer.write_all(table_name).ok();
-                writer.write_all(b"/").ok();
-                write_trigger_to_buffer(k, &mut writer).ok();
+                writer
+                    .write_all(table_name)
+                    .map_err(|_| FormatError::OutOfMemory)?;
+                writer
+                    .write_all(b"/")
+                    .map_err(|_| FormatError::OutOfMemory)?;
+                write_trigger_to_buffer(k, &mut writer).map_err(|_| FormatError::OutOfMemory)?;
                 // try v.formatEntries(&writer, formatter);
                 format_entries_into(v, &mut writer, formatter)?;
             }
@@ -5047,7 +5172,7 @@ impl Keybinds {
     pub fn format_entry<W: Writer>(
         &self,
         formatter: &mut rustty_cfg_fmt::EntryFormatter<W>,
-    ) -> Result<(), W::Error> {
+    ) -> Result<(), FormatError<W::Error>> {
         // try self.formatEntryDocs(formatter, false);
         self.format_entry_docs(formatter, false)
     }
@@ -5076,21 +5201,18 @@ fn v_tag_name(v: &rustty_input::binding::Value) -> &[u8] {
 // PORT NOTE: adapter for `v.formatEntries(&writer, formatter)` — the reference
 // passes the fixed writer + formatter and bubbles `error.OutOfMemory`/writer
 // errors. The Rust `Value::format_entries` returns `FormatEntriesError<W::Error>`;
-// the `OutOfMemory` arm cannot occur for the growable `RewindBuffer`, so it is
-// mapped through (unreachable in practice) and the writer error is surfaced.
+// both variants fold into the formatter error union (`FormatError`) variant-for-
+// variant, exactly the reference's inferred-error-set merge at the `try` site.
 fn format_entries_into<W: Writer>(
     v: &rustty_input::binding::Value,
     buffer: &mut rustty_input::binding::RewindBuffer,
     formatter: &mut rustty_cfg_fmt::EntryFormatter<W>,
-) -> Result<(), W::Error> {
+) -> Result<(), FormatError<W::Error>> {
     use rustty_input::binding::FormatEntriesError;
     match v.format_entries(buffer, formatter) {
         Ok(()) => Ok(()),
-        Err(FormatEntriesError::Writer(e)) => Err(e),
-        // The growable RewindBuffer never overflows, so OutOfMemory is unreachable.
-        Err(FormatEntriesError::OutOfMemory) => unreachable!(
-            "RewindBuffer is growable; the reference's fixed-buffer OutOfMemory cannot occur"
-        ),
+        Err(FormatEntriesError::Writer(e)) => Err(FormatError::Writer(e)),
+        Err(FormatEntriesError::OutOfMemory) => Err(FormatError::OutOfMemory),
     }
 }
 
@@ -5229,7 +5351,11 @@ impl RepeatableCodepointMap {
     }
 
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // if (self.map.list.len == 0) {
         if self.map.is_empty() {
             // try formatter.formatEntry(void, {});
@@ -5266,7 +5392,11 @@ impl RepeatableCodepointMap {
 }
 
 impl FormatEntry for RepeatableCodepointMap {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         RepeatableCodepointMap::format_entry(self, name, writer)
     }
 }
@@ -5395,7 +5525,11 @@ impl RepeatableClipboardCodepointMap {
 
     /// Used by Formatter
     // pub fn formatEntry(self: Self, formatter: anytype) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         use rustty_vt::formatter::Replacement;
         // if (self.map.list.len == 0) { try formatter.formatEntry(void, {}); return; }
         if self.map.list.is_empty() {
@@ -5419,37 +5553,99 @@ impl RepeatableClipboardCodepointMap {
             };
 
             // if (range[0] == range[1]) {
-            //     try formatter.formatEntry([]const u8, std.fmt.bufPrint(&buf, "U+{X:0>4}={s}", .{ range[0], value_str }) catch ...);
+            //     try formatter.formatEntry([]const u8, std.fmt.bufPrint(&buf, "U+{X:0>4}={s}", .{ range[0], value_str }) catch return error.OutOfMemory);
             // } else {
-            //     try formatter.formatEntry([]const u8, std.fmt.bufPrint(&buf, "U+{X:0>4}-U+{X:0>4}={s}", .{ range[0], range[1], value_str }) catch ...);
+            //     try formatter.formatEntry([]const u8, std.fmt.bufPrint(&buf, "U+{X:0>4}-U+{X:0>4}={s}", .{ range[0], range[1], value_str }) catch return error.OutOfMemory);
             // }
-            let mut s: Vec<u8> = Vec::new();
-            if range[0] == range[1] {
-                s.extend_from_slice(format!("U+{:04X}=", range[0]).as_bytes());
-                s.extend_from_slice(&value_str);
+            //
+            // PORT NOTE (fidelity): each entry is serialized through the
+            // reference's FIXED `var buf: [1024]u8`, so a `.string` replacement
+            // long enough to push the rendered entry past 1024 bytes makes
+            // `bufPrint` fail with `error.NoSpaceLeft`, which the reference
+            // catches and returns as `error.OutOfMemory` — the whole config dump
+            // fails. A growable `Vec` here silently accepted those overlong
+            // entries; the fixed scratch below reproduces the reference bound
+            // exactly (boundary: 1017 replacement bytes for a 4-hex-digit single
+            // codepoint, 1010 for the range form). `value_buf: [32]u8` needs no
+            // such treatment: a `u21` renders at most `U+1FFFFF` (8 bytes).
+            let mut buf = [0u8; 1024];
+            let prefix = if range[0] == range[1] {
+                format!("U+{:04X}=", range[0])
             } else {
-                s.extend_from_slice(format!("U+{:04X}-U+{:04X}=", range[0], range[1]).as_bytes());
-                s.extend_from_slice(&value_str);
-            }
-            format_entry_string(name, &s, writer)?;
+                format!("U+{:04X}-U+{:04X}=", range[0], range[1])
+            };
+            let s = buf_print_parts(&mut buf, &[prefix.as_bytes(), &value_str])
+                .ok_or(FormatError::OutOfMemory)?;
+            format_entry_string(name, s, writer)?;
         }
         Ok(())
     }
 }
 
 impl FormatEntry for RepeatableClipboardCodepointMap {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         RepeatableClipboardCodepointMap::format_entry(self, name, writer)
     }
 }
 
+/// PORTS: `std.fmt.bufPrint(&buf, fmt, args)` over already-rendered byte
+/// segments: copies `parts` into `buf` in order and returns the written prefix,
+/// or `None` for the reference's `error.NoSpaceLeft` when they do not fit. Used
+/// where the reference's formatting bound is a fixed stack buffer whose overflow
+/// is observable (`catch return error.OutOfMemory`).
+fn buf_print_parts<'a>(buf: &'a mut [u8], parts: &[&[u8]]) -> Option<&'a [u8]> {
+    let mut n: usize = 0;
+    for part in parts {
+        let end = n.checked_add(part.len())?;
+        if end > buf.len() {
+            return None;
+        }
+        buf[n..end].copy_from_slice(part);
+        n = end;
+    }
+    Some(&buf[..n])
+}
+
 /// PORTS: `std.fmt.parseInt(u21, str, 16)` — a 21-bit unsigned hex parse.
+//
+// PORT NOTE: `parseInt` is not a bare hex-digit scan: it accepts an optional
+// leading sign (std/fmt.zig:328-329) and `_` digit separators, rejecting `_`
+// only as the first or last char of the post-sign digit run (std/fmt.zig:439).
+// For an unsigned result a '-' sign only parses when the magnitude is zero
+// (std/fmt.zig:447-451 casts the negated first digit into the unsigned
+// accumulator). All error paths collapse to `error.InvalidValue` at the call
+// sites, which do `parseInt(...) catch return error.InvalidValue`.
 fn parse_int_u21_base16(input: &[u8]) -> Result<u21, ParseError> {
+    // if (buf.len == 0) return error.InvalidCharacter;
     if input.is_empty() {
         return Err(Error::InvalidValue);
     }
+
+    // if (buf[0] == '+') ... .pos; if (buf[0] == '-') ... .neg;
+    let (negative, digits) = match input[0] {
+        b'+' => (false, &input[1..]),
+        b'-' => (true, &input[1..]),
+        _ => (false, input),
+    };
+    // parseIntWithSign re-checks emptiness ("+"/"-" alone are invalid).
+    if digits.is_empty() {
+        return Err(Error::InvalidValue);
+    }
+    // if (buf_start[0] == '_' or buf_start[buf_start.len - 1] == '_') return error.InvalidCharacter;
+    if digits[0] == b'_' || digits[digits.len() - 1] == b'_' {
+        return Err(Error::InvalidValue);
+    }
+
     let mut acc: u32 = 0;
-    for &c in input {
+    for &c in digits {
+        // if (c == '_') continue;
+        if c == b'_' {
+            continue;
+        }
         let digit = match c {
             b'0'..=b'9' => (c - b'0') as u32,
             b'a'..=b'f' => (c - b'a' + 10) as u32,
@@ -5464,6 +5660,10 @@ fn parse_int_u21_base16(input: &[u8]) -> Result<u21, ParseError> {
         if acc > 0x1F_FFFF {
             return Err(Error::InvalidValue);
         }
+    }
+    // A '-' sign against an unsigned result only survives at magnitude zero.
+    if negative && acc != 0 {
+        return Err(Error::InvalidValue);
     }
     Ok(acc)
 }
@@ -5707,7 +5907,11 @@ impl RepeatableLink {
 
     /// Used by Formatter
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry<W: Writer>(&self, _name: &[u8], _writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        _name: &[u8],
+        _writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // This currently can't be set so we don't format anything.
         // _ = self; _ = formatter;
         Ok(())
@@ -5715,7 +5919,11 @@ impl RepeatableLink {
 }
 
 impl FormatEntry for RepeatableLink {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         RepeatableLink::format_entry(self, name, writer)
     }
 }
@@ -5867,7 +6075,11 @@ impl RepeatableCommand {
     // entry into an owned `Vec<u8>` (no fixed cap; the observable bytes are
     // identical) and emits it via `format_entry_string`. `std.zig.fmtString` ->
     // `zig_string_escape`; `{f}` on the action -> `Command.action.format`.
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // if (self.value.items.len == 0) {
         if self.value.is_empty() {
             // try formatter.formatEntry(void, {});
@@ -5914,7 +6126,11 @@ impl RepeatableCommand {
 }
 
 impl FormatEntry for RepeatableCommand {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         RepeatableCommand::format_entry(self, name, writer)
     }
 }
@@ -5988,7 +6204,11 @@ impl MouseScrollMultiplier {
 
     /// Used by Formatter
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // var buf: [4096]u8 = undefined;
         // var writer: std.Io.Writer = .fixed(&buf);
         // writer.print("precision:{d},discrete:{d}", .{ self.precision, self.discrete }) catch ...;
@@ -6027,7 +6247,11 @@ impl AutoStruct for MouseScrollMultiplier {
 }
 
 impl FormatEntry for MouseScrollMultiplier {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         MouseScrollMultiplier::format_entry(self, name, writer)
     }
 }
@@ -6144,28 +6368,113 @@ impl QuickTerminalSizeSize {
     }
 }
 
-/// PORTS: `std.fmt.parseInt(u32, input, 10)`.
+/// PORTS: `std.fmt.parseInt(u32, input, 10)` — i.e.
+/// `parseIntWithGenericCharacter` (optional leading `+`/`-`) followed by
+/// `parseIntWithSign` (base-10 digit run with `_` separators).
+//
+// PORT NOTE: Rust's `str::parse::<u32>()` is NOT a faithful stand-in: the
+// reference accepts a leading `+`, accepts `_` digit separators anywhere except
+// the first/last position of the post-sign digit run (doubled separators
+// included — `1__0` is 10 for `parseInt`), and treats a `-` sign on an unsigned
+// type as `error.Overflow` for any non-zero magnitude while `-0` parses to 0.
+// All call sites collapse both `Overflow` and `InvalidCharacter` into
+// `error.InvalidValue`, so only the accept/reject boundary is observable.
 fn parse_int_u32_base10(input: &[u8]) -> Result<u32, ParseIntError> {
+    // if (buf.len == 0) return error.InvalidCharacter;
     if input.is_empty() {
         return Err(ParseIntError::InvalidCharacter);
     }
+
+    // if (buf[0] == '+') return parseIntWithSign(..., buf[1..], base, .pos);
+    // if (buf[0] == '-') return parseIntWithSign(..., buf[1..], base, .neg);
+    let (digits, negative) = match input[0] {
+        b'+' => (&input[1..], false),
+        b'-' => (&input[1..], true),
+        _ => (input, false),
+    };
+
+    // parseIntWithSign: if (buf.len == 0) return error.InvalidCharacter;
+    if digits.is_empty() {
+        return Err(ParseIntError::InvalidCharacter);
+    }
+
+    // if (buf_start[0] == '_' or buf_start[buf_start.len - 1] == '_')
+    //     return error.InvalidCharacter;
+    if digits[0] == b'_' || digits[digits.len() - 1] == b'_' {
+        return Err(ParseIntError::InvalidCharacter);
+    }
+
     let mut acc: u32 = 0;
-    for &c in input {
+    // for (buf_start) |c| {
+    for &c in digits {
+        // if (c == '_') continue;
+        if c == b'_' {
+            continue;
+        }
+        // const digit = try charToDigit(c, buf_base);
         let digit = match c {
             b'0'..=b'9' => (c - b'0') as u32,
             _ => return Err(ParseIntError::InvalidCharacter),
         };
+        // accumulate = try math.mul(...); accumulate = try add(...);
         acc = acc
             .checked_mul(10)
             .and_then(|v| v.checked_add(digit))
             .ok_or(ParseIntError::Overflow)?;
     }
+
+    // The `.neg` arm subtracts from an unsigned accumulator, which overflows for
+    // any non-zero magnitude; "-0" (and "-000") is 0.
+    if negative && acc != 0 {
+        return Err(ParseIntError::Overflow);
+    }
     Ok(acc)
 }
 
+/// PORTS: `std.fmt.parseFloat`'s `validUnderscores(s, 10)` — a `_` is legal only
+/// between two base-10 digits (so `1_0` and `1.5_5` are valid while `_10`,
+/// `10_`, `1__0`, `1_.5` and `1e_0` are `error.InvalidCharacter`). Returns the
+/// underscore-stripped bytes, or `None` when an underscore is misplaced.
+//
+// PORT NOTE: the reference's float parser skips `_` while scanning digits; the
+// port validates with the reference's own rule and then strips, which yields the
+// identical numeric value. The sign character is never a base-10 digit, so
+// running the check over the whole (un-sign-stripped) input matches the
+// reference's check over its number slice (`+_10` is rejected either way).
+fn zig_float_strip_underscores(input: &[u8]) -> Option<Cow<'_, [u8]>> {
+    if !input.contains(&b'_') {
+        return Some(Cow::Borrowed(input));
+    }
+
+    let mut i = 0usize;
+    while i < input.len() {
+        if input[i] == b'_' {
+            // underscore at start or end
+            if i == 0 || i + 1 == input.len() {
+                return None;
+            }
+            // consecutive underscores / non-digit neighbours
+            if !input[i - 1].is_ascii_digit() || !input[i + 1].is_ascii_digit() {
+                return None;
+            }
+            // next is guaranteed a digit, skip an extra
+            i += 1;
+        }
+        i += 1;
+    }
+
+    Some(Cow::Owned(
+        input.iter().copied().filter(|&c| c != b'_').collect(),
+    ))
+}
+
 /// PORTS: `std.fmt.parseFloat(f32, input)`.
+//
+// PORT NOTE: Rust's `str::parse::<f32>()` rejects the `_` digit separators the
+// reference accepts, so the underscores are validated + stripped first.
 fn parse_float_f32(input: &[u8]) -> Result<f32, ParseError> {
-    core::str::from_utf8(input)
+    let stripped = zig_float_strip_underscores(input).ok_or(Error::InvalidValue)?;
+    core::str::from_utf8(&stripped)
         .ok()
         .and_then(|s| s.parse::<f32>().ok())
         .ok_or(Error::InvalidValue)
@@ -6368,7 +6677,11 @@ impl QuickTerminalSize {
     }
 
     // pub fn formatEntry(self: QuickTerminalSize, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // const primary = self.primary orelse return;
         let primary = match self.primary {
             Some(p) => p,
@@ -6396,7 +6709,11 @@ impl QuickTerminalSize {
 }
 
 impl FormatEntry for QuickTerminalSize {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         QuickTerminalSize::format_entry(self, name, writer)
     }
 }
@@ -6479,7 +6796,11 @@ impl Theme {
 
     /// Used by Formatter
     // pub fn formatEntry(self: Theme, formatter: anytype) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // var buf: [4096]u8 = undefined;
         // if (std.mem.eql(u8, self.light, self.dark)) { try formatter.formatEntry([]const u8, self.light); return; }
         if self.light == self.dark {
@@ -6522,7 +6843,11 @@ impl AutoStruct for Theme {
 }
 
 impl FormatEntry for Theme {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         Theme::format_entry(self, name, writer)
     }
 }
@@ -6754,7 +7079,11 @@ impl Duration {
     }
 
     // pub fn formatEntry(self: Duration, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // var buf: [64]u8 = undefined;
         // var writer: std.Io.Writer = .fixed(&buf);
         // try self.format(&writer);
@@ -6814,7 +7143,11 @@ impl Duration {
 }
 
 impl FormatEntry for Duration {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         Duration::format_entry(self, name, writer)
     }
 }
@@ -6896,7 +7229,11 @@ impl WindowPadding {
     }
 
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void
-    pub fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    pub fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // var buf: [128]u8 = undefined;
         // if (self.top_left == self.bottom_right) {
         //     try formatter.formatEntry([]const u8, std.fmt.bufPrint(&buf, "{}", .{self.top_left}) catch ...);
@@ -6914,7 +7251,11 @@ impl WindowPadding {
 }
 
 impl FormatEntry for WindowPadding {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         WindowPadding::format_entry(self, name, writer)
     }
 }
@@ -7000,6 +7341,23 @@ mod tests {
     // -----------------------------------------------------------------------
     // Color
     // -----------------------------------------------------------------------
+
+    // REGRESSION (fuzz finding, `cargo fuzz run fuzz_osc` in rustty-vt,
+    // 2026-08-11): `parse_cli` hands its raw `[]const u8` straight to
+    // `RGB::parse`, which slices it by BYTE index exactly like the reference's
+    // `parse(value: []const u8)`. A config/CLI color value holding a multi-byte
+    // scalar (or raw invalid UTF-8) must be a plain `InvalidValue`, never a
+    // char-boundary panic.
+    #[test]
+    fn color_parse_cli_non_ascii_is_invalid_value_not_a_panic() {
+        // 6 BYTES, so `RGB::parse` takes its 6-byte arm and cuts inside 'é'.
+        assert!(Color::parse_cli(Some("aébcd".as_bytes())).is_err());
+        assert!(Color::parse_cli(Some("#aébcd".as_bytes())).is_err());
+        assert!(Color::parse_cli(Some("rgb:é/0/0".as_bytes())).is_err());
+        // Raw invalid UTF-8 (never a valid spec in any form).
+        assert!(Color::parse_cli(Some(b"U\x8evv")).is_err());
+        assert!(Color::parse_cli(Some(b"\xff\xfe\xfd")).is_err());
+    }
 
     // test "parseCLI hex" (was "fromHex" — oracle 2970e9a2a deleted fromHex;
     // parseCLI now covers the same hex forms via RGB::parse delegation)
@@ -7761,6 +8119,47 @@ mod tests {
         assert!(matches!(entry.replacement, Replacement::Codepoint(0x002D)));
     }
 
+    // PORT NOTE: no reference test — this pins the fact that the replacement
+    // codepoint goes through `std.fmt.parseInt(u21, value[2..], 16)` and not a
+    // bare hex scan: a leading sign and interior `_` separators are accepted,
+    // while a leading/trailing `_` and an out-of-range magnitude are not.
+    #[test]
+    fn repeatable_clipboard_codepoint_map_parse_cli_codepoint_parse_int_forms() {
+        use rustty_vt::formatter::Replacement;
+
+        for (input, want) in [
+            (&b"U+0041=U++002D"[..], 0x2Du32),
+            (&b"U+0041=U+00_2D"[..], 0x2D),
+            (&b"U+0041=U+1__0"[..], 0x10),
+            (&b"U+0041=U+-0"[..], 0),
+        ] {
+            let mut list = RepeatableClipboardCodepointMap::default();
+            list.parse_cli(Some(input)).unwrap_or_else(|e| {
+                panic!("input {input:?} unexpectedly failed: {e:?}");
+            });
+            assert_eq!(1usize, list.map.list.len(), "input {input:?}");
+            assert!(
+                matches!(list.map.list[0].replacement, Replacement::Codepoint(cp) if cp == want),
+                "input {input:?}"
+            );
+        }
+
+        for input in [
+            &b"U+0041=U+_002D"[..],
+            &b"U+0041=U+002D_"[..],
+            &b"U+0041=U+200000"[..],
+            &b"U+0041=U+-1"[..],
+            &b"U+0041=U++"[..],
+        ] {
+            let mut list = RepeatableClipboardCodepointMap::default();
+            assert_eq!(
+                Err(Error::InvalidValue),
+                list.parse_cli(Some(input)),
+                "input {input:?}"
+            );
+        }
+    }
+
     // test "parseCLI string replacement"
     #[test]
     fn repeatable_clipboard_codepoint_map_parse_cli_string_replacement() {
@@ -7821,6 +8220,67 @@ mod tests {
         f.format_entry(&list).unwrap();
         // try std.testing.expectEqualSlices(u8, "a = U+03A3=SUM\n", buf.written());
         assert_eq!(b"a = U+03A3=SUM\n".as_slice(), buf.written());
+    }
+
+    // PORT NOTE: no reference test. The reference serializes each entry through
+    // `var buf: [1024]u8`, so `bufPrint` fails (`NoSpaceLeft` ->
+    // `error.OutOfMemory`) once the rendered entry passes 1024 bytes. The
+    // boundary is 1017 replacement bytes for the single-codepoint form
+    // ("U+XXXX=" is 7 bytes) and 1010 for the range form ("U+XXXX-U+XXXX=" is
+    // 14). A growable buffer accepted overlong entries the reference rejects.
+    #[test]
+    fn repeatable_clipboard_codepoint_map_format_config_fixed_buffer_bound() {
+        // 1017 bytes: the largest single-codepoint entry that fits.
+        {
+            let mut input: Vec<u8> = b"U+2500=".to_vec();
+            input.resize(input.len() + 1017, b'x');
+            let mut list = RepeatableClipboardCodepointMap::default();
+            list.parse_cli(Some(&input)).unwrap();
+
+            let mut buf = AllocatingWriter::init();
+            let mut f = entry_formatter(b"a", &mut buf);
+            f.format_entry(&list).unwrap();
+
+            let mut want: Vec<u8> = b"a = U+2500=".to_vec();
+            want.resize(want.len() + 1017, b'x');
+            want.push(b'\n');
+            assert_eq!(want.as_slice(), buf.written());
+        }
+
+        // 1018 bytes: one past the reference's buffer.
+        {
+            let mut input: Vec<u8> = b"U+2500=".to_vec();
+            input.resize(input.len() + 1018, b'x');
+            let mut list = RepeatableClipboardCodepointMap::default();
+            list.parse_cli(Some(&input)).unwrap();
+
+            let mut buf = AllocatingWriter::init();
+            let mut f = entry_formatter(b"a", &mut buf);
+            assert_eq!(Err(FormatError::OutOfMemory), f.format_entry(&list));
+        }
+
+        // Range form: "U+XXXX-U+XXXX=" is 14 bytes, so 1010 fits and 1011 does not.
+        {
+            let mut input: Vec<u8> = b"U+2500-U+2501=".to_vec();
+            input.resize(input.len() + 1010, b'x');
+            let mut list = RepeatableClipboardCodepointMap::default();
+            list.parse_cli(Some(&input)).unwrap();
+
+            let mut buf = AllocatingWriter::init();
+            let mut f = entry_formatter(b"a", &mut buf);
+            f.format_entry(&list).unwrap();
+            assert_eq!(1024 + 4 + 1, buf.written().len());
+        }
+        {
+            let mut input: Vec<u8> = b"U+2500-U+2501=".to_vec();
+            input.resize(input.len() + 1011, b'x');
+            let mut list = RepeatableClipboardCodepointMap::default();
+            list.parse_cli(Some(&input)).unwrap();
+
+            let mut buf = AllocatingWriter::init();
+            let mut f = entry_formatter(b"a", &mut buf);
+            assert_eq!(Err(FormatError::OutOfMemory), f.format_entry(&list));
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -7936,6 +8396,54 @@ mod tests {
             b"a = U+0006-U+0009=Courier\na = U+ABCD=Courier\n".as_slice(),
             buf.written()
         );
+    }
+
+    // PORT NOTE (no reference test): locks the DELIBERATE, documented divergence
+    // recorded on `RepeatableCodepointMap::equal` (see its PORT NOTE and
+    // .port/phase-2/DEFERRALS.md) — the reference's `std.meta.eql` compares the
+    // entry's `descriptor.family` SLICE by pointer+len identity, so a Ghostty
+    // clone (which `dupeZ`s the family) compares UNEQUAL to its source; the port
+    // compares `family` by CONTENT, which is the equality `Config.changed`/
+    // `deepEqual` actually wants. This test fails the moment that content
+    // compare silently drifts back toward identity semantics.
+    #[test]
+    fn repeatable_codepoint_map_clone_equal() {
+        let mut list = RepeatableCodepointMap::default();
+        list.parse_cli(Some(b"U+0041,U+0043-U+0045=Cascadia Code"))
+            .unwrap();
+
+        // A clone re-allocates every `family`; content equality still holds
+        // (the reference's pointer identity would report `false` here).
+        let cloned = list.clone_in();
+        assert!(list.equal(&cloned));
+        assert!(cloned.equal(&list));
+
+        // Same for an independently re-parsed (reloaded) map.
+        let mut reparsed = RepeatableCodepointMap::default();
+        reparsed
+            .parse_cli(Some(b"U+0041,U+0043-U+0045=Cascadia Code"))
+            .unwrap();
+        assert!(list.equal(&reparsed));
+
+        // Different family bytes -> unequal.
+        let mut other_family = RepeatableCodepointMap::default();
+        other_family
+            .parse_cli(Some(b"U+0041,U+0043-U+0045=Comic Sans"))
+            .unwrap();
+        assert!(!list.equal(&other_family));
+
+        // Different range -> unequal.
+        let mut other_range = RepeatableCodepointMap::default();
+        other_range
+            .parse_cli(Some(b"U+0041,U+0043-U+0046=Cascadia Code"))
+            .unwrap();
+        assert!(!list.equal(&other_range));
+
+        // Different entry count -> unequal.
+        let mut other_len = RepeatableCodepointMap::default();
+        other_len.parse_cli(Some(b"U+0041=Cascadia Code")).unwrap();
+        assert!(!list.equal(&other_len));
+        assert!(!other_len.equal(&list));
     }
 
     // -----------------------------------------------------------------------
@@ -8113,6 +8621,55 @@ mod tests {
             Err(QuickTerminalSizeParseError::InvalidValue),
             v.parse_cli(Some(b"-69px"))
         );
+    }
+
+    // PORT NOTE (no reference test): `Size.parse` routes "px" through
+    // `std.fmt.parseInt(u32, ..., 10)` and "%" through `std.fmt.parseFloat(f32, ..)`.
+    // Both accept a leading `+` and `_` digit separators; `parseInt` additionally
+    // accepts DOUBLED separators while `parseFloat`'s `validUnderscores` requires a
+    // `_` to sit between two digits. Oracle-probed on Zig 0.16 (see the parser
+    // ports): parseInt "1__0"=>10 but parseFloat "1__0"=>InvalidCharacter.
+    #[test]
+    fn parse_quick_terminal_size_zig_number_spellings() {
+        let mut v = QuickTerminalSize::default();
+
+        // parseInt spellings on the pixel branch.
+        v.parse_cli(Some(b"+69px")).unwrap();
+        assert_eq!(Some(QuickTerminalSizeSize::Pixels(69)), v.primary);
+        v.parse_cli(Some(b"1_0px")).unwrap();
+        assert_eq!(Some(QuickTerminalSizeSize::Pixels(10)), v.primary);
+        v.parse_cli(Some(b"1__0px")).unwrap();
+        assert_eq!(Some(QuickTerminalSizeSize::Pixels(10)), v.primary);
+
+        // parseFloat spellings on the percentage branch.
+        v.parse_cli(Some(b"+10%")).unwrap();
+        assert_eq!(Some(QuickTerminalSizeSize::Percentage(10.0)), v.primary);
+        v.parse_cli(Some(b"1_0%")).unwrap();
+        assert_eq!(Some(QuickTerminalSizeSize::Percentage(10.0)), v.primary);
+        v.parse_cli(Some(b"1_0.5%")).unwrap();
+        assert_eq!(Some(QuickTerminalSizeSize::Percentage(10.5)), v.primary);
+        v.parse_cli(Some(b"1.5_5%")).unwrap();
+        assert_eq!(Some(QuickTerminalSizeSize::Percentage(1.55)), v.primary);
+
+        // Rejections: separator at either end, or without two digit neighbours.
+        for bad in [
+            b"_10px".as_slice(),
+            b"10_px".as_slice(),
+            b"_10%".as_slice(),
+            b"10_%".as_slice(),
+            // parseFloat rejects doubled separators (parseInt does not).
+            b"1__0%".as_slice(),
+            b"1_.5%".as_slice(),
+            b"+%".as_slice(),
+            b"+px".as_slice(),
+        ] {
+            assert_eq!(
+                Err(QuickTerminalSizeParseError::InvalidValue),
+                v.parse_cli(Some(bad)),
+                "expected InvalidValue for {:?}",
+                core::str::from_utf8(bad).unwrap()
+            );
+        }
     }
 
     // test "calculate QuickTerminalSize"
@@ -8335,6 +8892,35 @@ mod tests {
             Err(Error::InvalidValue),
             background_blur_parse_cli(&mut v, Some(b"420"))
         );
+    }
+
+    // PORT NOTE: no reference test — this pins the `_` digit-separator rules of
+    // `std.fmt.parseInt(u8, input, 0)` (std/fmt.zig:439): a separator is only
+    // rejected as the FIRST or LAST char of the post-sign/post-prefix digit run,
+    // so `1__2` parses while `_12`, `12_` and `0x_10` are `error.InvalidCharacter`
+    // (-> `error.InvalidValue` here).
+    #[test]
+    fn parse_background_blur_underscore_separators() {
+        let mut v = BackgroundBlur::False;
+
+        for (input, want) in [
+            (&b"12"[..], 12u8),
+            (&b"0x10"[..], 16),
+            (&b"1__2"[..], 12),
+            (&b"+12"[..], 12),
+            (&b"0b1_0"[..], 2),
+        ] {
+            background_blur_parse_cli(&mut v, Some(input)).unwrap();
+            assert_eq!(BackgroundBlur::Radius(want), v, "input {input:?}");
+        }
+
+        for input in [&b"0x_10"[..], &b"_12"[..], &b"12_"[..], &b"0x10_"[..]] {
+            assert_eq!(
+                Err(Error::InvalidValue),
+                background_blur_parse_cli(&mut v, Some(input)),
+                "input {input:?}"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -8642,6 +9228,65 @@ mod tests {
         assert_eq!(
             Err(Error::InvalidValue),
             WindowPadding::parse_cli(Some(b"a"))
+        );
+    }
+
+    // PORT NOTE (no reference test): `parseCLI` routes both branches through
+    // `std.fmt.parseInt(u32, ..., 10)`, which accepts a leading `+`/`-` sign and
+    // `_` digit separators. Locks the accept/reject boundary of the ported
+    // `parse_int_u32_base10` against the Zig-0.16 oracle (probed:
+    // "+1"=>1, "1_0"=>10, "1__0"=>10, "-0"=>0, "_10"/"10_"=>InvalidCharacter,
+    // "-1"=>Overflow — the latter two both collapse to `error.InvalidValue`).
+    #[test]
+    fn parse_window_padding_zig_int_spellings() {
+        let pad = |tl: u32, br: u32| WindowPadding {
+            top_left: tl,
+            bottom_right: br,
+        };
+
+        // Leading '+' is accepted by parseInt.
+        assert_eq!(Ok(pad(1, 1)), WindowPadding::parse_cli(Some(b"+1")));
+        assert_eq!(Ok(pad(1, 2)), WindowPadding::parse_cli(Some(b"+1,+2")));
+
+        // '_' digit separators, including doubled ones (parseInt skips them).
+        assert_eq!(Ok(pad(10, 10)), WindowPadding::parse_cli(Some(b"1_0")));
+        assert_eq!(Ok(pad(10, 2)), WindowPadding::parse_cli(Some(b"1_0,2")));
+        assert_eq!(Ok(pad(10, 10)), WindowPadding::parse_cli(Some(b"1__0")));
+
+        // Unsigned negative zero parses to 0; any other negative overflows.
+        assert_eq!(Ok(pad(0, 0)), WindowPadding::parse_cli(Some(b"-0")));
+        assert_eq!(
+            Err(Error::InvalidValue),
+            WindowPadding::parse_cli(Some(b"-1"))
+        );
+
+        // A separator at either end of the digit run is invalid.
+        assert_eq!(
+            Err(Error::InvalidValue),
+            WindowPadding::parse_cli(Some(b"_10"))
+        );
+        assert_eq!(
+            Err(Error::InvalidValue),
+            WindowPadding::parse_cli(Some(b"10_"))
+        );
+        // A bare sign is invalid.
+        assert_eq!(
+            Err(Error::InvalidValue),
+            WindowPadding::parse_cli(Some(b"+"))
+        );
+        // Base 10 means no `0x` prefix detection.
+        assert_eq!(
+            Err(Error::InvalidValue),
+            WindowPadding::parse_cli(Some(b"0x10"))
+        );
+        // Overflow of u32 is still rejected.
+        assert_eq!(
+            Err(Error::InvalidValue),
+            WindowPadding::parse_cli(Some(b"4294967296"))
+        );
+        assert_eq!(
+            Ok(pad(4294967295, 4294967295)),
+            WindowPadding::parse_cli(Some(b"4294967295"))
         );
     }
 
@@ -9450,6 +10095,54 @@ mod tests {
             b"keybind = foo/shift+a=csi:hello\n".as_slice(),
             buf.written()
         );
+    }
+
+    // PORT NOTE: no reference test — this pins the `var buf: [1024]u8` bound of
+    // `Keybinds.formatEntryDocs` (Config.zig:7446). The table-binding prefix is
+    // printed with `writer.print("{s}/{f}", ...) catch return error.OutOfMemory`
+    // into that fixed writer, and `formatEntries` appends `"={f}"` into the same
+    // buffer, so the WHOLE `<table>/<trigger>=<action>` entry must fit in 1024
+    // bytes or the format fails with `error.OutOfMemory`.
+    #[test]
+    fn keybinds_format_entry_table_prefix_fixed_buffer_bound() {
+        // "<name>/a=csi:hello" — 12 bytes on top of the table name.
+        const OVERHEAD: usize = b"/a=csi:hello".len();
+        const CAP: usize = 1024;
+
+        let format_with_table_name_len = |n: usize| {
+            let mut input = vec![b'a'; n];
+            input.extend_from_slice(b"/a=csi:hello");
+
+            let mut keybinds: Keybinds = Keybinds::default();
+            keybinds.parse_cli(Some(&input)).unwrap();
+
+            let mut buf = AllocatingWriter::init();
+            let mut f = entry_formatter(b"keybind", &mut buf);
+            match keybinds.format_entry(&mut f) {
+                Ok(()) => Ok(buf.written().to_vec()),
+                Err(FormatError::OutOfMemory) => Err("OutOfMemory"),
+                Err(FormatError::Writer(_)) => panic!("unexpected writer error"),
+            }
+        };
+
+        // Comfortably under the bound: formats normally.
+        let out = format_with_table_name_len(1000).unwrap();
+        let mut want = b"keybind = ".to_vec();
+        want.extend_from_slice(&vec![b'a'; 1000]);
+        want.extend_from_slice(b"/a=csi:hello\n");
+        assert_eq!(want, out);
+
+        // Exactly at the bound: the entry is 1024 bytes, which still fits.
+        assert!(format_with_table_name_len(CAP - OVERHEAD).is_ok());
+
+        // One byte over: the leaf's `"={f}"` write no longer fits.
+        assert_eq!(
+            Err("OutOfMemory"),
+            format_with_table_name_len(CAP - OVERHEAD + 1)
+        );
+
+        // A table name at/over the buffer size fails on the prefix write itself.
+        assert_eq!(Err("OutOfMemory"), format_with_table_name_len(CAP));
     }
 
     // test "formatEntry with tables and root set"

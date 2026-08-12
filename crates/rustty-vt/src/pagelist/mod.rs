@@ -510,19 +510,25 @@ impl Node {
     /// `PreservedPage` for the synchronization required by its borrowed
     /// resident representation.
     ///
+    /// Allocation of the decode buffer is opportunistic for callers: on
+    /// failure this returns `Err(OutOfMemory)` and leaves the node and its
+    /// compressed representation untouched.
+    ///
     /// PORTS: oracle@main PageList.zig `Node.pagePreservingState`. This port
     /// takes no `alloc` parameter: the decode buffer comes from the global
-    /// allocator (see the `PreservedPage` PORT NOTE).
+    /// allocator (see the `PreservedPage` PORT NOTE). The oracle's
+    /// `Allocator.Error!PreservedPage` is preserved: the raw `alloc_zeroed`
+    /// reports failure with a null pointer, which is a real fallible seam.
     ///
     /// # Safety
     /// `node` must point at a live `Node` and the caller must retain exclusive
     /// access to the owning PageList for the lifetime of the result.
-    pub unsafe fn page_preserving_state(node: *const Node) -> PreservedPage {
+    pub unsafe fn page_preserving_state(node: *const Node) -> Result<PreservedPage, OutOfMemory> {
         let data = unsafe { core::ptr::addr_of!((*node).data) };
         match unsafe { NodeData::tag(data) } {
-            NodeData::TAG_RESIDENT => {
-                PreservedPage::Borrowed(unsafe { NodeData::resident_payload(data) })
-            }
+            NodeData::TAG_RESIDENT => Ok(PreservedPage::Borrowed(unsafe {
+                NodeData::resident_payload(data)
+            })),
             _ => {
                 // SAFETY: the tag says `Compressed`. The `&CompressedPage` is
                 // confined to this arm, which forms no other pointer into the
@@ -530,14 +536,19 @@ impl Node {
                 let compressed = unsafe { &*NodeData::compressed_payload(data) };
                 let len = compressed.page.memory_len();
                 let layout = Layout::from_size_align(len, PAGE_SIZE_MIN).unwrap();
+                // const memory = try alloc.alignedAlloc(...);
+                #[cfg(test)]
+                page_preserving_state_tw_check(PagePreservingStateFp::Buffer)?;
                 // SAFETY: `len > 0` and the layout is valid.
                 let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-                assert!(!ptr.is_null(), "OOM allocating a preserved page buffer");
+                if ptr.is_null() {
+                    return Err(OutOfMemory);
+                }
 
                 // SAFETY: `ptr` is a live, page-aligned, unaliased buffer of
                 // exactly `len` bytes.
                 match unsafe { compressed.clone_buf(ptr, len) } {
-                    Ok(page) => PreservedPage::Owned { page, ptr, len },
+                    Ok(page) => Ok(PreservedPage::Owned { page, ptr, len }),
                     Err(_err) => {
                         // The encoded data was produced by our codec and remains
                         // immutable while compressed. Failure is internal
@@ -1254,6 +1265,33 @@ fn init_tw_check(point: InitFp) -> Result<(), OutOfMemory> {
 #[inline]
 fn init_pages_tw_check(point: InitPagesFp) -> Result<(), OutOfMemory> {
     INIT_PAGES_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
+/// Failure injection for `Node::page_preserving_state`'s decode buffer.
+///
+/// PORT NOTE (F-015): the oracle exercises this branch by handing
+/// `pagePreservingState` a `testing.FailingAllocator`. rustty's version takes
+/// no allocator (the buffer comes from the global allocator), so the injectable
+/// seam is a tripwire fail point placed immediately before the fallible
+/// `alloc_zeroed`, the same idiom as the `init`/`initPages` modules above.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum PagePreservingStateFp {
+    /// The `try alloc.alignedAlloc(...)` decode buffer.
+    Buffer,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PAGE_PRESERVING_STATE_TW: core::cell::RefCell<
+        rustty_util::tripwire::Module<PagePreservingStateFp, OutOfMemory>,
+    > = core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+#[cfg(test)]
+#[inline]
+fn page_preserving_state_tw_check(point: PagePreservingStateFp) -> Result<(), OutOfMemory> {
+    PAGE_PRESERVING_STATE_TW.with(|tw| tw.borrow_mut().check(point))
 }
 
 /// `PageList.Options`

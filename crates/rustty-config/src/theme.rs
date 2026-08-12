@@ -25,6 +25,7 @@
 // stub): when wired, `resources_dir().app()` is exactly the reference's
 // `global_state.resources_dir.app()`.
 
+use crate::path::{basename, is_absolute};
 use rustty_args::diagnostics::{Diagnostic, DiagnosticList};
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 use rustty_os as internal_os;
@@ -151,28 +152,28 @@ impl Location {
                 //         else => return null,
                 //     }
                 // };
-                let subdir_str = String::from_utf8_lossy(&subdir);
+                // (W94-B02-01: `xdg::config` is byte-typed — the joined subdir
+                // bytes feed it directly; the former `from_utf8_lossy` shim is
+                // gone.)
                 // WS14 T6 (wasm32 arm): no XDG config directory in a browser — the
                 // same `None` the error arm below already yields.
                 #[cfg(target_family = "wasm")]
                 {
-                    let _ = subdir_str;
+                    let _ = subdir;
                     None
                 }
+                // Any other error we treat as the XDG directory not
+                // existing. Windows in particularly can return a LOT
+                // of errors here — hence the blanket `.ok()`.
                 #[cfg(not(target_family = "wasm"))]
-                match internal_os::xdg::config(
+                internal_os::xdg::config(
                     &rustty_global::environ_map(),
                     internal_os::xdg::Options {
-                        subdir: Some(&subdir_str),
+                        subdir: Some(&subdir),
                         ..Default::default()
                     },
-                ) {
-                    Ok(v) => Some(v.into_bytes()),
-                    // Any other error we treat as the XDG directory not
-                    // existing. Windows in particularly can return a LOT
-                    // of errors here.
-                    Err(_) => None,
-                }
+                )
+                .ok()
             }
 
             // .resources => try std.fs.path.join(arena_alloc, &.{
@@ -330,12 +331,14 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
         let stat = match file.metadata() {
             Ok(m) => m,
             Err(err) => {
+                let err_str = err.to_string();
                 diags.append(Diagnostic {
-                    message: alloc_print(format!(
-                        "not reading theme from \"{}\": {}",
-                        display(theme),
-                        err
-                    )),
+                    message: alloc_print(&[
+                        b"not reading theme from \"",
+                        theme,
+                        b"\": ",
+                        err_str.as_bytes(),
+                    ]),
                     ..Default::default()
                 });
                 return None;
@@ -357,11 +360,12 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
         // }
         if !stat.is_file() {
             diags.append(Diagnostic {
-                message: alloc_print(format!(
-                    "not reading theme from \"{}\": it is a {}",
-                    display(theme),
-                    kind_name(&stat)
-                )),
+                message: alloc_print(&[
+                    b"not reading theme from \"",
+                    theme,
+                    b"\": it is a ",
+                    kind_name(&stat).as_bytes(),
+                ]),
                 ..Default::default()
             });
             return None;
@@ -387,10 +391,11 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
         // });
         // return null;
         diags.append(Diagnostic {
-            message: alloc_print(format!(
-                "theme \"{}\" cannot include path separators unless it is an absolute path",
-                display(theme)
-            )),
+            message: alloc_print(&[
+                b"theme \"",
+                theme,
+                b"\" cannot include path separators unless it is an absolute path",
+            ]),
             ..Default::default()
         });
         return None;
@@ -422,12 +427,14 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                 let stat = match file.metadata() {
                     Ok(m) => m,
                     Err(err) => {
+                        let err_str = err.to_string();
                         diags.append(Diagnostic {
-                            message: alloc_print(format!(
-                                "not reading theme from \"{}\": {}",
-                                display(theme),
-                                err
-                            )),
+                            message: alloc_print(&[
+                                b"not reading theme from \"",
+                                theme,
+                                b"\": ",
+                                err_str.as_bytes(),
+                            ]),
                             ..Default::default()
                         });
                         return None;
@@ -444,11 +451,12 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                 // }
                 if !stat.is_file() {
                     diags.append(Diagnostic {
-                        message: alloc_print(format!(
-                            "not reading theme from \"{}\": it is a {}",
-                            display(theme),
-                            kind_name(&stat)
-                        )),
+                        message: alloc_print(&[
+                            b"not reading theme from \"",
+                            theme,
+                            b"\": it is a ",
+                            kind_name(&stat).as_bytes(),
+                        ]),
                         ..Default::default()
                     });
                     return None;
@@ -478,13 +486,16 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
                 //     return null;
                 // },
                 _ => {
+                    let err_str = err.to_string();
                     diags.append(Diagnostic {
-                        message: alloc_print(format!(
-                            "failed to load theme \"{}\" from the file \"{}\": {}",
-                            display(theme),
-                            display(&path),
-                            err
-                        )),
+                        message: alloc_print(&[
+                            b"failed to load theme \"",
+                            theme,
+                            b"\" from the file \"",
+                            &path,
+                            b"\": ",
+                            err_str.as_bytes(),
+                        ]),
                         ..Default::default()
                     });
                     return None;
@@ -512,11 +523,13 @@ pub fn open(theme: &[u8], diags: &mut DiagnosticList) -> Option<ThemeFile> {
         //     ),
         // });
         diags.append(Diagnostic {
-            message: alloc_print(format!(
-                "theme \"{}\" not found, tried path \"{}\"",
-                display(theme),
-                display(&path)
-            )),
+            message: alloc_print(&[
+                b"theme \"",
+                theme,
+                b"\" not found, tried path \"",
+                &path,
+                b"\"",
+            ]),
             ..Default::default()
         });
     }
@@ -554,10 +567,7 @@ pub fn open_absolute(theme: &[u8], diags: &mut DiagnosticList) -> Option<std::fs
                 //     ),
                 // }),
                 std::io::ErrorKind::NotFound => diags.append(Diagnostic {
-                    message: alloc_print(format!(
-                        "failed to load theme from the path \"{}\"",
-                        display(theme)
-                    )),
+                    message: alloc_print(&[b"failed to load theme from the path \"", theme, b"\""]),
                     ..Default::default()
                 }),
                 // else => try diags.append(arena_alloc, .{
@@ -569,11 +579,12 @@ pub fn open_absolute(theme: &[u8], diags: &mut DiagnosticList) -> Option<std::fs
                 //     ),
                 // }),
                 _ => diags.append(Diagnostic {
-                    message: alloc_print(format!(
-                        "failed to load theme from the path \"{}\": {}",
-                        display(theme),
-                        err
-                    )),
+                    message: alloc_print(&[
+                        b"failed to load theme from the path \"",
+                        theme,
+                        b"\": ",
+                        err.to_string().as_bytes(),
+                    ]),
                     ..Default::default()
                 }),
             }
@@ -590,31 +601,36 @@ pub fn open_absolute(theme: &[u8], diags: &mut DiagnosticList) -> Option<std::fs
 // calls the reference makes inline.
 // ===========================================================================
 
-/// `std.fs.path.isAbsolute` for the POSIX targets the parity harness runs.
-fn is_absolute(path: &[u8]) -> bool {
-    path.first() == Some(&(std::path::MAIN_SEPARATOR as u8))
-}
+// `std.fs.path.isAbsolute` / `std.fs.path.basename` are the target-dispatched
+// `std.fs.path` helpers ported once in `crate::path` (imported at the top of this
+// module) and shared with `config/path.zig`'s `expand`.
+//
+// PORT NOTE: they were previously POSIX-shaped `MAIN_SEPARATOR` one-liners here,
+// which on a Windows build accepted UNC (`\\server\...`, a leading `\`) while
+// REJECTING drive-qualified themes (`C:\...`), and dropped the last component of a
+// path with a trailing separator. `crate::path` now ports `std.fs.path`'s real
+// `isAbsoluteWindows`/`basenameWindows`/`basenamePosix` bodies.
 
-/// `std.fs.path.basename` — the final path component (no trailing-separator
-/// handling beyond what the reference relies on for theme names).
-fn basename(path: &[u8]) -> &[u8] {
-    let sep = std::path::MAIN_SEPARATOR as u8;
-    match path.iter().rposition(|&b| b == sep) {
-        Some(idx) => &path[idx + 1..],
-        None => path,
+/// `std.fmt.allocPrintSentinel(.., 0)` — owned message bytes, built by
+/// concatenating the literal text segments and the `{s}` byte payloads of the
+/// reference's format string. The trailing NUL sentinel the reference appends is
+/// implicit (`Vec<u8>` carries no sentinel); `Diagnostic.message` is the byte
+/// payload.
+///
+/// PORT NOTE (fidelity): the `{s}` payloads here (theme name, joined path) are
+/// arbitrary OS bytes and Zig's `{s}` copies them verbatim. This helper used to
+/// take a `String` built by `format!` over a `String::from_utf8_lossy` view,
+/// which replaced every invalid byte with U+FFFD (`EF BF BD`) — so a theme named
+/// with e.g. a stray `0xFF` was reported with a different byte payload than the
+/// reference reports. Appending the raw slices keeps the diagnostic byte-exact.
+/// The `{}`-formatted parts (`std.fs.File.Kind` tag names, error renderings) are
+/// ASCII and are passed in as their UTF-8 bytes.
+fn alloc_print(parts: &[&[u8]]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    for part in parts {
+        out.extend_from_slice(part);
     }
-}
-
-/// `std.fmt.allocPrintSentinel(.., 0)` — owned message bytes. The trailing NUL
-/// sentinel the reference appends is implicit (`Vec<u8>` carries no sentinel);
-/// `Diagnostic.message` is the byte payload.
-fn alloc_print(s: String) -> Vec<u8> {
-    s.into_bytes()
-}
-
-/// The `{s}` rendering of a byte-slice path for diagnostic messages.
-fn display(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
-    String::from_utf8_lossy(bytes)
+    out
 }
 
 /// `@tagName(stat.kind)` for the non-file kinds the diagnostics report. Returns
@@ -645,4 +661,61 @@ fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
 fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
     // Non-unix fallback (not exercised by the POSIX parity harness).
     std::ffi::OsStr::new(std::str::from_utf8(bytes).unwrap_or(""))
+}
+
+// PORT NOTE: the reference has no `test {}` blocks in `theme.zig`. These cover
+// the port's diagnostic-message seam only: the reference renders the theme name
+// and the tried path with Zig's `{s}`, which copies the byte slice VERBATIM, so
+// a theme name (or resolved path) that is not valid UTF-8 must be reported with
+// its original bytes and not with U+FFFD replacements.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The U+FFFD replacement character `String::from_utf8_lossy` substitutes.
+    const REPLACEMENT: &[u8] = &[0xEF, 0xBF, 0xBD];
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    // The separator-rejection branch: no filesystem access at all.
+    #[test]
+    fn diagnostic_preserves_theme_bytes_separator_rejection() {
+        let theme = b"bad\xffname/x";
+        let mut diags = DiagnosticList::default();
+        assert!(open(theme, &mut diags).is_none());
+
+        let items = diags.items();
+        assert_eq!(1, items.len());
+        let msg = &items[0].message;
+        // The reference's `{s}` copies the name byte for byte.
+        assert!(contains(msg, theme), "message lost the raw theme bytes");
+        assert!(
+            !contains(msg, REPLACEMENT),
+            "message replaced invalid bytes with U+FFFD"
+        );
+        assert_eq!(
+            b"theme \"bad\xffname/x\" cannot include path separators unless it is an absolute path"
+                .as_slice(),
+            msg.as_slice()
+        );
+    }
+
+    // The absolute-path not-found branch of `openAbsolute`.
+    #[test]
+    fn diagnostic_preserves_theme_bytes_open_absolute_not_found() {
+        let theme = b"/nonexistent-\xff-rustty-theme-parity";
+        let mut diags = DiagnosticList::default();
+        assert!(open_absolute(theme, &mut diags).is_none());
+
+        let items = diags.items();
+        assert_eq!(1, items.len());
+        let msg = &items[0].message;
+        assert!(contains(msg, theme), "message lost the raw theme bytes");
+        assert!(
+            !contains(msg, REPLACEMENT),
+            "message replaced invalid bytes with U+FFFD"
+        );
+    }
 }

@@ -1,14 +1,15 @@
 //! PORTS: ghostty `src/config/Wasm.zig` — the browser/wasm `Config` C ABI
 //! (`config_new`/`config_free`/`config_load_string`/`config_finalize`).
 //!
-//! PORT STATUS: deferred (browser-gated). The reference module is only ever
+//! PORT STATUS: ported (browser-gated). The reference module is only ever
 //! compiled into the wasm build (`@import("../os/wasm.zig").alloc`, the
 //! `comptime` `isWasm` gate elsewhere); it has 0 `test {}` blocks (Phase-0
-//! inventory contract). Per the agreed plan this is feature-gated behind an
-//! off-by-default `wasm` cargo feature and documented here, exactly as the vt
-//! wasm exports are deferred — the desktop config cluster never compiles it.
-//! When the rustty wasm app-runtime lands, the gate flips on and these exports
-//! join the wasm artifact.
+//! inventory contract). It is feature-gated behind an off-by-default `wasm`
+//! cargo feature — the desktop config cluster never compiles it. The gate is
+//! FLIPPED ON by `rustty-wasm` (WS14), so these four exports ship in
+//! `target/wasm32-unknown-unknown/release/rustty_wasm.wasm` today; the artifact
+//! shape (these exports + the `env.log` import the error arms below log through)
+//! is asserted by `crates/rustty-wasm/tests/artifact_shape.rs`.
 //!
 //! The faithful port body is recorded below under `#[cfg(feature = "wasm")]`. It
 //! mirrors `Wasm.zig` 1:1: `config_new`/`config_free` heap the `Config` on the
@@ -34,6 +35,24 @@
 #[cfg(feature = "wasm")]
 pub mod wasm_exports {
     use crate::config_struct::Config;
+
+    /// `const log = std.log.scoped(.config);` + `log.err(...)`.
+    ///
+    /// PORT NOTE: `std.log`'s sink in the wasm build is `main_wasm.zig`'s
+    /// `std_options.logFn = @import("os/wasm/log.zig").log`, which formats
+    /// `level_txt ++ "(" ++ @tagName(scope) ++ "): " ++ msg` and hands it to the
+    /// imported `env.log`. Rust has no global `std.log` hook, so the scoped-`err`
+    /// call is rendered as a direct call into that same ported sink
+    /// (`rustty_os::wasm::log::freestanding::log`) with the `.err` level text
+    /// (`std.log.Level.asText()` == `"error"`) and the `.config` scope. Host
+    /// (non-wasm) builds of this feature keep `eprintln!` — there is no `env.log`
+    /// import to route to.
+    fn log_err(msg: &str) {
+        #[cfg(target_arch = "wasm32")]
+        rustty_os::wasm::log::freestanding::log("error", "config", msg);
+        #[cfg(not(target_arch = "wasm32"))]
+        eprintln!("{msg}");
+    }
 
     /// Create a new configuration filled with the initial default values.
     // export fn config_new() ?*Config {
@@ -66,7 +85,7 @@ pub mod wasm_exports {
         // config_load_string_(self, str[0..len]) catch |err| { log.err(...); };
         let s = unsafe { std::slice::from_raw_parts(str_, len) };
         if let Err(err) = config_load_string_(unsafe { &mut *self_ }, s) {
-            eprintln!("error loading config err={err:?}");
+            log_err(&format!("error loading config err={err:?}"));
         }
     }
 
@@ -89,7 +108,7 @@ pub mod wasm_exports {
     pub unsafe extern "C" fn config_finalize(self_: *mut Config) {
         // self.finalize() catch |err| { log.err(...); };
         if let Err(err) = unsafe { &mut *self_ }.finalize() {
-            eprintln!("error finalizing config err={err:?}");
+            log_err(&format!("error finalizing config err={err:?}"));
         }
     }
 }

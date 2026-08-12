@@ -2,14 +2,16 @@
 //! reference's `pkg/fontconfig/*.zig` binding package (a hand-written safe layer
 //! over the Fontconfig C API), sibling of [`crate::ft`] and [`crate::hb`].
 //!
-//! Unlike `ft.rs`/`hb.rs` (which are additive glue standing in for not-yet-carved
-//! packages), `pkg/fontconfig` IS a carved reference target with its own test
-//! contract: all 11 of its `test` blocks are ported verbatim into this module's
-//! `#[cfg(test)] mod tests` (R1). The module mirrors the reference's own exports
-//! (`main.zig`): the opaque handle types `Config`/`Pattern`/`CharSet`/`LangSet`/
-//! `FontSet`, the `Weight`/`Slant`/`Spacing`/`Property`/`Result`/`MatchKind`
-//! enums, the `Type`/`Value` value model, the `Error` set, and the `init.zig`
-//! free functions.
+//! `pkg/fontconfig` is a carved reference target with its own test contract: all
+//! 14 of its NAMED `test` blocks are ported verbatim into this module's
+//! `#[cfg(test)] mod tests`, plus a `ref_all_decls` standing in for `main.zig`'s
+//! two anonymous blocks (`refAllDecls` + the `_ = @import("test.zig")`
+//! re-import) — 16 blocks in the reference, 15 `#[test]`s here (R1). The module
+//! mirrors the reference's own exports (`main.zig`): the opaque handle types
+//! `Config`/`Pattern`/`CharSet`/`LangSet`/`FontSet`/`ObjectSet`/`Range`, the
+//! `Matrix` value struct, the `Weight`/`Slant`/`Spacing`/`Property`/`Result`/
+//! `MatchKind` enums, the full 11-tag `Type`/`Value` model plus `ValueBinding`,
+//! the `Error` set, and the `init.zig` free functions.
 //!
 //! RAW-POINTER DISCIPLINE (matching the reference's `opaque {}` handles): the
 //! five handle types are zero-field, `#[repr(transparent)]` reinterpretations of
@@ -349,9 +351,7 @@ impl MatchKind {
 // =============================================================================
 
 /// The type tag of an [`Value`].
-// PORT NOTE: `value.zig:9-21` `Type = enum(c_int)`. Carried in full for fidelity
-// with the reference's exported surface.
-#[allow(dead_code)]
+// PORT NOTE: `value.zig:9-21` `Type = enum(c_int)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
 pub enum Type {
@@ -370,46 +370,88 @@ pub enum Type {
 
 /// A Fontconfig pattern value.
 ///
-/// PORT NOTE (subset): `value.zig:23-70` models `Value` as a `union(Type)` over
-/// all 11 `FcType`s. The discovery layer (the sole caller) only ever reads/writes
-/// four of them — strings + integers via `toFcPattern`, and the `charset`/`lang`
-/// handles via `pattern.get` (`src/font/discovery.zig:120-152, 331-332`) — so
-/// only those four variants are carved here (per the task brief; extend as later
-/// tasks require). The lifetime `'a` ties a borrowed [`Value::String`] to the
-/// pattern it was read from (the reference's `[:0]const u8` slice into
-/// pattern-owned memory).
+// PORT NOTE: `value.zig:23-70` `Value = union(Type)` — the full 11-tag union. The
+// lifetime `'a` ties a borrowed [`Value::String`] to the pattern it was read from
+// (the reference's `[:0]const u8` slice into pattern-owned memory); the pointer
+// payloads are likewise borrowed from the pattern, exactly as the reference's
+// `*const Matrix`/`*const CharSet`/`*const LangSet`/`*const Range` are.
 #[derive(Clone, Copy, Debug)]
 pub enum Value<'a> {
+    Unknown,
+    Void,
     Integer(i32),
+    Double(f64),
     String(&'a CStr),
+    Bool(bool),
+    Matrix(*const Matrix),
     CharSet(*const CharSet),
+    FtFace(*mut std::os::raw::c_void),
     LangSet(*const LangSet),
+    Range(*const Range),
 }
 
 impl<'a> Value<'a> {
+    /// The active tag of this value.
+    // PORT NOTE: `std.meta.activeTag(self)` on the `union(Type)`.
+    pub fn tag(self) -> Type {
+        match self {
+            Value::Unknown => Type::Unknown,
+            Value::Void => Type::Void,
+            Value::Integer(_) => Type::Integer,
+            Value::Double(_) => Type::Double,
+            Value::String(_) => Type::String,
+            Value::Bool(_) => Type::Bool,
+            Value::Matrix(_) => Type::Matrix,
+            Value::CharSet(_) => Type::CharSet,
+            Value::FtFace(_) => Type::FtFace,
+            Value::LangSet(_) => Type::LangSet,
+            Value::Range(_) => Type::Range,
+        }
+    }
+
     /// Read a raw `FcValue` into a [`Value`].
-    // PORT NOTE: `value.zig:36-50` `init`. Only the four carved types are handled;
-    // any other type is a caller bug (this package is only ever handed
-    // string/integer/charset/langset values — see the struct PORT NOTE) and
-    // panics rather than silently mis-reading the union, mirroring the reference's
-    // exhaustive (compile-checked) switch.
-    fn init(cvalue: &c::FcValue) -> Value<'a> {
+    // PORT NOTE: `value.zig:36-50` `init`. The reference's `@enumFromInt(cvalue.type)`
+    // is illegal behavior for a tag outside the 11; Fontconfig never produces one, and
+    // Rust cannot construct such a `Type` at all, so an out-of-range tag reads as
+    // `.unknown` — the same "no usable value" outcome.
+    pub fn init(cvalue: &c::FcValue) -> Value<'a> {
         match cvalue.type_ {
-            c::_FcType_FcTypeInteger => Value::Integer(unsafe { cvalue.u.i }),
+            c::_FcType_FcTypeVoid => Value::Void,
             c::_FcType_FcTypeString => Value::String(unsafe { CStr::from_ptr(cvalue.u.s.cast()) }),
+            c::_FcType_FcTypeInteger => Value::Integer(unsafe { cvalue.u.i }),
+            c::_FcType_FcTypeDouble => Value::Double(unsafe { cvalue.u.d }),
+            c::_FcType_FcTypeBool => Value::Bool(unsafe { cvalue.u.b } == FC_TRUE),
+            c::_FcType_FcTypeMatrix => Value::Matrix(unsafe { cvalue.u.m }.cast()),
             c::_FcType_FcTypeCharSet => Value::CharSet(unsafe { cvalue.u.c }.cast()),
+            c::_FcType_FcTypeFTFace => Value::FtFace(unsafe { cvalue.u.f }),
             c::_FcType_FcTypeLangSet => Value::LangSet(unsafe { cvalue.u.l }.cast()),
-            other => panic!("unmodeled FcValue type {other}"),
+            c::_FcType_FcTypeRange => Value::Range(unsafe { cvalue.u.r }.cast()),
+            _ => Value::Unknown,
         }
     }
 
     /// Build a raw `FcValue` from this [`Value`].
-    // PORT NOTE: `value.zig:52-69` `cval`.
-    fn cval(self) -> c::FcValue {
+    // PORT NOTE: `value.zig:52-69` `cval`. The reference leaves the `u` payload
+    // `undefined` for `.unknown`/`.void`; rustty zeroes it (Rust has no `undefined`,
+    // and a zeroed union is what a C caller of `FcValue{ .type = FcTypeVoid }`
+    // would build).
+    pub fn cval(self) -> c::FcValue {
         match self {
+            Value::Unknown => c::FcValue {
+                type_: c::_FcType_FcTypeUnknown,
+                u: unsafe { std::mem::zeroed() },
+            },
+            Value::Void => c::FcValue {
+                type_: c::_FcType_FcTypeVoid,
+                u: unsafe { std::mem::zeroed() },
+            },
             Value::Integer(v) => c::FcValue {
                 type_: c::_FcType_FcTypeInteger,
                 u: c::_FcValue__bindgen_ty_1 { i: v },
+            },
+            Value::Double(v) => c::FcValue {
+                type_: c::_FcType_FcTypeDouble,
+                u: c::_FcValue__bindgen_ty_1 { d: v },
             },
             Value::String(v) => c::FcValue {
                 type_: c::_FcType_FcTypeString,
@@ -417,15 +459,138 @@ impl<'a> Value<'a> {
                     s: v.as_ptr().cast(),
                 },
             },
+            Value::Bool(v) => c::FcValue {
+                type_: c::_FcType_FcTypeBool,
+                u: c::_FcValue__bindgen_ty_1 {
+                    b: if v { FC_TRUE } else { FC_FALSE },
+                },
+            },
+            Value::Matrix(v) => c::FcValue {
+                type_: c::_FcType_FcTypeMatrix,
+                u: c::_FcValue__bindgen_ty_1 { m: v.cast() },
+            },
             Value::CharSet(v) => c::FcValue {
                 type_: c::_FcType_FcTypeCharSet,
                 u: c::_FcValue__bindgen_ty_1 { c: v.cast() },
+            },
+            Value::FtFace(v) => c::FcValue {
+                type_: c::_FcType_FcTypeFTFace,
+                u: c::_FcValue__bindgen_ty_1 { f: v },
             },
             Value::LangSet(v) => c::FcValue {
                 type_: c::_FcType_FcTypeLangSet,
                 u: c::_FcValue__bindgen_ty_1 { l: v.cast() },
             },
+            Value::Range(v) => c::FcValue {
+                type_: c::_FcType_FcTypeRange,
+                u: c::_FcValue__bindgen_ty_1 { r: v.cast() },
+            },
         }
+    }
+}
+
+/// How a value is bound to a pattern element.
+// PORT NOTE: `value.zig:72-76` `ValueBinding = enum(c_int)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ValueBinding {
+    Weak,
+    Strong,
+    Same,
+}
+
+impl ValueBinding {
+    /// Map a raw `FcValueBinding` to this enum.
+    // PORT NOTE: the reference's `@enumFromInt(binding)`. `FcValueBindingEnd`
+    // (the C enum's `INT_MAX` padding sentinel) is not a real binding and is not
+    // in the reference enum; it reads as `.same`, Fontconfig's own "inherit the
+    // previous binding" value.
+    pub fn from_c(v: c::FcValueBinding) -> ValueBinding {
+        match v {
+            c::_FcValueBinding_FcValueBindingWeak => ValueBinding::Weak,
+            c::_FcValueBinding_FcValueBindingStrong => ValueBinding::Strong,
+            _ => ValueBinding::Same,
+        }
+    }
+
+    /// `@intFromEnum(binding)`.
+    pub fn to_c(self) -> c::FcValueBinding {
+        match self {
+            ValueBinding::Weak => c::_FcValueBinding_FcValueBindingWeak,
+            ValueBinding::Strong => c::_FcValueBinding_FcValueBindingStrong,
+            ValueBinding::Same => c::_FcValueBinding_FcValueBindingSame,
+        }
+    }
+}
+
+// =============================================================================
+// matrix.zig — the Matrix value struct.
+// =============================================================================
+
+/// A Fontconfig 2x2 transformation matrix.
+// PORT NOTE: `matrix.zig:5-10` `Matrix = extern struct`. `#[repr(C)]` gives the
+// same layout as the C `FcMatrix` the reference `@ptrCast`s to.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Matrix {
+    pub xx: f64,
+    pub xy: f64,
+    pub yx: f64,
+    pub yy: f64,
+}
+
+// =============================================================================
+// range.zig — the Range handle.
+// =============================================================================
+
+/// An opaque Fontconfig range handle.
+// PORT NOTE: `range.zig:5-13` `Range = opaque {}`.
+#[repr(transparent)]
+pub struct Range(c::FcRange);
+
+impl Range {
+    #[inline]
+    fn cval(&self) -> *mut c::FcRange {
+        (self as *const Range as *mut Range).cast()
+    }
+
+    /// Destroy this range.
+    // PORT NOTE: `range.zig:6-8` `destroy`.
+    pub fn destroy(&mut self) {
+        unsafe { c::FcRangeDestroy(self.cval()) }
+    }
+}
+
+// =============================================================================
+// object_set.zig — the ObjectSet handle.
+// =============================================================================
+
+/// An opaque Fontconfig object (property-name) set handle.
+// PORT NOTE: `object_set.zig:5-21` `ObjectSet = opaque {}`.
+#[repr(transparent)]
+pub struct ObjectSet(c::FcObjectSet);
+
+impl ObjectSet {
+    #[inline]
+    fn cval(&self) -> *mut c::FcObjectSet {
+        (self as *const ObjectSet as *mut ObjectSet).cast()
+    }
+
+    /// Create a new, empty object set.
+    // PORT NOTE: `object_set.zig:6-8` `create`.
+    pub fn create() -> *mut ObjectSet {
+        unsafe { c::FcObjectSetCreate().cast() }
+    }
+
+    /// Destroy this object set.
+    // PORT NOTE: `object_set.zig:10-12` `destroy`.
+    pub fn destroy(&mut self) {
+        unsafe { c::FcObjectSetDestroy(self.cval()) }
+    }
+
+    /// Add property `p` to the set.
+    // PORT NOTE: `object_set.zig:14-16` `add`.
+    pub fn add(&mut self, p: Property) -> bool {
+        unsafe { c::FcObjectSetAdd(self.cval(), p.cval().as_ptr()) == FC_TRUE }
     }
 }
 
@@ -457,6 +622,13 @@ impl Config {
     // PORT NOTE: `config.zig:12-14` `destroy`.
     pub fn destroy(&mut self) {
         unsafe { c::FcConfigDestroy(self.cval()) }
+    }
+
+    /// Select fonts matching `pat`, creating patterns holding only the
+    /// properties listed in `os`.
+    // PORT NOTE: `config.zig:16-18` `fontList`.
+    pub fn font_list(&mut self, pat: &Pattern, os: &ObjectSet) -> *mut FontSet {
+        unsafe { c::FcFontList(self.cval(), pat.cval(), os.cval()).cast() }
     }
 
     /// Return the fonts matching `pat`, sorted best-first. If `charset` is
@@ -513,9 +685,7 @@ impl Config {
 
 /// An opaque Fontconfig pattern handle.
 // PORT NOTE: `pattern.zig:12-145` `Pattern = opaque {}`. `#[repr(transparent)]`
-// over the C `FcPattern`. Only the surface the discovery layer uses is carved
-// (the `ObjectIterator`/`ValueIterator`/`filter`/`print`/`delete` helpers are
-// not needed by any caller yet).
+// over the C `FcPattern`.
 #[repr(transparent)]
 pub struct Pattern(c::FcPattern);
 
@@ -577,6 +747,149 @@ impl Pattern {
         })
         .to_error()?;
         Ok(Value::init(&val))
+    }
+
+    /// Delete every value of property `prop` from this pattern.
+    // PORT NOTE: `pattern.zig:50-52` `delete`.
+    pub fn delete(&mut self, prop: Property) -> bool {
+        unsafe { c::FcPatternDel(self.cval(), prop.cval().as_ptr()) == FC_TRUE }
+    }
+
+    /// Return a NEW pattern holding only the properties listed in `os`.
+    // PORT NOTE: `pattern.zig:54-56` `filter`. The returned pattern is owned by
+    // the caller (`destroy` it), like every other constructor here.
+    pub fn filter(&mut self, os: &ObjectSet) -> *mut Pattern {
+        unsafe { c::FcPatternFilter(self.cval(), os.cval()).cast() }
+    }
+
+    /// An iterator over this pattern's objects (properties).
+    // PORT NOTE: `pattern.zig:58-60` `objectIterator`.
+    pub fn object_iterator(&mut self) -> ObjectIterator {
+        ObjectIterator {
+            pat: self.cval(),
+            iter: None,
+        }
+    }
+
+    /// Print this pattern to stdout (debugging aid).
+    // PORT NOTE: `pattern.zig:62-64` `print`.
+    pub fn print(&mut self) {
+        unsafe { c::FcPatternPrint(self.cval()) }
+    }
+}
+
+/// An iterator over a pattern's objects (properties).
+// PORT NOTE: `pattern.zig:70-114` `Pattern.ObjectIterator`. Kept a module-level
+// type (Rust has no nested types inside an `impl`); `Pattern::object_iterator` is
+// still the only constructor, exactly as in the reference.
+pub struct ObjectIterator {
+    // pat: *c.struct__FcPattern,
+    pat: *mut c::FcPattern,
+    // iter: ?c.struct__FcPatternIter,
+    iter: Option<c::FcPatternIter>,
+}
+
+impl ObjectIterator {
+    /// Move to the next object, returns true if there is another
+    /// object and false otherwise. If this is the first call, this
+    /// will be the first object.
+    // PORT NOTE: `pattern.zig:76-96` `next`. Named `next` to match the reference
+    // iterator; it is not `Iterator::next` (it yields no item — the payload is read
+    // through `object`/`value_len`/`value_iterator`).
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> bool {
+        // Null means our first iterator
+        if self.iter.is_none() {
+            // If we have no objects, do not create iterator
+            if unsafe { c::FcPatternObjectCount(self.pat) } == 0 {
+                return false;
+            }
+
+            let mut iter: c::FcPatternIter = unsafe { std::mem::zeroed() };
+            unsafe { c::FcPatternIterStart(self.pat, &mut iter) };
+            // assert(c.FcPatternIterIsValid(self.pat, &iter) == c.FcTrue);
+            assert!(unsafe { c::FcPatternIterIsValid(self.pat, &mut iter) } == FC_TRUE);
+            self.iter = Some(iter);
+
+            // Return right away because the fontconfig iterator pattern
+            // is do/while.
+            return true;
+        }
+
+        unsafe { c::FcPatternIterNext(self.pat, self.iter.as_mut().unwrap()) == FC_TRUE }
+    }
+
+    /// The current object's name.
+    // PORT NOTE: `pattern.zig:98-103` `object`. Returns the BYTE slice of the
+    // NUL-terminated fontconfig object name (the reference's `sliceTo(..., 0)`),
+    // never a lossy `String`.
+    pub fn object(&mut self) -> &[u8] {
+        let p = unsafe { c::FcPatternIterGetObject(self.pat, self.iter.as_mut().unwrap()) };
+        unsafe { CStr::from_ptr(p) }.to_bytes()
+    }
+
+    /// How many values the current object has.
+    // PORT NOTE: `pattern.zig:105-107` `valueLen`.
+    pub fn value_len(&mut self) -> usize {
+        unsafe { c::FcPatternIterValueCount(self.pat, self.iter.as_mut().unwrap()) as usize }
+    }
+
+    /// An iterator over the current object's values.
+    // PORT NOTE: `pattern.zig:109-113` `valueIterator`.
+    pub fn value_iterator(&mut self) -> ValueIterator<'_> {
+        let iter: *mut c::FcPatternIter = self.iter.as_mut().unwrap();
+        ValueIterator {
+            pat: self.pat,
+            iter,
+            max: unsafe { c::FcPatternIterValueCount(self.pat, iter) },
+            id: 0,
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
+/// One value of a pattern object.
+// PORT NOTE: `pattern.zig:123-127` `Pattern.ValueIterator.Entry`.
+#[derive(Clone, Copy, Debug)]
+pub struct Entry<'a> {
+    pub result: Result,
+    pub value: Value<'a>,
+    pub binding: ValueBinding,
+}
+
+/// An iterator over one pattern object's values.
+// PORT NOTE: `pattern.zig:116-142` `Pattern.ValueIterator`. The reference holds a
+// bare `*c.struct__FcPatternIter` into its parent `ObjectIterator`; the `'a`
+// lifetime here is that same borrow, made explicit so the parent cannot be
+// advanced (or dropped) while this iterator is alive.
+pub struct ValueIterator<'a> {
+    pat: *mut c::FcPattern,
+    iter: *mut c::FcPatternIter,
+    max: std::os::raw::c_int,
+    id: std::os::raw::c_int,
+    _marker: std::marker::PhantomData<&'a mut ObjectIterator>,
+}
+
+impl<'a> ValueIterator<'a> {
+    // PORT NOTE: `pattern.zig:129-141` `next`. Named `next` to match the reference;
+    // not `Iterator::next`, whose item type could not borrow from `self`.
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Option<Entry<'a>> {
+        if self.id >= self.max {
+            return None;
+        }
+        let mut value: c::FcValue = unsafe { std::mem::zeroed() };
+        let mut binding: c::FcValueBinding = c::_FcValueBinding_FcValueBindingWeak;
+        let result = unsafe {
+            c::FcPatternIterGetValue(self.pat, self.iter, self.id, &mut value, &mut binding)
+        };
+        self.id += 1;
+
+        Some(Entry {
+            result: Result::from_c(result),
+            binding: ValueBinding::from_c(binding),
+            value: Value::init(&value),
+        })
     }
 }
 
@@ -705,9 +1018,14 @@ impl FontSet {
 
     /// Append `pat` to this font set.
     // PORT NOTE: `font_set.zig:24-26` `add`.
-    #[allow(dead_code)]
     pub fn add(&mut self, pat: &Pattern) -> bool {
         unsafe { c::FcFontSetAdd(self.cval(), pat.cval()) == FC_TRUE }
+    }
+
+    /// Print this font set to stdout (debugging aid).
+    // PORT NOTE: `font_set.zig:28-30` `print`.
+    pub fn print(&mut self) {
+        unsafe { c::FcFontSetPrint(self.cval()) }
     }
 }
 
@@ -849,5 +1167,212 @@ mod tests {
 
         fs.destroy();
         fs_emoji.destroy();
+    }
+
+    // PORT NOTE: object_set.zig:23-30 `test "create"`.
+    #[test]
+    fn object_set_create() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `FC_GLOBAL`).
+        let _fc = global_shared();
+        let os = unsafe { &mut *ObjectSet::create() };
+        assert!(os.add(Property::Family));
+        os.destroy();
+    }
+
+    // PORT NOTE: test.zig:4-22 `test "fc-list"`.
+    #[test]
+    fn fc_list() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `FC_GLOBAL`).
+        let _fc = global_shared();
+
+        // var cfg = fontconfig.initLoadConfigAndFonts(); defer cfg.destroy();
+        let cfg = unsafe { &mut *init_load_config_and_fonts() };
+        // var pat = fontconfig.Pattern.create(); defer pat.destroy();
+        let pat = unsafe { &mut *Pattern::create() };
+        // var os = fontconfig.ObjectSet.create(); defer os.destroy();
+        let os = unsafe { &mut *ObjectSet::create() };
+
+        // var fs = cfg.fontList(pat, os); defer fs.destroy();
+        let fs = unsafe { &mut *cfg.font_list(pat, os) };
+
+        // Note: this is environmental, but in general we expect all our
+        // testing environments to have at least one font.
+        assert!(!fs.fonts().is_empty());
+
+        fs.destroy();
+        os.destroy();
+        pat.destroy();
+        cfg.destroy();
+    }
+
+    // PORT NOTE: test.zig:24-66 `test "fc-match"`.
+    #[test]
+    fn fc_match() {
+        // Shared: fontconfig's global state must not be torn down under us
+        // (see `FC_GLOBAL`).
+        let _fc = global_shared();
+
+        // var cfg = fontconfig.initLoadConfigAndFonts(); defer cfg.destroy();
+        let cfg = unsafe { &mut *init_load_config_and_fonts() };
+
+        // var pat = fontconfig.Pattern.create(); errdefer pat.destroy();
+        let pat = unsafe { &mut *Pattern::create() };
+        // try testing.expect(cfg.substituteWithPat(pat, .pattern));
+        assert!(cfg.substitute_with_pat(pat, MatchKind::Pattern));
+        // pat.defaultSubstitute();
+        pat.default_substitute();
+
+        // const result = cfg.fontSort(pat, false, null);
+        let result = cfg.font_sort(pat, false, None);
+
+        // var fs = fontconfig.FontSet.create(); defer fs.destroy();
+        let fs = unsafe { &mut *FontSet::create() };
+
+        {
+            // const fonts = result.fs.fonts();
+            let fonts = unsafe { (*result.fs).fonts() }.to_vec();
+            // try testing.expect(fonts.len > 0);
+            assert!(!fonts.is_empty());
+            for font in fonts {
+                // const pat_prep = try cfg.fontRenderPrepare(pat, font);
+                let pat_prep = cfg.font_render_prepare(pat, unsafe { &*font }).unwrap();
+                // try testing.expect(fs.add(pat_prep));
+                assert!(fs.add(unsafe { &*pat_prep }));
+            }
+            // result.fs.destroy();
+            unsafe { (*result.fs).destroy() };
+            // pat.destroy();
+            pat.destroy();
+        }
+
+        {
+            // for (fs.fonts()) |font| { var it = font.objectIterator(); ... }
+            for &font in fs.fonts() {
+                let mut it = unsafe { (*font).object_iterator() };
+                while it.next() {
+                    // try testing.expect(it.object().len > 0);
+                    assert!(!it.object().is_empty());
+                    // try testing.expect(it.valueLen() > 0);
+                    assert!(it.value_len() > 0);
+                    // var value_it = it.valueIterator();
+                    let mut value_it = it.value_iterator();
+                    // while (value_it.next()) |entry| { ... }
+                    while let Some(entry) = value_it.next() {
+                        // try testing.expect(entry.value != .unknown);
+                        assert_ne!(Type::Unknown, entry.value.tag());
+                    }
+                }
+            }
+        }
+
+        // defer for (fs.fonts()) |font| font.destroy();
+        for &font in fs.fonts() {
+            unsafe { (*font).destroy() };
+        }
+        fs.destroy();
+        cfg.destroy();
+    }
+
+    // PORT NOTE: `main.zig:39-41` `test { refAllDecls(@This()); }` (and `:43-45`,
+    // the `_ = @import("test.zig")` re-import, whose blocks are the two tests
+    // above). Mirrors the crate's `ref_all_decls` convention (`face/mod.rs`):
+    // every declaration `main.zig` re-exports is reified so a signature drift is
+    // a compile error.
+    #[test]
+    fn ref_all_decls() {
+        let _ = std::mem::size_of::<CharSet>();
+        let _ = std::mem::size_of::<Config>();
+        let _ = std::mem::size_of::<Error>();
+        let _ = std::mem::size_of::<FontSet>();
+        let _ = std::mem::size_of::<LangSet>();
+        let _ = std::mem::size_of::<Matrix>();
+        let _ = std::mem::size_of::<ObjectSet>();
+        let _ = std::mem::size_of::<Pattern>();
+        let _ = std::mem::size_of::<Range>();
+        let _ = std::mem::size_of::<FontSortResult>();
+
+        let _ = init as fn() -> bool;
+        let _ = fini as fn();
+        let _ = init_load_config as fn() -> *mut Config;
+        let _ = init_load_config_and_fonts as fn() -> *mut Config;
+        let _ = version as fn() -> u32;
+
+        let _ = Config::destroy as fn(&mut Config);
+        let _ = Config::font_list as fn(&mut Config, &Pattern, &ObjectSet) -> *mut FontSet;
+        let _ = Config::font_sort
+            as fn(&mut Config, &Pattern, bool, Option<*mut *mut CharSet>) -> FontSortResult;
+        let _ = Config::substitute_with_pat as fn(&mut Config, &Pattern, MatchKind) -> bool;
+
+        let _ = Pattern::create as fn() -> *mut Pattern;
+        let _ = Pattern::parse as fn(&CStr) -> *mut Pattern;
+        let _ = Pattern::destroy as fn(&mut Pattern);
+        let _ = Pattern::default_substitute as fn(&mut Pattern);
+        let _ = Pattern::delete as fn(&mut Pattern, Property) -> bool;
+        let _ = Pattern::filter as fn(&mut Pattern, &ObjectSet) -> *mut Pattern;
+        let _ = Pattern::print as fn(&mut Pattern);
+        let _ = Pattern::object_iterator as fn(&mut Pattern) -> ObjectIterator;
+        let _ = ObjectIterator::next as fn(&mut ObjectIterator) -> bool;
+        let _ = ObjectIterator::value_len as fn(&mut ObjectIterator) -> usize;
+
+        let _ = ObjectSet::create as fn() -> *mut ObjectSet;
+        let _ = ObjectSet::destroy as fn(&mut ObjectSet);
+        let _ = ObjectSet::add as fn(&mut ObjectSet, Property) -> bool;
+        let _ = Range::destroy as fn(&mut Range);
+        let _ = FontSet::create as fn() -> *mut FontSet;
+        let _ = FontSet::destroy as fn(&mut FontSet);
+        let _ = FontSet::add as fn(&mut FontSet, &Pattern) -> bool;
+        let _ = FontSet::print as fn(&mut FontSet);
+        let _ = CharSet::create as fn() -> *mut CharSet;
+        let _ = LangSet::create as fn() -> *mut LangSet;
+        let _ = Value::<'static>::tag as fn(Value<'static>) -> Type;
+        let _ = Value::<'static>::cval as fn(Value<'static>) -> c::FcValue;
+        let _ = ValueBinding::from_c as fn(c::FcValueBinding) -> ValueBinding;
+        let _ = ValueBinding::to_c as fn(ValueBinding) -> c::FcValueBinding;
+
+        // Every `Value` variant round-trips its tag through `cval`/`init`.
+        let matrix = Matrix {
+            xx: 1.0,
+            xy: 0.0,
+            yx: 0.0,
+            yy: 1.0,
+        };
+        let cases: [Value<'_>; 11] = [
+            Value::Unknown,
+            Value::Void,
+            Value::Integer(7),
+            Value::Double(1.5),
+            Value::String(c"mono"),
+            Value::Bool(true),
+            Value::Matrix(&matrix),
+            Value::CharSet(std::ptr::null()),
+            Value::FtFace(std::ptr::null_mut()),
+            Value::LangSet(std::ptr::null()),
+            Value::Range(std::ptr::null()),
+        ];
+        for v in cases {
+            let cv = v.cval();
+            assert_eq!(v.tag(), Value::init(&cv).tag());
+        }
+        // The payloads survive the round-trip too.
+        let cv = Value::Integer(7).cval();
+        assert!(matches!(Value::init(&cv), Value::Integer(7)));
+        let cv = Value::Double(1.5).cval();
+        assert!(matches!(Value::init(&cv), Value::Double(d) if d == 1.5));
+        let cv = Value::Bool(true).cval();
+        assert!(matches!(Value::init(&cv), Value::Bool(true)));
+        let cv = Value::String(c"mono").cval();
+        assert!(matches!(Value::init(&cv), Value::String(s) if s == c"mono"));
+        let cv = Value::Matrix(&matrix).cval();
+        let Value::Matrix(m) = Value::init(&cv) else {
+            unreachable!()
+        };
+        assert_eq!(matrix, unsafe { *m });
+
+        // `ValueBinding` round-trips both ways.
+        for b in [ValueBinding::Weak, ValueBinding::Strong, ValueBinding::Same] {
+            assert_eq!(b, ValueBinding::from_c(b.to_c()));
+        }
     }
 }

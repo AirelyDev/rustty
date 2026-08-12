@@ -30,12 +30,23 @@ use rustty_vt::input::key;
 // the identical allocator in `free` (see `cwrap`). The `event: key.KeyEvent`
 // default mirrors `key.KeyEvent = .{}`.
 //
-// PORT NOTE (utf8 ownership): the reference KeyEvent's `utf8` is a NON-owning
-// `[]const u8` borrow of the caller's bytes. rustty-vt's `KeyEvent` (the R3
-// source of truth) owns `utf8: Vec<u8>`, so `set_utf8` copies the bytes into the
-// owned vec. This is observationally identical for the C API (get_utf8 returns
-// the same bytes; tests compare bytes, not pointer identity) and removes the
-// caller-lifetime hazard the reference's doc comment warns about.
+// PORT NOTE (utf8 ownership, W80-B02-01): the reference KeyEvent's `utf8` is a
+// NON-owning `[]const u8` borrow of the caller's bytes — `set_utf8` stores
+// `ptr[0..len]` verbatim and `get_utf8` hands that very pointer back, so a
+// caller sees its OWN pointer and any later mutation of its buffer is observed
+// by both `get_utf8` and the encoder. That borrow contract is the published one
+// (`include/rustty/vt/key/event.h`: "does NOT take ownership ... the caller
+// must ensure the string remains valid").
+//
+// rustty-vt's `KeyEvent` (the R3 source of truth) owns `utf8: Vec<u8>`, so this
+// wrapper — not rustty-vt — carries the reference's borrow: `utf8_ptr`/
+// `utf8_len` ARE the reference's slice, and the owned vec is refreshed from
+// them at every use (`sync_utf8`) so the encoder reads the caller's live bytes.
+// An earlier revision instead copied into the vec at `set_utf8` time and
+// claimed that was "observationally identical"; it is not — the C surface
+// exposes both pointer identity and post-`set` mutation, and paired C probes
+// against the reference measured `same_pointer=0`/`reflects_source_mutation=0`
+// where the reference gives 1/1.
 // PORT NOTE: the reference `KeyEventWrapper` is file-private. In Rust the opaque
 // handle `Event = *mut KeyEventWrapper` is `pub`, so the struct must be `pub`
 // too (a private pointee in a public alias is rejected); its fields stay private
@@ -43,6 +54,11 @@ use rustty_vt::input::key;
 pub struct KeyEventWrapper {
     event: key::KeyEvent,
     alloc: Option<CAllocator>,
+    // PORT NOTE (W80-B02-01): the reference's `event.utf8` slice itself — the
+    // caller's pointer and length, borrowed, never copied. `event.utf8` (the
+    // owned rustty-vt vec) is a derived cache refreshed by `sync_utf8`.
+    utf8_ptr: *const u8,
+    utf8_len: usize,
 }
 
 /// C: RusttyKeyEvent (R2)
@@ -58,9 +74,41 @@ pub type Event = *mut KeyEventWrapper;
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer (the reference's `event_.?`).
 pub(crate) unsafe fn event_ref<'a>(event_: Event) -> &'a key::KeyEvent {
+    // PORT NOTE (W80-B02-01): the reference reads `event_.?.event.utf8`, which
+    // IS the caller's live slice. rustty-vt's `KeyEvent` owns its `utf8`, so
+    // refresh that owned copy from the borrowed ptr/len first — otherwise the
+    // encoder would see the bytes as they were at `set_utf8` time instead of
+    // the caller's current buffer contents.
+    // SAFETY: `event_` validity is the caller's contract.
+    unsafe { sync_utf8(event_) };
     // const event: *key.KeyEvent = &event_.?.event;
     // SAFETY: `event_` validity is the caller's contract.
     unsafe { &(*event_).event }
+}
+
+/// Refresh the owned `event.utf8` vec from the borrowed `utf8_ptr`/`utf8_len`.
+///
+/// # Safety
+/// `event_` must be a valid `new`-returned pointer, and its stored
+/// `utf8_ptr`/`utf8_len` must still describe a readable region (the caller's
+/// borrow contract, exactly as in the reference).
+unsafe fn sync_utf8(event_: Event) {
+    // SAFETY: `event_` validity is the caller's contract.
+    let ptr = unsafe { (*event_).utf8_ptr };
+    let len = unsafe { (*event_).utf8_len };
+    let event = unsafe { std::ptr::addr_of_mut!((*event_).event) };
+    if ptr.is_null() || len == 0 {
+        // SAFETY: `event` points at the wrapper's live `KeyEvent`.
+        unsafe { (*event).utf8.clear() };
+        return;
+    }
+    // SAFETY: `ptr`/`len` describe a readable region (borrow contract).
+    let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
+    // SAFETY: `event` points at the wrapper's live `KeyEvent`.
+    unsafe {
+        (*event).utf8.clear();
+        (*event).utf8.extend_from_slice(slice);
+    }
 }
 
 /// PORT NOTE: `pub fn new(alloc_, result) callconv(...) Result`.
@@ -77,6 +125,9 @@ pub unsafe fn new(alloc_: Option<&CAllocator>, result: *mut Event) -> Result {
             KeyEventWrapper {
                 event: key::KeyEvent::default(),
                 alloc: alloc_.copied(),
+                // `key.KeyEvent = .{}` leaves `utf8` the empty slice.
+                utf8_ptr: std::ptr::null(),
+                utf8_len: 0,
             },
         )
     };
@@ -183,20 +234,28 @@ pub unsafe fn get_composing(event_: Event) -> bool {
 }
 
 /// PORT NOTE: `event.utf8 = if (utf8) |ptr| ptr[0..len] else "";` — see the
-/// utf8-ownership note on `KeyEventWrapper`: rustty's owned `Vec<u8>` is filled
-/// by copying the caller's bytes (empty vec for null/empty input).
+/// utf8-ownership note on `KeyEventWrapper`: the caller's pointer/length are
+/// BORROWED (null collapses to the empty slice, as `else ""` does), and the
+/// owned rustty-vt vec is refreshed from that borrow.
 ///
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer; `utf8`, if non-null, must
-/// point to `len` readable bytes.
+/// point to `len` readable bytes, and — per the published header contract —
+/// must remain valid for as long as the event may be read or encoded.
 pub unsafe fn set_utf8(event_: Event, utf8: *const u8, len: usize) {
-    let slice: &[u8] = if utf8.is_null() {
-        &[]
-    } else {
-        // SAFETY: `utf8`/`len` describe a valid readable region (caller contract).
-        unsafe { std::slice::from_raw_parts(utf8, len) }
-    };
-    unsafe { (*event_).event.utf8 = slice.to_vec() };
+    // event.utf8 = if (utf8) |ptr| ptr[0..len] else "";
+    unsafe {
+        if utf8.is_null() {
+            (*event_).utf8_ptr = std::ptr::null();
+            (*event_).utf8_len = 0;
+        } else {
+            (*event_).utf8_ptr = utf8;
+            (*event_).utf8_len = len;
+        }
+    }
+    // Keep the owned rustty-vt vec in step with the borrow.
+    // SAFETY: the region just stored is readable (caller contract).
+    unsafe { sync_utf8(event_) };
 }
 
 /// PORT NOTE: `pub fn get_utf8(event_, len) callconv(...) ?[*]const u8`. Writes
@@ -205,22 +264,31 @@ pub unsafe fn set_utf8(event_: Event, utf8: *const u8, len: usize) {
 ///
 /// # Safety
 /// `event_` must be a valid `new`-returned pointer; `len`, if non-null, must be
-/// a valid, writable pointer to `usize`. The returned pointer is valid only
-/// until the event's utf8 is next mutated or the event is freed.
+/// a valid, writable pointer to `usize`. The returned pointer is the CALLER's
+/// own `set_utf8` pointer (the reference's borrow), valid for exactly as long
+/// as the caller keeps that buffer alive.
 pub unsafe fn get_utf8(event_: Event, len: *mut usize) -> *const u8 {
     // const event: *key.KeyEvent = &event_.?.event;
+    // PORT NOTE (W80-B02-01): the reference's `event.utf8` IS the caller's
+    // borrowed slice, so both the reported length and the returned pointer come
+    // from the borrow (`utf8_ptr`/`utf8_len`), never from the derived owned vec.
+    // A caller therefore gets ITS OWN pointer back and observes later mutation
+    // of its buffer — the copy-based getter returned a different pointer frozen
+    // at `set_utf8` time.
     // SAFETY: `event_` validity is the caller's contract.
-    let utf8 = unsafe { &(*event_).event.utf8 };
+    let ptr = unsafe { (*event_).utf8_ptr };
+    // SAFETY: `event_` validity is the caller's contract.
+    let utf8_len = unsafe { (*event_).utf8_len };
     // if (len) |l| l.* = event.utf8.len;
     if !len.is_null() {
         // SAFETY: `len` is a valid writable pointer (caller contract).
-        unsafe { *len = utf8.len() };
+        unsafe { *len = utf8_len };
     }
     // return if (event.utf8.len == 0) null else event.utf8.ptr;
-    if utf8.is_empty() {
+    if utf8_len == 0 {
         std::ptr::null()
     } else {
-        utf8.as_ptr()
+        ptr
     }
 }
 
@@ -484,6 +552,62 @@ mod tests {
             assert_eq!(b"A", unsafe {
                 std::slice::from_raw_parts(got_utf8, utf8_len)
             });
+
+            unsafe { free(e) };
+        });
+    }
+
+    // W80-B02-01 (Rust-only proving test; the reference has none — the borrow
+    // is simply what `event.utf8 = ptr[0..len]` means). `set_utf8` BORROWS the
+    // caller's bytes and `get_utf8` returns that very pointer, so a caller sees
+    // pointer identity AND observes any later mutation of its own buffer. The
+    // earlier copy-into-`Vec<u8>` implementation returned a different pointer
+    // frozen at `set_utf8` time; the audit's paired C probes measured
+    // `same_pointer=0`/`reflects_source_mutation=0` against the reference's
+    // `1`/`1`.
+    //
+    // ALIASING NOTE (Stacked Borrows): the wrapper KEEPS the pointer this test
+    // hands it and reads through it after the mutation — exactly the C
+    // contract. So the caller-side buffer must be reached through a SINGLE
+    // provenance root: take one raw `*mut u8` from the local and do every read
+    // AND the mutation through that same pointer. Naming the local again
+    // (`text[0] = ...`, `text.as_ptr()`) creates a fresh borrow whose write
+    // invalidates the tag the wrapper stored, and the wrapper's later read is
+    // then UB under Miri (the G6 lane runs `cargo +nightly miri test
+    // -p rustty-vt-c --lib`). Same doctrine as the raw-ptr `&mut`-free seams
+    // elsewhere in the port: mutate through the alias's own pointer.
+    #[test]
+    fn get_utf8_returns_the_borrowed_caller_pointer_and_observes_mutation() {
+        with_test_allocator(|ta| {
+            let mut e: Event = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe { new(Some(ta), &mut e) });
+
+            let mut text = *b"hi";
+            let text_len = text.len();
+            // The one provenance root for the caller's buffer.
+            let base: *mut u8 = text.as_mut_ptr();
+            unsafe { set_utf8(e, base.cast_const(), text_len) };
+
+            // Pointer identity: the caller's own buffer comes back.
+            let mut utf8_len: usize = 0;
+            let got = unsafe { get_utf8(e, &mut utf8_len) };
+            assert_eq!(base.cast_const(), got);
+            assert_eq!(2usize, utf8_len);
+
+            // Live: mutating the caller buffer is observed through the getter
+            // and through the internal `event_ref` view the encoder reads.
+            unsafe { *base = b'H' };
+            let got = unsafe { get_utf8(e, &mut utf8_len) };
+            assert_eq!(base.cast_const(), got);
+            assert_eq!(b"Hi", unsafe { std::slice::from_raw_parts(got, utf8_len) });
+            assert_eq!(b"Hi", unsafe { event_ref(e).utf8.as_slice() });
+
+            // A zero-length borrow reports null, exactly as `event.utf8.len == 0`
+            // does in the reference — even when the stored pointer is non-null.
+            unsafe { set_utf8(e, base.cast_const(), 0) };
+            utf8_len = 99;
+            assert!(unsafe { get_utf8(e, &mut utf8_len) }.is_null());
+            assert_eq!(0usize, utf8_len);
 
             unsafe { free(e) };
         });

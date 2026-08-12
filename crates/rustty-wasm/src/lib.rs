@@ -45,8 +45,13 @@
 //     exports are pinned by the `#[used]` retention tuples below (the faithful
 //     `_ = ...Wasm` analog).
 //
-// RETENTION SET STATUS (WS14): 4 of the reference's 5 retentions map to a crate
-// edge plus, where the module carries `export fn`s, a `#[used]` static. The 5th,
+// RETENTION SET STATUS (WS14; completed by the codex-vet W16-FONT-01 fix): 4 of
+// the reference's 5 retentions map to a crate edge plus, where the module
+// carries `export fn`s, a `#[used]` static. `font/main.zig` retains FOUR wasm
+// groups (`Atlas.Wasm` + `DeferredFace.Wasm` + `face.web_canvas.Wasm` +
+// `shape.web_canvas.Wasm`); the latter three live in the D1 shaper tier, so the
+// `rustty-font-shaper` edge (feature `ghostty-wasm-abi`) + `retain_font_shaper`
+// below carry them. The 5th,
 // `_ = @import("App.zig").Wasm`, needs NO edge: that block is an EMPTY struct
 // whose three exports are commented out UPSTREAM (`App.zig:577-604`), so
 // retaining it emits zero symbols and pulls no App implementation — see the
@@ -108,6 +113,65 @@ mod retain {
         atlas_grow,
         atlas_clear,
     );
+}
+
+// The rest of the `_ = @import("font/main.zig")` retention: that comptime block
+// retains FOUR wasm groups —
+//
+//   _ = Atlas.Wasm;              // `mod retain` above (rustty-font)
+//   _ = DeferredFace.Wasm;       // `deferred_face_new`/`free`/`load`
+//   _ = face.web_canvas.Wasm;    // `face_new`/`free`/`render_glyph`/`debug_canvas`
+//   _ = shape.web_canvas.Wasm;   // `shaper_new`/`free`/`test`
+//
+// The latter three live in the SHAPER tier (D1 split: `rustty-font-shaper`,
+// feature `ghostty-wasm-abi`), and are `cfg(target_arch = "wasm32")` there (the
+// browser Canvas backend), so — unlike the tuples above — this retention module
+// is wasm32-gated: on the host the symbols do not exist to name.
+#[cfg(target_arch = "wasm32")]
+mod retain_font_shaper {
+    use rustty_font::atlas::Atlas;
+    use rustty_font::glyph::Glyph;
+    use rustty_font_shaper::deferred_face::{
+        deferred_face_free, deferred_face_load, deferred_face_new, DeferredFace,
+    };
+    use rustty_font_shaper::face::web_canvas::{
+        face_debug_canvas, face_free, face_new, face_render_glyph, Face,
+    };
+    use rustty_font_shaper::shape::web_canvas::{shaper_free, shaper_new, shaper_test, Shaper};
+    use rustty_font_shaper::shared_grid::SharedGrid;
+
+    // `_ = DeferredFace.Wasm;` (`DeferredFace.zig:423-466`).
+    type DeferredFaceWasmExports = (
+        extern "C" fn(*const u8, usize, u16) -> *mut DeferredFace,
+        extern "C" fn(*mut DeferredFace),
+        extern "C" fn(*mut DeferredFace, f32),
+    );
+
+    #[used]
+    static RETAIN_DEFERRED_FACE_WASM_EXPORTS: DeferredFaceWasmExports =
+        (deferred_face_new, deferred_face_free, deferred_face_load);
+
+    // `_ = face.web_canvas.Wasm;` (`face/web_canvas.zig:489-557`).
+    type FaceWasmExports = (
+        extern "C" fn(*const u8, usize, u16, u16) -> *mut Face,
+        extern "C" fn(*mut Face),
+        extern "C" fn(*mut Face, *mut Atlas, u32) -> *mut Glyph,
+        extern "C" fn(*mut Face),
+    );
+
+    #[used]
+    static RETAIN_FACE_WASM_EXPORTS: FaceWasmExports =
+        (face_new, face_free, face_render_glyph, face_debug_canvas);
+
+    // `_ = shape.web_canvas.Wasm;` (`shaper/web_canvas.zig:231-305`).
+    type ShaperWasmExports = (
+        extern "C" fn(usize) -> *mut Shaper,
+        extern "C" fn(*mut Shaper),
+        extern "C" fn(*mut Shaper, *mut SharedGrid, *const u8, usize),
+    );
+
+    #[used]
+    static RETAIN_SHAPER_WASM_EXPORTS: ShaperWasmExports = (shaper_new, shaper_free, shaper_test);
 }
 
 /// rustty-only host readback helpers — NOT a port.

@@ -296,6 +296,8 @@ impl Face {
 
     // PORT NOTE: `deinit`.
     pub fn deinit(&mut self) {
+        #[cfg(test)]
+        crate::face::test_probe::note_face_deinit();
         // self.lib.alloc.destroy(self.ft_mutex);
         unsafe {
             drop(Box::from_raw(self.ft_mutex));
@@ -413,6 +415,13 @@ impl Face {
     /// for clearing any glyph caches, font atlas data, etc.
     // PORT NOTE: `setSize`.
     pub fn set_size(&mut self, opts: Options) -> Result<(), Error> {
+        // Test-only fail-point (W9F-02): lets unit tests force the fallible
+        // `setSize` arm so its error-path cleanup can be proven.
+        #[cfg(test)]
+        if crate::face::test_probe::set_size_failpoint_should_fail() {
+            return Err(Error::OutOfMemory);
+        }
+
         set_size_(self.face, opts.size)?;
         self.size = opts.size;
         Ok(())

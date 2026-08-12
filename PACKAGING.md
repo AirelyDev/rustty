@@ -18,9 +18,13 @@ at the Rustty release-artifact host in the following URL format where
 `VERSION` is the version number with no prefix such as `1.0.0`:
 
 <!--
-  NOTE: the release-artifact host is `rustty.sh`, but the release
-  infrastructure is not yet stood up (release-infra is Batch 4), so these
-  URLs may not resolve until then.
+  NOTE: the release-artifact host is `rustty.sh`. The pipeline that produces
+  and signs these files now EXISTS in the repository
+  (.github/workflows/release-tag.yml -> `cargo run -p xtask -- distcheck` +
+  minisign, promoted by publish-tag.yml), but it is INERT: every job is gated
+  on the `RUSTTY_RELEASE_ENABLED` repository variable, and the bucket behind
+  rustty.sh plus the signing/notarization secrets are maintainer-provided
+  infrastructure. Until a maintainer arms it, these URLs will not resolve.
 -->
 
 ```
@@ -36,6 +40,14 @@ using the following public key:
 RWRcF0y/6b9ncIoHA72QDYLji3/E3Yp1NiGyJyp2wVC7y0kyjfvpn7mL
 ```
 
+<!--
+  MAINTAINERS: this public key must be the counterpart of the `MINISIGN_KEY`
+  secret the release workflows sign with (release-tag.yml "Sign Tarball",
+  release-tip.yml "Sign Tarball"). If the release keypair is ever generated or
+  rotated, update this block in the same change — packagers verify against it,
+  and a stale key here means every published signature fails verification.
+-->
+
 **Tip source tarballs** are available on the
 [GitHub releases page](https://github.com/AirelyDev/rustty/releases/tag/tip).
 Use the `rustty-source.tar.gz` asset and _not the GitHub auto-generated
@@ -43,8 +55,11 @@ source tarball_. These tarballs are generated for every commit to
 the `main` branch and are not associated with a specific version.
 
 <!--
-  Until the tip pipeline is set up
-  (release-infra is Batch 4), this asset may not yet be published.
+  The tip pipeline exists (.github/workflows/release-tip.yml: it runs after a
+  green `ci` on `main`, builds the tarball with `xtask distcheck`, signs it,
+  and force-moves the `tip` tag), but like the tagged pipeline it is gated on
+  the `RUSTTY_RELEASE_ENABLED` repository variable — until a maintainer arms
+  it, this asset is not published.
 -->
 
 > [!WARNING]
@@ -128,9 +143,24 @@ install -Dm755 target/release/rustty "$DESTDIR$PREFIX/bin/rustty"
 
 # The runtime resources (terminfo, completions, man pages, i18n, themes,
 # shell integration). This regenerates the full share/ tree.
-cargo run -p xtask -- resources
+#
+# `--target-os` selects the target's resource layout (default: the build
+# host). On Linux it ALSO stages the desktop-integration assets — the
+# .desktop launcher, D-Bus/systemd activation services, AppStream metainfo,
+# Nautilus/Dolphin right-click actions, and the hicolor icon set. `--prefix`
+# must match PREFIX so the templated Exec= lines point at the installed
+# binary. (On FreeBSD, `--target-os freebsd` puts the terminfo tree under
+# share/site-terminfo, where the runtime looks it up.)
+cargo run -p xtask -- resources --target-os linux --prefix "$PREFIX"
 cp -R zig-out/share "$DESTDIR$PREFIX/share"
 ```
+
+   Flags for special Linux packaging arms: `--flatpak` (flatpak D-Bus
+   activation, icons capped at 512x512, no systemd unit), `--debug` (the
+   `-debug` app id), and `--system-package` (the systemd user unit is staged
+   under `zig-out/lib/systemd/user` — copy `zig-out/lib` into
+   `$DESTDIR$PREFIX/lib` as well in that case, since system packages install
+   systemd user units under `lib`, not `share`).
 
    This installs Rustty into `/tmp/rustty` with the prefix `/usr` (i.e. the
    binary ends up at `/tmp/rustty/usr/bin/rustty`). This style is common for
@@ -174,6 +204,15 @@ maintainers migrating from other terminal emulators:
   Use `x86-64` for 64-bit x86 and `apple-m1` or a conservative baseline for
   Apple Silicon. The default (`native`) tunes for the build host and must be
   avoided for distributed packages.
+
+- **Windowing protocols** (was `-Dgtk-wayland=<bool>` / `-Dgtk-x11=<bool>`):
+  The default feature set builds the Linux GTK app with **both** native
+  Wayland and X11 integration (the `wayland` and `x11` Cargo features are
+  default-on, matching the upstream defaults on a distro GTK built with both
+  backends). If your GTK is built for a single backend, opt out of the other
+  arm with `--no-default-features --features gtk,wayland` (Wayland-only) or
+  `--no-default-features --features gtk,x11` (X11-only). Both features are
+  no-ops off Linux, so the default build stays correct on every other target.
 
 - **Target triple** (was `-Dtarget=$arch-$os-$abi`): Build for a specific
   target with `--target=<triple>` (for example

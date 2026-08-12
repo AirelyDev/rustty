@@ -256,20 +256,29 @@ pub fn parse(out: &mut [u8], bytes: &[u8]) -> Result<usize, ParseError> {
 
 /// PORTS: Zig stdlib `std.unicode.utf8Encode` (the subset `string.zig` reaches).
 //
-// PORT NOTE: encodes codepoint `cp` into `out`, returning the byte count. The
-// reference's errors (`Utf8CannotEncodeSurrogateHalf`, `CodepointTooLarge`) and
-// the `NoSpaceLeft`/out-of-bounds map to `ParseError::OutOfMemory` (the only
-// error the `parse` call site surfaces beyond `InvalidString`). The codepoints
-// reaching here come from `parse_escape_sequence`'s `\u{...}`/`\xNN`/escape arms,
-// all of which are valid scalar values (`<= 0x10ffff` and not surrogates for
-// the escape forms), so the encode itself does not fail in practice.
+// PORT NOTE: encodes codepoint `cp` into `out`, returning the byte count.
+//
+// The reference's `utf8Encode` error set is
+// `error{ Utf8CannotEncodeSurrogateHalf, CodepointTooLarge }`, and `parse`'s
+// inferred error set propagates it verbatim (`try std.unicode.utf8Encode(...)`).
+// A surrogate IS reachable here: `parse_escape_sequence`'s `\u{...}` arm rejects
+// only `value > 0x10ffff` (exactly as `std.zig.string_literal` does), so
+// `\u{D800}` parses successfully and reaches this encode, where the reference
+// returns `error.Utf8CannotEncodeSurrogateHalf`. `ParseError` therefore carries
+// that class instead of folding it into `OutOfMemory` — which the reference's
+// caller (`cli/args.zig` `parseIntoField`) treats as a FATAL config-load error,
+// while any other error becomes a recoverable "unknown error {}" diagnostic.
+// `CodepointTooLarge` stays unreachable (the `\u{...}` arm caps at `0x10ffff`),
+// so it is not part of this error set.
+//
+// The `out`-too-small arm has no reference analogue (Zig asserts the buffer is
+// large enough); it keeps `OutOfMemory`, the class `parse` itself returns when
+// the destination buffer is exhausted.
 fn utf8_encode(cp: u32, out: &mut [u8]) -> Result<usize, ParseError> {
-    // char::from_u32 rejects surrogates (D800..DFFF) and > 0x10FFFF, matching
-    // the reference's `Utf8CannotEncodeSurrogateHalf`/`CodepointTooLarge`. Those
-    // would surface as `InvalidString` upstream; the only call site here only
-    // ever passes a valid scalar, but we map failure to OutOfMemory to keep the
-    // `try ...` error-union shape of the reference.
-    let ch = char::from_u32(cp).ok_or(ParseError::OutOfMemory)?;
+    // `char::from_u32` rejects surrogates (D800..DFFF) and > 0x10FFFF; only the
+    // surrogate half is reachable from `parse_escape_sequence` (see above), so
+    // failure here is the reference's `error.Utf8CannotEncodeSurrogateHalf`.
+    let ch = char::from_u32(cp).ok_or(ParseError::Utf8CannotEncodeSurrogateHalf)?;
     let len = ch.len_utf8();
     if len > out.len() {
         return Err(ParseError::OutOfMemory);
@@ -278,11 +287,16 @@ fn utf8_encode(cp: u32, out: &mut [u8]) -> Result<usize, ParseError> {
     Ok(len)
 }
 
-/// PORTS: the error set of `parse` — `error.OutOfMemory || error.InvalidString`.
+/// PORTS: the error set of `parse` — `error.OutOfMemory || error.InvalidString`
+/// plus the `std.unicode.utf8Encode` errors its `try` propagates (of which only
+/// `Utf8CannotEncodeSurrogateHalf` is reachable; see `utf8_encode`).
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseError {
     OutOfMemory,
     InvalidString,
+    /// `error.Utf8CannotEncodeSurrogateHalf` — an escaped surrogate half
+    /// (`\u{D800}`..`\u{DFFF}`) cannot be UTF-8 encoded.
+    Utf8CannotEncodeSurrogateHalf,
 }
 
 /// Creates an iterator that requires no allocation to extract codepoints
@@ -493,5 +507,38 @@ mod tests {
         assert_eq!(0x1F601, it.next().unwrap().unwrap());
         // try std.testing.expectEqual(null, try it.next());
         assert_eq!(None, it.next().unwrap());
+    }
+
+    // PORT NOTE: no reference test. `\u{D800}` parses as an escape sequence
+    // (`std.zig.string_literal` rejects only `> 0x10ffff`) and then fails to
+    // UTF-8 encode: the reference's `try std.unicode.utf8Encode` propagates
+    // `error.Utf8CannotEncodeSurrogateHalf`, a class `cli/args.zig` turns into a
+    // recoverable "unknown error {}" diagnostic. Reporting it as `OutOfMemory`
+    // instead — as the port did before — is the one class `parseIntoField`
+    // treats as FATAL.
+    #[test]
+    fn parse_escaped_surrogate_half() {
+        let mut buf = [0u8; 128];
+        assert_eq!(
+            Err(ParseError::Utf8CannotEncodeSurrogateHalf),
+            parse(&mut buf, b"\\u{D800}")
+        );
+        // The whole surrogate range, low and high halves alike.
+        assert_eq!(
+            Err(ParseError::Utf8CannotEncodeSurrogateHalf),
+            parse(&mut buf, b"pre\\u{DFFF}post")
+        );
+
+        // Controls: the neighbours of the surrogate range and the largest legal
+        // codepoint still encode, and a genuinely too-small output buffer is
+        // still `OutOfMemory`.
+        let len = parse(&mut buf, b"\\u{D7FF}").unwrap();
+        assert_eq!("\u{D7FF}".as_bytes(), &buf[..len]);
+        let len = parse(&mut buf, b"\\u{E000}").unwrap();
+        assert_eq!("\u{E000}".as_bytes(), &buf[..len]);
+        let len = parse(&mut buf, b"\\u{10FFFF}").unwrap();
+        assert_eq!("\u{10FFFF}".as_bytes(), &buf[..len]);
+        let mut small = [0u8; 2];
+        assert_eq!(Err(ParseError::OutOfMemory), parse(&mut small, b"abc"));
     }
 }

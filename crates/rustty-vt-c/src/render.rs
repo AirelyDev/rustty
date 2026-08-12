@@ -22,6 +22,7 @@ use crate::row;
 use crate::style as style_c;
 use crate::terminal as terminal_c;
 use std::ffi::c_void;
+use std::os::raw::c_int;
 
 // const std = @import("std");
 // const testing = std.testing;
@@ -51,21 +52,30 @@ use rustty_vt::size;
 use rustty_vt::style::{ColorTag, Fg, Style};
 
 // const log = std.log.scoped(.render_state_c);
+//
+// PORT NOTE (W34-B02): rustty's scoped-log sink is `sys::log_fn` (the port of
+// `terminal/c/sys.zig`'s `logFn`), which is silent until a C caller installs a
+// log callback via `rustty_sys_set(RUSTTY_SYS_OPT_LOG, ...)`. `LOG_SCOPE` is
+// the `@tagName` of the reference's scope, which `log_fn` forwards to the
+// callback as the scope text.
+pub(crate) const LOG_SCOPE: &str = "render_state_c";
 
 // const RenderStateWrapper = struct {
 //     alloc: std.mem.Allocator,
 //     state: renderpkg.RenderState = .empty,
 // };
 //
-// PORT NOTE (D3 storage, internal — NOT C-ABI): like the terminal wrapper, the
-// `renderpkg.RenderState` is owned through its own `allocator_api2::Global`; the
-// C `alloc_` only selects the rustty-lib resolution. The wrapper is `Box`'d on
-// the Rust heap and handed across the C ABI as a raw `*mut RenderStateWrapper`.
+// PORT NOTE (W12-01, internal — NOT C-ABI): the wrapper STORAGE is allocated
+// through the C-resolved allocator (`alloc.create`, see `new_`) and handed
+// across the C ABI as a raw `*mut RenderStateWrapper`; `free` returns it via
+// `alloc.destroy` — the caller allocator owns the lifecycle exactly like the
+// reference. Tier-2 residual: the `renderpkg.RenderState` CONTENTS still grow
+// through rustty-vt's own `allocator_api2::Global` (DEFERRALS.md
+// "F-008/W12-01 Tier 2").
 pub struct RenderStateWrapper {
     // PORT NOTE: the reference `alloc: std.mem.Allocator` is the C-resolved
-    // allocator. rustty-vt's `RenderState` allocates exclusively through its own
-    // `allocator_api2::Global`, so this field is the resolved handle kept for
-    // parity (validating the C `alloc_`); the actual `deinit`/`update` use Global.
+    // allocator; it owns this wrapper's storage (used by `free`). Tier-2
+    // residual: the `deinit`/`update` calls on `state` still use Global.
     pub alloc: Box<dyn rustty_lib::allocator::ZigAllocator>,
     pub state: ZigRenderState,
 }
@@ -149,7 +159,65 @@ pub type RowCells = *mut RowCellsWrapper;
 
 /// C: GhosttyRenderStateDirty -> RusttyRenderStateDirty (R2)
 // pub const Dirty = renderpkg.RenderState.Dirty;
-pub type Dirty = RenderDirty;
+//
+// PORT NOTE (W34-B03): the reference's `renderpkg.RenderState.Dirty` is
+// `lib.Enum(lib.target, &.{ "false", "partial", "full" })`, whose C backing is
+// `c_int` (`src/lib/enum.zig`: `.c => c_int`), so `getTyped`/`setTyped` move a
+// full `int` through the caller's payload pointer, and the published header
+// declares `RusttyRenderStateDirty` with `RUSTTY_ENUM_MAX_VALUE` (int storage).
+// rustty's INTERNAL `render::Dirty` is a plain Rust enum (1 byte), so aliasing
+// it here made `get(.dirty)` write ONE byte into the C caller's 4-byte slot
+// (leaving the high bytes stale) and `set(.dirty)` read only the low byte. This
+// is the C-facing projection — int-sized, like `CursorVisualStyle` below — and
+// the internal enum is converted at the boundary.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dirty {
+    False = 0,
+    Partial = 1,
+    Full = 2,
+}
+
+// The C-ABI storage width the published header declares (`include/rustty/vt/
+// render.h`: `RUSTTY_RENDER_STATE_DIRTY_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE`).
+const _: () = assert!(std::mem::size_of::<Dirty>() == std::mem::size_of::<c_int>());
+
+impl Dirty {
+    /// Narrow an inbound C integer to a `Dirty`, mirroring `std.meta.intToEnum`;
+    /// `None` outside the declared range.
+    ///
+    /// D11 (P3-W6 T2), see `kitty_graphics::Data::from_c_int`: a `#[repr(C)]`
+    /// enum materialized from out-of-range C memory is UB in every build mode,
+    /// so `set(.dirty)` range-checks the payload before converting.
+    pub fn from_c_int(v: c_int) -> Option<Dirty> {
+        match v {
+            0 => Some(Dirty::False),
+            1 => Some(Dirty::Partial),
+            2 => Some(Dirty::Full),
+            _ => None,
+        }
+    }
+}
+
+impl From<RenderDirty> for Dirty {
+    fn from(d: RenderDirty) -> Dirty {
+        match d {
+            RenderDirty::False => Dirty::False,
+            RenderDirty::Partial => Dirty::Partial,
+            RenderDirty::Full => Dirty::Full,
+        }
+    }
+}
+
+impl From<Dirty> for RenderDirty {
+    fn from(d: Dirty) -> RenderDirty {
+        match d {
+            Dirty::False => RenderDirty::False,
+            Dirty::Partial => RenderDirty::Partial,
+            Dirty::Full => RenderDirty::Full,
+        }
+    }
+}
 
 /// C: GhosttyRenderStateRowSelection -> RusttyRenderStateRowSelection (R2)
 // pub const RowSelection = extern struct {
@@ -228,6 +296,28 @@ pub enum Data {
     CursorViewportX = 15,
     CursorViewportY = 16,
     CursorViewportWideTail = 17,
+}
+
+// D11 (P3-W6 T2): proves reading this value out of C memory as a `c_int` leaves
+// the ABI unchanged (the header declares `const RusttyRenderStateData *keys`).
+const _: () = assert!(std::mem::size_of::<Data>() == std::mem::size_of::<c_int>());
+
+impl Data {
+    /// Narrow an inbound C integer to a `Data`, mirroring `std.meta.intToEnum`;
+    /// `None` outside the declared range. `Invalid = 0` is IN range and keeps
+    /// its `.invalid_value` disposition inside `get`.
+    // PORT NOTE: the reference's guard is
+    // `std.enums.fromInt(Data, @intFromEnum(data))`; `Data` is a contiguous
+    // `#[repr(C)]` enum here, so the range check IS `fromInt`.
+    pub fn from_c_int(v: c_int) -> Option<Data> {
+        // contiguous 0..=17
+        if (0..=17).contains(&v) {
+            // SAFETY: `v` is a valid `Data` discriminant (range-checked above).
+            Some(unsafe { std::mem::transmute::<c_int, Data>(v) })
+        } else {
+            None
+        }
+    }
 }
 
 // Output type expected for querying the data of the given kind.
@@ -362,17 +452,29 @@ struct OutOfMemory;
 //     return ptr;
 // }
 //
-// PORT NOTE (D3 lifecycle): `alloc.create` becomes a `Box::into_raw` on the Rust
-// heap; `RenderState::empty()` supplies the `.state = .empty` field default. The
-// `RenderStateWrapper` allocation cannot fail in the Rust global heap path
-// (`Box::new` aborts on OOM), so the `error.OutOfMemory` arm is preserved for
-// the C-ABI contract but is unreachable here.
+// PORT NOTE (W12-01, supersedes the D3-lifecycle substitution): `alloc.create`
+// goes through the C-resolved allocator, so the caller allocator OWNS the
+// wrapper storage and a rejecting allocator yields a recoverable
+// `error.OutOfMemory` exactly like the reference. `RenderState::empty()`
+// supplies the `.state = .empty` field default.
 fn new_(alloc_: Option<&CAllocator>) -> std::result::Result<RenderState, OutOfMemory> {
     let alloc = rustty_lib::allocator::default(alloc_);
-    let ptr = Box::into_raw(Box::new(RenderStateWrapper {
-        alloc,
-        state: ZigRenderState::empty(),
-    }));
+    // const ptr = alloc.create(RenderStateWrapper) catch return error.OutOfMemory;
+    let ptr: *mut RenderStateWrapper = match rustty_lib::allocator::create_raw(&*alloc) {
+        Ok(ptr) => ptr,
+        Err(_) => return Err(OutOfMemory),
+    };
+    // ptr.* = .{ .alloc = alloc };
+    // SAFETY: `ptr` is valid uninitialized `RenderStateWrapper` storage.
+    unsafe {
+        std::ptr::write(
+            ptr,
+            RenderStateWrapper {
+                alloc,
+                state: ZigRenderState::empty(),
+            },
+        )
+    };
     Ok(ptr)
 }
 
@@ -389,14 +491,24 @@ pub unsafe fn free(state_: RenderState) {
     if state_.is_null() {
         return;
     }
+    // PORT NOTE (W12-01): move the wrapper value out of the caller-allocator
+    // storage, deinit its contents, return the STORAGE through the resolved
+    // allocator (`alloc.destroy(state)` — the caller free callback fires),
+    // then drop the value (which drops the `alloc` box itself last).
+    // SAFETY: `state_` is a live `new`-returned wrapper (caller contract);
+    // after the read the storage is treated as uninitialized and freed once.
+    let mut state = unsafe { std::ptr::read(state_) };
     // const alloc = state.alloc;
     // state.state.deinit(alloc);
-    // alloc.destroy(state);
-    // SAFETY: `state_` is a live `new`-returned wrapper (caller contract).
-    let mut state = unsafe { Box::from_raw(state_) };
+    // PORT NOTE (W12-01 Tier-2 residual): rustty-vt's `RenderState` allocates
+    // internally through `Global`, so `deinit` takes `Global`, not the caller
+    // allocator (see DEFERRALS.md "F-008/W12-01 Tier 2").
     let gpa = allocator_api2::alloc::Global;
     state.state.deinit(gpa);
-    // The `Box` frees the wrapper on drop (the reference `alloc.destroy`).
+    // alloc.destroy(state);
+    // SAFETY: `state_` was created by `new_` via `create_raw` with this
+    // same resolved allocator.
+    unsafe { rustty_lib::allocator::destroy_raw(&*state.alloc, state_) };
     drop(state);
 }
 
@@ -499,8 +611,8 @@ pub unsafe fn end_update(state_: RenderState) -> Result {
 // }
 //
 // PORT NOTE: the `intToEnum(Data, ...)` runtime-safety guard on the raw `c_int`
-// crossing the C boundary lives in the `extern "C"` wrapper in `lib.rs`; by the
-// time `get` is reached the `data` enum is already validated.
+// crossing the C boundary lives in `get_checked` below; by the time `get` is
+// reached the `data` enum is already validated.
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
 pub unsafe fn get(state_: RenderState, data: Data, out: *mut c_void) -> Result {
@@ -509,6 +621,32 @@ pub unsafe fn get(state_: RenderState, data: Data, out: *mut c_void) -> Result {
         // SAFETY: `out` validity/type is the caller's contract per `data`.
         _ => unsafe { get_typed(state_, data, out) },
     }
+}
+
+// PORT NOTE (W34-B02): the reference carries the runtime-safety guard INSIDE
+// `get`, so every caller reaches it — including `get_multi`, which calls `get`
+// per array element. rustty's `get` takes the already-narrowed `Data` (a
+// `#[repr(C)]` enum cannot even hold an out-of-range tag), so the guard lives
+// here, in the raw-`c_int` entry point shared by the `extern "C"` wrapper in
+// `lib.rs` AND by `get_multi` — the same "every path goes through the guard"
+// shape as the reference.
+/// # Safety
+/// `out` must point to writable storage of the type required by `data`.
+pub unsafe fn get_checked(state_: RenderState, data: c_int, out: *mut c_void) -> Result {
+    // _ = std.meta.intToEnum(Data, @intFromEnum(data)) catch {
+    //     log.warn("render_state_get invalid data value={d}", .{@intFromEnum(data)});
+    //     return .invalid_value;
+    // };
+    let Some(d) = Data::from_c_int(data) else {
+        crate::sys::log_fn(
+            crate::sys::StdLevel::Warn,
+            LOG_SCOPE,
+            format_args!("render_state_get invalid data value={data}"),
+        );
+        return Result::InvalidValue;
+    };
+    // SAFETY: `out` validity/type is the caller's contract.
+    unsafe { get(state_, d, out) }
 }
 
 // pub fn get_multi(state_, count, keys, values, out_written) ... Result {
@@ -523,10 +661,15 @@ pub unsafe fn get(state_: RenderState, data: Data, out: *mut c_void) -> Result {
 // }
 /// # Safety
 /// `keys`/`values`/`out_written` validity is the caller's contract.
+// PORT NOTE (W34-B02): `keys` is C memory typed `const RusttyRenderStateData *`
+// in the published header; each element is read as a raw `c_int` (ABI-identical
+// — `Data` is `#[repr(C)]`, asserted int-sized above) and range-checked by
+// `get_checked`. Reading an element straight into a `Data` would materialize an
+// out-of-range discriminant, which is UB in Rust in EVERY build mode.
 pub unsafe fn get_multi(
     state_: RenderState,
     count: usize,
-    keys: *const Data,
+    keys: *const c_int,
     values: *mut *mut c_void,
     out_written: *mut usize,
 ) -> Result {
@@ -544,7 +687,7 @@ pub unsafe fn get_multi(
         let key = unsafe { *keys.add(i) };
         let value = unsafe { *values.add(i) };
         // const result = get(state_, k[i], v[i]);
-        let result = unsafe { get(state_, key, value) };
+        let result = unsafe { get_checked(state_, key, value) };
         if result != Result::Success {
             if !out_written.is_null() {
                 // SAFETY: caller-provided out pointer, checked non-null.
@@ -589,8 +732,9 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
         }
         // .dirty => out.* = state.state.dirty,
         Data::Dirty => {
-            // SAFETY: `out` points to a writable `Dirty`.
-            unsafe { *(out as *mut Dirty) = state.state.dirty };
+            // SAFETY: `out` points to a writable `Dirty` — the int-sized C
+            // projection (W34-B03), so the caller's full slot is written.
+            unsafe { *(out as *mut Dirty) = Dirty::from(state.state.dirty) };
         }
         // .row_iterator => {
         //     const it = out.* orelse return .invalid_value;
@@ -750,8 +894,20 @@ unsafe fn set_typed(state_: RenderState, option: SetOption, value: *const c_void
     match option {
         // .dirty => state.state.dirty = value.*,
         SetOption::Dirty => {
-            // SAFETY: `value` points to a readable `Dirty`.
-            state.state.dirty = unsafe { *(value as *const Dirty) };
+            // SAFETY: `value` points to a readable int-sized `Dirty` (W34-B03:
+            // the C enum is `c_int`-backed, so the full slot is read — the old
+            // low-byte read both truncated and transmuted unvalidated bytes).
+            let raw = unsafe { *(value as *const c_int) };
+            // PORT NOTE: the reference loads `value.*` as a `Dirty` directly; an
+            // out-of-range payload is safety-checked illegal behavior in Zig
+            // (and UB in ReleaseFast). Rust cannot materialize an invalid
+            // `#[repr(C)]` enum at all, so the D11 range check applies here and
+            // an undeclared value returns `.invalid_value` (the same
+            // disposition the `get` side gives an undeclared selector).
+            let Some(dirty) = Dirty::from_c_int(raw) else {
+                return Result::InvalidValue;
+            };
+            state.state.dirty = dirty.into();
         }
     }
     Result::Success
@@ -857,20 +1013,37 @@ pub unsafe fn colors_get(state_: RenderState, out_colors_: *mut Colors) -> Resul
 /// valid writable pointer to a `RowIterator`.
 pub unsafe fn row_iterator_new(alloc_: Option<&CAllocator>, result: *mut RowIterator) -> Result {
     let alloc = rustty_lib::allocator::default(alloc_);
+    // const ptr = alloc.create(RowIteratorWrapper) catch { result.* = null; return .out_of_memory; };
+    // PORT NOTE (W12-01): through the C-resolved allocator; a rejecting caller
+    // allocator yields `.out_of_memory` + null out-param like the reference.
+    let ptr: *mut RowIteratorWrapper = match rustty_lib::allocator::create_raw(&*alloc) {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            // SAFETY: `result` is a valid writable `RowIterator` (caller contract).
+            unsafe { *result = std::ptr::null_mut() };
+            return Result::OutOfMemory;
+        }
+    };
     // PORT NOTE: the reference `undefined` fields become null/`None` sentinels:
     // `y = None`, `rows = &[]` (empty slice), `palette = null`. Real values are
     // installed by `get(.., .row_iterator, ..)` before any observation.
-    let ptr = Box::into_raw(Box::new(RowIteratorWrapper {
-        alloc,
-        y: None,
-        // Empty placeholder slice (never dereferenced: `len == 0` makes
-        // `row_iterator_next` return false; `get` installs the real slice).
-        rows: std::ptr::slice_from_raw_parts_mut(
-            std::ptr::NonNull::<RenderRow>::dangling().as_ptr(),
-            0,
-        ),
-        palette: std::ptr::null(),
-    }));
+    // SAFETY: `ptr` is valid uninitialized `RowIteratorWrapper` storage.
+    unsafe {
+        std::ptr::write(
+            ptr,
+            RowIteratorWrapper {
+                alloc,
+                y: None,
+                // Empty placeholder slice (never dereferenced: `len == 0` makes
+                // `row_iterator_next` return false; `get` installs the real slice).
+                rows: std::ptr::slice_from_raw_parts_mut(
+                    std::ptr::NonNull::<RenderRow>::dangling().as_ptr(),
+                    0,
+                ),
+                palette: std::ptr::null(),
+            },
+        )
+    };
     // result.* = ptr;
     // SAFETY: `result` is a valid writable `RowIterator` (caller contract).
     unsafe { *result = ptr };
@@ -891,8 +1064,13 @@ pub unsafe fn row_iterator_free(iterator_: RowIterator) {
     }
     // const alloc = iterator.alloc;
     // alloc.destroy(iterator);
-    // SAFETY: `iterator_` is a live `row_iterator_new`-returned wrapper.
-    drop(unsafe { Box::from_raw(iterator_) });
+    // PORT NOTE (W12-01): return the storage through the C-resolved allocator
+    // (caller free callback fires); the moved-out value drops afterwards.
+    // SAFETY: `iterator_` is a live `row_iterator_new`-returned wrapper; after
+    // the read the storage is treated as uninitialized and freed exactly once.
+    let iterator = unsafe { std::ptr::read(iterator_) };
+    unsafe { rustty_lib::allocator::destroy_raw(&*iterator.alloc, iterator_) };
+    drop(iterator);
 }
 
 // pub fn row_iterator_next(iterator_: RowIterator) ... bool {
@@ -940,6 +1118,17 @@ pub unsafe fn row_iterator_next(iterator_: RowIterator) -> bool {
 /// valid writable pointer to a `RowCells`.
 pub unsafe fn row_cells_new(alloc_: Option<&CAllocator>, result: *mut RowCells) -> Result {
     let alloc = rustty_lib::allocator::default(alloc_);
+    // const ptr = alloc.create(RowCellsWrapper) catch { result.* = null; return .out_of_memory; };
+    // PORT NOTE (W12-01): through the C-resolved allocator; a rejecting caller
+    // allocator yields `.out_of_memory` + null out-param like the reference.
+    let ptr: *mut RowCellsWrapper = match rustty_lib::allocator::create_raw(&*alloc) {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            // SAFETY: `result` is a valid writable `RowCells` (caller contract).
+            unsafe { *result = std::ptr::null_mut() };
+            return Result::OutOfMemory;
+        }
+    };
     // PORT NOTE: reference `undefined` fields become null/`None` sentinels;
     // real values are installed by `row_get(.., .cells, ..)`.
     // PORT NOTE (reshape): the sentinel is a pointer to a shared empty `CellList`
@@ -947,13 +1136,19 @@ pub unsafe fn row_cells_new(alloc_: Option<&CAllocator>, result: *mut RowCells) 
     // must be a valid `CellList` (not a dangling pointer); real values are
     // installed by `row_get(.., .cells, ..)`.
     static EMPTY_CELLS: CellList = CellList::empty();
-    let ptr = Box::into_raw(Box::new(RowCellsWrapper {
-        alloc,
-        x: None,
-        cells: &EMPTY_CELLS as *const CellList,
-        selection: None,
-        palette: std::ptr::null(),
-    }));
+    // SAFETY: `ptr` is valid uninitialized `RowCellsWrapper` storage.
+    unsafe {
+        std::ptr::write(
+            ptr,
+            RowCellsWrapper {
+                alloc,
+                x: None,
+                cells: &EMPTY_CELLS as *const CellList,
+                selection: None,
+                palette: std::ptr::null(),
+            },
+        )
+    };
     // result.* = ptr;
     // SAFETY: `result` is a valid writable `RowCells` (caller contract).
     unsafe { *result = ptr };
@@ -1033,8 +1228,13 @@ pub unsafe fn row_cells_free(cells_: RowCells) {
     }
     // const alloc = cells.alloc;
     // alloc.destroy(cells);
-    // SAFETY: `cells_` is a live `row_cells_new`-returned wrapper.
-    drop(unsafe { Box::from_raw(cells_) });
+    // PORT NOTE (W12-01): return the storage through the C-resolved allocator
+    // (caller free callback fires); the moved-out value drops afterwards.
+    // SAFETY: `cells_` is a live `row_cells_new`-returned wrapper; after the
+    // read the storage is treated as uninitialized and freed exactly once.
+    let cells = unsafe { std::ptr::read(cells_) };
+    unsafe { rustty_lib::allocator::destroy_raw(&*cells.alloc, cells_) };
+    drop(cells);
 }
 
 /// C: GhosttyRenderStateRowCellsData -> RusttyRenderStateRowCellsData (R2)
@@ -1052,6 +1252,23 @@ pub enum RowCellsData {
     Selected = 7,
     HasStyling = 8,
     GraphemesUtf8 = 9,
+}
+
+// D11 (P3-W6 T2): see `Data::from_c_int`; same rule, same header hazard.
+const _: () = assert!(std::mem::size_of::<RowCellsData>() == std::mem::size_of::<c_int>());
+
+impl RowCellsData {
+    /// Narrow an inbound C integer to a `RowCellsData`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    pub fn from_c_int(v: c_int) -> Option<RowCellsData> {
+        // contiguous 0..=9
+        if (0..=9).contains(&v) {
+            // SAFETY: `v` is a valid `RowCellsData` discriminant (range-checked).
+            Some(unsafe { std::mem::transmute::<c_int, RowCellsData>(v) })
+        } else {
+            None
+        }
+    }
 }
 
 // Output type expected for querying the data of the given kind.
@@ -1076,8 +1293,8 @@ pub enum RowCellsData {
 //     };
 // }
 //
-// PORT NOTE: the `intToEnum(RowCellsData, ...)` guard lives in the `extern "C"`
-// wrapper in `lib.rs`.
+// PORT NOTE: the `intToEnum(RowCellsData, ...)` guard lives in
+// `row_cells_get_checked` below.
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
 pub unsafe fn row_cells_get(cells_: RowCells, data: RowCellsData, out: *mut c_void) -> Result {
@@ -1093,6 +1310,28 @@ pub unsafe fn row_cells_get(cells_: RowCells, data: RowCellsData, out: *mut c_vo
     }
 }
 
+// PORT NOTE (W34-B02): see `get_checked` — the raw-`c_int` entry point carrying
+// the reference's runtime-safety guard, shared by the `extern "C"` wrapper in
+// `lib.rs` and by `row_cells_get_multi`.
+/// # Safety
+/// `out` must point to writable storage of the type required by `data`.
+pub unsafe fn row_cells_get_checked(cells_: RowCells, data: c_int, out: *mut c_void) -> Result {
+    // _ = std.meta.intToEnum(RowCellsData, @intFromEnum(data)) catch {
+    //     log.warn("render_state_row_cells_get invalid data value={d}", .{...});
+    //     return .invalid_value;
+    // };
+    let Some(d) = RowCellsData::from_c_int(data) else {
+        crate::sys::log_fn(
+            crate::sys::StdLevel::Warn,
+            LOG_SCOPE,
+            format_args!("render_state_row_cells_get invalid data value={data}"),
+        );
+        return Result::InvalidValue;
+    };
+    // SAFETY: `out` validity/type is the caller's contract.
+    unsafe { row_cells_get(cells_, d, out) }
+}
+
 // pub fn row_cells_get_multi(cells_, count, keys, values, out_written) ... Result {
 //     const k = keys orelse return .invalid_value;
 //     const v = values orelse return .invalid_value;
@@ -1102,10 +1341,12 @@ pub unsafe fn row_cells_get(cells_: RowCells, data: RowCellsData, out: *mut c_vo
 // }
 /// # Safety
 /// `keys`/`values`/`out_written` validity is the caller's contract.
+// PORT NOTE (W34-B02): `keys` elements are read as raw `c_int` and
+// range-checked by `row_cells_get_checked` — see `get_multi`.
 pub unsafe fn row_cells_get_multi(
     cells_: RowCells,
     count: usize,
-    keys: *const RowCellsData,
+    keys: *const c_int,
     values: *mut *mut c_void,
     out_written: *mut usize,
 ) -> Result {
@@ -1123,7 +1364,7 @@ pub unsafe fn row_cells_get_multi(
         let key = unsafe { *keys.add(i) };
         let value = unsafe { *values.add(i) };
         // const result = row_cells_get(cells_, k[i], v[i]);
-        let result = unsafe { row_cells_get(cells_, key, value) };
+        let result = unsafe { row_cells_get_checked(cells_, key, value) };
         if result != Result::Success {
             if !out_written.is_null() {
                 // SAFETY: caller-provided out pointer, checked non-null.
@@ -1404,6 +1645,23 @@ pub enum RowData {
     Selection = 4,
 }
 
+// D11 (P3-W6 T2): see `Data::from_c_int`; same rule, same header hazard.
+const _: () = assert!(std::mem::size_of::<RowData>() == std::mem::size_of::<c_int>());
+
+impl RowData {
+    /// Narrow an inbound C integer to a `RowData`, mirroring
+    /// `std.meta.intToEnum`; `None` outside the declared range.
+    pub fn from_c_int(v: c_int) -> Option<RowData> {
+        // contiguous 0..=4
+        if (0..=4).contains(&v) {
+            // SAFETY: `v` is a valid `RowData` discriminant (range-checked).
+            Some(unsafe { std::mem::transmute::<c_int, RowData>(v) })
+        } else {
+            None
+        }
+    }
+}
+
 // Output type expected for querying the data of the given kind.
 // PORT NOTE: `pub fn OutType(comptime self: RowData) type`:
 //     .invalid => void,
@@ -1433,8 +1691,8 @@ pub enum RowOption {
 //     };
 // }
 //
-// PORT NOTE: the `intToEnum(RowData, ...)` guard lives in the `extern "C"`
-// wrapper in `lib.rs`.
+// PORT NOTE: the `intToEnum(RowData, ...)` guard lives in `row_get_checked`
+// below.
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
 pub unsafe fn row_get(iterator_: RowIterator, data: RowData, out: *mut c_void) -> Result {
@@ -1446,13 +1704,37 @@ pub unsafe fn row_get(iterator_: RowIterator, data: RowData, out: *mut c_void) -
     }
 }
 
+// PORT NOTE (W34-B02): see `get_checked` — the raw-`c_int` entry point carrying
+// the reference's runtime-safety guard, shared by the `extern "C"` wrapper in
+// `lib.rs` and by `row_get_multi`.
+/// # Safety
+/// `out` must point to writable storage of the type required by `data`.
+pub unsafe fn row_get_checked(iterator_: RowIterator, data: c_int, out: *mut c_void) -> Result {
+    // _ = std.meta.intToEnum(RowData, @intFromEnum(data)) catch {
+    //     log.warn("render_state_row_get invalid data value={d}", .{...});
+    //     return .invalid_value;
+    // };
+    let Some(d) = RowData::from_c_int(data) else {
+        crate::sys::log_fn(
+            crate::sys::StdLevel::Warn,
+            LOG_SCOPE,
+            format_args!("render_state_row_get invalid data value={data}"),
+        );
+        return Result::InvalidValue;
+    };
+    // SAFETY: `out` validity/type is the caller's contract.
+    unsafe { row_get(iterator_, d, out) }
+}
+
 // pub fn row_get_multi(iterator_, count, keys, values, out_written) ... Result { ... }
 /// # Safety
 /// `keys`/`values`/`out_written` validity is the caller's contract.
+// PORT NOTE (W34-B02): `keys` elements are read as raw `c_int` and
+// range-checked by `row_get_checked` — see `get_multi`.
 pub unsafe fn row_get_multi(
     iterator_: RowIterator,
     count: usize,
-    keys: *const RowData,
+    keys: *const c_int,
     values: *mut *mut c_void,
     out_written: *mut usize,
 ) -> Result {
@@ -1470,7 +1752,7 @@ pub unsafe fn row_get_multi(
         let key = unsafe { *keys.add(i) };
         let value = unsafe { *values.add(i) };
         // const result = row_get(iterator_, k[i], v[i]);
-        let result = unsafe { row_get(iterator_, key, value) };
+        let result = unsafe { row_get_checked(iterator_, key, value) };
         if result != Result::Success {
             if !out_written.is_null() {
                 // SAFETY: caller-provided out pointer, checked non-null.

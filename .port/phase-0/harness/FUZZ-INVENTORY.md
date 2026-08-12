@@ -128,6 +128,24 @@ exercises the same path on both sides — a prerequisite for meaningful diffing.
 The `vt_driver_port` (DESIGN.md §3) provides the differential leg without needing
 the instrumented binaries.
 
+**DELIVERED (2026-08-10, codex-vet W13C-01).** The port-side harness now exists:
+
+- Harness bodies: `crates/rustty-vt/src/fuzz_harness.rs` — faithful ports of
+  the three `zig_fuzz_test` bodies (osc terminator-selector `%3`, parser
+  byte-loop, stream 80x24/scrollback-100 with even→`next_slice` /
+  odd→scalar-`next` selector).
+- cargo-fuzz targets: `crates/rustty-vt/fuzz/fuzz_targets/{fuzz_osc,fuzz_parser,
+  fuzz_stream,vt_diff}.rs` (nightly; `vt_diff` = the G5-named smoke target,
+  stream harness). `run_fuzz_smoke.sh` auto-flips from FUZZ-WIRED progress mode
+  to the REAL smoke and is GREEN.
+- Deterministic corpus replay, AFL-free, in plain `cargo test`:
+  `crates/rustty-vt/tests/fuzz_corpus_replay.rs` replays the in-tree
+  `*-initial` seeds always, and ALL reference corpora (4,001 files:
+  osc 20+20, parser 50+616, stream 24+3271 at oracle pin 6ad1fe7d) when
+  `GHOSTTY_ORACLE=<ghostty checkout>` is set — replayed clean.
+- The ref-vs-port *differential* leg intentionally stays in this phase-0
+  comparator (the Zig reference cannot link into a libFuzzer binary).
+
 ---
 
 ## 3. AFL-found regression tests (the existing safety net)
@@ -148,9 +166,35 @@ assertion-for-assertion:
 
 ## 4. Status & blocker
 
+- **Port-side harness: delivered** (see §2 "Port-side harness" DELIVERED note):
+  `rustty_vt::fuzz_harness` + `crates/rustty-vt/fuzz/` (cargo-fuzz, G5 real
+  smoke GREEN) + `tests/fuzz_corpus_replay.rs` (full 4,001-file reference
+  corpus replays clean under plain `cargo test` with `GHOSTTY_ORACLE` set).
 - **Wiring + shared corpus: delivered.** Seeds copied; comparator ingests corpus
   files directly (demonstrated over all 24 `stream-initial` seeds — control 0%,
   empty-port divergence 100% on every visible-content seed).
+- **Live fuzzing verified, all four targets (2026-08-11, codex-vet F-017).**
+  `run_fuzz_smoke.sh` takes the REAL branch and is GREEN (`vt_diff`, 3,299 runs,
+  no artifact); `fuzz_parser` and `fuzz_stream` also run clean. **`fuzz_osc`
+  found a REAL P1 crash** in `rustty_vt::color::RGB::parse` — it takes `&str`
+  and then byte-indexes it (`&input[0..2]`, …) off `input.len()`, so any
+  multi-byte UTF-8 scalar in a color spec lands a byte index mid-character and
+  `str` panics, where the oracle (`color.zig:657`, `parse(value: []const u8)`)
+  slices bytes and returns `error.InvalidFormat`. Reachable from untrusted
+  `OSC 4 / 10 / 11 / 104 / 21`. Minimized reproducers and the full analysis are
+  checked in at `crates/rustty-vt/fuzz/findings/` (that dir is deliberately
+  outside the gitignored `corpus/`+`artifacts/`, so the inputs survive without
+  living in an evolving corpus). This is the harness doing its job on its first
+  live run.
+- **That P1 is FIXED (2026-08-11, codex-vet batch w1f-vt-b01).** `RGB::parse`,
+  `RGB::from_hex` and `RGB::from_intensity` now take `&[u8]` and slice bytes,
+  matching `color.zig:657`'s `parse(value: []const u8)`; the OSC 21 value's
+  `String::from_utf8_lossy` (which widened invalid bytes to 3-byte U+FFFD and so
+  also picked the WRONG length arm) is gone, and the `str_from_bytes` pre-check
+  on the OSC 4/10-19/104 path with it. Both reproducers are now replayed by
+  `tests/fuzz_corpus_replay.rs::replay_fixed_fuzz_findings_osc`, which is a
+  proven-failing test against the pre-fix code, so the crashes stay fixed under
+  plain `cargo test`.
 - **Blocker (tooling, non-parity): AFL++ not installed** — `afl-cc`/`afl-fuzz`
   are absent in this environment, so live instrumented fuzzing of the reference
   cannot be *run* here (install: `brew install aflplusplus`). The *differential*

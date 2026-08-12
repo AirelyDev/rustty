@@ -40,15 +40,18 @@ use rustty_z2d::surface::{self, Surface};
 use rustty_vt::page::{SemanticContent, SemanticPrompt};
 use rustty_vt::render::RenderState;
 
-// PORT NOTE (linux-port): `image` is macOS-gated (its `Image::Ready` variant embeds
-// `crate::metal::Texture`), but NOTHING else in this file touches `image` — the
-// overlay is pure CPU/z2d. So the import, and the single `pending_image` leaf that
-// needs it, are gated here rather than gating the whole module: that keeps the
-// metal-free surface (`Feature`, `InitError`, `Overlay::init`/`apply_features`/the
-// four z2d render leaves) compiling and TESTED on every target. `Pending` and
-// `PixelFormat` are themselves metal-free plain data; they become reachable off-macOS
-// when L4 ungates a graphics-API-generic `image`.
-#[cfg(target_os = "macos")]
+// PORT NOTE (linux-port): `image` is a monomorphic twin pair gated to the targets
+// that have a `generic` renderer arm (macOS/Metal, Linux/OpenGL — its `Image::Ready`
+// variant embeds the BACKEND's `Texture`), but NOTHING else in this file touches
+// `image` — the overlay is pure CPU/z2d. So the import, and the single
+// `pending_image` leaf that needs it, are gated here rather than gating the whole
+// module: that keeps the backend-free surface (`Feature`, `InitError`,
+// `Overlay::init`/`apply_features`/the four z2d render leaves) compiling and TESTED
+// on every target. `Pending` and `PixelFormat` are themselves backend-free plain
+// data (identical POD in both twins); the L4 OpenGL twin is what made them reachable
+// on Linux, so this gate now tracks the dispatcher's `any(macos, linux, freebsd)`
+// (W2D/F-003 widened the OpenGL arm to FreeBSD — `backend.zig:20-21`).
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
 use crate::image::{Pending, PixelFormat};
 use crate::size::{CellSize, Size};
 
@@ -193,10 +196,11 @@ impl Overlay {
     /// Returns a pending image that can be used to copy, convert, upload, etc.
     //
     // PORT NOTE (linux-port): the ONLY `crate::image`-typed leaf on `Overlay`, hence
-    // the only thing in this file that binds it to the macOS-gated `image` module
+    // the only thing in this file that binds it to the twin-gated `image` module
     // (see the gated import above). The body is FULL and target-independent — the
-    // gate is purely the `image::Pending` return type, and lifts with L4.
-    #[cfg(target_os = "macos")]
+    // gate is purely the `image::Pending` return type, and it lifted to
+    // `any(macos, linux, freebsd)` with the L4 OpenGL image twin (W2D/F-003).
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
     pub fn pending_image(&self) -> Pending {
         Pending {
             // @intCast(self.surface.getWidth()) / getHeight()
@@ -811,11 +815,11 @@ mod tests {
         // pending_image reports the terminal (padding-less) surface dims, aliasing
         // the RGBA z2d buffer.
         //
-        // PORT NOTE (linux-port): `pending_image` is macOS-gated (its `image::Pending`
+        // PORT NOTE (linux-port): `pending_image` is twin-gated (its `image::Pending`
         // return type is — see the module head), so its assertions are too. The
-        // init/reset/deinit lifecycle around them is metal-free and stays covered on
+        // init/reset/deinit lifecycle around them is backend-free and stays covered on
         // every target.
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux", target_os = "freebsd"))]
         {
             let term = sz.terminal();
             let p = o.pending_image();

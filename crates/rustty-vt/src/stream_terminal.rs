@@ -290,6 +290,50 @@ pub(crate) fn color_operation_tw_end(
     COLOR_OPERATION_TW.with(|tw| tw.borrow_mut().end(mode))
 }
 
+// PORT NOTE: a fault-injection seam for the OSC 52 decode scratch allocation in
+// `clipboardContents`. The reference injects `testing.failing_allocator` by
+// swapping `t.screens.active.alloc` (oracle test "clipboard_write allocation
+// failure is ignored", stream_terminal.zig:2309-2339); rustty's allocator seam
+// is the zero-sized `allocator_api2::alloc::Global`, so the allocator itself
+// cannot be swapped out. This tripwire is the port's stand-in and sits exactly
+// where the reference's `try alloc.alloc(u8, decoded_len)` can fail. Same
+// `#[cfg(test)] thread_local!` idiom as `COLOR_OPERATION_TW` above.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum ClipboardContentsFp {
+    DecodeScratch,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CLIPBOARD_CONTENTS_TW: core::cell::RefCell<
+        rustty_util::tripwire::Module<ClipboardContentsFp, crate::pagelist::OutOfMemory>,
+    > = core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+#[cfg(test)]
+#[inline]
+fn clipboard_contents_tw_check(
+    point: ClipboardContentsFp,
+) -> Result<(), crate::pagelist::OutOfMemory> {
+    CLIPBOARD_CONTENTS_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
+#[cfg(test)]
+pub(crate) fn clipboard_contents_tw_error_always(point: ClipboardContentsFp) {
+    CLIPBOARD_CONTENTS_TW.with(|tw| {
+        tw.borrow_mut()
+            .errorAlways(point, crate::pagelist::OutOfMemory)
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn clipboard_contents_tw_end(
+    mode: rustty_util::tripwire::ResetMode,
+) -> Result<(), rustty_util::tripwire::UntrippedError> {
+    CLIPBOARD_CONTENTS_TW.with(|tw| tw.borrow_mut().end(mode))
+}
+
 impl<'a> Handler<'a> {
     // pub fn init(terminal: *Terminal) Handler {
     //     return .{ .terminal = terminal };
@@ -415,8 +459,15 @@ impl<'a> Handler<'a> {
     // through. Arms the reference deliberately keeps GRACEFUL
     // (`color_operation`, `kitty_color_report`, `clipboard_contents`) must NOT
     // route through here — they log and continue without setting the flag.
+    //
+    // PORT NOTE: the reference's `catch` is over `vtFallible`'s INFERRED error
+    // set (`!void`), i.e. it catches whatever any arm can fail with, not one
+    // concrete error. The Rust analog is therefore generic over the error type:
+    // arms whose Terminal call fails with something other than `OutOfMemory`
+    // (e.g. `Screen::start_hyperlink`'s `IncreaseCapacityError`) funnel through
+    // the very same catch instead of dropping their `Result`.
     #[inline]
-    fn vt_catch(&mut self, r: Result<(), crate::pagelist::OutOfMemory>) {
+    fn vt_catch<E>(&mut self, r: Result<(), E>) {
         if r.is_err() {
             // self.semantic_failure = true;
             self.semantic_failure = true;
@@ -1329,6 +1380,14 @@ impl<'a> Handler<'a> {
         // accumulator is the analog. A non-UTF-8 version slice is written
         // verbatim, so we build the byte sequence directly rather than via a
         // format string (the `{s}` in the reference is a raw byte splice).
+        //
+        // PORT NOTE: the reference's `bufPrintZ` must fit the formatted bytes
+        // PLUS a NUL sentinel in the 288-byte buffer, and its `catch return`
+        // turns an overflow into SILENT SUPPRESSION. A growable `Vec` has no
+        // such bound, so the cap is enforced explicitly: responses whose
+        // framed length + 1 exceeds 288 (i.e. an effective version string
+        // longer than 281 bytes: 288 - 1 NUL - 4 `ESC P > |` - 2 `ESC \`) are
+        // dropped without touching the pty.
         let mut resp: Vec<u8> = Vec::new();
         resp.extend_from_slice(b"\x1BP>|");
         if version.is_empty() {
@@ -1337,6 +1396,11 @@ impl<'a> Handler<'a> {
             resp.extend_from_slice(version);
         }
         resp.extend_from_slice(b"\x1B\\");
+        // `catch return` on `bufPrintZ`'s NoSpaceLeft: the formatted bytes plus
+        // the NUL sentinel must fit in the 288-byte buffer.
+        if resp.len() + 1 > 288 {
+            return;
+        }
         self.write_pty(&resp);
     }
 
@@ -1960,13 +2024,20 @@ impl<'a> stream::Handler for Handler<'a> {
     }
 
     // .set_mode => try self.setMode(value.mode, true),
+    //
+    // PORT NOTE: `setMode` is `try`'d inside `vtFallible` (its alt-screen arms
+    // `try switchScreenMode` and its `132_column` arm `try deccolm`), so a mode
+    // failure reaches the shared catch. Funnel the `Result` through `vt_catch`
+    // instead of dropping it — same shape as the `dcs_hook` arm below.
     fn set_mode(&mut self, v: stream::Mode) {
-        let _ = self.do_set_mode(v.mode, true);
+        let r = self.do_set_mode(v.mode, true);
+        self.vt_catch(r);
     }
 
     // .reset_mode => try self.setMode(value.mode, false),
     fn reset_mode(&mut self, v: stream::Mode) {
-        let _ = self.do_set_mode(v.mode, false);
+        let r = self.do_set_mode(v.mode, false);
+        self.vt_catch(r);
     }
 
     // .save_mode => self.terminal.modes.save(value.mode),
@@ -1980,7 +2051,8 @@ impl<'a> stream::Handler for Handler<'a> {
     // },
     fn restore_mode(&mut self, v: stream::Mode) {
         let enabled = self.term().modes.restore(v.mode);
-        let _ = self.do_set_mode(v.mode, enabled);
+        let r = self.do_set_mode(v.mode, enabled);
+        self.vt_catch(r);
     }
 
     // .request_mode => self.requestMode(value.mode),
@@ -2177,8 +2249,15 @@ impl<'a> stream::Handler for Handler<'a> {
     }
 
     // .start_hyperlink => try self.terminal.screens.active.startHyperlink(value.uri, value.id),
+    //
+    // PORT NOTE: `startHyperlink` is `try`'d inside `vtFallible`, so its failure
+    // (OOM or page-capacity exhaustion) reaches the shared catch and sets
+    // `semantic_failure`. Route the `Result` through `vt_catch` rather than
+    // dropping it; the error type is `IncreaseCapacityError`, not `OutOfMemory`,
+    // which is why `vt_catch` is generic over the error (see its PORT NOTE).
     fn start_hyperlink(&mut self, v: stream::StartHyperlink) {
-        let _ = self.term().active_mut().start_hyperlink(v.uri, v.id);
+        let r = self.term().active_mut().start_hyperlink(v.uri, v.id);
+        self.vt_catch(r);
     }
 
     // .end_hyperlink => self.terminal.screens.active.endHyperlink(),
@@ -2250,10 +2329,15 @@ impl<'a> stream::Handler for Handler<'a> {
     // arm is infallible, so a malformed payload is a silent no-op here — the net
     // observable behavior is identical (the callback is simply not invoked), and
     // the oracle stream test only asserts the un-invoked count. The reference's
-    // fallible-allocator OOM path ("clipboard_write allocation failure is
-    // ignored") has no rustty analog because the decode scratch is a `Vec` that
-    // aborts on OOM (DG5 abort policy), so that oracle test is intentionally not
-    // ported. What that test injects is:
+    // fallible-allocator OOM path is ALSO ported: the decode scratch is a
+    // fallible `allocator_api2::vec::Vec<u8, _>` over the terminal allocator
+    // (`try_reserve_exact`, mirroring `dcs.rs`'s `Allocating::init_capacity`),
+    // and on failure we return without invoking the callback — exactly what the
+    // reference's `try` + dispatch-arm `catch` pair does. The oracle test
+    // "clipboard_write allocation failure is ignored" is ported over the
+    // `CLIPBOARD_CONTENTS_TW` seam (rustty's allocator is the zero-sized
+    // `Global`, so `testing.failing_allocator` cannot be swapped in). What that
+    // test injects is:
     //
     //   Only the decoded scratch data uses the terminal allocator here. Swap in
     //   an allocator that always fails, then restore it before terminal teardown.
@@ -2293,13 +2377,31 @@ impl<'a> stream::Handler for Handler<'a> {
 
         // const decoder = std.base64.standard.Decoder;
         // const decoded_len = try decoder.calcSizeForSlice(data);
+        // const alloc = self.terminal.gpa();
         // const decoded = try alloc.alloc(u8, decoded_len);
+        // defer alloc.free(decoded);
         // try decoder.decode(decoded, data);
         let decoder = crate::apc::glyph::request::std_base64_standard_decoder();
         let Ok(decoded_len) = decoder.calc_size_for_slice(data) else {
             return;
         };
-        let mut decoded = vec![0u8; decoded_len];
+
+        // PORT NOTE: `try alloc.alloc(u8, decoded_len)` is a FALLIBLE
+        // allocation whose failure the dispatch arm swallows. `Vec::with_capacity`
+        // would abort instead, so we reserve through the terminal allocator with
+        // `try_reserve_exact` (same shape as `dcs::Allocating::init_capacity`)
+        // and bail out on `OutOfMemory` without invoking the effect.
+        let alloc = self.term().gpa();
+        let mut decoded: allocator_api2::vec::Vec<u8, _> = allocator_api2::vec::Vec::new_in(alloc);
+        #[cfg(test)]
+        if clipboard_contents_tw_check(ClipboardContentsFp::DecodeScratch).is_err() {
+            return;
+        }
+        if decoded.try_reserve_exact(decoded_len).is_err() {
+            return;
+        }
+        // The capacity above is already reserved, so this never allocates.
+        decoded.resize(decoded_len, 0);
         if decoder.decode(&mut decoded, data).is_err() {
             return;
         }
@@ -2722,6 +2824,124 @@ mod tests {
         // A new execution root starts without inheriting the diagnostic.
         let fresh = Handler::init(&raw mut t);
         assert!(!fresh.semantic_failure);
+
+        t.deinit(Global);
+    }
+
+    // NEW TEST (no oracle counterpart; the reference gets this for free from
+    // `vtFallible`'s single `try` chain): the `set_mode` / `reset_mode` /
+    // `restore_mode` actions are `try self.setMode(...)` in the reference, so a
+    // failure inside `setMode` reaches the `vt()` catch and sets
+    // `semantic_failure`. `setMode`'s fallible arms are the alt-screen switches
+    // and `132_column` -> `deccolm` -> `resize`; `resize` is the one with an
+    // established failure-injection seam (`terminal::RESIZE_TW`), and it is the
+    // only one reachable from all THREE actions (the alt-screen seam can only
+    // fail on the lazy first creation of the alternate screen, so it cannot
+    // exercise `reset_mode`/`restore_mode`).
+    //
+    // Each arm gets its own terminal because `semantic_failure` is sticky.
+    #[test]
+    fn semantic_failure_is_set_by_a_failing_mode_action() {
+        use crate::terminal::{resize_tw_end, resize_tw_error_always, ResizeFp};
+        use rustty_util::tripwire::ResetMode;
+
+        // .set_mode
+        {
+            let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+            {
+                let mut s = t.vt_stream();
+                // DECSET 40 is required before mode 3 does anything; it is an
+                // infallible arm and must leave the flag clear.
+                s.next_slice(b"\x1b[?40h");
+                assert!(!s.handler.semantic_failure);
+
+                resize_tw_error_always(ResizeFp::Tabstops);
+                s.next_slice(b"\x1b[?3h");
+                resize_tw_end(ResetMode::Reset).unwrap();
+                assert!(s.handler.semantic_failure);
+            }
+            t.deinit(Global);
+        }
+
+        // .reset_mode (with the unarmed success path as the negative control)
+        {
+            let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+            {
+                let mut s = t.vt_stream();
+                s.next_slice(b"\x1b[?40h");
+                s.next_slice(b"\x1b[?3h");
+                assert!(!s.handler.semantic_failure);
+
+                resize_tw_error_always(ResizeFp::Tabstops);
+                s.next_slice(b"\x1b[?3l");
+                resize_tw_end(ResetMode::Reset).unwrap();
+                assert!(s.handler.semantic_failure);
+            }
+            // The successful DECSET 3 above really did resize (side effects on
+            // the success path are unchanged), and the failed DECRST 3 rolled
+            // the geometry back rather than half-applying it.
+            assert_eq!(132, t.cols);
+            t.deinit(Global);
+        }
+
+        // .restore_mode
+        {
+            let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+            {
+                let mut s = t.vt_stream();
+                s.next_slice(b"\x1b[?40h");
+                s.next_slice(b"\x1b[?3h");
+                s.next_slice(b"\x1b[?3s");
+                s.next_slice(b"\x1b[?3l");
+                assert!(!s.handler.semantic_failure);
+                assert_eq!(80, s.handler.term().cols);
+
+                resize_tw_error_always(ResizeFp::Tabstops);
+                s.next_slice(b"\x1b[?3r");
+                resize_tw_end(ResetMode::Reset).unwrap();
+                assert!(s.handler.semantic_failure);
+            }
+            t.deinit(Global);
+        }
+    }
+
+    // NEW TEST (no oracle counterpart): `.start_hyperlink => try
+    // self.terminal.screens.active.startHyperlink(...)` is inside the
+    // reference's `vtFallible`, so an OSC 8 failure sets `semantic_failure`.
+    // The injection seam is `screen::START_HYPERLINK_TW` (the same fail point
+    // `Screen: implicit hyperlink id wrap rolls back on allocation failure`
+    // uses).
+    #[test]
+    fn semantic_failure_is_set_by_a_failing_start_hyperlink() {
+        use crate::screen::{StartHyperlinkFp, START_HYPERLINK_TW};
+
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+
+            // NEGATIVE CONTROL: the arm is reached and succeeds, flag stays clear.
+            s.next_slice(b"\x1b]8;;http://example.com/a\x1b\\");
+            assert!(!s.handler.semantic_failure);
+            assert!(s.handler.term().active_mut().cursor.hyperlink_id != 0);
+
+            START_HYPERLINK_TW.with(|tw| {
+                tw.borrow_mut()
+                    .errorAlways(StartHyperlinkFp::DupeLink, crate::pagelist::OutOfMemory)
+            });
+            s.next_slice(b"\x1b]8;;http://example.com/b\x1b\\");
+            START_HYPERLINK_TW.with(|tw| {
+                tw.borrow_mut()
+                    .end(rustty_util::tripwire::ResetMode::Reset)
+                    .unwrap()
+            });
+            assert!(s.handler.semantic_failure);
+
+            // Processing continues after the failure (best-effort, like every
+            // other arm that funnels through the shared catch).
+            s.next_slice(b"OK");
+        }
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(b"OK".as_slice(), str.as_slice());
 
         t.deinit(Global);
     }
@@ -4085,7 +4305,12 @@ mod tests {
         {
             let mut s = t.vt_stream();
             s.next_slice(b"\x1B]52;c;aGVsbG8=\x1B\\");
+
+            // Terminal should still be functional after the ignored sequence
+            s.next_slice(b"AfterClipboard");
         }
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(b"AfterClipboard".as_slice(), str.as_slice());
 
         t.full_reset();
 
@@ -4201,6 +4426,53 @@ mod tests {
             clipboard::WriteResult::Denied,
             CLIP_RESULT.with(|c| c.get())
         );
+
+        clip_clear_capture();
+        t.deinit(Global);
+    }
+
+    // test "clipboard_write allocation failure is ignored"
+    //
+    // PORT NOTE: the reference injects `testing.failing_allocator` by swapping
+    // `t.screens.active.alloc` for the duration of the sequence. rustty's
+    // allocator seam is the zero-sized `allocator_api2::alloc::Global`, so
+    // there is nothing to swap; the `CLIPBOARD_CONTENTS_TW` fail point sits
+    // exactly where the reference's `try alloc.alloc(u8, decoded_len)` is, and
+    // makes that allocation fail instead.
+    //
+    // WS18 release lane: `tripwire::Module::enabled()` is the union of
+    // `cfg!(test)`, `cfg!(debug_assertions)` and the `tripwire-test` feature
+    // (a dev-dependency feature of this crate), reproducing Zig's
+    // `builtin.is_test`, so this runs in the release test lane too.
+    #[test]
+    fn clipboard_write_allocation_failure_is_ignored() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        CLIP_COUNT.with(|c| c.set(0));
+        CLIP_RESULT.with(|c| c.set(clipboard::WriteResult::Success));
+        clip_clear_capture();
+
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.clipboard_write = Some(cap_clipboard_write);
+
+            // Only the decoded scratch data uses the terminal allocator here.
+            clipboard_contents_tw_error_always(ClipboardContentsFp::DecodeScratch);
+            s.next_slice(b"\x1B]52;c;aGVsbG8=\x1B\\");
+            clipboard_contents_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+
+            assert_eq!(0, CLIP_COUNT.with(|c| c.get()));
+            assert!(!s.handler.semantic_failure);
+
+            // The failure is swallowed, not fatal: the very same sequence
+            // succeeds once the allocation does.
+            s.next_slice(b"\x1B]52;c;aGVsbG8=\x1B\\");
+            assert_eq!(1, CLIP_COUNT.with(|c| c.get()));
+            assert_eq!(
+                b"hello".as_slice(),
+                CLIP_DATA.with(|c| c.borrow().clone()).unwrap().as_slice()
+            );
+        }
 
         clip_clear_capture();
         t.deinit(Global);
@@ -4371,6 +4643,56 @@ mod tests {
             s.next_slice(b"\x1b[>0q");
         }
         assert_eq!(cap_take().unwrap().as_slice(), b"\x1bP>|librustty\x1b\\");
+
+        t.deinit(Global);
+    }
+
+    // NEW TESTS (no oracle counterpart): the reference formats the response
+    // with `std.fmt.bufPrintZ` into a fixed `[288]u8` and `catch return`s, so
+    // the response (framing + version + NUL) must fit in 288 bytes. That caps
+    // the effective version string at 288 - 1 - 4 - 2 = 281 bytes; a 282-byte
+    // version produces NO pty write at all.
+    #[test]
+    fn xtversion_281_byte_version_is_written() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        static V281: [u8; 281] = [b'v'; 281];
+        fn xtversion(_: &mut Handler) -> &'static [u8] {
+            &V281
+        }
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.xtversion = Some(xtversion);
+        s.next_slice(b"\x1b[>0q");
+
+        let mut expect: Vec<u8> = Vec::new();
+        expect.extend_from_slice(b"\x1bP>|");
+        expect.extend_from_slice(&V281);
+        expect.extend_from_slice(b"\x1b\\");
+        assert_eq!(287, expect.len());
+        assert_eq!(expect.as_slice(), cap_take().unwrap().as_slice());
+
+        t.deinit(Global);
+    }
+
+    #[test]
+    fn xtversion_282_byte_version_is_suppressed() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        static V282: [u8; 282] = [b'v'; 282];
+        fn xtversion(_: &mut Handler) -> &'static [u8] {
+            &V282
+        }
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.effects.xtversion = Some(xtversion);
+        s.next_slice(b"\x1b[>0q");
+
+        assert_eq!(None, cap_take());
 
         t.deinit(Global);
     }

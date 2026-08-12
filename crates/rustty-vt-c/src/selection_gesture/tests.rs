@@ -175,7 +175,10 @@ fn selection_gesture_get_multi() {
                 gesture,
                 terminal,
                 keys.len(),
-                keys.as_ptr(),
+                // PORT NOTE (W66-GETMULTI-RAW-01): the key array stays typed
+                // `Data` (the reference's `[_]Data{...}`); `get_multi` reads its
+                // elements as raw `c_int`, so the pointer is cast at the call.
+                keys.as_ptr().cast(),
                 values.as_mut_ptr(),
                 &mut written,
             )
@@ -221,7 +224,10 @@ fn selection_gesture_get_multi_returns_first_failing_index() {
                 gesture,
                 terminal,
                 keys.len(),
-                keys.as_ptr(),
+                // PORT NOTE (W66-GETMULTI-RAW-01): the key array stays typed
+                // `Data` (the reference's `[_]Data{...}`); `get_multi` reads its
+                // elements as raw `c_int`, so the pointer is cast at the call.
+                keys.as_ptr().cast(),
                 values.as_mut_ptr(),
                 &mut written,
             )
@@ -1143,4 +1149,193 @@ fn selection_gesture_free_null() {
 fn selection_gesture_event_free_null() {
     // event_free(null);
     unsafe { event_free(std::ptr::null_mut()) };
+}
+
+// PORT NOTE (W12-01 proving tests, Rust-only — the reference has no unit test
+// for this; the contract is `new`/`event_new`'s `alloc.create(...) catch {
+// out.* = null; return .out_of_memory; }` + `free`/`event_free`'s
+// `alloc.destroy`): the caller-supplied C allocator must OWN the gesture and
+// event wrapper lifecycle storage.
+#[test]
+fn gesture_new_free_uses_caller_allocator() {
+    let stats = crate::test_util::CountingCAllocator::new();
+    let calloc = stats.c_allocator();
+    let mut gesture: Gesture = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe { new(Some(&calloc), &mut gesture) });
+    assert!(!gesture.is_null());
+    assert_eq!(1, stats.alloc_calls.get());
+    unsafe { free(gesture, std::ptr::null_mut()) };
+    assert_eq!(1, stats.free_calls.get());
+    assert_eq!(0, stats.live_bytes.get());
+}
+
+#[test]
+fn gesture_new_rejecting_allocator_out_of_memory() {
+    let stats = crate::test_util::CountingCAllocator::new();
+    stats.reject.set(true);
+    let calloc = stats.c_allocator();
+    let mut gesture: Gesture = std::ptr::null_mut();
+    assert_eq!(Result::OutOfMemory, unsafe {
+        new(Some(&calloc), &mut gesture)
+    });
+    assert!(gesture.is_null());
+    assert_eq!(1, stats.alloc_calls.get());
+}
+
+#[test]
+fn event_new_free_uses_caller_allocator() {
+    let stats = crate::test_util::CountingCAllocator::new();
+    let calloc = stats.c_allocator();
+    let mut event: Event = std::ptr::null_mut();
+    assert_eq!(Result::Success, unsafe {
+        event_new(Some(&calloc), &mut event, EventType::Press)
+    });
+    assert!(!event.is_null());
+    assert_eq!(1, stats.alloc_calls.get());
+    unsafe { event_free(event) };
+    assert_eq!(1, stats.free_calls.get());
+    assert_eq!(0, stats.live_bytes.get());
+}
+
+#[test]
+fn event_new_rejecting_allocator_out_of_memory() {
+    let stats = crate::test_util::CountingCAllocator::new();
+    stats.reject.set(true);
+    let calloc = stats.c_allocator();
+    let mut event: Event = std::ptr::null_mut();
+    assert_eq!(Result::OutOfMemory, unsafe {
+        event_new(Some(&calloc), &mut event, EventType::Press)
+    });
+    assert!(event.is_null());
+    assert_eq!(1, stats.alloc_calls.get());
+}
+
+// W66-BEHAVIOR-RAW-01 (Rust-only proving test; the reference has no equivalent
+// test, but this is its `validBehavior` guard —
+// ghostty src/terminal/c/selection_gesture.zig:495-499 + :745-748):
+// `RusttySelectionGestureBehaviors`'s three fields are PLAIN C enums, so a C
+// caller can store any int in them. Every field is range-checked before it is
+// converted, and any out-of-range field rejects the whole call with
+// `RUSTTY_INVALID_VALUE` — the port must not accept a raw 99 as a behavior.
+#[test]
+fn event_set_behaviors_rejects_out_of_range_c_values() {
+    const C_SUCCESS: c_int = 0;
+    const C_INVALID_VALUE: c_int = -2;
+    // RUSTTY_SELECTION_GESTURE_EVENT_OPT_BEHAVIORS
+    const OPT_BEHAVIORS: c_int = EventOption::Behaviors as c_int;
+
+    with_test_allocator(|alloc| {
+        let mut event: Event = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            event_new(Some(alloc), &mut event, EventType::Press)
+        });
+
+        // The C-side struct as a C caller can actually build it: three ints.
+        // Each of the three fields is guarded, so each gets its own rejection.
+        for raw in [
+            [99 as c_int, 0, 0],
+            [0, 99, 0],
+            [0, 0, 99],
+            // Just past the last declared variant (`.output = 3`), and the
+            // header's `RUSTTY_ENUM_MAX_VALUE` sentinel.
+            [4, 0, 0],
+            [0, 0, c_int::MAX],
+            // Negative storage is representable in a C enum too.
+            [-1, 0, 0],
+        ] {
+            assert_eq!(
+                C_INVALID_VALUE,
+                unsafe {
+                    crate::rustty_selection_gesture_event_set(
+                        event,
+                        OPT_BEHAVIORS,
+                        raw.as_ptr() as *const c_void,
+                    )
+                },
+                "raw behaviors {raw:?} must be rejected",
+            );
+            // The rejection is total: the event keeps the default table.
+            assert_eq!(sg::DEFAULT_BEHAVIORS, press_behaviors(event));
+        }
+
+        // In-range raw values still apply, unchanged: `.word, .word, .line`.
+        let ok: [c_int; 3] = [1, 1, 2];
+        assert_eq!(C_SUCCESS, unsafe {
+            crate::rustty_selection_gesture_event_set(
+                event,
+                OPT_BEHAVIORS,
+                ok.as_ptr() as *const c_void,
+            )
+        });
+        let behaviors = press_behaviors(event);
+        assert_eq!(sg::Behavior::Word, behaviors[0]);
+        assert_eq!(sg::Behavior::Word, behaviors[1]);
+        assert_eq!(sg::Behavior::Line, behaviors[2]);
+
+        unsafe { event_free(event) };
+    });
+}
+
+// W66-GETMULTI-RAW-01 (Rust-only proving test, shaped after the reference's
+// "get_multi returns first failing index" test): the `keys` array is C memory
+// typed `const RusttySelectionGestureData *`, so its elements are
+// caller-supplied ints. The reference reaches its per-element
+// `std.enums.fromInt(Data, ...)` guard because `get_multi` calls `get`
+// (selection_gesture.zig:361-405); the port must classify an out-of-range key
+// as `RUSTTY_INVALID_VALUE` — not `RUSTTY_NO_VALUE` — and report the first
+// failing index through `out_written`.
+#[test]
+fn get_multi_rejects_out_of_range_c_keys() {
+    const C_INVALID_VALUE: c_int = -2;
+
+    with_test_allocator(|alloc| {
+        let mut terminal: terminal_c::Terminal = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            terminal_c::new(alloc, &mut terminal, 5, 2)
+        });
+
+        let mut gesture: Gesture = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe { new(Some(alloc), &mut gesture) });
+
+        // [ .click_count, <raw 99> ]: the valid prefix is processed first, then
+        // the bad key stops the walk at index 1.
+        let keys: [c_int; 2] = [Data::ClickCount as c_int, 99];
+        let mut click_count: u8 = 255;
+        let mut dragged = true;
+        let mut values = [
+            &mut click_count as *mut _ as *mut c_void,
+            &mut dragged as *mut _ as *mut c_void,
+        ];
+        let mut written: usize = 99;
+
+        assert_eq!(C_INVALID_VALUE, unsafe {
+            crate::rustty_selection_gesture_get_multi(
+                gesture,
+                terminal,
+                keys.len(),
+                keys.as_ptr().cast(),
+                values.as_mut_ptr(),
+                &mut written,
+            )
+        });
+        assert_eq!(1usize, written);
+        // The valid prefix still wrote its value.
+        assert_eq!(0u8, click_count);
+        // The rejected key never wrote through its out pointer.
+        assert!(dragged);
+
+        // The scalar entry point classifies the same key identically.
+        let mut out: u8 = 255;
+        assert_eq!(C_INVALID_VALUE, unsafe {
+            crate::rustty_selection_gesture_get(
+                gesture,
+                terminal,
+                99,
+                &mut out as *mut _ as *mut c_void,
+            )
+        });
+
+        unsafe { free(gesture, terminal) };
+        unsafe { terminal_c::free(terminal) };
+    });
 }

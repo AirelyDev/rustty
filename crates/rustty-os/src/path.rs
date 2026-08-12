@@ -50,7 +50,7 @@ pub fn expand(
         None => return Ok(None),
     };
 
-    let mut path_buf: [u8; libc::PATH_MAX as usize] = [0; libc::PATH_MAX as usize];
+    let mut path_buf: [u8; MAX_PATH_BYTES] = [0; MAX_PATH_BYTES];
     let mut seen_eacces = false;
     for search_path in tokenize_path(path_bytes) {
         // We need enough space in our path buffer to store this
@@ -115,6 +115,18 @@ fn isExecutable(mode: Mode) -> bool {
 // logic and error mapping match the reference exactly (R3 binding, not a
 // reimplementation).
 // ---------------------------------------------------------------------------
+
+// `std.fs.max_path_bytes` (zig std/fs.zig): `posix.PATH_MAX` on the unix-ish
+// tags, and on windows `windows.PATH_MAX_WIDE * 3 + 1` — each WTF-16LE code
+// unit may expand to 3 WTF-8 bytes (a surrogate pair needing 4 bytes is
+// (over)accounted as 3+3), +1 for the trailing NUL. `PATH_MAX_WIDE` is 32767
+// (zig std/os/windows.zig), so the windows value is 98302. The reference's
+// `expand` stack-allocates exactly this many bytes on every target
+// (`ghostty src/os/path.zig:23`), including windows.
+#[cfg(unix)]
+const MAX_PATH_BYTES: usize = libc::PATH_MAX as usize;
+#[cfg(windows)]
+const MAX_PATH_BYTES: usize = 32767 * 3 + 1;
 
 // `std.fs.path.sep`: '/' on POSIX, '\\' on Windows.
 #[cfg(windows)]
@@ -201,6 +213,21 @@ pub(crate) fn os_str_from_bytes(b: &[u8]) -> &std::ffi::OsStr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `std.fs.max_path_bytes` shim (not a reference `test {}` — a guard on
+    /// a shim this port had to spell out per-target). On unix it must BE the
+    /// platform `PATH_MAX`, which is what `std.fs.max_path_bytes` resolves to
+    /// (`posix.PATH_MAX`); on windows it must be Zig's WTF-8 worst case
+    /// `PATH_MAX_WIDE * 3 + 1` = 98302. Compiled per-target: the unix arm runs
+    /// on the macOS host and the Linux VM, the windows arm on any future
+    /// windows test lane.
+    #[test]
+    fn max_path_bytes_matches_reference() {
+        #[cfg(unix)]
+        assert_eq!(MAX_PATH_BYTES, libc::PATH_MAX as usize);
+        #[cfg(windows)]
+        assert_eq!(MAX_PATH_BYTES, 98302);
+    }
 
     // `uname -n` is the *nix equivalent of `hostname.exe` on Windows
     #[test]

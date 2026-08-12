@@ -17,9 +17,9 @@ use crate::rustty::{Action, Error};
 //   `apprt.runtime.App`; for the headless `rustty` CLI build that is
 //   `none.App`, whose `perform_ipc` always returns `Ok(false)`. The ipc value
 //   types come from `rustty-apprt-api` (rustty-apprt does not re-export them).
-#[cfg(not(all(target_os = "linux", feature = "gtk")))]
+#[cfg(not(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk")))]
 use allocator_api2::alloc::Global;
-#[cfg(not(all(target_os = "linux", feature = "gtk")))]
+#[cfg(not(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk")))]
 use rustty_apprt::none;
 use rustty_apprt_api::ipc;
 
@@ -110,10 +110,10 @@ pub fn run() -> Result<u8, Error> {
     //     error.IPCFailed => { return 1; },
     //     else => { stderr.print("Sending the IPC failed: {}\n", .{err}); return 1; },
     // }) return 0;
-    #[cfg(all(target_os = "linux", feature = "gtk"))]
+    #[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
     let ipc_result =
         rustty_apprt::gtk::App::perform_ipc(ipc::Target::Detect, ipc::Action::ToggleQuickTerminal);
-    #[cfg(not(all(target_os = "linux", feature = "gtk")))]
+    #[cfg(not(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk")))]
     let ipc_result = none::App::perform_ipc(
         Global,
         ipc::Target::Detect,

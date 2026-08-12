@@ -11,6 +11,9 @@
 // `getpwuid_r`/`getuid` C API and `rustty-build-config` for the `flatpak`
 // build flag.
 
+// Its only use (`build_config::flatpak()`) lives inside `get`'s flatpak block,
+// which is absent on windows along with `get` itself (see the WI-4 note below).
+#[cfg(not(windows))]
 use rustty_build_config as build_config;
 
 const LOG_SCOPE: &str = "passwd";
@@ -179,13 +182,25 @@ pub fn get() -> Result<Entry, Error> {
     Ok(result)
 }
 
-#[cfg(windows)]
-pub fn get() -> Result<Entry, Error> {
-    // PORT NOTE: `if (builtin.os.tag == .windows) @compileError("passwd is not
-    // available on windows");` — the reference makes this a compile error. We
-    // keep the same intent at compile time below.
-    compile_error!("passwd is not available on windows")
-}
+// PORT NOTE: `if (builtin.os.tag == .windows) @compileError("passwd is not
+// available on windows");` (`ghostty src/os/passwd.zig:36`). Zig's
+// `@compileError` here is LAZY: it fires only when `get` is analyzed from a
+// windows-reachable call site, and the reference's windows builds pass
+// precisely because no such call site exists (`passwd.zig:20-24` even gates the
+// `pwd.h` cImport off windows, and the file's `test {}` self-skips at `:148`).
+// Rust's `compile_error!` is EAGER — a `#[cfg(windows)] fn get` whose body is
+// `compile_error!` breaks EVERY windows build unconditionally, which is a
+// strictly stronger (and non-faithful) rule than the reference's.
+//
+// The Rust construct with the reference's exact semantics is the ABSENCE of the
+// item on windows: a windows call site is then a compile error AT THE CALL SITE
+// (E0425), and a windows build with no call site compiles. A runtime
+// `unreachable!()` body was considered and REJECTED — it would let a windows
+// call site COMPILE, which is strictly weaker than the reference's guarantee.
+// Precedent for mapping a windows-unreachable `@compileError` decl to absence:
+// `rustty-xev/src/iocp_watcher.rs`. `Entry`/`Error` stay windows-visible,
+// matching the reference's windows-visible `Entry` struct.
+// See `.port/codex-vet/designs/W2D_WINDOWS_OS.md` WI-4.
 
 // PORT NOTE: `std.mem.sliceTo(pw.pw_name, 0)` rendered as a `&str` for the flatpak
 // host command formatting.

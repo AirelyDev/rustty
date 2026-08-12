@@ -82,11 +82,12 @@ pub use backend::Backend;
 
 /// The backend in use (the reference `xev.backend` read).
 ///
-/// PORT NOTE: on macOS the crate surface IS the static kqueue `Api()`
-/// (XEV_BLUEPRINT §0 — `Backend::candidates()` is the single-element
-/// `&[kqueue]`, comptime-eliding the Dynamic layer), and libxev's `Xev(be, T)`
-/// declares `pub const backend = be;` — so this is the comptime `.kqueue`.
-#[cfg(target_os = "macos")]
+/// PORT NOTE: on macOS — and, since W2D, on FreeBSD — the crate surface IS the
+/// static kqueue `Api()` (XEV_BLUEPRINT §0 — `Backend::candidates()` is the
+/// single-element `&[kqueue]` on both, `backend.zig:20,38`, comptime-eliding the
+/// Dynamic layer), and libxev's `Xev(be, T)` declares `pub const backend = be;`
+/// — so this is the comptime `.kqueue`.
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub fn backend() -> Backend {
     Backend::Kqueue
 }
@@ -177,34 +178,39 @@ mod darwin;
 //    wakeup handle the loop `Wakeup` embeds). `async` is a Rust keyword → `#[path]`.
 //  - `net` (std.net.Address subset): the connect/sendto/recvfrom addr type.
 //  - `timer` (watcher/timer.zig): the `xev.Timer` watcher C3 subset (init/run).
-#[cfg(target_os = "macos")]
+// W2D/F-004: the kqueue tree is `any(macos, freebsd)` — libxev maps BOTH onto the
+// kqueue backend (`backend.zig:20,38`) and its `kqueue.zig`/watcher sources carry
+// real `.freebsd` arms (`:35`, `:45-49`, `:1863`, `:1935`, `:1876`, `:1674/1081`,
+// `:1488-1510`). `darwin` below stays macOS-only — the reference gates the mach
+// paths on `builtin.os.tag.isDarwin()`, not on "is kqueue".
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 #[path = "async.rs"]
 mod async_watcher;
 // WS20: un-gated — `watcher/common.zig`'s `userdataValue` is backend-independent
 // and is now consumed by the iocp/wasi_poll watcher instantiations too.
 #[allow(dead_code)]
 mod common;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 #[allow(dead_code)]
 mod kqueue;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 #[path = "loop.rs"]
 mod looppkg;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 #[allow(dead_code)]
 mod net;
 // XEV_BLUEPRINT §4/§8 chunk C5: the `Process` watcher (`watcher/process.zig`
 // `ProcessKqueue`) — the subprocess exit-wait (EVFILT_PROC + `waitpid` reap) that
 // termio's Exec rides. The loop `proc` op/perform (Operation::Proc + exit decode)
 // landed in C3; this module adds the high-level `xev.Process` watcher surface.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 mod process;
 // XEV_BLUEPRINT §4/§8 chunk C6: the `Stream` watcher (`watcher/stream.zig`) — the
 // `Shared` piece (`WriteQueue`/`WriteRequest`/`PollError`/`PollEvent`) +
 // `GenericStream` (init_fd/deinit/read/write/close/poll) + the `Writeable.queueWrite`
 // ordered-write engine termio's pty write path rides. The loop read/write/close ops
 // landed in C3; this module adds the high-level `xev.Stream` surface.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 mod stream;
 // XEV_BLUEPRINT §1/§6 chunk C3 -> Task 1 (`.superpowers/sdd/task-1-brief.md`): the
 // full faithful port of `ThreadPool.zig` (kprotty's Zap work-stealing pool) now
@@ -222,13 +228,22 @@ mod stream;
 // surface is `std.Thread.Futex`, whose Windows and single-threaded (WASI /
 // freestanding wasm) arms are now ported alongside the Linux/Darwin ones.
 mod thread_pool;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 mod timer;
 
 // ---------------------------------------------------------------------------
-// The macOS/kqueue package re-export surface (= the kqueue `Api()` decls the
-// consumers name as `xev::*`). This is the collapse-on-macOS of `main.zig` +
-// `api.zig` (§0); their reference doc comments are preserved verbatim here (R3).
+// The kqueue package re-export surface (= the kqueue `Api()` decls the consumers
+// name as `xev::*`) — macOS AND, since W2D/F-004, FreeBSD. This is the
+// single-candidate collapse of `main.zig` + `api.zig` (§0) on both targets; their
+// reference doc comments are preserved verbatim here (R3).
+//
+// The FreeBSD export LIST is IDENTICAL to the macOS one. That is not a
+// convenience: `main.zig` forwards the SAME `Api()` decls for every kqueue
+// target, and the per-target forks live INSIDE the modules (`Async` is
+// `AsyncMachPort` vs `AsyncEventFd`, `WaitError` is `MachPortError` vs
+// `ReadError`, `Wakeup` is the mach port vs the panic stub). `MachPortError`
+// stays exported on FreeBSD for the same reason the reference keeps it: Zig
+// error sets / result unions are platform-free (`kqueue.zig:1701`).
 //
 // [main.zig] The low-level IO interfaces using the recommended compile-time
 // interface for the target system. We forward these as the default
@@ -287,23 +302,23 @@ mod timer;
 // Closeable, Writeable, Readable, etc. so that custom streams
 // can be constructed.
 // ---------------------------------------------------------------------------
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub use async_watcher::Async;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub use kqueue::{
     AcceptError, CancelError, CloseError, Completion, ConnectError, KEventError, Loop,
     MachPortError, Operation, ProcError, ReadBuffer, ReadError, Result, ShutdownError, ShutdownHow,
     TimerError, TimerTrigger, WriteBuffer, WriteError,
 };
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub use looppkg::{noop_callback, Callback, CallbackAction, CompletionState, Options, RunMode};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub use process::Process;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub use stream::{PollError, PollEvent, Stream, WriteQueue, WriteRequest};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub use thread_pool::ThreadPool;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub use timer::Timer;
 // PORT NOTE: `Timer.run`/`reset`'s callback error type (`pub const RunError =
 // error{Canceled, Unexpected}`) must be nameable by consumers — a termio
@@ -311,7 +326,7 @@ pub use timer::Timer;
 // Timer.RunError!void` parameter, and a named fn-item callback cannot infer it.
 // The `timer` module is private, so re-export the type here (Milestone-A export
 // gap surfaced by Milestone B's first typed Timer callback).
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub use timer::RunError as TimerRunError;
 // PORT NOTE: `Async.wait`'s callback error type (`pub const WaitError =
 // xev.Sys.MachPortError;`) must be nameable by consumers — the W2 CVDisplayLink
@@ -319,7 +334,7 @@ pub use timer::RunError as TimerRunError;
 // parameter, and the `async_watcher` module is private. Re-export the alias (same
 // export gap the `TimerRunError` re-export closed; the underlying `MachPortError`
 // is already re-exported via the `kqueue` block).
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub use async_watcher::WaitError;
 // PORT NOTE: `Process.wait`'s callback error type (`pub const WaitError =
 // xev.Sys.ProcError;`, watcher/process.zig:150) must be nameable by consumers —
@@ -338,7 +353,7 @@ pub use async_watcher::WaitError;
 // (watcher/process.zig:368), so ONE neutral name — the reference's own
 // `Process.WaitError` — now resolves on both targets and termio's flat
 // `pub use rustty_xev::*` seam needs no per-target spelling.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub use process::WaitError as ProcessWaitError;
 
 // ---------------------------------------------------------------------------
@@ -464,7 +479,7 @@ pub struct NotifyError;
 // +margin, not the R1-counted one). `test "completion is zero-able"` → the R1
 // parity test mapped to api.zig (zig_count=1).
 // ---------------------------------------------------------------------------
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(target_os = "macos", target_os = "freebsd")))]
 mod api_tests {
     use super::*;
 
@@ -559,8 +574,8 @@ pub use iocp::{
 pub use windows::{CallbackAction, CompletionState, Options, RunMode};
 
 // `main.zig`'s `pub const ThreadPool = @import("ThreadPool.zig")` — exported on
-// every target (WS20), matching the macOS/Linux re-exports above.
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+// every target (WS20), matching the macOS/Linux/FreeBSD re-exports above.
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "freebsd")))]
 pub use thread_pool::ThreadPool;
 
 // ---------------------------------------------------------------------------
@@ -606,11 +621,16 @@ pub use wasi_watcher::{
 // upstream library does not support. Every rustty artifact for this target
 // (`rustty-wasm`, `rustty-web-canvas`, `rustty-vt-c`) runs the SYNCHRONOUS C-ABI
 // with no event loop, which is why the crate is only required to TYPE-CHECK here.
+//
+// W2D/F-004: `freebsd` LEFT this seam — it now has the real kqueue backend above
+// (`backend.zig:20,38` maps it onto `.kqueue`, and `kqueue.zig` carries real
+// `.freebsd` arms). The seam text stays true for the targets still listed.
 // ---------------------------------------------------------------------------
 
 #[cfg(not(any(
     target_os = "macos",
     target_os = "linux",
+    target_os = "freebsd",
     target_os = "windows",
     target_os = "wasi"
 )))]
@@ -619,6 +639,7 @@ pub use no_backend_seam::*;
 #[cfg(not(any(
     target_os = "macos",
     target_os = "linux",
+    target_os = "freebsd",
     target_os = "windows",
     target_os = "wasi"
 )))]
@@ -706,7 +727,7 @@ mod backend_accessor_tests {
     /// WS3-B: `xev.backend` — macOS is the flat static kqueue Api
     /// (`pub const backend = be;` in libxev main.zig's Xev(be, T)), so the
     /// accessor is the comptime `.kqueue`.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     #[test]
     fn backend_is_kqueue_on_macos() {
         assert_eq!(crate::Backend::Kqueue, crate::backend());

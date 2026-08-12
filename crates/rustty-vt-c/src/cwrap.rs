@@ -37,11 +37,8 @@ use std::alloc::Layout;
 /// outlives the returned pointer. The returned pointer (if non-null) must be
 /// released with `destroy` using the SAME `alloc_`.
 pub unsafe fn create<T>(alloc_: Option<&CAllocator>, value: T) -> *mut T {
-    let allocator = default(alloc_);
-    let layout = Layout::new::<T>();
-    // alloc.create(T) — `Layout::new::<T>` carries T's size+alignment.
-    let ptr =
-        allocator.alloc(layout.size(), Alignment::from_byte_units(layout.align()), 0) as *mut T;
+    // alloc.create(T)
+    let ptr = unsafe { alloc_uninit::<T>(alloc_) };
     if ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -51,6 +48,53 @@ pub unsafe fn create<T>(alloc_: Option<&CAllocator>, value: T) -> *mut T {
     // prior contents.
     unsafe { ptr.write(value) };
     ptr
+}
+
+/// The ALLOCATION half of `create`: `alloc.create(T)` WITHOUT initializing the
+/// storage. This is the shape the reference uses whenever fallible work sits
+/// BETWEEN the allocation and the initialization:
+///
+///   const ptr = alloc.create(T) catch return error.OutOfMemory;
+///   errdefer alloc.destroy(ptr);
+///   ... fallible work ...
+///   ptr.* = .{ ... };
+///
+/// so a caller-supplied C allocator observes the SAME callback sequence as the
+/// reference (one alloc, plus one free on every error arm) rather than a
+/// silently-skipped allocation. Returns null on allocation failure (the
+/// reference's `catch return .out_of_memory`).
+///
+/// # Safety
+/// `alloc_`, if non-null, must point to a valid `CAllocator` whose vtable
+/// outlives the returned pointer. The returned pointer (if non-null) holds
+/// UNINITIALIZED storage: it must be initialized with `ptr.write(..)` before
+/// any read, and released with `free_uninit` (while still uninitialized) or
+/// with `destroy` (once initialized), using the SAME `alloc_`.
+pub unsafe fn alloc_uninit<T>(alloc_: Option<&CAllocator>) -> *mut T {
+    let allocator = default(alloc_);
+    let layout = Layout::new::<T>();
+    // alloc.create(T) — `Layout::new::<T>` carries T's size+alignment.
+    allocator.alloc(layout.size(), Alignment::from_byte_units(layout.align()), 0) as *mut T
+}
+
+/// `alloc.destroy(p)` for storage that is still UNINITIALIZED — the `errdefer
+/// alloc.destroy(ptr)` arm of the shape above. Frees the backing bytes WITHOUT
+/// running `T`'s destructor (there is no `T` there yet). Zig's `destroy` is
+/// exactly this free (Zig has no destructors), so the reference's `errdefer`
+/// and its normal `free` path are the same call; in Rust the two must be
+/// distinguished.
+///
+/// # Safety
+/// `ptr` must be a non-null pointer returned by `alloc_uninit::<T>` with the
+/// same `alloc_`, whose storage was never initialized, and not yet freed.
+pub unsafe fn free_uninit<T>(alloc_: Option<&CAllocator>, ptr: *mut T) {
+    let allocator = default(alloc_);
+    let layout = Layout::new::<T>();
+    allocator.free(
+        ZigSlice::new(ptr as *mut u8, layout.size()),
+        Alignment::from_byte_units(layout.align()),
+        0,
+    );
 }
 
 /// `alloc.destroy(p)`: drop the `T` and free its storage via the allocator the

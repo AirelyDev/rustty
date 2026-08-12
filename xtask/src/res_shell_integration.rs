@@ -152,6 +152,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    /// W11-01 regression: the Nushell `ssh` and `sudo` wrappers must each carry
+    /// the `@complete external` attribute (oracle ghostty.nu:9/:28) so that a
+    /// configured Nushell external completer keeps completing arguments inside
+    /// the wrapped commands. Runs in default `cargo test` (no oracle checkout
+    /// needed) as drift coverage over the embedded vendored bytes.
+    #[test]
+    fn nushell_wrappers_delegate_to_external_completer() {
+        let nu = FILES
+            .iter()
+            .find(|(rel, _)| *rel == "nushell/vendor/autoload/rustty.nu")
+            .expect("rustty.nu missing from FILES")
+            .1;
+        let nu = std::str::from_utf8(nu).expect("rustty.nu is UTF-8");
+        let count = nu.matches("@complete external").count();
+        assert_eq!(
+            count, 2,
+            "expected exactly 2 `@complete external` attributes (ssh + sudo wrappers), found {count}"
+        );
+        // Each attribute must sit immediately before its wrapped def.
+        for def in ["export def --wrapped ssh", "export def --wrapped sudo"] {
+            let idx = nu.find(def).unwrap_or_else(|| panic!("missing `{def}`"));
+            let preceding = &nu[..idx];
+            let prev_line = preceding.trim_end().lines().next_back().unwrap_or("");
+            assert_eq!(
+                prev_line.trim(),
+                "@complete external",
+                "`{def}` is not annotated with `@complete external`"
+            );
+        }
+    }
+
     fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
         let mut out = Vec::new();
         if let Ok(rd) = std::fs::read_dir(dir) {

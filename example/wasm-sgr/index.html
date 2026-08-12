@@ -109,7 +109,7 @@
 
         async function loadWasm() {
             try {
-                const response = await fetch('../../target/wasm32-unknown-unknown/release/rustty_vt_c.wasm');
+                const response = await fetch('../../zig-out/bin/rustty-vt.wasm');
                 const wasmBytes = await response.arrayBuffer();
                 
                 const wasmModule = await WebAssembly.instantiate(wasmBytes, {

@@ -68,38 +68,62 @@ pub struct OsTag {
 impl OsTag {
     /// The host build-target OS tag, matching `builtin.target.os.tag`.
     pub fn host() -> OsTag {
-        // PORT NOTE: `std.Target.Os.Tag` uses lowercase names (`macos`, `linux`,
-        // `windows`, ...). We map the Rust `target_os` to the matching tag name.
-        #[cfg(target_os = "macos")]
-        {
-            OsTag { name: b"macos" }
-        }
-        #[cfg(target_os = "linux")]
-        {
-            OsTag { name: b"linux" }
-        }
-        #[cfg(target_os = "windows")]
-        {
-            OsTag { name: b"windows" }
-        }
-        #[cfg(target_os = "freebsd")]
-        {
-            OsTag { name: b"freebsd" }
-        }
-        #[cfg(not(any(
-            target_os = "macos",
-            target_os = "linux",
-            target_os = "windows",
-            target_os = "freebsd"
-        )))]
-        {
-            OsTag { name: b"other" }
+        OsTag {
+            name: tag_name_for(std::env::consts::OS),
         }
     }
 
     /// PORTS: the `@tagName` of the OS tag used by `State.match`.
     pub fn tag_name(self) -> &'static [u8] {
         self.name
+    }
+}
+
+/// PORTS: `@tagName(builtin.target.os.tag)` for a build whose Rust `target_os`
+/// is `target_os` (`std::env::consts::OS`).
+//
+// PORT NOTE: `std.Target.Os.Tag` uses lowercase names (`macos`, `linux`,
+// `windows`, ...) and Rust's `target_os` names coincide for every OS both
+// support, so the mapping is mostly identity. This used to be a `cfg` chain that
+// named only macos/linux/windows/freebsd and collapsed EVERY other target to
+// `other`, which was two divergences at once on e.g. a NetBSD build: an
+// `os == netbsd` conditional could never match (the reference yields "netbsd"),
+// and an `os == other` conditional matched even though the reference's `.other`
+// tag is a distinct enum member the target does not have.
+//
+// The listed names are exactly the `std.Target.Os.Tag` members (Zig 0.16) that a
+// Rust `target_os` can name; anything else — a target Zig models under a
+// different tag, or one it has no member for at all (`solaris`, `redox`, `nto`,
+// ...) — falls to `other`, the reference's own catch-all member. Two non-identity
+// arms: Zig models Android as `.linux` with the `android` ABI, and Rust's
+// bare-metal `none` is Zig's `freestanding`.
+fn tag_name_for(target_os: &str) -> &'static [u8] {
+    match target_os {
+        "macos" => b"macos",
+        "ios" => b"ios",
+        "tvos" => b"tvos",
+        "watchos" => b"watchos",
+        "visionos" => b"visionos",
+        "linux" => b"linux",
+        "android" => b"linux",
+        "windows" => b"windows",
+        "uefi" => b"uefi",
+        "freebsd" => b"freebsd",
+        "netbsd" => b"netbsd",
+        "openbsd" => b"openbsd",
+        "dragonfly" => b"dragonfly",
+        "illumos" => b"illumos",
+        "haiku" => b"haiku",
+        "hurd" => b"hurd",
+        "fuchsia" => b"fuchsia",
+        "hermit" => b"hermit",
+        "rtems" => b"rtems",
+        "psp" => b"psp",
+        "vita" => b"vita",
+        "wasi" => b"wasi",
+        "emscripten" => b"emscripten",
+        "none" => b"freestanding",
+        _ => b"other",
     }
 }
 
@@ -253,6 +277,57 @@ mod tests {
             key: Key::Theme,
             op: Op::Ne,
             value: b"light".to_vec(),
+        }));
+    }
+
+    // PORT NOTE: no reference test — `builtin.target.os.tag` needs none in Zig
+    // because the tag IS the target's. This covers the port's mapping seam: the
+    // OS tags a `Key.os` conditional can name must be the reference's
+    // `@tagName(std.Target.Os.Tag)` for the same build target, not a
+    // four-target allowlist collapsed to `other`.
+    #[test]
+    fn os_tag_name_matches_zig_target_os_tag() {
+        // The BSDs the old cfg chain collapsed to `other`.
+        assert_eq!(b"netbsd", tag_name_for("netbsd"));
+        assert_eq!(b"openbsd", tag_name_for("openbsd"));
+        assert_eq!(b"dragonfly", tag_name_for("dragonfly"));
+        // Positive controls that were already covered.
+        assert_eq!(b"macos", tag_name_for("macos"));
+        assert_eq!(b"linux", tag_name_for("linux"));
+        assert_eq!(b"windows", tag_name_for("windows"));
+        assert_eq!(b"freebsd", tag_name_for("freebsd"));
+        // Zig models Android as `.linux`.
+        assert_eq!(b"linux", tag_name_for("android"));
+        // Targets `std.Target.Os.Tag` has no member for keep the reference's
+        // own `.other` catch-all.
+        assert_eq!(b"other", tag_name_for("solaris"));
+        assert_eq!(b"other", tag_name_for("unknownos"));
+        // ...and a target that DOES have a tag must never report `other`.
+        assert_ne!(b"other", tag_name_for("netbsd"));
+
+        // `host()` is exactly the mapping applied to this build's target.
+        assert_eq!(tag_name_for(std::env::consts::OS), OsTag::host().tag_name());
+    }
+
+    // A `Key.os` conditional naming the real target OS must match on that
+    // target, and the reference's distinct `.other` tag must not.
+    #[test]
+    fn os_conditional_matches_real_tag() {
+        let state = State {
+            theme: Theme::Light,
+            os: OsTag {
+                name: tag_name_for("netbsd"),
+            },
+        };
+        assert!(state.is_match(&Conditional {
+            key: Key::Os,
+            op: Op::Eq,
+            value: b"netbsd".to_vec(),
+        }));
+        assert!(!state.is_match(&Conditional {
+            key: Key::Os,
+            op: Op::Eq,
+            value: b"other".to_vec(),
         }));
     }
 }

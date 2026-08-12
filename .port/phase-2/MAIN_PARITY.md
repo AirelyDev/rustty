@@ -172,7 +172,7 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 | `0d015b2fc` | terminal: preserve compressed pages during search | **PORTED** (WS7; row corrected `P3-W10 T2`) | 10 provenance-tagged (`oracle 0d015b2fc`) sites across `crates/rustty-vt/src/search/`: `sliding_window.rs:152` (`Meta.rows`), `:634`, `:696`, `:899`, `:916`, `:918` `append_if_wrapped` / `:942` `append_page` (the split that inspects a preserved page instead of restoring it), `viewport.rs:253,294`, `active.rs:137`, `pagelist.rs:612`. **Guard:** `search::pagelist::tests::compressed_history_match_spanning_page_boundary_remains_compressed` (`search/pagelist.rs:619`). |
 | `e7969ed43` | terminal: make PageList compression self-contained | **PORTED** (re-triaged 2026-07-31) | cited by 1 Rust file. Guard: `pagelist_owns_incremental_compression_state` (mutation-proved: dropping `page_compression.reset()` from `scroll` fails it). |
 | `70e788f06` | terminal: add incremental scrollback compression | **PORTED** (re-triaged 2026-07-31) | cited by 2 Rust files. Guards: `pagelist_compress_incremental_converges_to_complete`, `pagelist_incremental_compression_bounds_inspected_pages` (mutation-proved: budget `MAX`->`MAX+1` fails it). |
-| `9156ada16` | terminal: add cold-history compression pass | **PORTED** (re-triaged 2026-07-31) | cited by 2 Rust files. The cold-history pass and **all 21** of its oracle tests are ported — 19 of them only after `G-TESTS` (the live-oracle test audit) found them absent on 2026-07-31; see `.port/phase-3/TEST_AUDIT.md`. One accepted absence (`advances after allocation failure`) is a `FailingAllocator` seam with no rustty analogue, argued there. |
+| `9156ada16` | terminal: add cold-history compression pass | **PORTED** (re-triaged 2026-07-31) | cited by 2 Rust files. The cold-history pass and **all 21** of its oracle tests are ported — 19 of them only after `G-TESTS` (the live-oracle test audit) found them absent on 2026-07-31; see `.port/phase-3/TEST_AUDIT.md`. The last accepted absence (`advances after allocation failure`) was **resolved 2026-08-11 by vet finding F-015**: the "no rustty analogue" argument rested on the encoded buffer aborting on OOM, which was itself the divergence — `CompressedPage::init` now returns `Err(InitError::OutOfMemory)` via `try_reserve_exact` and the oracle test is ported as `pagelist_incremental_compression_advances_after_allocation_failure`. All 21 oracle tests ported, none accepted-absent. |
 | `421fe8dab` | terminal: integrate compressed pages into PageList | **PORTED** (re-triaged 2026-07-31) | cited by 1 Rust file. Guards: `pagelist_compression_restores_through_page_access`, `pagelist_lazily_restores_compressed_history_made_active_by_resize` (mutation-proved via `Chunk::rows()`/`Node::rows` reading through the restoring accessor). |
 | `f6fd4cb08` | terminal: generalize page memory reclamation | **PORTED** (re-triaged 2026-07-31) | cited by 1 Rust file; page-memory reclamation generalized in `pagelist/`. Guard: `pagelist_prune_reuses_malformed_compressed_page_memory`. |
 | `ebc3ffd22` | terminal: add compressed page representation | **PORTED** (re-triaged 2026-07-31) | `crates/rustty-vt/src/compress/page.rs` (510 lines, 4 tests) — `CompressedPage` + `clone_buf`. Guard: `pagelist_preserved_page_keeps_compressed_storage` (mutation-proved: clearing `dirty` on the decoded copy fails it). |
@@ -260,9 +260,16 @@ PORTED:
   (`6cffd25`).
 * `src/terminal/stream.zig` — the lane-wise printable-run scan (`6cffd25`).
 * `src/terminal/hash_map.zig` — the force-inline of the auto context's hash.
-  Ported as `#[inline]` on `AutoContext::hash` (`f1730b2`+); the
-  `hasUniqueRepresentation` split selects between two Zig std hashers and has no
-  counterpart in a port with one.
+  Ported as `#[inline]` on `AutoContext::hash` (`f1730b2`+). The
+  `hasUniqueRepresentation` split selects between the one-shot
+  (`Wyhash.hash(0, asBytes(&key))`) and the iterative (`autoHash` into
+  `Wyhash.init(0)`) form of the SAME hash; the port always takes the iterative
+  form, which agrees byte-for-byte on the same input. The hash ITSELF is now
+  ported too (W24-B01-F1): `AutoContext::hash` was seeded Rust `DefaultHasher`
+  and is now seed-0 Wyhash via `rustty_zigstd::wyhash` (a port of Zig 0.16's
+  `std.hash.Wyhash`), so home slots, metadata fingerprints, probe/iterator order
+  and the raw page bytes handed to LZ4 match the oracle. Pinned by
+  `hash_map.rs`'s `HashMap_auto_context_matches_reference_wyhash_layout`.
 
 NOT APPLICABLE — each checked against the rustty source, not assumed:
 * `src/quirks_memset.zig` (+322) — **must NOT be ported**, see

@@ -4,6 +4,9 @@ Sending title change:
   title changed (cursor at col 0)
 Sending DECRQM query:
   write_pty (8 bytes): [?7;1$y
+Sending clipboard write:
+  clipboard write (location=0, contents=1)
+    text/plain (15 bytes): Hello clipboard
 Sending another BEL:
   bell! (count=2)
 Total bells: 2

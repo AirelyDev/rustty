@@ -59,16 +59,22 @@
 //!
 //!  2. **locale** — REAL compiled gettext catalogs (un-deferred: the `po/*.po`
 //!     corpus now exists and is `msgfmt`-clean). Mirroring ghostty
-//!     (`GhosttyI18n.zig` `init`: `msgfmt -o - po/<locale>.po` captured to
-//!     `share/locale/<locale>/LC_MESSAGES/<domain>.mo`), we compile every
+//!     (`GhosttyI18n.zig` `init`: `inline for (locales)` → `msgfmt -o -
+//!     po/<locale>.po` captured to
+//!     `share/locale/<locale>/LC_MESSAGES/<domain>.mo`), we compile
 //!     `po/<locale>.po` into
 //!     `share/locale/<locale>/LC_MESSAGES/io.airely.rustty.mo` via the system
-//!     `msgfmt`. The `.mo` domain filename is [`DOMAIN`] (= the app BUNDLE_ID,
-//!     `io.airely.rustty`); `<locale>` is the `.po` basename (`de`, `ja`,
-//!     `zh_CN`, …). The `.pot` template and any `README*.md` in `po/` are
-//!     skipped. Kept `std`-only (shells out to `msgfmt`, like the other
-//!     generators here) so `gen_misc` compiles regardless of concurrent
-//!     `xtask/Cargo.toml` edits.
+//!     `msgfmt` for every locale in the DECLARED set
+//!     ([`crate::translations::LOCALES`], which mirrors `rustty-os`'s
+//!     `i18n_locales::locales` exactly as `GhosttyI18n.zig` imports
+//!     `os/i18n_locales.zig`). Membership is declared-set driven, NOT `po/`
+//!     directory driven: a declared locale with no catalog is a hard error
+//!     (ghostty's build fails the same way), and an undeclared extra `.po` is
+//!     never installed — which also drops the `.pot` template and the
+//!     `README*.md` files for free. The `.mo` domain filename is [`DOMAIN`]
+//!     (= the app BUNDLE_ID, `io.airely.rustty`). Kept `std`-only (shells out
+//!     to `msgfmt`, like the other generators here) so `gen_misc` compiles
+//!     regardless of concurrent `xtask/Cargo.toml` edits.
 //!
 //!  3. **bat** — the sublime-syntax generator IS ported
 //!     (`rustty_extra::sublime::syntax() -> Vec<u8>`, golden-tested byte-exact
@@ -207,33 +213,43 @@ fn gen_webdata(share_dir: &Path) -> Result<(), String> {
     )
 }
 
-/// `share/locale` — compile every `po/<locale>.po` gettext catalog into
+/// The DECLARED catalog set to compile: `(locale, <po_dir>/<locale>.po)` for
+/// every locale in [`crate::translations::LOCALES`], in declared order.
+///
+/// This is the membership rule ghostty uses: `GhosttyI18n.zig:7,24-43` does
+/// `inline for (locales) |locale|` over the imported `os/i18n_locales.zig`
+/// array and `msgfmt`s `po/<locale>.po` for each — so a DECLARED locale whose
+/// catalog is missing fails the build (surfaced here as an error), and an
+/// UNDECLARED extra `.po` in `po/` is never compiled or installed. The `.pot`
+/// template and the `README*.md` files fall out of the set for free.
+fn locale_catalogs(po_dir: &Path) -> Result<Vec<(&'static str, std::path::PathBuf)>, String> {
+    crate::translations::LOCALES
+        .iter()
+        .map(|&locale| {
+            let po = po_dir.join(format!("{locale}.po"));
+            if !po.is_file() {
+                return Err(format!(
+                    "declared locale `{locale}` has no catalog: {} is missing \
+                     (`po/` and `translations::LOCALES` are out of lockstep)",
+                    po.display()
+                ));
+            }
+            Ok((locale, po))
+        })
+        .collect()
+}
+
+/// `share/locale` — compile the DECLARED gettext catalogs (one per
+/// [`crate::translations::LOCALES`] entry, see [`locale_catalogs`]) into
 /// `share/locale/<locale>/LC_MESSAGES/{DOMAIN}.mo` via the system `msgfmt`,
-/// mirroring ghostty's install step (`GhosttyI18n.zig` `init`). `<locale>` is
-/// the `.po` basename; the `.pot` template and any `README*.md` are skipped.
+/// mirroring ghostty's install step (`GhosttyI18n.zig` `init`).
 /// See the module DEFERRAL SUMMARY (item 2) for the un-defer rationale.
 fn gen_locale(share_dir: &Path) -> Result<(), String> {
     let locale_dir = share_dir.join("locale");
     mkdirp(&locale_dir)?;
 
     let po_dir = crate::workspace_root().join("po");
-    let entries =
-        fs::read_dir(&po_dir).map_err(|e| format!("read_dir {}: {e}", po_dir.display()))?;
-
-    // Collect the `.po` catalogs (skip the `.pot` template + `README*.md`),
-    // sorted for deterministic output.
-    let mut po_files: Vec<std::path::PathBuf> = entries
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("po"))
-        .collect();
-    po_files.sort();
-
-    for po in &po_files {
-        let locale = po
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| format!("non-UTF-8 po basename: {}", po.display()))?;
-
+    for (locale, po) in locale_catalogs(&po_dir)? {
         // share/locale/<locale>/LC_MESSAGES/io.airely.rustty.mo
         let lc_dir = locale_dir.join(locale).join("LC_MESSAGES");
         mkdirp(&lc_dir)?;
@@ -245,7 +261,7 @@ fn gen_locale(share_dir: &Path) -> Result<(), String> {
             .env("PATH", msgfmt_path())
             .arg("-o")
             .arg(&mo)
-            .arg(po)
+            .arg(&po)
             .status()
             .map_err(|e| {
                 format!("spawn msgfmt (is gettext on PATH? try /opt/homebrew/opt/gettext/bin): {e}")
@@ -297,4 +313,87 @@ fn mkdirp(dir: &Path) -> Result<(), String> {
 
 fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
     fs::write(path, bytes).map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::translations::LOCALES;
+    use std::collections::BTreeSet;
+    use std::path::PathBuf;
+
+    fn temp_po(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("rustty-xtask-locale-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn touch(dir: &Path, name: &str) {
+        fs::write(dir.join(name), b"").unwrap();
+    }
+
+    /// Tripwire: the committed `po/` corpus and the DECLARED locale set must
+    /// stay in lockstep — the invariant ghostty gets structurally by importing
+    /// `os/i18n_locales.zig` into `GhosttyI18n.zig`. A `.po` added to `po/`
+    /// without a `LOCALES` entry would silently never ship; a `LOCALES` entry
+    /// without a `.po` would break `xtask resources`.
+    #[test]
+    fn po_dir_matches_declared_locales() {
+        let po_dir = crate::workspace_root().join("po");
+        let on_disk: BTreeSet<String> = fs::read_dir(&po_dir)
+            .unwrap_or_else(|e| panic!("read_dir {}: {e}", po_dir.display()))
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("po"))
+            .map(|p| p.file_stem().unwrap().to_str().unwrap().to_string())
+            .collect();
+        let declared: BTreeSet<String> = LOCALES.iter().map(|s| (*s).to_string()).collect();
+        assert_eq!(
+            on_disk, declared,
+            "po/*.po and translations::LOCALES are out of lockstep"
+        );
+    }
+
+    /// The catalog set is DECLARED-driven, not directory-driven: an undeclared
+    /// extra `.po` (and the `.pot` template / `README*.md`) is never compiled,
+    /// and the order is the declared order (`GhosttyI18n.zig:24` `inline for
+    /// (locales)`).
+    #[test]
+    fn catalogs_ignore_undeclared_po_files() {
+        let dir = temp_po("extra");
+        for locale in LOCALES {
+            touch(&dir, &format!("{locale}.po"));
+        }
+        // Undeclared extras that a directory scan would happily ship.
+        touch(&dir, "zz.po");
+        touch(&dir, "en_US.po");
+        touch(&dir, "io.airely.rustty.pot");
+        touch(&dir, "README_TRANSLATORS.md");
+
+        let got = locale_catalogs(&dir).expect("all declared catalogs present");
+        let names: Vec<&str> = got.iter().map(|(l, _)| *l).collect();
+        assert_eq!(names, LOCALES, "declared set and declared order");
+        for (locale, po) in &got {
+            assert_eq!(po, &dir.join(format!("{locale}.po")));
+        }
+    }
+
+    /// A DECLARED locale with no catalog is a hard error (ghostty's build fails
+    /// on the missing `b.path("po/" ++ locale ++ ".po")` input), not a silently
+    /// smaller install set.
+    #[test]
+    fn catalogs_error_on_missing_declared_po() {
+        let dir = temp_po("missing");
+        for locale in LOCALES {
+            if *locale == "eu" {
+                continue;
+            }
+            touch(&dir, &format!("{locale}.po"));
+        }
+
+        let err = locale_catalogs(&dir).expect_err("missing declared catalog must fail");
+        assert!(err.contains("`eu`"), "error names the locale: {err}");
+        assert!(err.contains("eu.po"), "error names the path: {err}");
+    }
 }

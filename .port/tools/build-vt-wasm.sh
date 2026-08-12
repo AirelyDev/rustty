@@ -7,9 +7,34 @@
 # Pure Rust (rustty-simd scalar fallbacks + no zlib on wasm), so no C toolchain /
 # no zig is needed — unlike build-wasm.sh (the wasip1 variant with the C deps).
 #
+# Mirrors GhosttyLibVt.initWasm's three-step pipeline:
+#   (a) link with the indirect function table EXPORTED (`exe.export_table =
+#       true` — "so that embedders (e.g. JS in a browser) can insert callback
+#       entries for terminal effects"); rust-lld exports it as
+#       `__indirect_function_table` via `--export-table`.
+#   (b) run the ported `wasm_patch_growable_table` build tool to drop the
+#       table's max limit so JS can `table.grow()` (the ghostty pipeline
+#       patches rather than passing `--growable-table`; we keep the patcher
+#       path to exercise the same ported tool on the same input shape).
+#   (c) install the patched module as `zig-out/bin/rustty-vt.wasm` — the
+#       analog of ghostty's installed `zig-out/bin/ghostty-vt.wasm`.
+#
 # Usage: .port/tools/build-vt-wasm.sh [extra cargo args...]
 set -e
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH= cd -- "$here/../.." && pwd)
-exec cargo build --manifest-path "$root/Cargo.toml" \
-  -p rustty-vt-c --target wasm32-unknown-unknown --release "$@"
+
+# (a) build with the table exported. `cargo rustc` passes the trailing flags
+# only to rustty-vt-c's own compilation; `--export-table` affects the final
+# cdylib link (wasm-ld).
+cargo rustc --manifest-path "$root/Cargo.toml" \
+  -p rustty-vt-c --target wasm32-unknown-unknown --release "$@" -- \
+  -C link-arg=--export-table
+
+# (b)+(c) patch the table growable and install as rustty-vt.wasm.
+raw="$root/target/wasm32-unknown-unknown/release/rustty_vt_c.wasm"
+out_dir="$root/zig-out/bin"
+mkdir -p "$out_dir"
+cargo run --manifest-path "$root/Cargo.toml" -p xtask -- \
+  wasm-patch-growable-table "$raw" "$out_dir/rustty-vt.wasm"
+echo "installed $out_dir/rustty-vt.wasm"

@@ -199,10 +199,19 @@ dispatch2 = { version = "0.3", features = ["block2"] }
 # seam (Frame.complete's `!sync` path). Also brought in transitively by dispatch2.
 block2 = { version = "0.6" }
 
-# Linux: the OpenGL graphics-API backend (L4). R5: purely additive and
+# Linux/FreeBSD: the OpenGL graphics-API backend (L4). R5: purely additive and
 # target-gated — the macOS/Metal lane above is untouched. R3: these are the two
 # deps the L4 plan names, and nothing else.
-[target.'cfg(target_os = "linux")'.dependencies]
+#
+# W2D/F-003: the table is `any(target_os = "linux", target_os = "freebsd")`, not
+# `linux` — `renderer/backend.zig:20-21` gives every non-Darwin native target the
+# `.opengl` backend, and FreeBSD is a real windowed target at the pin
+# (`apprt/runtime.zig:18`). Both crates below are FreeBSD-clean with no version or
+# feature change: `gl` is generated bindings with no link-time dependency at all
+# (loaded through `gl::load_with`), and `khronos-egl`'s `dynamic` feature dlopen's
+# `libEGL.so.1` through `libloading` (full unix support; FreeBSD ships libEGL via
+# mesa/libglvnd), so neither names a Linux-only symbol or library.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 # `gl`: raw `gl_generator`-produced FFI bindings loaded through an explicit
 # `gl::load_with(|s| …)` closure — Rust's analogue of ghostty's own glad
 # function-pointer context (`pkg/opengl/glad.zig`, `gl.c.gl*` / `gl.c.GL_*`).

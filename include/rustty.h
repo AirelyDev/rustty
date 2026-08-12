@@ -131,34 +131,6 @@ typedef enum {
 
 
 /**
- * C: GhosttyFocusEvent -> RusttyFocusEvent (R2)
- */
-typedef enum {
-    FOCUS_EVENT_FOCUS_EVENT_GAINED = 0,
-    FOCUS_EVENT_FOCUS_EVENT_LOST = 1,
-} FocusEvent;
-
-/**
- * C: GhosttySysLogLevel -> RusttySysLogLevel (R2)
- */
-typedef enum {
-    LOG_LEVEL_LOG_LEVEL_ERROR = 0,
-    LOG_LEVEL_LOG_LEVEL_WARNING = 1,
-    LOG_LEVEL_LOG_LEVEL_INFO = 2,
-    LOG_LEVEL_LOG_LEVEL_DEBUG = 3,
-} LogLevel;
-
-/**
- * C: RusttySizeReportStyle (R2)
- */
-typedef enum {
-    STYLE_STYLE_MODE2048 = 0,
-    STYLE_STYLE_CSI14_T = 1,
-    STYLE_STYLE_CSI16_T = 2,
-    STYLE_STYLE_CSI18_T = 3,
-} Style;
-
-/**
  * C: GhosttyCellData -> RusttyCellData (R2)
  */
 typedef enum {
@@ -234,60 +206,13 @@ typedef enum {
 } RowData;
 
 /**
- * C: RusttySgrAttributeTag (R2) — checked by the A5 enum-discriminant arm.
- * The C ABI compatible tag type for `Attribute`.
+ * C: GhosttyStyleColorTag -> RusttyStyleColorTag (R2)
  */
 typedef enum {
-    TAG_TAG_UNSET = 0,
-    TAG_TAG_UNKNOWN = 1,
-    TAG_TAG_BOLD = 2,
-    TAG_TAG_RESET_BOLD = 3,
-    TAG_TAG_ITALIC = 4,
-    TAG_TAG_RESET_ITALIC = 5,
-    TAG_TAG_FAINT = 6,
-    TAG_TAG_UNDERLINE = 7,
-    TAG_TAG_UNDERLINE_COLOR = 8,
-    TAG_TAG_COLOR256_UNDERLINE = 9,
-    TAG_TAG_RESET_UNDERLINE_COLOR = 10,
-    TAG_TAG_OVERLINE = 11,
-    TAG_TAG_RESET_OVERLINE = 12,
-    TAG_TAG_BLINK = 13,
-    TAG_TAG_RESET_BLINK = 14,
-    TAG_TAG_INVERSE = 15,
-    TAG_TAG_RESET_INVERSE = 16,
-    TAG_TAG_INVISIBLE = 17,
-    TAG_TAG_RESET_INVISIBLE = 18,
-    TAG_TAG_STRIKETHROUGH = 19,
-    TAG_TAG_RESET_STRIKETHROUGH = 20,
-    TAG_TAG_DIRECT_COLOR_FG = 21,
-    TAG_TAG_DIRECT_COLOR_BG = 22,
-    TAG_TAG_COLOR8_BG = 23,
-    TAG_TAG_COLOR8_FG = 24,
-    TAG_TAG_RESET_FG = 25,
-    TAG_TAG_RESET_BG = 26,
-    TAG_TAG_COLOR8_BRIGHT_BG = 27,
-    TAG_TAG_COLOR8_BRIGHT_FG = 28,
-    TAG_TAG_COLOR256_BG = 29,
-    TAG_TAG_COLOR256_FG = 30,
-} Tag;
-
-/**
- * C: GhosttySelectionFormat -> RusttyFormatterFormat (R2) — the `enum(c_int)` projection of `formatter.Format`.
- */
-typedef enum {
-    FORMAT_FORMAT_PLAIN = 0,
-    FORMAT_FORMAT_VT = 1,
-    FORMAT_FORMAT_HTML = 2,
-} Format;
-
-/**
- * C: GhosttyKittyGraphicsData -> RusttyKittyGraphicsData (R2)
- */
-typedef enum {
-    DATA_DATA_INVALID = 0,
-    DATA_DATA_PLACEMENT_ITERATOR = 1,
-    DATA_DATA_GENERATION = 2,
-} Data;
+    COLOR_TAG_COLOR_TAG_NONE = 0,
+    COLOR_TAG_COLOR_TAG_PALETTE = 1,
+    COLOR_TAG_COLOR_TAG_RGB = 2,
+} ColorTag;
 
 /**
  * C: GhosttyKittyGraphicsImageData -> RusttyKittyGraphicsImageData (R2)
@@ -325,6 +250,15 @@ typedef enum {
 } PlacementData;
 
 /**
+ * C: GhosttyKittyGraphicsData -> RusttyKittyGraphicsData (R2)
+ */
+typedef enum {
+    DATA_DATA_INVALID = 0,
+    DATA_DATA_PLACEMENT_ITERATOR = 1,
+    DATA_DATA_GENERATION = 2,
+} Data;
+
+/**
  * C: GhosttyRenderStateRowCellsData -> RusttyRenderStateRowCellsData (R2)
  */
 typedef enum {
@@ -339,17 +273,6 @@ typedef enum {
     ROW_CELLS_DATA_ROW_CELLS_DATA_HAS_STYLING = 8,
     ROW_CELLS_DATA_ROW_CELLS_DATA_GRAPHEMES_UTF8 = 9,
 } RowCellsData;
-
-/**
- * C: RusttyTerminalScrollViewportTag (R2) — checked by the A5 enum-discriminant arm.
- * The C ABI compatible tag for `ScrollViewport`.
- */
-typedef enum {
-    SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_TOP = 0,
-    SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_BOTTOM = 1,
-    SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_DELTA = 2,
-    SCROLL_VIEWPORT_TAG_SCROLL_VIEWPORT_TAG_ROW = 3,
-} ScrollViewportTag;
 
 /**
  * C: GhosttyTerminalData -> RusttyTerminalData (R2)
@@ -388,26 +311,10 @@ typedef enum {
     TERMINAL_DATA_TERMINAL_DATA_KITTY_GRAPHICS = 30,
     TERMINAL_DATA_TERMINAL_DATA_SELECTION = 31,
     TERMINAL_DATA_TERMINAL_DATA_VIEWPORT_ACTIVE = 32,
+    TERMINAL_DATA_TERMINAL_DATA_VT_PROCESSING_ERROR = 33,
     TERMINAL_DATA_TERMINAL_DATA_SCROLLBACK_MAX_BYTES = 34,
     TERMINAL_DATA_TERMINAL_DATA_SCROLLBACK_MAX_LINES = 35,
 } TerminalData;
-
-/**
- * C: GhosttySelectionAdjustment -> RusttySelectionAdjust (R2) — the `enum(c_int)` projection of
- * `Selection.Adjustment`.
- */
-typedef enum {
-    ADJUSTMENT_ADJUSTMENT_LEFT = 0,
-    ADJUSTMENT_ADJUSTMENT_RIGHT = 1,
-    ADJUSTMENT_ADJUSTMENT_UP = 2,
-    ADJUSTMENT_ADJUSTMENT_DOWN = 3,
-    ADJUSTMENT_ADJUSTMENT_HOME = 4,
-    ADJUSTMENT_ADJUSTMENT_END = 5,
-    ADJUSTMENT_ADJUSTMENT_PAGE_UP = 6,
-    ADJUSTMENT_ADJUSTMENT_PAGE_DOWN = 7,
-    ADJUSTMENT_ADJUSTMENT_BEGINNING_OF_LINE = 8,
-    ADJUSTMENT_ADJUSTMENT_END_OF_LINE = 9,
-} Adjustment;
 
 /**
  * C: GhosttySelectionOrder -> RusttySelectionOrder (R2) — the `enum(c_int)` projection of `Selection.Order`.
@@ -418,17 +325,6 @@ typedef enum {
     ORDER_ORDER_MIRRORED_FORWARD = 2,
     ORDER_ORDER_MIRRORED_REVERSE = 3,
 } Order;
-
-/**
- * C: RusttyPointTag (R2) — checked by the A5 enum-discriminant arm.
- * The C ABI compatible tag type for `Point`.
- */
-typedef enum {
-    TAG_C_TAG_C_ACTIVE = 0,
-    TAG_C_TAG_C_VIEWPORT = 1,
-    TAG_C_TAG_C_SCREEN = 2,
-    TAG_C_TAG_C_HISTORY = 3,
-} TagC;
 
 /**
  * Wrapper around formatter that tracks the allocator for C API usage.
@@ -545,6 +441,42 @@ typedef uint64_t CCell;
 typedef uint64_t CRow;
 
 /**
+ * C: GhosttyStyleColorValue -> RusttyStyleColorValue (R2)
+ */
+typedef union {
+    uint8_t palette;
+    RGB rgb;
+    uint64_t _padding;
+} ColorValue;
+
+/**
+ * C: GhosttyStyleColor -> RusttyStyleColor (R2)
+ */
+typedef struct {
+    ColorTag tag;
+    ColorValue value;
+} Color;
+
+/**
+ * C: GhosttyStyle -> RusttyStyle (R2)
+ */
+typedef struct {
+    uintptr_t size;
+    Color fg_color;
+    Color bg_color;
+    Color underline_color;
+    bool bold;
+    bool italic;
+    bool faint;
+    bool blink;
+    bool inverse;
+    bool invisible;
+    bool strikethrough;
+    bool overline;
+    int underline;
+} Style;
+
+/**
  * C: RusttyOscParser (R2)
  */
 typedef OscParserWrapper *Parser;
@@ -611,7 +543,18 @@ typedef union {
  * C: GhosttySgrAttribute -> RusttySgrAttribute (R2) — the hand-authored tagged union (`Attribute.C`).
  */
 typedef struct {
-    Tag tag;
+    /**
+     * D11 (P3-W6 T2): held as the C integer, NOT as `Tag`.
+     * `rustty_sgr_attribute_tag` takes `AttributeC` BY VALUE, so a `Tag`-typed
+     * field is materialized by the callee prologue and an undeclared value is
+     * UB there — even though nothing in this crate DISPATCHES on an inbound
+     * tag. That is the subtle part of this rule: the UB is in the
+     * materialization, not in the use, so "we never read it" is not a defence.
+     * `attribute_tag` remains the reference's pure pass-through (`return
+     * attr.tag;`) and therefore needs no narrowing point; `cval` writes the
+     * discriminant with `as c_int`.
+     */
+    int tag;
     CValue value;
 } AttributeC;
 
@@ -677,7 +620,22 @@ typedef struct {
  */
 typedef struct {
     uintptr_t size;
-    Format emit;
+    /**
+     * D11 (P3-W6 T2): held as the C integer, NOT as `Format`.
+     * `rustty_formatter_terminal_new` takes this struct BY VALUE, so a
+     * `Format`-typed field is materialized by the callee prologue exactly as a
+     * bare closed-enum parameter would be — an out-of-range value is UB before
+     * anything can check it. Narrowed in `terminal_new_impl`.
+     *
+     * The ORACLE has no `intToEnum` guard here and needs none: `lib.Enum` emits
+     * a NON-EXHAUSTIVE `enum(c_int) { …, _ }` for the `.c` target, so every
+     * `c_int` is a representable value in Zig. Rust has no non-exhaustive
+     * `#[repr(C)]` enum, which is precisely why the check must exist on this
+     * side. It is a soundness requirement of the Rust representation, not a
+     * behavioural divergence: a conforming caller passing a declared
+     * enumerator sees identical behaviour.
+     */
+    int emit;
     bool unwrap;
     bool trim;
     TerminalOptionsExtra extra;
@@ -782,7 +740,17 @@ typedef union {
  * C: GhosttyTerminalScrollViewport -> RusttyTerminalScrollViewport (R2) — the hand-authored tagged union.
  */
 typedef struct {
-    ScrollViewportTag tag;
+    /**
+     * D11 (P3-W6 T2): held as the C integer, NOT as `ScrollViewportTag`.
+     * `rustty_terminal_scroll_viewport` takes this struct BY VALUE, so a
+     * `ScrollViewportTag`-typed field is materialized by the callee prologue
+     * and an undeclared value is instant UB there, before the `match` below can
+     * run. `include/rustty/vt/terminal.h` itself declares
+     * `RUSTTY_TERMINAL_SCROLL_VIEWPORT_MAX_VALUE`, so a conforming C caller can
+     * write one. This is the IN-RANGE member of the D11 population: oracle
+     * `3a2e28329` added `Row = 3` to this very enum.
+     */
+    int tag;
     ScrollViewportCValue value;
 } ScrollViewportC;
 
@@ -833,7 +801,15 @@ typedef struct {
  */
 typedef struct {
     uintptr_t size;
-    Format emit;
+    /**
+     * D11 (P3-W6 T2): held as the C integer, NOT as `Format`. This struct is
+     * taken BY VALUE by `rustty_terminal_selection_format_alloc` and
+     * `_format_buf`, so a `Format`-typed field would be materialized by the
+     * callee prologue — the same UB a bare closed-enum parameter has, one level
+     * down. Narrowed in `selection_formatter` with `Format::from_c_int`, which
+     * is where the oracle's `intToEnum` guard lives too.
+     */
+    int emit;
     bool unwrap;
     bool trim;
     const CSelection *selection;
@@ -857,7 +833,13 @@ typedef union {
  * C: GhosttyPoint -> RusttyPoint (R2) — the C ABI compatible tagged union.
  */
 typedef struct {
-    TagC tag;
+    /**
+     * D11 (P3-W6 T2): held as the C integer, NOT as `TagC`. `PointC` is taken
+     * BY VALUE by four exports, so a `TagC`-typed field would be materialized
+     * by the callee prologue — the same UB a bare closed-enum parameter has,
+     * one level down. Narrowed by `PointC::tag()` / `PointC::from_c()`.
+     */
+    int tag;
     PointCValue value;
 } PointC;
 
@@ -982,7 +964,7 @@ int rustty_color_scheme_report_encode(int scheme,
  * `out`, if non-null, must point to `out_len` writable bytes; `out_written`
  * must be a valid, writable pointer to `usize`.
  */
-int rustty_focus_encode(FocusEvent event, uint8_t *out, uintptr_t out_len, uintptr_t *out_written);
+int rustty_focus_encode(int event, uint8_t *out, uintptr_t out_len, uintptr_t *out_written);
 
 /**
  * C: rustty_mode_report_encode
@@ -1022,7 +1004,7 @@ void rustty_free(const Allocator *alloc_, uint8_t *ptr, uintptr_t len);
  * `scope_ptr`/`message_ptr` must point to `scope_len`/`message_len` valid bytes.
  */
 void rustty_sys_log_stderr(void *userdata,
-                           LogLevel level,
+                           int level,
                            const uint8_t *scope_ptr,
                            uintptr_t scope_len,
                            const uint8_t *message_ptr,
@@ -1080,7 +1062,7 @@ uintptr_t rustty_unicode_grapheme_width(const uint32_t *cps, uintptr_t len, uint
  * `out`, if non-null, must point to `out_len` writable bytes; `out_written`
  * must be a valid, writable pointer to `usize`.
  */
-int rustty_size_report_encode(Style style,
+int rustty_size_report_encode(int style,
                               Size size,
                               uint8_t *out,
                               uintptr_t out_len,
@@ -1532,7 +1514,7 @@ uintptr_t rustty_sgr_unknown_partial(UnknownC unknown, const uint16_t **ptr);
 /**
  * C: rustty_sgr_attribute_tag
  */
-Tag rustty_sgr_attribute_tag(AttributeC attr);
+int rustty_sgr_attribute_tag(AttributeC attr);
 
 /**
  * C: rustty_sgr_attribute_value
@@ -1668,7 +1650,7 @@ const char *rustty_type_json(void);
  * `graphics` must be a valid `KittyGraphics` handle; `out` must point to storage
  * of the type required by `data`.
  */
-int rustty_kitty_graphics_get(KittyGraphics graphics, Data data, void *out);
+int rustty_kitty_graphics_get(KittyGraphics graphics, int data, void *out);
 
 /**
  * C: rustty_kitty_graphics_image
@@ -1685,7 +1667,7 @@ ImageHandle rustty_kitty_graphics_image(KittyGraphics graphics, uint32_t image_i
  * `image`, if non-null, must point to a valid `Image`; `out` must point to
  * storage of the type required by `data`.
  */
-int rustty_kitty_graphics_image_get(ImageHandle image, ImageData data, void *out);
+int rustty_kitty_graphics_image_get(ImageHandle image, int data, void *out);
 
 /**
  * C: rustty_kitty_graphics_image_get_multi
@@ -1742,7 +1724,7 @@ bool rustty_kitty_graphics_placement_next(PlacementIterator iter);
  * `iter`, if non-null, must be a live iterator positioned on an entry; `out`
  * must point to storage of the type required by `data`.
  */
-int rustty_kitty_graphics_placement_get(PlacementIterator iter, PlacementData data, void *out);
+int rustty_kitty_graphics_placement_get(PlacementIterator iter, int data, void *out);
 
 /**
  * C: rustty_kitty_graphics_placement_get_multi
@@ -2305,9 +2287,7 @@ int rustty_terminal_selection_format_alloc(Terminal terminal,
  * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `selection`,
  * if non-null, must be a valid, writable pointer to a `CSelection`.
  */
-int rustty_terminal_selection_adjust(Terminal terminal,
-                                     CSelection *selection,
-                                     Adjustment adjustment);
+int rustty_terminal_selection_adjust(Terminal terminal, CSelection *selection, int adjustment);
 
 /**
  * C: rustty_terminal_selection_order
@@ -2329,7 +2309,7 @@ int rustty_terminal_selection_order(Terminal terminal,
  */
 int rustty_terminal_selection_ordered(Terminal terminal,
                                       const CSelection *selection,
-                                      Order desired,
+                                      int desired,
                                       CSelection *out_selection);
 
 /**
@@ -2384,7 +2364,7 @@ int rustty_terminal_grid_ref_track(Terminal terminal, PointC pt, CTrackedGridRef
  */
 int rustty_terminal_point_from_grid_ref(Terminal terminal,
                                         const CGridRef *ref_,
-                                        TagC tag,
+                                        int tag,
                                         Coordinate *out);
 
 /**
@@ -2461,7 +2441,7 @@ bool rustty_tracked_grid_ref_has_value(CTrackedGridRef ref_);
  * `ref_`, if non-null, must be a live handle; `out`, if non-null, must be a
  * valid, writable pointer to a `Coordinate`.
  */
-int rustty_tracked_grid_ref_point(CTrackedGridRef ref_, TagC tag, Coordinate *out);
+int rustty_tracked_grid_ref_point(CTrackedGridRef ref_, int tag, Coordinate *out);
 
 /**
  * C: rustty_tracked_grid_ref_set

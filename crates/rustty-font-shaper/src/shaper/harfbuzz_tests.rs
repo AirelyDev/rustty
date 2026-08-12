@@ -25,10 +25,13 @@ use crate::Style;
 use rustty_vt::kitty;
 use rustty_vt::modes as modespkg;
 // PORT NOTE (WS20): `Mode` and `contains_subslice` below are used ONLY by the
-// `#[cfg(target_os = "macos")]` discovered-font tests, so they are gated the same
-// way — otherwise every non-macOS build (Linux fontconfig, Windows freetype) warns
-// `unused`, which `-D warnings` rejects.
-#[cfg(target_os = "macos")]
+// discovered-font tests, so they carry the same gate — otherwise a build that
+// elides those tests warns `unused`, which `-D warnings` rejects. The gate is
+// `not(wasm32)`, mirroring the reference's ONLY skip condition for these tests
+// (`if (font.Discover == void) return error.SkipZigTest`, comptime-true only on
+// the `.web_canvas => void` wasm arm); every native target has a live discoverer
+// (CoreText on macOS, Fontconfig on Linux/BSD, the directory scanner on Windows).
+#[cfg(not(target_arch = "wasm32"))]
 use rustty_vt::modes::Mode;
 use rustty_vt::page::{Cell, CellRgb, ContentTag};
 use rustty_vt::point::{Coordinate, Point};
@@ -217,7 +220,7 @@ fn test_shaper_with_font(font_req: TestFont) -> TestShaper {
 // PORT NOTE: `error.SkipZigTest` (font not found / not matching / discovery
 // unavailable) is modeled as `Option::None` — the caller returns early (a Rust
 // test that returns is a pass, i.e. an effective skip).
-#[cfg(target_os = "macos")]
+#[cfg(not(target_arch = "wasm32"))]
 fn test_shaper_with_discovered_font(font_req: &str) -> Option<TestShaper> {
     use crate::discovery::{Descriptor, Discover};
 
@@ -301,7 +304,7 @@ fn resolver_for(c: Collection) -> CodepointResolver {
 }
 
 /// `std.mem.indexOf(u8, haystack, needle) != null`.
-#[cfg(target_os = "macos")]
+#[cfg(not(target_arch = "wasm32"))]
 fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() {
         return true;
@@ -1039,7 +1042,7 @@ fn shape_combining_characters() {
 // non-monotonic run with our cluster level set to `characters`, which we need
 // to handle by tracking the max cluster for the run.
 // test "shape Devanagari string" {
-#[cfg(target_os = "macos")]
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn shape_devanagari_string() {
     // We need a font that supports devanagari for this to work, if we can't
@@ -1162,7 +1165,7 @@ fn shape_tai_tham_vowels_position_differs_from_advance() {
 }
 
 // test "shape Tibetan characters" {
-#[cfg(target_os = "macos")]
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn shape_tibetan_characters() {
     // We need a font that has multiple glyphs for this codepoint to reproduce
@@ -1317,7 +1320,7 @@ fn shape_javanese_ligatures() {
 }
 
 // test "shape Chakma vowel sign with ligature (vowel sign renders first)" {
-#[cfg(target_os = "macos")]
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn shape_chakma_vowel_sign_with_ligature() {
     // We need a font that supports Chakma for this to work, if we can't find
@@ -1390,7 +1393,7 @@ fn shape_chakma_vowel_sign_with_ligature() {
 }
 
 // test "shape Bengali ligatures with out of order vowels" {
-#[cfg(target_os = "macos")]
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn shape_bengali_ligatures_with_out_of_order_vowels() {
     // Whereas this test in CoreText had everything shaping into one giant

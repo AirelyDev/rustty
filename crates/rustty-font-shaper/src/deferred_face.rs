@@ -390,8 +390,8 @@ mod coretext_payload {
 
 // ---------------------------------------------------------------------------
 // PORT NOTE (DEFERRED): the non-CoreText arms of `familyName`/`name`/`load`/
-// `hasCodepoint` and the wasm `Wasm` C-ABI struct are recorded verbatim and land
-// with their backends:
+// `hasCodepoint` are recorded verbatim and land with their backends (the wasm
+// `Wasm` C-ABI struct HAS landed — the `ghostty_wasm_abi` module below):
 //
 //   .freetype_windows => if (self.win) |w| return try w.peek.name(buf),
 //   .fontconfig_freetype => if (self.fc) |fc| return (try fc.pattern.get(.fullname, 0)).string,
@@ -491,7 +491,8 @@ mod coretext_payload {
 //       return face.glyphIndex(cp) != null;
 //   },
 //
-//   pub const Wasm = struct { export fn deferred_face_new/free/load ... };
+// The wasm `Wasm` C-ABI struct (`deferred_face_new`/`free`/`load`) is PORTED —
+// see the `ghostty_wasm_abi` module below (feature `ghostty-wasm-abi`).
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -1120,6 +1121,114 @@ mod web_canvas_payload {
             // if we're not using a discovery mechanism, the face MUST be loaded.
             // unreachable;
             unreachable!()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The wasm-compatible API (`pub const Wasm = struct { … }`,
+// `DeferredFace.zig:423-466`) — the UNPREFIXED Ghostty-ABI exports retained by
+// `font/main.zig`'s `comptime { _ = DeferredFace.Wasm; }`. Feature-gated
+// (`ghostty-wasm-abi`): only the `rustty_wasm.wasm` (`main_wasm.zig`) artifact
+// carries these names; the separate `rustty_web_canvas.wasm` deliverable keeps
+// its `rustty_wc_*` surface.
+// ---------------------------------------------------------------------------
+
+#[cfg(all(target_arch = "wasm32", feature = "ghostty-wasm-abi"))]
+pub use ghostty_wasm_abi::{deferred_face_free, deferred_face_load, deferred_face_new};
+
+/// The wasm-compatible API.
+// pub const Wasm = struct {
+//     const wasm = @import("../os/wasm.zig");
+//     const alloc = wasm.alloc;
+#[cfg(all(target_arch = "wasm32", feature = "ghostty-wasm-abi"))]
+mod ghostty_wasm_abi {
+    use super::{DeferredFace, WebCanvasData};
+    use crate::face::{DesiredSize, Options, DEFAULT_DPI, FREETYPE_LOAD_FLAGS_DEFAULT};
+    use crate::library::Library;
+    use crate::Presentation;
+
+    /// `export fn deferred_face_new(ptr: [*]const u8, len: usize, presentation: u16) ?*DeferredFace`
+    // PORT NOTE: `catch |err| { log.warn("error creating deferred face err={}", …);
+    // return null; }` — log-as-comment (this crate wires no logger); the only
+    // reference failure mode is OOM, which aborts here (`Box`), so the `null` arm
+    // is unreachable in the Rust port.
+    #[no_mangle]
+    pub extern "C" fn deferred_face_new(
+        ptr: *const u8,
+        len: usize,
+        presentation: u16,
+    ) -> *mut DeferredFace {
+        // fn deferred_face_new_(ptr, len, presentation) !*DeferredFace {
+        // const font_str = try alloc.dupeZ(u8, ptr[0..len]);
+        let font_str = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+
+        // var face: DeferredFace = .{ .wc = .{ .alloc = alloc, .font_str = font_str,
+        //     .presentation = @enumFromInt(presentation) } };
+        //
+        // PORT NOTE (`@enumFromInt`): same mapping the crate's `rustty_wc_face_new`
+        // uses — 0 => .text, else .emoji (a value outside the enum is
+        // safety-checked UB in the reference; the total mapping is the Rust map).
+        let presentation = if presentation == 0 {
+            Presentation::Text
+        } else {
+            Presentation::Emoji
+        };
+        let face = DeferredFace {
+            wc: Some(WebCanvasData {
+                font_str,
+                presentation,
+            }),
+        };
+
+        // const result = try alloc.create(DeferredFace); result.* = face; return result;
+        Box::into_raw(Box::new(face))
+    }
+
+    /// `export fn deferred_face_free(ptr: ?*DeferredFace) void`
+    #[no_mangle]
+    pub extern "C" fn deferred_face_free(ptr: *mut DeferredFace) {
+        // if (ptr) |v| { v.deinit(); alloc.destroy(v); }
+        if !ptr.is_null() {
+            let mut face = unsafe { Box::from_raw(ptr) };
+            face.deinit();
+        }
+    }
+
+    /// `export fn deferred_face_load(self: *DeferredFace, pts: f32) void`
+    #[no_mangle]
+    pub extern "C" fn deferred_face_load(self_: *mut DeferredFace, pts: f32) {
+        if self_.is_null() {
+            return;
+        }
+        let df = unsafe { &mut *self_ };
+        // self.load(.{}, .{ .points = pts }) catch |err| {
+        //     log.warn("error loading deferred face err={}", .{err});
+        //     return;
+        // };
+        //
+        // PORT NOTE: `.{ .points = pts }` relies on the reference `DesiredSize`
+        // field defaults (`default_dpi`); written out here. The loaded `Face` the
+        // reference discards is deinit'd (dropping it un-deinit'd would leak the
+        // JS canvas handle); errors are log-as-comment.
+        let lib = match Library::init() {
+            Ok(lib) => lib,
+            Err(_) => return,
+        };
+        match df.load(
+            lib,
+            Options {
+                size: DesiredSize {
+                    points: pts,
+                    xdpi: DEFAULT_DPI,
+                    ydpi: DEFAULT_DPI,
+                },
+                freetype_load_flags: FREETYPE_LOAD_FLAGS_DEFAULT,
+            },
+        ) {
+            Ok(mut face) => face.deinit(),
+            // log.warn("error loading deferred face err={}", .{err});
+            Err(_err) => (),
         }
     }
 }

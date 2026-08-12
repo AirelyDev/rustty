@@ -122,6 +122,111 @@ mod shape_tests {
     use crate::options as build_options;
     use rustty_lib::r#enum::{check_ghostty_henum, enum_type, EnumType};
     use rustty_lib::target::Target;
+    use std::collections::HashMap;
+
+    /// The checked-in public C header, embedded at compile time.
+    ///
+    /// PORT NOTE: the reference `lib.checkGhosttyHEnum` does
+    /// `const c = @import("ghostty.h")` — it reflects over the REAL generated
+    /// header. Rust has no `@import` for a C header, so the test reads the
+    /// checked-in header's text and parses the enum block out of it (see
+    /// [`parse_header_enum`]). The point is the same: the C declarations the
+    /// check compares against must come from the header, never from the
+    /// descriptor under test.
+    const HEADER_SRC: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../include/rustty-embed.h"
+    ));
+
+    /// The header's enum tag for `Shape` (`terminal.MouseShape`).
+    const HEADER_ENUM: &str = "rustty_action_mouse_shape_e";
+
+    /// Strip `//` and `/* */` comments from a C fragment.
+    fn strip_c_comments(src: &str) -> String {
+        let b = src.as_bytes();
+        let mut out = String::with_capacity(src.len());
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'/' {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            } else if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'*' {
+                i += 2;
+                while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(b.len());
+                out.push(' ');
+            } else {
+                out.push(b[i] as char);
+                i += 1;
+            }
+        }
+        out
+    }
+
+    /// Parse `typedef enum { ... } <enum_name>;` out of C header text into its
+    /// declared `(name, value)` pairs, in declaration order. Enumerators may be
+    /// bare (value = previous + 1, starting at 0) or `NAME = <int>`; anything
+    /// else is an error rather than a silent skip, so header drift can never
+    /// quietly disappear from the check.
+    fn parse_header_enum(src: &str, enum_name: &str) -> Result<Vec<(String, i64)>, String> {
+        let close = format!("}} {};", enum_name);
+        let close_at = src
+            .find(&close)
+            .ok_or_else(|| format!("enum `{}` not found in header", enum_name))?;
+        let head = &src[..close_at];
+        let open_pat = "typedef enum {";
+        let open_at = head
+            .rfind(open_pat)
+            .ok_or_else(|| format!("no `{}` opening for `{}`", open_pat, enum_name))?;
+        let body = strip_c_comments(&head[open_at + open_pat.len()..]);
+        if body.contains('}') || body.contains('{') {
+            return Err(format!("unbalanced braces in enum `{}`", enum_name));
+        }
+
+        let mut out: Vec<(String, i64)> = Vec::new();
+        let mut next: i64 = 0;
+        for raw in body.split(',') {
+            let entry = raw.trim();
+            if entry.is_empty() {
+                continue;
+            }
+            let (name, value) = match entry.split_once('=') {
+                Some((n, v)) => {
+                    let v = v.trim();
+                    let parsed = match v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")) {
+                        Some(hex) => i64::from_str_radix(hex, 16),
+                        None => v.parse::<i64>(),
+                    }
+                    .map_err(|_| format!("unparseable value `{}` in enum `{}`", v, enum_name))?;
+                    (n.trim(), parsed)
+                }
+                None => (entry, next),
+            };
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                return Err(format!(
+                    "unparseable enumerator `{}` in enum `{}`",
+                    entry, enum_name
+                ));
+            }
+            next = value + 1;
+            out.push((name.to_string(), value));
+        }
+        if out.is_empty() {
+            return Err(format!("enum `{}` declares no enumerators", enum_name));
+        }
+        Ok(out)
+    }
+
+    /// The `@hasDecl`/`@field` stand-in: the header's declarations as a lookup.
+    fn header_decls(src: &str) -> HashMap<String, i64> {
+        parse_header_enum(src, HEADER_ENUM)
+            .unwrap()
+            .into_iter()
+            .collect()
+    }
 
     /// PORT NOTE: models the reference `enum(c_int)` `Shape` as a [`EnumType`]
     /// (C target) so the `checkGhosttyHEnum` test can reflect over its keys and
@@ -182,23 +287,90 @@ mod shape_tests {
         // PORT NOTE: `try lib.checkGhosttyHEnum(Shape, "GHOSTTY_MOUSE_SHAPE_");`,
         // retargeted to `RUSTTY_MOUSE_SHAPE_` per R2. `checkGhosttyHEnum` takes a
         // lookup closure mapping an UPPER-CASE `<prefix><KEY>` name to its declared
-        // C value (mirroring `@hasDecl` on the generated header). The
-        // `rustty_cursor_shape_e` C enum declares every `Shape` key with the same
-        // sequential `c_int` value as the enum field, so the closure returns each
-        // field's own backing int.
+        // C value (mirroring `@hasDecl`/`@field` on `@import("ghostty.h")`). The
+        // declarations therefore come from the checked-in header text, exactly as
+        // the reference's come from the generated header — never from the
+        // descriptor under test.
         let t = enum_descriptor();
-        let fields = t.fields.clone();
-        check_ghostty_henum(&t, "RUSTTY_MOUSE_SHAPE_", |name| {
-            fields.iter().find_map(|(n, v)| {
-                let expected = format!("RUSTTY_MOUSE_SHAPE_{}", n.to_ascii_uppercase());
-                if expected == name {
-                    Some(*v as i64)
-                } else {
-                    None
-                }
-            })
-        })
-        .unwrap();
+        let decls = header_decls(HEADER_SRC);
+        check_ghostty_henum(&t, "RUSTTY_MOUSE_SHAPE_", |name| decls.get(name).copied()).unwrap();
+    }
+
+    /// Self-check that the probe above can actually FAIL — i.e. that it is
+    /// reading the header and not the descriptor. Each mutation of the header
+    /// text is one of the drifts `checkGhosttyHEnum` exists to catch.
+    ///
+    /// PORT NOTE: no reference analogue; the oracle gets this for free because
+    /// `@import("ghostty.h")` is the real header. Added per PORT_RULES (prove
+    /// the check even where Ghostty has none).
+    #[test]
+    fn ghostty_h_mouse_shape_probe_can_fail() {
+        let t = enum_descriptor();
+        let run = |src: &str| {
+            let decls = header_decls(src);
+            check_ghostty_henum(&t, "RUSTTY_MOUSE_SHAPE_", |name| decls.get(name).copied())
+        };
+
+        // Baseline: the real header passes.
+        run(HEADER_SRC).unwrap();
+
+        // A dropped declaration leaves a `Shape` value unmatched.
+        let dropped = HEADER_SRC.replace("  RUSTTY_MOUSE_SHAPE_NWSE_RESIZE,\n", "");
+        assert_ne!(dropped, HEADER_SRC);
+        assert!(run(&dropped).is_err(), "dropped enumerator must fail");
+
+        // A renamed declaration is equally a drop, from the check's view.
+        let renamed = HEADER_SRC.replace(
+            "RUSTTY_MOUSE_SHAPE_ZOOM_OUT",
+            "RUSTTY_MOUSE_SHAPE_ZOOM_OUTER",
+        );
+        assert_ne!(renamed, HEADER_SRC);
+        assert!(run(&renamed).is_err(), "renamed enumerator must fail");
+
+        // A revalued declaration mismatches the field's backing int.
+        let revalued =
+            HEADER_SRC.replace("RUSTTY_MOUSE_SHAPE_HELP,", "RUSTTY_MOUSE_SHAPE_HELP = 99,");
+        assert_ne!(revalued, HEADER_SRC);
+        assert!(run(&revalued).is_err(), "revalued enumerator must fail");
+
+        // Reordering shifts every implicit value from the swap point on.
+        let reordered = HEADER_SRC.replace(
+            "  RUSTTY_MOUSE_SHAPE_HELP,\n  RUSTTY_MOUSE_SHAPE_POINTER,\n",
+            "  RUSTTY_MOUSE_SHAPE_POINTER,\n  RUSTTY_MOUSE_SHAPE_HELP,\n",
+        );
+        assert_ne!(reordered, HEADER_SRC);
+        assert!(run(&reordered).is_err(), "reordered enumerators must fail");
+    }
+
+    /// The parser must refuse anything it cannot read rather than silently
+    /// yielding an empty/partial declaration set (which would make the check
+    /// above vacuously pass).
+    #[test]
+    fn header_enum_parser_rejects_garbage() {
+        assert!(parse_header_enum(HEADER_SRC, "rustty_no_such_enum_e").is_err());
+        assert!(parse_header_enum("typedef enum {\n} rustty_empty_e;", "rustty_empty_e").is_err());
+        assert!(parse_header_enum(
+            "typedef enum {\n  A = zzz,\n} rustty_bad_e;",
+            "rustty_bad_e"
+        )
+        .is_err());
+        assert!(
+            parse_header_enum("typedef enum {\n  A B,\n} rustty_bad2_e;", "rustty_bad2_e").is_err()
+        );
+
+        // Explicit values and trailing-comma-less bodies parse as C does.
+        assert_eq!(
+            parse_header_enum(
+                "typedef enum {\n  A,\n  B = 7,\n  C\n} rustty_ok_e;",
+                "rustty_ok_e"
+            )
+            .unwrap(),
+            vec![
+                ("A".to_string(), 0),
+                ("B".to_string(), 7),
+                ("C".to_string(), 8),
+            ]
+        );
     }
 }
 

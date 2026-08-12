@@ -10,24 +10,27 @@
 //! (`generic.rs::macos_impl` line range) and the ultimate Zig oracle
 //! (`generic.zig` line range) so a reviewer can diff either direction.
 //!
-//! MILESTONE-SCOPE-CUT (L4, per the plan's Global Constraints): this is a SKELETON
-//! (Task 9) — struct decls + `init`(offscreen-only path)/`deinit`. The CPU cell
-//! fill (`rebuild_cells`/`update_frame`) and the offscreen draw path
-//! (`draw_frame`/the golden) land in Tasks 10-11.
+//! (HISTORY) This file started as an L4 SKELETON (Task 9 — struct decls +
+//! `init`/`deinit`); the CPU cell fill (`rebuild_cells`/`update_frame`) and the
+//! offscreen draw path (`draw_frame`/the golden) landed in Tasks 10-11, and wave 2
+//! closed the remaining image-pipeline elisions (F-005 kitty graphics, F-012
+//! background image, F-020 inspector overlay). There are no scope cuts left in the
+//! update/draw path.
 //!
-//! TWO deliberate divergences from `macos_impl`, both faithful to `generic.zig`'s
-//! non-macOS comptime arms + rustty's current module gating:
+//! ONE deliberate divergence from `macos_impl`, faithful to `generic.zig`'s
+//! non-macOS comptime arms:
 //!   1. **No `display_link`.** `generic.zig`'s `const DisplayLink = switch
 //!      (builtin.os.tag) { .macos => *macos.video.DisplayLink, else => void }`
 //!      (:225-227) is `void` off macOS, so the field, the `vsync` init branch
 //!      (`else => null`, :692-698), and the `if (DisplayLink != void)` deinit
 //!      teardown (:806-811) all collapse to nothing here.
-//!   2. **No `images`/`bg_image`.** rustty's `crate::image` module is macOS-only
-//!      (it embeds `crate::metal::Texture`); the graphics-API-generic OpenGL image
-//!      port is DEFERRED (kitty-graphics + background-image are milestone-cut).
-//!      So the image-typed Renderer fields + `prep_background_image` are omitted
-//!      (DEFERRALS.md "GL image"); `generic.zig`'s `images`/`bg_image` fields (its
-//!      `imagepkg.Image` = `Image(OpenGL)`) have no rustty analogue yet.
+//!
+//! (RESOLVED, w2 F-005) A second divergence used to be listed here: "no
+//! `images`/`bg_image`", because `crate::image` was macOS-only. `crate::image` is
+//! now a monomorphic twin pair like this module is — `image::linux_impl` over
+//! `crate::opengl` — so `images: image::State` is a real field and the Kitty
+//! graphics upload/draw path is wired for real (`generic.zig:1229-1248, 1548-1549,
+//! 1628-1679`).
 //!
 //! The OpenGL leaf resources (`opengl::{buffer,texture,sampler,target}`) have a
 //! MANUAL `deinit(self)` and NO `Drop` (faithful to the Zig reference's explicit
@@ -65,11 +68,23 @@ use rustty_zigstd::thread::{Mutex, Semaphore};
 
 use core::mem;
 use core::ptr::addr_of_mut;
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, OsStr};
+// `prepBackgroundImage` opens the config path (byte-faithful `CString` bytes ->
+// an `OsStr` path) via `std::os::unix::ffi::OsStrExt::from_bytes` — NEVER a lossy
+// `String`. (This module is Linux-gated, so unix is guaranteed.)
+use std::os::unix::ffi::OsStrExt;
 
-use super::{AtomicHealth, DerivedConfig, Options, TerminalColor};
+// `FileType::detect`/`guessFromExtension` — the background-image file-type sniff
+// (`prepBackgroundImage`). Renderer deps rustty-util.
+use rustty_util::file_type::FileType;
+
+use super::{
+    path_extension, AtomicHealth, DerivedConfig, MailboxTimeout, Options, SurfaceMailbox,
+    SurfaceMessage, TerminalColor,
+};
 use crate::cell::{self, Contents, Key};
 use crate::cursor;
+use crate::image::{self, DrawPlacements};
 use crate::opengl::buffer::Buffer;
 use crate::opengl::frame::Frame;
 use crate::opengl::gl::primitives::Primitive;
@@ -111,17 +126,16 @@ const SWAP_CHAIN_COUNT: usize = OpenGL::SWAP_CHAIN_COUNT;
 // PORT NOTE (macos_impl generic.rs:921-929): reference
 // `GraphicsAPI.custom_shader_y_is_down` — monomorphized to
 // `OpenGL::CUSTOM_SHADER_Y_IS_DOWN` (`OpenGL.zig:27-28` = `false`: the OpenGL
-// fragCoord is +Y = up). Milestone-inert (only read by the deferred custom-shader
-// uniforms), kept for parity + the later draw path.
-#[allow(dead_code)]
+// fragCoord is +Y = up). Read by `update_custom_shader_uniforms_for_frame`.
 const CUSTOM_SHADER_Y_IS_DOWN: bool = OpenGL::CUSTOM_SHADER_Y_IS_DOWN;
 
 /// PORT NOTE (macos_impl generic.rs:931-954): the aggregate renderer error.
 /// Reference `generic.zig` methods return Zig `!T` (inferred error unions of the
 /// graphics-API leaf errors + OOM); Rust `?` needs a common type, so this enum
 /// aggregates the leaf errors via the `From` impls below. The Metal twin names the
-/// GPU variant `MetalFailed`; this names it `GlFailed`. The `ImageDecode` variant
-/// (bg-image wuffs decode) has no analogue here — bg-image is milestone-cut.
+/// GPU variant `MetalFailed`; this names it `GlFailed`. Every other variant —
+/// including `ImageDecode` — is the SAME set as the Metal twin
+/// (macos_impl generic.rs:1194-1216).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     /// An OpenGL API call failed (any of the buffer/texture/sampler/target/
@@ -133,6 +147,13 @@ pub enum Error {
     /// The swap chain is defunct (its GPU state was torn down). Reference
     /// `error{Defunct}` (part of `drawFrame`'s error set).
     Defunct,
+    /// A background-image `wuffs` decode failed (`WuffsError`/`Overflow`).
+    /// `prepBackgroundImage` propagates the wuffs `Error` via `try` (the
+    /// reference `!void` error set includes the wuffs `Error`); OOM maps to
+    /// `OutOfMemory`, the rest to this. Note: only the DECODE error propagates —
+    /// the open/read failures `break :load_background` (a warn + no-op), never
+    /// propagate. Twin of `macos_impl generic.rs:1209-1215`.
+    ImageDecode,
 }
 
 // PORT NOTE (macos_impl generic.rs:956-967): core's `renderer_seam::RendererError`
@@ -144,6 +165,21 @@ impl core::fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+
+// rustty_wuffs::Error {OutOfMemory, WuffsError, Overflow} -> the renderer Error.
+// `prepBackgroundImage` returns `!void` whose error set includes the wuffs `Error`
+// (via `try wuffs.png.decode(...)`), so the decode error PROPAGATES out of
+// `prep_background_image` while the open/read failures only warn. OOM reuses
+// `OutOfMemory`; `WuffsError`/`Overflow` map to `ImageDecode`. Twin of
+// `macos_impl generic.rs:1231-1245`.
+impl From<rustty_wuffs::Error> for Error {
+    fn from(e: rustty_wuffs::Error) -> Self {
+        match e {
+            rustty_wuffs::Error::OutOfMemory => Error::OutOfMemory,
+            rustty_wuffs::Error::WuffsError | rustty_wuffs::Error::Overflow => Error::ImageDecode,
+        }
+    }
+}
 
 // The OpenGL graphics-API leaf errors that `init`/`deinit` (and the later draw
 // path) propagate. All GPU-side failures fold into `GlFailed` (the reference `!void`
@@ -207,32 +243,13 @@ impl From<shape::harfbuzz::Error> for Error {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Defunct;
 
-/// PORT NOTE (macos_impl generic.rs:1065-1076, DEFERRED SEAM — surface-mailbox):
-/// stands in for the Renderer's `surface_mailbox: apprt.surface.Mailbox` field.
-/// `apprt::surface::Mailbox` does not exist in rustty (apprt-api replaced it with
-/// the `AppMailbox` trait), and a `renderer -> apprt-api` edge would CYCLE. Until
-/// `draw_frame` lands the field is an inhabited, default-constructible placeholder.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SurfaceMailbox;
-
-/// PORT NOTE (macos_impl generic.rs:1078-1087, DEFERRED SEAM): the mailbox push
-/// timeout mode. Inhabited placeholder preserving the two reference modes (R1).
-#[derive(Clone, Copy, Debug)]
-#[allow(dead_code)]
-pub enum MailboxTimeout {
-    Instant,
-    Forever,
-}
-
-impl SurfaceMailbox {
-    /// PORT NOTE (macos_impl generic.rs:1089-1100, DEFERRED SEAM — no-op):
-    /// `apprt.surface.Mailbox.push` returns the number of messages pushed; this
-    /// placeholder returns 0 so the reference push sites port unchanged as no-ops.
-    #[allow(dead_code)]
-    pub fn push<M>(&self, _msg: M, _timeout: MailboxTimeout) -> usize {
-        0
-    }
-}
+// PORT NOTE (surface-mailbox seam RESOLVED — was a per-arm no-op placeholder):
+// `SurfaceMailbox`/`MailboxTimeout`/`SurfaceMessage`/`SurfaceMailboxSink` are now
+// SHARED module-level types in `generic.rs` (`super::`) — `generic.zig`
+// instantiates ONE `Renderer(GraphicsAPI)` for both Metal and OpenGL, so the seam
+// has ONE copy rather than a per-arm duplicate — and the mailbox is REAL: core
+// attaches a `SurfaceMailboxSink` over `apprt.surface.Mailbox` through `Options`
+// (GPU_RD_CHUNK3A_DESIGN §B.2). Imported at the `use super::{…}` line above.
 
 /// The monomorphic GPU renderer over [`OpenGL`] (reference
 /// `GenericRenderer(OpenGL)`).
@@ -243,9 +260,9 @@ impl SurfaceMailbox {
 // `self.<field>` from the renderer's own methods; Zig struct fields are non-opaque)
 // and dead-code-exempt until the deferred draw path reads them. Same field SET as
 // `macos_impl::Renderer` with `crate::metal::*` types swapped for `crate::opengl::*`,
-// MINUS `display_link` (macOS-only) and `images`/`bg_image`/`bg_image_changed` (the
-// `crate::image` module is macOS-only; the GL image port is deferred — see the
-// module docs).
+// MINUS `display_link` (macOS-only — see the module docs). The image-typed fields
+// (`images`/`bg_image`/`bg_image_changed`) ARE present: `crate::image` is a twin
+// pair, so they carry `image::linux_impl`'s OpenGL types here.
 pub struct Renderer {
     /// Allocator that can be used.
     pub alloc: Global,
@@ -316,13 +333,34 @@ pub struct Renderer {
     pub font_shaper: Shaper,
     pub font_shaper_cache: ShaperCache,
 
+    /// The images that we may render.
+    //
+    // Zig `images: ImageState = .empty` (`ImageState = imagepkg.State`);
+    // macos_impl generic.rs:1496-1499; generic.zig:178-189.
+    pub images: image::State,
+
+    /// Background image, if we have one.
+    pub bg_image: Option<image::Image>,
+    /// Set whenever the background image changes, signalling
+    /// that the new background image needs to be uploaded to
+    /// the GPU.
+    ///
+    /// This is initialized as true so that we load the image
+    /// on renderer initialization, not just on config change.
+    //
+    // NOTE (WI-3 scope): the field exists and is torn down/kept in lockstep with
+    // the macOS twin, but the bg-image DECODE/UPLOAD/DRAW arms are WI-4's; until
+    // they land `bg_image` stays `None` on Linux and the draw path takes the
+    // oracle's `else` branch (bg_color in its own step, generic.zig:1619-1626) —
+    // which is exactly what the oracle does with no background image.
+    pub bg_image_changed: bool,
+
     /// Background image vertex buffer (CPU-side, ergonomic).
     //
     // PORT NOTE: `generic.zig`'s `bg_image_buffer` (`shaderpkg.BgImage`) is
-    // graphics-API-agnostic (`crate::shaders::BgImage`), so it is KEPT even though
-    // the bg-image DRAW path is milestone-cut: `init` fills it via
+    // graphics-API-agnostic (`crate::shaders::BgImage`): `init` fills it via
     // `update_bg_image_buffer` (matching `generic.zig:773,794`) and it is synced
-    // into `FrameState.bg_image_buffer` by the later draw path.
+    // into `FrameState.bg_image_buffer` by the draw path.
     pub bg_image_buffer: BgImage,
     /// Force-updates the swap-chain copy of the bg-image buffer whenever it changes.
     pub bg_image_buffer_modified: usize,
@@ -584,8 +622,8 @@ impl FrameState {
 /// State relevant to our custom shaders if we have any.
 //
 // PORT NOTE (macos_impl generic.rs:1600-1626): reference `const CustomShaderState =
-// struct` (Renderer-private), widened to `pub`. Milestone-inert (built only when
-// `custom_shaders` is set, which the golden's config never does), kept for parity.
+// struct` (Renderer-private), widened to `pub`. Built when `custom_shaders` is set
+// (at init, or lazily by `draw_frame_raw`'s setup block after a config change).
 pub struct CustomShaderState {
     /// Front/back textures used as a swap chain between custom shaders.
     pub front_texture: Texture,
@@ -600,7 +638,6 @@ pub struct CustomShaderState {
 impl CustomShaderState {
     /// Swap the front and back textures.
     // PORTS: generic.zig:461-463 `CustomShaderState.swap`; macos_impl generic.rs:1630-1633.
-    #[allow(dead_code)]
     pub fn swap(&mut self) {
         mem::swap(&mut self.front_texture, &mut self.back_texture);
     }
@@ -634,8 +671,6 @@ impl CustomShaderState {
     }
 
     // PORTS: generic.zig:504-... `CustomShaderState.resize`; macos_impl generic.rs:1664-1677.
-    // Milestone-inert; lands now so Tasks 10-11 need no second edit.
-    #[allow(dead_code)]
     pub fn resize(&mut self, api: &OpenGL, width: usize, height: usize) -> Result<(), Error> {
         let front_texture = Texture::init(api.texture_options(), width, height, None)?;
         let back_texture = Texture::init(api.texture_options(), width, height, None)?;
@@ -765,8 +800,9 @@ impl Renderer {
     // the shared [`Self::init_with_api`] body. Used by the golden + the renderer's
     // own unit tests, which provide no windowing host. The WINDOWED sibling is
     // [`Self::init_windowed`]. The macOS `display_link`/vsync branch
-    // (generic.zig:692-698 `else => null`) and the `images`/`bg_image` fields (the
-    // macOS-only `crate::image` module) are omitted — see the module docs.
+    // (generic.zig:692-698 `else => null`) is the only omission — see the module
+    // docs. (`images`/`bg_image` used to be omitted here too; `crate::image` is a
+    // twin pair now, so both are real fields — w2 F-005/F-012.)
     pub fn init(alloc: Global, options: Options) -> Result<Self, Error> {
         // Zig: var api = try GraphicsAPI.init(alloc, options); errdefer api.deinit();
         // (macos_impl generic.rs:1848-1852: reuse the offscreen ctor, layer `None`.)
@@ -885,7 +921,8 @@ impl Renderer {
         let mut result = Self {
             alloc,
             config: options.config,
-            surface_mailbox: SurfaceMailbox,
+            // .surface_mailbox = options.surface_mailbox, (generic.zig:704)
+            surface_mailbox: options.surface_mailbox,
             grid_metrics,
             size: options.size,
             focused: true,
@@ -913,6 +950,15 @@ impl Renderer {
             cells_rebuilt: false,
             first_frame_time: None,
             last_frame_time: None,
+            // macos_impl generic.rs:2274-2276. NOTE (R1): `generic.zig:189` declares
+            // `bg_image_changed: bool = true`, but that field is WRITE-ONLY in the
+            // oracle — the only other mention is a SHADOWING local in `changeConfig`
+            // (:1881) — because `init` calls `prepBackgroundImage()` directly (:799)
+            // rather than consulting it. The macOS twin therefore initializes it
+            // `false`; follow the twin so the two arms cannot drift.
+            images: image::State::empty(),
+            bg_image: None,
+            bg_image_changed: false,
             bg_image_buffer_modified: 0,
             health: AtomicHealth::new(crate::Health::Healthy),
             target_config_modified: 0,
@@ -930,21 +976,19 @@ impl Renderer {
         result.update_font_grid_uniforms(); // (792)
         result.update_screen_size_uniforms(); // (793)
         result.update_bg_image_buffer(); // (794)
-
-        // generic.zig:795 `try result.prepBackgroundImage()` — OMITTED: bg-image
-        // load needs the macOS-only `crate::image` module (GL image port deferred).
+        result.prep_background_image()?; // (795) — macos_impl generic.rs:2297.
 
         Ok(result)
     }
 
     // PORTS: generic.zig:800-830 `Renderer.deinit`; macos_impl generic.rs:2114-2179.
     //
-    // Off-macOS: the `if (DisplayLink != void)` teardown (806-811) and the
-    // `images`/`bg_image` teardown (821-823) collapse to nothing (those fields do
-    // not exist here — see the module docs). ORDER IS LOAD-BEARING for OpenGL: the
-    // GL objects (`swap_chain` frames, `shaders`) are freed HERE while the owned GL
-    // context is still current; `api` (its `OffscreenContext`) drops last, when the
-    // `Renderer` value drops, terminating EGL.
+    // Off-macOS: the `if (DisplayLink != void)` teardown (806-811) collapses to
+    // nothing (that field does not exist here — see the module docs). ORDER IS
+    // LOAD-BEARING for OpenGL: the GL objects (`swap_chain` frames, `images`'
+    // textures, `shaders`) are freed HERE while the owned GL context is still
+    // current; `api` (its `OffscreenContext`) drops last, when the `Renderer` value
+    // drops, terminating EGL.
     pub fn deinit(&mut self) {
         // if (self.overlay) |*overlay| overlay.deinit(self.alloc); (801)
         // Port: `Overlay::deinit(&mut self)` takes NO allocator arg.
@@ -974,7 +1018,20 @@ impl Renderer {
         // self.config.deinit(); (819)
         self.config.deinit();
 
-        // (821-823) `images`/`bg_image` teardown — omitted (fields do not exist).
+        // self.images.deinit(self.alloc); (821) — macos_impl generic.rs:2386-2394.
+        //
+        // ORDER IS LOAD-BEARING (GL): this DELETES every Kitty/overlay image's GL
+        // texture (`image::Image::deinit` → `Texture::deinit` → `glDeleteTextures`),
+        // so it must run HERE — while the owned context is still current — not from
+        // a `Drop`. Same rule as the swap chain above and the shaders below.
+        self.images.deinit(self.alloc);
+
+        // if (self.bg_image) |img| img.deinit(self.alloc); (823)
+        // Port: `image::Image::deinit(self, alloc)` consumes `self` by value, so
+        // move the `Image` out of the `Option` with `.take()`.
+        if let Some(img) = self.bg_image.take() {
+            img.deinit(self.alloc);
+        }
 
         // self.deinitShaders(); (825) — frees the shader pipelines' GL objects.
         self.deinit_shaders();
@@ -1202,12 +1259,10 @@ impl Renderer {
     // `Message::ChangeConfig` payload holds a `Box<DerivedConfig>`, so ownership is
     // moved in (the reference `v.impl.deinit()` collapses into the old-config drop).
     //
-    // MILESTONE-CUT (matching `init` generic.zig:795 / linux_impl `init` line 897):
-    // the reference `bg_image_changed` branch calls `prepBackgroundImage()` to decode
-    // a new bg-image path via `crate::image` (macOS-only) — `linux_impl` has no
-    // `images`/`bg_image` field, so that decode branch is OMITTED. The
-    // `bg_image_config_changed` → `update_bg_image_buffer` path (the vertex-buffer
-    // config, graphics-API-agnostic) is KEPT.
+    // (RESOLVED, w2 F-012) The reference `bg_image_changed` branch — which calls
+    // `prepBackgroundImage()` to decode a new bg-image path via `crate::image` — used
+    // to be OMITTED here because `crate::image` was macOS-only. It is a twin pair
+    // now, so the decode branch is LIVE below, exactly as in `macos_impl`.
     //
     // `defer self.draw_mutex.unlock()` FIDELITY: the ported `Mutex` is bare
     // lock/unlock with NO RAII guard, so `defer` is replicated by explicit unlock on
@@ -1250,8 +1305,16 @@ impl Renderer {
             || self.config.bg_image_repeat != config.bg_image_repeat
             || self.config.bg_image_opacity != config.bg_image_opacity;
 
-        // (MILESTONE-CUT) the reference `bg_image_changed` / `prepBackgroundImage`
-        // branch is omitted — no `bg_image` decode field on `linux_impl`.
+        // Zig: `if (self.config.bg_image) |old| if (config.bg_image) |new|
+        //          !old.equal(new) else true else config.bg_image != null`.
+        // `Path` derives `PartialEq`, so `old != new` == `!old.equal(new)`.
+        // macos_impl generic.rs:2779-2784.
+        let bg_image_changed = match (&self.config.bg_image, &config.bg_image) {
+            (Some(old), Some(new)) => old != new,
+            (Some(_), None) => true,
+            (None, Some(_)) => true,
+            (None, None) => false,
+        };
 
         let old_blending = self.config.blending;
         let custom_shaders_changed = self.config.custom_shaders != config.custom_shaders;
@@ -1260,6 +1323,21 @@ impl Renderer {
         // (moving the new one in), then `deinit` + drop the old one.
         let mut old = mem::replace(&mut self.config, config);
         old.deinit();
+
+        // If our background image path changed, prepare the new bg image.
+        // if (bg_image_changed) try self.prepBackgroundImage();
+        //
+        // `prep_background_image` decodes the new path (wuffs PNG/JPEG) into a
+        // pending `bg_image`; only a DECODE error propagates (open/read failures
+        // warn + no-op). unlock-before-`?` (the `Mutex` is guard-less, so
+        // `defer draw_mutex.unlock()` is replicated on every early return).
+        // macos_impl generic.rs:2805-2810.
+        if bg_image_changed {
+            if let Err(e) = self.prep_background_image() {
+                self.draw_mutex.unlock();
+                return Err(e);
+            }
+        }
 
         // If our background image config changed, update the vertex buffer.
         if bg_image_config_changed {
@@ -1286,6 +1364,135 @@ impl Renderer {
         }
 
         self.draw_mutex.unlock();
+        Ok(())
+    }
+
+    /// Call this any time the background image path changes.
+    ///
+    /// Caller must hold the draw mutex.
+    //
+    // PORTS: generic.zig:1746-1830 `prepBackgroundImage`; macos_impl
+    // generic.rs:2844-2971. FULLY graphics-API-agnostic (file read + wuffs decode +
+    // an `image::Pending` hand-off) — copy-adapted VERBATIM from the Metal twin; the
+    // only reason it was cut here before is that `crate::image` did not compile on
+    // Linux.
+    fn prep_background_image(&mut self) -> Result<(), Error> {
+        // Then we try to load the background image if we have a path.
+        // if (self.config.bg_image) |p| load_background: { ... } else { ... }
+        let Some(p) = self.config.bg_image.as_ref() else {
+            // If we don't have a background image path, mark our
+            // background image for unload if we currently have one.
+            // if (self.bg_image) |*img| img.markForUnload();
+            if let Some(img) = self.bg_image.as_mut() {
+                img.mark_for_unload();
+            }
+            return Ok(());
+        };
+
+        // const path = switch (p) { .required, .optional => |slice| slice };
+        //
+        // Borrow discipline (same as the Metal twin): `p` borrows `self.config`
+        // immutably, but the load block below mutates `self.bg_image`. Copy the
+        // null-terminated path bytes into an OWNED `CString` here and drop the
+        // `&self.config` borrow before touching `self.bg_image`. Purely mechanical;
+        // no fidelity impact.
+        let path: CString = p.slice().to_owned();
+
+        // `self.alloc` is a Copy `Global` ZST; capture it so the `'load_background`
+        // block reads it without holding a `&self` borrow across the later
+        // `self.bg_image` mutation.
+        let alloc = self.alloc;
+
+        // 'load_background: { ... break :load_background; } — a labeled block whose
+        // early exits (open-fail / read-fail / unknown-type) `break` with `None`
+        // ("no change"); a DECODE error `?`-propagates OUT of the whole method
+        // (the reference `try`), NOT a `break`.
+        let pending: Option<image::Pending> = 'load_background: {
+            // Open the file / Read it.
+            //
+            // The reference `openFileAbsolute` + `readToEndAlloc(self.alloc,
+            // maxInt(u32))` (max size 4 GiB) collapse to `std.fs.read`; both the
+            // open failure and the read failure map to `break :load_background`
+            // (a warn + no-op). The 4 GiB cap is applied AFTER the read here (an
+            // oversize file is treated as a read failure), byte-faithfully over the
+            // `CString` path bytes (never a lossy `String`).
+            let contents: Vec<u8> = match std::fs::read(OsStr::from_bytes(path.to_bytes())) {
+                Ok(b) if b.len() <= u32::MAX as usize => b,
+                Ok(_) | Err(_) => {
+                    // log.warn("error opening/reading background image file \"{s}\": {}", ...);
+                    eprintln!(
+                        "warning(renderer): error opening/reading background image file {path:?}"
+                    );
+                    break 'load_background None;
+                }
+            };
+
+            // Figure out what type it probably is.
+            // const file_type = switch (FileType.detect(contents)) {
+            //     .unknown => FileType.guessFromExtension(std.fs.path.extension(path)),
+            //     else => |t| t,
+            // };
+            let file_type = match FileType::detect(&contents) {
+                FileType::Unknown => FileType::guessFromExtension(path_extension(path.to_bytes())),
+                t => t,
+            };
+
+            // Decode it if we know how.
+            // const image_data = switch (file_type) {
+            //     .png => try wuffs.png.decode(self.alloc, contents),
+            //     .jpeg => try wuffs.jpeg.decode(self.alloc, contents),
+            //     .unknown => { log.warn("Cannot determine file type ...", .{path}); break; },
+            //     else => |f| { log.warn("Unsupported file type {} ...", .{ f, path }); break; },
+            // };
+            let image_data = match file_type {
+                FileType::Png => rustty_wuffs::png::decode(alloc, &contents)?,
+                FileType::Jpeg => rustty_wuffs::jpeg::decode(alloc, &contents)?,
+                FileType::Unknown => {
+                    eprintln!(
+                        "warning(renderer): Cannot determine file type for background image file {path:?}!"
+                    );
+                    break 'load_background None;
+                }
+                f => {
+                    eprintln!(
+                        "warning(renderer): Unsupported file type {f:?} for background image file {path:?}!"
+                    );
+                    break 'load_background None;
+                }
+            };
+
+            // const image: imagepkg.Image = .{ .pending = .{ .width, .height,
+            //     .pixel_format = .rgba, .data = image_data.data.ptr } };
+            //
+            // Transfer OWNERSHIP of the decoded RGBA buffer to `Pending` (do NOT
+            // free it here — `rustty-wuffs` allocated it over the SAME `Global`,
+            // align 1, so `image::linux_impl`'s `free_data` `Layout::from_size_align(
+            // len, 1)` frees it later without a layout mismatch). `contents` (the
+            // encoded bytes) IS freed here, at the block's end (`Vec` drop == the
+            // reference `defer self.alloc.free(contents)`).
+            let (width, height, buf, _len) = image_data.into_raw();
+            Some(image::Pending {
+                width,
+                height,
+                pixel_format: image::PixelFormat::Rgba,
+                data: buf.as_ptr(), // *mut u8 — freed later by Image::deinit / free_data
+            })
+        };
+
+        // If we have an existing background image, replace it.
+        // Otherwise, set this as our background image directly. A `None` pending
+        // is the `break :load_background` case — leave `self.bg_image` unchanged.
+        if let Some(pend) = pending {
+            let img = image::Image::Pending(pend);
+            // if (self.bg_image) |*img| { img.markForReplace(self.alloc, image); }
+            // else { self.bg_image = image; }
+            if let Some(existing) = self.bg_image.as_mut() {
+                existing.mark_for_replace(self.alloc, img);
+            } else {
+                self.bg_image = Some(img);
+            }
+        }
+
         Ok(())
     }
 
@@ -3016,6 +3223,84 @@ impl Renderer {
         Ok(())
     }
 
+    // fn rebuildOverlay(self, features: []const Overlay.Feature) Overlay.InitError!void
+    //
+    // PORTS: generic.zig:2230-… `rebuildOverlay`; macos_impl generic.rs:4539-4622.
+    // PURE CPU/z2d — no graphics-API surface at all (the `Overlay` is a z2d software
+    // surface; the GPU only ever sees it later via `images.overlay_update`), so this
+    // is a VERBATIM copy-adapt of the Metal twin.
+    pub fn rebuild_overlay(
+        &mut self,
+        features: &[crate::overlay::Feature],
+    ) -> Result<(), crate::overlay::InitError> {
+        // const alloc = self.alloc;
+        // (rustty `Overlay` drops the reference `alloc` arg — its z2d surface
+        // owns its `Vec`; `Overlay::init`/`apply_features` take no `alloc`.)
+
+        // If we have no features enabled, don't build an overlay.
+        // If we had a previous overlay, deallocate it.
+        if features.is_empty() {
+            if let Some(old) = self.overlay.as_mut() {
+                old.deinit();
+                self.overlay = None;
+            }
+
+            return Ok(());
+        }
+
+        // If we had a previous overlay, clear it. Otherwise, init.
+        'overlay: {
+            if let Some(v) = self.overlay.as_mut() {
+                'existing: {
+                    // Verify that our overlay size matches our screen
+                    // size as we know it now. If not, deinit and reinit.
+                    // Note: these intCasts are always safe because z2d
+                    // stores as i32 but we always init with a u32.
+                    let width: u32 = v.surface.get_width() as u32;
+                    let height: u32 = v.surface.get_height() as u32;
+                    let term_size = self.size.terminal();
+                    if width != term_size.width || height != term_size.height {
+                        break 'existing;
+                    }
+
+                    // We also depend on cell size.
+                    if v.cell_size.width != self.size.cell.width
+                        || v.cell_size.height != self.size.cell.height
+                    {
+                        break 'existing;
+                    }
+
+                    // Everything matches, so we can just reset the surface
+                    // and redraw.
+                    v.reset();
+                    break 'overlay;
+                }
+            }
+
+            // If we reached this point we want to reset our overlay.
+            if let Some(v) = self.overlay.as_mut() {
+                v.deinit();
+                self.overlay = None;
+            }
+
+            assert!(self.overlay.is_none());
+            let new: Overlay = Overlay::init(self.size)?;
+            self.overlay = Some(new);
+        }
+
+        // overlay.applyFeatures(alloc, &self.terminal_state, features);
+        // SAFETY: `self.overlay` and `self.terminal_state` are DISJOINT fields; the
+        // raw ptr detaches the immutable `terminal_state` read from the `&mut
+        // self.overlay` borrow (a field-level reborrow does not retag
+        // `terminal_state`).
+        let terminal_state: *const RenderState = &self.terminal_state;
+        self.overlay
+            .as_mut()
+            .unwrap()
+            .apply_features(unsafe { &*terminal_state }, features);
+        Ok(())
+    }
+
     /// Update the frame data.
     //
     // PORTS: generic.zig:1123-… `updateFrame`; macos_impl generic.rs:4424-4803.
@@ -3025,19 +3310,18 @@ impl Renderer {
     // `*mut Terminal`). The sole propagated `?` is `terminal_state.update` →
     // `VtOutOfMemory`.
     //
-    // MILESTONE-SCOPE-CUT (L4 plan Global Constraints — bg_color/cell_bg/cell_text
-    // only): FOUR reference branches are ELIDED, each cited (never silently dropped):
-    //   1. Kitty-graphics image state (`self.images.kitty_requires_update`/
-    //      `kitty_update`, macos_impl generic.rs:4584-4597) — `linux_impl` has no
-    //      `images` field (the `crate::image` port is macOS-only; kitty is deferred).
-    //   2. Inspector debug-overlay (`state.inspector` → `overlay_features` →
-    //      `rebuild_overlay`, macos_impl generic.rs:4619-4636,4717) + the overlay
-    //      image upload (`self.images.overlay_update`, :4783-4785) — deferred.
-    //   3. Custom-shader uniforms (`self.update_custom_shader_uniforms_from_state`,
-    //      macos_impl generic.rs:4789) — custom shaders are deferred.
-    //   4. The macOS-only glass-background alpha zero-out (macos_impl generic.rs:
-    //      4773-4778) is guarded by `if (comptime builtin.os.tag == .macos)` in
-    //      generic.zig; on Linux that branch is COMPILED OUT, so it is absent here.
+    // HISTORY (both L4 scope cuts are now RESOLVED; nothing here is elided):
+    //   1. RESOLVED (w2 F-005) — the Kitty-graphics image state
+    //      (`self.images.kitty_requires_update`/`kitty_update`) is LIVE below;
+    //      `crate::image` is a twin pair now, so `self.images` is a real field.
+    //   2. RESOLVED (w2 F-020) — the inspector debug-overlay chain (`state.inspector`
+    //      → `overlay_features` → `rebuild_overlay`, macos_impl generic.rs:4856-4873,
+    //      :4959) and the overlay image upload (`self.images.overlay_update`,
+    //      :5026-5028) are LIVE below.
+    //   3. NOT A CUT — the macOS-only glass-background alpha zero-out (macos_impl
+    //      generic.rs:5007-5021) is guarded by `if (comptime builtin.os.tag ==
+    //      .macos)` in generic.zig; on Linux that branch is COMPILED OUT, so its
+    //      absence here IS the faithful port.
     // Every other line is copy-adapted verbatim from `macos_impl`.
     pub fn update_frame(
         &mut self,
@@ -3063,6 +3347,7 @@ impl Renderer {
             mouse: state::Mouse,
             preedit: Option<state::Preedit>,
             scrollbar: Scrollbar,
+            overlay_features: Vec<crate::overlay::Feature>,
         }
 
         // The renderer-thread state carries its terminal behind a `*mut Terminal` (a
@@ -3152,8 +3437,29 @@ impl Renderer {
             // Get our preedit state
             let preedit: Option<state::Preedit> = state.preedit.as_ref().map(|p| p.clone());
 
-            // MILESTONE-SCOPE-CUT (kitty graphics): macos_impl generic.rs:4584-4597 —
-            // `self.images.kitty_requires_update`/`kitty_update`. No `images` field.
+            // If we have Kitty graphics data, we enter a SLOW SLOW SLOW path.
+            // We only do this if the Kitty image state is dirty meaning only if
+            // it changes.
+            //
+            // If we have any virtual references, we must also rebuild our
+            // kitty state on every frame because any cell change can move
+            // an image.
+            //
+            // PORTS: generic.zig:1229-1248; macos_impl generic.rs:4813-4833.
+            if self.images.kitty_requires_update(unsafe { &*t }) {
+                // We need to grab the draw mutex since this updates
+                // our image state that drawFrame uses.
+                self.draw_mutex.lock();
+                self.images.kitty_update(
+                    self.alloc,
+                    unsafe { &*t },
+                    CellSize {
+                        width: self.grid_metrics.cell_width,
+                        height: self.grid_metrics.cell_height,
+                    },
+                );
+                self.draw_mutex.unlock();
+            }
 
             // Get our OSC8 links we're hovering if we have a mouse.
             let links: CellSet = match state.mouse.point {
@@ -3169,14 +3475,31 @@ impl Renderer {
                 }
             };
 
-            // MILESTONE-SCOPE-CUT (inspector debug overlay): macos_impl generic.rs:
-            // 4619-4636 — `state.inspector` → `overlay_features`. Overlay is deferred.
+            // PORTS: generic.zig:1269-1283; macos_impl generic.rs:4856-4873.
+            //   const insp = state.inspector orelse break :overlay &.{};
+            //   const renderer_info = insp.rendererInfo();
+            //   break :overlay renderer_info.overlayFeatures(arena_alloc) catch &.{};
+            //
+            // R2 ACCESSOR-TRAIT SEAM: `state.inspector` is the renderer-owned
+            // `*mut dyn InspectorOverlay` fat pointer (state.rs) — the acyclic
+            // accessor trait (INV-7). The renderer reads the enabled overlay features
+            // THROUGH the trait, never naming a `rustty-inspector` type. The
+            // reference's `insp.rendererInfo()` navigation happens at STORE time
+            // (core coerces the `Info` into the fat pointer), so here the one-method
+            // trait call subsumes the whole chain. INV-1: this deref is inside the
+            // `state.mutex`-guarded critical section; the raw pointer never escapes
+            // the guard.
+            let overlay_features: Vec<crate::overlay::Feature> = match state.inspector {
+                None => Vec::new(),
+                Some(insp) => unsafe { (*insp).overlay_features() },
+            };
 
             Critical {
                 links,
                 mouse: state.mouse,
                 preedit,
                 scrollbar,
+                overlay_features,
             }
         };
 
@@ -3226,9 +3549,13 @@ impl Renderer {
 
         // From this point forward no more errors.
 
-        // MILESTONE-SCOPE-CUT (inspector debug overlay): macos_impl generic.rs:4717 —
-        // `self.rebuild_overlay(&critical.overlay_features)`. Overlay is deferred, so
-        // `rebuild_overlay` is not ported for this milestone.
+        // Rebuild the overlay image if we have one. We can do this
+        // outside of any critical areas.
+        // self.rebuildOverlay(critical.overlay_features) catch |err|
+        //     log.warn("error rebuilding overlay surface err={}", .{err});
+        //
+        // PORTS: generic.zig:1356-1365; macos_impl generic.rs:4959.
+        let _ = self.rebuild_overlay(&critical.overlay_features);
 
         // Acquire the draw mutex for all remaining state updates.
         {
@@ -3261,15 +3588,25 @@ impl Renderer {
                 (self.config.background_opacity * 255.0).round() as u8,
             ];
 
-            // MILESTONE-SCOPE-CUT (macOS glass background): macos_impl generic.rs:
-            // 4773-4778 is guarded by `if (comptime builtin.os.tag == .macos)` in
-            // generic.zig; that branch is compiled out on Linux, so it is absent.
+            // NOT A CUT (macOS glass background): macos_impl generic.rs:5007-5021 is
+            // guarded by `if (comptime builtin.os.tag == .macos)` in generic.zig;
+            // that branch is COMPILED OUT on Linux, so it is absent here by fidelity.
 
-            // MILESTONE-SCOPE-CUT (overlay image upload): macos_impl generic.rs:
-            // 4783-4785 — `self.images.overlay_update`. No `images` field.
+            // Prepare our overlay image for upload (or unload). This has to use our
+            // general allocator since it modifies state that survives frames.
+            // self.images.overlayUpdate(self.alloc, self.overlay) catch |err|
+            //     log.warn("error updating overlay images err={}", .{err});
+            //
+            // PORTS: generic.zig:1416-1424; macos_impl generic.rs:5026-5028.
+            // (`Option<&Overlay>` — the borrowed-ownership deviation documented on
+            //  `image::linux_impl::State::overlay_update`.)
+            let _ = self
+                .images
+                .overlay_update(self.alloc, self.overlay.as_ref());
 
-            // MILESTONE-SCOPE-CUT (custom-shader uniforms): macos_impl generic.rs:4789
-            // — `self.update_custom_shader_uniforms_from_state()`. Deferred.
+            // Update custom shader uniforms that depend on terminal state.
+            // self.updateCustomShaderUniformsFromState();
+            self.update_custom_shader_uniforms_from_state();
 
             self.draw_mutex.unlock();
         }
@@ -3282,6 +3619,254 @@ impl Renderer {
         self.terminal_state.dirty = Dirty::False;
 
         Ok(())
+    }
+
+    /// Update custom shader uniforms that depend on terminal state.
+    ///
+    /// This should be called in `updateFrame` when terminal state changes.
+    //
+    // PORTS: generic.zig `updateCustomShaderUniformsFromState`; copy-adapted verbatim
+    // from macos_impl generic.rs:4926-5041 (widened to `pub` there for direct unit
+    // tests; kept `pub` here for the same reason).
+    pub fn update_custom_shader_uniforms_from_state(&mut self) {
+        // We only need to do this if we have custom shaders.
+        if !self.has_custom_shaders {
+            return;
+        }
+
+        // Only update when terminal state is dirty.
+        if self.terminal_state.dirty == Dirty::False {
+            return;
+        }
+
+        let uniforms: &mut shadertoy::Uniforms = &mut self.custom_shader_uniforms;
+        let colors: &render::Colors = &self.terminal_state.colors;
+
+        // 256-color palette
+        for (i, color) in colors.palette.iter().enumerate() {
+            uniforms.palette[i] = [
+                color.r as f32 / 255.0,
+                color.g as f32 / 255.0,
+                color.b as f32 / 255.0,
+                1.0,
+            ];
+        }
+
+        // Background color
+        uniforms.background_color = [
+            colors.background.r as f32 / 255.0,
+            colors.background.g as f32 / 255.0,
+            colors.background.b as f32 / 255.0,
+            1.0,
+        ];
+
+        // Foreground color
+        uniforms.foreground_color = [
+            colors.foreground.r as f32 / 255.0,
+            colors.foreground.g as f32 / 255.0,
+            colors.foreground.b as f32 / 255.0,
+            1.0,
+        ];
+
+        // Cursor color
+        if let Some(cursor_color) = colors.cursor {
+            uniforms.cursor_color = [
+                cursor_color.r as f32 / 255.0,
+                cursor_color.g as f32 / 255.0,
+                cursor_color.b as f32 / 255.0,
+                1.0,
+            ];
+        }
+
+        // NOTE: the following could be optimized to follow a change in
+        // config for a slight optimization however this is only 12 bytes
+        // each being updated and likely isn't a cause for concern
+
+        // Cursor text color
+        //
+        // PORT NOTE (macos_impl §E.3/RISK-1): the reference reads `cursor_text.color.r`
+        // on a `?TerminalColor` — a raw Zig union `.color` field access that is
+        // SAFETY-CHECKED as a TAG-ASSERT (panics on the `cell-foreground`/
+        // `cell-background` specials). A plain `if let Some(TerminalColor::Color(c))`
+        // would SILENTLY SKIP the specials, so the faithful port destructures the
+        // `Option`, then TAG-ASSERTs with `_ => unreachable!()`.
+        if let Some(cursor_text) = self.config.cursor_text {
+            match cursor_text {
+                TerminalColor::Color(c) => {
+                    uniforms.cursor_text = [
+                        c.r as f32 / 255.0,
+                        c.g as f32 / 255.0,
+                        c.b as f32 / 255.0,
+                        1.0,
+                    ];
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        // Selection background color
+        if let Some(selection_bg) = self.config.selection_background {
+            match selection_bg {
+                TerminalColor::Color(c) => {
+                    uniforms.selection_background_color = [
+                        c.r as f32 / 255.0,
+                        c.g as f32 / 255.0,
+                        c.b as f32 / 255.0,
+                        1.0,
+                    ];
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        // Selection foreground color
+        if let Some(selection_fg) = self.config.selection_foreground {
+            match selection_fg {
+                TerminalColor::Color(c) => {
+                    uniforms.selection_foreground_color = [
+                        c.r as f32 / 255.0,
+                        c.g as f32 / 255.0,
+                        c.b as f32 / 255.0,
+                        1.0,
+                    ];
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        // Cursor visibility
+        uniforms.cursor_visible = self.terminal_state.cursor.visible as i32;
+
+        // Cursor style
+        let cursor_style: cursor::Style =
+            cursor::Style::from_terminal(self.terminal_state.cursor.visual_style);
+        uniforms.previous_cursor_style = uniforms.current_cursor_style;
+        uniforms.current_cursor_style = cursor_style as i32;
+    }
+
+    /// Update per-frame custom shader uniforms.
+    ///
+    /// This should be called exactly once per frame, inside `drawFrame`.
+    //
+    // PORTS: generic.zig `updateCustomShaderUniformsForFrame`; copy-adapted verbatim
+    // from macos_impl generic.rs:5052-5169 (the sole `try` — `std.time.Instant.now()`
+    // — is infallible in Rust ⇒ `()`). `CUSTOM_SHADER_Y_IS_DOWN` is `false` here
+    // (`OpenGL.zig:27-28`; Metal's is `true`), so the flipped-Y branches are LIVE.
+    pub fn update_custom_shader_uniforms_for_frame(&mut self) {
+        // We only need to do this if we have custom shaders.
+        if !self.has_custom_shaders {
+            return;
+        }
+
+        let now = Instant::now();
+        // defer self.last_frame_time = now; (set as the LAST statement — §E.6)
+        let first_frame_time = match self.first_frame_time {
+            Some(t) => t,
+            None => {
+                self.first_frame_time = Some(now);
+                now
+            }
+        };
+        let last_frame_time = self.last_frame_time.unwrap_or(now);
+
+        let u: &mut shadertoy::Uniforms = &mut self.custom_shader_uniforms;
+
+        let since_ns: f32 = now.duration_since(first_frame_time).as_nanos() as f32;
+        u.time = since_ns / 1_000_000_000.0;
+
+        let delta_ns: f32 = now.duration_since(last_frame_time).as_nanos() as f32;
+        u.time_delta = delta_ns / 1_000_000_000.0;
+
+        u.frame += 1;
+
+        let screen = self.size.screen;
+        let padding = self.size.padding;
+        let cell = self.size.cell;
+
+        u.resolution = [screen.width as f32, screen.height as f32, 1.0];
+        u.channel_resolution[0] = [screen.width as f32, screen.height as f32, 1.0, 0.0];
+
+        if let Some(cursor) = self.cells.get_cursor_glyph() {
+            let cursor_width: f32 = cursor.glyph_size[0] as f32;
+            let cursor_height: f32 = cursor.glyph_size[1] as f32;
+
+            // Left edge of the cell the cursor is in.
+            //
+            // PORT NOTE (macos_impl §E.6): `cursor.grid_pos: [u16; 2]` but
+            // `cell.{width,height}` / `padding.{left,top}` are `u32` — the reference
+            // `grid_pos[0] * cell.width + padding.left` relies on Zig's implicit
+            // widening. Rust has no implicit widening, so widen `grid_pos` to `u32`
+            // BEFORE the `as f32`.
+            let mut pixel_x: f32 = (cursor.grid_pos[0] as u32 * cell.width + padding.left) as f32;
+            // Top edge, relative to the top of the
+            // screen, of the cell the cursor is in.
+            let mut pixel_y: f32 = (cursor.grid_pos[1] as u32 * cell.height + padding.top) as f32;
+
+            // If +Y is up in our shaders, we need to flip the coordinate
+            // so that it's instead the top edge of the cell relative to
+            // the *bottom* of the screen.
+            if !CUSTOM_SHADER_Y_IS_DOWN {
+                pixel_y = screen.height as f32 - pixel_y;
+            }
+
+            // Add the X bearing to get the -X (left) edge of the cursor.
+            pixel_x += cursor.bearings[0] as f32;
+
+            // How we deal with the Y bearing depends on which direction
+            // is "up", since we want our final `pixel_y` value to be the
+            // +Y edge of the cursor.
+            if CUSTOM_SHADER_Y_IS_DOWN {
+                // As a reminder, the Y bearing is the distance from the
+                // bottom of the cell to the top of the glyph, so to get
+                // the +Y edge we need to add the cell height, subtract
+                // the Y bearing, and add the glyph height to get the +Y
+                // (bottom) edge of the cursor.
+                pixel_y += cell.height as f32;
+                pixel_y -= cursor.bearings[1] as f32;
+                pixel_y += cursor.glyph_size[1] as f32;
+            } else {
+                // If the Y direction is reversed though, we instead want
+                // the *top* edge of the cursor, which means we just need
+                // to subtract the cell height and add the Y bearing.
+                pixel_y -= cell.height as f32;
+                pixel_y += cursor.bearings[1] as f32;
+            }
+
+            let new_cursor: [f32; 4] = [pixel_x, pixel_y, cursor_width, cursor_height];
+            let cursor_color: [f32; 4] = [
+                cursor.color[0] as f32 / 255.0,
+                cursor.color[1] as f32 / 255.0,
+                cursor.color[2] as f32 / 255.0,
+                cursor.color[3] as f32 / 255.0,
+            ];
+
+            let cursor_changed: bool =
+                new_cursor != u.current_cursor || cursor_color != u.current_cursor_color;
+
+            if cursor_changed {
+                u.previous_cursor = u.current_cursor;
+                u.previous_cursor_color = u.current_cursor_color;
+                u.current_cursor = new_cursor;
+                u.current_cursor_color = cursor_color;
+                u.cursor_change_time = u.time;
+            }
+        }
+
+        // Update focus uniforms
+        u.focus = self.focused as i32;
+
+        // If we need to update the time our focus state changed
+        // then update it to our current frame time. This may not be
+        // exactly correct since it is frame time, not exact focus
+        // time, but focus time on its own isn't exactly correct anyways
+        // since it comes async from a message.
+        if self.custom_shader_focused_changed && self.focused {
+            u.time_focus = u.time;
+            self.custom_shader_focused_changed = false;
+        }
+
+        // defer self.last_frame_time = now; (Zig fn-scope-exit defer — §E.6)
+        self.last_frame_time = Some(now);
     }
 
     /// Sync the atlas data to the given texture. This copies the bytes associated with
@@ -3336,11 +3921,42 @@ impl Renderer {
         Ok(())
     }
 
+    // PORTS: generic.zig:1832-1846 `uploadBackgroundImage`; macos_impl
+    // generic.rs:5561-5581.
+    //
+    // GL: `Image::deinit`/`Image::upload` touch real GL objects
+    // (`glDeleteTextures`/`glTexImage2D`), so this must run with the owned context
+    // current — it does: the sole caller is `draw_frame_raw`.
+    fn upload_background_image(&mut self) -> Result<(), Error> {
+        // Make sure our bg image is uploaded if it needs to be.
+        // if (self.bg_image) |*bg| {
+        if let Some(bg) = self.bg_image.as_mut() {
+            // if (bg.isUnloading()) { bg.deinit(self.alloc); self.bg_image = null; return; }
+            if bg.is_unloading() {
+                // `Image::deinit` consumes `self` by value (the reference
+                // `bg.deinit(self.alloc)`), so take the image OUT of the Option to
+                // move it into `deinit`; then the Option is left `None`.
+                let img = self.bg_image.take().unwrap();
+                img.deinit(self.alloc);
+                return Ok(());
+            }
+            // if (bg.isPending()) try bg.upload(self.alloc, &self.api);
+            //   (`bg` borrows the `self.bg_image` field; `self.api` is a DISJOINT
+            //    field, so the shared borrow is fine — same shape as the Metal twin.)
+            if bg.is_pending() {
+                bg.upload(self.alloc, &self.api)
+                    .map_err(|_| Error::GlFailed)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Callback from the graphics API when a frame is completed.
     //
     // PORTS: generic.zig:1259-1276 `frameCompleted`; macos_impl generic.rs:5351-5372.
     // `&self` narrowing (faithful): every op is `&self`-safe — `health.store`
-    // (`AtomicHealth`), the no-op `surface_mailbox.push`, and `swap_chain.release_frame`
+    // (`AtomicHealth`), `surface_mailbox.push` (`&self` — the sink is behind an
+    // `Arc`), and `swap_chain.release_frame`
     // (posts the semaphore).
     pub fn frame_completed(&self, health: crate::Health) {
         // If our health value hasn't changed, then we do nothing.
@@ -3349,10 +3965,14 @@ impl Renderer {
             // self.health.store(health, .seq_cst);
             self.health.store(health);
 
-            // Notify the surface so it can react (deferred no-op mailbox — the real
-            // routing lands with the apprt tier; `push` returns 0).
+            // Notify the surface so it can react (REAL — seam §B.2 resolved: core's
+            // sink re-wraps this into `apprt::surface::Message::RendererHealth`; a
+            // DETACHED offscreen mailbox still returns 0).
             // _ = self.surface_mailbox.push(.{ .renderer_health = health }, .{ .forever = {} });
-            let _ = self.surface_mailbox.push(health, MailboxTimeout::Forever);
+            let _ = self.surface_mailbox.push(
+                SurfaceMessage::RendererHealth(health),
+                MailboxTimeout::Forever,
+            );
         }
 
         // Always release our semaphore.
@@ -3368,14 +3988,21 @@ impl Renderer {
     //
     // PORTS: generic.zig:1278-1466 `drawFrame`; macos_impl generic.rs:5408-6022.
     //
-    // MILESTONE-SCOPE-CUT (L4 plan Global Constraints — bg_color/cell_bg/cell_text only):
-    // the reference branches for kitty-image draws, the debug overlay, the background
-    // image (the `bg_image` shader arm), and the custom-shader (post-process) render
-    // passes are CUT, each cited below — matching the file's honesty bar (never silently
-    // deleted). `linux_impl` has no `images`/`bg_image` field (the `crate::image` port is
-    // macOS-only; kitty/bg-image are deferred), and custom shaders are deferred, so the
-    // encode path is exactly begin_frame → one render_pass { bg_color, cell_bg, cell_text }
-    // → complete.
+    // NO SCOPE CUTS REMAIN in this body (the L4 plan's Global-Constraints elisions are
+    // all resolved). The encode path is the reference's, in the reference's order:
+    // begin_frame → one render_pass { bg_image-or-bg_color, kitty_below_bg, cell_bg,
+    // kitty_below_text, cell_text, kitty_above_text, overlay } → complete.
+    //   * KITTY-IMAGE bands + the image upload sweep: w2 F-005 (`crate::image` is a
+    //     twin pair now, so `images.upload`/`images.draw` run for real).
+    //   * BACKGROUND IMAGE: w2 F-012 — `upload_background_image` runs before the pass
+    //     and the `if (self.bg_image) |img| switch (img) { .ready => … } else { … }`
+    //     arm replaces the unconditional `bg_color` step (generic.zig:1611-1628).
+    //   * DEBUG OVERLAY: w2 F-020 — the guarded `images.draw(…, .overlay)` band
+    //     (generic.zig:1681-1688) runs whenever `update_frame` built an overlay.
+    //   * CUSTOM SHADERS (post-process): F-013 — when `has_custom_shaders` is set the
+    //     base pass retargets to the custom-shader state's `back_texture` and the
+    //     `shaders.post_pipelines` ping-pong chain runs afterwards, exactly as
+    //     generic.zig:1691-1719.
     //
     // PORT NOTE (raw-ptr discipline, identical to the Metal twin / MIRIHAR-proven): the
     // whole body drives `self` through the SINGLE raw root `self_ptr` with NARROW field
@@ -3405,14 +4032,16 @@ impl Renderer {
             fn drop(&mut self) {
                 // defer if (self.scrollbar_dirty) { if (self.surface_mailbox.push(...,
                 //     .instant) > 0) self.scrollbar_dirty = false; };
-                // (push is the no-op placeholder ⇒ returns 0 ⇒ the branch is never taken
-                //  offscreen.)
+                // (REAL — seam §B.2 resolved: core's sink enqueues
+                //  `apprt::surface::Message::Scrollbar`. A DETACHED mailbox — the
+                //  offscreen golden/unit renderers — still returns 0, so the branch
+                //  is never taken offscreen.)
                 unsafe {
                     if (*self.0).scrollbar_dirty
-                        && (*self.0)
-                            .surface_mailbox
-                            .push((*self.0).scrollbar, MailboxTimeout::Instant)
-                            > 0
+                        && (*self.0).surface_mailbox.push(
+                            SurfaceMessage::Scrollbar((*self.0).scrollbar),
+                            MailboxTimeout::Instant,
+                        ) > 0
                     {
                         (*self.0).scrollbar_dirty = false;
                     }
@@ -3505,11 +4134,44 @@ impl Renderer {
         // assert(!self.shaders.defunct);
         assert!(!unsafe { (*self_ptr).shaders.defunct });
 
-        // MILESTONE-SCOPE-CUT (custom shaders): macos_impl generic.rs:5575-5605 sets up /
-        // tears down `frame.custom_shader_state` based on `self.has_custom_shaders`. Custom
-        // shaders are deferred (the golden's config never sets them ⇒ `has_custom_shaders`
-        // is always false), so the whole setup block is cut; `frame.custom_shader_state`
-        // stays `None`. Cited, not silently dropped (generic.zig:1305-1324).
+        // If we have custom shaders, make sure we have the custom shader state in
+        // our frame state, otherwise if we have a state but don't need it we remove
+        // it.
+        // PORTS: generic.zig:1305-1324; macos_impl generic.rs:5588-5621.
+        {
+            let frame: *mut FrameState =
+                unsafe { addr_of_mut!((*self_ptr).swap_chain.frames[idx]) };
+            // if (self.has_custom_shaders) {
+            if unsafe { (*self_ptr).has_custom_shaders } {
+                // if (frame.custom_shader_state == null) {
+                //     frame.custom_shader_state = try .init(self.api);
+                //     try frame.custom_shader_state.?.resize(self.api, w, h);
+                // }
+                if unsafe { (*frame).custom_shader_state.is_none() } {
+                    unsafe {
+                        (*frame).custom_shader_state =
+                            Some(CustomShaderState::init(&(*self_ptr).api)?);
+                        (*frame).custom_shader_state.as_mut().unwrap().resize(
+                            &(*self_ptr).api,
+                            surface_size.width as usize,
+                            surface_size.height as usize,
+                        )?;
+                    }
+                }
+            }
+            // } else if (frame.custom_shader_state) |*state| {
+            //     state.deinit();
+            //     frame.custom_shader_state = null;
+            // }
+            //
+            // DIVERGENCE from `macos_impl` (which relies on field `Drop`): the OpenGL
+            // leaf resources have a manual `deinit(self)` and no `Drop`, so the state
+            // is `take`n and deinited EXPLICITLY (a bare `= None` would leak the GL
+            // objects), matching `FrameState::deinit`'s model.
+            else if let Some(state) = unsafe { (*frame).custom_shader_state.take() } {
+                state.deinit();
+            }
+        }
 
         // If our stored size doesn't match the surface size we need to update it.
         // (Golden: size_changed=false ⇒ skipped. `update_screen_size_uniforms` is a
@@ -3547,14 +4209,38 @@ impl Renderer {
             }
         }
 
-        // MILESTONE-SCOPE-CUT (kitty images / background image): macos_impl generic.rs:
-        // 5653-5668 uploads `self.images` + `self.uploadBackgroundImage()` +
-        // `self.updateCustomShaderUniformsForFrame()`. `linux_impl` has no `images`/
-        // `bg_image` field and custom shaders are deferred, so all three are cut
-        // (generic.zig:1360-1372).
+        // Upload images to the GPU as necessary.
+        // _ = self.images.upload(self.alloc, &self.api);   (generic.zig:1548-1549)
+        //   (narrow: &mut self.images + &self.api — disjoint fields.)
+        //   macos_impl generic.rs:5899-5906.
+        //
+        // GL: this is where pending Kitty images become real `glTexImage2D` uploads
+        // AND where unloaded ones are evicted (`glDeleteTextures`). Both need the
+        // context current — it is, we are inside `draw_frame_raw`.
+        let _ = unsafe {
+            (*self_ptr)
+                .images
+                .upload((*self_ptr).alloc, &(*self_ptr).api)
+        };
 
-        // Re-derive the frame raw root FRESH. (No whole-`&mut self` reborrows occur from
-        // here to `complete()`, so this root survives to the end.)
+        // Make sure our background image is uploaded if it needs to be.
+        // try self.uploadBackgroundImage();   (generic.zig:1551-1552)
+        //   (whole-`&mut self` — macos_impl generic.rs:5911.)
+        //
+        // GL: this is where a pending bg image becomes a real `glTexImage2D` upload
+        // and where an unloaded one is freed (`glDeleteTextures`); both need the
+        // context current — it is, we are inside `draw_frame_raw`.
+        unsafe { (*self_ptr).upload_background_image()? };
+
+        // Update per-frame custom shader uniforms.
+        // try self.updateCustomShaderUniformsForFrame();   (whole-&mut self)
+        unsafe { (*self_ptr).update_custom_shader_uniforms_for_frame() };
+
+        // Re-derive the frame raw root FRESH: the two whole-`&mut self` calls above
+        // (`upload_background_image`, `update_custom_shader_uniforms_for_frame`)
+        // popped any earlier frame tag.
+        // (No whole-`&mut self` reborrows occur from here to `complete()`, so this
+        // root survives to the end.)
         let frame: *mut FrameState = unsafe { addr_of_mut!((*self_ptr).swap_chain.frames[idx]) };
 
         // Setup our frame data (the serialization boundary: ergonomic `crate::shaders`
@@ -3653,43 +4339,89 @@ impl Renderer {
         };
 
         {
-            // var pass = frame_ctx.renderPass(&.{.{ .target = … , .clear_color = {0,0,0,0} }});
+            // var pass = frame_ctx.renderPass(&.{.{
+            //     .target = if (frame.custom_shader_state) |state|
+            //         .{ .texture = state.back_texture } else .{ .target = frame.target },
+            //     .clear_color = .{ 0.0, 0.0, 0.0, 0.0 },
+            // }});
             // defer pass.complete();
-            //
-            // MILESTONE-SCOPE-CUT (custom shaders): the reference's attachment target is
-            // `if (frame.custom_shader_state) |state| .{ .texture = state.back_texture }
-            // else .{ .target = frame.target }` (generic.rs:5804-5807). `custom_shader_state`
-            // is always `None` here (cut above), so the target is ALWAYS `frame.target`.
             //
             // PORT NOTE: OpenGL `RenderPass::step` takes `&mut self` (it bumps
             // `step_number`), unlike Metal's `&self`, so `pass` is `mut`. The
             // `attachments` slice is bound to a `let` so it outlives `pass` (the
             // `RenderPass` borrows it — E0716).
+            let attach_target = match unsafe { (*frame).custom_shader_state.as_ref() } {
+                Some(state) => AttachmentTarget::Texture(&state.back_texture),
+                None => AttachmentTarget::Target(unsafe { &(*frame).target }),
+            };
             let attachments = [Attachment {
-                target: AttachmentTarget::Target(unsafe { &(*frame).target }),
+                target: attach_target,
                 clear_color: Some([0.0, 0.0, 0.0, 0.0]),
             }];
             let mut pass = frame_ctx.render_pass(&attachments);
 
-            // Background color. (Reference: with no `bg_image`, the `else` arm draws the
-            // bg color in its own step — generic.zig:1621-1628. The `bg_image` arm is
-            // MILESTONE-SCOPE-CUT: no `bg_image` field.)
-            // pass.step(.{ .pipeline = bg_color, .uniforms, .buffers = &.{ null,
-            //     frame.cells_bg.buffer }, .draw = {triangle, 3} });
-            pass.step(Step {
-                pipeline: unsafe { &(*self_ptr).shaders.pipelines.bg_color },
-                uniforms: Some(unsafe { (*frame).uniforms.buffer }),
-                buffers: &[None, Some(unsafe { (*frame).cells_bg.buffer })],
-                textures: &[],
-                samplers: &[],
-                draw: Draw {
-                    kind: Primitive::Triangle,
-                    vertex_count: 3,
-                    instance_count: 1,
-                },
-            });
+            // First we draw our background image, if we have one. The bg image
+            // shader also draws the main bg color. Otherwise, if we don't have a
+            // background image, we draw the background color by itself in its own
+            // step.
+            //
+            // NOTE: We don't use the clear_color for this because that would require
+            //       us to do color space conversion on the CPU-side. In the future
+            //       when we have utilities for that we should remove this step and
+            //       use clear_color.
+            //
+            // PORTS: generic.zig:1611-1628; macos_impl generic.rs:6069-6100.
+            // if (self.bg_image) |img| switch (img) {
+            //     .ready => |texture| pass.step(.{ .pipeline = bg_image, .uniforms,
+            //         .buffers = &.{frame.bg_image_buffer.buffer},
+            //         .textures = &.{texture}, .draw = {triangle, 3} }),
+            //     else => {},
+            // } else { pass.step(.{ .pipeline = bg_color, .uniforms, .buffers =
+            //     &.{ null, frame.cells_bg.buffer }, .draw = {triangle, 3} }); }
+            match unsafe { (*self_ptr).bg_image.as_ref() } {
+                Some(image::Image::Ready(texture)) => pass.step(Step {
+                    pipeline: unsafe { &(*self_ptr).shaders.pipelines.bg_image },
+                    uniforms: Some(unsafe { (*frame).uniforms.buffer }),
+                    buffers: &[Some(unsafe { (*frame).bg_image_buffer.buffer })],
+                    textures: &[Some(texture)],
+                    samplers: &[],
+                    draw: Draw {
+                        kind: Primitive::Triangle,
+                        vertex_count: 3,
+                        instance_count: 1,
+                    },
+                }),
+                Some(_) => {}
+                None => {
+                    pass.step(Step {
+                        pipeline: unsafe { &(*self_ptr).shaders.pipelines.bg_color },
+                        uniforms: Some(unsafe { (*frame).uniforms.buffer }),
+                        buffers: &[None, Some(unsafe { (*frame).cells_bg.buffer })],
+                        textures: &[],
+                        samplers: &[],
+                        draw: Draw {
+                            kind: Primitive::Triangle,
+                            vertex_count: 3,
+                            instance_count: 1,
+                        },
+                    });
+                }
+            }
 
-            // MILESTONE-SCOPE-CUT (kitty images below bg): generic.zig:1630-1637.
+            // Then we draw any kitty images that need to be behind text AND cell
+            // backgrounds.
+            // self.images.draw(&self.api, self.shaders.pipelines.image, &pass, .kitty_below_bg);
+            //
+            // PORTS: generic.zig:1628-1635; macos_impl generic.rs:6105-6113.
+            // GL: `pass` is `&mut` (step bumps `step_number`) — see the module docs.
+            unsafe {
+                (*self_ptr).images.draw(
+                    &(*self_ptr).api,
+                    &(*self_ptr).shaders.pipelines.image,
+                    &mut pass,
+                    DrawPlacements::KittyBelowBg,
+                );
+            }
 
             // Opaque cell backgrounds.
             // pass.step(.{ .pipeline = cell_bg, .uniforms, .buffers = &.{ null,
@@ -3707,7 +4439,18 @@ impl Renderer {
                 },
             });
 
-            // MILESTONE-SCOPE-CUT (kitty images below text): generic.zig:1647-1653.
+            // Kitty images between cell backgrounds and text.
+            // self.images.draw(..., .kitty_below_text);
+            //
+            // PORTS: generic.zig:1645-1651; macos_impl generic.rs:6131-6139.
+            unsafe {
+                (*self_ptr).images.draw(
+                    &(*self_ptr).api,
+                    &(*self_ptr).shaders.pipelines.image,
+                    &mut pass,
+                    DrawPlacements::KittyBelowText,
+                );
+            }
 
             // Text.
             // pass.step(.{ .pipeline = cell_text, .uniforms, .buffers = &.{
@@ -3732,16 +4475,101 @@ impl Renderer {
                 },
             });
 
-            // MILESTONE-SCOPE-CUT (kitty images above text + debug overlay):
-            // generic.zig:1656-1672,1674-1683.
+            // Kitty images in front of text.
+            // self.images.draw(..., .kitty_above_text);
+            //
+            // PORTS: generic.zig:1671-1677; macos_impl generic.rs:6166-6174.
+            unsafe {
+                (*self_ptr).images.draw(
+                    &(*self_ptr).api,
+                    &(*self_ptr).shaders.pipelines.image,
+                    &mut pass,
+                    DrawPlacements::KittyAboveText,
+                );
+            }
+
+            // Debug overlay. We do this before any custom shader state
+            // because our debug overlay is aligned with the grid.
+            // if (self.overlay != null) self.images.draw(..., .overlay);
+            //
+            // PORTS: generic.zig:1681-1688; macos_impl generic.rs:6176-6188.
+            if unsafe { (*self_ptr).overlay.is_some() } {
+                unsafe {
+                    (*self_ptr).images.draw(
+                        &(*self_ptr).api,
+                        &(*self_ptr).shaders.pipelines.image,
+                        &mut pass,
+                        DrawPlacements::Overlay,
+                    );
+                }
+            }
 
             // defer pass.complete();
             pass.complete();
         }
 
-        // MILESTONE-SCOPE-CUT (custom-shader post-process passes): macos_impl generic.rs:
-        // 5947-6007 (generic.zig:1685-1720). `frame.custom_shader_state` is always `None`,
-        // so this whole `if` is cut.
+        // If we have custom shaders, then we render them.
+        // if (frame.custom_shader_state) |*state| { … }
+        // PORTS: generic.zig:1691-1719; macos_impl generic.rs:5963-6023.
+        if unsafe { (*frame).custom_shader_state.is_some() } {
+            let state: *mut CustomShaderState =
+                unsafe { (*frame).custom_shader_state.as_mut().unwrap() };
+            // Sync our uniforms.
+            // try state.uniforms.sync(&.{self.custom_shader_uniforms});
+            //   (CustomShaderState.uniforms stays `Buffer<shadertoy::Uniforms>` — no
+            //    ABI serializer; the ergonomic shadertoy uniforms sync directly.)
+            unsafe {
+                (*state)
+                    .uniforms
+                    .sync(&[(*self_ptr).custom_shader_uniforms])?;
+            }
+
+            // for (self.shaders.post_pipelines, 0..) |pipeline, i| {
+            //   (the slice ref is hoisted so `[i]` does not autoref through the raw
+            //    `self_ptr` — a narrow shared reborrow of `self.shaders.post_pipelines`,
+            //    disjoint from the `state`/`frame` the loop touches.)
+            let post_pipelines: &[crate::opengl::pipeline::Pipeline] =
+                unsafe { &(*self_ptr).shaders.post_pipelines };
+            let n = post_pipelines.len();
+            for (i, pipeline) in post_pipelines.iter().enumerate() {
+                // var pass = frame_ctx.renderPass(&.{.{
+                //     .target = if (i < post_pipelines.len - 1)
+                //         .{ .texture = state.front_texture } else .{ .target = frame.target },
+                //     .clear_color = .{ 0.0, 0.0, 0.0, 0.0 },
+                // }});
+                // defer pass.complete();
+                let target = if i < n - 1 {
+                    AttachmentTarget::Texture(unsafe { &(*state).front_texture })
+                } else {
+                    AttachmentTarget::Target(unsafe { &(*frame).target })
+                };
+                let attachments = [Attachment {
+                    target,
+                    clear_color: Some([0.0, 0.0, 0.0, 0.0]),
+                }];
+                let mut pass = frame_ctx.render_pass(&attachments);
+
+                // pass.step(.{ .pipeline = pipeline, .uniforms = state.uniforms.buffer,
+                //     .textures = &.{state.back_texture}, .samplers = &.{state.sampler},
+                //     .draw = .{ .type = .triangle, .vertex_count = 3 } });
+                pass.step(Step {
+                    pipeline,
+                    uniforms: Some(unsafe { (*state).uniforms.buffer }),
+                    buffers: &[],
+                    textures: &[Some(unsafe { &(*state).back_texture })],
+                    samplers: &[Some(unsafe { &(*state).sampler })],
+                    draw: Draw {
+                        kind: Primitive::Triangle,
+                        vertex_count: 3,
+                        instance_count: 1,
+                    },
+                });
+                // defer pass.complete();
+                pass.complete();
+                // defer state.swap();
+                unsafe { (*state).swap() };
+            }
+        }
 
         // Disarm the errdefer: from here we always reach `frame_ctx.complete`, whose
         // trampoline calls `frame_completed` → `release_frame`. Leaving it armed would
@@ -3773,11 +4601,15 @@ impl Renderer {
 mod tests {
     use allocator_api2::alloc::Global;
 
-    use super::Renderer;
-    use crate::generic::{Color, DerivedConfig, Options, RepeatablePath, TerminalColor};
+    use super::{Error, Renderer};
+    use crate::generic::{
+        Color, DerivedConfig, Options, RepeatablePath, SurfaceMailbox, TerminalColor,
+    };
     use crate::link;
+    // The bg-image buffer mapping asserted by `update_bg_image_buffer_maps_config`.
     use crate::opengl::gl::test_support;
     use crate::opengl::OpenGL;
+    use crate::shaders::{BgImageInfoFit, BgImageInfoPosition};
     use crate::size::{
         AlphaBlending, BackgroundBlur, BackgroundImageFit, BackgroundImagePosition, CellSize,
         FontShapingBreak, Padding, ScreenSize, Size, WindowColorspace,
@@ -3956,6 +4788,8 @@ mod tests {
             config: derived_config_for_test(),
             font_grid,
             size,
+            // Offscreen: no surface, hence no mailbox (push returns 0).
+            surface_mailbox: SurfaceMailbox::DETACHED,
         };
 
         let mut r = match Renderer::init(Global, opts) {
@@ -3966,6 +4800,12 @@ mod tests {
             // CLEAN SKIP, mirroring Task 8's `init_offscreen` skip contract — never
             // a panic, never a fabricated renderer.
             Err(e) => {
+                // W8-03 strict mode: under RUSTTY_REQUIRE_GL=1 the clean skip
+                // becomes a hard failure (see test_support docs).
+                test_support::require_gl_or_skip(
+                    "linux_opengl_renderer_init_then_deinit_round_trips",
+                    &e,
+                );
                 eprintln!(
                     "no headless OpenGL 4.3 core context ({e}); skipping \
                      linux_opengl_renderer_init_then_deinit_round_trips"
@@ -4013,10 +4853,17 @@ mod tests {
             config: derived_config_for_test(),
             font_grid,
             size,
+            // Offscreen: no surface, hence no mailbox (push returns 0).
+            surface_mailbox: SurfaceMailbox::DETACHED,
         };
         let mut r = match Renderer::init(Global, opts) {
             Ok(r) => r,
             Err(e) => {
+                // W8-03 strict mode (see test_support docs).
+                test_support::require_gl_or_skip(
+                    "linux_opengl_display_unrealize_then_realize_rebuilds",
+                    &e,
+                );
                 eprintln!(
                     "no headless OpenGL 4.3 core context ({e}); skipping \
                      linux_opengl_display_unrealize_then_realize_rebuilds"
@@ -4094,10 +4941,17 @@ mod tests {
             config: derived_config_for_test(),
             font_grid,
             size,
+            // Offscreen: no surface, hence no mailbox (push returns 0).
+            surface_mailbox: SurfaceMailbox::DETACHED,
         };
         let mut r = match Renderer::init(Global, opts) {
             Ok(r) => r,
             Err(e) => {
+                // W8-03 strict mode (see test_support docs).
+                test_support::require_gl_or_skip(
+                    "linux_opengl_rebuild_cells_places_ab_and_cursor",
+                    &e,
+                );
                 eprintln!(
                     "no headless OpenGL 4.3 core context ({e}); skipping \
                      linux_opengl_rebuild_cells_places_ab_and_cursor"
@@ -4163,7 +5017,10 @@ mod tests {
     // `test_support::gl_lock`, so the terminate/re-init is SEQUENTIAL — the parallel
     // 2nd-live-context hazard the lock guards against never arises.
     fn golden_renderer(cols: CellCountInt, rows: CellCountInt) -> Option<Renderer> {
-        if OpenGL::init_offscreen(AlphaBlending::Native, 1, 1).is_err() {
+        if let Err(e) = OpenGL::init_offscreen(AlphaBlending::Native, 1, 1) {
+            // W8-03 strict mode: this ONE arm covers every golden test — they
+            // all probe through here (see test_support docs).
+            test_support::require_gl_or_skip("golden_renderer probe", &e);
             eprintln!("no headless OpenGL 4.3 core context; skipping golden");
             return None;
         }
@@ -4173,8 +5030,156 @@ mod tests {
             config: derived_config_for_test(),
             font_grid,
             size,
+            // Offscreen: no surface, hence no mailbox (push returns 0).
+            surface_mailbox: SurfaceMailbox::DETACHED,
         };
         Some(Renderer::init(Global, opts).expect("Renderer::init (GL probed above)"))
+    }
+
+    // F-014 PROVING TESTS (the OpenGL twin of
+    // `macos_impl::tests::surface_mailbox_routing`): the surface-mailbox seam
+    // (GPU_RD_CHUNK3A_DESIGN §B.2) is RESOLVED — `frameCompleted`'s
+    // `.renderer_health` push and `drawFrame`'s `.scrollbar` push actually reach the
+    // mailbox. Before the fix `SurfaceMailbox::push` was a hard-coded `0`, so both
+    // sinks stayed EMPTY and `scrollbar_dirty` could never be cleared (the reported
+    // "Linux GTK: renderer scrollbar updates are discarded by a no-op mailbox").
+    mod surface_mailbox_routing {
+        use std::sync::Arc;
+
+        // `use super::*` picks up the enclosing `tests` module's helpers +
+        // imports (`golden_renderer`, `term_opts`, `Renderer`, `Global`, `Mutex`,
+        // `Terminal`, `state`, `test_support`); the seam types live one level
+        // further up (`crate::generic`) and are named explicitly.
+        use super::*;
+        use crate::generic::surface_mailbox_tests::RecordingSink;
+        use crate::generic::{MailboxTimeout, SurfaceMailbox, SurfaceMessage};
+        use rustty_vt::Scrollbar;
+
+        /// Drive one real frame: `update_frame` (refreshes the scrollbar cache from
+        /// the terminal and raises `scrollbar_dirty`) then `draw_frame(true)` (whose
+        /// `defer` runs the scrollbar push). Returns the pushed scrollbar value.
+        fn update_and_draw(r: &mut Renderer) -> Scrollbar {
+            let mut mutex = Mutex::new();
+            let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+            {
+                let mut s = t.vt_stream();
+                s.next_slice(b"Ab");
+                s.deinit();
+            }
+            let st = state::State {
+                mutex: &mut mutex,
+                terminal: &mut t,
+                inspector: None,
+                inspector_ptr: None,
+                preedit: None,
+                mouse: state::Mouse::default(),
+                demand: Default::default(),
+                handoff_gen: Default::default(),
+                handoff_park: Default::default(),
+            };
+            r.update_frame(&st, true).unwrap();
+            // Guard against a vacuous test: the fresh terminal's scrollbar differs
+            // from the `Scrollbar::ZERO` the renderer was built with, so
+            // `update_frame` raised the dirty flag.
+            assert!(
+                r.scrollbar_dirty,
+                "update_frame must have cached a fresh scrollbar (dirty)"
+            );
+            let scrollbar = r.scrollbar;
+            r.draw_frame(true).unwrap();
+            scrollbar
+        }
+
+        /// generic.zig:1725-1737 — `frameCompleted` pushes `.renderer_health` with
+        /// `.forever` ONLY on a health TRANSITION.
+        #[test]
+        fn frame_completed_pushes_renderer_health_on_transition_only() {
+            let _guard = test_support::gl_lock();
+
+            let mut r = match golden_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // GL-context skip
+            };
+            let sink = Arc::new(RecordingSink::accepting());
+            r.surface_mailbox = SurfaceMailbox::new(sink.clone());
+
+            // `health` starts `.healthy`, so this IS a transition → one push.
+            r.frame_completed(crate::Health::Unhealthy);
+            // Identical health → `if (self.health.load(...) != health)` is false.
+            r.frame_completed(crate::Health::Unhealthy);
+
+            assert_eq!(
+                sink.pushed(),
+                vec![(
+                    SurfaceMessage::RendererHealth(crate::Health::Unhealthy),
+                    MailboxTimeout::Forever
+                )]
+            );
+
+            r.deinit();
+        }
+
+        /// generic.zig:1449-1456 — the `drawFrame` `defer` pushes `.scrollbar` with
+        /// `.instant` and clears `scrollbar_dirty` when the push lands. This is the
+        /// exact hop the GTK scrollbar adjustment depends on.
+        #[test]
+        fn draw_frame_pushes_scrollbar_and_clears_dirty() {
+            let _guard = test_support::gl_lock();
+
+            let mut r = match golden_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // GL-context skip
+            };
+            let sink = Arc::new(RecordingSink::accepting());
+            r.surface_mailbox = SurfaceMailbox::new(sink.clone());
+
+            let scrollbar = update_and_draw(&mut r);
+
+            assert_eq!(
+                sink.pushed(),
+                vec![(
+                    SurfaceMessage::Scrollbar(scrollbar),
+                    MailboxTimeout::Instant
+                )]
+            );
+            assert!(
+                !r.scrollbar_dirty,
+                "a landed scrollbar push must clear scrollbar_dirty"
+            );
+
+            r.deinit();
+        }
+
+        /// The other arm of the same `if (... > 0)`: "Fail instantly if the surface
+        /// mailbox if full, we'll just get it on the next frame" — a refused push
+        /// must KEEP `scrollbar_dirty` set.
+        #[test]
+        fn draw_frame_keeps_scrollbar_dirty_when_the_mailbox_is_full() {
+            let _guard = test_support::gl_lock();
+
+            let mut r = match golden_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // GL-context skip
+            };
+            let sink = Arc::new(RecordingSink::refusing());
+            r.surface_mailbox = SurfaceMailbox::new(sink.clone());
+
+            let scrollbar = update_and_draw(&mut r);
+
+            assert_eq!(
+                sink.pushed(),
+                vec![(
+                    SurfaceMessage::Scrollbar(scrollbar),
+                    MailboxTimeout::Instant
+                )]
+            );
+            assert!(
+                r.scrollbar_dirty,
+                "a refused scrollbar push must keep scrollbar_dirty set"
+            );
+
+            r.deinit();
+        }
     }
 
     // Sample the RGBA byte 4-tuple at pixel (x, y) in a tight `w*h*4` readback
@@ -4309,5 +5314,945 @@ mod tests {
 
         r.deinit();
         t.deinit(Global);
+    }
+
+    /// Build the `state::State` the two Kitty tests drive `update_frame` with.
+    /// (Split out so the two tests cannot drift apart; the golden above keeps its
+    /// own inline literal, untouched.)
+    fn kitty_state(mutex: &mut Mutex, terminal: &mut Terminal) -> state::State {
+        state::State {
+            mutex,
+            terminal,
+            inspector: None,
+            inspector_ptr: None,
+            preedit: None,
+            mouse: state::Mouse::default(),
+            // D4 handoff (oracle d34b54e9b) - reference field defaults are `.init(0)`.
+            demand: Default::default(),
+            handoff_gen: Default::default(),
+            handoff_park: Default::default(),
+        }
+    }
+
+    /// F-005 PROVING TEST — the OpenGL twin of `macos_impl::tests::
+    /// kitty_image_pixel_path` (generic.rs:7498). Drives a real `Terminal` with a
+    /// Kitty-graphics transmit+display APC, runs `update_frame` (which enters
+    /// `image::State::kitty_update` through the `kitty_requires_update` guard) then
+    /// `draw_frame` (which uploads the pending image to the GPU), and asserts the
+    /// STATE the path produces.
+    ///
+    /// BEFORE THIS WAVE the whole path was absent on Linux: `linux_impl` had no
+    /// `images` field, so a transmitted Kitty image was parsed and stored by the vt
+    /// layer and then silently dropped by the renderer (F-005).
+    ///
+    /// The assertions (a)-(d) are ported VERBATIM from the macOS twin — which
+    /// asserts STATE, not pixels — plus one GL-ONLY EXTRA: a pixel readback proving
+    /// the `.kitty_below_text` band actually reached the framebuffer. There is no
+    /// macOS-twin analogue for the extra; it follows the structural-threshold
+    /// philosophy of `golden_renders_cursor_fg_bg` (a region/color assertion with
+    /// tolerance, never a byte-diff against Metal).
+    ///
+    /// Live-GL: clean-skips via `golden_renderer`, hard-fails under
+    /// `RUSTTY_REQUIRE_GL=1`. `_guard` first so it drops last (after `deinit`).
+    #[test]
+    fn kitty_image_pixel_path() {
+        let _guard = test_support::gl_lock();
+
+        let mut r = match golden_renderer(10, 3) {
+            Some(r) => r,
+            None => return, // GL-context skip
+        };
+
+        // Transmit AND display (a=T) a 1x2 direct RGB image (f=24), id 1, all
+        // pixels 0xFF (`////////` = 6 bytes of 0xFF). a=T places it at the
+        // cursor → a pin placement, marking storage dirty.
+        let mut mutex = Mutex::new();
+        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        // The vt `Terminal` starts with `width_px`/`height_px == 0` (the port
+        // sets them only through the surface). Kitty `pixel_size` divides by the
+        // cell size (`width_px / cols`), so pin the pixel dims to the renderer's
+        // cell metrics — exactly what a real surface resize would do — else the
+        // placement's dest size is 0 and it is (correctly) culled.
+        t.width_px = r.grid_metrics.cell_width * 10;
+        t.height_px = r.grid_metrics.cell_height * 3;
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b_Ga=T,f=24,i=1,s=1,v=2,c=1,r=1;////////\x1b\\");
+            s.deinit();
+        }
+
+        // Sanity: the image + a placement now live in storage, dirty is set.
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        assert!(storage.image_by_id(1).is_some(), "image not in storage");
+        assert!(!storage.placements.is_empty(), "no placement in storage");
+        assert!(storage.dirty, "storage not marked dirty by the APC");
+
+        // Drive the renderer. `terminal_state.update` snapshots the terminal;
+        // `update_frame` → `kitty_requires_update` (dirty) == true → `kitty_update`.
+        r.terminal_state.update(Global, &mut t).unwrap();
+        {
+            let st = kitty_state(&mut mutex, &mut t);
+            r.update_frame(&st, true).unwrap();
+        }
+
+        // (a) the terminal-walk + containment math ran → a placement was computed.
+        assert!(
+            !r.images.kitty_placements.is_empty(),
+            "kitty_update computed no placements"
+        );
+        // (b) `prep_kitty_image` queued the image (pending) or it is already up.
+        let entry = r
+            .images
+            .images
+            .get(&crate::image::Id::Kitty(1))
+            .expect("no Id::Kitty(1) image entry after kitty_update");
+        assert!(
+            entry.image.has_texture() || entry.image.is_pending(),
+            "image neither pending nor uploaded after kitty_update"
+        );
+        // (c) `kitty_update`'s tail cleared `storage.dirty` (through the raw ptr).
+        assert!(
+            !unsafe { &(*t.screens.active).kitty_images }.dirty,
+            "kitty_update did not clear storage.dirty"
+        );
+
+        // `draw_frame` uploads pending images → `convert` (rgb→rgba) +
+        // `Texture::init` run → the image is Ready with a GL texture.
+        r.draw_frame(true).unwrap();
+        assert!(
+            r.images
+                .images
+                .get(&crate::image::Id::Kitty(1))
+                .expect("image entry vanished")
+                .image
+                .has_texture(),
+            "image has no GPU texture after draw_frame (convert/upload did not run)"
+        );
+
+        // EXTRA (GL-only, no macOS-twin analogue): the image was not merely uploaded
+        // — the `.kitty_below_text` band actually DREW it. The placement is a 1-cell
+        // wide, 1-row tall, all-0xFF (white) image at the cursor, i.e. grid (0,0) on
+        // an otherwise black background. Sample the cell center and require a bright
+        // pixel. Structural threshold (>128 on all three channels), never a byte
+        // comparison against Metal — llvmpipe and Metal are different rasterizers.
+        // Y-FLIP as in `golden_renders_cursor_fg_bg`: `glReadPixels` is bottom-up.
+        let idx = r.swap_chain.frame_index as usize;
+        let px = r.swap_chain.frames[idx].target.read_rgba();
+        let w = r.size.screen.width as usize;
+        let h = r.size.screen.height as usize;
+        let cw = r.grid_metrics.cell_width as usize;
+        let ch = r.grid_metrics.cell_height as usize;
+        assert_eq!(px.len(), w * h * 4);
+        let (ir, ig, ib, _ia) = px_at(&px, w, cw / 2, h - 1 - ch / 2);
+        assert!(
+            ir > 128 && ig > 128 && ib > 128,
+            "the kitty image was uploaded but never drawn: cell (0,0) is \
+             (R={ir} G={ig} B={ib}), expected the all-0xFF white image"
+        );
+
+        r.deinit();
+        t.deinit(Global);
+    }
+
+    /// F-005 PROVING TEST (eviction half) — GL-ONLY, no macOS-twin analogue.
+    ///
+    /// Covers the third leg of the oracle's image lifecycle: upload → draw →
+    /// **evict**. After a drawn image exists, the Kitty delete-all APC (`a=d`) makes
+    /// the vt layer drop the placement/image; the next `update_frame` re-walks the
+    /// terminal and `kitty_update`'s prune marks the orphaned renderer-side image for
+    /// unload, and the next `draw_frame`'s upload sweep removes it from the map and
+    /// deletes its GL texture (`image.zig:73-78`, `State::upload`'s `isUnloading`
+    /// arm). Without the twin's explicit `Texture::deinit` this would leak a GL
+    /// texture per transmitted image for the life of the surface.
+    ///
+    /// Live-GL: clean-skips via `golden_renderer`, hard-fails under
+    /// `RUSTTY_REQUIRE_GL=1`.
+    #[test]
+    fn kitty_eviction_removes_image() {
+        let _guard = test_support::gl_lock();
+
+        let mut r = match golden_renderer(10, 3) {
+            Some(r) => r,
+            None => return, // GL-context skip
+        };
+
+        let mut mutex = Mutex::new();
+        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        t.width_px = r.grid_metrics.cell_width * 10;
+        t.height_px = r.grid_metrics.cell_height * 3;
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b_Ga=T,f=24,i=1,s=1,v=2,c=1,r=1;////////\x1b\\");
+            s.deinit();
+        }
+
+        // Frame 1: transmit + place + upload.
+        r.terminal_state.update(Global, &mut t).unwrap();
+        {
+            let st = kitty_state(&mut mutex, &mut t);
+            r.update_frame(&st, true).unwrap();
+        }
+        r.draw_frame(true).unwrap();
+        assert!(
+            r.images
+                .images
+                .get(&crate::image::Id::Kitty(1))
+                .is_some_and(|e| e.image.has_texture()),
+            "precondition: the image must be uploaded before we evict it"
+        );
+
+        // Delete everything — `d=A` (capital) is "all placements AND the image
+        // data" (`command::Delete::All(true)`); the lowercase `d=a` default would
+        // drop only the placements and KEEP the image in storage, which is not an
+        // eviction. Then re-drive the renderer.
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b_Ga=d,d=A\x1b\\");
+            s.deinit();
+        }
+        r.terminal_state.update(Global, &mut t).unwrap();
+        {
+            let st = kitty_state(&mut mutex, &mut t);
+            r.update_frame(&st, true).unwrap();
+        }
+        // The placement is gone from the renderer's own list right away.
+        assert!(
+            r.images.kitty_placements.is_empty(),
+            "kitty_update kept a placement for a deleted image"
+        );
+        assert!(
+            match r.images.images.get(&crate::image::Id::Kitty(1)) {
+                None => true,
+                Some(e) => e.image.is_unloading(),
+            },
+            "the orphaned image was not marked for unload"
+        );
+
+        // The upload sweep inside `draw_frame` performs the eviction (and the GL
+        // texture delete).
+        r.draw_frame(true).unwrap();
+        assert!(
+            r.images.images.is_empty(),
+            "the unloaded image was not evicted from the renderer image map"
+        );
+
+        r.deinit();
+        t.deinit(Global);
+    }
+
+    // Shared driver for the custom-shader goldens (F-013): write the given shadertoy
+    // body to a nanos-suffixed temp file, point the config at it, `init_shaders`
+    // (load + transpile GLSL + build the post pipelines + flip `has_custom_shaders`),
+    // then drive one "Ab" frame through `update_frame` + `draw_frame`. Returns the
+    // renderer, the terminal, and the readback of the frame just drawn (RGBA, rows
+    // tight, bottom-up per `glReadPixels`). Returns None on the GL-context skip.
+    //
+    // The OpenGL twin of `macos_impl::tests::golden_renders_custom_shader`
+    // (generic.rs:7042); CALLER holds `test_support::gl_lock`.
+    fn drive_custom_shader_frame(shader_body: &[u8]) -> Option<(Renderer, Terminal, Vec<u8>)> {
+        use std::ffi::CString;
+
+        let mut r = golden_renderer(10, 3)?;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("rustty_gl_shader_{nanos}.glsl"));
+        std::fs::write(&path, shader_body).unwrap();
+
+        // Point the config at the on-disk shader (required arm), byte-faithful
+        // path -> CString (mirrors the macOS custom-shader golden).
+        let cpath = CString::new(path.as_os_str().as_encoded_bytes().to_vec()).unwrap();
+        r.config.custom_shaders = RepeatablePath {
+            value: vec![crate::generic::Path::Required(cpath)],
+        };
+
+        // Load + transpile + build the post pipelines + flip has_custom_shaders.
+        r.init_shaders().expect("init_shaders");
+        assert!(r.has_custom_shaders, "custom shaders not activated");
+        assert!(
+            !r.shaders.post_pipelines.is_empty(),
+            "post pipelines not built"
+        );
+
+        // Drive one frame: "Ab" on 10×3 ⇒ block cursor at grid (2,0) (the T10/T11
+        // fixture), visible glyphs + a red cursor cell.
+        let mut mutex = Mutex::new();
+        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"Ab");
+            s.deinit();
+        }
+        let st = state::State {
+            mutex: &mut mutex,
+            terminal: &mut t,
+            inspector: None,
+            inspector_ptr: None,
+            preedit: None,
+            mouse: state::Mouse::default(),
+            // D4 handoff (oracle d34b54e9b) - reference field defaults are `.init(0)`.
+            demand: Default::default(),
+            handoff_gen: Default::default(),
+            handoff_park: Default::default(),
+        };
+        r.update_frame(&st, true).unwrap();
+        r.draw_frame(true).unwrap();
+
+        // The draw_frame setup block lazily created the per-frame CustomShaderState
+        // (the config had no shaders at `Renderer::init`, so `FrameState::init` did
+        // not — this is the F-013 wiring, absent before the fix).
+        let idx = r.swap_chain.frame_index as usize;
+        assert!(
+            r.swap_chain.frames[idx].custom_shader_state.is_some(),
+            "custom_shader_state not created by draw_frame"
+        );
+
+        let px = r.swap_chain.frames[idx].target.read_rgba();
+        let _ = std::fs::remove_file(&path);
+        Some((r, t, px))
+    }
+
+    /// F-013 golden 1/2 (the macOS `golden_renders_custom_shader` twin): a
+    /// PASS-THROUGH shadertoy post-process shader preserves the cells — the base
+    /// pass retargets to `back_texture` and the post pass blits it to
+    /// `frame.target`. Same robustness contract as the macOS twin (non-black AND
+    /// non-uniform — an empty-pipeline black frame fails the first, a uniform fill
+    /// fails the second; NOT an exact byte-diff, since the pass-through samples
+    /// through a GL sampler and sub-LSB filtering may perturb bytes) PLUS the
+    /// structural cursor fact: the red cursor cell survives the identity shader.
+    ///
+    /// RUNS FOR REAL only under `LIBGL_ALWAYS_SOFTWARE=1` (llvmpipe); CLEAN-SKIPS
+    /// otherwise. Holds `test_support::gl_lock`; `_guard` first so it drops last.
+    #[test]
+    fn golden_renders_custom_shader_passthrough() {
+        let _guard = test_support::gl_lock();
+
+        let Some((mut r, mut t, px)) = drive_custom_shader_frame(
+            b"void mainImage(out vec4 fragColor, in vec2 fragCoord){\n\
+              fragColor = texture(iChannel0, fragCoord / iResolution.xy);\n}\n",
+        ) else {
+            return; // GL-context skip
+        };
+
+        let w = r.size.screen.width as usize;
+        let h = r.size.screen.height as usize;
+        let cw = r.grid_metrics.cell_width as usize;
+        let ch = r.grid_metrics.cell_height as usize;
+        assert_eq!(px.len(), w * h * 4);
+        let sample = |x: usize, y: usize| px_at(&px, w, x, h - 1 - y);
+
+        // Non-black: some pixel has a bright channel (the white "Ab" glyphs /
+        // red cursor made it through the pass-through).
+        let non_black = px
+            .chunks_exact(4)
+            .any(|p| p[0] > 64 || p[1] > 64 || p[2] > 64);
+        assert!(
+            non_black,
+            "cells not visible through the pass-through shader"
+        );
+        // Not uniform: at least one pixel differs from the first (glyph vs bg).
+        let first = &px[0..4];
+        let non_uniform = px.chunks_exact(4).any(|p| p != first);
+        assert!(
+            non_uniform,
+            "frame is a uniform fill (post-process did not preserve the image)"
+        );
+        // Structural: the block cursor at grid (2,0) is still bright-red-dominant
+        // (identity shader ⇒ the T11 golden's cursor fact holds).
+        let (rr, g, b, _a) = sample(2 * cw + cw / 2, ch / 2);
+        assert!(rr > 128, "cursor cell not bright-red (R={rr})");
+        assert!(
+            rr > g && rr > b,
+            "cursor cell not red-dominant (R={rr} G={g} B={b})"
+        );
+
+        r.deinit();
+        t.deinit(Global);
+    }
+
+    /// F-013 golden 2/2, the BEHAVIORAL proof the post-process pass actually
+    /// transforms pixels (rustty-added; ghostty has no oracle test here): a
+    /// color-INVERTING shader turns the dark background bright and the red cursor
+    /// cyan. Before the F-013 wiring the base pass rendered straight to
+    /// `frame.target` and the post loop never ran, so the background stayed dark —
+    /// this test fails without the fix and passes with it.
+    ///
+    /// RUNS FOR REAL only under `LIBGL_ALWAYS_SOFTWARE=1` (llvmpipe); CLEAN-SKIPS
+    /// otherwise. Holds `test_support::gl_lock`; `_guard` first so it drops last.
+    #[test]
+    fn golden_custom_shader_inverts_colors() {
+        let _guard = test_support::gl_lock();
+
+        let Some((mut r, mut t, px)) = drive_custom_shader_frame(
+            b"void mainImage(out vec4 fragColor, in vec2 fragCoord){\n\
+              vec4 c = texture(iChannel0, fragCoord / iResolution.xy);\n\
+              fragColor = vec4(1.0 - c.rgb, 1.0);\n}\n",
+        ) else {
+            return; // GL-context skip
+        };
+
+        let w = r.size.screen.width as usize;
+        let h = r.size.screen.height as usize;
+        let cw = r.grid_metrics.cell_width as usize;
+        let ch = r.grid_metrics.cell_height as usize;
+        assert_eq!(px.len(), w * h * 4);
+        let sample = |x: usize, y: usize| px_at(&px, w, x, h - 1 - y);
+
+        // The empty background cell (8,2) was near-black (T11 golden fact B);
+        // inverted it must be BRIGHT on every channel. Without the post pass this
+        // samples the un-transformed dark background and fails.
+        let (br, bg2, bb, _ba) = sample(8 * cw + cw / 2, 2 * ch + ch / 2);
+        assert!(
+            br > 128 && bg2 > 128 && bb > 128,
+            "background not inverted to bright (R={br} G={bg2} B={bb})"
+        );
+
+        // The red cursor cell (2,0) inverts to cyan: green/blue dominant over red.
+        let (rr, g, b, _a) = sample(2 * cw + cw / 2, ch / 2);
+        assert!(
+            g > rr && b > rr,
+            "cursor cell not inverted to cyan-dominant (R={rr} G={g} B={b})"
+        );
+
+        r.deinit();
+        t.deinit(Global);
+    }
+
+    // ===================================================================
+    // F-012 — background image (w2 WI-4)
+    // ===================================================================
+
+    /// Encode a `w`×`h` solid-RGB PNG (8-bit) for the bg-image golden. The reference
+    /// `background-image` fixtures are not checked in, so generate one at test time
+    /// via the pure-Rust `png` encoder. (Test-helper duplication precedent — the
+    /// Metal twin has the same helper at `generic.rs:6842`; `linux_impl`'s tests
+    /// deliberately do not reach into `macos_impl`, which is not even compiled here.)
+    fn encode_solid_png(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut out, w, h);
+            enc.set_color(png::ColorType::Rgb);
+            enc.set_depth(png::BitDepth::Eight);
+            let mut writer = enc.write_header().expect("png header");
+            let mut data = Vec::with_capacity((w * h * 3) as usize);
+            for _ in 0..(w * h) {
+                data.extend_from_slice(&rgb);
+            }
+            writer.write_image_data(&data).expect("png data");
+            writer.finish().expect("png finish");
+        }
+        out
+    }
+
+    /// F-012 PROVING TEST — the OpenGL twin of `macos_impl::tests::
+    /// golden_renders_background_image` (generic.rs:7277). Point the config at a real
+    /// PNG on disk, run `prep_background_image` (open + `FileType` sniff + wuffs
+    /// decode → `bg_image = Some(Pending)`) and `update_bg_image_buffer`
+    /// (opacity/fit → `BgImageGpu`), then `draw_frame` — whose
+    /// `upload_background_image` turns the pending image into a `Ready(Texture)` and
+    /// whose base pass takes the `bg_image` step INSTEAD of the `bg_color` step. Read
+    /// the FBO back and assert the sampled pixel is the DECODED image color, distinct
+    /// from the plain black `bg_color` the negative control shows.
+    ///
+    /// BEFORE THIS WAVE `background-image` was accepted by the config and its vertex
+    /// buffer was synced, but nothing on Linux ever decoded, uploaded, or drew it
+    /// (F-012) — this test could not even be written, because `bg_image` was
+    /// permanently `None`.
+    ///
+    /// DETERMINISM PINS (mirroring the cursor golden): `AlphaBlending::Native`,
+    /// `colorspace = Srgb`, and `fit = Stretch` so the solid image fills the whole
+    /// screen ⇒ every pixel is the image color (trivial sampling).
+    ///
+    /// Live-GL: clean-skips via `golden_renderer`, hard-fails under
+    /// `RUSTTY_REQUIRE_GL=1`. `_guard` first so it drops last (after `deinit`).
+    #[test]
+    fn golden_renders_background_image() {
+        use std::ffi::CString;
+
+        let _guard = test_support::gl_lock();
+
+        // The distinct bg-image color (blue-dominant), unambiguously != black.
+        const IMG_RGB: [u8; 3] = [0x30, 0x60, 0xC0];
+
+        // Build a golden renderer, optionally with a bg image at `path`, draw one
+        // frame, and return the center-pixel RGBA of the bottom row.
+        fn draw_center(with_bg: Option<&std::path::Path>) -> Option<(u8, u8, u8, u8)> {
+            let mut r = golden_renderer(10, 3)?;
+
+            if let Some(p) = with_bg {
+                // Point the config at the on-disk PNG (required arm) + stretch it.
+                let bytes = p.as_os_str().as_encoded_bytes().to_vec();
+                r.config.bg_image =
+                    Some(crate::generic::Path::Required(CString::new(bytes).unwrap()));
+                r.config.bg_image_fit = BackgroundImageFit::Stretch;
+                r.config.bg_image_opacity = 1.0;
+                // Decode + build the vertex/opacity buffer (the two calls
+                // `change_config` would make on a bg-image change).
+                r.prep_background_image().expect("prep_background_image");
+                r.update_bg_image_buffer();
+                // The decode must have produced a pending bg image.
+                assert!(
+                    matches!(r.bg_image, Some(crate::image::Image::Pending(_))),
+                    "prep did not stage a pending bg image"
+                );
+            }
+
+            // An (empty) terminal drives update_frame/draw_frame (as the cursor
+            // golden does); the bg-image step does not depend on cell content.
+            let mut mutex = Mutex::new();
+            let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+            {
+                let st = kitty_state(&mut mutex, &mut t);
+                r.update_frame(&st, true).unwrap();
+            }
+            r.draw_frame(true).unwrap();
+
+            if with_bg.is_some() {
+                // After the frame, the pending image was uploaded to the GPU.
+                assert!(
+                    matches!(r.bg_image, Some(crate::image::Image::Ready(_))),
+                    "bg image not uploaded to a Ready texture"
+                );
+            }
+
+            let idx = r.swap_chain.frame_index as usize;
+            let px = r.swap_chain.frames[idx].target.read_rgba();
+            let w = r.size.screen.width as usize;
+            let h = r.size.screen.height as usize;
+            let cw = r.grid_metrics.cell_width as usize;
+            let ch = r.grid_metrics.cell_height as usize;
+            // Sample the center of an empty cell on the bottom row (grid (5,2)).
+            // Y-FLIP: `glReadPixels` is bottom-up (see `golden_renders_cursor_fg_bg`).
+            let out = px_at(&px, w, 5 * cw + cw / 2, h - 1 - (2 * ch + ch / 2));
+            r.deinit();
+            t.deinit(Global);
+            Some(out)
+        }
+
+        // Write the solid bg-image PNG to a temp file.
+        let png_bytes = encode_solid_png(2, 2, IMG_RGB);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("rustty_gl_bg_{nanos}.png"));
+        std::fs::write(&path, &png_bytes).unwrap();
+
+        // (bg image) — sample should be the decoded image color.
+        let bg = match draw_center(Some(&path)) {
+            Some(v) => v,
+            None => {
+                let _ = std::fs::remove_file(&path);
+                return; // GL-context skip
+            }
+        };
+        // (negative control) — no bg image ⇒ the plain black bg_color.
+        let none = draw_center(None).expect("GL probed above");
+        let _ = std::fs::remove_file(&path);
+
+        // `read_rgba` returns (R, G, B, A). The image is blue-dominant
+        // (0x30,0x60,0xC0): B ≈ 0xC0 (>128), R ≈ 0x30 (<128), B > R, opaque.
+        // Structural thresholds, never a byte-diff against the Metal golden.
+        let (br, _bg2, bb, ba) = bg;
+        assert!(bb > 128, "bg-image blue channel too low (B={bb})");
+        assert!(br < 128, "bg-image red channel too high (R={br})");
+        assert!(bb > br, "bg-image not blue-dominant (B={bb} R={br})");
+        assert!(ba > 128, "bg-image not opaque (A={ba})");
+
+        // The negative control is dark (black bg_color) — proves the bg-image step
+        // (not the bg_color fallback) produced the color above.
+        let (nr, ng, nb, _na) = none;
+        assert!(
+            nr < 96 && ng < 96 && nb < 96,
+            "negative control not dark (R={nr} G={ng} B={nb})"
+        );
+        assert!(
+            bb > nb + 64,
+            "bg-image blue not distinct from bg_color (bg B={bb} vs none B={nb})"
+        );
+    }
+
+    /// F-012 — the CPU half: config → bg-image vertex/uniform buffer mapping + the
+    /// `modified` counter. The OpenGL twin of `macos_impl::tests::
+    /// update_bg_image_buffer_maps_config` (generic.rs:7766). This code was already
+    /// live on Linux before the wave, but it had NO Linux-side test; it is the
+    /// fit/position/repeat/opacity coverage the GPU-side sampling (the shader's job)
+    /// rests on.
+    #[test]
+    fn update_bg_image_buffer_maps_config() {
+        let _guard = test_support::gl_lock();
+
+        let mut r = match golden_renderer(10, 3) {
+            Some(r) => r,
+            None => return, // GL-context skip
+        };
+        // DIVERGENCE from the Metal twin's assertion (`== 1`): the macOS test builds
+        // its renderer through a test-only ctor, whereas `golden_renderer` goes
+        // through the REAL `Renderer::init`, which already called
+        // `update_bg_image_buffer` once (generic.zig:794). So assert the INCREMENT,
+        // which is the actual invariant the per-frame sync gate reads.
+        let before = r.bg_image_buffer_modified;
+        r.config.bg_image_position = BackgroundImagePosition::CenterCenter;
+        r.config.bg_image_fit = BackgroundImageFit::Cover;
+        r.config.bg_image_repeat = true;
+        r.update_bg_image_buffer();
+        assert_eq!(r.bg_image_buffer.info.position, BgImageInfoPosition::Mc);
+        assert_eq!(r.bg_image_buffer.info.fit, BgImageInfoFit::Cover);
+        assert!(r.bg_image_buffer.info.repeat);
+        assert_eq!(r.bg_image_buffer_modified, before + 1);
+
+        r.deinit();
+    }
+
+    /// F-012 — the "no path" arm of `prep_background_image` (oracle
+    /// `generic.zig:1825-1829`): with `config.bg_image == None` an existing image is
+    /// marked for unload, and the next `draw_frame`'s `upload_background_image`
+    /// FREES it (`bg_image = None`). This is the config-cleared path, which the
+    /// golden above does not exercise.
+    #[test]
+    fn clearing_bg_image_config_unloads_the_image() {
+        use std::ffi::CString;
+
+        let _guard = test_support::gl_lock();
+
+        let mut r = match golden_renderer(10, 3) {
+            Some(r) => r,
+            None => return, // GL-context skip
+        };
+
+        let png_bytes = encode_solid_png(2, 2, [0x30, 0x60, 0xC0]);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("rustty_gl_bg_clear_{nanos}.png"));
+        std::fs::write(&path, &png_bytes).unwrap();
+
+        r.config.bg_image = Some(crate::generic::Path::Required(
+            CString::new(path.as_os_str().as_encoded_bytes().to_vec()).unwrap(),
+        ));
+        r.prep_background_image().expect("prep_background_image");
+        assert!(
+            matches!(r.bg_image, Some(crate::image::Image::Pending(_))),
+            "prep did not stage a pending bg image"
+        );
+
+        // Now clear the path and re-prep: `markForUnload` on the pending image.
+        r.config.bg_image = None;
+        r.prep_background_image().expect("prep (cleared)");
+        assert!(
+            r.bg_image.as_ref().is_some_and(|i| i.is_unloading()),
+            "clearing the config did not mark the bg image for unload"
+        );
+
+        // The frame's `upload_background_image` frees it.
+        let mut mutex = Mutex::new();
+        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        {
+            let st = kitty_state(&mut mutex, &mut t);
+            r.update_frame(&st, true).unwrap();
+        }
+        r.draw_frame(true).unwrap();
+        assert!(
+            r.bg_image.is_none(),
+            "upload_background_image did not free the unloading bg image"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        r.deinit();
+        t.deinit(Global);
+    }
+
+    /// F-012 — `change_config`'s `bg_image_changed` branch (oracle
+    /// `generic.zig:1878-1897`): a config whose `bg_image` path DIFFERS from the
+    /// current one must run `prep_background_image`, and an identical path must not
+    /// re-decode. This is the runtime (`ChangeConfig` message) entry point, distinct
+    /// from the `init` entry the golden drives.
+    #[test]
+    fn change_config_reprepares_the_bg_image() {
+        use std::ffi::CString;
+
+        let _guard = test_support::gl_lock();
+
+        let mut r = match golden_renderer(10, 3) {
+            Some(r) => r,
+            None => return, // GL-context skip
+        };
+
+        let png_bytes = encode_solid_png(2, 2, [0x30, 0x60, 0xC0]);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("rustty_gl_bg_cfg_{nanos}.png"));
+        std::fs::write(&path, &png_bytes).unwrap();
+        let cpath = CString::new(path.as_os_str().as_encoded_bytes().to_vec()).unwrap();
+
+        // Precondition: the renderer was built with no bg image.
+        assert!(r.bg_image.is_none());
+
+        // None -> Some(path) IS a change ⇒ decode.
+        let mut cfg = derived_config_for_test();
+        cfg.bg_image = Some(crate::generic::Path::Required(cpath.clone()));
+        r.change_config(cfg).expect("change_config");
+        assert!(
+            matches!(r.bg_image, Some(crate::image::Image::Pending(_))),
+            "change_config did not decode the new bg-image path"
+        );
+
+        // Upload it so the state machine has a TEXTURE — that is what makes the
+        // next two arms distinguishable (`mark_for_replace` on a textured image
+        // yields `Replace{texture, pending}`; on an untextured one it is just
+        // `Pending` again, which would make this test vacuous).
+        let mut mutex = Mutex::new();
+        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        {
+            let st = kitty_state(&mut mutex, &mut t);
+            r.update_frame(&st, true).unwrap();
+        }
+        r.draw_frame(true).unwrap();
+        assert!(
+            matches!(r.bg_image, Some(crate::image::Image::Ready(_))),
+            "the bg image did not upload"
+        );
+
+        // Some(path) -> Some(SAME path) is NOT a change ⇒ `prep_background_image`
+        // must NOT run: the image stays plain `Ready`.
+        let mut same = derived_config_for_test();
+        same.bg_image = Some(crate::generic::Path::Required(cpath));
+        r.change_config(same).expect("change_config (same path)");
+        assert!(
+            matches!(r.bg_image, Some(crate::image::Image::Ready(_))),
+            "an unchanged bg-image path re-entered prep_background_image"
+        );
+
+        // Some(A) -> Some(B) IS a change ⇒ re-decode + `mark_for_replace`, which on a
+        // textured image is the `Replace{texture, pending}` shape (pending AND
+        // textured at once).
+        let path2 = std::env::temp_dir().join(format!("rustty_gl_bg_cfg2_{nanos}.png"));
+        std::fs::write(&path2, encode_solid_png(2, 2, [0xC0, 0x20, 0x20])).unwrap();
+        let mut other = derived_config_for_test();
+        other.bg_image = Some(crate::generic::Path::Required(
+            CString::new(path2.as_os_str().as_encoded_bytes().to_vec()).unwrap(),
+        ));
+        r.change_config(other).expect("change_config (new path)");
+        let bg = r.bg_image.as_ref().expect("bg image vanished");
+        assert!(
+            bg.is_pending() && bg.has_texture(),
+            "a changed bg-image path did not re-enter prep_background_image"
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&path2);
+        r.deinit();
+        t.deinit(Global);
+    }
+
+    /// F-012 — the wuffs-error → `Error::ImageDecode` mapping the `?` in
+    /// `prep_background_image` propagates. PURE (no GL, no renderer): runs on every
+    /// host, including this macOS dev box's cross-compile lanes' Linux twin builds.
+    #[test]
+    fn wuffs_error_maps_to_image_decode() {
+        assert_eq!(
+            Error::from(rustty_wuffs::Error::OutOfMemory),
+            Error::OutOfMemory
+        );
+        assert_eq!(
+            Error::from(rustty_wuffs::Error::WuffsError),
+            Error::ImageDecode
+        );
+        assert_eq!(
+            Error::from(rustty_wuffs::Error::Overflow),
+            Error::ImageDecode
+        );
+    }
+
+    // ===================================================================
+    // F-020 — inspector renderer overlay (w2 WI-5)
+    // ===================================================================
+
+    /// A stand-in for the inspector's `widgets::renderer::Info`, which is the real
+    /// `InspectorOverlay` impl. The renderer may never name a `rustty-inspector`
+    /// type (R4 acyclicity), so the seam is exercised through a test-local impl —
+    /// exactly the shape core coerces the real `Info` into.
+    struct FakeInspector(Vec<crate::overlay::Feature>);
+    impl state::InspectorOverlay for FakeInspector {
+        fn overlay_features(&self) -> Vec<crate::overlay::Feature> {
+            self.0.clone()
+        }
+    }
+
+    /// F-020 PROVING TEST — the inspector's live renderer-overlay controls now have
+    /// an OpenGL consumer. With a `state.inspector` attached and a feature enabled,
+    /// `update_frame` must (1) read the features through the `InspectorOverlay`
+    /// seam, (2) `rebuild_overlay` a z2d surface, and (3) `images.overlay_update`
+    /// stage it as an `Id::Overlay` placement; `draw_frame` must then upload it and
+    /// take the `.overlay` draw band.
+    ///
+    /// BEFORE THIS WAVE all four stages were milestone-scope-cut on Linux: the
+    /// inspector checkbox wrote a feature nobody read (F-020).
+    ///
+    /// The negative control (`inspector: None`) proves the assertions are not
+    /// vacuous — `overlay` stays `None` and no overlay placement is staged.
+    ///
+    /// Live-GL: clean-skips via `golden_renderer`, hard-fails under
+    /// `RUSTTY_REQUIRE_GL=1`.
+    #[test]
+    fn overlay_draws_on_inspector_features() {
+        let _guard = test_support::gl_lock();
+
+        let mut r = match golden_renderer(10, 3) {
+            Some(r) => r,
+            None => return, // GL-context skip
+        };
+
+        let mut mutex = Mutex::new();
+        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        {
+            // OSC 133;A marks row 0 as a shell PROMPT — the row state
+            // `Overlay::highlight_semantic_prompts` looks for. It draws a
+            // `min(5, cell_width)`-wide bar down the LEFT edge of the prompt rows,
+            // which is what the pixel assertion below samples.
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b]133;A\x1b\\Ab");
+            s.deinit();
+        }
+
+        // (negative control) no inspector ⇒ no features ⇒ no overlay at all.
+        {
+            let st = kitty_state(&mut mutex, &mut t);
+            r.update_frame(&st, true).unwrap();
+        }
+        assert!(
+            r.overlay.is_none(),
+            "an overlay was built with no inspector attached"
+        );
+        assert!(
+            r.images.overlay_placements.is_empty(),
+            "an overlay placement was staged with no inspector attached"
+        );
+        // Guard against a vacuous pixel comparison later: the prompt row must
+        // actually be marked, else the overlay would legitimately draw nothing.
+        assert_ne!(
+            r.terminal_state.row_data[0].raw.semantic_prompt(),
+            rustty_vt::page::SemanticPrompt::None,
+            "OSC 133;A did not mark row 0 as a prompt"
+        );
+        // Baseline frame WITHOUT the overlay.
+        r.draw_frame(true).unwrap();
+        let before = {
+            let idx = r.swap_chain.frame_index as usize;
+            r.swap_chain.frames[idx].target.read_rgba()
+        };
+
+        // (positive) attach an inspector reporting one enabled feature.
+        let mut fake = FakeInspector(vec![crate::overlay::Feature::SemanticPrompts]);
+        {
+            let mut st = kitty_state(&mut mutex, &mut t);
+            st.inspector = Some(&mut fake as *mut dyn state::InspectorOverlay);
+            r.update_frame(&st, true).unwrap();
+        }
+
+        // (1)+(2) the features reached `rebuild_overlay`, which built a surface at
+        // the terminal size.
+        let overlay = r
+            .overlay
+            .as_ref()
+            .expect("rebuild_overlay built no overlay");
+        let term = r.size.terminal();
+        assert_eq!(overlay.surface.get_width() as u32, term.width);
+        assert_eq!(overlay.surface.get_height() as u32, term.height);
+
+        // (3) `images.overlay_update` staged the `Id::Overlay` image + placement.
+        assert_eq!(
+            r.images.overlay_placements.len(),
+            1,
+            "overlay_update staged no overlay placement"
+        );
+        assert!(
+            r.images.images.contains_key(&crate::image::Id::Overlay),
+            "overlay_update staged no Id::Overlay image"
+        );
+
+        // `draw_frame`'s upload sweep turns it into a real GL texture, and the
+        // `.overlay` band draws it (the band is guarded on `self.overlay.is_some()`,
+        // which now holds).
+        r.draw_frame(true).unwrap();
+        assert!(
+            r.images
+                .images
+                .get(&crate::image::Id::Overlay)
+                .expect("overlay image entry vanished")
+                .image
+                .has_texture(),
+            "the overlay image was never uploaded to a GL texture"
+        );
+
+        // (4) the `.overlay` DRAW band actually reached the framebuffer. Sample the
+        // left-edge prompt bar (`highlight_semantic_prompts` draws it at pixel x
+        // 0..min(5, cell_width) of the prompt rows) and require it to differ from the
+        // overlay-off baseline. Structural (a difference, with a margin), never a
+        // byte-diff against Metal — llvmpipe is a different rasterizer.
+        // Y-FLIP as in `golden_renders_cursor_fg_bg`: `glReadPixels` is bottom-up.
+        let after = {
+            let idx = r.swap_chain.frame_index as usize;
+            r.swap_chain.frames[idx].target.read_rgba()
+        };
+        let w = r.size.screen.width as usize;
+        let h = r.size.screen.height as usize;
+        let ch = r.grid_metrics.cell_height as usize;
+        assert_eq!(before.len(), after.len());
+        let y = h - 1 - ch / 2; // vertical center of grid row 0
+        let (b0, b1, b2, _) = px_at(&before, w, 2, y);
+        let (a0, a1, a2, _) = px_at(&after, w, 2, y);
+        let delta = (a0 as i32 - b0 as i32).abs()
+            + (a1 as i32 - b1 as i32).abs()
+            + (a2 as i32 - b2 as i32).abs();
+        assert!(
+            delta > 16,
+            "the overlay was uploaded but never drawn: prompt-bar pixel is \
+             ({a0},{a1},{a2}) with the overlay vs ({b0},{b1},{b2}) without \
+             (delta={delta})"
+        );
+
+        r.deinit();
+        t.deinit(Global);
+    }
+
+    /// F-020 — the direct `rebuild_overlay` lifecycle, twin of `macos_impl::tests::
+    /// rebuild_overlay_builds_and_clears` (generic.rs:7632): empty features build
+    /// nothing, a real feature builds an overlay at the terminal size, and clearing
+    /// tears it down again. Needs a `Renderer`, hence live-GL clean-skip.
+    #[test]
+    fn rebuild_overlay_builds_and_clears() {
+        let _guard = test_support::gl_lock();
+
+        let mut r = match golden_renderer(10, 3) {
+            Some(r) => r,
+            None => return, // GL-context skip
+        };
+
+        // empty features → overlay stays None
+        r.rebuild_overlay(&[]).unwrap();
+        assert!(r.overlay.is_none());
+
+        // A real feature builds the overlay at the terminal size.
+        r.rebuild_overlay(&[crate::overlay::Feature::SemanticPrompts])
+            .unwrap();
+        assert!(r.overlay.is_some());
+
+        // A second call with the SAME size takes the `reset()` fast path (oracle
+        // `'existing`), not a rebuild — the overlay survives.
+        r.rebuild_overlay(&[crate::overlay::Feature::SemanticPrompts])
+            .unwrap();
+        assert!(r.overlay.is_some());
+
+        // and clearing removes it
+        r.rebuild_overlay(&[]).unwrap();
+        assert!(r.overlay.is_none());
+
+        r.deinit();
     }
 }

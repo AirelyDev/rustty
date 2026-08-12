@@ -27,8 +27,8 @@ use super::grow::{IncreaseCapacity, IncreaseCapacityError, Scrollbar, SplitError
 use super::resize::Resize;
 use super::scroll::Scroll;
 use super::{
-    std_capacity, std_size, IntegrityError, Key, Limits, NodeData, Options, Owned, PageList, Pin,
-    PreservedPage, Storage, Viewport,
+    std_capacity, std_size, IntegrityError, Key, Limits, NodeData, Options, OutOfMemory, Owned,
+    PageList, Pin, PreservedPage, Storage, Viewport,
 };
 use crate::page::{Capacity, Cell, CellRgb, ContentTag, Page, SemanticContent, SemanticPrompt};
 use crate::style::{self as stylepkg, Style};
@@ -2955,7 +2955,7 @@ fn pagelist_page_preserving_state_leaves_a_compressed_node_compressed() {
         core::ptr::write_bytes(ptr, 0, len);
         (*node).data = NodeData::Compressed(compressed);
 
-        let mut preserved = super::Node::page_preserving_state(node);
+        let mut preserved = super::Node::page_preserving_state(node).unwrap();
         let p = preserved.page();
         assert_ne!((*p).memory_ptr(), ptr as *const u8);
         assert_eq!(
@@ -2995,18 +2995,16 @@ fn compressed_encoded_for_test(node: *const super::Node) -> Vec<u8> {
 /// PORTS: oracle@main PageList.zig `test "PageList preserved page keeps
 /// compressed storage"` (9156ada16).
 ///
-/// PORT NOTE: the reference brackets `pagePreservingState` with two
-/// `testing.FailingAllocator` arms — one proving the RESIDENT case never
-/// allocates, one proving that a failed decode allocation leaves the node and
-/// its stats untouched. rustty's `page_preserving_state` takes no allocator (it
-/// uses the global allocator and panics on OOM), so the second arm has no
-/// injectable seam and is not ported. The first arm survives structurally and is
-/// asserted below: the resident case returns `PreservedPage::Borrowed` pointing
-/// at the live page, a variant that owns no buffer and therefore cannot have
-/// allocated or copied anything. The reference's second arm reads:
-///
-///   Preserved-page allocation is opportunistic for callers. Failure leaves
-///   the node and its compressed representation untouched.
+/// PORT NOTE (revised by F-015): the reference brackets `pagePreservingState`
+/// with two `testing.FailingAllocator` arms — one proving the RESIDENT case
+/// never allocates, one proving that a failed decode allocation leaves the node
+/// and its stats untouched. rustty's `page_preserving_state` takes no allocator
+/// (the decode buffer comes from the global allocator), so BOTH arms are ported
+/// against a `PagePreservingStateFp::Buffer` tripwire fail point standing in for
+/// the failing allocator. The first arm additionally survives structurally: the
+/// resident case returns `PreservedPage::Borrowed` pointing at the live page, a
+/// variant that owns no buffer and therefore cannot have allocated or copied
+/// anything.
 #[cfg_attr(
     miri,
     ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): TIMEOUT in BOTH Miri lanes — the cost is page-mapping/LZ4 volume, not assertion overhead, so the debug-assertions-off G6c lane does not rescue it either. Covered natively + by ASan."
@@ -3024,12 +3022,24 @@ fn pagelist_preserved_page_keeps_compressed_storage() {
 
     // Resident nodes can be borrowed without allocating an unnecessary copy.
     {
-        let mut preserved = unsafe { super::Node::page_preserving_state(node) };
+        // The reference arms the FailingAllocator's very first request here and
+        // asserts `!failing.has_induced_failure` afterwards. The port's
+        // equivalent is the `Buffer` fail point: arming it and still getting
+        // `Ok` proves the resident arm never reached the allocation at all.
+        super::PAGE_PRESERVING_STATE_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(super::PagePreservingStateFp::Buffer, OutOfMemory)
+        });
+        let mut preserved = unsafe { super::Node::page_preserving_state(node) }
+            .expect("a resident page must not allocate");
         match preserved {
             PreservedPage::Borrowed(p) => assert_eq!(p, resident as *const Page),
             PreservedPage::Owned { .. } => panic!("a resident page must be borrowed, not copied"),
         }
         preserved.deinit();
+        // `end` would report the expectation as untripped, which is precisely
+        // what this arm asserts, so clear it with `reset` instead.
+        super::PAGE_PRESERVING_STATE_TW.with(|tw| tw.borrow_mut().reset());
     }
 
     let (retained_ptr, memory_len, expected) = unsafe {
@@ -3050,7 +3060,37 @@ fn pagelist_preserved_page_keeps_compressed_storage() {
             .all(|&b| b == 0)
     );
 
-    let mut preserved = unsafe { super::Node::page_preserving_state(node) };
+    // Preserved-page allocation is opportunistic for callers. Failure leaves
+    // the node and its compressed representation untouched.
+    //
+    // WS18 release lane: this arm injects a failure through a
+    // `rustty_util::tripwire` fail point, and `tripwire::Module::enabled()` is
+    // `cfg!(debug_assertions)`. Without `debug_assertions` the fail point never
+    // trips, so only this ARM is compiled out; the rest of the test still runs.
+    #[cfg(debug_assertions)]
+    {
+        super::PAGE_PRESERVING_STATE_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(super::PagePreservingStateFp::Buffer, OutOfMemory)
+        });
+        match unsafe { super::Node::page_preserving_state(node) } {
+            Err(OutOfMemory) => {}
+            Ok(mut p) => {
+                p.deinit();
+                panic!("a failed decode-buffer allocation must be reported");
+            }
+        }
+        super::PAGE_PRESERVING_STATE_TW.with(|tw| {
+            tw.borrow_mut()
+                .end(rustty_util::tripwire::ResetMode::Reset)
+                .unwrap()
+        });
+        assert_eq!(unsafe { super::Node::storage(node) }, Storage::Compressed);
+        assert_eq!(stats, s.memory_stats());
+        assert_eq!(expected_encoded, compressed_encoded_for_test(node));
+    }
+
+    let mut preserved = unsafe { super::Node::page_preserving_state(node) }.unwrap();
     match preserved {
         PreservedPage::Borrowed(_) => {
             panic!("a compressed page must be decoded into an owned copy")
@@ -3981,34 +4021,60 @@ fn pagelist_oversized_page_is_heap_owned() {
 // not carried over with it.
 // =====================================================================
 
-// NOT PORTED: oracle@main PageList.zig
-// `test "PageList incremental compression advances after allocation failure"`.
-//
-// The oracle wraps the whole PageList in a `testing.FailingAllocator` and fails
-// the allocator's very next request, which lands on `compressPage`'s
-// exact-sized encoded allocation: the candidate is rejected, the source page
-// stays resident, and the pass continues at the following serial.
-//
-// rustty has no equivalent seam. The encoded buffer is a `Vec<u8>` on the
-// infallible global allocator, so the "encoded allocation failed" branch does
-// not exist in the port at all — synthesizing a tripwire for it would be a test
-// of a branch that cannot occur. This is the same class as the not-ported
-// `FailingAllocator` arm documented on
-// `pagelist_preserved_page_keeps_compressed_storage` and in
-// `compress/page.rs`'s `compressed_page_rejects_a_representation_without_savings`.
-//
-// The behaviour under test — "a rejected candidate advances the pass rather
-// than stalling it" — IS covered, from the two failure sources rustty can
-// actually produce: `..._advances_after_failure` (incompressible page) and
-// `..._advances_after_decommit_failure` (strict reclamation refused). The
-// reference's two comments there read:
-//
-//   Pool preheating supplies compression scratch. Failing the allocator's
-//   next request therefore rejects the exact encoded allocation while the
-//   source page and pass remain valid.
-//
-//   Allow allocations again. The pass must continue with the following page
-//   rather than retrying the failed candidate.
+/// PORTS: oracle@main PageList.zig
+/// `test "PageList incremental compression advances after allocation failure"`.
+///
+/// PORT NOTE (F-015): the oracle wraps the whole PageList in a
+/// `testing.FailingAllocator` and fails the allocator's very next request,
+/// which lands on `compressPage`'s exact-sized encoded allocation. rustty's
+/// encoded buffer is a `Vec<u8>` on the global allocator, so the failing
+/// allocator is replaced by the `compress::page::InitFp::Encoded` tripwire fail
+/// point, which sits immediately before the same fallible allocation (now a
+/// `try_reserve_exact` rather than an aborting `to_vec`). This test was
+/// previously recorded as NOT PORTED on the grounds that the branch could not
+/// occur; the branch now exists, and this is its proof.
+///
+/// The `has_induced_failure` assertion is spelled as `end(.reset)`: it fails
+/// unless the fail point actually tripped.
+///
+/// PORT NOTE (WS7 B10 convention): tripwire injection is compiled out when
+/// `debug_assertions` is off, so this test is ignored under `--release` rather
+/// than left to fail.
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "tripwire failure injection is disabled without debug_assertions"
+)]
+#[test]
+fn pagelist_incremental_compression_advances_after_allocation_failure() {
+    use rustty_util::tripwire::ResetMode;
+
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    grow_cold_pages_for_test(&mut s, 2);
+    let first = s.pages.first;
+    let second = unsafe { (*first).next };
+
+    // Pool preheating supplies compression scratch. Failing the allocator's
+    // next request therefore rejects the exact encoded allocation while the
+    // source page and pass remain valid.
+    crate::compress::page::INIT_TW.with(|tw| {
+        tw.borrow_mut().errorAlways(
+            crate::compress::page::InitFp::Encoded,
+            crate::compress::InitError::OutOfMemory,
+        )
+    });
+    let failed = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, failed);
+    assert!(!unsafe { super::Node::is_compressed(first) });
+
+    // Allow allocations again. The pass must continue with the following page
+    // rather than retrying the failed candidate.
+    crate::compress::page::INIT_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+    let continued = s.compress(CompressionMode::Incremental);
+    assert_eq!(IncrementalCompressionResult::Pending, continued);
+    assert!(unsafe { super::Node::is_compressed(second) });
+
+    s.deinit();
+}
 
 /// PORTS: oracle@main PageList.zig
 /// `test "PageList memory stats do not restore compressed pages"`.
@@ -11401,6 +11467,97 @@ fn pagelist_resize_no_reflow_more_rows_adds_blank_rows_if_cursor_at_bottom() {
 
     s.untrack_pin(p);
     s.deinit();
+}
+
+// PORT-LOCAL test: the reference has no `test {}` block for this, it covers the
+// analogous `errdefer` rollbacks with `std.testing.failing_allocator`. The
+// behavior under test IS the reference's: `resizeWithoutReflow` installs the new
+// `limits` minimums up front and guards them with `errdefer self.limits =
+// old_limits` (PageList.zig:2337), so an `Allocator.Error` out of ANY fallible
+// path below it — including the two row-growth `try self.grow()` loops
+// (PageList.zig:2440 and :2470) — must leave the OLD limits installed.
+//
+// Release lane: this test injects a failure through a `rustty_util::tripwire`
+// fail point and deliberately carries NO `#[cfg_attr(not(debug_assertions),
+// ignore)]`. `tripwire::Module::enabled()` is `cfg!(any(test, debug_assertions,
+// feature = "tripwire-test"))` (W57-B03/W59-B04), which reproduces Zig's
+// `builtin.is_test` — true at ANY optimize mode — so the fail point trips in the
+// `--release` lane too and this test RUNS there. Verified green in both profiles.
+#[test]
+fn pagelist_resize_no_reflow_grow_rows_oom_restores_limits() {
+    use super::grow::{GrowFp, GROW_TW};
+    use rustty_util::tripwire::ResetMode;
+
+    // Arm 1: cursor is NOT at the bottom, so we take the `cursor:` block's
+    // `for (0..delta) |_| _ = try self.grow()` loop.
+    {
+        let mut s = PageList::init(Options::new(80, 24)).unwrap();
+
+        // Fill the only page to capacity so that the very next `grow()` has to
+        // allocate a new page — the single fallible point in `grow()`.
+        let page_cap = unsafe { super::Node::capacity(s.pages.last).rows };
+        unsafe { (*super::Node::page(s.pages.last)).pause_integrity_checks(true) };
+        while unsafe { super::Node::rows(s.pages.last) } < page_cap {
+            assert!(s.grow().unwrap().is_none());
+        }
+        unsafe { (*super::Node::page(s.pages.last)).pause_integrity_checks(false) };
+
+        // The new row count must not fit in a single page, otherwise the
+        // recomputed minimums are identical and the rollback is unobservable.
+        let new_rows = page_cap + 1;
+        let old_limits = s.limits;
+        assert_ne!(old_limits, {
+            let mut l = old_limits;
+            l.resize(s.cols, new_rows);
+            l
+        });
+
+        GROW_TW.with(|tw| tw.borrow_mut().errorAlways(GrowFp::CreatePage, OutOfMemory));
+        assert_eq!(
+            Err(OutOfMemory),
+            s.resize_without_reflow(Resize {
+                rows: Some(new_rows),
+                reflow: false,
+                cursor: Some(super::resize::Cursor {
+                    x: 0,
+                    y: 0,
+                    pin: None,
+                }),
+                ..Default::default()
+            })
+        );
+        GROW_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+
+        assert_eq!(old_limits, s.limits);
+        s.deinit();
+    }
+
+    // Arm 2: no cursor, so we take the "pulls down scrollback" `for
+    // (count..rows) |_| _ = try self.grow()` loop.
+    {
+        let mut s = PageList::init(Options::new(80, 24)).unwrap();
+
+        // Same requirement as above: grow past a single page's capacity so the
+        // loop eventually reaches the allocating path AND the minimums change.
+        let new_rows = unsafe { super::Node::capacity(s.pages.last).rows } + 1;
+        let old_limits = s.limits;
+
+        unsafe { (*super::Node::page(s.pages.last)).pause_integrity_checks(true) };
+        GROW_TW.with(|tw| tw.borrow_mut().errorAlways(GrowFp::CreatePage, OutOfMemory));
+        assert_eq!(
+            Err(OutOfMemory),
+            s.resize_without_reflow(Resize {
+                rows: Some(new_rows),
+                reflow: false,
+                ..Default::default()
+            })
+        );
+        GROW_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+        unsafe { (*super::Node::page(s.pages.last)).pause_integrity_checks(false) };
+
+        assert_eq!(old_limits, s.limits);
+        s.deinit();
+    }
 }
 
 // ref: test "PageList resize reflow more cols no wrapped rows"

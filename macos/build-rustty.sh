@@ -4,9 +4,16 @@
 #
 # Prereqs (once): `cargo run -p xtask -- xcframework` (the RusttyKit.xcframework)
 # and `cargo run -p xtask -- resources` (zig-out/share/*). This script runs both.
+#
+# CONFIGURATION selects the Xcode build configuration and defaults to `Debug`
+# (local development). The release pipeline — .github/workflows/release-tag.yml
+# and release-tip.yml, which build the shipped app through THIS script rather
+# than duplicating its xcodebuild invocation — sets CONFIGURATION=Release.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+
+CONFIGURATION="${CONFIGURATION:-Debug}"
 
 echo "== 1/3 packaging RusttyKit.xcframework =="
 cargo run -q -p xtask -- xcframework
@@ -31,7 +38,7 @@ echo "== 3/3 xcodebuild =="
 # Guard: `.port/tools/gates/no_homebrew_gettext_gate.sh` proves this by building
 # with Homebrew's libintl hidden.
 cd macos
-exec xcodebuild -project Rustty.xcodeproj -scheme Rustty -configuration Debug \
+exec xcodebuild -project Rustty.xcodeproj -scheme Rustty -configuration "$CONFIGURATION" \
   -destination 'platform=macOS,arch=arm64' \
   CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
   OTHER_LDFLAGS="-lstdc++" \

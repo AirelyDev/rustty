@@ -27,8 +27,8 @@
 //!
 //! RUN via `.port/tools/gates/ws17_kde_globals_gate.sh`.
 //!
-//! R5: gated `all(target_os = "linux", feature = "wayland")`.
-#![cfg(all(target_os = "linux", feature = "wayland"))]
+//! R5: gated `all(any(linux, freebsd), feature = "wayland")`.
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "wayland"))]
 
 use rustty_apprt::gtk::winproto::{App, Protocol};
 use rustty_config::Config as CoreConfig;

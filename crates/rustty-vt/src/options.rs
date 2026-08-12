@@ -46,7 +46,52 @@ pub const ONIGURUMA: bool = cfg!(feature = "oniguruma");
 /// Whether SIMD-accelerated code paths are built.
 // PORT NOTE: `opts.addOption(bool, "simd", self.simd)`. Gated by the `simd` cargo
 // feature, matching the reference build knob.
-pub const SIMD: bool = cfg!(feature = "simd");
+//
+// TARGET-CONDITIONAL DEFAULT (`src/build/Config.zig:196-206`): `-Dsimd` is
+//
+//     config.simd = b.option(bool, "simd", "...") orelse simd: {
+//         // We can't build our SIMD dependencies for Wasm. Note that we may
+//         // still use SIMD features in the Wasm-builds.
+//         if (target.result.cpu.arch.isWasm()) break :simd false;
+//         break :simd true;
+//     };
+//
+// i.e. ON for every native target and OFF for wasm — which is why ghostty ships
+// `ghostty-vt.wasm` built simd=false. Cargo cannot express a per-target `default`
+// feature set, so the wasm arm of that `orelse` is resolved HERE, at the same
+// place the port already resolves `Options.add`'s other target-conditional
+// synthesis (`KITTY_GRAPHICS` below). The cargo feature therefore carries only
+// the non-wasm half of the knob: default-on via the shipping crates'
+// `default = ["simd"]` (rustty-vt-c, rustty-apprt-c) / rustty-core's dependency
+// feature list, and `--no-default-features` as the `-Dsimd=false` analog.
+//
+// The carve-out is not merely cosmetic parity with a reported flag: with `SIMD`
+// true, `stream.rs:757` takes the `next_slice_capped` fast path instead of the
+// reference's own byte-by-byte arm, so a wasm artifact would run a code path the
+// reference cannot even build there.
+pub const SIMD: bool = resolve_simd(cfg!(feature = "simd"), cfg!(target_arch = "wasm32"));
+
+/// `-Dsimd`'s resolution, factored out so both arms of the wasm carve-out are
+/// testable from a native test run (`build/Config.zig:196-206`).
+///
+/// `requested` is the cargo-feature half of the knob (the reference's explicit
+/// `-Dsimd=<bool>`, plus the non-wasm `break :simd true` default); `is_wasm` is
+/// `target.result.cpu.arch.isWasm()`.
+const fn resolve_simd(requested: bool, is_wasm: bool) -> bool {
+    // if (target.result.cpu.arch.isWasm()) break :simd false;
+    if is_wasm {
+        return false;
+    }
+
+    requested
+}
+
+// Compile-time proof of the wasm arm: EVERY wasm build of this crate resolves
+// the option off, whatever feature set the graph unified to. Deleting the
+// carve-out above breaks `cargo build -p rustty-vt-c --target
+// wasm32-unknown-unknown` (whose `default = ["simd"]` is active there).
+#[cfg(target_arch = "wasm32")]
+const _: () = assert!(!SIMD, "ghostty builds wasm targets with simd=false");
 
 /// True if we should enable the "slow" runtime safety checks. These are runtime
 /// safety checks that are slower than typical and should generally be disabled in
@@ -120,6 +165,43 @@ mod tests {
     fn tmux_control_mode_tracks_oniguruma() {
         // Synthesized exactly as `Options.add` does: tmux tracks oniguruma.
         assert_eq!(ONIGURUMA, TMUX_CONTROL_MODE);
+    }
+
+    /// W16-TARGET-01 wasm arm. `-Dsimd`'s default is TARGET-CONDITIONAL
+    /// (`build/Config.zig:200-206`): `if (target.result.cpu.arch.isWasm())
+    /// break :simd false; break :simd true;` — which is why ghostty ships
+    /// `ghostty-vt.wasm` built simd=false. Both arms of that `orelse` are
+    /// asserted here from a native run; the wasm arm is additionally proven at
+    /// compile time by the `#[cfg(target_arch = "wasm32")] const _` above,
+    /// which every wasm build of this crate evaluates.
+    #[test]
+    fn simd_default_is_target_conditional() {
+        // Wasm: forced off no matter what the feature graph unified to — the
+        // reference "can't build our SIMD dependencies for Wasm".
+        assert!(!resolve_simd(true, true));
+        assert!(!resolve_simd(false, true));
+
+        // Everything else: the knob passes straight through, so the shipping
+        // crates' `default = ["simd"]` reaches `stream.rs`'s fast path and
+        // `--no-default-features` is the `-Dsimd=false` analog.
+        assert!(resolve_simd(true, false));
+        assert!(!resolve_simd(false, false));
+    }
+
+    /// The exported constant really is wired to that resolution (anti-vacuity:
+    /// `simd_default_is_target_conditional` alone would still pass if `SIMD`
+    /// went back to a bare `cfg!(feature = "simd")`).
+    #[test]
+    fn simd_const_uses_the_target_conditional_resolution() {
+        assert_eq!(
+            resolve_simd(cfg!(feature = "simd"), cfg!(target_arch = "wasm32")),
+            SIMD
+        );
+        // This test binary is native (cargo cannot run a wasm32 test harness
+        // here), so on THIS target the knob is exactly the cargo feature —
+        // which is what the shipping tiers' `default = ["simd"]` pins.
+        #[cfg(not(target_arch = "wasm32"))]
+        assert_eq!(cfg!(feature = "simd"), SIMD);
     }
 
     #[test]

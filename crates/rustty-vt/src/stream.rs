@@ -12,10 +12,13 @@
 //! `rustty_simd::vt::utf8DecodeUntilControlSeq`) is PORTED and LIVE — RESOLVED
 //! Stage A.1, see `.port/phase-2/DEFERRALS.md` "Deferred to Dispatch/SIMD
 //! phase". It stays gated on `options::SIMD` (the reference's own
-//! `comptime debug or !build_options.simd` switch): `SIMD` defaults to `false`
-//! (`cfg!(feature = "simd")`), so the scalar fallback — the reference's own
-//! non-SIMD arm — runs unconditionally by default, and the SIMD arm is
-//! exercised under `--features simd` (all 38 stream tests pass in both modes;
+//! `comptime debug or !build_options.simd` switch). In THIS crate's own default
+//! feature set `SIMD` is `false`, so the scalar fallback — the reference's own
+//! non-SIMD arm — runs by default under `cargo test -p rustty-vt`, and the SIMD
+//! arm is exercised under `--features simd`. The SHIPPING tiers (rustty-core,
+//! rustty-vt-c, rustty-apprt-c) turn the feature on, matching `-Dsimd`'s
+//! non-wasm default; wasm targets resolve `SIMD` off regardless
+//! (`options::SIMD`, `build/Config.zig:200-206`). (All 38 stream tests pass in both modes;
 //! Miri covers the scalar arm, ASan the C-FFI SIMD arm per MIRI_EXCEPTIONS.md).
 
 // PORT NOTE: the dispatch routines are a verbatim retargeting of the reference's

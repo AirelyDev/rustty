@@ -186,7 +186,8 @@ const fn version_pre() -> Option<&'static str> {
 /// Reference: `pub const artifact = Artifact.detect();`. The reference detects
 /// this from `builtin.output_mode`/`builtin.target` at comptime; in the Rust
 /// port the artifact is selected by the host crate (the `rustty` binary vs the
-/// `librustty` library vs the wasm module) via [`Artifact`].
+/// `librustty` library, via the `artifact-lib` feature, vs the wasm module) —
+/// see [`Artifact::detect`].
 pub const fn artifact() -> Artifact {
     Artifact::detect()
 }
@@ -320,13 +321,29 @@ impl Artifact {
     /// };
     /// ```
     ///
-    /// In the Rust port the artifact is determined by the compilation target:
-    /// a wasm target produces the wasm module; otherwise the default is the
-    /// standalone executable (the embeddable `lib` is selected by the
-    /// `librustty` crate which overrides this at its own seam).
+    /// In the Rust port there is no `builtin.output_mode`, so the artifact is
+    /// determined by the compilation target plus the crate that hosts the
+    /// build: a wasm target produces the wasm module; the `artifact-lib` cargo
+    /// feature (enabled by `rustty-apprt-c`, the `librustty` cdylib/staticlib
+    /// hub — the `libghostty` analog) selects the embeddable library; otherwise
+    /// the default is the standalone executable (the `rustty` binary).
+    ///
+    /// CAVEAT (mirrors the `rustty-vt` `wuffs` seam): cargo features unify per
+    /// BUILD SELECTION, not per artifact. A combined selection that contains
+    /// both `rustty-apprt-c` and the `rustty` exe (e.g. `--workspace`) compiles
+    /// a single `rustty-build-config` with `artifact-lib` on, so the exe also
+    /// reports `.lib`. The only behavioral deltas that ride `artifact()` are
+    /// additive (diagnostics precompute allocations; the macOS
+    /// `RUSTTY_MAC_LAUNCH_SOURCE` probe in `rustty-os`, which falls through to
+    /// the same `getppid()` check), so unification is a superset, never a
+    /// behavior break. Published `librustty` artifacts come from isolated
+    /// `-p rustty-apprt-c` invocations.
     pub const fn detect() -> Artifact {
         if cfg!(target_arch = "wasm32") {
             return Artifact::WasmModule;
+        }
+        if cfg!(feature = "artifact-lib") {
+            return Artifact::Lib;
         }
         Artifact::Exe
     }

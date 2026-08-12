@@ -121,15 +121,29 @@ int main(int argc, char **argv) {
   if (!in_buf) { fprintf(stderr, "failed to read input\n"); return 3; }
 
   // --- Create the terminal ---
+  // PORT NOTE: oracle 03d5fa268 removed `GhosttyTerminalOptions` from the ABI;
+  // ghostty_terminal_new now takes (allocator, out, cols, rows) and scrollback
+  // is configured post-create via ghostty_terminal_set() with
+  // GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES (size_t*).
   GhosttyTerminal terminal;
-  GhosttyTerminalOptions opts = {
-    .cols = cols,
-    .rows = rows,
-    .max_scrollback = scrollback,
-  };
-  GhosttyResult result = ghostty_terminal_new(NULL, &terminal, opts);
+  GhosttyResult result = ghostty_terminal_new(NULL, &terminal, cols, rows);
   if (result != GHOSTTY_SUCCESS) {
     fprintf(stderr, "ghostty_terminal_new failed: %s\n", result_str(result));
+    free(in_buf);
+    return 4;
+  }
+
+  // Apply --scrollback unconditionally: the driver's contract is an EXPLICIT
+  // byte limit (default 0 = scrollback disabled, exactly what the old
+  // `.max_scrollback = scrollback` options field pinned). Passing the value
+  // pointer (never NULL) matters: per the header, a NULL value would REMOVE
+  // the byte limit rather than set it to zero.
+  result = ghostty_terminal_set(
+      terminal, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES, &scrollback);
+  if (result != GHOSTTY_SUCCESS) {
+    fprintf(stderr, "ghostty_terminal_set(SCROLLBACK_MAX_BYTES) failed: %s\n",
+            result_str(result));
+    ghostty_terminal_free(terminal);
     free(in_buf);
     return 4;
   }

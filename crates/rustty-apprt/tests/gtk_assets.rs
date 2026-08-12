@@ -6,11 +6,11 @@
 //! so a manifest/disk drift is caught in the normal gate rather than at
 //! `glib-compile-resources` time.
 //!
-//! R5: the whole file is gated `all(target_os = "linux", feature = "gtk")` — the
+//! R5: the whole file is gated `all(any(linux, freebsd), feature = "gtk")` — the
 //! `gresource`/`build_info` modules it references only exist under that cfg
 //! (`lib.rs`), so off the gate this test crate compiles to nothing. Run it with:
 //!   cargo test -p rustty-apprt --features gtk --test gtk_assets
-#![cfg(all(target_os = "linux", feature = "gtk"))]
+#![cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]
 
 use std::path::PathBuf;
 

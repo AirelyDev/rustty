@@ -243,6 +243,7 @@ use rustty_datastruct::MessageData;
 // names as `terminal.Terminal` under the renderer mutex (the renderer
 // state.rs / termio_impl.rs import precedent).
 use rustty_vt::search::thread::Event as SearchThreadEvent;
+use rustty_vt::terminal::PrintStringError;
 use rustty_vt::terminal::Terminal;
 
 // const log = std.log.scoped(.surface);
@@ -3803,13 +3804,15 @@ where
     //
     // PORT NOTE: the inferred `!void` error set is the vt terminal storage
     // failures (`setAttribute`/`plainString`/`linefeed`/`print`/`printString`
-    // — Zig `Allocator.Error` surfaced as vt `OutOfMemory`); the
-    // join/allocPrint OOMs collapse (infallible Rust allocation).
+    // — Zig `Allocator.Error` surfaced as vt `OutOfMemory`) plus the
+    // `printString` UTF-8 validation error (`error.InvalidUtf8`), together
+    // `PrintStringError`; the join/allocPrint OOMs collapse (infallible Rust
+    // allocation).
     #[allow(clippy::redundant_closure_call)]
     fn childExitedAbnormally(
         &mut self,
         info: apprt::surface::ChildExited,
-    ) -> Result<(), terminal::pagelist::OutOfMemory> {
+    ) -> Result<(), PrintStringError> {
         // var arena = ArenaAllocator.init(self.alloc);
         // defer arena.deinit();
         // const alloc = arena.allocator();
@@ -3846,7 +3849,7 @@ where
         // const t: *terminal.Terminal = self.renderer_state.terminal;
         let t: *mut Terminal = self.renderer_state.terminal;
 
-        let result = (|| -> Result<(), terminal::pagelist::OutOfMemory> {
+        let result = (|| -> Result<(), PrintStringError> {
             unsafe {
                 // No matter what move the cursor back to the column 0.
                 // t.carriageReturn();

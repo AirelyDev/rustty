@@ -12,7 +12,9 @@
 //! module inside rustty-crash (its only consumer, per the integration-tier
 //! blueprint) rather than as its own parity crate. It is built over the
 //! vendored `sentry-sys` (R3: the SAME sentry-native 0.7.8 the reference
-//! links, `backend = .inproc`, `transport = .none`). The wrapper surface is
+//! links, with the product's `backend = .breakpad` — SharedDeps.zig; the
+//! breakpad client comes from breakpad-sys — and `transport = .none`). The
+//! wrapper surface is
 //! ported 1:1 from the reference package (every declaration, incl. the ones
 //! src/crash does not reach yet — captureEvent/setContext/removeContext).
 #![allow(non_snake_case)]

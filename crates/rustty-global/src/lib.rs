@@ -173,8 +173,9 @@ pub struct GlobalState<Action = (), ResourcesDir = ()> {
     /// Asserts that the global state is initialized.
     // PARITY: reference `logging: Logging,` plus its free accessor
     // `pub fn logging() GlobalState.Logging { return state.?.logging; }`.
-    // See the FREE ACCESSORS note below for why the accessor is a field read
-    // in rustty.
+    // The free accessor lives on the `LOGGING` process-global mirror below
+    // (see the FREE ACCESSORS note); the bootstrap keeps this field and the
+    // mirror in sync from the ONE computation site.
     pub logging: Logging,
     /// Returns the global state rlimits, or an empty one when testing.
     ///
@@ -208,8 +209,10 @@ pub struct GlobalState<Action = (), ResourcesDir = ()> {
 // different bindings — `rustty_global::STATE` and `rustty_core::STATE`. A free
 // accessor in this crate cannot name "the" state, so only the accessors whose
 // value is NON-generic are free functions here: `environ()`, `environ_map()`,
-// `sync_environ()` and `tmp_dir_path()` (see the `environ` module, which owns
-// the matching process-globals). The generic-valued ones — `logging()`,
+// `sync_environ()`, `tmp_dir_path()` (see the `environ` module, which owns the
+// matching process-globals) and `logging()` (the `LOGGING` mirror below, which
+// the bootstrap publishes so leaf crates — the config crate's scoped logger —
+// can honor the reference's stderr gate). The generic-valued ones —
 // `rlimits()`, `resources_dir()`, `action()` — stay field reads on whichever
 // `GlobalState` the caller holds, which is why their reference docs are
 // attached to the fields above. `io()`/`alloc()` are Zig-allocator/`std.Io`
@@ -548,6 +551,33 @@ impl Default for Logging {
     }
 }
 
+/// Process-global mirror of the active `GlobalState.logging` value, published
+/// by the bootstrap (`rustty-apprt::init_with_action`) alongside the
+/// `rustty_core::STATE` set. `Logging` is NON-generic, so unlike the other
+/// state-valued accessors it CAN be a free function in this crate — which is
+/// what lets leaf crates below `rustty-core` (the config crate's `.config`
+/// scoped logger) honor the reference's stderr gate.
+static LOGGING: std::sync::OnceLock<Logging> = std::sync::OnceLock::new();
+
+/// Publishes the computed logging configuration. Idempotent (first set wins),
+/// matching the OnceLock null-then-init contract of `STATE` above.
+pub fn set_logging(logging: Logging) {
+    let _ = LOGGING.set(logging);
+}
+
+/// Returns the global state logging configuration.
+///
+/// Asserts that the global state is initialized.
+// PARITY: reference free accessor
+// `pub fn logging() GlobalState.Logging { return state.?.logging; }`.
+// PORT NOTE: where the reference asserts init (`state.?`), the port falls back
+// to `Logging::default()` when the bootstrap has not published a value — the
+// same value the reference field carries pre-override (`.logging = .{}`), and
+// the memory-safe analogue for test processes that never run the bootstrap.
+pub fn logging() -> Logging {
+    LOGGING.get().copied().unwrap_or_default()
+}
+
 /// Maintains the Unix resource limits that we set for our process. This
 /// can be used to restore the limits to their original values.
 // PARITY (BREAK #1, R4): the reference `nofile` field is `?internal_os.rlimit`
@@ -624,6 +654,36 @@ pub mod seam {
     /// PARITY: reference `pub const xev = @import("xev").Dynamic;` (event-loop
     /// backend, above us). Re-exported from `rustty-core`.
     pub type Xev = ();
+}
+
+#[cfg(test)]
+mod logging_tests {
+    use super::{logging, set_logging, Logging};
+
+    // ONE ordered test (default -> set -> read-back): the `LOGGING` OnceLock is
+    // process-wide and first-set-wins, so observing the pre-publish default and
+    // the published value must happen in sequence within a single test.
+    #[test]
+    fn logging_defaults_until_set_then_mirrors() {
+        // Pre-publish: the accessor falls back to the reference's pre-override
+        // field default (`.logging = .{}`).
+        let default = Logging::default();
+        assert_eq!(logging(), default);
+
+        // Publish a value bit-distinct from the default on EVERY target
+        // (`Logging::default().stderr` is target/runtime-dependent: false on
+        // the `.none` app runtime), so the mirror read-back is discriminating.
+        let published = Logging {
+            stderr: !default.stderr,
+            macos: !default.macos,
+        };
+        set_logging(published);
+        assert_eq!(logging(), published);
+
+        // First set wins (idempotent bootstrap): a second set is a no-op.
+        set_logging(default);
+        assert_eq!(logging(), published);
+    }
 }
 
 #[cfg(all(test, unix))]

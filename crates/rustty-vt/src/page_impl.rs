@@ -419,6 +419,20 @@ impl Page {
         // overwrite the start of the buffer for pool reuse. See the
         // `const _` assert next to `Row` in `page.rs`.
         assert!(cap.rows > 0);
+
+        // PORT NOTE: the reference stores `.memory = @alignCast(buf.start()[0..
+        // l.total_size])`, i.e. the backing buffer is re-typed to
+        // `[]align(std.heap.page_size_min) u8` and the cast is SAFETY-CHECKED in
+        // Debug/ReleaseSafe (and elided in ReleaseFast). Our `memory_ptr` is a
+        // plain `*mut u8` that carries no alignment, so nothing reproduced that
+        // check: a caller-supplied `OffsetBuf` that merely happened to satisfy
+        // `Offset::ptr`'s per-type `align_of::<T>()` asserts passed silently
+        // where the reference traps. `debug_assert!` is the port's standing
+        // mapping of that mode switch (rustty_util::quirks::inlineAssert, DG4).
+        debug_assert!(
+            (unsafe { buf.start() } as usize).is_multiple_of(PAGE_SIZE_MIN),
+            "page backing memory must be page_size_min-aligned",
+        );
         let rows: Offset<Row> = buf.member(l.rows_start);
         let cells: Offset<Cell> = buf.member(l.cells_start);
 
@@ -850,6 +864,19 @@ impl Page {
     /// The buffer must be at least the size of self.memory.
     pub fn clone_buf(&self, buf: &mut [u8]) -> Page {
         assert!(buf.len() >= self.memory_len);
+        // PORT NOTE: the reference types this parameter
+        // `buf: []align(std.heap.page_size_min) u8`, so an under-aligned buffer
+        // is a COMPILE error at every call site in every optimize mode — the
+        // contract can never be elided. `&mut [u8]` carries no alignment, so we
+        // restore it with an always-on assert (not `debug_assert!`: the
+        // reference's guarantee is not mode-dependent). The cloned page's
+        // sub-allocators are laid out from this base, and `Page::clone` hands it
+        // `page_alloc`-backed (mmap'd) memory, so page alignment is the real
+        // precondition, not just `Row`/`Cell` alignment.
+        assert!(
+            (buf.as_ptr() as usize).is_multiple_of(PAGE_SIZE_MIN),
+            "clone_buf backing memory must be page_size_min-aligned",
+        );
 
         // The entire concept behind a page is that everything is stored
         // as offsets so we can do a simple linear copy of the backing
@@ -2248,6 +2275,14 @@ impl Page {
     ) -> Result<(), GraphemeError> {
         assert!(unsafe { (*cell).codepoint() } > 0);
         assert!(unsafe { (*cell).content_tag() } == ContentTag::Codepoint);
+        // PORT NOTE: `cps: []const u21` in the reference. Our `u21` alias is
+        // `u32` (page.rs), and the grapheme tails are copied VERBATIM into the
+        // page's grapheme arena below, so nothing else constrains the domain.
+        // This restores the reference's safe-build guarantee.
+        debug_assert!(
+            cps.iter().all(|&cp| cp <= U21_MAX),
+            "grapheme codepoint out of u21 domain",
+        );
 
         let base = self.memory_ptr();
         let cell_offset = unsafe { get_offset::<Cell, _>(base, cell) };
@@ -2306,6 +2341,10 @@ impl Page {
         if cfg!(debug_assertions) {
             assert!(unsafe { (*cell).codepoint() } != 0);
         }
+        // PORT NOTE: `cp: u21` in the reference. See `set_graphemes_inner`: the
+        // codepoint is written verbatim into the grapheme arena, so the alias's
+        // domain is only enforced here.
+        debug_assert!(cp <= U21_MAX, "grapheme codepoint out of u21 domain");
 
         let base = self.memory_ptr();
         let cell_offset = unsafe { get_offset::<Cell, _>(base, cell) };

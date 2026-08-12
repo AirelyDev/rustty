@@ -9,15 +9,23 @@
 # WHY THIS GATE EXISTS
 # --------------------
 # Several of the port's failure-injection seams are DELIBERATELY compiled out in
-# release: `rustty_util::tripwire::Module::enabled()` is `cfg!(debug_assertions)`
-# (the faithful stand-in for Zig's `builtin.is_test` — see its PORT NOTE), and
-# the pagelist integrity gate / `pin_is_valid` mirror the reference's
+# release: the pagelist integrity gate / `pin_is_valid` mirror the reference's
 # `build_options.slow_runtime_safety`. Tests that drive those seams therefore
 # carry `#[cfg_attr(not(debug_assertions), ignore)]`. That is a correct,
 # documented arrangement — but nothing enforced it, so the release lane silently
 # rotted to 22 failures across 7 targets before WS18. This gate is the
 # enforcement: any NEW release-only failure (a genuinely release-sensitive bug,
 # or a new injection test that forgot the attribute) turns it RED.
+#
+# `rustty_util::tripwire` is NO LONGER in that compiled-out set for
+# `rustty-util`/`rustty-vt` (W57-B03 / W59-B04): `Module::enabled()` is
+# `cfg!(any(test, debug_assertions, feature = "tripwire-test"))` and `rustty-vt`
+# enables the off-by-default `tripwire-test` feature as a DEV-dependency, so its
+# fail-point tests RUN (not "ignored") in this release lane — reproducing Zig's
+# `builtin.is_test`, which is true at ANY optimize mode. Dev-dep features do not
+# reach `cargo build --release`, so production still compiles `check` away.
+# Fail-point tests in crates that have not opted in yet (`rustty-font`,
+# `rustty-font-shaper`) keep the `not(debug_assertions)` ignore.
 #
 # The build step is not incidental: `rustty-apprt-c`'s C-ABI smoke asserts the
 # published cdylib/staticlib exist in `target/<profile>/`, and `cargo test`

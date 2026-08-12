@@ -30,6 +30,31 @@
 //!      `Collection`/`CodepointResolver` call these on the active `Face` on every
 //!      backend; Canvas cannot synthesize styles or expose SFNT tables, so those
 //!      are faithful `Unsupported`/derived stubs (documented at each site).
+//!
+//!   4. `atlas.format` RGBA arm -> RGBA->BGRA swizzle. The reference's
+//!      `renderGlyph` stores the Canvas `getImageData` bytes UNCHANGED under an
+//!      `.rgba` atlas format — a variant that does NOT exist in the pinned
+//!      `font/Atlas.zig` enum (`grayscale`/`bgr`/`bgra`), i.e. that arm cannot
+//!      compile against its own tree (the browser path is abandoned upstream).
+//!      The modern enum's only 4-byte format is `bgra`, and the renderers upload
+//!      `Format::Bgra` atlases as `BGRA`/`BGRA8Unorm_sRGB` textures, so storing
+//!      Canvas RGBA bytes verbatim would render every color glyph channel-swapped
+//!      (red -> blue). We therefore convert RGBA -> BGRA (`rgba_to_bgra`) so the
+//!      bytes honor the format the `Atlas` declares. The grayscale (A8) arm is
+//!      byte-identical to the reference.
+//!
+//!   5. `initNamed` validates that `raw` really is a CSS "font" value. The
+//!      reference can only ever be handed a CSS string (its `Face` has NO
+//!      bytes-based initializer, and `SharedGridSet` is never instantiated with
+//!      the web_canvas face), so an invalid value is a browser-side no-op that it
+//!      merely `log.warn`s about. The modern generic loader DOES call
+//!      `Face::init(lib, source, opts)` with embedded TTF bytes, which the shim
+//!      would otherwise hand to `ctx.font` as a binary "CSS" string: the browser
+//!      rejects it and silently keeps the previous/fallback font. We reject
+//!      non-CSS payloads up front with `Error::InvalidFontStr` (see
+//!      `validate_css_font_str`) so the failure is loud rather than a silently
+//!      wrong font, and keep the reference's post-set read-back check (see
+//!      `context`) instead of discarding it.
 
 use std::collections::HashMap;
 
@@ -64,6 +89,9 @@ pub enum Error {
     CanvasContainerNotFound,
     /// Codepoint outside the Unicode range (utf8 encode failure).
     CodepointTooLarge,
+    /// The "raw" value handed to `init_named`/`init` is not a CSS "font" value
+    /// (non-UTF-8, control bytes, or font-FILE bytes). See divergence 5.
+    InvalidFontStr,
     /// Canvas cannot synthesize bold/italic or expose variations/SFNT names.
     Unsupported,
 }
@@ -237,6 +265,13 @@ impl Face {
         size: DesiredSize,
         presentation: Presentation,
     ) -> Result<Face, Error> {
+        // PORT NOTE (divergence 5): the reference has no bytes-based initializer,
+        // so `raw` is a CSS string by construction there. Here the generic
+        // `Face::init` shim can be handed embedded font FILE bytes, which
+        // `ctx.font` would reject while leaving the previous/fallback font in
+        // place — a silently wrong font. Fail loudly instead.
+        validate_css_font_str(raw)?;
+
         // Copy our font string because we're going to have to reuse it.
         // const font_str = try alloc.dupe(u8, raw);
         let font_str = raw.to_vec();
@@ -270,6 +305,14 @@ impl Face {
     /// The browser face therefore interprets `source` as the CSS "font" string
     /// (excluding size) and defaults the presentation to `.text`; `opts.size`
     /// carries the size. This keeps the modern loader call-site type-checking.
+    ///
+    /// PORT NOTE (divergence 5): `source` MUST therefore be a CSS "font" value.
+    /// A caller that hands over real font FILE bytes (e.g.
+    /// `rustty_font::embedded::VARIABLE`) gets `Error::InvalidFontStr` — the
+    /// browser would otherwise reject the binary `ctx.font` assignment and keep
+    /// its previous/fallback font, silently rendering a different font than the
+    /// caller asked for. Wasm callers of the shared-grid pipeline pass a CSS
+    /// family instead (see `shared_grid_set::embedded_face_source`).
     pub fn init(_lib: Library, source: &[u8], opts: Options) -> Result<Face, Error> {
         Face::init_named(source, opts.size, Presentation::Text)
     }
@@ -413,10 +456,13 @@ impl Face {
         // Convert the format of the bitmap if necessary.
         // const bitmap_formatted: []u8 = switch (atlas.format) { … };
         let bitmap_formatted: Vec<u8> = match atlas.format() {
-            // Bitmap is already in RGBA (canvas ImageData order; the reference's
-            // `.rgba` atlas path stores it directly — see PORT NOTE at file head).
+            // Bitmap is already in RGBA (canvas ImageData order) — but the atlas
+            // says BGRA, and BGRA is what the renderers upload it as, so swap the
+            // R and B channels. The reference stores the bitmap directly under an
+            // `.rgba` atlas format that does NOT exist in `font/Atlas.zig`; see
+            // faithful divergence 4 at the file head.
             // .rgba => render.bitmap,
-            Format::Bgra => render.bitmap.clone(),
+            Format::Bgra => rgba_to_bgra(&render.bitmap),
 
             // Convert down to A8 (take the alpha channel).
             // .grayscale => a8: { … bitmap_a8[i] = render.bitmap[(i*4)+3]; }
@@ -546,7 +592,10 @@ impl Face {
         // if (!std.mem.eql(u8, font_val, check)) log.warn("canvas font didn't set…");
         let mut check = [0u8; 256];
         let n = unsafe { ffi::rustty_wc_context_get_font(ctx, check.as_mut_ptr(), check.len()) };
-        let _ = font_val == check.get(..n).unwrap_or(&[]);
+        let got = check.get(..n).unwrap_or(&[]);
+        if font_val != got {
+            font_did_not_set(&font_val, got);
+        }
 
         ctx
     }
@@ -739,6 +788,86 @@ fn zero_face_metrics() -> FaceMetrics {
     }
 }
 
+/// Convert a Canvas `getImageData` RGBA buffer into the BGRA byte order the
+/// `Atlas` `Format::Bgra` declares (swap byte 0 and byte 2 of every pixel; green
+/// and alpha are untouched).
+///
+/// PORT NOTE (faithful divergence 4): the reference has no such conversion — it
+/// stores the RGBA bytes under an `.rgba` atlas format that its own `Atlas` enum
+/// does not define. `Format::Bgra` is the modern enum's only 4-byte format and is
+/// uploaded as a BGRA texture by both the OpenGL and Metal renderers, so the
+/// bytes must be swizzled to match the declared format.
+fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
+    let mut out = rgba.to_vec();
+    // `getImageData` always yields whole RGBA pixels, so the remainder is empty.
+    for px in out.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+    out
+}
+
+/// The font-FILE magics a CSS "font" value can never begin with: sfnt
+/// (`0x00010000`), TrueType (`true`), TrueType collection (`ttcf`), CFF/OpenType
+/// (`OTTO`), and WOFF/WOFF2 (`wOFF`/`wOF2`).
+const FONT_FILE_MAGICS: [&[u8]; 6] = [
+    &[0x00, 0x01, 0x00, 0x00],
+    b"true",
+    b"ttcf",
+    b"OTTO",
+    b"wOFF",
+    b"wOF2",
+];
+
+/// Validate that `raw` is plausibly a CSS "font" value (see faithful divergence
+/// 5). Rejects font FILE bytes, invalid UTF-8, and control characters — none of
+/// which the browser can accept, and all of which `ctx.font` would silently
+/// ignore (keeping the previous/fallback font).
+fn validate_css_font_str(raw: &[u8]) -> Result<(), Error> {
+    // Font file bytes (the modern generic `Face::init` loader's payload).
+    for magic in FONT_FILE_MAGICS {
+        if raw.starts_with(magic) {
+            return Err(Error::InvalidFontStr);
+        }
+    }
+
+    // A CSS value is text: it must be valid UTF-8 with no control characters.
+    let s = core::str::from_utf8(raw).map_err(|_| Error::InvalidFontStr)?;
+    if s.chars().any(|c| c.is_control()) {
+        return Err(Error::InvalidFontStr);
+    }
+
+    Ok(())
+}
+
+/// The reference's `log.warn("canvas font didn't set, fonts may be broken,
+/// expected={s} got={s}", …)` (`web_canvas.zig:316-321`).
+///
+/// PORT NOTE: the reference logs through `std.log`, which on the freestanding
+/// wasm target is `os/wasm/log.zig`'s `extern "env" fn log` sink. That import is
+/// only present in the Ghostty-ABI artifact (`rustty_wasm.wasm`, which installs
+/// the `rustty-os` wasm log fn); the standalone `rustty_web_canvas.wasm`
+/// deliverable deliberately imports ONLY the `rustty_wc_*` Canvas ops, so it has
+/// no host log sink and the message is dropped there. The mismatch is no longer
+/// silently discarded at the check site either way, and the payload that used to
+/// reach this path from the modern loader (font FILE bytes) is now rejected up
+/// front by `validate_css_font_str`.
+#[cold]
+#[inline(never)]
+fn font_did_not_set(expected: &[u8], got: &[u8]) {
+    #[cfg(feature = "ghostty-wasm-abi")]
+    {
+        let mut msg = String::from("canvas font didn't set, fonts may be broken, expected=");
+        msg.push_str(&String::from_utf8_lossy(expected));
+        msg.push_str(" got=");
+        msg.push_str(&String::from_utf8_lossy(got));
+        rustty_os::wasm::log::freestanding::log("warning", "font_face", &msg);
+    }
+    #[cfg(not(feature = "ghostty-wasm-abi"))]
+    {
+        let _ = (expected, got);
+    }
+}
+
 /// Append the base-10 ASCII of a non-negative integer to `out` (the `{d}` in the
 /// reference `std.fmt.allocPrint`).
 fn push_int(out: &mut Vec<u8>, mut v: i64) {
@@ -844,4 +973,135 @@ pub extern "C" fn rustty_wc_face_debug_canvas(
     }
     let face = unsafe { &*face };
     unsafe { ffi::rustty_wc_debug_append(face.canvas.handle, id_ptr, id_len) }
+}
+
+// ---------------------------------------------------------------------------
+// The Ghostty-ABI wasm-compatible C-ABI (`pub const Wasm = struct { … }`,
+// `web_canvas.zig:489-557`) — the UNPREFIXED export names retained by
+// `font/main.zig`'s `comptime { _ = face.web_canvas.Wasm; }`. Feature-gated
+// (`ghostty-wasm-abi`): only the `rustty_wasm.wasm` (`main_wasm.zig`) artifact
+// carries these names; `rustty_web_canvas.wasm` keeps the `rustty_wc_*` surface
+// above.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "ghostty-wasm-abi")]
+pub use ghostty_wasm_abi::{face_debug_canvas, face_free, face_new, face_render_glyph};
+
+/// The wasm-compatible API.
+// pub const Wasm = struct {
+//     const wasm = @import("../../os/wasm.zig");
+//     const alloc = wasm.alloc;
+#[cfg(feature = "ghostty-wasm-abi")]
+mod ghostty_wasm_abi {
+    use super::{ffi, Face};
+    use crate::face::{DesiredSize, DEFAULT_DPI};
+    use crate::Presentation;
+    use rustty_font::atlas::Atlas;
+    use rustty_font::glyph::{Glyph, RenderOptions};
+
+    /// `export fn face_new(ptr: [*]const u8, len: usize, pts: u16, p: u16) ?*Face`
+    // PORT NOTE (`pts: u16`): the reference EXPORT takes the size as a `u16`
+    // (points) and hands it to `initNamed`'s `f32` `DesiredSize.points`; the
+    // widening is written out. `p` maps via the same total `@enumFromInt` map as
+    // `rustty_wc_face_new` (0 => .text, else .emoji).
+    #[no_mangle]
+    pub extern "C" fn face_new(ptr: *const u8, len: usize, pts: u16, p: u16) -> *mut Face {
+        // return face_new_(ptr, len, pts, p) catch null;
+        let raw = unsafe { core::slice::from_raw_parts(ptr, len) };
+        let pres = if p == 0 {
+            Presentation::Text
+        } else {
+            Presentation::Emoji
+        };
+        // var face = try Face.initNamed(alloc, ptr[0..len], .{ .points = pts },
+        //     @enumFromInt(presentation));
+        let size = DesiredSize {
+            points: f32::from(pts),
+            xdpi: DEFAULT_DPI,
+            ydpi: DEFAULT_DPI,
+        };
+        match Face::init_named(raw, size, pres) {
+            // const result = try alloc.create(Face); result.* = face; return result;
+            Ok(face) => Box::into_raw(Box::new(face)),
+            // catch null
+            Err(_) => core::ptr::null_mut(),
+        }
+    }
+
+    /// `export fn face_free(ptr: ?*Face) void`
+    #[no_mangle]
+    pub extern "C" fn face_free(ptr: *mut Face) {
+        // if (ptr) |v| { v.deinit(); alloc.destroy(v); }
+        if !ptr.is_null() {
+            let mut face = unsafe { Box::from_raw(ptr) };
+            face.deinit();
+        }
+    }
+
+    /// Resulting pointer must be freed using the global "free".
+    // export fn face_render_glyph(face: *Face, atlas: *font.Atlas, codepoint: u32) ?*font.Glyph
+    #[no_mangle]
+    pub extern "C" fn face_render_glyph(
+        face: *mut Face,
+        atlas: *mut Atlas,
+        codepoint: u32,
+    ) -> *mut Glyph {
+        // return face_render_glyph_(face, atlas, codepoint) catch |err| {
+        //     log.warn("error rendering glyph err={}", .{err});   // log-as-comment
+        //     return null;
+        // };
+        if face.is_null() || atlas.is_null() {
+            return core::ptr::null_mut();
+        }
+        let face = unsafe { &*face };
+        let atlas = unsafe { &mut *atlas };
+
+        // fn face_render_glyph_(face, atlas, codepoint) !*font.Glyph {
+        // const glyph = try face.renderGlyph(alloc, atlas, codepoint, .{});
+        let glyph = match face.render_glyph(
+            allocator_api2::alloc::Global,
+            atlas,
+            codepoint,
+            RenderOptions::default(),
+        ) {
+            Ok(glyph) => glyph,
+            Err(_err) => return core::ptr::null_mut(),
+        };
+
+        // const result = try alloc.create(font.Glyph);
+        // errdefer alloc.destroy(result);
+        // _ = try wasm.toHostOwned(result);
+        // result.* = glyph;
+        // return result;
+        //
+        // PORT NOTE: `toHostOwned` is the resurrected pre-`9dc2e5978`
+        // `os/wasm.zig` tracker (rustty-os `wasm-host-owned`): the host frees the
+        // returned `*Glyph` with the module's exported `free`.
+        let result = Box::into_raw(Box::new(glyph));
+        match unsafe { rustty_os::wasm::to_host_owned(result) } {
+            Ok(_) => result,
+            Err(_err) => {
+                // errdefer alloc.destroy(result);
+                drop(unsafe { Box::from_raw(result) });
+                core::ptr::null_mut()
+            }
+        }
+    }
+
+    /// `export fn face_debug_canvas(face: *Face) void`
+    // PORT NOTE: the reference body (`face_debug_canvas_`) does
+    // `document.getElementById("face-canvas").append(face.canvas)` via zig-js;
+    // the Canvas FFI's `rustty_wc_debug_append` is that exact operation (the JS
+    // glue owns the `getElementById` + `append`; -1 is the reference's
+    // `error.CanvasContainerNotFound`, log-as-comment).
+    #[no_mangle]
+    pub extern "C" fn face_debug_canvas(face: *mut Face) {
+        if face.is_null() {
+            return;
+        }
+        let face = unsafe { &*face };
+        const ID: &[u8] = b"face-canvas";
+        // face_debug_canvas_(face) catch |err| { log.warn("error adding debug canvas err={}", …); };
+        let _ = unsafe { ffi::rustty_wc_debug_append(face.canvas.handle, ID.as_ptr(), ID.len()) };
+    }
 }

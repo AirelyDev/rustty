@@ -53,10 +53,17 @@ const DOMAIN: &str = "io.airely.rustty";
 const MSGID_BUGS_ADDRESS: &str = "gael@airely.io";
 const COPYRIGHT_HOLDER: &str = "Mitchell Hashimoto, Ghostty contributors, Rustty contributors";
 
-/// The list of locale catalogs to merge, kept in lockstep with the `po/`
-/// directory. Mirrors `rustty-os`'s `i18n_locales::locales` (the reference
-/// `GhosttyI18n.zig` imports the same `locales` array).
-const LOCALES: &[&str] = &[
+/// The DECLARED locale set: the catalogs to merge on `update-translations`
+/// AND the exact set of catalogs the `resources` build compiles and installs
+/// (see [`crate::res_misc`]'s `gen_locale`). Mirrors `rustty-os`'s
+/// `i18n_locales::locales` (the reference `GhosttyI18n.zig` imports that same
+/// `locales` array and drives its `msgfmt`/install steps from it — declared-set
+/// driven, NOT `po/` directory driven: a declared locale whose `.po` is missing
+/// fails the build, and an undeclared extra `.po` is never installed).
+///
+/// Kept in lockstep with the `po/` directory; the `po_dir_matches_declared_locales`
+/// test in [`crate::res_misc`] is the tripwire for drift.
+pub(crate) const LOCALES: &[&str] = &[
     "zh_CN", "de", "fr", "ja", "nl", "nb", "ru", "uk", "pl", "ko_KR", "mk", "tr", "id", "es_BO",
     "es_AR", "es_ES", "pt_BR", "ca", "it", "bg", "ga", "hu", "he", "zh_TW", "hr", "lt", "lv", "vi",
     "kk", "be", "eu",

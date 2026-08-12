@@ -968,6 +968,17 @@ typedef enum RUSTTY_ENUM_TYPED {
   /**
    * Set the maximum scrollback allocation in bytes.
    *
+   * This is an estimate. Internally, librustty only prunes bytes up 
+   * to a "page"-granularity. A page is the minimum allocated unit of
+   * grid space within Rustty. A page at the time of writing these docs
+   * is about 400KB, so the byte limit will be within this delta.
+   *
+   * This works alongside the line limit configuration. If both are set,
+   * the first-reached limit is used first. Both limits are dependent
+   * on external state (byte limit can be reached with less lines if
+   * more styles are used for example, line limit can be reached with
+   * a narrower terminal viewport). So, they are useful together.
+   *
    * Lowering the limit immediately removes eligible complete historical
    * pages. A value of zero disables scrollback and erases retained history.
    * A NULL value pointer removes the byte limit.
@@ -978,6 +989,20 @@ typedef enum RUSTTY_ENUM_TYPED {
 
   /**
    * Set the maximum number of physical lines retained in scrollback.
+   *
+   * This is an estimate. Internally, librustty only prunes lines up 
+   * to a "page"-granularity. A page is the minimum allocated unit of
+   * grid space within Rustty. As a result, the actual available scrollback
+   * lines will almost always be higher than configured. The magnitude 
+   * of the difference depends on the number of used styles, graphemes, etc.
+   * since the row-count in a page is dynamic based on that. In general,
+   * it ranges from dozens to a hundred or so lines.
+   *
+   * This works alongside the line limit configuration. If both are set,
+   * the first-reached limit is used first. Both limits are dependent
+   * on external state (byte limit can be reached with less lines if
+   * more styles are used for example, line limit can be reached with
+   * a narrower terminal viewport). So, they are useful together.
    *
    * Lowering the limit immediately removes eligible complete historical
    * pages. A NULL value pointer removes the line limit.

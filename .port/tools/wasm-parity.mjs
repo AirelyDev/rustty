@@ -1,14 +1,27 @@
 // Exact-parity harness: run the SAME wasm-vt flow (terminal_new -> vt_write ->
-// formatter -> format_alloc) through BOTH ghostty-vt.wasm and rustty_vt_c.wasm
+// formatter -> format_alloc) through BOTH ghostty-vt.wasm and rustty-vt.wasm
 // and assert the formatted output bytes are IDENTICAL. This is the byte-level
 // gate behind the side-by-side browser examples (example/wasm-vt).
 //
-// Usage: node .port/tools/wasm-parity.mjs
+// Also gates the F-006 embedder-callback contract on both modules: an exported
+// GROWABLE `__indirect_function_table` (ghostty: `exe.export_table = true` +
+// wasm_patch_growable_table; rustty: `--export-table` + the ported xtask
+// `wasm-patch-growable-table` — see .port/tools/build-vt-wasm.sh) so browser JS
+// can grow the table, insert a callback entry, and hand its index to
+// <prefix>_sys_set.
+//
+// Usage: node .port/tools/wasm-parity.mjs [--table-only]
+//   --table-only runs ONLY the F-006 embedder-callback gate on both modules
+//   (compile + instantiate + grow + <prefix>_sys_set). That gate depends on
+//   nothing but the link/patch pipeline, so it stays runnable independently of
+//   the byte-parity flow below, which additionally needs an oracle
+//   `ghostty-vt.wasm` whose `type_json` matches the flow's struct expectations.
 import { readFileSync } from "node:fs";
 
+const TABLE_ONLY = process.argv.includes("--table-only");
+
 const GHOSTTY = "/Users/gael/projects/ghostty/zig-out/bin/ghostty-vt.wasm";
-const RUSTTY =
-  "/Users/gael/projects/rustty/target/wasm32-unknown-unknown/release/rustty_vt_c.wasm";
+const RUSTTY = "/Users/gael/projects/rustty/zig-out/bin/rustty-vt.wasm";
 
 // The exact default input from the wasm-vt example (\x1b/\r/\n unescaped).
 const VT =
@@ -17,12 +30,46 @@ const VT =
 const SUCCESS = 0,
   EMIT_PLAIN = 0;
 
-async function runFlow(path, P /* symbol prefix: ghostty|rustty */) {
+// F-006: embedder-callback contract. The module must export a GROWABLE
+// funcref table named `__indirect_function_table` so browser JS can install
+// effect callbacks; a bounded (unpatched) table makes `grow` throw RangeError,
+// and a private (unexported) table leaves `ex.__indirect_function_table`
+// undefined. Both are checked, because the two halves of the pipeline —
+// `--export-table` at link time and `wasm-patch-growable-table` after — fail
+// independently.
+function tableGate(mod, ex, P) {
+  if (
+    !WebAssembly.Module.exports(mod).some(
+      (e) => e.kind === "table" && e.name === "__indirect_function_table",
+    )
+  )
+    throw new Error(`${P}: __indirect_function_table not exported`);
+  const table = ex.__indirect_function_table;
+  const cbIdx = table.length;
+  table.grow(1); // RangeError here = table max was not patched away
+  // A grown slot's index is a valid fn-pointer value for the sys API: install
+  // it as the log callback (option 2 = LOG), then clear it (0 = null fn ptr).
+  const sysSet = ex[`${P}_sys_set`];
+  if (sysSet(2, cbIdx) !== SUCCESS)
+    throw new Error(`${P}: sys_set(LOG, table index) failed`);
+  if (sysSet(2, 0) !== SUCCESS)
+    throw new Error(`${P}: sys_set(LOG, null) failed`);
+  return cbIdx;
+}
+
+async function load(path, P) {
   const mod = await WebAssembly.compile(readFileSync(path));
   const inst = await WebAssembly.instantiate(mod, { env: { log() {} } });
-  const ex = inst.exports;
+  return { mod, ex: inst.exports };
+}
+
+async function runFlow(path, P /* symbol prefix: ghostty|rustty */) {
+  const { mod, ex } = await load(path, P);
   const buf = () => ex.memory.buffer;
   const fn = (s) => ex[`${P}_${s}`];
+
+  tableGate(mod, ex, P);
+
   // type layout
   const jp = fn("type_json")();
   let e = jp;
@@ -99,6 +146,22 @@ async function runFlow(path, P /* symbol prefix: ghostty|rustty */) {
   fn("formatter_free")(fmt);
   fn("terminal_free")(term);
   return { bytes: out, inputLen: vb.length };
+}
+
+if (TABLE_ONLY) {
+  for (const [path, P] of [
+    [GHOSTTY, "ghostty"],
+    [RUSTTY, "rustty"],
+  ]) {
+    const { mod, ex } = await load(path, P);
+    const idx = tableGate(mod, ex, P);
+    console.log(
+      `${P}: exported growable __indirect_function_table OK ` +
+        `(grew to slot ${idx}, ${P}_sys_set(LOG, ${idx}) accepted)`,
+    );
+  }
+  console.log("\nF-006 EMBEDDER-CALLBACK GATE: PASS ✓");
+  process.exit(0);
 }
 
 const g = await runFlow(GHOSTTY, "ghostty");

@@ -49,8 +49,12 @@ rustty-z2d = { workspace = true }
 allocator-api2 = { workspace = true }
 
 [dev-dependencies]
-# Pure-Rust PNG decoder, used ONLY by the glyf_rasterize PNG known-answer test to
-# decode ghostty's checked-in reference image (`res/glyf_rasterize.png`) for a
-# pixel-exact comparison. This replaces ghostty's runtime `wuffs.png.decode`
-# (wuffs-sys is ghostty's separate emoji-decode path and is NOT pulled in here).
+# Pure-Rust PNG codec, used ONLY by the sprite face and glyf_rasterize PNG
+# known-answer tests: it decodes the checked-in reference images AND re-encodes
+# the rendered atlases so the encoded bytes are compared against the references
+# first (the binary-smuggling integrity gate). This replaces ghostty's
+# `z2d.png_exporter` + runtime `wuffs.png.decode` pair (wuffs-sys is ghostty's
+# separate emoji-decode path and is NOT pulled in here). The encoder output is
+# coupled to the checked-in reference bytes: treat upgrades that change encoder
+# output as reference-regeneration events (RUSTTY_REGEN_FONT_KAT_PNGS).
 png = "0.18"

@@ -29,7 +29,9 @@
 // `cfg!(target_vendor = "apple")`. `OptionAsAlt` maps to `config::OptionAsAlt`.
 
 use crate::config::OptionAsAlt;
-use rustty_cfg_fmt::{format_entry_string, format_entry_void, EntryFormatter, FormatEntry, Writer};
+use rustty_cfg_fmt::{
+    format_entry_string, format_entry_void, EntryFormatter, FormatEntry, FormatError, Writer,
+};
 use rustty_vt::input::key_mods::{Keys, Mod, ModSide, Mods, Side, ALIAS};
 use rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged;
 
@@ -290,7 +292,7 @@ impl RemapSet {
     pub fn format_entry<W: Writer>(
         &self,
         formatter: &mut EntryFormatter<W>,
-    ) -> Result<(), W::Error> {
+    ) -> Result<(), FormatError<W::Error>> {
         // if (self.map.count() == 0) {
         if self.map.count() == 0 {
             // try formatter.formatEntry(void, {});
@@ -511,7 +513,11 @@ impl rustty_datastruct::comparison::DeepEqual for RemapSet {
 /// `formatter.formatEntry(void, {})` (`.void` arm, `format_entry_void`).
 struct VoidValue;
 impl FormatEntry for VoidValue {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         format_entry_void(name, writer)
     }
 }
@@ -521,7 +527,11 @@ impl FormatEntry for VoidValue {
 /// arm, `format_entry_string`). Mirrors the `Binding.zig` port's `ByteSlice`.
 struct ByteSlice(Vec<u8>);
 impl FormatEntry for ByteSlice {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         format_entry_string(name, &self.0, writer)
     }
 }

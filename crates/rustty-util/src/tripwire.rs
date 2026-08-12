@@ -173,17 +173,30 @@ impl<P: FailPointKey, E: Copy> Module<P, E> {
     /// want to make this a comptime parameter to the module.
     //
     // PORT NOTE: the Zig reference gates on `builtin.is_test`, which is true for
-    // the WHOLE compilation unit when running tests (including dependency code).
-    // Rust's `cfg!(test)` is only true inside the crate currently compiled with
-    // `--test`, so a downstream crate's tripwire calls would see `enabled() ==
-    // false` and never trip (this module would be dead weight cross-crate). The
-    // faithful equivalent that propagates to dependency code is
-    // `cfg!(debug_assertions)`: it is on for the `test`/`dev` profiles (where
-    // unit tests run) and off for `release`, matching `builtin.is_test`'s effect
-    // in practice. Consumers additionally `#[cfg(test)]`-gate their `check` call
-    // sites, so production (non-test) builds never reach `check` regardless.
+    // the WHOLE compilation unit when running tests (including dependency code)
+    // at ANY optimize mode — `zig build test -Doptimize=ReleaseFast` still trips
+    // the fail points. Rust has no single cfg with that meaning, so `enabled()`
+    // is the union of the three cfgs that together reproduce it:
+    //
+    //   * `test`             — this crate's OWN unit tests, at any profile.
+    //   * `debug_assertions` — the `test`/`dev` profiles, which is what makes a
+    //                          downstream crate's tripwire calls trip by default
+    //                          (`cfg!(test)` is per-compilation-unit, so a
+    //                          dependency compiled for a consumer's test binary
+    //                          does NOT see it).
+    //   * `tripwire-test`    — the off-by-default cargo feature that restores
+    //                          `is_test` cross-crate in RELEASE test builds,
+    //                          which `debug_assertions` alone cannot express.
+    //                          Consumers turn it on as a DEV-dependency feature
+    //                          (`rustty-vt`), so it unifies only into
+    //                          test/bench/example builds; a production
+    //                          `cargo build --release` builds no dev-deps and
+    //                          still compiles `check` away to nothing.
+    //
+    // Consumers additionally `#[cfg(test)]`-gate their `check` call sites, so
+    // production (non-test) builds never reach `check` regardless.
     pub const fn enabled() -> bool {
-        cfg!(debug_assertions)
+        cfg!(any(test, debug_assertions, feature = "tripwire-test"))
     }
 
     /// Construct a new tripwire module instance. (Zig models this as a type;
@@ -347,12 +360,10 @@ mod tests {
     }
 
     #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // WS18 release lane: this test injects a failure through a `tripwire` fail
+    // point. `Module::enabled()` includes `cfg!(test)` (see its PORT NOTE), which
+    // is true for this crate's own unit tests at ANY profile — so this runs in the
+    // release lane too, matching Zig's `builtin.is_test`. No `ignore` attribute.
     fn test_anon_0() {
         let mut io: Module<Io, AnyError> = module();
 
@@ -405,12 +416,10 @@ mod tests {
     }
 
     #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // WS18 release lane: this test injects a failure through a `tripwire` fail
+    // point. `Module::enabled()` includes `cfg!(test)` (see its PORT NOTE), which
+    // is true for this crate's own unit tests at ANY profile — so this runs in the
+    // release lane too, matching Zig's `builtin.is_test`. No `ignore` attribute.
     fn errorAfter() {
         let mut io: Module<Io, AnyError> = module();
         // Trip after 2 calls (on the 3rd call)

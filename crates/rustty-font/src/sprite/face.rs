@@ -854,38 +854,24 @@ mod tests {
     /// and the reference file for the range, returns true if there is a diff.
     // fn testDiffAtlas(alloc, atlas, path, i, width, height, thickness) !bool {
     //
-    // PORT NOTE: z2d's PNG *exporter* is not part of the ported subset, so the
-    // reference's "export the test atlas to a PNG, byte-compare it against the
-    // reference PNG, and only decode+diff on mismatch" flow cannot be
-    // reproduced. Following the established `glyf_rasterize_png_test` precedent,
-    // this decodes the checked-in reference PNG with the pure-Rust `png`
-    // dev-dependency (replacing `wuffs.png.decode`) and asserts the rendered
-    // alpha8 atlas is PIXEL-EXACT against it. The reference files are 8-bit
-    // grayscale PNGs whose per-pixel gray value is exactly the alpha8 coverage,
-    // so this enforces the same known-answer contract. The temp-PNG copying and
-    // diff-image emission (debugging aids) have no analogue and are dropped.
+    // PORT NOTE: z2d's PNG *exporter* is not part of the ported subset; the
+    // pure-Rust `png` dev-dependency stands in for it on the encode side (see
+    // `encode_alpha8_png`) and for `wuffs.png.decode` on the decode side. This
+    // reproduces the reference's integrity contract in full: encode the
+    // rendered atlas to PNG bytes, byte-compare them against the checked-in
+    // reference FIRST, and only decode + pixel-diff on mismatch — including
+    // the explicit bytes-differ-but-pixels-match failure arm ("smuggle binary
+    // data"). The reference files are 8-bit grayscale PNGs whose per-pixel
+    // gray value is exactly the alpha8 coverage, re-encoded with the pinned
+    // encoder settings of `encode_alpha8_png` so byte equality holds.
     //
-    // Reference-only (dropped) verbatim lines, preserved for R1 comment fidelity
-    // — these describe the reference's PNG-export / byte-compare / diff-image
-    // path that the pure-Rust decode-and-compare replaces:
-    //
-    //     // Get the file contents, we compare the PNG data first in
-    //     // order to ensure that no one smuggles arbitrary binary
-    //     // data in to the reference PNGs.
-    //
-    //     // Get the reference file contents to compare.
+    // Reference-only (dropped) verbatim lines, preserved for R1 comment
+    // fidelity — the tmp-dir test-PNG copying and the red/green diff-image
+    // emission are debugging aids with no analogue here (regeneration is
+    // instead performed in place via `RUSTTY_REGEN_FONT_KAT_PNGS`):
     //
     //     // Copy the test PNG in to the CWD so it isn't
     //     // cleaned up with the rest of the tmp dir files.
-    //
-    //     // Do our PNG bytes comparison, if it's the same then we can
-    //     // move on, otherwise we'll decode the reference file and do
-    //     // a pixel-for-pixel diff.
-    //     if (std.mem.eql(u8, test_bytes, ref_bytes)) return false;
-    //
-    //     // Use wuffs to decode the reference PNG to raw pixels.
-    //     // These will be RGBA, so when diffing we can just compare
-    //     // every fourth byte.
     //
     //     // We'll make a visual representation of the diff using
     //     // red for removed pixels and green for added. We make
@@ -896,12 +882,16 @@ mod tests {
     //     // Otherwise put the reference value in the red
     //     // channel and the new value in the green channel.
     //
-    //     // If the PNG data differs but not the raw pixels, that's
-    //     // a big red flag, since it could mean someone is trying to
-    //     // smuggle binary data in to the test files.
-    //
     //     // Drop the diff image as a PNG in the cwd.
     fn test_diff_atlas(atlas: &Surface, i: u32, width: u32, height: u32, thickness: u32) -> bool {
+        // Get the file contents, we compare the PNG data first in
+        // order to ensure that no one smuggles arbitrary binary
+        // data in to the reference PNGs.
+        //
+        // (The reference exports the atlas to a tmp-dir PNG file and reads it
+        // back; here the atlas is encoded to PNG bytes in memory.)
+        let test_bytes = encode_alpha8_png(atlas);
+
         // Get the reference file contents to compare.
         // const ref_path = "./src/font/sprite/testdata/U+{X}...U+{X}-{d}x{d}+{d}.png"
         let ref_path = format!(
@@ -923,10 +913,80 @@ mod tests {
             }
         };
 
+        let outcome = diff_encoded_atlas(atlas, &test_bytes, &ref_bytes);
+
+        // Regeneration arm (no reference analogue): with
+        // `RUSTTY_REGEN_FONT_KAT_PNGS` set, rewrite the checked-in reference
+        // from the freshly rendered atlas — but only when the decoded pixels
+        // are exact, so a regeneration can never smuggle a visual change past
+        // the KAT. This is needed when the pinned `png` encoder settings (or
+        // the crate's encoded output) change: the byte-level contract treats
+        // an encoder upgrade as a reference-regeneration event, exactly as
+        // the reference treats z2d exporter changes.
+        if std::env::var_os("RUSTTY_REGEN_FONT_KAT_PNGS").is_some()
+            && outcome == AtlasDiff::BytesDifferPixelsMatch
+        {
+            std::fs::write(&ref_path, &test_bytes).unwrap();
+            eprintln!("info(font_sprite): regenerated reference file {ref_path}");
+            return false;
+        }
+        // BytesMatch needs no rewrite; PixelsDiffer falls through to the
+        // failure arm below — regeneration never overwrites a visual
+        // change.
+
+        match outcome {
+            AtlasDiff::BytesMatch => false,
+            AtlasDiff::BytesDifferPixelsMatch => {
+                // If the PNG data differs but not the raw pixels, that's
+                // a big red flag, since it could mean someone is trying to
+                // smuggle binary data in to the test files.
+                eprintln!(
+                    "error(font_sprite): !!! Test PNG data does not match reference, but pixels \
+                     do match! Either the `png` crate's encoder changed or someone is trying to \
+                     smuggle binary data in the test files! reference={ref_path}",
+                );
+                true
+            }
+            AtlasDiff::PixelsDiffer => {
+                eprintln!(
+                    "error(font_sprite): One or more glyphs differ from reference file in range \
+                     U+{i:X}...U+{:X}! reference={ref_path}",
+                    i + 0xFF,
+                );
+                true
+            }
+        }
+    }
+
+    /// Outcome of comparing the encoded test atlas against a reference PNG.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum AtlasDiff {
+        /// Encoded PNG bytes are identical; nothing to decode.
+        BytesMatch,
+        /// Encoded bytes differ but every decoded pixel matches: possible
+        /// binary smuggling in the reference file (or encoder drift). An
+        /// explicit failure in the reference, and here.
+        BytesDifferPixelsMatch,
+        /// One or more decoded pixels differ from the rendered atlas.
+        PixelsDiffer,
+    }
+
+    /// Comparison core of `test_diff_atlas`, split out so the byte-integrity
+    /// contract itself has direct unit coverage (see the `diff_atlas_*` tests).
+    fn diff_encoded_atlas(atlas: &Surface, test_bytes: &[u8], ref_bytes: &[u8]) -> AtlasDiff {
+        // Do our PNG bytes comparison, if it's the same then we can
+        // move on, otherwise we'll decode the reference file and do
+        // a pixel-for-pixel diff.
+        // if (std.mem.eql(u8, test_bytes, ref_bytes)) return false;
+        if test_bytes == ref_bytes {
+            return AtlasDiff::BytesMatch;
+        }
+
         // Use the pure-Rust `png` decoder to decode the reference PNG to raw
-        // pixels. The references are 8-bit grayscale, so one decoded byte per
-        // pixel is exactly the alpha8 coverage we compare against.
-        let decoder = png::Decoder::new(std::io::Cursor::new(&ref_bytes));
+        // pixels (replacing `wuffs.png.decode`). The references are 8-bit
+        // grayscale, so one decoded byte per pixel is exactly the alpha8
+        // coverage we compare against.
+        let decoder = png::Decoder::new(std::io::Cursor::new(ref_bytes));
         let mut reader = decoder.read_info().unwrap();
         let mut ref_gray = vec![0u8; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut ref_gray).unwrap();
@@ -958,15 +1018,107 @@ mod tests {
         }
 
         if differs {
-            eprintln!(
-                "error(font_sprite): One or more glyphs differ from reference file in range \
-                 U+{i:X}...U+{:X}! reference={ref_path}",
-                i + 0xFF,
-            );
+            AtlasDiff::PixelsDiffer
+        } else {
+            AtlasDiff::BytesDifferPixelsMatch
         }
+    }
 
-        // return true; (on diff)
-        differs
+    /// Encode an alpha8 surface to PNG bytes: 8-bit grayscale, one gray byte
+    /// per pixel equal to the alpha8 coverage — the same shape the checked-in
+    /// reference files use.
+    //
+    // PORT NOTE: stands in for the reference's `z2d.png_exporter`. The
+    // compression and filter settings are pinned explicitly because the
+    // checked-in reference bytes are coupled to them: changing them (or
+    // picking up a `png` crate release that changes encoder output) is a
+    // reference-regeneration event (`RUSTTY_REGEN_FONT_KAT_PNGS`), exactly as
+    // the reference treats z2d exporter changes.
+    fn encode_alpha8_png(atlas: &Surface) -> Vec<u8> {
+        let mut out: Vec<u8> = Vec::new();
+        let mut encoder = png::Encoder::new(
+            &mut out,
+            atlas.get_width() as u32,
+            atlas.get_height() as u32,
+        );
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Balanced);
+        encoder.set_filter(png::Filter::Adaptive);
+        let mut writer = encoder.write_header().unwrap();
+        let gray: Vec<u8> = atlas.alpha8_buf().iter().map(|px| px.a).collect();
+        writer.write_image_data(&gray).unwrap();
+        writer.finish().unwrap();
+        out
+    }
+
+    /// Build a small deterministic alpha8 surface for the `diff_atlas_*` unit
+    /// tests below.
+    fn diff_test_surface() -> Surface {
+        let mut sfc = Surface::init(SurfaceType::ImageSurfaceAlpha8, 16, 16).unwrap();
+        for (j, px) in sfc.alpha8_buf_mut().iter_mut().enumerate() {
+            px.a = (j * 7 % 251) as u8;
+        }
+        sfc
+    }
+
+    /// W9-02 proving test: a byte-identical reference short-circuits to a
+    /// pass without decoding.
+    #[test]
+    fn diff_atlas_accepts_byte_identical_reference() {
+        let sfc = diff_test_surface();
+        let bytes = encode_alpha8_png(&sfc);
+        assert_eq!(
+            diff_encoded_atlas(&sfc, &bytes, &bytes),
+            AtlasDiff::BytesMatch
+        );
+    }
+
+    /// W9-02 proving test: a reference re-encoded with an extra (valid) tEXt
+    /// chunk decodes to identical pixels but has different encoded bytes. The
+    /// reference explicitly fails this arm (`Face.zig` `testDiffAtlas`:
+    /// "smuggle binary data"); before the byte-compare gate was ported, the
+    /// sprite KAT silently passed such a reference.
+    #[test]
+    fn diff_atlas_flags_byte_smuggle_when_pixels_match() {
+        let sfc = diff_test_surface();
+        let test_bytes = encode_alpha8_png(&sfc);
+
+        // Same pixels, plus a smuggled tEXt chunk => different encoded bytes.
+        let mut smuggled: Vec<u8> = Vec::new();
+        let mut encoder = png::Encoder::new(&mut smuggled, 16, 16);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Balanced);
+        encoder.set_filter(png::Filter::Adaptive);
+        encoder
+            .add_text_chunk("Comment".to_string(), "smuggled".to_string())
+            .unwrap();
+        let mut writer = encoder.write_header().unwrap();
+        let gray: Vec<u8> = sfc.alpha8_buf().iter().map(|px| px.a).collect();
+        writer.write_image_data(&gray).unwrap();
+        writer.finish().unwrap();
+
+        assert!(test_bytes != smuggled);
+        assert_eq!(
+            diff_encoded_atlas(&sfc, &test_bytes, &smuggled),
+            AtlasDiff::BytesDifferPixelsMatch
+        );
+    }
+
+    /// W9-02 control: a pixel edit is still reported as a pixel diff, not as
+    /// byte smuggling.
+    #[test]
+    fn diff_atlas_flags_pixel_diff() {
+        let sfc = diff_test_surface();
+        let test_bytes = encode_alpha8_png(&sfc);
+        let mut edited = diff_test_surface();
+        edited.alpha8_buf_mut()[42].a ^= 0xFF;
+        let ref_bytes = encode_alpha8_png(&edited);
+        assert_eq!(
+            diff_encoded_atlas(&sfc, &test_bytes, &ref_bytes),
+            AtlasDiff::PixelsDiffer
+        );
     }
 
     /// Draws all ranges in to a set of 16x16 glyph atlases, checks for regressions

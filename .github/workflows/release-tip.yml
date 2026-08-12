@@ -1,0 +1,465 @@
+# rustty continuous ("tip") release pipeline.
+#
+# PORTS: ghostty `.github/workflows/release-tip.yml` @6ad1fe7d — the `setup`
+# (skip detection) -> `source-tarball` / `build-macos` -> `tag` job graph,
+# adapted from Zig+Nix to Cargo+xtask. It publishes the `rustty-source.tar.gz`
+# asset that PACKAGING.md's "Tip source tarballs" section points users at, and
+# force-moves the `tip` tag to the built commit.
+#
+#   zig build distcheck              -> cargo run -p xtask -- distcheck
+#   nu .github/scripts/ghostty-tip   -> .github/scripts/rustty-tip (bash+curl)
+#   inline xcodebuild + codesign     -> macos/build-rustty.sh + build-rustty-signed.sh
+#   dist/macos/update_appcast_tip.py -> same script (already ported, RUSTTY_* env)
+#
+# ============================ INERT BY DEFAULT ============================
+# Every job is gated on the repository variable `RUSTTY_RELEASE_ENABLED` being
+# `true`; until a maintainer sets it, a completed `ci` run on `main` starts this
+# workflow and it immediately does nothing. The publishing jobs additionally
+# require the canonical repository, so a fork can never push a `tip` tag or a
+# release into someone else's namespace.
+#
+# Secrets are the same optional set release-tag.yml documents, plus
+# CF_R2_TIP_{ACCOUNT_ID,AWS_KEY,SECRET_KEY} for the tip artifact host. A missing
+# secret degrades the run with a `::warning::` rather than failing it.
+#
+# DELIBERATE OMISSIONS vs the oracle (recorded, not forgotten): the
+# `build-macos-debug-{slow,fast}` variants and their `sentry-dsym*` uploads
+# (rustty has no Sentry project), and the `source-tarball-lib-vt` /
+# `build-lib-vt-xcframework` jobs (upstream's separate libghostty-vt
+# distribution; rustty ships that engine inside the same workspace tarball).
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+
+  workflow_dispatch:
+
+name: Release Tip
+
+# We must only run one release workflow at a time to prevent corrupting
+# our release artifacts.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    if: |-
+      vars.RUSTTY_RELEASE_ENABLED == 'true' &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.repository == 'AirelyDev/rustty' &&
+          github.ref_name == 'main'
+        )
+      )
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.check.outputs.should_skip }}
+      build: ${{ steps.release_info.outputs.build }}
+      commit: ${{ steps.release_info.outputs.commit }}
+      commit_long: ${{ steps.release_info.outputs.commit_long }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Important so that build number generation works
+          fetch-depth: 0
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      # A tip build has no tag, so `release-info` takes the version straight
+      # from Cargo.toml; only build/commit/commit_long are consumed here.
+      - name: Extract build info
+        id: release_info
+        run: cargo run -q -p xtask -- release-info
+
+      # Classify what changed since the last tip. `build` matches any file that
+      # can reach the built artifact; `release_tip` re-adds release-tip.yml,
+      # which defines the build/tag/publish jobs. Everything else (all of
+      # .github, the port harness under .port, plus docs and repo/lint/editor
+      # metadata) never changes the artifact. Skipped on manual dispatches,
+      # which always build.
+      - name: Detect changes since last tip
+        id: changes
+        if: github.event_name == 'workflow_run'
+        # `base: tip` cannot resolve before the very first tip tag exists. That
+        # must not abort the run: with no outputs, "Determine skip" below falls
+        # through to should_skip=false and builds, which is the safe direction.
+        continue-on-error: true
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        with:
+          token: ""
+          base: tip
+          predicate-quantifier: "every"
+          filters: |
+            build:
+              - '**'
+              - '!.github/**'
+              - '!.port/**'
+              - '!docs/**'
+              - '!.agents/**'
+              - '!.claude/**'
+              - '!.superpowers/**'
+              - '!README.md'
+              - '!CONTRIBUTING.md'
+              - '!HACKING.md'
+              - '!PACKAGING.md'
+              - '!AI_POLICY.md'
+              - '!AGENTS.md'
+              - '!Doxyfile'
+              - '!DoxygenLayout.xml'
+              - '!LICENSE'
+              - '!NOTICE'
+              - '!CODEOWNERS'
+              - '!.clang-format'
+              - '!.editorconfig'
+              - '!.gitattributes'
+              - '!.gitignore'
+              - '!.mailmap'
+              - '!.prettierignore'
+              - '!.shellcheckrc'
+              - '!.swiftlint.yml'
+              - '!typos.toml'
+              - '!valgrind.supp'
+            release_tip:
+              - '.github/workflows/release-tip.yml'
+
+      - name: Determine skip
+        id: check
+        env:
+          CHANGED_BUILD: ${{ steps.changes.outputs.build }}
+          CHANGED_RELEASE_TIP: ${{ steps.changes.outputs.release_tip }}
+        run: |
+          if .github/scripts/rustty-tip "$(git rev-parse HEAD)"; then
+            echo "Tip already built for this commit, skipping"
+            echo "should_skip=true" >> "$GITHUB_OUTPUT"
+          elif [ "$CHANGED_BUILD" = "false" ] && [ "$CHANGED_RELEASE_TIP" = "false" ]; then
+            echo "Only non-artifact files changed since the last tip, skipping"
+            echo "should_skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  tag:
+    runs-on: ubuntu-latest
+    needs: [setup, build-macos]
+    if: |-
+      needs.setup.outputs.should_skip != 'true' &&
+      github.repository == 'AirelyDev/rustty'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Tip Tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -fa tip -m "Latest Continuous Release" "${GITHUB_SHA}"
+          git push --force origin tip
+
+  source-tarball:
+    needs: [setup]
+    if: needs.setup.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RUSTTY_COMMIT_LONG: ${{ needs.setup.outputs.commit_long }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+      # `xtask distcheck` == `zig build distcheck`: it also proves the tarball
+      # builds `--offline --locked` from a fresh CARGO_HOME before we ship it.
+      - name: Create Tarball
+        run: |
+          rm -rf dist/*.tar.gz
+          cargo run -q -p xtask -- distcheck
+          cp dist/rustty-*.tar.gz rustty-source.tar.gz
+
+      - name: Sign Tarball
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          if [ -z "$MINISIGN_KEY" ]; then
+            echo "::warning title=Unsigned tarball::MINISIGN_KEY is not configured; publishing the tip tarball without a signature."
+            exit 0
+          fi
+          printf '%s' "$MINISIGN_KEY" > minisign.key
+          printf '%s' "$MINISIGN_PASSWORD" > minisign.password
+          minisign -S -m rustty-source.tar.gz -s minisign.key < minisign.password
+          rm -f minisign.key minisign.password
+
+      - name: Update Release
+        if: github.repository == 'AirelyDev/rustty'
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          name: 'Rustty Tip ("Nightly")'
+          prerelease: true
+          tag_name: tip
+          target_commitish: ${{ github.sha }}
+          files: |
+            rustty-source.tar.gz
+            rustty-source.tar.gz.minisig
+          token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
+
+  build-macos:
+    needs: [setup]
+    if: needs.setup.outputs.should_skip != 'true'
+    runs-on: macos-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      RUSTTY_BUILD: ${{ needs.setup.outputs.build }}
+      RUSTTY_COMMIT: ${{ needs.setup.outputs.commit }}
+      RUSTTY_COMMIT_LONG: ${{ needs.setup.outputs.commit_long }}
+      # `Release`, not the scripts' local-dev `Debug` default.
+      CONFIGURATION: Release
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Xcode Version
+        run: xcodebuild -version
+
+      # `sign_update` ships in the Sparkle release zip; the app itself resolves
+      # Sparkle through SwiftPM, so this is only for the signing tool.
+      - name: Setup Sparkle
+        env:
+          SPARKLE_VERSION: 2.9.0
+        run: |
+          mkdir -p .action/sparkle
+          cd .action/sparkle
+          curl -L "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-for-Swift-Package-Manager.zip" > sparkle.zip
+          unzip sparkle.zip
+          echo "$(pwd)/bin" >> "$GITHUB_PATH"
+
+      # Build UNSIGNED first: Info.plist is patched below and codesigning seals
+      # it, so signing has to come after.
+      - name: Build Rustty.app
+        run: ./macos/build-rustty.sh
+
+      - name: Locate app bundle
+        run: |
+          APP="$(cd macos && xcodebuild -project Rustty.xcodeproj -scheme Rustty \
+            -configuration "$CONFIGURATION" -showBuildSettings 2>/dev/null \
+            | awk -F' = ' '/ BUILT_PRODUCTS_DIR = /{d=$2} / FULL_PRODUCT_NAME = /{p=$2} END{print d"/"p}')"
+          if [ ! -d "$APP" ]; then
+            echo "built app not found at: $APP" >&2
+            exit 1
+          fi
+          echo "APP=$APP" >> "$GITHUB_ENV"
+
+      - name: Update Info.plist
+        env:
+          SPARKLE_KEY_PUB: ${{ secrets.PROD_MACOS_SPARKLE_KEY_PUB }}
+        run: |
+          # Version Info. A tip build has no marketing version of its own; the
+          # build number is what Sparkle compares (sparkle:version).
+          /usr/libexec/PlistBuddy -c "Set :RusttyCommit $RUSTTY_COMMIT" "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $RUSTTY_BUILD" "$APP/Contents/Info.plist"
+
+          if [ -n "$SPARKLE_KEY_PUB" ]; then
+            /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey $SPARKLE_KEY_PUB" "$APP/Contents/Info.plist"
+          fi
+
+      - name: Import codesigning certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.PROD_MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.PROD_MACOS_CERTIFICATE_PWD }}
+          MACOS_CI_KEYCHAIN_PWD: ${{ secrets.PROD_MACOS_CI_KEYCHAIN_PWD }}
+        run: |
+          if [ -z "$MACOS_CERTIFICATE" ]; then
+            echo "::warning title=Ad-hoc signing::PROD_MACOS_CERTIFICATE is not configured; the tip app will be signed ad-hoc and cannot be notarized."
+            exit 0
+          fi
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p "$MACOS_CI_KEYCHAIN_PWD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$MACOS_CI_KEYCHAIN_PWD" build.keychain
+          security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_CI_KEYCHAIN_PWD" build.keychain
+          rm -f certificate.p12
+
+      - name: Codesign app bundle
+        env:
+          DEVELOPER_ID: ${{ secrets.PROD_MACOS_CERTIFICATE_NAME }}
+          SKIP_BUILD: "1"
+        run: ./macos/build-rustty-signed.sh
+
+      - name: Create DMG
+        env:
+          MACOS_CERTIFICATE_NAME: ${{ secrets.PROD_MACOS_CERTIFICATE_NAME }}
+        run: |
+          npm install --global create-dmg
+          if [ -n "$MACOS_CERTIFICATE_NAME" ]; then
+            create-dmg --identity="$MACOS_CERTIFICATE_NAME" "$APP" ./
+          else
+            create-dmg "$APP" ./ || true
+          fi
+          mv ./Rustty*.dmg ./Rustty.dmg
+
+      - name: Notarize DMG
+        env:
+          APPLE_NOTARIZATION_ISSUER: ${{ secrets.APPLE_NOTARIZATION_ISSUER }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_KEY: ${{ secrets.APPLE_NOTARIZATION_KEY }}
+        run: |
+          if [ -z "$APPLE_NOTARIZATION_KEY" ]; then
+            echo "::warning title=Not notarized::APPLE_NOTARIZATION_KEY is not configured; skipping notarization of the tip build."
+            exit 0
+          fi
+          echo "$APPLE_NOTARIZATION_KEY" > notarization_key.p8
+          xcrun notarytool store-credentials "notarytool-profile" --key notarization_key.p8 --key-id "$APPLE_NOTARIZATION_KEY_ID" --issuer "$APPLE_NOTARIZATION_ISSUER"
+          rm notarization_key.p8
+          xcrun notarytool submit "Rustty.dmg" --keychain-profile "notarytool-profile" --wait
+          xcrun stapler staple "Rustty.dmg"
+          xcrun stapler staple "$APP"
+
+      # Zip up the app and symbols. `-arm64`, not `-universal`: `xtask
+      # xcframework` builds the aarch64-apple-darwin slice only.
+      - name: Zip App
+        run: |
+          ( cd "$(dirname "$APP")" && zip -9 -r --symlinks "$GITHUB_WORKSPACE/rustty-macos-arm64.zip" "$(basename "$APP")" )
+          DSYM="$APP.dSYM"
+          if [ -d "$DSYM" ]; then
+            ( cd "$(dirname "$DSYM")" && zip -9 -r --symlinks "$GITHUB_WORKSPACE/rustty-macos-arm64-dsym.zip" "$(basename "$DSYM")" )
+          else
+            echo "::warning title=No dSYM::$DSYM does not exist; publishing without debug symbols."
+          fi
+
+      - name: Release
+        if: github.repository == 'AirelyDev/rustty'
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          name: 'Rustty Tip ("Nightly")'
+          prerelease: true
+          tag_name: tip
+          target_commitish: ${{ github.sha }}
+          files: |
+            rustty-macos-arm64.zip
+            Rustty.dmg
+          token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
+
+      # Create our appcast for Sparkle.
+      - name: Generate Appcast
+        id: appcast
+        if: github.repository == 'AirelyDev/rustty'
+        env:
+          SPARKLE_KEY: ${{ secrets.PROD_MACOS_SPARKLE_KEY }}
+        run: |
+          if [ -z "$SPARKLE_KEY" ]; then
+            echo "::warning title=No appcast::PROD_MACOS_SPARKLE_KEY is not configured; skipping appcast generation."
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$SPARKLE_KEY" > signing.key
+          sign_update -f signing.key Rustty.dmg > sign_update.txt
+
+          # Fetch the live tip appcast to append to. The very first tip build
+          # has none, so seed an empty channel rather than failing.
+          if ! curl -fsSL https://tip.rustty.sh/appcast.xml > appcast.xml; then
+            echo "::notice title=Seeding appcast::https://tip.rustty.sh/appcast.xml did not resolve; starting a new appcast."
+            cat > appcast.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>Rustty Tip</title>
+            </channel>
+          </rss>
+          EOF
+          fi
+
+          python3 ./dist/macos/update_appcast_tip.py
+          test -f appcast_new.xml
+
+          # See release-tag.yml's identical guard: ElementTree drops the
+          # `xmlns:sparkle` declaration when the appcast it parsed had no
+          # namespaced element yet (i.e. the seeded first build).
+          if ! grep -q 'xmlns:sparkle' appcast_new.xml; then
+            sed -i.bak 's|<rss version="2.0">|<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">|' appcast_new.xml
+            rm -f appcast_new.xml.bak
+            grep -q 'xmlns:sparkle' appcast_new.xml
+          fi
+
+          echo "generated=true" >> "$GITHUB_OUTPUT"
+
+      # Upload our binaries first.
+      - name: Prep R2 Storage
+        run: |
+          rm -rf blob
+          mkdir -p "blob/${RUSTTY_COMMIT_LONG}"
+          cp rustty-macos-arm64.zip "blob/${RUSTTY_COMMIT_LONG}/rustty-macos-arm64.zip"
+          if [ -f rustty-macos-arm64-dsym.zip ]; then
+            cp rustty-macos-arm64-dsym.zip "blob/${RUSTTY_COMMIT_LONG}/rustty-macos-arm64-dsym.zip"
+          fi
+          cp Rustty.dmg "blob/${RUSTTY_COMMIT_LONG}/Rustty.dmg"
+
+      - name: Upload to R2
+        if: github.repository == 'AirelyDev/rustty'
+        uses: ryand56/r2-upload-action@b801a390acbdeb034c5e684ff5e1361c06639e7c # v1.4
+        with:
+          r2-account-id: ${{ secrets.CF_R2_TIP_ACCOUNT_ID }}
+          r2-access-key-id: ${{ secrets.CF_R2_TIP_AWS_KEY }}
+          r2-secret-access-key: ${{ secrets.CF_R2_TIP_SECRET_KEY }}
+          r2-bucket: rustty-tip
+          source-dir: blob
+          destination-dir: ./
+
+      # Now upload our appcast. This ensures that the appcast never
+      # gets out of sync with the binaries.
+      - name: Prep R2 Storage for Appcast
+        if: |-
+          github.repository == 'AirelyDev/rustty' &&
+          steps.appcast.outputs.generated == 'true'
+        run: |
+          rm -rf blob
+          mkdir blob
+          cp appcast_new.xml blob/appcast.xml
+
+      - name: Upload Appcast to R2
+        if: |-
+          github.repository == 'AirelyDev/rustty' &&
+          steps.appcast.outputs.generated == 'true'
+        uses: ryand56/r2-upload-action@b801a390acbdeb034c5e684ff5e1361c06639e7c # v1.4
+        with:
+          r2-account-id: ${{ secrets.CF_R2_TIP_ACCOUNT_ID }}
+          r2-access-key-id: ${{ secrets.CF_R2_TIP_AWS_KEY }}
+          r2-secret-access-key: ${{ secrets.CF_R2_TIP_SECRET_KEY }}
+          r2-bucket: rustty-tip
+          source-dir: blob
+          destination-dir: ./
+
+      - name: Show and Save Release URLs
+        run: |
+          cat << EOF | tee release-urls.txt
+          Release URLs:
+            App Bundle: https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/rustty-macos-arm64.zip
+            Debug Symbols: https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/rustty-macos-arm64-dsym.zip
+            DMG: https://tip.rustty.sh/${RUSTTY_COMMIT_LONG}/Rustty.dmg
+          EOF
+
+      - name: Upload Release URLs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-urls
+          path: release-urls.txt
+          retention-days: 2

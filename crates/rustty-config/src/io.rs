@@ -14,7 +14,7 @@
 // const cli = @import("../cli.zig");
 use crate::string;
 use rustty_args::args::split_tagged_union;
-use rustty_cfg_fmt::{format_entry_void, FormatEntry, Writer};
+use rustty_cfg_fmt::{format_entry_void, FormatEntry, FormatError, Writer};
 use rustty_util::quirks::inlineAssert as assert;
 
 /// PORTS: the error set used by `ReadableIO`/`RepeatableReadableIO` `parseCLI` —
@@ -63,11 +63,23 @@ impl ReadableIO {
         //     defer alloc.free(buf);
         //     _ = try string.parse(buf, input);
         // }
+        //
+        // PORT NOTE: the reference's `try` propagates `string.parse`'s whole
+        // inferred error set. In `cli/args.zig` `parseIntoField` only
+        // `error.OutOfMemory` is fatal (it is returned, aborting the config
+        // load); every other class — `InvalidString` and
+        // `Utf8CannotEncodeSurrogateHalf` alike — falls to the `else` arm and
+        // becomes a recoverable "unknown error {}" diagnostic. `rustty`'s args
+        // layer carries no unknown-error variant (type-specific failures collapse
+        // into the base `Error` set), so both recoverable classes map to
+        // `InvalidString` here. What matters for parity is that the surrogate
+        // class does NOT ride the `OutOfMemory` (fatal) path.
         {
             let mut buf = vec![0u8; input.len()];
             string::parse(&mut buf, input).map_err(|err| match err {
                 string::ParseError::OutOfMemory => ParseError::InvalidString,
                 string::ParseError::InvalidString => ParseError::InvalidString,
+                string::ParseError::Utf8CannotEncodeSurrogateHalf => ParseError::InvalidString,
             })?;
         }
 
@@ -212,7 +224,11 @@ impl ReadableIO {
 
 impl FormatEntry for ReadableIO {
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // var buf: [4096]u8 = undefined;
         // var writer: std.Io.Writer = .fixed(&buf);
         // switch (self) {
@@ -228,13 +244,22 @@ impl FormatEntry for ReadableIO {
         //     writer.buffered(),
         // );
         //
-        // PORT NOTE: the reference writes `tag:value` into a 4096-byte fixed
-        // buffer then passes the accumulated bytes through the string-slice arm.
-        // We build the same bytes and route through `format_entry_string`.
+        // PORT NOTE: the reference writes `tag:value` into a 4096-byte FIXED
+        // buffer then passes the accumulated bytes through the string-slice arm;
+        // each `writeAll`/`writeByte` overflowing the buffer is caught as
+        // `return error.OutOfMemory`. The growable Vec is only the scratch —
+        // the fixed capacity is enforced by the bound check below
+        // (byte-identical output when `tag:value` fits).
         let (tag, v): (&[u8], &[u8]) = match self {
             ReadableIO::Raw(v) => (b"raw", v),
             ReadableIO::Path(v) => (b"path", v),
         };
+        // writer.writeAll(@tagName(tag)) catch return error.OutOfMemory;
+        // writer.writeByte(':') catch return error.OutOfMemory;
+        // writer.writeAll(v) catch return error.OutOfMemory;
+        if tag.len() + 1 + v.len() > 4096 {
+            return Err(FormatError::OutOfMemory);
+        }
         let mut buf: Vec<u8> = Vec::new();
         buf.extend_from_slice(tag);
         buf.push(b':');
@@ -367,7 +392,11 @@ impl RepeatableReadableIO {
 
 impl FormatEntry for RepeatableReadableIO {
     // pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         // if (self.list.items.len == 0) {
         //     try formatter.formatEntry(void, {});
         //     return;
@@ -447,6 +476,55 @@ mod tests {
         f.format_entry(&v).unwrap();
         // try std.testing.expectEqualSlices(u8, "a = raw:foo\n", buf.written());
         assert_eq!(b"a = raw:foo\n".as_slice(), buf.written());
+    }
+
+    // rustty-only test (parity fix W95-B02-01): the reference formats `tag:value`
+    // through a FIXED `[4096]u8` buffer (`writeAll ... catch return
+    // error.OutOfMemory`). With the `raw` tag + `:` occupying 4 bytes, a
+    // 4092-byte value fills the buffer exactly and a 4093-byte value overflows
+    // it. Lock both sides of the boundary.
+    #[test]
+    fn readable_io_format_entry_fixed_buffer_boundary() {
+        use rustty_cfg_fmt::FormatError;
+
+        // raw + ':' + 4092 bytes == 4096: fits.
+        {
+            let mut buf = AllocatingWriter::init();
+            let v = ReadableIO::Raw(vec![b'x'; 4092]);
+            let mut f = entry_formatter(b"a", &mut buf);
+            f.format_entry(&v).unwrap();
+            let mut expected: Vec<u8> = Vec::new();
+            expected.extend_from_slice(b"a = raw:");
+            expected.extend_from_slice(&vec![b'x'; 4092]);
+            expected.push(b'\n');
+            assert_eq!(expected.as_slice(), buf.written());
+        }
+
+        // raw + ':' + 4093 bytes == 4097: overflows -> OutOfMemory.
+        {
+            let mut buf = AllocatingWriter::init();
+            let v = ReadableIO::Raw(vec![b'x'; 4093]);
+            let mut f = entry_formatter(b"a", &mut buf);
+            assert_eq!(Err(FormatError::OutOfMemory), f.format_entry(&v));
+        }
+
+        // path + ':' + 4092 bytes == 4097 (5-byte prefix): overflows too.
+        {
+            let mut buf = AllocatingWriter::init();
+            let v = ReadableIO::Path(vec![b'x'; 4092]);
+            let mut f = entry_formatter(b"a", &mut buf);
+            assert_eq!(Err(FormatError::OutOfMemory), f.format_entry(&v));
+        }
+
+        // The per-item delegation inherits the same bound.
+        {
+            let mut buf = AllocatingWriter::init();
+            let list = RepeatableReadableIO {
+                list: vec![ReadableIO::Raw(vec![b'x'; 4093])],
+            };
+            let mut f = entry_formatter(b"a", &mut buf);
+            assert_eq!(Err(FormatError::OutOfMemory), f.format_entry(&list));
+        }
     }
 
     // test "parseCLI" {  (RepeatableReadableIO)

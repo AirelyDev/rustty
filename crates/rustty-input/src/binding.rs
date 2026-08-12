@@ -24,7 +24,7 @@
 // `Trigger.foldedCodepoint` (see there). `EntryFormatter`/`deepEqual`/`key`/
 // `key_mods`/`KeyEvent` map to the ported crates below.
 
-use rustty_cfg_fmt::{format_entry_string, EntryFormatter, FormatEntry, Writer};
+use rustty_cfg_fmt::{format_entry_string, EntryFormatter, FormatEntry, FormatError, Writer};
 use rustty_datastruct::comparison::deep_equal;
 use rustty_vt::input::key::{self, Key as KeyKey, KeyEvent};
 use rustty_vt::input::key_mods::{self, Mods};
@@ -4196,7 +4196,7 @@ impl Value {
                 // try formatter.formatEntry([]const u8, buffer.buffer[0..buffer.end]);
                 formatter
                     .format_entry(&ByteSlice(buffer.slice().to_vec()))
-                    .map_err(FormatEntriesError::Writer)
+                    .map_err(FormatEntriesError::from)
             }
 
             Value::LeafChained(leaf) => {
@@ -4220,7 +4220,7 @@ impl Value {
                     }
                     formatter
                         .format_entry(&ByteSlice(buffer.slice().to_vec()))
-                        .map_err(FormatEntriesError::Writer)?;
+                        .map_err(FormatEntriesError::from)?;
                     buffer.end = pos;
                 }
                 Ok(())
@@ -4236,13 +4236,30 @@ pub enum FormatEntriesError<E> {
     Writer(E),
 }
 
+/// The `EntryFormatter::format_entry` error union (`FormatError`) folds into
+/// `formatEntries`' inferred error set variant-for-variant — the reference's
+/// `try formatter.formatEntry(...)` merges both `error.OutOfMemory` sources
+/// into one inferred `!void` set.
+impl<E> From<FormatError<E>> for FormatEntriesError<E> {
+    fn from(e: FormatError<E>) -> FormatEntriesError<E> {
+        match e {
+            FormatError::Writer(w) => FormatEntriesError::Writer(w),
+            FormatError::OutOfMemory => FormatEntriesError::OutOfMemory,
+        }
+    }
+}
+
 /// PORT NOTE: a `[]const u8` value wrapper implementing `FormatEntry` so it can
 /// be passed to `EntryFormatter::format_entry` (the reference calls
 /// `formatter.formatEntry([]const u8, bytes)` — the `.pointer` `[]const u8` arm,
 /// `format_entry_string`).
 struct ByteSlice(Vec<u8>);
 impl FormatEntry for ByteSlice {
-    fn format_entry<W: Writer>(&self, name: &[u8], writer: &mut W) -> Result<(), W::Error> {
+    fn format_entry<W: Writer>(
+        &self,
+        name: &[u8],
+        writer: &mut W,
+    ) -> Result<(), FormatError<W::Error>> {
         format_entry_string(name, &self.0, writer)
     }
 }
@@ -4255,6 +4272,12 @@ pub struct RewindBuffer {
     end: usize,
 }
 
+/// `var buf: [1024]u8 = undefined;` — the capacity of the reference's stack
+/// buffer (`Config.zig` `Keybinds.formatEntryDocs`, `RemapSet.formatEntry`).
+/// The bound is OBSERVABLE: `std.Io.Writer.fixed(&buf)` fails once a write would
+/// pass it, and every call site turns that into `error.OutOfMemory`.
+pub const REWIND_BUFFER_CAPACITY: usize = 1024;
+
 impl RewindBuffer {
     pub fn new() -> RewindBuffer {
         RewindBuffer {
@@ -4263,12 +4286,16 @@ impl RewindBuffer {
         }
     }
     // PORT NOTE: the `()` error models the reference's fixed-`std.Io.Writer`
-    // overflow (`error.OutOfMemory`); for this growable buffer the write never
-    // fails, so the unit error is never produced. The `result_unit_err` lint is
-    // allowed for that fidelity (the signature mirrors the reference's fallible
-    // buffer write, kept for the call-site shape in `format_entries`).
+    // overflow (`error.OutOfMemory`), which every caller maps to that error. The
+    // buffer is heap-backed here (no 1 KiB of stack per format call), but it is
+    // CAPPED at the reference's `[1024]u8` so the overflow boundary is identical:
+    // a write that would push `end` past 1024 fails instead of growing.
     #[allow(clippy::result_unit_err)]
     pub fn write_all(&mut self, bytes: &[u8]) -> Result<(), ()> {
+        // A fixed `std.Io.Writer` fails the write once it no longer fits.
+        if self.end + bytes.len() > REWIND_BUFFER_CAPACITY {
+            return Err(());
+        }
         // Mirrors writing into a fixed buffer at the `end` cursor, overwriting.
         if self.buf.len() < self.end {
             self.buf.resize(self.end, 0);
@@ -4296,8 +4323,9 @@ impl Default for RewindBuffer {
 // can write the leading `{f}` trigger (and table-name prefix) into the shared
 // `RewindBuffer` before delegating to `Value::format_entries`, exactly as the
 // reference does (`writer.print("{f}", .{k})` / `"{s}/{f}"`).
-// PORT NOTE: `()` error mirrors the fixed-buffer write error (never produced for
-// the growable buffer); `result_unit_err` allowed for that fidelity.
+// PORT NOTE: `()` error mirrors the fixed-buffer write error (produced when the
+// write passes `REWIND_BUFFER_CAPACITY`); `result_unit_err` allowed for that
+// fidelity.
 #[allow(clippy::result_unit_err)]
 pub fn write_trigger_to_buffer(t: &Trigger, buffer: &mut RewindBuffer) -> Result<(), ()> {
     let mut w = RewindWriter { inner: buffer };

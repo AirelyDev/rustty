@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Check if a given commit SHA has a corresponding tip release.
+#
+# PORTS: ghostty `.github/scripts/ghostty-tip` (nushell: one `http head` against
+# the tip artifact host, exit 0 if it resolves, exit 1 otherwise). rustty has no
+# nushell in its toolchain — ghostty gets `nu` from its Nix dev shell, and
+# rustty has no Nix flake (`.port/phase-3/NON_PORTS.md` §G13) — so this is the
+# same single HEAD probe in bash + curl.
+#
+# Like the oracle this does NOT validate that the SHA is a real commit of this
+# repository, only that a tip release exists for it.
+#
+# Usage:  .github/scripts/rustty-tip <full-length-commit-sha>
+# Exit:   0 = a tip release exists, 1 = it does not, 2 = usage error.
+#
+# RUSTTY_TIP_URL_BASE overrides the artifact host (default: the host
+# `dist/macos/update_appcast_tip.py` writes its enclosure URLs against).
+set -euo pipefail
+
+if [ "$#" -ne 1 ] || [ -z "$1" ]; then
+  echo "usage: rustty-tip <full-length-commit-sha>" >&2
+  exit 2
+fi
+
+commit="$1"
+base="${RUSTTY_TIP_URL_BASE:-https://tip.rustty.sh}"
+url="${base}/${commit}/rustty-macos-arm64.zip"
+
+# `-I` = HEAD, `-L` follows redirects, `-w` prints only the final status code.
+# A network failure yields an empty body and a non-zero curl exit; `|| true`
+# keeps `set -e` from killing us so the miss is reported as "no tip release"
+# rather than an opaque failure (matching the oracle's `try/catch`).
+code="$(curl -sS -L -I -o /dev/null -w '%{http_code}' "$url" || true)"
+if [ "$code" = "200" ]; then
+  exit 0
+fi
+
+echo "The SHA ${commit} does not have a corresponding tip release (HTTP ${code:-000} for ${url})." >&2
+exit 1

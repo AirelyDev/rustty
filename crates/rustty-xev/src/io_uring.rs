@@ -5588,14 +5588,19 @@ impl File {
         let _ = cb;
 
         unsafe {
-            // req.* = .{};
+            // req.* = .{ .full_write_buffer = buf };
             //
-            // Matches the oracle (file.zig:170) exactly: `queuePWrite` default-inits
-            // the whole `WriteRequest` and does NOT set `full_write_buffer` (unlike
-            // `queueWrite`, which needs it for the remainder-chaining trampoline).
-            // Behavior-neutral: `queue_pwrite_trampoline` reads only the op's buffer
-            // via `pwrite_result`, never `full_write_buffer` — so `default()` here.
-            *req = WriteRequest::default();
+            // Matches CURRENT upstream (libxev 9ce8e8e6, the ghostty 6ad1fe7d pin;
+            // file.zig:171): `queuePWrite` now seeds `full_write_buffer` like
+            // `queueWrite` does. The tracked oracle (34fa5087, file.zig:170) wrote
+            // `req.* = .{}`. Behavior-neutral either way: `queue_pwrite_trampoline`
+            // reads only the op's buffer via `pwrite_result`, never
+            // `full_write_buffer` — absorbed here so the source body and the ported
+            // `queuePWrite` KAT come from the same revision (codex W13A-02).
+            *req = WriteRequest {
+                full_write_buffer: buf,
+                ..WriteRequest::default()
+            };
             self.pwrite_init(ptr::addr_of_mut!((*req).completion), buf, offset);
             (*req).completion.userdata = q as *mut c_void;
             (*req).completion.callback = Self::queue_pwrite_trampoline::<UD, CB>;
@@ -5968,6 +5973,13 @@ impl File {
 //   Option<WriteBuffer> = 48, libc::iovec = 16
 // so `Connect` (4 + 112, +tag → 120) still outweighs the widest new arm,
 // `SendMsg` (msghdr 8 + buffer 48 + iov 16 + fd 4, +tag/padding → 88).
+//
+// UPSTREAM DRIFT (unabsorbed): the libxev bundled by the ghostty pin 6ad1fe7d
+// (libxev 9ce8e8e6) asserts 128 (io_uring.zig:1130), down from the 152 this
+// port tracks (libxev 34fa5087) — against its own pin the Rust size is
+// byte-identical. The bump is a documented non-port (`.port/phase-3/NON_PORTS.md`
+// G3; rustty-xev is a D6 Zig-port-defer and does not track libxev revisions) —
+// a future bump absorption re-measures against 128, not 152.
 const COMPLETION_SIZE: usize = 152;
 const _: () = assert!(size_of::<Completion>() == COMPLETION_SIZE);
 
@@ -7472,6 +7484,126 @@ mod tests {
         loop_.deinit();
     }
 
+    // test "process wait with non-zero exit code" (watcher/process.zig) — the
+    // reference instantiates `ProcessTests` inside `ProcessPidFd`, so this
+    // generic test runs per Linux backend upstream; monomorphized here for
+    // io_uring. Asserts the pidfd waitid reap surfaces the REAL `si_status`,
+    // not just zero.
+    #[test]
+    #[allow(clippy::zombie_processes)]
+    fn io_uring_process_wait_with_non_zero_exit_code() {
+        // posix_spawn `sh -c "exit 42"` (the reference's argv_42).
+        let mut pid: libc::pid_t = 0;
+        let path = b"/bin/sh\0";
+        let arg_c = b"-c\0";
+        let arg_script = b"exit 42\0";
+        let mut argv: [*mut libc::c_char; 4] = [
+            path.as_ptr() as *mut libc::c_char,
+            arg_c.as_ptr() as *mut libc::c_char,
+            arg_script.as_ptr() as *mut libc::c_char,
+            ptr::null_mut(),
+        ];
+        let mut envp: [*mut libc::c_char; 1] = [ptr::null_mut()];
+        let rc = unsafe {
+            libc::posix_spawn(
+                &mut pid,
+                path.as_ptr() as *const libc::c_char,
+                ptr::null(),
+                ptr::null(),
+                argv.as_mut_ptr() as *const *mut libc::c_char,
+                envp.as_mut_ptr() as *const *mut libc::c_char,
+            )
+        };
+        assert_eq!(rc, 0, "posix_spawn sh -c 'exit 42'");
+
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let mut p = Process::init(pid).unwrap();
+
+        // Wait
+        let mut code: Option<u32> = None;
+        let mut c_wait = Completion::default();
+        let cb = |ud: *mut Option<u32>,
+                  _l: *mut Loop,
+                  _c: *mut Completion,
+                  r: core::result::Result<u32, ProcessWaitError>| {
+            unsafe { *ud = Some(r.unwrap()) }; // ud.?.* = r catch unreachable
+            CallbackAction::Disarm
+        };
+        unsafe {
+            p.wait(
+                &mut loop_ as *mut Loop,
+                ptr::addr_of_mut!(c_wait),
+                ptr::addr_of_mut!(code),
+                cb,
+            );
+        }
+
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert_eq!(code, Some(42));
+
+        p.deinit();
+        loop_.deinit();
+    }
+
+    // test "process wait on a process that already exited" (watcher/process.zig)
+    // — Process::init FIRST (the pidfd must be opened while the child exists),
+    // then the child is reaped OUT FROM UNDER the watcher via waitpid; the
+    // subsequent loop wait exercises the ECHILD → `InvalidChild` path
+    // (`r catch 0` in the reference).
+    #[test]
+    fn io_uring_process_wait_on_a_process_that_already_exited() {
+        // posix_spawn /bin/true (the reference's argv_0 equivalent).
+        let mut pid: libc::pid_t = 0;
+        let path = b"/bin/true\0";
+        let mut argv: [*mut libc::c_char; 2] =
+            [path.as_ptr() as *mut libc::c_char, ptr::null_mut()];
+        let mut envp: [*mut libc::c_char; 1] = [ptr::null_mut()];
+        let rc = unsafe {
+            libc::posix_spawn(
+                &mut pid,
+                path.as_ptr() as *const libc::c_char,
+                ptr::null(),
+                ptr::null(),
+                argv.as_mut_ptr() as *const *mut libc::c_char,
+                envp.as_mut_ptr() as *const *mut libc::c_char,
+            )
+        };
+        assert_eq!(rc, 0, "posix_spawn /bin/true");
+
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let mut p = Process::init(pid).unwrap();
+
+        // _ = try child.wait();  — reap the child before the watcher does.
+        let mut status: libc::c_int = 0;
+        let reaped = unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert_eq!(reaped, pid, "waitpid must reap the child");
+
+        // Wait
+        let mut code: Option<u32> = None;
+        let mut c_wait = Completion::default();
+        let cb = |ud: *mut Option<u32>,
+                  _l: *mut Loop,
+                  _c: *mut Completion,
+                  r: core::result::Result<u32, ProcessWaitError>| {
+            unsafe { *ud = Some(r.unwrap_or(0)) }; // ud.?.* = r catch 0
+            CallbackAction::Disarm
+        };
+        unsafe {
+            p.wait(
+                &mut loop_ as *mut Loop,
+                ptr::addr_of_mut!(c_wait),
+                ptr::addr_of_mut!(code),
+                cb,
+            );
+        }
+
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert_eq!(code, Some(0));
+
+        p.deinit();
+        loop_.deinit();
+    }
+
     // KAT — Pty write round-trip: openpty; Stream.init_fd(write side = parent);
     // queue_write a payload; read it back on the other end (child); assert bytes +
     // WriteQueue drains. Proves the ordered-write engine on the live io_uring ring.
@@ -7541,6 +7673,252 @@ mod tests {
 
         // The WriteQueue drains (the single request was popped by the trampoline).
         assert!(write_queue.empty());
+
+        pty.deinit();
+        loop_.deinit();
+    }
+
+    // test "pty: child to parent" (watcher/stream.zig) — direct `Stream::write`
+    // on the child end, read on the parent end. The reference's `StreamTests`
+    // are generic over the backend; monomorphized here for io_uring (the macOS
+    // instantiation lives in stream.rs).
+    #[test]
+    fn io_uring_pty_child_to_parent() {
+        // Create the pty parent/child side.
+        let mut pty = Pty::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+
+        let parent = Stream::init_fd(pty.parent);
+        let child = Stream::init_fd(pty.child);
+
+        // Read
+        let mut read_buf = [0u8; 128];
+        let mut read_len: Option<usize> = None;
+        let mut c_read = Completion::default();
+        let read_cb = |ud: *mut Option<usize>,
+                       _l: *mut Loop,
+                       _c: *mut Completion,
+                       _s: Stream,
+                       _b: ReadBuffer,
+                       r: core::result::Result<usize, ReadError>| {
+            unsafe { *ud = Some(r.unwrap()) }; // ud.?.* = r catch unreachable
+            CallbackAction::Disarm
+        };
+        unsafe {
+            parent.read(
+                &mut loop_ as *mut Loop,
+                ptr::addr_of_mut!(c_read),
+                read_slice(&mut read_buf),
+                ptr::addr_of_mut!(read_len),
+                read_cb,
+            );
+        }
+
+        // This should not block!
+        loop_.run(RunMode::NoWait).unwrap();
+        assert!(read_len.is_none());
+
+        // Send
+        let send_buf = b"hello, world!";
+        let mut c_write = Completion::default();
+        let write_cb = |_ud: *mut (),
+                        _l: *mut Loop,
+                        _c: *mut Completion,
+                        _s: Stream,
+                        _b: WriteBuffer,
+                        r: core::result::Result<usize, WriteError>| {
+            r.unwrap(); // _ = r catch unreachable
+            CallbackAction::Disarm
+        };
+        unsafe {
+            child.write::<(), _>(
+                &mut loop_ as *mut Loop,
+                ptr::addr_of_mut!(c_write),
+                write_slice(send_buf),
+                ptr::null_mut(),
+                write_cb,
+            );
+        }
+
+        // The write and read should trigger
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(read_len.is_some());
+        assert_eq!(send_buf, &read_buf[0..read_len.unwrap()]);
+
+        pty.deinit();
+        loop_.deinit();
+    }
+
+    // test "pty: parent to child" (watcher/stream.zig) — direct `Stream::write`
+    // on the parent end, read on the child end.
+    #[test]
+    fn io_uring_pty_parent_to_child() {
+        // Create the pty parent/child side.
+        let mut pty = Pty::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+
+        let parent = Stream::init_fd(pty.parent);
+        let child = Stream::init_fd(pty.child);
+
+        // Read
+        let mut read_buf = [0u8; 128];
+        let mut read_len: Option<usize> = None;
+        let mut c_read = Completion::default();
+        let read_cb = |ud: *mut Option<usize>,
+                       _l: *mut Loop,
+                       _c: *mut Completion,
+                       _s: Stream,
+                       _b: ReadBuffer,
+                       r: core::result::Result<usize, ReadError>| {
+            unsafe { *ud = Some(r.unwrap()) };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            child.read(
+                &mut loop_ as *mut Loop,
+                ptr::addr_of_mut!(c_read),
+                read_slice(&mut read_buf),
+                ptr::addr_of_mut!(read_len),
+                read_cb,
+            );
+        }
+
+        // This should not block!
+        loop_.run(RunMode::NoWait).unwrap();
+        assert!(read_len.is_none());
+
+        // Send (note the newline at the end of the buf is important
+        // since we're in cooked mode)
+        let send_buf = b"hello, world!\n";
+        let mut c_write = Completion::default();
+        let write_cb = |_ud: *mut (),
+                        _l: *mut Loop,
+                        _c: *mut Completion,
+                        _s: Stream,
+                        _b: WriteBuffer,
+                        r: core::result::Result<usize, WriteError>| {
+            r.unwrap();
+            CallbackAction::Disarm
+        };
+        unsafe {
+            parent.write::<(), _>(
+                &mut loop_ as *mut Loop,
+                ptr::addr_of_mut!(c_write),
+                write_slice(send_buf),
+                ptr::null_mut(),
+                write_cb,
+            );
+        }
+
+        // The write and read should trigger
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(read_len.is_some());
+        assert_eq!(send_buf, &read_buf[0..read_len.unwrap()]);
+
+        pty.deinit();
+        loop_.deinit();
+    }
+
+    // test "pty: queued writes" (watcher/stream.zig) — TWO `queue_write`
+    // requests must drain FIFO ("hello, " then "world!\n" concatenate), and the
+    // completion handed to the second callback must map back to ITS
+    // `WriteRequest` (`WriteRequest.from(c_result) == &write_req[1]`; the
+    // reference guards that assert with `!xev.dynamic`, which holds for this
+    // concrete-backend instantiation).
+    #[test]
+    fn io_uring_pty_queued_writes() {
+        // Create the pty parent/child side.
+        let mut pty = Pty::init().unwrap();
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+
+        let parent = Stream::init_fd(pty.parent);
+        let child = Stream::init_fd(pty.child);
+
+        // Read
+        let mut read_buf = [0u8; 128];
+        let mut read_len: Option<usize> = None;
+        let mut c_read = Completion::default();
+        let read_cb = |ud: *mut Option<usize>,
+                       _l: *mut Loop,
+                       _c: *mut Completion,
+                       _s: Stream,
+                       _b: ReadBuffer,
+                       r: core::result::Result<usize, ReadError>| {
+            unsafe { *ud = Some(r.unwrap()) };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            child.read(
+                &mut loop_ as *mut Loop,
+                ptr::addr_of_mut!(c_read),
+                read_slice(&mut read_buf),
+                ptr::addr_of_mut!(read_len),
+                read_cb,
+            );
+        }
+
+        // This should not block!
+        loop_.run(RunMode::NoWait).unwrap();
+        assert!(read_len.is_none());
+
+        let mut write_queue: WriteQueue = WriteQueue::default();
+        let mut write_req: [WriteRequest; 2] = [WriteRequest::default(), WriteRequest::default()];
+
+        // Send (note the newline at the end of the buf is important
+        // since we're in cooked mode)
+        let hello_cb = |_ud: *mut (),
+                        _l: *mut Loop,
+                        _c: *mut Completion,
+                        _s: Stream,
+                        _b: WriteBuffer,
+                        r: core::result::Result<usize, WriteError>| {
+            r.unwrap();
+            CallbackAction::Disarm
+        };
+        unsafe {
+            parent.queue_write::<(), _>(
+                &mut loop_ as *mut Loop,
+                ptr::addr_of_mut!(write_queue),
+                ptr::addr_of_mut!(write_req[0]),
+                write_slice(b"hello, "),
+                ptr::null_mut(),
+                hello_cb,
+            );
+        }
+
+        let mut c_result: Option<*mut Completion> = None;
+        let world_cb = |ud: *mut Option<*mut Completion>,
+                        _l: *mut Loop,
+                        c: *mut Completion,
+                        _s: Stream,
+                        _b: WriteBuffer,
+                        r: core::result::Result<usize, WriteError>| {
+            r.unwrap();
+            unsafe { *ud = Some(c) }; // ud.?.* = c
+            CallbackAction::Disarm
+        };
+        unsafe {
+            parent.queue_write(
+                &mut loop_ as *mut Loop,
+                ptr::addr_of_mut!(write_queue),
+                ptr::addr_of_mut!(write_req[1]),
+                write_slice(b"world!\n"),
+                ptr::addr_of_mut!(c_result),
+                world_cb,
+            );
+        }
+
+        // The write and read should trigger
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(read_len.is_some());
+        assert_eq!(b"hello, world!\n", &read_buf[0..read_len.unwrap()]);
+
+        // Verify our completion is equal to our request
+        // (`!xev.dynamic` holds here.)
+        assert_eq!(
+            WriteRequest::from(c_result.unwrap()),
+            ptr::addr_of_mut!(write_req[1])
+        );
 
         pty.deinit();
         loop_.deinit();
@@ -7619,6 +7997,96 @@ mod tests {
         }
         loop_.run(RunMode::NoWait).unwrap();
         assert!(!wake2);
+
+        notifier.deinit();
+        loop_.deinit();
+    }
+
+    // test "async: notify first" (watcher/async.zig) — a notification sent
+    // BEFORE the wait is registered must still wake the waiter (the eventfd
+    // counter retains it). Monomorphized for io_uring (the macOS instantiation
+    // lives in async.rs).
+    #[test]
+    fn io_uring_async_notify_first() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let mut notifier = Async::init().unwrap();
+
+        // Send a notification
+        notifier.notify().unwrap();
+
+        // Wait
+        let mut wake = false;
+        let mut c_wait = Completion::default();
+        let cb = |ud: *mut bool,
+                  _l: *mut Loop,
+                  _c: *mut Completion,
+                  r: core::result::Result<(), ReadError>| {
+            r.unwrap(); // _ = r catch unreachable
+            unsafe { *ud = true };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            notifier.wait(
+                &mut loop_ as *mut Loop,
+                ptr::addr_of_mut!(c_wait),
+                ptr::addr_of_mut!(wake),
+                cb,
+            );
+        }
+
+        // Wait for wake
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert!(wake);
+
+        notifier.deinit();
+        loop_.deinit();
+    }
+
+    // test "async batches multiple notifications" (watcher/async.zig) — N
+    // notifications before (5) and after (1) the wait is registered must
+    // coalesce into EXACTLY ONE callback (the eventfd read drains the counter),
+    // even across 10 extra `no_wait` ticks with a rearming waiter.
+    #[test]
+    fn io_uring_async_batches_multiple_notifications() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+        let mut notifier = Async::init().unwrap();
+
+        // Send a notification many times
+        notifier.notify().unwrap();
+        notifier.notify().unwrap();
+        notifier.notify().unwrap();
+        notifier.notify().unwrap();
+        notifier.notify().unwrap();
+
+        // Wait
+        let mut count: u32 = 0;
+        let mut c_wait = Completion::default();
+        let cb = |ud: *mut u32,
+                  _l: *mut Loop,
+                  _c: *mut Completion,
+                  r: core::result::Result<(), ReadError>| {
+            r.unwrap(); // _ = r catch unreachable
+            unsafe { *ud += 1 };
+            CallbackAction::Rearm
+        };
+        unsafe {
+            notifier.wait(
+                &mut loop_ as *mut Loop,
+                ptr::addr_of_mut!(c_wait),
+                ptr::addr_of_mut!(count),
+                cb,
+            );
+        }
+
+        // Send a notification
+        notifier.notify().unwrap();
+
+        // Wait for wake
+        loop_.run(RunMode::Once).unwrap();
+        for _ in 0..10 {
+            loop_.run(RunMode::NoWait).unwrap();
+        }
+        assert_eq!(count, 1);
 
         notifier.deinit();
         loop_.deinit();
@@ -7915,6 +8383,98 @@ mod tests {
         }
         loop_.run(RunMode::UntilDone).unwrap();
         assert_eq!(b"12345678", &read_buf[0..read_len]);
+
+        unsafe {
+            libc::close(wfd);
+            libc::close(rfd);
+        }
+        loop_.deinit();
+        std::fs::remove_file(&path).ok();
+    }
+
+    // test "queuePWrite" (current pin file.zig:318; libxev 9ce8e8e6, absent from
+    // the tracked 34fa5087 oracle — codex W13A-02). Two File.queue_write requests
+    // ("1234" via req[0], "5678" via req[1]) followed by a File.queue_pwrite of
+    // "000" at offset 3 that REUSES req[1] — faithfully clobbering the still-queued
+    // "5678" request node exactly as the oracle does — then read back and pin the
+    // exact final bytes "123000".
+    #[test]
+    fn io_uring_file_queue_pwrite_kat() {
+        let mut loop_ = Loop::init(Options::default()).unwrap();
+
+        let (wfd, path) = temp_file();
+        let file = File::init(wfd);
+
+        let mut write_queue: WriteQueue = WriteQueue::default();
+        let mut write_req: [WriteRequest; 2] = [WriteRequest::default(), WriteRequest::default()];
+        let write_cb = |_ud: *mut (),
+                        _l: *mut Loop,
+                        _c: *mut Completion,
+                        _s: File,
+                        _b: WriteBuffer,
+                        r: core::result::Result<usize, WriteError>| {
+            r.unwrap();
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file.queue_write::<(), _>(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(write_queue),
+                ptr::addr_of_mut!(write_req[0]),
+                write_slice(b"1234"),
+                ptr::null_mut(),
+                write_cb,
+            );
+            file.queue_write::<(), _>(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(write_queue),
+                ptr::addr_of_mut!(write_req[1]),
+                write_slice(b"5678"),
+                ptr::null_mut(),
+                write_cb,
+            );
+            // Oracle reuse: &write_req[1] again — queue_pwrite re-inits the node
+            // that is already queued for "5678", so that write never runs.
+            file.queue_pwrite::<(), _>(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(write_queue),
+                ptr::addr_of_mut!(write_req[1]),
+                write_slice(b"000"),
+                3,
+                ptr::null_mut(),
+                write_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+
+        // Make sure the data is on disk.
+        assert_eq!(unsafe { libc::fsync(wfd) }, 0);
+
+        let rfd = open_read_fd(&path);
+        let file2 = File::init(rfd);
+        let mut read_buf = [0u8; 128];
+        let mut read_len: usize = 0;
+        let mut c_read = Completion::default();
+        let read_cb = |ud: *mut usize,
+                       _l: *mut Loop,
+                       _c: *mut Completion,
+                       _s: File,
+                       _b: ReadBuffer,
+                       r: core::result::Result<usize, ReadError>| {
+            unsafe { *ud = r.unwrap() };
+            CallbackAction::Disarm
+        };
+        unsafe {
+            file2.read(
+                ptr::addr_of_mut!(loop_),
+                ptr::addr_of_mut!(c_read),
+                read_slice(&mut read_buf),
+                ptr::addr_of_mut!(read_len),
+                read_cb,
+            );
+        }
+        loop_.run(RunMode::UntilDone).unwrap();
+        assert_eq!(b"123000", &read_buf[0..read_len]);
 
         unsafe {
             libc::close(wfd);

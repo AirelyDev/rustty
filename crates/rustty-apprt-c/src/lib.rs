@@ -954,7 +954,8 @@ pub struct Info {
 
 // `rustty_info_s` = `{ enum build_mode(4→pad8); const char* version(8);
 // uintptr_t version_len(8) }` = 24, align 8. Returned by value by `rustty_info`
-// (now landed — supersedes abi_layout.rs's stale "DEFERRED" note). Frozen here.
+// (landed; abi_layout.rs's stale "DEFERRED" note is gone and that file now pins the
+// same layout plus the `BuildMode` ordinals/width). Frozen here.
 // @embed-abi rustty_info_s 24
 const _: () = assert!(core::mem::size_of::<Info>() == 24);
 const _: () = assert!(core::mem::align_of::<Info>() == 8);
@@ -2040,28 +2041,23 @@ pub unsafe extern "C" fn rustty_surface_mouse_pressure(
     stage_raw: u32,
     pressure: f64,
 ) {
-    // const stage = std.meta.intToEnum(
-    //     input.MousePressureStage,
-    //     stage_raw,
-    // ) catch {
-    //     log.warn(
-    //         "invalid mouse pressure stage value={}",
-    //         .{stage_raw},
-    //     );
-    //     return;
-    // };
+    // const stage = std.enums.fromInt(input.MousePressureStage, stage_raw) orelse return;
     //
-    // PORT NOTE: `intToEnum` is the fallible tag guard on the raw `u32` crossing the
-    // C boundary (the E7 `set_color_scheme` precedent). `MousePressureStage` is
-    // `enum(u8) { none=0, normal=1, deep=2 }`.
+    // PORT NOTE: `std.enums.fromInt` is the fallible tag guard on the raw `u32`
+    // crossing the C boundary (the E7 `set_color_scheme` precedent).
+    // `MousePressureStage` is `enum(u8) { none=0, normal=1, deep=2 }`. The guard is
+    // SILENT: an out-of-range `stage_raw` returns with NO diagnostic. (The reference
+    // did `std.meta.intToEnum ... catch { log.warn("invalid mouse pressure stage
+    // value={}", .{stage_raw}); return; }` until upstream e8525c0fd ("Update to Zig
+    // 0.16.0") replaced it with the silent `fromInt ... orelse return` that the
+    // pinned oracle carries; the port had tracked that stale revision and emitted an
+    // `eprintln!` here, which no oracle revision ever did — Ghostty's `log.warn`
+    // routes through `std_options.logFn`, not raw stderr.)
     let stage = match stage_raw {
         0 => mouse::PressureStage::None,
         1 => mouse::PressureStage::Normal,
         2 => mouse::PressureStage::Deep,
-        _ => {
-            eprintln!("invalid mouse pressure stage value={stage_raw}");
-            return;
-        }
+        _ => return,
     };
 
     // surface.mousePressureCallback(stage, pressure);

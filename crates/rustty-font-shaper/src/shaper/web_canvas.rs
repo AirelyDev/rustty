@@ -31,6 +31,12 @@ pub use wasm::Shaper;
 // force-retain them (`#[used]`), and so they participate in the public API.
 #[cfg(target_arch = "wasm32")]
 pub use wasm::{rustty_wc_shaper_free, rustty_wc_shaper_new, rustty_wc_shaper_shape};
+// The Ghostty-ABI wasm exports (`pub const Wasm`, `shaper/web_canvas.zig:231-305`)
+// — the UNPREFIXED names retained by `font/main.zig`'s
+// `comptime { _ = shape.web_canvas.Wasm; }`. Feature-gated (`ghostty-wasm-abi`):
+// only the `rustty_wasm.wasm` (`main_wasm.zig`) artifact carries them.
+#[cfg(all(target_arch = "wasm32", feature = "ghostty-wasm-abi"))]
+pub use wasm::{shaper_free, shaper_new, shaper_test};
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
@@ -380,5 +386,212 @@ mod wasm {
             unsafe { *out_cells.add(k) = *cell };
         }
         count as isize
+    }
+
+    // -----------------------------------------------------------------------
+    // The Ghostty-ABI wasm-compatible C-ABI (`pub const Wasm = struct { … }`,
+    // `shaper/web_canvas.zig:231-305`) — the UNPREFIXED export names. Feature-
+    // gated (`ghostty-wasm-abi`); see the re-export at the file head.
+    // -----------------------------------------------------------------------
+
+    #[cfg(feature = "ghostty-wasm-abi")]
+    pub use ghostty_wasm_abi::{shaper_free, shaper_new, shaper_test};
+
+    /// The wasm-compatible API.
+    // pub const Wasm = struct {
+    //     const wasm = @import("../../os/wasm.zig");
+    //     const alloc = wasm.alloc;
+    #[cfg(feature = "ghostty-wasm-abi")]
+    mod ghostty_wasm_abi {
+        use super::{collection, shape, Shaper};
+        use crate::shared_grid::SharedGrid;
+        use allocator_api2::alloc::Global;
+        use rustty_vt::page::ContentTag;
+        use rustty_vt::pagelist::Node;
+        use rustty_vt::point::{Coordinate, Point};
+        use rustty_vt::size::CellCountInt;
+        use rustty_vt::terminal::{Colors, Options as TerminalOptions, Terminal};
+
+        /// `export fn shaper_new(cap: usize) ?*Shaper`
+        #[no_mangle]
+        pub extern "C" fn shaper_new(cap: usize) -> *mut Shaper {
+            // return shaper_new_(cap) catch null;
+            //
+            // fn shaper_new_(cap: usize) !*Shaper {
+            //     const cell_buf = try alloc.alloc(font.shape.Cell, cap);
+            //     var shaper = try Shaper.init(alloc, .{ .cell_buf = cell_buf });
+            //     const result = try alloc.create(Shaper); result.* = shaper; return result;
+            // }
+            //
+            // PORT NOTE: identical body to `rustty_wc_shaper_new` — the modern
+            // `cell_buf` is growable, so `cap` is an advisory reservation.
+            match Shaper::init(shape::Options::default()) {
+                Ok(mut shaper) => {
+                    shaper.cell_buf.reserve(cap);
+                    shaper.run_buf.reserve(cap);
+                    Box::into_raw(Box::new(shaper))
+                }
+                Err(_) => core::ptr::null_mut(),
+            }
+        }
+
+        /// `export fn shaper_free(ptr: ?*Shaper) void`
+        #[no_mangle]
+        pub extern "C" fn shaper_free(ptr: *mut Shaper) {
+            // if (ptr) |v| { alloc.free(v.cell_buf); v.deinit(); alloc.destroy(v); }
+            if !ptr.is_null() {
+                let mut shaper = unsafe { Box::from_raw(ptr) };
+                shaper.deinit();
+            }
+        }
+
+        /// Runs a test to verify shaping works properly.
+        // export fn shaper_test(self: *Shaper, group: *font.GroupCache,
+        //     str: [*]const u8, len: usize) void
+        //
+        // PORT NOTE (FAITHFUL MODERNIZATION, see the file header): the second
+        // parameter is the font state — `*font.GroupCache` upstream, a type the
+        // 2024 `Group` → `SharedGrid` refactor DELETED; the modern analog is
+        // `*SharedGrid`, exactly as `rustty_wc_shaper_shape` takes. Likewise the
+        // reference row loop drives the deleted 4-arg
+        // `runIterator(group, row, null, null)`; the port reaches the SAME
+        // `shape()` through the run-buffer primitive (`prepare`/`addCodepoint`
+        // inlined), feeding each viewport cell's codepoints with its column as
+        // the cluster — what the old iterator's hooks produced. `grid` may be
+        // null for strings without multi-codepoint graphemes (only the
+        // grapheme-cluster arm of `shape()` dereferences it).
+        #[no_mangle]
+        pub extern "C" fn shaper_test(
+            self_: *mut Shaper,
+            grid: *mut SharedGrid,
+            str: *const u8,
+            len: usize,
+        ) {
+            if self_.is_null() || (len > 0 && str.is_null()) {
+                return;
+            }
+            let shaper = unsafe { &mut *self_ };
+            let bytes = unsafe { core::slice::from_raw_parts(str, len) };
+            // shaper_test_(self, group, str[0..len]) catch |err| {
+            //     log.warn("error during shaper test err={}", .{err});   // log-as-comment
+            // };
+            let _ = shaper_test_(shaper, grid, bytes);
+        }
+
+        // fn shaper_test_(self: *Shaper, group: *font.GroupCache, str: []const u8) !void {
+        fn shaper_test_(shaper: &mut Shaper, grid: *mut SharedGrid, s: &[u8]) -> Result<(), ()> {
+            // Create a terminal and print all our characters into it.
+            // var term = try terminal.Terminal.init(alloc, self.cell_buf.len, 80);
+            // defer term.deinit(alloc);
+            //
+            // PORT NOTE: `self.cell_buf.len` is the fixed capacity `shaper_new`
+            // allocated; the modern growable `cell_buf`'s analog is its reserved
+            // capacity. The reference's 2-arg `Terminal.init(alloc, cols, rows)`
+            // was replaced upstream by `Options`; the remaining fields replicate
+            // the reference `Terminal.Options` defaults, exactly as
+            // `rustty-vt-c/src/terminal.rs` does.
+            let cols = shaper
+                .cell_buf
+                .capacity()
+                .min(usize::from(CellCountInt::MAX));
+            if cols == 0 {
+                return Err(());
+            }
+            const ROWS: u16 = 80;
+            let mut term = Terminal::init(
+                Global,
+                TerminalOptions {
+                    cols: cols as CellCountInt,
+                    rows: ROWS as CellCountInt,
+                    max_scrollback_bytes: Some(10_000),
+                    max_scrollback_lines: None,
+                    colors: Colors::default(),
+                    default_modes: rustty_vt::modes::ModePacked::default(),
+                    default_cursor_style: rustty_vt::screen::CursorStyle::Block,
+                    default_cursor_blink: Some(false),
+                    kitty_image_storage_limit: 320 * 1000 * 1000,
+                    kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
+                },
+            )
+            .map_err(|_| ())?;
+
+            let result = shaper_test_rows(shaper, grid, &mut term, s);
+            // defer term.deinit(alloc);
+            term.deinit(Global);
+            result
+        }
+
+        /// The body of `shaper_test_` after terminal creation, split out so the
+        /// terminal's `deinit` runs on every path (the reference `defer`).
+        fn shaper_test_rows(
+            shaper: &mut Shaper,
+            grid: *mut SharedGrid,
+            term: &mut Terminal,
+            s: &[u8],
+        ) -> Result<(), ()> {
+            // Iterate over unicode codepoints and add to terminal
+            // const view = try std.unicode.Utf8View.init(str);
+            // var iter = view.iterator();
+            // while (iter.nextCodepoint()) |c| { try term.print(c); }
+            let text = core::str::from_utf8(s).map_err(|_| ())?;
+            for c in text.chars() {
+                term.print(c as u32).map_err(|_| ())?;
+            }
+
+            // Iterate over the rows and print out all the runs we get.
+            // var rowIter = term.screen.rowIterator(.viewport);
+            // var y: usize = 0;
+            // while (rowIter.next()) |row| { … }
+            let pages = unsafe { &(*term.screens.active).pages };
+            let (cols, rows) = (term.cols, term.rows);
+            for y in 0..rows {
+                // var iter = self.runIterator(group, row, null, null);
+                // while (try iter.next(alloc)) |run| { … }
+                //
+                // PORT NOTE (modernization, see `shaper_test`): the deleted
+                // 4-arg run iterator's hooks fed each cell's codepoints with the
+                // cell column as cluster; reproduced via the run-buffer
+                // primitive, one run per row.
+                shaper.reset_run();
+                for x in 0..cols {
+                    let Some(cell) =
+                        pages.get_cell(Point::Viewport(Coordinate { x, y: u32::from(y) }))
+                    else {
+                        continue;
+                    };
+                    let pcell = unsafe { *cell.cell };
+                    let cp = pcell.codepoint();
+                    if cp == 0 {
+                        continue;
+                    }
+                    shaper.push_codepoint(cp, u32::from(x));
+                    if pcell.content_tag() == ContentTag::CodepointGrapheme {
+                        let page = unsafe { &*Node::page(cell.node) };
+                        if let Some(extra) = page.lookup_grapheme(cell.cell) {
+                            for &cp2 in extra {
+                                shaper.push_codepoint(cp2, u32::from(x));
+                            }
+                        }
+                    }
+                }
+                if shaper.run_buf.is_empty() {
+                    continue;
+                }
+
+                // const cells = try self.shape(run);
+                let n = shaper.run_buf.len();
+                let run = shape::TextRun {
+                    hash: 0,
+                    offset: 0,
+                    cells: n as u16,
+                    grid,
+                    font_index: collection::Index::new(crate::Style::Regular, 0),
+                };
+                // log.info("y={} run={d} shape={any} idx={}", .{ y, run.cells,
+                //     cells, run.font_index });   // log-as-comment
+                let _cells = shaper.shape(run).map_err(|_| ())?;
+            }
+            Ok(())
+        }
     }
 }

@@ -217,6 +217,26 @@ sound *because nothing reads it yet* — the PORT NOTE records the Chunk-4 oblig
 
 ### B.2 Surface-mailbox seam (`GPU_RD_TRAIT_DESIGN.md §D is wrong here)
 
+> **RESOLVED — 2026-08-11 (codex-vet F-014 / W1-05).** The planned resolution
+> below ("when `drawFrame` lands it routes through a renderer-local mailbox trait
+> … bound to apprt-api's `AppMailbox` concretely in `core`") is now BUILT.
+> `drawFrame` had landed without the routing, so both pushes were silently
+> discarded on **both** platforms (not just Linux/GTK): the renderer's scrollbar
+> and renderer-health messages never reached `Surface::handleMessage` →
+> `updateScrollbar`/`updateRendererHealth` → the apprt Actions (GTK adjustment /
+> macOS `GHOSTTY_ACTION_SCROLLBAR`). Shipped shape:
+> `rustty-renderer` `generic.rs` declares `SurfaceMessage` (the two reference
+> variants), `MailboxTimeout`, the `SurfaceMailboxSink` trait and the
+> `SurfaceMailbox` handle (shared by BOTH `Renderer` monomorphizations, no longer
+> duplicated per platform arm); `renderer::Options` carries `surface_mailbox`
+> again; `rustty-core` `renderer_seam.rs` `SurfaceMailboxAdapter` implements the
+> trait over `surface::SurfaceMailbox<A>` and is passed into `Renderer::init` —
+> so the mailbox is no longer dropped by
+> `let _ = (surface_mailbox, rt_surface, thread)`. `rt_surface`/`thread` stay
+> core-side (the renderer never reads them). Offscreen callers pass
+> `SurfaceMailbox::DETACHED`, whose `push` returns 0 — the goldens still observe
+> no mailbox. The historical text below is retained for provenance.
+
 §D writes `surface_mailbox: apprt::surface::Mailbox`. This is **unbuildable**: (a) `apprt::surface::
 Mailbox` does not exist — apprt-api replaced the reference struct with the `AppMailbox` **trait**
 (`apprt-api/src/surface.rs:181`); (b) `rustty-apprt-api -> rustty-renderer`

@@ -103,3 +103,6 @@ example/**/build/
 .port/codex/**
 # !.port/codex/**/
 # !.port/codex/**/*.md
+
+# codex-vet remediation ledger: keep the state/designs/scripts, drop caches
+.port/codex-vet/__pycache__/

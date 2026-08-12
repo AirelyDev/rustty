@@ -25,7 +25,16 @@ workspace = true
 #
 # `wuffs` = the sys.zig decodePngWuffs default for the app tier (SharedDeps
 # `.ghostty` terminalOptions analog; the standalone rustty-vt-c stays `.lib`/None).
-rustty-vt = { workspace = true, features = ["oniguruma", "wuffs"] }
+#
+# `simd` = `build/Config.zig:196-206` — `-Dsimd` defaults to TRUE for every
+# non-WASM target ("Build with SIMD-accelerated code paths. Results in
+# significant performance improvements."), and `SharedDeps` threads `cfg.simd`
+# into the terminal module, so the reference app binary runs
+# `stream.zig`'s SIMD `nextSlice` fast path. Rustty's app tier (this crate) turns
+# it on to match. rustty-vt's OWN default stays empty — the Zig terminal module
+# has no self-default either; consumers thread the knob — so `cargo test -p
+# rustty-vt` keeps its scalar-arm coverage and `--features simd` its SIMD arm.
+rustty-vt = { workspace = true, features = ["oniguruma", "simd", "wuffs"] }
 rustty-config = { workspace = true }
 rustty-renderer = { workspace = true }
 rustty-font = { workspace = true }
