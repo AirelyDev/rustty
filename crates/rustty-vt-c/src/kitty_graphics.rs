@@ -509,8 +509,8 @@ pub unsafe fn image_get_multi(
 //     switch (data) {
 //         .invalid => return .invalid_value,
 //         .id => out.* = image.id, ...
-//         .data_ptr => out.* = image.data.ptr,
-//         .data_len => out.* = image.data.len,
+//         .data_ptr => out.* = (image.data.bytes() orelse return .no_value).ptr,
+//         .data_len => out.* = image.data.len(),
 //     }
 //     return .success;
 // }
@@ -540,9 +540,12 @@ unsafe fn image_get_typed(image_: ImageHandle, data: ImageData, out: *mut c_void
         ImageData::Format => unsafe { *(out as *mut ImageFormat) = image.format },
         // .compression => out.* = image.compression,
         ImageData::Compression => unsafe { *(out as *mut ImageCompression) = image.compression },
-        // .data_ptr => out.* = image.data.ptr,
-        ImageData::DataPtr => unsafe { *(out as *mut *const u8) = image.data.as_ptr() },
-        // .data_len => out.* = image.data.len,
+        // .data_ptr => out.* = (image.data.bytes() orelse return .no_value).ptr,
+        ImageData::DataPtr => match image.data.bytes() {
+            Some(bytes) => unsafe { *(out as *mut *const u8) = bytes.as_ptr() },
+            None => return Result::NoValue,
+        },
+        // .data_len => out.* = image.data.len(),
         ImageData::DataLen => unsafe { *(out as *mut usize) = image.data.len() },
         // .generation => out.* = image.generation,
         ImageData::Generation => unsafe { *(out as *mut u64) = image.generation },

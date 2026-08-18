@@ -432,7 +432,15 @@ where
             //     }
             // }
             match message {
-                Message::OpenConfig => self.performAction(rt_app, ScopedApp::OpenConfig)?,
+                // PORT NOTE (P4 partial, 0a183c923): upstream `Message.open_config`
+                // carries its own `App.Message.OpenConfig` payload mapped into the
+                // binding enum here. The core `Message` payload union is the W5/W7
+                // apprt/C-ABI bundle; until it lands the mailbox message keeps the
+                // pre-range void shape and dispatches the default (`.os_open`).
+                Message::OpenConfig => self.performAction(
+                    rt_app,
+                    ScopedApp::OpenConfig(rustty_input::binding::OpenConfig::DEFAULT),
+                )?,
                 Message::NewWindow(msg) => self.newWindow(rt_app, msg)?,
                 Message::Close(surface) => self.closeSurface(surface),
                 Message::SurfaceMessage(msg) => self.surfaceMessage(msg.surface, msg.message)?,
@@ -644,7 +652,17 @@ where
                 // _ = try self.newWindow(rt_app, .{ .parent = null });
                 self.newWindow(rt_app, NewWindow { parent: None })?;
             }
-            ScopedApp::OpenConfig => {
+            // .open_config => |v| _ = try rt_app.performAction(
+            //     .app,
+            //     .open_config,
+            //     switch (v) { .os_open => .os_open, .new_window => .new_window },
+            // ),
+            //
+            // PORT NOTE (P4 partial, 0a183c923): the apprt `Action.OpenConfig`
+            // payload (`apprt.action.OpenConfig`, a C-ABI enum) is the W5/W7
+            // bundle; until it lands the payload is dropped at this seam and the
+            // pre-range void apprt action is performed.
+            ScopedApp::OpenConfig(_) => {
                 let _ = rt_app
                     .perform_action(apprt::Target::<Surface<A>>::App, apprt::Action::OpenConfig)?;
             }
@@ -1484,7 +1502,7 @@ mod test_runtime {
                 mods: Default::default(),
                 key: TriggerKey::Physical(Key::KeyA),
             },
-            BindingAction::OpenConfig,
+            BindingAction::OpenConfig(rustty_input::binding::OpenConfig::DEFAULT),
         );
         let mut app = App::<TestApp>::init(Allocator).unwrap();
         app.focusEvent(false);
@@ -1509,7 +1527,7 @@ mod test_runtime {
                 mods: Default::default(),
                 key: TriggerKey::Physical(Key::KeyA),
             },
-            BindingAction::OpenConfig,
+            BindingAction::OpenConfig(rustty_input::binding::OpenConfig::DEFAULT),
         );
         let mut app = App::<TestApp>::init(Allocator).unwrap();
         assert!(app.focused);
@@ -1557,7 +1575,13 @@ mod test_runtime {
         rt_app.fail_key = Some(ActionKey::Quit);
         let mut app = App::<TestApp>::init(Allocator).unwrap();
 
-        app.performAllChainedAction(&rt_app, &[BindingAction::Quit, BindingAction::OpenConfig]);
+        app.performAllChainedAction(
+            &rt_app,
+            &[
+                BindingAction::Quit,
+                BindingAction::OpenConfig(rustty_input::binding::OpenConfig::DEFAULT),
+            ],
+        );
         assert_eq!(
             rt_app.recorded(),
             vec![

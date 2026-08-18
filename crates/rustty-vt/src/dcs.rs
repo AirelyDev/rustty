@@ -940,6 +940,7 @@ mod tests {
         t.set_attribute(Attribute::Inverse).unwrap();
         t.set_attribute(Attribute::Invisible).unwrap();
         t.set_attribute(Attribute::Strikethrough).unwrap();
+        t.set_attribute(Attribute::Overline).unwrap();
         t.set_attribute(Attribute::DirectColorFg(crate::color::RGB {
             r: 255,
             g: 255,
@@ -957,7 +958,7 @@ mod tests {
         let encoded = Decrqss::Sgr.encode(&mut t, &mut buf).unwrap();
 
         let expected: &[u8] =
-            b"\x1BP1$r0;1;2;3;4:5;5;7;8;9;38:2::255:255:255;48:2::255:255:255m\x1B\\";
+            b"\x1BP1$r0;1;2;3;4:5;53;5;7;8;9;38:2::255:255:255;48:2::255:255:255m\x1B\\";
         assert_eq!(expected, encoded);
         assert!(encoded.len() <= Decrqss::MAX_RESPONSE_BYTES);
 

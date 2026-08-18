@@ -1153,9 +1153,10 @@ mod tests {
             height: 306,
             ..Image::default()
         };
-        s.add_image(alloc, image.clone()).unwrap();
+        s.add_image(alloc, t.screens.active, image.clone()).unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             0,
             crate::kitty::graphics_storage::Placement {
@@ -1216,7 +1217,7 @@ mod tests {
             assert_eq!(44, rp.dest_height);
         }
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -1240,9 +1241,10 @@ mod tests {
             height: 306,
             ..Image::default()
         };
-        s.add_image(alloc, image.clone()).unwrap();
+        s.add_image(alloc, t.screens.active, image.clone()).unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             0,
             crate::kitty::graphics_storage::Placement {
@@ -1303,7 +1305,7 @@ mod tests {
             assert_eq!(22, rp.dest_height);
         }
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -1326,9 +1328,10 @@ mod tests {
             height: 306,
             ..Image::default()
         };
-        s.add_image(alloc, image.clone()).unwrap();
+        s.add_image(alloc, t.screens.active, image.clone()).unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             0,
             crate::kitty::graphics_storage::Placement {
@@ -1365,7 +1368,7 @@ mod tests {
             assert_eq!(22, rp.dest_height);
         }
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 }

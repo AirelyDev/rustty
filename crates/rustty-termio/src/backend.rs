@@ -37,8 +37,9 @@ use crate::Error;
 // enough to satisfy most write requests. It must be a power of 2.
 //
 // PORT NOTE: reference `const WRITE_REQ_PREALLOC = std.math.pow(usize, 2, 5);`
-// (file-private and unreferenced in backend.zig — Exec.zig's ThreadData
-// carries its own copy, `exec::ThreadData::WRITE_REQ_PREALLOC`).
+// (file-private and unreferenced in backend.zig; since e0ef934f7 replaced
+// Exec.zig's SegmentedPools with `std.heap.MemoryPool`, this orphaned const is
+// the only surviving mention of the prealloc size).
 #[allow(dead_code)]
 pub(crate) const WRITE_REQ_PREALLOC: usize = usize::pow(2, 5);
 

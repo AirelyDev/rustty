@@ -1,6 +1,4 @@
-#if canImport(AppKit)
 import AppKit
-#endif
 import CoreTransferable
 import UniformTypeIdentifiers
 
@@ -32,15 +30,8 @@ extension Rustty.SurfaceView: Transferable {
 
     @MainActor
     static func find(uuid: UUID) -> Self? {
-        #if canImport(AppKit)
         guard let del = NSApp.delegate as? Rustty.Delegate else { return nil }
         return del.rusttySurface(id: uuid) as? Self
-        #elseif canImport(UIKit)
-        // We should be able to use UIApplication here.
-        return nil
-        #else
-        return nil
-        #endif
     }
 }
 
@@ -50,9 +41,7 @@ extension UTType {
     static let rusttySurfaceId = UTType(exportedAs: "io.airely.rusttySurfaceId")
 }
 
-#if canImport(AppKit)
 extension NSPasteboard.PasteboardType {
     /// Pasteboard type for dragging surface IDs.
     static let rusttySurfaceId = NSPasteboard.PasteboardType(UTType.rusttySurfaceId.identifier)
 }
-#endif

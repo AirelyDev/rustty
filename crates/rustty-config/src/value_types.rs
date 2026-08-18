@@ -3408,8 +3408,11 @@ impl Keybinds {
             ),
             Action::ReloadConfig,
         );
-        self.set
-            .put(uni(',', ctrl_or_super(Mods::default())), Action::OpenConfig);
+        // .{ .open_config = .default },
+        self.set.put(
+            uni(',', ctrl_or_super(Mods::default())),
+            Action::OpenConfig(rustty_input::binding::OpenConfig::DEFAULT),
+        );
 
         {
             self.set.put(
@@ -5959,12 +5962,38 @@ impl RepeatableCommand {
         // self.value_c = .empty;
         self.value = Vec::new();
         self.value_c = Vec::new();
-        // try self.value.appendSlice(alloc, inputpkg.command.defaults);
-        self.value
-            .extend_from_slice(&rustty_input::command::defaults());
-        // try self.value_c.appendSlice(alloc, inputpkg.command.defaultsC);
-        self.value_c
-            .extend_from_slice(&rustty_input::command::defaults_c());
+        // try self.value.ensureUnusedCapacity(alloc, inputpkg.command.defaults.len);
+        // try self.value_c.ensureUnusedCapacity(alloc, inputpkg.command.defaults.len);
+        let defaults = rustty_input::command::defaults();
+        self.value.reserve(defaults.len());
+        self.value_c.reserve(defaults.len());
+        // for (inputpkg.command.defaults) |cmd| {
+        for cmd in defaults {
+            // Translation is currently a GTK-only feature. In particular,
+            // translating these shared strings for the embedded runtime gives
+            // the macOS app a localized command palette in an otherwise
+            // unlocalized UI.
+            // const localized = if (comptime build_config.app_runtime == .gtk)
+            //     cmd.translated()
+            // else
+            //     cmd;
+            let localized = if matches!(
+                rustty_build_config::app_runtime(),
+                rustty_build_config::Runtime::Gtk
+            ) {
+                cmd.translated()
+            } else {
+                cmd
+            };
+            // self.value_c.appendAssumeCapacity(try localized.cval(alloc));
+            //
+            // PORT NOTE: `cval` is `!C` (OOM only); the Rust port aborts on
+            // allocation failure, so the unit error is unreachable here.
+            let localized_c = localized.cval().expect("cval is infallible");
+            // self.value.appendAssumeCapacity(localized);
+            self.value.push(localized);
+            self.value_c.push(localized_c);
+        }
     }
 
     // pub fn parseCLI(self: *Self, alloc: Allocator, input_: ?[]const u8) !void

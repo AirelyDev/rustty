@@ -144,17 +144,76 @@ static GLOBAL: Mutex<Global> = Mutex::new(Global {
     log: None,
 });
 
+/// PORT NOTE (`590d669c4` seam): views the seam's `RawAllocator` — the
+/// `std.mem.Allocator` the caller hands the decoder (the kitty path passes a
+/// `LimitedAllocator`) — as a rustty-lib `ZigAllocator` so it can be wrapped
+/// into the C allocator handed to the callback. The reference forwards the SAME
+/// Zig allocator (`CAllocator.fromZig(&alloc)`); this bridge is that forward,
+/// so the callback's allocations are capped exactly like a native decoder's.
+struct RawZigAllocator<'a>(&'a dyn terminal_sys::RawAllocator);
+
+impl rustty_lib::allocator::ZigAllocator for RawZigAllocator<'_> {
+    fn alloc(&self, len: usize, alignment: rustty_lib::allocator::Alignment, ra: usize) -> *mut u8 {
+        self.0
+            .raw_alloc(len, terminal_sys::Alignment(alignment.0), ra)
+    }
+
+    fn resize(
+        &self,
+        memory: rustty_lib::allocator::ZigSlice,
+        alignment: rustty_lib::allocator::Alignment,
+        new_len: usize,
+        ra: usize,
+    ) -> bool {
+        self.0.raw_resize(
+            terminal_sys::RawSlice::new(memory.ptr, memory.len),
+            terminal_sys::Alignment(alignment.0),
+            new_len,
+            ra,
+        )
+    }
+
+    fn remap(
+        &self,
+        memory: rustty_lib::allocator::ZigSlice,
+        alignment: rustty_lib::allocator::Alignment,
+        new_len: usize,
+        ra: usize,
+    ) -> *mut u8 {
+        self.0.raw_remap(
+            terminal_sys::RawSlice::new(memory.ptr, memory.len),
+            terminal_sys::Alignment(alignment.0),
+            new_len,
+            ra,
+        )
+    }
+
+    fn free(
+        &self,
+        memory: rustty_lib::allocator::ZigSlice,
+        alignment: rustty_lib::allocator::Alignment,
+        ra: usize,
+    ) {
+        self.0.raw_free(
+            terminal_sys::RawSlice::new(memory.ptr, memory.len),
+            terminal_sys::Alignment(alignment.0),
+            ra,
+        )
+    }
+}
+
 /// Zig-compatible wrapper that calls through to the stored C callback.
 /// The C callback allocates the pixel data through the provided allocator,
 /// so we can take ownership directly.
 // PORT NOTE: the reference signature is
 //   fn decodePngWrapper(alloc: std.mem.Allocator, data: []const u8)
 //       terminal_sys.DecodeError!terminal_sys.Image
-// rustty's `terminal_sys.DecodePngFn` is `fn(&[u8]) -> Result<Image, DecodeError>`
-// (no allocator parameter — allocation is the Rust allocator's job). The C
-// callback still receives a `*const CAllocator`; we hand it the rustty-lib C
-// allocator built from the GLOBAL/default allocator so the callback can allocate.
+// rustty's `terminal_sys.DecodePngFn` carries the allocator as the seam's
+// `&dyn RawAllocator` (see `terminal_sys::DecodePngFn`); the C callback
+// receives a `*const CAllocator` built over exactly that allocator via the
+// `RawZigAllocator` bridge above.
 fn decode_png_wrapper(
+    alloc: &dyn terminal_sys::RawAllocator,
     data: &[u8],
 ) -> core::result::Result<terminal_sys::Image, terminal_sys::DecodeError> {
     // const func = global.decode_png orelse return error.InvalidData;
@@ -167,12 +226,7 @@ fn decode_png_wrapper(
     drop(g);
 
     // const c_alloc = CAllocator.fromZig(&alloc);
-    // PORT NOTE: the reference forwards the Zig allocator passed by the caller as
-    // the C allocator. rustty's `DecodePngFn` carries no allocator, so we build a
-    // C allocator backed by the process default (the rustty analog of the
-    // always-available allocator), matching the "callback allocates through the
-    // provided allocator" contract.
-    let zig_alloc = rustty_lib::allocator::GlobalZigAllocator;
+    let zig_alloc = RawZigAllocator(alloc);
     let zref = rustty_lib::allocator::ZigAllocatorRef::new(&zig_alloc);
     let c_alloc = CAllocator::from_zig(&zref);
 
@@ -887,7 +941,7 @@ pub(crate) mod tests {
             set(Option_::DecodePng, decode_alloc as *const std::ffi::c_void)
         });
         let f = terminal_sys::decode_png.read().unwrap().unwrap();
-        let img = f(&[0x42]).expect("decode must succeed");
+        let img = f(&terminal_sys::GlobalRawAllocator, &[0x42]).expect("decode must succeed");
         assert_eq!(2, img.width);
         assert_eq!(2, img.height);
         // bytes copied out of the callback buffer before it is freed

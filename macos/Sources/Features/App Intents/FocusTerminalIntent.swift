@@ -27,7 +27,7 @@ struct FocusTerminalIntent: AppIntent {
             throw RusttyIntentError.surfaceNotFound
         }
 
-        guard let controller = surfaceView.window?.windowController as? BaseTerminalController else {
+        guard let controller = BaseTerminalController.controller(owning: surfaceView) else {
             return .result()
         }
 

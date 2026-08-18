@@ -5935,7 +5935,7 @@ mod macos_impl {
             unsafe {
                 (*frame).cells_bg.sync(&(*self_ptr).cells.bg_cells)?;
             }
-            // const fg_count = try frame.cells.syncFromArrayLists(self.cells.fg_rows.lists);
+            // const fg_count = try frame.cells.syncFromArrayLists(self.cells.fg_rows);
             //
             // PORT NOTE (§6.2, accepted deviation — OPEN RISK #4): the reference's
             // `syncFromArrayLists` is a zero-copy memcpy of the `extern struct`s. Rust's
@@ -5951,7 +5951,6 @@ mod macos_impl {
                 (*self_ptr)
                     .cells
                     .fg_rows
-                    .lists
                     .iter()
                     .flat_map(|row| row.iter().map(CellTextGpu::from))
                     .collect()
@@ -7610,8 +7609,8 @@ mod macos_impl {
             assert_eq!(*r.cells.bg_cell(0, 0), [bg.r, bg.g, bg.b, 0]);
 
             // (2) FG glyph: row 0 fg list (index y+1 == 1) is non-empty (glyphs for A, b).
-            assert!(!r.cells.fg_rows.lists[1].is_empty());
-            let a = r.cells.fg_rows.lists[1][0];
+            assert!(!r.cells.fg_rows[1].is_empty());
+            let a = r.cells.fg_rows[1][0];
             assert_eq!(a.grid_pos, [0, 0]);
             assert_eq!(a.atlas, Atlas::Grayscale);
             assert!(a.glyph_size[0] > 0 && a.glyph_size[1] > 0);
@@ -7694,7 +7693,7 @@ mod macos_impl {
             // now driven end-to-end):
             let bg = r.terminal_state.colors.background;
             assert_eq!(*r.cells.bg_cell(0, 0), [bg.r, bg.g, bg.b, 0]);
-            assert!(!r.cells.fg_rows.lists[1].is_empty());
+            assert!(!r.cells.fg_rows[1].is_empty());
             let cur = r.cells.get_cursor_glyph().expect("cursor present");
             assert!(cur.bools.is_cursor_glyph);
             assert_eq!(cur.grid_pos, [2, 0]);

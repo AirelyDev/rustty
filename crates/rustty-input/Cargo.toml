@@ -30,6 +30,10 @@ oniguruma = ["dep:rustty-oniguruma"]
 
 [dependencies]
 rustty-vt = { workspace = true }
+# `command.zig` imports `../os/i18n.zig` (df23bef0e): `Command.translated()` runs
+# `i18n._` over the palette strings and every default entry is `i18n.N_`-marked.
+# rustty-os has no rustty-vt/rustty-input edge, so this is acyclic.
+rustty-os = { workspace = true }
 # config's `RepeatableCommand.parseCLI` calls `cli.args.parseAutoStruct(Command, ...)`;
 # the `AutoStruct` impl for `Command` lives here (orphan rule — `Command` is ours),
 # so the CLI-args reflection traits/helpers (`AutoStruct`, `parse_auto_struct`,

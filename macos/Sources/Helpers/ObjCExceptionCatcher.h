@@ -11,3 +11,10 @@ FOUNDATION_EXPORT BOOL RusttyAddTabbedWindowSafely(
     NSInteger ordered,
     NSError * _Nullable * _Nullable error
 );
+
+/// NSWindowController.showWindow wrapper
+FOUNDATION_EXPORT BOOL RusttyShowWindowSafely(
+    id _Nonnull controller,
+    id _Nullable sender,
+    NSError * _Nullable * _Nullable error
+);

@@ -36,6 +36,8 @@
 use crate::kitty::graphics_command as command;
 use crate::pagelist as PageList;
 use crate::sys;
+// const LimitedAllocator = @import("../../datastruct/main.zig").LimitedAllocator;
+use rustty_datastruct::limited_allocator::LimitedAllocator;
 use rustty_util::fastmem;
 use rustty_util::quirks::inlineAssert as assert;
 
@@ -175,6 +177,14 @@ impl Limits {
     };
 }
 
+/// PORT NOTE: the reference nests `const SharedMemoryRange = struct { start:
+/// usize, end: usize };` inside `LoadingImage`; hoisted to module level because
+/// Rust has no nested type namespacing on structs.
+struct SharedMemoryRange {
+    start: usize,
+    end: usize,
+}
+
 impl LoadingImage {
     /// Initialize a chunked immage from the first image transmission.
     /// If this is a multi-chunk image, this should only be the FIRST
@@ -196,7 +206,11 @@ impl LoadingImage {
                 height: t.height,
                 compression: t.compression,
                 format: t.format,
-                usage: t.usage,
+                // .metadata = .{ .transient = t.usage.transient },
+                metadata: Metadata {
+                    transient: t.usage.transient,
+                    ..Metadata::default()
+                },
                 ..Image::default()
             },
 
@@ -257,36 +271,20 @@ impl LoadingImage {
         #[cfg(not(windows))]
         {
             if cmd.data.contains(&0) {
-                // posix.realpath *asserts* that the path does not have
-                // internal nulls instead of erroring.
-                // log.warn("failed to get absolute path: BadPathName", .{});
+                // POSIX paths cannot contain internal nulls.
+                // log.warn("invalid image path: BadPathName", .{});
                 return Err(Error::InvalidData);
             }
         }
 
-        // PORT NOTE: `var abs_buf: [std.fs.max_path_bytes]u8 = undefined;` and
-        // `posix.realpath(cmd.data, &abs_buf)`. In Rust `realpath` returns an
-        // owning path; we resolve below per medium.
-        let path: Vec<u8> = match t.medium {
-            command::Medium::Direct => unreachable!(), // handled above
-            command::Medium::File | command::Medium::TemporaryFile => match realpath(&cmd.data) {
-                Ok(p) => p,
-                Err(_err) => {
-                    // log.warn("failed to get absolute path: {}", .{err});
-                    return Err(Error::InvalidData);
-                }
-            },
-            command::Medium::SharedMemory => cmd.data.clone(),
-        };
-
         // Depending on the medium, load the data from the path.
         match t.medium {
             command::Medium::Direct => unreachable!(), // handled above
-            command::Medium::File => result.readFile(command::Medium::File, &t, &path)?,
+            command::Medium::File => result.readFile(command::Medium::File, &t, &cmd.data)?,
             command::Medium::TemporaryFile => {
-                result.readFile(command::Medium::TemporaryFile, &t, &path)?
+                result.readFile(command::Medium::TemporaryFile, &t, &cmd.data)?
             }
-            command::Medium::SharedMemory => result.readSharedMemory(&t, &path)?,
+            command::Medium::SharedMemory => result.readSharedMemory(&t, &cmd.data)?,
         }
 
         Ok(result)
@@ -372,33 +370,17 @@ impl LoadingImage {
             if st.st_size <= 0 {
                 return Err(Error::InvalidData);
             }
-            st.st_size as usize
-        };
-
-        let expected_size: usize = match self.image.format {
-            // Png we decode the full data size because later decoding will
-            // get the proper dimensions and assert validity.
-            command::Format::Png => stat_size,
-
-            // For these formats we have a size we must have.
-            command::Format::Gray
-            | command::Format::GrayAlpha
-            | command::Format::Rgb
-            | command::Format::Rgba => {
-                let bpp = command::Transmission::format_bpp(self.image.format) as usize;
-                self.image.width as usize * self.image.height as usize * bpp
+            // break :stat std.math.cast(usize, stat.size) orelse
+            //     return error.InvalidData;
+            match usize::try_from(st.st_size) {
+                Ok(v) => v,
+                Err(_) => return Err(Error::InvalidData),
             }
         };
 
-        // Our stat size must be at least the expected size otherwise
-        // the shared memory data is invalid.
-        if stat_size < expected_size {
-            // log.warn(
-            //     "shared memory size too small expected={} actual={}",
-            //     .{ expected_size, stat_size },
-            // );
-            return Err(Error::InvalidData);
-        }
+        // Get the memory range we'll read. Validate it to make sure
+        // it doesn't overflow.
+        let range = self.sharedMemoryRange(t, stat_size)?;
 
         // PORT NOTE: `std.posix.mmap(null, stat_size, PROT.READ,
         // MAP{ .TYPE = .SHARED }, fd, 0)`.
@@ -437,18 +419,73 @@ impl LoadingImage {
         // SAFETY: the mapping is stat_size bytes, readable.
         let map: &[u8] = unsafe { std::slice::from_raw_parts(map_ptr as *const u8, stat_size) };
 
-        // Our end size always uses the expected size so we cut off the
-        // padding for mmap alignment.
-        let start: usize = t.offset as usize;
-        let end: usize = if t.size > 0 {
-            std::cmp::min(t.offset as usize + t.size as usize, expected_size)
-        } else {
-            expected_size
+        assert(self.data.is_empty());
+        self.data.extend_from_slice(&map[range.start..range.end]);
+        Ok(())
+    }
+
+    /// Returns the byte range to copy from a shared memory object.
+    // PORT NOTE: the reference return type is the inline error set
+    // `error{ InvalidData, DimensionsTooLarge }!SharedMemoryRange`; both members
+    // exist on the module `Error` enum, so it is used directly.
+    fn sharedMemoryRange(
+        &self,
+        t: &command::Transmission,
+        stat_size: usize,
+    ) -> Result<SharedMemoryRange, Error> {
+        let expected_size: Option<usize> = match self.image.format {
+            // PNG dimensions come from the decoded data.
+            command::Format::Png => None,
+
+            // Validate before multiplying because protocol dimensions are
+            // u32 values and may otherwise overflow in safe builds.
+            command::Format::Gray
+            | command::Format::GrayAlpha
+            | command::Format::Rgb
+            | command::Format::Rgba => {
+                if self.image.width > MAX_DIMENSION || self.image.height > MAX_DIMENSION {
+                    return Err(Error::DimensionsTooLarge);
+                }
+
+                let bpp: usize = command::Transmission::format_bpp(self.image.format) as usize;
+                Some(self.image.width as usize * self.image.height as usize * bpp)
+            }
         };
 
-        assert(self.data.is_empty());
-        self.data.extend_from_slice(&map[start..end]);
-        Ok(())
+        // Get our start offset and validate its within the range of
+        // the statted data.
+        // const start = std.math.cast(usize, t.offset) orelse
+        //     return error.InvalidData;
+        let start = match usize::try_from(t.offset) {
+            Ok(v) => v,
+            Err(_) => return Err(Error::InvalidData),
+        };
+        if start > stat_size {
+            return Err(Error::InvalidData);
+        }
+
+        // Validate that our length is within the stat range too.
+        let available = stat_size - start;
+        let data_size: usize = if t.size > 0 {
+            // std.math.cast(usize, t.size) orelse return error.InvalidData
+            match usize::try_from(t.size) {
+                Ok(v) => v,
+                Err(_) => return Err(Error::InvalidData),
+            }
+        } else if self.image.compression == command::Compression::None && expected_size.is_some() {
+            expected_size.unwrap()
+        } else {
+            available
+        };
+        if data_size > MAX_SIZE || data_size > available {
+            return Err(Error::InvalidData);
+        }
+
+        // data_size <= available guarantees this addition cannot overflow.
+        Ok(SharedMemoryRange {
+            start,
+            end: start + data_size,
+        })
     }
 
     /// Reads the data from a temporary file and returns it. This allocates
@@ -469,14 +506,48 @@ impl LoadingImage {
             _ => unreachable!("readFile only supports file and temporary_file"),
         }
 
-        // Verify file seems "safe". This is logic copied directly from Kitty,
-        // mostly. This is really rough but it will catch obvious bad actors.
-        if starts_with(path, b"/proc/")
-            || starts_with(path, b"/sys/")
-            || (starts_with(path, b"/dev/") && !starts_with(path, b"/dev/shm/"))
-        {
-            return Err(Error::InvalidData);
+        // We'll populate a delete path if this is a temporary file.
+        // PORT NOTE: the reference's single `defer { file.close(io);
+        // if (delete_path) |p| ... deleteFile(p) ... }` runs close-then-delete
+        // on every exit path. Rust drop order is reverse declaration order, so
+        // the delete guard is declared BEFORE `file`: at scope exit `file`
+        // drops first (close), then the guard best-effort deletes.
+        struct DeletePathGuard {
+            // var delete_path: ?[]const u8 = null;
+            delete_path: Option<Vec<u8>>,
         }
+        impl Drop for DeletePathGuard {
+            fn drop(&mut self) {
+                if let Some(p) = &self.delete_path {
+                    if unlink(p).is_err() {
+                        // log.warn("failed to delete temporary file: {}", .{err});
+                    }
+                }
+            }
+        }
+        let mut delete_guard = DeletePathGuard { delete_path: None };
+
+        // Open our file right away before we do validation. This avoids
+        // TOCTOU issues.
+        let mut file = match open_file(path) {
+            Ok(f) => f,
+            Err(_err) => {
+                // log.warn("failed to open image file: {}", .{err});
+                return Err(Error::InvalidData);
+            }
+        };
+        // defer file.close(); — handled by `File` Drop (see guard note above).
+
+        // Derive the path from the open handle so the file we validate is the
+        // exact file we read. Resolving a path before opening it would allow a
+        // cooperating process to swap a symlink or directory entry in between.
+        let abs_path = match Self::validatedFilePath(&file) {
+            Ok(p) => p,
+            Err(_err) => {
+                // log.warn("failed to validate image file path: {}", .{err});
+                return Err(Error::InvalidData);
+            }
+        };
 
         // Temporary file logic
         if medium == command::Medium::TemporaryFile {
@@ -487,41 +558,15 @@ impl LoadingImage {
             // overlap a `&mut self` — `isPathInTempDir` is an associated
             // function, so no `self` borrow is live inside it.
             let dir = self.temporary_directory.as_deref().unwrap();
-            if !Self::isPathInTempDir(dir, path) {
+            if !Self::isPathInTempDir(dir, &abs_path) {
                 return Err(Error::TemporaryFileNotInTempDir);
             }
-            if index_of(path, b"tty-graphics-protocol").is_none() {
+            if index_of(&abs_path, b"tty-graphics-protocol").is_none() {
                 return Err(Error::TemporaryFileNotNamedCorrectly);
             }
+            // delete_path = abs_path;
+            delete_guard.delete_path = Some(abs_path);
         }
-
-        // PORT NOTE: `defer if (medium == .temporary_file) posix.unlink(path)`.
-        // The guard runs on every exit path after this point (mirroring the
-        // Zig `defer`), best-effort deleting the temporary file.
-        struct UnlinkGuard<'a> {
-            armed: bool,
-            path: &'a [u8],
-        }
-        impl Drop for UnlinkGuard<'_> {
-            fn drop(&mut self) {
-                if self.armed && unlink(self.path).is_err() {
-                    // log.warn("failed to delete temporary file: {}", .{err});
-                }
-            }
-        }
-        let _unlink_guard = UnlinkGuard {
-            armed: medium == command::Medium::TemporaryFile,
-            path,
-        };
-
-        let mut file = match open_file(path) {
-            Ok(f) => f,
-            Err(_err) => {
-                // log.warn("failed to open temporary file: {}", .{err});
-                return Err(Error::InvalidData);
-            }
-        };
-        // defer file.close(); — handled by `File` Drop.
 
         // File must be a regular file
         match file.metadata() {
@@ -575,6 +620,35 @@ impl LoadingImage {
         Ok(())
     }
 
+    /// Returns the canonical path of an open file after applying the file
+    /// transmission blocklist.
+    // PORT NOTE: the reference is `fn validatedFilePath(io, file, buf) ![]const
+    // u8` where `file.realPath` derives the canonical path from the open
+    // HANDLE. Rust std has no handle-based realpath, so `realpath_of_handle`
+    // below reproduces it per platform (macOS `fcntl(F_GETPATH)`, Linux
+    // `/proc/self/fd/N` readlink) — never by re-resolving the submitted path,
+    // which would reintroduce the TOCTOU this exists to close. Any handle-path
+    // failure maps to `InvalidData` (the caller logs then maps every error to
+    // `InvalidData` anyway).
+    fn validatedFilePath(file: &std::fs::File) -> Result<Vec<u8>, Error> {
+        // const path = buf[0..try file.realPath(io, buf)];
+        let path = match realpath_of_handle(file) {
+            Ok(p) => p,
+            Err(_) => return Err(Error::InvalidData),
+        };
+
+        // This is logic copied directly from Kitty, mostly. This is really
+        // rough but it will catch obvious bad actors.
+        if starts_with(&path, b"/proc/")
+            || starts_with(&path, b"/sys/")
+            || (starts_with(&path, b"/dev/") && !starts_with(&path, b"/dev/shm/"))
+        {
+            return Err(Error::InvalidData);
+        }
+
+        Ok(path)
+    }
+
     /// Returns true if path appears to be in a temporary directory.
     /// Copies logic from Kitty.
     // PORT NOTE (oracle `e8525c0fd`(iii), `b988efcfe`): `dir` is now a
@@ -582,13 +656,13 @@ impl LoadingImage {
     // `TMPDIR`/`TMP` from the process environment at validation time; that
     // lookup is DELETED. See the `temp_dir` module note above.
     fn isPathInTempDir(dir: &[u8], path: &[u8]) -> bool {
-        if starts_with(path, b"/tmp") {
+        if isPathInDir(b"/tmp", path) {
             return true;
         }
-        if starts_with(path, b"/dev/shm") {
+        if isPathInDir(b"/dev/shm", path) {
             return true;
         }
-        if starts_with(path, dir) {
+        if isPathInDir(dir, path) {
             return true;
         }
 
@@ -602,7 +676,7 @@ impl LoadingImage {
         let Ok(real_dir) = realpath(dir) else {
             return false;
         };
-        if starts_with(path, &real_dir) {
+        if isPathInDir(&real_dir, path) {
             return true;
         }
 
@@ -682,11 +756,11 @@ impl LoadingImage {
         // by `ImageStorage::add_image`.)
 
         // Everything looks good, copy the image data over.
-        // PORT NOTE: `result.data = try self.data.toOwnedSlice(alloc);` then
-        // `self.image = .{}`. We move our data into the result image and reset
-        // `self.image` to its default so a later drop frees nothing twice.
+        // PORT NOTE: `result.data = .{ .complete = try self.data.toOwnedSlice(alloc) };`
+        // then `self.image = .{}`. We move our data into the result image and
+        // reset `self.image` to its default so a later drop frees nothing twice.
         let mut result = std::mem::take(&mut self.image);
-        result.data = std::mem::take(&mut self.data);
+        result.data = Data::Complete(std::mem::take(&mut self.data));
         Ok(result)
     }
 
@@ -774,14 +848,39 @@ impl LoadingImage {
             Some(f) => f,
             None => return Err(Error::UnsupportedFormat),
         };
-        let result = match decode_png_fn(&self.data) {
+
+        // var limited: LimitedAllocator = .init(alloc, max_size);
+        // const decode_alloc = limited.allocator();
+        //
+        // PORT NOTE: the reference's `alloc` (the caller's allocator) is the
+        // Rust global allocator here, wrapped by the same
+        // `datastruct/limited_allocator` the reference wraps. The decoder
+        // performs every allocation through the limited allocator, so an
+        // oversized decode is rejected BEFORE the memory is requested from the
+        // child.
+        let limited = LimitedAllocator::init(sys::GlobalRawAllocator, MAX_SIZE);
+        let decode_alloc = limited.allocator();
+        let result = match decode_png_fn(decode_alloc, &self.data) {
             Ok(r) => r,
             Err(err) => match err {
                 sys::DecodeError::InvalidData => return Err(Error::InvalidData),
-                sys::DecodeError::OutOfMemory => return Err(Error::OutOfMemory),
+                // error.OutOfMemory => if (limited.limit_exceeded)
+                //     return error.InvalidData
+                // else
+                //     return error.OutOfMemory,
+                sys::DecodeError::OutOfMemory => {
+                    return Err(if limited.limit_exceeded.get() {
+                        Error::InvalidData
+                    } else {
+                        Error::OutOfMemory
+                    })
+                }
             },
         };
-        // defer alloc.free(result.data); — `result` (and its Vec) drops at end.
+        // defer decode_alloc.free(result.data); — the decoder's
+        // limited-allocator buffer was already freed inside the seam after
+        // copying into the global-allocator `Vec` carried by `result` (see
+        // `sys::decode_png` PORT NOTE).
 
         if result.data.len() > MAX_SIZE {
             // log.warn("png image too large size={} max_size={}", .{ result.data.len, max_size });
@@ -789,10 +888,13 @@ impl LoadingImage {
         }
 
         // Replace our data
-        self.data = Vec::new();
-        self.data.reserve(result.data.len());
-        self.data
-            .extend_from_slice(&result.data[0..result.data.len()]);
+        // PORT NOTE: the reference re-allocates `self.data` from the parent
+        // allocator and `appendSlice`s the decode-allocator bytes in (then the
+        // deferred free releases the decode buffer). The seam already produced
+        // `result.data` as a parent-(global-)allocator `Vec` — that copy IS the
+        // `appendSlice` copy (see `sys::decode_png` PORT NOTE) — so it is moved
+        // in here rather than copied a second time.
+        self.data = result.data;
 
         // Store updated image dimensions
         self.image.width = result.width;
@@ -802,13 +904,13 @@ impl LoadingImage {
     }
 }
 
-/// Image represents a single fully loaded image.
+/// Image represents a single image whose metadata is fully known.
 ///
-/// The image data is always fully decoded raw pixels: loading inflates any
-/// zlib-compressed payload and decodes PNG into RGBA before an image is
-/// completed, so `compression` is always `None` and `format` is never `Png` for
-/// a stored image, and `data.len()` always equals
-/// `width * height * bytes-per-pixel`.
+/// Complete image data is always fully decoded raw pixels: loading inflates
+/// any zlib-compressed payload and decodes PNG into RGBA before an image is
+/// completed, so `compression` is always `None` and `format` is never `Png`
+/// for a stored image. Pending image data reserves the exact decoded byte
+/// length that will be attached later.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Image {
     pub id: u32,
@@ -817,10 +919,9 @@ pub struct Image {
     pub height: u32,
     pub format: command::Format,
     pub compression: command::Compression,
-    pub data: Vec<u8>,
-    /// Usage hints transmitted with the image (oracle `a65e11cc9`); see
-    /// `command::Usage`. `transient` prioritises this image for eviction.
-    pub usage: command::Usage,
+    pub data: Data,
+    pub metadata: Metadata,
+
     /// Unique, monotonically increasing stamp assigned each time an
     /// image is added to (or replaced in) an ImageStorage. A changed
     /// generation for a given image ID means the image contents may
@@ -830,12 +931,84 @@ pub struct Image {
     //
     // PORT NOTE: replaces the pre-`bdc0b6c19` `transmit_time: std.time.Instant`.
     pub generation: u64,
+}
 
-    /// Set this to true if this image was loaded by a command that
-    /// doesn't specify an ID or number, since such commands should
-    /// not be responded to, even though we do currently give them
+/// PORT NOTE: the reference is an anonymous `metadata: packed struct(u32) {
+/// transient: bool, implicit_id: bool, placement_count: u30 } = .{}` field on
+/// `Image`. Named here (Rust has no anonymous structs) and carried as a plain
+/// struct: it is only ever read/written field-wise, never bitcast, so the
+/// packing is unobservable. `placement_count: u30` rides a `u32` carrier
+/// bounded by [`Metadata::PLACEMENT_COUNT_MAX`] (`maxInt(u30)`), enforced at
+/// the single increment site (`ImageStorage::add_placement`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Metadata {
+    /// The image's transient usage hint, used to prioritize eviction.
+    pub transient: bool,
+
+    /// Set this if the image was loaded without an ID or number. Such
+    /// images must not receive responses even though they currently get
     /// IDs in the public range (which is bad!).
     pub implicit_id: bool,
+
+    /// Number of placements referencing this image.
+    pub placement_count: u32,
+}
+
+impl Metadata {
+    /// `std.math.maxInt(u30)` — the reference field is a `u30`.
+    pub const PLACEMENT_COUNT_MAX: u32 = (1 << 30) - 1;
+}
+
+/// `pub const Data = union(enum) { complete, pending }` — the payload state of
+/// a stored image.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Data {
+    /// Owned, decoded image bytes. The empty default is not allocated.
+    Complete(Vec<u8>),
+
+    /// Expected decoded byte length for a payload that has not arrived.
+    Pending(usize),
+}
+
+impl Data {
+    /// Bytes reserved against the storage limit.
+    // PORT NOTE: clippy wants an `is_empty` companion for `len`; the reference
+    // has none and `len` here means "reserved bytes", not container length.
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        match self {
+            Data::Complete(data) => data.len(),
+            Data::Pending(expected_len) => *expected_len,
+        }
+    }
+
+    /// Returns decoded bytes when the payload is complete.
+    pub fn bytes(&self) -> Option<&[u8]> {
+        match self {
+            Data::Complete(data) => Some(data),
+            Data::Pending(_) => None,
+        }
+    }
+
+    pub fn is_pending(&self) -> bool {
+        matches!(self, Data::Pending(_))
+    }
+
+    // PORT NOTE: `deinit` frees the complete bytes if non-empty; Rust drops the
+    // owning `Vec<u8>` automatically.
+    // pub fn deinit(self: *Data, alloc: Allocator) void {
+    //     switch (self.*) {
+    //         .complete => |data| if (data.len > 0) alloc.free(data),
+    //         .pending => {},
+    //     }
+    // }
+}
+
+impl Default for Data {
+    // data: Data = .{ .complete = "" },
+    fn default() -> Self {
+        Data::Complete(Vec::new())
+    }
 }
 
 impl Default for Image {
@@ -847,25 +1020,27 @@ impl Default for Image {
             height: 0,
             format: command::Format::Rgb,
             compression: command::Compression::None,
-            data: Vec::new(),
-            usage: command::Usage::DEFAULT,
+            data: Data::Complete(Vec::new()),
+            metadata: Metadata::default(),
             generation: 0,
-            implicit_id: false,
         }
     }
 }
 
 impl Image {
-    // PORT NOTE: `deinit` frees `self.data` if non-empty; Rust drops the owning
-    // `Vec<u8>` automatically.
+    // PORT NOTE: `deinit` forwards to `self.data.deinit(alloc)`; Rust drops the
+    // owning `Data` automatically.
     // pub fn deinit(self: *Image, alloc: Allocator) void {
-    //     if (self.data.len > 0) alloc.free(self.data);
+    //     self.data.deinit(alloc);
     // }
 
     /// Mostly for logging
     pub fn withoutData(&self) -> Image {
         let mut copy = self.clone();
-        copy.data = Vec::new();
+        // if (copy.data == .complete) copy.data = .{ .complete = "" };
+        if matches!(copy.data, Data::Complete(_)) {
+            copy.data = Data::Complete(Vec::new());
+        }
         copy
     }
 }
@@ -876,6 +1051,44 @@ impl Image {
 pub struct Rect {
     pub top_left: PageList::Pin,
     pub bottom_right: PageList::Pin,
+}
+
+impl Rect {
+    /// Returns true if the grid cell is inside this rectangle. Pin.isBetween
+    /// compares page order, so its interior rows intentionally do not constrain
+    /// x. Check the column independently and use isBetween only for the row.
+    pub fn contains(&self, cell: PageList::Pin) -> bool {
+        if cell.x < self.top_left.x || cell.x > self.bottom_right.x {
+            return false;
+        }
+
+        let mut row = cell;
+        row.x = self.top_left.x;
+        row.is_between(self.top_left, self.bottom_right)
+    }
+}
+
+/// Returns true if `path` is `dir` or is contained within it, requiring a
+/// path-separator boundary so similarly prefixed directories do not match.
+fn isPathInDir(dir: &[u8], path: &[u8]) -> bool {
+    if dir.is_empty() || !starts_with(path, dir) {
+        return false;
+    }
+    if path.len() == dir.len() || is_sep(dir[dir.len() - 1]) {
+        return true;
+    }
+    is_sep(path[dir.len()])
+}
+
+/// `std.fs.path.isSep(byte)` — platform path-separator test.
+#[cfg(not(windows))]
+fn is_sep(byte: u8) -> bool {
+    byte == b'/'
+}
+
+#[cfg(windows)]
+fn is_sep(byte: u8) -> bool {
+    byte == b'/' || byte == b'\\'
 }
 
 // ---------------------------------------------------------------------------
@@ -933,6 +1146,46 @@ fn realpath(path: &[u8]) -> std::io::Result<Vec<u8>> {
         .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
     let canon = std::fs::canonicalize(s)?;
     Ok(canon.to_string_lossy().into_owned().into_bytes())
+}
+
+/// `std.Io.File.realPath(io, buf)` — the canonical path of an OPEN handle.
+///
+/// PORT NOTE (TOCTOU, `ec04900ab`): this must be derived from the handle, never
+/// by re-resolving the submitted path string (which a cooperating process could
+/// swap in between). macOS: `fcntl(F_GETPATH)`; Linux/Android: readlink of
+/// `/proc/self/fd/N` — the same mechanisms Zig's `File.realPath` uses.
+#[cfg(target_os = "macos")]
+fn realpath_of_handle(file: &std::fs::File) -> std::io::Result<Vec<u8>> {
+    use std::os::fd::AsRawFd;
+    let mut buf = [0u8; libc::PATH_MAX as usize];
+    // SAFETY(ffi-boundary/graphics_image): `F_GETPATH` writes a NUL-terminated
+    // path of at most PATH_MAX bytes into `buf`, which is exactly PATH_MAX
+    // bytes; `file` keeps the fd open for the duration of the call.
+    let rc = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr()) };
+    if rc == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    Ok(buf[..len].to_vec())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn realpath_of_handle(file: &std::fs::File) -> std::io::Result<Vec<u8>> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStringExt;
+    let link = format!("/proc/self/fd/{}", file.as_raw_fd());
+    let target = std::fs::read_link(link)?;
+    Ok(target.into_os_string().into_vec())
+}
+
+// PORT NOTE: remaining targets (windows, other unixes, wasm). Zig's
+// `File.realPath` covers windows via the NT object path; the rustty windows
+// tier has no handle-path binding yet, so the kitty file/temporary-file medium
+// fails closed (`InvalidData` via `validatedFilePath`) there.
+// TODO(port): windows GetFinalPathNameByHandleW once a windows tier lands.
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
+fn realpath_of_handle(_file: &std::fs::File) -> std::io::Result<Vec<u8>> {
+    Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
 }
 
 /// `std.fs.cwd().openFile(path, .{})`.
@@ -996,6 +1249,115 @@ mod tests {
     // LoadingImage. We build the equivalent `Command` values via the ported
     // `command` module. The reference's `alloc.dupe(u8, ...)` (an owned copy the
     // command frees) maps to an owned `Vec<u8>` in `Command.data`.
+
+    // test "temporary file path must be inside directory"
+    #[test]
+    fn temporary_file_path_must_be_inside_directory() {
+        assert!(isPathInDir(
+            b"/tmp",
+            b"/tmp/tty-graphics-protocol-image.data"
+        ));
+        assert!(isPathInDir(
+            b"/tmp/",
+            b"/tmp/tty-graphics-protocol-image.data"
+        ));
+        assert!(isPathInDir(b"/tmp", b"/tmp"));
+
+        assert!(!isPathInDir(b"", b"/tmp/tty-graphics-protocol-image.data"));
+        assert!(!isPathInDir(
+            b"/tmp",
+            b"/tmpX/tty-graphics-protocol-image.data"
+        ));
+        assert!(!isPathInDir(
+            b"/dev/shm",
+            b"/dev/shm-evil/tty-graphics-protocol-image.data"
+        ));
+        assert!(!isPathInDir(
+            b"/custom/tmp",
+            b"/custom/tmp-suffix/tty-graphics-protocol-image.data"
+        ));
+    }
+
+    /// Test helper: the reference's `const loading: LoadingImage = .{ .image =
+    /// .{...}, .quiet = .no, .temporary_directory = null };` literal (field
+    /// defaults fill the rest).
+    fn shm_loading(width: u32, height: u32, format: command::Format) -> LoadingImage {
+        LoadingImage {
+            image: Image {
+                width,
+                height,
+                format,
+                ..Image::default()
+            },
+            data: Vec::new(),
+            display: None,
+            quiet: command::Quiet::No,
+            temporary_directory: None,
+        }
+    }
+
+    // test "shared memory range with offset and size"
+    #[test]
+    fn shared_memory_range_with_offset_and_size() {
+        let loading = shm_loading(1, 1, command::Format::Rgb);
+
+        let explicit = loading
+            .sharedMemoryRange(
+                &command::Transmission {
+                    offset: 2,
+                    size: 3,
+                    ..Default::default()
+                },
+                5,
+            )
+            .unwrap();
+        assert_eq!(2usize, explicit.start);
+        assert_eq!(5usize, explicit.end);
+
+        let implicit = loading
+            .sharedMemoryRange(
+                &command::Transmission {
+                    offset: 2,
+                    ..Default::default()
+                },
+                5,
+            )
+            .unwrap();
+        assert_eq!(2usize, implicit.start);
+        assert_eq!(5usize, implicit.end);
+    }
+
+    // test "shared memory range rejects out of bounds offset"
+    #[test]
+    fn shared_memory_range_rejects_out_of_bounds_offset() {
+        let loading = shm_loading(1, 1, command::Format::Rgb);
+
+        assert_eq!(
+            Err(Error::InvalidData),
+            loading
+                .sharedMemoryRange(
+                    &command::Transmission {
+                        offset: 4,
+                        ..Default::default()
+                    },
+                    3,
+                )
+                .map(|_| ())
+        );
+    }
+
+    // test "shared memory range validates dimensions before multiplication"
+    #[test]
+    fn shared_memory_range_validates_dimensions_before_multiplication() {
+        let loading = shm_loading(u32::MAX, u32::MAX, command::Format::Rgba);
+
+        assert_eq!(
+            Err(Error::DimensionsTooLarge),
+            loading
+                .sharedMemoryRange(&command::Transmission::default(), 1)
+                .map(|_| ())
+        );
+    }
 
     // This specifically tests we ALLOW invalid RGB data because Kitty
     // documents that this should work.
@@ -1251,6 +1613,53 @@ mod tests {
         tmp_dir.deinit();
     }
 
+    // test "image load: temporary file outside directory prefix is rejected"
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_temporary_file_outside_directory_prefix_is_rejected() {
+        let mut tmp_dir = temp_dir::TempDir::init().unwrap();
+        let base = tmp_dir.dir().realpath(".").unwrap();
+        // try tmp_dir.dir.createDir(io, "temp", .default_dir);
+        // try tmp_dir.dir.createDir(io, "temp-suffix", .default_dir);
+        // PORT NOTE: rustty_os::TempDir's Dir has no createDir; std::fs over the
+        // canonical base is the same operation.
+        std::fs::create_dir(base.join("temp")).unwrap();
+        std::fs::create_dir(base.join("temp-suffix")).unwrap();
+
+        let filename = "tty-graphics-protocol-image.data";
+        let data = include_bytes!("testdata/image-rgb-none-20x15-2147483647-raw.data");
+        std::fs::write(base.join("temp-suffix").join(filename), data).unwrap();
+
+        let trusted_path = std::fs::canonicalize(base.join("temp")).unwrap();
+        let outside_path = std::fs::canonicalize(base.join("temp-suffix").join(filename)).unwrap();
+
+        let cmd: command::Command = command::Command {
+            control: command::Control::Transmit(command::Transmission {
+                format: command::Format::Rgb,
+                medium: command::Medium::TemporaryFile,
+                compression: command::Compression::None,
+                width: 20,
+                height: 15,
+                image_id: 31,
+                ..Default::default()
+            }),
+            quiet: command::Quiet::No,
+            data: path_to_bytes(&outside_path),
+        };
+        assert_eq!(
+            Err(Error::TemporaryFileNotInTempDir),
+            LoadingImage::init(
+                &cmd,
+                &Limits::all_with_temp_dir(&path_to_bytes(&trusted_path))
+            )
+            .map(|_| ())
+        );
+
+        // Rejection must happen before temporary-file cleanup is armed.
+        tmp_dir.dir().access(&outside_path).unwrap();
+        tmp_dir.deinit();
+    }
+
     #[test]
     #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
     fn image_load_rgb_not_compressed_temporary_file() {
@@ -1330,6 +1739,41 @@ mod tests {
         tmp_dir.deinit();
     }
 
+    // test "image load: blocklist applies to opened file after symlink swap"
+    // (the reference starts with `if (builtin.os.tag == .windows) return
+    // error.SkipZigTest;` — mapped to the cfg gate)
+    #[cfg(not(windows))]
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_blocklist_applies_to_opened_file_after_symlink_swap() {
+        let mut tmp_dir = temp_dir::TempDir::init().unwrap();
+        let base = tmp_dir.dir().realpath(".").unwrap();
+        tmp_dir.dir().writeFile("safe.data", b"safe").unwrap();
+        // try tmp_dir.dir.symLink(io, "/dev/null", "image.data", .{});
+        std::os::unix::fs::symlink("/dev/null", base.join("image.data")).unwrap();
+
+        // Pin the blocked file, then simulate the cooperating process replacing
+        // the path with a safe target before validation.
+        let blocked_file = std::fs::File::open(base.join("image.data")).unwrap();
+        // try tmp_dir.dir.symLinkAtomic(io, "safe.data", "image.data", .{});
+        // PORT NOTE: `symLinkAtomic` = symlink to a temp name + rename over.
+        std::os::unix::fs::symlink("safe.data", base.join("image.data.atomic")).unwrap();
+        std::fs::rename(base.join("image.data.atomic"), base.join("image.data")).unwrap();
+
+        assert_eq!(
+            Err(Error::InvalidData),
+            LoadingImage::validatedFilePath(&blocked_file).map(|_| ())
+        );
+
+        // The pathname now resolves to the safe replacement, demonstrating that
+        // the rejection above came from the already-open file handle.
+        let safe_file = std::fs::File::open(base.join("image.data")).unwrap();
+        LoadingImage::validatedFilePath(&safe_file).unwrap();
+        // (blocked_file/safe_file close on drop; the reference defers both.)
+        drop(blocked_file);
+        tmp_dir.deinit();
+    }
+
     #[test]
     #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
     fn image_load_png_not_compressed_regular_file() {
@@ -1337,6 +1781,9 @@ mod tests {
         // decoder seam is not installed in this VT leaf crate (the wuffs binding
         // rides a later FFI crate), so this test is skipped, matching the
         // reference's skip when no decoder is present.
+        let _png_lock = sys::decode_png_test_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if sys::decode_png.read().unwrap().is_none() {
             return;
         }
@@ -1377,6 +1824,174 @@ mod tests {
         assert!(img.format == command::Format::Rgba);
         tmp_dir.dir().access(&path).unwrap();
         tmp_dir.deinit();
+    }
+
+    // test "image load: png rejects oversized decoder allocation"
+    //
+    // PORT NOTE (restructured, same assertions): the reference threads the
+    // testing `FailingAllocator` in as the allocator `complete(alloc)` hands to
+    // `decodePng`, then asserts `error.InvalidData` AND
+    // `!failing.has_induced_failure` (the limiter rejected the request BEFORE
+    // it reached the child). rustty's `complete()` carries no allocator
+    // parameter (the Rust global backs it), so the two assertions are split:
+    // part A drives the SAME oversized decoder through a
+    // `LimitedAllocator(FailingAllocator)` directly, proving the request is
+    // rejected before the child; part B installs the decoder in the global slot
+    // and asserts `loading.complete()` maps it to `InvalidData`.
+    #[test]
+    fn image_load_png_rejects_oversized_decoder_allocation() {
+        use rustty_datastruct::limited_allocator::{Alignment, RawAllocator, RawSlice};
+
+        // const oversized_decoder = struct { fn decode(alloc, _) { ... } }.decode;
+        fn oversized_decoder(
+            alloc: &dyn RawAllocator,
+            _data: &[u8],
+        ) -> core::result::Result<sys::Image, sys::DecodeError> {
+            // const data = try alloc.alloc(u8, max_size + 1);
+            let data = match alloc.alloc_bytes(MAX_SIZE + 1) {
+                Ok(d) => d,
+                Err(_) => return Err(sys::DecodeError::OutOfMemory),
+            };
+            // return .{ .width = 1, .height = 1, .data = data };
+            // PORT NOTE: unreachable in practice (the limiter rejects first);
+            // sys::Image owns a Vec, so copy-and-free the raw allocation.
+            // SAFETY: `data` is a live `MAX_SIZE + 1`-byte allocation from `alloc`.
+            let bytes = unsafe { std::slice::from_raw_parts(data.ptr, data.len) }.to_vec();
+            alloc.free_bytes(data);
+            Ok(sys::Image {
+                width: 1,
+                height: 1,
+                data: bytes,
+            })
+        }
+
+        // PORT NOTE: the rustty analog of `std.testing.FailingAllocator`
+        // restricted to what this test observes (see the datastruct
+        // limited_allocator tests for the canonical copy).
+        struct FailingAllocator {
+            fail_index: usize,
+            index: std::cell::Cell<usize>,
+            has_induced_failure: std::cell::Cell<bool>,
+        }
+        impl RawAllocator for FailingAllocator {
+            fn raw_alloc(&self, len: usize, alignment: Alignment, ra: usize) -> *mut u8 {
+                if self.index.get() >= self.fail_index {
+                    self.has_induced_failure.set(true);
+                    return std::ptr::null_mut();
+                }
+                self.index.set(self.index.get() + 1);
+                sys::GlobalRawAllocator.raw_alloc(len, alignment, ra)
+            }
+            fn raw_resize(
+                &self,
+                memory: RawSlice,
+                alignment: Alignment,
+                new_len: usize,
+                ra: usize,
+            ) -> bool {
+                sys::GlobalRawAllocator.raw_resize(memory, alignment, new_len, ra)
+            }
+            fn raw_remap(
+                &self,
+                memory: RawSlice,
+                alignment: Alignment,
+                new_len: usize,
+                ra: usize,
+            ) -> *mut u8 {
+                sys::GlobalRawAllocator.raw_remap(memory, alignment, new_len, ra)
+            }
+            fn raw_free(&self, memory: RawSlice, alignment: Alignment, ra: usize) {
+                sys::GlobalRawAllocator.raw_free(memory, alignment, ra);
+            }
+        }
+
+        // Part A: fail any allocation which reaches the underlying allocator.
+        // The size limiter should reject the decoder's request before it gets
+        // that far.
+        // var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+        let failing = FailingAllocator {
+            fail_index: 0,
+            index: std::cell::Cell::new(0),
+            has_induced_failure: std::cell::Cell::new(false),
+        };
+        let limited = LimitedAllocator::init(failing, MAX_SIZE);
+        assert_eq!(
+            Err(sys::DecodeError::OutOfMemory),
+            oversized_decoder(limited.allocator(), b"").map(|_| ())
+        );
+        assert!(limited.limit_exceeded.get());
+        // try testing.expect(!failing.has_induced_failure);
+        assert!(!limited.child.has_induced_failure.get());
+
+        // Part B: with the decoder installed, `complete()` maps the
+        // limit-rejected decode to `InvalidData`.
+        let _png_lock = sys::decode_png_test_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // const original_decode_png = sys.decode_png;
+        // defer sys.decode_png = original_decode_png;
+        // sys.decode_png = &oversized_decoder;
+        let original_decode_png = *sys::decode_png.read().unwrap();
+        *sys::decode_png.write().unwrap() = Some(oversized_decoder);
+
+        let mut loading = shm_loading(0, 0, command::Format::Png);
+        assert_eq!(Err(Error::InvalidData), loading.complete().map(|_| ()));
+
+        *sys::decode_png.write().unwrap() = original_decode_png;
+    }
+
+    // test "image load: png rejects oversized Wuffs image before allocation"
+    #[test]
+    fn image_load_png_rejects_oversized_wuffs_image_before_allocation() {
+        let _png_lock = sys::decode_png_test_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // if (sys.decode_png == null) return error.SkipZigTest;
+        if sys::decode_png.read().unwrap().is_none() {
+            return;
+        }
+
+        // Turn the small test PNG into a 32768x32767 image. Its decoded RGBA
+        // size is just under Wuffs' 4 GiB package limit but over Kitty's 400 MiB
+        // limit, which previously allowed the large allocation to happen first.
+        let mut data = include_bytes!("testdata/image-png-none-50x76-2147483647-raw.data").to_vec();
+        // std.mem.writeInt(u32, data[16..20], 32768, .big);
+        data[16..20].copy_from_slice(&32768u32.to_be_bytes());
+        // std.mem.writeInt(u32, data[20..24], 32767, .big);
+        data[20..24].copy_from_slice(&32767u32.to_be_bytes());
+        // std.mem.writeInt(u32, data[29..33], std.hash.Crc32.hash(data[12..29]), .big);
+        let crc = crc32(&data[12..29]);
+        data[29..33].copy_from_slice(&crc.to_be_bytes());
+
+        let cmd: command::Command = command::Command {
+            control: command::Control::Transmit(command::Transmission {
+                format: command::Format::Png,
+                medium: command::Medium::Direct,
+                ..Default::default()
+            }),
+            quiet: command::Quiet::No,
+            data,
+        };
+        let mut loading = LoadingImage::init(&cmd, &Limits::DIRECT).unwrap();
+
+        assert_eq!(Err(Error::InvalidData), loading.complete().map(|_| ()));
+    }
+
+    /// PORT NOTE: `std.hash.Crc32.hash` (the IEEE polynomial, as PNG chunk CRCs
+    /// use) — a small bitwise implementation, test-only.
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc: u32 = 0xFFFF_FFFF;
+        for &b in data {
+            crc ^= b as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
     }
 
     #[test]

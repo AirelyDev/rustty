@@ -1047,25 +1047,20 @@ impl<M: AppMailbox> Termio<M> {
             .and_then(|color| color.to_terminal_rgb());
 
         // Set the image limits
-        // try self.terminal.setKittyGraphicsSizeLimit(self.alloc, config.image_storage_limit);
-        //
-        // (PORT NOTE: the reference `try` returns early on error, and the guard-less
-        // `defer unlock` still fires; `setKittyGraphicsLoadingLimits` below is
-        // only reached on success — mirrored by the `is_ok()` fall-through.)
-        let size_limit = self
-            .terminal
+        // self.terminal.setKittyGraphicsSizeLimit(self.alloc, config.image_storage_limit);
+        // (`4371871bc`: eviction no longer allocates, so this cannot fail — the
+        // pre-range `try` and its early-return gate are gone upstream.)
+        self.terminal
             .set_kitty_graphics_size_limit(self.alloc, self.config.image_storage_limit);
-        if size_limit.is_ok() {
-            // self.terminal.setKittyGraphicsLoadingLimits(.allWithTempDir(global.tmpDirPath()));
-            self.terminal
-                .set_kitty_graphics_loading_limits(Limits::all_with_temp_dir(
-                    rustty_global::tmp_dir_path(),
-                ));
-        }
+        // self.terminal.setKittyGraphicsLoadingLimits(.allWithTempDir(global.tmpDirPath()));
+        self.terminal
+            .set_kitty_graphics_loading_limits(Limits::all_with_temp_dir(
+                rustty_global::tmp_dir_path(),
+            ));
 
         // (the deferred renderer-state unlock)
         unsafe { (*(*self.renderer_state).mutex).unlock() };
-        size_limit.map_err(|_| Error)
+        Ok(())
     }
 
     /// Resize the terminal.

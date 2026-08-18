@@ -1,5 +1,5 @@
 //! Tests for the HarfBuzz shaper — a faithful port of the `test { ... }` blocks
-//! in ghostty `src/font/shaper/harfbuzz.zig` (24 tests: 20 executing + 4 gated
+//! in ghostty `src/font/shaper/harfbuzz.zig` (25 tests: 21 executing + 4 gated
 //! `error.SkipZigTest`). Kept in a sibling file (mirroring `page_tests.rs`),
 //! attached as the `tests` submodule of `harfbuzz.rs`.
 //!
@@ -842,6 +842,60 @@ fn shape_emoji_width_long() {
         assert_eq!(1usize, cells.len());
     }
     assert_eq!(1usize, count);
+
+    state.deinit(Global);
+    t.deinit(Global);
+    testdata.deinit();
+}
+
+// test "shaper selects font for entire grapheme" {
+#[test]
+fn shaper_selects_font_for_entire_grapheme() {
+    let mut testdata = test_shaper();
+
+    let mut t = Terminal::init(Global, term_opts(5, 3)).unwrap();
+
+    {
+        let mut s = t.vt_stream();
+        s.next_slice("#\u{20E3}".as_bytes()); // Combining enclosing keycap
+        s.deinit();
+    }
+
+    // const primary = (try testdata.grid.getIndex(alloc, '#', .regular, null)).?;
+    let primary = testdata
+        .grid
+        .get_index(Global, '#' as u32, Style::Regular, None)
+        .unwrap()
+        .unwrap();
+    assert!(testdata.grid.has_codepoint(primary, '#' as u32, None));
+    assert!(!testdata.grid.has_codepoint(primary, 0x20E3, None));
+
+    // const additional = (try testdata.grid.getIndex(alloc, 0x20E3, .regular, null)).?;
+    let additional = testdata
+        .grid
+        .get_index(Global, 0x20E3, Style::Regular, None)
+        .unwrap()
+        .unwrap();
+    assert!(testdata.grid.has_codepoint(additional, '#' as u32, None));
+    assert!(testdata.grid.has_codepoint(additional, 0x20E3, None));
+
+    let mut state = RenderState::empty();
+    state.update(Global, &mut t).unwrap();
+
+    let shaper: *mut Shaper = &mut testdata.shaper;
+    let grid = testdata.grid_ptr();
+    let mut it = unsafe {
+        (*shaper).run_iterator(shape::RunOptions {
+            grid,
+            cells: state.row_data[0].cells.slice(),
+            selection: None,
+            cursor_x: None,
+        })
+    };
+    // const run = (try it.next(alloc)).?;
+    let run = it.next(Global).unwrap().unwrap();
+    // try testing.expectEqual(additional, run.font_index);
+    assert_eq!(additional, run.font_index);
 
     state.deinit(Global);
     t.deinit(Global);

@@ -147,6 +147,17 @@ pub fn gettext_(msgid: &std::ffi::CStr) -> &'static std::ffi::CStr {
     unsafe { std::ffi::CStr::from_ptr(ptr) }
 }
 
+/// Mark a string for translation without translating it immediately.
+//
+// PORT NOTE: `pub fn N_(msgid: [:0]const u8) [:0]const u8 { return msgid; }` —
+// the gettext "no-op marking" convention (`N_`), kept as its reference name
+// (the non-snake-case allow mirrors the reference identifier). The sentinel
+// `[:0]` collapses to a plain byte slice per the crate's string convention.
+#[allow(non_snake_case)]
+pub fn N_(msgid: &[u8]) -> &[u8] {
+    msgid
+}
+
 /// Canonicalize a locale name from a platform-specific value to
 /// a POSIX-compliant value. This is a thin layer over the unexported
 /// gnulib-lib function in gettext that does this already.

@@ -1522,7 +1522,7 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
         //     var it = wrapper.terminal.screens.all.iterator();
         //     while (it.next()) |entry| {
         //         const screen = entry.value.*;
-        //         screen.kitty_images.setLimit(screen.alloc, screen, limit) catch return .out_of_memory;
+        //         screen.kitty_images.setLimit(screen.io, screen.alloc, screen, limit);
         //     }
         // },
         Option_::KittyImageStorageLimit => {
@@ -1544,21 +1544,23 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
                 0
             };
             // var it = wrapper.terminal.screens.all.iterator();
-            // while (it.next()) |entry| { const screen = entry.value.*; ... }
+            // while (it.next()) |entry| {
+            //     const screen = entry.value.*;
+            //     screen.kitty_images.setLimit(screen.io, screen.alloc, screen, limit);
+            // }
+            // (`4371871bc` made `setLimit` infallible; the `catch return
+            // .out_of_memory` is gone upstream.)
             for slot in unsafe { (*t).screens.all.iter() } {
                 if let Some(screen) = *slot {
-                    // PORT NOTE: `setLimit(&mut self, alloc, s: &mut Screen, limit)`
+                    // PORT NOTE: `setLimit(&mut self, alloc, s: *mut Screen, limit)`
                     // aliases `screen.kitty_images` (the receiver) with `screen`
                     // (the `s` arg). Mirror `ScreenSet::init`: MOVE `kitty_images`
-                    // out, run `set_limit` against the now-disjoint `&mut Screen`,
-                    // then move it back.
+                    // out, run `set_limit` against the raw screen pointer, then
+                    // move it back.
                     let alloc = unsafe { (*screen).alloc };
                     let mut images = core::mem::take(unsafe { &mut (*screen).kitty_images });
-                    let res = images.set_limit(alloc, unsafe { &mut *screen }, limit);
+                    images.set_limit(alloc, screen, limit);
                     unsafe { (*screen).kitty_images = images };
-                    if res.is_err() {
-                        return Result::OutOfMemory;
-                    }
                 }
             }
         }

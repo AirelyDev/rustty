@@ -65,9 +65,6 @@ extension Rustty {
             }
 
             // Load our configuration from files, CLI args, and then any referenced files.
-            // We only do this on macOS because other Apple platforms do not have the
-            // same filesystem concept.
-#if os(macOS)
             if let path {
                 rustty_config_load_file(cfg, path)
             } else {
@@ -81,7 +78,6 @@ extension Rustty {
             }
 
             rustty_config_load_recursive_files(cfg)
-#endif
 
             // TODO: we'd probably do some config loading here... for now we'd
             // have to do this synchronously. When we support config updating we can do
@@ -108,7 +104,6 @@ extension Rustty {
             return cfg
         }
 
-#if os(macOS)
         // MARK: - Keybindings
 
         /// Return the key equivalent for the given action. The action is the name of the action
@@ -122,7 +117,6 @@ extension Rustty {
             let trigger = rustty_config_trigger(cfg, action, UInt(action.lengthOfBytes(using: .utf8)))
             return Rustty.keyboardShortcut(for: trigger)
         }
-#endif
 
         // MARK: - Configuration Values
 
@@ -274,10 +268,19 @@ extension Rustty {
             return v
         }
 
+        var dragHandle: DragHandle {
+            let defaultValue = DragHandle.auto
+            guard let config = self.config else { return defaultValue }
+            var v: UnsafePointer<Int8>?
+            let key = "drag-handle"
+            guard rustty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return defaultValue }
+            guard let ptr = v else { return defaultValue }
+            return DragHandle(rawValue: String(cString: ptr)) ?? defaultValue
+        }
+
         /// Returns the fullscreen mode if fullscreen is enabled, or nil if disabled.
         /// This parses the `fullscreen` enum config which supports both
         /// native and non-native fullscreen modes.
-        #if canImport(AppKit)
         var windowFullscreen: FullscreenMode? {
             guard let config = self.config else { return nil }
             var v: UnsafePointer<Int8>?
@@ -300,21 +303,9 @@ extension Rustty {
                 nil
             }
         }
-        #else
-        var windowFullscreen: Bool {
-            guard let config = self.config else { return false }
-            var v: UnsafePointer<Int8>?
-            let key = "fullscreen"
-            guard rustty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return false }
-            guard let ptr = v else { return false }
-            let str = String(cString: ptr)
-            return str != "false"
-        }
-        #endif
 
         /// Returns the fullscreen mode for toggle actions (keybindings).
         /// This is controlled by `macos-non-native-fullscreen` config.
-        #if canImport(AppKit)
         var windowFullscreenMode: FullscreenMode {
             let defaultValue: FullscreenMode = .native
             guard let config = self.config else { return defaultValue }
@@ -336,7 +327,6 @@ extension Rustty {
                 defaultValue
             }
         }
-        #endif
 
         var windowTitleFontFamily: String? {
             guard let config = self.config else { return nil }
@@ -410,7 +400,6 @@ extension Rustty {
         }
 
         var macosCustomIcon: String {
-            #if os(macOS)
             let defaultValue = NSString("~/.config/rustty/Rustty.icns").expandingTildeInPath
             guard let config = self.config else { return defaultValue }
             var v: UnsafePointer<Int8>?
@@ -419,9 +408,6 @@ extension Rustty {
             guard let ptr = v else { return defaultValue }
             guard let path = NSString(utf8String: ptr) else { return defaultValue }
             return path.expandingTildeInPath
-            #else
-            return ""
-            #endif
         }
 
         var macosIconFrame: MacOSIconFrame {
@@ -435,7 +421,7 @@ extension Rustty {
             return MacOSIconFrame(rawValue: str) ?? defaultValue
         }
 
-        var macosIconGhostColor: OSColor? {
+        var macosIconGhostColor: NSColor? {
             guard let config = self.config else { return nil }
             var v: rustty_config_color_s = .init()
             let key = "macos-icon-ghost-color"
@@ -443,7 +429,7 @@ extension Rustty {
             return .init(rustty: v)
         }
 
-        var macosIconScreenColor: [OSColor]? {
+        var macosIconScreenColor: [NSColor]? {
             guard let config = self.config else { return nil }
             var v: rustty_config_color_list_s = .init()
             let key = "macos-icon-screen-color"
@@ -475,13 +461,7 @@ extension Rustty {
             var color: rustty_config_color_s = .init()
             let bg_key = "background"
             if !rustty_config_get(config, &color, bg_key, UInt(bg_key.lengthOfBytes(using: .utf8))) {
-#if os(macOS)
                 return Color(NSColor.windowBackgroundColor)
-#elseif os(iOS)
-                return Color(UIColor.systemBackground)
-#else
-#error("unsupported")
-#endif
             }
 
             return .init(
@@ -533,7 +513,7 @@ extension Rustty {
         }
 
         var splitDividerColor: Color {
-            let backgroundColor = OSColor(backgroundColor)
+            let backgroundColor = NSColor(backgroundColor)
             let isLightBackground = backgroundColor.isLightColor
             let newColor = isLightBackground ? backgroundColor.darken(by: 0.08) : backgroundColor.darken(by: 0.4)
 
@@ -552,7 +532,6 @@ extension Rustty {
             )
         }
 
-        #if canImport(AppKit)
         var quickTerminalPosition: QuickTerminalPosition {
             guard let config = self.config else { return .top }
             var v: UnsafePointer<Int8>?
@@ -606,7 +585,6 @@ extension Rustty {
             guard rustty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return QuickTerminalSize() }
             return QuickTerminalSize(from: v)
         }
-        #endif
 
         var resizeOverlay: ResizeOverlay {
             guard let config = self.config else { return .after_first }
@@ -932,5 +910,9 @@ extension Rustty.Config {
     enum MacOSTitlebarStyle: String {
         static let `default` = MacOSTitlebarStyle.transparent
         case native, transparent, tabs, hidden
+    }
+
+    enum DragHandle: String {
+        case always, auto, never
     }
 }

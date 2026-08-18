@@ -1,7 +1,7 @@
 //! rustty-datastruct
 //!
-//! PORTS: ghostty src/datastruct/ (array_list_collection, blocking_queue, cache_table, circ_buf,
-//! comparison, intrusive_linked_list, limited_allocator, main, message_data, segmented_pool,
+//! PORTS: ghostty src/datastruct/ (blocking_queue, cache_table, circ_buf,
+//! comparison, intrusive_linked_list, limited_allocator, main, message_data,
 //! split_tree, wasm_page_pool).
 //!
 //! PORT STATUS: done
@@ -12,7 +12,6 @@
 //! This crate is a leaf over rustty-util (fastmem, quirks). It has NO
 //! dependency on the ghostty tree (R3) and is fully Miri-able (R6).
 
-pub mod array_list_collection;
 pub mod blocking_queue;
 pub mod cache_table;
 pub mod circ_buf;
@@ -22,7 +21,6 @@ pub mod intrusive_linked_list;
 pub mod limited_allocator;
 mod main_mod;
 pub mod message_data;
-pub mod segmented_pool;
 pub mod split_tree;
 pub mod wasm_page_pool;
 
@@ -41,6 +39,5 @@ pub use circ_buf::CircBuf;
 pub use intrusive_linked_list::DoublyLinkedList as IntrusiveDoublyLinkedList;
 pub use limited_allocator::LimitedAllocator;
 pub use message_data::MessageData;
-pub use segmented_pool::SegmentedPool;
 pub use split_tree::SplitTree;
 pub use wasm_page_pool::WasmPagePool;

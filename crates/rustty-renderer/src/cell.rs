@@ -9,7 +9,6 @@
 // const terminal = @import("../terminal/main.zig");
 // const renderer = @import("../renderer.zig");
 // const shaderpkg = renderer.Renderer.API.shaders;
-// const ArrayListCollection = @import("../datastruct/array_list_collection.zig").ArrayListCollection;
 // const symbols = @import("../unicode/symbols_table.zig").table;
 //
 // PORT NOTE: `font` (`../font/main.zig`) is imported by the reference but is not
@@ -17,7 +16,6 @@
 // lives in the generic renderer, deferred to R-d/Phase 3), so no `use` is bound
 // here. `shaderpkg` — the backend's shader package (`Renderer.API.shaders`) — is
 // the vertex-data struct set; in this headless port it is `crate::shaders`.
-use rustty_datastruct::array_list_collection::ArrayListCollection;
 use rustty_render_types::GridSize;
 use rustty_unicode::symbols_table::table as symbols;
 use rustty_util::quirks::inlineAssert as assert;
@@ -26,6 +24,9 @@ use rustty_vt::size::CellCountInt;
 
 use crate::cursor::Style as CursorStyle;
 use crate::shaders::{CellBg, CellText};
+
+// const CellTextRow = std.ArrayListUnmanaged(shaderpkg.CellText);
+type CellTextRow = Vec<CellText>;
 
 /// The possible cell content keys that exist.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -77,14 +78,14 @@ pub struct Contents {
     /// Prefer accessing with `Contents.bgCell(row, col).*` instead
     /// of directly indexing in order to avoid integer size bugs.
     //
-    // PORT NOTE: the reference field is `[]shaderpkg.CellBg = undefined`; the Rust
+    // PORT NOTE: the reference field is `[]shaderpkg.CellBg = &.{}`; the Rust
     // port owns it as a `Vec<CellBg>` (empty until `resize`), which the global
     // allocator manages — the reference `deinit(alloc)` free is Rust's `Drop`.
     pub bg_cells: Vec<CellBg>,
 
-    /// The ArrayListCollection which holds all of the foreground cells. When
-    /// sized with Contents.resize the individual ArrayLists are given enough
-    /// room that they can hold a single row with #cols glyphs, underlines, and
+    /// The lists which hold all of the foreground cells. When sized with
+    /// Contents.resize the individual ArrayLists are given enough room that
+    /// they can hold a single row with #cols glyphs, underlines, and
     /// strikethroughs; however, appendAssumeCapacity MUST NOT be used since
     /// it is possible to exceed this with combining glyphs that add a glyph
     /// but take up no column since they combine with the previous one, as
@@ -103,14 +104,13 @@ pub struct Contents {
     ///
     /// Must be initialized by calling resize on the Contents struct before
     /// calling any operations.
-    pub fg_rows: ArrayListCollection<CellText>,
+    pub fg_rows: Vec<CellTextRow>,
 }
 
 // PORT NOTE: `pub const Contents = struct { ... = .{ ... } }` — the reference
 // gives every field a default (`size = .{ .rows = 0, .columns = 0 }`,
-// `bg_cells = undefined`, `fg_rows = .{ .lists = &.{} }`). `Default` reproduces
-// the empty/zero initialization; `bg_cells`'s `undefined` becomes an empty `Vec`
-// (never observed before `resize`, matching the reference contract).
+// `bg_cells = &.{}`, `fg_rows = &.{}`). `Default` reproduces the empty/zero
+// initialization (the empty `Vec`s never allocate, matching the empty slices).
 impl Default for Contents {
     fn default() -> Self {
         Contents {
@@ -119,62 +119,78 @@ impl Default for Contents {
                 columns: 0,
             },
             bg_cells: Vec::new(),
-            fg_rows: ArrayListCollection { lists: Vec::new() },
+            fg_rows: Vec::new(),
         }
     }
 }
 
 impl Contents {
-    // PORT NOTE: the reference `deinit(self, alloc)` frees `bg_cells` and the
-    // `fg_rows` collection. The Rust `Vec`s free on `Drop`; this method is kept
-    // for API parity and returns the storage to empty.
+    // PORT NOTE: the reference `deinit(self, alloc)` deinits every `fg_rows` row
+    // and frees the row slice and `bg_cells`. The Rust `Vec`s free on `Drop`;
+    // this method is kept for API parity and returns the storage to empty.
     pub fn deinit(&mut self) {
         self.bg_cells = Vec::new();
-        self.fg_rows.lists = Vec::new();
+        self.fg_rows = Vec::new();
     }
 
     /// Resize the cell contents for the given grid size. This will
     /// always invalidate the entire cell contents.
     //
     // PORT NOTE: the reference returns `Allocator.Error!void` and threads
-    // `errdefer` cleanup around fallible allocations. The Rust `Vec`/collection
+    // `errdefer` cleanup around fallible allocations (up to the
+    // `errdefer comptime unreachable` point of no return). The Rust `Vec`
     // allocations use the global allocator (which aborts on OOM, as the
     // datastruct leaf does), so this returns `()`; the reference's careful
     // errdefer ordering is unnecessary because no intermediate state is observed
     // on the abort-on-OOM path.
     pub fn resize(&mut self, size: GridSize) {
-        self.size = size;
+        // const row_count: usize = size.rows;
+        let row_count: usize = size.rows as usize;
 
-        let cell_count = (size.columns as usize) * (size.rows as usize);
+        // The two extra lists hold cursor cells: index 0 is drawn before the
+        // row contents, and index row_count + 1 is drawn after them.
+        // const fg_rows = try alloc.alloc(CellTextRow, row_count + 2);
+        // @memset(fg_rows, .empty);
+        let mut fg_rows: Vec<CellTextRow> = vec![CellTextRow::new(); row_count + 2];
 
-        let bg_cells = vec![[0, 0, 0, 0]; cell_count];
+        // Foreground rows hold glyphs plus underlines, overlines, and
+        // strikethroughs. Three entries per column cover the common cases
+        // without reserving space for every decoration combination. We can't
+        // assume this capacity because combining glyphs and font substitutions
+        // can produce arbitrarily many glyphs in one column.
+        let fg_row_capacity = (size.columns as usize) * 3;
 
-        // The foreground lists can hold 3 types of items:
-        // - Glyphs
-        // - Underlines
-        // - Strikethroughs
-        // So we give them an initial capacity of size.columns * 3, which will
-        // avoid any further allocations in the vast majority of cases. Sadly
-        // we can not assume capacity though, since with combining glyphs that
-        // form a single grapheme, and multi-substitutions in fonts, the number
-        // of glyphs in a row is theoretically unlimited.
+        // The cursor lists need just one cell. The rest get the full capacity.
+        fg_rows[0] = CellTextRow::with_capacity(1);
+        fg_rows[row_count + 1] = CellTextRow::with_capacity(1);
+        for row in fg_rows[1..row_count + 1].iter_mut() {
+            *row = CellTextRow::with_capacity(fg_row_capacity);
+        }
+
+        // const bg_cells = try alloc.realloc(
+        //     self.bg_cells,
+        //     row_count * @as(usize, size.columns),
+        // );
         //
-        // We have size.rows + 2 lists because indexes 0 and size.rows - 1 are
-        // used for special lists containing the cursor cell which need to
-        // be first and last in the buffer, respectively.
-        let mut fg_rows: ArrayListCollection<CellText> =
-            ArrayListCollection::init((size.rows + 2) as usize, (size.columns * 3) as usize);
-
-        // We don't need 3*cols worth of cells for the cursor lists, so we can
-        // replace them with smaller lists. This is technically a tiny bit of
-        // extra work but resize is not a hot function so it's worth it to not
-        // waste the memory.
-        fg_rows.lists[0] = Vec::with_capacity(1);
-        fg_rows.lists[(size.rows + 1) as usize] = Vec::with_capacity(1);
+        // PORT NOTE: `alloc.realloc` keeps the existing prefix, resizes in
+        // place when possible, and produces an exact-size buffer. `Vec::resize`
+        // + `shrink_to_fit` is the analogue (grow reuses the allocation when
+        // capacity allows; shrink returns the surplus). The fill value written
+        // to grown entries — like the reference's undefined tail — is stale as
+        // far as the grid is concerned; the `reset()` after the swap below is
+        // what re-zeroes the whole buffer, so do not reorder it.
+        self.bg_cells
+            .resize(row_count * (size.columns as usize), [0, 0, 0, 0]);
+        self.bg_cells.shrink_to_fit();
 
         // Perform the swap, no going back from here.
-        self.bg_cells = bg_cells;
+        // errdefer comptime unreachable;
+        // for (self.fg_rows) |*row| row.deinit(alloc);
+        // alloc.free(self.fg_rows);
+        self.size = size;
+        // self.bg_cells = bg_cells;  (reallocated in place above)
         self.fg_rows = fg_rows;
+        self.reset();
     }
 
     /// Reset the cell contents to an empty state without resizing.
@@ -182,7 +198,10 @@ impl Contents {
         for c in self.bg_cells.iter_mut() {
             *c = [0, 0, 0, 0];
         }
-        self.fg_rows.reset();
+        // for (self.fg_rows) |*row| row.clearRetainingCapacity();
+        for row in self.fg_rows.iter_mut() {
+            row.clear();
+        }
     }
 
     /// Set the cursor value. If the value is null then the cursor is hidden.
@@ -190,9 +209,9 @@ impl Contents {
         if self.size.rows == 0 {
             return;
         }
-        self.fg_rows.lists[0].clear();
+        self.fg_rows[0].clear();
         let last = (self.size.rows + 1) as usize;
-        self.fg_rows.lists[last].clear();
+        self.fg_rows[last].clear();
 
         let cell = match v {
             Some(c) => c,
@@ -205,12 +224,12 @@ impl Contents {
 
         match style {
             // Block cursors should be drawn first
-            CursorStyle::Block => self.fg_rows.lists[0].push(cell),
+            CursorStyle::Block => self.fg_rows[0].push(cell),
             // Other cursor styles should be drawn last
             CursorStyle::BlockHollow
             | CursorStyle::Bar
             | CursorStyle::Underline
-            | CursorStyle::Lock => self.fg_rows.lists[last].push(cell),
+            | CursorStyle::Lock => self.fg_rows[last].push(cell),
         }
     }
 
@@ -219,12 +238,12 @@ impl Contents {
         if self.size.rows == 0 {
             return None;
         }
-        if !self.fg_rows.lists[0].is_empty() {
-            return Some(self.fg_rows.lists[0][0]);
+        if !self.fg_rows[0].is_empty() {
+            return Some(self.fg_rows[0][0]);
         }
         let last = (self.size.rows + 1) as usize;
-        if !self.fg_rows.lists[last].is_empty() {
-            return Some(self.fg_rows.lists[last][0]);
+        if !self.fg_rows[last].is_empty() {
+            return Some(self.fg_rows[last][0]);
         }
         None
     }
@@ -257,7 +276,7 @@ impl Contents {
             // of our fg row collection, so we need to add 1 to the y to get
             // the correct index.
             {
-                self.fg_rows.lists[(y + 1) as usize].push(cell)
+                self.fg_rows[(y + 1) as usize].push(cell)
             }
         }
     }
@@ -275,7 +294,7 @@ impl Contents {
         // We have a special list containing the cursor cell at the start
         // of our fg row collection, so we need to add 1 to the y to get
         // the correct index.
-        self.fg_rows.lists[(y + 1) as usize].clear();
+        self.fg_rows[(y + 1) as usize].clear();
     }
 }
 
@@ -462,14 +481,14 @@ mod tests {
 
         // We should start off empty after resizing.
         for y in 0..rows {
-            assert!(c.fg_rows.lists[y + 1].is_empty());
+            assert!(c.fg_rows[y + 1].is_empty());
             for x in 0..cols {
                 assert_eq!([0, 0, 0, 0], *c.bg_cell(y, x));
             }
         }
         // And the cursor row should have a capacity of 1 and also be empty.
-        assert!(c.fg_rows.lists[0].capacity() == 1);
-        assert!(c.fg_rows.lists[0].is_empty());
+        assert!(c.fg_rows[0].capacity() == 1);
+        assert!(c.fg_rows[0].is_empty());
 
         // Add some contents.
         let bg_cell: CellBg = [0, 0, 0, 1];
@@ -483,12 +502,12 @@ mod tests {
         c.add(Key::Text, fg_cell);
         assert_eq!(bg_cell, *c.bg_cell(1, 4));
         // The fg row index is offset by 1 because of the cursor list.
-        assert_eq!(fg_cell, c.fg_rows.lists[2][0]);
+        assert_eq!(fg_cell, c.fg_rows[2][0]);
 
         // And we should be able to clear it.
         c.clear(1);
         for y in 0..rows {
-            assert!(c.fg_rows.lists[y + 1].is_empty());
+            assert!(c.fg_rows[y + 1].is_empty());
             for x in 0..cols {
                 assert_eq!([0, 0, 0, 0], *c.bg_cell(y, x));
             }
@@ -506,18 +525,57 @@ mod tests {
             ..Default::default()
         };
         c.set_cursor(Some(cursor_cell), Some(CursorStyle::Block));
-        assert_eq!(cursor_cell, c.fg_rows.lists[0][0]);
+        assert_eq!(cursor_cell, c.fg_rows[0][0]);
         assert_eq!(cursor_cell, c.get_cursor_glyph().unwrap());
 
         // And remove it.
         c.set_cursor(None, None);
-        assert_eq!(0, c.fg_rows.lists[0].len());
+        assert_eq!(0, c.fg_rows[0].len());
         assert!(c.get_cursor_glyph().is_none());
 
         // Add a hollow cursor.
         c.set_cursor(Some(cursor_cell), Some(CursorStyle::BlockHollow));
-        assert_eq!(cursor_cell, c.fg_rows.lists[rows + 1][0]);
+        assert_eq!(cursor_cell, c.fg_rows[rows + 1][0]);
         assert_eq!(cursor_cell, c.get_cursor_glyph().unwrap());
+
+        c.deinit();
+    }
+
+    // test "Contents resize grows and shrinks"
+    #[test]
+    fn contents_resize_grows_and_shrinks() {
+        let mut c: Contents = Contents::default();
+
+        c.resize(GridSize {
+            rows: 2,
+            columns: 2,
+        });
+        let mut cell: CellText = CellText {
+            atlas: Atlas::Grayscale,
+            grid_pos: [1, 1],
+            color: [0, 0, 0, 1],
+            ..Default::default()
+        };
+        c.add(Key::Text, cell);
+        *c.bg_cell(1, 1) = [0, 0, 0, 1];
+        c.set_cursor(Some(cell), Some(CursorStyle::Bar));
+
+        c.resize(GridSize {
+            rows: 3,
+            columns: 4,
+        });
+        assert_eq!([0, 0, 0, 0], *c.bg_cell(1, 1));
+        assert_eq!(0, c.fg_rows[2].len());
+        assert_eq!(None, c.get_cursor_glyph());
+        cell.grid_pos = [3, 2];
+        c.add(Key::Text, cell);
+
+        c.resize(GridSize {
+            rows: 1,
+            columns: 1,
+        });
+        cell.grid_pos = [0, 0];
+        c.add(Key::Text, cell);
 
         c.deinit();
     }
@@ -562,7 +620,7 @@ mod tests {
         // Row 2 should still contain its cells.
         assert_eq!(bg_cell_2, *c.bg_cell(2, 4));
         // Fg row index is +1 because of cursor list at start
-        assert_eq!(fg_cell_2, c.fg_rows.lists[3][0]);
+        assert_eq!(fg_cell_2, c.fg_rows[3][0]);
 
         c.deinit();
     }
@@ -607,7 +665,7 @@ mod tests {
         // Row 1 should still contain its cells.
         assert_eq!(bg_cell_1, *c.bg_cell(1, 4));
         // Fg row index is +1 because of cursor list at start
-        assert_eq!(fg_cell_1, c.fg_rows.lists[2][0]);
+        assert_eq!(fg_cell_1, c.fg_rows[2][0]);
 
         c.deinit();
     }

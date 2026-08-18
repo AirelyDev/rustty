@@ -4,7 +4,7 @@
 # to avoid Nix shell interference (NIX_LDFLAGS, NIX_CFLAGS_COMPILE, etc.).
 
 def main [
-    --scheme: string = "Rustty"       # Xcode scheme (Rustty, Rustty-iOS, DockTilePlugin)
+    --scheme: string = "Rustty"       # Xcode scheme (Rustty, DockTilePlugin)
     --configuration: string = "Debug"  # Build configuration (Debug, Release, ReleaseLocal)
     --action: string = "build"         # xcodebuild action (build, test, clean, etc.)
 ] {

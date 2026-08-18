@@ -518,7 +518,6 @@ extension Rustty.Input.Momentum: AppEnum {
     ]
 }
 
-#if canImport(AppKit)
 import AppKit
 
 extension Rustty.Input.Momentum {
@@ -535,7 +534,6 @@ extension Rustty.Input.Momentum {
         }
     }
 }
-#endif
 
 // MARK: Rustty.Input.Mods
 

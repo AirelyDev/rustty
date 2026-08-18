@@ -572,7 +572,9 @@ impl State {
         {
             // var it = self.images.iterator();
             // while (it.next()) |kv| switch (kv.key_ptr.*) {
-            //     .kitty => |id| if (storage.imageById(id) == null) markForUnload,
+            //     .kitty => |id| if (storage.imageById(id)) |image| {
+            //         if (image.data.isPending()) markForUnload;
+            //     } else markForUnload,
             //     .overlay => {},
             // };
             //
@@ -585,7 +587,13 @@ impl State {
                 .keys()
                 .filter_map(|id| match id {
                     // We're only looking at Kitty images
-                    Id::Kitty(kid) if storage.image_by_id(*kid).is_none() => Some(*kid),
+                    Id::Kitty(kid) => match storage.image_by_id(*kid) {
+                        // A pending source must not keep an older texture for
+                        // the same ID renderable while its placements wait.
+                        Some(image) if image.data.is_pending() => Some(*kid),
+                        Some(_) => None,
+                        None => Some(*kid),
+                    },
                     _ => None,
                 })
                 .collect();
@@ -797,6 +805,13 @@ impl State {
         image: &KittyImage,
         p: &KittyStoragePlacement,
     ) -> Result<(), PrepImageError> {
+        // Keep the native placement but do not create a renderer placement or
+        // texture until the decoded bytes arrive.
+        // if (image.data.isPending()) return;
+        if image.data.is_pending() {
+            return Ok(());
+        }
+
         // Get the rect for the placement. If this placement doesn't have
         // a rect then its virtual or something so skip it.
         // const rect = p.rect(image.*, t) orelse return;
@@ -950,6 +965,10 @@ impl State {
                 return Ok(());
             }
         };
+        // if (image.data.isPending()) return;
+        if image.data.is_pending() {
+            return Ok(());
+        }
 
         // const rp = p.renderPlacement(storage, &image, cell_size.width, cell_size.height)
         //     catch |err| { log.warn("error rendering virtual placement err={}", .{err}); return; };
@@ -1119,6 +1138,9 @@ impl State {
         alloc: A,
         image: &KittyImage,
     ) -> Result<(), PrepImageError> {
+        // const data = image.data.bytes() orelse unreachable;
+        // (callers skip pending images, so the payload is always complete here)
+        let data = image.data.bytes().unwrap();
         // try self.prepImage(alloc, .{ .kitty = image.id }, image.generation, .{ ... });
         self.prep_image(
             alloc,
@@ -1138,8 +1160,8 @@ impl State {
                 // the data is only read from here and copied into its own
                 // buffer. (`image` is our owned clone (§0 R-1) so the ptr is
                 // valid for the call.)
-                // .data = @constCast(image.data.ptr),
-                data: image.data.as_ptr() as *mut u8,
+                // .data = @constCast(data.ptr),
+                data: data.as_ptr() as *mut u8,
             },
         )
     }

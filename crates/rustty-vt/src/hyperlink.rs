@@ -419,15 +419,22 @@ impl PageEntry {
         // runs from the hyperlink set context's `deleted` while the page's
         // `hyperlink_set` is mutably borrowed.
         let base = unsafe { Page::memory_ptr_of(page) };
+        // PORT NOTE (oracle 2fc238ed0): snapshot decode can materialize
+        // zero-length slices; guard both frees with `len > 0`.
         match self.id.tag() {
             PageEntryIdTag::Implicit => {}
             PageEntryIdTag::Explicit => {
-                let s = unsafe { self.id.explicit().slice(base) };
-                unsafe { Page::string_alloc_free(page, s) };
+                let v = self.id.explicit();
+                if v.len > 0 {
+                    let s = unsafe { v.slice(base) };
+                    unsafe { Page::string_alloc_free(page, s) };
+                }
             }
         }
-        let uri = unsafe { self.uri.slice(base) };
-        unsafe { Page::string_alloc_free(page, uri) };
+        if self.uri.len > 0 {
+            let uri = unsafe { self.uri.slice(base) };
+            unsafe { Page::string_alloc_free(page, uri) };
+        }
     }
 }
 

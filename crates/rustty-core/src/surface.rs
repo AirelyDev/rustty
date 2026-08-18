@@ -3355,7 +3355,7 @@ where
             Message::ChildExited(v) => self.childExited(v),
 
             // .desktop_notification => |notification| {
-            Message::DesktopNotification { title, body } => {
+            Message::DesktopNotification(notification) => {
                 // if (!self.config.desktop_notifications) {
                 if !self.config.desktop_notifications {
                     // log.info("application attempted to display a desktop notification, but 'desktop-notifications' is disabled", .{});
@@ -3363,9 +3363,17 @@ where
                 }
 
                 // const title = std.mem.sliceTo(&notification.title, 0);
-                let title = &title[..title.iter().position(|&b| b == 0).unwrap_or(title.len())];
+                let title = &notification.title[..notification
+                    .title
+                    .iter()
+                    .position(|&b| b == 0)
+                    .unwrap_or(notification.title.len())];
                 // const body = std.mem.sliceTo(&notification.body, 0);
-                let body = &body[..body.iter().position(|&b| b == 0).unwrap_or(body.len())];
+                let body = &notification.body[..notification
+                    .body
+                    .iter()
+                    .position(|&b| b == 0)
+                    .unwrap_or(notification.body.len())];
                 // try self.showDesktopNotification(title, body);
                 self.showDesktopNotification(title, body)?;
             }
@@ -9537,7 +9545,7 @@ where
         // out-param overwrites — the vt string_map test convention.)
         let mut strmap: terminal::string_map::StringMap = terminal::string_map::StringMap {
             string: Vec::new(),
-            map: Vec::new(),
+            map: terminal::formatter::PinMapMap::EMPTY,
         };
         // self.alloc.free(try screen.selectionString(self.alloc, .{
         //     .sel = line,
@@ -11396,6 +11404,19 @@ where
                 )?);
             }
 
+            // .prompt_window_title => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .prompt_title,
+            //     .window,
+            // ),
+            //
+            // PORT NOTE (P4 partial, 8b7c57c75): the apprt half — the
+            // `PromptTitle.window` C-ABI enum value — is the W5/W7 bundle; until
+            // it lands this binding is accepted but not performed (false).
+            binding::ScopedSurface::PromptWindowTitle => {
+                return Ok(false);
+            }
+
             // .set_tab_title => |v| {
             binding::ScopedSurface::SetTabTitle(v) => {
                 // const title = try self.alloc.dupeZ(u8, v);
@@ -11413,6 +11434,23 @@ where
                     apprt::Target::Surface(&*self),
                     apprt::Action::SetTabTitle(SetTitle { title: v }),
                 )?);
+            }
+
+            // .set_window_title => |v| {
+            //     const title = try self.alloc.dupeZ(u8, v);
+            //     defer self.alloc.free(title);
+            //     return try self.rt_app.performAction(
+            //         .{ .surface = self },
+            //         .set_window_title,
+            //         .{ .title = title },
+            //     );
+            // },
+            //
+            // PORT NOTE (P4 partial, 8b7c57c75): the apprt half — the
+            // `set_window_title` C-ABI action tag — is the W5/W7 bundle; until
+            // it lands this binding is accepted but not performed (false).
+            binding::ScopedSurface::SetWindowTitle(_) => {
+                return Ok(false);
             }
 
             // .clear_screen => {
@@ -11691,6 +11729,19 @@ where
                     apprt::Target::Surface(&*self),
                     apprt::Action::MoveTab(apprt::action::MoveTab { amount: position }),
                 )?);
+            }
+
+            // .move_tab_to_new_window => return try self.rt_app.performAction(
+            //     .{ .surface = self },
+            //     .move_tab_to_new_window,
+            //     {},
+            // ),
+            //
+            // PORT NOTE (P4 partial, 25b2d8a38): the apprt half — the
+            // `move_tab_to_new_window` C-ABI action tag — is the W5/W7 bundle;
+            // until it lands this binding is accepted but not performed (false).
+            binding::ScopedSurface::MoveTabToNewWindow => {
+                return Ok(false);
             }
 
             // .new_split => |direction| return try self.rt_app.performAction(

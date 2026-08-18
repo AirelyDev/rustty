@@ -494,7 +494,9 @@ impl State {
         {
             // var it = self.images.iterator();
             // while (it.next()) |kv| switch (kv.key_ptr.*) {
-            //     .kitty => |id| if (storage.imageById(id) == null) markForUnload,
+            //     .kitty => |id| if (storage.imageById(id)) |image| {
+            //         if (image.data.isPending()) markForUnload;
+            //     } else markForUnload,
             //     .overlay => {},
             // };
             //
@@ -507,7 +509,13 @@ impl State {
                 .keys()
                 .filter_map(|id| match id {
                     // We're only looking at Kitty images
-                    Id::Kitty(kid) if storage.image_by_id(*kid).is_none() => Some(*kid),
+                    Id::Kitty(kid) => match storage.image_by_id(*kid) {
+                        // A pending source must not keep an older texture for
+                        // the same ID renderable while its placements wait.
+                        Some(image) if image.data.is_pending() => Some(*kid),
+                        Some(_) => None,
+                        None => Some(*kid),
+                    },
                     _ => None,
                 })
                 .collect();
@@ -719,6 +727,13 @@ impl State {
         image: &KittyImage,
         p: &KittyStoragePlacement,
     ) -> Result<(), PrepImageError> {
+        // Keep the native placement but do not create a renderer placement or
+        // texture until the decoded bytes arrive.
+        // if (image.data.isPending()) return;
+        if image.data.is_pending() {
+            return Ok(());
+        }
+
         // Get the rect for the placement. If this placement doesn't have
         // a rect then its virtual or something so skip it.
         // const rect = p.rect(image.*, t) orelse return;
@@ -872,6 +887,10 @@ impl State {
                 return Ok(());
             }
         };
+        // if (image.data.isPending()) return;
+        if image.data.is_pending() {
+            return Ok(());
+        }
 
         // const rp = p.renderPlacement(storage, &image, cell_size.width, cell_size.height)
         //     catch |err| { log.warn("error rendering virtual placement err={}", .{err}); return; };
@@ -1041,6 +1060,9 @@ impl State {
         alloc: A,
         image: &KittyImage,
     ) -> Result<(), PrepImageError> {
+        // const data = image.data.bytes() orelse unreachable;
+        // (callers skip pending images, so the payload is always complete here)
+        let data = image.data.bytes().unwrap();
         // try self.prepImage(alloc, .{ .kitty = image.id }, image.generation, .{ ... });
         self.prep_image(
             alloc,
@@ -1060,8 +1082,8 @@ impl State {
                 // the data is only read from here and copied into its own
                 // buffer. (`image` is our owned clone (§0 R-1) so the ptr is
                 // valid for the call.)
-                // .data = @constCast(image.data.ptr),
-                data: image.data.as_ptr() as *mut u8,
+                // .data = @constCast(data.ptr),
+                data: data.as_ptr() as *mut u8,
             },
         )
     }
@@ -1829,5 +1851,147 @@ mod tests {
         assert_eq!(PixelFormat::Bgr.bpp(), 3);
         assert_eq!(PixelFormat::Rgba.bpp(), 4);
         assert_eq!(PixelFormat::Bgra.bpp(), 4);
+    }
+
+    // PORT NOTE: the tests construct `terminal.Terminal.init(io, alloc, .{ .rows,
+    // .cols })` relying on the reference `Terminal.Options` field defaults; this
+    // helper supplies them verbatim (the graphics_storage.rs / graphics_exec.rs
+    // test-`opts` shape).
+    fn opts(
+        cols: rustty_vt::size::CellCountInt,
+        rows: rustty_vt::size::CellCountInt,
+    ) -> rustty_vt::terminal::Options {
+        rustty_vt::terminal::Options {
+            cols,
+            rows,
+            max_scrollback_bytes: Some(10_000),
+            max_scrollback_lines: None,
+            colors: rustty_vt::terminal::Colors::default(),
+            default_modes: rustty_vt::modes::ModePacked::default(),
+            default_cursor_style: rustty_vt::screen::CursorStyle::Block,
+            default_cursor_blink: Some(false),
+            kitty_image_storage_limit: 320 * 1000 * 1000,
+            kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
+        }
+    }
+
+    // test "kitty renderer ignores pending payloads and removes replaced placements"
+    #[test]
+    fn kitty_renderer_ignores_pending_payloads_and_removes_replaced_placements() {
+        use rustty_vt::kitty::graphics_image::Data;
+
+        let alloc = Global;
+
+        let mut t = rustty_vt::terminal::Terminal::init(alloc, opts(3, 3)).unwrap();
+        t.width_px = 30;
+        t.height_px = 30;
+
+        let mut state: State = State::empty();
+
+        // const storage = &t.screens.active.kitty_images;
+        // (re-derived from the raw screen pointer per access, per the storage's
+        // `s: *mut Screen` PORT NOTE.)
+        let sp = t.screens.active;
+        let tracked = unsafe { &(*sp).pages }.count_tracked_pins();
+        let pending = unsafe { &mut (*sp).kitty_images }
+            .add_pending_image(
+                alloc,
+                sp,
+                KittyImage {
+                    id: 1,
+                    width: 1,
+                    height: 1,
+                    format: Format::Rgba,
+                    data: Data::Pending(4),
+                    ..KittyImage::default()
+                },
+            )
+            .unwrap();
+        // const pin = try t.screens.active.pages.trackPin(
+        //     t.screens.active.cursor.page_pin.*,
+        // );
+        let pin = {
+            let cursor_pin = unsafe { *(*sp).cursor.page_pin };
+            unsafe { &mut (*sp).pages }.track_pin(cursor_pin).unwrap()
+        };
+        unsafe { &mut (*sp).kitty_images }
+            .add_placement(
+                alloc,
+                sp,
+                1,
+                1,
+                KittyStoragePlacement {
+                    columns: 1,
+                    rows: 1,
+                    ..KittyStoragePlacement::with_location(Location::Pin(pin))
+                },
+            )
+            .unwrap();
+
+        state.kitty_update(
+            alloc,
+            &t,
+            CellSize {
+                width: 10,
+                height: 10,
+            },
+        );
+        assert_eq!(1usize, unsafe { &(*sp).kitty_images }.placements.len());
+        assert_eq!(0usize, state.kitty_placements.len());
+        assert!(state.images.get(&Id::Kitty(1)).is_none());
+
+        // const pixels = try alloc.dupe(u8, "rgba");
+        let pixels = b"rgba".to_vec();
+        assert!(pending.complete(unsafe { &mut (*sp).kitty_images }, pixels));
+        state.kitty_update(
+            alloc,
+            &t,
+            CellSize {
+                width: 10,
+                height: 10,
+            },
+        );
+        assert_eq!(1usize, state.kitty_placements.len());
+        assert_eq!(
+            pending.generation,
+            state.images.get(&Id::Kitty(1)).unwrap().generation
+        );
+
+        // A newer pending replacement deletes the native placement and marks the
+        // copied texture data for unload.
+        let _ = unsafe { &mut (*sp).kitty_images }
+            .add_pending_image(
+                alloc,
+                sp,
+                KittyImage {
+                    id: 1,
+                    width: 1,
+                    height: 1,
+                    format: Format::Rgba,
+                    data: Data::Pending(4),
+                    ..KittyImage::default()
+                },
+            )
+            .unwrap();
+        state.kitty_update(
+            alloc,
+            &t,
+            CellSize {
+                width: 10,
+                height: 10,
+            },
+        );
+        assert_eq!(0usize, unsafe { &(*sp).kitty_images }.placements.len());
+        assert_eq!(tracked, unsafe { &(*sp).pages }.count_tracked_pins());
+        assert_eq!(0usize, state.kitty_placements.len());
+        assert!(state
+            .images
+            .get(&Id::Kitty(1))
+            .unwrap()
+            .image
+            .is_unloading());
+
+        state.deinit(alloc);
+        t.deinit(alloc);
     }
 }

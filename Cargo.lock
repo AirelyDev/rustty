@@ -1474,6 +1474,7 @@ dependencies = [
  "rustty-datastruct",
  "rustty-helpgen",
  "rustty-oniguruma",
+ "rustty-os",
  "rustty-render-types",
  "rustty-util",
  "rustty-vt",

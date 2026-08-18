@@ -667,8 +667,8 @@ mod no_backend_seam {
     /// PORT NOTE: `xev.Stream` placeholder — no reference backend for this target.
     #[derive(Clone, Copy)]
     pub struct Stream {}
-    /// PORT NOTE: `xev.WriteRequest` placeholder — Exec's
-    /// `SegmentedPool<xev::WriteRequest>` requires `Default`.
+    /// PORT NOTE: `xev.WriteRequest` placeholder — `queue_write`'s wholesale
+    /// re-init (`..WriteRequest::default()`) requires `Default`.
     #[derive(Default)]
     pub struct WriteRequest {}
     /// PORT NOTE: `xev.WriteQueue` placeholder — Exec's `write_queue` field

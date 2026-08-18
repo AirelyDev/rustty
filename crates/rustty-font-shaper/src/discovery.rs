@@ -912,6 +912,10 @@ mod coretext_impl {
     // and panics on NULL. The reference's `original.font.createForString(...) orelse
     // return null` relies on the nullable result, so the raw symbol is declared here
     // against the SAME framework objc2 links (R3 — a binding, not a reimplementation).
+    // PORT NOTE: `CTFontCreateWithName` is the raw symbol behind the reference's
+    // `pkg/macos` `Font.createWithName` (`orelse Allocator.Error.OutOfMemory`);
+    // objc2's `CTFont::with_name` likewise panics on NULL, so the nullable result
+    // needs the raw symbol (see `ct_font_create_with_name` below).
     mod sys {
         use super::*;
         #[link(name = "CoreText", kind = "framework")]
@@ -921,6 +925,31 @@ mod coretext_impl {
                 string: &CFString,
                 range: CFRange,
             ) -> *mut CTFont;
+            pub fn CTFontCreateWithName(
+                name: &CFString,
+                size: f64,
+                matrix: *const c_void,
+            ) -> *mut CTFont;
+        }
+    }
+
+    /// The reference `pkg/macos/text/font.zig` `Font.createWithName`:
+    ///     pub fn createWithName(name: *foundation.String, size: f32) Allocator.Error!*Font {
+    ///         return @as(?*Font, @ptrFromInt(@intFromPtr(c.CTFontCreateWithName(
+    ///             @ptrCast(name), size, null,
+    ///         )))) orelse Allocator.Error.OutOfMemory;
+    ///     }
+    // PORT NOTE: `matrix` is always `null` in the reference wrapper, so it is a
+    // bare `*const c_void` here (never a real `CGAffineTransform`).
+    fn ct_font_create_with_name(name: &CFString, size: f64) -> Result<CFRetained<CTFont>, Error> {
+        // SAFETY: `name` is a live CFString; NULL matrix is documented-valid.
+        let raw = unsafe { sys::CTFontCreateWithName(name, size, ptr::null()) };
+        match NonNull::new(raw) {
+            // SAFETY: CTFontCreateWithName returns a +1 ("Create rule") reference;
+            // `CFRetained::from_raw` takes that ownership (releases on drop).
+            Some(p) => Ok(unsafe { CFRetained::from_raw(p) }),
+            // orelse Allocator.Error.OutOfMemory
+            None => Err(Error::OutOfMemory),
         }
     }
 
@@ -1143,6 +1172,30 @@ mod coretext_impl {
         // pub fn deinit(self: *CoreText) void { _ = self; }
         pub fn deinit(&mut self) {}
 
+        /// Warm up the system font registry.
+        ///
+        /// The first CoreText query in a process initializes the system font
+        /// database, which takes multiple milliseconds, while subsequent
+        /// queries are microseconds.
+        // pub fn warmup() void {
+        pub fn warmup() {
+            // const name = macos.foundation.String.createWithBytes(
+            //     "AppleColorEmoji",
+            //     .utf8,
+            //     false,
+            // ) catch return;
+            let Some(name) = new_cfstring_bytes(b"AppleColorEmoji") else {
+                return;
+            };
+            // defer name.release(); — RAII (`CFRetained` drop).
+            // const ct_font = macos.text.Font.createWithName(name, 12) catch return;
+            let Ok(ct_font) = ct_font_create_with_name(&name, 12.0) else {
+                return;
+            };
+            // ct_font.release(); — RAII (`CFRetained` drop).
+            drop(ct_font);
+        }
+
         /// Discover fonts from a descriptor. This returns an iterator that can
         /// be used to build up the deferred fonts.
         // pub fn discover(self: *const CoreText, alloc: Allocator, desc: Descriptor) !DiscoverIterator {
@@ -1187,6 +1240,66 @@ mod coretext_impl {
                 variations: desc.variations,
                 i: 0,
             })
+        }
+
+        /// Discover a font by its exact name (family, full, or PostScript
+        /// name). This is significantly faster than `discover` because it
+        /// avoids the system-wide font matching that CTFontCollection does
+        /// (which takes multiple milliseconds). This should be preferred
+        /// when the desired font is known exactly, e.g. system fonts such
+        /// as Apple Color Emoji.
+        ///
+        /// Returns null if no font with this exact family name exists;
+        /// CoreText fallback fonts are never returned.
+        // pub fn discoverExactFamily(self: *const CoreText, family: []const u8) !?DeferredFace {
+        pub fn discover_exact_family(&self, family: &[u8]) -> Result<Option<DeferredFace>, Error> {
+            // _ = self;
+
+            // const family_str = try macos.foundation.String.createWithBytes(
+            //     family,
+            //     .utf8,
+            //     false,
+            // );
+            let family_str = new_cfstring_bytes(family).ok_or(Error::OutOfMemory)?;
+            // defer family_str.release(); — RAII (`CFRetained` drop).
+
+            // Create our font. We need a size to initialize it so we use size
+            // 12 but we will alter the size later (same as DiscoverIterator).
+            // const ct_font = try macos.text.Font.createWithName(family_str, 12);
+            let ct_font = ct_font_create_with_name(&family_str, 12.0)?;
+
+            // CTFontCreateWithName never returns null: if the requested font
+            // isn't installed it returns a substitute font. Verify we got
+            // the family we asked for, otherwise report not found.
+            // const found: bool = found: { ... };
+            let found: bool = {
+                // const actual = ct_font.copyFamilyName();
+                // defer actual.release();
+                let actual = unsafe { ct_font.family_name() };
+                // var buf: [256]u8 = undefined;
+                // const actual_slice = actual.cstring(&buf, .utf8) orelse
+                //     break :found false;
+                // break :found std.mem.eql(u8, actual_slice, family);
+                //
+                // PORT NOTE: rustty reads CFStrings via `to_string()` (the idiom of
+                // `DeferredFace::family_name`), so the reference's 256-byte stack
+                // buffer and its too-small `orelse false` arm collapse into the
+                // byte comparison.
+                let actual_s = actual.to_string();
+                actual_s.as_bytes() == family
+            };
+            if !found {
+                // ct_font.release(); — RAII (`ct_font` drops on return).
+                return Ok(None);
+            }
+
+            // return .{ .ct = .{ .font = ct_font, .variations = &.{} } };
+            Ok(Some(DeferredFace {
+                ct: Some(CoreTextData {
+                    font: ct_font,
+                    variations: Vec::new(),
+                }),
+            }))
         }
 
         // pub fn discoverFallback(self, alloc, collection, desc) !DiscoverIterator {

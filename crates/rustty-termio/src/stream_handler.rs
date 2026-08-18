@@ -42,7 +42,10 @@
 // rustty-terminfo; `posix` is unreferenced by any live declaration here.
 use allocator_api2::alloc::Global as Allocator;
 use rustty_apprt_api::structs::Clipboard;
-use rustty_apprt_api::surface::{AppMailbox, Message as SurfaceMessage, ReportTitleStyle};
+use rustty_apprt_api::surface::{
+    AppMailbox, DesktopNotification as SurfaceDesktopNotification, Message as SurfaceMessage,
+    ReportTitleStyle,
+};
 use rustty_config::value_types::{ClipboardAccess, OSCColorReportFormat};
 use rustty_datastruct::blocking_queue::Timeout;
 use rustty_renderer::size::Size;
@@ -2193,32 +2196,12 @@ impl<M: AppMailbox> StreamHandler<M> {
     //     body: []const u8,
     // ) !void {
     fn showDesktopNotification(&mut self, title: &[u8], body: &[u8]) -> Result<(), crate::Error> {
-        // var message = apprt.surface.Message{ .desktop_notification = undefined };
-        let mut title_buf = [0u8; 64];
-        let mut body_buf = [0u8; 256];
-
-        // const title_len = @min(title.len, message.desktop_notification.title.len);
-        // (PORT NOTE: the reference arrays are `[63:0]u8`/`[255:0]u8` — usable
-        // lengths 63/255 + NUL sentinel; apprt-api models them as [u8;64]/
-        // [u8;256].)
-        let title_len = title.len().min(title_buf.len() - 1);
-        // @memcpy(message.desktop_notification.title[0..title_len], title[0..title_len]);
-        title_buf[..title_len].copy_from_slice(&title[..title_len]);
-        // message.desktop_notification.title[title_len] = 0;
-        title_buf[title_len] = 0;
-
-        // const body_len = @min(body.len, message.desktop_notification.body.len);
-        let body_len = body.len().min(body_buf.len() - 1);
-        // @memcpy(message.desktop_notification.body[0..body_len], body[0..body_len]);
-        body_buf[..body_len].copy_from_slice(&body[..body_len]);
-        // message.desktop_notification.body[body_len] = 0;
-        body_buf[body_len] = 0;
-
-        // self.surfaceMessageWriter(message);
-        self.surfaceMessageWriter(SurfaceMessage::DesktopNotification {
-            title: title_buf,
-            body: body_buf,
-        });
+        // self.surfaceMessageWriter(.{
+        //     .desktop_notification = .init(title, body),
+        // });
+        self.surfaceMessageWriter(SurfaceMessage::DesktopNotification(
+            SurfaceDesktopNotification::init(title, body),
+        ));
         Ok(())
     }
 

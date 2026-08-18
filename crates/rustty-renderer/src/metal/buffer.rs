@@ -196,7 +196,8 @@ impl<T: Copy> Buffer<T> {
     /// rather than a single array. Returns the number of items synced.
     //
     // PORT NOTE: Zig's `[]const std.ArrayListUnmanaged(T)` → `&[Vec<T>]` (the
-    // already-ported `ArrayListCollection<T>.lists` is a `Vec<Vec<T>>`).
+    // caller's `cell.rs` `fg_rows: []CellTextRow` is ported as
+    // `Vec<Vec<CellText>>`).
     pub fn sync_from_array_lists(&mut self, lists: &[Vec<T>]) -> Result<usize, Error> {
         let mut total_len: usize = 0;
         for list in lists {

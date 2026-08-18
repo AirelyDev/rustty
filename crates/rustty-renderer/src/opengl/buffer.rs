@@ -271,8 +271,8 @@ impl<T> Buffer<T> {
     // ```
     //
     // PORT NOTE (`[]const std.ArrayListUnmanaged(T)` -> `&[Vec<T>]`): same mapping
-    // as the Metal twin — the already-ported `ArrayListCollection<T>.lists` is a
-    // `Vec<Vec<T>>`, so an array of array-lists is a `&[Vec<T>]`.
+    // as the Metal twin — the caller's `cell.rs` `fg_rows: []CellTextRow` is
+    // ported as `Vec<Vec<CellText>>`, so an array of array-lists is a `&[Vec<T>]`.
     pub fn sync_from_array_lists(&mut self, lists: &[Vec<T>]) -> Result<usize, errors::Error> {
         let binding = self.buffer.bind(self.opts.target)?;
 

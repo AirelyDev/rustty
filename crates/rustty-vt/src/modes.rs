@@ -107,21 +107,22 @@ impl ModeState {
 
     /// Set a mode to a value.
     pub fn set(&mut self, mode: Mode, value: bool) {
-        // PORT NOTE: the reference `switch (mode) { inline else => ... }` resolves
-        // `entryForMode(mode)` at comptime and sets the matching ModePacked
-        // field. We set the corresponding bit by the entry index.
         #[cfg(debug_assertions)]
         if matches!(mode, Mode::SynchronizedOutput) && !value {
             sync_output_clear_bump();
         }
-        let entry_idx = index_for_mode(mode);
-        self.values.set_bit(entry_idx, value);
+        set_packed(&mut self.values, mode, value);
+    }
+
+    /// Set the reset default and current value for a mode.
+    pub fn set_default(&mut self, mode: Mode, value: bool) {
+        set_packed(&mut self.values, mode, value);
+        set_packed(&mut self.default, mode, value);
     }
 
     /// Get the value of a mode.
     pub fn get(&self, mode: Mode) -> bool {
-        let entry_idx = index_for_mode(mode);
-        self.values.get_bit(entry_idx)
+        get_packed(&self.values, mode)
     }
 
     /// Save the state of the given mode. This can then be restored
@@ -145,6 +146,22 @@ impl ModeState {
     /// Return a DECRPM report for the given mode tag. If the tag does
     /// not correspond to a known mode, the report state is .not_recognized.
     pub fn get_report(&self, tag: ModeTag) -> Report {
+        // DECECM (Erase Color Mode, DEC private mode 117) controls whether erasing
+        // and scrolling use the default background or the active background color.
+        // Rustty's behavior is fixed equivalent to DECECM reset, and DECRQM has a
+        // "permanently reset" response for recognized modes that cannot be changed.
+        // Report that instead of "not recognized" so applications can query and adapt
+        // to Rustty's erase-color behavior.
+        //
+        // See VT520/VT525 Programmer Information, "Erase Color" and DECRQM/DECRPM:
+        // https://web.mit.edu/dosathena/doc/www/ek-vt520-rm.pdf
+
+        if !tag.ansi && tag.value == 117 {
+            return Report {
+                tag,
+                state: State::PermanentlyReset,
+            };
+        }
         let mode = match mode_from_int(tag.value, tag.ansi) {
             Some(m) => m,
             None => {
@@ -163,6 +180,19 @@ impl ModeState {
             },
         }
     }
+}
+
+// PORT NOTE: the reference `switch (mode) { inline else => ... }` resolves
+// `entryForMode(mode)` at comptime and sets/reads the matching ModePacked
+// field. We set/read the corresponding bit by the entry index.
+fn set_packed(values: &mut ModePacked, mode: Mode, value: bool) {
+    let entry_idx = index_for_mode(mode);
+    values.set_bit(entry_idx, value);
+}
+
+fn get_packed(values: &ModePacked, mode: Mode) -> bool {
+    let entry_idx = index_for_mode(mode);
+    values.get_bit(entry_idx)
 }
 
 /// A packed struct of all the settable modes. This shouldn't
@@ -432,11 +462,26 @@ struct ModeEntry {
     /// set or queried. The mode enum still has it, allowing Ghostty developers
     /// to develop a mode without exposing it to real users.
     disabled: bool,
+
+    /// Whether an embedder may safely configure this bit as reset policy.
+    /// Modes that perform a transition or mirror additional terminal state
+    /// must use their semantic configuration API instead.
+    default_configurable: bool,
+}
+
+/// Return whether a mode can safely be configured as a reset default by an
+/// embedder. This excludes modes whose set/reset operations have side effects
+/// beyond changing the mode bit.
+pub fn default_configurable(mode: Mode) -> bool {
+    // PORT NOTE: the reference resolves `entryForMode(mode).default_configurable`
+    // at comptime; we index the ENTRIES table by the mode's bit index.
+    ENTRIES[index_for_mode(mode)].default_configurable
 }
 
 // PORT NOTE: a const constructor for ModeEntry with the reference field defaults
-// (`default = false`, `ansi = false`, `disabled = false`), so the ENTRIES table
-// reads like the reference struct literals.
+// (`default = false`, `ansi = false`, `disabled = false`,
+// `default_configurable = true`), so the ENTRIES table reads like the reference
+// struct literals.
 const fn e(name: &'static str, value: u16) -> ModeEntry {
     ModeEntry {
         name,
@@ -444,6 +489,7 @@ const fn e(name: &'static str, value: u16) -> ModeEntry {
         default: false,
         ansi: false,
         disabled: false,
+        default_configurable: true,
     }
 }
 
@@ -454,11 +500,19 @@ const fn e_ansi(name: &'static str, value: u16) -> ModeEntry {
         default: false,
         ansi: true,
         disabled: false,
+        default_configurable: true,
     }
 }
 
 const fn e_default(mut entry: ModeEntry) -> ModeEntry {
     entry.default = true;
+    entry
+}
+
+// PORT NOTE: mirrors the reference's `.default_configurable = false` overrides
+// in the entries table.
+const fn e_not_default_configurable(mut entry: ModeEntry) -> ModeEntry {
+    entry.default_configurable = false;
     entry
 }
 
@@ -486,46 +540,46 @@ const ENTRIES: &[ModeEntry] = &[
     e_ansi("linefeed", 20),
     // DEC
     e("cursor_keys", 1), // DECCKM
-    e("132_column", 3),
+    e_not_default_configurable(e("132_column", 3)),
     e("slow_scroll", 4),
     e("reverse_colors", 5),
-    e("origin", 6),
+    e_not_default_configurable(e("origin", 6)),
     e_default(e("wraparound", 7)),
     e("autorepeat", 8),
-    e("mouse_event_x10", 9),
-    e("cursor_blinking", 12),
+    e_not_default_configurable(e("mouse_event_x10", 9)),
+    e_not_default_configurable(e("cursor_blinking", 12)),
     e_default(e("cursor_visible", 25)),
     e("enable_mode_3", 40),
     e("reverse_wrap", 45),
-    e("alt_screen_legacy", 47),
+    e_not_default_configurable(e("alt_screen_legacy", 47)),
     e("keypad_keys", 66),
     // DEC Backarrow Key Mode (DECBKM)
     // See https://vt100.net/dec/ek-vt3xx-tp-002.pdf page 170
     // If `false` (the default), `backspace` emits 0x7f
     // If `true`, `backspace` emits 0x08
     e("backarrow_key_mode", 67),
-    e("enable_left_and_right_margin", 69),
-    e("mouse_event_normal", 1000),
-    e("mouse_event_button", 1002),
-    e("mouse_event_any", 1003),
+    e_not_default_configurable(e("enable_left_and_right_margin", 69)),
+    e_not_default_configurable(e("mouse_event_normal", 1000)),
+    e_not_default_configurable(e("mouse_event_button", 1002)),
+    e_not_default_configurable(e("mouse_event_any", 1003)),
     e("focus_event", 1004),
-    e("mouse_format_utf8", 1005),
-    e("mouse_format_sgr", 1006),
+    e_not_default_configurable(e("mouse_format_utf8", 1005)),
+    e_not_default_configurable(e("mouse_format_sgr", 1006)),
     e_default(e("mouse_alternate_scroll", 1007)),
-    e("mouse_format_urxvt", 1015),
-    e("mouse_format_sgr_pixels", 1016),
+    e_not_default_configurable(e("mouse_format_urxvt", 1015)),
+    e_not_default_configurable(e("mouse_format_sgr_pixels", 1016)),
     e_default(e("ignore_keypad_with_numlock", 1035)),
     e_default(e("alt_esc_prefix", 1036)),
     e("alt_sends_escape", 1039),
     e("reverse_wrap_extended", 1045),
-    e("alt_screen", 1047),
-    e("save_cursor", 1048),
-    e("alt_screen_save_cursor_clear_enter", 1049),
+    e_not_default_configurable(e("alt_screen", 1047)),
+    e_not_default_configurable(e("save_cursor", 1048)),
+    e_not_default_configurable(e("alt_screen_save_cursor_clear_enter", 1049)),
     e("bracketed_paste", 2004),
-    e("synchronized_output", 2026),
+    e_not_default_configurable(e("synchronized_output", 2026)),
     e("grapheme_cluster", 2027),
     e("report_color_scheme", 2031),
-    e("report_visibility", 2033),
+    e_not_default_configurable(e("report_visibility", 2033)),
     e("in_band_size_reports", 2048),
 ];
 
@@ -647,6 +701,34 @@ mod tests {
     }
 
     #[test]
+    fn mode_state_set_default_updates_current_and_reset_value() {
+        let mut state: ModeState = ModeState::default();
+
+        state.set_default(Mode::GraphemeCluster, true);
+        assert!(state.get(Mode::GraphemeCluster));
+        assert!(state.default.get_mode(Mode::GraphemeCluster));
+
+        state.set(Mode::GraphemeCluster, false);
+        assert!(!state.get(Mode::GraphemeCluster));
+        assert!(state.default.get_mode(Mode::GraphemeCluster));
+
+        state.set_default(Mode::GraphemeCluster, true);
+        assert!(state.get(Mode::GraphemeCluster));
+
+        state.set(Mode::GraphemeCluster, false);
+        state.reset();
+        assert!(state.get(Mode::GraphemeCluster));
+    }
+
+    #[test]
+    fn default_configurable_modes() {
+        assert!(default_configurable(Mode::GraphemeCluster));
+        assert!(default_configurable(Mode::Wraparound));
+        assert!(!default_configurable(Mode::AltScreen));
+        assert!(!default_configurable(Mode::CursorBlinking));
+    }
+
+    #[test]
     fn get_report_known_dec_mode() {
         let mut state: ModeState = ModeState::default();
         let report = state.get_report(ModeTag::new(1));
@@ -669,6 +751,17 @@ mod tests {
         });
         assert_eq!(State::Set, report.state);
         assert_eq!(true, report.tag.ansi);
+    }
+
+    #[test]
+    fn get_report_dececm_permanently_reset() {
+        let state: ModeState = ModeState::default();
+        let report = state.get_report(ModeTag {
+            value: 117,
+            ansi: false,
+        });
+        assert_eq!(State::PermanentlyReset, report.state);
+        assert_eq!(false, report.tag.ansi);
     }
 
     #[test]

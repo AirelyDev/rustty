@@ -1958,8 +1958,9 @@ impl WriteQueue {
 // (stream.zig:737-741: `req.* = @unionInit(xev.WriteRequest, @tagName(tag),
 // undefined)`), so it never needs to know its own arm.
 //
-// PORT NOTE: `Default` is REQUIRED (termio's Exec pools `xev::WriteRequest` in a
-// `SegmentedPool`, which default-constructs its elements) and hand-written, never
+// PORT NOTE: `Default` is REQUIRED (`queue_write`'s wholesale re-init uses
+// `..WriteRequest::default()`; termio's pooled `ThreadData.Write` node hands the
+// embedded request over logically uninitialized) and hand-written, never
 // derived. The reference's pool elements are `undefined`; the zero value here is
 // the LAST candidate's variant, consistent with `Completion`/`WriteQueue`
 // (dynamic.zig:251/377) — and `queue_write` overwrites it wholesale regardless.
@@ -4492,9 +4493,9 @@ const _: fn() = || {
     needs_copy::<Stream>();
     needs_copy::<File>();
 
-    // `Default`: REQUIRED by termio (Exec default-constructs `write_queue`; its
-    // `SegmentedPool` default-constructs pooled `WriteRequest`s). Hand-written
-    // here, never derived — a derive would pick the wrong union arm.
+    // `Default`: REQUIRED by termio (Exec default-constructs `write_queue`) and
+    // by `queue_write`'s wholesale `..WriteRequest::default()` re-init.
+    // Hand-written here, never derived — a derive would pick the wrong union arm.
     fn needs_default<T: Default>() {}
     needs_default::<Completion>();
     needs_default::<WriteQueue>();

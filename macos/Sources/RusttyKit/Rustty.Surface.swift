@@ -10,7 +10,9 @@ extension Rustty {
     ///
     /// Wraps a `rustty_surface_t`
     final class Surface: Sendable {
-        private let surface: rustty_surface_t
+        /// A surface is sendable because it is just a reference type. Using the surface in parameters
+        /// may be unsafe but the value itself is safe to send across threads.
+        nonisolated(unsafe) private let surface: rustty_surface_t
 
         /// Read the underlying C value for this surface. This is unsafe because the value will be
         /// freed when the Surface class is deinitialized.

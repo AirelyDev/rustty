@@ -25,6 +25,7 @@
 // `crate::terminal::Terminal`; `PageList.Pin` is `crate::pagelist::Pin`; the
 // `command`/`Image`/`LoadingImage`/`Rect` come from the sibling kitty modules.
 use crate::kitty::graphics_command as command;
+use crate::kitty::graphics_image;
 use crate::kitty::graphics_image::{Image, Limits, LoadingImage, Rect};
 use crate::pagelist as PageList;
 use crate::point;
@@ -183,24 +184,79 @@ impl Default for ImageStorage {
     }
 }
 
+/// Identifies one exact pending image transmission. The generation is
+/// assigned by this storage when the pending image is inserted, so a
+/// later replacement of the same ID cannot consume stale payload bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingImage {
+    pub id: u32,
+    pub generation: u64,
+}
+
+impl PendingImage {
+    /// Attach owned decoded bytes if this exact pending transmission is
+    /// still resident. On true, storage owns `data`; on false, the caller
+    /// retains ownership. Completion preserves the image generation (and
+    /// therefore eviction age) while marking storage content as mutated.
+    //
+    // PORT NOTE: the reference takes `data: []const u8` and the caller frees it
+    // on `false`. Rust ownership transfers the `Vec<u8>` either way: on `true`
+    // it becomes the image payload; on `false` it is dropped (freed) here —
+    // observably the caller's `defer alloc.free(data)`.
+    pub fn complete(&self, storage: &mut ImageStorage, data: Vec<u8>) -> bool {
+        // const img = storage.images.getPtr(self.id) orelse return false;
+        let img = match storage.images.get_mut(&self.id) {
+            Some(img) => img,
+            None => return false,
+        };
+        if img.generation != self.generation {
+            return false;
+        }
+
+        let expected_len = match img.data {
+            graphics_image::Data::Complete(_) => return false,
+            graphics_image::Data::Pending(len) => len,
+        };
+        if data.len() != expected_len {
+            return false;
+        }
+
+        img.data = graphics_image::Data::Complete(data);
+        storage.mark_mutated();
+        true
+    }
+}
+
 impl ImageStorage {
-    pub fn deinit(&mut self, alloc: Allocator, s: &mut Screen) {
+    // PORT NOTE (`s: *terminal.Screen` params, this range's pin-lifecycle
+    // series): upstream threads the owning screen into
+    // `deinit`/`setLimit`/`addImage`/`addPendingImage`/`addPlacement`/eviction
+    // so replaced/evicted/pruned placements can release their tracked pins.
+    // This storage lives INSIDE `Screen` (`screen.kitty_images`), so a
+    // `&mut Screen` parameter would alias the `&mut self` receiver whenever the
+    // caller's storage has not been moved out — instant Stacked-Borrows UB
+    // (memory `rust-mut-args-strongly-protected`). The parameter is therefore a
+    // RAW `*mut Screen`, following `delete`'s existing sanctioned shape, and is
+    // dereferenced only inside narrow scopes (`Placement::deinit` →
+    // `(*s).pages.untrack_pin`, garbage-pin reads) that never overlap a `&mut`
+    // reconstruction of the whole screen.
+    pub fn deinit(&mut self, alloc: Allocator, s: *mut Screen) {
         // if (self.loading) |loading| loading.destroy(alloc);
         // PORT NOTE: `LoadingImage.destroy` frees its data + the heap allocation;
         // dropping the owning `Box<LoadingImage>` does both.
         let _ = &alloc;
         self.loading = None;
 
+        self.clear_placements(s);
+        // self.placements.deinit(alloc);
+        self.placements = PlacementMap::new();
+
         // var it = self.images.iterator();
         // while (it.next()) |kv| kv.value_ptr.deinit(alloc);
         // self.images.deinit(alloc);
         // PORT NOTE: `Image.deinit` frees its `data`; clearing the owning map
-        // drops every `Image` (and its `Vec<u8>`).
+        // drops every `Image` (and its payload).
         self.images.clear();
-
-        self.clear_placements(s);
-        // self.placements.deinit(alloc);
-        self.placements = PlacementMap::new();
     }
 
     /// Kitty image protocol is enabled if we have a non-zero limit.
@@ -225,12 +281,9 @@ impl ImageStorage {
     /// can be loaded. If this limit is lower, this will do an eviction
     /// if necessary. If the value is zero, then Kitty image protocol will
     /// be disabled.
-    pub fn set_limit(
-        &mut self,
-        alloc: Allocator,
-        s: &mut Screen,
-        limit: usize,
-    ) -> Result<(), OutOfMemory> {
+    // PORT NOTE (`4371871bc`): eviction no longer allocates, so `setLimit` is
+    // infallible (`!void` → `void`).
+    pub fn set_limit(&mut self, alloc: Allocator, s: *mut Screen, limit: usize) {
         // Special case disabling by quickly deleting all
         if limit == 0 {
             // PORT NOTE: `Limits` is no longer `Copy` (it owns the temp-file
@@ -248,80 +301,126 @@ impl ImageStorage {
         if limit < self.total_bytes {
             let req_bytes = self.total_bytes - limit;
             // log.info("evicting images to lower limit, evicting={}", .{req_bytes});
-            if !self.evict_image(alloc, req_bytes)? {
+            if !self.evict_image(alloc, s, req_bytes) {
                 // log.warn("failed to evict enough images for required bytes", .{});
             }
         }
 
         self.total_limit = limit;
-        Ok(())
     }
 
-    /// Add an already-loaded image to the storage. This will automatically
-    /// free any existing image with the same ID.
+    /// Add an image to the storage. This will automatically free any existing
+    /// image with the same ID. Prefer addPendingImage for pending data so the
+    /// caller receives a completion token.
     // PORT NOTE: `Allocator.Error!void` → `Result<(), OutOfMemory>`.
-    pub fn add_image(&mut self, alloc: Allocator, img: Image) -> Result<(), OutOfMemory> {
+    pub fn add_image(
+        &mut self,
+        alloc: Allocator,
+        s: *mut Screen,
+        img: Image,
+    ) -> Result<(), OutOfMemory> {
+        let new_len = img.data.len();
+
         // If the image itself is over the limit, then error immediately
-        if img.data.len() > self.total_limit {
+        if new_len > self.total_limit {
             return Err(OutOfMemory);
         }
 
+        // Credit an existing image's reservation before calculating the
+        // replacement size. In particular, a completed live transmission
+        // replacing pending snapshot metadata must be able to reuse the
+        // reservation without evicting its own ID.
+        let old_len = if let Some(old) = self.images.get(&img.id) {
+            old.data.len()
+        } else {
+            0
+        };
+        assert(old_len <= self.total_bytes);
+
+        // Reserve map capacity before evicting anything so allocation failure
+        // cannot leave storage partially evicted. Existing keys need no room.
+        // PORT NOTE: `ensureUnusedCapacity` on a Rust `HashMap` is infallible
+        // (it grows via the global allocator); the reserve keeps the shape.
+        if !self.images.contains_key(&img.id) {
+            self.images.reserve(1);
+        }
+
         // If this would put us over the limit, then evict.
-        let total_bytes = self.total_bytes + img.data.len();
+        let total_bytes = self.total_bytes - old_len + new_len;
         if total_bytes > self.total_limit {
             let req_bytes = total_bytes - self.total_limit;
             // log.info("evicting images to make space for {} bytes", .{req_bytes});
-            if !self.evict_image(alloc, req_bytes)? {
+            if !self.evict_image_except(alloc, s, req_bytes, Some(img.id)) {
                 // log.warn("failed to evict enough images for required bytes", .{});
                 return Err(OutOfMemory);
             }
         }
 
-        // Do the gop op first so if it fails we don't get a partial state
-        // PORT NOTE: `getOrPut` on a Rust `HashMap` is infallible (it owns its
-        // backing storage and grows via the global allocator); the reference's
-        // `try` cannot fire for OOM here. We mirror `found_existing` accounting
-        // via `HashMap::get`/`insert`.
+        // const gop = self.images.getOrPutAssumeCapacity(img.id);
 
-        // log.debug("addImage image={}", .{img: {
-        //     var copy = img;
-        //     copy.data = "";
-        //     break :img copy;
-        // }});
+        // log.debug("addImage image={}", .{img.withoutData()});
 
-        // Write our new image
+        // Retransmitting a specific image ID replaces the old image and all
+        // of its placements, as required by the Kitty graphics protocol.
         // if (gop.found_existing) {
-        //     self.total_bytes -= gop.value_ptr.data.len;
+        //     self.removePlacementsByImageId(s, img.id);
+        //     self.total_bytes -= gop.value_ptr.data.len();
         //     gop.value_ptr.deinit(alloc);
         // }
         let id = img.id;
-        let data_len = img.data.len();
-        if let Some(existing) = self.images.get(&id) {
-            self.total_bytes -= existing.data.len();
-            // existing `Image` (and its `Vec`) is dropped by the `insert` below.
+        if self.images.contains_key(&id) {
+            self.remove_placements_by_image_id(s, id);
+            self.total_bytes -= self.images.get(&id).unwrap().data.len();
+            // the existing `Image` (and its payload) is dropped by the
+            // `insert` below.
         }
         let _ = &alloc;
 
         // gop.value_ptr.* = img;
+        // gop.value_ptr.metadata.placement_count = 0;
         self.images.insert(id, img);
-        // self.total_bytes += img.data.len;
-        self.total_bytes += data_len;
+        self.images.get_mut(&id).unwrap().metadata.placement_count = 0;
+        self.total_bytes += new_len;
 
-        // Stamp the stored image with a fresh generation. This gives every
-        // add/replace a unique stamp even when the same image ID is
-        // retransmitted with identical dimensions, so consumers (e.g. renderer
-        // texture caches) can detect content changes.
+        // Stamp the stored image with a fresh generation. This gives
+        // every add/replace a unique stamp even when the same image ID
+        // is retransmitted with identical dimensions, so consumers
+        // (e.g. renderer texture caches) can detect content changes.
         self.mark_mutated();
         let generation = self.generation;
         self.images.get_mut(&id).unwrap().generation = generation;
         Ok(())
     }
 
+    /// Add an image whose decoded payload bytes have not arrived yet.
+    /// Returns the token required to complete this exact transmission.
+    pub fn add_pending_image(
+        &mut self,
+        alloc: Allocator,
+        s: *mut Screen,
+        img: Image,
+    ) -> Result<PendingImage, OutOfMemory> {
+        assert(img.data.is_pending());
+        // PORT NOTE: `img` moves into `addImage`; capture the id first (the
+        // reference re-reads `img.id` from its by-value copy).
+        let id = img.id;
+        self.add_image(alloc, s, img)?;
+        // const stored = self.images.get(img.id).?;
+        let stored = self.images.get(&id).unwrap();
+        Ok(PendingImage {
+            id: stored.id,
+            generation: stored.generation,
+        })
+    }
+
     /// Add a placement for a given image. The caller must verify in advance
-    /// the image exists to prevent memory corruption.
+    /// the image exists to prevent memory corruption. On success, storage
+    /// owns `p`; on error, the caller retains ownership. The screen must own
+    /// any tracked pin in `p` and in the placement it replaces.
     pub fn add_placement(
         &mut self,
         alloc: Allocator,
+        s: *mut Screen,
         image_id: u32,
         placement_id: u32,
         p: Placement,
@@ -334,6 +433,17 @@ impl ImageStorage {
         //     placement_id,
         //     p,
         // });
+
+        // Tracked pins are marked garbage when their underlying history is
+        // pruned. Kitty removes placements once they scroll out of retained
+        // history, so reclaim those placements before growing the map for a
+        // new one. If allocation below fails, the sweep is still a content
+        // mutation and must be visible to consumers.
+        // const removed_garbage = self.removeGarbagePlacements(s);
+        // errdefer if (removed_garbage) self.markMutated(io);
+        // PORT NOTE: the `errdefer` fires only on the error return below; Rust
+        // marks the mutation inline on that path.
+        let removed_garbage = self.remove_garbage_placements(s);
 
         // The important piece here is that the placement ID needs to
         // be marked internal if it is zero. This allows multiple placements
@@ -362,20 +472,103 @@ impl ImageStorage {
         };
 
         // const gop = try self.placements.getOrPut(alloc, key);
+        // if (gop.found_existing) {
+        //     gop.value_ptr.deinit(s);
+        // } else { ... placement_count overflow check ... }
         // gop.value_ptr.* = p;
+        if let Some(existing) = self.placements.get(&key) {
+            existing.deinit(s);
+        } else {
+            let img = self.images.get_mut(&image_id).unwrap();
+            // img.metadata.placement_count = std.math.add(
+            //     @TypeOf(img.metadata.placement_count),
+            //     img.metadata.placement_count,
+            //     1,
+            // ) catch {
+            //     self.placements.removeByPtr(gop.key_ptr);
+            //     return error.OutOfMemory;
+            // };
+            // PORT NOTE: the counter is a `u30` upstream; the checked add is
+            // bounded by `Metadata::PLACEMENT_COUNT_MAX` (`maxInt(u30)`). The
+            // reference removes the freshly-created gop slot on overflow; here
+            // nothing was inserted yet, so there is nothing to remove.
+            match img.metadata.placement_count.checked_add(1) {
+                Some(count) if count <= graphics_image::Metadata::PLACEMENT_COUNT_MAX => {
+                    img.metadata.placement_count = count;
+                }
+                _ => {
+                    if removed_garbage {
+                        self.mark_mutated();
+                    }
+                    return Err(OutOfMemory);
+                }
+            }
+        }
         self.placements.insert(key, p);
 
         self.mark_mutated();
         Ok(())
     }
 
-    fn clear_placements(&mut self, s: &mut Screen) {
+    /// Remove pin-backed placements whose tracked content has been pruned.
+    /// Virtual placements have no tracked screen location and are retained.
+    fn remove_garbage_placements(&mut self, s: *mut Screen) -> bool {
+        let mut removed = false;
+        // var it = self.placements.iterator();
+        // while (it.next()) |entry| { ... }
+        let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
+        for key in keys {
+            let pin = match self.placements.get(&key).unwrap().location {
+                Location::Pin(pin) => pin,
+                Location::Virtual => continue,
+            };
+            // if (!pin.garbage) continue;
+            // SAFETY(raw-page-aliasing/graphics_storage): `pin` is a tracked
+            // pin owned by the screen's pagelist; no `&mut` to the pin or its
+            // pagelist is live across this read.
+            if !unsafe { (*pin).garbage } {
+                continue;
+            }
+
+            self.placements.get(&key).unwrap().deinit(s);
+            self.remove_placement_by_key(&key);
+            removed = true;
+        }
+
+        removed
+    }
+
+    fn clear_placements(&mut self, s: *mut Screen) {
         // var it = self.placements.iterator();
         // while (it.next()) |entry| entry.value_ptr.deinit(s);
         for entry in self.placements.values() {
             entry.deinit(s);
         }
         self.placements.clear(); // clearRetainingCapacity
+    }
+
+    fn remove_placements_by_image_id(&mut self, s: *mut Screen, image_id: u32) {
+        // var it = self.placements.iterator();
+        // while (it.next()) |entry| { ... }
+        let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
+        for key in keys {
+            if key.image_id != image_id {
+                continue;
+            }
+            self.placements.get(&key).unwrap().deinit(s);
+            self.remove_placement_by_key(&key);
+        }
+    }
+
+    // fn removePlacementByPtr(self: *ImageStorage, key: *PlacementKey) void
+    // PORT NOTE: Zig removes by entry pointer during iteration; the collect-
+    // keys-first shape removes by key value (observably identical, see the
+    // hash-map PORT NOTE on the struct).
+    fn remove_placement_by_key(&mut self, key: &PlacementKey) {
+        let img = self.images.get_mut(&key.image_id).unwrap();
+        assert(img.metadata.placement_count > 0);
+        img.metadata.placement_count -= 1;
+        self.placements.remove(key);
     }
 
     /// Get an image by its ID. If the image doesn't exist, null is returned.
@@ -438,9 +631,8 @@ impl ImageStorage {
 
                         // Deinit the placement and remove it
                         let image_id = key.image_id;
-                        let entry = self.placements.get(&key).unwrap();
-                        entry.deinit(unsafe { &mut *t.screens.active });
-                        self.placements.remove(&key);
+                        self.placements.get(&key).unwrap().deinit(t.screens.active);
+                        self.remove_placement_by_key(&key);
                         if delete_images {
                             self.delete_if_unused(alloc, image_id);
                         }
@@ -478,13 +670,7 @@ impl ImageStorage {
                         Some(img) => img,
                         None => break 'delete,
                     };
-                    self.delete_by_id(
-                        alloc,
-                        unsafe { &mut *t.screens.active },
-                        img.id,
-                        placement_id,
-                        delete,
-                    );
+                    self.delete_by_id(alloc, t.screens.active, img.id, placement_id, delete);
                 }
 
                 command::Delete::IntersectCursor(delete_images) => {
@@ -568,11 +754,8 @@ impl ImageStorage {
                             None => continue,
                         };
                         if rect.top_left.x as u32 <= x && rect.bottom_right.x as u32 >= x {
-                            self.placements
-                                .get(&key)
-                                .unwrap()
-                                .deinit(unsafe { &mut *t.screens.active });
-                            self.placements.remove(&key);
+                            self.placements.get(&key).unwrap().deinit(t.screens.active);
+                            self.remove_placement_by_key(&key);
                             if delete {
                                 self.delete_if_unused(alloc, img.id);
                             }
@@ -616,11 +799,8 @@ impl ImageStorage {
                         let mut target_pin_copy = target_pin;
                         target_pin_copy.x = rect.top_left.x;
                         if target_pin_copy.is_between(rect.top_left, rect.bottom_right) {
-                            self.placements
-                                .get(&key)
-                                .unwrap()
-                                .deinit(unsafe { &mut *t.screens.active });
-                            self.placements.remove(&key);
+                            self.placements.get(&key).unwrap().deinit(t.screens.active);
+                            self.remove_placement_by_key(&key);
                             if delete {
                                 self.delete_if_unused(alloc, img.id);
                             }
@@ -641,11 +821,8 @@ impl ImageStorage {
 
                         if self.placements.get(&key).unwrap().z == z {
                             let image_id = key.image_id;
-                            self.placements
-                                .get(&key)
-                                .unwrap()
-                                .deinit(unsafe { &mut *t.screens.active });
-                            self.placements.remove(&key);
+                            self.placements.get(&key).unwrap().deinit(t.screens.active);
+                            self.remove_placement_by_key(&key);
                             if delete {
                                 self.delete_if_unused(alloc, image_id);
                             }
@@ -672,11 +849,8 @@ impl ImageStorage {
                     for key in keys {
                         if key.image_id >= first && key.image_id <= last {
                             let image_id = key.image_id;
-                            self.placements
-                                .get(&key)
-                                .unwrap()
-                                .deinit(unsafe { &mut *t.screens.active });
-                            self.placements.remove(&key);
+                            self.placements.get(&key).unwrap().deinit(t.screens.active);
+                            self.remove_placement_by_key(&key);
                             if delete {
                                 self.delete_if_unused(alloc, image_id);
                             }
@@ -698,7 +872,7 @@ impl ImageStorage {
     fn delete_by_id(
         &mut self,
         alloc: Allocator,
-        s: &mut Screen,
+        s: *mut Screen,
         image_id: u32,
         placement_id: u32,
         delete_unused: bool,
@@ -711,7 +885,7 @@ impl ImageStorage {
             for key in keys {
                 if key.image_id == image_id {
                     self.placements.get(&key).unwrap().deinit(s);
-                    self.placements.remove(&key);
+                    self.remove_placement_by_key(&key);
                 }
             }
         } else {
@@ -724,7 +898,7 @@ impl ImageStorage {
             };
             if let Some(entry) = self.placements.get(&key) {
                 entry.deinit(s);
-                self.placements.remove(&key);
+                self.remove_placement_by_key(&key);
             }
         }
 
@@ -737,22 +911,20 @@ impl ImageStorage {
 
     /// Delete an image if it is unused.
     fn delete_if_unused(&mut self, alloc: Allocator, image_id: u32) {
-        // var it = self.placements.iterator();
-        // while (it.next()) |kv| { if (kv.key_ptr.image_id == image_id) return; }
-        for kv in self.placements.keys() {
-            if kv.image_id == image_id {
-                return;
-            }
+        // const entry = self.images.getEntry(image_id) orelse return;
+        // if (entry.value_ptr.metadata.placement_count > 0) return;
+        let _ = &alloc;
+        let entry = match self.images.get(&image_id) {
+            Some(entry) => entry,
+            None => return,
+        };
+        if entry.metadata.placement_count > 0 {
+            return;
         }
 
-        // If we get here, we can delete the image.
-        // if (self.images.getEntry(image_id)) |entry| { ... }
-        let _ = &alloc;
-        if let Some(entry) = self.images.get(&image_id) {
-            self.total_bytes -= entry.data.len();
-            // entry.value_ptr.deinit(alloc); — dropping the removed Image frees data.
-            self.images.remove(&image_id);
-        }
+        self.total_bytes -= entry.data.len();
+        // entry.value_ptr.deinit(alloc); — dropping the removed Image frees data.
+        self.images.remove(&image_id);
     }
 
     /// Deletes all placements intersecting a screen point.
@@ -786,16 +958,14 @@ impl ImageStorage {
                 Some(r) => r,
                 None => continue,
             };
-            if target_pin.is_between(rect.top_left, rect.bottom_right) {
+            // if (rect.contains(target_pin)) { ... }
+            if rect.contains(target_pin) {
                 // if (filter) |f| if (!f(filter_ctx, entry.value_ptr.*)) continue;
                 if !filter(self.placements.get(&key).unwrap()) {
                     continue;
                 }
-                self.placements
-                    .get(&key)
-                    .unwrap()
-                    .deinit(unsafe { &mut *t.screens.active });
-                self.placements.remove(&key);
+                self.placements.get(&key).unwrap().deinit(t.screens.active);
+                self.remove_placement_by_key(&key);
                 if delete_unused {
                     self.delete_if_unused(alloc, img.id);
                 }
@@ -809,129 +979,85 @@ impl ImageStorage {
     ///
     /// This will evict as many images as necessary to make space for
     /// req bytes.
-    fn evict_image(&mut self, alloc: Allocator, req: usize) -> Result<bool, OutOfMemory> {
+    fn evict_image(&mut self, alloc: Allocator, s: *mut Screen, req: usize) -> bool {
+        self.evict_image_except(alloc, s, req, None)
+    }
+
+    /// Evict images while preserving `exclude_id`, used when replacing an
+    /// existing image whose old reservation has already been credited.
+    fn evict_image_except(
+        &mut self,
+        alloc: Allocator,
+        s: *mut Screen,
+        req: usize,
+        exclude_id: Option<u32>,
+    ) -> bool {
         assert(req <= self.total_limit);
         let _ = &alloc;
 
-        // Ironically we allocate to evict. We should probably redesign the
-        // data structures to avoid this but for now allocating a little
-        // bit is fine compared to the megabytes we're looking to save.
-        // const Candidate = struct { id: u32, time: std.time.Instant, used: bool };
+        // Evicting anything is a content mutation. This matters for the
+        // setLimit path in particular, which doesn't otherwise mark it.
+        //
+        // PORT NOTE: Zig `defer if (self.images.count() != images_before)
+        // self.markMutated(io);`. Rust has no `defer`, so the count is checked
+        // at BOTH exits: the `return false` inside the loop and the trailing
+        // `return true`.
+        let images_before = self.images.len();
 
-        // var candidates: std.ArrayList(Candidate) = .empty;
-        // defer candidates.deinit(alloc);
-        let mut candidates: Vec<Candidate> = Vec::with_capacity(self.images.len());
+        let mut evicted: usize = 0;
+        while evicted < req {
+            // const c = candidate: { ... };
+            let c = {
+                let mut best: Option<Candidate> = None;
+                // var it = self.images.iterator();
+                for img in self.images.values() {
+                    // if (exclude_id != null and img.id == exclude_id.?) continue;
+                    if exclude_id.is_some() && img.id == exclude_id.unwrap() {
+                        continue;
+                    }
 
-        // var it = self.images.iterator();
-        // while (it.next()) |kv| { ... }
-        for img in self.images.values() {
-            // This is a huge waste. See comment above about redesigning
-            // our data structures to avoid this. Eviction should be very
-            // rare though and we never have that many images/placements
-            // so hopefully this will last a long time.
-            let used = {
-                let mut used = false;
-                for p_kv in self.placements.keys() {
-                    if p_kv.image_id == img.id {
-                        used = true;
-                        break;
+                    let current = Candidate::init(img);
+                    if best.is_none() || current.less_than(best.unwrap()) {
+                        best = Some(current);
                     }
                 }
-                used
+                // break :candidate best orelse return false;
+                match best {
+                    Some(best) => best,
+                    None => {
+                        if self.images.len() != images_before {
+                            self.mark_mutated();
+                        }
+                        return false;
+                    }
+                }
             };
 
-            // const transient = img.usage.transient;
-            let transient = img.usage.transient;
-
-            // candidates[i] = .{ ... };
-            //
-            // PORT NOTE (oracle `a65e11cc9`): the reference swapped the
-            // `ArrayList` for a single `alloc.alloc(Candidate, count)` +
-            // indexed writes, purely to cut allocation count. rustty's `Vec`
-            // is pre-sized with `with_capacity(self.images.len())` below, which
-            // is the same one-allocation shape without an unsafe uninit slice.
-            candidates.push(Candidate {
-                id: img.id,
-                generation: img.generation,
-                // Map images into four distinct blocks:
-                // 0: transient, unused
-                // 1: not transient, unused
-                // 2: transient, used
-                // 3: not transient, used
-                block: (if transient { 0u8 } else { 1u8 }) + (if used { 2u8 } else { 0u8 }),
-            });
-        }
-
-        // Sort
-        // std.mem.sortUnstable(Candidate, candidates.items, {}, struct { fn lessThan(...) }.lessThan);
-        candidates.sort_unstable_by(|lhs, rhs| {
-            // PORT NOTE: the reference `lessThan` returns `bool`; we port it to a
-            // total `Ordering` comparator. `lessThan(lhs, rhs)` true ⇒ `Less`.
-
-            // If images mapped into different blocks, prioritize lower
-            // numbered blocks.
-            // if (lhs.block < rhs.block) return true;
-            // if (lhs.block > rhs.block) return false;
-            if lhs.block != rhs.block {
-                return lhs.block.cmp(&rhs.block);
-            }
-
-            // If images mapped to the same block, compare generations.
-            if lhs.generation == rhs.generation {
-                // If the generation is the same, use the ID to prioritize
-                // evicting "earlier" images.
-                lhs.id.cmp(&rhs.id)
-            } else {
-                // If the generation is different, prioritize evicting images
-                // from earlier generations.
-                lhs.generation.cmp(&rhs.generation)
-            }
-        });
-
-        // Evicting anything is a content mutation. This matters for the
-        // `set_limit` path in particular, which doesn't otherwise mark it.
-        //
-        // PORT NOTE: Zig `defer if (any_evicted) self.markMutated();`. Rust has
-        // no `defer`, so the flag is checked at BOTH success paths: the
-        // `return Ok(true)` inside the loop and the trailing `Ok(false)`.
-        let mut any_evicted = false;
-
-        // They're in order of best to evict.
-        let mut evicted: usize = 0;
-        for c in &candidates {
-            // Delete all the placements for this image and the image.
+            // var p_it = self.placements.iterator();
+            // while (p_it.next()) |entry| { ... }
             let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
             for key in keys {
                 if key.image_id == c.id {
-                    self.placements.remove(&key);
-                    any_evicted = true;
+                    self.placements.get(&key).unwrap().deinit(s);
+                    self.remove_placement_by_key(&key);
                 }
             }
 
-            // if (self.images.getEntry(c.id)) |entry| { ... }
-            if let Some(entry) = self.images.get(&c.id) {
-                // log.info("evicting image id={} bytes={}", .{ c.id, entry.value_ptr.data.len });
+            // const entry = self.images.getEntry(c.id).?;
+            let image_len = self.images.get(&c.id).unwrap().data.len();
+            // log.info("evicting image id={} bytes={}", .{ c.id, image_len });
 
-                evicted += entry.data.len();
-                self.total_bytes -= entry.data.len();
+            evicted += image_len;
+            self.total_bytes -= image_len;
 
-                // entry.value_ptr.deinit(alloc); — dropping the removed Image frees data.
-                self.images.remove(&c.id);
-                any_evicted = true;
-
-                if evicted > req {
-                    if any_evicted {
-                        self.mark_mutated();
-                    }
-                    return Ok(true);
-                }
-            }
+            // entry.value_ptr.deinit(alloc); — dropping the removed Image frees data.
+            self.images.remove(&c.id);
         }
 
-        if any_evicted {
+        if self.images.len() != images_before {
             self.mark_mutated();
         }
-        Ok(false)
+        true
     }
 }
 
@@ -939,30 +1065,58 @@ impl ImageStorage {
 //
 // PORT NOTE: the reference's fallible functions return `Allocator.Error!T`; in
 // Rust this is `Result<T, OutOfMemory>`. Rust's `HashMap`/`Vec` own their
-// storage and never surface OOM through these APIs, so this error is preserved
-// for signature fidelity but never produced in practice.
+// storage and never surface OOM through these APIs; the reachable producers
+// are `add_image` (eviction cannot free enough) and `add_placement` (the u30
+// placement-count overflow, `error.OutOfMemory` upstream).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutOfMemory;
 
-/// The candidate type used during eviction (`evictImage`).
+/// The candidate type used during eviction (`evictImageExcept`).
 //
 // PORT NOTE: the reference declares this as a function-local `const Candidate =
 // struct {...}`. Rust has no local-to-method struct visible across closures,
 // so it is hoisted to a private module-level struct with identical fields.
+#[derive(Clone, Copy)]
 struct Candidate {
     id: u32,
     generation: u64,
-    // Map images into four distinct blocks:
+
+    // Lower values are evicted first:
     // 0: transient, unused
     // 1: not transient, unused
     // 2: transient, used
     // 3: not transient, used
     //
-    // PORT NOTE (oracle `a65e11cc9`): the reference field is `block: u2`. Rust
-    // has no `u2`; `u8` is the narrowest carrier. The value is only ever
-    // compared, never bit-packed, so the widening is unobservable — and the
-    // construction below can only produce 0..=3.
-    block: u8,
+    // PORT NOTE: the reference field is `priority: u2`. Rust has no `u2`; `u8`
+    // is the narrowest carrier. The value is only ever compared, never
+    // bit-packed, so the widening is unobservable — and `init` can only
+    // produce 0..=3.
+    priority: u8,
+}
+
+impl Candidate {
+    fn init(img: &Image) -> Candidate {
+        Candidate {
+            id: img.id,
+            generation: img.generation,
+            priority: (if img.metadata.transient { 0u8 } else { 1u8 })
+                + (if img.metadata.placement_count > 0 {
+                    2u8
+                } else {
+                    0u8
+                }),
+        }
+    }
+
+    fn less_than(self, rhs: Candidate) -> bool {
+        if self.priority != rhs.priority {
+            return self.priority < rhs.priority;
+        }
+        if self.generation != rhs.generation {
+            return self.generation < rhs.generation;
+        }
+        self.id < rhs.id
+    }
 }
 
 /// Every placement is uniquely identified by the image ID and the
@@ -1050,13 +1204,44 @@ impl Placement {
         }
     }
 
-    pub fn deinit(&self, s: &mut Screen) {
+    pub fn deinit(&self, s: *mut Screen) {
         match self.location {
             // .pin => |p| s.pages.untrackPin(p),
-            Location::Pin(p) => s.pages.untrack_pin(p),
+            // SAFETY(raw-page-aliasing/graphics_storage): `s` is the screen
+            // owning this placement's tracked pin (the caller's contract, per
+            // the `s: *mut Screen` PORT NOTE on `ImageStorage`); the `&mut`
+            // projection of its `pages` field is scoped to this one call and
+            // never overlaps a live borrow of `kitty_images`.
+            Location::Pin(p) => unsafe { (*s).pages.untrack_pin(p) },
             // .virtual => {},
             Location::Virtual => {}
         }
+    }
+
+    /// Multiply two protocol-controlled values without allowing them to
+    /// wrap. Placement geometry is exposed as u32, so values larger than
+    /// that are represented by the largest possible value.
+    // fn saturatingMul(lhs: u32, rhs: u32) u32 {
+    //     return std.math.mul(u32, lhs, rhs) catch std.math.maxInt(u32);
+    // }
+    fn saturating_mul(lhs: u32, rhs: u32) -> u32 {
+        lhs.saturating_mul(rhs)
+    }
+
+    /// Scale a dimension by an aspect ratio and round to the nearest
+    /// integer. The u64 intermediate can hold the product of two u32s as
+    /// well as the rounding adjustment.
+    fn scale_dimension(value: u32, numerator: u32, denominator: u32) -> u32 {
+        if denominator == 0 {
+            return 0;
+        }
+
+        // const rounded = (@as(u64, value) * @as(u64, numerator) +
+        //     @as(u64, denominator) / 2) / @as(u64, denominator);
+        let rounded =
+            (value as u64 * numerator as u64 + denominator as u64 / 2) / denominator as u64;
+        // return std.math.cast(u32, rounded) orelse std.math.maxInt(u32);
+        u32::try_from(rounded).unwrap_or(u32::MAX)
     }
 
     /// Returns the size of this placement's image in pixels,
@@ -1090,15 +1275,12 @@ impl Placement {
         let cell_width: u32 = t.width_px / t.cols as u32;
         let cell_height: u32 = t.height_px / t.rows as u32;
 
-        let width_f64: f64 = width as f64;
-        let height_f64: f64 = height as f64;
-
         // If we have a specified cols AND rows then we calculate
         // the width and height from them directly, we don't need
         // to adjust for aspect ratio.
         if self.columns > 0 && self.rows > 0 {
-            let calc_width = cell_width * self.columns;
-            let calc_height = cell_height * self.rows;
+            let calc_width = Self::saturating_mul(cell_width, self.columns);
+            let calc_height = Self::saturating_mul(cell_height, self.rows);
 
             return PixelSize {
                 width: calc_width,
@@ -1112,9 +1294,8 @@ impl Placement {
         // If only the columns were specified, we determine
         // the height of the image based on the aspect ratio.
         if self.columns > 0 {
-            let aspect = height_f64 / width_f64;
-            let calc_width: u32 = cell_width * self.columns;
-            let calc_height: u32 = ((calc_width as f64) * aspect).round() as u32;
+            let calc_width = Self::saturating_mul(cell_width, self.columns);
+            let calc_height = Self::scale_dimension(calc_width, height, width);
 
             return PixelSize {
                 width: calc_width,
@@ -1125,9 +1306,8 @@ impl Placement {
         // Otherwise, only the rows were specified, so we
         // determine the width based on the aspect ratio.
         {
-            let aspect = width_f64 / height_f64;
-            let calc_height: u32 = cell_height * self.rows;
-            let calc_width: u32 = ((calc_height as f64) * aspect).round() as u32;
+            let calc_height = Self::saturating_mul(cell_height, self.rows);
+            let calc_width = Self::scale_dimension(calc_height, width, height);
 
             PixelSize {
                 width: calc_width,
@@ -1148,14 +1328,21 @@ impl Placement {
 
         // Otherwise we calculate the pixel size, divide by
         // cell size, and round up to the nearest integer.
+        // PORT NOTE (R7): the numerators are `+|` upstream (`e5840bb9b` — the
+        // offsets are protocol-controlled and MAY saturate by design; the
+        // untrusted-dimensions test drives them at `maxInt(u32)`), so this is
+        // `saturating_add` without a no-overflow debug_assert.
         let calc_size = self.pixel_size(image, t);
         GridSize {
-            // std.math.divCeil(u32, calc_size.width + self.x_offset, t.width_px / t.cols) catch 0,
-            cols: div_ceil_u32(calc_size.width + self.x_offset, t.width_px / t.cols as u32)
-                .unwrap_or(0),
-            // std.math.divCeil(u32, calc_size.height + self.y_offset, t.height_px / t.rows) catch 0,
+            // std.math.divCeil(u32, calc_size.width +| self.x_offset, t.width_px / t.cols) catch 0,
+            cols: div_ceil_u32(
+                calc_size.width.saturating_add(self.x_offset),
+                t.width_px / t.cols as u32,
+            )
+            .unwrap_or(0),
+            // std.math.divCeil(u32, calc_size.height +| self.y_offset, t.height_px / t.rows) catch 0,
             rows: div_ceil_u32(
-                calc_size.height + self.y_offset,
+                calc_size.height.saturating_add(self.y_offset),
                 t.height_px / t.rows as u32,
             )
             .unwrap_or(0),
@@ -1165,31 +1352,49 @@ impl Placement {
     }
 
     /// Returns a selection of the entire rectangle this placement
-    /// occupies within the screen. This can return null if the placement
-    /// doesn't have an associated rect (i.e. a virtual placement).
+    /// occupies within the screen. This can return null for a virtual
+    /// placement or when unavailable pixel geometry makes it empty.
     pub fn rect(&self, image: &Image, t: &Terminal) -> Option<Rect> {
         let grid_size = self.grid_size(image, t);
         let pin = match self.location {
             Location::Pin(p) => p,
             Location::Virtual => return None,
         };
+        // if (pin.garbage) return null;
+        // SAFETY(raw-page-aliasing/graphics_storage): `pin` is a tracked pin
+        // owned by the screen's pagelist; only shared reads are performed and
+        // no `&mut` to the pin is live across them.
+        let pin_ref: &PageList::Pin = unsafe { &*pin };
+        if pin_ref.garbage {
+            return None;
+        }
+
+        // A zero pixel-sized placement can produce a zero grid size when
+        // pixel geometry is unavailable. It occupies no rectangle.
+        if grid_size.cols == 0 || grid_size.rows == 0 {
+            return None;
+        }
 
         // var br = switch (pin.downOverflow(grid_size.rows - 1)) {
         //     .offset => |v| v,
         //     .overflow => |v| v.end,
         // };
-        let pin_ref: &PageList::Pin = unsafe { &*pin };
         let mut br = match pin_ref.down_overflow((grid_size.rows - 1) as usize) {
             PageList::pin::PinOverflow::Offset(v) => v,
             PageList::pin::PinOverflow::Overflow { end, .. } => end,
         };
-        br.x = core::cmp::min(
+        // br.x = @intCast(@min(
+        //     @as(u32, pin.x) +| (grid_size.cols - 1),
+        //     @as(u32, t.cols) - 1,
+        // ));
+        br.x = size::CellCountInt::try_from(core::cmp::min(
             // We need to sub one here because the x value is
             // one width already. So if the image is width "1"
             // then we add zero to X because X itself is width 1.
-            pin_ref.x + (grid_size.cols - 1) as size::CellCountInt,
-            t.cols - 1,
-        );
+            (pin_ref.x as u32).saturating_add(grid_size.cols - 1),
+            t.cols as u32 - 1,
+        ))
+        .unwrap();
 
         Some(Rect {
             top_left: *pin_ref,
@@ -1234,6 +1439,7 @@ fn div_ceil_u32(numerator: u32, denominator: u32) -> Option<u32> {
 )]
 mod tests {
     use super::*;
+    use crate::kitty::graphics_image::{Data, Metadata};
     use crate::terminal::Terminal;
 
     // PORT NOTE: the tests construct `terminal.Terminal.init(alloc, .{ .cols, .rows })`
@@ -1282,6 +1488,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 width: 50,
@@ -1292,6 +1499,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 width: 25,
@@ -1302,6 +1510,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             0,
             Placement::with_location(Location::Pin(
@@ -1311,6 +1520,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             0,
             Placement::with_location(Location::Pin(
@@ -1344,7 +1554,7 @@ mod tests {
             })
             .is_some());
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -1358,6 +1568,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 ..Image::default()
@@ -1366,6 +1577,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 ..Image::default()
@@ -1374,6 +1586,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 3,
                 ..Image::default()
@@ -1382,6 +1595,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -1391,6 +1605,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             2,
             1,
             Placement::with_location(Location::Pin(
@@ -1409,7 +1624,7 @@ mod tests {
             unsafe { &(*t.screens.active).pages }.count_tracked_pins()
         );
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -1424,6 +1639,7 @@ mod tests {
         s.total_limit = 5000;
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 ..Image::default()
@@ -1432,6 +1648,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 ..Image::default()
@@ -1440,6 +1657,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 3,
                 ..Image::default()
@@ -1448,6 +1666,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -1457,6 +1676,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             2,
             1,
             Placement::with_location(Location::Pin(
@@ -1476,7 +1696,7 @@ mod tests {
             unsafe { &(*t.screens.active).pages }.count_tracked_pins()
         );
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -1490,6 +1710,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 ..Image::default()
@@ -1498,6 +1719,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 ..Image::default()
@@ -1506,6 +1728,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 3,
                 ..Image::default()
@@ -1514,6 +1737,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -1523,6 +1747,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             2,
             1,
             Placement::with_location(Location::Pin(
@@ -1541,7 +1766,7 @@ mod tests {
             unsafe { &(*t.screens.active).pages }.count_tracked_pins()
         );
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -1555,6 +1780,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 ..Image::default()
@@ -1563,6 +1789,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 ..Image::default()
@@ -1571,6 +1798,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 3,
                 ..Image::default()
@@ -1579,6 +1807,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -1588,6 +1817,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             2,
             1,
             Placement::with_location(Location::Pin(
@@ -1614,7 +1844,7 @@ mod tests {
             unsafe { &(*t.screens.active).pages }.count_tracked_pins()
         );
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -1628,6 +1858,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 ..Image::default()
@@ -1636,6 +1867,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 ..Image::default()
@@ -1644,6 +1876,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 3,
                 ..Image::default()
@@ -1652,6 +1885,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -1661,6 +1895,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             2,
             1,
             Placement::with_location(Location::Pin(
@@ -1687,7 +1922,7 @@ mod tests {
             unsafe { &(*t.screens.active).pages }.count_tracked_pins()
         );
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -1701,6 +1936,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 ..Image::default()
@@ -1709,6 +1945,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 ..Image::default()
@@ -1717,6 +1954,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 3,
                 ..Image::default()
@@ -1725,6 +1963,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -1734,6 +1973,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             2,
             Placement::with_location(Location::Pin(
@@ -1743,6 +1983,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             2,
             1,
             Placement::with_location(Location::Pin(
@@ -1769,7 +2010,7 @@ mod tests {
             unsafe { &(*t.screens.active).pages }.count_tracked_pins()
         );
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -1785,6 +2026,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 width: 50,
@@ -1795,6 +2037,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 width: 25,
@@ -1805,6 +2048,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -1814,6 +2058,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             2,
             Placement::with_location(Location::Pin(
@@ -1846,7 +2091,7 @@ mod tests {
             })
             .is_some());
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -1862,6 +2107,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 width: 50,
@@ -1872,6 +2118,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 width: 25,
@@ -1882,6 +2129,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -1891,6 +2139,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             2,
             Placement::with_location(Location::Pin(
@@ -1923,7 +2172,7 @@ mod tests {
             })
             .is_some());
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -1939,6 +2188,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 width: 50,
@@ -1949,6 +2199,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 width: 25,
@@ -1959,6 +2210,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -1968,6 +2220,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             2,
             Placement::with_location(Location::Pin(
@@ -1988,7 +2241,7 @@ mod tests {
             unsafe { &(*t.screens.active).pages }.count_tracked_pins()
         );
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -2004,6 +2257,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 width: 50,
@@ -2014,6 +2268,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 width: 25,
@@ -2024,6 +2279,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -2033,6 +2289,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             2,
             Placement::with_location(Location::Pin(
@@ -2070,7 +2327,7 @@ mod tests {
             })
             .is_some());
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -2085,6 +2342,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 width: 1,
@@ -2095,6 +2353,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -2104,6 +2363,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             2,
             Placement::with_location(Location::Pin(
@@ -2113,6 +2373,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             3,
             Placement::with_location(Location::Pin(
@@ -2154,7 +2415,7 @@ mod tests {
             })
             .is_some());
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -2170,6 +2431,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 width: 50,
@@ -2180,6 +2442,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 width: 25,
@@ -2190,6 +2453,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -2199,6 +2463,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             2,
             Placement::with_location(Location::Pin(
@@ -2236,7 +2501,7 @@ mod tests {
             })
             .is_some());
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -2251,6 +2516,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 width: 1,
@@ -2261,6 +2527,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -2270,6 +2537,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             2,
             Placement::with_location(Location::Pin(
@@ -2279,6 +2547,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             3,
             Placement::with_location(Location::Pin(
@@ -2320,7 +2589,7 @@ mod tests {
             })
             .is_some());
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -2334,6 +2603,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 ..Image::default()
@@ -2342,6 +2612,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 ..Image::default()
@@ -2350,6 +2621,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 3,
                 ..Image::default()
@@ -2358,6 +2630,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -2367,6 +2640,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             2,
             1,
             Placement::with_location(Location::Pin(
@@ -2395,7 +2669,7 @@ mod tests {
             unsafe { &(*t.screens.active).pages }.count_tracked_pins()
         );
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -2409,6 +2683,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 ..Image::default()
@@ -2417,6 +2692,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 ..Image::default()
@@ -2425,6 +2701,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 3,
                 ..Image::default()
@@ -2433,6 +2710,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -2442,6 +2720,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             2,
             1,
             Placement::with_location(Location::Pin(
@@ -2470,7 +2749,7 @@ mod tests {
             unsafe { &(*t.screens.active).pages }.count_tracked_pins()
         );
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -2484,6 +2763,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 ..Image::default()
@@ -2492,6 +2772,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 ..Image::default()
@@ -2500,6 +2781,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 3,
                 ..Image::default()
@@ -2508,6 +2790,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -2517,6 +2800,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             2,
             1,
             Placement::with_location(Location::Pin(
@@ -2526,6 +2810,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             3,
             1,
             Placement::with_location(Location::Pin(
@@ -2574,7 +2859,7 @@ mod tests {
             unsafe { &(*t.screens.active).pages }.count_tracked_pins()
         );
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -2588,6 +2873,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 ..Image::default()
@@ -2596,6 +2882,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 ..Image::default()
@@ -2604,6 +2891,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 3,
                 ..Image::default()
@@ -2612,6 +2900,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             1,
             1,
             Placement::with_location(Location::Pin(
@@ -2621,6 +2910,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             2,
             1,
             Placement::with_location(Location::Pin(
@@ -2630,6 +2920,7 @@ mod tests {
         .unwrap();
         s.add_placement(
             alloc,
+            t.screens.active,
             3,
             1,
             Placement::with_location(Location::Pin(
@@ -2678,7 +2969,7 @@ mod tests {
             unsafe { &(*t.screens.active).pages }.count_tracked_pins()
         );
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -2755,6 +3046,7 @@ mod tests {
 
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 width: 1,
@@ -2772,6 +3064,7 @@ mod tests {
         // A second image gets a strictly greater stamp.
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 width: 1,
@@ -2789,6 +3082,7 @@ mod tests {
         // detectable by renderers.
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 width: 1,
@@ -2804,7 +3098,7 @@ mod tests {
         // Image 2 kept its stamp.
         assert_eq!(gen2, s.image_by_id(2).unwrap().generation);
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -2817,6 +3111,7 @@ mod tests {
         let mut s: ImageStorage = ImageStorage::default();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 ..Image::default()
@@ -2826,8 +3121,14 @@ mod tests {
         let gen_add = s.generation;
 
         let pin = track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap();
-        s.add_placement(alloc, 1, 1, Placement::with_location(Location::Pin(pin)))
-            .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Pin(pin)),
+        )
+        .unwrap();
         let gen_place = s.generation;
         assert!(gen_place > gen_add);
 
@@ -2839,7 +3140,7 @@ mod tests {
         s.delete(alloc, &mut t, command::Delete::All(true));
         assert!(s.generation > gen_place);
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -2853,11 +3154,12 @@ mod tests {
 
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 width: 1,
                 height: 1,
-                data: b"1234".to_vec(),
+                data: Data::Complete(b"1234".to_vec()),
                 ..Image::default()
             },
         )
@@ -2866,8 +3168,7 @@ mod tests {
 
         // Lowering the limit evicts the image and must mark a mutation.
         s.dirty = false;
-        s.set_limit(alloc, unsafe { &mut *t.screens.active }, 1)
-            .unwrap();
+        s.set_limit(alloc, t.screens.active, 1);
         assert!(s.dirty);
         assert!(s.generation > gen_add);
         assert_eq!(0usize, s.images.len());
@@ -2875,12 +3176,11 @@ mod tests {
 
         // Disabling (limit=0) resets the storage and must mark a mutation.
         s.dirty = false;
-        s.set_limit(alloc, unsafe { &mut *t.screens.active }, 0)
-            .unwrap();
+        s.set_limit(alloc, t.screens.active, 0);
         assert!(s.dirty);
         assert!(s.generation > gen_evict);
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -2896,6 +3196,7 @@ mod tests {
         // regardless of insertion order or clock resolution.
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 number: 7,
@@ -2905,6 +3206,7 @@ mod tests {
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
                 number: 7,
@@ -2917,6 +3219,7 @@ mod tests {
         // Retransmit the first: it becomes the newest.
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 number: 7,
@@ -2926,7 +3229,7 @@ mod tests {
         .unwrap();
         assert_eq!(1u32, s.image_by_number(7).unwrap().id);
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -2956,6 +3259,7 @@ mod tests {
         // Same for a delete that matches nothing.
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
                 ..Image::default()
@@ -2963,8 +3267,14 @@ mod tests {
         )
         .unwrap();
         let pin = track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap();
-        s.add_placement(alloc, 1, 1, Placement::with_location(Location::Pin(pin)))
-            .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Pin(pin)),
+        )
+        .unwrap();
         let gen = s.generation;
         s.dirty = false;
         s.delete(
@@ -2992,13 +3302,14 @@ mod tests {
         assert!(s.dirty);
         assert!(s.generation > gen);
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
-    // test "storage: evict unused transient image"  (oracle a65e11cc9)
+    // test "storage: evicts images in priority order"
+    // (supersedes a65e11cc9's "storage: evict unused transient image")
     #[test]
-    fn storage_evict_unused_transient_image() {
+    fn storage_evicts_images_in_priority_order() {
         let alloc = allocator_api2::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
 
@@ -3009,49 +3320,67 @@ mod tests {
 
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 1,
-                data: vec![b'*'; 64],
-                usage: command::Usage { transient: false },
+                data: Data::Complete(vec![b'*'; 64]),
+                metadata: Metadata {
+                    transient: false,
+                    ..Metadata::default()
+                },
                 ..Image::default()
             },
         )
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 2,
-                data: vec![b'*'; 64],
-                usage: command::Usage { transient: true },
+                data: Data::Complete(vec![b'*'; 64]),
+                metadata: Metadata {
+                    transient: true,
+                    ..Metadata::default()
+                },
                 ..Image::default()
             },
         )
         .unwrap();
         s.add_image(
             alloc,
+            t.screens.active,
             Image {
                 id: 3,
-                data: vec![b'*'; 64],
-                usage: command::Usage { transient: true },
+                data: Data::Complete(vec![b'*'; 64]),
+                metadata: Metadata {
+                    transient: true,
+                    ..Metadata::default()
+                },
                 ..Image::default()
             },
         )
         .unwrap();
         let pin = track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap();
-        s.add_placement(alloc, 2, 1, Placement::with_location(Location::Pin(pin)))
-            .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            2,
+            1,
+            Placement::with_location(Location::Pin(pin)),
+        )
+        .unwrap();
 
         let gen = s.generation;
-        let result = s.evict_image(alloc, 32).unwrap();
+        let result = s.evict_image(alloc, t.screens.active, 96);
         assert!(s.dirty);
         assert!(s.generation > gen);
         assert!(result);
-        assert_eq!(2, s.images.len());
-        assert!(s.images.contains_key(&1));
+        assert_eq!(1, s.images.len());
+        assert!(!s.images.contains_key(&1));
         assert!(s.images.contains_key(&2));
         assert!(!s.images.contains_key(&3));
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 
@@ -3090,10 +3419,14 @@ mod tests {
         for (id, transient) in [(1u32, false), (2, true), (3, false), (4, true)] {
             s.add_image(
                 alloc,
+                t.screens.active,
                 Image {
                     id,
-                    data: vec![b'*'; 64],
-                    usage: command::Usage { transient },
+                    data: Data::Complete(vec![b'*'; 64]),
+                    metadata: Metadata {
+                        transient,
+                        ..Metadata::default()
+                    },
                     ..Image::default()
                 },
             )
@@ -3102,15 +3435,21 @@ mod tests {
         // Only 1 and 2 are "used" (have a placement).
         for (i, id) in [1u32, 2].iter().enumerate() {
             let pin = track_pin(&mut t, point::Coordinate { x: 1, y: i as u32 }).unwrap();
-            s.add_placement(alloc, *id, 1, Placement::with_location(Location::Pin(pin)))
-                .unwrap();
+            s.add_placement(
+                alloc,
+                t.screens.active,
+                *id,
+                1,
+                Placement::with_location(Location::Pin(pin)),
+            )
+            .unwrap();
         }
 
         // Evict one image at a time and record which one went.
         let mut order: Vec<u32> = Vec::new();
         for _ in 0..4 {
             let before: std::collections::BTreeSet<u32> = s.images.keys().copied().collect();
-            assert!(s.evict_image(alloc, 1).unwrap());
+            assert!(s.evict_image(alloc, t.screens.active, 1));
             let after: std::collections::BTreeSet<u32> = s.images.keys().copied().collect();
             let gone: Vec<u32> = before.difference(&after).copied().collect();
             assert_eq!(
@@ -3128,7 +3467,880 @@ mod tests {
              transient+used, not-transient+used"
         );
 
-        s.deinit(alloc, unsafe { &mut *t.screens.active });
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: replacing placement releases tracked pin"
+    #[test]
+    fn storage_replacing_placement_releases_tracked_pin() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+
+        let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap(),
+            )),
+        )
+        .unwrap();
+        assert_eq!(
+            tracked + 1,
+            unsafe { &(*t.screens.active).pages }.count_tracked_pins()
+        );
+
+        let replacement_pin = track_pin(&mut t, point::Coordinate { x: 2, y: 2 }).unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Pin(replacement_pin)),
+        )
+        .unwrap();
+        assert_eq!(1usize, s.placements.len());
+        assert_eq!(
+            tracked + 1,
+            unsafe { &(*t.screens.active).pages }.count_tracked_pins()
+        );
+        // try testing.expectEqual(replacement_pin, s.placements.get(...).?.location.pin);
+        match s
+            .placements
+            .get(&PlacementKey {
+                image_id: 1,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id: 1,
+                },
+            })
+            .unwrap()
+            .location
+        {
+            Location::Pin(p) => assert_eq!(replacement_pin, p),
+            Location::Virtual => panic!("expected pin location"),
+        }
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: adding placement reclaims garbage placements"
+    #[test]
+    fn storage_adding_placement_reclaims_garbage_placements() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+
+        let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
+        let old_pin = track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            0,
+            Placement::with_location(Location::Pin(old_pin)),
+        )
+        .unwrap();
+        // old_pin.garbage = true;
+        // SAFETY: `old_pin` is a live tracked pin owned by the pagelist.
+        unsafe { (*old_pin).garbage = true };
+
+        let new_pin = track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            0,
+            Placement::with_location(Location::Pin(new_pin)),
+        )
+        .unwrap();
+
+        assert_eq!(1usize, s.placements.len());
+        assert_eq!(
+            tracked + 1,
+            unsafe { &(*t.screens.active).pages }.count_tracked_pins()
+        );
+        match s
+            .placements
+            .get(&PlacementKey {
+                image_id: 1,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::Internal,
+                    id: 1,
+                },
+            })
+            .unwrap()
+            .location
+        {
+            Location::Pin(p) => assert_eq!(new_pin, p),
+            Location::Virtual => panic!("expected pin location"),
+        }
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: placement count limit permits replacement"
+    #[test]
+    fn storage_placement_count_limit_permits_replacement() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Virtual),
+        )
+        .unwrap();
+
+        // const img = s.images.getPtr(1).?;
+        // img.metadata.placement_count = std.math.maxInt(@TypeOf(img.metadata.placement_count));
+        let img = s.images.get_mut(&1).unwrap();
+        img.metadata.placement_count = Metadata::PLACEMENT_COUNT_MAX;
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Virtual),
+        )
+        .unwrap();
+        assert_eq!(
+            Err(OutOfMemory),
+            s.add_placement(
+                alloc,
+                t.screens.active,
+                1,
+                2,
+                Placement::with_location(Location::Virtual),
+            )
+        );
+        assert_eq!(1usize, s.placements.len());
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: delete intersecting cursor checks interior row column"
+    #[test]
+    fn storage_delete_intersecting_cursor_checks_interior_row_column() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(100, 100)).unwrap();
+        t.width_px = 100;
+        t.height_px = 100;
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                width: 10,
+                height: 10,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap(),
+            )),
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            2,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 20, y: 0 }).unwrap(),
+            )),
+        )
+        .unwrap();
+
+        // This is inside the right placement and on an interior row shared by
+        // both placements, but it is outside the left placement's columns.
+        unsafe { (*t.screens.active).cursor_absolute(21, 5) };
+        s.delete(alloc, &mut t, command::Delete::IntersectCursor(false));
+
+        assert_eq!(1usize, s.placements.len());
+        assert!(s
+            .placements
+            .get(&PlacementKey {
+                image_id: 1,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id: 1
+                },
+            })
+            .is_some());
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: delete intersecting cell checks interior row column"
+    #[test]
+    fn storage_delete_intersecting_cell_checks_interior_row_column() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(100, 100)).unwrap();
+        t.width_px = 100;
+        t.height_px = 100;
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                width: 10,
+                height: 10,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap(),
+            )),
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            2,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 20, y: 0 }).unwrap(),
+            )),
+        )
+        .unwrap();
+
+        // Protocol coordinates are one-based, so this targets grid cell (21, 5).
+        s.delete(
+            alloc,
+            &mut t,
+            command::Delete::IntersectCell {
+                delete: false,
+                x: 22,
+                y: 6,
+            },
+        );
+
+        assert_eq!(1usize, s.placements.len());
+        assert!(s
+            .placements
+            .get(&PlacementKey {
+                image_id: 1,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id: 1
+                },
+            })
+            .is_some());
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: placement geometry handles untrusted dimensions"
+    #[test]
+    fn storage_placement_geometry_handles_untrusted_dimensions() {
+        let alloc = allocator_api2::alloc::Global;
+        let max = u32::MAX;
+
+        let mut t = Terminal::init(alloc, opts(2, 2)).unwrap();
+        t.width_px = max;
+        t.height_px = max;
+
+        // Test helper: the reference passes the image as an anonymous literal
+        // `.{ .width = 1, .height = 1 }`.
+        let image_1x1 = Image {
+            width: 1,
+            height: 1,
+            ..Image::default()
+        };
+
+        // Cell dimensions multiplied by protocol-controlled row and column
+        // counts saturate instead of panicking or wrapping.
+        {
+            let placement: Placement = Placement {
+                columns: 3,
+                rows: 3,
+                ..Placement::with_location(Location::Virtual)
+            };
+            let actual = placement.pixel_size(&image_1x1, &t);
+            assert_eq!(max, actual.width);
+            assert_eq!(max, actual.height);
+        }
+
+        // Aspect-ratio scaling also saturates when the derived dimension does
+        // not fit in the public u32 geometry type.
+        {
+            let placement: Placement = Placement {
+                columns: 3,
+                source_height: max,
+                ..Placement::with_location(Location::Virtual)
+            };
+            let actual = placement.pixel_size(&image_1x1, &t);
+            assert_eq!(max, actual.width);
+            assert_eq!(max, actual.height);
+        }
+        {
+            let placement: Placement = Placement {
+                rows: 3,
+                source_width: max,
+                ..Placement::with_location(Location::Virtual)
+            };
+            let actual = placement.pixel_size(&image_1x1, &t);
+            assert_eq!(max, actual.width);
+            assert_eq!(max, actual.height);
+        }
+
+        // Pixel offsets are protocol-controlled too. Include them without
+        // allowing the grid-size numerator to wrap.
+        t.width_px = 2;
+        t.height_px = 2;
+        {
+            let placement: Placement = Placement {
+                x_offset: max,
+                y_offset: max,
+                ..Placement::with_location(Location::Virtual)
+            };
+            let actual = placement.grid_size(&image_1x1, &t);
+            assert_eq!(max, actual.cols);
+            assert_eq!(max, actual.rows);
+        }
+
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap();
+        // defer t.screens.active.pages.untrackPin(pin); — explicit below.
+
+        // Explicit maximum dimensions must clamp the rectangle to the terminal
+        // without overflowing its horizontal extent.
+        {
+            let placement: Placement = Placement {
+                columns: max,
+                rows: 1,
+                ..Placement::with_location(Location::Pin(pin))
+            };
+            let rect = placement.rect(&image_1x1, &t).unwrap();
+            assert_eq!(1 as size::CellCountInt, rect.bottom_right.x);
+        }
+
+        // A garbage pin represents content that has been pruned from retained
+        // history. Its fallback location must not make the placement visible.
+        // SAFETY: `pin` is a live tracked pin owned by the pagelist.
+        unsafe { (*pin).garbage = true };
+        {
+            let placement: Placement = Placement {
+                columns: 1,
+                rows: 1,
+                ..Placement::with_location(Location::Pin(pin))
+            };
+            assert!(placement.rect(&image_1x1, &t).is_none());
+        }
+        unsafe { (*pin).garbage = false };
+
+        // Terminals can temporarily have no pixel geometry. A placement whose
+        // computed grid is empty has no rectangle, so rect must not subtract one
+        // from a zero row count.
+        t.width_px = 0;
+        t.height_px = 0;
+        {
+            let placement: Placement = Placement {
+                columns: 1,
+                ..Placement::with_location(Location::Pin(pin))
+            };
+            let actual = placement.grid_size(&image_1x1, &t);
+            assert_eq!(0u32, actual.cols);
+            assert_eq!(0u32, actual.rows);
+            assert!(placement.rect(&image_1x1, &t).is_none());
+        }
+
+        // (deferred) t.screens.active.pages.untrackPin(pin);
+        unsafe { (*t.screens.active).pages.untrack_pin(pin) };
+        t.deinit(alloc);
+    }
+
+    // test "storage: eviction releases placement pins"
+    #[test]
+    fn storage_eviction_releases_placement_pins() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage {
+            total_limit: 128,
+            ..ImageStorage::default()
+        };
+
+        let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                data: Data::Complete(vec![b'*'; 64]),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap(),
+            )),
+        )
+        .unwrap();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 2,
+                data: Data::Complete(vec![b'*'; 64]),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            2,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap(),
+            )),
+        )
+        .unwrap();
+        assert_eq!(
+            tracked + 2,
+            unsafe { &(*t.screens.active).pages }.count_tracked_pins()
+        );
+
+        // Adding a third image evicts the oldest equally-ranked image and its
+        // placement. The newer image's placement and tracked pin remain intact.
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 3,
+                data: Data::Complete(vec![b'*'; 64]),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        assert!(!s.images.contains_key(&1));
+        assert!(s.images.contains_key(&2));
+        assert!(s.images.contains_key(&3));
+        assert_eq!(1usize, s.placements.len());
+        assert!(s.placements.contains_key(&PlacementKey {
+            image_id: 2,
+            placement_id: PlacementId {
+                tag: PlacementIdTag::External,
+                id: 1
+            },
+        }));
+        assert_eq!(
+            tracked + 1,
+            unsafe { &(*t.screens.active).pages }.count_tracked_pins()
+        );
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: pending image completes once and preserves age"
+    #[test]
+    fn storage_pending_image_completes_once_and_preserves_age() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage {
+            total_limit: 16,
+            ..ImageStorage::default()
+        };
+
+        let pending = s
+            .add_pending_image(
+                alloc,
+                t.screens.active,
+                Image {
+                    id: 1,
+                    number: 7,
+                    width: 2,
+                    height: 2,
+                    format: command::Format::Rgba,
+                    data: Data::Pending(16),
+                    ..Image::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(16usize, s.total_bytes);
+        assert_eq!(1u32, s.image_by_number(7).unwrap().id);
+        assert!(s.image_by_id(1).unwrap().data.is_pending());
+
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap(),
+            )),
+        )
+        .unwrap();
+        assert_eq!(1usize, s.placements.len());
+
+        // const wrong = try alloc.dupe(u8, "short");
+        // const wrong_completed = pending.complete(&s, io, wrong);
+        // try testing.expect(!wrong_completed);
+        // defer alloc.free(wrong); — the Vec drops inside `complete` on false.
+        let wrong = b"short".to_vec();
+        let wrong_completed = pending.complete(&mut s, wrong);
+        assert!(!wrong_completed);
+
+        let storage_generation = s.generation;
+        s.dirty = false;
+        let pixels = vec![b'*'; 16];
+        assert!(pending.complete(&mut s, pixels.clone()));
+        assert!(s.dirty);
+        assert!(s.generation > storage_generation);
+        assert_eq!(pending.generation, s.image_by_id(1).unwrap().generation);
+        assert_eq!(16usize, s.total_bytes);
+        // try testing.expectEqualSlices(u8, pixels, s.imageById(1).?.data.bytes().?);
+        let stored = s.image_by_id(1).unwrap();
+        assert_eq!(pixels.as_slice(), stored.data.bytes().unwrap());
+
+        let duplicate = vec![b'!'; 16];
+        let duplicate_completed = pending.complete(&mut s, duplicate);
+        assert!(!duplicate_completed);
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: stale pending completion loses to delete replacement and eviction"
+    #[test]
+    fn storage_stale_pending_completion_loses_to_delete_replacement_and_eviction() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage {
+            total_limit: 8,
+            ..ImageStorage::default()
+        };
+
+        let deleted = s
+            .add_pending_image(
+                alloc,
+                t.screens.active,
+                Image {
+                    id: 1,
+                    data: Data::Pending(4),
+                    ..Image::default()
+                },
+            )
+            .unwrap();
+        s.delete(
+            alloc,
+            &mut t,
+            command::Delete::Id {
+                delete: true,
+                image_id: 1,
+                placement_id: 0,
+            },
+        );
+        let deleted_data = b"gone".to_vec();
+        let deleted_completed = deleted.complete(&mut s, deleted_data);
+        assert!(!deleted_completed);
+
+        let replaced = s
+            .add_pending_image(
+                alloc,
+                t.screens.active,
+                Image {
+                    id: 2,
+                    data: Data::Pending(4),
+                    ..Image::default()
+                },
+            )
+            .unwrap();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 2,
+                data: Data::Complete(b"live".to_vec()),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        let replaced_data = b"late".to_vec();
+        let replaced_completed = replaced.complete(&mut s, replaced_data);
+        assert!(!replaced_completed);
+        // try testing.expectEqualStrings("live", s.imageById(2).?.data.bytes().?);
+        let live = s.image_by_id(2).unwrap();
+        assert_eq!(b"live".as_slice(), live.data.bytes().unwrap());
+
+        let evicted = s
+            .add_pending_image(
+                alloc,
+                t.screens.active,
+                Image {
+                    id: 3,
+                    data: Data::Pending(4),
+                    ..Image::default()
+                },
+            )
+            .unwrap();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 4,
+                data: Data::Complete(b"12345678".to_vec()),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        assert!(s.image_by_id(3).is_none());
+        let evicted_data = b"late".to_vec();
+        let evicted_completed = evicted.complete(&mut s, evicted_data);
+        assert!(!evicted_completed);
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: replacement reuses pending reservation and removes placements"
+    #[test]
+    fn storage_replacement_reuses_pending_reservation_and_removes_placements() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage {
+            total_limit: 12,
+            ..ImageStorage::default()
+        };
+        let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
+
+        let pending = s
+            .add_pending_image(
+                alloc,
+                t.screens.active,
+                Image {
+                    id: 1,
+                    width: 2,
+                    height: 1,
+                    format: command::Format::Rgba,
+                    data: Data::Pending(8),
+                    ..Image::default()
+                },
+            )
+            .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap(),
+            )),
+        )
+        .unwrap();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 2,
+                data: Data::Complete(b"keep".to_vec()),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                width: 2,
+                height: 1,
+                format: command::Format::Rgba,
+                data: Data::Complete(b"12345678".to_vec()),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        assert!(s.images.contains_key(&1));
+        assert!(s.images.contains_key(&2));
+        assert_eq!(0usize, s.placements.len());
+        assert_eq!(
+            tracked,
+            unsafe { &(*t.screens.active).pages }.count_tracked_pins()
+        );
+        // try testing.expectEqual(@as(u30, 0), s.imageById(1).?.metadata.placement_count);
+        assert_eq!(0u32, s.image_by_id(1).unwrap().metadata.placement_count);
+        assert_eq!(12usize, s.total_bytes);
+
+        let stale = b"snapshot".to_vec();
+        let stale_completed = pending.complete(&mut s, stale);
+        assert!(!stale_completed);
+
+        // Growing the replacement requires eviction, but the replacement ID is
+        // excluded. The other image supplies the needed bytes.
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                data: Data::Complete(b"1234567890".to_vec()),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        assert!(s.images.contains_key(&1));
+        assert!(!s.images.contains_key(&2));
+        assert_eq!(0usize, s.placements.len());
+        assert_eq!(10usize, s.total_bytes);
+
+        s.delete(
+            alloc,
+            &mut t,
+            command::Delete::Id {
+                delete: true,
+                image_id: 1,
+                placement_id: 0,
+            },
+        );
+        assert_eq!(0usize, s.images.len());
+        assert_eq!(0usize, s.placements.len());
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: pending images share exact eviction ordering"
+    #[test]
+    fn storage_pending_images_share_exact_eviction_ordering() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage {
+            total_limit: 192,
+            ..ImageStorage::default()
+        };
+
+        let _ = s
+            .add_pending_image(
+                alloc,
+                t.screens.active,
+                Image {
+                    id: 1,
+                    data: Data::Pending(64),
+                    metadata: Metadata {
+                        transient: false,
+                        ..Metadata::default()
+                    },
+                    ..Image::default()
+                },
+            )
+            .unwrap();
+        let _ = s
+            .add_pending_image(
+                alloc,
+                t.screens.active,
+                Image {
+                    id: 2,
+                    data: Data::Pending(64),
+                    metadata: Metadata {
+                        transient: true,
+                        ..Metadata::default()
+                    },
+                    ..Image::default()
+                },
+            )
+            .unwrap();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 3,
+                data: Data::Complete(vec![b'*'; 64]),
+                metadata: Metadata {
+                    transient: true,
+                    ..Metadata::default()
+                },
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            2,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap(),
+            )),
+        )
+        .unwrap();
+
+        // ID 3 is transient and unused, so one exact-size eviction is enough.
+        assert!(s.evict_image(alloc, t.screens.active, 64));
+        assert!(s.images.contains_key(&1));
+        assert!(s.images.contains_key(&2));
+        assert!(!s.images.contains_key(&3));
+        assert_eq!(128usize, s.total_bytes);
+
+        s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
     }
 }

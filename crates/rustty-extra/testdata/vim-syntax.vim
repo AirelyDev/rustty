@@ -106,6 +106,7 @@ syn keyword rusttyConfigKeyword
 	\ scrollbar
 	\ link
 	\ link-url
+	\ link-osc8
 	\ link-previews
 	\ maximize
 	\ fullscreen
@@ -139,6 +140,7 @@ syn keyword rusttyConfigKeyword
 	\ window-show-tab-bar
 	\ window-titlebar-background
 	\ window-titlebar-foreground
+	\ drag-handle
 	\ resize-overlay
 	\ resize-overlay-position
 	\ resize-overlay-duration

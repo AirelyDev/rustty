@@ -257,7 +257,7 @@ fn transmit(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Respons
 
     // If the loaded image was assigned its ID automatically, not based
     // on a number or explicitly specified ID, then we don't respond.
-    if load.image.implicit_id {
+    if load.image.metadata.implicit_id {
         return Response::default();
     }
 
@@ -410,9 +410,15 @@ fn display(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Response
     // NOTE above prescribes; the reference's `storage` is a plain Zig pointer
     // with no such invalidation.
     let storage = unsafe { &mut (*terminal.screens.active).kitty_images };
-    if let Err(err) = storage.add_placement(alloc, img.id, result.placement_id, p) {
+    if let Err(err) = storage.add_placement(
+        alloc,
+        terminal.screens.active,
+        img.id,
+        result.placement_id,
+        p,
+    ) {
         // p.deinit(terminal.screens.active);
-        p_copy.deinit(unsafe { &mut *terminal.screens.active });
+        p_copy.deinit(terminal.screens.active);
         encode_error_storage(&mut result, err);
         return result;
     }
@@ -431,11 +437,16 @@ fn display(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Response
                 // We use terminal.index to properly handle scroll regions.
                 // const size = p.gridSize(img, terminal);
                 let size = p_copy.grid_size(&img, terminal);
-                // for (0..size.rows) |_| terminal.index() catch |err| {
-                //     log.warn("failed to move cursor: {}", .{err});
-                //     break;
-                // };
-                for _ in 0..size.rows {
+                // Once the requested movement leaves the screen, its exact
+                // position is undefined by the Kitty graphics protocol. Bound
+                // the work so an untrusted row count can't make us spin.
+                // const rows_to_move: usize = @min(
+                //     @as(usize, size.rows),
+                //     @as(usize, terminal.rows),
+                // );
+                let rows_to_move: usize =
+                    core::cmp::min(size.rows as usize, terminal.rows as usize);
+                for _ in 0..rows_to_move {
                     if terminal.index().is_err() {
                         // log.warn("failed to move cursor: {}", .{err});
                         break;
@@ -444,11 +455,17 @@ fn display(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Response
 
                 // terminal.setCursorPos(
                 //     terminal.screens.active.cursor.y,
-                //     pin.x + size.cols + 1,
+                //     @as(usize, pin.x) +| @as(usize, size.cols) +| 1,
                 // );
+                // (R7: the `+|`s saturate by design for untrusted `size.cols`.)
                 let cursor_y = unsafe { (*terminal.screens.active).cursor.y };
                 let pin_x = unsafe { (*pin).x };
-                terminal.set_cursor_pos(cursor_y as usize, (pin_x as u32 + size.cols + 1) as usize);
+                terminal.set_cursor_pos(
+                    cursor_y as usize,
+                    (pin_x as usize)
+                        .saturating_add(size.cols as usize)
+                        .saturating_add(1),
+                );
             }
         },
     }
@@ -561,9 +578,9 @@ fn load_and_add_image(
         storage.next_image_id = storage.next_image_id.wrapping_add(1);
 
         // If the image also has no number then its auto-ID is "implicit".
-        // See the doc comment on the Image.implicit_id field for more detail.
+        // See the doc comment on Image.metadata.implicit_id for more detail.
         if loading.image.number == 0 {
-            loading.image.implicit_id = true;
+            loading.image.metadata.implicit_id = true;
         }
     }
 
@@ -592,7 +609,7 @@ fn load_and_add_image(
     // Validate and store our image
     // var img = try loading.complete(alloc);
     // errdefer img.deinit(alloc);
-    // try storage.addImage(alloc, img);
+    // try storage.addImage(io, alloc, terminal.screens.active, img);
     // PORT NOTE: in the reference, `addImage` takes `img` by value (a struct copy
     // that shares the same `data` slice) and the caller keeps `img` to return
     // below — both the stored image and the returned `img` alias the same data.
@@ -604,7 +621,7 @@ fn load_and_add_image(
     let img = loading.complete()?;
     let returned = img.withoutData();
     storage
-        .add_image(alloc, img)
+        .add_image(alloc, terminal.screens.active, img)
         .map_err(|_| image::Error::OutOfMemory)?;
 
     // Get our display settings
@@ -889,6 +906,83 @@ mod tests {
         t.deinit(alloc);
     }
 
+    // test "kittygfx retransmit same id removes existing placements"
+    #[test]
+    fn kittygfx_retransmit_same_id_removes_existing_placements() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
+
+        // Transmit and display an image, then add anonymous and named placements.
+        // Multiple anonymous a=p placements for one image are explicitly valid.
+        {
+            let cmd =
+                command::Parser::parse_string(b"a=T,t=d,f=24,i=1,s=1,v=2,C=1;////////").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+        }
+        {
+            let cmd = command::Parser::parse_string(b"a=p,i=1,C=1").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+        }
+        {
+            let cmd = command::Parser::parse_string(b"a=p,i=1,p=7,C=1").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+        }
+        {
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            assert_eq!(3usize, storage.placements.len());
+        }
+        assert_eq!(
+            tracked + 3,
+            unsafe { &(*t.screens.active).pages }.count_tracked_pins()
+        );
+
+        // Retransmitting replaces the image and must delete every old placement.
+        // Plain a=t creates no replacement placement of its own.
+        {
+            let cmd = command::Parser::parse_string(b"a=t,t=d,f=24,i=1,s=1,v=2;AAAAAAAA").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+        }
+        {
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            assert_eq!(0usize, storage.placements.len());
+        }
+        assert_eq!(
+            tracked,
+            unsafe { &(*t.screens.active).pages }.count_tracked_pins()
+        );
+
+        // a=T creates one new placement after deleting the previous image and
+        // placements, so repeated redraws remain bounded at one placement.
+        {
+            let cmd =
+                command::Parser::parse_string(b"a=T,t=d,f=24,i=1,s=1,v=2,C=1;////////").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+        }
+        {
+            let cmd =
+                command::Parser::parse_string(b"a=T,t=d,f=24,i=1,s=1,v=2,C=1;AAAAAAAA").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+        }
+        {
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            assert_eq!(1usize, storage.placements.len());
+        }
+        assert_eq!(
+            tracked + 1,
+            unsafe { &(*t.screens.active).pages }.count_tracked_pins()
+        );
+
+        t.deinit(alloc);
+    }
+
     // test "kittygfx delete then retransmit same id gets fresh generation"
     #[test]
     fn kittygfx_delete_then_retransmit_same_id_gets_fresh_generation() {
@@ -932,6 +1026,30 @@ mod tests {
             .generation;
         assert!(gen2 > gen1);
         assert!(gen2 > gen_delete);
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx placement bounds cursor movement for untrusted dimensions"
+    #[test]
+    fn kittygfx_placement_bounds_cursor_movement_for_untrusted_dimensions() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        let cmd = command::Parser::parse_string(
+            b"a=T,t=d,f=24,i=1,s=1,v=1,c=4294967295,r=4294967295;////",
+        )
+        .unwrap();
+
+        let resp = execute(alloc, &mut t, &cmd).unwrap();
+        assert!(resp.ok());
+        assert_eq!(
+            1usize,
+            unsafe { &(*t.screens.active).kitty_images }
+                .placements
+                .len()
+        );
 
         t.deinit(alloc);
     }

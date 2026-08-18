@@ -39,7 +39,6 @@
 // const terminal = @import("../terminal/main.zig");
 // const termio = @import("../termio.zig");
 // const Command = @import("../Command.zig");
-// const SegmentedPool = @import("../datastruct/main.zig").SegmentedPool;
 // const ptypkg = @import("../pty.zig");
 // const Pty = ptypkg.Pty;
 // const EnvMap = std.process.EnvMap;
@@ -58,7 +57,9 @@
 // `std.process.EnvMap` modeling.
 use allocator_api2::alloc::Global as Allocator;
 use rustty_config as configpkg;
-use rustty_datastruct::SegmentedPool;
+// PORT NOTE: `std.heap.MemoryPool` — the rustty-zigstd faithful port (Zig-std
+// infra tier; `write_pool` below).
+use rustty_zigstd::memory_pool::MemoryPool;
 use rustty_os::pty as ptypkg;
 use rustty_os::pty::Pty;
 use rustty_renderer::size::{GridSize, ScreenSize};
@@ -553,16 +554,15 @@ impl Exec {
         // has no `undefined`; the caller supplies a placeholder `backend`, and
         // this move-assign drops it (the placeholder is constructed to be
         // trivially droppable). The remaining exec fields take their reference
-        // struct defaults (`write_req_pool`/`write_buf_pool` = `.{}` =
-        // preallocated pools, `write_queue`/`*_c` = `.{}`, `termios_timer_running`
+        // struct defaults (`write_pool` = `.empty` = an empty pool,
+        // `write_queue`/`*_c` = `.{}`, `termios_timer_running`
         // = true, `termios_mode` = `.{}`).
         td.backend = crate::backend::ThreadData::Exec(ThreadData {
             start: process_start,
             exited: false,
             write_stream: stream,
             process,
-            write_req_pool: SegmentedPool::new(ThreadData::WRITE_REQ_PREALLOC),
-            write_buf_pool: SegmentedPool::new(ThreadData::WRITE_REQ_PREALLOC),
+            write_pool: MemoryPool::init(alloc),
             write_queue: xev::WriteQueue::default(),
             process_wait_c: xev::Completion::default(),
             flatpak_wait_c: FlatpakHostCommandCompletion::default(),
@@ -1287,8 +1287,8 @@ impl Exec {
         xev::CallbackAction::Disarm
     }
 
-    // DEFERRED (D6 xev write stream/pools, 0 tests — R1-safe). Preserved
-    // verbatim:
+    // [W6 STALE HEADER STRUCK: this said "DEFERRED (D6 xev write stream/pools,
+    // 0 tests — R1-safe)" — the body below is LIVE.] Preserved verbatim:
     //
     // pub fn queueWrite(
     //     self: *Exec,
@@ -1307,8 +1307,9 @@ impl Exec {
     //     // our cached buffers that we can queue to the stream.
     //     var i: usize = 0;
     //     while (i < data.len) {
-    //         const req = try exec.write_req_pool.getGrow(alloc);
-    //         const buf = try exec.write_buf_pool.getGrow(alloc);
+    //         const w = try exec.write_pool.create(alloc);
+    //         w.td = exec;
+    //         const buf = &w.buf;
     //         const slice = slice: {
     //             // The maximum end index is either the end of our data or
     //             // the end of our buffer, whichever is smaller.
@@ -1348,10 +1349,10 @@ impl Exec {
     //         exec.write_stream.queueWrite(
     //             td.loop,
     //             &exec.write_queue,
-    //             req,
+    //             &w.req,
     //             .{ .slice = slice },
-    //             termio.Exec.ThreadData,
-    //             exec,
+    //             ThreadData.Write,
+    //             w,
     //             ttyWrite,
     //         );
     //     }
@@ -1390,23 +1391,34 @@ impl Exec {
         let mut i: usize = 0;
         // while (i < data.len) {
         while i < data.len() {
-            // const req = try exec.write_req_pool.getGrow(alloc);
-            let req: *mut xev::WriteRequest = unsafe {
+            // const w = try exec.write_pool.create(alloc);
+            //
+            // SB/UB (rust-mut-args-strongly-protected): the checked-out node
+            // lives in the pool's arena heap, NOT inline in `ThreadData`, so
+            // the momentary `&mut write_pool` autoref here never covers the
+            // node's bytes; the node's ADDRESS is held by the event loop
+            // across completion (stable until `ttyWrite` destroys it). The
+            // slot is logically uninitialized (`undefined`), so its fields
+            // are written via `addr_of_mut!` raw places — never a `&mut
+            // Write` re-borrow (Miri-proven at
+            // .port/phase-4/mirihar-termio-pool).
+            // (PORT NOTE: the reference passes `alloc` per call
+            // (`create(alloc)`); the rustty-zigstd `MemoryPool` owns its
+            // arena's child allocator from `init` — the per-call alloc
+            // param collapses, matching the `deinit` note below.)
+            let w: *mut Write = unsafe {
                 (*exec)
-                    .write_req_pool
-                    .get_grow()
+                    .write_pool
+                    .create()
                     .map_err(|_| crate::Error)?
+                    .as_ptr()
             };
-            // const buf = try exec.write_buf_pool.getGrow(alloc);
-            // (PORT NOTE: the pool element is `WriteBuf([u8; 64])`; `buf` is the inner
-            // 64-byte array — `buf.len` == 64.)
-            let buf_wrap: *mut WriteBuf = unsafe {
-                (*exec)
-                    .write_buf_pool
-                    .get_grow()
-                    .map_err(|_| crate::Error)?
-            };
-            let buf: *mut [u8; 64] = unsafe { std::ptr::addr_of_mut!((*buf_wrap).0) };
+            // w.td = exec;
+            unsafe { std::ptr::addr_of_mut!((*w).td).write(exec) };
+            // const buf = &w.buf;
+            // (PORT NOTE: `buf` is the raw address of the node's 64-byte
+            // buffer — `buf.len` == 64.)
+            let buf: *mut [u8; 64] = unsafe { std::ptr::addr_of_mut!((*w).buf) };
             let buf_len = 64usize;
 
             // const slice = slice: {
@@ -1473,22 +1485,23 @@ impl Exec {
             //for (slice) |b| log.warn("write: {x}", .{b});
 
             // exec.write_stream.queueWrite(
-            //     td.loop, &exec.write_queue, req, .{ .slice = slice },
-            //     termio.Exec.ThreadData, exec, ttyWrite,
+            //     td.loop, &exec.write_queue, &w.req, .{ .slice = slice },
+            //     ThreadData.Write, w, ttyWrite,
             // );
             //
-            // SAFETY: `loop_`/`&exec.write_queue`/`req` are stable pointers held
-            // raw by the ordered-write engine; `slice` points into the stable
-            // pool buffer (recycled by `ttyWrite` after the write completes); the
-            // userdata is the `exec::ThreadData` pointer `ttyWrite` recovers.
+            // SAFETY: `loop_`/`&exec.write_queue`/`&w.req` are stable pointers
+            // held raw by the ordered-write engine (the pool-arena node `w`
+            // keeps its address until `ttyWrite` destroys it); `slice` points
+            // into the node's own 64-byte buffer; the userdata is the `Write`
+            // node pointer `ttyWrite` recovers.
             unsafe {
                 let write_stream = (*exec).write_stream;
                 write_stream.queue_write(
                     loop_,
                     std::ptr::addr_of_mut!((*exec).write_queue),
-                    req,
+                    std::ptr::addr_of_mut!((*w).req),
                     xev::WriteBuffer::Slice(slice),
-                    exec,
+                    w,
                     Self::ttyWrite,
                 );
             }
@@ -1497,20 +1510,19 @@ impl Exec {
         Ok(())
     }
 
-    // DEFERRED (D6 — the xev stream-write completion callback). Preserved
-    // verbatim:
+    // [W6 STALE HEADER STRUCK: this said "DEFERRED (D6 — the xev stream-write
+    // completion callback)" — the body below is LIVE.] Preserved verbatim:
     //
     // fn ttyWrite(
-    //     td_: ?*ThreadData,
+    //     w_: ?*ThreadData.Write,
     //     _: *xev.Loop,
     //     _: *xev.Completion,
     //     _: xev.Stream,
     //     _: xev.WriteBuffer,
     //     r: xev.WriteError!usize,
     // ) xev.CallbackAction {
-    //     const td = td_.?;
-    //     td.write_req_pool.put();
-    //     td.write_buf_pool.put();
+    //     const w = w_.?;
+    //     w.td.write_pool.destroy(w);
     //
     //     const d = r catch |err| {
     //         log.err("write error: {}", .{err});
@@ -1522,24 +1534,33 @@ impl Exec {
     //     return .disarm;
     // }
     //
-    // PORT NOTE: `td_` here is the `exec::ThreadData` (the reference `ThreadData`
-    // in Exec.zig scope), NOT termio's — the reference passed `exec` as the
-    // `queueWrite` userdata. Non-generic (no `M`).
+    // PORT NOTE: `w_` is the pooled `ThreadData.Write` node — the reference
+    // passes `w` as the `queueWrite` userdata. Non-generic (no `M`).
     fn ttyWrite(
-        td_: *mut ThreadData,
+        w_: *mut Write,
         _l: *mut xev::Loop,
         _c: *mut xev::Completion,
         _s: xev::Stream,
         _b: xev::WriteBuffer,
         r: core::result::Result<usize, xev::WriteError>,
     ) -> xev::CallbackAction {
-        // const td = td_.?;
-        let td = td_;
-        // td.write_req_pool.put();
-        // td.write_buf_pool.put();
+        // const w = w_.?;
+        let w = w_;
+        // w.td.write_pool.destroy(w);
+        //
+        // SAFETY: `w` is the pool-arena node this write checked out (the
+        // engine pops it from the write queue and never touches it after this
+        // callback returns Disarm); `w.td` was written at checkout and the
+        // `ThreadData` outlives the loop. The `&mut write_pool` autoref
+        // covers only the pool header (free-list + arena fields) inside
+        // `ThreadData` — never the arena-heap node bytes — so the addresses
+        // of other in-flight nodes stay valid (Miri-proven at
+        // .port/phase-4/mirihar-termio-pool).
         unsafe {
-            (*td).write_req_pool.put();
-            (*td).write_buf_pool.put();
+            let td = (*w).td;
+            (*td)
+                .write_pool
+                .destroy(std::ptr::NonNull::new_unchecked(w));
         }
 
         // const d = r catch |err| { log.err("write error: {}", .{err}); return .disarm; };
@@ -1580,6 +1601,11 @@ impl Exec {
 //
 // pub const ThreadData = struct {
 pub struct ThreadData {
+    // (PORT NOTE: the reference nests `pub const Write = struct { ... }` in
+    // `ThreadData`; Rust cannot nest a type in a struct's namespace, so it is
+    // hoisted to the module-level `Write` below — the `WriteReq` hoist
+    // precedent.)
+
     /// Process start time and boolean of whether its already exited.
     pub start: std::time::Instant,
     // exited: bool = false,
@@ -1591,16 +1617,14 @@ pub struct ThreadData {
     /// The process watcher
     pub process: Option<xev::Process>,
 
-    /// This is the pool of available (unused) write requests. If you grab
+    /// This is the pool of available (unused) write states. If you grab
     /// one from the pool, you must put it back when you're done!
-    // write_req_pool: SegmentedPool(xev.WriteRequest, WRITE_REQ_PREALLOC) = .{},
-    pub write_req_pool: SegmentedPool<xev::WriteRequest>,
-
-    /// The pool of available buffers for writing to the pty.
-    // write_buf_pool: SegmentedPool([64]u8, WRITE_REQ_PREALLOC) = .{},
+    // write_pool: std.heap.MemoryPool(Write) = .empty,
     //
-    // (PORT NOTE: `WriteBuf` wraps the `[64]u8` element — see its note.)
-    pub write_buf_pool: SegmentedPool<WriteBuf>,
+    // (PORT NOTE: the rustty-zigstd `MemoryPool` owns its arena's child
+    // allocator (`init(alloc)` in `threadEnter`) — the reference's per-call
+    // `create(alloc)`/`deinit(alloc)` params collapse into it.)
+    pub write_pool: MemoryPool<Write>,
 
     /// The write queue for the data stream.
     // write_queue: xev.WriteQueue = .{},
@@ -1644,27 +1668,34 @@ pub struct ThreadData {
     pub termios_mode: ptypkg::Mode,
 }
 
-/// PORT NOTE (Rust-only glue): the `[64]u8` write-buffer element of
-/// `write_buf_pool` (Rust arrays implement `Default` — the SegmentedPool
-/// element bound — only up to length 32, so the 64-byte buffer wraps).
-pub struct WriteBuf(pub [u8; 64]);
+/// The state for a single queued pty write. The write request and
+/// the buffer it writes from must both remain pointer-stable until
+/// the write completes, so they're pooled together and checked out
+/// per write.
+//
+// pub const Write = struct {
+//
+// PORT NOTE: hoisted from the reference's `ThreadData.Write` nesting (see the
+// `ThreadData` note). SB/UB: nodes are dispensed by `write_pool` as raw,
+// logically-uninitialized slots; every field is written via `addr_of_mut!`
+// raw places and the node is handed to the event loop as a RAW pointer —
+// never a `&mut Write` (`rust-mut-args-strongly-protected`,
+// `intrusive-ptr-and-placeholder-fill`; Miri-proven at
+// .port/phase-4/mirihar-termio-pool).
+pub struct Write {
+    /// Backpointer to the thread data so the write completion
+    /// callback can put this back into the pool.
+    // td: *ThreadData,
+    pub td: *mut ThreadData,
 
-impl Default for WriteBuf {
-    fn default() -> Self {
-        WriteBuf([0u8; 64])
-    }
+    /// The libxev write request.
+    pub req: xev::WriteRequest,
+
+    /// The buffer for the data being written.
+    pub buf: [u8; 64],
 }
 
 impl ThreadData {
-    // The preallocation size for the write request pool. This should be big
-    // enough to satisfy most write requests. It must be a power of 2.
-    //
-    // const WRITE_REQ_PREALLOC = std.math.pow(usize, 2, 5);
-    // (Consumed by the D6-deferred threadEnter construction — see the pool
-    // fields' `= .{}` defaults above.)
-    #[allow(dead_code)]
-    pub(crate) const WRITE_REQ_PREALLOC: usize = usize::pow(2, 5);
-
     /// PORT NOTE (Rust-only glue, xev B4): the reference `Termio.threadEnter`
     /// initializes `ThreadData.backend = undefined` and `Exec.threadEnter` then
     /// OVERWRITES it (`td.backend = .{ .exec = ... }`). Zig assigns over
@@ -1682,8 +1713,7 @@ impl ThreadData {
             exited: false,
             write_stream: xev::Stream::init_fd(-1),
             process: None,
-            write_req_pool: SegmentedPool::new(0),
-            write_buf_pool: SegmentedPool::new(0),
+            write_pool: MemoryPool::init(Allocator),
             write_queue: xev::WriteQueue::default(),
             process_wait_c: xev::Completion::default(),
             flatpak_wait_c: FlatpakHostCommandCompletion::default(),
@@ -1707,12 +1737,11 @@ impl ThreadData {
         #[cfg(windows)]
         let _ = rustty_os::windows::CloseHandle(self.read_thread_pipe);
 
-        // Clear our write pools. We know we aren't ever going to do
+        // Clear our write pool. We know we aren't ever going to do
         // any more IO since we stop our data stream below so we can just
         // drop this.
-        // self.write_req_pool.deinit(alloc);
-        // self.write_buf_pool.deinit(alloc);
-        // (PORT NOTE: the pools' memory frees on Drop; the alloc param collapses.)
+        // self.write_pool.deinit(alloc);
+        // (PORT NOTE: the pool's memory frees on Drop; the alloc param collapses.)
         let _ = alloc;
 
         // Stop our process watcher
@@ -6404,8 +6433,7 @@ mod tests {
                 exited: false,
                 write_stream: xev::Stream::init_fd(-1),
                 process: None,
-                write_req_pool: SegmentedPool::new(0),
-                write_buf_pool: SegmentedPool::new(0),
+                write_pool: MemoryPool::init(Global),
                 write_queue: xev::WriteQueue::default(),
                 process_wait_c: xev::Completion::default(),
                 flatpak_wait_c: FlatpakHostCommandCompletion::default(),

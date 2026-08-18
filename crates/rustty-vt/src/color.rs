@@ -398,17 +398,42 @@ fn trim_space_tab(s: &[u8]) -> &[u8] {
 // PORT NOTE: `pub const PaletteC = [256]RGB.C;` and `paletteCval`/`paletteZval`
 // convert between the native and C-ABI palette. The C ABI surface (`RGB.C`) is
 // ported in the rustty-vt-c crate; since `RGB` and `RGB.C` carry identical r/g/b
-// data, the conversions are deferred to that crate with the C type. They are
+// data, those conversions are deferred to that crate with the C type. They are
 // reproduced here as comments to preserve the reference surface.
 //
 // /// C-compatible palette type using the extern RGB struct.
 // pub const PaletteC = [256]RGB.C;
 //
 // /// Convert a Palette to a PaletteC.
-// pub fn paletteCval(palette: *const Palette) PaletteC { ... }
+// pub fn paletteCval(palette: *const Palette) PaletteC {
+//     var result: PaletteC = undefined;
+//     paletteCvalSlice(palette[0..], result[0..]);
+//     return result;
+// }
 //
 // /// Convert a PaletteC to a Palette.
 // pub fn paletteZval(palette: *const PaletteC) Palette { ... }
+
+/// Convert a slice of palette entries to their C representation.
+/// Asserts that both slices are the same length.
+// PORT NOTE (oracle e3056658d + 74a233b54): the reference's LE fast path is a
+// vectorized 4-to-3-byte shuffle (with `@Vector`-typed pointer casts, because
+// Zig 0.16 disables the LLVM auto-vectorizer) — Zig's packed `RGB` occupies 4
+// bytes in memory while `RGB.C` is 3. Rustty's `RGB` is `#[repr(C)]` and
+// exactly 3 bytes, byte-identical to `RGB.C` (see the `RGB` PORT NOTE), so
+// there is no 4-to-3 conversion to vectorize: the element-wise copy below IS
+// the whole conversion, and Rust keeps the auto-vectorizer the reference works
+// around. The dst element type is `RGB` itself (rustty's `RGB.C`).
+pub fn palette_cval_slice(src: &[RGB], dst: &mut [RGB]) {
+    // assert(src.len == dst.len);
+    assert!(src.len() == dst.len());
+
+    // for (src[i..], dst[i..]) |entry, *out| out.* = entry.cval();
+    // PORT NOTE: `RGB.cval()` is the identity here (`RGB` == `RGB.C`).
+    for (entry, out) in src.iter().zip(dst.iter_mut()) {
+        *out = *entry;
+    }
+}
 
 /// Mask that can be used to set which palette indexes were set.
 // PORT NOTE: `pub const PaletteMask = std.StaticBitSet(@typeInfo(Palette).array.len);`
@@ -2516,6 +2541,56 @@ mod tests {
             assert_eq!(expected.r, actual.r);
             assert_eq!(expected.g, actual.g);
             assert_eq!(expected.b, actual.b);
+        }
+    }
+
+    // test paletteCvalSlice
+    #[test]
+    fn palette_cval_slice() {
+        // Every length from empty through a full palette, so that the
+        // vectorized groups, the overlapping store bound, and the scalar
+        // tail are all exercised at their edges.
+        //
+        // PORT NOTE: rustty's conversion has no vector path (see the fn's
+        // PORT NOTE), but the every-length sweep still exercises the length
+        // assert and the nothing-written-beyond-len contract at their edges.
+        let mut src: Palette = [RGB::default(); 256];
+        for (i, rgb) in src.iter_mut().enumerate() {
+            *rgb = RGB {
+                r: (i % 256) as u8,
+                g: ((i * 7 + 1) % 256) as u8,
+                b: ((i * 13 + 2) % 256) as u8,
+            };
+        }
+
+        let mut dst: Palette = [RGB::default(); 256];
+        for len in 0..=src.len() {
+            // Poison the destination so unwritten bytes are detected.
+            // PORT NOTE: the reference poisons `asBytes(&dst)` with 0xAA and
+            // then checks `asBytes(&dst)[len * 3 ..]`. Rustty's `RGB` is 3
+            // bytes with NO padding (asserted below), so poisoning and
+            // checking whole elements is byte-exact with the reference.
+            const _: () = assert!(core::mem::size_of::<RGB>() == 3);
+            let poison = RGB {
+                r: 0xAA,
+                g: 0xAA,
+                b: 0xAA,
+            };
+            for out in dst.iter_mut() {
+                *out = poison;
+            }
+
+            super::palette_cval_slice(&src[..len], &mut dst[..len]);
+            for (rgb, c) in src[..len].iter().zip(dst[..len].iter()) {
+                assert_eq!(rgb.r, c.r);
+                assert_eq!(rgb.g, c.g);
+                assert_eq!(rgb.b, c.b);
+            }
+
+            // Nothing beyond the requested length may be written.
+            for c in dst[len..].iter() {
+                assert_eq!(poison, *c);
+            }
         }
     }
 }

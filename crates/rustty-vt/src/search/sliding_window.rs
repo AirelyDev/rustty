@@ -1021,6 +1021,9 @@ impl SlidingWindow {
             formatter.point_map = Some(PointMap {
                 alloc: self.alloc,
                 map: &mut meta.cell_map,
+                // PORT NOTE: the reference relies on the `base: usize = 0`
+                // field default (P4-W3 pin-map redesign).
+                base: 0,
             });
             formatter.format(&mut encoded).map_err(|_| OutOfMemory)?;
         }

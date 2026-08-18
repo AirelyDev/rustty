@@ -7,7 +7,9 @@
 //!
 //! PORT NOTE: the reference imports are
 //!   const std = @import("std");
+//!   const builtin = @import("builtin");
 //!   const assert = @import("../quirks.zig").inlineAssert;
+//!   const fastprint = @import("../fastprint.zig");
 //!   const color = @import("color.zig");
 //!   const sgr = @import("sgr.zig");
 //!   const page = @import("page.zig");
@@ -22,6 +24,7 @@
 //! color/sgr/size (the leaf primitives) is fully ported here.
 
 use crate::color;
+use crate::fastprint;
 use crate::sgr;
 use rustty_render_types::term_size as size;
 
@@ -621,75 +624,141 @@ pub struct VtFormatter<'a> {
 
 impl<'a> VtFormatter<'a> {
     pub fn format<W: core::fmt::Write>(&self, writer: &mut W) -> core::fmt::Result {
+        // Style emission is a hot path when formatting styled terminal
+        // contents, so all of the sequences are assembled in a buffer
+        // and written in one call rather than going through the
+        // (slower) format string machinery with a write per sequence.
+        //
+        // Worst case: `\x1b[0m` (4) + 7 flags (28) + `\x1b[53m` (5) +
+        // `\x1b[4:2m` (6) + 3 RGB colors (19 each = 57) = 100.
+        let mut buf: [u8; 128] = [0; 128];
+
         // Always reset the style. Styles are fully self-contained.
         // Even if this style is empty, then that means we want to go
         // back to the default.
-        writer.write_str("\x1b[0m")?;
+        buf[0..4].copy_from_slice(b"\x1b[0m");
+        let mut len: usize = 4;
 
         // Our flags
         if self.style.flags.bold {
-            writer.write_str("\x1b[1m")?;
+            buf[len..len + 4].copy_from_slice(b"\x1b[1m");
+            len += 4;
         }
         if self.style.flags.faint {
-            writer.write_str("\x1b[2m")?;
+            buf[len..len + 4].copy_from_slice(b"\x1b[2m");
+            len += 4;
         }
         if self.style.flags.italic {
-            writer.write_str("\x1b[3m")?;
+            buf[len..len + 4].copy_from_slice(b"\x1b[3m");
+            len += 4;
         }
         if self.style.flags.blink {
-            writer.write_str("\x1b[5m")?;
+            buf[len..len + 4].copy_from_slice(b"\x1b[5m");
+            len += 4;
         }
         if self.style.flags.inverse {
-            writer.write_str("\x1b[7m")?;
+            buf[len..len + 4].copy_from_slice(b"\x1b[7m");
+            len += 4;
         }
         if self.style.flags.invisible {
-            writer.write_str("\x1b[8m")?;
+            buf[len..len + 4].copy_from_slice(b"\x1b[8m");
+            len += 4;
         }
         if self.style.flags.strikethrough {
-            writer.write_str("\x1b[9m")?;
+            buf[len..len + 4].copy_from_slice(b"\x1b[9m");
+            len += 4;
         }
         if self.style.flags.overline {
-            writer.write_str("\x1b[53m")?;
+            buf[len..len + 5].copy_from_slice(b"\x1b[53m");
+            len += 5;
         }
         match self.style.flags.underline {
             sgr::Underline::None => {}
-            sgr::Underline::Single => writer.write_str("\x1b[4m")?,
-            sgr::Underline::Double => writer.write_str("\x1b[4:2m")?,
-            sgr::Underline::Curly => writer.write_str("\x1b[4:3m")?,
-            sgr::Underline::Dotted => writer.write_str("\x1b[4:4m")?,
-            sgr::Underline::Dashed => writer.write_str("\x1b[4:5m")?,
+            sgr::Underline::Single => {
+                buf[len..len + 4].copy_from_slice(b"\x1b[4m");
+                len += 4;
+            }
+            sgr::Underline::Double => {
+                buf[len..len + 6].copy_from_slice(b"\x1b[4:2m");
+                len += 6;
+            }
+            sgr::Underline::Curly => {
+                buf[len..len + 6].copy_from_slice(b"\x1b[4:3m");
+                len += 6;
+            }
+            sgr::Underline::Dotted => {
+                buf[len..len + 6].copy_from_slice(b"\x1b[4:4m");
+                len += 6;
+            }
+            sgr::Underline::Dashed => {
+                buf[len..len + 6].copy_from_slice(b"\x1b[4:5m");
+                len += 6;
+            }
         }
 
-        // Various RGB colors.
-        self.format_color(writer, 38, self.style.fg_color)?;
-        self.format_color(writer, 48, self.style.bg_color)?;
-        self.format_color(writer, 58, self.style.underline_color)?;
-        Ok(())
+        // Various colors.
+        len += self.append_color(&mut buf[len..], 38, self.style.fg_color);
+        len += self.append_color(&mut buf[len..], 48, self.style.bg_color);
+        len += self.append_color(&mut buf[len..], 58, self.style.underline_color);
+
+        // PORT NOTE: `writer.writeAll(buf[0..len])` — the `core::fmt::Write`
+        // seam takes `&str`; every emitted byte is ASCII so the conversion is
+        // infallible.
+        writer.write_str(core::str::from_utf8(&buf[..len]).unwrap())
     }
 
-    fn format_color<W: core::fmt::Write>(
-        &self,
-        writer: &mut W,
-        prefix: u8,
-        value: Color,
-    ) -> core::fmt::Result {
+    /// Appends a standalone `\x1b[{prefix};5;{idx}m` or
+    /// `\x1b[{prefix};2;{r};{g};{b}m` sequence to buf, returning the
+    /// length written.
+    fn append_color(&self, buf: &mut [u8], prefix: u8, value: Color) -> usize {
         match value.tag() {
-            ColorTag::None => Ok(()),
+            ColorTag::None => 0,
+
             ColorTag::Palette => {
                 let idx = value.palette();
+
+                // Direct RGB: `\x1b[{prefix};2;{r};{g};{b}m`
                 if let Some(p) = self.palette {
-                    let rgb = p[idx as usize];
-                    write!(writer, "\x1b[{};2;{};{};{}m", prefix, rgb.r, rgb.g, rgb.b)
-                } else {
-                    write!(writer, "\x1b[{};5;{}m", prefix, idx)
+                    return append_color_rgb(buf, prefix, p[idx as usize]);
                 }
+
+                // Palette reference: `\x1b[{prefix};5;{idx}m`
+                buf[0..2].copy_from_slice(b"\x1b[");
+                let mut len: usize = 2;
+                len += fastprint::print_decimal(&mut buf[len..], prefix);
+                buf[len..len + 3].copy_from_slice(b";5;");
+                len += 3;
+                len += fastprint::print_decimal(&mut buf[len..], idx);
+                buf[len] = b'm';
+                len += 1;
+                len
             }
-            ColorTag::Rgb => {
-                let rgb = value.rgb();
-                write!(writer, "\x1b[{};2;{};{};{}m", prefix, rgb.r, rgb.g, rgb.b)
-            }
+
+            ColorTag::Rgb => append_color_rgb(buf, prefix, value.rgb()),
         }
     }
+}
+
+/// Appends `\x1b[{prefix};2;{r};{g};{b}m` to buf, returning the
+/// length written.
+// PORT NOTE: the reference nests this self-less fn inside `VTFormatter`; a
+// module-level fn is the Rust equivalent.
+fn append_color_rgb(buf: &mut [u8], prefix: u8, rgb: color::RGB) -> usize {
+    buf[0..2].copy_from_slice(b"\x1b[");
+    let mut len: usize = 2;
+    len += fastprint::print_decimal(&mut buf[len..], prefix);
+    buf[len..len + 3].copy_from_slice(b";2;");
+    len += 3;
+    len += fastprint::print_decimal(&mut buf[len..], rgb.r);
+    buf[len] = b';';
+    len += 1;
+    len += fastprint::print_decimal(&mut buf[len..], rgb.g);
+    buf[len] = b';';
+    len += 1;
+    len += fastprint::print_decimal(&mut buf[len..], rgb.b);
+    buf[len] = b'm';
+    len += 1;
+    len
 }
 
 /// HTML/CSS formatter for a `Style`.
@@ -767,31 +836,61 @@ impl<'a> HtmlFormatter<'a> {
         property: &str,
         c: Color,
     ) -> core::fmt::Result {
+        // Style emission is a hot path when formatting styled terminal
+        // contents, so the values are assembled in a buffer and written
+        // in one call rather than going through the (slower) format
+        // string machinery.
+        let mut buf: [u8; 32] = [0; 32];
+        // PORT NOTE: `var len: usize = 0;` — deferred init (every live arm
+        // assigns; `.none` returns) so the dead zero write doesn't trip the
+        // unused-assignment lint.
+        let mut len: usize;
         match c.tag() {
-            ColorTag::None => Ok(()),
+            ColorTag::None => return Ok(()),
+
+            // `{property}: rgb({r}, {g}, {b});`
             ColorTag::Palette => {
                 let idx = c.palette();
                 if let Some(p) = self.palette {
-                    let rgb = p[idx as usize];
-                    write!(
-                        writer,
-                        "{}: rgb({}, {}, {});",
-                        property, rgb.r, rgb.g, rgb.b
-                    )
+                    len = format_color_rgb(&mut buf, p[idx as usize]);
                 } else {
-                    write!(writer, "{}: var(--vt-palette-{});", property, idx)
+                    // `{property}: var(--vt-palette-{idx});`
+                    const PREFIX: &[u8] = b": var(--vt-palette-";
+                    buf[0..PREFIX.len()].copy_from_slice(PREFIX);
+                    len = PREFIX.len();
+                    len += fastprint::print_decimal(&mut buf[len..], idx);
+                    buf[len..len + 2].copy_from_slice(b");");
+                    len += 2;
                 }
             }
-            ColorTag::Rgb => {
-                let rgb = c.rgb();
-                write!(
-                    writer,
-                    "{}: rgb({}, {}, {});",
-                    property, rgb.r, rgb.g, rgb.b
-                )
-            }
+
+            ColorTag::Rgb => len = format_color_rgb(&mut buf, c.rgb()),
         }
+
+        writer.write_str(property)?;
+        // PORT NOTE: `writer.writeAll(buf[0..len])` — all emitted bytes are
+        // ASCII so the `&str` conversion is infallible.
+        writer.write_str(core::str::from_utf8(&buf[..len]).unwrap())
     }
+}
+
+/// Writes `: rgb({r}, {g}, {b});` into buf, returning the length
+/// written.
+// PORT NOTE: the reference nests this self-less fn inside `HtmlFormatter`; a
+// module-level fn is the Rust equivalent.
+fn format_color_rgb(buf: &mut [u8; 32], rgb: color::RGB) -> usize {
+    buf[0..6].copy_from_slice(b": rgb(");
+    let mut len: usize = 6;
+    len += fastprint::print_decimal(&mut buf[len..], rgb.r);
+    buf[len..len + 2].copy_from_slice(b", ");
+    len += 2;
+    len += fastprint::print_decimal(&mut buf[len..], rgb.g);
+    buf[len..len + 2].copy_from_slice(b", ");
+    len += 2;
+    len += fastprint::print_decimal(&mut buf[len..], rgb.b);
+    buf[len..len + 2].copy_from_slice(b");");
+    len += 2;
+    len
 }
 
 /// `PackedStyle` represents the same data as `Style` but without padding,

@@ -22,11 +22,11 @@
 // const build_options = @import("terminal_options");
 // const oni = @import("oniguruma");
 // const point = @import("point.zig");
+// const PinMap = @import("formatter.zig").PinMap;
 // const Selection = @import("Selection.zig");
 // const Screen = @import("Screen.zig");
-// const Pin = @import("PageList.zig").Pin;
 // const Allocator = std.mem.Allocator;
-use crate::pagelist::Pin;
+use crate::formatter::PinMapMap;
 
 // PORT NOTE: the reference allocator maps to `allocator_api2::alloc::Global`
 // (the crate's allocator seam).
@@ -57,19 +57,23 @@ pub struct StringMap {
     // `onig_search_with_param` with `str_ptr` / `str_ptr + len` / start / end —
     // the same four bounds the reference's oniguruma binding passes.
     pub string: Vec<u8>,
-    // PORT NOTE: `map: []Pin` -> `Vec<Pin>`.
-    pub map: Vec<Pin>,
+
+    /// Mapping of string byte offsets to pins. See PinMap for the
+    /// storage details.
+    // PORT NOTE: `map: PinMap.Map` -> the hoisted `formatter::PinMapMap`.
+    pub map: PinMapMap,
 }
 
 impl StringMap {
     pub fn deinit(self, alloc: Allocator) {
         // alloc.free(self.string);
-        // alloc.free(self.map);
-        // PORT NOTE: the reference frees the two `alloc`-owned slices
-        // (`string`, `map`). In Rust both are owning `Vec`s, so taking `self`
-        // by value and letting them drop here is the faithful equivalent; the
-        // `alloc` parameter is preserved for signature parity but the `Global`
-        // seam is the implicit `Vec` allocator.
+        // var map = self.map;
+        // map.deinit(alloc);
+        // PORT NOTE: the reference frees the `alloc`-owned string and the pin
+        // map's two lists. In Rust both are owning containers, so taking
+        // `self` by value and letting them drop here is the faithful
+        // equivalent; the `alloc` parameter is preserved for signature parity
+        // but the `Global` seam is the implicit `Vec` allocator.
         let _ = alloc;
         drop(self.string);
         drop(self.map);
@@ -209,8 +213,8 @@ impl Match {
     pub fn selection(&self) -> crate::selection::Selection {
         let start_idx: usize = self.region.starts()[0] as usize;
         let end_idx: usize = (self.region.ends()[0] - 1) as usize;
-        let start_pt = self.map.map[self.offset + start_idx];
-        let end_pt = self.map.map[self.offset + end_idx];
+        let start_pt = self.map.map.get(self.offset + start_idx).unwrap();
+        let end_pt = self.map.map.get(self.offset + end_idx).unwrap();
         crate::selection::Selection::init(start_pt, end_pt, false)
     }
 }
@@ -394,7 +398,7 @@ mod tests {
             .unwrap();
         let mut map: StringMap = StringMap {
             string: Vec::new(),
-            map: Vec::new(),
+            map: PinMapMap::EMPTY,
         };
         let sel_str = s
             .selection_string(
@@ -415,7 +419,7 @@ mod tests {
         assert!(!map.string.contains(&0));
         // One pin per byte of `string` — the invariant `Match::selection` indexes
         // by, which a stored sentinel would break.
-        assert_eq!(map.string.len(), map.map.len());
+        assert_eq!(map.string.len(), map.map.count());
 
         // The sentinel is never observed: the search passes explicit start/end
         // byte bounds, so an unsentineled buffer matches just the same.
@@ -469,7 +473,7 @@ mod tests {
             .unwrap();
         let mut map: StringMap = StringMap {
             string: Vec::new(),
-            map: Vec::new(),
+            map: PinMapMap::EMPTY,
         };
         let sel_str = s
             .selection_string(
@@ -561,7 +565,7 @@ mod tests {
             .unwrap();
         let mut map: StringMap = StringMap {
             string: Vec::new(),
-            map: Vec::new(),
+            map: PinMapMap::EMPTY,
         };
         let sel_str = s
             .selection_string(
@@ -657,7 +661,7 @@ mod tests {
             .unwrap();
         let mut map: StringMap = StringMap {
             string: Vec::new(),
-            map: Vec::new(),
+            map: PinMapMap::EMPTY,
         };
         let sel_str = s
             .selection_string(

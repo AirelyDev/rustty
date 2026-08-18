@@ -281,11 +281,15 @@ fn kitty<W: Write>(writer: &mut W, event: &key::KeyEvent, opts: Options) -> std:
         None => {
             // No entry found. If we have UTF-8 text this is a pure text event
             // (e.g. composed/IME text), so send it as-is so programs can
-            // still receive it.
-            if !event.utf8.is_empty() {
-                return writer.write_all(&event.utf8);
+            // still receive it. Release events never insert text, same as the
+            // plain-text path above.
+            if event.action == key::Action::Release {
+                return Ok(());
             }
-            return Ok(());
+            if event.utf8.is_empty() {
+                return Ok(());
+            }
+            return writer.write_all(&event.utf8);
         }
     };
 
@@ -1856,6 +1860,39 @@ mod tests {
         assert_eq!(writer, b"\x1b[127;2u");
     }
 
+    // test "kitty: alt+backspace emits CSI u"
+    #[test]
+    fn kitty_alt_backspace_emits_csi_u() {
+        let mut writer: Vec<u8> = Vec::new();
+        kitty(
+            &mut writer,
+            &ev(key::KeyEvent {
+                key: key::Key::Backspace,
+                mods: Mods {
+                    alt: true,
+                    ..Default::default()
+                },
+                // macOS may mark Option as consumed while translating the key. With
+                // no attached control text, all modifiers must remain effective.
+                consumed_mods: Mods {
+                    alt: true,
+                    ..Default::default()
+                },
+                utf8: b"".to_vec(),
+                ..Default::default()
+            }),
+            Options {
+                kitty_flags: KittyFlags {
+                    disambiguate: true,
+                    ..KittyFlags::DISABLED
+                },
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(writer, b"\x1b[127;3u");
+    }
+
     #[test]
     fn kitty_shift_enter_emits_csi_u() {
         let mut writer: Vec<u8> = Vec::new();
@@ -2099,6 +2136,74 @@ mod tests {
         )
         .unwrap();
         assert_eq!(writer, b"\xc3\xbb");
+    }
+
+    // A key whose base (unshifted) keysym is a dead key has no unshifted
+    // codepoint, so it has no kitty entry and falls back to writing the text
+    // directly. That must not happen on release or the text is inserted twice.
+    // test "kitty: text fallback on release"
+    #[test]
+    fn kitty_text_fallback_on_release() {
+        // for ([_]bool{ false, true }) |report_all| {
+        for report_all in [false, true] {
+            let mut writer: Vec<u8> = Vec::new();
+            kitty(
+                &mut writer,
+                &ev(key::KeyEvent {
+                    action: key::Action::Release,
+                    key: key::Key::Unidentified,
+                    mods: Mods {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    utf8: b"!".to_vec(),
+                    ..Default::default()
+                }),
+                Options {
+                    kitty_flags: KittyFlags {
+                        disambiguate: true,
+                        report_events: true,
+                        report_alternates: true,
+                        report_all,
+                        report_associated: true,
+                    },
+                    ..Options::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(writer, b"");
+        }
+    }
+
+    // test "kitty: text fallback on repeat"
+    #[test]
+    fn kitty_text_fallback_on_repeat() {
+        let mut writer: Vec<u8> = Vec::new();
+        kitty(
+            &mut writer,
+            &ev(key::KeyEvent {
+                action: key::Action::Repeat,
+                key: key::Key::Unidentified,
+                mods: Mods {
+                    shift: true,
+                    ..Default::default()
+                },
+                utf8: b"!".to_vec(),
+                ..Default::default()
+            }),
+            Options {
+                kitty_flags: KittyFlags {
+                    disambiguate: true,
+                    report_events: true,
+                    report_alternates: true,
+                    report_associated: true,
+                    ..KittyFlags::DISABLED
+                },
+                ..Options::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(writer, b"!");
     }
 
     #[test]

@@ -654,6 +654,35 @@ impl CloseTabMode {
     }
 }
 
+/// PORT NOTE: `Action.OpenConfig`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenConfig {
+    /// Open the config in the OS default editor.
+    OsOpen,
+
+    /// Open the config in a new window using $EDITOR or $VISUAL
+    NewWindow,
+}
+
+impl OpenConfig {
+    // pub const default: OpenConfig = .os_open;
+    pub const DEFAULT: OpenConfig = OpenConfig::OsOpen;
+
+    fn tag_name(self) -> &'static str {
+        match self {
+            OpenConfig::OsOpen => "os_open",
+            OpenConfig::NewWindow => "new_window",
+        }
+    }
+    fn string_to_enum(v: &[u8]) -> Option<OpenConfig> {
+        match v {
+            b"os_open" => Some(OpenConfig::OsOpen),
+            b"new_window" => Some(OpenConfig::NewWindow),
+            _ => None,
+        }
+    }
+}
+
 /// The set of actions that a keybinding can take.
 //
 // PORT NOTE: the reference `Action` is a `union(enum)` — a tagged union. Each
@@ -949,6 +978,12 @@ pub enum Action {
     /// the last tab.
     MoveTab(isize),
 
+    /// Move a tab to a new window.
+    ///
+    /// Only implemented on Linux, but there's a native tab menu provided by
+    /// macOS.
+    MoveTabToNewWindow,
+
     /// Toggle the tab overview.
     ///
     /// This is only supported on Linux and when the system's libadwaita
@@ -964,6 +999,13 @@ pub enum Action {
     /// and persists across focus changes within the tab.
     PromptTabTitle,
 
+    /// Change the title of the current window via a pop-up prompt. The
+    /// title set via this prompt overrides any title set by the terminal
+    /// and persists across focus changes within the tab.
+    ///
+    /// Only implemented on Linux.
+    PromptWindowTitle,
+
     /// Set the title for the current focused surface.
     ///
     /// If the title is empty, the surface title is reset to an empty title.
@@ -973,6 +1015,13 @@ pub enum Action {
     ///
     /// If the title is empty, the tab title override is cleared.
     SetTabTitle(Vec<u8>),
+
+    /// Set the title for the current focused window.
+    ///
+    /// If the title is empty, the tab title override is cleared.
+    ///
+    /// Only implement on Linux.
+    SetWindowTitle(Vec<u8>),
 
     /// Create a new split in the specified direction.
     ///
@@ -1048,12 +1097,14 @@ pub enum Action {
     /// untested.
     ShowOnScreenKeyboard,
 
-    /// Open the configuration file in the default OS editor.
+    /// Open the configuration file in an editor.
     ///
-    /// If your default OS editor isn't configured then this will fail.
-    /// Currently, any failures to open the configuration will show up only in
-    /// the logs.
-    OpenConfig,
+    /// * `os_open`: Use the OS's default editor to edit the configuration file.
+    ///   This is the default action. (Available since 1.4.0)
+    /// * `new_window`: Launch the editor specified in `$EDITOR` or `$VISUAL` in
+    ///   a new Rustty window to edit the configuration file. GTK only. (Available
+    ///   since 1.4.0.)
+    OpenConfig(OpenConfig),
 
     /// Reload the configuration.
     ///
@@ -1103,8 +1154,8 @@ pub enum Action {
 
     /// Maximize or unmaximize the current window.
     ///
-    /// This has no effect on macOS as it does not have the concept of
-    /// maximized windows.
+    /// On macOS, this zooms the window, which is the closest equivalent
+    /// since macOS has no concept of a maximized window.
     ToggleMaximize,
 
     /// Fullscreen or unfullscreen the current window.
@@ -1393,11 +1444,14 @@ impl Action {
             Action::LastTab => "last_tab",
             Action::GotoTab(_) => "goto_tab",
             Action::MoveTab(_) => "move_tab",
+            Action::MoveTabToNewWindow => "move_tab_to_new_window",
             Action::ToggleTabOverview => "toggle_tab_overview",
             Action::PromptSurfaceTitle => "prompt_surface_title",
             Action::PromptTabTitle => "prompt_tab_title",
+            Action::PromptWindowTitle => "prompt_window_title",
             Action::SetSurfaceTitle(_) => "set_surface_title",
             Action::SetTabTitle(_) => "set_tab_title",
+            Action::SetWindowTitle(_) => "set_window_title",
             Action::NewSplit(_) => "new_split",
             Action::GotoSplit(_) => "goto_split",
             Action::GotoWindow(_) => "goto_window",
@@ -1409,7 +1463,7 @@ impl Action {
             Action::Inspector(_) => "inspector",
             Action::ShowGtkInspector => "show_gtk_inspector",
             Action::ShowOnScreenKeyboard => "show_on_screen_keyboard",
-            Action::OpenConfig => "open_config",
+            Action::OpenConfig(_) => "open_config",
             Action::ReloadConfig => "reload_config",
             Action::CloseSurface => "close_surface",
             Action::CloseTab(_) => "close_tab",
@@ -1489,11 +1543,14 @@ impl Action {
         "last_tab",
         "goto_tab",
         "move_tab",
+        "move_tab_to_new_window",
         "toggle_tab_overview",
         "prompt_surface_title",
         "prompt_tab_title",
+        "prompt_window_title",
         "set_surface_title",
         "set_tab_title",
+        "set_window_title",
         "new_split",
         "goto_split",
         "goto_window",
@@ -1620,16 +1677,17 @@ impl Action {
             b"previous_tab" => void_arm!(Action::PreviousTab),
             b"next_tab" => void_arm!(Action::NextTab),
             b"last_tab" => void_arm!(Action::LastTab),
+            b"move_tab_to_new_window" => void_arm!(Action::MoveTabToNewWindow),
             b"toggle_tab_overview" => void_arm!(Action::ToggleTabOverview),
             b"prompt_surface_title" => void_arm!(Action::PromptSurfaceTitle),
             b"prompt_tab_title" => void_arm!(Action::PromptTabTitle),
+            b"prompt_window_title" => void_arm!(Action::PromptWindowTitle),
             b"toggle_split_zoom" => void_arm!(Action::ToggleSplitZoom),
             b"toggle_readonly" => void_arm!(Action::ToggleReadonly),
             b"equalize_splits" => void_arm!(Action::EqualizeSplits),
             b"reset_window_size" => void_arm!(Action::ResetWindowSize),
             b"show_gtk_inspector" => void_arm!(Action::ShowGtkInspector),
             b"show_on_screen_keyboard" => void_arm!(Action::ShowOnScreenKeyboard),
-            b"open_config" => void_arm!(Action::OpenConfig),
             b"reload_config" => void_arm!(Action::ReloadConfig),
             b"close_surface" => void_arm!(Action::CloseSurface),
             b"close_window" => void_arm!(Action::CloseWindow),
@@ -1659,6 +1717,7 @@ impl Action {
             b"search" => Ok(Action::Search(parse_field_string(Some(value))?)),
             b"set_surface_title" => Ok(Action::SetSurfaceTitle(parse_field_string(Some(value))?)),
             b"set_tab_title" => Ok(Action::SetTabTitle(parse_field_string(Some(value))?)),
+            b"set_window_title" => Ok(Action::SetWindowTitle(parse_field_string(Some(value))?)),
             b"activate_key_table" => Ok(Action::ActivateKeyTable(parse_field_string(Some(value))?)),
             b"activate_key_table_once" => Ok(Action::ActivateKeyTableOnce(parse_field_string(
                 Some(value),
@@ -1713,6 +1772,10 @@ impl Action {
             b"inspector" => Ok(Action::Inspector(parse_field_enum(
                 Some(value),
                 InspectorMode::string_to_enum,
+            )?)),
+            b"open_config" => Ok(Action::OpenConfig(parse_field_enum(
+                Some(value),
+                OpenConfig::string_to_enum,
             )?)),
             b"close_tab" => Ok(Action::CloseTab(parse_field_enum(
                 Some(value),
@@ -2096,11 +2159,14 @@ impl Action {
             b"last_tab" => void_arm!(Action::LastTab),
             b"goto_tab" => num_arm!(Action::GotoTab, parse_int_usize),
             b"move_tab" => num_arm!(Action::MoveTab, parse_int_isize),
+            b"move_tab_to_new_window" => void_arm!(Action::MoveTabToNewWindow),
             b"toggle_tab_overview" => void_arm!(Action::ToggleTabOverview),
             b"prompt_surface_title" => void_arm!(Action::PromptSurfaceTitle),
             b"prompt_tab_title" => void_arm!(Action::PromptTabTitle),
+            b"prompt_window_title" => void_arm!(Action::PromptWindowTitle),
             b"set_surface_title" => string_arm!(Action::SetSurfaceTitle),
             b"set_tab_title" => string_arm!(Action::SetTabTitle),
+            b"set_window_title" => string_arm!(Action::SetWindowTitle),
             b"new_split" => {
                 enum_arm_default!(SplitDirection, Action::NewSplit, SplitDirection::DEFAULT)
             }
@@ -2114,7 +2180,9 @@ impl Action {
             b"inspector" => enum_arm!(InspectorMode, Action::Inspector),
             b"show_gtk_inspector" => void_arm!(Action::ShowGtkInspector),
             b"show_on_screen_keyboard" => void_arm!(Action::ShowOnScreenKeyboard),
-            b"open_config" => void_arm!(Action::OpenConfig),
+            b"open_config" => {
+                enum_arm_default!(OpenConfig, Action::OpenConfig, OpenConfig::DEFAULT)
+            }
             b"reload_config" => void_arm!(Action::ReloadConfig),
             b"close_surface" => void_arm!(Action::CloseSurface),
             b"close_tab" => {
@@ -2171,8 +2239,9 @@ pub enum Scope {
 // Rust has no comptime type generation, so this is the HAND-WRITTEN
 // `Scoped(.app)` instantiation: exactly the fields whose `scope() == .app`, in
 // the `Action` union's declaration order (the order the comptime loop
-// preserves). Every app-scoped action is a void field, so the union collapses
-// to a fieldless enum. `Scoped(.surface)` is hand-written the same way with
+// preserves). Every app-scoped action except `open_config` is a void field
+// (`open_config` carries its `OpenConfig` enum payload, `Copy` by value).
+// `Scoped(.surface)` is hand-written the same way with
 // its consumer (core C14 `performBindingAction`); see the note at
 // [`Action::scoped_app`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2181,7 +2250,7 @@ pub enum ScopedApp {
     Unbind,
     NewWindow,
     ShowGtkInspector,
-    OpenConfig,
+    OpenConfig(OpenConfig),
     ReloadConfig,
     CloseAllWindows,
     ToggleQuickTerminal,
@@ -2252,11 +2321,14 @@ pub enum ScopedSurface<'a> {
     LastTab,
     GotoTab(usize),
     MoveTab(isize),
+    MoveTabToNewWindow,
     ToggleTabOverview,
     PromptSurfaceTitle,
     PromptTabTitle,
+    PromptWindowTitle,
     SetSurfaceTitle(&'a [u8]),
     SetTabTitle(&'a [u8]),
+    SetWindowTitle(&'a [u8]),
     NewSplit(SplitDirection),
     GotoSplit(SplitFocusDirection),
     GotoWindow(GotoWindow),
@@ -2294,7 +2366,7 @@ impl Action {
             Action::Ignore | Action::Unbind => Scope::App,
 
             // Obviously app actions.
-            Action::OpenConfig
+            Action::OpenConfig(_)
             | Action::ReloadConfig
             | Action::CloseAllWindows
             | Action::Quit
@@ -2328,8 +2400,10 @@ impl Action {
             | Action::SetFontSize(_)
             | Action::PromptSurfaceTitle
             | Action::PromptTabTitle
+            | Action::PromptWindowTitle
             | Action::SetSurfaceTitle(_)
             | Action::SetTabTitle(_)
+            | Action::SetWindowTitle(_)
             | Action::ClearScreen
             | Action::SelectAll
             | Action::ScrollToTop
@@ -2375,6 +2449,7 @@ impl Action {
             | Action::LastTab
             | Action::GotoTab(_)
             | Action::MoveTab(_)
+            | Action::MoveTabToNewWindow
             | Action::ToggleTabOverview
             | Action::NewSplit(_)
             | Action::GotoSplit(_)
@@ -2421,7 +2496,7 @@ impl Action {
             Action::Unbind => Some(ScopedApp::Unbind),
             Action::NewWindow => Some(ScopedApp::NewWindow),
             Action::ShowGtkInspector => Some(ScopedApp::ShowGtkInspector),
-            Action::OpenConfig => Some(ScopedApp::OpenConfig),
+            Action::OpenConfig(v) => Some(ScopedApp::OpenConfig(*v)),
             Action::ReloadConfig => Some(ScopedApp::ReloadConfig),
             Action::CloseAllWindows => Some(ScopedApp::CloseAllWindows),
             Action::ToggleQuickTerminal => Some(ScopedApp::ToggleQuickTerminal),
@@ -2486,11 +2561,14 @@ impl Action {
             Action::LastTab => Some(ScopedSurface::LastTab),
             Action::GotoTab(v) => Some(ScopedSurface::GotoTab(*v)),
             Action::MoveTab(v) => Some(ScopedSurface::MoveTab(*v)),
+            Action::MoveTabToNewWindow => Some(ScopedSurface::MoveTabToNewWindow),
             Action::ToggleTabOverview => Some(ScopedSurface::ToggleTabOverview),
             Action::PromptSurfaceTitle => Some(ScopedSurface::PromptSurfaceTitle),
             Action::PromptTabTitle => Some(ScopedSurface::PromptTabTitle),
+            Action::PromptWindowTitle => Some(ScopedSurface::PromptWindowTitle),
             Action::SetSurfaceTitle(v) => Some(ScopedSurface::SetSurfaceTitle(v.as_slice())),
             Action::SetTabTitle(v) => Some(ScopedSurface::SetTabTitle(v.as_slice())),
+            Action::SetWindowTitle(v) => Some(ScopedSurface::SetWindowTitle(v.as_slice())),
             Action::NewSplit(v) => Some(ScopedSurface::NewSplit(*v)),
             Action::GotoSplit(v) => Some(ScopedSurface::GotoSplit(*v)),
             Action::GotoWindow(v) => Some(ScopedSurface::GotoWindow(*v)),
@@ -2562,16 +2640,17 @@ impl Action {
             | Action::PreviousTab
             | Action::NextTab
             | Action::LastTab
+            | Action::MoveTabToNewWindow
             | Action::ToggleTabOverview
             | Action::PromptSurfaceTitle
             | Action::PromptTabTitle
+            | Action::PromptWindowTitle
             | Action::ToggleSplitZoom
             | Action::ToggleReadonly
             | Action::EqualizeSplits
             | Action::ResetWindowSize
             | Action::ShowGtkInspector
             | Action::ShowOnScreenKeyboard
-            | Action::OpenConfig
             | Action::ReloadConfig
             | Action::CloseSurface
             | Action::CloseWindow
@@ -2601,6 +2680,7 @@ impl Action {
             | Action::Search(v)
             | Action::SetSurfaceTitle(v)
             | Action::SetTabTitle(v)
+            | Action::SetWindowTitle(v)
             | Action::ActivateKeyTable(v)
             | Action::ActivateKeyTableOnce(v) => {
                 writer.write_all(b":")?;
@@ -2671,6 +2751,10 @@ impl Action {
                 writer.write_all(b":")?;
                 format_value_enum(writer, v.tag_name())
             }
+            Action::OpenConfig(v) => {
+                writer.write_all(b":")?;
+                format_value_enum(writer, v.tag_name())
+            }
             Action::CloseTab(v) => {
                 writer.write_all(b":")?;
                 format_value_enum(writer, v.tag_name())
@@ -2687,40 +2771,9 @@ impl Action {
 // `Action.format`. The reference switches on `@TypeOf(value)` then
 // `@typeInfo(Value)`. Each Rust helper below reproduces one arm.
 
-// []const u8 => try std.zig.stringEscape(value, writer),
-//
-// PORT NOTE: faithful port of `std.zig.stringEscape` (Zig 0.15.2 std/zig.zig):
-// printable ASCII passes through, a handful of escapes are special-cased, and
-// everything else is `\xNN` (lowercase hex, width 2, zero-filled).
+// []const u8 => try writer.print("{s}", .{value}),
 fn format_value_string<W: Writer>(writer: &mut W, value: &[u8]) -> Result<(), W::Error> {
-    for &byte in value {
-        match byte {
-            b'\n' => writer.write_all(b"\\n")?,
-            b'\r' => writer.write_all(b"\\r")?,
-            b'\t' => writer.write_all(b"\\t")?,
-            b'\\' => writer.write_all(b"\\\\")?,
-            b'"' => writer.write_all(b"\\\"")?,
-            b'\'' => writer.write_all(b"'")?,
-            b' ' | b'!' | b'#'..=b'&' | b'('..=b'[' | b']'..=b'~' => {
-                writer.write_all(&[byte])?;
-            }
-            _ => {
-                writer.write_all(b"\\x")?;
-                // printInt(byte, 16, .lower, .{ .width = 2, .fill = '0' })
-                let hi = byte >> 4;
-                let lo = byte & 0xf;
-                writer.write_all(&[hex_lower(hi), hex_lower(lo)])?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn hex_lower(nibble: u8) -> u8 {
-    match nibble {
-        0..=9 => b'0' + nibble,
-        _ => b'a' + (nibble - 10),
-    }
+    writer.write_all(value)
 }
 
 // .@"enum" => try writer.print("{t}", .{value}),
@@ -2829,16 +2882,17 @@ impl Action {
             | Action::PreviousTab
             | Action::NextTab
             | Action::LastTab
+            | Action::MoveTabToNewWindow
             | Action::ToggleTabOverview
             | Action::PromptSurfaceTitle
             | Action::PromptTabTitle
+            | Action::PromptWindowTitle
             | Action::ToggleSplitZoom
             | Action::ToggleReadonly
             | Action::EqualizeSplits
             | Action::ResetWindowSize
             | Action::ShowGtkInspector
             | Action::ShowOnScreenKeyboard
-            | Action::OpenConfig
             | Action::ReloadConfig
             | Action::CloseSurface
             | Action::CloseWindow
@@ -2877,6 +2931,7 @@ impl Action {
             | Action::Search(v)
             | Action::SetSurfaceTitle(v)
             | Action::SetTabTitle(v)
+            | Action::SetWindowTitle(v)
             | Action::ActivateKeyTable(v)
             | Action::ActivateKeyTableOnce(v) => hasher.write(v),
             Action::CursorKey(v) => {
@@ -2903,6 +2958,7 @@ impl Action {
                 hasher.write_u16(v.1);
             }
             Action::Inspector(v) => hasher.write(v.tag_name().as_bytes()),
+            Action::OpenConfig(v) => hasher.write(v.tag_name().as_bytes()),
             Action::CloseTab(v) => hasher.write(v.tag_name().as_bytes()),
             Action::Crash(v) => hasher.write(v.tag_name().as_bytes()),
         }
@@ -2925,6 +2981,7 @@ impl Action {
             | (Action::Search(a), Action::Search(b))
             | (Action::SetSurfaceTitle(a), Action::SetSurfaceTitle(b))
             | (Action::SetTabTitle(a), Action::SetTabTitle(b))
+            | (Action::SetWindowTitle(a), Action::SetWindowTitle(b))
             | (Action::ActivateKeyTable(a), Action::ActivateKeyTable(b))
             | (Action::ActivateKeyTableOnce(a), Action::ActivateKeyTableOnce(b)) => {
                 deep_equal::<[u8]>(a, b)
@@ -2952,6 +3009,7 @@ impl Action {
             (Action::GotoWindow(a), Action::GotoWindow(b)) => a == b,
             (Action::ResizeSplit(a), Action::ResizeSplit(b)) => a == b,
             (Action::Inspector(a), Action::Inspector(b)) => a == b,
+            (Action::OpenConfig(a), Action::OpenConfig(b)) => a == b,
             (Action::CloseTab(a), Action::CloseTab(b)) => a == b,
             (Action::Crash(a), Action::Crash(b)) => a == b,
             // void variants: equal iff same tag.
@@ -7725,11 +7783,15 @@ mod tests {
     // test "action: format"
     #[test]
     fn action_format() {
-        let a: Action = Action::Text("👻".as_bytes().to_vec());
+        let a: Action = Action::Text("👻Rustty'\"".as_bytes().to_vec());
 
         let mut buf = AllocatingWriter::init();
         a.format(&mut buf).unwrap();
-        assert_eq!(b"text:\\xf0\\x9f\\x91\\xbb", buf.written());
+
+        // const b = try Binding.Action.parse(buf.written());
+        let b = Action::parse(buf.written()).unwrap();
+        // try testing.expect(a.equal(b));
+        assert!(a.equal(&b));
     }
 
     // test "action: format set title"

@@ -144,6 +144,7 @@ _rustty() {
     config+=" --scrollbar="
     config+=" --link="
     config+=" '--link-url '"
+    config+=" '--link-osc8 '"
     config+=" --link-previews="
     config+=" '--maximize '"
     config+=" --fullscreen="
@@ -177,6 +178,7 @@ _rustty() {
     config+=" --window-show-tab-bar="
     config+=" --window-titlebar-background="
     config+=" --window-titlebar-foreground="
+    config+=" --drag-handle="
     config+=" --resize-overlay="
     config+=" --resize-overlay-position="
     config+=" --resize-overlay-duration="
@@ -352,6 +354,7 @@ _rustty() {
       --scrollbar) _compreply compgen -W "system never" -- "$cur"; _add_spaces ;;
       --link) return ;;
       --link-url) return ;;
+      --link-osc8) return ;;
       --link-previews) _compreply compgen -W "false true osc8" -- "$cur"; _add_spaces ;;
       --maximize) return ;;
       --fullscreen) _compreply compgen -W "false true non-native non-native-visible-menu non-native-padded-notch" -- "$cur"; _add_spaces ;;
@@ -385,6 +388,7 @@ _rustty() {
       --window-show-tab-bar) _compreply compgen -W "always auto never" -- "$cur"; _add_spaces ;;
       --window-titlebar-background) return ;;
       --window-titlebar-foreground) return ;;
+      --drag-handle) _compreply compgen -W "always auto never" -- "$cur"; _add_spaces ;;
       --resize-overlay) _compreply compgen -W "always never after-first" -- "$cur"; _add_spaces ;;
       --resize-overlay-position) _compreply compgen -W "center top-left top-center top-right bottom-left bottom-center bottom-right" -- "$cur"; _add_spaces ;;
       --resize-overlay-duration) return ;;

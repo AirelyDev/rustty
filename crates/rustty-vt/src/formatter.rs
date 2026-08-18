@@ -16,6 +16,7 @@
 
 // const std = @import("std");
 // const assert = @import("../quirks.zig").inlineAssert;
+// const fastprint = @import("../fastprint.zig");
 // const lib = @import("lib.zig");
 // const Allocator = std.mem.Allocator;
 // const color = @import("color.zig");
@@ -35,6 +36,7 @@
 // const Selection = @import("Selection.zig");
 // const Style = @import("style.zig").Style;
 use crate::color;
+use crate::fastprint;
 use crate::page as pagepkg;
 use crate::page::u21;
 use crate::page::{Cell, Page, Row};
@@ -263,9 +265,154 @@ impl Options {
 ///
 /// Used by formatters that operate on PageLists to track the source position
 /// of each byte written. The caller is responsible for freeing the map.
+///
+/// The mapping is stored in two parts: a per-byte x/y coordinate (8
+/// bytes per output byte, half the size of a Pin) and a tiny table of
+/// page nodes covering byte ranges (there are only ever a handful of
+/// pages). This also lets page formatters write coordinates directly
+/// into the map without a separate coordinate-to-pin conversion pass.
 pub struct PinMap<'a> {
     pub alloc: Allocator,
-    pub map: &'a mut Vec<Pin>,
+    pub map: &'a mut PinMapMap,
+}
+
+/// The type of the page node referenced by pins.
+// PORT NOTE: nested `PinMap.Node` (`@FieldType(Pin, "node")`), hoisted to a
+// top-level name per the `TerminalExtra`/`ScreenExtra` precedent.
+pub type PinMapNode = *mut crate::pagelist::Node;
+
+/// A page node covering output bytes starting at `offset`
+/// (inclusive) until the next entry's offset (or the end of the
+/// output).
+// PORT NOTE: nested `PinMap.NodeRun`, hoisted to a top-level name.
+#[derive(Clone, Copy)]
+pub struct NodeRun {
+    pub offset: usize,
+    pub node: PinMapNode,
+}
+
+// PORT NOTE: nested `PinMap.Map`, hoisted to the parent-prefixed top-level
+// name `PinMapMap` (the `TerminalExtra`/`ScreenExtra` hoisting precedent).
+#[derive(Clone)]
+pub struct PinMapMap {
+    /// The x/y coordinate within its page for every output byte.
+    // PORT NOTE: `std.ArrayList(Coordinate) = .empty` -> `Vec<Coordinate>`.
+    pub points: Vec<Coordinate>,
+
+    /// The page node for ranges of output bytes, ordered by offset.
+    pub nodes: Vec<NodeRun>,
+}
+
+impl PinMapMap {
+    // pub const empty: Map = .{};
+    pub const EMPTY: PinMapMap = PinMapMap {
+        points: Vec::new(),
+        nodes: Vec::new(),
+    };
+
+    pub fn deinit(&mut self, alloc: Allocator) {
+        // PORT NOTE: the reference frees both `alloc`-owned lists. The owning
+        // `Vec`s free on drop; replacing them here is the faithful
+        // deallocation, and the `alloc` parameter is kept for signature parity.
+        let _ = alloc;
+        self.points = Vec::new();
+        self.nodes = Vec::new();
+    }
+
+    pub fn clear_retaining_capacity(&mut self) {
+        self.points.clear();
+        self.nodes.clear();
+    }
+
+    /// The total number of bytes mapped.
+    pub fn count(&self) -> usize {
+        self.points.len()
+    }
+
+    /// Set the page node for all bytes appended from here on,
+    /// until the next call. No-op if the node is unchanged.
+    // PORT NOTE: returns `Allocator.Error!void` in the reference; `Vec` growth
+    // aborts on OOM (the file-wide convention that dropped the
+    // `catch return error.WriteFailed` arms), so this is infallible here.
+    pub fn set_node(&mut self, alloc: Allocator, node: PinMapNode) {
+        let _ = alloc;
+        if let Some(last) = self.nodes.last() {
+            if core::ptr::eq(last.node, node) {
+                return;
+            }
+        }
+
+        self.nodes.push(NodeRun {
+            offset: self.points.len(),
+            node,
+        });
+    }
+
+    /// Append `n` bytes that map to `pin`.
+    pub fn append(&mut self, alloc: Allocator, pin: Pin, n: usize) {
+        if n == 0 {
+            return;
+        }
+        self.set_node(alloc, pin.node);
+        // try self.points.appendNTimes(alloc, .{ .x = pin.x, .y = pin.y }, n);
+        self.points.extend(core::iter::repeat_n(
+            Coordinate {
+                x: pin.x,
+                y: pin.y as u32,
+            },
+            n,
+        ));
+    }
+
+    /// Returns the pin that the byte at the given offset maps to,
+    /// or null if the offset is out of range.
+    pub fn get(&self, offset: usize) -> Option<Pin> {
+        if offset >= self.points.len() {
+            return None;
+        }
+        let coord = self.points[offset];
+        // PORT NOTE: `.y = @intCast(coord.y)` — the safety-checked narrowing
+        // maps to the debug_assert + `as` pairing (R7).
+        debug_assert!(coord.y <= size::CellCountInt::MAX as u32);
+        Some(Pin {
+            node: PinMap::find_node(&self.nodes, offset)?,
+            x: coord.x,
+            y: coord.y as size::CellCountInt,
+            // PORT NOTE: the reference Pin field default (`garbage = false`).
+            garbage: false,
+        })
+    }
+
+    /// Returns the last pin in the map, if any.
+    pub fn get_last_or_null(&self) -> Option<Pin> {
+        let len = self.points.len();
+        if len == 0 {
+            return None;
+        }
+        self.get(len - 1)
+    }
+}
+
+impl<'a> PinMap<'a> {
+    /// Binary search for the node covering `offset` in a slice of node
+    /// runs sorted by offset. Returns null only if the slice is empty
+    /// or the offset precedes the first run.
+    pub fn find_node(runs: &[NodeRun], offset: usize) -> Option<PinMapNode> {
+        if runs.is_empty() || offset < runs[0].offset {
+            return None;
+        }
+        let mut lo: usize = 0;
+        let mut hi: usize = runs.len();
+        while lo + 1 < hi {
+            let mid = lo + (hi - lo) / 2;
+            if runs[mid].offset <= offset {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Some(runs[lo].node)
+    }
 }
 
 /// Terminal formatter formats the active terminal screen.
@@ -446,12 +593,13 @@ impl<'a> TerminalFormatter<'a> {
 
                     // Map all those bytes to the same pin. Use the top left to ensure
                     // the node pointer is always properly initialized.
-                    let pin = unsafe { &*terminal.screens.active }
-                        .pages
-                        .get_top_left(point::Tag::Screen);
-                    for _ in 0..discarding.count {
-                        m.map.push(pin);
-                    }
+                    m.map.append(
+                        m.alloc,
+                        unsafe { &*terminal.screens.active }
+                            .pages
+                            .get_top_left(point::Tag::Screen),
+                        discarding.count,
+                    );
                 }
             }
         }
@@ -494,12 +642,58 @@ impl<'a> TerminalFormatter<'a> {
 
                 // Map all those bytes to the same pin. Use the top left to ensure
                 // the node pointer is always properly initialized.
-                let pin = unsafe { &*terminal.screens.active }
-                    .pages
-                    .get_top_left(point::Tag::Screen);
-                for _ in 0..discarding.count {
-                    m.map.push(pin);
+                m.map.append(
+                    m.alloc,
+                    unsafe { &*terminal.screens.active }
+                        .pages
+                        .get_top_left(point::Tag::Screen),
+                    discarding.count,
+                );
+            }
+        }
+
+        // Emit tabstop positions before the screen contents because setting
+        // them moves the cursor. Screen formatting will restore the requested
+        // cursor position afterwards.
+        if self.opts.emit == Format::Vt && self.extra.tabstops {
+            // Clear all tabs (CSI 3 g)
+            write!(writer, "\x1b[3g")?;
+
+            // Set each configured tabstop by moving cursor and using HTS
+            for col in 0..terminal.cols {
+                if terminal.tabstops.get(col as usize) {
+                    // Move cursor to the column (1-indexed)
+                    write!(writer, "\x1b[{}G", col + 1)?;
+                    // Set tab (HTS)
+                    write!(writer, "\x1bH")?;
                 }
+            }
+
+            // Screen contents are formatted relative to the top-left.
+            writer.write_all(b"\x1b[H")?;
+
+            // If we have a pin_map, add the bytes we wrote to map.
+            if let Some(m) = self.pin_map.as_mut() {
+                let mut discarding = Discarding::new();
+                let mut extra_formatter: TerminalFormatter = TerminalFormatter {
+                    terminal: self.terminal,
+                    opts: copy_options(&self.opts),
+                    content: Content::None,
+                    extra: TerminalExtra::NONE,
+                    pin_map: None,
+                };
+                extra_formatter.extra.tabstops = true;
+                extra_formatter.format(&mut discarding)?;
+
+                // Map all those bytes to the same pin. Use the top left to ensure
+                // the node pointer is always properly initialized.
+                m.map.append(
+                    m.alloc,
+                    unsafe { &*terminal.screens.active }
+                        .pages
+                        .get_top_left(point::Tag::Screen),
+                    discarding.count,
+                );
             }
         }
 
@@ -509,7 +703,6 @@ impl<'a> TerminalFormatter<'a> {
             Content::None => Content::None,
             Content::Selection(sel) => Content::Selection(*sel),
         };
-        screen_formatter.extra = self.extra.screen;
         if let Some(m) = self.pin_map.as_mut() {
             screen_formatter.pin_map = Some(PinMap {
                 alloc: m.alloc,
@@ -535,22 +728,6 @@ impl<'a> TerminalFormatter<'a> {
                 // Only emit if not the full width
                 if region.left != 0 || region.right != terminal.cols - 1 {
                     write!(writer, "\x1b[{};{}s", region.left + 1, region.right + 1)?;
-                }
-            }
-
-            // Emit tabstop positions
-            if self.extra.tabstops {
-                // Clear all tabs (CSI 3 g)
-                write!(writer, "\x1b[3g")?;
-
-                // Set each configured tabstop by moving cursor and using HTS
-                for col in 0..terminal.cols {
-                    if terminal.tabstops.get(col as usize) {
-                        // Move cursor to the column (1-indexed)
-                        write!(writer, "\x1b[{}G", col + 1)?;
-                        // Set tab (HTS)
-                        write!(writer, "\x1bH")?;
-                    }
                 }
             }
 
@@ -583,29 +760,37 @@ impl<'a> TerminalFormatter<'a> {
                     pin_map: None,
                 };
                 extra_formatter.extra.scrolling_region = self.extra.scrolling_region;
-                extra_formatter.extra.tabstops = self.extra.tabstops;
                 extra_formatter.extra.keyboard = self.extra.keyboard;
                 extra_formatter.extra.pwd = self.extra.pwd;
                 extra_formatter.format(&mut discarding)?;
 
-                let pin = if !m.map.is_empty() {
-                    let last = m.map[m.map.len() - 1];
-                    Pin {
-                        node: last.node,
-                        x: last.x,
-                        y: last.y,
-                        garbage: last.garbage,
-                    }
-                } else {
+                let pin = m.map.get_last_or_null().unwrap_or_else(|| {
                     unsafe { &*terminal.screens.active }
                         .pages
                         .get_top_left(point::Tag::Screen)
-                };
-                for _ in 0..discarding.count {
-                    m.map.push(pin);
-                }
+                });
+                m.map.append(m.alloc, pin, discarding.count);
             }
         }
+
+        // Emit extra screen state last because terminal state such
+        // as scrolling regions can move the cursor, so we have to set
+        // cursor last.
+        // PORT NOTE: the reference reuses the same by-value `screen_formatter`
+        // (its `format` copies `self`); the Rust `format` consumes `self`, so
+        // the trailing pass reconstructs an identical formatter, carrying the
+        // same pin_map reborrow.
+        let mut screen_formatter: ScreenFormatter =
+            ScreenFormatter::init(terminal.screens.active, copy_options(&self.opts));
+        screen_formatter.content = Content::None;
+        screen_formatter.extra = self.extra.screen;
+        if let Some(m) = self.pin_map.as_mut() {
+            screen_formatter.pin_map = Some(PinMap {
+                alloc: m.alloc,
+                map: &mut *m.map,
+            });
+        }
+        screen_formatter.format(writer)?;
 
         Ok(())
     }
@@ -785,6 +970,49 @@ impl<'a> ScreenFormatter<'a> {
             Format::Html => return Ok(()),
         }
 
+        // Emit cursor position before the other extras because restoring a
+        // pending wrap requires reprinting the cell at the right edge. That
+        // print uses and changes active screen state, so the requested style,
+        // hyperlink, protection, and charset must be restored afterwards.
+        if self.extra.cursor {
+            'cursor: {
+                let cursor = &screen.cursor;
+
+                // If we don't have pending wrap, then we can just use CUP.
+                if !cursor.pending_wrap || cursor.x != screen.pages.cols - 1 {
+                    write!(writer, "\x1b[{};{}H", cursor.y + 1, cursor.x + 1)?;
+                    break 'cursor;
+                }
+
+                // Pending wrap, we can't use CUP because it resets pending wrap.
+                let start_x: size::CellCountInt = match unsafe { (*cursor.page_cell).wide() } {
+                    pagepkg::Wide::SpacerTail => cursor.x - 1,
+                    pagepkg::Wide::Narrow | pagepkg::Wide::Wide | pagepkg::Wide::SpacerHead => {
+                        cursor.x
+                    }
+                };
+
+                // Move cursor to the edge.
+                write!(writer, "\x1b[{};{}H", cursor.y + 1, start_x + 1)?;
+
+                // Reformat the cell which sets the proper pending wrap state.
+                // PORT NOTE (SB): the 1-cell PageFormatter's page alias is
+                // derived from the pin's OWN node pointer
+                // (`cursor.page_pin.node.page()`), never a fresh `&mut` —
+                // both the screen alias and this page alias are read-only.
+                let page_pin = unsafe { *cursor.page_pin };
+                let mut cell_formatter: PageFormatter = PageFormatter::init(
+                    unsafe { crate::pagelist::Node::page(page_pin.node) } as *const Page,
+                    copy_options(&self.opts),
+                );
+                cell_formatter.start_x = cursor.x;
+                cell_formatter.end_x = Some(cursor.x);
+                cell_formatter.start_y = page_pin.y;
+                cell_formatter.end_y = Some(page_pin.y);
+                cell_formatter.format(writer)?;
+            }
+        }
+
         // Emit current SGR style state
         if self.extra.style {
             let cursor = &screen.cursor;
@@ -891,13 +1119,6 @@ impl<'a> ScreenFormatter<'a> {
             }
         }
 
-        // Emit cursor position using CUP (CSI H)
-        if self.extra.cursor {
-            let cursor = &screen.cursor;
-            // CUP is 1-indexed
-            write!(writer, "\x1b[{};{}H", cursor.y + 1, cursor.x + 1)?;
-        }
-
         // If we have a pin_map, we need to count how many bytes the extras
         // will emit so we can map them all to the same pin. We do this by
         // formatting to a discarding writer with content=none.
@@ -917,25 +1138,11 @@ impl<'a> ScreenFormatter<'a> {
 
             // Map all those bytes to the same pin. Use the first page node
             // to ensure the node pointer is always properly initialized.
-            let pin = if !m.map.is_empty() {
-                // There is a weird Zig miscompilation here on 0.15.2.
-                // If I return the m.map.items value directly then we
-                // get undefined memory (even though we're copying a
-                // Pin struct). If we duplicate here like this we do
-                // not.
-                let last = m.map[m.map.len() - 1];
-                Pin {
-                    node: last.node,
-                    x: last.x,
-                    y: last.y,
-                    garbage: last.garbage,
-                }
-            } else {
-                screen.pages.get_top_left(point::Tag::Screen)
-            };
-            for _ in 0..discarding.count {
-                m.map.push(pin);
-            }
+            let pin = m
+                .map
+                .get_last_or_null()
+                .unwrap_or_else(|| screen.pages.get_top_left(point::Tag::Screen));
+            m.map.append(m.alloc, pin, discarding.count);
         }
 
         Ok(())
@@ -1025,9 +1232,6 @@ impl<'a> PageListFormatter<'a> {
             .bottom_right
             .unwrap_or_else(|| list.get_bottom_right(point::Tag::Screen).unwrap());
 
-        // If we keep track of pins, we'll need this.
-        let mut point_map: Vec<Coordinate> = Vec::new();
-
         let mut page_state: Option<TrailingState> = None;
         let mut iter = tl.page_iterator(crate::pagelist::iter::Direction::RightDown, Some(br));
         while let Some(chunk) = iter.next() {
@@ -1057,31 +1261,20 @@ impl<'a> PageListFormatter<'a> {
                 }
             }
 
-            // If we're tracking pins, then we setup a point map for the
-            // page formatter (cause it can't track pins). And then we convert
-            // this to pins later.
-            if self.pin_map.is_some() {
-                point_map.clear();
+            // If we're tracking pins, the page formatter writes its
+            // per-byte coordinates directly into our map's point list
+            // and we record which page node covers those bytes.
+            if let Some(m) = self.pin_map.as_mut() {
+                m.map.set_node(m.alloc, chunk.node);
+                let base = m.map.points.len();
                 formatter.point_map = Some(PointMap {
-                    alloc: Allocator,
-                    map: &mut point_map,
+                    alloc: m.alloc,
+                    map: &mut m.map.points,
+                    base,
                 });
             }
 
             page_state = Some(formatter.format_with_state(writer)?);
-
-            // If we're tracking pins then grab our points and write them
-            // to our pin map.
-            if let Some(m) = self.pin_map.as_mut() {
-                for coord in point_map.iter() {
-                    m.map.push(Pin {
-                        node: chunk.node,
-                        x: coord.x,
-                        y: coord.y as size::CellCountInt,
-                        garbage: false,
-                    });
-                }
-            }
         }
 
         Ok(())
@@ -1139,10 +1332,20 @@ pub struct PageFormatter<'a> {
     pub trailing_state: Option<TrailingState>,
 }
 
-// PORT NOTE: inline anonymous param struct for `PageFormatter.point_map`.
+/// See point_map.
+// PORT NOTE: nested `PageFormatter.PointMap`, hoisted to a top-level name.
 pub struct PointMap<'a> {
     pub alloc: Allocator,
     pub map: &'a mut Vec<Coordinate>,
+
+    /// The index in `map` at which this formatter's output begins.
+    /// Entries before this index belong to a caller (e.g. previous
+    /// pages of a PageListFormatter) and aren't inspected. This
+    /// exists so that callers can share one list across pages.
+    // PORT NOTE: the reference field default (`base: usize = 0`) is supplied
+    // explicitly at each construction site (Rust struct literals have no
+    // field defaults).
+    pub base: usize,
 }
 
 /// Trailing state. This is used to ensure that rows wrapped across
@@ -1180,7 +1383,23 @@ impl<'a> PageFormatter<'a> {
         Ok(())
     }
 
-    pub fn format_with_state(mut self, writer: &mut dyn io::Write) -> io::Result<TrailingState> {
+    pub fn format_with_state(self, writer: &mut dyn io::Write) -> io::Result<TrailingState> {
+        // Specialize the hot path on the emitted format so that the
+        // per-cell loop contains no per-cell format dispatch.
+        // PORT NOTE: the reference `switch (self.opts.emit) { inline else =>
+        // |emit| ... }` comptime-specializes per format. Per this file's
+        // comptime-parameter convention (`writeCell`'s `comptime tag` ported
+        // as a runtime param), `emit` is a hoisted runtime parameter — the
+        // dispatch still happens exactly once, here.
+        let emit = self.opts.emit;
+        self.format_with_state_emit(writer, emit)
+    }
+
+    fn format_with_state_emit(
+        mut self,
+        writer: &mut dyn io::Write,
+        emit: Format,
+    ) -> io::Result<TrailingState> {
         // PORT NOTE: `self.page` is a `*const Page`; deref to access (the caller
         // guarantees the page outlives the formatter).
         let page: &Page = unsafe { &*self.page };
@@ -1255,7 +1474,7 @@ impl<'a> PageFormatter<'a> {
         }
 
         // Wrap HTML output in monospace font styling
-        match self.opts.emit {
+        match emit {
             Format::Plain => {}
 
             Format::Html => {
@@ -1317,8 +1536,23 @@ impl<'a> PageFormatter<'a> {
             }
         }
 
-        // Our style for non-plain formats
+        // Our style for non-plain formats. Alongside the style itself we
+        // track the page-local interned style id it corresponds to (styles
+        // are interned per-page so id equality implies style equality).
+        // The id is only a fast-path hint: it is set to `invalid_style_id`
+        // whenever the current style didn't come from an interned id
+        // (e.g. bg-color-only cells which synthesize styles).
+        let invalid_style_id: u32 = u32::MAX;
         let mut style: crate::style::Style = crate::style::Style::default();
+        let mut style_id: u32 = 0;
+
+        // Whether the codepoint map has any entries. Hoisted out of the
+        // per-codepoint path so that the common no-map case can use the
+        // fast cell run path below.
+        let cp_map_empty: bool = match self.opts.codepoint_map.as_ref() {
+            Some(m) => m.is_empty(),
+            None => true,
+        };
 
         // Track hyperlink state for HTML output. We need to close </a> tags
         // when the hyperlink changes or ends.
@@ -1372,11 +1606,12 @@ impl<'a> PageFormatter<'a> {
                 // Reset style before emitting newlines to prevent background
                 // colors from bleeding into the next line's leading cells.
                 if !style.default_style() {
-                    self.format_style_close(writer)?;
+                    self.format_style_close(emit, writer)?;
                     style = crate::style::Style::default();
+                    style_id = 0;
                 }
 
-                let sequence: &[u8] = match self.opts.emit {
+                let sequence: &[u8] = match emit {
                     // Plaintext just uses standard newlines because newlines
                     // on their own usually move the cursor back in anywhere
                     // you type plaintext.
@@ -1401,7 +1636,7 @@ impl<'a> PageFormatter<'a> {
                 // in a prior page, so we just map to the first row of this
                 // page.
                 if let Some(map) = self.point_map.as_mut() {
-                    let start: Coordinate = if !map.map.is_empty() {
+                    let start: Coordinate = if map.map.len() > map.base {
                         map.map[map.map.len() - 1]
                     } else {
                         Coordinate { x: 0, y: 0 }
@@ -1444,14 +1679,59 @@ impl<'a> PageFormatter<'a> {
             }
 
             // Go through each cell and print it
-            'cells: for (i, cell) in cells_subset.iter().enumerate() {
-                let x: size::CellCountInt = row_start_x + i as size::CellCountInt;
+            // PORT NOTE: the reference `while (...) : (cell_i += 1)` continue
+            // expression runs on every `continue`; this port increments at
+            // each continue site and at the loop tail.
+            let mut cell_i: usize = 0;
+            'cells: while cell_i < cells_subset.len() {
+                let cell: &Cell = &cells_subset[cell_i];
+                let x: size::CellCountInt = (row_start_x as usize + cell_i) as size::CellCountInt;
+
+                // Fast path: runs of simple cells (single codepoint, no
+                // style/hyperlink transitions) are encoded in batches,
+                // avoiding all of the per-cell bookkeeping below. This is
+                // only valid when we have no codepoint map and when our
+                // current style/hyperlink state is known-stable.
+                if cp_map_empty {
+                    'fast: {
+                        if format_styled(emit) && style_id == invalid_style_id {
+                            break 'fast;
+                        }
+
+                        let track_points = self.point_map.is_some();
+                        let consumed = self.write_cell_run(
+                            emit,
+                            track_points,
+                            writer,
+                            &cells_subset[cell_i..],
+                            x,
+                            y,
+                            style_id,
+                            current_hyperlink_id,
+                            &mut blank_cells,
+                        )?;
+
+                        // Zero cells consumed means the first cell isn't
+                        // eligible for the fast path; handle it below.
+                        if consumed == 0 {
+                            break 'fast;
+                        }
+
+                        // The continue expression adds the final one.
+                        cell_i += consumed - 1;
+                        cell_i += 1;
+                        continue 'cells;
+                    }
+                }
 
                 // Skip spacers. These happen naturally when wide characters
                 // are printed again on the screen (for well-behaved terminals!)
                 match cell.wide() {
                     pagepkg::Wide::Narrow | pagepkg::Wide::Wide => {}
-                    pagepkg::Wide::SpacerHead | pagepkg::Wide::SpacerTail => continue,
+                    pagepkg::Wide::SpacerHead | pagepkg::Wide::SpacerTail => {
+                        cell_i += 1;
+                        continue 'cells;
+                    }
                 }
 
                 // If we have a zero value, then we accumulate a counter. We
@@ -1461,13 +1741,14 @@ impl<'a> PageFormatter<'a> {
                     // If we're emitting styled output (not plaintext) and
                     // the cell has some kind of styling or is not empty
                     // then this isn't blank.
-                    if format_styled(self.opts.emit) && (!cell.is_empty() || cell.has_styling()) {
+                    if format_styled(emit) && (!cell.is_empty() || cell.has_styling()) {
                         break 'blank;
                     }
 
                     // Cells with no text are blank
                     if !cell.has_text() {
                         blank_cells += 1;
+                        cell_i += 1;
                         continue 'cells;
                     }
 
@@ -1476,6 +1757,7 @@ impl<'a> PageFormatter<'a> {
                     // fill the blanks.
                     if cell.codepoint() == ' ' as u21 && self.opts.trim {
                         blank_cells += 1;
+                        cell_i += 1;
                         continue 'cells;
                     }
                 }
@@ -1487,32 +1769,8 @@ impl<'a> PageFormatter<'a> {
                         writer.write_all(b" ")?;
                     }
 
-                    if let Some(map) = self.point_map.as_mut() {
-                        // Map each blank cell to its coordinate. Blank cells can span
-                        // multiple rows if they carry over from wrap continuation.
-                        let mut remaining_blanks = blank_cells;
-                        let mut blank_x = x;
-                        let mut blank_y = y;
-                        while remaining_blanks > 0 {
-                            if blank_x > 0 {
-                                // We have space in this row
-                                blank_x -= 1;
-                            } else if blank_y > 0 {
-                                // Wrap to previous row
-                                blank_y -= 1;
-                                blank_x = page.size.cols - 1;
-                            } else {
-                                // Can't go back further, just use (0, 0)
-                                blank_x = 0;
-                                blank_y = 0;
-                            }
-
-                            map.map.push(Coordinate {
-                                x: blank_x,
-                                y: blank_y as u32,
-                            });
-                            remaining_blanks -= 1;
-                        }
+                    if self.point_map.is_some() {
+                        self.append_blank_points(blank_cells, x, y);
                     }
 
                     blank_cells = 0;
@@ -1521,7 +1779,22 @@ impl<'a> PageFormatter<'a> {
                 'style: {
                     // If we aren't emitting styled output then we don't
                     // have to worry about styles.
-                    if !format_styled(self.opts.emit) {
+                    if !format_styled(emit) {
+                        break 'style;
+                    }
+
+                    // Fast path: styles are interned per-page, so if this
+                    // cell's style id matches the id of our current style
+                    // then the style is unchanged.
+                    let cell_style_id: u32 = match cell.content_tag() {
+                        pagepkg::ContentTag::Codepoint | pagepkg::ContentTag::CodepointGrapheme => {
+                            cell.style_id() as u32
+                        }
+                        pagepkg::ContentTag::BgColorPalette | pagepkg::ContentTag::BgColorRgb => {
+                            invalid_style_id
+                        }
+                    };
+                    if cell_style_id == style_id && cell_style_id != invalid_style_id {
                         break 'style;
                     }
 
@@ -1529,23 +1802,32 @@ impl<'a> PageFormatter<'a> {
                     let cell_style = self.cell_style(page, cell);
 
                     // If the style hasn't changed, don't bloat output.
-                    if cell_style.eql(&style) {
-                        break 'style;
+                    // When both ids are interned (and thus different, since
+                    // equal ids broke out above), interning guarantees the
+                    // styles differ so we can skip the comparison entirely.
+                    // PORT NOTE: the reference nests these two ifs; the allow
+                    // keeps that 1:1 structure past `collapsible_if`.
+                    #[allow(clippy::collapsible_if)]
+                    if cell_style_id == invalid_style_id || style_id == invalid_style_id {
+                        if cell_style.eql(&style) {
+                            style_id = cell_style_id;
+                            break 'style;
+                        }
                     }
 
                     // If we had a previous style, we need to close it,
                     // because we've confirmed we have some new style
                     // (which is maybe default).
                     if !style.default_style() {
-                        match self.opts.emit {
-                            Format::Html => self.format_style_close(writer)?,
+                        match emit {
+                            Format::Html => self.format_style_close(emit, writer)?,
 
                             // For VT, we only close if we're switching to a default
                             // style because any non-default style will emit
                             // a \x1b[0m as the start of a VT coloring sequence.
                             Format::Vt => {
                                 if cell_style.default_style() {
-                                    self.format_style_close(writer)?;
+                                    self.format_style_close(emit, writer)?;
                                 }
                             }
 
@@ -1557,6 +1839,7 @@ impl<'a> PageFormatter<'a> {
 
                     // At this point, we can copy our style over
                     style = cell_style;
+                    style_id = cell_style_id;
 
                     // If we're just the default style now, we're done.
                     if cell_style.default_style() {
@@ -1564,22 +1847,21 @@ impl<'a> PageFormatter<'a> {
                     }
 
                     // New style, emit it.
-                    self.format_style_open(writer, &style)?;
+                    self.format_style_open(emit, writer, &style)?;
 
                     // If we have a point map, we map the style to
                     // this cell.
                     if self.point_map.is_some() {
                         let mut discarding = Discarding::new();
-                        self.format_style_open(&mut discarding, &style)?;
+                        self.format_style_open(emit, &mut discarding, &style)?;
                         let count = discarding.count;
                         // PORT NOTE: `count` is computed above (needs `&self`),
                         // then the map borrow is taken separately to satisfy the
                         // borrow checker (cannot hold `&mut self.point_map` across
                         // the `&self` `format_style_open` call).
                         if let Some(map) = self.point_map.as_mut() {
-                            for _ in 0..count {
-                                map.map.push(Coordinate { x, y: y as u32 });
-                            }
+                            map.map
+                                .extend(core::iter::repeat_n(Coordinate { x, y: y as u32 }, count));
                         }
                     }
                 }
@@ -1589,7 +1871,7 @@ impl<'a> PageFormatter<'a> {
                     // We currently only emit hyperlinks for HTML. In the
                     // future we can support emitting OSC 8 hyperlinks for
                     // VT output as well.
-                    if self.opts.emit != Format::Html {
+                    if emit != Format::Html {
                         break 'hyperlink;
                     }
 
@@ -1610,7 +1892,7 @@ impl<'a> PageFormatter<'a> {
                     // If our prior hyperlink ID was non-null, we need to
                     // close it because the ID has changed.
                     if current_hyperlink_id.is_some() {
-                        self.format_hyperlink_close(writer)?;
+                        self.format_hyperlink_close(emit, writer)?;
                         current_hyperlink_id = None;
                     }
 
@@ -1627,18 +1909,17 @@ impl<'a> PageFormatter<'a> {
                         let base = page.memory_ptr();
                         unsafe { link.uri.slice(base) }.to_vec()
                     };
-                    self.format_hyperlink_open(writer, &uri)?;
+                    self.format_hyperlink_open(emit, writer, &uri)?;
 
                     // If we have a point map, we map the hyperlink to
                     // this cell.
                     if self.point_map.is_some() {
                         let mut discarding = Discarding::new();
-                        self.format_hyperlink_open(&mut discarding, &uri)?;
+                        self.format_hyperlink_open(emit, &mut discarding, &uri)?;
                         let count = discarding.count;
                         if let Some(map) = self.point_map.as_mut() {
-                            for _ in 0..count {
-                                map.map.push(Coordinate { x, y: y as u32 });
-                            }
+                            map.map
+                                .extend(core::iter::repeat_n(Coordinate { x, y: y as u32 }, count));
                         }
                     }
                 }
@@ -1648,18 +1929,19 @@ impl<'a> PageFormatter<'a> {
                     // shared style handling. We use comptime to dup it.
                     tag @ (pagepkg::ContentTag::Codepoint
                     | pagepkg::ContentTag::CodepointGrapheme) => {
-                        self.write_cell(tag, writer, page, cell)?;
+                        self.write_cell(tag, emit, writer, page, cell)?;
 
                         // If we have a point map, all codepoints map to this
                         // cell.
                         if self.point_map.is_some() {
                             let mut discarding = Discarding::new();
-                            self.write_cell(tag, &mut discarding, page, cell)?;
+                            self.write_cell(tag, emit, &mut discarding, page, cell)?;
                             let count = discarding.count;
                             if let Some(map) = self.point_map.as_mut() {
-                                for _ in 0..count {
-                                    map.map.push(Coordinate { x, y: y as u32 });
-                                }
+                                map.map.extend(core::iter::repeat_n(
+                                    Coordinate { x, y: y as u32 },
+                                    count,
+                                ));
                             }
                         }
                     }
@@ -1673,28 +1955,36 @@ impl<'a> PageFormatter<'a> {
                         }
                     }
                 }
+
+                cell_i += 1;
             }
         }
 
         // If the style is non-default, we need to close our style tag.
         if !style.default_style() {
-            self.format_style_close(writer)?;
+            self.format_style_close(emit, writer)?;
         }
 
         // Close any open hyperlink for HTML output
         if current_hyperlink_id.is_some() {
-            self.format_hyperlink_close(writer)?;
+            self.format_hyperlink_close(emit, writer)?;
         }
 
         // Close the monospace wrapper for HTML output
-        if self.opts.emit == Format::Html {
+        if emit == Format::Html {
             let closing = b"</div>";
             writer.write_all(closing)?;
             if let Some(map) = self.point_map.as_mut() {
+                // PORT NOTE: `ensureUnusedCapacity` + `appendNTimesAssumeCapacity`
+                // -> `reserve` + `extend(repeat_n(..))`.
+                map.map.reserve(closing.len());
                 let last = map.map[map.map.len() - 1];
-                for _ in 0..closing.len() {
-                    map.map.push(last);
-                }
+                map.map.extend(core::iter::repeat_n(last, closing.len()));
+            }
+            // Closing the div creates a newline in the output
+            // so make sure to create one less newline
+            if blank_rows >= 1 {
+                blank_rows -= 1;
             }
         }
 
@@ -1704,9 +1994,278 @@ impl<'a> PageFormatter<'a> {
         })
     }
 
+    /// Fast path for writing runs of simple cells: single-codepoint cells
+    /// that require no style or hyperlink handling. Output bytes are
+    /// batched into a stack buffer to avoid per-cell writer dispatch.
+    /// Returns the number of cells consumed, which may be zero if the
+    /// first cell isn't eligible for the fast path (in which case the
+    /// caller must handle it via the slow path).
+    ///
+    /// Requirements (asserted by the caller, not here):
+    ///
+    ///   - The codepoint map is empty.
+    ///   - For styled formats, `run_style_id` is the valid interned
+    ///     page-local id of the currently active style.
+    ///   - For HTML, no hyperlink is currently open.
+    ///
+    /// `run_x`/`run_y` are the page coordinates of `cells[0]`, used for
+    /// point map tracking.
+    ///
+    /// Blank cell accounting matches the slow path: accumulated blanks
+    /// are only materialized once a non-blank cell is found, and any
+    /// remainder is written back to `blank_cells`.
+    // Deliberately not inlined: this is instantiated per emit format and
+    // inlining every copy into formatWithStateEmit's row loop bloats the
+    // binary. track_points is a runtime bool for the same reason: a
+    // comptime bool doubles the instantiation count for one predictable
+    // branch per emitted cell.
+    // PORT NOTE: `emit` is a runtime param here (the file's comptime-param
+    // convention), so there is a single instantiation; `noinline` maps to
+    // `#[inline(never)]` to keep the reference's row-loop code-size intent.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn write_cell_run(
+        &mut self,
+        emit: Format,
+        track_points: bool,
+        writer: &mut dyn io::Write,
+        cells: &[Cell],
+        run_x: size::CellCountInt,
+        run_y: size::CellCountInt,
+        run_style_id: u32,
+        run_hyperlink_id: Option<crate::hyperlink::Id>,
+        blank_cells: &mut usize,
+    ) -> io::Result<usize> {
+        debug_assert!(track_points == self.point_map.is_some());
+
+        let page: &Page = unsafe { &*self.page };
+
+        // The largest single-cell encoding must fit after a flush: the
+        // HTML entity for the maximum codepoint ("&#2097151;") is 10
+        // bytes, escapes are up to 6.
+        const MAX_ENCODING_LEN: usize = 16;
+        let mut buf: [u8; 512] = [0; 512];
+        let mut len: usize = 0;
+        let mut pending: usize = *blank_cells;
+
+        // PORT NOTE: `while (i < cells.len) : (i += 1)` — the continue
+        // expression maps to increments at each continue site and the tail.
+        let mut i: usize = 0;
+        while i < cells.len() {
+            let cell = &cells[i];
+
+            // Spacers produce no output, matching the slow path which
+            // skips them before any blank/style handling.
+            match cell.wide() {
+                pagepkg::Wide::Narrow | pagepkg::Wide::Wide => {}
+                pagepkg::Wide::SpacerHead | pagepkg::Wide::SpacerTail => {
+                    i += 1;
+                    continue;
+                }
+            }
+
+            // Only text cells: bg-color cells synthesize styles and take
+            // the slow path.
+            match cell.content_tag() {
+                pagepkg::ContentTag::Codepoint | pagepkg::ContentTag::CodepointGrapheme => {}
+                pagepkg::ContentTag::BgColorPalette | pagepkg::ContentTag::BgColorRgb => break,
+            }
+
+            if format_styled(emit) {
+                // Style transition, take the slow path.
+                if cell.style_id() as u32 != run_style_id {
+                    break;
+                }
+            }
+
+            let cp: u21 = cell.content_codepoint();
+
+            // Blank cell accounting, matching the slow path blank block.
+            if format_styled(emit) {
+                // Styled formats only treat unstyled empty cells as
+                // blank; anything else (including spaces) is written
+                // so that styling is preserved.
+                if cp == 0 && cell.wide() == pagepkg::Wide::Narrow && run_style_id == 0 {
+                    pending += 1;
+                    i += 1;
+                    continue;
+                }
+            } else {
+                // Cells with no text are blank.
+                if cp == 0 {
+                    pending += 1;
+                    i += 1;
+                    continue;
+                }
+
+                // Trailing spaces are blank.
+                if cp == ' ' as u21 && self.opts.trim {
+                    pending += 1;
+                    i += 1;
+                    continue;
+                }
+            }
+
+            // Hyperlink state must be stable within a run: any non-blank
+            // cell must belong to the currently open hyperlink (or none).
+            // Transitions take the slow path. This is checked after blank
+            // accounting because blank cells never touch hyperlink state.
+            if emit == Format::Html {
+                if cell.hyperlink() {
+                    let run_id = match run_hyperlink_id {
+                        Some(v) => v,
+                        None => break,
+                    };
+                    let cell_id = match page.lookup_hyperlink(cell as *const Cell) {
+                        Some(v) => v,
+                        None => break,
+                    };
+                    if cell_id != run_id {
+                        break;
+                    }
+                } else if run_hyperlink_id.is_some() {
+                    break;
+                }
+            }
+
+            // The page coordinate of this cell, for point tracking.
+            let x: size::CellCountInt = (run_x as usize + i) as size::CellCountInt;
+
+            // This cell produces output: materialize accumulated blanks.
+            if pending > 0 {
+                if track_points {
+                    self.append_blank_points(pending, x, run_y);
+                }
+
+                while pending > 0 {
+                    if len == buf.len() {
+                        writer.write_all(&buf[..len])?;
+                        len = 0;
+                    }
+                    let n = core::cmp::min(pending, buf.len() - len);
+                    buf[len..len + n].fill(b' ');
+                    len += n;
+                    pending -= n;
+                }
+            }
+
+            // Flush if the largest possible encoding may not fit.
+            if len + MAX_ENCODING_LEN > buf.len() {
+                writer.write_all(&buf[..len])?;
+                len = 0;
+            }
+
+            let mut cell_bytes: usize;
+
+            // Empty (but styled or wide) cells emit a space, matching
+            // writeCell.
+            if cp == 0 {
+                buf[len] = b' ';
+                len += 1;
+                cell_bytes = 1;
+            } else {
+                cell_bytes = encode_codepoint(emit, &mut buf, &mut len, cp);
+
+                // Multi-codepoint graphemes emit their extra codepoints,
+                // matching writeCell. This is out-of-line to keep the
+                // hot loop for the common single-codepoint case small.
+                if cell.content_tag() == pagepkg::ContentTag::CodepointGrapheme {
+                    cell_bytes += self.write_grapheme_cps(emit, writer, cell, &mut buf, &mut len)?;
+                }
+            }
+
+            // All of the cell's bytes map to the cell's coordinate.
+            if track_points {
+                let map = self.point_map.as_mut().unwrap();
+                map.map.extend(core::iter::repeat_n(
+                    Coordinate {
+                        x,
+                        y: run_y as u32,
+                    },
+                    cell_bytes,
+                ));
+            }
+
+            i += 1;
+        }
+
+        if len > 0 {
+            writer.write_all(&buf[..len])?;
+        }
+        *blank_cells = pending;
+        Ok(i)
+    }
+
+    /// Encode the extra codepoints of a multi-codepoint grapheme into
+    /// buf, flushing to the writer as needed. Returns the number of
+    /// bytes written. This is deliberately not inlined so that the
+    /// (rare) grapheme case doesn't bloat the writeCellRun hot loop.
+    #[inline(never)]
+    fn write_grapheme_cps(
+        &self,
+        emit: Format,
+        writer: &mut dyn io::Write,
+        cell: &Cell,
+        buf: &mut [u8; 512],
+        len: &mut usize,
+    ) -> io::Result<usize> {
+        let page: &Page = unsafe { &*self.page };
+        const MAX_ENCODING_LEN: usize = 16;
+        let mut bytes: usize = 0;
+        for &gcp in page.lookup_grapheme(cell as *const Cell).unwrap() {
+            if *len + MAX_ENCODING_LEN > buf.len() {
+                writer.write_all(&buf[..*len])?;
+                *len = 0;
+            }
+            bytes += encode_codepoint(emit, buf, len, gcp as u21);
+        }
+        Ok(bytes)
+    }
+
+    /// Append the point map entries for a run of `count` blank cells
+    /// that are materialized as spaces just before the cell at (x, y).
+    /// Blank cells can span multiple rows if they carry over from wrap
+    /// continuation, so this walks backwards from (x, y).
+    // PORT NOTE: the reference passes `map: *const PointMap` (whose inner list
+    // pointer is mutable through the const handle); the Rust expression of
+    // that aliasing is `&mut self` mutating `self.point_map` directly.
+    fn append_blank_points(&mut self, count: usize, x: size::CellCountInt, y: size::CellCountInt) {
+        let cols = unsafe { &*self.page }.size.cols;
+        let map = self.point_map.as_mut().unwrap();
+        // PORT NOTE: `ensureUnusedCapacity` + `appendAssumeCapacity` ->
+        // `reserve` + `push` (Vec growth aborts on OOM; the reference's
+        // `catch return error.WriteFailed` arm has no Rust analogue).
+        map.map.reserve(count);
+
+        let mut remaining = count;
+        let mut blank_x = x;
+        let mut blank_y = y;
+        while remaining > 0 {
+            if blank_x > 0 {
+                // We have space in this row
+                blank_x -= 1;
+            } else if blank_y > 0 {
+                // Wrap to previous row
+                blank_y -= 1;
+                blank_x = cols - 1;
+            } else {
+                // Can't go back further, just use (0, 0)
+                blank_x = 0;
+                blank_y = 0;
+            }
+
+            map.map.push(Coordinate {
+                x: blank_x,
+                y: blank_y as u32,
+            });
+            remaining -= 1;
+        }
+    }
+
     fn write_cell(
         &self,
         tag: pagepkg::ContentTag,
+        emit: Format,
         writer: &mut dyn io::Write,
         page: &Page,
         cell: &Cell,
@@ -1719,10 +2278,10 @@ impl<'a> PageFormatter<'a> {
             return Ok(());
         }
 
-        self.write_codepoint_with_replacement(writer, cell.content_codepoint())?;
+        self.write_codepoint_with_replacement(emit, writer, cell.content_codepoint())?;
         if tag == pagepkg::ContentTag::CodepointGrapheme {
             for &cp in page.lookup_grapheme(cell as *const Cell).unwrap() {
-                self.write_codepoint_with_replacement(writer, cp as u21)?;
+                self.write_codepoint_with_replacement(emit, writer, cp as u21)?;
             }
         }
         Ok(())
@@ -1730,6 +2289,7 @@ impl<'a> PageFormatter<'a> {
 
     fn write_codepoint_with_replacement(
         &self,
+        emit: Format,
         writer: &mut dyn io::Write,
         codepoint: u21,
     ) -> io::Result<()> {
@@ -1754,11 +2314,11 @@ impl<'a> PageFormatter<'a> {
         // If no replacement, write it directly.
         let r = match r_ {
             Some(r) => r,
-            None => return self.write_codepoint(writer, codepoint),
+            None => return self.write_codepoint(emit, writer, codepoint),
         };
 
         match r {
-            Replacement::Codepoint(v) => self.write_codepoint(writer, *v)?,
+            Replacement::Codepoint(v) => self.write_codepoint(emit, writer, *v)?,
 
             Replacement::String(s) => {
                 // PORT NOTE: the reference validates UTF-8 (`Utf8View.init(s)
@@ -1766,15 +2326,25 @@ impl<'a> PageFormatter<'a> {
                 // asserted-valid UTF-8 byte slice; we iterate its `char`s.
                 let view = core::str::from_utf8(s).unwrap();
                 for cp in view.chars() {
-                    self.write_codepoint(writer, cp as u21)?;
+                    self.write_codepoint(emit, writer, cp as u21)?;
                 }
             }
         }
         Ok(())
     }
 
-    fn write_codepoint(&self, writer: &mut dyn io::Write, codepoint: u21) -> io::Result<()> {
-        match self.opts.emit {
+    // PORT NOTE: the reference discards `self` (`_ = self;`) — the fn keeps
+    // its method shape but no longer reads any field.
+    fn write_codepoint(
+        &self,
+        emit: Format,
+        writer: &mut dyn io::Write,
+        codepoint: u21,
+    ) -> io::Result<()> {
+        let _ = self;
+        match emit {
+            // PORT NOTE: `writer.printUnicodeCodepoint(codepoint)` — the
+            // UTF-8 encode with replacement-character fallback below.
             Format::Plain | Format::Vt => write_codepoint_utf8(writer, codepoint),
             Format::Html => {
                 match codepoint {
@@ -1790,9 +2360,14 @@ impl<'a> PageFormatter<'a> {
                         // meta tag because we emit partial HTML so this ensures
                         // proper unicode handling.
                         if codepoint < 0x80 {
-                            write_codepoint_utf8(writer, codepoint)
+                            writer.write_all(&[codepoint as u8])
                         } else {
-                            write!(writer, "&#{};", codepoint)
+                            let mut buf: [u8; 16] = [0; 16];
+                            buf[0..2].copy_from_slice(b"&#");
+                            let mut len: usize = 2 + fastprint::print_decimal(&mut buf[2..], codepoint);
+                            buf[len] = b';';
+                            len += 1;
+                            writer.write_all(&buf[..len])
                         }
                     }
                 }
@@ -1835,10 +2410,11 @@ impl<'a> PageFormatter<'a> {
     /// and other HTML attribute values.
     fn format_style_open(
         &self,
+        emit: Format,
         writer: &mut dyn io::Write,
         style: &crate::style::Style,
     ) -> io::Result<()> {
-        match self.opts.emit {
+        match emit {
             Format::Plain => unreachable!(),
 
             Format::Vt => {
@@ -1870,8 +2446,8 @@ impl<'a> PageFormatter<'a> {
     // `point_map` field is a pointer to a heap `ArrayList`, so the in-place
     // append below aliases the real list). In Rust we express that aliasing via
     // `&mut self`.
-    fn format_style_close(&mut self, writer: &mut dyn io::Write) -> io::Result<()> {
-        let s: &[u8] = match self.opts.emit {
+    fn format_style_close(&mut self, emit: Format, writer: &mut dyn io::Write) -> io::Result<()> {
+        let s: &[u8] = match emit {
             Format::Plain => return Ok(()),
             Format::Vt => b"\x1b[0m",
             Format::Html => b"</div>",
@@ -1888,15 +2464,20 @@ impl<'a> PageFormatter<'a> {
         Ok(())
     }
 
-    fn format_hyperlink_open(&self, writer: &mut dyn io::Write, uri: &[u8]) -> io::Result<()> {
-        match self.opts.emit {
+    fn format_hyperlink_open(
+        &self,
+        emit: Format,
+        writer: &mut dyn io::Write,
+        uri: &[u8],
+    ) -> io::Result<()> {
+        match emit {
             Format::Plain | Format::Vt => unreachable!(),
 
             // layout since we're primarily using it as a CSS wrapper.
             Format::Html => {
                 writer.write_all(b"<a href=\"")?;
                 for &byte in uri {
-                    self.write_codepoint(writer, byte as u21)?;
+                    self.write_codepoint(emit, writer, byte as u21)?;
                 }
                 writer.write_all(b"\">")
             }
@@ -1904,8 +2485,12 @@ impl<'a> PageFormatter<'a> {
     }
 
     // PORT NOTE: takes `&mut self` for the same reason as `format_style_close`.
-    fn format_hyperlink_close(&mut self, writer: &mut dyn io::Write) -> io::Result<()> {
-        let s: &[u8] = match self.opts.emit {
+    fn format_hyperlink_close(
+        &mut self,
+        emit: Format,
+        writer: &mut dyn io::Write,
+    ) -> io::Result<()> {
+        let s: &[u8] = match emit {
             Format::Html => b"</a>",
             Format::Plain | Format::Vt => return Ok(()),
         };
@@ -1920,6 +2505,70 @@ impl<'a> PageFormatter<'a> {
         }
         Ok(())
     }
+}
+
+/// Encode a single codepoint into buf at len, advancing len and
+/// returning the number of bytes written. The caller must guarantee
+/// enough remaining buffer space for the largest possible encoding.
+// PORT NOTE: the reference nests this self-less `inline fn` inside
+// `PageFormatter`; Rust impl blocks only hold associated fns, so it is a
+// module-level fn (`inline` -> `#[inline]`).
+#[inline]
+fn encode_codepoint(emit: Format, buf: &mut [u8; 512], len: &mut usize, cp: u21) -> usize {
+    let start = *len;
+    match emit {
+        Format::Plain | Format::Vt => {
+            if cp < 0x80 {
+                buf[start] = cp as u8;
+                *len += 1;
+            } else {
+                // PORT NOTE: `std.unicode.utf8Encode(cp, ..) catch { .. }` —
+                // `char::from_u32` rejects the same domain (surrogates and
+                // out-of-range values).
+                match char::from_u32(cp) {
+                    Some(c) => *len += c.encode_utf8(&mut buf[start..start + 4]).len(),
+                    None => {
+                        // Matches Writer.printUnicodeCodepoint: invalid
+                        // codepoints become the replacement character.
+                        buf[start..start + 3].copy_from_slice(&[0xEF, 0xBF, 0xBD]);
+                        *len += 3;
+                    }
+                }
+            }
+        }
+
+        Format::Html => 'html: {
+            let esc: Option<&[u8]> = match cp {
+                cp if cp == '<' as u21 => Some(b"&lt;"),
+                cp if cp == '>' as u21 => Some(b"&gt;"),
+                cp if cp == '&' as u21 => Some(b"&amp;"),
+                cp if cp == '"' as u21 => Some(b"&quot;"),
+                cp if cp == '\'' as u21 => Some(b"&#39;"),
+                _ => None,
+            };
+            if let Some(s) = esc {
+                buf[start..start + s.len()].copy_from_slice(s);
+                *len += s.len();
+                break 'html;
+            }
+
+            // ASCII is emitted directly, everything else as a
+            // numeric entity. See writeCodepoint.
+            if cp < 0x80 {
+                buf[start] = cp as u8;
+                *len += 1;
+                break 'html;
+            }
+
+            buf[start..start + 2].copy_from_slice(b"&#");
+            *len += 2;
+            *len += fastprint::print_decimal(&mut buf[*len..], cp);
+            buf[*len] = b';';
+            *len += 1;
+        }
+    }
+
+    *len - start
 }
 
 #[cfg(test)]
@@ -2021,6 +2670,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         // Verify output
@@ -2070,6 +2720,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         // Verify output
@@ -2117,6 +2768,7 @@ mod tests {
             formatter.point_map = Some(PointMap {
                 alloc: Global,
                 map: &mut point_map,
+                base: 0,
             });
             let state = formatter.format_with_state(&mut builder).unwrap();
             let output = builder.as_slice();
@@ -2139,6 +2791,7 @@ mod tests {
             formatter.point_map = Some(PointMap {
                 alloc: Global,
                 map: &mut point_map,
+                base: 0,
             });
             formatter.start_x = 2;
             let state = formatter.format_with_state(&mut builder).unwrap();
@@ -2162,6 +2815,7 @@ mod tests {
             formatter.point_map = Some(PointMap {
                 alloc: Global,
                 map: &mut point_map,
+                base: 0,
             });
             formatter.start_x = 3;
             let state = formatter.format_with_state(&mut builder).unwrap();
@@ -2207,6 +2861,7 @@ mod tests {
             formatter.point_map = Some(PointMap {
                 alloc: Global,
                 map: &mut point_map,
+                base: 0,
             });
             let state = formatter.format_with_state(&mut builder).unwrap();
             let output = builder.as_slice();
@@ -2230,6 +2885,7 @@ mod tests {
             formatter.point_map = Some(PointMap {
                 alloc: Global,
                 map: &mut point_map,
+                base: 0,
             });
             formatter.end_x = Some(2);
             formatter.end_y = Some(0);
@@ -2253,6 +2909,7 @@ mod tests {
             formatter.point_map = Some(PointMap {
                 alloc: Global,
                 map: &mut point_map,
+                base: 0,
             });
             formatter.start_x = 2;
             let state = formatter.format_with_state(&mut builder).unwrap();
@@ -2277,6 +2934,7 @@ mod tests {
             formatter.point_map = Some(PointMap {
                 alloc: Global,
                 map: &mut point_map,
+                base: 0,
             });
             formatter.start_y = 1;
             formatter.start_x = 1;
@@ -2318,6 +2976,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         // Verify output
@@ -2365,6 +3024,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         // Verify output
@@ -2409,6 +3069,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         // Verify output
@@ -2455,6 +3116,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         // Verify output. We expect there to be no trailing newlines because
@@ -2501,6 +3163,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         // Verify output. We expect there to be no trailing newlines because
@@ -2554,6 +3217,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         // Verify output. We expect there to be no trailing newlines because
@@ -2599,6 +3263,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         let state = formatter.format_with_state(&mut builder).unwrap();
@@ -2639,6 +3304,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         let state = formatter.format_with_state(&mut builder).unwrap();
@@ -2690,6 +3356,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         let state = formatter.format_with_state(&mut builder).unwrap();
@@ -2732,6 +3399,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         let state = formatter.format_with_state(&mut builder).unwrap();
@@ -2781,6 +3449,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         let state = formatter.format_with_state(&mut builder).unwrap();
@@ -2822,6 +3491,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         let state = formatter.format_with_state(&mut builder).unwrap();
@@ -2875,6 +3545,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         let state = formatter.format_with_state(&mut builder).unwrap();
@@ -2916,6 +3587,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -2953,6 +3625,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -2991,6 +3664,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3027,6 +3701,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3057,6 +3732,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3091,6 +3767,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3121,6 +3798,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3154,6 +3832,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3196,6 +3875,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3239,6 +3919,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3269,6 +3950,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3303,6 +3985,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3334,6 +4017,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3369,6 +4053,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3405,6 +4090,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         let state = formatter.format_with_state(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3446,6 +4132,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
 
         // Verify output
@@ -3479,6 +4166,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         formatter.format(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3508,6 +4196,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         formatter.format(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3543,6 +4232,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         formatter.format(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3572,6 +4262,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         formatter.format(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3646,6 +4337,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         formatter.format(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3677,6 +4369,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         formatter.format(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -3696,7 +4389,7 @@ mod tests {
             let mut s = t.vt_stream();
             s.next_slice(b"hello, world");
         }
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
         let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
         formatter.pin_map = Some(PinMap {
@@ -3708,10 +4401,10 @@ mod tests {
         assert_eq!(output, b"hello, world");
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         for i in 0..output.len() {
-            assert_eq!(pin(node, i as size::CellCountInt, 0), pin_map[i]);
+            assert_eq!(pin(node, i as size::CellCountInt, 0), pin_map.get(i).unwrap());
         }
         t.deinit(Global);
     }
@@ -3762,7 +4455,7 @@ mod tests {
         }
 
         // Format the entire PageList
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let mut formatter: PageListFormatter =
             PageListFormatter::init(pages_ptr(), Options::plain());
         formatter.pin_map = Some(PinMap {
@@ -3775,31 +4468,31 @@ mod tests {
         assert_eq!(output, b"page one\npage two");
 
         // Verify pin map
-        assert_eq!(full_output.len(), pin_map.len());
+        assert_eq!(full_output.len(), pin_map.count());
         let first_node = unsafe { (*pages_ptr()).pages.first };
         let last_node = unsafe { (*pages_ptr()).pages.last };
         let trimmed_count = full_output.len() - output.len();
 
         // First part (trimmed blank lines) maps to first node
         for i in 0..trimmed_count {
-            assert_eq!(first_node, pin_map[i].node);
+            assert_eq!(first_node, pin_map.get(i).unwrap().node);
         }
 
         // "page one" (8 chars) maps to first node
         for i in 0..8 {
             let idx = trimmed_count + i;
-            assert_eq!(first_node, pin_map[idx].node);
-            assert_eq!(i as size::CellCountInt, pin_map[idx].x);
+            assert_eq!(first_node, pin_map.get(idx).unwrap().node);
+            assert_eq!(i as size::CellCountInt, pin_map.get(idx).unwrap().x);
         }
 
         // \n - maps to last node as it represents the transition to new page
-        assert_eq!(last_node, pin_map[trimmed_count + 8].node);
+        assert_eq!(last_node, pin_map.get(trimmed_count + 8).unwrap().node);
 
         // "page two" (8 chars) maps to last node
         for i in 0..8 {
             let idx = trimmed_count + 9 + i;
-            assert_eq!(last_node, pin_map[idx].node);
-            assert_eq!(i as size::CellCountInt, pin_map[idx].x);
+            assert_eq!(last_node, pin_map.get(idx).unwrap().node);
+            assert_eq!(i as size::CellCountInt, pin_map.get(idx).unwrap().x);
         }
         t.deinit(Global);
     }
@@ -3828,7 +4521,7 @@ mod tests {
         assert!(unsafe { !core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
 
         // Format without unwrap - should show line breaks
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
         formatter.pin_map = Some(PinMap {
             alloc: Global,
@@ -3840,29 +4533,29 @@ mod tests {
         assert_eq!(output, b"hello worl\nd test");
 
         // Verify pin map
-        assert_eq!(full_output.len(), pin_map.len());
+        assert_eq!(full_output.len(), pin_map.count());
         let first_node = unsafe { (*pages_ptr).pages.first };
         let last_node = unsafe { (*pages_ptr).pages.last };
         let trimmed_count = full_output.len() - output.len();
 
         // First part (trimmed blank lines) maps to first node
         for i in 0..trimmed_count {
-            assert_eq!(first_node, pin_map[i].node);
+            assert_eq!(first_node, pin_map.get(i).unwrap().node);
         }
 
         // First line maps to first node
         for i in 0..10 {
             let idx = trimmed_count + i;
-            assert_eq!(first_node, pin_map[idx].node);
+            assert_eq!(first_node, pin_map.get(idx).unwrap().node);
         }
 
         // \n - maps to last node as it represents the transition to new page
-        assert_eq!(last_node, pin_map[trimmed_count + 10].node);
+        assert_eq!(last_node, pin_map.get(trimmed_count + 10).unwrap().node);
 
         // "d test" (6 chars) maps to last node
         for i in 0..6 {
             let idx = trimmed_count + 11 + i;
-            assert_eq!(last_node, pin_map[idx].node);
+            assert_eq!(last_node, pin_map.get(idx).unwrap().node);
         }
         t.deinit(Global);
     }
@@ -3891,7 +4584,7 @@ mod tests {
         assert!(unsafe { !core::ptr::eq((*pages_ptr).pages.first, (*pages_ptr).pages.last) });
 
         // Format with unwrap - should join the wrapped lines
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let mut formatter: PageListFormatter = PageListFormatter::init(
             pages_ptr,
             Options {
@@ -3910,26 +4603,26 @@ mod tests {
         assert_eq!(output, b"hello world test");
 
         // Verify pin map
-        assert_eq!(full_output.len(), pin_map.len());
+        assert_eq!(full_output.len(), pin_map.count());
         let first_node = unsafe { (*pages_ptr).pages.first };
         let last_node = unsafe { (*pages_ptr).pages.last };
         let trimmed_count = full_output.len() - output.len();
 
         // First part (trimmed blank lines) maps to first node
         for i in 0..trimmed_count {
-            assert_eq!(first_node, pin_map[i].node);
+            assert_eq!(first_node, pin_map.get(i).unwrap().node);
         }
 
         // First line from first page
         for i in 0..10 {
             let idx = trimmed_count + i;
-            assert_eq!(first_node, pin_map[idx].node);
+            assert_eq!(first_node, pin_map.get(idx).unwrap().node);
         }
 
         // "d test" (6 chars) from last page
         for i in 0..6 {
             let idx = trimmed_count + 10 + i;
-            assert_eq!(last_node, pin_map[idx].node);
+            assert_eq!(last_node, pin_map.get(idx).unwrap().node);
         }
         t.deinit(Global);
     }
@@ -3980,7 +4673,7 @@ mod tests {
         }
 
         // Format the entire PageList with VT
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr(), Options::vt());
         formatter.pin_map = Some(PinMap {
             alloc: Global,
@@ -3995,14 +4688,15 @@ mod tests {
         );
 
         // Verify pin map
-        assert_eq!(full_output.len(), pin_map.len());
+        assert_eq!(full_output.len(), pin_map.count());
         let first_node = unsafe { (*pages_ptr()).pages.first };
         let last_node = unsafe { (*pages_ptr()).pages.last };
 
         // Just verify we have entries for both pages in the pin map
         let mut first_count: usize = 0;
         let mut last_count: usize = 0;
-        for p in pin_map.iter() {
+        for byte_i in 0..pin_map.count() {
+            let p = pin_map.get(byte_i).unwrap();
             if p.node == first_node {
                 first_count += 1;
             }
@@ -4026,7 +4720,7 @@ mod tests {
         }
         let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
         let node = unsafe { (*pages_ptr).pages.first };
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
         formatter.top_left = Some(pin(node, 6, 0));
         formatter.bottom_right = Some(pin(node, 2, 2));
@@ -4039,15 +4733,16 @@ mod tests {
         assert_eq!(output, b"world\ntest case\nfoo");
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
-        for p in pin_map.iter() {
+        assert_eq!(output.len(), pin_map.count());
+        for byte_i in 0..pin_map.count() {
+            let p = pin_map.get(byte_i).unwrap();
             assert_eq!(node, p.node);
         }
 
         // "world" starts at x=6, y=0
         for i in 0..5 {
-            assert_eq!((6 + i) as size::CellCountInt, pin_map[i].x);
-            assert_eq!(0, pin_map[i].y);
+            assert_eq!((6 + i) as size::CellCountInt, pin_map.get(i).unwrap().x);
+            assert_eq!(0, pin_map.get(i).unwrap().y);
         }
         t.deinit(Global);
     }
@@ -4099,7 +4794,7 @@ mod tests {
         let last_node = unsafe { (*pages_ptr()).pages.last };
         let first_node_size_rows = unsafe { crate::pagelist::Node::rows(first_node) };
 
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let mut formatter: PageListFormatter =
             PageListFormatter::init(pages_ptr(), Options::plain());
         formatter.top_left = Some(pin(first_node, 6, first_node_size_rows - 1));
@@ -4114,24 +4809,24 @@ mod tests {
         assert_eq!(output, b"world\nfoo");
 
         // Verify pin map
-        assert_eq!(full_output.len(), pin_map.len());
+        assert_eq!(full_output.len(), pin_map.count());
         let trimmed_count = full_output.len() - output.len();
 
         // "world" (5 chars) from first page
         for i in 0..5 {
             let idx = trimmed_count + i;
-            assert_eq!(first_node, pin_map[idx].node);
-            assert_eq!((6 + i) as size::CellCountInt, pin_map[idx].x);
+            assert_eq!(first_node, pin_map.get(idx).unwrap().node);
+            assert_eq!((6 + i) as size::CellCountInt, pin_map.get(idx).unwrap().x);
         }
 
         // \n - maps to last node as it represents the transition to new page
-        assert_eq!(last_node, pin_map[trimmed_count + 5].node);
+        assert_eq!(last_node, pin_map.get(trimmed_count + 5).unwrap().node);
 
         // "foo" (3 chars) from last page
         for i in 0..3 {
             let idx = trimmed_count + 6 + i;
-            assert_eq!(last_node, pin_map[idx].node);
-            assert_eq!(i as size::CellCountInt, pin_map[idx].x);
+            assert_eq!(last_node, pin_map.get(idx).unwrap().node);
+            assert_eq!(i as size::CellCountInt, pin_map.get(idx).unwrap().x);
         }
         t.deinit(Global);
     }
@@ -4147,7 +4842,7 @@ mod tests {
         }
         let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
         let node = unsafe { (*pages_ptr).pages.first };
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
         formatter.top_left = Some(pin(node, 6, 0));
         formatter.pin_map = Some(PinMap {
@@ -4159,11 +4854,11 @@ mod tests {
         assert_eq!(output, b"world");
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         for i in 0..5 {
-            assert_eq!(node, pin_map[i].node);
-            assert_eq!((6 + i) as size::CellCountInt, pin_map[i].x);
-            assert_eq!(0, pin_map[i].y);
+            assert_eq!(node, pin_map.get(i).unwrap().node);
+            assert_eq!((6 + i) as size::CellCountInt, pin_map.get(i).unwrap().x);
+            assert_eq!(0, pin_map.get(i).unwrap().y);
         }
         t.deinit(Global);
     }
@@ -4179,7 +4874,7 @@ mod tests {
         }
         let pages_ptr: *const PageList = unsafe { &(*t.screens.active).pages };
         let node = unsafe { (*pages_ptr).pages.first };
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let mut formatter: PageListFormatter = PageListFormatter::init(pages_ptr, Options::plain());
         formatter.bottom_right = Some(pin(node, 2, 1));
         formatter.pin_map = Some(PinMap {
@@ -4191,23 +4886,23 @@ mod tests {
         assert_eq!(output, b"hello world\ntes");
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
 
         // "hello world" (11 chars) on y=0
         for i in 0..11 {
-            assert_eq!(node, pin_map[i].node);
-            assert_eq!(i as size::CellCountInt, pin_map[i].x);
-            assert_eq!(0, pin_map[i].y);
+            assert_eq!(node, pin_map.get(i).unwrap().node);
+            assert_eq!(i as size::CellCountInt, pin_map.get(i).unwrap().x);
+            assert_eq!(0, pin_map.get(i).unwrap().y);
         }
 
         // \n
-        assert_eq!(node, pin_map[11].node);
+        assert_eq!(node, pin_map.get(11).unwrap().node);
 
         // "tes" (3 chars) on y=1
         for i in 0..3 {
-            assert_eq!(node, pin_map[12 + i].node);
-            assert_eq!(i as size::CellCountInt, pin_map[12 + i].x);
-            assert_eq!(1, pin_map[12 + i].y);
+            assert_eq!(node, pin_map.get(12 + i).unwrap().node);
+            assert_eq!(i as size::CellCountInt, pin_map.get(12 + i).unwrap().x);
+            assert_eq!(1, pin_map.get(12 + i).unwrap().y);
         }
         t.deinit(Global);
     }
@@ -4374,7 +5069,7 @@ mod tests {
             let mut s = t.vt_stream();
             s.next_slice(b"hello, world");
         }
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let t_ptr: *const Terminal = &t;
         let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::plain());
         formatter.pin_map = Some(PinMap {
@@ -4386,10 +5081,10 @@ mod tests {
         assert_eq!(output, b"hello, world");
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         for i in 0..output.len() {
-            assert_eq!(pin(node, i as size::CellCountInt, 0), pin_map[i]);
+            assert_eq!(pin(node, i as size::CellCountInt, 0), pin_map.get(i).unwrap());
         }
         t.deinit(Global);
     }
@@ -4403,7 +5098,7 @@ mod tests {
             let mut s = t.vt_stream();
             s.next_slice(b"hello\r\nworld");
         }
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let t_ptr: *const Terminal = &t;
         let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::plain());
         formatter.pin_map = Some(PinMap {
@@ -4415,22 +5110,22 @@ mod tests {
         assert_eq!(output, b"hello\nworld");
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         // "hello" (5 chars)
         for i in 0..5 {
-            assert_eq!(node, pin_map[i].node);
-            assert_eq!(i as size::CellCountInt, pin_map[i].x);
-            assert_eq!(0, pin_map[i].y);
+            assert_eq!(node, pin_map.get(i).unwrap().node);
+            assert_eq!(i as size::CellCountInt, pin_map.get(i).unwrap().x);
+            assert_eq!(0, pin_map.get(i).unwrap().y);
         }
         // "\n" maps to end of first line
-        assert_eq!(node, pin_map[5].node);
+        assert_eq!(node, pin_map.get(5).unwrap().node);
         // "world" (5 chars)
         for i in 0..5 {
             let idx = 6 + i;
-            assert_eq!(node, pin_map[idx].node);
-            assert_eq!(i as size::CellCountInt, pin_map[idx].x);
-            assert_eq!(1, pin_map[idx].y);
+            assert_eq!(node, pin_map.get(idx).unwrap().node);
+            assert_eq!(i as size::CellCountInt, pin_map.get(idx).unwrap().x);
+            assert_eq!(1, pin_map.get(idx).unwrap().y);
         }
         t.deinit(Global);
     }
@@ -4446,7 +5141,7 @@ mod tests {
             s.next_slice(b"\x1b]4;0;rgb:12/34/56\x1b\\");
             s.next_slice(b"test");
         }
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let t_ptr: *const Terminal = &t;
         let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
         formatter.pin_map = Some(PinMap {
@@ -4457,10 +5152,10 @@ mod tests {
         let output = builder.as_slice();
 
         // Verify pin map - palette bytes should be mapped to top left
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         for i in 0..output.len() {
-            assert_eq!(node, pin_map[i].node);
+            assert_eq!(node, pin_map.get(i).unwrap().node);
         }
         t.deinit(Global);
     }
@@ -4474,7 +5169,7 @@ mod tests {
             let mut s = t.vt_stream();
             s.next_slice(b"line1\r\nline2\r\nline3");
         }
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let pages = unsafe { &(*t.screens.active).pages };
         let tl = pages.pin(crate::point::Point::Active(coord(0, 1))).unwrap();
         let br = pages.pin(crate::point::Point::Active(coord(4, 1))).unwrap();
@@ -4490,13 +5185,13 @@ mod tests {
         assert_eq!(output, b"line2");
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         // "line2" (5 chars) from row 1
         for i in 0..5 {
-            assert_eq!(node, pin_map[i].node);
-            assert_eq!(i as size::CellCountInt, pin_map[i].x);
-            assert_eq!(1, pin_map[i].y);
+            assert_eq!(node, pin_map.get(i).unwrap().node);
+            assert_eq!(i as size::CellCountInt, pin_map.get(i).unwrap().x);
+            assert_eq!(1, pin_map.get(i).unwrap().y);
         }
         t.deinit(Global);
     }
@@ -4510,7 +5205,7 @@ mod tests {
             let mut s = t.vt_stream();
             s.next_slice(b"hello, world");
         }
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let screen_ptr: *const Screen = t.screens.active;
         let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::plain());
         formatter.pin_map = Some(PinMap {
@@ -4522,10 +5217,10 @@ mod tests {
         assert_eq!(output, b"hello, world");
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         for i in 0..output.len() {
-            assert_eq!(pin(node, i as size::CellCountInt, 0), pin_map[i]);
+            assert_eq!(pin(node, i as size::CellCountInt, 0), pin_map.get(i).unwrap());
         }
         t.deinit(Global);
     }
@@ -4539,7 +5234,7 @@ mod tests {
             let mut s = t.vt_stream();
             s.next_slice(b"hello\r\nworld");
         }
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let screen_ptr: *const Screen = t.screens.active;
         let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::plain());
         formatter.pin_map = Some(PinMap {
@@ -4551,22 +5246,22 @@ mod tests {
         assert_eq!(output, b"hello\nworld");
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         // "hello" (5 chars)
         for i in 0..5 {
-            assert_eq!(node, pin_map[i].node);
-            assert_eq!(i as size::CellCountInt, pin_map[i].x);
-            assert_eq!(0, pin_map[i].y);
+            assert_eq!(node, pin_map.get(i).unwrap().node);
+            assert_eq!(i as size::CellCountInt, pin_map.get(i).unwrap().x);
+            assert_eq!(0, pin_map.get(i).unwrap().y);
         }
         // "\n" maps to end of first line
-        assert_eq!(node, pin_map[5].node);
+        assert_eq!(node, pin_map.get(5).unwrap().node);
         // "world" (5 chars)
         for i in 0..5 {
             let idx = 6 + i;
-            assert_eq!(node, pin_map[idx].node);
-            assert_eq!(i as size::CellCountInt, pin_map[idx].x);
-            assert_eq!(1, pin_map[idx].y);
+            assert_eq!(node, pin_map.get(idx).unwrap().node);
+            assert_eq!(i as size::CellCountInt, pin_map.get(idx).unwrap().x);
+            assert_eq!(1, pin_map.get(idx).unwrap().y);
         }
         t.deinit(Global);
     }
@@ -4580,7 +5275,7 @@ mod tests {
             let mut s = t.vt_stream();
             s.next_slice(b"line1\r\nline2\r\nline3");
         }
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let pages = unsafe { &(*t.screens.active).pages };
         let tl = pages.pin(crate::point::Point::Active(coord(0, 1))).unwrap();
         let br = pages.pin(crate::point::Point::Active(coord(4, 1))).unwrap();
@@ -4596,13 +5291,13 @@ mod tests {
         assert_eq!(output, b"line2");
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         // "line2" (5 chars) from row 1
         for i in 0..5 {
-            assert_eq!(node, pin_map[i].node);
-            assert_eq!(i as size::CellCountInt, pin_map[i].x);
-            assert_eq!(1, pin_map[i].y);
+            assert_eq!(node, pin_map.get(i).unwrap().node);
+            assert_eq!(i as size::CellCountInt, pin_map.get(i).unwrap().x);
+            assert_eq!(1, pin_map.get(i).unwrap().y);
         }
         t.deinit(Global);
     }
@@ -4617,7 +5312,7 @@ mod tests {
             let mut s = t.vt_stream();
             s.next_slice(b"hello\r\nworld");
         }
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let screen_ptr: *const Screen = t.screens.active;
         let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::vt());
         formatter.extra.cursor = true;
@@ -4644,19 +5339,80 @@ mod tests {
         });
 
         // Verify pin map - the extras should be mapped to the last pin
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         let content_len = b"hello\r\nworld".len();
         // Content bytes map to their positions
         for i in 0..content_len {
-            assert_eq!(node, pin_map[i].node);
+            assert_eq!(node, pin_map.get(i).unwrap().node);
         }
         // Extra bytes (cursor position) map to last content pin
         for i in content_len..output.len() {
-            assert_eq!(node, pin_map[i].node);
+            assert_eq!(node, pin_map.get(i).unwrap().node);
         }
         t.deinit(Global);
         t2.deinit(Global);
+    }
+
+    // test "Terminal vt cursor preserves pending wrap"
+    #[test]
+    fn terminal_vt_cursor_preserves_pending_wrap() {
+        let mut builder: Vec<u8> = Vec::new();
+
+        let mut source = Terminal::init(Global, opts(4, 2)).unwrap();
+        {
+            let mut source_stream = source.vt_stream();
+            source_stream.next_slice(b"abcd");
+        }
+        assert!(unsafe { (*source.screens.active).cursor.pending_wrap });
+
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
+
+        let source_ptr: *const Terminal = &source;
+        let mut formatter: TerminalFormatter = TerminalFormatter::init(source_ptr, Options::vt());
+        formatter.extra = TerminalExtra::NONE;
+        formatter.extra.screen.cursor = true;
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
+        formatter.format(&mut builder).unwrap();
+        assert_eq!(builder.len(), pin_map.count());
+
+        let mut target = Terminal::init(Global, opts(4, 2)).unwrap();
+        {
+            let mut target_stream = target.vt_stream();
+            target_stream.next_slice(builder.as_slice());
+        }
+
+        assert_eq!(
+            unsafe { (*source.screens.active).cursor.pending_wrap },
+            unsafe { (*target.screens.active).cursor.pending_wrap },
+        );
+
+        {
+            let mut source_stream = source.vt_stream();
+            source_stream.next_slice(b"X");
+        }
+        {
+            let mut target_stream = target.vt_stream();
+            target_stream.next_slice(b"X");
+        }
+        let source_contents = unsafe { &(*source.screens.active) }
+            .dump_string_alloc(
+                Global,
+                crate::point::Point::Screen(crate::point::Coordinate::default()),
+            )
+            .unwrap();
+        let target_contents = unsafe { &(*target.screens.active) }
+            .dump_string_alloc(
+                Global,
+                crate::point::Point::Screen(crate::point::Coordinate::default()),
+            )
+            .unwrap();
+        assert_eq!(source_contents, target_contents);
+        source.deinit(Global);
+        target.deinit(Global);
     }
 
     // test "Screen vt with style"
@@ -4669,7 +5425,7 @@ mod tests {
             let mut s = t.vt_stream();
             s.next_slice(b"\x1b[1;31mhello");
         }
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let screen_ptr: *const Screen = t.screens.active;
         let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::vt());
         formatter.extra.style = true;
@@ -4692,10 +5448,10 @@ mod tests {
             .eql(&unsafe { (*t2.screens.active).cursor.style }));
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         for i in 0..output.len() {
-            assert_eq!(node, pin_map[i].node);
+            assert_eq!(node, pin_map.get(i).unwrap().node);
         }
         t.deinit(Global);
         t2.deinit(Global);
@@ -4711,7 +5467,7 @@ mod tests {
             let mut s = t.vt_stream();
             s.next_slice(b"\x1b]8;;http://example.com\x1b\\hello");
         }
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let screen_ptr: *const Screen = t.screens.active;
         let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::vt());
         formatter.extra.hyperlink = true;
@@ -4741,10 +5497,10 @@ mod tests {
         }
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         for i in 0..output.len() {
-            assert_eq!(node, pin_map[i].node);
+            assert_eq!(node, pin_map.get(i).unwrap().node);
         }
         t.deinit(Global);
         t2.deinit(Global);
@@ -4760,7 +5516,7 @@ mod tests {
             let mut s = t.vt_stream();
             s.next_slice(b"\x1b[1\"qhello");
         }
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let screen_ptr: *const Screen = t.screens.active;
         let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::vt());
         formatter.extra.protection = true;
@@ -4784,10 +5540,10 @@ mod tests {
         });
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         for i in 0..output.len() {
-            assert_eq!(node, pin_map[i].node);
+            assert_eq!(node, pin_map.get(i).unwrap().node);
         }
         t.deinit(Global);
         t2.deinit(Global);
@@ -4803,7 +5559,7 @@ mod tests {
             let mut s = t.vt_stream();
             s.next_slice(b"\x1b[=3;1uhello");
         }
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let screen_ptr: *const Screen = t.screens.active;
         let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::vt());
         formatter.extra.kitty_keyboard = true;
@@ -4827,10 +5583,10 @@ mod tests {
         assert_eq!(flags1, flags2);
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         for i in 0..output.len() {
-            assert_eq!(node, pin_map[i].node);
+            assert_eq!(node, pin_map.get(i).unwrap().node);
         }
         t.deinit(Global);
         t2.deinit(Global);
@@ -4846,7 +5602,7 @@ mod tests {
             let mut s = t.vt_stream();
             s.next_slice(b"\x1b(0\x0ehello");
         }
-        let mut pin_map: Vec<Pin> = Vec::new();
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let screen_ptr: *const Screen = t.screens.active;
         let mut formatter: ScreenFormatter = ScreenFormatter::init(screen_ptr, Options::vt());
         formatter.extra.charsets = true;
@@ -4887,10 +5643,10 @@ mod tests {
         );
 
         // Verify pin map
-        assert_eq!(output.len(), pin_map.len());
+        assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         for i in 0..output.len() {
-            assert_eq!(node, pin_map[i].node);
+            assert_eq!(node, pin_map.get(i).unwrap().node);
         }
         t.deinit(Global);
         t2.deinit(Global);
@@ -4983,11 +5739,17 @@ mod tests {
             s.next_slice(b"\x1b[5G\x1bH"); // Set tab at column 5
             s.next_slice(b"\x1b[15G\x1bH"); // Set tab at column 15
             s.next_slice(b"\x1b[30G\x1bH"); // Set tab at column 30
-            s.next_slice(b"hello");
+            s.next_slice(b"\x1b[Hhello");
         }
+        let mut pin_map: PinMapMap = PinMapMap::EMPTY;
         let t_ptr: *const Terminal = &t;
         let mut formatter: TerminalFormatter = TerminalFormatter::init(t_ptr, Options::vt());
         formatter.extra.tabstops = true;
+        formatter.extra.screen.cursor = true;
+        formatter.pin_map = Some(PinMap {
+            alloc: Global,
+            map: &mut pin_map,
+        });
         formatter.format(&mut builder).unwrap();
         let output = builder.clone();
 
@@ -5006,6 +5768,29 @@ mod tests {
         assert!(t2.tabstops.get(14)); // Column 15 (1-indexed)
         assert!(t2.tabstops.get(29)); // Column 30 (1-indexed)
         assert!(!t2.tabstops.get(8)); // Not a tab
+
+        // Tabstop serialization must not offset the screen contents.
+        for (col, expected) in b"hello".iter().enumerate() {
+            let cell = unsafe { &(*t2.screens.active).pages }
+                .get_cell(crate::point::Point::Screen(coord(
+                    col as size::CellCountInt,
+                    0,
+                )))
+                .unwrap();
+            assert_eq!(*expected as u21, unsafe { (*cell.cell).codepoint() });
+        }
+
+        // Emitting tabstops moves the cursor to each configured column. When
+        // cursor state is included, it must be restored afterwards.
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, unsafe {
+            (*t2.screens.active).cursor.x
+        });
+        assert_eq!(unsafe { (*t.screens.active).cursor.y }, unsafe {
+            (*t2.screens.active).cursor.y
+        });
+
+        // Verify the reordered terminal state is still represented in the map.
+        assert_eq!(output.len(), pin_map.count());
         t.deinit(Global);
         t2.deinit(Global);
     }
@@ -5229,6 +6014,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         formatter.format(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -5306,6 +6092,35 @@ mod tests {
         assert_eq!(
             output,
             b"<div style=\"font-family: monospace; white-space: pre;\">&#9584;&#9472; &#10095;</div>"
+        );
+        t.deinit(Global);
+    }
+
+    // test "Page html trailing blank lines"
+    #[test]
+    fn page_html_trailing_blank_lines() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"hello\r\nworld\r\n\r\n");
+        }
+
+        let pages = unsafe { &(*t.screens.active).pages };
+        assert!(!pages.pages.first.is_null());
+        assert!(core::ptr::eq(pages.pages.first, pages.pages.last));
+
+        let page = unsafe { last_page(pages) };
+        let formatter: PageFormatter = PageFormatter::init(page, Options::html());
+
+        let state = formatter.format_with_state(&mut builder).unwrap();
+        let output = builder.as_slice();
+
+        // The closing div behaves as a newline
+        assert_eq!((unsafe { &*page }.size.rows - 2) as usize, state.rows);
+        assert_eq!(
+            b"<div style=\"font-family: monospace; white-space: pre;\">hello\nworld</div>".as_slice(),
+            output,
         );
         t.deinit(Global);
     }
@@ -5483,6 +6298,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         formatter.format(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -5561,6 +6377,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         formatter.format(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -5663,6 +6480,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         formatter.format(&mut builder).unwrap();
         let output = builder.as_slice();
@@ -5943,6 +6761,7 @@ mod tests {
         formatter.point_map = Some(PointMap {
             alloc: Global,
             map: &mut point_map,
+            base: 0,
         });
         formatter.format(&mut builder).unwrap();
         let output = builder.as_slice();

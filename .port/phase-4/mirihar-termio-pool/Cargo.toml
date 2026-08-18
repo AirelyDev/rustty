@@ -1,0 +1,13 @@
+# mirihar-termio-pool — isolated, non-FFI Miri proof artifact for the W6
+# (e0ef934f7) SegmentedPool -> MemoryPool termio write-path rewrite.
+[package]
+name = "mirihar-termio-pool"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "mirihar-termio-pool"
+path = "src/main.rs"
+
+# Standalone: not part of the rustty root workspace (this is a proof artifact).
+[workspace]

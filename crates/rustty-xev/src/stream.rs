@@ -130,11 +130,12 @@ pub struct WriteRequest {
 // PORT NOTE [ADV-FIX F3]: hand-written `Default` (NOT `#[derive]`) — the Zig
 // field defaults are `completion = .{}`, `userdata = null`, `next = null`, but
 // `full_write_buffer: xev.WriteBuffer` has NO Zig default (it is `undefined` in
-// the pre-allocated `SegmentedPool(WriteRequest)` element and is fully overwritten
-// by `queueWrite`'s `req.* = .{ .full_write_buffer = buf }` before use). Rust has
+// the pool-checked-out request — since e0ef934f7 the `req` embedded in termio's
+// `MemoryPool`-pooled `ThreadData.Write` node — and is fully overwritten by
+// `queueWrite`'s `req.* = .{ .full_write_buffer = buf }` before use). Rust has
 // no `undefined`, so the placeholder is an empty in-line `Array` buffer — never
-// observed, always overwritten. This is load-bearing: termio's `SegmentedPool<
-// xev::WriteRequest>` requires `WriteRequest: Default`.
+// observed, always overwritten. This is load-bearing: `queue_write`'s wholesale
+// re-init (`..WriteRequest::default()`) requires `WriteRequest: Default`.
 impl Default for WriteRequest {
     fn default() -> Self {
         WriteRequest {
@@ -160,11 +161,11 @@ impl queue::Node for WriteRequest {
 }
 
 // PORT NOTE [ADV-FIX F2]: `WriteRequest` holds a raw-ptr `userdata`/`next` +
-// embeds `Completion` (an fn-ptr) → auto-`!Send`; termio pools it in a
-// `SegmentedPool<WriteRequest>` inside the `ThreadData` that is MOVED onto the
-// termio thread. SAFETY / single-thread affinity: a request is touched by exactly
-// the owning event-loop thread at a time after the move, so transferring ownership
-// is sound.
+// embeds `Completion` (an fn-ptr) → auto-`!Send`; termio embeds it in the
+// `MemoryPool`-pooled `ThreadData.Write` node whose pool lives inside the
+// `ThreadData` that is MOVED onto the termio thread. SAFETY / single-thread
+// affinity: a request is touched by exactly the owning event-loop thread at a
+// time after the move, so transferring ownership is sound.
 unsafe impl Send for WriteRequest {}
 
 impl WriteRequest {

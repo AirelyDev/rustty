@@ -2213,8 +2213,7 @@ impl Terminal {
                         // Remove the wide spacer tail. The previous cell may be
                         // under the cursor, so locate the tail from the wide base
                         // rather than by subtracting from the cursor distance.
-                        let prev_x =
-                            unsafe { (*self.screens.active).cursor.x } - prev_left;
+                        let prev_x = unsafe { (*self.screens.active).cursor.x } - prev_left;
                         if prev_x < self.cols - 1 {
                             // const cells: [*]Cell = @ptrCast(prev.cell);
                             // cells[1].wide = .narrow;
@@ -5301,38 +5300,35 @@ impl Terminal {
     }
 
     /// Set the storage size limit for Kitty graphics across all screens.
-    pub fn set_kitty_graphics_size_limit(
-        &mut self,
-        alloc: Allocator,
-        limit: usize,
-    ) -> Result<(), OutOfMemory> {
+    // PORT NOTE (`4371871bc`): `setLimit` no longer allocates, so this is
+    // infallible (`!void` → `void`).
+    pub fn set_kitty_graphics_size_limit(&mut self, alloc: Allocator, limit: usize) {
         // if (comptime !build_options.kitty_graphics) return;
         if !crate::options::KITTY_GRAPHICS {
-            return Ok(());
+            return;
         }
         // var it = self.screens.all.iterator();
         // while (it.next()) |entry| {
         //     const screen: *Screen = entry.value.*;
-        //     try screen.kitty_images.setLimit(alloc, screen, limit);
+        //     screen.kitty_images.setLimit(self.io(), alloc, screen, limit);
         // }
-        // PORT NOTE: `screen.kitty_images.setLimit(alloc, screen, limit)` borrows
-        // `screen.kitty_images` mutably while also handing `screen` itself to
-        // `set_limit`. As in `Screen::deinit`, we MOVE `kitty_images` out of the
-        // screen (leaving a default in its slot), run `set_limit` against the
-        // borrowed screen, then move the updated storage back. The screen pointers
-        // in `self.screens.all` are stable heap allocations.
+        // PORT NOTE: `screen.kitty_images.setLimit(io, alloc, screen, limit)`
+        // borrows `screen.kitty_images` mutably while also handing `screen`
+        // itself to `set_limit` (now as a raw `*mut Screen`, per the storage's
+        // `s: *mut Screen` PORT NOTE). As in `Screen::deinit`, we MOVE
+        // `kitty_images` out of the screen (leaving a default in its slot), run
+        // `set_limit` against the raw screen pointer, then move the updated
+        // storage back. The screen pointers in `self.screens.all` are stable
+        // heap allocations.
         for slot in self.screens.all.iter() {
             if let Some(screen) = *slot {
                 // SAFETY: `screen` is a stable, initialized heap allocation owned
                 // by the screen set; we hold `&mut self` so no other alias exists.
-                let screen: &mut Screen = unsafe { &mut *screen };
-                let mut images = core::mem::take(&mut screen.kitty_images);
-                let res = images.set_limit(alloc, screen, limit);
-                screen.kitty_images = images;
-                res.map_err(|_| OutOfMemory)?;
+                let mut images = core::mem::take(unsafe { &mut (*screen).kitty_images });
+                images.set_limit(alloc, screen, limit);
+                unsafe { (*screen).kitty_images = images };
             }
         }
-        Ok(())
     }
 
     /// Set the allowed medium types for Kitty graphics image loading
@@ -5413,73 +5409,78 @@ impl Terminal {
 
         // const pen = self.screens.active.cursor.style;
         let pen = self.active_mut().cursor.style;
-        // var attrs: [8]u8 = @splat(0);
-        let mut attrs: [u8; 8] = [0; 8];
+        // var attrs: [9]u8 = @splat(0);
+        let mut attrs: [u8; 9] = [0; 9];
         // var i: usize = 0;
         let mut i: usize = 0;
 
         if pen.flags.bold {
-            attrs[i] = b'1';
+            attrs[i] = 1;
             i += 1;
         }
 
         if pen.flags.faint {
-            attrs[i] = b'2';
+            attrs[i] = 2;
             i += 1;
         }
 
         if pen.flags.italic {
-            attrs[i] = b'3';
+            attrs[i] = 3;
             i += 1;
         }
 
         if pen.flags.underline != sgr::Underline::None {
-            attrs[i] = b'4';
+            attrs[i] = 4;
+            i += 1;
+        }
+
+        if pen.flags.overline {
+            attrs[i] = 53;
             i += 1;
         }
 
         if pen.flags.blink {
-            attrs[i] = b'5';
+            attrs[i] = 5;
             i += 1;
         }
 
         if pen.flags.inverse {
-            attrs[i] = b'7';
+            attrs[i] = 7;
             i += 1;
         }
 
         if pen.flags.invisible {
-            attrs[i] = b'8';
+            attrs[i] = 8;
             i += 1;
         }
 
         if pen.flags.strikethrough {
-            attrs[i] = b'9';
+            attrs[i] = 9;
             i += 1;
         }
 
-        // for (attrs[0..i]) |c| {
-        //     // Preserve underline styles. Kind of a hack to special case '4'
+        // for (attrs[0..i]) |attr| {
+        //     // Preserve underline styles. Kind of a hack to special case 4
         //     // here but its easier than changing how we do all attributes.
-        //     if (c == '4' and pen.flags.underline != .single) {
+        //     if (attr == 4 and pen.flags.underline != .single) {
         //         try writer.print(";4:{}", .{@intFromEnum(pen.flags.underline)});
         //         continue;
         //     }
         //
-        //     try writer.print(";{c}", .{c});
+        //     try writer.print(";{}", .{attr});
         // }
         //
         // PORT NOTE (oracle cb2fef390, `P3-W1 T6`): the buffer stays
         // `&mut [u8]` in, `&[u8]` out — nothing here formats through `String`.
-        for &c in &attrs[0..i] {
-            // Preserve underline styles. Kind of a hack to special case '4'
+        for &attr in &attrs[0..i] {
+            // Preserve underline styles. Kind of a hack to special case 4
             // here but its easier than changing how we do all attributes.
-            if c == b'4' && pen.flags.underline != sgr::Underline::Single {
+            if attr == 4 && pen.flags.underline != sgr::Underline::Single {
                 write_print!(";4:{}", pen.flags.underline as u8);
                 continue;
             }
 
-            write_print!(";{}", c as char);
+            write_print!(";{}", attr);
         }
 
         // switch (pen.fg_color) {
@@ -7003,10 +7004,9 @@ mod tests {
         t.modes.set(modespkg::Mode::GraphemeCluster, false);
         t.print('A' as u32).unwrap();
 
-        let initial_capacity = unsafe {
-            crate::pagelist::Node::capacity((*(*t.screens.active).cursor.page_pin).node)
-        }
-        .grapheme_bytes;
+        let initial_capacity =
+            unsafe { crate::pagelist::Node::capacity((*(*t.screens.active).cursor.page_pin).node) }
+                .grapheme_bytes;
         for _ in 0..pagepkg::GRAPHEME_MAX_LEN * 4 {
             t.print(0x0301).unwrap();
         }
@@ -7020,10 +7020,10 @@ mod tests {
             .unwrap()
             .len(),
         );
-        assert_eq!(initial_capacity, unsafe {
-            crate::pagelist::Node::capacity(list_cell.node)
-        }
-        .grapheme_bytes);
+        assert_eq!(
+            initial_capacity,
+            unsafe { crate::pagelist::Node::capacity(list_cell.node) }.grapheme_bytes
+        );
 
         t.deinit(Global);
     }
@@ -17037,6 +17037,7 @@ mod tests {
             t.set_attribute(sgr::Attribute::Inverse).unwrap();
             t.set_attribute(sgr::Attribute::Invisible).unwrap();
             t.set_attribute(sgr::Attribute::Strikethrough).unwrap();
+            t.set_attribute(sgr::Attribute::Overline).unwrap();
             t.set_attribute(sgr::Attribute::DirectColorFg(color::RGB {
                 r: 100,
                 g: 200,
@@ -17052,7 +17053,7 @@ mod tests {
             let buf = t.print_attributes(&mut storage).unwrap();
             assert_eq!(
                 buf,
-                "0;1;2;3;4;5;7;8;9;38:2::100:200:255;48:2::101:102:103".as_bytes()
+                "0;1;2;3;4;53;5;7;8;9;38:2::100:200:255;48:2::101:102:103".as_bytes()
             );
             t.set_attribute(sgr::Attribute::Unset).unwrap();
         }
@@ -20778,11 +20779,14 @@ mod tests {
         use crate::kitty::graphics_storage::{Location, Placement};
 
         // SAFETY: `screens.active` is a stable heap pointer owned by `screens`
-        // and we hold `&mut t`.
-        let s = unsafe { &mut *t.screens.active };
-        s.kitty_images
+        // and we hold `&mut t`. Each access re-derives its reference from the
+        // raw base pointer so no alias outlives its statement (the storage's
+        // `s: *mut Screen` PORT NOTE shape).
+        let sp = t.screens.active;
+        unsafe { &mut (*sp).kitty_images }
             .add_image(
                 Global,
+                sp,
                 Image {
                     id: 1,
                     width: 4,
@@ -20792,18 +20796,24 @@ mod tests {
             )
             .unwrap();
         let pin = {
-            let pin = s
-                .pages
+            let pages = unsafe { &mut (*sp).pages };
+            let pin = pages
                 .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
                 .unwrap();
-            s.pages.track_pin(pin).unwrap()
+            pages.track_pin(pin).unwrap()
         };
-        s.kitty_images
-            .add_placement(Global, 1, 0, Placement::with_location(Location::Pin(pin)))
+        unsafe { &mut (*sp).kitty_images }
+            .add_placement(
+                Global,
+                sp,
+                1,
+                0,
+                Placement::with_location(Location::Pin(pin)),
+            )
             .unwrap();
 
-        assert_eq!(1, s.kitty_images.images.len());
-        assert_eq!(1, s.kitty_images.placements.len());
+        assert_eq!(1, unsafe { &(*sp).kitty_images }.images.len());
+        assert_eq!(1, unsafe { &(*sp).kitty_images }.placements.len());
     }
 
     fn kitty_image_counts(t: &Terminal) -> (usize, usize) {

@@ -996,10 +996,15 @@ mod imp {
             // accelerator GTK renders next to the menu item is re-derived from the
             // current keybind set on every `notify::config`.
             use rustty_input::binding::{
-                Action, CloseTabMode, CopyToClipboard, InspectorMode, SplitDirection,
+                Action, CloseTabMode, CopyToClipboard, InspectorMode, OpenConfig, SplitDirection,
             };
             self.sync_action_accelerator("app.quit", &Action::Quit);
-            self.sync_action_accelerator("app.open-config", &Action::OpenConfig);
+            // PORT NOTE (P4 partial, 0a183c923): upstream syncs the two
+            // parameterized targets (`app.open-config::os-open` /
+            // `::new-window`, application.zig:1208-1209); that GTK rework is
+            // the F-lane half of the bundle. Until it lands the single action
+            // keeps the default (`.os_open`) accelerator.
+            self.sync_action_accelerator("app.open-config", &Action::OpenConfig(OpenConfig::DEFAULT));
             self.sync_action_accelerator("app.reload-config", &Action::ReloadConfig);
             self.sync_action_accelerator(
                 "win.toggle-inspector",

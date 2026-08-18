@@ -106,6 +106,7 @@ _config() {
     "--scrollbar=-:::(system never)" \
     "--link=-:::( )" \
     "--link-url" \
+    "--link-osc8" \
     "--link-previews=-:::(false true osc8)" \
     "--maximize" \
     "--fullscreen=-:::(false true non-native non-native-visible-menu non-native-padded-notch)" \
@@ -139,6 +140,7 @@ _config() {
     "--window-show-tab-bar=-:::(always auto never)" \
     "--window-titlebar-background=-:::( )" \
     "--window-titlebar-foreground=-:::( )" \
+    "--drag-handle=-:::(always auto never)" \
     "--resize-overlay=-:::(always never after-first)" \
     "--resize-overlay-position=-:::(center top-left top-center top-right bottom-left bottom-center bottom-right)" \
     "--resize-overlay-duration=-:::( )" \

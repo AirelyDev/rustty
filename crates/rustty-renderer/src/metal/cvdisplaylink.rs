@@ -86,9 +86,12 @@ extern "C" {
     fn CVDisplayLinkRelease(dl: CVDisplayLinkRef);
 }
 
-/// Reference `DisplayLink.Error = error{ InvalidOperation }`.
+/// Reference `DisplayLink.Error = error{ CreationFailed, InvalidOperation }`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
+    /// Display link creation failed (e.g. macOS has no active displays —
+    /// a locked session). Reference `error.CreationFailed` (a177ba90a).
+    CreationFailed,
     /// A CoreVideo call returned non-`kCVReturnSuccess`.
     InvalidOperation,
 }
@@ -142,31 +145,25 @@ impl core::fmt::Debug for DisplayLink {
 // it — the KAT keeps the `DisplayLink` on one thread, so it is unneeded here.)
 
 impl DisplayLink {
-    /// Reference `createWithActiveCGDisplays() Allocator.Error!*DisplayLink`.
+    /// Reference `createWithActiveCGDisplays() Error!*DisplayLink`.
     ///     var result: ?*DisplayLink = null;
     ///     if (c.CVDisplayLinkCreateWithActiveCGDisplays(@ptrCast(&result)) != kCVReturnSuccess)
-    ///         return error.OutOfMemory;
-    ///     return result orelse error.OutOfMemory;
-    ///
-    /// Note on the error: the reference maps CoreVideo failure to `error.OutOfMemory`
-    /// (its `Allocator.Error`). This wrapper returns its own `Error::InvalidOperation`
-    /// because `rustty-renderer`'s init error channel is `generic::Error`, not an
-    /// allocator error; the `From<cvdisplaylink::Error> for generic::Error` impl folds
-    /// `InvalidOperation -> OutOfMemory`, keeping `try … catch error.OutOfMemory` faithful.
+    ///         return error.CreationFailed;
+    ///     return result orelse error.CreationFailed;
     pub fn create_with_active_cg_displays() -> Result<DisplayLink, Error> {
         let mut result: CVDisplayLinkRef = core::ptr::null_mut();
         // SAFETY: `&mut result` is a valid out-pointer; CoreVideo writes a +1 ref.
         let rc = unsafe { CVDisplayLinkCreateWithActiveCGDisplays(&mut result) };
         if rc != kCVReturnSuccess {
-            return Err(Error::InvalidOperation); // reference `error.OutOfMemory`; see note
+            return Err(Error::CreationFailed);
         }
-        // reference `result orelse error.OutOfMemory`
+        // reference `result orelse error.CreationFailed`
         match NonNull::new(result) {
             Some(link) => Ok(DisplayLink {
                 link,
                 draw_now: None,
             }),
-            None => Err(Error::InvalidOperation),
+            None => Err(Error::CreationFailed),
         }
     }
 

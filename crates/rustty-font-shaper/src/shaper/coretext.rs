@@ -83,6 +83,25 @@ use crate::shared_grid::SharedGrid;
 // PORT NOTE: this crate wires no logger; `log.warn`/`log.err` sites are preserved
 // as comments (matching `harfbuzz.rs` / `feature.rs`).
 
+/// Raw CoreText entry point that objc2 0.3 wraps as non-null (it can
+/// legitimately return NULL, which the reference handles as OOM).
+// PORT NOTE: the reference `Typesetter.createLine` returns
+// `Allocator.Error!*text.Line` (`orelse return error.OutOfMemory` on a NULL
+// result), but objc2's `CTTypesetter::line` panics on NULL — so the raw symbol
+// is declared here against the SAME framework objc2 links (R3 — a binding, not
+// a reimplementation; mirrors `discovery.rs`'s `CTFontCreateForString`).
+mod sys {
+    use super::{CFRange, CTLine, CTTypesetter};
+    use core::ptr::NonNull;
+    #[link(name = "CoreText", kind = "framework")]
+    extern "C-unwind" {
+        pub fn CTTypesetterCreateLine(
+            typesetter: &CTTypesetter,
+            string_range: CFRange,
+        ) -> Option<NonNull<CTLine>>;
+    }
+}
+
 /// The error set for `init`/`shape`.
 ///
 // PORT NOTE: the reference `!Shaper` / `![]const Cell` inferred error sets union
@@ -619,8 +638,12 @@ impl Shaper {
         // try self.cf_release_pool.ensureUnusedCapacity(self.alloc, 4);
         self.cf_release_pool.reserve(4);
 
-        // const str = macos.foundation.String.createWithCharactersNoCopy(state.unichars.items);
+        // const str = try macos.foundation.String.createWithCharactersNoCopy(state.unichars.items);
         // self.cf_release_pool.appendAssumeCapacity(str);
+        //
+        // (`createWithCharactersNoCopy` returns `Allocator.Error!*String` —
+        // `orelse return error.OutOfMemory` on a NULL result; the `ok_or` below
+        // is that same null-check.)
         //
         // PORT NOTE (no-copy): CoreText references `state.unichars` directly (no
         // copy, `kCFAllocatorNull` deallocator so CF never frees our buffer). The
@@ -670,14 +693,28 @@ impl Shaper {
             unsafe { &*(*self.cf_release_pool.last().unwrap() as *const CTTypesetter) };
 
         // Create a line from the typesetter
-        // const line = typesetter.createLine(.{ .location = 0, .length = 0 });
+        // const line = try typesetter.createLine(.{ .location = 0, .length = 0 });
         // self.cf_release_pool.appendAssumeCapacity(line);
+        //
+        // PORT NOTE: the reference `Typesetter.createLine` returns
+        // `Allocator.Error!*text.Line` (`orelse return error.OutOfMemory` on a NULL
+        // result). objc2's `CTTypesetter::line` panics on NULL, so the raw
+        // `CTTypesetterCreateLine` symbol is declared here against the SAME
+        // framework objc2 links (R3 — a binding, not a reimplementation; mirrors
+        // `discovery.rs`'s `CTFontCreateForString`).
+        // SAFETY: `typesetter_ref` is a live pooled CTTypesetter; the +1
+        // ("Create rule") result is owned by `CFRetained::from_raw`.
         let line: CFRetained<CTLine> = unsafe {
-            typesetter_ref.line(CFRange {
-                location: 0,
-                length: 0,
-            })
-        };
+            sys::CTTypesetterCreateLine(
+                typesetter_ref,
+                CFRange {
+                    location: 0,
+                    length: 0,
+                },
+            )
+            .map(|p| CFRetained::from_raw(p))
+        }
+        .ok_or(Error::OutOfMemory)?;
         self.cf_release_pool
             .push(CFRetained::into_raw(line).as_ptr() as *mut c_void);
         let line_ref: &CTLine =

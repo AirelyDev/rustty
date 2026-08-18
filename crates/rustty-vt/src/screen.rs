@@ -768,22 +768,23 @@ impl Screen {
 
         // if (comptime build_options.kitty_graphics) {
         if crate::options::KITTY_GRAPHICS {
-            // This can't fail because the storage is always empty at this point
-            // and the only fail-able case is that we have to evict images.
-            // result.kitty_images.setLimit(alloc, &result, opts.kitty_image_storage_limit) catch unreachable;
+            // result.kitty_images.setLimit(io, alloc, &result, opts.kitty_image_storage_limit);
+            // (`4371871bc` made `setLimit` infallible — the pre-range `catch
+            // unreachable` and its can't-fail comment are gone upstream.)
             // PORT NOTE: `setLimit` takes `&mut self` (the `kitty_images` field)
-            // and `s: &mut Screen` (which here is `&result` itself). Borrowing
-            // `result.kitty_images` as the receiver while also handing
-            // `&mut result` to the same call aliases (Stacked-Borrows UB). We
-            // instead MOVE `kitty_images` out of `result` (leaving a default
-            // placeholder), invoke the method on the owned storage with a clean
-            // `&mut result`, then move it back — sound and observably identical
-            // (`setLimit` only reads/mutates the storage + `s.pages`, disjoint
-            // from the now-empty `kitty_images` slot).
+            // and the screen it lives in (now a raw `*mut Screen`, per the
+            // storage's PORT NOTE). We keep the MOVE-out shape: take
+            // `kitty_images` out of `result` (leaving a default placeholder),
+            // invoke the method on the owned storage with a raw `*mut result`,
+            // then move it back — sound and observably identical (`setLimit`
+            // only reads/mutates the storage + `s.pages`, disjoint from the
+            // now-empty `kitty_images` slot).
             let mut images = core::mem::take(&mut result.kitty_images);
-            images
-                .set_limit(alloc, &mut result, opts.kitty_image_storage_limit)
-                .expect("storage is empty so setLimit cannot evict/fail");
+            images.set_limit(
+                alloc,
+                &mut result as *mut Screen,
+                opts.kitty_image_storage_limit,
+            );
             // result.kitty_images.image_limits = opts.kitty_image_loading_limits;
             images.image_limits = opts.kitty_image_loading_limits;
             result.kitty_images = images;
@@ -806,7 +807,7 @@ impl Screen {
         if crate::options::KITTY_GRAPHICS {
             let alloc = self.alloc;
             let mut images = core::mem::take(&mut self.kitty_images);
-            images.deinit(alloc, self);
+            images.deinit(alloc, self as *mut Screen);
         }
         self.cursor.deinit(self.alloc);
         self.pages.deinit();
@@ -901,7 +902,7 @@ impl Screen {
             // Reset kitty graphics storage
             let alloc = self.alloc;
             let mut images = core::mem::take(&mut self.kitty_images);
-            images.deinit(alloc, self);
+            images.deinit(alloc, self as *mut Screen);
             self.kitty_images = kitty::graphics_storage::ImageStorage {
                 dirty: true,
                 ..kitty::graphics_storage::ImageStorage::default()
@@ -4225,7 +4226,7 @@ impl Screen {
         formatter.content = Content::Selection(Some(opts.sel));
 
         // If we have a string map, we need to set that up.
-        let mut pins: Vec<Pin> = Vec::new();
+        let mut pins: formatter::PinMapMap = formatter::PinMapMap::EMPTY;
         if opts.map.is_some() {
             formatter.pin_map = Some(formatter::PinMap {
                 alloc,
@@ -4255,12 +4256,15 @@ impl Screen {
             // `enabled = builtin.is_test` gate).
             #[cfg(test)]
             selection_string_tw_check(SelectionStringFp::CopyMap)?;
-            // const map_pins = try pins.toOwnedSlice(alloc);
-            let map_pins = pins;
             *map = StringMap {
                 string: map_string,
-                map: map_pins,
+                map: pins,
             };
+
+            // Ownership of the pin map moved to the string map.
+            // PORT NOTE: the reference re-assigns `pins = .empty` so its
+            // deferred deinit frees nothing; the Rust move above IS that
+            // ownership transfer.
         }
 
         Ok(text)
@@ -12640,7 +12644,7 @@ mod tests {
         // Trigger allocation failure on toOwnedSlice
         let mut map: StringMap = StringMap {
             string: Vec::new(),
-            map: Vec::new(),
+            map: formatter::PinMapMap::EMPTY,
         };
         SELECTION_STRING_TW.with(|tw| {
             tw.borrow_mut()

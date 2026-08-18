@@ -46,6 +46,7 @@ extension Rustty.Action {
             case unknown
             case text
             case html
+            case osc8
 
             init(_ c: rustty_action_open_url_kind_e) {
                 switch c {
@@ -53,6 +54,14 @@ extension Rustty.Action {
                     self = .text
                 case RUSTTY_ACTION_OPEN_URL_KIND_HTML:
                     self = .html
+                // PORT-SEAM(w7-macos, upstream 77537c806): upstream maps
+                // GHOSTTY_ACTION_OPEN_URL_KIND_OSC8 -> .osc8 here. The OSC8 kind
+                // does not exist in rustty.h yet (the C enum + core producer land
+                // with a later Rust bundle). Until it does, OSC-8 opens surface as
+                // .unknown and the untrusted-URL policy below is dormant. Restore
+                // when the header gains the kind:
+                // case RUSTTY_ACTION_OPEN_URL_KIND_OSC8:
+                //     self = .osc8
                 default:
                     self = .unknown
                 }

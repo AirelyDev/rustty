@@ -17,6 +17,7 @@
 
 use crate::binding::*;
 use rustty_cfg_fmt::AllocatingWriter;
+use rustty_os::i18n;
 use rustty_util::quirks::inlineAssert as assert;
 
 /// A command is a named binding action that can be executed from
@@ -150,6 +151,25 @@ impl Command {
         })
     }
 
+    // pub fn translated(self: Command) Command
+    //
+    // PORT NOTE: `std.mem.span(i18n._(self.title))` — the stored strings are
+    // unsentineled `Vec<u8>` (see the struct PORT NOTE); the NUL the reference's
+    // `[:0]const u8` carries is appended for the gettext lookup and the result
+    // is copied back sentinel-free.
+    pub fn translated(&self) -> Command {
+        // return .{
+        //     .action = self.action,
+        //     .title = std.mem.span(i18n._(self.title)),
+        //     .description = std.mem.span(i18n._(self.description)),
+        // };
+        Command {
+            action: self.action.clone_action(),
+            title: translate(&self.title),
+            description: translate(&self.description),
+        }
+    }
+
     /// Implements a comparison function for std.mem.sortUnstable
     /// and similar functions. The sorting is defined by Rustty
     /// to be what we prefer. If a caller wants some other sorting,
@@ -215,6 +235,15 @@ impl rustty_args::args::AutoStruct for Command {
             _ => unreachable!(),
         }
     }
+}
+
+// PORT NOTE: `std.mem.span(i18n._(msgid))` — run the msgid through the gettext
+// catalog (`i18n::gettext_`, the reference's `_`). The bytes are NUL-terminated
+// for the C lookup and the (possibly translated) result is copied out before
+// the temporary sentinel buffer drops.
+fn translate(msgid: &[u8]) -> Vec<u8> {
+    let c = std::ffi::CString::new(msgid.to_vec()).expect("msgid has no interior NUL");
+    i18n::gettext_(&c).to_bytes().to_vec()
 }
 
 // PORT NOTE: `[:0]const u8` / `[*:0]const u8` — produce a NUL-terminated owned
@@ -328,516 +357,535 @@ fn action_commands(action: &str) -> Vec<Command> {
         // and not pointing to the stack.
         "reset" => vec![Command {
             action: Action::Reset,
-            title: b"Reset Terminal".to_vec(),
-            description: b"Reset the terminal to a clean state.".to_vec(),
+            title: i18n::N_(b"Reset Terminal").to_vec(),
+            description: i18n::N_(b"Reset the terminal to a clean state.").to_vec(),
         }],
 
         "copy_to_clipboard" => vec![
             Command {
                 action: Action::CopyToClipboard(CopyToClipboard::Mixed),
-                title: b"Copy to Clipboard".to_vec(),
-                description: b"Copy the selected text to the clipboard in both plain and styled formats.".to_vec(),
+                title: i18n::N_(b"Copy to Clipboard").to_vec(),
+                description: i18n::N_(b"Copy the selected text to the clipboard in both plain and styled formats.").to_vec(),
             },
             Command {
                 action: Action::CopyToClipboard(CopyToClipboard::Plain),
-                title: b"Copy Selection as Plain Text to Clipboard".to_vec(),
-                description: b"Copy the selected text as plain text to the clipboard.".to_vec(),
+                title: i18n::N_(b"Copy Selection as Plain Text to Clipboard").to_vec(),
+                description: i18n::N_(b"Copy the selected text as plain text to the clipboard.").to_vec(),
             },
             Command {
                 action: Action::CopyToClipboard(CopyToClipboard::Vt),
-                title: b"Copy Selection as ANSI Sequences to Clipboard".to_vec(),
-                description: b"Copy the selected text as ANSI escape sequences to the clipboard.".to_vec(),
+                title: i18n::N_(b"Copy Selection as ANSI Sequences to Clipboard").to_vec(),
+                description: i18n::N_(b"Copy the selected text as ANSI escape sequences to the clipboard.").to_vec(),
             },
             Command {
                 action: Action::CopyToClipboard(CopyToClipboard::Html),
-                title: b"Copy Selection as HTML to Clipboard".to_vec(),
-                description: b"Copy the selected text as HTML to the clipboard.".to_vec(),
+                title: i18n::N_(b"Copy Selection as HTML to Clipboard").to_vec(),
+                description: i18n::N_(b"Copy the selected text as HTML to the clipboard.").to_vec(),
             },
         ],
 
         "copy_url_to_clipboard" => vec![Command {
             action: Action::CopyUrlToClipboard,
-            title: b"Copy URL to Clipboard".to_vec(),
-            description: b"Copy the URL under the cursor to the clipboard.".to_vec(),
+            title: i18n::N_(b"Copy URL to Clipboard").to_vec(),
+            description: i18n::N_(b"Copy the URL under the cursor to the clipboard.").to_vec(),
         }],
 
         "copy_title_to_clipboard" => vec![Command {
             action: Action::CopyTitleToClipboard,
-            title: b"Copy Terminal Title to Clipboard".to_vec(),
-            description: b"Copy the terminal title to the clipboard. If the terminal title is not set this has no effect.".to_vec(),
+            title: i18n::N_(b"Copy Terminal Title to Clipboard").to_vec(),
+            description: i18n::N_(b"Copy the terminal title to the clipboard. If the terminal title is not set this has no effect.").to_vec(),
         }],
 
         "paste_from_clipboard" => vec![Command {
             action: Action::PasteFromClipboard,
-            title: b"Paste from Clipboard".to_vec(),
-            description: b"Paste the contents of the main clipboard.".to_vec(),
+            title: i18n::N_(b"Paste from Clipboard").to_vec(),
+            description: i18n::N_(b"Paste the contents of the main clipboard.").to_vec(),
         }],
 
         "paste_from_selection" => vec![Command {
             action: Action::PasteFromSelection,
-            title: b"Paste from Selection".to_vec(),
-            description: b"Paste the contents of the selection clipboard.".to_vec(),
+            title: i18n::N_(b"Paste from Selection").to_vec(),
+            description: i18n::N_(b"Paste the contents of the selection clipboard.").to_vec(),
         }],
 
         "start_search" => vec![Command {
             action: Action::StartSearch,
-            title: b"Start Search".to_vec(),
-            description: b"Start a search if one isn't already active.".to_vec(),
+            title: i18n::N_(b"Start Search").to_vec(),
+            description: i18n::N_(b"Start a search if one isn't already active.").to_vec(),
         }],
 
         "search_selection" => vec![Command {
             action: Action::SearchSelection,
-            title: b"Search Selection".to_vec(),
-            description: b"Start a search for the current text selection.".to_vec(),
+            title: i18n::N_(b"Search Selection").to_vec(),
+            description: i18n::N_(b"Start a search for the current text selection.").to_vec(),
         }],
 
         "end_search" => vec![Command {
             action: Action::EndSearch,
-            title: b"End Search".to_vec(),
-            description: b"End the current search if any and hide any GUI elements.".to_vec(),
+            title: i18n::N_(b"End Search").to_vec(),
+            description: i18n::N_(b"End the current search if any and hide any GUI elements.").to_vec(),
         }],
 
         "navigate_search" => vec![
             Command {
                 action: Action::NavigateSearch(NavigateSearch::Next),
-                title: b"Next Search Result".to_vec(),
-                description: b"Navigate to the next search result, if any.".to_vec(),
+                title: i18n::N_(b"Next Search Result").to_vec(),
+                description: i18n::N_(b"Navigate to the next search result, if any.").to_vec(),
             },
             Command {
                 action: Action::NavigateSearch(NavigateSearch::Previous),
-                title: b"Previous Search Result".to_vec(),
-                description: b"Navigate to the previous search result, if any.".to_vec(),
+                title: i18n::N_(b"Previous Search Result").to_vec(),
+                description: i18n::N_(b"Navigate to the previous search result, if any.").to_vec(),
             },
         ],
 
         "increase_font_size" => vec![Command {
             action: Action::IncreaseFontSize(1.0),
-            title: b"Increase Font Size".to_vec(),
-            description: b"Increase the font size by 1 point.".to_vec(),
+            title: i18n::N_(b"Increase Font Size").to_vec(),
+            description: i18n::N_(b"Increase the font size by 1 point.").to_vec(),
         }],
 
         "decrease_font_size" => vec![Command {
             action: Action::DecreaseFontSize(1.0),
-            title: b"Decrease Font Size".to_vec(),
-            description: b"Decrease the font size by 1 point.".to_vec(),
+            title: i18n::N_(b"Decrease Font Size").to_vec(),
+            description: i18n::N_(b"Decrease the font size by 1 point.").to_vec(),
         }],
 
         "reset_font_size" => vec![Command {
             action: Action::ResetFontSize,
-            title: b"Reset Font Size".to_vec(),
-            description: b"Reset the font size to the default.".to_vec(),
+            title: i18n::N_(b"Reset Font Size").to_vec(),
+            description: i18n::N_(b"Reset the font size to the default.").to_vec(),
         }],
 
         "clear_screen" => vec![Command {
             action: Action::ClearScreen,
-            title: b"Clear Screen".to_vec(),
-            description: b"Clear the screen and scrollback.".to_vec(),
+            title: i18n::N_(b"Clear Screen").to_vec(),
+            description: i18n::N_(b"Clear the screen and scrollback.").to_vec(),
         }],
 
         "select_all" => vec![Command {
             action: Action::SelectAll,
-            title: b"Select All".to_vec(),
-            description: b"Select all text on the screen.".to_vec(),
+            title: i18n::N_(b"Select All").to_vec(),
+            description: i18n::N_(b"Select all text on the screen.").to_vec(),
         }],
 
         "scroll_to_top" => vec![Command {
             action: Action::ScrollToTop,
-            title: b"Scroll to Top".to_vec(),
-            description: b"Scroll to the top of the screen.".to_vec(),
+            title: i18n::N_(b"Scroll to Top").to_vec(),
+            description: i18n::N_(b"Scroll to the top of the screen.").to_vec(),
         }],
 
         "scroll_to_bottom" => vec![Command {
             action: Action::ScrollToBottom,
-            title: b"Scroll to Bottom".to_vec(),
-            description: b"Scroll to the bottom of the screen.".to_vec(),
+            title: i18n::N_(b"Scroll to Bottom").to_vec(),
+            description: i18n::N_(b"Scroll to the bottom of the screen.").to_vec(),
         }],
 
         "scroll_to_selection" => vec![Command {
             action: Action::ScrollToSelection,
-            title: b"Scroll to Selection".to_vec(),
-            description: b"Scroll to the selected text.".to_vec(),
+            title: i18n::N_(b"Scroll to Selection").to_vec(),
+            description: i18n::N_(b"Scroll to the selected text.").to_vec(),
         }],
 
         "scroll_page_up" => vec![Command {
             action: Action::ScrollPageUp,
-            title: b"Scroll Page Up".to_vec(),
-            description: b"Scroll the screen up by a page.".to_vec(),
+            title: i18n::N_(b"Scroll Page Up").to_vec(),
+            description: i18n::N_(b"Scroll the screen up by a page.").to_vec(),
         }],
 
         "scroll_page_down" => vec![Command {
             action: Action::ScrollPageDown,
-            title: b"Scroll Page Down".to_vec(),
-            description: b"Scroll the screen down by a page.".to_vec(),
+            title: i18n::N_(b"Scroll Page Down").to_vec(),
+            description: i18n::N_(b"Scroll the screen down by a page.").to_vec(),
         }],
 
         "write_screen_file" => vec![
             Command {
                 action: Action::WriteScreenFile(WriteScreen::COPY),
-                title: b"Copy Screen to Temporary File and Copy Path".to_vec(),
-                description: b"Copy the screen contents to a temporary file and copy the path to the clipboard.".to_vec(),
+                title: i18n::N_(b"Copy Screen to Temporary File and Copy Path").to_vec(),
+                description: i18n::N_(b"Copy the screen contents to a temporary file and copy the path to the clipboard.").to_vec(),
             },
             Command {
                 action: Action::WriteScreenFile(WriteScreen::PASTE),
-                title: b"Copy Screen to Temporary File and Paste Path".to_vec(),
-                description: b"Copy the screen contents to a temporary file and paste the path to the file.".to_vec(),
+                title: i18n::N_(b"Copy Screen to Temporary File and Paste Path").to_vec(),
+                description: i18n::N_(b"Copy the screen contents to a temporary file and paste the path to the file.").to_vec(),
             },
             Command {
                 action: Action::WriteScreenFile(WriteScreen::OPEN),
-                title: b"Copy Screen to Temporary File and Open".to_vec(),
-                description: b"Copy the screen contents to a temporary file and open it.".to_vec(),
+                title: i18n::N_(b"Copy Screen to Temporary File and Open").to_vec(),
+                description: i18n::N_(b"Copy the screen contents to a temporary file and open it.").to_vec(),
             },
             Command {
                 action: Action::WriteScreenFile(WriteScreen { action: WriteScreenAction::Copy, emit: WriteScreenFormat::Html }),
-                title: b"Copy Screen as HTML to Temporary File and Copy Path".to_vec(),
-                description: b"Copy the screen contents as HTML to a temporary file and copy the path to the clipboard.".to_vec(),
+                title: i18n::N_(b"Copy Screen as HTML to Temporary File and Copy Path").to_vec(),
+                description: i18n::N_(b"Copy the screen contents as HTML to a temporary file and copy the path to the clipboard.").to_vec(),
             },
             Command {
                 action: Action::WriteScreenFile(WriteScreen { action: WriteScreenAction::Paste, emit: WriteScreenFormat::Html }),
-                title: b"Copy Screen as HTML to Temporary File and Paste Path".to_vec(),
-                description: b"Copy the screen contents as HTML to a temporary file and paste the path to the file.".to_vec(),
+                title: i18n::N_(b"Copy Screen as HTML to Temporary File and Paste Path").to_vec(),
+                description: i18n::N_(b"Copy the screen contents as HTML to a temporary file and paste the path to the file.").to_vec(),
             },
             Command {
                 action: Action::WriteScreenFile(WriteScreen { action: WriteScreenAction::Open, emit: WriteScreenFormat::Html }),
-                title: b"Copy Screen as HTML to Temporary File and Open".to_vec(),
-                description: b"Copy the screen contents as HTML to a temporary file and open it.".to_vec(),
+                title: i18n::N_(b"Copy Screen as HTML to Temporary File and Open").to_vec(),
+                description: i18n::N_(b"Copy the screen contents as HTML to a temporary file and open it.").to_vec(),
             },
             Command {
                 action: Action::WriteScreenFile(WriteScreen { action: WriteScreenAction::Copy, emit: WriteScreenFormat::Vt }),
-                title: b"Copy Screen as ANSI Sequences to Temporary File and Copy Path".to_vec(),
-                description: b"Copy the screen contents as ANSI escape sequences to a temporary file and copy the path to the clipboard.".to_vec(),
+                title: i18n::N_(b"Copy Screen as ANSI Sequences to Temporary File and Copy Path").to_vec(),
+                description: i18n::N_(b"Copy the screen contents as ANSI escape sequences to a temporary file and copy the path to the clipboard.").to_vec(),
             },
             Command {
                 action: Action::WriteScreenFile(WriteScreen { action: WriteScreenAction::Paste, emit: WriteScreenFormat::Vt }),
-                title: b"Copy Screen as ANSI Sequences to Temporary File and Paste Path".to_vec(),
-                description: b"Copy the screen contents as ANSI escape sequences to a temporary file and paste the path to the file.".to_vec(),
+                title: i18n::N_(b"Copy Screen as ANSI Sequences to Temporary File and Paste Path").to_vec(),
+                description: i18n::N_(b"Copy the screen contents as ANSI escape sequences to a temporary file and paste the path to the file.").to_vec(),
             },
             Command {
                 action: Action::WriteScreenFile(WriteScreen { action: WriteScreenAction::Open, emit: WriteScreenFormat::Vt }),
-                title: b"Copy Screen as ANSI Sequences to Temporary File and Open".to_vec(),
-                description: b"Copy the screen contents as ANSI escape sequences to a temporary file and open it.".to_vec(),
+                title: i18n::N_(b"Copy Screen as ANSI Sequences to Temporary File and Open").to_vec(),
+                description: i18n::N_(b"Copy the screen contents as ANSI escape sequences to a temporary file and open it.").to_vec(),
             },
         ],
 
         "write_selection_file" => vec![
             Command {
                 action: Action::WriteSelectionFile(WriteScreen::COPY),
-                title: b"Copy Selection to Temporary File and Copy Path".to_vec(),
-                description: b"Copy the selection contents to a temporary file and copy the path to the clipboard.".to_vec(),
+                title: i18n::N_(b"Copy Selection to Temporary File and Copy Path").to_vec(),
+                description: i18n::N_(b"Copy the selection contents to a temporary file and copy the path to the clipboard.").to_vec(),
             },
             Command {
                 action: Action::WriteSelectionFile(WriteScreen::PASTE),
-                title: b"Copy Selection to Temporary File and Paste Path".to_vec(),
-                description: b"Copy the selection contents to a temporary file and paste the path to the file.".to_vec(),
+                title: i18n::N_(b"Copy Selection to Temporary File and Paste Path").to_vec(),
+                description: i18n::N_(b"Copy the selection contents to a temporary file and paste the path to the file.").to_vec(),
             },
             Command {
                 action: Action::WriteSelectionFile(WriteScreen::OPEN),
-                title: b"Copy Selection to Temporary File and Open".to_vec(),
-                description: b"Copy the selection contents to a temporary file and open it.".to_vec(),
+                title: i18n::N_(b"Copy Selection to Temporary File and Open").to_vec(),
+                description: i18n::N_(b"Copy the selection contents to a temporary file and open it.").to_vec(),
             },
             Command {
                 action: Action::WriteSelectionFile(WriteScreen { action: WriteScreenAction::Copy, emit: WriteScreenFormat::Html }),
-                title: b"Copy Selection as HTML to Temporary File and Copy Path".to_vec(),
-                description: b"Copy the selection contents as HTML to a temporary file and copy the path to the clipboard.".to_vec(),
+                title: i18n::N_(b"Copy Selection as HTML to Temporary File and Copy Path").to_vec(),
+                description: i18n::N_(b"Copy the selection contents as HTML to a temporary file and copy the path to the clipboard.").to_vec(),
             },
             Command {
                 action: Action::WriteSelectionFile(WriteScreen { action: WriteScreenAction::Paste, emit: WriteScreenFormat::Html }),
-                title: b"Copy Selection as HTML to Temporary File and Paste Path".to_vec(),
-                description: b"Copy the selection contents as HTML to a temporary file and paste the path to the file.".to_vec(),
+                title: i18n::N_(b"Copy Selection as HTML to Temporary File and Paste Path").to_vec(),
+                description: i18n::N_(b"Copy the selection contents as HTML to a temporary file and paste the path to the file.").to_vec(),
             },
             Command {
                 action: Action::WriteSelectionFile(WriteScreen { action: WriteScreenAction::Open, emit: WriteScreenFormat::Html }),
-                title: b"Copy Selection as HTML to Temporary File and Open".to_vec(),
-                description: b"Copy the selection contents as HTML to a temporary file and open it.".to_vec(),
+                title: i18n::N_(b"Copy Selection as HTML to Temporary File and Open").to_vec(),
+                description: i18n::N_(b"Copy the selection contents as HTML to a temporary file and open it.").to_vec(),
             },
             Command {
                 action: Action::WriteSelectionFile(WriteScreen { action: WriteScreenAction::Copy, emit: WriteScreenFormat::Vt }),
-                title: b"Copy Selection as ANSI Sequences to Temporary File and Copy Path".to_vec(),
-                description: b"Copy the selection contents as ANSI escape sequences to a temporary file and copy the path to the clipboard.".to_vec(),
+                title: i18n::N_(b"Copy Selection as ANSI Sequences to Temporary File and Copy Path").to_vec(),
+                description: i18n::N_(b"Copy the selection contents as ANSI escape sequences to a temporary file and copy the path to the clipboard.").to_vec(),
             },
             Command {
                 action: Action::WriteSelectionFile(WriteScreen { action: WriteScreenAction::Paste, emit: WriteScreenFormat::Vt }),
-                title: b"Copy Selection as ANSI Sequences to Temporary File and Paste Path".to_vec(),
-                description: b"Copy the selection contents as ANSI escape sequences to a temporary file and paste the path to the file.".to_vec(),
+                title: i18n::N_(b"Copy Selection as ANSI Sequences to Temporary File and Paste Path").to_vec(),
+                description: i18n::N_(b"Copy the selection contents as ANSI escape sequences to a temporary file and paste the path to the file.").to_vec(),
             },
             Command {
                 action: Action::WriteSelectionFile(WriteScreen { action: WriteScreenAction::Open, emit: WriteScreenFormat::Vt }),
-                title: b"Copy Selection as ANSI Sequences to Temporary File and Open".to_vec(),
-                description: b"Copy the selection contents as ANSI escape sequences to a temporary file and open it.".to_vec(),
+                title: i18n::N_(b"Copy Selection as ANSI Sequences to Temporary File and Open").to_vec(),
+                description: i18n::N_(b"Copy the selection contents as ANSI escape sequences to a temporary file and open it.").to_vec(),
             },
         ],
 
         "new_window" => vec![Command {
             action: Action::NewWindow,
-            title: b"New Window".to_vec(),
-            description: b"Open a new window.".to_vec(),
+            title: i18n::N_(b"New Window").to_vec(),
+            description: i18n::N_(b"Open a new window.").to_vec(),
         }],
 
         "new_tab" => vec![Command {
             action: Action::NewTab,
-            title: b"New Tab".to_vec(),
-            description: b"Open a new tab.".to_vec(),
+            title: i18n::N_(b"New Tab").to_vec(),
+            description: i18n::N_(b"Open a new tab.").to_vec(),
         }],
 
         "move_tab" => vec![
             Command {
                 action: Action::MoveTab(-1),
-                title: b"Move Tab Left".to_vec(),
-                description: b"Move the current tab to the left.".to_vec(),
+                title: i18n::N_(b"Move Tab Left").to_vec(),
+                description: i18n::N_(b"Move the current tab to the left.").to_vec(),
             },
             Command {
                 action: Action::MoveTab(1),
-                title: b"Move Tab Right".to_vec(),
-                description: b"Move the current tab to the right.".to_vec(),
+                title: i18n::N_(b"Move Tab Right").to_vec(),
+                description: i18n::N_(b"Move the current tab to the right.").to_vec(),
             },
         ],
 
+        "move_tab_to_new_window" => vec![Command {
+            action: Action::MoveTabToNewWindow,
+            title: i18n::N_(b"Move Tab to New Window").to_vec(),
+            description: i18n::N_(b"Move the current tab to a new window.").to_vec(),
+        }],
+
         "toggle_tab_overview" => vec![Command {
             action: Action::ToggleTabOverview,
-            title: b"Toggle Tab Overview".to_vec(),
-            description: b"Toggle the tab overview.".to_vec(),
+            title: i18n::N_(b"Toggle Tab Overview").to_vec(),
+            description: i18n::N_(b"Toggle the tab overview.").to_vec(),
         }],
 
         "prompt_surface_title" => vec![Command {
             action: Action::PromptSurfaceTitle,
-            title: "Change Terminal Title…".as_bytes().to_vec(),
-            description: b"Prompt for a new title for the current terminal.".to_vec(),
+            title: i18n::N_("Change Terminal Title…".as_bytes()).to_vec(),
+            description: i18n::N_(b"Prompt for a new title for the current terminal.").to_vec(),
         }],
 
         "prompt_tab_title" => vec![Command {
             action: Action::PromptTabTitle,
-            title: "Change Tab Title…".as_bytes().to_vec(),
-            description: b"Prompt for a new title for the current tab.".to_vec(),
+            title: i18n::N_("Change Tab Title…".as_bytes()).to_vec(),
+            description: i18n::N_(b"Prompt for a new title for the current tab.").to_vec(),
+        }],
+
+        "prompt_window_title" => vec![Command {
+            action: Action::PromptWindowTitle,
+            title: "Change Window Title…".as_bytes().to_vec(),
+            description: b"Prompt for a new title for the current window.".to_vec(),
         }],
 
         "new_split" => vec![
             Command {
                 action: Action::NewSplit(SplitDirection::Left),
-                title: b"Split Left".to_vec(),
-                description: b"Split the terminal to the left.".to_vec(),
+                title: i18n::N_(b"Split Left").to_vec(),
+                description: i18n::N_(b"Split the terminal to the left.").to_vec(),
             },
             Command {
                 action: Action::NewSplit(SplitDirection::Right),
-                title: b"Split Right".to_vec(),
-                description: b"Split the terminal to the right.".to_vec(),
+                title: i18n::N_(b"Split Right").to_vec(),
+                description: i18n::N_(b"Split the terminal to the right.").to_vec(),
             },
             Command {
                 action: Action::NewSplit(SplitDirection::Up),
-                title: b"Split Up".to_vec(),
-                description: b"Split the terminal up.".to_vec(),
+                title: i18n::N_(b"Split Up").to_vec(),
+                description: i18n::N_(b"Split the terminal up.").to_vec(),
             },
             Command {
                 action: Action::NewSplit(SplitDirection::Down),
-                title: b"Split Down".to_vec(),
-                description: b"Split the terminal down.".to_vec(),
+                title: i18n::N_(b"Split Down").to_vec(),
+                description: i18n::N_(b"Split the terminal down.").to_vec(),
             },
         ],
 
         "goto_split" => vec![
             Command {
                 action: Action::GotoSplit(SplitFocusDirection::Previous),
-                title: b"Focus Split: Previous".to_vec(),
-                description: b"Focus the previous split, if any.".to_vec(),
+                title: i18n::N_(b"Focus Split: Previous").to_vec(),
+                description: i18n::N_(b"Focus the previous split, if any.").to_vec(),
             },
             Command {
                 action: Action::GotoSplit(SplitFocusDirection::Next),
-                title: b"Focus Split: Next".to_vec(),
-                description: b"Focus the next split, if any.".to_vec(),
+                title: i18n::N_(b"Focus Split: Next").to_vec(),
+                description: i18n::N_(b"Focus the next split, if any.").to_vec(),
             },
             Command {
                 action: Action::GotoSplit(SplitFocusDirection::Left),
-                title: b"Focus Split: Left".to_vec(),
-                description: b"Focus the split to the left, if it exists.".to_vec(),
+                title: i18n::N_(b"Focus Split: Left").to_vec(),
+                description: i18n::N_(b"Focus the split to the left, if it exists.").to_vec(),
             },
             Command {
                 action: Action::GotoSplit(SplitFocusDirection::Right),
-                title: b"Focus Split: Right".to_vec(),
-                description: b"Focus the split to the right, if it exists.".to_vec(),
+                title: i18n::N_(b"Focus Split: Right").to_vec(),
+                description: i18n::N_(b"Focus the split to the right, if it exists.").to_vec(),
             },
             Command {
                 action: Action::GotoSplit(SplitFocusDirection::Up),
-                title: b"Focus Split: Up".to_vec(),
-                description: b"Focus the split above, if it exists.".to_vec(),
+                title: i18n::N_(b"Focus Split: Up").to_vec(),
+                description: i18n::N_(b"Focus the split above, if it exists.").to_vec(),
             },
             Command {
                 action: Action::GotoSplit(SplitFocusDirection::Down),
-                title: b"Focus Split: Down".to_vec(),
-                description: b"Focus the split below, if it exists.".to_vec(),
+                title: i18n::N_(b"Focus Split: Down").to_vec(),
+                description: i18n::N_(b"Focus the split below, if it exists.").to_vec(),
             },
         ],
 
         "goto_window" => vec![
             Command {
                 action: Action::GotoWindow(GotoWindow::Previous),
-                title: b"Focus Window: Previous".to_vec(),
-                description: b"Focus the previous window, if any.".to_vec(),
+                title: i18n::N_(b"Focus Window: Previous").to_vec(),
+                description: i18n::N_(b"Focus the previous window, if any.").to_vec(),
             },
             Command {
                 action: Action::GotoWindow(GotoWindow::Next),
-                title: b"Focus Window: Next".to_vec(),
-                description: b"Focus the next window, if any.".to_vec(),
+                title: i18n::N_(b"Focus Window: Next").to_vec(),
+                description: i18n::N_(b"Focus the next window, if any.").to_vec(),
             },
         ],
 
         "toggle_split_zoom" => vec![Command {
             action: Action::ToggleSplitZoom,
-            title: b"Toggle Split Zoom".to_vec(),
-            description: b"Toggle the zoom state of the current split.".to_vec(),
+            title: i18n::N_(b"Toggle Split Zoom").to_vec(),
+            description: i18n::N_(b"Toggle the zoom state of the current split.").to_vec(),
         }],
 
         "toggle_readonly" => vec![Command {
             action: Action::ToggleReadonly,
-            title: b"Toggle Read-Only Mode".to_vec(),
-            description: b"Toggle read-only mode for the current surface.".to_vec(),
+            title: i18n::N_(b"Toggle Read-Only Mode").to_vec(),
+            description: i18n::N_(b"Toggle read-only mode for the current surface.").to_vec(),
         }],
 
         "equalize_splits" => vec![Command {
             action: Action::EqualizeSplits,
-            title: b"Equalize Splits".to_vec(),
-            description: b"Equalize the size of all splits.".to_vec(),
+            title: i18n::N_(b"Equalize Splits").to_vec(),
+            description: i18n::N_(b"Equalize the size of all splits.").to_vec(),
         }],
 
         "reset_window_size" => vec![Command {
             action: Action::ResetWindowSize,
-            title: b"Reset Window Size".to_vec(),
-            description: b"Reset the window size to the default.".to_vec(),
+            title: i18n::N_(b"Reset Window Size").to_vec(),
+            description: i18n::N_(b"Reset the window size to the default.").to_vec(),
         }],
 
         "inspector" => vec![Command {
             action: Action::Inspector(InspectorMode::Toggle),
-            title: b"Toggle Inspector".to_vec(),
-            description: b"Toggle the inspector.".to_vec(),
+            title: i18n::N_(b"Toggle Inspector").to_vec(),
+            description: i18n::N_(b"Toggle the inspector.").to_vec(),
         }],
 
         "show_gtk_inspector" => vec![Command {
             action: Action::ShowGtkInspector,
-            title: b"Show the GTK Inspector".to_vec(),
-            description: b"Show the GTK inspector.".to_vec(),
+            title: i18n::N_(b"Show the GTK Inspector").to_vec(),
+            description: i18n::N_(b"Show the GTK inspector.").to_vec(),
         }],
 
         "show_on_screen_keyboard" => vec![Command {
             action: Action::ShowOnScreenKeyboard,
-            title: b"Show On-Screen Keyboard".to_vec(),
-            description: b"Show the on-screen keyboard if present.".to_vec(),
+            title: i18n::N_(b"Show On-Screen Keyboard").to_vec(),
+            description: i18n::N_(b"Show the on-screen keyboard if present.").to_vec(),
         }],
 
-        "open_config" => vec![Command {
-            action: Action::OpenConfig,
-            title: b"Open Config".to_vec(),
-            description: b"Open the config file.".to_vec(),
-        }],
+        "open_config" => vec![
+            Command {
+                action: Action::OpenConfig(OpenConfig::OsOpen),
+                title: i18n::N_(b"Open Config Using OS editor").to_vec(),
+                description: i18n::N_(b"Open the config file with the OS's default editor.").to_vec(),
+            },
+            Command {
+                action: Action::OpenConfig(OpenConfig::NewWindow),
+                title: i18n::N_(b"Open Config in New Terminal Window").to_vec(),
+                description: i18n::N_(b"Open the config file in a new window using $EDITOR or $VISUAL.").to_vec(),
+            },
+        ],
 
         "reload_config" => vec![Command {
             action: Action::ReloadConfig,
-            title: b"Reload Config".to_vec(),
-            description: b"Reload the config file.".to_vec(),
+            title: i18n::N_(b"Reload Config").to_vec(),
+            description: i18n::N_(b"Reload the config file.").to_vec(),
         }],
 
         "close_surface" => vec![Command {
             action: Action::CloseSurface,
-            title: b"Close Terminal".to_vec(),
-            description: b"Close the current terminal.".to_vec(),
+            title: i18n::N_(b"Close Terminal").to_vec(),
+            description: i18n::N_(b"Close the current terminal.").to_vec(),
         }],
 
         "close_tab" => vec![
             Command {
                 action: Action::CloseTab(CloseTabMode::This),
-                title: b"Close Tab".to_vec(),
-                description: b"Close the current tab.".to_vec(),
+                title: i18n::N_(b"Close Tab").to_vec(),
+                description: i18n::N_(b"Close the current tab.").to_vec(),
             },
             Command {
                 action: Action::CloseTab(CloseTabMode::Other),
-                title: b"Close Other Tabs".to_vec(),
-                description: b"Close all tabs in this window except the current one.".to_vec(),
+                title: i18n::N_(b"Close Other Tabs").to_vec(),
+                description: i18n::N_(b"Close all tabs in this window except the current one.").to_vec(),
             },
             Command {
                 action: Action::CloseTab(CloseTabMode::Right),
-                title: b"Close Tabs to the Right".to_vec(),
-                description: b"Close all tabs to the right of the current one.".to_vec(),
+                title: i18n::N_(b"Close Tabs to the Right").to_vec(),
+                description: i18n::N_(b"Close all tabs to the right of the current one.").to_vec(),
             },
         ],
 
         "close_window" => vec![Command {
             action: Action::CloseWindow,
-            title: b"Close Window".to_vec(),
-            description: b"Close the current window.".to_vec(),
+            title: i18n::N_(b"Close Window").to_vec(),
+            description: i18n::N_(b"Close the current window.").to_vec(),
         }],
 
         "close_all_windows" => vec![Command {
             action: Action::CloseAllWindows,
-            title: b"Close All Windows".to_vec(),
-            description: b"Close all windows.".to_vec(),
+            title: i18n::N_(b"Close All Windows").to_vec(),
+            description: i18n::N_(b"Close all windows.").to_vec(),
         }],
 
         "toggle_maximize" => vec![Command {
             action: Action::ToggleMaximize,
-            title: b"Toggle Maximize".to_vec(),
-            description: b"Toggle the maximized state of the current window.".to_vec(),
+            title: i18n::N_(b"Toggle Maximize").to_vec(),
+            description: i18n::N_(b"Toggle the maximized state of the current window.").to_vec(),
         }],
 
         "toggle_fullscreen" => vec![Command {
             action: Action::ToggleFullscreen,
-            title: b"Toggle Fullscreen".to_vec(),
-            description: b"Toggle the fullscreen state of the current window.".to_vec(),
+            title: i18n::N_(b"Toggle Fullscreen").to_vec(),
+            description: i18n::N_(b"Toggle the fullscreen state of the current window.").to_vec(),
         }],
 
         "toggle_window_decorations" => vec![Command {
             action: Action::ToggleWindowDecorations,
-            title: b"Toggle Window Decorations".to_vec(),
-            description: b"Toggle the window decorations.".to_vec(),
+            title: i18n::N_(b"Toggle Window Decorations").to_vec(),
+            description: i18n::N_(b"Toggle the window decorations.").to_vec(),
         }],
 
         "toggle_window_float_on_top" => vec![Command {
             action: Action::ToggleWindowFloatOnTop,
-            title: b"Toggle Float on Top".to_vec(),
-            description: b"Toggle the float on top state of the current window.".to_vec(),
+            title: i18n::N_(b"Toggle Float on Top").to_vec(),
+            description: i18n::N_(b"Toggle the float on top state of the current window.").to_vec(),
         }],
 
         "toggle_secure_input" => vec![Command {
             action: Action::ToggleSecureInput,
-            title: b"Toggle Secure Input".to_vec(),
-            description: b"Toggle secure input mode.".to_vec(),
+            title: i18n::N_(b"Toggle Secure Input").to_vec(),
+            description: i18n::N_(b"Toggle secure input mode.").to_vec(),
         }],
 
         "toggle_mouse_reporting" => vec![Command {
             action: Action::ToggleMouseReporting,
-            title: b"Toggle Mouse Reporting".to_vec(),
-            description: b"Toggle whether mouse events are reported to terminal applications.".to_vec(),
+            title: i18n::N_(b"Toggle Mouse Reporting").to_vec(),
+            description: i18n::N_(b"Toggle whether mouse events are reported to terminal applications.").to_vec(),
         }],
 
         "toggle_background_opacity" => vec![Command {
             action: Action::ToggleBackgroundOpacity,
-            title: b"Toggle Background Opacity".to_vec(),
-            description: b"Toggle the background opacity of a window that started transparent.".to_vec(),
+            title: i18n::N_(b"Toggle Background Opacity").to_vec(),
+            description: i18n::N_(b"Toggle the background opacity of a window that started transparent.").to_vec(),
         }],
 
         "check_for_updates" => vec![Command {
             action: Action::CheckForUpdates,
-            title: b"Check for Updates".to_vec(),
-            description: b"Check for updates to the application.".to_vec(),
+            title: i18n::N_(b"Check for Updates").to_vec(),
+            description: i18n::N_(b"Check for updates to the application.").to_vec(),
         }],
 
         "undo" => vec![Command {
             action: Action::Undo,
-            title: b"Undo".to_vec(),
-            description: b"Undo the last action.".to_vec(),
+            title: i18n::N_(b"Undo").to_vec(),
+            description: i18n::N_(b"Undo the last action.").to_vec(),
         }],
 
         "redo" => vec![Command {
             action: Action::Redo,
-            title: b"Redo".to_vec(),
-            description: b"Redo the last undone action.".to_vec(),
+            title: i18n::N_(b"Redo").to_vec(),
+            description: i18n::N_(b"Redo the last undone action.").to_vec(),
         }],
 
         "quit" => vec![Command {
             action: Action::Quit,
-            title: b"Quit".to_vec(),
-            description: b"Quit the application.".to_vec(),
+            title: i18n::N_(b"Quit").to_vec(),
+            description: i18n::N_(b"Quit the application.").to_vec(),
         }],
 
         "text" => vec![Command {
             action: Action::Text("👻".as_bytes().to_vec()),
-            title: b"Rustty".to_vec(),
-            description: b"Put a little Rustty in your terminal.".to_vec(),
+            title: i18n::N_(b"Rustty").to_vec(),
+            description: i18n::N_(b"Put a little Rustty in your terminal.").to_vec(),
         }],
 
         // No commands because they're parameterized and there
@@ -850,6 +898,7 @@ fn action_commands(action: &str) -> Vec<Command> {
         | "set_font_size"
         | "set_surface_title"
         | "set_tab_title"
+        | "set_window_title"
         | "search"
         | "scroll_to_row"
         | "scroll_page_fractional"

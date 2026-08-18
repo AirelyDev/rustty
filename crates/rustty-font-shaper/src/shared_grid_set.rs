@@ -539,6 +539,38 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
             };
             // SAFETY: `disco` aliases `self.font_discover`, unmutated for this block.
             let disco = unsafe { &mut *disco };
+
+            // Fast path: we know the exact name of the font we want so we
+            // can look it up directly, which is sometimes significantly faster than
+            // full discovery (e.g. CoreText).
+            // if (@hasDecl(Discover, "discoverExactFamily")) {
+            //
+            // PORT NOTE: the comptime `@hasDecl` collapses — this block is already
+            // macOS-gated, where `Discover = CoreText` always declares
+            // `discoverExactFamily`.
+            {
+                // if (try disco.discoverExactFamily("Apple Color Emoji")) |face| {
+                if let Some(face) = disco.discover_exact_family(b"Apple Color Emoji")? {
+                    // _ = try c.addDeferred(self.alloc, face, .{
+                    //     .style = .regular,
+                    //     .fallback = true,
+                    //     // No size adjustment for emojis.
+                    //     .size_adjustment = .none,
+                    // });
+                    c.add_deferred(
+                        face,
+                        AddOptions {
+                            style: Style::Regular,
+                            fallback: true,
+                            // No size adjustment for emojis.
+                            size_adjustment: SizeAdjustment::None,
+                        },
+                    )?;
+                    // break :apple_emoji;
+                    break 'apple_emoji;
+                }
+            }
+
             // var disco_it = try disco.discover(self.alloc, .{ .family = "Apple Color Emoji" });
             // defer disco_it.deinit(); — RAII scope drop.
             let mut disco_it = disco.discover(Descriptor {

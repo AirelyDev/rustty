@@ -96,8 +96,8 @@ const _: fn() = || {
     needs_copy::<rustty_xev::Stream>();
     needs_copy::<rustty_xev::Process>();
     // `Default` — termio's Exec default-constructs `write_queue: xev.WriteQueue =
-    // .{}` and pools `xev.WriteRequest` in a `SegmentedPool` (which
-    // default-constructs its elements); `Completion` is api.zig's "completion is
+    // .{}`, and `queue_write` re-initializes the pooled request wholesale via
+    // `..WriteRequest::default()`; `Completion` is api.zig's "completion is
     // zero-able" contract.
     needs_default::<rustty_xev::Completion>();
     needs_default::<rustty_xev::WriteQueue>();
@@ -269,7 +269,7 @@ fn public_loop_surface_is_live() {
 
 /// The zero-value contract of the public `Completion`/`WriteQueue` — api.zig's
 /// `test "completion is zero-able"` seen from OUTSIDE the crate (the shape
-/// termio's `SegmentedPool`/`write_queue` rely on).
+/// termio's pooled write nodes/`write_queue` rely on).
 //
 // PORT NOTE (`state_of`, not `state`): the reference names this decl `state`
 // (kqueue.zig:1035 / epoll.zig:941 / io_uring.zig:649 / dynamic.zig:270), but

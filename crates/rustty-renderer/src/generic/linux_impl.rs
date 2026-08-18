@@ -4256,7 +4256,7 @@ impl Renderer {
         unsafe {
             (*frame).cells_bg.sync(&(*self_ptr).cells.bg_cells)?;
         }
-        // const fg_count = try frame.cells.syncFromArrayLists(self.cells.fg_rows.lists);
+        // const fg_count = try frame.cells.syncFromArrayLists(self.cells.fg_rows);
         //
         // PORT NOTE (accepted deviation, same as the Metal twin): the reference's
         // `syncFromArrayLists` is a zero-copy memcpy of the `extern struct`s. Rust's
@@ -4268,7 +4268,6 @@ impl Renderer {
             (*self_ptr)
                 .cells
                 .fg_rows
-                .lists
                 .iter()
                 .flat_map(|row| row.iter().map(CellTextGpu::from))
                 .collect()
@@ -4984,8 +4983,8 @@ mod tests {
         assert_eq!(*r.cells.bg_cell(0, 0), [bg.r, bg.g, bg.b, 0]);
 
         // (2) FG glyph: row 0 fg list (index y+1 == 1) is non-empty (glyphs for A, b).
-        assert!(!r.cells.fg_rows.lists[1].is_empty());
-        let a = r.cells.fg_rows.lists[1][0];
+        assert!(!r.cells.fg_rows[1].is_empty());
+        let a = r.cells.fg_rows[1][0];
         assert_eq!(a.grid_pos, [0, 0]);
         assert_eq!(a.atlas, Atlas::Grayscale);
         assert!(a.glyph_size[0] > 0 && a.glyph_size[1] > 0);

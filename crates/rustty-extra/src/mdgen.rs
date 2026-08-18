@@ -212,7 +212,7 @@ mod tests {
     /// with the `--` CLI prefix in the man(1) flavor and without it in man(5)
     /// (`mdgen.zig:33-35`).
     /// MIRI EXCEPTION (measured 2026-07-30, criterion 2: intractable runtime).
-    /// This test renders EVERY documented config field (206 options) and the
+    /// This test renders EVERY documented config field (208 options) and the
     /// full CLI action set through the markdown->roff pipeline. Natively it is
     /// milliseconds; under Miri's interpreter it did not complete in **71 min**
     /// on the Linux VM or in **53 min** on macOS — two independent hosts, no
@@ -235,14 +235,14 @@ mod tests {
         let file = String::from_utf8(file).unwrap();
 
         let fields = rustty_config::config_struct::config_fields();
-        // 206, not the plan's 183: `config_fields()` has grown since the WS13 plan
+        // 208, not the plan's 183: `config_fields()` has grown since the WS13 plan
         // was written (204 -> 206: `P3-W3` T4 split `scrollback-limit` into
         // `scrollback-limit-bytes` + `scrollback-limit-lines`, and `P3-W9` T3
         // added `gtk-horizontal-tab-scroll`). Pinned so a table that silently
         // shrinks cannot make the per-field loop below vacuous.
         assert_eq!(
             fields.len(),
-            206,
+            208,
             "the field table changed; update this count"
         );
         for (name, _key) in fields {
@@ -283,7 +283,7 @@ mod tests {
     /// All 18 CLI actions, with `--help`/`--version` spelled as flags and the rest
     /// as `+action` (`mdgen.zig:57-67`).
     /// MIRI EXCEPTION (measured 2026-07-30, criterion 2: intractable runtime).
-    /// This test renders EVERY documented config field (206 options) and the
+    /// This test renders EVERY documented config field (208 options) and the
     /// full CLI action set through the markdown->roff pipeline. Natively it is
     /// milliseconds; under Miri's interpreter it did not complete in **71 min**
     /// on the Linux VM or in **53 min** on macOS — two independent hosts, no
@@ -327,7 +327,9 @@ mod tests {
         let s = String::from_utf8(out).unwrap();
 
         let names = rustty_input::binding::Action::FIELD_NAMES;
-        assert_eq!(names.len(), 85, "the keybind action table changed");
+        // 85 -> 88 (P4-W3 w3-input): `move_tab_to_new_window` (25b2d8a38),
+        // `prompt_window_title` + `set_window_title` (8b7c57c75).
+        assert_eq!(names.len(), 88, "the keybind action table changed");
         for name in names {
             if name.starts_with('_') {
                 continue;

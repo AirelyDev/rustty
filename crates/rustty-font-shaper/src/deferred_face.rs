@@ -230,6 +230,33 @@ mod coretext_payload {
         }
     }
 
+    /// Raw CoreText entry point that objc2 0.3 wraps as non-null (it can
+    /// legitimately return NULL, which the reference handles with `orelse`).
+    // PORT NOTE (d166c05ed): the reference `pkg/macos/text/font.zig` wrapper is
+    //     pub fn copyDisplayName(self: *Font) ?*foundation.String {
+    //         return @ptrFromInt(@intFromPtr(c.CTFontCopyDisplayName(@ptrCast(self))));
+    //     }
+    // — nullable. objc2's `CTFont::display_name` marks the result non-null and
+    // panics on NULL, so the raw symbol is declared here against the SAME
+    // framework objc2 links (R3 — a binding, not a reimplementation; the
+    // `discovery.rs` `CTFontCreateWithName` precedent).
+    mod sys {
+        use super::*;
+        #[link(name = "CoreText", kind = "framework")]
+        extern "C-unwind" {
+            pub fn CTFontCopyDisplayName(font: &CTFont) -> *mut CFString;
+        }
+    }
+
+    /// `ct.font.copyDisplayName()` — `None` when CoreText has no display name.
+    fn ct_font_copy_display_name(font: &CTFont) -> Option<CFRetained<CFString>> {
+        // SAFETY: `font` is a live retained CTFont.
+        let raw = unsafe { sys::CTFontCopyDisplayName(font) };
+        // SAFETY: CTFontCopyDisplayName follows the "Copy rule" (+1 reference);
+        // `CFRetained::from_raw` takes that ownership (releases on drop).
+        NonNull::new(raw).map(|p| unsafe { CFRetained::from_raw(p) })
+    }
+
     impl DeferredFace {
         // pub fn deinit(self: *DeferredFace) void { switch (backend) { ... ct.deinit() ... } self.* = undefined; }
         pub fn deinit(&mut self) {
@@ -275,16 +302,25 @@ mod coretext_payload {
         // pub fn name(self: DeferredFace, buf: []u8) ![]const u8 {
         pub fn name<'a>(&self, buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
             // .coretext* => if (self.ct) |ct| {
-            //     const display_name = ct.font.copyDisplayName();
-            //     return display_name.cstringPtr(.utf8) orelse
+            //     const display_name = ct.font.copyDisplayName() orelse
+            //         return self.familyName(buf);
+            //     return display_name.cstringPtr(.utf8) orelse unsupported: {
             //         // "NULL if the internal storage of theString does not allow
             //         // this to be returned efficiently." In this case, we need
             //         // to allocate. But we can't return an allocated string because
             //         // we don't have an allocator. Let's use the stack and log it.
-            //         display_name.cstring(buf, .utf8) orelse return error.OutOfMemory;
+            //         break :unsupported display_name.cstring(buf, .utf8) orelse
+            //             return error.OutOfMemory;
+            //     };
             // },
             if let Some(ct) = self.ct.as_ref() {
-                let display_name = unsafe { ct.font.display_name() };
+                // `CTFontCopyDisplayName` can return NULL (the reference `pkg/macos`
+                // wrapper is `copyDisplayName(self: *Font) ?*foundation.String`);
+                // fall back to the family name when it does (d166c05ed).
+                let Some(display_name) = ct_font_copy_display_name(&ct.font) else {
+                    // orelse return self.familyName(buf);
+                    return self.family_name(buf);
+                };
                 let s = display_name.to_string();
                 let bytes = s.as_bytes();
                 if bytes.len() > buf.len() {

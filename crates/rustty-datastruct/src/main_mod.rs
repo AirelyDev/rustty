@@ -12,7 +12,6 @@
 //   - IntrusiveDoublyLinkedList   -> intrusive_linked_list::DoublyLinkedList
 //   - LimitedAllocator            -> limited_allocator::LimitedAllocator
 //   - MessageData                 -> message_data::MessageData
-//   - SegmentedPool               -> segmented_pool::SegmentedPool
 //   - SplitTree                   -> split_tree::SplitTree
 //   - WasmPagePool                -> wasm_page_pool::WasmPagePool
 

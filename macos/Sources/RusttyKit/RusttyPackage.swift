@@ -4,13 +4,6 @@ import RusttyKit
 
 // MARK: C Extensions
 
-/// A command is fully self-contained so it is Sendable.
-extension rustty_command_s: @unchecked @retroactive Sendable {}
-
-/// A surface is sendable because it is just a reference type. Using the surface in parameters
-/// may be unsafe but the value itself is safe to send across threads.
-extension rustty_surface_t: @unchecked @retroactive Sendable {}
-
 extension Rustty {
     // The user notification category identifier
     static let userNotificationCategory = "io.airely.rustty.userNotification"
@@ -216,7 +209,6 @@ extension Rustty {
     }
 }
 
-#if canImport(AppKit)
 // MARK: SplitFocusDirection Extensions
 
 extension Rustty.SplitFocusDirection {
@@ -243,54 +235,8 @@ extension Rustty.SplitFocusDirection {
         }
     }
 }
-#endif
 
 extension Rustty {
-    /// The type of a clipboard request
-    enum ClipboardRequest {
-        /// A direct paste of clipboard contents
-        case paste
-
-        /// An application is attempting to read from the clipboard using OSC 52
-        case osc_52_read
-
-        /// An application is attempting to write to the clipboard using OSC 52
-        case osc_52_write(OSPasteboard?)
-
-        /// The text to show in the clipboard confirmation prompt for a given request type
-        func text() -> String {
-            switch self {
-            case .paste:
-                return """
-                Pasting this text to the terminal may be dangerous as it looks like some commands may be executed.
-                """
-            case .osc_52_read:
-                return """
-                An application is attempting to read from the clipboard.
-                The current clipboard contents are shown below.
-                """
-            case .osc_52_write:
-                return """
-                An application is attempting to write to the clipboard.
-                The content to write is shown below.
-                """
-            }
-        }
-
-        static func from(request: rustty_clipboard_request_e) -> ClipboardRequest? {
-            switch request {
-            case RUSTTY_CLIPBOARD_REQUEST_PASTE:
-                return .paste
-            case RUSTTY_CLIPBOARD_REQUEST_OSC_52_READ:
-                return .osc_52_read
-            case RUSTTY_CLIPBOARD_REQUEST_OSC_52_WRITE:
-                return .osc_52_write(nil)
-            default:
-                return nil
-            }
-        }
-    }
-
     struct ClipboardContent {
         let mime: String
         let data: String
@@ -425,11 +371,6 @@ extension Rustty.Notification {
 
     /// Notification to show/hide the inspector
     static let didControlInspector = Notification.Name("io.airely.rustty.didControlInspector")
-
-    static let confirmClipboard = Notification.Name("io.airely.rustty.confirmClipboard")
-    static let ConfirmClipboardStrKey = confirmClipboard.rawValue + ".str"
-    static let ConfirmClipboardStateKey = confirmClipboard.rawValue + ".state"
-    static let ConfirmClipboardRequestKey = confirmClipboard.rawValue + ".request"
 
     /// Notification sent to the active split view to resize the split.
     static let didResizeSplit = Notification.Name("io.airely.rustty.didResizeSplit")

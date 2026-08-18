@@ -33,6 +33,77 @@ use crate::structs::Clipboard;
 // type alias in an enum's namespace). Carries `MessageData`'s borrow lifetime.
 pub type WriteReq<'a> = MessageData<'a, u8, 255>;
 
+/// A fixed-size desktop notification payload sent to the app thread.
+//
+// PORT NOTE: reference `pub const DesktopNotification = struct { ... }` nested
+// in `Message` (`Message.DesktopNotification`). Hoisted to module level per the
+// `WriteReq` precedent (Rust cannot nest types in an enum's namespace).
+// Reference `title: [63:0]u8, body: [255:0]u8` — sentinel-terminated arrays
+// (63/255 usable bytes + a NUL sentinel), so `@sizeOf` is 64/256. Modeled as
+// `[u8; 64]`/`[u8; 256]`.
+pub struct DesktopNotification {
+    /// Desktop notification title.
+    pub title: [u8; 64],
+
+    /// Desktop notification body.
+    pub body: [u8; 256],
+}
+
+impl DesktopNotification {
+    // pub fn init(title: []const u8, body: []const u8) DesktopNotification {
+    pub fn init(title: &[u8], body: &[u8]) -> DesktopNotification {
+        // var result: DesktopNotification = undefined;
+        //
+        // PORT NOTE: Rust has no `undefined`; the buffers are zero-initialized.
+        // Bytes past the NUL sentinel are never read (readers slice with
+        // `std.mem.sliceTo(&.., 0)`), so the zero fill adds nothing observable.
+        let mut result = DesktopNotification {
+            title: [0; 64],
+            body: [0; 256],
+        };
+        // copyUtf8Z(result.title.len, &result.title, title);
+        // copyUtf8Z(result.body.len, &result.body, body);
+        //
+        // (`.len` of a Zig `[N:0]u8` is N — the sentinel-EXCLUSIVE capacity —
+        // so the Rust `[u8; N + 1]` model passes `len() - 1`.)
+        Self::copy_utf8_z(result.title.len() - 1, &mut result.title, title);
+        Self::copy_utf8_z(result.body.len() - 1, &mut result.body, body);
+        result
+    }
+
+    /// UTF-8 continuation bytes occupy the range 0x80 through 0xBF.
+    fn is_utf8_continuation_byte(byte: u8) -> bool {
+        // return switch (byte) { 0x80...0xBF => true, else => false };
+        matches!(byte, 0x80..=0xBF)
+    }
+
+    /// Copy as much of `src` as fits, backing up from a UTF-8 continuation
+    /// byte so valid input is never truncated in the middle of a codepoint.
+    //
+    // PORT NOTE: reference signature `copyUtf8Z(comptime capacity: usize,
+    // dst: *[capacity:0]u8, src: []const u8)` — `capacity` is the
+    // sentinel-exclusive length of `dst`. The Rust sentinel-array model is a
+    // `&mut [u8]` of `capacity + 1` bytes with `capacity` as a runtime
+    // parameter (asserted, since Rust cannot tie a const generic to `N + 1`).
+    fn copy_utf8_z(capacity: usize, dst: &mut [u8], src: &[u8]) {
+        debug_assert!(dst.len() == capacity + 1);
+        // var len = @min(src.len, capacity);
+        let mut len = src.len().min(capacity);
+        // while (len > 0 and
+        //     len < src.len and
+        //     isUtf8ContinuationByte(src[len])) : (len -= 1)
+        // {}
+        while len > 0 && len < src.len() && Self::is_utf8_continuation_byte(src[len]) {
+            len -= 1;
+        }
+
+        // @memcpy(dst[0..len], src[0..len]);
+        dst[..len].copy_from_slice(&src[..len]);
+        // dst[len] = 0;
+        dst[len] = 0;
+    }
+}
+
 /// The message types that can be sent to a single surface.
 //
 // PORT NOTE: reference `Message = union(enum)`. Carries the `WriteReq`/
@@ -77,10 +148,10 @@ pub enum Message<'a> {
 
     /// Show a desktop notification.
     //
-    // PORT NOTE: reference `title: [63:0]u8, body: [255:0]u8` — sentinel-
-    // terminated arrays (63/255 usable bytes + a NUL sentinel), so `@sizeOf` is
-    // 64/256. Modeled as `[u8; 64]`/`[u8; 256]`.
-    DesktopNotification { title: [u8; 64], body: [u8; 256] },
+    // PORT NOTE: reference `desktop_notification: DesktopNotification` — the
+    // named payload struct (hoisted to module level above, `WriteReq`
+    // precedent).
+    DesktopNotification(DesktopNotification),
 
     /// Health status change for the renderer.
     RendererHealth(Health),
@@ -268,3 +339,113 @@ pub trait AppMailbox {
 //
 //     return copy;
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // std.mem.sliceTo(&buf, 0) — slice up to (excluding) the NUL sentinel.
+    fn slice_to_nul(buf: &[u8]) -> &[u8] {
+        &buf[..buf.iter().position(|&b| b == 0).unwrap_or(buf.len())]
+    }
+
+    // PORT NOTE (all four tests): a Zig `[N:0]u8` destination is modeled as
+    // `[u8; N + 1]`, so the reference's `dst.len` (the sentinel-exclusive
+    // capacity N) is expressed as `dst.len() - 1`, and `expectEqualStrings`
+    // over `sliceTo(&dst, 0)` becomes a byte-slice `assert_eq!` over
+    // `slice_to_nul(&dst)`.
+
+    // test "DesktopNotification init"
+    #[test]
+    fn desktop_notification_init() {
+        // const notification = Message.DesktopNotification.init("Title", "Body");
+        let notification = DesktopNotification::init(b"Title", b"Body");
+
+        // try std.testing.expectEqualStrings("Title", std.mem.sliceTo(&notification.title, 0));
+        assert_eq!(&b"Title"[..], slice_to_nul(&notification.title));
+        // try std.testing.expectEqualStrings("Body", std.mem.sliceTo(&notification.body, 0));
+        assert_eq!(&b"Body"[..], slice_to_nul(&notification.body));
+    }
+
+    // test "copyUtf8Z handles len at the final byte of every UTF-8 sequence length"
+    #[test]
+    fn copy_utf8_z_handles_len_at_the_final_byte_of_every_utf8_sequence_length() {
+        // const DesktopNotification = Message.DesktopNotification;
+
+        // var dst_1_byte: [1:0]u8 = undefined;
+        let mut dst_1_byte = [0u8; 2];
+        let src_ending_in_1_byte_codepoint = "ab".as_bytes();
+        assert!(!DesktopNotification::is_utf8_continuation_byte(
+            src_ending_in_1_byte_codepoint[dst_1_byte.len() - 1],
+        ));
+        DesktopNotification::copy_utf8_z(
+            dst_1_byte.len() - 1,
+            &mut dst_1_byte,
+            src_ending_in_1_byte_codepoint,
+        );
+        assert_eq!(&b"a"[..], slice_to_nul(&dst_1_byte));
+
+        // var dst_2_bytes: [2:0]u8 = undefined;
+        let mut dst_2_bytes = [0u8; 3];
+        let src_ending_in_2_byte_codepoint = "aЯ".as_bytes();
+        assert!(DesktopNotification::is_utf8_continuation_byte(
+            src_ending_in_2_byte_codepoint[dst_2_bytes.len() - 1],
+        ));
+        DesktopNotification::copy_utf8_z(
+            dst_2_bytes.len() - 1,
+            &mut dst_2_bytes,
+            src_ending_in_2_byte_codepoint,
+        );
+        assert_eq!(&b"a"[..], slice_to_nul(&dst_2_bytes));
+
+        // var dst_3_bytes: [3:0]u8 = undefined;
+        let mut dst_3_bytes = [0u8; 4];
+        let src_ending_in_3_byte_codepoint = "a€".as_bytes();
+        assert!(DesktopNotification::is_utf8_continuation_byte(
+            src_ending_in_3_byte_codepoint[dst_3_bytes.len() - 1],
+        ));
+        DesktopNotification::copy_utf8_z(
+            dst_3_bytes.len() - 1,
+            &mut dst_3_bytes,
+            src_ending_in_3_byte_codepoint,
+        );
+        assert_eq!(&b"a"[..], slice_to_nul(&dst_3_bytes));
+
+        // var dst_4_bytes: [4:0]u8 = undefined;
+        let mut dst_4_bytes = [0u8; 5];
+        let src_ending_in_4_byte_codepoint = "a😀".as_bytes();
+        assert!(DesktopNotification::is_utf8_continuation_byte(
+            src_ending_in_4_byte_codepoint[dst_4_bytes.len() - 1],
+        ));
+        DesktopNotification::copy_utf8_z(
+            dst_4_bytes.len() - 1,
+            &mut dst_4_bytes,
+            src_ending_in_4_byte_codepoint,
+        );
+        assert_eq!(&b"a"[..], slice_to_nul(&dst_4_bytes));
+    }
+
+    // test "copyUtf8Z keeps a complete codepoint at the truncation boundary"
+    #[test]
+    fn copy_utf8_z_keeps_a_complete_codepoint_at_the_truncation_boundary() {
+        // var dst: [5:0]u8 = undefined;
+        let mut dst = [0u8; 6];
+
+        DesktopNotification::copy_utf8_z(dst.len() - 1, &mut dst, "abcЯz".as_bytes());
+
+        // try std.testing.expectEqualStrings("abcЯ", std.mem.sliceTo(&dst, 0));
+        assert_eq!("abcЯ".as_bytes(), slice_to_nul(&dst));
+    }
+
+    // test "copyUtf8Z preserves UTF-8 that fits"
+    #[test]
+    fn copy_utf8_z_preserves_utf8_that_fits() {
+        // var dst: [5:0]u8 = undefined;
+        let mut dst = [0u8; 6];
+
+        DesktopNotification::copy_utf8_z(dst.len() - 1, &mut dst, "abcЯ".as_bytes());
+
+        // try std.testing.expectEqualStrings("abcЯ", std.mem.sliceTo(&dst, 0));
+        assert_eq!("abcЯ".as_bytes(), slice_to_nul(&dst));
+    }
+}
