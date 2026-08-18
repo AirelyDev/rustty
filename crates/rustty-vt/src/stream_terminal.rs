@@ -118,6 +118,12 @@ pub struct Handler<'a> {
     /// effects.
     pub effects: Effects<'a>,
 
+    /// Whether CSI 21 t may report the terminal title. This is disabled by
+    /// default because reporting an attacker-controlled title to the pty can
+    /// inject text into the input stream of the foreground process.
+    // title_report: bool = false,
+    pub title_report: bool,
+
     /// The APC command handler maintains the APC state. APC is like
     /// CSI or OSC, but it is a private escape sequence that is used
     /// to send commands to the terminal emulator. This is used by
@@ -343,6 +349,8 @@ impl<'a> Handler<'a> {
             terminal,
             semantic_failure: false,
             effects: Effects::READONLY,
+            // title_report: false (the reference field default)
+            title_report: false,
             // apc_handler: .{} (the reference field default)
             apc_handler: ApcHandler::default(),
             // dcs_handler: .{} (the reference field default)
@@ -1425,10 +1433,14 @@ impl<'a> Handler<'a> {
         // Build the response.
         match style {
             // .csi_21_t => {
+            //     if (!self.title_report) return;
             //     const title = self.terminal.getTitle() orelse "";
             //     aw.writer.print("\x1b]l{s}\x1b\\", .{title}) catch return;
             // },
             csi::SizeReportStyle::Csi21T => {
+                if !self.title_report {
+                    return;
+                }
                 // PORT NOTE: the title is a raw byte slice spliced via `{s}`; we
                 // build the bytes directly to avoid assuming UTF-8.
                 let mut resp: Vec<u8> = Vec::new();
@@ -3429,6 +3441,13 @@ mod tests {
     fn osc_11_set_and_reset_background_color() {
         let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
 
+        let default = color::RGB {
+            r: 0x10,
+            g: 0x20,
+            b: 0x30,
+        };
+        t.colors.background.default = Some(default);
+
         {
             let mut s = t.vt_stream();
             // Set background to green
@@ -3444,7 +3463,17 @@ mod tests {
             // Reset background
             s.next_slice(b"\x1b]111\x1b\\");
         }
-        assert!(t.colors.background.get().is_none());
+        assert_eq!(default, t.colors.background.get().unwrap());
+        assert_eq!(None, t.colors.background.override_);
+
+        // A reset color continues to follow later configuration changes.
+        let updated = color::RGB {
+            r: 0x40,
+            g: 0x50,
+            b: 0x60,
+        };
+        t.colors.background.default = Some(updated);
+        assert_eq!(updated, t.colors.background.get().unwrap());
 
         t.deinit(Global);
     }
@@ -4784,14 +4813,36 @@ mod tests {
         t.deinit(Global);
     }
 
-    // test "size report csi_21_t title"
+    // test "size report csi_21_t title disabled by default"
     #[test]
-    fn size_report_csi_21_t_title() {
+    fn size_report_csi_21_t_title_disabled_by_default() {
         let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
 
         cap_reset();
         let mut s = t.vt_stream();
         s.handler.effects.write_pty = Some(cap_write_pty);
+
+        {
+            // Set a title first
+            s.next_slice(b"\x1b]2;My Title\x1b\\");
+
+            // CSI 21 t - report title (no size effect needed)
+            s.next_slice(b"\x1b[21t");
+        }
+        assert!(cap_take().is_none());
+
+        t.deinit(Global);
+    }
+
+    // test "size report csi_21_t title enabled"
+    #[test]
+    fn size_report_csi_21_t_title_enabled() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        cap_reset();
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cap_write_pty);
+        s.handler.title_report = true;
 
         {
             // Set a title first

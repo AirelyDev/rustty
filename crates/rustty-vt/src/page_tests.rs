@@ -730,6 +730,66 @@ mod tests {
         page.deinit();
     }
 
+    // test "Page appendGrapheme caps codepoints per cell"
+    #[test]
+    fn page_appendGrapheme_caps_codepoints_per_cell() {
+        let mut page = Page::init(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+
+        let rac = page.get_row_and_cell(0, 0);
+        unsafe {
+            *rac.cell = Cell::init('A' as u32);
+        }
+
+        for i in 0..GRAPHEME_MAX_LEN + 16 {
+            page.append_grapheme(
+                unsafe { &mut *rac.row },
+                unsafe { &mut *rac.cell },
+                (0x0300 + i) as u32,
+            )
+            .unwrap();
+        }
+
+        let cps = page.lookup_grapheme(unsafe { &*rac.cell }).unwrap();
+        assert_eq!(GRAPHEME_MAX_LEN, cps.len());
+        for i in 0..GRAPHEME_MAX_LEN {
+            assert_eq!((0x0300 + i) as u32, cps[i]);
+        }
+
+        page.deinit();
+    }
+
+    // test "Page setGraphemes caps codepoints per cell"
+    #[test]
+    fn page_setGraphemes_caps_codepoints_per_cell() {
+        let mut page = Page::init(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        })
+        .unwrap();
+
+        let mut input: [u32; GRAPHEME_MAX_LEN + 16] = [0; GRAPHEME_MAX_LEN + 16];
+        for (i, cp) in input.iter_mut().enumerate() {
+            *cp = (0x0300 + i) as u32;
+        }
+
+        let rac = page.get_row_and_cell(0, 0);
+        unsafe {
+            *rac.cell = Cell::init('A' as u32);
+        }
+        page.set_graphemes(rac.row, rac.cell, &input).unwrap();
+
+        assert_eq!(
+            GRAPHEME_MAX_LEN,
+            page.lookup_grapheme(unsafe { &*rac.cell }).unwrap().len(),
+        );
+
+        page.deinit();
+    }
+
     #[test]
     fn page_clearGrapheme_not_all_cells() {
         let mut page = Page::init(Capacity {

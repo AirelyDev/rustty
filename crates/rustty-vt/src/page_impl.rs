@@ -2254,7 +2254,8 @@ impl Page {
     }
 
     /// Set the graphemes for the given cell. This asserts that the cell
-    /// has no graphemes set, and only contains a single codepoint.
+    /// has no graphemes set, and only contains a single codepoint. Input
+    /// beyond GRAPHEME_MAX_LEN is ignored.
     pub fn set_graphemes(
         &mut self,
         row: *mut Row,
@@ -2288,15 +2289,17 @@ impl Page {
         let cell_offset = unsafe { get_offset::<Cell, _>(base, cell) };
         let mut map = unsafe { self.grapheme_map.map(base) };
         let actx = AutoContext::default();
+        // const stored_cps = cps[0..@min(cps.len, grapheme_max_len)];
+        let stored_cps = &cps[..cps.len().min(GRAPHEME_MAX_LEN)];
 
         let slice = unsafe {
-            self.grapheme_alloc.alloc::<u32, _>(base, cps.len()).map_err(|_| {
+            self.grapheme_alloc.alloc::<u32, _>(base, stored_cps.len()).map_err(|_| {
                 // The grapheme alloc capacity needs to be increased.
                 GraphemeError::GraphemeAllocOutOfMemory
             })?
         };
         // errdefer self.grapheme_alloc.free(self.memory, slice);
-        slice.copy_from_slice(cps);
+        slice.copy_from_slice(stored_cps);
 
         let value = OffsetSlice::new(
             unsafe { get_offset::<u32, _>(base, &slice[0]) },
@@ -2319,7 +2322,8 @@ impl Page {
         Ok(())
     }
 
-    /// Append a codepoint to the given cell as a grapheme.
+    /// Append a codepoint to the given cell as a grapheme. Once the cell has
+    /// GRAPHEME_MAX_LEN suffix codepoints, additional codepoints are ignored.
     pub fn append_grapheme(
         &mut self,
         row: *mut Row,
@@ -2380,6 +2384,12 @@ impl Page {
 
         let slice = map.get_ptr_context(cell_offset, &actx).unwrap();
         let slice_ref = unsafe { &mut *slice };
+
+        // Terminal input is untrusted. In addition to bounding memory, this
+        // prevents repeated chunk growth and copying from becoming quadratic.
+        if slice_ref.len >= GRAPHEME_MAX_LEN {
+            return Ok(());
+        }
 
         // If our slice len doesn't divide evenly by the grapheme chunk
         // length then we can utilize the additional chunk space.

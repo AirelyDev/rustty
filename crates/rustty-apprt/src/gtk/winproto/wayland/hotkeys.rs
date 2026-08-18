@@ -257,13 +257,19 @@ impl Hotkeys {
         }
     }
 
-    /// PORTS: `Hotkeys.zig:90-95` `deinit` — "Must leave the entries in a valid
+    /// PORTS: `Hotkeys.zig:90-96` `deinit` — "Must leave the entries in a valid
     /// empty state: clear may still be called after deinit during application
-    /// teardown." `clear` already does exactly that, and Rust frees `app_id` on
-    /// drop, so this is `clear` (the reference's `alloc.free(self.app_id)` has no
-    /// counterpart).
+    /// teardown." Rust frees `app_id` on drop, so the reference's
+    /// `alloc.free(self.app_id)` has no counterpart.
     pub fn deinit(&mut self) {
-        self.clear();
+        // `for (self.entries.items) |*entry| entry.deinit();`
+        for entry in &mut self.entries {
+            entry.deinit();
+        }
+        // `self.entries.clearAndFree(self.alloc);` — full teardown: release the
+        // list's backing allocation (fd47b15cd, the DebugAllocator leak fix),
+        // leaving a valid empty list behind.
+        self.entries = Vec::new();
     }
 
     /// PORTS: `Hotkeys.zig:97-100` `clear`.
@@ -1083,6 +1089,47 @@ mod tests {
         assert!(
             select_entries(&multi).is_empty(),
             "a global bind with more than one action must not be selected"
+        );
+    }
+
+    /// PORTS: fd47b15cd "gtk: free hotkeys memory on app teardown" — `deinit`
+    /// must release the entries list's backing allocation (the reference's
+    /// `clearAndFree`), not just clear it. The reference's proof is the
+    /// DebugAllocator leak report on teardown; the Rust-observable equivalent
+    /// is the `Vec`'s capacity going to zero on deinit.
+    #[test]
+    fn hotkeys_deinit_frees_entries_storage() {
+        let config = config_with(&["global:super+q=new_window"]);
+        let (trigger, action) = select_entries(&config)
+            .into_iter()
+            .next()
+            .expect("one global bind selected");
+
+        let mut hotkeys = Hotkeys::new("com.mitchellh.rustty");
+        hotkeys.entries.push(Entry {
+            id: HotkeyId(0),
+            hotkey: None,
+            trigger,
+            action,
+            shortcuts: glib::WeakRef::new(),
+        });
+        assert!(
+            hotkeys.entries.capacity() > 0,
+            "precondition: the entries list holds a live allocation"
+        );
+
+        hotkeys.deinit();
+        // "Must leave the entries in a valid empty state: clear may still be
+        // called after deinit during application teardown."
+        assert!(
+            hotkeys.entries.is_empty(),
+            "deinit leaves a valid empty state"
+        );
+        hotkeys.clear();
+        assert_eq!(
+            hotkeys.entries.capacity(),
+            0,
+            "deinit must free the entries' backing allocation (the reference's clearAndFree)"
         );
     }
 }

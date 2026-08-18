@@ -1649,31 +1649,9 @@ impl ReflowCursor {
 
                 // Ensure that the string alloc has sufficient capacity
                 // to dupe the link (and the ID if it's not implicit).
-                let additional_required_string_capacity = src_link.uri.len
-                    + match src_link.id.tag() {
-                        crate::hyperlink::PageEntryIdTag::Explicit => src_link.id.explicit().len,
-                        crate::hyperlink::PageEntryIdTag::Implicit => 0,
-                    };
-                // Keep trying until we have enough capacity.
-                loop {
-                    let base = unsafe { (*self.page).memory_ptr() };
-                    match unsafe {
-                        (*self.page)
-                            .string_alloc
-                            .alloc::<u8, _>(base, additional_required_string_capacity)
-                    } {
-                        Ok(slice) => {
-                            // We have enough capacity, free the test alloc.
-                            unsafe {
-                                (*self.page).string_alloc.free(base, slice);
-                            }
-                            break;
-                        }
-                        Err(_) => {
-                            // Grow our capacity until we can fit the extra bytes.
-                            self.increase_capacity(list, Some(IncreaseCapacity::StringBytes))?;
-                        }
-                    }
+                // Grow our capacity until the hyperlink fits.
+                while !self.hyperlink_strings_fit(&src_link) {
+                    self.increase_capacity(list, Some(IncreaseCapacity::StringBytes))?;
                 }
 
                 let dst_link = match unsafe { src_link.dupe(src_page, self.page) } {
@@ -1719,6 +1697,17 @@ impl ReflowCursor {
                                     crate::ref_counted_set::AddError::NeedsRehash => None,
                                 },
                             )?;
+
+                            // The increaseCapacity call above swapped self.page
+                            // for a new page, so the string capacity check done
+                            // before the first dupe no longer applies. Re-establish
+                            // it against the current page before duping again.
+                            while !self.hyperlink_strings_fit(&src_link) {
+                                self.increase_capacity(
+                                    list,
+                                    Some(IncreaseCapacity::StringBytes),
+                                )?;
+                            }
 
                             // We need to recreate the link into the new page.
                             let dst_link2 = match unsafe { src_link.dupe(src_page, self.page) } {
@@ -1994,6 +1983,52 @@ impl ReflowCursor {
         self.cursor_absolute(old_x, old_y);
         self.total_rows = old_total_rows;
         Ok(())
+    }
+
+    /// True if the string allocator of the current page can fit the
+    /// allocations that duping the given source hyperlink performs.
+    /// The test allocations are freed before returning.
+    ///
+    /// This must mirror the exact allocation pattern of
+    /// hyperlink.PageEntry.dupe: the URI and the explicit ID (if any)
+    /// are allocated separately. The string allocator rounds every
+    /// allocation up to its chunk size and requires each allocation to
+    /// be contiguous, so a single combined allocation of the total byte
+    /// length can succeed where the two separate allocations performed
+    /// by dupe would fail.
+    fn hyperlink_strings_fit(&self, src_link: &crate::hyperlink::PageEntry) -> bool {
+        let base = unsafe { (*self.page).memory_ptr() };
+        let uri_buf = match unsafe {
+            (*self.page)
+                .string_alloc
+                .alloc::<u8, _>(base, src_link.uri.len)
+        } {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        // defer self.page.string_alloc.free(self.page.memory, uri_buf);
+
+        let fits = match src_link.id.tag() {
+            crate::hyperlink::PageEntryIdTag::Implicit => true,
+            crate::hyperlink::PageEntryIdTag::Explicit => {
+                match unsafe {
+                    (*self.page)
+                        .string_alloc
+                        .alloc::<u8, _>(base, src_link.id.explicit().len)
+                } {
+                    Ok(id_buf) => {
+                        unsafe { (*self.page).string_alloc.free(base, id_buf) };
+                        true
+                    }
+                    Err(_) => false,
+                }
+            }
+        };
+
+        // (The reference frees `uri_buf` via `defer`; both return paths
+        // above the explicit-ID branch free it here.)
+        unsafe { (*self.page).string_alloc.free(base, uri_buf) };
+        fits
     }
 
     /// True if this cursor is at the bottom of the page by capacity,

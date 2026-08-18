@@ -154,7 +154,12 @@ impl IOSurfaceLayer {
     // `IOSurfaceLayer` drops; the Canonical Interface mandates `&mut self`, so this
     // documents the reference's manual release (the real teardown is the value drop).
     pub fn release(&mut self) {
-        // no-op relative to Drop — the `Retained` releases on drop.
+        // The layer may be retained by the view after we release our reference.
+        // Clear the callback first so that a later display pass can't access the
+        // renderer that owned this wrapper after it has been freed.
+        self.set_display_callback(None, core::ptr::null_mut());
+        // The layer release itself is a no-op relative to Drop — the `Retained`
+        // releases on drop.
     }
 
     /// PORT NOTE: Canonical upcast to the base `CALayer` (for the W1 NSView attach).
@@ -257,6 +262,18 @@ impl IOSurfaceLayer {
     }
 }
 
+// PORT NOTE (4b4a5b241): in the reference the callback-clear lives in `release`;
+// in the port the real teardown is this value Drop (see the `release` PORT NOTE),
+// so the clear runs here too — every teardown path reaches it.
+impl Drop for IOSurfaceLayer {
+    fn drop(&mut self) {
+        // The layer may be retained by the view after we release our reference.
+        // Clear the callback first so that a later display pass can't access the
+        // renderer that owned this wrapper after it has been freed.
+        self.set_display_callback(None, core::ptr::null_mut());
+    }
+}
+
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use std::ffi::c_void;
@@ -264,6 +281,7 @@ mod tests {
 
     use objc2::msg_send;
     use objc2::rc::Retained;
+    use objc2::DefinedClass;
     use objc2::runtime::AnyObject;
     use objc2_io_surface::IOSurfaceRef;
     use rustty_render_types::AlphaBlending;
@@ -307,6 +325,43 @@ mod tests {
     unsafe extern "C" fn on_display(ctx: *mut c_void) {
         assert_eq!(ctx, 0xABCD_usize as *mut c_void);
         FIRED.store(true, Ordering::SeqCst);
+    }
+
+    static FIRED_AFTER_DROP: AtomicBool = AtomicBool::new(false);
+    unsafe extern "C" fn on_display_after_drop(_ctx: *mut c_void) {
+        FIRED_AFTER_DROP.store(true, Ordering::SeqCst);
+    }
+
+    // 4b4a5b241 — renderer/metal: clear callback before layer release. The host
+    // view can retain the backing layer beyond renderer teardown; a later Core
+    // Animation display pass must not invoke the callback with a freed renderer
+    // context.
+    #[test]
+    fn iosurface_layer_drop_clears_display_callback() {
+        FIRED_AFTER_DROP.store(false, Ordering::SeqCst);
+        let layer = IOSurfaceLayer::init().expect("IOSurfaceLayer::init");
+        let cb: DisplayCallback = Some(on_display_after_drop);
+        layer.set_display_callback(cb, 0xDEAD_usize as *mut c_void);
+
+        // The host view's retention of the backing CALayer, outliving the wrapper.
+        let host_retained = layer.layer.clone();
+        drop(layer); // renderer teardown
+
+        // Drop must have cleared the stored callback + ctx ivars...
+        assert!(
+            host_retained.ivars().display_cb.load(Ordering::SeqCst).is_null(),
+            "Drop must clear the display callback"
+        );
+        assert!(
+            host_retained.ivars().display_ctx.load(Ordering::SeqCst).is_null(),
+            "Drop must clear the display context"
+        );
+        // ...so a later display pass on the host-retained layer is a no-op.
+        let _: () = unsafe { msg_send![&*host_retained, display] };
+        assert!(
+            !FIRED_AFTER_DROP.load(Ordering::SeqCst),
+            "display after Drop must not invoke the cleared callback"
+        );
     }
 
     // The overridden `display` method invokes the stored display callback+ctx.

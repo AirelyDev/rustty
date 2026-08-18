@@ -171,6 +171,8 @@ impl<T: Clone> CircBuf<T> {
         let prev_cap = self.storage.len();
         let default = self.default.clone();
         self.storage.resize(size, default.clone());
+        // const retained_len = @min(prev_len, size);
+        let retained_len = core::cmp::min(prev_len, size);
 
         // If we grew, we need to set our new defaults. We can add it
         // at the end since we rotated to start.
@@ -179,13 +181,12 @@ impl<T: Clone> CircBuf<T> {
             for v in self.storage[prev_cap..].iter_mut() {
                 *v = default.clone();
             }
-
-            // Fix up our head/tail
-            if self.full {
-                self.head = prev_len;
-                self.full = false;
-            }
         }
+
+        // Fix up our head/tail for the new capacity.
+        self.head = if retained_len == size { 0 } else { retained_len };
+        self.tail = 0;
+        self.full = retained_len == size;
         Ok(())
     }
 
@@ -881,6 +882,54 @@ mod tests {
             assert_eq!(2u8, unsafe { (&*slices.0)[1] });
             assert_eq!(3u8, unsafe { (&*slices.0)[2] });
         }
+    }
+
+    #[test]
+    fn CircBuf_resize_shrink_partially_full() {
+        type Buf = CircBuf<u8>;
+        let mut buf = Buf::init(5, 0).unwrap();
+
+        buf.append(1).unwrap();
+        buf.append(2).unwrap();
+        buf.append(3).unwrap();
+
+        buf.resize(2).unwrap();
+        assert!(buf.full);
+        assert_eq!(2usize, buf.len());
+        assert_eq!(2usize, buf.capacity());
+
+        {
+            let mut it = buf.iterator(Direction::Forward);
+            assert_eq!(1u8, *it.next().unwrap());
+            assert_eq!(2u8, *it.next().unwrap());
+            assert!(it.next().is_none());
+        }
+        assert!(matches!(buf.append(4), Err(Error::OutOfMemory)));
+    }
+
+    #[test]
+    fn CircBuf_resize_shrink_to_length() {
+        type Buf = CircBuf<u8>;
+        let mut buf = Buf::init(5, 0).unwrap();
+
+        buf.append(1).unwrap();
+        buf.append(2).unwrap();
+        buf.resize(2).unwrap();
+
+        assert!(buf.full);
+        assert_eq!(2usize, buf.len());
+        assert_eq!(2usize, buf.capacity());
+    }
+
+    #[test]
+    fn CircBuf_resize_empty_to_zero() {
+        type Buf = CircBuf<u8>;
+        let mut buf = Buf::init(5, 0).unwrap();
+
+        buf.resize(0).unwrap();
+        assert!(buf.full);
+        assert_eq!(0usize, buf.len());
+        assert_eq!(0usize, buf.capacity());
     }
 
     #[test]

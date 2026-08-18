@@ -125,6 +125,8 @@ const KITTY_PLACEHOLDER: u21 = 0x10EEEE;
 /// for alignment.
 const GRAPHEME_CHUNK_LEN: usize = 4;
 const GRAPHEME_CHUNK: usize = GRAPHEME_CHUNK_LEN * core::mem::size_of::<u32>();
+// pub const grapheme_max_len = 64;
+pub const GRAPHEME_MAX_LEN: usize = 64;
 // PORT NOTE: the reference uses `u21` for codepoints; Rust has no `u21`, so we
 // use `u32` (which has the same 4-byte storage as Zig's `u21`, matching
 // `@sizeOf(u21) == 4` for the grapheme allocation chunk math).

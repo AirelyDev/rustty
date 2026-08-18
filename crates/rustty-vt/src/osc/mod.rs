@@ -494,11 +494,20 @@ impl std::fmt::Display for Terminator {
 /// Maximum size of a "normal" OSC.
 pub const MAX_BUF: usize = 2048;
 
+/// Maximum size of an OSC that requires dynamically allocated storage.
+/// OSC input is untrusted, so these captures must have a finite bound.
+pub const MAX_ALLOCATING_BUF: usize = 8 * 1024 * 1024;
+
 pub struct Parser<'a> {
     /// Optional allocator used to accept data longer than MAX_BUF.
     /// This only applies to some commands (e.g. OSC 52) that can
     /// reasonably exceed MAX_BUF.
     pub alloc: Option<rustty_lib::allocator::ZigAllocatorRef<'a>>,
+
+    /// Maximum number of bytes retained by an allocating capture.
+    /// This is configurable primarily so callers and tests can choose a
+    /// smaller policy than the default.
+    pub max_allocating_bytes: usize,
 
     /// Current state of the parser.
     pub state: State,
@@ -583,6 +592,10 @@ pub enum State {
 // `Parser::next` — zero allocation, exactly like `std.Io.Writer.fixed`.
 pub struct Capture {
     pub backing: CaptureBacking,
+    /// `max_bytes: usize` — the byte bound this capture may not grow beyond
+    /// (for the fixed backing this is the buffer length; for the allocating
+    /// backing it is the parser's `max_allocating_bytes` policy).
+    pub max_bytes: usize,
 }
 
 pub enum CaptureBacking {
@@ -647,11 +660,15 @@ impl Capture {
     // ReleaseFast; #[inline] restores cross-crate inlinability without LTO.
     // The fixed arm stores directly into the Parser's inline buffer (threaded
     // in), restoring the zero-alloc single-bounds-check idiom.
+    /// Append one byte without permitting the backing allocation to grow
+    /// beyond max_bytes. Allocating.Writer normally grows super-linearly,
+    /// so grow it explicitly to keep the allocation itself bounded too.
     #[inline]
     pub fn write_byte(&mut self, buffer: &mut [u8; MAX_BUF], c: u8) -> bool {
+        // if (self.writer.buffered().len >= self.max_bytes) return error.WriteFailed;
         match &mut self.backing {
             CaptureBacking::Fixed(len) => {
-                if *len >= MAX_BUF {
+                if *len >= self.max_bytes || *len >= MAX_BUF {
                     false
                 } else {
                     buffer[*len] = c;
@@ -660,6 +677,25 @@ impl Capture {
                 }
             }
             CaptureBacking::Allocating(w) => {
+                if w.len() >= self.max_bytes {
+                    return false;
+                }
+                if w.len() >= w.capacity() {
+                    // const new_capacity = @min(
+                    //     self.max_bytes,
+                    //     @max(w.writer.buffer.len *| 2, 1),
+                    // );
+                    // R7: `*|` is a saturating multiply; `@max(.., 1)` keeps a
+                    // zero-capacity buffer growable.
+                    let new_capacity = self
+                        .max_bytes
+                        .min(w.capacity().saturating_mul(2).max(1));
+                    // w.writer.buffer = w.allocator.realloc(w.writer.buffer, new_capacity)
+                    // PORT NOTE: `reserve_exact` grows the Vec's backing to
+                    // exactly `new_capacity` (len + additional), mirroring the
+                    // bounded realloc.
+                    w.reserve_exact(new_capacity - w.len());
+                }
                 w.push(c);
                 true
             }
@@ -684,6 +720,7 @@ impl<'a> Parser<'a> {
         // initialized, so we zero it.
         Parser {
             alloc,
+            max_allocating_bytes: MAX_ALLOCATING_BUF,
             state: State::Start,
             capture: None,
             command: Command::Invalid,
@@ -800,6 +837,8 @@ impl<'a> Parser<'a> {
             CaptureMode::Fixed => {
                 self.capture = Some(Capture {
                     backing: CaptureBacking::Fixed(0),
+                    // .max_bytes = buf.len,
+                    max_bytes: MAX_BUF,
                 });
             }
 
@@ -811,11 +850,15 @@ impl<'a> Parser<'a> {
                     return;
                 }
 
-                // PORT NOTE: the allocating writer's `initCapacity(alloc, 2048)`
-                // failure path also falls back to the fixed buffer; here the
-                // backing `Vec` is grown on demand.
+                // PORT NOTE: the allocating writer's
+                // `initCapacity(alloc, @min(MAX_BUF, max_bytes))` failure path
+                // also falls back to the fixed buffer; here the backing `Vec`
+                // is grown on demand (bounded by `max_bytes`).
                 self.capture = Some(Capture {
-                    backing: CaptureBacking::Allocating(Vec::with_capacity(2048)),
+                    backing: CaptureBacking::Allocating(Vec::with_capacity(
+                        MAX_BUF.min(self.max_allocating_bytes),
+                    )),
+                    max_bytes: self.max_allocating_bytes,
                 });
             }
         }
@@ -860,7 +903,28 @@ impl<'a> Parser<'a> {
                     }
                 }
                 CaptureBacking::Allocating(w) => {
-                    w.push(c);
+                    // cap.writeByte(c) catch |err| switch (err) {
+                    //     error.WriteFailed => self.state = .invalid,
+                    // };
+                    // PORT NOTE (727b8a02f): allocating captures are bounded by
+                    // `cap.max_bytes` and grown explicitly so the allocation
+                    // itself stays bounded too — this mirrors
+                    // `Capture::write_byte`'s allocating arm (the fixed arm
+                    // above keeps its measured inline layout).
+                    if w.len() >= cap.max_bytes {
+                        // We have overflowed our buffer or had some other error, set the
+                        // state to invalid so that we discard any further input.
+                        self.state = State::Invalid;
+                    } else {
+                        if w.len() >= w.capacity() {
+                            // R7: `*|` saturating multiply, `@max(.., 1)` floor.
+                            let new_capacity = cap
+                                .max_bytes
+                                .min(w.capacity().saturating_mul(2).max(1));
+                            w.reserve_exact(new_capacity - w.len());
+                        }
+                        w.push(c);
+                    }
                 }
             }
             return;
@@ -1173,5 +1237,83 @@ mod ref_tests {
         let _ = super::parsers::color::parse as fn(_, _) -> _;
         // _ = encoding;
         let _ = super::encoding::is_safe_utf8 as fn(_) -> _;
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use rustty_lib::allocator::{GlobalZigAllocator, ZigAllocatorRef};
+
+    // test "Parser allocating captures have a hard limit"
+    #[test]
+    fn parser_allocating_captures_have_a_hard_limit() {
+        let prefixes: [&str; 4] = ["52;", "66;", "72;", "5522;"];
+        let limit = MAX_BUF + 1;
+
+        for prefix in prefixes {
+            let backend = GlobalZigAllocator;
+            let alloc = ZigAllocatorRef::new(&backend);
+            let mut p: Parser = Parser::init(Some(alloc));
+            p.max_allocating_bytes = limit;
+
+            for ch in prefix.bytes() {
+                p.next(ch);
+            }
+            for _ in 0..limit {
+                p.next(b'a');
+            }
+
+            {
+                let cap = p.capture.as_ref().unwrap();
+                assert_eq!(limit, cap.trailing(&p.buffer).len());
+                // try testing.expectEqual(@as(usize, limit), cap.writer.buffer.len);
+                // PORT NOTE: the allocating writer's backing buffer length is
+                // the Vec's capacity here (explicit bounded growth keeps it
+                // exact).
+                match &cap.backing {
+                    CaptureBacking::Allocating(w) => assert_eq!(limit, w.capacity()),
+                    CaptureBacking::Fixed(_) => unreachable!(),
+                }
+            }
+
+            p.next(b'a');
+            assert_eq!(State::Invalid, p.state);
+            {
+                let cap = p.capture.as_ref().unwrap();
+                assert_eq!(limit, cap.trailing(&p.buffer).len());
+                match &cap.backing {
+                    CaptureBacking::Allocating(w) => assert_eq!(limit, w.capacity()),
+                    CaptureBacking::Fixed(_) => unreachable!(),
+                }
+            }
+
+            p.deinit();
+        }
+    }
+
+    // test "Parser allocating capture limit includes parser-added bytes"
+    #[test]
+    fn parser_allocating_capture_limit_includes_parser_added_bytes() {
+        let backend = GlobalZigAllocator;
+        let alloc = ZigAllocatorRef::new(&backend);
+        let mut p: Parser = Parser::init(Some(alloc));
+        p.max_allocating_bytes = 4;
+
+        for ch in "52;abcd".bytes() {
+            p.next(ch);
+        }
+        assert!(p.end(None).is_none());
+        assert_eq!(State::Invalid, p.state);
+
+        let cap = p.capture.as_ref().unwrap();
+        assert_eq!(4, cap.trailing(&p.buffer).len());
+        // try testing.expectEqual(@as(usize, 4), cap.writer.buffer.len);
+        match &cap.backing {
+            CaptureBacking::Allocating(w) => assert_eq!(4, w.capacity()),
+            CaptureBacking::Fixed(_) => unreachable!(),
+        }
+
+        p.deinit();
     }
 }

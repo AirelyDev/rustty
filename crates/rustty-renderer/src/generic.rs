@@ -4666,6 +4666,7 @@ mod macos_impl {
             if self.terminal_state_frame_count >= max_terminal_state_frame_count {
                 self.terminal_state.deinit(self.alloc);
                 self.terminal_state = RenderState::empty();
+                self.terminal_state_frame_count = 0;
             }
             self.terminal_state_frame_count += 1;
 
@@ -7708,6 +7709,45 @@ mod macos_impl {
             // scrollbar (recomputed from the same PageList).
             let expected_scrollbar = unsafe { (*t.screens.active).pages.scrollbar() };
             assert!(r.scrollbar.eql(expected_scrollbar));
+
+            t.deinit(Global);
+        }
+
+        // 9e6e2ea96 — renderer: reset terminal state cleanup counter. The frame
+        // counter must restart whenever the retained render state is cleared;
+        // otherwise every subsequent frame deinitializes and rebuilds the full
+        // state (perf collapse after ~12 minutes at 120Hz).
+        #[test]
+        fn update_frame_resets_terminal_state_frame_count() {
+            let mut r = match test_renderer(10, 3) {
+                Some(r) => r,
+                None => return,
+            };
+
+            let mut mutex = Mutex::new();
+            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            let st = state::State {
+                mutex: &mut mutex,
+                terminal: &mut t,
+                inspector: None,
+                inspector_ptr: None,
+                preedit: None,
+                mouse: state::Mouse::default(),
+                demand: Default::default(),
+                handoff_gen: Default::default(),
+                handoff_park: Default::default(),
+            };
+
+            // Drive the counter to the cleanup threshold (the ~12-minutes-at-120Hz
+            // mark). This frame performs the SCHEDULED deinit+rebuild...
+            r.terminal_state_frame_count = 100_000;
+            r.update_frame(&st, true).unwrap();
+            // ...and must reset the counter (0, then +1 for this frame). Without
+            // the reset the counter stays past the threshold forever and every
+            // subsequent frame hits the deinit+rebuild branch.
+            assert_eq!(r.terminal_state_frame_count, 1);
+            r.update_frame(&st, true).unwrap();
+            assert_eq!(r.terminal_state_frame_count, 2);
 
             t.deinit(Global);
         }

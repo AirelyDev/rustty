@@ -684,7 +684,7 @@ impl DynamicRGB {
     }
 
     pub fn reset(&mut self) {
-        self.override_ = self.default;
+        self.override_ = None;
     }
 }
 

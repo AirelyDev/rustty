@@ -670,7 +670,7 @@ impl ImageStorage {
 
                     let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
                     for key in keys {
-                        if key.image_id >= first || key.image_id <= last {
+                        if key.image_id >= first && key.image_id <= last {
                             let image_id = key.image_id;
                             self.placements
                                 .get(&key)
@@ -2524,8 +2524,17 @@ mod tests {
             )),
         )
         .unwrap();
+        s.add_placement(
+            alloc,
+            3,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap(),
+            )),
+        )
+        .unwrap();
         assert_eq!(3usize, s.images.len());
-        assert_eq!(2usize, s.placements.len());
+        assert_eq!(3usize, s.placements.len());
 
         s.dirty = false;
         s.delete(
@@ -2533,15 +2542,35 @@ mod tests {
             &mut t,
             command::Delete::Range {
                 delete: false,
-                first: 1,
-                last: 1,
+                first: 2,
+                last: 2,
             },
         );
         assert!(s.dirty);
         assert_eq!(3usize, s.images.len());
-        assert_eq!(0usize, s.placements.len());
+        assert_eq!(2usize, s.placements.len());
+        assert!(s
+            .placements
+            .get(&PlacementKey {
+                image_id: 1,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id: 1
+                },
+            })
+            .is_some());
+        assert!(s
+            .placements
+            .get(&PlacementKey {
+                image_id: 3,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id: 1
+                },
+            })
+            .is_some());
         assert_eq!(
-            tracked,
+            tracked + 2,
             unsafe { &(*t.screens.active).pages }.count_tracked_pins()
         );
 
@@ -2599,8 +2628,17 @@ mod tests {
             )),
         )
         .unwrap();
+        s.add_placement(
+            alloc,
+            3,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap(),
+            )),
+        )
+        .unwrap();
         assert_eq!(3usize, s.images.len());
-        assert_eq!(2usize, s.placements.len());
+        assert_eq!(3usize, s.placements.len());
 
         s.dirty = false;
         s.delete(
@@ -2608,15 +2646,35 @@ mod tests {
             &mut t,
             command::Delete::Range {
                 delete: true,
-                first: 1,
-                last: 1,
+                first: 2,
+                last: 2,
             },
         );
         assert!(s.dirty);
-        assert_eq!(1usize, s.images.len());
-        assert_eq!(0usize, s.placements.len());
+        assert_eq!(2usize, s.images.len());
+        assert_eq!(2usize, s.placements.len());
+        assert!(s
+            .placements
+            .get(&PlacementKey {
+                image_id: 1,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id: 1
+                },
+            })
+            .is_some());
+        assert!(s
+            .placements
+            .get(&PlacementKey {
+                image_id: 3,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id: 1
+                },
+            })
+            .is_some());
         assert_eq!(
-            tracked,
+            tracked + 2,
             unsafe { &(*t.screens.active).pages }.count_tracked_pins()
         );
 

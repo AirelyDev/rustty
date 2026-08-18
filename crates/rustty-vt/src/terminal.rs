@@ -2204,28 +2204,24 @@ impl Terminal {
                         }
                         unsafe { (*prev_cell).set_wide(pagepkg::Wide::Narrow) };
 
-                        // Remove the wide spacer tail
-                        let cell = self.active_mut().cursor_cell_left(prev_left - 1);
-                        unsafe { (*cell).set_wide(pagepkg::Wide::Narrow) };
-
-                        // Back track the cursor so that we don't end up with
-                        // an extra space after the character. Since xterm is
-                        // not VS aware, it cannot be used as a reference for
-                        // this behavior; but it does follow the principle of
-                        // least surprise, and also matches the behavior that
-                        // can be observed in Kitty, which is one of the only
-                        // other VS aware terminals.
-                        let active: *mut Screen = self.screens.active;
-                        if unsafe { (*active).cursor.x } == right_limit - 1 {
-                            // If we're already at the right edge, we stay
-                            // here and set the pending wrap to false since
-                            // when we pend a wrap, we only move our cursor once
-                            // even for wide chars (tests verify).
-                            unsafe { (*active).cursor.pending_wrap = false };
-                        } else {
-                            // Otherwise, move back.
-                            self.active_mut().cursor_left(1);
+                        // Remove the wide spacer tail. The previous cell may be
+                        // under the cursor, so locate the tail from the wide base
+                        // rather than by subtracting from the cursor distance.
+                        let prev_x =
+                            unsafe { (*self.screens.active).cursor.x } - prev_left;
+                        if prev_x < self.cols - 1 {
+                            // const cells: [*]Cell = @ptrCast(prev.cell);
+                            // cells[1].wide = .narrow;
+                            unsafe { (*prev_cell.add(1)).set_wide(pagepkg::Wide::Narrow) };
                         }
+
+                        // Place the cursor one cell after the now-narrow base,
+                        // clamped to the right edge. Usually this moves the cursor
+                        // back from after the old tail, but saved cursor state or
+                        // changed margins can leave it directly on the base.
+                        unsafe { (*self.screens.active).cursor.pending_wrap = false };
+                        self.active_mut()
+                            .cursor_horizontal_absolute((prev_x + 1).min(right_limit - 1));
 
                         #[allow(clippy::needless_return)]
                         {
@@ -6993,6 +6989,39 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "Terminal: caps zero-width codepoints attached to one cell"
+    #[test]
+    fn terminal_caps_zero_width_codepoints_attached_to_one_cell() {
+        let mut t = Terminal::init(Global, opts(2, 2)).unwrap();
+
+        t.modes.set(modespkg::Mode::GraphemeCluster, false);
+        t.print('A' as u32).unwrap();
+
+        let initial_capacity = unsafe {
+            crate::pagelist::Node::capacity((*(*t.screens.active).cursor.page_pin).node)
+        }
+        .grapheme_bytes;
+        for _ in 0..pagepkg::GRAPHEME_MAX_LEN * 4 {
+            t.print(0x0301).unwrap();
+        }
+
+        let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 0)).unwrap();
+        assert_eq!(
+            pagepkg::GRAPHEME_MAX_LEN,
+            unsafe {
+                (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(list_cell.cell)
+            }
+            .unwrap()
+            .len(),
+        );
+        assert_eq!(initial_capacity, unsafe {
+            crate::pagelist::Node::capacity(list_cell.node)
+        }
+        .grapheme_bytes);
+
+        t.deinit(Global);
+    }
+
     // test "Terminal: VS16 doesn't make character with 2027 disabled"
     #[test]
     fn terminal_vs16_doesnt_make_character_with_2027_disabled() {
@@ -8164,6 +8193,74 @@ mod tests {
             assert_eq!(unsafe { (*spacer_cell).content_codepoint() }, 0);
             assert_eq!(unsafe { (*spacer_cell).wide() }, pagepkg::Wide::SpacerTail);
         }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: VS15 narrows wide cell under cursor with wraparound disabled"
+    #[test]
+    fn terminal_vs15_narrows_wide_cell_under_cursor_with_wraparound_disabled() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+        t.modes.set(modespkg::Mode::Wraparound, false);
+
+        // First create a wide cell spanning columns 4 and 5.
+        t.set_cursor_pos(1, 4);
+        t.print(0x2614).unwrap();
+
+        // Make column 4 the right margin and put the cursor on the wide base.
+        // With wraparound disabled, grapheme lookup selects the cell under the
+        // cursor when it has content.
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(1, 4);
+        t.set_cursor_pos(1, 4);
+        t.print(0xFE0E).unwrap();
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 3);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        let base = t.active_mut().pages.get_cell(screen_pt(3, 0)).unwrap().cell;
+        assert_eq!(unsafe { (*base).wide() }, pagepkg::Wide::Narrow);
+        assert!(unsafe { (*base).has_grapheme() });
+        let tail = t.active_mut().pages.get_cell(screen_pt(4, 0)).unwrap().cell;
+        assert_eq!(unsafe { (*tail).wide() }, pagepkg::Wide::Narrow);
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: VS15 narrows wide cell under restored pending cursor"
+    #[test]
+    fn terminal_vs15_narrows_wide_cell_under_restored_pending_cursor() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+        t.modes.set(modespkg::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(1, 4);
+
+        // Save a pending-wrap cursor at column 4.
+        t.set_cursor_pos(1, 4);
+        t.print('X' as u32).unwrap();
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.save_cursor();
+
+        // Widen the margin and replace that cell with a wide character.
+        t.set_left_and_right_margin(1, 5);
+        t.set_cursor_pos(1, 4);
+        t.print(0x2614).unwrap();
+
+        // Restoring also restores pending_wrap, so grapheme lookup selects the
+        // wide base under the cursor rather than its spacer tail.
+        t.restore_cursor();
+        assert!(unsafe { (*t.screens.active).cursor.pending_wrap });
+        t.print(0xFE0E).unwrap();
+
+        assert_eq!(unsafe { (*t.screens.active).cursor.x }, 4);
+        assert!(!unsafe { (*t.screens.active).cursor.pending_wrap });
+        let base = t.active_mut().pages.get_cell(screen_pt(3, 0)).unwrap().cell;
+        assert_eq!(unsafe { (*base).wide() }, pagepkg::Wide::Narrow);
+        assert!(unsafe { (*base).has_grapheme() });
+        let tail = t.active_mut().pages.get_cell(screen_pt(4, 0)).unwrap().cell;
+        assert_eq!(unsafe { (*tail).wide() }, pagepkg::Wide::Narrow);
 
         t.deinit(Global);
     }

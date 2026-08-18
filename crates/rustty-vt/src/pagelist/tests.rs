@@ -12583,13 +12583,13 @@ fn pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase() {
     s.deinit();
 }
 
-// ref: test "PageList resize reflow exceeds grapheme memory forcing capacity increase"
+// ref: test "PageList resize reflow hyperlink dupe string alloc chunk rounding"
 #[cfg_attr(
     all(miri, debug_assertions),
-    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane (same shape as its sibling `pagelist_resize_reflow_exceeds_hyperlink_memory_forcing_capacity_increase`). It runs in the G6c lane (`check_leaks.sh --debug-assertions-off`). Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
 )]
 #[test]
-fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
+fn pagelist_resize_reflow_hyperlink_dupe_string_alloc_chunk_rounding() {
     let mut s = PageList::init(Options {
         max_size: Some(0),
         ..Options::new(2, 10)
@@ -12617,31 +12617,45 @@ fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
         }));
     }
 
-    // We use almost all grapheme alloc capacity with a grapheme in the final
-    // row of the first page, and do the same on the first row of the second
-    // page. We also mark the row as wrapped so that when we resize with more
-    // cols the row unwraps and we have a single row that requires almost two
-    // times the base grapheme alloc capacity.
+    // The string allocator hands out 32-byte chunks and every allocation
+    // is rounded up to the chunk size independently. Duping a hyperlink
+    // during reflow allocates the URI and the explicit ID separately, so
+    // two separate allocations can require one more chunk than a single
+    // combined allocation of the same total byte length.
     //
-    // This forces the reflow to increase capacity.
+    // We arrange for the reflow target page to have exactly two free
+    // chunks (64 bytes) remaining when a hyperlink with a 33-byte URI
+    // (2 chunks) and a 31-byte explicit ID (1 chunk) is reflowed into
+    // it. The combined byte length (64 bytes -> 2 chunks) fits, but the
+    // separate allocations (3 chunks) do not, so the reflow must grow
+    // the string capacity rather than panic or drop the hyperlink.
+    //
+    // The two hyperlinked cells are joined as a single wrapped row so
+    // that they are always reflowed into the same target page.
     //
     //  +--+ = PAGE 0
     //  :  :
-    //  | X… <- where X is a grapheme which uses almost all the capacity.
+    //  | A… <- A is hyperlinked with all but 64 bytes of string cap.
     //  +--+
     //  +--+ = PAGE 1
-    //  …X | <- X here also almost hits grapheme cap.
+    //  …B | <- B is hyperlinked with a 33-byte URI and 31-byte ID.
     //  +--+
 
-    // grapheme count: @divFloor(grapheme_bytes_default - 1, @sizeOf(u21))
-    // where u21 occupies 4 bytes; the Rust port stores graphemes as u32.
-    let grapheme_n = (crate::page::GRAPHEME_BYTES_DEFAULT - 1) / core::mem::size_of::<u32>();
-    let grapheme_cps: Vec<u32> = vec!['a' as u32; grapheme_n];
+    let uri_a: Vec<u8> = vec![b'a'; crate::page::STRING_BYTES_DEFAULT - 64];
+    let uri_b: Vec<u8> = vec![b'b'; 33];
+    let id_b: Vec<u8> = vec![b'i'; 31];
 
-    // Almost hit grapheme alloc cap in bottom right of first page.
-    // Mark the final row as wrapped.
+    // Hyperlink A in the bottom right of the first page. Mark the final
+    // row as wrapped.
     {
         let page = unsafe { super::Node::page(s.pages.first) };
+        let id = unsafe {
+            (*page).insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Implicit(0),
+                uri: uri_a.clone(),
+            })
+        }
+        .unwrap();
         let rac = unsafe {
             (*page).get_row_and_cell(
                 (*page).size.cols as usize - 1,
@@ -12650,23 +12664,173 @@ fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
         };
         unsafe {
             (*rac.row).set_wrap(true);
-            *rac.cell = cell_codepoint('X' as u32);
+            *rac.cell = cell_codepoint('A' as u32);
         }
-        unsafe { (*page).set_graphemes(rac.row, rac.cell, &grapheme_cps) }.unwrap();
+        unsafe { (*page).set_hyperlink(rac.row, rac.cell, id) }.unwrap();
+
+        // Sanity check the chunk math: the remaining 64 bytes fit as a
+        // single allocation but not as the two separate allocations that
+        // inserting (or duping) hyperlink B performs.
         let base = unsafe { (*page).memory_ptr() };
+        let buf = unsafe { (*page).string_alloc.alloc::<u8, _>(base, 64) }.unwrap();
+        unsafe { (*page).string_alloc.free(base, buf) };
+        assert!(matches!(
+            unsafe {
+                (*page).insert_hyperlink(hyperlink::Hyperlink {
+                    id: hyperlink::HyperlinkId::Explicit(id_b.clone()),
+                    uri: uri_b.clone(),
+                })
+            },
+            Err(crate::page::InsertHyperlinkError::StringsOutOfMemory)
+        ));
+    }
+
+    // Hyperlink B in the top left of the second page. Mark the first
+    // row as a wrap continuation.
+    {
+        let page = unsafe { super::Node::page(s.pages.last) };
+        let id = unsafe {
+            (*page).insert_hyperlink(hyperlink::Hyperlink {
+                id: hyperlink::HyperlinkId::Explicit(id_b.clone()),
+                uri: uri_b.clone(),
+            })
+        }
+        .unwrap();
+        let rac = unsafe { (*page).get_row_and_cell(0, 0) };
+        unsafe {
+            (*rac.row).set_wrap_continuation(true);
+            *rac.cell = cell_codepoint('B' as u32);
+        }
+        unsafe { (*page).set_hyperlink(rac.row, rac.cell, id) }.unwrap();
+    }
+
+    // Resize to 1 column wider, unwrapping the row.
+    s.resize(Resize {
+        cols: Some(s.cols + 1),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+
+    // Both hyperlinks must have survived the reflow intact.
+    let mut found: usize = 0;
+    let mut node_it = s.pages.first;
+    while !node_it.is_null() {
+        let page = unsafe { super::Node::page(node_it) };
+        for y in 0..unsafe { (*page).size.rows } as usize {
+            for x in 0..unsafe { (*page).size.cols } as usize {
+                let rac = unsafe { (*page).get_row_and_cell(x, y) };
+                if !unsafe { (*rac.cell).hyperlink() } {
+                    continue;
+                }
+                found += 1;
+
+                let link_id = unsafe { (*page).lookup_hyperlink(rac.cell) }.unwrap();
+                let base = unsafe { (*page).memory_ptr() };
+                let entry = unsafe { (*page).hyperlink_set.get(base, link_id) };
+                let uri = unsafe { (*entry).uri.slice(base) };
+                match unsafe { (*entry).id.tag() } {
+                    crate::hyperlink::PageEntryIdTag::Implicit => assert_eq!(uri_a, uri),
+                    crate::hyperlink::PageEntryIdTag::Explicit => {
+                        assert_eq!(uri_b, uri);
+                        assert_eq!(id_b, unsafe { (*entry).id.explicit().slice(base) });
+                    }
+                }
+            }
+        }
+        node_it = unsafe { (*node_it).next };
+    }
+    assert_eq!(2usize, found);
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow exceeds grapheme memory forcing capacity increase"
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — G6 LANE ONLY (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): `Page::assert_integrity` is O(page) and runs on nearly every PageList mutation under `debug_assertions`, which puts this test out of Miri's budget in the debug-assertions-ON G6 lane. It RUNS there — UB-clean and leak-clean — in the G6c lane (`check_leaks.sh --debug-assertions-off`), measured per test in single-worker isolation; see the WS19 T6 per-test table. Do NOT widen this to a plain `miri` ignore: that would silently drop the test from BOTH lanes."
+)]
+#[test]
+fn pagelist_resize_reflow_exceeds_grapheme_memory_forcing_capacity_increase() {
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(4, 10)
+    })
+    .unwrap();
+    assert_eq!(1usize, s.total_pages());
+
+    // Grow to the capacity of the first page and add
+    // one more row so that we have two pages total.
+    {
+        let page = unsafe { super::Node::page(s.pages.first) };
+        unsafe { (*page).pause_integrity_checks(true) };
+        for _ in unsafe { (*page).size.rows..(*page).capacity.rows } {
+            let _ = s.grow().unwrap();
+        }
+        unsafe { (*super::Node::page(s.pages.first)).pause_integrity_checks(false) };
+        assert_eq!(1usize, s.total_pages());
+        s.grow_rows(1).unwrap();
+        assert_eq!(2usize, s.total_pages());
+
+        // We now have two pages.
+        assert!(!core::ptr::eq(s.pages.first, s.pages.last));
+        assert!(core::ptr::eq(s.pages.last, unsafe {
+            (*s.pages.first).next
+        }));
+    }
+
+    // We use all grapheme alloc capacity with four maximum-sized graphemes on
+    // each page. The two rows form one wrapped logical line across the page
+    // boundary, so resizing wider moves all eight graphemes into one page and
+    // requires almost two times the base grapheme alloc capacity.
+    //
+    // This forces the reflow to increase capacity.
+    //
+    //  +----+ = PAGE 0
+    //  :  :
+    //  |XXXX| <- four capped graphemes in one wrapped row.
+    //  +----+
+    //  +----+ = PAGE 1
+    //  |XXXX| <- four more capped graphemes continue the logical line.
+    //  +----+
+
+    // const suffixes: [pagepkg.grapheme_max_len]u21 = @splat('a');
+    let suffixes: Vec<u32> = vec!['a' as u32; crate::page::GRAPHEME_MAX_LEN];
+
+    // Fill the final row of the first page and mark it as wrapped.
+    {
+        let page = unsafe { super::Node::page(s.pages.first) };
+        let y = unsafe { (*page).size.rows } as usize - 1;
+        let row = unsafe { (*page).get_row(y) };
+        unsafe { (*row).set_wrap(true) };
+
+        for x in 0..unsafe { (*page).size.cols } as usize {
+            let rac = unsafe { (*page).get_row_and_cell(x, y) };
+            unsafe {
+                *rac.cell = cell_codepoint('X' as u32);
+            }
+            unsafe { (*page).set_graphemes(rac.row, rac.cell, &suffixes) }.unwrap();
+        }
+        let base = unsafe { (*page).memory_ptr() };
+        assert_eq!(unsafe { (*page).grapheme_alloc.capacity_bytes() }, unsafe {
+            (*page).grapheme_alloc.used_bytes(base)
+        });
         assert!(unsafe { (*page).grapheme_alloc.alloc::<u32, _>(base, 16) }.is_err());
     }
 
-    // Almost hit grapheme alloc cap in top left of second page.
-    // Mark the first row as a wrap continuation.
+    // Fill the first row of the second page and mark it as a continuation.
     {
         let page = unsafe { super::Node::page(s.pages.last) };
-        let rac = unsafe { (*page).get_row_and_cell(0, 0) };
-        unsafe {
-            (*rac.row).set_wrap(true);
-            *rac.cell = cell_codepoint('X' as u32);
+        let row = unsafe { (*page).get_row(0) };
+        unsafe { (*row).set_wrap_continuation(true) };
+
+        for x in 0..unsafe { (*page).size.cols } as usize {
+            let rac = unsafe { (*page).get_row_and_cell(x, 0) };
+            unsafe {
+                *rac.cell = cell_codepoint('X' as u32);
+            }
+            unsafe { (*page).set_graphemes(rac.row, rac.cell, &suffixes) }.unwrap();
         }
-        unsafe { (*page).set_graphemes(rac.row, rac.cell, &grapheme_cps) }.unwrap();
         let base = unsafe { (*page).memory_ptr() };
         assert!(unsafe { (*page).grapheme_alloc.alloc::<u32, _>(base, 16) }.is_err());
     }

@@ -2856,7 +2856,7 @@ where
         }
     }
 
-    /// Queue a message for the IO thread.
+    /// Queue a message for the IO thread, taking ownership of `msg`.
     ///
     /// We centralize all our logic into this spot so we can intercept
     /// messages for example in readonly mode.
@@ -6532,16 +6532,17 @@ where
             // move this behavior to the apprt probably.
             // if (self.child_exited) {
             if self.child_exited {
+                // write_req.deinit();
+                //
+                // (Drop-owned `WriteReq` — freed by the return below.)
                 // self.close();
                 self.close();
                 // return .closed;
                 return Ok(InputEffect::Closed);
             }
 
-            // errdefer write_req.deinit();
-            //
-            // (Drop-owned `WriteReq`; `queueIo` cannot fail, the errdefer
-            // never fires.)
+            // (the reference's former `errdefer write_req.deinit()` is gone:
+            // `queueIo` takes ownership of the message and cannot fail.)
             // self.queueIo(switch (write_req) {
             self.queueIo(
                 match write_req {
@@ -6738,19 +6739,26 @@ where
         let leaf: binding::GenericLeaf = match unsafe { &*entry.0 }.value_at(entry.1) {
             // .leader => |set| {
             binding::Value::Leader(set) => {
-                // Setup the next set we'll look at.
-                // self.keyboard.sequence_set = set;
-                self.keyboard.sequence_set = Some(&**set as *const binding::Set);
-
                 // Store this event so that we can drain and encode on invalid.
                 // We don't need to cap this because it is naturally capped by
                 // the config validation.
                 // if (try self.encodeKey(event, insp_ev)) |req| {
-                //     try self.keyboard.sequence_queued.append(self.alloc, req);
+                //     self.keyboard.sequence_queued.append(self.alloc, req) catch |err| {
+                //         req.deinit();
+                //         return err;
+                //     };
                 // }
+                //
+                // (the append `catch` collapses: Vec `push` cannot fail, and
+                // `req` is Drop-owned so the reference's on-error `req.deinit()`
+                // has no counterpart.)
                 if let Some(req) = self.encodeKey(event, insp_ev.as_deref_mut())? {
                     self.keyboard.sequence_queued.push(req);
                 }
+
+                // Setup the next set we'll look at only after all fallible work.
+                // self.keyboard.sequence_set = set;
+                self.keyboard.sequence_set = Some(&**set as *const binding::Set);
 
                 // Start or continue our key sequence
                 // _ = self.rt_app.performAction(
