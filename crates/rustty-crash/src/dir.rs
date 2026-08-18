@@ -14,23 +14,22 @@ use rustty_os as internal_os;
 
 /// Returns a Dir for the default directory. The Dir.path field must be
 /// freed with the given allocator.
-// PORT NOTE: `pub fn defaultDir(alloc: Allocator) !Dir` — the allocator parameter
-// collapses (Rust's String owns/frees its allocation; break #1 keeps
-// rustty-global injected, not a hard dep). Error set = the xdg lookup's.
-pub fn defaultDir() -> Result<Dir, internal_os::xdg::DirError> {
-    // const crash_dir = try internal_os.xdg.state(alloc, .{ .subdir = "ghostty/crash" });
+// PORT NOTE (P4-E33, `15c50c1db` "crash: do not use global state"):
+//   pub fn defaultDir(io: std.Io, alloc: Allocator, environ_map: *const std.process.Environ.Map) !Dir
+// The `environ_map` parameter is the semantic core: the CALLER supplies the
+// environment snapshot; this file no longer imports `global` and performs no
+// live environment reads. The `io: std.Io` parameter is N-A (Rust std does I/O
+// without a provider handle) and the allocator parameter collapses (Rust's
+// String owns/frees its allocation). Error set = the xdg lookup's.
+pub fn defaultDir(environ_map: &rustty_global::EnvMap) -> Result<Dir, internal_os::xdg::DirError> {
+    // const crash_dir = try internal_os.xdg.state(io, alloc, environ_map, .{ .subdir = "ghostty/crash" });
     // (R2: the app-name segment of the `"ghostty/crash"` subdir is sourced from
     // rustty-identity, the identity source-of-truth crate, not hardcoded.)
     let subdir = format!("{}/crash", rustty_identity::APP_NAME);
-    // PORT NOTE (P3-W7 T3 / area-E `E15`):
-    //   var environ_map = try global.environMap();
-    //   defer environ_map.deinit();
-    //   const crash_dir = try internal_os.xdg.state(alloc, &environ_map, ..);
-    let environ_map = rustty_global::environ_map();
     // (W94-B02-01: `xdg::state` is byte-typed — raw path bytes in and out, so
     // a non-UTF-8 `XDG_STATE_HOME` is honored as in the reference.)
     let crash_dir = internal_os::xdg::state(
-        &environ_map,
+        environ_map,
         internal_os::xdg::Options {
             subdir: Some(subdir.as_bytes()),
             ..Default::default()
@@ -53,8 +52,12 @@ impl Dir {
     /// Returns an iterator over the crash reports in this directory. This
     /// iterator must be freed with `ReportIterator.deinit`. The iterator
     /// may have no reports.
+    // PORT NOTE (P4-E33, `15c50c1db`): `iterator`/`deinit`/`next` grew a
+    // `io: std.Io` parameter upstream (previously `global.io()`); N-A here —
+    // Rust std does I/O without a provider handle, so no global read to remove.
     pub fn iterator(&self) -> std::io::Result<ReportIterator> {
-        // var dir = std.fs.openDirAbsolute(
+        // var dir = std.Io.Dir.openDirAbsolute(
+        //     io,
         //     self.path,
         //     .{ .iterate = true },
         // ) catch return .{};
@@ -62,7 +65,7 @@ impl Dir {
             Ok(dir) => dir,
             Err(_) => return Ok(ReportIterator::default()),
         };
-        // errdefer dir.close(); — Drop closes the handle on every path.
+        // errdefer dir.close(io); — Drop closes the handle on every path.
 
         // return .{
         //     .dir = dir,
@@ -82,12 +85,13 @@ pub struct ReportIterator {
 
 impl ReportIterator {
     pub fn deinit(&mut self) {
-        // if (self.dir) |dir| dir.close();
+        // if (self.dir) |dir| dir.close(io);
         self.dir = None;
     }
 
-    // PORT NOTE: `pub fn next(self: *ReportIterator) !?Report` — an inherent `next`
-    // (NOT Iterator::next; the fallible `!?Report` shape doesn't fit the trait).
+    // PORT NOTE: `pub fn next(self: *ReportIterator, io: std.Io) !?Report` — an
+    // inherent `next` (NOT Iterator::next; the fallible `!?Report` shape doesn't
+    // fit the trait). The `io` parameter is N-A (see `iterator` above).
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> std::io::Result<Option<Report>> {
         // If we have no dir then we failed to open the directory.
@@ -99,7 +103,7 @@ impl ReportIterator {
 
         // Get the next file entry, if any.
         let entry = loop {
-            // const entry = try self.it.next() orelse return null;
+            // const entry = try self.it.next(io) orelse return null;
             let entry = match dir.next() {
                 Some(entry) => entry?,
                 None => return Ok(None),
@@ -111,14 +115,14 @@ impl ReportIterator {
             break entry;
         };
 
-        // const stat = try dir.statFile(entry.name);
+        // const stat = try dir.statFile(io, entry.name, .{});
         let stat = std::fs::metadata(entry.path())?;
         Ok(Some(Report {
             // PORT NOTE: the reference's `entry.name` is a borrow into the iterator
             // (invalidated by the next `next()`); Rust owns the bytes.
             name: entry.file_name().into_encoded_bytes(),
-            // PORT NOTE: `stat.mtime` — Zig reports nanoseconds since the epoch as
-            // an i128 (negative for pre-epoch times).
+            // PORT NOTE: `stat.mtime.toNanoseconds()` — Zig reports nanoseconds
+            // since the epoch as an i128 (negative for pre-epoch times).
             mtime: mtime_nanos(stat.modified()?),
         }))
     }
@@ -144,8 +148,9 @@ pub(crate) fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
     std::ffi::OsStr::new(std::str::from_utf8(bytes).unwrap_or(""))
 }
 
-// PORT NOTE: helper: Zig `std.fs.Dir.statFile(...).mtime` is signed nanoseconds
-// since the Unix epoch; `SystemTime` is converted to the same representation.
+// PORT NOTE: helper: Zig `std.Io.Dir.statFile(...).mtime.toNanoseconds()` is
+// signed nanoseconds since the Unix epoch; `SystemTime` is converted to the
+// same representation.
 fn mtime_nanos(mtime: std::time::SystemTime) -> i128 {
     match mtime.duration_since(std::time::UNIX_EPOCH) {
         Ok(d) => d.as_nanos() as i128,

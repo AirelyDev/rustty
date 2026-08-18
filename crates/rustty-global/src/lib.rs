@@ -358,13 +358,17 @@ impl<Action, ResourcesDir> GlobalState<Action, ResourcesDir> {
     //     // As early as possible, initialize our resource limits.
     //     self.rlimits = .init();
     //
-    //     // Initialize our crash reporting.
-    //     crash.init(self.alloc) catch |err| {
-    //         std.log.warn(
-    //             "sentry init failed, no crash capture available err={}",
-    //             .{err},
-    //         );
-    //     };
+    //     if (build_options.sentry) {
+    //         // Initialize our crash reporting. The environ map snapshot is
+    //         // owned by crash.init (it is freed by the init thread).
+    //         const environ_map = try self.environ.createMap(self.alloc);
+    //         crash.init(self.alloc, environ_map) catch |err| {
+    //             std.log.warn(
+    //                 "sentry init failed, no crash capture available err={}",
+    //                 .{err},
+    //             );
+    //         };
+    //     }
     //
     //     // const sentrylib = @import("sentry");
     //     // if (sentrylib.captureEvent(sentrylib.Value.initMessageEvent(

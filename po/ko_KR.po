@@ -2,14 +2,16 @@
 # Copyright (C) 2025 Mitchell Hashimoto
 # This file is distributed under the same license as the io.airely.rustty package.
 # Ruben Engelbrecht <hey@rme.gg>, 2025.
+# GyuYong Jung <obliviscence@gmail.com>, 2026.
+# dobbylee <leekw1245@gmail.com>, 2026.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: io.airely.rustty\n"
 "Report-Msgid-Bugs-To: gael@airely.io\n"
-"POT-Creation-Date: 2026-07-31 03:57-0700\n"
-"PO-Revision-Date: 2026-02-11 12:50+0900\n"
-"Last-Translator: GyuYong Jung <obliviscence@gmail.com>\n"
+"POT-Creation-Date: 2026-08-10 10:06-0500\n"
+"PO-Revision-Date: 2026-08-14 23:43+0900\n"
+"Last-Translator: dobbylee <leekw1245@gmail.com>\n"
 "Language-Team: Korean <translation-team-ko@googlegroups.com>\n"
 "Language: ko\n"
 "MIME-Version: 1.0\n"
@@ -21,193 +23,19 @@ msgstr ""
 msgid "Open in Rustty"
 msgstr "Rustty에서 열기"
 
-#: crates/rustty-apprt/assets/ui/1.2/close-confirmation-dialog.blp:7
-#: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:8
-msgid "Cancel"
-msgstr "취소"
-
-#: crates/rustty-apprt/assets/ui/1.2/close-confirmation-dialog.blp:8
-#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:85
-#: crates/rustty-apprt/assets/ui/1.3/surface-child-exited.blp:17
-msgid "Close"
-msgstr "닫기"
-
-#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:6
-msgid "Configuration Errors"
-msgstr "설정 오류"
-
-#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:7
-msgid ""
-"One or more configuration errors were found. Please review the errors below, "
-"and either reload your configuration or ignore these errors."
-msgstr ""
-"설정에 하나 이상의 문제가 발견되었습니다. 아래 오류를 확인한 후 설정을 다시 "
-"불러오거나 무시하세요."
-
-#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:10
-msgid "Ignore"
-msgstr "무시"
-
-#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:11
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:373
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:300
-msgid "Reload Configuration"
-msgstr "설정 값 다시 불러오기"
-
-#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:29
-msgid "Find…"
-msgstr "찾기…"
-
-#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:64
-msgid "Previous Match"
-msgstr "이전 결과"
-
-#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:74
-msgid "Next Match"
-msgstr "다음 결과"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:6
-msgid "Oh, no."
-msgstr "이런!"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:7
-msgid "Unable to acquire an OpenGL context for rendering."
-msgstr "렌더링을 위한 OpenGL 컨텍스트를 가져올 수 없습니다."
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:99
-msgid ""
-"This terminal is in read-only mode. You can still view, select, and scroll "
-"through the content, but no input events will be sent to the running "
-"application."
-msgstr ""
-"이 터미널은 읽기 전용 모드입니다. 콘텐츠를 보고 선택하고 스크롤할 수는 있지"
-"만 실행 중인 애플리케이션으로 입력 이벤트가 전송되지 않습니다."
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:109
-msgid "Read-only"
-msgstr "읽기 전용"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:262
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:200
-msgid "Copy"
-msgstr "복사"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:267
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:205
-msgid "Paste"
-msgstr "붙여넣기"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:272
-msgid "Notify on Next Command Finish"
-msgstr "다음 명령 완료 시 알림"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:279
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:273
-msgid "Clear"
-msgstr "지우기"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:284
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:278
-msgid "Reset"
-msgstr "초기화"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:291
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:242
-msgid "Split"
-msgstr "나누기"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:294
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:245
-msgid "Change Title…"
-msgstr "제목 변경…"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:299
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:177
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:250
-msgid "Split Up"
-msgstr "위로 창 나누기"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:305
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:182
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:255
-msgid "Split Down"
-msgstr "아래로 창 나누기"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:311
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:187
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:260
-msgid "Split Left"
-msgstr "왼쪽으로 창 나누기"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:317
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:192
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:265
-msgid "Split Right"
-msgstr "오른쪽으로 창 나누기"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:323
-msgid "Close Split"
-msgstr ""
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:329
-msgid "Tab"
-msgstr "탭"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:332
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:224
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:320
-msgid "Change Tab Title…"
-msgstr "탭 제목 변경…"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:337
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:57
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:107
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:229
-msgid "New Tab"
-msgstr "새 탭"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:342
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:234
-msgid "Close Tab"
-msgstr "탭 닫기"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:349
-msgid "Window"
-msgstr "창"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:352
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:212
-msgid "New Window"
-msgstr "새 창"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:357
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:217
-msgid "Close Window"
-msgstr "창 닫기"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:365
-msgid "Config"
-msgstr "설정"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:368
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:295
-msgid "Open Configuration"
-msgstr "설정 열기"
-
-#: crates/rustty-apprt/assets/ui/1.3/debug-warning.blp:6
-msgid "⚠️ You're running a debug build of Rustty! Performance will be degraded."
-msgstr "⚠️ Rustty 디버그 빌드로 실행 중입니다! 성능이 저하됩니다."
-
+#: crates/rustty-apprt/assets/ui/1.0/clipboard-confirmation-dialog.blp:12
 #: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:12
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:269
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:273
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:197
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:201
 msgid "Authorize Clipboard Access"
 msgstr "클립보드 액세스 권한 부여"
 
+#: crates/rustty-apprt/assets/ui/1.0/clipboard-confirmation-dialog.blp:17
 #: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:17
 msgid "Deny"
 msgstr "거부"
 
+#: crates/rustty-apprt/assets/ui/1.0/clipboard-confirmation-dialog.blp:18
 #: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:18
 msgid "Allow"
 msgstr "허용"
@@ -220,13 +48,183 @@ msgstr "이 분할에 대한 선택 기억하기"
 msgid "Reload configuration to show this prompt again"
 msgstr "이 창을 다시 보려면 설정을 다시 불러오세요"
 
-#: crates/rustty-apprt/assets/ui/1.5/command-palette.blp:17
-msgid "Execute a command…"
-msgstr "명령을 실행하세요…"
+#: crates/rustty-apprt/assets/ui/1.2/close-confirmation-dialog.blp:7
+#: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:8
+#: crates/rustty-apprt/src/gtk/class/application.rs:2263
+msgid "Cancel"
+msgstr "취소"
+
+#: crates/rustty-apprt/assets/ui/1.2/close-confirmation-dialog.blp:8
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:90
+#: crates/rustty-apprt/assets/ui/1.3/surface-child-exited.blp:17
+msgid "Close"
+msgstr "닫기"
+
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:6
+msgid "Configuration Errors"
+msgstr "설정 오류"
+
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:8
+msgid ""
+"One or more configuration errors were found. Please review the errors below, "
+"and either reload your configuration or ignore these errors."
+msgstr ""
+"설정에 하나 이상의 문제가 발견되었습니다. 아래 오류를 확인한 후 설정을 다시 "
+"불러오거나 무시하세요."
+
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:12
+msgid "Ignore"
+msgstr "무시"
+
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:13
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:439 crates/rustty-apprt/assets/ui/1.5/window.blp:318
+msgid "Reload Configuration"
+msgstr "설정 값 다시 불러오기"
+
+#: crates/rustty-apprt/assets/ui/1.2/debug-warning.blp:7
+#: crates/rustty-apprt/assets/ui/1.3/debug-warning.blp:6
+msgid ""
+"⚠️ You're running a debug build of Rustty! Performance will be degraded."
+msgstr "⚠️ Rustty 디버그 빌드로 실행 중입니다! 성능이 저하됩니다."
 
 #: crates/rustty-apprt/assets/ui/1.5/inspector-window.blp:5
 msgid "Rustty: Terminal Inspector"
 msgstr "Rustty: 터미널 인스펙터"
+
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:29
+msgid "Find…"
+msgstr "찾기…"
+
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:69
+msgid "Previous Match"
+msgstr "이전 결과"
+
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:79
+msgid "Next Match"
+msgstr "다음 결과"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:7
+msgid "Oh, no."
+msgstr "이런!"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:8
+msgid "Unable to acquire an OpenGL context for rendering."
+msgstr "렌더링을 위한 OpenGL 컨텍스트를 가져올 수 없습니다."
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:101
+msgid ""
+"This terminal is in read-only mode. You can still view, select, and scroll "
+"through the content, but no input events will be sent to the running "
+"application."
+msgstr ""
+"이 터미널은 읽기 전용 모드입니다. 콘텐츠를 보고 선택하고 스크롤할 수는 있지"
+"만 실행 중인 애플리케이션으로 입력 이벤트가 전송되지 않습니다."
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:112
+msgid "Read-only"
+msgstr "읽기 전용"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:316 crates/rustty-apprt/assets/ui/1.5/window.blp:203
+msgid "Copy"
+msgstr "복사"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:321 crates/rustty-apprt/assets/ui/1.5/window.blp:208
+msgid "Paste"
+msgstr "붙여넣기"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:326
+msgid "Notify on Next Command Finish"
+msgstr "다음 명령 완료 시 알림"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:333 crates/rustty-apprt/assets/ui/1.5/window.blp:281
+msgid "Clear"
+msgstr "지우기"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:338 crates/rustty-apprt/assets/ui/1.5/window.blp:286
+msgid "Reset"
+msgstr "초기화"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:345 crates/rustty-apprt/assets/ui/1.5/window.blp:250
+msgid "Split"
+msgstr "나누기"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:348 crates/rustty-apprt/assets/ui/1.5/window.blp:253
+msgid "Change Title…"
+msgstr "제목 변경…"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:353 crates/rustty-apprt/assets/ui/1.5/window.blp:180
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:258 crates/rustty-input/src/command.rs:487
+msgid "Split Up"
+msgstr "위로 창 나누기"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:359 crates/rustty-apprt/assets/ui/1.5/window.blp:185
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:263 crates/rustty-input/src/command.rs:492
+msgid "Split Down"
+msgstr "아래로 창 나누기"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:365 crates/rustty-apprt/assets/ui/1.5/window.blp:190
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:268 crates/rustty-input/src/command.rs:477
+msgid "Split Left"
+msgstr "왼쪽으로 창 나누기"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:371 crates/rustty-apprt/assets/ui/1.5/window.blp:195
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:273 crates/rustty-input/src/command.rs:482
+msgid "Split Right"
+msgstr "오른쪽으로 창 나누기"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:377
+msgid "Close Split"
+msgstr "분할 닫기"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:383
+msgid "Tab"
+msgstr "탭"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:386 crates/rustty-apprt/assets/ui/1.5/window.blp:232
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:339 crates/rustty-input/src/command.rs:464
+msgid "Change Tab Title…"
+msgstr "탭 제목 변경…"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:391 crates/rustty-apprt/assets/ui/1.5/window.blp:60
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:110 crates/rustty-apprt/assets/ui/1.5/window.blp:237
+#: crates/rustty-input/src/command.rs:427
+msgid "New Tab"
+msgstr "새 탭"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:396 crates/rustty-apprt/assets/ui/1.5/window.blp:242
+#: crates/rustty-input/src/command.rs:613
+msgid "Close Tab"
+msgstr "탭 닫기"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:403
+msgid "Window"
+msgstr "창"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:406 crates/rustty-apprt/assets/ui/1.5/window.blp:215
+msgid "Change Window Title…"
+msgstr "창 제목 변경…"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:411 crates/rustty-apprt/assets/ui/1.5/window.blp:220
+#: crates/rustty-input/src/command.rs:421
+msgid "New Window"
+msgstr "새 창"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:416 crates/rustty-apprt/assets/ui/1.5/window.blp:225
+#: crates/rustty-input/src/command.rs:630
+msgid "Close Window"
+msgstr "창 닫기"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:424 crates/rustty-apprt/assets/ui/1.5/window.blp:303
+msgid "Config"
+msgstr "설정"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:427 crates/rustty-apprt/assets/ui/1.5/window.blp:306
+msgid "Open Configuration in OS Editor"
+msgstr "시스템 기본 편집기에서 설정 열기"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:433 crates/rustty-apprt/assets/ui/1.5/window.blp:312
+msgid "Open Configuration in New Window"
+msgstr "새 창에서 설정 열기"
 
 #: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:5
 msgid "Leave blank to restore the default title."
@@ -236,50 +234,63 @@ msgstr "제목란을 비워 두면 기본값으로 복원됩니다."
 msgid "OK"
 msgstr "확인"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:58
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:108
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:61 crates/rustty-apprt/assets/ui/1.5/window.blp:111
 msgid "New Split"
 msgstr "새 분할"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:68
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:126
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:71 crates/rustty-apprt/assets/ui/1.5/window.blp:129
 msgid "View Open Tabs"
 msgstr "열린 탭 보기"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:78
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:140
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:81 crates/rustty-apprt/assets/ui/1.5/window.blp:143
 msgid "Main Menu"
 msgstr "메인 메뉴"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:285
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:293
 msgid "Command Palette"
 msgstr "명령 팔레트"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:290
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:298
 msgid "Terminal Inspector"
 msgstr "터미널 인스펙터"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:307
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:326 crates/rustty-apprt/src/gtk/class/window.rs:1991
 msgid "About Rustty"
 msgstr "Rustty 정보"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:312
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:331 crates/rustty-input/src/command.rs:702
 msgid "Quit"
 msgstr "종료"
 
-#: crates/rustty-apprt/src/gtk/class/application.rs:1596
+#: crates/rustty-apprt/assets/ui/1.5/command-palette.blp:17
+msgid "Execute a command…"
+msgstr "명령을 실행하세요…"
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:1767
 msgid "The keybind was revoked by the system."
-msgstr ""
+msgstr "시스템에서 단축키 등록을 취소했습니다."
 
-#: crates/rustty-apprt/src/gtk/class/application.rs:1598
+#: crates/rustty-apprt/src/gtk/class/application.rs:1769
 msgid "The keybind was denied by the system."
-msgstr ""
+msgstr "시스템에서 단축키 등록을 거부했습니다."
 
-#: crates/rustty-apprt/src/gtk/class/application.rs:1605
+#: crates/rustty-apprt/src/gtk/class/application.rs:1780
 msgid "Global keybind unavailable"
-msgstr ""
+msgstr "전역 단축키를 사용할 수 없음"
 
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:270
+#: crates/rustty-apprt/src/gtk/class/application.rs:2259
+msgid "Export Terminal IO Events"
+msgstr "터미널 입출력 이벤트 내보내기"
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:2262
+msgid "Export"
+msgstr "내보내기"
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:2783
+msgid "Editing configuration file"
+msgstr "설정 파일 편집 중"
+
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:198
 msgid ""
 "An application is attempting to write to the clipboard. The current "
 "clipboard contents are shown below."
@@ -287,7 +298,7 @@ msgstr ""
 "응용 프로그램이 클립보드에 쓰기를 시도하고 있습니다. 현재 클립보드 내용은 아"
 "래와 같습니다."
 
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:274
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:202
 msgid ""
 "An application is attempting to read from the clipboard. The current "
 "clipboard contents are shown below."
@@ -295,11 +306,11 @@ msgstr ""
 "응용 프로그램이 클립보드에서 읽기를 시도하고 있습니다. 현재 클립보드 내용은 "
 "아래와 같습니다."
 
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:277
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:205
 msgid "Warning: Potentially Unsafe Paste"
 msgstr "경고: 잠재적으로 안전하지 않은 붙여넣기"
 
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:278
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:206
 msgid ""
 "Pasting this text into the terminal may be dangerous as it looks like some "
 "commands may be executed."
@@ -307,78 +318,797 @@ msgstr ""
 "이 텍스트를 터미널에 붙여넣으면 일부 명령이 실행될 수 있어 위험할 수 있습니"
 "다."
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:59
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:184
 msgid "Quit Rustty?"
 msgstr "Rustty를 종료하시겠습니까?"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:60
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:185
 msgid "Close Tab?"
 msgstr "탭을 닫으시겠습니까?"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:61
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:186
 msgid "Close Window?"
 msgstr "창을 닫으시겠습니까?"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:62
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:187
 msgid "Close Split?"
 msgstr "분할을 닫으시겠습니까?"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:71
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:193
 msgid "All terminal sessions will be terminated."
 msgstr "모든 터미널 세션이 종료됩니다."
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:72
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:194
 msgid "All terminal sessions in this tab will be terminated."
 msgstr "이 탭의 모든 터미널 세션이 종료됩니다."
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:73
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:195
 msgid "All terminal sessions in this window will be terminated."
 msgstr "이 창의 모든 터미널 세션이 종료됩니다."
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:75
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:196
 msgid "The currently running process in this split will be terminated."
 msgstr "이 분할에서 현재 실행 중인 프로세스가 종료됩니다."
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1934
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1181
 msgid "Command Finished"
 msgstr "명령 완료"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1935
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1182
+#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:109
 msgid "Command Succeeded"
 msgstr "명령 성공"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1936
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1183
+#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:113
 msgid "Command Failed"
 msgstr "명령 실패"
 
-#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:154
-msgid "Command succeeded"
-msgstr "명령 성공"
-
-#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:158
-msgid "Command failed"
-msgstr "명령 실패"
-
-#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:43
+#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:227
 msgid "Change Terminal Title"
 msgstr "터미널 제목 변경"
 
-#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:44
+#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:228
 msgid "Change Tab Title"
 msgstr "탭 제목 변경"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1137
-msgid "Cleared clipboard"
-msgstr "클립보드 지워짐"
+#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:229
+msgid "Change Window Title"
+msgstr "창 제목 변경"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1139
-msgid "Copied to clipboard"
-msgstr "클립보드에 복사됨"
-
-#: crates/rustty-apprt/src/gtk/class/window.rs:1931
+#: crates/rustty-apprt/src/gtk/class/window.rs:1153
 msgid "Reloaded the configuration"
 msgstr "설정값을 다시 불러왔습니다"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:2088
+#: crates/rustty-apprt/src/gtk/class/window.rs:1830
+msgid "Copied to clipboard"
+msgstr "클립보드에 복사됨"
+
+#: crates/rustty-apprt/src/gtk/class/window.rs:1832
+msgid "Cleared clipboard"
+msgstr "클립보드 지워짐"
+
+#: crates/rustty-apprt/src/gtk/class/window.rs:1972
 msgid "Rustty Developers"
 msgstr "Rustty 개발자들"
+
+#: crates/rustty-input/src/command.rs:149
+msgid "Reset Terminal"
+msgstr "터미널 초기화"
+
+#: crates/rustty-input/src/command.rs:150
+msgid "Reset the terminal to a clean state."
+msgstr "터미널을 초기 상태로 되돌립니다."
+
+#: crates/rustty-input/src/command.rs:155
+msgid "Copy to Clipboard"
+msgstr "클립보드에 복사"
+
+#: crates/rustty-input/src/command.rs:156
+msgid ""
+"Copy the selected text to the clipboard in both plain and styled formats."
+msgstr ""
+"선택한 텍스트를 일반 텍스트와 서식 있는 텍스트 형식으로 클립보드에 복사합니다."
+
+#: crates/rustty-input/src/command.rs:159
+msgid "Copy Selection as Plain Text to Clipboard"
+msgstr "선택 영역을 일반 텍스트로 클립보드에 복사"
+
+#: crates/rustty-input/src/command.rs:160
+msgid "Copy the selected text as plain text to the clipboard."
+msgstr "선택한 텍스트를 일반 텍스트로 클립보드에 복사합니다."
+
+#: crates/rustty-input/src/command.rs:163
+msgid "Copy Selection as ANSI Sequences to Clipboard"
+msgstr "선택 영역을 ANSI 시퀀스로 클립보드에 복사"
+
+#: crates/rustty-input/src/command.rs:164
+msgid "Copy the selected text as ANSI escape sequences to the clipboard."
+msgstr "선택한 텍스트를 ANSI 이스케이프 시퀀스로 클립보드에 복사합니다."
+
+#: crates/rustty-input/src/command.rs:167
+msgid "Copy Selection as HTML to Clipboard"
+msgstr "선택 영역을 HTML로 클립보드에 복사"
+
+#: crates/rustty-input/src/command.rs:168
+msgid "Copy the selected text as HTML to the clipboard."
+msgstr "선택한 텍스트를 HTML로 클립보드에 복사합니다."
+
+#: crates/rustty-input/src/command.rs:173
+msgid "Copy URL to Clipboard"
+msgstr "URL을 클립보드에 복사"
+
+#: crates/rustty-input/src/command.rs:174
+msgid "Copy the URL under the cursor to the clipboard."
+msgstr "마우스 커서가 가리키는 URL을 클립보드에 복사합니다."
+
+#: crates/rustty-input/src/command.rs:179
+msgid "Copy Terminal Title to Clipboard"
+msgstr "터미널 제목을 클립보드에 복사"
+
+#: crates/rustty-input/src/command.rs:180
+msgid ""
+"Copy the terminal title to the clipboard. If the terminal title is not set "
+"this has no effect."
+msgstr ""
+"터미널 제목을 클립보드에 복사합니다. 터미널 제목이 설정되지 않은 경우에는 "
+"아무 작업도 하지 않습니다."
+
+#: crates/rustty-input/src/command.rs:185
+msgid "Paste from Clipboard"
+msgstr "클립보드에서 붙여넣기"
+
+#: crates/rustty-input/src/command.rs:186
+msgid "Paste the contents of the main clipboard."
+msgstr "기본 클립보드의 내용을 붙여넣습니다."
+
+#: crates/rustty-input/src/command.rs:191
+msgid "Paste from Selection"
+msgstr "선택 클립보드에서 붙여넣기"
+
+#: crates/rustty-input/src/command.rs:192
+msgid "Paste the contents of the selection clipboard."
+msgstr "선택 클립보드의 내용을 붙여넣습니다."
+
+#: crates/rustty-input/src/command.rs:197
+msgid "Start Search"
+msgstr "검색 시작"
+
+#: crates/rustty-input/src/command.rs:198
+msgid "Start a search if one isn't already active."
+msgstr "진행 중인 검색이 없으면 검색을 시작합니다."
+
+#: crates/rustty-input/src/command.rs:203
+msgid "Search Selection"
+msgstr "선택 영역 검색"
+
+#: crates/rustty-input/src/command.rs:204
+msgid "Start a search for the current text selection."
+msgstr "현재 선택한 텍스트를 검색합니다."
+
+#: crates/rustty-input/src/command.rs:209
+msgid "End Search"
+msgstr "검색 종료"
+
+#: crates/rustty-input/src/command.rs:210
+msgid "End the current search if any and hide any GUI elements."
+msgstr "진행 중인 검색을 종료하고 관련 화면 요소를 숨깁니다."
+
+#: crates/rustty-input/src/command.rs:215
+msgid "Next Search Result"
+msgstr "다음 검색 결과"
+
+#: crates/rustty-input/src/command.rs:216
+msgid "Navigate to the next search result, if any."
+msgstr "다음 검색 결과가 있으면 해당 결과로 이동합니다."
+
+#: crates/rustty-input/src/command.rs:219
+msgid "Previous Search Result"
+msgstr "이전 검색 결과"
+
+#: crates/rustty-input/src/command.rs:220
+msgid "Navigate to the previous search result, if any."
+msgstr "이전 검색 결과가 있으면 해당 결과로 이동합니다."
+
+#: crates/rustty-input/src/command.rs:225
+msgid "Increase Font Size"
+msgstr "글꼴 크기 키우기"
+
+#: crates/rustty-input/src/command.rs:226
+msgid "Increase the font size by 1 point."
+msgstr "글꼴 크기를 1포인트 키웁니다."
+
+#: crates/rustty-input/src/command.rs:231
+msgid "Decrease Font Size"
+msgstr "글꼴 크기 줄이기"
+
+#: crates/rustty-input/src/command.rs:232
+msgid "Decrease the font size by 1 point."
+msgstr "글꼴 크기를 1포인트 줄입니다."
+
+#: crates/rustty-input/src/command.rs:237
+msgid "Reset Font Size"
+msgstr "글꼴 크기 초기화"
+
+#: crates/rustty-input/src/command.rs:238
+msgid "Reset the font size to the default."
+msgstr "글꼴 크기를 기본값으로 되돌립니다."
+
+#: crates/rustty-input/src/command.rs:243
+msgid "Clear Screen"
+msgstr "화면 지우기"
+
+#: crates/rustty-input/src/command.rs:244
+msgid "Clear the screen and scrollback."
+msgstr "화면과 스크롤백을 지웁니다."
+
+#: crates/rustty-input/src/command.rs:249
+msgid "Select All"
+msgstr "모두 선택"
+
+#: crates/rustty-input/src/command.rs:250
+msgid "Select all text on the screen."
+msgstr "화면의 모든 텍스트를 선택합니다."
+
+#: crates/rustty-input/src/command.rs:255
+msgid "Scroll to Top"
+msgstr "맨 위로 스크롤"
+
+#: crates/rustty-input/src/command.rs:256
+msgid "Scroll to the top of the screen."
+msgstr "화면 맨 위로 스크롤합니다."
+
+#: crates/rustty-input/src/command.rs:261
+msgid "Scroll to Bottom"
+msgstr "맨 아래로 스크롤"
+
+#: crates/rustty-input/src/command.rs:262
+msgid "Scroll to the bottom of the screen."
+msgstr "화면 맨 아래로 스크롤합니다."
+
+#: crates/rustty-input/src/command.rs:267
+msgid "Scroll to Selection"
+msgstr "선택 영역으로 스크롤"
+
+#: crates/rustty-input/src/command.rs:268
+msgid "Scroll to the selected text."
+msgstr "선택한 텍스트가 있는 위치로 스크롤합니다."
+
+#: crates/rustty-input/src/command.rs:273
+msgid "Scroll Page Up"
+msgstr "한 페이지 위로 스크롤"
+
+#: crates/rustty-input/src/command.rs:274
+msgid "Scroll the screen up by a page."
+msgstr "화면을 한 페이지 위로 스크롤합니다."
+
+#: crates/rustty-input/src/command.rs:279
+msgid "Scroll Page Down"
+msgstr "한 페이지 아래로 스크롤"
+
+#: crates/rustty-input/src/command.rs:280
+msgid "Scroll the screen down by a page."
+msgstr "화면을 한 페이지 아래로 스크롤합니다."
+
+#: crates/rustty-input/src/command.rs:286
+msgid "Copy Screen to Temporary File and Copy Path"
+msgstr "화면을 임시 파일에 저장하고 경로 복사"
+
+#: crates/rustty-input/src/command.rs:287
+msgid ""
+"Copy the screen contents to a temporary file and copy the path to the "
+"clipboard."
+msgstr "화면 내용을 임시 파일에 저장하고 파일 경로를 클립보드에 복사합니다."
+
+#: crates/rustty-input/src/command.rs:291
+msgid "Copy Screen to Temporary File and Paste Path"
+msgstr "화면을 임시 파일에 저장하고 경로 붙여넣기"
+
+#: crates/rustty-input/src/command.rs:292
+msgid ""
+"Copy the screen contents to a temporary file and paste the path to the file."
+msgstr "화면 내용을 임시 파일에 저장하고 파일 경로를 붙여넣습니다."
+
+#: crates/rustty-input/src/command.rs:296
+msgid "Copy Screen to Temporary File and Open"
+msgstr "화면을 임시 파일에 저장하고 열기"
+
+#: crates/rustty-input/src/command.rs:297
+msgid "Copy the screen contents to a temporary file and open it."
+msgstr "화면 내용을 임시 파일에 저장하고 파일을 엽니다."
+
+#: crates/rustty-input/src/command.rs:305
+msgid "Copy Screen as HTML to Temporary File and Copy Path"
+msgstr "화면을 HTML 형식으로 임시 파일에 저장하고 경로 복사"
+
+#: crates/rustty-input/src/command.rs:306
+msgid ""
+"Copy the screen contents as HTML to a temporary file and copy the path to "
+"the clipboard."
+msgstr "화면 내용을 HTML 형식으로 임시 파일에 저장하고 파일 경로를 클립보드에 복사합니다."
+
+#: crates/rustty-input/src/command.rs:313
+msgid "Copy Screen as HTML to Temporary File and Paste Path"
+msgstr "화면을 HTML 형식으로 임시 파일에 저장하고 경로 붙여넣기"
+
+#: crates/rustty-input/src/command.rs:314
+msgid ""
+"Copy the screen contents as HTML to a temporary file and paste the path to "
+"the file."
+msgstr "화면 내용을 HTML 형식으로 임시 파일에 저장하고 파일 경로를 붙여넣습니다."
+
+#: crates/rustty-input/src/command.rs:321
+msgid "Copy Screen as HTML to Temporary File and Open"
+msgstr "화면을 HTML 형식으로 임시 파일에 저장하고 열기"
+
+#: crates/rustty-input/src/command.rs:322
+msgid "Copy the screen contents as HTML to a temporary file and open it."
+msgstr "화면 내용을 HTML 형식으로 임시 파일에 저장하고 파일을 엽니다."
+
+#: crates/rustty-input/src/command.rs:330
+msgid "Copy Screen as ANSI Sequences to Temporary File and Copy Path"
+msgstr "화면을 ANSI 시퀀스로 임시 파일에 저장하고 경로 복사"
+
+#: crates/rustty-input/src/command.rs:331
+msgid ""
+"Copy the screen contents as ANSI escape sequences to a temporary file and "
+"copy the path to the clipboard."
+msgstr ""
+"화면 내용을 ANSI 이스케이프 시퀀스로 임시 파일에 저장하고 파일 경로를 "
+"클립보드에 복사합니다."
+
+#: crates/rustty-input/src/command.rs:338
+msgid "Copy Screen as ANSI Sequences to Temporary File and Paste Path"
+msgstr "화면을 ANSI 시퀀스로 임시 파일에 저장하고 경로 붙여넣기"
+
+#: crates/rustty-input/src/command.rs:339
+msgid ""
+"Copy the screen contents as ANSI escape sequences to a temporary file and "
+"paste the path to the file."
+msgstr ""
+"화면 내용을 ANSI 이스케이프 시퀀스로 임시 파일에 저장하고 파일 경로를 "
+"붙여넣습니다."
+
+#: crates/rustty-input/src/command.rs:346
+msgid "Copy Screen as ANSI Sequences to Temporary File and Open"
+msgstr "화면을 ANSI 시퀀스로 임시 파일에 저장하고 열기"
+
+#: crates/rustty-input/src/command.rs:347
+msgid ""
+"Copy the screen contents as ANSI escape sequences to a temporary file and "
+"open it."
+msgstr "화면 내용을 ANSI 이스케이프 시퀀스로 임시 파일에 저장하고 파일을 엽니다."
+
+#: crates/rustty-input/src/command.rs:354
+msgid "Copy Selection to Temporary File and Copy Path"
+msgstr "선택 영역을 임시 파일에 저장하고 경로 복사"
+
+#: crates/rustty-input/src/command.rs:355
+msgid ""
+"Copy the selection contents to a temporary file and copy the path to the "
+"clipboard."
+msgstr "선택 영역을 임시 파일에 저장하고 파일 경로를 클립보드에 복사합니다."
+
+#: crates/rustty-input/src/command.rs:359
+msgid "Copy Selection to Temporary File and Paste Path"
+msgstr "선택 영역을 임시 파일에 저장하고 경로 붙여넣기"
+
+#: crates/rustty-input/src/command.rs:360
+msgid ""
+"Copy the selection contents to a temporary file and paste the path to the "
+"file."
+msgstr "선택 영역을 임시 파일에 저장하고 파일 경로를 붙여넣습니다."
+
+#: crates/rustty-input/src/command.rs:364
+msgid "Copy Selection to Temporary File and Open"
+msgstr "선택 영역을 임시 파일에 저장하고 열기"
+
+#: crates/rustty-input/src/command.rs:365
+msgid "Copy the selection contents to a temporary file and open it."
+msgstr "선택 영역을 임시 파일에 저장하고 파일을 엽니다."
+
+#: crates/rustty-input/src/command.rs:373
+msgid "Copy Selection as HTML to Temporary File and Copy Path"
+msgstr "선택 영역을 HTML 형식으로 임시 파일에 저장하고 경로 복사"
+
+#: crates/rustty-input/src/command.rs:374
+msgid ""
+"Copy the selection contents as HTML to a temporary file and copy the path to "
+"the clipboard."
+msgstr "선택 영역을 HTML 형식으로 임시 파일에 저장하고 파일 경로를 클립보드에 복사합니다."
+
+#: crates/rustty-input/src/command.rs:381
+msgid "Copy Selection as HTML to Temporary File and Paste Path"
+msgstr "선택 영역을 HTML 형식으로 임시 파일에 저장하고 경로 붙여넣기"
+
+#: crates/rustty-input/src/command.rs:382
+msgid ""
+"Copy the selection contents as HTML to a temporary file and paste the path "
+"to the file."
+msgstr "선택 영역을 HTML 형식으로 임시 파일에 저장하고 파일 경로를 붙여넣습니다."
+
+#: crates/rustty-input/src/command.rs:389
+msgid "Copy Selection as HTML to Temporary File and Open"
+msgstr "선택 영역을 HTML 형식으로 임시 파일에 저장하고 열기"
+
+#: crates/rustty-input/src/command.rs:390
+msgid "Copy the selection contents as HTML to a temporary file and open it."
+msgstr "선택 영역을 HTML 형식으로 임시 파일에 저장하고 파일을 엽니다."
+
+#: crates/rustty-input/src/command.rs:398
+msgid "Copy Selection as ANSI Sequences to Temporary File and Copy Path"
+msgstr "선택 영역을 ANSI 시퀀스로 임시 파일에 저장하고 경로 복사"
+
+#: crates/rustty-input/src/command.rs:399
+msgid ""
+"Copy the selection contents as ANSI escape sequences to a temporary file and "
+"copy the path to the clipboard."
+msgstr ""
+"선택 영역을 ANSI 이스케이프 시퀀스로 임시 파일에 저장하고 파일 경로를 "
+"클립보드에 복사합니다."
+
+#: crates/rustty-input/src/command.rs:406
+msgid "Copy Selection as ANSI Sequences to Temporary File and Paste Path"
+msgstr "선택 영역을 ANSI 시퀀스로 임시 파일에 저장하고 경로 붙여넣기"
+
+#: crates/rustty-input/src/command.rs:407
+msgid ""
+"Copy the selection contents as ANSI escape sequences to a temporary file and "
+"paste the path to the file."
+msgstr ""
+"선택 영역을 ANSI 이스케이프 시퀀스로 임시 파일에 저장하고 파일 경로를 "
+"붙여넣습니다."
+
+#: crates/rustty-input/src/command.rs:414
+msgid "Copy Selection as ANSI Sequences to Temporary File and Open"
+msgstr "선택 영역을 ANSI 시퀀스로 임시 파일에 저장하고 열기"
+
+#: crates/rustty-input/src/command.rs:415
+msgid ""
+"Copy the selection contents as ANSI escape sequences to a temporary file and "
+"open it."
+msgstr "선택 영역을 ANSI 이스케이프 시퀀스로 임시 파일에 저장하고 파일을 엽니다."
+
+#: crates/rustty-input/src/command.rs:422
+msgid "Open a new window."
+msgstr "새 창을 엽니다."
+
+#: crates/rustty-input/src/command.rs:428
+msgid "Open a new tab."
+msgstr "새 탭을 엽니다."
+
+#: crates/rustty-input/src/command.rs:434
+msgid "Move Tab Left"
+msgstr "탭을 왼쪽으로 이동"
+
+#: crates/rustty-input/src/command.rs:435
+msgid "Move the current tab to the left."
+msgstr "현재 탭을 왼쪽으로 이동합니다."
+
+#: crates/rustty-input/src/command.rs:439
+msgid "Move Tab Right"
+msgstr "탭을 오른쪽으로 이동"
+
+#: crates/rustty-input/src/command.rs:440
+msgid "Move the current tab to the right."
+msgstr "현재 탭을 오른쪽으로 이동합니다."
+
+#: crates/rustty-input/src/command.rs:446
+msgid "Move Tab to New Window"
+msgstr "탭을 새 창으로 이동"
+
+#: crates/rustty-input/src/command.rs:447
+msgid "Move the current tab to a new window."
+msgstr "현재 탭을 새 창으로 이동합니다."
+
+#: crates/rustty-input/src/command.rs:452
+msgid "Toggle Tab Overview"
+msgstr "탭 개요 표시 전환"
+
+#: crates/rustty-input/src/command.rs:453
+msgid "Toggle the tab overview."
+msgstr "탭 개요를 표시하거나 숨깁니다."
+
+#: crates/rustty-input/src/command.rs:458
+msgid "Change Terminal Title…"
+msgstr "터미널 제목 변경…"
+
+#: crates/rustty-input/src/command.rs:459
+msgid "Prompt for a new title for the current terminal."
+msgstr "현재 터미널의 새 제목을 입력합니다."
+
+#: crates/rustty-input/src/command.rs:465
+msgid "Prompt for a new title for the current tab."
+msgstr "현재 탭의 새 제목을 입력합니다."
+
+#: crates/rustty-input/src/command.rs:478
+msgid "Split the terminal to the left."
+msgstr "터미널을 왼쪽으로 나눕니다."
+
+#: crates/rustty-input/src/command.rs:483
+msgid "Split the terminal to the right."
+msgstr "터미널을 오른쪽으로 나눕니다."
+
+#: crates/rustty-input/src/command.rs:488
+msgid "Split the terminal up."
+msgstr "터미널을 위로 나눕니다."
+
+#: crates/rustty-input/src/command.rs:493
+msgid "Split the terminal down."
+msgstr "터미널을 아래로 나눕니다."
+
+#: crates/rustty-input/src/command.rs:500
+msgid "Focus Split: Previous"
+msgstr "이전 분할로 포커스 이동"
+
+#: crates/rustty-input/src/command.rs:501
+msgid "Focus the previous split, if any."
+msgstr "이전 분할이 있으면 포커스를 이동합니다."
+
+#: crates/rustty-input/src/command.rs:505
+msgid "Focus Split: Next"
+msgstr "다음 분할로 포커스 이동"
+
+#: crates/rustty-input/src/command.rs:506
+msgid "Focus the next split, if any."
+msgstr "다음 분할이 있으면 포커스를 이동합니다."
+
+#: crates/rustty-input/src/command.rs:510
+msgid "Focus Split: Left"
+msgstr "왼쪽 분할로 포커스 이동"
+
+#: crates/rustty-input/src/command.rs:511
+msgid "Focus the split to the left, if it exists."
+msgstr "왼쪽 분할이 있으면 포커스를 이동합니다."
+
+#: crates/rustty-input/src/command.rs:515
+msgid "Focus Split: Right"
+msgstr "오른쪽 분할로 포커스 이동"
+
+#: crates/rustty-input/src/command.rs:516
+msgid "Focus the split to the right, if it exists."
+msgstr "오른쪽 분할이 있으면 포커스를 이동합니다."
+
+#: crates/rustty-input/src/command.rs:520
+msgid "Focus Split: Up"
+msgstr "위쪽 분할로 포커스 이동"
+
+#: crates/rustty-input/src/command.rs:521
+msgid "Focus the split above, if it exists."
+msgstr "위쪽 분할이 있으면 포커스를 이동합니다."
+
+#: crates/rustty-input/src/command.rs:525
+msgid "Focus Split: Down"
+msgstr "아래쪽 분할로 포커스 이동"
+
+#: crates/rustty-input/src/command.rs:526
+msgid "Focus the split below, if it exists."
+msgstr "아래쪽 분할이 있으면 포커스를 이동합니다."
+
+#: crates/rustty-input/src/command.rs:533
+msgid "Focus Window: Previous"
+msgstr "이전 창으로 포커스 이동"
+
+#: crates/rustty-input/src/command.rs:534
+msgid "Focus the previous window, if any."
+msgstr "이전 창이 있으면 포커스를 이동합니다."
+
+#: crates/rustty-input/src/command.rs:538
+msgid "Focus Window: Next"
+msgstr "다음 창으로 포커스 이동"
+
+#: crates/rustty-input/src/command.rs:539
+msgid "Focus the next window, if any."
+msgstr "다음 창이 있으면 포커스를 이동합니다."
+
+#: crates/rustty-input/src/command.rs:545
+msgid "Toggle Split Zoom"
+msgstr "분할 확대/축소 전환"
+
+#: crates/rustty-input/src/command.rs:546
+msgid "Toggle the zoom state of the current split."
+msgstr "현재 분할을 확대하거나 원래 크기로 되돌립니다."
+
+#: crates/rustty-input/src/command.rs:551
+msgid "Toggle Read-Only Mode"
+msgstr "읽기 전용 모드 전환"
+
+#: crates/rustty-input/src/command.rs:552
+msgid "Toggle read-only mode for the current surface."
+msgstr "현재 터미널의 읽기 전용 모드를 켜거나 끕니다."
+
+#: crates/rustty-input/src/command.rs:557
+msgid "Equalize Splits"
+msgstr "분할 크기 균등화"
+
+#: crates/rustty-input/src/command.rs:558
+msgid "Equalize the size of all splits."
+msgstr "모든 분할의 크기를 균등하게 맞춥니다."
+
+#: crates/rustty-input/src/command.rs:563
+msgid "Reset Window Size"
+msgstr "창 크기 초기화"
+
+#: crates/rustty-input/src/command.rs:564
+msgid "Reset the window size to the default."
+msgstr "창 크기를 기본값으로 되돌립니다."
+
+#: crates/rustty-input/src/command.rs:569
+msgid "Toggle Inspector"
+msgstr "인스펙터 표시 전환"
+
+#: crates/rustty-input/src/command.rs:570
+msgid "Toggle the inspector."
+msgstr "인스펙터를 표시하거나 숨깁니다."
+
+#: crates/rustty-input/src/command.rs:575
+msgid "Show the GTK Inspector"
+msgstr "GTK 인스펙터 표시"
+
+#: crates/rustty-input/src/command.rs:576
+msgid "Show the GTK inspector."
+msgstr "GTK 인스펙터를 표시합니다."
+
+#: crates/rustty-input/src/command.rs:581
+msgid "Show On-Screen Keyboard"
+msgstr "화상 키보드 표시"
+
+#: crates/rustty-input/src/command.rs:582
+msgid "Show the on-screen keyboard if present."
+msgstr "화상 키보드를 사용할 수 있으면 표시합니다."
+
+#: crates/rustty-input/src/command.rs:588
+msgid "Open Config Using OS editor"
+msgstr "시스템 기본 편집기에서 설정 열기"
+
+#: crates/rustty-input/src/command.rs:589
+msgid "Open the config file with the OS's default editor."
+msgstr "시스템 기본 편집기로 설정 파일을 엽니다."
+
+#: crates/rustty-input/src/command.rs:593
+msgid "Open Config in New Terminal Window"
+msgstr "새 터미널 창에서 설정 열기"
+
+#: crates/rustty-input/src/command.rs:594
+msgid "Open the config file in a new window using $EDITOR or $VISUAL."
+msgstr "$EDITOR 또는 $VISUAL을 사용하여 새 창에서 설정 파일을 엽니다."
+
+#: crates/rustty-input/src/command.rs:600
+msgid "Reload Config"
+msgstr "설정 값 다시 불러오기"
+
+#: crates/rustty-input/src/command.rs:601
+msgid "Reload the config file."
+msgstr "설정 파일을 다시 불러옵니다."
+
+#: crates/rustty-input/src/command.rs:606
+msgid "Close Terminal"
+msgstr "터미널 닫기"
+
+#: crates/rustty-input/src/command.rs:607
+msgid "Close the current terminal."
+msgstr "현재 터미널을 닫습니다."
+
+#: crates/rustty-input/src/command.rs:614
+msgid "Close the current tab."
+msgstr "현재 탭을 닫습니다."
+
+#: crates/rustty-input/src/command.rs:618
+msgid "Close Other Tabs"
+msgstr "다른 탭 닫기"
+
+#: crates/rustty-input/src/command.rs:619
+msgid "Close all tabs in this window except the current one."
+msgstr "이 창에서 현재 탭을 제외한 모든 탭을 닫습니다."
+
+#: crates/rustty-input/src/command.rs:623
+msgid "Close Tabs to the Right"
+msgstr "오른쪽 탭 닫기"
+
+#: crates/rustty-input/src/command.rs:624
+msgid "Close all tabs to the right of the current one."
+msgstr "현재 탭 오른쪽의 모든 탭을 닫습니다."
+
+#: crates/rustty-input/src/command.rs:631
+msgid "Close the current window."
+msgstr "현재 창을 닫습니다."
+
+#: crates/rustty-input/src/command.rs:636
+msgid "Close All Windows"
+msgstr "모든 창 닫기"
+
+#: crates/rustty-input/src/command.rs:637
+msgid "Close all windows."
+msgstr "모든 창을 닫습니다."
+
+#: crates/rustty-input/src/command.rs:642
+msgid "Toggle Maximize"
+msgstr "창 최대화 전환"
+
+#: crates/rustty-input/src/command.rs:643
+msgid "Toggle the maximized state of the current window."
+msgstr "현재 창을 최대화하거나 원래 크기로 복원합니다."
+
+#: crates/rustty-input/src/command.rs:648
+msgid "Toggle Fullscreen"
+msgstr "전체 화면 전환"
+
+#: crates/rustty-input/src/command.rs:649
+msgid "Toggle the fullscreen state of the current window."
+msgstr "현재 창의 전체 화면 모드를 켜거나 끕니다."
+
+#: crates/rustty-input/src/command.rs:654
+msgid "Toggle Window Decorations"
+msgstr "창 장식 표시 전환"
+
+#: crates/rustty-input/src/command.rs:655
+msgid "Toggle the window decorations."
+msgstr "창 장식을 표시하거나 숨깁니다."
+
+#: crates/rustty-input/src/command.rs:660
+msgid "Toggle Float on Top"
+msgstr "항상 위에 표시 전환"
+
+#: crates/rustty-input/src/command.rs:661
+msgid "Toggle the float on top state of the current window."
+msgstr "현재 창의 항상 위에 표시 기능을 켜거나 끕니다."
+
+#: crates/rustty-input/src/command.rs:666
+msgid "Toggle Secure Input"
+msgstr "보안 입력 전환"
+
+#: crates/rustty-input/src/command.rs:667
+msgid "Toggle secure input mode."
+msgstr "보안 입력 모드를 켜거나 끕니다."
+
+#: crates/rustty-input/src/command.rs:672
+msgid "Toggle Mouse Reporting"
+msgstr "마우스 이벤트 전달 전환"
+
+#: crates/rustty-input/src/command.rs:673
+msgid "Toggle whether mouse events are reported to terminal applications."
+msgstr "터미널 애플리케이션에 마우스 이벤트를 전달하는 기능을 켜거나 끕니다."
+
+#: crates/rustty-input/src/command.rs:678
+msgid "Toggle Background Opacity"
+msgstr "배경 불투명도 전환"
+
+#: crates/rustty-input/src/command.rs:679
+msgid "Toggle the background opacity of a window that started transparent."
+msgstr "투명하게 시작된 창의 배경을 불투명하게 표시하거나 원래 투명도로 되돌립니다."
+
+#: crates/rustty-input/src/command.rs:684
+msgid "Check for Updates"
+msgstr "업데이트 확인"
+
+#: crates/rustty-input/src/command.rs:685
+msgid "Check for updates to the application."
+msgstr "애플리케이션의 업데이트를 확인합니다."
+
+#: crates/rustty-input/src/command.rs:690
+msgid "Undo"
+msgstr "실행 취소"
+
+#: crates/rustty-input/src/command.rs:691
+msgid "Undo the last action."
+msgstr "마지막 작업을 실행 취소합니다."
+
+#: crates/rustty-input/src/command.rs:696
+msgid "Redo"
+msgstr "다시 실행"
+
+#: crates/rustty-input/src/command.rs:697
+msgid "Redo the last undone action."
+msgstr "마지막으로 실행 취소한 작업을 다시 실행합니다."
+
+#: crates/rustty-input/src/command.rs:703
+msgid "Quit the application."
+msgstr "애플리케이션을 종료합니다."
+
+#: crates/rustty-input/src/command.rs:708
+msgid "Rustty"
+msgstr "Rustty"
+
+#: crates/rustty-input/src/command.rs:709
+msgid "Put a little Rustty in your terminal."
+msgstr "터미널에 작은 유령 하나를 입력합니다."

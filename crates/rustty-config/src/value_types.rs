@@ -677,6 +677,15 @@ pub enum WindowShowTabBar {
     Never,
 }
 
+/// See drag-handle
+// pub const DragHandle = enum { always, auto, never };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DragHandle {
+    Always,
+    Auto,
+    Never,
+}
+
 // pub const ResizeOverlay = enum { always, never, "after-first" };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResizeOverlay {
@@ -1126,6 +1135,13 @@ bare_enum_names!(MacOSDockDropBehavior {
 
 // pub const WindowShowTabBar = enum { always, auto, never };
 bare_enum_names!(WindowShowTabBar {
+    Always => b"always",
+    Auto => b"auto",
+    Never => b"never",
+});
+
+// pub const DragHandle = enum { always, auto, never };
+bare_enum_names!(DragHandle {
     Always => b"always",
     Auto => b"auto",
     Never => b"never",
@@ -1945,49 +1961,19 @@ impl WorkingDirectory {
             _ => return,
         };
 
-        // if (!std.mem.startsWith(u8, path, "~/")) return;
-        if !path.starts_with(b"~/") {
-            return;
-        }
-
-        // WS14 T6 (wasm32 arm): a browser has no home directory to expand `~/`
-        // against, so wasm returns exactly as the `expandHome` error arm below does.
-        // The reference never analyses this on wasm (Zig analyses `config.zig.Wasm`
-        // lazily, so it never forces `internal_os.expandHome`); Rust compiles whole
-        // crates, so the arm has to exist.
-        #[cfg(target_family = "wasm")]
-        return;
-
         // var buf: [std.fs.max_path_bytes]u8 = undefined;
         // PORT NOTE: `std.fs.max_path_bytes` is the platform max path length
         // (4096 on Linux/macOS); we size the stack buffer the same.
-        #[cfg(not(target_family = "wasm"))]
         let mut buf = [0u8; MAX_PATH_BYTES];
-        // const expanded = internal_os.expandHome(path, &buf) catch |err| {
-        //     log.warn(...);
-        //     return;
-        // };
-        #[cfg(not(target_family = "wasm"))]
-        {
-            let expanded = match rustty_os::homedir::expandHome(
-                &rustty_global::environ_map(),
-                &path,
-                &mut buf,
-            ) {
-                Ok(v) => v,
-                Err(_err) => {
-                    // log.warn("error expanding home directory for working-directory path={s}: {}", ...);
-                    return;
-                }
-            };
+        // const expanded = expandHome(path, &buf);
+        let expanded = crate::config_struct::expand_home(&path, &mut buf);
 
-            // if (std.mem.eql(u8, expanded, path)) return;
-            if expanded == &path[..] {
-                return;
-            }
-            // self.* = .{ .path = try alloc.dupe(u8, expanded) };
-            *self = WorkingDirectory::Path(expanded.to_vec());
+        // if (std.mem.eql(u8, expanded, path)) return;
+        if expanded == &path[..] {
+            return;
         }
+        // self.* = .{ .path = try alloc.dupe(u8, expanded) };
+        *self = WorkingDirectory::Path(expanded.to_vec());
     }
 
     // pub fn value(self: Self) ?[]const u8
@@ -6784,6 +6770,31 @@ impl Theme {
         Ok(())
     }
 
+    /// Expand tilde paths in light/dark theme values.
+    // pub fn finalize(self: *Theme, alloc: Allocator) Allocator.Error!void {
+    pub fn finalize(&mut self) {
+        // var buf: [std.fs.max_path_bytes]u8 = undefined;
+        let mut buf = [0u8; MAX_PATH_BYTES];
+
+        // const light = expandHome(self.light, &buf);
+        // if (!std.mem.eql(u8, light, self.light))
+        //     self.light = try alloc.dupeZ(u8, light);
+        let light = crate::config_struct::expand_home(&self.light, &mut buf);
+        if light != &self.light[..] {
+            let light = light.to_vec();
+            self.light = light;
+        }
+
+        // const dark = expandHome(self.dark, &buf);
+        // if (!std.mem.eql(u8, dark, self.dark))
+        //     self.dark = try alloc.dupeZ(u8, dark);
+        let dark = crate::config_struct::expand_home(&self.dark, &mut buf);
+        if dark != &self.dark[..] {
+            let dark = dark.to_vec();
+            self.dark = dark;
+        }
+    }
+
     /// Deep copy of the struct. Required by Config.
     // pub fn clone(self: *const Theme, alloc: Allocator) Allocator.Error!Theme
     pub fn clone_in(&self) -> Theme {
@@ -9014,6 +9025,48 @@ mod tests {
             v.parse_cli(Some(b" light:foo,  dark : bar  ")).unwrap();
             assert_eq!(b"foo".as_slice(), v.light.as_slice());
             assert_eq!(b"bar".as_slice(), v.dark.as_slice());
+        }
+
+        // Expand tilde to home
+        {
+            // var environ_map = try testing.environ.createMap(alloc);
+            // defer environ_map.deinit();
+            let environ_map = rustty_global::environ_map();
+
+            // var home_buf: [std.fs.max_path_bytes]u8 = undefined;
+            let mut home_buf = [0u8; MAX_PATH_BYTES];
+            // const home = try internal_os.expandHome(
+            //     testing.io,
+            //     &environ_map,
+            //     "~/",
+            //     &home_buf,
+            // );
+            let home = rustty_os::homedir::expandHome(&environ_map, b"~/", &mut home_buf)
+                .unwrap()
+                .to_vec();
+
+            // var v: Theme = undefined;
+            let mut v = Theme::default();
+            // try v.parseCLI(alloc, "light:~/foo, dark:~/bar");
+            v.parse_cli(Some(b"light:~/foo, dark:~/bar")).unwrap();
+            // try v.finalize(alloc);
+            v.finalize();
+
+            // var expected_buf: [std.fs.max_path_bytes]u8 = undefined;
+            // try testing.expectEqualStrings(
+            //     try std.fmt.bufPrint(&expected_buf, "{s}foo", .{home}),
+            //     v.light,
+            // );
+            let mut expected = home.clone();
+            expected.extend_from_slice(b"foo");
+            assert_eq!(expected.as_slice(), v.light.as_slice());
+            // try testing.expectEqualStrings(
+            //     try std.fmt.bufPrint(&expected_buf, "{s}bar", .{home}),
+            //     v.dark,
+            // );
+            let mut expected = home.clone();
+            expected.extend_from_slice(b"bar");
+            assert_eq!(expected.as_slice(), v.dark.as_slice());
         }
 
         let mut v = Theme::default();

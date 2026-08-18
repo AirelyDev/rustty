@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: io.airely.rustty\n"
 "Report-Msgid-Bugs-To: gael@airely.io\n"
-"POT-Creation-Date: 2026-07-31 03:57-0700\n"
+"POT-Creation-Date: 2026-08-10 10:06-0500\n"
 "PO-Revision-Date: 2026-02-12 01:56+0800\n"
 "Last-Translator: Leah <hi@pluie.me>\n"
 "Language-Team: Chinese (simplified) <i18n-zh@googlegroups.com>\n"
@@ -22,192 +22,19 @@ msgstr ""
 msgid "Open in Rustty"
 msgstr "在 Rustty 中打开"
 
-#: crates/rustty-apprt/assets/ui/1.2/close-confirmation-dialog.blp:7
-#: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:8
-msgid "Cancel"
-msgstr "取消"
-
-#: crates/rustty-apprt/assets/ui/1.2/close-confirmation-dialog.blp:8
-#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:85
-#: crates/rustty-apprt/assets/ui/1.3/surface-child-exited.blp:17
-msgid "Close"
-msgstr "关闭"
-
-#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:6
-msgid "Configuration Errors"
-msgstr "配置错误"
-
-#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:7
-msgid ""
-"One or more configuration errors were found. Please review the errors below, "
-"and either reload your configuration or ignore these errors."
-msgstr ""
-"加载配置时发现了以下错误。请仔细阅读错误信息，并选择忽略或重新加载配置文件。"
-
-#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:10
-msgid "Ignore"
-msgstr "忽略"
-
-#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:11
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:373
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:300
-msgid "Reload Configuration"
-msgstr "重新加载配置"
-
-#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:29
-msgid "Find…"
-msgstr "查找…"
-
-#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:64
-msgid "Previous Match"
-msgstr "上一个匹配项"
-
-#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:74
-msgid "Next Match"
-msgstr "下一个匹配项"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:6
-msgid "Oh, no."
-msgstr "糟糕。"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:7
-msgid "Unable to acquire an OpenGL context for rendering."
-msgstr "未能获取可用于渲染的 OpenGL 环境。"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:99
-msgid ""
-"This terminal is in read-only mode. You can still view, select, and scroll "
-"through the content, but no input events will be sent to the running "
-"application."
-msgstr ""
-"本终端当前处于只读模式。你仍可浏览、选择、并滚动其中内容，但任何用户输入都不"
-"会传给运行中的程序。"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:109
-msgid "Read-only"
-msgstr "只读"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:262
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:200
-msgid "Copy"
-msgstr "复制"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:267
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:205
-msgid "Paste"
-msgstr "粘贴"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:272
-msgid "Notify on Next Command Finish"
-msgstr "下条命令完成时发出提醒"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:279
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:273
-msgid "Clear"
-msgstr "清除屏幕"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:284
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:278
-msgid "Reset"
-msgstr "重置终端"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:291
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:242
-msgid "Split"
-msgstr "分屏"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:294
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:245
-msgid "Change Title…"
-msgstr "更改标题…"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:299
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:177
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:250
-msgid "Split Up"
-msgstr "向上分屏"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:305
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:182
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:255
-msgid "Split Down"
-msgstr "向下分屏"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:311
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:187
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:260
-msgid "Split Left"
-msgstr "向左分屏"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:317
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:192
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:265
-msgid "Split Right"
-msgstr "向右分屏"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:323
-msgid "Close Split"
-msgstr "关闭分屏"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:329
-msgid "Tab"
-msgstr "标签页"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:332
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:224
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:320
-msgid "Change Tab Title…"
-msgstr "更改标签页标题…"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:337
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:57
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:107
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:229
-msgid "New Tab"
-msgstr "新建标签页"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:342
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:234
-msgid "Close Tab"
-msgstr "关闭标签页"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:349
-msgid "Window"
-msgstr "窗口"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:352
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:212
-msgid "New Window"
-msgstr "新建窗口"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:357
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:217
-msgid "Close Window"
-msgstr "关闭窗口"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:365
-msgid "Config"
-msgstr "配置"
-
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:368
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:295
-msgid "Open Configuration"
-msgstr "打开配置文件"
-
-#: crates/rustty-apprt/assets/ui/1.3/debug-warning.blp:6
-msgid "⚠️ You're running a debug build of Rustty! Performance will be degraded."
-msgstr "⚠️ Rustty 正在以调试模式运行！性能将大打折扣。"
-
+#: crates/rustty-apprt/assets/ui/1.0/clipboard-confirmation-dialog.blp:12
 #: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:12
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:269
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:273
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:197
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:201
 msgid "Authorize Clipboard Access"
 msgstr "剪贴板访问授权"
 
+#: crates/rustty-apprt/assets/ui/1.0/clipboard-confirmation-dialog.blp:17
 #: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:17
 msgid "Deny"
 msgstr "拒绝"
 
+#: crates/rustty-apprt/assets/ui/1.0/clipboard-confirmation-dialog.blp:18
 #: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:18
 msgid "Allow"
 msgstr "允许"
@@ -220,13 +47,182 @@ msgstr "为本分屏记住当前选择"
 msgid "Reload configuration to show this prompt again"
 msgstr "本提示将在重载配置后再次出现"
 
-#: crates/rustty-apprt/assets/ui/1.5/command-palette.blp:17
-msgid "Execute a command…"
-msgstr "选择要执行的命令…"
+#: crates/rustty-apprt/assets/ui/1.2/close-confirmation-dialog.blp:7
+#: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:8
+#: crates/rustty-apprt/src/gtk/class/application.rs:2263
+msgid "Cancel"
+msgstr "取消"
+
+#: crates/rustty-apprt/assets/ui/1.2/close-confirmation-dialog.blp:8
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:90
+#: crates/rustty-apprt/assets/ui/1.3/surface-child-exited.blp:17
+msgid "Close"
+msgstr "关闭"
+
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:6
+msgid "Configuration Errors"
+msgstr "配置错误"
+
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:8
+msgid ""
+"One or more configuration errors were found. Please review the errors below, "
+"and either reload your configuration or ignore these errors."
+msgstr ""
+"加载配置时发现了以下错误。请仔细阅读错误信息，并选择忽略或重新加载配置文件。"
+
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:12
+msgid "Ignore"
+msgstr "忽略"
+
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:13
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:439 crates/rustty-apprt/assets/ui/1.5/window.blp:318
+msgid "Reload Configuration"
+msgstr "重新加载配置"
+
+#: crates/rustty-apprt/assets/ui/1.2/debug-warning.blp:7
+#: crates/rustty-apprt/assets/ui/1.3/debug-warning.blp:6
+msgid ""
+"⚠️ You're running a debug build of Rustty! Performance will be degraded."
+msgstr "⚠️ Rustty 正在以调试模式运行！性能将大打折扣。"
 
 #: crates/rustty-apprt/assets/ui/1.5/inspector-window.blp:5
 msgid "Rustty: Terminal Inspector"
 msgstr "Rustty 终端调试器"
+
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:29
+msgid "Find…"
+msgstr "查找…"
+
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:69
+msgid "Previous Match"
+msgstr "上一个匹配项"
+
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:79
+msgid "Next Match"
+msgstr "下一个匹配项"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:7
+msgid "Oh, no."
+msgstr "糟糕。"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:8
+msgid "Unable to acquire an OpenGL context for rendering."
+msgstr "未能获取可用于渲染的 OpenGL 环境。"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:101
+msgid ""
+"This terminal is in read-only mode. You can still view, select, and scroll "
+"through the content, but no input events will be sent to the running "
+"application."
+msgstr ""
+"本终端当前处于只读模式。你仍可浏览、选择、并滚动其中内容，但任何用户输入都不"
+"会传给运行中的程序。"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:112
+msgid "Read-only"
+msgstr "只读"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:316 crates/rustty-apprt/assets/ui/1.5/window.blp:203
+msgid "Copy"
+msgstr "复制"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:321 crates/rustty-apprt/assets/ui/1.5/window.blp:208
+msgid "Paste"
+msgstr "粘贴"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:326
+msgid "Notify on Next Command Finish"
+msgstr "下条命令完成时发出提醒"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:333 crates/rustty-apprt/assets/ui/1.5/window.blp:281
+msgid "Clear"
+msgstr "清除屏幕"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:338 crates/rustty-apprt/assets/ui/1.5/window.blp:286
+msgid "Reset"
+msgstr "重置终端"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:345 crates/rustty-apprt/assets/ui/1.5/window.blp:250
+msgid "Split"
+msgstr "分屏"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:348 crates/rustty-apprt/assets/ui/1.5/window.blp:253
+msgid "Change Title…"
+msgstr "更改标题…"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:353 crates/rustty-apprt/assets/ui/1.5/window.blp:180
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:258 crates/rustty-input/src/command.rs:487
+msgid "Split Up"
+msgstr "向上分屏"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:359 crates/rustty-apprt/assets/ui/1.5/window.blp:185
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:263 crates/rustty-input/src/command.rs:492
+msgid "Split Down"
+msgstr "向下分屏"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:365 crates/rustty-apprt/assets/ui/1.5/window.blp:190
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:268 crates/rustty-input/src/command.rs:477
+msgid "Split Left"
+msgstr "向左分屏"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:371 crates/rustty-apprt/assets/ui/1.5/window.blp:195
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:273 crates/rustty-input/src/command.rs:482
+msgid "Split Right"
+msgstr "向右分屏"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:377
+msgid "Close Split"
+msgstr "关闭分屏"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:383
+msgid "Tab"
+msgstr "标签页"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:386 crates/rustty-apprt/assets/ui/1.5/window.blp:232
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:339 crates/rustty-input/src/command.rs:464
+msgid "Change Tab Title…"
+msgstr "更改标签页标题…"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:391 crates/rustty-apprt/assets/ui/1.5/window.blp:60
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:110 crates/rustty-apprt/assets/ui/1.5/window.blp:237
+#: crates/rustty-input/src/command.rs:427
+msgid "New Tab"
+msgstr "新建标签页"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:396 crates/rustty-apprt/assets/ui/1.5/window.blp:242
+#: crates/rustty-input/src/command.rs:613
+msgid "Close Tab"
+msgstr "关闭标签页"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:403
+msgid "Window"
+msgstr "窗口"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:406 crates/rustty-apprt/assets/ui/1.5/window.blp:215
+msgid "Change Window Title…"
+msgstr ""
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:411 crates/rustty-apprt/assets/ui/1.5/window.blp:220
+#: crates/rustty-input/src/command.rs:421
+msgid "New Window"
+msgstr "新建窗口"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:416 crates/rustty-apprt/assets/ui/1.5/window.blp:225
+#: crates/rustty-input/src/command.rs:630
+msgid "Close Window"
+msgstr "关闭窗口"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:424 crates/rustty-apprt/assets/ui/1.5/window.blp:303
+msgid "Config"
+msgstr "配置"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:427 crates/rustty-apprt/assets/ui/1.5/window.blp:306
+msgid "Open Configuration in OS Editor"
+msgstr "在系统编辑器内打开配置"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:433 crates/rustty-apprt/assets/ui/1.5/window.blp:312
+msgid "Open Configuration in New Window"
+msgstr "在新窗口内打开配置"
 
 #: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:5
 msgid "Leave blank to restore the default title."
@@ -236,143 +232,865 @@ msgstr "留空以重置至默认标题。"
 msgid "OK"
 msgstr "确认"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:58
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:108
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:61 crates/rustty-apprt/assets/ui/1.5/window.blp:111
 msgid "New Split"
 msgstr "新建分屏"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:68
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:126
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:71 crates/rustty-apprt/assets/ui/1.5/window.blp:129
 msgid "View Open Tabs"
 msgstr "浏览标签页"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:78
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:140
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:81 crates/rustty-apprt/assets/ui/1.5/window.blp:143
 msgid "Main Menu"
 msgstr "主菜单"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:285
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:293
 msgid "Command Palette"
 msgstr "命令面板"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:290
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:298
 msgid "Terminal Inspector"
 msgstr "终端调试器"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:307
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:326 crates/rustty-apprt/src/gtk/class/window.rs:1991
 msgid "About Rustty"
 msgstr "关于 Rustty"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:312
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:331 crates/rustty-input/src/command.rs:702
 msgid "Quit"
 msgstr "退出"
 
-#: crates/rustty-apprt/src/gtk/class/application.rs:1596
+#: crates/rustty-apprt/assets/ui/1.5/command-palette.blp:17
+msgid "Execute a command…"
+msgstr "选择要执行的命令…"
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:1767
 msgid "The keybind was revoked by the system."
-msgstr ""
+msgstr "系统撤销了该快捷键。"
 
-#: crates/rustty-apprt/src/gtk/class/application.rs:1598
+#: crates/rustty-apprt/src/gtk/class/application.rs:1769
 msgid "The keybind was denied by the system."
-msgstr ""
+msgstr "系统拒绝绑定该快捷键。"
 
-#: crates/rustty-apprt/src/gtk/class/application.rs:1605
+#: crates/rustty-apprt/src/gtk/class/application.rs:1780
 msgid "Global keybind unavailable"
+msgstr "全局快捷键不可用"
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:2259
+msgid "Export Terminal IO Events"
+msgstr "导出终端输入输出事件"
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:2262
+msgid "Export"
+msgstr "导出"
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:2783
+msgid "Editing configuration file"
 msgstr ""
 
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:270
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:198
 msgid ""
 "An application is attempting to write to the clipboard. The current "
 "clipboard contents are shown below."
 msgstr "一个应用正在试图向剪贴板写入内容。剪贴板目前的内容如下："
 
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:274
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:202
 msgid ""
 "An application is attempting to read from the clipboard. The current "
 "clipboard contents are shown below."
 msgstr "一个应用正在试图从剪贴板读取内容。剪贴板目前的内容如下："
 
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:277
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:205
 msgid "Warning: Potentially Unsafe Paste"
 msgstr "警告：粘贴内容可能不安全"
 
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:278
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:206
 msgid ""
 "Pasting this text into the terminal may be dangerous as it looks like some "
 "commands may be executed."
 msgstr "将以下内容粘贴至终端内将可能执行有害命令。"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:59
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:184
 msgid "Quit Rustty?"
 msgstr "退出 Rustty 吗？"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:60
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:185
 msgid "Close Tab?"
 msgstr "关闭标签页吗？"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:61
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:186
 msgid "Close Window?"
 msgstr "关闭窗口吗？"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:62
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:187
 msgid "Close Split?"
 msgstr "关闭分屏吗？"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:71
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:193
 msgid "All terminal sessions will be terminated."
 msgstr "终端内所有运行中的进程将被终止。"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:72
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:194
 msgid "All terminal sessions in this tab will be terminated."
 msgstr "标签页内所有运行中的进程将被终止。"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:73
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:195
 msgid "All terminal sessions in this window will be terminated."
 msgstr "窗口内所有运行中的进程将被终止。"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:75
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:196
 msgid "The currently running process in this split will be terminated."
 msgstr "分屏内正在运行中的进程将被终止。"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1934
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1181
 msgid "Command Finished"
 msgstr "命令已完成"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1935
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1182
+#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:109
 msgid "Command Succeeded"
 msgstr "命令执行成功"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1936
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1183
+#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:113
 msgid "Command Failed"
 msgstr "命令执行失败"
 
-#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:154
-msgid "Command succeeded"
-msgstr "命令执行成功"
-
-#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:158
-msgid "Command failed"
-msgstr "命令执行失败"
-
-#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:43
+#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:227
 msgid "Change Terminal Title"
 msgstr "更改终端标题"
 
-#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:44
+#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:228
 msgid "Change Tab Title"
 msgstr "更改标签页标题"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1137
-msgid "Cleared clipboard"
-msgstr "已清空剪贴板"
+#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:229
+msgid "Change Window Title"
+msgstr ""
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1139
-msgid "Copied to clipboard"
-msgstr "已复制至剪贴板"
-
-#: crates/rustty-apprt/src/gtk/class/window.rs:1931
+#: crates/rustty-apprt/src/gtk/class/window.rs:1153
 msgid "Reloaded the configuration"
 msgstr "已重新加载配置"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:2088
+#: crates/rustty-apprt/src/gtk/class/window.rs:1830
+msgid "Copied to clipboard"
+msgstr "已复制至剪贴板"
+
+#: crates/rustty-apprt/src/gtk/class/window.rs:1832
+msgid "Cleared clipboard"
+msgstr "已清空剪贴板"
+
+#: crates/rustty-apprt/src/gtk/class/window.rs:1972
 msgid "Rustty Developers"
 msgstr "Rustty 开发团队"
+
+#: crates/rustty-input/src/command.rs:149
+msgid "Reset Terminal"
+msgstr "重置终端"
+
+#: crates/rustty-input/src/command.rs:150
+msgid "Reset the terminal to a clean state."
+msgstr "将终端重置回初始状态。"
+
+#: crates/rustty-input/src/command.rs:155
+msgid "Copy to Clipboard"
+msgstr "复制到剪贴板"
+
+#: crates/rustty-input/src/command.rs:156
+msgid ""
+"Copy the selected text to the clipboard in both plain and styled formats."
+msgstr "同时以纯文本与样式文本两种格式，将选中的文本复制到剪贴板。"
+
+#: crates/rustty-input/src/command.rs:159
+msgid "Copy Selection as Plain Text to Clipboard"
+msgstr "将选区以纯文本格式复制到剪贴板"
+
+#: crates/rustty-input/src/command.rs:160
+msgid "Copy the selected text as plain text to the clipboard."
+msgstr "以纯文本格式，将选中的文本复制到剪贴板。"
+
+#: crates/rustty-input/src/command.rs:163
+msgid "Copy Selection as ANSI Sequences to Clipboard"
+msgstr "将选区以 ANSI 序列格式复制到剪贴板"
+
+#: crates/rustty-input/src/command.rs:164
+msgid "Copy the selected text as ANSI escape sequences to the clipboard."
+msgstr "以 ANSI 转义序列格式，将选中的文本复制到剪贴板。"
+
+#: crates/rustty-input/src/command.rs:167
+msgid "Copy Selection as HTML to Clipboard"
+msgstr "将选区以 HTML 格式复制到剪贴板"
+
+#: crates/rustty-input/src/command.rs:168
+msgid "Copy the selected text as HTML to the clipboard."
+msgstr "以 HTML 格式，将选中的文本复制到剪贴板。"
+
+#: crates/rustty-input/src/command.rs:173
+msgid "Copy URL to Clipboard"
+msgstr "复制 URL 到剪贴板"
+
+#: crates/rustty-input/src/command.rs:174
+msgid "Copy the URL under the cursor to the clipboard."
+msgstr "将光标下的 URL 复制到剪贴板。"
+
+#: crates/rustty-input/src/command.rs:179
+msgid "Copy Terminal Title to Clipboard"
+msgstr "复制终端标题到剪贴板"
+
+#: crates/rustty-input/src/command.rs:180
+msgid ""
+"Copy the terminal title to the clipboard. If the terminal title is not set "
+"this has no effect."
+msgstr "将终端标题复制到剪贴板。没有设置终端标题时没有任何效果。"
+
+#: crates/rustty-input/src/command.rs:185
+msgid "Paste from Clipboard"
+msgstr "粘贴剪贴板内容"
+
+#: crates/rustty-input/src/command.rs:186
+msgid "Paste the contents of the main clipboard."
+msgstr "将主剪贴板的内容粘贴进终端。"
+
+#: crates/rustty-input/src/command.rs:191
+msgid "Paste from Selection"
+msgstr "粘贴主选区内容"
+
+#: crates/rustty-input/src/command.rs:192
+msgid "Paste the contents of the selection clipboard."
+msgstr "将主选区的内容粘贴进终端。"
+
+#: crates/rustty-input/src/command.rs:197
+msgid "Start Search"
+msgstr "开始查找"
+
+#: crates/rustty-input/src/command.rs:198
+msgid "Start a search if one isn't already active."
+msgstr "未在进行查找时，可开始新一次查找。"
+
+#: crates/rustty-input/src/command.rs:203
+msgid "Search Selection"
+msgstr "在选区内查找"
+
+#: crates/rustty-input/src/command.rs:204
+msgid "Start a search for the current text selection."
+msgstr "在选中的文本当中开始查找。"
+
+#: crates/rustty-input/src/command.rs:209
+msgid "End Search"
+msgstr "结束查找"
+
+#: crates/rustty-input/src/command.rs:210
+msgid "End the current search if any and hide any GUI elements."
+msgstr "结束当前进行中的查找，并隐藏相关界面。"
+
+#: crates/rustty-input/src/command.rs:215
+msgid "Next Search Result"
+msgstr "下一个匹配项"
+
+#: crates/rustty-input/src/command.rs:216
+msgid "Navigate to the next search result, if any."
+msgstr "如果可能，移动到下一个匹配项。"
+
+#: crates/rustty-input/src/command.rs:219
+msgid "Previous Search Result"
+msgstr "上一个匹配项"
+
+#: crates/rustty-input/src/command.rs:220
+msgid "Navigate to the previous search result, if any."
+msgstr "如果可能，移动到上一个匹配项。"
+
+#: crates/rustty-input/src/command.rs:225
+msgid "Increase Font Size"
+msgstr "放大字号"
+
+#: crates/rustty-input/src/command.rs:226
+msgid "Increase the font size by 1 point."
+msgstr "将字体大小增大 1pt。"
+
+#: crates/rustty-input/src/command.rs:231
+msgid "Decrease Font Size"
+msgstr "缩小字号"
+
+#: crates/rustty-input/src/command.rs:232
+msgid "Decrease the font size by 1 point."
+msgstr "将字体大小缩小 1pt。"
+
+#: crates/rustty-input/src/command.rs:237
+msgid "Reset Font Size"
+msgstr "重置字号"
+
+#: crates/rustty-input/src/command.rs:238
+msgid "Reset the font size to the default."
+msgstr "将字体大小重置到默认值。"
+
+#: crates/rustty-input/src/command.rs:243
+msgid "Clear Screen"
+msgstr "清除屏幕"
+
+#: crates/rustty-input/src/command.rs:244
+msgid "Clear the screen and scrollback."
+msgstr "清除屏幕和回滚内容。"
+
+#: crates/rustty-input/src/command.rs:249
+msgid "Select All"
+msgstr "全选"
+
+#: crates/rustty-input/src/command.rs:250
+msgid "Select all text on the screen."
+msgstr "选择屏幕上所有文本。"
+
+#: crates/rustty-input/src/command.rs:255
+msgid "Scroll to Top"
+msgstr "滚动到顶部"
+
+#: crates/rustty-input/src/command.rs:256
+msgid "Scroll to the top of the screen."
+msgstr "滚动到屏幕顶部。"
+
+#: crates/rustty-input/src/command.rs:261
+msgid "Scroll to Bottom"
+msgstr "滚动到底部"
+
+#: crates/rustty-input/src/command.rs:262
+msgid "Scroll to the bottom of the screen."
+msgstr "滚动到屏幕底部。"
+
+#: crates/rustty-input/src/command.rs:267
+msgid "Scroll to Selection"
+msgstr "滚动到选区"
+
+#: crates/rustty-input/src/command.rs:268
+msgid "Scroll to the selected text."
+msgstr "滚动到选中的文本。"
+
+#: crates/rustty-input/src/command.rs:273
+msgid "Scroll Page Up"
+msgstr "向上滚动一页"
+
+#: crates/rustty-input/src/command.rs:274
+msgid "Scroll the screen up by a page."
+msgstr "将屏幕向上滚动一页。"
+
+#: crates/rustty-input/src/command.rs:279
+msgid "Scroll Page Down"
+msgstr "向下滚动一页"
+
+#: crates/rustty-input/src/command.rs:280
+msgid "Scroll the screen down by a page."
+msgstr "将屏幕向下滚动一页。"
+
+#: crates/rustty-input/src/command.rs:286
+msgid "Copy Screen to Temporary File and Copy Path"
+msgstr "复制屏幕内容到临时文件并复制路径"
+
+#: crates/rustty-input/src/command.rs:287
+msgid ""
+"Copy the screen contents to a temporary file and copy the path to the "
+"clipboard."
+msgstr "将屏幕内容复制到一个临时文件，并将其路径复制到剪贴板。"
+
+#: crates/rustty-input/src/command.rs:291
+msgid "Copy Screen to Temporary File and Paste Path"
+msgstr "复制屏幕内容到临时文件并粘贴路径"
+
+#: crates/rustty-input/src/command.rs:292
+msgid ""
+"Copy the screen contents to a temporary file and paste the path to the file."
+msgstr "将屏幕内容复制到一个临时文件，并将其路径粘贴进终端。"
+
+#: crates/rustty-input/src/command.rs:296
+msgid "Copy Screen to Temporary File and Open"
+msgstr "复制屏幕内容到临时文件并打开"
+
+#: crates/rustty-input/src/command.rs:297
+msgid "Copy the screen contents to a temporary file and open it."
+msgstr "将屏幕内容复制到一个临时文件，并打开。"
+
+#: crates/rustty-input/src/command.rs:305
+msgid "Copy Screen as HTML to Temporary File and Copy Path"
+msgstr "以 HTML 格式复制屏幕内容到临时文件并复制路径"
+
+#: crates/rustty-input/src/command.rs:306
+msgid ""
+"Copy the screen contents as HTML to a temporary file and copy the path to "
+"the clipboard."
+msgstr "将屏幕内容以 HTML 格式复制到一个临时文件，并将其路径复制到剪贴板。"
+
+#: crates/rustty-input/src/command.rs:313
+msgid "Copy Screen as HTML to Temporary File and Paste Path"
+msgstr "以 HTML 格式复制屏幕内容到临时文件并粘贴路径"
+
+#: crates/rustty-input/src/command.rs:314
+msgid ""
+"Copy the screen contents as HTML to a temporary file and paste the path to "
+"the file."
+msgstr "将屏幕内容以 HTML 格式复制到一个临时文件，并将其路径粘贴进终端。"
+
+#: crates/rustty-input/src/command.rs:321
+msgid "Copy Screen as HTML to Temporary File and Open"
+msgstr "以 HTML 格式复制屏幕内容到临时文件并打开"
+
+#: crates/rustty-input/src/command.rs:322
+msgid "Copy the screen contents as HTML to a temporary file and open it."
+msgstr "将屏幕内容以 HTML 格式复制到一个临时文件，并打开。"
+
+#: crates/rustty-input/src/command.rs:330
+msgid "Copy Screen as ANSI Sequences to Temporary File and Copy Path"
+msgstr "以 ANSI 序列格式复制屏幕内容到临时文件并复制路径"
+
+#: crates/rustty-input/src/command.rs:331
+msgid ""
+"Copy the screen contents as ANSI escape sequences to a temporary file and "
+"copy the path to the clipboard."
+msgstr "将屏幕内容以 ANSI 转义序列格式复制到一个临时文件，并将其路径复制到剪贴板。"
+
+#: crates/rustty-input/src/command.rs:338
+msgid "Copy Screen as ANSI Sequences to Temporary File and Paste Path"
+msgstr "以 ANSI 序列格式复制屏幕内容到临时文件并粘贴路径"
+
+#: crates/rustty-input/src/command.rs:339
+msgid ""
+"Copy the screen contents as ANSI escape sequences to a temporary file and "
+"paste the path to the file."
+msgstr "将屏幕内容以 ANSI 转义序列格式复制到一个临时文件，并将其路径粘贴进终端。"
+
+#: crates/rustty-input/src/command.rs:346
+msgid "Copy Screen as ANSI Sequences to Temporary File and Open"
+msgstr "以 ANSI 序列格式复制屏幕内容到临时文件并打开"
+
+#: crates/rustty-input/src/command.rs:347
+msgid ""
+"Copy the screen contents as ANSI escape sequences to a temporary file and "
+"open it."
+msgstr "将屏幕内容以 ANSI 转义序列格式复制到一个临时文件，并打开。"
+
+#: crates/rustty-input/src/command.rs:354
+msgid "Copy Selection to Temporary File and Copy Path"
+msgstr "将选区复制到临时文件并复制路径"
+
+#: crates/rustty-input/src/command.rs:355
+msgid ""
+"Copy the selection contents to a temporary file and copy the path to the "
+"clipboard."
+msgstr "将选中文本复制到临时文件，并将其路径复制到剪贴板。"
+
+#: crates/rustty-input/src/command.rs:359
+msgid "Copy Selection to Temporary File and Paste Path"
+msgstr "复制选区到临时文件并粘贴路径"
+
+#: crates/rustty-input/src/command.rs:360
+msgid ""
+"Copy the selection contents to a temporary file and paste the path to the "
+"file."
+msgstr "将选中文本复制到临时文件，并将其路径粘贴进终端。"
+
+#: crates/rustty-input/src/command.rs:364
+msgid "Copy Selection to Temporary File and Open"
+msgstr "复制选区到临时文件并打开"
+
+#: crates/rustty-input/src/command.rs:365
+msgid "Copy the selection contents to a temporary file and open it."
+msgstr "将选中文本复制到临时文件，并打开。"
+
+#: crates/rustty-input/src/command.rs:373
+msgid "Copy Selection as HTML to Temporary File and Copy Path"
+msgstr "以 HTML 格式复制选区到临时文件并复制路径"
+
+#: crates/rustty-input/src/command.rs:374
+msgid ""
+"Copy the selection contents as HTML to a temporary file and copy the path to "
+"the clipboard."
+msgstr "将选中文本以 HTML 格式复制到临时文件，并将其路径复制到剪贴板。"
+
+#: crates/rustty-input/src/command.rs:381
+msgid "Copy Selection as HTML to Temporary File and Paste Path"
+msgstr "以 HTML 格式复制选区到临时文件并粘贴路径"
+
+#: crates/rustty-input/src/command.rs:382
+msgid ""
+"Copy the selection contents as HTML to a temporary file and paste the path "
+"to the file."
+msgstr "将选中文本以 HTML 格式复制到临时文件，并将其路径粘贴进终端。"
+
+#: crates/rustty-input/src/command.rs:389
+msgid "Copy Selection as HTML to Temporary File and Open"
+msgstr "以 HTML 格式复制选区到临时文件并打开"
+
+#: crates/rustty-input/src/command.rs:390
+msgid "Copy the selection contents as HTML to a temporary file and open it."
+msgstr "将选中文本以 HTML 格式复制到临时文件，并打开。"
+
+#: crates/rustty-input/src/command.rs:398
+msgid "Copy Selection as ANSI Sequences to Temporary File and Copy Path"
+msgstr "以 ANSI 序列格式复制选区到临时文件并复制路径"
+
+#: crates/rustty-input/src/command.rs:399
+msgid ""
+"Copy the selection contents as ANSI escape sequences to a temporary file and "
+"copy the path to the clipboard."
+msgstr "将选中文本以 ANSI 转义序列格式复制到临时文件，并将其路径复制到剪贴板。"
+
+#: crates/rustty-input/src/command.rs:406
+msgid "Copy Selection as ANSI Sequences to Temporary File and Paste Path"
+msgstr "以 ANSI 序列格式复制选区到临时文件并粘贴路径"
+
+#: crates/rustty-input/src/command.rs:407
+msgid ""
+"Copy the selection contents as ANSI escape sequences to a temporary file and "
+"paste the path to the file."
+msgstr "将选中文本以 ANSI 转义序列格式复制到临时文件，并将其路径粘贴进终端。"
+
+#: crates/rustty-input/src/command.rs:414
+msgid "Copy Selection as ANSI Sequences to Temporary File and Open"
+msgstr "以 ANSI 序列格式复制选区到临时文件并打开"
+
+#: crates/rustty-input/src/command.rs:415
+msgid ""
+"Copy the selection contents as ANSI escape sequences to a temporary file and "
+"open it."
+msgstr "将选中文本以 ANSI 转义序列格式复制到临时文件，并打开。"
+
+#: crates/rustty-input/src/command.rs:422
+msgid "Open a new window."
+msgstr "新建一个窗口。"
+
+#: crates/rustty-input/src/command.rs:428
+msgid "Open a new tab."
+msgstr "新建一个标签页。"
+
+#: crates/rustty-input/src/command.rs:434
+msgid "Move Tab Left"
+msgstr "标签页左移"
+
+#: crates/rustty-input/src/command.rs:435
+msgid "Move the current tab to the left."
+msgstr "将当前标签页向左移动。"
+
+#: crates/rustty-input/src/command.rs:439
+msgid "Move Tab Right"
+msgstr "标签页右移"
+
+#: crates/rustty-input/src/command.rs:440
+msgid "Move the current tab to the right."
+msgstr "将当前标签页向右移动。"
+
+#: crates/rustty-input/src/command.rs:446
+msgid "Move Tab to New Window"
+msgstr ""
+
+#: crates/rustty-input/src/command.rs:447
+msgid "Move the current tab to a new window."
+msgstr ""
+
+#: crates/rustty-input/src/command.rs:452
+msgid "Toggle Tab Overview"
+msgstr "切换标签页预览"
+
+#: crates/rustty-input/src/command.rs:453
+msgid "Toggle the tab overview."
+msgstr "切换标签页预览。"
+
+#: crates/rustty-input/src/command.rs:458
+msgid "Change Terminal Title…"
+msgstr "更改终端标题…"
+
+#: crates/rustty-input/src/command.rs:459
+msgid "Prompt for a new title for the current terminal."
+msgstr "更改当前终端的标题。"
+
+#: crates/rustty-input/src/command.rs:465
+msgid "Prompt for a new title for the current tab."
+msgstr "更改当前标签页的标题。"
+
+#: crates/rustty-input/src/command.rs:478
+msgid "Split the terminal to the left."
+msgstr "向左创建新分屏。"
+
+#: crates/rustty-input/src/command.rs:483
+msgid "Split the terminal to the right."
+msgstr "向右创建新分屏。"
+
+#: crates/rustty-input/src/command.rs:488
+msgid "Split the terminal up."
+msgstr "向上创建新分屏。"
+
+#: crates/rustty-input/src/command.rs:493
+msgid "Split the terminal down."
+msgstr "向下创建新分屏。"
+
+#: crates/rustty-input/src/command.rs:500
+msgid "Focus Split: Previous"
+msgstr "聚焦上一个分屏"
+
+#: crates/rustty-input/src/command.rs:501
+msgid "Focus the previous split, if any."
+msgstr "如果存在，将焦点移动到上一个分屏。"
+
+#: crates/rustty-input/src/command.rs:505
+msgid "Focus Split: Next"
+msgstr "聚焦下一个分屏"
+
+#: crates/rustty-input/src/command.rs:506
+msgid "Focus the next split, if any."
+msgstr "如果存在，将焦点移动到下一个分屏。"
+
+#: crates/rustty-input/src/command.rs:510
+msgid "Focus Split: Left"
+msgstr "聚焦左侧分屏"
+
+#: crates/rustty-input/src/command.rs:511
+msgid "Focus the split to the left, if it exists."
+msgstr "如果存在，将焦点移动到左侧的分屏。"
+
+#: crates/rustty-input/src/command.rs:515
+msgid "Focus Split: Right"
+msgstr "聚焦右侧分屏"
+
+#: crates/rustty-input/src/command.rs:516
+msgid "Focus the split to the right, if it exists."
+msgstr "如果存在，将焦点移动到右侧的分屏。"
+
+#: crates/rustty-input/src/command.rs:520
+msgid "Focus Split: Up"
+msgstr "聚焦上方分屏"
+
+#: crates/rustty-input/src/command.rs:521
+msgid "Focus the split above, if it exists."
+msgstr "如果存在，将焦点移动到上方的分屏。"
+
+#: crates/rustty-input/src/command.rs:525
+msgid "Focus Split: Down"
+msgstr "聚焦下方分屏"
+
+#: crates/rustty-input/src/command.rs:526
+msgid "Focus the split below, if it exists."
+msgstr "如果存在，将焦点移动到下方的分屏。"
+
+#: crates/rustty-input/src/command.rs:533
+msgid "Focus Window: Previous"
+msgstr "聚焦上一个窗口"
+
+#: crates/rustty-input/src/command.rs:534
+msgid "Focus the previous window, if any."
+msgstr "如果可能，将焦点移动到上一个窗口。"
+
+#: crates/rustty-input/src/command.rs:538
+msgid "Focus Window: Next"
+msgstr "聚焦下一个窗口"
+
+#: crates/rustty-input/src/command.rs:539
+msgid "Focus the next window, if any."
+msgstr "如果可能，将焦点移动到下一个窗口。"
+
+#: crates/rustty-input/src/command.rs:545
+msgid "Toggle Split Zoom"
+msgstr "切换分屏放大"
+
+#: crates/rustty-input/src/command.rs:546
+msgid "Toggle the zoom state of the current split."
+msgstr "切换当前分屏的放大状态。"
+
+#: crates/rustty-input/src/command.rs:551
+msgid "Toggle Read-Only Mode"
+msgstr "切换只读模式"
+
+#: crates/rustty-input/src/command.rs:552
+msgid "Toggle read-only mode for the current surface."
+msgstr "切换当前分屏的只读状态。"
+
+#: crates/rustty-input/src/command.rs:557
+msgid "Equalize Splits"
+msgstr "均分分屏大小"
+
+#: crates/rustty-input/src/command.rs:558
+msgid "Equalize the size of all splits."
+msgstr "使所有分屏大小相等。"
+
+#: crates/rustty-input/src/command.rs:563
+msgid "Reset Window Size"
+msgstr "重置窗口大小"
+
+#: crates/rustty-input/src/command.rs:564
+msgid "Reset the window size to the default."
+msgstr "将窗口重置到默认大小。"
+
+#: crates/rustty-input/src/command.rs:569
+msgid "Toggle Inspector"
+msgstr "切换调试器"
+
+#: crates/rustty-input/src/command.rs:570
+msgid "Toggle the inspector."
+msgstr "切换终端调试器。"
+
+#: crates/rustty-input/src/command.rs:575
+msgid "Show the GTK Inspector"
+msgstr "显示 GTK 调试器"
+
+#: crates/rustty-input/src/command.rs:576
+msgid "Show the GTK inspector."
+msgstr "显示 GTK 调试器。"
+
+#: crates/rustty-input/src/command.rs:581
+msgid "Show On-Screen Keyboard"
+msgstr "显示屏幕键盘"
+
+#: crates/rustty-input/src/command.rs:582
+msgid "Show the on-screen keyboard if present."
+msgstr "如果可能，显示屏幕键盘。"
+
+#: crates/rustty-input/src/command.rs:588
+msgid "Open Config Using OS editor"
+msgstr "用系统编辑器打开配置"
+
+#: crates/rustty-input/src/command.rs:589
+msgid "Open the config file with the OS's default editor."
+msgstr "用系统默认的编辑器打开配置文件。"
+
+#: crates/rustty-input/src/command.rs:593
+msgid "Open Config in New Terminal Window"
+msgstr "在新终端窗口打开配置"
+
+#: crates/rustty-input/src/command.rs:594
+msgid "Open the config file in a new window using $EDITOR or $VISUAL."
+msgstr "在新终端窗口内用 $EDITOR 或 $VISUAL 程序打开配置文件。"
+
+#: crates/rustty-input/src/command.rs:600
+msgid "Reload Config"
+msgstr "重新加载配置"
+
+#: crates/rustty-input/src/command.rs:601
+msgid "Reload the config file."
+msgstr "重新加载配置文件。"
+
+#: crates/rustty-input/src/command.rs:606
+msgid "Close Terminal"
+msgstr "关闭终端"
+
+#: crates/rustty-input/src/command.rs:607
+msgid "Close the current terminal."
+msgstr "关闭当前终端。"
+
+#: crates/rustty-input/src/command.rs:614
+msgid "Close the current tab."
+msgstr "关闭当前标签页。"
+
+#: crates/rustty-input/src/command.rs:618
+msgid "Close Other Tabs"
+msgstr "关闭其他标签页"
+
+#: crates/rustty-input/src/command.rs:619
+msgid "Close all tabs in this window except the current one."
+msgstr "关闭当前窗口内除了当前标签页以外的所有标签页。"
+
+#: crates/rustty-input/src/command.rs:623
+msgid "Close Tabs to the Right"
+msgstr "关闭右侧标签页"
+
+#: crates/rustty-input/src/command.rs:624
+msgid "Close all tabs to the right of the current one."
+msgstr "关闭当前标签页右侧的所有标签页。"
+
+#: crates/rustty-input/src/command.rs:631
+msgid "Close the current window."
+msgstr "关闭当前窗口。"
+
+#: crates/rustty-input/src/command.rs:636
+msgid "Close All Windows"
+msgstr "关闭所有窗口"
+
+#: crates/rustty-input/src/command.rs:637
+msgid "Close all windows."
+msgstr "关闭所有窗口。"
+
+#: crates/rustty-input/src/command.rs:642
+msgid "Toggle Maximize"
+msgstr "切换最大化"
+
+#: crates/rustty-input/src/command.rs:643
+msgid "Toggle the maximized state of the current window."
+msgstr "切换当前窗口的最大化状态。"
+
+#: crates/rustty-input/src/command.rs:648
+msgid "Toggle Fullscreen"
+msgstr "切换全屏"
+
+#: crates/rustty-input/src/command.rs:649
+msgid "Toggle the fullscreen state of the current window."
+msgstr "切换当前窗口的全屏状态。"
+
+#: crates/rustty-input/src/command.rs:654
+msgid "Toggle Window Decorations"
+msgstr "切换窗口装饰"
+
+#: crates/rustty-input/src/command.rs:655
+msgid "Toggle the window decorations."
+msgstr "切换是否显示窗口装饰，如标题栏、边框等。"
+
+#: crates/rustty-input/src/command.rs:660
+msgid "Toggle Float on Top"
+msgstr "切换窗口置顶"
+
+#: crates/rustty-input/src/command.rs:661
+msgid "Toggle the float on top state of the current window."
+msgstr "切换当前窗口的置顶状态。"
+
+#: crates/rustty-input/src/command.rs:666
+msgid "Toggle Secure Input"
+msgstr "切换安全输入"
+
+#: crates/rustty-input/src/command.rs:667
+msgid "Toggle secure input mode."
+msgstr "切换安全输入模式。"
+
+#: crates/rustty-input/src/command.rs:672
+msgid "Toggle Mouse Reporting"
+msgstr "切换鼠标事件上报"
+
+#: crates/rustty-input/src/command.rs:673
+msgid "Toggle whether mouse events are reported to terminal applications."
+msgstr "切换是否向终端应用上报鼠标事件。"
+
+#: crates/rustty-input/src/command.rs:678
+# Opacity 实际指不透明度，但是这样表述太拗口了
+msgid "Toggle Background Opacity"
+msgstr "切换背景透明度"
+
+#: crates/rustty-input/src/command.rs:679
+msgid "Toggle the background opacity of a window that started transparent."
+msgstr "切换最初透明的窗口的背景透明度。"
+
+#: crates/rustty-input/src/command.rs:684
+msgid "Check for Updates"
+msgstr "检查更新"
+
+#: crates/rustty-input/src/command.rs:685
+msgid "Check for updates to the application."
+msgstr "检查应用是否有版本更新。"
+
+#: crates/rustty-input/src/command.rs:690
+msgid "Undo"
+msgstr "撤销"
+
+#: crates/rustty-input/src/command.rs:691
+msgid "Undo the last action."
+msgstr "撤销上一个操作。"
+
+#: crates/rustty-input/src/command.rs:696
+msgid "Redo"
+msgstr "重做"
+
+#: crates/rustty-input/src/command.rs:697
+msgid "Redo the last undone action."
+msgstr "重做上一个撤销的操作。"
+
+#: crates/rustty-input/src/command.rs:703
+msgid "Quit the application."
+msgstr "退出应用。"
+
+#: crates/rustty-input/src/command.rs:708
+msgid "Rustty"
+msgstr "Rustty"
+
+#: crates/rustty-input/src/command.rs:709
+msgid "Put a little Rustty in your terminal."
+msgstr "把一只小 Rustty 塞进终端里。"

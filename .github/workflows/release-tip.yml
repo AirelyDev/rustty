@@ -92,7 +92,7 @@ jobs:
         # must not abort the run: with no outputs, "Determine skip" below falls
         # through to should_skip=false and builds, which is the safe direction.
         continue-on-error: true
-        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           token: ""
           base: tip

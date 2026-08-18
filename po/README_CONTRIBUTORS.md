@@ -51,6 +51,30 @@ let text = if awesome {
 let label = gtk::Label::new(Some(text));
 ```
 
+If a string must be stored untranslated and only translated later, use
+`i18n::N_` instead. This marks the string for extraction into the translation
+template but returns the original msgid unchanged. A common use case is
+compile-time or static metadata that is translated only when it is presented
+to the user.
+
+```rust
+use rustty_os::i18n;
+
+struct Command {
+    title: &'static str,
+}
+
+let cmd = Command {
+    title: i18n::N_("Reset Terminal"),
+};
+
+let label = gtk::Label::new(Some(i18n::_(cmd.title)));
+```
+
+`i18n::_` is a runtime catalog lookup, so it cannot appear in a `const` or
+`static` initializer. For strings that are stored untranslated and translated
+later, prefer `i18n::N_`.
+
 All translatable strings are extracted into the _translation template file_,
 located under `po/io.airely.rustty.pot`. **This file must stay in sync with
 the list of translatable strings present in source code or Blueprints at all times.**

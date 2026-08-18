@@ -43,12 +43,11 @@ sentry-sys = { workspace = true }
 # the workspace manifest note). Used by the sentry_envelope port.
 serde_json = { workspace = true }
 
-# P3-W7 T3 (area-E `E15`): the captured environment accessors. Upstream's
-# `crash/dir.zig` and `crash/sentry.zig` call `global.environMap()` directly to
-# feed the `xdg` helpers' new explicit-map parameter. rustty-global is the LEAF
-# state-holder (break #1), so this edge is strictly downward and G7 stays green.
-# NOTE this is the ENVIRONMENT accessor only — the ALLOCATOR read below stays a
-# DI seam, unchanged.
+# P4-E33 (`15c50c1db` "crash: do not use global state"): upstream's crash files
+# no longer import `global` AT ALL — callers pass the environment-map snapshot
+# in (`sentry.init` owns it; `defaultDir` borrows it). This edge remains only
+# for the `EnvMap` TYPE (the Rust image of `std.process.Environ.Map`, hosted by
+# the leaf state crate); rustty-crash performs no live global reads.
 rustty-global = { workspace = true }
 
 # NOTE (R4, integration-tier blueprint): `rustty-global` stays INJECTED for the

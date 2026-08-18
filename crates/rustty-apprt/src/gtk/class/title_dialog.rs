@@ -31,6 +31,8 @@ pub enum Target {
     Surface,
     /// PORTS: `title_dialog.zig:222` `.tab`.
     Tab,
+    /// PORTS: `title_dialog.zig:223` `.window`.
+    Window,
 }
 
 impl Target {
@@ -42,6 +44,7 @@ impl Target {
         match self {
             Target::Surface => tr(c"Change Terminal Title"),
             Target::Tab => tr(c"Change Tab Title"),
+            Target::Window => tr(c"Change Window Title"),
         }
     }
 }

@@ -14,6 +14,8 @@ use rustty_args::args;
 use crate::rustty::{Action, Error};
 // const Duration = @import("../config.zig").Config.Duration;
 use rustty_config::value_types::Duration;
+// const terminfopkg = @import("../terminfo/main.zig");
+use rustty_terminfo as terminfopkg;
 // pub const Entry = @import("ssh-cache/Entry.zig");
 pub mod entry;
 pub use entry::Entry;
@@ -248,8 +250,34 @@ pub fn run() -> Result<u8, Error> {
         }
     }
 
-    // const result = runInner(alloc, opts, query, stdout, stderr);
-    let result = run_inner(&opts, query.as_deref(), &mut stdout, &mut stderr);
+    // Setup our disk cache to the standard location
+    // const cache_path = DiskCache.defaultPath(alloc, "ghostty") catch |err| {
+    //     try stderr.print(
+    //         "Error: unable to determine the cache path: {t}\n",
+    //         .{err},
+    //     );
+    //     stderr.flush() catch {};
+    //     return 1;
+    // };
+    //   R2 / ADV-FIX 5: the program dir is the Rustty app name via identity.
+    let cache_path = match DiskCache::default_path(rustty_identity::APP_NAME) {
+        Ok(path) => path,
+        Err(err) => {
+            writeln!(stderr, "Error: unable to determine the cache path: {err}")
+                .map_err(Error::from)?;
+            let _ = stderr.flush();
+            return Ok(1);
+        }
+    };
+
+    // const result = runInner(alloc, opts, query, .{ .path = cache_path }, stdout, stderr);
+    let result = run_inner(
+        &opts,
+        query.as_deref(),
+        DiskCache { path: cache_path },
+        &mut stdout,
+        &mut stderr,
+    );
 
     // Flushing *shouldn't* fail but...
     // stdout.flush() catch {};
@@ -263,15 +291,16 @@ pub fn run() -> Result<u8, Error> {
     result.map_err(Error::from)
 }
 
-// pub fn runInner(alloc, opts, query, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !u8 {
+// pub fn runInner(alloc, opts, query, cache: DiskCache, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !u8 {
 //
 // PORT NOTE: generic over the output writers (the reference passes `*std.Io.Writer`;
-// the unit tests pass in-memory writers). Errors are I/O-shaped: the disk-cache
-// error variants that propagate (`clear`/`list`/`defaultPath`) fold into
-// `std::io::Error` via `From<disk_cache::Error>`.
+// the unit tests pass in-memory writers). Every disk-cache failure is reported
+// inline against `cache.path` and mapped to an exit code, so only writer I/O
+// errors propagate.
 fn run_inner<Wo: Write, We: Write>(
     opts: &Options,
     query: Option<&[u8]>,
+    cache: DiskCache,
     stdout: &mut Wo,
     stderr: &mut We,
 ) -> Result<u8, std::io::Error> {
@@ -299,39 +328,49 @@ fn run_inner<Wo: Write, We: Write>(
         return Ok(2);
     }
 
-    // Setup our disk cache to the standard location
-    // const cache_path = try DiskCache.defaultPath(alloc, "ghostty");
-    //   R2 / ADV-FIX 5: the program dir is the Rustty app name via identity.
-    let cache_path = DiskCache::default_path(rustty_identity::APP_NAME)?;
-    // const cache: DiskCache = .{ .path = cache_path };
-    let cache = DiskCache { path: cache_path };
-
-    // if (opts.clear) { try cache.clear(); return 0; }
+    // if (opts.clear) {
     if opts.clear {
-        cache.clear()?;
+        // cache.clear() catch |err| {
+        //     try stderr.print(
+        //         "Error: unable to clear cache '{s}': {t}\n",
+        //         .{ cache.path, err },
+        //     );
+        //     return 1;
+        // };
+        if let Err(err) = cache.clear() {
+            writeln!(
+                stderr,
+                "Error: unable to clear cache '{}': {}",
+                String::from_utf8_lossy(&cache.path),
+                err,
+            )?;
+            return Ok(1);
+        }
+        // return 0;
         return Ok(0);
     }
 
     // if (opts.add) |dest| {
     if let Some(dest) = &opts.add {
-        // cache.add(alloc, dest, std.time.timestamp()) catch |err| switch (err) {
-        match cache.add(dest, timestamp()) {
+        // cache.add(alloc, dest, terminfopkg.version, std.Io.Timestamp.now(global.io(), .real).toSeconds()) catch |err| switch (err) {
+        match cache.add(dest, terminfopkg::version().as_bytes(), timestamp()) {
             Ok(()) => {}
-            // error.InvalidCacheKey => { stderr "Error: Invalid destination '{s}' ..."; return 2; },
+            // error.InvalidCacheKey => { stderr "Error: invalid destination '{s}' ..."; return 2; },
             Err(disk_cache::Error::InvalidCacheKey) => {
                 writeln!(
                     stderr,
-                    "Error: Invalid destination '{}' (expected hostname or user@hostname)",
+                    "Error: invalid destination '{}' (expected hostname or user@hostname)",
                     String::from_utf8_lossy(dest),
                 )?;
                 return Ok(2);
             }
-            // else => { stderr "Error: Unable to add '{s}' to cache. Error: {}\n"; return 1; },
+            // else => { stderr "Error: unable to add '{s}' to cache '{s}': {t}\n"; return 1; },
             Err(err) => {
                 writeln!(
                     stderr,
-                    "Error: Unable to add '{}' to cache. Error: {}",
+                    "Error: unable to add '{}' to cache '{}': {}",
                     String::from_utf8_lossy(dest),
+                    String::from_utf8_lossy(&cache.path),
                     err,
                 )?;
                 return Ok(1);
@@ -346,21 +385,22 @@ fn run_inner<Wo: Write, We: Write>(
         // const removed = cache.remove(alloc, dest) catch |err| switch (err) {
         let removed = match cache.remove(dest) {
             Ok(removed) => removed,
-            // error.InvalidCacheKey => { stderr "Error: Invalid destination ..."; return 2; },
+            // error.InvalidCacheKey => { stderr "Error: invalid destination ..."; return 2; },
             Err(disk_cache::Error::InvalidCacheKey) => {
                 writeln!(
                     stderr,
-                    "Error: Invalid destination '{}' (expected hostname or user@hostname)",
+                    "Error: invalid destination '{}' (expected hostname or user@hostname)",
                     String::from_utf8_lossy(dest),
                 )?;
                 return Ok(2);
             }
-            // else => { stderr "Error: Unable to remove '{s}' from cache. Error: {}\n"; return 1; },
+            // else => { stderr "Error: unable to remove '{s}' from cache '{s}': {t}\n"; return 1; },
             Err(err) => {
                 writeln!(
                     stderr,
-                    "Error: Unable to remove '{}' from cache. Error: {}",
+                    "Error: unable to remove '{}' from cache '{}': {}",
                     String::from_utf8_lossy(dest),
+                    String::from_utf8_lossy(&cache.path),
                     err,
                 )?;
                 return Ok(1);
@@ -392,11 +432,22 @@ fn run_inner<Wo: Write, We: Write>(
             )?;
             return Ok(2);
         }
-        // const pruned = cache.prune(alloc, max_age_s) catch |err| { stderr "Error: Unable to prune cache. Error: {}\n"; return 1; };
+        // const pruned = cache.prune(alloc, max_age_s) catch |err| {
+        //     try stderr.print(
+        //         "Error: unable to prune cache '{s}': {t}\n",
+        //         .{ cache.path, err },
+        //     );
+        //     return 1;
+        // };
         let pruned = match cache.prune(max_age_s) {
             Ok(pruned) => pruned,
             Err(err) => {
-                writeln!(stderr, "Error: Unable to prune cache. Error: {err}")?;
+                writeln!(
+                    stderr,
+                    "Error: unable to prune cache '{}': {}",
+                    String::from_utf8_lossy(&cache.path),
+                    err,
+                )?;
                 return Ok(1);
             }
         };
@@ -406,19 +457,36 @@ fn run_inner<Wo: Write, We: Write>(
         return Ok(0);
     }
 
-    // var entries = try cache.list(alloc);
+    // var entries = cache.list(alloc) catch |err| {
+    //     try stderr.print(
+    //         "Error: unable to read cache '{s}': {t}\n",
+    //         .{ cache.path, err },
+    //     );
+    //     return 1;
+    // };
     // defer DiskCache.deinitEntries(alloc, &entries);
-    let mut entries = cache.list()?;
+    let mut entries = match cache.list() {
+        Ok(entries) => entries,
+        Err(err) => {
+            writeln!(
+                stderr,
+                "Error: unable to read cache '{}': {}",
+                String::from_utf8_lossy(&cache.path),
+                err,
+            )?;
+            return Ok(1);
+        }
+    };
 
     // A positional query filters the listing: an exact `user@host` match,
     // or every entry on a bare `host`.
     // if (query) |q| {
     if let Some(q) = query {
-        // if (!DiskCache.isValidCacheKey(q)) { stderr "Error: Invalid destination ..."; return 2; }
+        // if (!DiskCache.isValidCacheKey(q)) { stderr "Error: invalid destination ..."; return 2; }
         if !DiskCache::is_valid_cache_key(q) {
             writeln!(
                 stderr,
-                "Error: Invalid destination '{}' (expected hostname or user@hostname)",
+                "Error: invalid destination '{}' (expected hostname or user@hostname)",
                 String::from_utf8_lossy(q),
             )?;
             DiskCache::deinit_entries(&mut entries);
@@ -851,13 +919,26 @@ mod tests {
         let mut stderr: Vec<u8> = Vec::new();
 
         // The check runs before any cache access, so it never touches disk.
-        // const code = try runInner(alloc, .{ .add = "example.com", .remove = "other.com" }, null, ...);
+        // const cache: DiskCache = .{ .path = "/nonexistent/ssh_cache" };
+        let cache = DiskCache {
+            path: b"/nonexistent/ssh_cache".to_vec(),
+        };
+        // const code = try runInner(alloc, .{ .add = "example.com", .remove = "other.com" }, null, cache, ...);
         let opts = Options {
             add: Some(b"example.com".to_vec()),
             remove: Some(b"other.com".to_vec()),
             ..Default::default()
         };
-        let code = run_inner(&opts, None, &mut stdout, &mut stderr).unwrap();
+        let code = run_inner(
+            &opts,
+            None,
+            DiskCache {
+                path: cache.path.clone(),
+            },
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
 
         // try testing.expectEqual(@as(u8, 2), code);
         assert_eq!(2u8, code);
@@ -869,15 +950,110 @@ mod tests {
         // A positional query is itself an action: query + a flag conflicts.
         // stderr.clearRetainingCapacity();
         stderr.clear();
-        // const code2 = try runInner(alloc, .{ .clear = true }, "example.com", ...);
+        // const code2 = try runInner(alloc, .{ .clear = true }, "example.com", cache, ...);
         let opts2 = Options {
             clear: true,
             ..Default::default()
         };
-        let code2 = run_inner(&opts2, Some(b"example.com"), &mut stdout, &mut stderr).unwrap();
+        let code2 = run_inner(
+            &opts2,
+            Some(b"example.com"),
+            cache,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
         // try testing.expectEqual(@as(u8, 2), code2);
         assert_eq!(2u8, code2);
         // try testing.expect(std.mem.indexOf(u8, stderr.written(), "only one") != null);
         assert!(find_subslice(&stderr, b"only one").is_some());
+    }
+
+    // test "runInner fails cleanly when the cache is unusable"
+    #[test]
+    fn run_inner_fails_cleanly_when_the_cache_is_unusable() {
+        // A directory where the cache file belongs fails every operation.
+        // var tmp = testing.tmpDir(.{});
+        // defer tmp.cleanup();
+        // try tmp.dir.createDirPath(io, "ssh_cache");
+        // const tmp_path = try tmp.dir.realPathFileAlloc(io, ".", alloc);
+        // const cache_path = try std.fs.path.join(alloc, &.{ tmp_path, "ssh_cache" });
+        // const cache: DiskCache = .{ .path = cache_path };
+        //
+        // PORT NOTE (test-only glue): a per-test unique temp dir with Drop
+        // cleanup reproduces `testing.tmpDir` (the parallel-runner isolation
+        // lesson); the cache path points at the created DIRECTORY.
+        let mut tmp_path = std::env::temp_dir();
+        tmp_path.push(format!(
+            "rustty-ssh-cache-unusable-{}-{}",
+            std::process::id(),
+            line!(),
+        ));
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(tmp_path.clone());
+        let dir_cache_path = tmp_path.join("ssh_cache");
+        std::fs::create_dir_all(&dir_cache_path).unwrap();
+        let cache_path_bytes: Vec<u8> = {
+            #[cfg(unix)]
+            {
+                use std::os::unix::ffi::OsStrExt;
+                dir_cache_path.as_os_str().as_bytes().to_vec()
+            }
+            #[cfg(not(unix))]
+            {
+                dir_cache_path.to_string_lossy().into_owned().into_bytes()
+            }
+        };
+
+        // var stdout: std.Io.Writer.Allocating = .init(alloc); var stderr: ...;
+        let mut stdout: Vec<u8> = Vec::new();
+        let mut stderr: Vec<u8> = Vec::new();
+
+        // const opts: []const Options = &.{
+        //     .{}, // the default listing
+        //     .{ .add = "example.com" },
+        //     .{ .remove = "example.com" },
+        //     .{ .prune = .{ .duration = std.time.ns_per_s } },
+        // };
+        let opts_list: [Options; 4] = [
+            // the default listing
+            Options::default(),
+            Options {
+                add: Some(b"example.com".to_vec()),
+                ..Default::default()
+            },
+            Options {
+                remove: Some(b"example.com".to_vec()),
+                ..Default::default()
+            },
+            Options {
+                prune: Some(Duration {
+                    duration: NS_PER_S,
+                }),
+                ..Default::default()
+            },
+        ];
+        // for (opts) |o| {
+        //     const code = try runInner(alloc, o, null, cache, &stdout.writer, &stderr.writer);
+        //     try testing.expectEqual(@as(u8, 1), code);
+        // }
+        for o in &opts_list {
+            let code = run_inner(
+                o,
+                None,
+                DiskCache {
+                    path: cache_path_bytes.clone(),
+                },
+                &mut stdout,
+                &mut stderr,
+            )
+            .unwrap();
+            assert_eq!(1u8, code);
+        }
     }
 }

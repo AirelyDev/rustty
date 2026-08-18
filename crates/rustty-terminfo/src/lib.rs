@@ -23,6 +23,8 @@ pub mod entry;
 pub mod source;
 
 pub use entry::rustty;
+// pub const version = @import("ghostty.zig").version;
+pub use entry::version;
 pub use source::Source;
 
 // The reference `main.zig` has a single `test { refAllDecls(@This()) }` that
@@ -42,5 +44,6 @@ mod tests {
         // Source + its constructors are reachable.
         let _ = rustty();
         let _: fn() -> Source = rustty;
+        let _: &'static str = version();
     }
 }

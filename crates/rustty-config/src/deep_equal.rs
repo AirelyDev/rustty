@@ -89,6 +89,7 @@ deep_equal_via_eq!(
     WindowNewTabPosition,
     MacOSDockDropBehavior,
     WindowShowTabBar,
+    DragHandle,
     ResizeOverlay,
     ResizeOverlayPosition,
     QuickTerminalPosition,

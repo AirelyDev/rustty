@@ -129,8 +129,21 @@ fn homeUnix<'a>(
         }
 
         // If all else fails, have the shell tell us...
+        // PORT NOTE (P4-E33, `15c50c1db`): upstream's `std.process.run` gained
+        // `.environ_map = environ_map` — the child's environment IS the
+        // caller-supplied snapshot (not the live process environment), so this
+        // fallback cannot race a concurrent `setenv`. `env_clear` + `envs` is
+        // the Rust image of a full environment replacement.
+        use std::os::unix::ffi::OsStrExt;
         let run = std::process::Command::new("/bin/sh")
             .args(["-c", "cd && pwd"])
+            .env_clear()
+            .envs(environ_map.iter().map(|(k, v)| {
+                (
+                    std::ffi::OsStr::from_bytes(k),
+                    std::ffi::OsStr::from_bytes(v),
+                )
+            }))
             .output();
 
         if let Ok(run) = run {

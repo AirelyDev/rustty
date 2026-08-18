@@ -28,7 +28,7 @@
 //!     msgid exists in the `.pot` and every oracle code-side catalog entry is
 //!     actually looked up somewhere. Run it after any regeneration.
 //!   * After running this command, `msgcmp po/<l>.po po/io.airely.rustty.pot`
-//!     must be silent for all 31 locales and `msgattrib --only-obsolete` must
+//!     must be silent for all 32 locales and `msgattrib --only-obsolete` must
 //!     produce an empty body — i.e. no translation was orphaned.
 //!
 //! Rust-side keywords: `_` is not a legal Rust fn name, so `os/i18n.zig`'s `_()`
@@ -66,7 +66,7 @@ const COPYRIGHT_HOLDER: &str = "Mitchell Hashimoto, Ghostty contributors, Rustty
 pub(crate) const LOCALES: &[&str] = &[
     "zh_CN", "de", "fr", "ja", "nl", "nb", "ru", "uk", "pl", "ko_KR", "mk", "tr", "id", "es_BO",
     "es_AR", "es_ES", "pt_BR", "ca", "it", "bg", "ga", "hu", "he", "zh_TW", "hr", "lt", "lv", "vi",
-    "kk", "be", "eu",
+    "kk", "be", "eu", "da",
 ];
 
 /// Recursively collect GTK-apprt source files (`.blp` + `.rs`) as paths

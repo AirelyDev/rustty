@@ -1,0 +1,1138 @@
+# Danish translations for io.airely.rustty package.
+# Copyright (C) 2026 "Mitchell Hashimoto, Rustty contributors"
+# This file is distributed under the same license as the io.airely.rustty package.
+# Carl Villads Priisholm <carl.priisholm@gmail.com>, 2026.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: io.airely.rustty\n"
+"Report-Msgid-Bugs-To: gael@airely.io\n"
+"POT-Creation-Date: 2026-08-10 10:06-0500\n"
+"PO-Revision-Date: 2026-08-13 12:00+0200\n"
+"Last-Translator: Carl Villads Priisholm <carl.priisholm@gmail.com>\n"
+"Language-Team: Danish <dansk@dansk-gruppen.dk>\n"
+"Language: da\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: dist/linux/rustty_nautilus.py:53
+msgid "Open in Rustty"
+msgstr "Åben i Rustty"
+
+#: crates/rustty-apprt/assets/ui/1.0/clipboard-confirmation-dialog.blp:12
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:12
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:197
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:201
+msgid "Authorize Clipboard Access"
+msgstr "Autorisér adgang til udklipsholderen"
+
+#: crates/rustty-apprt/assets/ui/1.0/clipboard-confirmation-dialog.blp:17
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:17
+msgid "Deny"
+msgstr "Afvis"
+
+#: crates/rustty-apprt/assets/ui/1.0/clipboard-confirmation-dialog.blp:18
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:18
+msgid "Allow"
+msgstr "Tillad"
+
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:92
+msgid "Remember choice for this split"
+msgstr "Husk mit valg for denne deling"
+
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:93
+msgid "Reload configuration to show this prompt again"
+msgstr "Genindlæs konfigurationen for at se denne dialog igen"
+
+#: crates/rustty-apprt/assets/ui/1.2/close-confirmation-dialog.blp:7
+#: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:8
+#: crates/rustty-apprt/src/gtk/class/application.rs:2263
+msgid "Cancel"
+msgstr "Annullér"
+
+#: crates/rustty-apprt/assets/ui/1.2/close-confirmation-dialog.blp:8
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:90
+#: crates/rustty-apprt/assets/ui/1.3/surface-child-exited.blp:17
+msgid "Close"
+msgstr "Luk"
+
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:6
+msgid "Configuration Errors"
+msgstr "Konfigurationsfejl"
+
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:8
+msgid ""
+"One or more configuration errors were found. Please review the errors below, "
+"and either reload your configuration or ignore these errors."
+msgstr ""
+"Der blev fundet en eller flere konfigurationsfejl. Venligst gennemse fejlene "
+"nedenfor, og derefter enten genindlæs konfigurationen, eller ignorer disse "
+"fejl."
+
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:12
+msgid "Ignore"
+msgstr "Ignorer"
+
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:13
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:439 crates/rustty-apprt/assets/ui/1.5/window.blp:318
+msgid "Reload Configuration"
+msgstr "Genindlæs konfiguration"
+
+#: crates/rustty-apprt/assets/ui/1.2/debug-warning.blp:7
+#: crates/rustty-apprt/assets/ui/1.3/debug-warning.blp:6
+msgid ""
+"⚠️ You're running a debug build of Rustty! Performance will be degraded."
+msgstr ""
+"⚠️ Du kører et debug build af Rustty! Dette medfører en nedsat ydeevne."
+
+#: crates/rustty-apprt/assets/ui/1.5/inspector-window.blp:5
+msgid "Rustty: Terminal Inspector"
+msgstr "Rustty: Terminal-inspektør"
+
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:29
+msgid "Find…"
+msgstr "Find…"
+
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:69
+msgid "Previous Match"
+msgstr "Forrige match"
+
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:79
+msgid "Next Match"
+msgstr "Næste match"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:7
+msgid "Oh, no."
+msgstr "Åh nej."
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:8
+msgid "Unable to acquire an OpenGL context for rendering."
+msgstr "Det var ikke muligt at anskaffe en OpenGL kontekst for rendering."
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:101
+msgid ""
+"This terminal is in read-only mode. You can still view, select, and scroll "
+"through the content, but no input events will be sent to the running "
+"application."
+msgstr ""
+"Denne terminal er i skrivebeskyttet tilstand. Du kan stadig se, vælge, og "
+"scrolle gennem indholdet, men ingen anslag vil blive sendt til det kørende "
+"program."
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:112
+msgid "Read-only"
+msgstr "Skrivebeskyttet"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:316 crates/rustty-apprt/assets/ui/1.5/window.blp:203
+msgid "Copy"
+msgstr "Kopiér"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:321 crates/rustty-apprt/assets/ui/1.5/window.blp:208
+msgid "Paste"
+msgstr "Sæt ind"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:326
+msgid "Notify on Next Command Finish"
+msgstr "Giv mig besked når den næste kommando er færdig"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:333 crates/rustty-apprt/assets/ui/1.5/window.blp:281
+msgid "Clear"
+msgstr "Ryd"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:338 crates/rustty-apprt/assets/ui/1.5/window.blp:286
+msgid "Reset"
+msgstr "Nulstil"
+
+# I de andre oversættelser af 'split' bruges 'del' i stedet for 'opdel', men tror det er for tvetydigt at have 'del' stående alene.
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:345 crates/rustty-apprt/assets/ui/1.5/window.blp:250
+msgid "Split"
+msgstr "Opdel"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:348 crates/rustty-apprt/assets/ui/1.5/window.blp:253
+msgid "Change Title…"
+msgstr "Skift titel…"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:353 crates/rustty-apprt/assets/ui/1.5/window.blp:180
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:258 crates/rustty-input/src/command.rs:487
+msgid "Split Up"
+msgstr "Del opad"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:359 crates/rustty-apprt/assets/ui/1.5/window.blp:185
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:263 crates/rustty-input/src/command.rs:492
+msgid "Split Down"
+msgstr "Del nedad"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:365 crates/rustty-apprt/assets/ui/1.5/window.blp:190
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:268 crates/rustty-input/src/command.rs:477
+msgid "Split Left"
+msgstr "Del mod venstre"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:371 crates/rustty-apprt/assets/ui/1.5/window.blp:195
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:273 crates/rustty-input/src/command.rs:482
+msgid "Split Right"
+msgstr "Del mod højre"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:377
+msgid "Close Split"
+msgstr "Luk deling"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:383
+msgid "Tab"
+msgstr "Fane"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:386 crates/rustty-apprt/assets/ui/1.5/window.blp:232
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:339 crates/rustty-input/src/command.rs:464
+msgid "Change Tab Title…"
+msgstr "Skift fanetitel…"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:391 crates/rustty-apprt/assets/ui/1.5/window.blp:60
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:110 crates/rustty-apprt/assets/ui/1.5/window.blp:237
+#: crates/rustty-input/src/command.rs:427
+msgid "New Tab"
+msgstr "Ny fane"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:396 crates/rustty-apprt/assets/ui/1.5/window.blp:242
+#: crates/rustty-input/src/command.rs:613
+msgid "Close Tab"
+msgstr "Luk fane"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:403
+msgid "Window"
+msgstr "Vindue"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:406 crates/rustty-apprt/assets/ui/1.5/window.blp:215
+msgid "Change Window Title…"
+msgstr "Skift titel på vindue…"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:411 crates/rustty-apprt/assets/ui/1.5/window.blp:220
+#: crates/rustty-input/src/command.rs:421
+msgid "New Window"
+msgstr "Nyt vindue"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:416 crates/rustty-apprt/assets/ui/1.5/window.blp:225
+#: crates/rustty-input/src/command.rs:630
+msgid "Close Window"
+msgstr "Luk vindue"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:424 crates/rustty-apprt/assets/ui/1.5/window.blp:303
+msgid "Config"
+msgstr "Konfiguration"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:427 crates/rustty-apprt/assets/ui/1.5/window.blp:306
+msgid "Open Configuration in OS Editor"
+msgstr "Åben konfigurering i styresystemets redigeringsprogram"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:433 crates/rustty-apprt/assets/ui/1.5/window.blp:312
+msgid "Open Configuration in New Window"
+msgstr "Åben konfigurering i nyt vindue"
+
+#: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:5
+msgid "Leave blank to restore the default title."
+msgstr "Lad feltet stå tomt for at gendanne standardtitlen."
+
+#: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:9
+msgid "OK"
+msgstr "OK"
+
+# Her bruges 'opdeling' igen, da jeg tror at 'deling' vil være for tvetydigt
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:61 crates/rustty-apprt/assets/ui/1.5/window.blp:111
+msgid "New Split"
+msgstr "Ny opdeling"
+
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:71 crates/rustty-apprt/assets/ui/1.5/window.blp:129
+msgid "View Open Tabs"
+msgstr "Vis åbne faner"
+
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:81 crates/rustty-apprt/assets/ui/1.5/window.blp:143
+msgid "Main Menu"
+msgstr "Hovedmenu"
+
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:293
+msgid "Command Palette"
+msgstr "Kommandopalet"
+
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:298
+msgid "Terminal Inspector"
+msgstr "Terminalinspektør"
+
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:326 crates/rustty-apprt/src/gtk/class/window.rs:1991
+msgid "About Rustty"
+msgstr "Om Rustty"
+
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:331 crates/rustty-input/src/command.rs:702
+msgid "Quit"
+msgstr "Luk ned"
+
+#: crates/rustty-apprt/assets/ui/1.5/command-palette.blp:17
+msgid "Execute a command…"
+msgstr "Eksekver en kommando…"
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:1767
+msgid "The keybind was revoked by the system."
+msgstr "Tastaturgenvejen blev ophævet af systemet."
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:1769
+msgid "The keybind was denied by the system."
+msgstr "Tastaturgenvejen blev afvist af systemet."
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:1780
+msgid "Global keybind unavailable"
+msgstr "Global tastaturgenvej utilgængelig"
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:2259
+msgid "Export Terminal IO Events"
+msgstr "Eksportér terminal IO-begivenheder"
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:2262
+msgid "Export"
+msgstr "Eksportér"
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:2783
+msgid "Editing configuration file"
+msgstr "Redigerer konfigurationsfil"
+
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:198
+msgid ""
+"An application is attempting to write to the clipboard. The current "
+"clipboard contents are shown below."
+msgstr ""
+"Et program prøver at skrive til udklipsholderen. Indholdet af den "
+"nuværende udklipsholder er vist nedenfor."
+
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:202
+msgid ""
+"An application is attempting to read from the clipboard. The current "
+"clipboard contents are shown below."
+msgstr ""
+"Et program prøver at læse fra udklipsholderen. Indholdet af den "
+"nuværende udklipsholder er vist nedenfor."
+
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:205
+msgid "Warning: Potentially Unsafe Paste"
+msgstr "Advarsel: Potentielt usikker indsætning"
+
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:206
+msgid ""
+"Pasting this text into the terminal may be dangerous as it looks like some "
+"commands may be executed."
+msgstr ""
+"Det kan være farligt at indsætte denne tekst i terminalen, da det ligner at "
+"en eller flere kommandoer vil blive eksekveret."
+
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:184
+msgid "Quit Rustty?"
+msgstr "Luk ned for Rustty?"
+
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:185
+msgid "Close Tab?"
+msgstr "Luk fane?"
+
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:186
+msgid "Close Window?"
+msgstr "Luk vindue?"
+
+# Her bruges opdeling igen da 'deling' kunne være tvetydigt
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:187
+msgid "Close Split?"
+msgstr "Luk opdeling?"
+
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:193
+msgid "All terminal sessions will be terminated."
+msgstr "Alle terminalsessioner vil blive afsluttet."
+
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:194
+msgid "All terminal sessions in this tab will be terminated."
+msgstr "Alle terminalsessioner i denne fane vil blive afsluttet."
+
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:195
+msgid "All terminal sessions in this window will be terminated."
+msgstr "Alle terminalsessioner i dette vindue vil blive afsluttet."
+
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:196
+msgid "The currently running process in this split will be terminated."
+msgstr "Den kørende proces i denne opdeling vil blive afsluttet."
+
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1181
+msgid "Command Finished"
+msgstr "Kommandoen er færdig"
+
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1182
+#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:109
+msgid "Command Succeeded"
+msgstr "Kommandoen lykkedes"
+
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1183
+#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:113
+msgid "Command Failed"
+msgstr "Kommandoen fejlede"
+
+#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:227
+msgid "Change Terminal Title"
+msgstr "Skift terminaltitlen"
+
+#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:228
+msgid "Change Tab Title"
+msgstr "Skift fanetitel"
+
+#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:229
+msgid "Change Window Title"
+msgstr "Skift vinduestitel"
+
+#: crates/rustty-apprt/src/gtk/class/window.rs:1153
+msgid "Reloaded the configuration"
+msgstr "Konfigurationen blev genindlæst"
+
+#: crates/rustty-apprt/src/gtk/class/window.rs:1830
+msgid "Copied to clipboard"
+msgstr "Kopieret til udklipsholder"
+
+#: crates/rustty-apprt/src/gtk/class/window.rs:1832
+msgid "Cleared clipboard"
+msgstr "Udklipsholderen blev ryddet"
+
+#: crates/rustty-apprt/src/gtk/class/window.rs:1972
+msgid "Rustty Developers"
+msgstr "Rustty udviklerne"
+
+#: crates/rustty-input/src/command.rs:149
+msgid "Reset Terminal"
+msgstr "Nulstil terminal"
+
+#: crates/rustty-input/src/command.rs:150
+msgid "Reset the terminal to a clean state."
+msgstr "Nulstil terminalen fuldstændigt."
+
+#: crates/rustty-input/src/command.rs:155
+msgid "Copy to Clipboard"
+msgstr "Kopiér til udklipsholder"
+
+#: crates/rustty-input/src/command.rs:156
+msgid ""
+"Copy the selected text to the clipboard in both plain and styled formats."
+msgstr ""
+"Kopiér den valgte tekst i både almindelig og stiliseret format til udklipsholderen."
+
+#: crates/rustty-input/src/command.rs:159
+msgid "Copy Selection as Plain Text to Clipboard"
+msgstr "Kopiér valg som almindelig tekst til udklipsholderen"
+
+#: crates/rustty-input/src/command.rs:160
+msgid "Copy the selected text as plain text to the clipboard."
+msgstr "Kopiér den valgte tekst som almindelig tekst til udklipsholderen."
+
+#: crates/rustty-input/src/command.rs:163
+msgid "Copy Selection as ANSI Sequences to Clipboard"
+msgstr "Kopiér valg som ANSI-sekvenser til udklipsholderen"
+
+#: crates/rustty-input/src/command.rs:164
+msgid "Copy the selected text as ANSI escape sequences to the clipboard."
+msgstr "Kopiér det valgte tekst som ANSI escape-sekvenser til udklipsholderen."
+
+#: crates/rustty-input/src/command.rs:167
+msgid "Copy Selection as HTML to Clipboard"
+msgstr "Kopiér valg som HTML til udklipsholderen"
+
+#: crates/rustty-input/src/command.rs:168
+msgid "Copy the selected text as HTML to the clipboard."
+msgstr "Kopiér det valgte tekst som HTML til udklipsholderen."
+
+#: crates/rustty-input/src/command.rs:173
+msgid "Copy URL to Clipboard"
+msgstr "Kopiér URL til udklipsholder"
+
+#: crates/rustty-input/src/command.rs:174
+msgid "Copy the URL under the cursor to the clipboard."
+msgstr "Kopiér URL'en under musen til udklipsholderen."
+
+#: crates/rustty-input/src/command.rs:179
+msgid "Copy Terminal Title to Clipboard"
+msgstr "Kopiér terminaltitel til udklipsholder"
+
+#: crates/rustty-input/src/command.rs:180
+msgid ""
+"Copy the terminal title to the clipboard. If the terminal title is not set "
+"this has no effect."
+msgstr ""
+"Kopiér terminaltitlen til udklipsholderen. Hvis ingen terminaltitel er "
+"angivet, vil dette have ingen effekt."
+
+#: crates/rustty-input/src/command.rs:185
+msgid "Paste from Clipboard"
+msgstr "Sæt ind fra udklipsholder"
+
+#: crates/rustty-input/src/command.rs:186
+msgid "Paste the contents of the main clipboard."
+msgstr "Indsæt indholdet fra den primære udklipsholder."
+
+#: crates/rustty-input/src/command.rs:191
+msgid "Paste from Selection"
+msgstr "Sæt ind fra markering"
+
+#: crates/rustty-input/src/command.rs:192
+msgid "Paste the contents of the selection clipboard."
+msgstr "Indsæt indholdet fra udklipsholderen for markeringer."
+
+#: crates/rustty-input/src/command.rs:197
+msgid "Start Search"
+msgstr "Start søgning"
+
+#: crates/rustty-input/src/command.rs:198
+msgid "Start a search if one isn't already active."
+msgstr "Start en søgning, hvis en ikke allerede er aktiv."
+
+#: crates/rustty-input/src/command.rs:203
+msgid "Search Selection"
+msgstr "Søg i markering"
+
+#: crates/rustty-input/src/command.rs:204
+msgid "Start a search for the current text selection."
+msgstr "Start en søgning i den aktuelle tekstmarkering."
+
+#: crates/rustty-input/src/command.rs:209
+msgid "End Search"
+msgstr "Afslut søgning"
+
+#: crates/rustty-input/src/command.rs:210
+msgid "End the current search if any and hide any GUI elements."
+msgstr "Afslut den nuværende søgning hvis den findes, og skjul eventuelle GUI-elementer."
+
+#: crates/rustty-input/src/command.rs:215
+msgid "Next Search Result"
+msgstr "Næste søgeresultat"
+
+#: crates/rustty-input/src/command.rs:216
+msgid "Navigate to the next search result, if any."
+msgstr "Navigér til det næste søgeresultat, hvis det findes."
+
+#: crates/rustty-input/src/command.rs:219
+msgid "Previous Search Result"
+msgstr "Forrige søgeresultat"
+
+#: crates/rustty-input/src/command.rs:220
+msgid "Navigate to the previous search result, if any."
+msgstr "Navigér til det forrige søgeresultat, hvis det findes."
+
+#: crates/rustty-input/src/command.rs:225
+msgid "Increase Font Size"
+msgstr "Øg skriftstørrelsen"
+
+#: crates/rustty-input/src/command.rs:226
+msgid "Increase the font size by 1 point."
+msgstr "Øg skriftstørrelsen med 1 punkt."
+
+#: crates/rustty-input/src/command.rs:231
+msgid "Decrease Font Size"
+msgstr "Formindsk skriftstørrelse"
+
+#: crates/rustty-input/src/command.rs:232
+msgid "Decrease the font size by 1 point."
+msgstr "Formindsk skriftstørrelsen med 1 punkt."
+
+#: crates/rustty-input/src/command.rs:237
+msgid "Reset Font Size"
+msgstr "Nulstil skriftstørrelse"
+
+#: crates/rustty-input/src/command.rs:238
+msgid "Reset the font size to the default."
+msgstr "Nulstil skriftstørrelsen til standardindstillingen."
+
+#: crates/rustty-input/src/command.rs:243
+msgid "Clear Screen"
+msgstr "Ryd skærm"
+
+#: crates/rustty-input/src/command.rs:244
+msgid "Clear the screen and scrollback."
+msgstr "Ryd skærmen og rul tilbage."
+
+#: crates/rustty-input/src/command.rs:249
+msgid "Select All"
+msgstr "Vælg alt"
+
+#: crates/rustty-input/src/command.rs:250
+msgid "Select all text on the screen."
+msgstr "Markér al tekst på skærmen."
+
+#: crates/rustty-input/src/command.rs:255
+msgid "Scroll to Top"
+msgstr "Rul til toppen"
+
+#: crates/rustty-input/src/command.rs:256
+msgid "Scroll to the top of the screen."
+msgstr "Rul til toppen af skærmen."
+
+#: crates/rustty-input/src/command.rs:261
+msgid "Scroll to Bottom"
+msgstr "Rul til bunden"
+
+#: crates/rustty-input/src/command.rs:262
+msgid "Scroll to the bottom of the screen."
+msgstr "Rul ned til bunden af skærmen."
+
+#: crates/rustty-input/src/command.rs:267
+msgid "Scroll to Selection"
+msgstr "Rul til markering"
+
+#: crates/rustty-input/src/command.rs:268
+msgid "Scroll to the selected text."
+msgstr "Rul hen til den markerede tekst."
+
+#: crates/rustty-input/src/command.rs:273
+msgid "Scroll Page Up"
+msgstr "Rul side op"
+
+#: crates/rustty-input/src/command.rs:274
+msgid "Scroll the screen up by a page."
+msgstr "Rul skærmen op med en side."
+
+#: crates/rustty-input/src/command.rs:279
+msgid "Scroll Page Down"
+msgstr "Rul side ned"
+
+#: crates/rustty-input/src/command.rs:280
+msgid "Scroll the screen down by a page."
+msgstr "Rul skærmen ned med en side."
+
+#: crates/rustty-input/src/command.rs:286
+msgid "Copy Screen to Temporary File and Copy Path"
+msgstr "Kopiér skærm til midlertidig fil og kopiér sti"
+
+#: crates/rustty-input/src/command.rs:287
+msgid ""
+"Copy the screen contents to a temporary file and copy the path to the "
+"clipboard."
+msgstr ""
+"Kopiér indholdet af skærmen til en midlertidig fil, og kopiér stien "
+"til udklipsholderen."
+
+#: crates/rustty-input/src/command.rs:291
+msgid "Copy Screen to Temporary File and Paste Path"
+msgstr "Kopiér skærm til midlertidig fil og indsæt sti"
+
+#: crates/rustty-input/src/command.rs:292
+msgid ""
+"Copy the screen contents to a temporary file and paste the path to the file."
+msgstr ""
+"Kopiér indholdet af skærmen til en midlertidig fil, og indsæt stien til filen."
+
+#: crates/rustty-input/src/command.rs:296
+msgid "Copy Screen to Temporary File and Open"
+msgstr "Kopiér skærm til midlertidig fil og åben"
+
+#: crates/rustty-input/src/command.rs:297
+msgid "Copy the screen contents to a temporary file and open it."
+msgstr "Kopiér indholdet af skærmen til en midlertidig fil, og åben den."
+
+#: crates/rustty-input/src/command.rs:305
+msgid "Copy Screen as HTML to Temporary File and Copy Path"
+msgstr "Kopiér skærm som HTML til en midlertidig fil og kopiér sti"
+
+#: crates/rustty-input/src/command.rs:306
+msgid ""
+"Copy the screen contents as HTML to a temporary file and copy the path to "
+"the clipboard."
+msgstr ""
+"Kopiér indholdet af skærmen som HTML til en midlertidig fil, og kopiér stien "
+"til udklipsholderen."
+
+#: crates/rustty-input/src/command.rs:313
+msgid "Copy Screen as HTML to Temporary File and Paste Path"
+msgstr "Kopiér skærmen som HTML til en midlertidig fil og indsæt sti"
+
+#: crates/rustty-input/src/command.rs:314
+msgid ""
+"Copy the screen contents as HTML to a temporary file and paste the path to "
+"the file."
+msgstr ""
+"Kopiér indholdet af skærmen som HTML til en midlertidig fil, og indsæt stien "
+"til filen."
+
+#: crates/rustty-input/src/command.rs:321
+msgid "Copy Screen as HTML to Temporary File and Open"
+msgstr "Kopiér skærm som HTML til en midlertidig fil og åben"
+
+#: crates/rustty-input/src/command.rs:322
+msgid "Copy the screen contents as HTML to a temporary file and open it."
+msgstr "Kopiér indholdet af skærmen som HTML til en midlertidig fil og åben den."
+
+#: crates/rustty-input/src/command.rs:330
+msgid "Copy Screen as ANSI Sequences to Temporary File and Copy Path"
+msgstr "Kopiér skærm som ANSI-sekvenser til en midlertidig fil og kopiér sti"
+
+#: crates/rustty-input/src/command.rs:331
+msgid ""
+"Copy the screen contents as ANSI escape sequences to a temporary file and "
+"copy the path to the clipboard."
+msgstr ""
+"Kopiér indholdet af skærmen som ANSI escape-sekvenser til en midlertidig "
+"fil, og kopiér stien til udklipsholderen."
+
+#: crates/rustty-input/src/command.rs:338
+msgid "Copy Screen as ANSI Sequences to Temporary File and Paste Path"
+msgstr "Kopiér skærm som ANSI-sekvenser til midlertidig fil og indsæt sti"
+
+#: crates/rustty-input/src/command.rs:339
+msgid ""
+"Copy the screen contents as ANSI escape sequences to a temporary file and "
+"paste the path to the file."
+msgstr ""
+"Kopiér indholdet af skærmen som ANSI escape-sekvenser til en midlertidig "
+"fil, og indsæt stien til filen."
+
+#: crates/rustty-input/src/command.rs:346
+msgid "Copy Screen as ANSI Sequences to Temporary File and Open"
+msgstr "Kopiér skærm som ANSI-sekvenser til midlertidig fil og åben"
+
+#: crates/rustty-input/src/command.rs:347
+msgid ""
+"Copy the screen contents as ANSI escape sequences to a temporary file and "
+"open it."
+msgstr ""
+"Kopiér indholdet af skærmen som ANSI escape-sekvenser til en midlertidig "
+"fil, og åben den."
+
+#: crates/rustty-input/src/command.rs:354
+msgid "Copy Selection to Temporary File and Copy Path"
+msgstr "Kopiér markering til midlertidig fil og kopiér sti"
+
+#: crates/rustty-input/src/command.rs:355
+msgid ""
+"Copy the selection contents to a temporary file and copy the path to the "
+"clipboard."
+msgstr ""
+"Kopiér indholdet af markeringen til en midlertidig fil, og kopiér stien "
+"til udklipsholderen."
+
+#: crates/rustty-input/src/command.rs:359
+msgid "Copy Selection to Temporary File and Paste Path"
+msgstr "Kopiér markering til midlertidig fil og indsæt sti"
+
+#: crates/rustty-input/src/command.rs:360
+msgid ""
+"Copy the selection contents to a temporary file and paste the path to the "
+"file."
+msgstr ""
+"Kopiér indholdet af markeringen til en midlertidig fil, og indsæt stien "
+"til filen."
+
+#: crates/rustty-input/src/command.rs:364
+msgid "Copy Selection to Temporary File and Open"
+msgstr "Kopiér markering til midlertidig fil og åben"
+
+#: crates/rustty-input/src/command.rs:365
+msgid "Copy the selection contents to a temporary file and open it."
+msgstr "Kopiér indholdet af markeringen til en midlertidig fil og åben den."
+
+#: crates/rustty-input/src/command.rs:373
+msgid "Copy Selection as HTML to Temporary File and Copy Path"
+msgstr "Kopiér markering som HTML til en midlertidig fil og kopiér sti"
+
+#: crates/rustty-input/src/command.rs:374
+msgid ""
+"Copy the selection contents as HTML to a temporary file and copy the path to "
+"the clipboard."
+msgstr ""
+"Kopiér indholdet af markeringen som HTML til en midlertidig fil, og kopiér "
+"stien til udklipsholderen."
+
+#: crates/rustty-input/src/command.rs:381
+msgid "Copy Selection as HTML to Temporary File and Paste Path"
+msgstr "Kopiér markering som HTML til midlertidig fil og indsæt sti"
+
+#: crates/rustty-input/src/command.rs:382
+msgid ""
+"Copy the selection contents as HTML to a temporary file and paste the path "
+"to the file."
+msgstr ""
+"Kopiér indholdet af markeringen som HTML til en midlertidig fil, og indsæt "
+"stien til filen."
+
+#: crates/rustty-input/src/command.rs:389
+msgid "Copy Selection as HTML to Temporary File and Open"
+msgstr "Kopiér markering som HTML til midlertidig fil og åben"
+
+#: crates/rustty-input/src/command.rs:390
+msgid "Copy the selection contents as HTML to a temporary file and open it."
+msgstr "Kopiér indholdet af markeringen som HTML til en midlertidig fil, og åben den."
+
+#: crates/rustty-input/src/command.rs:398
+msgid "Copy Selection as ANSI Sequences to Temporary File and Copy Path"
+msgstr "Kopiér markering som ANSI-sekvenser til midlertidig fil og kopiér sti"
+
+#: crates/rustty-input/src/command.rs:399
+msgid ""
+"Copy the selection contents as ANSI escape sequences to a temporary file and "
+"copy the path to the clipboard."
+msgstr ""
+"Kopiér indholdet af markeringen som ANSI escape-sekvenser til en midlertidig "
+"fil, og kopiér stien til udklipsholderen."
+
+#: crates/rustty-input/src/command.rs:406
+msgid "Copy Selection as ANSI Sequences to Temporary File and Paste Path"
+msgstr "Kopiér markering som ANSI-sekvenser til midlertidig fil og indsæt sti"
+
+#: crates/rustty-input/src/command.rs:407
+msgid ""
+"Copy the selection contents as ANSI escape sequences to a temporary file and "
+"paste the path to the file."
+msgstr ""
+"Kopiér indholdet af markeringen som ANSI escape-sekvenser til en midlertidig "
+"fil, og indsæt stien til filen."
+
+#: crates/rustty-input/src/command.rs:414
+msgid "Copy Selection as ANSI Sequences to Temporary File and Open"
+msgstr "Kopiér markering som ANSI-sekvenser til midlertidig fil og åben"
+
+#: crates/rustty-input/src/command.rs:415
+msgid ""
+"Copy the selection contents as ANSI escape sequences to a temporary file and "
+"open it."
+msgstr ""
+"Kopiér indholdet af markeringen som ANSI escape-sekvenser til en midlertidig "
+"fil, og åben den."
+
+#: crates/rustty-input/src/command.rs:422
+msgid "Open a new window."
+msgstr "Åben et nyt vindue."
+
+#: crates/rustty-input/src/command.rs:428
+msgid "Open a new tab."
+msgstr "Åben en ny fane."
+
+#: crates/rustty-input/src/command.rs:434
+msgid "Move Tab Left"
+msgstr "Ryk fane til venstre"
+
+#: crates/rustty-input/src/command.rs:435
+msgid "Move the current tab to the left."
+msgstr "Ryk den nuværende fane til venstre."
+
+#: crates/rustty-input/src/command.rs:439
+msgid "Move Tab Right"
+msgstr "Ryk fane til højre"
+
+#: crates/rustty-input/src/command.rs:440
+msgid "Move the current tab to the right."
+msgstr "Ryk den nuværende fane til højre."
+
+#: crates/rustty-input/src/command.rs:446
+msgid "Move Tab to New Window"
+msgstr "Ryk fane til nyt vindue"
+
+#: crates/rustty-input/src/command.rs:447
+msgid "Move the current tab to a new window."
+msgstr "Ryk den nuværende fane til et nyt vindue."
+
+#: crates/rustty-input/src/command.rs:452
+msgid "Toggle Tab Overview"
+msgstr "Slå faneoversigt til/fra"
+
+#: crates/rustty-input/src/command.rs:453
+msgid "Toggle the tab overview."
+msgstr "Slå faneoversigten til eller fra."
+
+#: crates/rustty-input/src/command.rs:458
+msgid "Change Terminal Title…"
+msgstr "Skift terminaltitel…"
+
+#: crates/rustty-input/src/command.rs:459
+msgid "Prompt for a new title for the current terminal."
+msgstr "Dialog for at skifte titlen på den nuværende terminal."
+
+#: crates/rustty-input/src/command.rs:465
+msgid "Prompt for a new title for the current tab."
+msgstr "Dialog for at skifte titlen for den nuværende fane."
+
+#: crates/rustty-input/src/command.rs:478
+msgid "Split the terminal to the left."
+msgstr "Del terminalen mod venstre."
+
+#: crates/rustty-input/src/command.rs:483
+msgid "Split the terminal to the right."
+msgstr "Del terminalen mod højre."
+
+#: crates/rustty-input/src/command.rs:488
+msgid "Split the terminal up."
+msgstr "Del terminalen opad."
+
+#: crates/rustty-input/src/command.rs:493
+msgid "Split the terminal down."
+msgstr "Del terminalen nedad."
+
+# See retskrivningsordbogen §11 stk. 3 for the rules for large or small letters after colon.
+#: crates/rustty-input/src/command.rs:500
+msgid "Focus Split: Previous"
+msgstr "Fokusopdeling: Forrige"
+
+#: crates/rustty-input/src/command.rs:501
+msgid "Focus the previous split, if any."
+msgstr "Fokusér på den tidligere deling, hvis der er en."
+
+#: crates/rustty-input/src/command.rs:505
+msgid "Focus Split: Next"
+msgstr "Fokusopdeling: Næste"
+
+#: crates/rustty-input/src/command.rs:506
+msgid "Focus the next split, if any."
+msgstr "Fokusér på den næste deling, hvis der er en."
+
+#: crates/rustty-input/src/command.rs:510
+msgid "Focus Split: Left"
+msgstr "Fokusopdeling: Venstre"
+
+#: crates/rustty-input/src/command.rs:511
+msgid "Focus the split to the left, if it exists."
+msgstr "Fokusér på delingen til venstre, hvis den findes."
+
+#: crates/rustty-input/src/command.rs:515
+msgid "Focus Split: Right"
+msgstr "Fokusopdeling: Højre"
+
+#: crates/rustty-input/src/command.rs:516
+msgid "Focus the split to the right, if it exists."
+msgstr "Fokusér på delingen til højre, hvis den findes."
+
+#: crates/rustty-input/src/command.rs:520
+msgid "Focus Split: Up"
+msgstr "Fokusopdeling: Opad"
+
+#: crates/rustty-input/src/command.rs:521
+msgid "Focus the split above, if it exists."
+msgstr "Fokusér på ovenstående deling, hvis den findes."
+
+#: crates/rustty-input/src/command.rs:525
+msgid "Focus Split: Down"
+msgstr "Fokusopdeling: Nedad"
+
+#: crates/rustty-input/src/command.rs:526
+msgid "Focus the split below, if it exists."
+msgstr "Fokusér på nedenstående deling, hvis den findes."
+
+#: crates/rustty-input/src/command.rs:533
+msgid "Focus Window: Previous"
+msgstr "Fokusvindue: Forrige"
+
+#: crates/rustty-input/src/command.rs:534
+msgid "Focus the previous window, if any."
+msgstr "Fokusér på det tidligere vindue, hvis der er et."
+
+#: crates/rustty-input/src/command.rs:538
+msgid "Focus Window: Next"
+msgstr "Fokusvindue: Næste"
+
+#: crates/rustty-input/src/command.rs:539
+msgid "Focus the next window, if any."
+msgstr "Fokusér på det næste vindue, hvis der er et."
+
+#: crates/rustty-input/src/command.rs:545
+msgid "Toggle Split Zoom"
+msgstr "Slå delingszoom til/fra"
+
+#: crates/rustty-input/src/command.rs:546
+msgid "Toggle the zoom state of the current split."
+msgstr "Skift zoomtilstand for den aktuelle deling."
+
+#: crates/rustty-input/src/command.rs:551
+msgid "Toggle Read-Only Mode"
+msgstr "Slå skrivebeskyttet tilstand til/fra"
+
+#: crates/rustty-input/src/command.rs:552
+msgid "Toggle read-only mode for the current surface."
+msgstr "Slå skrivebeskyttet tilstand til eller fra for den aktuelle overflade."
+
+#: crates/rustty-input/src/command.rs:557
+msgid "Equalize Splits"
+msgstr "Udlign opdelinger"
+
+#: crates/rustty-input/src/command.rs:558
+msgid "Equalize the size of all splits."
+msgstr "Udlign størrelsen af alle opdelinger."
+
+#: crates/rustty-input/src/command.rs:563
+msgid "Reset Window Size"
+msgstr "Nulstil vinduesstørrelse"
+
+#: crates/rustty-input/src/command.rs:564
+msgid "Reset the window size to the default."
+msgstr "Nulstil vinduestørrelsen til standardindstillingen."
+
+#: crates/rustty-input/src/command.rs:569
+msgid "Toggle Inspector"
+msgstr "Slå inspektør til/fra"
+
+#: crates/rustty-input/src/command.rs:570
+msgid "Toggle the inspector."
+msgstr "Slå inspektøren til eller fra."
+
+#: crates/rustty-input/src/command.rs:575
+msgid "Show the GTK Inspector"
+msgstr "Vis GTK-inspektør"
+
+#: crates/rustty-input/src/command.rs:576
+msgid "Show the GTK inspector."
+msgstr "Vis GTK-inspektøren."
+
+#: crates/rustty-input/src/command.rs:581
+msgid "Show On-Screen Keyboard"
+msgstr "Vis tastatur på skærmen"
+
+#: crates/rustty-input/src/command.rs:582
+msgid "Show the on-screen keyboard if present."
+msgstr "Vis tastaturet på skærmen, hvis det er til stede."
+
+#: crates/rustty-input/src/command.rs:588
+msgid "Open Config Using OS editor"
+msgstr "Åben konfiguration med styresystemets redigeringsprogram"
+
+#: crates/rustty-input/src/command.rs:589
+msgid "Open the config file with the OS's default editor."
+msgstr "Åben konfigurationen med styresystemets standardredigeringsprogram."
+
+#: crates/rustty-input/src/command.rs:593
+msgid "Open Config in New Terminal Window"
+msgstr "Åben konfiguration i nyt terminalvindue"
+
+#: crates/rustty-input/src/command.rs:594
+msgid "Open the config file in a new window using $EDITOR or $VISUAL."
+msgstr "Åben konfigurationsfilen i et nyt vindue med $EDITOR eller $VISUAL."
+
+#: crates/rustty-input/src/command.rs:600
+msgid "Reload Config"
+msgstr "Genindlæs konfiguration"
+
+#: crates/rustty-input/src/command.rs:601
+msgid "Reload the config file."
+msgstr "Genindlæs konfigurationsfilen."
+
+#: crates/rustty-input/src/command.rs:606
+msgid "Close Terminal"
+msgstr "Luk terminal"
+
+#: crates/rustty-input/src/command.rs:607
+msgid "Close the current terminal."
+msgstr "Luk den nuværende terminal."
+
+#: crates/rustty-input/src/command.rs:614
+msgid "Close the current tab."
+msgstr "Luk den nuværende fane."
+
+#: crates/rustty-input/src/command.rs:618
+msgid "Close Other Tabs"
+msgstr "Luk andre faner"
+
+#: crates/rustty-input/src/command.rs:619
+msgid "Close all tabs in this window except the current one."
+msgstr "Luk alle faner i dette vindue, bortset fra den nuværende."
+
+#: crates/rustty-input/src/command.rs:623
+msgid "Close Tabs to the Right"
+msgstr "Luk alle faner til højre"
+
+#: crates/rustty-input/src/command.rs:624
+msgid "Close all tabs to the right of the current one."
+msgstr "Luk alle faner til højre for den nuværende."
+
+#: crates/rustty-input/src/command.rs:631
+msgid "Close the current window."
+msgstr "Luk det nuværende vindue."
+
+#: crates/rustty-input/src/command.rs:636
+msgid "Close All Windows"
+msgstr "Luk alle vinduer"
+
+#: crates/rustty-input/src/command.rs:637
+msgid "Close all windows."
+msgstr "Luk alle vinduer."
+
+#: crates/rustty-input/src/command.rs:642
+msgid "Toggle Maximize"
+msgstr "Slå maksimering til/fra"
+
+#: crates/rustty-input/src/command.rs:643
+msgid "Toggle the maximized state of the current window."
+msgstr "Slå den maksimerede tilstand af det nuværende vindue til eller fra."
+
+#: crates/rustty-input/src/command.rs:648
+msgid "Toggle Fullscreen"
+msgstr "Slå fuld skærm til/fra"
+
+#: crates/rustty-input/src/command.rs:649
+msgid "Toggle the fullscreen state of the current window."
+msgstr "Slå fuldskærmstilstanden til eller fra for det nuværende vindue."
+
+#: crates/rustty-input/src/command.rs:654
+msgid "Toggle Window Decorations"
+msgstr "Slå vinduesdekorationer til/fra"
+
+#: crates/rustty-input/src/command.rs:655
+msgid "Toggle the window decorations."
+msgstr "Slå vinduesdekorationerne til eller fra."
+
+#: crates/rustty-input/src/command.rs:660
+msgid "Toggle Float on Top"
+msgstr "Slå vis altid øverst til/fra"
+
+#: crates/rustty-input/src/command.rs:661
+msgid "Toggle the float on top state of the current window."
+msgstr "Slå tilstanden for altid at vise vinduet øverst til eller fra."
+
+#: crates/rustty-input/src/command.rs:666
+msgid "Toggle Secure Input"
+msgstr "Slå sikker input til/fra"
+
+#: crates/rustty-input/src/command.rs:667
+msgid "Toggle secure input mode."
+msgstr "Slå sikker inputstilstanden til eller fra."
+
+#: crates/rustty-input/src/command.rs:672
+msgid "Toggle Mouse Reporting"
+msgstr "Slå muserapportering til/fra"
+
+#: crates/rustty-input/src/command.rs:673
+msgid "Toggle whether mouse events are reported to terminal applications."
+msgstr "Slå til eller fra, om musehændelser skal rapporteres til terminalprogrammer."
+
+#: crates/rustty-input/src/command.rs:678
+msgid "Toggle Background Opacity"
+msgstr "Slå baggrundsgennemskinnelighed til/fra"
+
+#: crates/rustty-input/src/command.rs:679
+msgid "Toggle the background opacity of a window that started transparent."
+msgstr "Slå baggrundsgennemskinneligheden til eller fra for et vindue, der startede som gennemsigtigt."
+
+#: crates/rustty-input/src/command.rs:684
+msgid "Check for Updates"
+msgstr "Tjek efter opdateringer"
+
+#: crates/rustty-input/src/command.rs:685
+msgid "Check for updates to the application."
+msgstr "Tjek efter opdateringer for programmet."
+
+#: crates/rustty-input/src/command.rs:690
+msgid "Undo"
+msgstr "Fortryd"
+
+#: crates/rustty-input/src/command.rs:691
+msgid "Undo the last action."
+msgstr "Fortryd den sidste handling."
+
+#: crates/rustty-input/src/command.rs:696
+msgid "Redo"
+msgstr "Gentag"
+
+#: crates/rustty-input/src/command.rs:697
+msgid "Redo the last undone action."
+msgstr "Gentag den sidste fortrudte handling."
+
+#: crates/rustty-input/src/command.rs:703
+msgid "Quit the application."
+msgstr "Luk ned for programmet."
+
+#: crates/rustty-input/src/command.rs:708
+msgid "Rustty"
+msgstr "Rustty"
+
+#: crates/rustty-input/src/command.rs:709
+msgid "Put a little Rustty in your terminal."
+msgstr "Sæt en lille Rustty i din terminal."

@@ -910,15 +910,15 @@ fn update<'a>(
                         st.text_input.buf.clear_retaining_capacity();
                         update_filtered(st)?;
                     }
-                    // if (key.matchesAny(&.{ home, kp_home }, .{})) self.current = 0;
-                    if key.matches_any(&[key::home, key::kp_home], none) {
+                    // if (key.matchesAny(&.{ home, kp_home, 'g' }, .{})) self.current = 0;
+                    if key.matches_any(&[key::home, key::kp_home, 'g' as u32], none) {
                         st.current = 0;
                     }
-                    // if (key.matchesAny(&.{ end, kp_end }, .{})) self.current = self.filtered.items.len - 1;
+                    // if (key.matchesAny(&.{ end, kp_end, 'G' }, .{})) self.current = self.filtered.items.len - 1;
                     //   PORT NOTE (issue 4): `wrapping_sub(1)` mirrors ReleaseFast's `usize`
                     //   wrap on an empty filter; `draw` resets `current = 0` before any index,
                     //   so the wrapped value is never used to index (matching the reference).
-                    if key.matches_any(&[key::end, key::kp_end], none) {
+                    if key.matches_any(&[key::end, key::kp_end, 'G' as u32], none) {
                         st.current = st.filtered.len().wrapping_sub(1);
                     }
                     // if (key.matchesAny(&.{ 'j', '+', down, kp_down, kp_add }, .{})) self.down(1);
@@ -1338,8 +1338,8 @@ fn draw<'a>(vx: &mut Vaxis<'a>, st: &mut DrawState<'a>) {
                 (b"d", b"Show palette numbers in decimal."),
                 (b"c", b"Copy theme name to the clipboard."),
                 (b"C", b"Copy theme path to the clipboard."),
-                (b"Home", b"Go to the start of the list."),
-                (b"End", b"Go to the end of the list."),
+                (b"Home, g", b"Go to the start of the list."),
+                (b"End, G", b"Go to the end of the list."),
                 (b"/", b"Start search."),
                 (b"^X, ^/", b"Clear search."),
                 ("⏎".as_bytes(), b"Save theme or close search window."),

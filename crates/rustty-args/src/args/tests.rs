@@ -1506,6 +1506,39 @@ fn line_iterator_with_buffered_and_primed_reader() {
     assert_eq!(None, LineIterator::next(&mut iter));
 }
 
+// test "LineIterator refills after ignored line at buffer boundary"
+//
+// PORT NOTE: the reference drives a 2-byte-buffered (then 1-byte-buffered)
+// reader so an ignored comment/blank line consumes the buffered data exactly at
+// the boundary; the upstream fix (c247e455c) refills before the loop condition
+// checks for more data. The Rust port's `LineIterator` holds the whole source
+// slice — there is no refill to miss (see the buffered-reader note above) — so
+// both sub-cases assert the identical output over the same inputs.
+#[test]
+fn line_iterator_refills_after_ignored_line_at_buffer_boundary() {
+    // { var f = .fixed("#\nA\n"); var buf: [2]u8; var r = f.limited(.unlimited, &buf);
+    //   var iter: LineIterator = .init(&r.interface); ... }
+    {
+        let src: &[u8] = b"#\nA\n";
+        let mut iter = LineIterator::init(src);
+        // try testing.expectEqualStrings("--A", iter.next().?);
+        assert_eq!(b"--A".as_slice(), LineIterator::next(&mut iter).unwrap());
+        // try testing.expectEqual(@as(?[]const u8, null), iter.next());
+        assert_eq!(None, LineIterator::next(&mut iter));
+    }
+
+    // { var f = .fixed("\nA\n"); var buf: [1]u8; var r = f.limited(.unlimited, &buf);
+    //   var iter: LineIterator = .init(&r.interface); ... }
+    {
+        let src: &[u8] = b"\nA\n";
+        let mut iter = LineIterator::init(src);
+        // try testing.expectEqualStrings("--A", iter.next().?);
+        assert_eq!(b"--A".as_slice(), LineIterator::next(&mut iter).unwrap());
+        // try testing.expectEqual(@as(?[]const u8, null), iter.next());
+        assert_eq!(None, LineIterator::next(&mut iter));
+    }
+}
+
 // PORT NOTE: keep `LocationKey`/`Diagnostic` referenced so their imports are
 // exercised by the diagnostics surface (used by downstream config); no reference
 // test in args.zig drives them directly.

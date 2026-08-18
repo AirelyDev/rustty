@@ -102,8 +102,15 @@ pub fn run() -> Result<u8, Error> {
     let stdout_is_tty = stdout_file.is_terminal();
     let mut stdout = std::io::BufWriter::new(stdout_file.lock());
 
-    // const result = runInner(alloc, &stdout_file, stdout);
-    let result = run_inner(stdout_is_tty, &mut stdout);
+    // var environ_map = try global.environMap();
+    // defer environ_map.deinit();
+    // (PORT NOTE, P4-E33 `15c50c1db`: the CLI — a place that "would more
+    // correctly interface with global state" — builds the environment snapshot
+    // and passes it down; crash/dir.zig no longer reads global state itself.
+    // `environ_map()` is infallible in Rust; Drop frees the map.)
+    let environ_map = rustty_global::environ_map();
+    // const result = runInner(global.io(), alloc, &environ_map, &stdout_file, stdout);
+    let result = run_inner(&environ_map, stdout_is_tty, &mut stdout);
     // stdout.flush() catch {};
     let _ = stdout.flush();
 
@@ -113,17 +120,29 @@ pub fn run() -> Result<u8, Error> {
     result
 }
 
-// fn runInner(alloc: Allocator, stdout_file: *std.fs.File, stdout: *std.Io.Writer) !u8 {
-fn run_inner<W: Write>(stdout_is_tty: bool, stdout: &mut W) -> Result<u8, Error> {
-    // const crash_dir = try crash.defaultDir(alloc);
-    let crash_dir = crash::defaultDir()?;
+// fn runInner(
+//     io: std.Io,
+//     alloc: Allocator,
+//     environ_map: *const std.process.Environ.Map,
+//     stdout_file: *std.Io.File,
+//     stdout: *std.Io.Writer,
+// ) !u8 {
+// (PORT NOTE: the `io: std.Io` parameter is N-A — Rust std does I/O without a
+// provider handle; see rustty-crash dir.rs.)
+fn run_inner<W: Write>(
+    environ_map: &rustty_global::EnvMap,
+    stdout_is_tty: bool,
+    stdout: &mut W,
+) -> Result<u8, Error> {
+    // const crash_dir = try crash.defaultDir(io, alloc, environ_map);
+    let crash_dir = crash::defaultDir(environ_map)?;
     // var reports: std.ArrayList(crash.Report) = .empty;
     // errdefer reports.deinit(alloc);
     let mut reports: Vec<crash::Report> = Vec::new();
 
-    // var it = try crash_dir.iterator();
+    // var it = try crash_dir.iterator(io);
     let mut it = crash_dir.iterator()?;
-    // while (try it.next()) |report| try reports.append(alloc, .{
+    // while (try it.next(io)) |report| try reports.append(alloc, .{
     //     .name = try alloc.dupe(u8, report.name),
     //     .mtime = report.mtime,
     // });

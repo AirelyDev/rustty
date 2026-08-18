@@ -2,9 +2,11 @@
 //!
 //! PORTS: ghostty src/cli/ssh-cache/DiskCache.zig — the on-disk SSH terminfo
 //! entry cache. Byte-faithful (R1); paths are byte strings (`Vec<u8>`, R3). The
-//! program dir (`ghostty`) and the default terminfo token (`xterm-ghostty`) are
-//! routed through `rustty-identity` (R2 / ADV-FIX 5) so the on-disk path and the
-//! cached terminfo name track the Rustty product identity.
+//! program dir (`ghostty`) is routed through `rustty-identity` (R2 / ADV-FIX 5)
+//! so the on-disk path tracks the Rustty product identity. Entries record the
+//! caller-supplied content-derived terminfo `version` (`rustty_terminfo::version`
+//! at the call sites), so a stale cache entry no longer suppresses a required
+//! install after the terminfo source changes.
 //!
 //! PORT NOTE (memory model): the reference `std.StringHashMap(Entry)` stores the
 //! hostname exactly ONCE and uses that same allocation as both the map key AND
@@ -111,8 +113,12 @@ impl DiskCache {
     // string; the callers pass the app name, routed through rustty-identity (R2).
     // pub fn defaultPath(alloc: Allocator, program: []const u8) ![]const u8 {
     pub fn default_path(program: &str) -> Result<Vec<u8>, Error> {
+        // var environ_map = try global.environMap();
+        // defer environ_map.deinit();
         // const state_dir: []const u8 = xdg.state(
+        //     global.io(),
         //     alloc,
+        //     &environ_map,
         //     .{ .subdir = program },
         // ) catch |err| return switch (err) {
         //     error.OutOfMemory => error.OutOfMemory,
@@ -120,6 +126,8 @@ impl DiskCache {
         // };
         // defer alloc.free(state_dir);
         // (W94-B02-01: `xdg::state` is byte-typed — raw path bytes in and out.)
+        //   (the `global.io()` first param is the reference's `std.Io` provider
+        //   threading, 15c50c1db — N-A in Rust, there is no such provider)
         let state_dir = xdg::state(
             &rustty_global::environ_map(),
             xdg::Options {
@@ -150,8 +158,8 @@ impl DiskCache {
 
     /// Add or update an entry in the cache, recording `timestamp` (Unix seconds).
     /// The cache file is created if it doesn't exist with secure permissions (0600).
-    // pub fn add(self: DiskCache, alloc: Allocator, key: []const u8, timestamp: i64) !void {
-    pub fn add(&self, key: &[u8], timestamp: i64) -> Result<(), Error> {
+    // pub fn add(self: DiskCache, alloc: Allocator, key: []const u8, version: []const u8, timestamp: i64) !void {
+    pub fn add(&self, key: &[u8], version: &[u8], timestamp: i64) -> Result<(), Error> {
         // if (!isValidCacheKey(key)) return error.InvalidCacheKey;
         if !Self::is_valid_cache_key(key) {
             return Err(Error::InvalidCacheKey);
@@ -216,29 +224,32 @@ impl DiskCache {
         // `deinitEntries` defer to walk.
         // if (entries.getPtr(key)) |existing| {
         //     existing.timestamp = timestamp;
+        //     const version_copy = try alloc.dupe(u8, version);
+        //     alloc.free(existing.terminfo_version);
+        //     existing.terminfo_version = version_copy;
         // } else {
         //     const key_copy = try alloc.dupe(u8, key);
         //     errdefer alloc.free(key_copy);
-        //     const terminfo_copy = try alloc.dupe(u8, "xterm-ghostty");
-        //     errdefer alloc.free(terminfo_copy);
+        //     const version_copy = try alloc.dupe(u8, version);
+        //     errdefer alloc.free(version_copy);
         //     try entries.put(key_copy, .{
         //         .hostname = key_copy,
         //         .timestamp = timestamp,
-        //         .terminfo_version = terminfo_copy,
+        //         .terminfo_version = version_copy,
         //     });
         // }
-        //   R2 / ADV-FIX 5: the cached terminfo token is the Rustty identity's
-        //   primary terminfo name (`xterm-rustty`). Ownership makes the dupe/
-        //   errdefer bookkeeping implicit (the two `Vec<u8>` copies below).
+        //   Ownership makes the dupe/errdefer bookkeeping implicit (the
+        //   `Vec<u8>` copies below).
         if let Some(existing) = entries.get_mut(key) {
             existing.timestamp = timestamp;
+            existing.terminfo_version = version.to_vec();
         } else {
             entries.insert(
                 key.to_vec(),
                 Entry {
                     hostname: key.to_vec(),
                     timestamp,
-                    terminfo_version: rustty_identity::TERMINFO_PRIMARY_NAME.as_bytes().to_vec(),
+                    terminfo_version: version.to_vec(),
                 },
             );
         }
@@ -371,10 +382,10 @@ impl DiskCache {
         Ok(expired.len())
     }
 
-    /// Check if a key exists in the cache.
-    /// Returns false if the cache file doesn't exist.
-    // pub fn contains(self: DiskCache, alloc: Allocator, key: []const u8) !bool {
-    pub fn contains(&self, key: &[u8]) -> Result<bool, Error> {
+    /// Check if a key with `version` exists in the cache.
+    /// Returns false if the cache file doesn't exist or the version doesn't match.
+    // pub fn contains(self: DiskCache, alloc: Allocator, key: []const u8, version: []const u8) !bool {
+    pub fn contains(&self, key: &[u8], version: &[u8]) -> Result<bool, Error> {
         // if (!isValidCacheKey(key)) return error.InvalidCacheKey;
         if !Self::is_valid_cache_key(key) {
             return Err(Error::InvalidCacheKey);
@@ -397,8 +408,13 @@ impl DiskCache {
         // defer deinitEntries(alloc, &entries);
         let entries = read_entries(&file)?;
 
-        // return entries.contains(key);
-        Ok(entries.contains_key(key))
+        // const entry = entries.get(key) orelse return false;
+        let entry = match entries.get(key) {
+            Some(e) => e,
+            None => return Ok(false),
+        };
+        // return std.mem.eql(u8, entry.terminfo_version, version);
+        Ok(entry.terminfo_version == version)
     }
 
     // fn writeCacheFile(self: DiskCache, entries: std.StringHashMap(Entry)) !void {
@@ -490,6 +506,18 @@ impl DiskCache {
             debug_assert_eq!(key.as_slice(), value.hostname.as_slice());
         }
         entries.clear();
+    }
+
+    /// Whether an error from a cache operation reflects a problem with the cache
+    /// itself. A destination we can't key on and a lock held by another process
+    /// both leave the cache healthy, so neither is worth reporting.
+    // pub fn isFailure(err: anyerror) bool {
+    pub fn is_failure(err: &Error) -> bool {
+        // return switch (err) {
+        //     error.InvalidCacheKey, error.CacheLocked => false,
+        //     else => true,
+        // };
+        !matches!(err, Error::InvalidCacheKey | Error::CacheLocked)
     }
 
     // Supports both standalone hostnames and user@hostname format
@@ -963,18 +991,31 @@ mod tests {
         let cache = DiskCache {
             path: path_bytes(&path),
         };
-        // try cache.add(alloc, "example.com", std.time.timestamp());
-        cache.add(b"example.com", timestamp()).unwrap();
-        // try cache.add(alloc, "example.com", std.time.timestamp());
-        cache.add(b"example.com", timestamp()).unwrap();
-        // try testing.expect(try cache.contains(alloc, "example.com"));
-        assert!(cache.contains(b"example.com").unwrap());
+        // try cache.add(alloc, "example.com", "v1", std.Io.Timestamp.now(testing.io, .real).toSeconds());
+        cache.add(b"example.com", b"v1", timestamp()).unwrap();
+        // try testing.expect(!try cache.contains(alloc, "example.com", "v2"));
+        assert!(!cache.contains(b"example.com", b"v2").unwrap());
+        // try cache.add(alloc, "example.com", "v2", std.Io.Timestamp.now(testing.io, .real).toSeconds());
+        cache.add(b"example.com", b"v2", timestamp()).unwrap();
+        // try testing.expect(try cache.contains(alloc, "example.com", "v2"));
+        assert!(cache.contains(b"example.com", b"v2").unwrap());
 
         // List
         // var entries = try cache.list(alloc);
-        // deinitEntries(alloc, &entries);
+        // defer deinitEntries(alloc, &entries);
         let mut entries = cache.list().unwrap();
-        DiskCache::deinit_entries(&mut entries);
+        // try testing.expectEqualStrings(
+        //     "v2",
+        //     entries.get("example.com").?.terminfo_version,
+        // );
+        assert_eq!(
+            b"v2".as_slice(),
+            entries
+                .get(b"example.com".as_slice())
+                .unwrap()
+                .terminfo_version
+                .as_slice(),
+        );
 
         // Remove reports that it removed the entry, and a second remove of the
         // same key reports nothing to remove.
@@ -982,10 +1023,13 @@ mod tests {
         assert!(cache.remove(b"example.com").unwrap());
         // try testing.expect(!try cache.remove(alloc, "example.com"));
         assert!(!cache.remove(b"example.com").unwrap());
-        // try testing.expect(!(try cache.contains(alloc, "example.com")));
-        assert!(!cache.contains(b"example.com").unwrap());
-        // try cache.add(alloc, "example.com", std.time.timestamp());
-        cache.add(b"example.com", timestamp()).unwrap();
+        // try testing.expect(!(try cache.contains(alloc, "example.com", "v2")));
+        assert!(!cache.contains(b"example.com", b"v2").unwrap());
+        // try cache.add(alloc, "example.com", "v2", std.Io.Timestamp.now(testing.io, .real).toSeconds());
+        cache.add(b"example.com", b"v2", timestamp()).unwrap();
+
+        // (the reference's `defer deinitEntries(alloc, &entries)`)
+        DiskCache::deinit_entries(&mut entries);
     }
 
     // test "disk cache cleans up temp files"
@@ -1003,10 +1047,10 @@ mod tests {
         let cache = DiskCache {
             path: path_bytes(&cache_path),
         };
-        // try cache.add(alloc, "example.com", std.time.timestamp());
-        cache.add(b"example.com", timestamp()).unwrap();
-        // try cache.add(alloc, "example.org", std.time.timestamp());
-        cache.add(b"example.org", timestamp()).unwrap();
+        // try cache.add(alloc, "example.com", "v1", std.Io.Timestamp.now(testing.io, .real).toSeconds());
+        cache.add(b"example.com", b"v1", timestamp()).unwrap();
+        // try cache.add(alloc, "example.org", "v1", std.Io.Timestamp.now(testing.io, .real).toSeconds());
+        cache.add(b"example.org", b"v1", timestamp()).unwrap();
 
         // Verify only the cache file exists and no temp files left behind
         // var count: usize = 0;
@@ -1043,18 +1087,18 @@ mod tests {
         let hour = S_PER_HOUR;
         // const now = std.time.timestamp();
         let now = timestamp();
-        // try cache.add(alloc, "recent.com", now - hour);
-        cache.add(b"recent.com", now - hour).unwrap();
-        // try cache.add(alloc, "old.com", now - 100 * day);
-        cache.add(b"old.com", now - 100 * day).unwrap();
+        // try cache.add(alloc, "recent.com", "v1", now - hour);
+        cache.add(b"recent.com", b"v1", now - hour).unwrap();
+        // try cache.add(alloc, "old.com", "v1", now - 100 * day);
+        cache.add(b"old.com", b"v1", now - 100 * day).unwrap();
 
         // Prune entries older than 90 days: only old.com goes.
         // try testing.expectEqual(@as(usize, 1), try cache.prune(alloc, 90 * day));
         assert_eq!(1_usize, cache.prune((90 * day) as u64).unwrap());
-        // try testing.expect(try cache.contains(alloc, "recent.com"));
-        assert!(cache.contains(b"recent.com").unwrap());
-        // try testing.expect(!try cache.contains(alloc, "old.com"));
-        assert!(!cache.contains(b"old.com").unwrap());
+        // try testing.expect(try cache.contains(alloc, "recent.com", "v1"));
+        assert!(cache.contains(b"recent.com", b"v1").unwrap());
+        // try testing.expect(!try cache.contains(alloc, "old.com", "v1"));
+        assert!(!cache.contains(b"old.com", b"v1").unwrap());
 
         // Pruning again removes nothing.
         // try testing.expectEqual(@as(usize, 0), try cache.prune(alloc, 90 * day));
@@ -1063,8 +1107,8 @@ mod tests {
         // Sub-day granularity: a 30-minute max age prunes the hour-old entry.
         // try testing.expectEqual(@as(usize, 1), try cache.prune(alloc, 30 * std.time.s_per_min));
         assert_eq!(1_usize, cache.prune((30 * S_PER_MIN) as u64).unwrap());
-        // try testing.expect(!try cache.contains(alloc, "recent.com"));
-        assert!(!cache.contains(b"recent.com").unwrap());
+        // try testing.expect(!try cache.contains(alloc, "recent.com", "v1"));
+        assert!(!cache.contains(b"recent.com", b"v1").unwrap());
     }
 
     // test "disk cache prune missing file"
@@ -1202,7 +1246,7 @@ mod tests {
         //     std.fs.cwd().deleteFile(path) catch {};
         //     var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
         //     const alloc = failing.allocator();
-        //     if (cache.add(alloc, "user@example.com", 100)) |_| {
+        //     if (cache.add(alloc, "user@example.com", "v1", 100)) |_| {
         //         if (!failing.has_induced_failure) break;
         //     } else |err| { try testing.expectEqual(error.OutOfMemory, err); }
         // }
@@ -1213,7 +1257,25 @@ mod tests {
         // reference loop's one assertion (its terminal state: an `add` run with
         // no induced failure, i.e. the non-error arm and the `break`) maps to
         // asserting the collapsed run's success arm.
-        assert!(cache.add(b"user@example.com", 100).is_ok());
+        assert!(cache.add(b"user@example.com", b"v1", 100).is_ok());
+    }
+
+    // test isFailure
+    #[test]
+    fn is_failure_test() {
+        // try testing.expect(!isFailure(error.InvalidCacheKey));
+        assert!(!DiskCache::is_failure(&Error::InvalidCacheKey));
+        // try testing.expect(!isFailure(error.CacheLocked));
+        assert!(!DiskCache::is_failure(&Error::CacheLocked));
+        // try testing.expect(isFailure(error.AccessDenied));
+        //   (`error.AccessDenied` / `error.IsDir` are I/O-shaped in the port)
+        assert!(DiskCache::is_failure(&Error::Io(std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied
+        ))));
+        // try testing.expect(isFailure(error.IsDir));
+        assert!(DiskCache::is_failure(&Error::Io(std::io::Error::from(
+            std::io::ErrorKind::IsADirectory
+        ))));
     }
 
     // test isValidHost

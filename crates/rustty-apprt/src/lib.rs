@@ -307,15 +307,26 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     // self.rlimits = .init();
     let rlimits = rustty_global::ResourceLimits::init(rustty_os::fixMaxFiles());
 
-    // Initialize our crash reporting.
-    // crash.init(self.alloc) catch |err| log.warn(...);
-    if let Err(err) = rustty_crash::init() {
-        log_with(
-            Level::Warn,
-            "default",
-            &format!("sentry init failed, no crash capture available err={err:?}"),
-            &logging,
-        );
+    // if (build_options.sentry) { ... }
+    // (PORT NOTE, P4-E33/E34 `15c50c1db`+`a82637b53`: upstream gates the whole
+    // block on the sentry build option so the env-map snapshot isn't built for
+    // nothing; `crash.init` also checks it internally.)
+    if rustty_crash::build_options::SENTRY {
+        // Initialize our crash reporting. The environ map snapshot is
+        // owned by crash.init (it is freed by the init thread).
+        // const environ_map = try self.environ.createMap(self.alloc);
+        // (PORT NOTE: `environ_map()` — the free accessor over the captured
+        // global environ, `createMap`'s image — is infallible in Rust.)
+        let environ_map = rustty_global::environ_map();
+        // crash.init(self.alloc, environ_map) catch |err| { ... };
+        if let Err(err) = rustty_crash::init(environ_map) {
+            log_with(
+                Level::Warn,
+                "default",
+                &format!("sentry init failed, no crash capture available err={err:?}"),
+                &logging,
+            );
+        }
     }
 
     // We need to make sure the process locale is set properly. Locale

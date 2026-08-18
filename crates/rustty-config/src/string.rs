@@ -238,14 +238,34 @@ pub fn parse(out: &mut [u8], bytes: &[u8]) -> Result<usize, ParseError> {
             continue;
         }
 
+        // Zig's \xNN syntax represents a single byte, while the other
+        // escape sequences represent Unicode codepoints.
+        // const is_byte_escape = src_i + 1 < bytes.len and
+        //     bytes[src_i + 1] == 'x';
+        let is_byte_escape = src_i + 1 < bytes.len() && bytes[src_i + 1] == b'x';
+
         // Parse the escape sequence
         // switch (std.zig.string_literal.parseEscapeSequence(bytes, &src_i)) {
         match parse_escape_sequence(bytes, &mut src_i) {
             // .failure => return error.InvalidString,
             ParsedCharLiteral::Failure => return Err(ParseError::InvalidString),
-            // .success => |cp| dst_i += try std.unicode.utf8Encode(cp, out[dst_i..]),
+            // .success => |cp| if (is_byte_escape) {
+            //     out[dst_i] = @intCast(cp);
+            //     dst_i += 1;
+            // } else {
+            //     dst_i += try std.unicode.utf8Encode(cp, out[dst_i..]);
+            // },
             ParsedCharLiteral::Success(cp) => {
-                dst_i += utf8_encode(cp, &mut out[dst_i..])?;
+                if is_byte_escape {
+                    // `@intCast(cp)` — the `\xNN` arm of `parse_escape_sequence`
+                    // assembles at most two hex digits into a `u8`, so `cp` is
+                    // always <= 0xff here (the reference's safety-checked cast).
+                    debug_assert!(cp <= 0xff);
+                    out[dst_i] = cp as u8;
+                    dst_i += 1;
+                } else {
+                    dst_i += utf8_encode(cp, &mut out[dst_i..])?;
+                }
             }
         }
     }
@@ -424,6 +444,20 @@ mod tests {
             // try testing.expectEqualStrings("hello\u{1F601}world", result);
             assert_eq!("hello\u{1F601}world".as_bytes(), &buf[..len]);
         }
+    }
+
+    // test "parse: hex escapes are bytes" {
+    #[test]
+    fn parse_hex_escapes_are_bytes() {
+        // var buf: [128]u8 = undefined;
+        let mut buf = [0u8; 128];
+        // const result = try parse(
+        //     &buf,
+        //     "\\xe6\\x97\\xa5\\xe6\\x9c\\xac\\xe8\\xaa\\x9e",
+        // );
+        let len = parse(&mut buf, b"\\xe6\\x97\\xa5\\xe6\\x9c\\xac\\xe8\\xaa\\x9e").unwrap();
+        // try std.testing.expectEqualStrings("日本語", result);
+        assert_eq!("日本語".as_bytes(), &buf[..len]);
     }
 
     // test "codepointIterator: empty" {

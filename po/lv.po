@@ -7,11 +7,11 @@ msgid ""
 msgstr ""
 "Project-Id-Version: io.airely.rustty\n"
 "Report-Msgid-Bugs-To: gael@airely.io\n"
-"POT-Creation-Date: 2026-07-31 03:57-0700\n"
-"PO-Revision-Date: 2026-02-09 03:24+0200\n"
+"POT-Creation-Date: 2026-08-10 10:06-0500\n"
+"PO-Revision-Date: 2026-08-10 17:32+0300\n"
 "Last-Translator: Ēriks Remess <eriks@remess.lv>\n"
 "Language-Team: Latvian\n"
-"Language: LV\n"
+"Language: lv\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -21,13 +21,39 @@ msgstr ""
 msgid "Open in Rustty"
 msgstr "Atvērt ar Rustty"
 
+#: crates/rustty-apprt/assets/ui/1.0/clipboard-confirmation-dialog.blp:12
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:12
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:197
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:201
+msgid "Authorize Clipboard Access"
+msgstr "Atļaut piekļuvi starpliktuvei"
+
+#: crates/rustty-apprt/assets/ui/1.0/clipboard-confirmation-dialog.blp:17
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:17
+msgid "Deny"
+msgstr "Noraidīt"
+
+#: crates/rustty-apprt/assets/ui/1.0/clipboard-confirmation-dialog.blp:18
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:18
+msgid "Allow"
+msgstr "Atļaut"
+
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:92
+msgid "Remember choice for this split"
+msgstr "Atcerēties izvēli šim nodalījumam"
+
+#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:93
+msgid "Reload configuration to show this prompt again"
+msgstr "Lai šo uzvedni parādītu vēlreiz, pārlādējiet konfigurāciju"
+
 #: crates/rustty-apprt/assets/ui/1.2/close-confirmation-dialog.blp:7
 #: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:8
+#: crates/rustty-apprt/src/gtk/class/application.rs:2263
 msgid "Cancel"
 msgstr "Atcelt"
 
 #: crates/rustty-apprt/assets/ui/1.2/close-confirmation-dialog.blp:8
-#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:85
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:90
 #: crates/rustty-apprt/assets/ui/1.3/surface-child-exited.blp:17
 msgid "Close"
 msgstr "Aizvērt"
@@ -36,7 +62,7 @@ msgstr "Aizvērt"
 msgid "Configuration Errors"
 msgstr "Konfigurācijas kļūdas"
 
-#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:7
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:8
 msgid ""
 "One or more configuration errors were found. Please review the errors below, "
 "and either reload your configuration or ignore these errors."
@@ -44,37 +70,46 @@ msgstr ""
 "Tika atrasta viena vai vairākas konfigurācijas kļūdas. Lūdzu, pārskatiet "
 "zemāk redzamās kļūdas un pārlādējiet konfigurāciju vai ignorējiet tās."
 
-#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:10
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:12
 msgid "Ignore"
 msgstr "Ignorēt"
 
-#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:11
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:373
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:300
+#: crates/rustty-apprt/assets/ui/1.2/config-errors-dialog.blp:13
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:439 crates/rustty-apprt/assets/ui/1.5/window.blp:318
 msgid "Reload Configuration"
 msgstr "Pārlādēt konfigurāciju"
+
+#: crates/rustty-apprt/assets/ui/1.2/debug-warning.blp:7
+#: crates/rustty-apprt/assets/ui/1.3/debug-warning.blp:6
+msgid ""
+"⚠️ You're running a debug build of Rustty! Performance will be degraded."
+msgstr "⚠️ Jūs izmantojat Rustty atkļūdošanas būvējumu! Veiktspēja būs zemāka."
+
+#: crates/rustty-apprt/assets/ui/1.5/inspector-window.blp:5
+msgid "Rustty: Terminal Inspector"
+msgstr "Rustty: Termināļa inspektors"
 
 #: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:29
 msgid "Find…"
 msgstr "Meklēt…"
 
-#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:64
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:69
 msgid "Previous Match"
 msgstr "Iepriekšējā atbilstība"
 
-#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:74
+#: crates/rustty-apprt/assets/ui/1.2/search-overlay.blp:79
 msgid "Next Match"
 msgstr "Nākamā atbilstība"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:6
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:7
 msgid "Oh, no."
 msgstr "Ak, nē."
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:7
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:8
 msgid "Unable to acquire an OpenGL context for rendering."
 msgstr "Neizdevās iegūt OpenGL kontekstu attēlošanai."
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:99
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:101
 msgid ""
 "This terminal is in read-only mode. You can still view, select, and scroll "
 "through the content, but no input events will be sent to the running "
@@ -83,203 +118,177 @@ msgstr ""
 "Šis terminālis ir tikai lasīšanas režīmā. Jūs joprojām varat skatīt, atlasīt "
 "un ritināt saturu, taču ievade netiks sūtīta palaistajai lietotnei."
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:109
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:112
 msgid "Read-only"
 msgstr "Tikai lasīšanai"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:262
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:200
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:316 crates/rustty-apprt/assets/ui/1.5/window.blp:203
 msgid "Copy"
 msgstr "Kopēt"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:267
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:205
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:321 crates/rustty-apprt/assets/ui/1.5/window.blp:208
 msgid "Paste"
 msgstr "Ielīmēt"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:272
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:326
 msgid "Notify on Next Command Finish"
 msgstr "Paziņot, kad nākamā komanda būs izpildīta"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:279
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:273
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:333 crates/rustty-apprt/assets/ui/1.5/window.blp:281
 msgid "Clear"
 msgstr "Notīrīt"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:284
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:278
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:338 crates/rustty-apprt/assets/ui/1.5/window.blp:286
 msgid "Reset"
 msgstr "Atiestatīt"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:291
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:242
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:345 crates/rustty-apprt/assets/ui/1.5/window.blp:250
 msgid "Split"
 msgstr "Sadalīt"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:294
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:245
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:348 crates/rustty-apprt/assets/ui/1.5/window.blp:253
 msgid "Change Title…"
 msgstr "Mainīt virsrakstu…"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:299
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:177
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:250
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:353 crates/rustty-apprt/assets/ui/1.5/window.blp:180
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:258 crates/rustty-input/src/command.rs:487
 msgid "Split Up"
 msgstr "Sadalīt uz augšu"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:305
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:182
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:255
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:359 crates/rustty-apprt/assets/ui/1.5/window.blp:185
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:263 crates/rustty-input/src/command.rs:492
 msgid "Split Down"
 msgstr "Sadalīt uz leju"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:311
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:187
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:260
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:365 crates/rustty-apprt/assets/ui/1.5/window.blp:190
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:268 crates/rustty-input/src/command.rs:477
 msgid "Split Left"
 msgstr "Sadalīt pa kreisi"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:317
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:192
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:265
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:371 crates/rustty-apprt/assets/ui/1.5/window.blp:195
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:273 crates/rustty-input/src/command.rs:482
 msgid "Split Right"
 msgstr "Sadalīt pa labi"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:323
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:377
 msgid "Close Split"
-msgstr ""
+msgstr "Aizvērt nodalījumu"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:329
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:383
 msgid "Tab"
 msgstr "Cilne"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:332
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:224
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:320
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:386 crates/rustty-apprt/assets/ui/1.5/window.blp:232
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:339 crates/rustty-input/src/command.rs:464
 msgid "Change Tab Title…"
 msgstr "Mainīt cilnes virsrakstu…"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:337
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:57
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:107
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:229
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:391 crates/rustty-apprt/assets/ui/1.5/window.blp:60
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:110 crates/rustty-apprt/assets/ui/1.5/window.blp:237
+#: crates/rustty-input/src/command.rs:427
 msgid "New Tab"
 msgstr "Jauna cilne"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:342
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:234
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:396 crates/rustty-apprt/assets/ui/1.5/window.blp:242
+#: crates/rustty-input/src/command.rs:613
 msgid "Close Tab"
 msgstr "Aizvērt cilni"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:349
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:403
 msgid "Window"
 msgstr "Logs"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:352
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:212
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:406 crates/rustty-apprt/assets/ui/1.5/window.blp:215
+msgid "Change Window Title…"
+msgstr "Mainīt loga virsrakstu…"
+
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:411 crates/rustty-apprt/assets/ui/1.5/window.blp:220
+#: crates/rustty-input/src/command.rs:421
 msgid "New Window"
 msgstr "Jauns logs"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:357
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:217
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:416 crates/rustty-apprt/assets/ui/1.5/window.blp:225
+#: crates/rustty-input/src/command.rs:630
 msgid "Close Window"
 msgstr "Aizvērt logu"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:365
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:424 crates/rustty-apprt/assets/ui/1.5/window.blp:303
 msgid "Config"
 msgstr "Konfigurācija"
 
-#: crates/rustty-apprt/assets/ui/1.2/surface.blp:368
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:295
-msgid "Open Configuration"
-msgstr "Atvērt konfigurāciju"
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:427 crates/rustty-apprt/assets/ui/1.5/window.blp:306
+msgid "Open Configuration in OS Editor"
+msgstr "Atvērt konfigurāciju noklusējuma redaktorā"
 
-#: crates/rustty-apprt/assets/ui/1.3/debug-warning.blp:6
-msgid "⚠️ You're running a debug build of Rustty! Performance will be degraded."
-msgstr "⚠️ Jūs izmantojat Rustty atkļūdošanas būvējumu! Veiktspēja būs zemāka."
-
-#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:12
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:269
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:273
-msgid "Authorize Clipboard Access"
-msgstr "Atļaut piekļuvi starpliktuvei"
-
-#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:17
-msgid "Deny"
-msgstr "Noraidīt"
-
-#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:18
-msgid "Allow"
-msgstr "Atļaut"
-
-#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:92
-msgid "Remember choice for this split"
-msgstr "Atcerēties izvēli šim sadalījumam"
-
-#: crates/rustty-apprt/assets/ui/1.4/clipboard-confirmation-dialog.blp:93
-msgid "Reload configuration to show this prompt again"
-msgstr "Pārlādējiet konfigurāciju, lai šo uzvedni rādītu atkal"
-
-#: crates/rustty-apprt/assets/ui/1.5/command-palette.blp:17
-msgid "Execute a command…"
-msgstr "Izpildīt komandu…"
-
-#: crates/rustty-apprt/assets/ui/1.5/inspector-window.blp:5
-msgid "Rustty: Terminal Inspector"
-msgstr "Rustty: Termināļa inspektors"
+#: crates/rustty-apprt/assets/ui/1.2/surface.blp:433 crates/rustty-apprt/assets/ui/1.5/window.blp:312
+msgid "Open Configuration in New Window"
+msgstr "Atvērt konfigurāciju jaunā logā"
 
 #: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:5
 msgid "Leave blank to restore the default title."
-msgstr "Atstāj tukšu, lai atjaunotu noklusēto virsrakstu."
+msgstr "Atstājiet lauku tukšu, lai atjaunotu noklusēto virsrakstu."
 
 #: crates/rustty-apprt/assets/ui/1.5/title-dialog.blp:9
 msgid "OK"
 msgstr "Labi"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:58
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:108
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:61 crates/rustty-apprt/assets/ui/1.5/window.blp:111
 msgid "New Split"
-msgstr "Jauns sadalījums"
+msgstr "Jauns nodalījums"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:68
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:126
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:71 crates/rustty-apprt/assets/ui/1.5/window.blp:129
 msgid "View Open Tabs"
 msgstr "Skatīt atvērtās cilnes"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:78
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:140
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:81 crates/rustty-apprt/assets/ui/1.5/window.blp:143
 msgid "Main Menu"
 msgstr "Galvenā izvēlne"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:285
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:293
 msgid "Command Palette"
 msgstr "Komandu palete"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:290
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:298
 msgid "Terminal Inspector"
 msgstr "Termināļa inspektors"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:307
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:326 crates/rustty-apprt/src/gtk/class/window.rs:1991
 msgid "About Rustty"
 msgstr "Par Rustty"
 
-#: crates/rustty-apprt/assets/ui/1.5/window.blp:312
+#: crates/rustty-apprt/assets/ui/1.5/window.blp:331 crates/rustty-input/src/command.rs:702
 msgid "Quit"
 msgstr "Iziet"
 
-#: crates/rustty-apprt/src/gtk/class/application.rs:1596
+#: crates/rustty-apprt/assets/ui/1.5/command-palette.blp:17
+msgid "Execute a command…"
+msgstr "Izpildīt komandu…"
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:1767
 msgid "The keybind was revoked by the system."
-msgstr ""
+msgstr "Sistēma atsauca taustiņu sasaisti."
 
-#: crates/rustty-apprt/src/gtk/class/application.rs:1598
+#: crates/rustty-apprt/src/gtk/class/application.rs:1769
 msgid "The keybind was denied by the system."
-msgstr ""
+msgstr "Sistēma noraidīja taustiņu sasaisti."
 
-#: crates/rustty-apprt/src/gtk/class/application.rs:1605
+#: crates/rustty-apprt/src/gtk/class/application.rs:1780
 msgid "Global keybind unavailable"
-msgstr ""
+msgstr "Globālā taustiņu sasaiste nav pieejama"
 
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:270
+#: crates/rustty-apprt/src/gtk/class/application.rs:2259
+msgid "Export Terminal IO Events"
+msgstr "Eksportēt termināļa ievades un izvades notikumus"
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:2262
+msgid "Export"
+msgstr "Eksportēt"
+
+#: crates/rustty-apprt/src/gtk/class/application.rs:2783
+msgid "Editing configuration file"
+msgstr "Konfigurācijas faila rediģēšana:"
+
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:198
 msgid ""
 "An application is attempting to write to the clipboard. The current "
 "clipboard contents are shown below."
@@ -287,7 +296,7 @@ msgstr ""
 "Lietotne mēģina rakstīt starpliktuvē. Zemāk ir redzams pašreizējais "
 "starpliktuves saturs."
 
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:274
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:202
 msgid ""
 "An application is attempting to read from the clipboard. The current "
 "clipboard contents are shown below."
@@ -295,90 +304,818 @@ msgstr ""
 "Lietotne mēģina lasīt no starpliktuves. Zemāk ir redzams pašreizējais "
 "starpliktuves saturs."
 
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:277
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:205
 msgid "Warning: Potentially Unsafe Paste"
 msgstr "Brīdinājums: potenciāli nedroša ielīmēšana"
 
-#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:278
+#: crates/rustty-apprt/src/gtk/class/clipboard_confirmation_dialog.rs:206
 msgid ""
 "Pasting this text into the terminal may be dangerous as it looks like some "
 "commands may be executed."
 msgstr ""
-"Šī teksta ielīmēšana terminālī var būt bīstama, jo izskatās, ka var tikt "
-"izpildītas komandas."
+"Šī teksta ielīmēšana terminālī var būt bīstama, jo tas, iespējams, satur "
+"izpildāmas komandas."
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:59
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:184
 msgid "Quit Rustty?"
 msgstr "Iziet no Rustty?"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:60
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:185
 msgid "Close Tab?"
 msgstr "Aizvērt cilni?"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:61
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:186
 msgid "Close Window?"
 msgstr "Aizvērt logu?"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:62
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:187
 msgid "Close Split?"
-msgstr "Aizvērt sadalījumu?"
+msgstr "Aizvērt nodalījumu?"
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:71
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:193
 msgid "All terminal sessions will be terminated."
 msgstr "Visas termināļa sesijas tiks pārtrauktas."
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:72
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:194
 msgid "All terminal sessions in this tab will be terminated."
 msgstr "Visas termināļa sesijas šajā cilnē tiks pārtrauktas."
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:73
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:195
 msgid "All terminal sessions in this window will be terminated."
 msgstr "Visas termināļa sesijas šajā logā tiks pārtrauktas."
 
-#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:75
+#: crates/rustty-apprt/src/gtk/class/close_confirmation_dialog.rs:196
 msgid "The currently running process in this split will be terminated."
-msgstr "Pašlaik palaistais process šajā sadalījumā tiks pārtraukts."
+msgstr "Pašlaik palaistais process šajā nodalījumā tiks pārtraukts."
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1934
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1181
 msgid "Command Finished"
 msgstr "Komanda izpildīta"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1935
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1182
+#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:109
 msgid "Command Succeeded"
 msgstr "Komanda izdevās"
 
-#: crates/rustty-apprt/src/gtk/class/surface.rs:1936
+#: crates/rustty-apprt/src/gtk/class/surface.rs:1183
+#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:113
 msgid "Command Failed"
 msgstr "Komanda neizdevās"
 
-#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:154
-msgid "Command succeeded"
-msgstr "Komanda izdevās"
-
-#: crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:158
-msgid "Command failed"
-msgstr "Komanda neizdevās"
-
-#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:43
+#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:227
 msgid "Change Terminal Title"
 msgstr "Mainīt termināļa virsrakstu"
 
-#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:44
+#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:228
 msgid "Change Tab Title"
 msgstr "Mainīt cilnes virsrakstu"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1137
-msgid "Cleared clipboard"
-msgstr "Starpliktuve notīrīta"
+#: crates/rustty-apprt/src/gtk/class/title_dialog.rs:229
+msgid "Change Window Title"
+msgstr "Mainīt loga virsrakstu"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:1139
-msgid "Copied to clipboard"
-msgstr "Nokopēts starpliktuvē"
-
-#: crates/rustty-apprt/src/gtk/class/window.rs:1931
+#: crates/rustty-apprt/src/gtk/class/window.rs:1153
 msgid "Reloaded the configuration"
 msgstr "Konfigurācija pārlādēta"
 
-#: crates/rustty-apprt/src/gtk/class/window.rs:2088
+#: crates/rustty-apprt/src/gtk/class/window.rs:1830
+msgid "Copied to clipboard"
+msgstr "Nokopēts starpliktuvē"
+
+#: crates/rustty-apprt/src/gtk/class/window.rs:1832
+msgid "Cleared clipboard"
+msgstr "Starpliktuve notīrīta"
+
+#: crates/rustty-apprt/src/gtk/class/window.rs:1972
 msgid "Rustty Developers"
 msgstr "Rustty izstrādātāji"
+
+#: crates/rustty-input/src/command.rs:149
+msgid "Reset Terminal"
+msgstr "Atiestatīt termināli"
+
+#: crates/rustty-input/src/command.rs:150
+msgid "Reset the terminal to a clean state."
+msgstr "Atiestatīt termināli tīrā stāvoklī."
+
+#: crates/rustty-input/src/command.rs:155
+msgid "Copy to Clipboard"
+msgstr "Kopēt starpliktuvē"
+
+#: crates/rustty-input/src/command.rs:156
+msgid ""
+"Copy the selected text to the clipboard in both plain and styled formats."
+msgstr ""
+"Kopēt atlasīto tekstu starpliktuvē gan kā vienkāršu tekstu, gan ar "
+"formatējumu."
+
+#: crates/rustty-input/src/command.rs:159
+msgid "Copy Selection as Plain Text to Clipboard"
+msgstr "Kopēt atlasi starpliktuvē kā vienkāršu tekstu"
+
+#: crates/rustty-input/src/command.rs:160
+msgid "Copy the selected text as plain text to the clipboard."
+msgstr "Kopēt atlasīto tekstu starpliktuvē kā vienkāršu tekstu."
+
+#: crates/rustty-input/src/command.rs:163
+msgid "Copy Selection as ANSI Sequences to Clipboard"
+msgstr "Kopēt atlasi starpliktuvē kā ANSI sekvences"
+
+#: crates/rustty-input/src/command.rs:164
+msgid "Copy the selected text as ANSI escape sequences to the clipboard."
+msgstr "Kopēt atlasīto tekstu starpliktuvē kā ANSI vadības sekvences."
+
+#: crates/rustty-input/src/command.rs:167
+msgid "Copy Selection as HTML to Clipboard"
+msgstr "Kopēt atlasi starpliktuvē kā HTML"
+
+#: crates/rustty-input/src/command.rs:168
+msgid "Copy the selected text as HTML to the clipboard."
+msgstr "Kopēt atlasīto tekstu starpliktuvē kā HTML."
+
+#: crates/rustty-input/src/command.rs:173
+msgid "Copy URL to Clipboard"
+msgstr "Kopēt URL starpliktuvē"
+
+#: crates/rustty-input/src/command.rs:174
+msgid "Copy the URL under the cursor to the clipboard."
+msgstr "Kopēt zem kursora esošo URL starpliktuvē."
+
+#: crates/rustty-input/src/command.rs:179
+msgid "Copy Terminal Title to Clipboard"
+msgstr "Kopēt termināļa virsrakstu starpliktuvē"
+
+#: crates/rustty-input/src/command.rs:180
+msgid ""
+"Copy the terminal title to the clipboard. If the terminal title is not set "
+"this has no effect."
+msgstr ""
+"Kopēt termināļa virsrakstu starpliktuvē. Ja termināļa virsraksts nav "
+"iestatīts, šī darbība neko nemaina."
+
+#: crates/rustty-input/src/command.rs:185
+msgid "Paste from Clipboard"
+msgstr "Ielīmēt no starpliktuves"
+
+#: crates/rustty-input/src/command.rs:186
+msgid "Paste the contents of the main clipboard."
+msgstr "Ielīmēt galvenās starpliktuves saturu."
+
+#: crates/rustty-input/src/command.rs:191
+msgid "Paste from Selection"
+msgstr "Ielīmēt no atlases"
+
+#: crates/rustty-input/src/command.rs:192
+msgid "Paste the contents of the selection clipboard."
+msgstr "Ielīmēt atlases starpliktuves saturu."
+
+#: crates/rustty-input/src/command.rs:197
+msgid "Start Search"
+msgstr "Sākt meklēšanu"
+
+#: crates/rustty-input/src/command.rs:198
+msgid "Start a search if one isn't already active."
+msgstr "Sākt meklēšanu, ja tā vēl nav aktīva."
+
+#: crates/rustty-input/src/command.rs:203
+msgid "Search Selection"
+msgstr "Meklēt atlasīto tekstu"
+
+#: crates/rustty-input/src/command.rs:204
+msgid "Start a search for the current text selection."
+msgstr "Sākt meklēt pašreiz atlasīto tekstu."
+
+#: crates/rustty-input/src/command.rs:209
+msgid "End Search"
+msgstr "Beigt meklēšanu"
+
+#: crates/rustty-input/src/command.rs:210
+msgid "End the current search if any and hide any GUI elements."
+msgstr "Beigt pašreizējo meklēšanu, ja tāda ir, un paslēpt GUI elementus."
+
+#: crates/rustty-input/src/command.rs:215
+msgid "Next Search Result"
+msgstr "Nākamais meklēšanas rezultāts"
+
+#: crates/rustty-input/src/command.rs:216
+msgid "Navigate to the next search result, if any."
+msgstr "Pāriet uz nākamo meklēšanas rezultātu, ja tāds ir."
+
+#: crates/rustty-input/src/command.rs:219
+msgid "Previous Search Result"
+msgstr "Iepriekšējais meklēšanas rezultāts"
+
+#: crates/rustty-input/src/command.rs:220
+msgid "Navigate to the previous search result, if any."
+msgstr "Pāriet uz iepriekšējo meklēšanas rezultātu, ja tāds ir."
+
+#: crates/rustty-input/src/command.rs:225
+msgid "Increase Font Size"
+msgstr "Palielināt fonta izmēru"
+
+#: crates/rustty-input/src/command.rs:226
+msgid "Increase the font size by 1 point."
+msgstr "Palielināt fonta izmēru par 1 punktu."
+
+#: crates/rustty-input/src/command.rs:231
+msgid "Decrease Font Size"
+msgstr "Samazināt fonta izmēru"
+
+#: crates/rustty-input/src/command.rs:232
+msgid "Decrease the font size by 1 point."
+msgstr "Samazināt fonta izmēru par 1 punktu."
+
+#: crates/rustty-input/src/command.rs:237
+msgid "Reset Font Size"
+msgstr "Atiestatīt fonta izmēru"
+
+#: crates/rustty-input/src/command.rs:238
+msgid "Reset the font size to the default."
+msgstr "Atiestatīt fonta izmēru uz noklusēto."
+
+#: crates/rustty-input/src/command.rs:243
+msgid "Clear Screen"
+msgstr "Notīrīt ekrānu"
+
+#: crates/rustty-input/src/command.rs:244
+msgid "Clear the screen and scrollback."
+msgstr "Notīrīt ekrānu un ritināšanas vēsturi."
+
+#: crates/rustty-input/src/command.rs:249
+msgid "Select All"
+msgstr "Atlasīt visu"
+
+#: crates/rustty-input/src/command.rs:250
+msgid "Select all text on the screen."
+msgstr "Atlasīt visu ekrānā redzamo tekstu."
+
+#: crates/rustty-input/src/command.rs:255
+msgid "Scroll to Top"
+msgstr "Ritināt līdz sākumam"
+
+#: crates/rustty-input/src/command.rs:256
+msgid "Scroll to the top of the screen."
+msgstr "Ritināt līdz ekrāna sākumam."
+
+#: crates/rustty-input/src/command.rs:261
+msgid "Scroll to Bottom"
+msgstr "Ritināt līdz beigām"
+
+#: crates/rustty-input/src/command.rs:262
+msgid "Scroll to the bottom of the screen."
+msgstr "Ritināt līdz ekrāna beigām."
+
+#: crates/rustty-input/src/command.rs:267
+msgid "Scroll to Selection"
+msgstr "Ritināt līdz atlasei"
+
+#: crates/rustty-input/src/command.rs:268
+msgid "Scroll to the selected text."
+msgstr "Ritināt līdz atlasītajam tekstam."
+
+#: crates/rustty-input/src/command.rs:273
+msgid "Scroll Page Up"
+msgstr "Ritināt lapu augšup"
+
+#: crates/rustty-input/src/command.rs:274
+msgid "Scroll the screen up by a page."
+msgstr "Ritināt ekrānu vienu lapu augšup."
+
+#: crates/rustty-input/src/command.rs:279
+msgid "Scroll Page Down"
+msgstr "Ritināt lapu lejup"
+
+#: crates/rustty-input/src/command.rs:280
+msgid "Scroll the screen down by a page."
+msgstr "Ritināt ekrānu vienu lapu lejup."
+
+#: crates/rustty-input/src/command.rs:286
+msgid "Copy Screen to Temporary File and Copy Path"
+msgstr "Kopēt ekrānu pagaidu failā un kopēt tā ceļu"
+
+#: crates/rustty-input/src/command.rs:287
+msgid ""
+"Copy the screen contents to a temporary file and copy the path to the "
+"clipboard."
+msgstr "Kopēt ekrāna saturu pagaidu failā un kopēt faila ceļu starpliktuvē."
+
+#: crates/rustty-input/src/command.rs:291
+msgid "Copy Screen to Temporary File and Paste Path"
+msgstr "Kopēt ekrānu pagaidu failā un ielīmēt ceļu"
+
+#: crates/rustty-input/src/command.rs:292
+msgid ""
+"Copy the screen contents to a temporary file and paste the path to the file."
+msgstr "Kopēt ekrāna saturu pagaidu failā un ielīmēt faila ceļu."
+
+#: crates/rustty-input/src/command.rs:296
+msgid "Copy Screen to Temporary File and Open"
+msgstr "Kopēt ekrānu pagaidu failā un atvērt"
+
+#: crates/rustty-input/src/command.rs:297
+msgid "Copy the screen contents to a temporary file and open it."
+msgstr "Kopēt ekrāna saturu pagaidu failā un atvērt to."
+
+#: crates/rustty-input/src/command.rs:305
+msgid "Copy Screen as HTML to Temporary File and Copy Path"
+msgstr "Kopēt ekrānu kā HTML pagaidu failā un kopēt ceļu"
+
+#: crates/rustty-input/src/command.rs:306
+msgid ""
+"Copy the screen contents as HTML to a temporary file and copy the path to "
+"the clipboard."
+msgstr ""
+"Kopēt ekrāna saturu kā HTML pagaidu failā un kopēt faila ceļu starpliktuvē."
+
+#: crates/rustty-input/src/command.rs:313
+msgid "Copy Screen as HTML to Temporary File and Paste Path"
+msgstr "Kopēt ekrānu kā HTML pagaidu failā un ielīmēt ceļu"
+
+#: crates/rustty-input/src/command.rs:314
+msgid ""
+"Copy the screen contents as HTML to a temporary file and paste the path to "
+"the file."
+msgstr "Kopēt ekrāna saturu kā HTML pagaidu failā un ielīmēt faila ceļu."
+
+#: crates/rustty-input/src/command.rs:321
+msgid "Copy Screen as HTML to Temporary File and Open"
+msgstr "Kopēt ekrānu kā HTML pagaidu failā un atvērt"
+
+#: crates/rustty-input/src/command.rs:322
+msgid "Copy the screen contents as HTML to a temporary file and open it."
+msgstr "Kopēt ekrāna saturu kā HTML pagaidu failā un atvērt to."
+
+#: crates/rustty-input/src/command.rs:330
+msgid "Copy Screen as ANSI Sequences to Temporary File and Copy Path"
+msgstr "Kopēt ekrānu kā ANSI sekvences pagaidu failā un kopēt ceļu"
+
+#: crates/rustty-input/src/command.rs:331
+msgid ""
+"Copy the screen contents as ANSI escape sequences to a temporary file and "
+"copy the path to the clipboard."
+msgstr ""
+"Kopēt ekrāna saturu kā ANSI vadības sekvences pagaidu failā un kopēt faila "
+"ceļu starpliktuvē."
+
+#: crates/rustty-input/src/command.rs:338
+msgid "Copy Screen as ANSI Sequences to Temporary File and Paste Path"
+msgstr "Kopēt ekrānu kā ANSI sekvences pagaidu failā un ielīmēt ceļu"
+
+#: crates/rustty-input/src/command.rs:339
+msgid ""
+"Copy the screen contents as ANSI escape sequences to a temporary file and "
+"paste the path to the file."
+msgstr ""
+"Kopēt ekrāna saturu kā ANSI vadības sekvences pagaidu failā un ielīmēt faila "
+"ceļu."
+
+#: crates/rustty-input/src/command.rs:346
+msgid "Copy Screen as ANSI Sequences to Temporary File and Open"
+msgstr "Kopēt ekrānu kā ANSI sekvences pagaidu failā un atvērt"
+
+#: crates/rustty-input/src/command.rs:347
+msgid ""
+"Copy the screen contents as ANSI escape sequences to a temporary file and "
+"open it."
+msgstr ""
+"Kopēt ekrāna saturu kā ANSI vadības sekvences pagaidu failā un atvērt to."
+
+#: crates/rustty-input/src/command.rs:354
+msgid "Copy Selection to Temporary File and Copy Path"
+msgstr "Kopēt atlasi pagaidu failā un kopēt ceļu"
+
+#: crates/rustty-input/src/command.rs:355
+msgid ""
+"Copy the selection contents to a temporary file and copy the path to the "
+"clipboard."
+msgstr "Kopēt atlases saturu pagaidu failā un kopēt faila ceļu starpliktuvē."
+
+#: crates/rustty-input/src/command.rs:359
+msgid "Copy Selection to Temporary File and Paste Path"
+msgstr "Kopēt atlasi pagaidu failā un ielīmēt ceļu"
+
+#: crates/rustty-input/src/command.rs:360
+msgid ""
+"Copy the selection contents to a temporary file and paste the path to the "
+"file."
+msgstr "Kopēt atlases saturu pagaidu failā un ielīmēt faila ceļu."
+
+#: crates/rustty-input/src/command.rs:364
+msgid "Copy Selection to Temporary File and Open"
+msgstr "Kopēt atlasi pagaidu failā un atvērt"
+
+#: crates/rustty-input/src/command.rs:365
+msgid "Copy the selection contents to a temporary file and open it."
+msgstr "Kopēt atlases saturu pagaidu failā un atvērt to."
+
+#: crates/rustty-input/src/command.rs:373
+msgid "Copy Selection as HTML to Temporary File and Copy Path"
+msgstr "Kopēt atlasi kā HTML pagaidu failā un kopēt ceļu"
+
+#: crates/rustty-input/src/command.rs:374
+msgid ""
+"Copy the selection contents as HTML to a temporary file and copy the path to "
+"the clipboard."
+msgstr ""
+"Kopēt atlases saturu kā HTML pagaidu failā un kopēt faila ceļu starpliktuvē."
+
+#: crates/rustty-input/src/command.rs:381
+msgid "Copy Selection as HTML to Temporary File and Paste Path"
+msgstr "Kopēt atlasi kā HTML pagaidu failā un ielīmēt ceļu"
+
+#: crates/rustty-input/src/command.rs:382
+msgid ""
+"Copy the selection contents as HTML to a temporary file and paste the path "
+"to the file."
+msgstr "Kopēt atlases saturu kā HTML pagaidu failā un ielīmēt faila ceļu."
+
+#: crates/rustty-input/src/command.rs:389
+msgid "Copy Selection as HTML to Temporary File and Open"
+msgstr "Kopēt atlasi kā HTML pagaidu failā un atvērt"
+
+#: crates/rustty-input/src/command.rs:390
+msgid "Copy the selection contents as HTML to a temporary file and open it."
+msgstr "Kopēt atlases saturu kā HTML pagaidu failā un atvērt to."
+
+#: crates/rustty-input/src/command.rs:398
+msgid "Copy Selection as ANSI Sequences to Temporary File and Copy Path"
+msgstr "Kopēt atlasi kā ANSI sekvences pagaidu failā un kopēt ceļu"
+
+#: crates/rustty-input/src/command.rs:399
+msgid ""
+"Copy the selection contents as ANSI escape sequences to a temporary file and "
+"copy the path to the clipboard."
+msgstr ""
+"Kopēt atlases saturu kā ANSI vadības sekvences pagaidu failā un kopēt faila "
+"ceļu starpliktuvē."
+
+#: crates/rustty-input/src/command.rs:406
+msgid "Copy Selection as ANSI Sequences to Temporary File and Paste Path"
+msgstr "Kopēt atlasi kā ANSI sekvences pagaidu failā un ielīmēt ceļu"
+
+#: crates/rustty-input/src/command.rs:407
+msgid ""
+"Copy the selection contents as ANSI escape sequences to a temporary file and "
+"paste the path to the file."
+msgstr ""
+"Kopēt atlases saturu kā ANSI vadības sekvences pagaidu failā un ielīmēt "
+"faila ceļu."
+
+#: crates/rustty-input/src/command.rs:414
+msgid "Copy Selection as ANSI Sequences to Temporary File and Open"
+msgstr "Kopēt atlasi kā ANSI sekvences pagaidu failā un atvērt"
+
+#: crates/rustty-input/src/command.rs:415
+msgid ""
+"Copy the selection contents as ANSI escape sequences to a temporary file and "
+"open it."
+msgstr ""
+"Kopēt atlases saturu kā ANSI vadības sekvences pagaidu failā un atvērt to."
+
+#: crates/rustty-input/src/command.rs:422
+msgid "Open a new window."
+msgstr "Atvērt jaunu logu."
+
+#: crates/rustty-input/src/command.rs:428
+msgid "Open a new tab."
+msgstr "Atvērt jaunu cilni."
+
+#: crates/rustty-input/src/command.rs:434
+msgid "Move Tab Left"
+msgstr "Pārvietot cilni pa kreisi"
+
+#: crates/rustty-input/src/command.rs:435
+msgid "Move the current tab to the left."
+msgstr "Pārvietot pašreizējo cilni pa kreisi."
+
+#: crates/rustty-input/src/command.rs:439
+msgid "Move Tab Right"
+msgstr "Pārvietot cilni pa labi"
+
+#: crates/rustty-input/src/command.rs:440
+msgid "Move the current tab to the right."
+msgstr "Pārvietot pašreizējo cilni pa labi."
+
+#: crates/rustty-input/src/command.rs:446
+msgid "Move Tab to New Window"
+msgstr "Pārvietot cilni uz jaunu logu"
+
+#: crates/rustty-input/src/command.rs:447
+msgid "Move the current tab to a new window."
+msgstr "Pārvietot pašreizējo cilni uz jaunu logu."
+
+#: crates/rustty-input/src/command.rs:452
+msgid "Toggle Tab Overview"
+msgstr "Parādīt vai paslēpt ciļņu pārskatu"
+
+#: crates/rustty-input/src/command.rs:453
+msgid "Toggle the tab overview."
+msgstr "Parādīt vai paslēpt ciļņu pārskatu."
+
+#: crates/rustty-input/src/command.rs:458
+msgid "Change Terminal Title…"
+msgstr "Mainīt termināļa virsrakstu…"
+
+#: crates/rustty-input/src/command.rs:459
+msgid "Prompt for a new title for the current terminal."
+msgstr "Parādīt aicinājumu ievadīt jaunu virsrakstu pašreizējam terminālim."
+
+#: crates/rustty-input/src/command.rs:465
+msgid "Prompt for a new title for the current tab."
+msgstr "Parādīt aicinājumu ievadīt jaunu virsrakstu pašreizējai cilnei."
+
+#: crates/rustty-input/src/command.rs:478
+msgid "Split the terminal to the left."
+msgstr "Sadalīt termināli pa kreisi."
+
+#: crates/rustty-input/src/command.rs:483
+msgid "Split the terminal to the right."
+msgstr "Sadalīt termināli pa labi."
+
+#: crates/rustty-input/src/command.rs:488
+msgid "Split the terminal up."
+msgstr "Sadalīt termināli augšup."
+
+#: crates/rustty-input/src/command.rs:493
+msgid "Split the terminal down."
+msgstr "Sadalīt termināli lejup."
+
+#: crates/rustty-input/src/command.rs:500
+msgid "Focus Split: Previous"
+msgstr "Fokusēt iepriekšējo nodalījumu"
+
+#: crates/rustty-input/src/command.rs:501
+msgid "Focus the previous split, if any."
+msgstr "Fokusēt iepriekšējo nodalījumu, ja tāds ir."
+
+#: crates/rustty-input/src/command.rs:505
+msgid "Focus Split: Next"
+msgstr "Fokusēt nākamo nodalījumu"
+
+#: crates/rustty-input/src/command.rs:506
+msgid "Focus the next split, if any."
+msgstr "Fokusēt nākamo nodalījumu, ja tāds ir."
+
+#: crates/rustty-input/src/command.rs:510
+msgid "Focus Split: Left"
+msgstr "Fokusēt nodalījumu pa kreisi"
+
+#: crates/rustty-input/src/command.rs:511
+msgid "Focus the split to the left, if it exists."
+msgstr "Fokusēt nodalījumu pa kreisi, ja tāds ir."
+
+#: crates/rustty-input/src/command.rs:515
+msgid "Focus Split: Right"
+msgstr "Fokusēt nodalījumu pa labi"
+
+#: crates/rustty-input/src/command.rs:516
+msgid "Focus the split to the right, if it exists."
+msgstr "Fokusēt nodalījumu pa labi, ja tāds ir."
+
+#: crates/rustty-input/src/command.rs:520
+msgid "Focus Split: Up"
+msgstr "Fokusēt augšējo nodalījumu"
+
+#: crates/rustty-input/src/command.rs:521
+msgid "Focus the split above, if it exists."
+msgstr "Fokusēt augšējo nodalījumu, ja tāds ir."
+
+#: crates/rustty-input/src/command.rs:525
+msgid "Focus Split: Down"
+msgstr "Fokusēt apakšējo nodalījumu"
+
+#: crates/rustty-input/src/command.rs:526
+msgid "Focus the split below, if it exists."
+msgstr "Fokusēt apakšējo nodalījumu, ja tāds ir."
+
+#: crates/rustty-input/src/command.rs:533
+msgid "Focus Window: Previous"
+msgstr "Fokusēt iepriekšējo logu"
+
+#: crates/rustty-input/src/command.rs:534
+msgid "Focus the previous window, if any."
+msgstr "Fokusēt iepriekšējo logu, ja tāds ir."
+
+#: crates/rustty-input/src/command.rs:538
+msgid "Focus Window: Next"
+msgstr "Fokusēt nākamo logu"
+
+#: crates/rustty-input/src/command.rs:539
+msgid "Focus the next window, if any."
+msgstr "Fokusēt nākamo logu, ja tāds ir."
+
+#: crates/rustty-input/src/command.rs:545
+msgid "Toggle Split Zoom"
+msgstr "Palielināt nodalījumu vai atjaunot tā izmēru"
+
+#: crates/rustty-input/src/command.rs:546
+msgid "Toggle the zoom state of the current split."
+msgstr "Palielināt pašreizējo nodalījumu vai atjaunot tā izmēru."
+
+#: crates/rustty-input/src/command.rs:551
+msgid "Toggle Read-Only Mode"
+msgstr "Ieslēgt vai izslēgt tikai lasīšanas režīmu"
+
+#: crates/rustty-input/src/command.rs:552
+msgid "Toggle read-only mode for the current surface."
+msgstr "Ieslēgt vai izslēgt tikai lasīšanas režīmu pašreizējā terminālī."
+
+#: crates/rustty-input/src/command.rs:557
+msgid "Equalize Splits"
+msgstr "Izlīdzināt nodalījumu izmērus"
+
+#: crates/rustty-input/src/command.rs:558
+msgid "Equalize the size of all splits."
+msgstr "Izlīdzināt visu nodalījumu izmērus."
+
+#: crates/rustty-input/src/command.rs:563
+msgid "Reset Window Size"
+msgstr "Atiestatīt loga izmēru"
+
+#: crates/rustty-input/src/command.rs:564
+msgid "Reset the window size to the default."
+msgstr "Atiestatīt loga izmēru uz noklusēto."
+
+#: crates/rustty-input/src/command.rs:569
+msgid "Toggle Inspector"
+msgstr "Parādīt vai paslēpt inspektoru"
+
+#: crates/rustty-input/src/command.rs:570
+msgid "Toggle the inspector."
+msgstr "Parādīt vai paslēpt inspektoru."
+
+#: crates/rustty-input/src/command.rs:575
+msgid "Show the GTK Inspector"
+msgstr "Rādīt GTK inspektoru"
+
+#: crates/rustty-input/src/command.rs:576
+msgid "Show the GTK inspector."
+msgstr "Rādīt GTK inspektoru."
+
+#: crates/rustty-input/src/command.rs:581
+msgid "Show On-Screen Keyboard"
+msgstr "Rādīt ekrāna tastatūru"
+
+#: crates/rustty-input/src/command.rs:582
+msgid "Show the on-screen keyboard if present."
+msgstr "Rādīt ekrāna tastatūru, ja tā ir pieejama."
+
+#: crates/rustty-input/src/command.rs:588
+msgid "Open Config Using OS editor"
+msgstr "Atvērt konfigurāciju noklusējuma redaktorā"
+
+#: crates/rustty-input/src/command.rs:589
+msgid "Open the config file with the OS's default editor."
+msgstr "Atvērt konfigurācijas failu noklusējuma redaktorā."
+
+#: crates/rustty-input/src/command.rs:593
+msgid "Open Config in New Terminal Window"
+msgstr "Atvērt konfigurāciju jaunā termināļa logā"
+
+#: crates/rustty-input/src/command.rs:594
+msgid "Open the config file in a new window using $EDITOR or $VISUAL."
+msgstr ""
+"Atvērt konfigurācijas failu jaunā logā, izmantojot mainīgajā $EDITOR vai "
+"$VISUAL norādīto redaktoru."
+
+#: crates/rustty-input/src/command.rs:600
+msgid "Reload Config"
+msgstr "Pārlādēt konfigurāciju"
+
+#: crates/rustty-input/src/command.rs:601
+msgid "Reload the config file."
+msgstr "Pārlādēt konfigurācijas failu."
+
+#: crates/rustty-input/src/command.rs:606
+msgid "Close Terminal"
+msgstr "Aizvērt termināli"
+
+#: crates/rustty-input/src/command.rs:607
+msgid "Close the current terminal."
+msgstr "Aizvērt pašreizējo termināli."
+
+#: crates/rustty-input/src/command.rs:614
+msgid "Close the current tab."
+msgstr "Aizvērt pašreizējo cilni."
+
+#: crates/rustty-input/src/command.rs:618
+msgid "Close Other Tabs"
+msgstr "Aizvērt citas cilnes"
+
+#: crates/rustty-input/src/command.rs:619
+msgid "Close all tabs in this window except the current one."
+msgstr "Aizvērt visas cilnes šajā logā, izņemot pašreizējo."
+
+#: crates/rustty-input/src/command.rs:623
+msgid "Close Tabs to the Right"
+msgstr "Aizvērt cilnes pa labi"
+
+#: crates/rustty-input/src/command.rs:624
+msgid "Close all tabs to the right of the current one."
+msgstr "Aizvērt visas cilnes pa labi no pašreizējās."
+
+#: crates/rustty-input/src/command.rs:631
+msgid "Close the current window."
+msgstr "Aizvērt pašreizējo logu."
+
+#: crates/rustty-input/src/command.rs:636
+msgid "Close All Windows"
+msgstr "Aizvērt visus logus"
+
+#: crates/rustty-input/src/command.rs:637
+msgid "Close all windows."
+msgstr "Aizvērt visus logus."
+
+#: crates/rustty-input/src/command.rs:642
+msgid "Toggle Maximize"
+msgstr "Maksimizēt vai atjaunot logu"
+
+#: crates/rustty-input/src/command.rs:643
+msgid "Toggle the maximized state of the current window."
+msgstr "Maksimizēt pašreizējo logu vai atjaunot tā iepriekšējo izmēru."
+
+#: crates/rustty-input/src/command.rs:648
+msgid "Toggle Fullscreen"
+msgstr "Ieslēgt vai izslēgt pilnekrāna režīmu"
+
+#: crates/rustty-input/src/command.rs:649
+msgid "Toggle the fullscreen state of the current window."
+msgstr "Ieslēgt vai izslēgt pilnekrāna režīmu pašreizējam logam."
+
+#: crates/rustty-input/src/command.rs:654
+msgid "Toggle Window Decorations"
+msgstr "Parādīt vai paslēpt loga apdari"
+
+#: crates/rustty-input/src/command.rs:655
+msgid "Toggle the window decorations."
+msgstr "Parādīt vai paslēpt loga apdari."
+
+#: crates/rustty-input/src/command.rs:660
+msgid "Toggle Float on Top"
+msgstr "Ieslēgt vai izslēgt rādīšanu virspusē"
+
+#: crates/rustty-input/src/command.rs:661
+msgid "Toggle the float on top state of the current window."
+msgstr "Ieslēgt vai izslēgt pašreizējā loga rādīšanu virs citiem logiem."
+
+#: crates/rustty-input/src/command.rs:666
+msgid "Toggle Secure Input"
+msgstr "Ieslēgt vai izslēgt drošo ievadi"
+
+#: crates/rustty-input/src/command.rs:667
+msgid "Toggle secure input mode."
+msgstr "Ieslēgt vai izslēgt drošās ievades režīmu."
+
+#: crates/rustty-input/src/command.rs:672
+msgid "Toggle Mouse Reporting"
+msgstr "Ieslēgt vai izslēgt peles notikumu nosūtīšanu"
+
+#: crates/rustty-input/src/command.rs:673
+msgid "Toggle whether mouse events are reported to terminal applications."
+msgstr "Ieslēgt vai izslēgt peles notikumu nosūtīšanu termināļa lietotnēm."
+
+#: crates/rustty-input/src/command.rs:678
+msgid "Toggle Background Opacity"
+msgstr "Ieslēgt vai izslēgt fona caurspīdīgumu"
+
+#: crates/rustty-input/src/command.rs:679
+msgid "Toggle the background opacity of a window that started transparent."
+msgstr ""
+"Ieslēgt vai izslēgt fona caurspīdīgumu logam, kas tika atvērts ar "
+"caurspīdīgu fonu."
+
+#: crates/rustty-input/src/command.rs:684
+msgid "Check for Updates"
+msgstr "Pārbaudīt atjauninājumus"
+
+#: crates/rustty-input/src/command.rs:685
+msgid "Check for updates to the application."
+msgstr "Pārbaudīt lietotnes atjauninājumus."
+
+#: crates/rustty-input/src/command.rs:690
+msgid "Undo"
+msgstr "Atsaukt"
+
+#: crates/rustty-input/src/command.rs:691
+msgid "Undo the last action."
+msgstr "Atsaukt pēdējo darbību."
+
+#: crates/rustty-input/src/command.rs:696
+msgid "Redo"
+msgstr "Atkārtot"
+
+#: crates/rustty-input/src/command.rs:697
+msgid "Redo the last undone action."
+msgstr "Atkārtot pēdējo atsaukto darbību."
+
+#: crates/rustty-input/src/command.rs:703
+msgid "Quit the application."
+msgstr "Iziet no lietotnes."
+
+#: crates/rustty-input/src/command.rs:708
+msgid "Rustty"
+msgstr "Rustty"
+
+#: crates/rustty-input/src/command.rs:709
+msgid "Put a little Rustty in your terminal."
+msgstr "Ielaid mazu Rustty savā terminālī."

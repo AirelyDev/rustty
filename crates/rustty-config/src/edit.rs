@@ -42,46 +42,93 @@ pub fn open_path() -> Result<Vec<u8>, FileLoadError> {
     // const config_path = try configPath(alloc_arena);
     let config_path = config_path()?;
 
-    // Create config directory recursively.
-    // if (std.fs.path.dirname(config_path)) |config_dir| {
-    //     try std.fs.cwd().makePath(config_dir);
-    // }
-    if let Some(config_dir) = dirname(&config_path) {
-        std::fs::create_dir_all(os_str_from_bytes(config_dir))?;
+    // if (!config_path.exists) {
+    if !config_path.exists {
+        // if (std.fs.path.dirname(config_path.name)) |config_dir| check_dir: {
+        if let Some(config_dir) = dirname(&config_path.name) {
+            'check_dir: {
+                // Check to see if dir exists.
+                // const dir = std.Io.Dir.cwd().openDir(global.io(), config_dir, .{ .follow_symlinks = true }) catch |err| {
+                //     switch (err) {
+                //         error.FileNotFound => { ... },
+                //         else => return err,
+                //     }
+                // };
+                //
+                // PORT NOTE: `openDir(..., .{ .follow_symlinks = true })` maps to
+                // `std::fs::read_dir` — it follows symlinks, fails with NotFound
+                // when the directory is absent, and dropping the handle is the
+                // `dir.close(global.io())`.
+                let dir = match std::fs::read_dir(os_str_from_bytes(config_dir)) {
+                    Ok(dir) => dir,
+                    Err(err) => match err.kind() {
+                        std::io::ErrorKind::NotFound => {
+                            // Create config directory recursively. Note that this does not
+                            // allow intermediate symlinks by design, see
+                            // std.Io.Threaded.dirCreateDirPath for why. If some sort of
+                            // complex symlink structure is needed, it will need to be created
+                            // manually.
+                            //
+                            // PORT NOTE: `create_dir_all` does follow intermediate
+                            // symlinks (Rust's stdlib has no non-following recursive
+                            // create); the comment above records the reference's
+                            // `dirCreateDirPath` constraint.
+                            // try std.Io.Dir.cwd().createDirPath(global.io(), config_dir);
+                            std::fs::create_dir_all(os_str_from_bytes(config_dir))?;
+                            // break :check_dir;
+                            break 'check_dir;
+                        }
+                        _ => return Err(FileLoadError::Io(err)),
+                    },
+                };
+                // dir.close(global.io());
+                drop(dir);
+            }
+        }
+
+        // Try to create file and go on if it already exists
+        // _ = std.Io.Dir.createFileAbsolute(
+        //     global.io(),
+        //     config_path.name,
+        //     .{ .exclusive = true },
+        // ) catch |err| {
+        //     switch (err) {
+        //         error.PathAlreadyExists => {},
+        //         else => return err,
+        //     }
+        // };
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(os_str_from_bytes(&config_path.name))
+        {
+            Ok(_) => {}
+            Err(err) => match err.kind() {
+                std::io::ErrorKind::AlreadyExists => {}
+                _ => return Err(FileLoadError::Io(err)),
+            },
+        }
     }
 
-    // Try to create file and go on if it already exists
-    // _ = std.fs.createFileAbsolute(
-    //     config_path,
-    //     .{ .exclusive = true },
-    // ) catch |err| {
-    //     switch (err) {
-    //         error.PathAlreadyExists => {},
-    //         else => return err,
-    //     }
-    // };
-    match std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(os_str_from_bytes(&config_path))
-    {
-        Ok(_) => {}
-        Err(err) => match err.kind() {
-            std::io::ErrorKind::AlreadyExists => {}
-            _ => return Err(FileLoadError::Io(err)),
-        },
-    }
+    // return try alloc_gpa.dupeZ(u8, config_path.name);
+    Ok(config_path.name)
+}
 
-    // return try alloc_gpa.dupeZ(u8, config_path);
-    Ok(config_path)
+// const ConfigPathResult = struct {
+//     name: []const u8,
+//     exists: bool,
+// };
+struct ConfigPathResult {
+    name: Vec<u8>,
+    exists: bool,
 }
 
 /// Returns the config path to use for open for the current OS.
 ///
 /// The allocator must be an arena allocator. No memory is freed by this
 /// function and the resulting path is not all the memory that is allocated.
-// fn configPath(alloc_arena: Allocator) ![]const u8 {
-fn config_path() -> Result<Vec<u8>, FileLoadError> {
+// fn configPath(alloc_arena: Allocator) !ConfigPathResult {
+fn config_path() -> Result<ConfigPathResult, FileLoadError> {
     // const paths: []const []const u8 = try configPathCandidates(alloc_arena);
     let paths = config_path_candidates()?;
     // assert(paths.len > 0);
@@ -125,9 +172,15 @@ fn config_path() -> Result<Vec<u8>, FileLoadError> {
         let stat = f.metadata()?;
 
         // If the file is non-empty, return it.
-        // if (stat.size > 0) return path;
+        // if (stat.size > 0) return .{
+        //     .name = path,
+        //     .exists = true,
+        // };
         if stat.len() > 0 {
-            return Ok(path.clone());
+            return Ok(ConfigPathResult {
+                name: path.clone(),
+                exists: true,
+            });
         }
 
         // If the file is empty, remember it exists.
@@ -138,14 +191,26 @@ fn config_path() -> Result<Vec<u8>, FileLoadError> {
     }
 
     // No paths are non-empty, return the first path that exists.
-    // if (exists) |v| return v;
+    // if (exists) |v| return .{
+    //     .name = v,
+    //     .exists = true,
+    // };
     if let Some(v) = exists {
-        return Ok(v);
+        return Ok(ConfigPathResult {
+            name: v,
+            exists: true,
+        });
     }
 
     // No paths are non-empty or exist, return the first path.
-    // return paths[0];
-    Ok(paths[0].clone())
+    // return .{
+    //     .name = paths[0],
+    //     .exists = false,
+    // };
+    Ok(ConfigPathResult {
+        name: paths[0].clone(),
+        exists: false,
+    })
 }
 
 /// Returns a const list of possible paths the main config file could be

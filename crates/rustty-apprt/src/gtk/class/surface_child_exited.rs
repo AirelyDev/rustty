@@ -151,11 +151,11 @@ impl SurfaceChildExited {
         // not the banner. PORTS the reference's `i18n._(...)` wrapping of both
         // banner titles (`:109`, `:113`) via [`crate::gtk::i18n::tr`].
         if data.exit_code == 0 {
-            banner.set_title(tr(c"Command succeeded"));
+            banner.set_title(tr(c"Command Succeeded"));
             widget.add_css_class("normal");
             widget.remove_css_class("abnormal");
         } else {
-            banner.set_title(tr(c"Command failed"));
+            banner.set_title(tr(c"Command Failed"));
             widget.remove_css_class("normal");
             widget.add_css_class("abnormal");
         }

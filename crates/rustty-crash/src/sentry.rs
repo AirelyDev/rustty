@@ -31,10 +31,11 @@ use crate::sentry_pkg as sentry;
 use rustty_os as internal_os;
 // const crash = @import("main.zig");
 use crate as crash;
-// const state = &@import("../global.zig").state;
-// (PORT, break #1: rustty-global stays INJECTED, not a hard dep. The single
-// use is `state.alloc` as `sendInternal`'s arena child allocator, which
-// collapses into Rust ownership below.)
+// PORT NOTE (P4-E33, `15c50c1db` "crash: do not use global state"): upstream
+// removed the `global = @import("../global.zig")` import entirely — this file
+// performs NO live global reads anymore. The `rustty_global::EnvMap` mentions
+// below are the TYPE of the caller-supplied environment snapshot only (the
+// Rust image of `std.process.Environ.Map`, hosted by the leaf state crate).
 // const Surface = @import("../Surface.zig");
 // (PORT NOTE: seamed via `ThreadStateSurface` — see the module doc above. crash
 // must also NOT dep rustty-renderer for the size types: renderer already deps
@@ -50,6 +51,24 @@ use crate as crash;
 // in a Mutex. `JoinHandle::join` consumes the handle, so deinit `take`s it.
 static INIT_THREAD: std::sync::Mutex<Option<std::thread::JoinHandle<Result<(), InitThreadError>>>> =
     std::sync::Mutex::new(None);
+
+// Directory memory, holds the cache and state dirs persistently. This
+// prevents any sort of crashes due to initialization races.
+// var dir_mem: [std.fs.max_path_bytes * 2]u8 = undefined;
+// PORT NOTE: the fixed static buffer + `FixedBufferAllocator` (which the two
+// dirs are `dupe`d into so they outlive the init thread's arena) collapse into
+// the owned byte-paths INSIDE the two statics below — same persistence, same
+// "set once on the init thread, read by the Transport" discipline. Rust
+// statics must be Sync, so (like INIT_THREAD above) the Zig plain globals
+// (`?[]const u8`) ride in Mutexes.
+
+/// Holds the XDG cache dir.
+// var cache_dir_: ?[]const u8 = null;
+static CACHE_DIR: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
+
+/// Holds the XDG state dir.
+// var state_dir_: ?[]const u8 = null;
+static STATE_DIR: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
 
 /// SEAM (integration-tier blueprint): the read surface `beforeSend` needs from
 /// the reference's `*Surface` — `surface.size.screen`, `surface.size.grid()`,
@@ -160,76 +179,100 @@ pub enum InitError {
 /// NOT send any data over the network. We use the Sentry native SDK to collect
 /// crash reports and logs, but we only store them locally (see Transport).
 /// It is up to the user to grab the logs and manually send them to us
-/// (or they own Sentry instance) if they want to.
-// pub fn init(gpa: Allocator) !void {
-// PORT NOTE: the `gpa: Allocator` parameter collapses (break #1 — the injected
-// allocator is Rust's global allocator; same collapse as dir.rs).
-pub fn init() -> Result<(), InitError> {
-    // if (comptime !build_options.sentry) return;
+/// (or to their own Sentry instance) if they want to.
+// pub fn init(gpa: Allocator, environ_map: std.process.Environ.Map) !void {
+// PORT NOTE (P4-E33/E34, `15c50c1db` + `a82637b53` end state): `init` takes the
+// environment-map snapshot BY VALUE (owned) and moves it into the init thread —
+// no live global environment reads happen on either thread after this point
+// (the main-thread-`setenv`-vs-init-thread-read race class this removes).
+// The `gpa: Allocator` parameter collapses (the injected allocator is Rust's
+// global allocator; same collapse as dir.rs). The reference's four manual
+// `map.deinit()` arms (build-off, Windows, spawn-failure, thread exit) collapse
+// into Drop — N-A-by-ownership glue (same reasoning as E9).
+pub fn init(environ_map: rustty_global::EnvMap) -> Result<(), InitError> {
+    // if (comptime !build_options.sentry) {
+    //     var map = environ_map;
+    //     map.deinit();
+    //     return;
+    // }
     if !build_options::SENTRY {
         return Ok(());
     }
 
     // Not supported on Windows currently, doesn't build.
-    // if (comptime builtin.os.tag == .windows) return;
+    // if (comptime builtin.os.tag == .windows) {
+    //     var map = environ_map;
+    //     map.deinit();
+    //     return;
+    // }
     if cfg!(windows) {
         return Ok(());
     }
-
-    // const start = try std.time.Instant.now();
-    // const start_micro = std.time.microTimestamp();
-    // defer {
-    //     const end = std.time.Instant.now() catch unreachable;
-    //     // "[updateFrame critical time] <START us>\t<TIME_TAKEN us>"
-    //     std.log.err("[sentry init time] start={}us duration={}ns", .{ start_micro, end.since(start) / std.time.ns_per_us });
-    // }
 
     // Must only start once
     // assert(init_thread == null);
     let mut init_thread = INIT_THREAD.lock().unwrap();
     assert!(init_thread.is_none());
 
-    // We use a thread for initializing Sentry because initialization takes
-    // ~2k ns on my M3 Max. That's not a LOT of time but it's enough to be
-    // 90% of our pre-App startup time. Everything Sentry is doing initially
-    // is safe to do on a separate thread and fast enough that its very
-    // likely to be done before a crash occurs.
-    // const thr = try std.Thread.spawn(
+    // We use a thread for initializing Sentry because initialization is
+    // slow enough to matter for process startup: resolving our directories
+    // can take multiple milliseconds on macOS (Apple APIs) and Sentry's
+    // own init does disk I/O. Everything Sentry is doing initially is safe
+    // to do on a separate thread and fast enough that its very likely to
+    // be done before a crash occurs.
+    //
+    // The environ map is a snapshot owned by the thread (and freed there),
+    // so it is safe against concurrent mutations of the process environment
+    // (e.g. ensureLocale on the main thread).
+    // const thr = std.Thread.spawn(
     //     .{},
     //     initThread,
-    //     .{gpa},
-    // );
-    // thr.setName("sentry-init") catch {};
+    //     .{ gpa, environ_map },
+    // ) catch |err| {
+    //     var map = environ_map;
+    //     map.deinit();
+    //     return err;
+    // };
+    // (PORT NOTE: on spawn failure the moved-in closure — and the map it owns —
+    // is dropped by `Builder::spawn`; the manual deinit arm collapses.)
+    //
+    // thr.setName(single_threaded.io(), "sentry-init") catch {};
     // PORT NOTE: Rust can only name a thread AT spawn (`Builder::name`) — the same
-    // "sentry-init" name the reference sets post-spawn (and re-sets from
-    // within the thread on Darwin; see initThread).
+    // "sentry-init" name the reference sets post-spawn. Upstream: "Naming the
+    // thread from here only works on some platforms (e.g. Linux). On Darwin the
+    // thread names itself in initThread."
     let thr = std::thread::Builder::new()
         .name("sentry-init".to_string())
-        .spawn(initThread)
+        .spawn(move || initThread(environ_map))
         .map_err(InitError::Spawn)?;
     // init_thread = thr;
     *init_thread = Some(thr);
     Ok(())
 }
 
-/// PORT NOTE: the reified error set of `initThread`'s `!void` — the cache-dir
-/// lookups' errors + `error.SentryInitFailed`.
+/// PORT NOTE: the reified error set of `initThread`'s `!void` — the state/cache
+/// dir lookups' errors + `error.SentryInitFailed`.
 #[derive(Debug)]
 enum InitThreadError {
     SentryInitFailed,
-    /// The `internal_os.xdg.cache` lookup's error.
+    /// The `crash.defaultDir` / `internal_os.xdg.cache` lookups' error.
     Dir(internal_os::xdg::DirError),
     /// The macOS `internal_os.macos.cacheDir` (NSCachesDirectory) error.
     #[cfg(target_os = "macos")]
     AppleApi(internal_os::macos::CacheDirError),
 }
 
-// fn initThread(gpa: Allocator) !void {
-fn initThread() -> Result<(), InitThreadError> {
-    // if (comptime !build_options.sentry) return;
-    if !build_options::SENTRY {
-        return Ok(());
-    }
+// fn initThread(gpa: Allocator, environ_map_: std.process.Environ.Map) !void {
+// PORT NOTE (P4-E34, `a82637b53` "crash: resolve sentry directories on the init
+// thread"): ALL directory resolution happens HERE, on the init thread, against
+// the owned snapshot — on macOS the NSFileManager URLForDirectory: call was the
+// single largest cost in global.init (2967-4018µs → 30-70µs). The reference's
+// `if (comptime !build_options.sentry) return;` guard was dropped upstream in
+// this restructure (the thread is only ever spawned when sentry is enabled).
+fn initThread(environ_map: rustty_global::EnvMap) -> Result<(), InitThreadError> {
+    // var environ_map = environ_map_;
+    // defer environ_map.deinit();
+    // (PORT NOTE: the thread owns the snapshot; Drop frees it on every path.)
 
     // Right now, on Darwin, `std.Thread.setName` can only name the current
     // thread, and we have no way to get the current thread from within it,
@@ -244,11 +287,59 @@ fn initThread() -> Result<(), InitThreadError> {
         internal_os::macos::pthread_setname_np(c"sentry-init".as_ptr())
     };
 
-    // var arena = std.heap.ArenaAllocator.init(gpa);
-    // defer arena.deinit();
-    // const alloc = arena.allocator();
-    // (PORT NOTE: the arena collapses to Rust ownership — every allocation below
-    // frees on all paths.)
+    // Get our directories.
+    // var single_threaded: std.Io.Threaded = .init_single_threaded;
+    // defer single_threaded.deinit();
+    // var fba: std.heap.FixedBufferAllocator = .init(&dir_mem);
+    // (PORT NOTE: the single-threaded Io provider is N-A — Rust std does I/O
+    // without a provider handle; the FBA collapses into the statics' owned
+    // byte-paths, see `dir_mem` above; W94-B02-01: raw path bytes.)
+
+    // state_dir_ = state_dir: {
+    //     const dir = try crash.defaultDir(
+    //         single_threaded.io(),
+    //         gpa,
+    //         &environ_map,
+    //     );
+    //     defer gpa.free(dir.path);
+    //     break :state_dir try fba.allocator().dupe(u8, dir.path);
+    // };
+    let state_dir: Vec<u8> = crash::defaultDir(&environ_map)
+        .map_err(InitThreadError::Dir)?
+        .path;
+    *STATE_DIR.lock().unwrap() = Some(state_dir);
+    // errdefer state_dir_ = null;
+    struct StateDirErrdefer;
+    impl Drop for StateDirErrdefer {
+        fn drop(&mut self) {
+            *STATE_DIR.lock().unwrap() = None;
+        }
+    }
+    let state_dir_errdefer = StateDirErrdefer;
+
+    // const cache_dir = cache_dir: {
+    //     const dir = try cacheDir(
+    //         single_threaded.io(),
+    //         gpa,
+    //         &environ_map,
+    //     );
+    //     defer gpa.free(dir);
+    //     break :cache_dir try fba.allocator().dupe(u8, dir);
+    // };
+    let cache_dir: Vec<u8> = cacheDir(&environ_map)?;
+    // cache_dir_ = cache_dir;
+    // (PORT NOTE: the reference aliases the static and the local to the same
+    // FBA bytes; Rust clones the bytes into the static, the local keeps
+    // feeding `sentry_options_set_database_path_n` below.)
+    *CACHE_DIR.lock().unwrap() = Some(cache_dir.clone());
+    // errdefer cache_dir_ = null;
+    struct CacheDirErrdefer;
+    impl Drop for CacheDirErrdefer {
+        fn drop(&mut self) {
+            *CACHE_DIR.lock().unwrap() = None;
+        }
+    }
+    let cache_dir_errdefer = CacheDirErrdefer;
 
     // const transport = sentry.Transport.init(&Transport.send);
     let transport = sentry::Transport::init(Transport::send);
@@ -294,55 +385,6 @@ fn initThread() -> Result<(), InitThreadError> {
         sentry::c::sentry_options_set_before_send(opts, Some(beforeSend), std::ptr::null_mut())
     };
 
-    // Determine the Sentry cache directory.
-    // (W94-B02-01: raw path bytes — `xdg::cache` is byte-typed; the macOS
-    // `cacheDir` arm's UTF-8 `String` converts losslessly via `into_bytes`.)
-    let cache_dir: Vec<u8> = 'cache_dir: {
-        // On macOS, we prefer to use the NSCachesDirectory value to be
-        // a more idiomatic macOS application. But if XDG env vars are set
-        // we will respect them.
-        // if (comptime builtin.os.tag == .macos) macos: {
-        //     if (global.environ().containsUnemptyConstant("XDG_CACHE_HOME")) break :macos;
-        //     break :cache_dir try internal_os.macos.cacheDir(
-        //         alloc,
-        //         "sentry",
-        //     );
-        // }
-        //
-        // PORT NOTE: `containsUnemptyConstant`, NOT a bare presence check —
-        // upstream treats `XDG_CACHE_HOME=""` as UNSET and still prefers
-        // `NSCachesDirectory`. And it reads the CAPTURED global environ so an
-        // embedder-supplied block (`global.init(.{ .c = ... })`) is honored,
-        // which is also what the `xdg.cache` arm below uses via `environMap`.
-        #[cfg(target_os = "macos")]
-        {
-            if !rustty_global::environ::environ().contains_unempty_constant(b"XDG_CACHE_HOME") {
-                break 'cache_dir internal_os::macos::cacheDir("sentry")
-                    .map_err(InitThreadError::AppleApi)?
-                    .into_bytes();
-            }
-        }
-
-        // break :cache_dir try internal_os.xdg.cache(
-        //     alloc,
-        //     .{ .subdir = "ghostty/sentry" },
-        // );
-        // (R2: the app-name segment of the `"ghostty/sentry"` subdir is
-        // sourced from rustty-identity, the identity source-of-truth crate,
-        // not hardcoded — same as dir.rs.)
-        // PORT NOTE: spelled as the reference's explicit `break :cache_dir`
-        // rather than a bare tail expression — off Darwin the `break` above is
-        // `cfg`-stripped, and a labelled block whose label is never named warns.
-        let subdir = format!("{}/sentry", rustty_identity::APP_NAME);
-        break 'cache_dir internal_os::xdg::cache(
-            &rustty_global::environ_map(),
-            internal_os::xdg::Options {
-                subdir: Some(subdir.as_bytes()),
-                ..Default::default()
-            },
-        )
-        .map_err(InitThreadError::Dir)?;
-    };
     // sentry.c.sentry_options_set_database_path_n(
     //     opts,
     //     cache_dir.ptr,
@@ -388,7 +430,73 @@ fn initThread() -> Result<(), InitThreadError> {
     // log.debug("sentry initialized database={s}", .{cache_dir});
     let _ = cache_dir;
 
+    // (normal return: the reference's dir errdefers don't run — the statics
+    // keep the resolved dirs for the Transport.)
+    std::mem::forget(state_dir_errdefer);
+    std::mem::forget(cache_dir_errdefer);
     Ok(())
+}
+
+// fn cacheDir(io: std.Io, alloc: Allocator, environ_map: *const std.process.Environ.Map) ![]const u8 {
+// PORT NOTE (P4-E33): file-local, resolves the Sentry database (cache) dir from
+// the caller-supplied snapshot only. The `io`/`alloc` parameters are N-A /
+// collapsed as everywhere else in this file.
+fn cacheDir(environ_map: &rustty_global::EnvMap) -> Result<Vec<u8>, InitThreadError> {
+    // On macOS, we prefer to use the NSCachesDirectory value to be
+    // a more idiomatic macOS application. But if XDG env vars are set
+    // we will respect them.
+    //
+    // UPSTREAM BUG — NOT PORTED AS WRITTEN (P4-E35, escalated + ratified; see
+    // .port/phase-4/UPSTREAM_BUGS.md "P4-U1"): upstream `15c50c1db` INVERTED
+    // this check while extracting the fn —
+    //     if (comptime builtin.os.tag == .macos) macos: {
+    //         const xdg_cache_home = environ_map.get("XDG_CACHE_HOME") orelse break :macos;
+    //         if (xdg_cache_home.len > 0) {
+    //             return try internal_os.macos.cacheDir(
+    //                 alloc,
+    //                 "sentry",
+    //             );
+    //         }
+    //     }
+    // i.e. at upstream HEAD a set-and-nonempty XDG_CACHE_HOME picks
+    // NSCachesDirectory and an unset one picks the XDG path — the exact
+    // opposite of the comment above (and of the pre-range
+    // `containsUnemptyConstant` logic). rustty ports the pre-range,
+    // comment-consistent behavior: set-and-nonempty XDG_CACHE_HOME → respect
+    // XDG (`xdg.cache` below); unset or empty → NSCachesDirectory
+    // (`XDG_CACHE_HOME=""` is treated as UNSET).
+    #[cfg(target_os = "macos")]
+    {
+        let respect_xdg = environ_map
+            .get(&b"XDG_CACHE_HOME"[..])
+            .is_some_and(|xdg_cache_home| !xdg_cache_home.is_empty());
+        if !respect_xdg {
+            // (W94-B02-01: the macOS arm's UTF-8 `String` converts losslessly
+            // via `into_bytes` — the statics are raw path bytes.)
+            return internal_os::macos::cacheDir("sentry")
+                .map(String::into_bytes)
+                .map_err(InitThreadError::AppleApi);
+        }
+    }
+
+    // return try internal_os.xdg.cache(
+    //     io,
+    //     alloc,
+    //     environ_map,
+    //     .{ .subdir = "ghostty/sentry" },
+    // );
+    // (R2: the app-name segment of the `"ghostty/sentry"` subdir is sourced
+    // from rustty-identity, the identity source-of-truth crate, not hardcoded —
+    // same as dir.rs.)
+    let subdir = format!("{}/sentry", rustty_identity::APP_NAME);
+    internal_os::xdg::cache(
+        environ_map,
+        internal_os::xdg::Options {
+            subdir: Some(subdir.as_bytes()),
+            ..Default::default()
+        },
+    )
+    .map_err(InitThreadError::Dir)
 }
 
 /// Process-wide deinitialization of our Sentry client. This ensures all
@@ -578,27 +686,24 @@ const fn tagNameRenderer(v: build_config::renderer::Backend) -> &'static str {
 }
 
 /// PORT NOTE: the reified error set of `Transport.sendInternal`'s `!void` — the
-/// envelope parse errors + the crash-dir lookup + the filesystem writes.
+/// unset-state-dir guard + the envelope parse errors + the filesystem writes
+/// (the crash-dir lookup left this set in `15c50c1db`: the dir is resolved on
+/// the init thread now, see `STATE_DIR`).
 // (The payloads are carried for the reference's `log.warn("... err={}", .{err})`
 // — currently a comment, like every log line in the port — and for Debug;
 // dead-code analysis intentionally ignores derived Debug, hence the allow.)
 #[allow(dead_code)]
 #[derive(Debug)]
 enum SendError {
+    // error.StateDirNotInitialized
+    StateDirNotInitialized,
     Envelope(crate::sentry_envelope::Error),
-    Dir(internal_os::xdg::DirError),
     Io(std::io::Error),
 }
 
 impl From<crate::sentry_envelope::Error> for SendError {
     fn from(err: crate::sentry_envelope::Error) -> SendError {
         SendError::Envelope(err)
-    }
-}
-
-impl From<internal_os::xdg::DirError> for SendError {
-    fn from(err: internal_os::xdg::DirError) -> SendError {
-        SendError::Dir(err)
     }
 }
 
@@ -641,11 +746,23 @@ impl Transport {
     ///
     /// `envelope` must be the live envelope pointer `send` received.
     unsafe fn sendInternal(envelope: *mut sentry::Envelope) -> Result<(), SendError> {
-        // var arena = std.heap.ArenaAllocator.init(state.alloc);
+        // const state_dir = state_dir_ orelse return error.StateDirNotInitialized;
+        let state_dir = match STATE_DIR.lock().unwrap().clone() {
+            Some(v) => v,
+            None => return Err(SendError::StateDirNotInitialized),
+        };
+
+        // The I/O and allocator we use here are just meant to get the job
+        // done for saving the crash report.
+        // var single_threaded: std.Io.Threaded = .init_single_threaded;
+        // defer single_threaded.deinit();
+        // var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         // defer arena.deinit();
         // const alloc = arena.allocator();
-        // (PORT, break #1: the `state.alloc` read — this file's only
-        // rustty-global touch — collapses with the arena into Rust ownership.)
+        // (PORT NOTE, `15c50c1db`: upstream swapped the arena's child from
+        // `global.alloc()` to `std.heap.page_allocator` — no global state; in
+        // Rust the arena collapses into ownership as before, and the Io
+        // provider is N-A.)
 
         // Parse into an envelope structure
         // const json = envelope.serialize();
@@ -687,21 +804,17 @@ impl Transport {
         // const uuid = sentry.UUID.init();
         let uuid = sentry::UUID::init();
 
-        // Get our XDG state directory where we'll store the crash reports.
-        // This directory must exist for writing to work.
-        // const dir = try crash.defaultDir(alloc);
-        let dir = crash::defaultDir()?;
-        // try std.fs.cwd().makePath(dir.path);
-        // (W94-B02-01: `dir.path` is raw path bytes now — via `OsStr`.)
-        std::fs::create_dir_all(crate::dir::os_str_from_bytes(&dir.path))?;
+        // try std.Io.Dir.cwd().createDirPath(single_threaded.io(), state_dir);
+        // (W94-B02-01: `state_dir` is raw path bytes now — via `OsStr`.)
+        std::fs::create_dir_all(crate::dir::os_str_from_bytes(&state_dir))?;
 
         // Build our final path and write to it.
         // const path = try std.fs.path.join(alloc, &.{
-        //     dir.path,
+        //     state_dir,
         //     try std.fmt.allocPrint(alloc, "{s}.ghosttycrash", .{uuid.string()}),
         // });
         let uuid_string = uuid.string();
-        let path = std::path::Path::new(crate::dir::os_str_from_bytes(&dir.path)).join(format!(
+        let path = std::path::Path::new(crate::dir::os_str_from_bytes(&state_dir)).join(format!(
             "{}.{}crash",
             // (PORT NOTE: `uuid.string()` is `[36:0]u8` — `{s}` formats the 36
             // UUID chars before the NUL sentinel.)
@@ -710,11 +823,11 @@ impl Transport {
             // sourced from rustty-identity, not hardcoded.)
             rustty_identity::APP_NAME,
         ));
-        // const file = try std.fs.cwd().createFile(path, .{});
+        // const file = try std.Io.Dir.cwd().createFile(single_threaded.io(), path, .{});
         let mut file = std::fs::File::create(&path)?;
-        // defer file.close(); — Drop.
+        // defer file.close(single_threaded.io()); — Drop.
         // var buf: [4096]u8 = undefined;
-        // var file_writer = file.writer(&buf);
+        // var file_writer = file.writer(single_threaded.io(), &buf);
         // try file_writer.interface.writeAll(json);
         // try file_writer.end();
         // (PORT NOTE: the fixed 4096-byte buffered writer + `end()` flush collapse

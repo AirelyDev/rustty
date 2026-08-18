@@ -7,8 +7,10 @@
 //! PORTS: ghostty src/crash/main.zig (this file) + dir.zig + sentry.zig +
 //! sentry_envelope.zig; hosts the `pkg/sentry` dep-glue (`sentry_pkg`, over the
 //! vendored sentry-sys) and the crash entry of the reference's generated
-//! `build_options` blob (`build_options`). `global` is injected (break #1),
-//! not a hard dep.
+//! `build_options` blob (`build_options`). Since `15c50c1db` ("crash: do not
+//! use global state") the reference imports no `global` at all: callers hand
+//! `init`/`defaultDir` an owned/borrowed environment-map snapshot, and the
+//! rustty-global edge is for the `EnvMap` TYPE only.
 //!
 //! PORT STATUS: done
 //!
@@ -66,13 +68,14 @@ mod tests {
         // pub const Envelope = sentry_envelope.Envelope;
         let _ = std::any::type_name::<crate::Envelope>();
         // pub const defaultDir = dir.defaultDir;
-        let _: fn() -> Result<crate::Dir, rustty_os::xdg::DirError> = crate::defaultDir;
+        let _: fn(&rustty_global::EnvMap) -> Result<crate::Dir, rustty_os::xdg::DirError> =
+            crate::defaultDir;
         // pub const Dir = dir.Dir; / ReportIterator / Report
         let _ = std::any::type_name::<crate::Dir>();
         let _ = std::any::type_name::<crate::ReportIterator>();
         let _ = std::any::type_name::<crate::Report>();
         // pub const init = sentry.init; / deinit = sentry.deinit;
-        let _: fn() -> Result<(), crate::sentry::InitError> = crate::init;
+        let _: fn(rustty_global::EnvMap) -> Result<(), crate::sentry::InitError> = crate::init;
         let _: fn() = crate::deinit;
     }
 }

@@ -205,6 +205,7 @@ pub enum Key {
     Scrollbar,
     Link,
     LinkUrl,
+    LinkOsc8,
     LinkPreviews,
     Maximize,
     Fullscreen,
@@ -238,6 +239,7 @@ pub enum Key {
     WindowShowTabBar,
     WindowTitlebarBackground,
     WindowTitlebarForeground,
+    DragHandle,
     ResizeOverlay,
     ResizeOverlayPosition,
     ResizeOverlayDuration,
@@ -390,6 +392,7 @@ impl Key {
             b"custom-shader" => Some(Key::CustomShader),
             b"custom-shader-animation" => Some(Key::CustomShaderAnimation),
             b"desktop-notifications" => Some(Key::DesktopNotifications),
+            b"drag-handle" => Some(Key::DragHandle),
             b"enquiry-response" => Some(Key::EnquiryResponse),
             b"env" => Some(Key::Env),
             b"faint-opacity" => Some(Key::FaintOpacity),
@@ -437,6 +440,7 @@ impl Key {
             b"keybind" => Some(Key::Keybind),
             b"language" => Some(Key::Language),
             b"link" => Some(Key::Link),
+            b"link-osc8" => Some(Key::LinkOsc8),
             b"link-previews" => Some(Key::LinkPreviews),
             b"link-url" => Some(Key::LinkUrl),
             b"linux-cgroup" => Some(Key::LinuxCgroup),
@@ -671,6 +675,7 @@ pub fn value_type(key: Key) -> std::any::TypeId {
         Key::Scrollbar => TypeId::of::<Scrollbar>(),
         Key::Link => TypeId::of::<RepeatableLink>(),
         Key::LinkUrl => TypeId::of::<bool>(),
+        Key::LinkOsc8 => TypeId::of::<bool>(),
         Key::LinkPreviews => TypeId::of::<LinkPreviews>(),
         Key::Maximize => TypeId::of::<bool>(),
         Key::Fullscreen => TypeId::of::<Fullscreen>(),
@@ -704,6 +709,7 @@ pub fn value_type(key: Key) -> std::any::TypeId {
         Key::WindowShowTabBar => TypeId::of::<WindowShowTabBar>(),
         Key::WindowTitlebarBackground => TypeId::of::<Option<Color>>(),
         Key::WindowTitlebarForeground => TypeId::of::<Option<Color>>(),
+        Key::DragHandle => TypeId::of::<DragHandle>(),
         Key::ResizeOverlay => TypeId::of::<ResizeOverlay>(),
         Key::ResizeOverlayPosition => TypeId::of::<ResizeOverlayPosition>(),
         Key::ResizeOverlayDuration => TypeId::of::<Duration>(),
@@ -900,6 +906,7 @@ pub fn config_completion_kind(key: Key) -> ConfigCompletionKind {
         Key::WindowSaveState => ConfigCompletionKind::Enum(WindowSaveState::VALUE_NAMES),
         Key::WindowNewTabPosition => ConfigCompletionKind::Enum(WindowNewTabPosition::VALUE_NAMES),
         Key::WindowShowTabBar => ConfigCompletionKind::Enum(WindowShowTabBar::VALUE_NAMES),
+        Key::DragHandle => ConfigCompletionKind::Enum(DragHandle::VALUE_NAMES),
         Key::ResizeOverlay => ConfigCompletionKind::Enum(ResizeOverlay::VALUE_NAMES),
         Key::ResizeOverlayPosition => {
             ConfigCompletionKind::Enum(ResizeOverlayPosition::VALUE_NAMES)
@@ -1837,10 +1844,10 @@ pub struct Config {
     /// Enables the ability to move the cursor at prompts by clicking on a
     /// location in the prompt text.
     ///
-    /// This feature requires shell integration, specifically prompt marking
-    /// via `OSC 133`. Some shells like Fish (v4) and Nu (0.111+) natively
-    /// support this while others may require additional configuration or
-    /// Rustty's shell integration features to be enabled.
+    /// This feature requires prompt marking via `OSC 133`. Some shells like Fish
+    /// (v4.1+) and Nu (0.111+) natively support this while others may require
+    /// additional configuration or Rustty's shell integration features to be
+    /// enabled.
     ///
     /// Depending on the shell, this works either by translating your click
     /// position into a series of synthetic arrow key movements or by sending
@@ -2373,9 +2380,9 @@ pub struct Config {
     /// Valid values:
     ///
     ///   * `system` - Respect the system settings for when to show scrollbars.
-    ///     For example, on macOS, this will respect the "Scrollbar behavior"
-    ///     system setting which by default usually only shows scrollbars while
-    ///     actively scrolling or hovering the gutter.
+    ///     On macOS, we only show scrollbars while actively scrolling or hovering
+    ///     the gutter. If the system setting is set to "Always", the scrollbar
+    ///     will be shown when the mouse is over the gutter area.
     ///
     ///   * `never` - Never show a scrollbar. You can still scroll using the mouse,
     ///     keybind actions, etc. but you will not have a visual UI widget showing
@@ -2404,6 +2411,14 @@ pub struct Config {
     /// The URL matcher is always lowest priority of any configured links (see
     /// `link`). If you want to customize URL matching, use `link` and disable this.
     pub link_url: bool,
+    // @"link-osc8": bool = true,
+    /// Enable hyperlinks created with the OSC 8 escape sequence. When disabled,
+    /// OSC 8 hyperlinks are not highlighted, previewed, copied, or opened.
+    ///
+    /// This does not affect URL matching controlled by `link-url`.
+    ///
+    /// Available since: 1.4.0
+    pub link_osc8: bool,
     // @"link-previews": LinkPreviews = .true,
     /// Show link previews for a matched URL.
     ///
@@ -3286,6 +3301,34 @@ pub struct Config {
     /// Specified as either hex (`#RRGGBB` or `RRGGBB`) or a named X11 color.
     pub window_titlebar_foreground: Option<Color>,
 
+    // @"drag-handle": DragHandle = .auto,
+    /// Controls when drag handles are shown over splits,
+    /// allowing splits to be rearranged with mouse controls.
+    ///
+    /// Valid values:
+    ///
+    ///  - `always`
+    ///
+    ///    Always display the drag handle, even when there's only one split.
+    ///
+    ///  - `auto` *(default)*
+    ///
+    ///    Automatically show and hide the drag handle.
+    ///
+    ///    On Linux, the handle is only shown when there are two or
+    ///    more splits present.
+    ///
+    ///    On macOS, the handle is only hidden when there's one split
+    ///    in **fullscreen** mode, otherwise it's shown when hovered.
+    ///
+    ///  - `never`
+    ///
+    ///    Never show the drag handle. Splits then cannot be rearranged with
+    ///    mouse controls.
+    ///
+    /// Available since: 1.4.0.
+    pub drag_handle: DragHandle,
+
     // @"resize-overlay": ResizeOverlay = .@"after-first",
     /// This controls when resize overlays are shown. Resize overlays are a
     /// transient popup that shows the size of the terminal while the surfaces are
@@ -3863,10 +3906,9 @@ pub struct Config {
     ///     (Available since: 1.2.0)
     ///
     ///   * `ssh-terminfo` - Enable automatic terminfo installation on remote hosts.
-    ///     Attempts to install Rustty's terminfo entry using `infocmp` and `tic` when
-    ///     connecting to hosts that lack it. Requires `infocmp` to be available locally
-    ///     and `tic` to be available on remote hosts. Once terminfo is installed on a
-    ///     remote host, it will be automatically "cached" to avoid repeat installations.
+    ///     Attempts to install Rustty's embedded terminfo entry using `tic` on local
+    ///     cache misses. Requires `tic` to be available on remote hosts. Successful
+    ///     installations are cached locally to avoid repeat installations.
     ///     If desired, the `+ssh-cache` CLI action can be used to manage the installation
     ///     cache manually using various arguments.
     ///     (Available since: 1.2.0)
@@ -5016,6 +5058,7 @@ impl Default for Config {
             scrollbar: Scrollbar::System,
             link: RepeatableLink::default(),
             link_url: true,
+            link_osc8: true,
             link_previews: LinkPreviews::True,
             maximize: false,
             fullscreen: Fullscreen::False,
@@ -5055,6 +5098,7 @@ impl Default for Config {
             window_show_tab_bar: WindowShowTabBar::Auto,
             window_titlebar_background: None,
             window_titlebar_foreground: None,
+            drag_handle: DragHandle::Auto,
             resize_overlay: ResizeOverlay::AfterFirst,
             resize_overlay_position: ResizeOverlayPosition::Center,
             resize_overlay_duration: Duration {
@@ -5488,6 +5532,65 @@ fn probable_cli_environment() -> bool {
     // Unlikely CLI environment
     // return false;
     false
+}
+
+/// Expand tilde paths to absolute paths to the user's home directory.
+/// If expansion fails, an error is logged and the original path is returned.
+// fn expandHome(path: []const u8, buf: []u8) []const u8 {
+//
+// PORT NOTE (`37174c73b`): file-scope helper in the reference (Config.zig, right
+// before `loadTheme`); shared by `WorkingDirectory.finalize` and `Theme.finalize`
+// (both in `value_types.rs`), hence `pub(crate)`.
+pub(crate) fn expand_home<'a>(path: &'a [u8], buf: &'a mut [u8]) -> &'a [u8] {
+    // if (!std.mem.startsWith(u8, path, "~/"))
+    //     return path;
+    if !path.starts_with(b"~/") {
+        return path;
+    }
+
+    // WS14 T6 (wasm32 arm): a browser has no home directory to expand `~/`
+    // against, so wasm returns the path unchanged, exactly as the error arms
+    // below do. The reference never analyses this on wasm (Zig analyses
+    // `config.zig.Wasm` lazily, so it never forces `internal_os.expandHome`);
+    // Rust compiles whole crates, so the arm has to exist.
+    #[cfg(target_family = "wasm")]
+    {
+        path
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        // var environ_map = global.environMap() catch |err| {
+        //     log.warn("failed to get environment map for path \"{s}\": {}", .{ path, err });
+        //     return path;
+        // };
+        // defer environ_map.deinit();
+        //
+        // PORT NOTE: `rustty_global::environ_map()` is infallible (a snapshot of
+        // the captured environ), so the reference's `catch` warn-arm has no Rust
+        // analogue.
+        let environ_map = rustty_global::environ_map();
+
+        // return internal_os.expandHome(
+        //     global.io(),
+        //     &environ_map,
+        //     path,
+        //     buf,
+        // ) catch |err| {
+        //     log.warn("failed to expand home directory in path \"{s}\": {}", .{ path, err });
+        //     return path;
+        // };
+        match rustty_os::homedir::expandHome(&environ_map, path, buf) {
+            Ok(expanded) => expanded,
+            Err(err) => {
+                log_warn(format!(
+                    "failed to expand home directory in path \"{}\": {:?}",
+                    String::from_utf8_lossy(path),
+                    err
+                ));
+                path
+            }
+        }
+    }
 }
 
 /// This is used to "replay" the configuration. See loadTheme for details.
@@ -7012,16 +7115,25 @@ impl Config {
     /// is idempotent but will waste memory if called multiple times.
     // pub fn finalize(self: *Config) !void {
     pub fn finalize(&mut self) -> Result<(), LoadError> {
+        // const alloc = self._arena.?.allocator();
+
         // We always load the theme first because it may set other fields
         // in our config.
-        // if (self.theme) |theme| {
-        if let Some(theme) = self.theme.clone() {
+        // if (self.theme) |*theme| {
+        if let Some(theme) = &mut self.theme {
+            // try theme.finalize(alloc);
+            theme.finalize();
             // const different = !std.mem.eql(u8, theme.light, theme.dark);
             let different = theme.light != theme.dark;
 
             // Warning: loadTheme will deinit our existing config and replace
             // it so all memory from self prior to this point will be freed.
-            // try self.loadTheme(theme);
+            // try self.loadTheme(theme.*);
+            //
+            // PORT NOTE: `theme.*` copies the (finalized) payload out of the
+            // capture; the clone ends the `&mut self.theme` borrow before
+            // `load_theme` takes `&mut self`.
+            let theme = theme.clone();
             self.load_theme(theme)?;
 
             // If we have different light vs dark mode themes, disable
@@ -7040,8 +7152,6 @@ impl Config {
                 self._conditional_set.insert(conditional::Key::Theme);
             }
         }
-
-        // const alloc = self._arena.?.allocator();
 
         // Used for a variety of defaults. See the function docs as well the
         // specific variable use sites for more details.
@@ -7577,6 +7687,7 @@ impl Config {
             Key::Scrollbar => c!(scrollbar),
             Key::Link => c!(link),
             Key::LinkUrl => c!(link_url),
+            Key::LinkOsc8 => c!(link_osc8),
             Key::LinkPreviews => c!(link_previews),
             Key::Maximize => c!(maximize),
             Key::Fullscreen => c!(fullscreen),
@@ -7610,6 +7721,7 @@ impl Config {
             Key::WindowShowTabBar => c!(window_show_tab_bar),
             Key::WindowTitlebarBackground => c!(window_titlebar_background),
             Key::WindowTitlebarForeground => c!(window_titlebar_foreground),
+            Key::DragHandle => c!(drag_handle),
             Key::ResizeOverlay => c!(resize_overlay),
             Key::ResizeOverlayPosition => c!(resize_overlay_position),
             Key::ResizeOverlayDuration => c!(resize_overlay_duration),
@@ -7867,6 +7979,7 @@ impl Config {
         cv!(scrollbar);
         cv!(link);
         cv!(link_url);
+        cv!(link_osc8);
         cv!(link_previews);
         cv!(maximize);
         cv!(fullscreen);
@@ -7901,6 +8014,7 @@ impl Config {
         cv!(window_show_tab_bar);
         cv!(window_titlebar_background);
         cv!(window_titlebar_foreground);
+        cv!(drag_handle);
         cv!(resize_overlay);
         cv!(resize_overlay_position);
         cv!(resize_overlay_duration);
@@ -8123,6 +8237,7 @@ pub(crate) const CONFIG_FIELDS: &[(&[u8], Key)] = &[
     (b"scrollbar", Key::Scrollbar),
     (b"link", Key::Link),
     (b"link-url", Key::LinkUrl),
+    (b"link-osc8", Key::LinkOsc8),
     (b"link-previews", Key::LinkPreviews),
     (b"maximize", Key::Maximize),
     (b"fullscreen", Key::Fullscreen),
@@ -8165,6 +8280,7 @@ pub(crate) const CONFIG_FIELDS: &[(&[u8], Key)] = &[
     (b"window-show-tab-bar", Key::WindowShowTabBar),
     (b"window-titlebar-background", Key::WindowTitlebarBackground),
     (b"window-titlebar-foreground", Key::WindowTitlebarForeground),
+    (b"drag-handle", Key::DragHandle),
     (b"resize-overlay", Key::ResizeOverlay),
     (b"resize-overlay-position", Key::ResizeOverlayPosition),
     (b"resize-overlay-duration", Key::ResizeOverlayDuration),
@@ -8640,6 +8756,8 @@ impl Config {
             b"link" => f_entry!(link),
             // @"link-url": bool
             b"link-url" => f_display!(link_url),
+            // @"link-osc8": bool
+            b"link-osc8" => f_display!(link_osc8),
             // @"link-previews": LinkPreviews (bare enum)
             b"link-previews" => f_enum!(link_previews),
 
@@ -8712,6 +8830,9 @@ impl Config {
             b"window-titlebar-background" => f_opt_entry!(window_titlebar_background),
             // @"window-titlebar-foreground": ?Color (FormatEntry, optional)
             b"window-titlebar-foreground" => f_opt_entry!(window_titlebar_foreground),
+
+            // @"drag-handle": DragHandle (bare enum)
+            b"drag-handle" => f_enum!(drag_handle),
 
             // @"resize-overlay": ResizeOverlay (bare enum)
             b"resize-overlay" => f_enum!(resize_overlay),
@@ -9977,6 +10098,8 @@ impl Target for Config {
             b"link" => field_parsecli_self!(link),
             // @"link-url": bool
             b"link-url" => field_bool!(link_url),
+            // @"link-osc8": bool
+            b"link-osc8" => field_bool!(link_osc8),
             // @"link-previews": LinkPreviews (bare enum)
             b"link-previews" => field_enum!(link_previews, LinkPreviews::string_to_enum),
 
@@ -10098,6 +10221,9 @@ impl Target for Config {
             b"window-titlebar-foreground" => {
                 field_opt_parsecli_value!(window_titlebar_foreground, Color)
             }
+
+            // @"drag-handle": DragHandle (bare enum)
+            b"drag-handle" => field_enum!(drag_handle, DragHandle::string_to_enum),
 
             // @"resize-overlay": ResizeOverlay (bare enum)
             b"resize-overlay" => field_enum!(resize_overlay, ResizeOverlay::string_to_enum),
@@ -10527,6 +10653,7 @@ mod parse_tests {
         b"custom-shader",
         b"custom-shader-animation",
         b"desktop-notifications",
+        b"drag-handle",
         b"enquiry-response",
         b"env",
         b"faint-opacity",
@@ -10574,6 +10701,7 @@ mod parse_tests {
         b"keybind",
         b"language",
         b"link",
+        b"link-osc8",
         b"link-previews",
         b"link-url",
         b"linux-cgroup",
@@ -10689,7 +10817,9 @@ mod parse_tests {
     // and for the two rows that are still DIVERGENT by design.
     #[test]
     fn config_field_names_count_is_contract() {
-        assert_eq!(CONFIG_FIELD_NAMES.len(), 206);
+        // 206 -> 208: Phase-4 w8-config (oracle range `6ad1fe7d8..12967b68f`)
+        // added `drag-handle` (`c6e7e9e4e`) and `link-osc8` (`77537c806`).
+        assert_eq!(CONFIG_FIELD_NAMES.len(), 208);
     }
 
     /// Area G OQ-6: until `P3-W9 T3`, these three `204` assertions guarded rustty
@@ -10726,6 +10856,9 @@ mod parse_tests {
     ///  * `gtk-horizontal-tab-scroll` and `scrollback-compression` show as "not in
     ///    oracle" at the PIN only, because both are beyond-pin ports
     ///    (`5ea45919d`/`b5f5ca078` and `0fb89f4ff`); at head they match.
+    ///  * Phase-4 w8-config (oracle range `6ad1fe7d8..12967b68f`, new pin
+    ///    `12967b68f`): `drag-handle` (`c6e7e9e4e`) and `link-osc8` (`77537c806`)
+    ///    landed on both sides, moving the public count 206 -> **208**.
     const FIELD_COUNT_ORACLE_RECONCILIATION: () = ();
 
     // Every non-`_` Config field dispatches to a real parse arm. We use the
@@ -11125,6 +11258,7 @@ mod clone_changed_tests {
         Key::Scrollbar,
         Key::Link,
         Key::LinkUrl,
+        Key::LinkOsc8,
         Key::LinkPreviews,
         Key::Maximize,
         Key::Fullscreen,
@@ -11158,6 +11292,7 @@ mod clone_changed_tests {
         Key::WindowShowTabBar,
         Key::WindowTitlebarBackground,
         Key::WindowTitlebarForeground,
+        Key::DragHandle,
         Key::ResizeOverlay,
         Key::ResizeOverlayPosition,
         Key::ResizeOverlayDuration,
@@ -11247,7 +11382,7 @@ mod clone_changed_tests {
     // (its `inline for` over the field/`Key` set is a compile error if an arm is
     // missing) with a runtime check over the explicit Rust dispatch tables.
     //
-    // - `ALL_KEYS` enumerates every variant (its length is checked == 206, the
+    // - `ALL_KEYS` enumerates every variant (its length is checked == 208, the
     //   `Key`-count contract, and == `CONFIG_FIELDS`).
     // - Each `Key` maps to exactly one `(name, key)` in `CONFIG_FIELDS` (the
     //   ordered name+key table shared by parse/format/clone).
@@ -11261,8 +11396,8 @@ mod clone_changed_tests {
     //   was deep-copied.
     #[test]
     fn key_exhaustive_parse_format_clone_changed() {
-        // `Key`-count contract: 206 variants, matching `CONFIG_FIELDS` and the
-        // 206 field names. Last reconciled against the ORACLE at `6ad1fe7d8`
+        // `Key`-count contract: 208 variants, matching `CONFIG_FIELDS` and the
+        // 208 field names. Last reconciled against the ORACLE at `6ad1fe7d8`
         // (`P3-W9 T3` step 3) — see `FIELD_COUNT_ORACLE_RECONCILIATION` in
         // `parse_tests` for the set-diff and the two rows still divergent by
         // design.
@@ -11272,8 +11407,11 @@ mod clone_changed_tests {
         // into `scrollback-limit-bytes` + `scrollback-limit-lines` (+1 net).
         // Each lane landed 205 independently and they collide here by design;
         // 206 is the merged truth.
-        assert_eq!(ALL_KEYS.len(), 206);
-        assert_eq!(CONFIG_FIELDS.len(), 206);
+        //
+        // 206 -> 208: Phase-4 w8-config, from the `6ad1fe7d8..12967b68f` oracle
+        // range — `drag-handle` (`c6e7e9e4e`) and `link-osc8` (`77537c806`).
+        assert_eq!(ALL_KEYS.len(), 208);
+        assert_eq!(CONFIG_FIELDS.len(), 208);
 
         let default = Config::default();
 

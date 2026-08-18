@@ -3,11 +3,13 @@
 //! PORTS: ghostty src/cli/ssh.zig — the `+ssh` wrapper action (wrap `ssh` to
 //! configure Rustty terminal integration on remote hosts). Byte-faithful (R1);
 //! ssh args and destinations are byte strings (R3). The `TERM=xterm-rustty`
-//! wire token (the reference's `xterm-ghostty`), the `infocmp <name>`/`tic`
-//! remote install script, and the `{APP_NAME}-ssh-` control-path prefix are
-//! routed through `rustty-identity` (R2 / ADV-FIX 5 / Risk 3) so they track
-//! the installed rustty-terminfo entry (`rustty-ssh-` by default,
-//! `ghostty-ssh-` under the `identity-oracle` parity harness).
+//! wire token (the reference's `xterm-ghostty`) and the `{APP_NAME}-ssh-`
+//! control-path prefix are routed through `rustty-identity` (R2 / ADV-FIX 5 /
+//! Risk 3) so they track the installed rustty-terminfo entry (`rustty-ssh-` by
+//! default, `ghostty-ssh-` under the `identity-oracle` parity harness). The
+//! remote install script always pipes the embedded terminfo to `tic` (the
+//! `infocmp` short-circuit — the script's only identity interpolation site —
+//! was removed upstream so stale remote entries get refreshed).
 
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;
@@ -22,9 +24,10 @@ use crate::rustty::{Action, Error};
 use crate::ssh_cache::DiskCache;
 // const internal_os = @import("../os/main.zig");
 use rustty_os as internal_os;
-// const ghostty_terminfo = @import("../terminfo/main.zig").ghostty;
-//   R2: the rustty-terminfo entry carrying the product identity.
-use rustty_terminfo::rustty as rustty_terminfo_entry;
+// const terminfopkg = @import("../terminfo/main.zig");
+//   R2: the rustty-terminfo package carrying the product identity (the entry
+//   generator `rustty()` and the content-derived `version`).
+use rustty_terminfo as terminfopkg;
 
 use std::io::Write;
 
@@ -265,9 +268,9 @@ impl cli_args::Target for Options {
 ///      forwarding to succeed.
 ///
 ///   2. **Terminfo install** (`--terminfo`). On the first connection to a
-///      given destination, installs Rustty's terminfo entry on the remote
-///      host using `infocmp -x xterm-rustty | ssh tic -x -` over a
-///      shared `ControlMaster` connection. Successful installs are cached
+///      given destination, installs Rustty's embedded terminfo entry on the
+///      remote host using `ssh tic -x -` over a shared `ControlMaster`
+///      connection. Successful installs are cached
 ///      (see `rustty +ssh-cache`) so subsequent connections skip this
 ///      step. When terminfo is successfully installed or already cached,
 ///      `TERM` is set to `xterm-rustty` instead of `xterm-256color`.
@@ -428,7 +431,7 @@ fn run_inner<We: Write>(opts: &Options, stderr: &mut We) -> Result<u8, std::io::
 
         // const cache: ?DiskCache = if (opts.cache) cache: {
         //     const path = DiskCache.defaultPath(alloc, "ghostty") catch |err| {
-        //         warnPrint(stderr, "ghostty terminfo cache unavailable: {}", .{err});
+        //         warnPrint(stderr, "ghostty terminfo cache unavailable: {t}", .{err});
         //         break :session .{ .term = "xterm-256color" };
         //     };
         //     break :cache .{ .path = path };
@@ -457,8 +460,33 @@ fn run_inner<We: Write>(opts: &Options, stderr: &mut We) -> Result<u8, std::io::
 
         // if (cache) |c| {
         if let Some(c) = &cache {
-            // if (c.contains(alloc, dest) catch false) {
-            if c.contains(&dest).unwrap_or(false) {
+            // const cached = c.contains(
+            //     alloc,
+            //     dest,
+            //     terminfopkg.version,
+            // ) catch |err| cached: {
+            //     if (DiskCache.isFailure(err)) warnPrint(
+            //         stderr,
+            //         "unable to read the cache '{s}': {t}",
+            //         .{ c.path, err },
+            //     );
+            //     break :cached false;
+            // };
+            let cached = match c.contains(&dest, terminfopkg::version().as_bytes()) {
+                Ok(cached) => cached,
+                Err(err) => {
+                    if DiskCache::is_failure(&err) {
+                        warn_print(
+                            stderr,
+                            &format!("unable to read the cache '{}': {err}", show(&c.path)),
+                        );
+                    }
+                    false
+                }
+            };
+
+            // if (cached) {
+            if cached {
                 // verbosePrint(opts, stderr, "dest: {s} (cached, skipping install)", .{dest});
                 verbose_print(
                     opts,
@@ -498,7 +526,7 @@ fn run_inner<We: Write>(opts: &Options, stderr: &mut We) -> Result<u8, std::io::
         let _ = stderr.flush();
 
         // installRemoteTerminfo(alloc, opts, stderr) catch |err| {
-        //     warnPrint(stderr, "failed to install terminfo: {}", .{err});
+        //     warnPrint(stderr, "failed to install terminfo: {t}", .{err});
         //     break :session .{ .term = "xterm-256color" };
         // };
         if let Err(err) = install_remote_terminfo(opts, stderr) {
@@ -548,8 +576,8 @@ fn run_inner<We: Write>(opts: &Options, stderr: &mut We) -> Result<u8, std::io::
     // verbosePrint(opts, stderr, "exec: {f}", .{Joined{ .items = argv }});
     verbose_print(opts, stderr, &format!("exec: {}", show(&joined(&argv))));
 
-    // const exit_code = childExec(alloc, argv) catch |err| {
-    //     try stderr.print("Error: failed to run {s}: {}\n", .{ argv[0], err });
+    // const exit_code = childExec(argv) catch |err| {
+    //     try stderr.print("Error: failed to run {s}: {t}\n", .{ argv[0], err });
     //     return 1;
     // };
     let exit_code = match child_exec(&argv) {
@@ -564,20 +592,57 @@ fn run_inner<We: Write>(opts: &Options, stderr: &mut We) -> Result<u8, std::io::
 
     // Attempt to cache (if needed) on a successful ssh execution.
     // if (exit_code == 0) if (session.to_cache) |entry| {
-    //     if (entry.cache.add(alloc, entry.dest, std.time.timestamp())) |_| {
+    //     if (entry.cache.add(
+    //         alloc,
+    //         entry.dest,
+    //         terminfopkg.version,
+    //         std.Io.Timestamp.now(global.io(), .real).toSeconds(),
+    //     )) |_| {
     //         verbosePrint(opts, stderr, "cache: wrote {s}", .{entry.dest});
-    //     } else |err| { log.debug("cache add failed for '{s}': {}", .{ entry.dest, err }); }
+    //     } else |err| {
+    //         if (DiskCache.isFailure(err)) {
+    //             warnPrint(
+    //                 stderr,
+    //                 "unable to add '{s}' to the cache '{s}': {t}",
+    //                 .{ entry.dest, entry.cache.path, err },
+    //             );
+    //         } else {
+    //             verbosePrint(
+    //                 opts,
+    //                 stderr,
+    //                 "cache: skipped {s}: {t}",
+    //                 .{ entry.dest, err },
+    //             );
+    //         }
+    //     }
     // };
     if exit_code == 0 {
         if let Some(entry) = session.to_cache {
-            match entry.cache.add(&entry.dest, timestamp()) {
+            match entry
+                .cache
+                .add(&entry.dest, terminfopkg::version().as_bytes(), timestamp())
+            {
                 Ok(()) => {
                     verbose_print(opts, stderr, &format!("cache: wrote {}", show(&entry.dest)))
                 }
-                Err(err) => log_debug(&format!(
-                    "cache add failed for '{}': {err}",
-                    show(&entry.dest),
-                )),
+                Err(err) => {
+                    if DiskCache::is_failure(&err) {
+                        warn_print(
+                            stderr,
+                            &format!(
+                                "unable to add '{}' to the cache '{}': {err}",
+                                show(&entry.dest),
+                                show(&entry.cache.path),
+                            ),
+                        );
+                    } else {
+                        verbose_print(
+                            opts,
+                            stderr,
+                            &format!("cache: skipped {}: {err}", show(&entry.dest)),
+                        );
+                    }
+                }
             }
         }
     }
@@ -758,10 +823,10 @@ fn install_remote_terminfo<We: Write>(
     stderr: &mut We,
 ) -> Result<(), std::io::Error> {
     // var buf: std.Io.Writer.Allocating = .init(alloc); defer buf.deinit();
-    // try ghostty_terminfo.encode(&buf.writer);
+    // try terminfopkg.ghostty.encode(&buf.writer);
     // const terminfo = buf.written();
     let mut buf: Vec<u8> = Vec::new();
-    rustty_terminfo_entry().encode(&mut buf)?;
+    terminfopkg::rustty().encode(&mut buf)?;
     let terminfo = buf;
 
     // ControlPath is in TMPDIR with a short, random basename. ssh uses
@@ -778,37 +843,27 @@ fn install_remote_terminfo<We: Write>(
     // the most common failure source) and inherit ssh's stderr so it
     // reaches the user's terminal. Other steps stay quiet either way.
     // const remote_script = if (opts.verbose)
-    //     \\infocmp xterm-ghostty >/dev/null 2>&1 && exit 0
     //     \\command -v tic >/dev/null 2>&1 || exit 1
     //     \\mkdir -p ~/.terminfo 2>/dev/null && tic -x - && exit 0
     //     \\exit 1
     // else
-    //     \\infocmp xterm-ghostty >/dev/null 2>&1 && exit 0
     //     \\command -v tic >/dev/null 2>&1 || exit 1
     //     \\mkdir -p ~/.terminfo 2>/dev/null && tic -x - 2>/dev/null && exit 0
     //     \\exit 1
-    //   R2 / Risk 3: the `infocmp <name>` target is the installed rustty-terminfo
-    //   entry name (a wire/interop token), routed through rustty-identity.
-    let ti = rustty_identity::TERMINFO_PRIMARY_NAME;
+    //   (the `infocmp <name>` short-circuit — the script's only identity
+    //   interpolation site — was removed upstream, fff9f62f3)
     let remote_script = if opts.verbose {
-        format!(
-            "infocmp {ti} >/dev/null 2>&1 && exit 0\n\
-             command -v tic >/dev/null 2>&1 || exit 1\n\
-             mkdir -p ~/.terminfo 2>/dev/null && tic -x - && exit 0\n\
-             exit 1"
-        )
+        "command -v tic >/dev/null 2>&1 || exit 1\n\
+         mkdir -p ~/.terminfo 2>/dev/null && tic -x - && exit 0\n\
+         exit 1"
     } else {
-        format!(
-            "infocmp {ti} >/dev/null 2>&1 && exit 0\n\
-             command -v tic >/dev/null 2>&1 || exit 1\n\
-             mkdir -p ~/.terminfo 2>/dev/null && tic -x - 2>/dev/null && exit 0\n\
-             exit 1"
-        )
+        "command -v tic >/dev/null 2>&1 || exit 1\n\
+         mkdir -p ~/.terminfo 2>/dev/null && tic -x - 2>/dev/null && exit 0\n\
+         exit 1"
     };
 
     // Set up an SSH ControlMaster scoped to this single install:
-    //   - ControlMaster=yes makes our client also act as the master,
-    //     so `infocmp | ssh tic` runs over a single connection.
+    //   - ControlMaster=yes makes our client also act as the master.
     //   - ControlPersist=no tears the master down when our client
     //     exits; no socket lingers on the remote side.
     // const argv = try std.mem.concat(alloc, []const u8, &.{ &.{opts.ssh},
@@ -825,7 +880,7 @@ fn install_remote_terminfo<We: Write>(
         control_path_opt.into_bytes(),
     ]);
     argv.extend(opts._ssh_args.iter().cloned());
-    argv.push(remote_script.into_bytes());
+    argv.push(remote_script.as_bytes().to_vec());
     // verbosePrint(opts, stderr, "exec: {f}", .{Joined{ .items = argv }});
     verbose_print(opts, stderr, &format!("exec: {}", show(&joined(&argv))));
 

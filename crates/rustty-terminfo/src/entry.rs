@@ -10,6 +10,8 @@
 
 use crate::source::{Capability, Source, Value};
 
+use std::sync::OnceLock;
+
 /// rustty's terminfo entry.
 ///
 /// The reference is a comptime `const ghostty: Source`; the faithful Rust port
@@ -387,6 +389,219 @@ pub fn rustty() -> Source {
     }
 }
 
+/// A content-derived version of the encoded terminfo source.
+// pub const version = version: {
+//     @setEvalBranchQuota(100_000);
+//     var hashing: std.Io.Writer.Hashing(std.hash.Wyhash) =
+//         .initHasher(.init(0), &.{});
+//     ghostty.encode(&hashing.writer) catch unreachable;
+//     break :version std.fmt.comptimePrint("{x}", .{hashing.hasher.final()});
+// };
+//
+// PORT NOTE: the reference computes this at comptime over the comptime `ghostty`
+// Source. The port's [`rustty()`] builds the Source at runtime (its names come
+// from `rustty-identity`, R2), so `version` is computed once at first use with
+// the same value semantics: a deterministic Wyhash(0) of the RUSTTY-encoded
+// source bytes, hex-formatted. It is content-derived, never hardcoded — under
+// `identity-oracle` it hashes the reference's encoded bytes automatically (the
+// identity fork flips the encoded names). The hash algorithm below is a
+// faithful port of Zig `std.hash.Wyhash`; strictly, self-consistency would
+// suffice (the version is only ever compared to itself: a cache entry against
+// the current build), but algorithm parity keeps the value aligned with the
+// reference on identical bytes.
+pub fn version() -> &'static str {
+    static VERSION: OnceLock<String> = OnceLock::new();
+    VERSION.get_or_init(|| {
+        // ghostty.encode(&hashing.writer) catch unreachable;
+        //   (encoding into a Vec cannot fail)
+        let mut buf: Vec<u8> = Vec::new();
+        rustty().encode(&mut buf).unwrap();
+        // std.fmt.comptimePrint("{x}", .{hashing.hasher.final()})
+        format!("{:x}", wyhash::hash(0, &buf))
+    })
+}
+
+// ---------------------------------------------------------------------------
+// PORT NOTE: support shim — a faithful port of Zig `std.hash.Wyhash`'s one-shot
+// `hash(seed, input)` (lib/std/hash/wyhash.zig), used only by [`version`]. The
+// reference streams the encoded bytes through `std.Io.Writer.Hashing`; hashing
+// the complete buffer one-shot is equivalent (Zig's own "iterative api" test
+// asserts streaming == one-shot). Only the one-shot path is ported. All
+// arithmetic mirrors the reference exactly: the `mum` multiply is Zig's `*%`
+// (wrapping u128), everything else is bounded (R7).
+// ---------------------------------------------------------------------------
+mod wyhash {
+    // const secret = [_]u64{ ... };
+    const SECRET: [u64; 4] = [
+        0xa0761d6478bd642f,
+        0xe7037ed1a0b428db,
+        0x8ebc6af09c88c6e3,
+        0x589965cc75374cc3,
+    ];
+
+    // a: u64, b: u64, state: [3]u64, total_len: usize,
+    //   (the streaming `buf`/`buf_len` fields are not ported — one-shot only)
+    struct Wyhash {
+        a: u64,
+        b: u64,
+        state: [u64; 3],
+        total_len: usize,
+    }
+
+    // inline fn read(comptime bytes: usize, data: []const u8) u64 — the two
+    // instantiations used (4- and 8-byte little-endian reads).
+    #[inline]
+    fn read4(data: &[u8]) -> u64 {
+        u64::from(u32::from_le_bytes(data[0..4].try_into().unwrap()))
+    }
+
+    #[inline]
+    fn read8(data: &[u8]) -> u64 {
+        u64::from_le_bytes(data[0..8].try_into().unwrap())
+    }
+
+    // inline fn mum(a: *u64, b: *u64) void {
+    #[inline]
+    fn mum(a: &mut u64, b: &mut u64) {
+        // const x = @as(u128, a.*) *% b.*;
+        let x = u128::from(*a).wrapping_mul(u128::from(*b));
+        // a.* = @as(u64, @truncate(x));
+        *a = x as u64;
+        // b.* = @as(u64, @truncate(x >> 64));
+        *b = (x >> 64) as u64;
+    }
+
+    // inline fn mix(a_: u64, b_: u64) u64 {
+    #[inline]
+    fn mix(a_: u64, b_: u64) -> u64 {
+        let mut a = a_;
+        let mut b = b_;
+        mum(&mut a, &mut b);
+        a ^ b
+    }
+
+    impl Wyhash {
+        // pub fn init(seed: u64) Wyhash {
+        fn init(seed: u64) -> Wyhash {
+            // self.state[0] = seed ^ mix(seed ^ secret[0], secret[1]);
+            // self.state[1] = self.state[0];
+            // self.state[2] = self.state[0];
+            let s0 = seed ^ mix(seed ^ SECRET[0], SECRET[1]);
+            Wyhash {
+                a: 0,
+                b: 0,
+                state: [s0; 3],
+                total_len: 0,
+            }
+        }
+
+        // inline fn smallKey(self: *Wyhash, input: []const u8) void {
+        fn small_key(&mut self, input: &[u8]) {
+            // std.debug.assert(input.len <= 16);
+            debug_assert!(input.len() <= 16);
+
+            if input.len() >= 4 {
+                // const end = input.len - 4;
+                let end = input.len() - 4;
+                // const quarter = (input.len >> 3) << 2;
+                let quarter = (input.len() >> 3) << 2;
+                // self.a = (read(4, input[0..]) << 32) | read(4, input[quarter..]);
+                self.a = (read4(&input[0..]) << 32) | read4(&input[quarter..]);
+                // self.b = (read(4, input[end..]) << 32) | read(4, input[end - quarter ..]);
+                self.b = (read4(&input[end..]) << 32) | read4(&input[end - quarter..]);
+            } else if !input.is_empty() {
+                // self.a = (@as(u64, input[0]) << 16) | (@as(u64, input[input.len >> 1]) << 8) | input[input.len - 1];
+                self.a = (u64::from(input[0]) << 16)
+                    | (u64::from(input[input.len() >> 1]) << 8)
+                    | u64::from(input[input.len() - 1]);
+                self.b = 0;
+            } else {
+                self.a = 0;
+                self.b = 0;
+            }
+        }
+
+        // inline fn round(self: *Wyhash, input: *const [48]u8) void {
+        fn round(&mut self, input: &[u8; 48]) {
+            // inline for (0..3) |i| {
+            for i in 0..3 {
+                // const a = read(8, input[8 * (2 * i) ..]);
+                let a = read8(&input[8 * (2 * i)..]);
+                // const b = read(8, input[8 * (2 * i + 1) ..]);
+                let b = read8(&input[8 * (2 * i + 1)..]);
+                // self.state[i] = mix(a ^ secret[i + 1], b ^ self.state[i]);
+                self.state[i] = mix(a ^ SECRET[i + 1], b ^ self.state[i]);
+            }
+        }
+
+        // inline fn final0(self: *Wyhash) void {
+        fn final0(&mut self) {
+            self.state[0] ^= self.state[1] ^ self.state[2];
+        }
+
+        // input_lb must be at least 16-bytes long (in shorter key cases the
+        // smallKey function will be used instead).
+        // inline fn final1(self: *Wyhash, input_lb: []const u8, start_pos: usize) void {
+        fn final1(&mut self, input_lb: &[u8], start_pos: usize) {
+            debug_assert!(input_lb.len() >= 16);
+            debug_assert!(input_lb.len() - start_pos <= 48);
+            let input = &input_lb[start_pos..];
+
+            // var i: usize = 0;
+            // while (i + 16 < input.len) : (i += 16) { ... }
+            let mut i: usize = 0;
+            while i + 16 < input.len() {
+                self.state[0] = mix(
+                    read8(&input[i..]) ^ SECRET[1],
+                    read8(&input[i + 8..]) ^ self.state[0],
+                );
+                i += 16;
+            }
+
+            // self.a = read(8, input_lb[input_lb.len - 16 ..][0..8]);
+            self.a = read8(&input_lb[input_lb.len() - 16..]);
+            // self.b = read(8, input_lb[input_lb.len - 8 ..][0..8]);
+            self.b = read8(&input_lb[input_lb.len() - 8..]);
+        }
+
+        // inline fn final2(self: *Wyhash) u64 {
+        fn final2(&mut self) -> u64 {
+            self.a ^= SECRET[1];
+            self.b ^= self.state[0];
+            mum(&mut self.a, &mut self.b);
+            // return mix(self.a ^ secret[0] ^ self.total_len, self.b ^ secret[1]);
+            mix(self.a ^ SECRET[0] ^ (self.total_len as u64), self.b ^ SECRET[1])
+        }
+    }
+
+    // pub fn hash(seed: u64, input: []const u8) u64 {
+    pub fn hash(seed: u64, input: &[u8]) -> u64 {
+        // var self = Wyhash.init(seed);
+        let mut state = Wyhash::init(seed);
+
+        if input.len() <= 16 {
+            state.small_key(input);
+        } else {
+            // var i: usize = 0;
+            let mut i: usize = 0;
+            if input.len() >= 48 {
+                // while (i + 48 < input.len) : (i += 48) { self.round(input[i..][0..48]); }
+                while i + 48 < input.len() {
+                    state.round(input[i..i + 48].try_into().unwrap());
+                    i += 48;
+                }
+                state.final0();
+            }
+            state.final1(input, i);
+        }
+
+        // self.total_len = input.len;
+        state.total_len = input.len();
+        // return self.final2();
+        state.final2()
+    }
+}
+
 // --- helpers ---------------------------------------------------------------
 //
 // The reference uses Zig anonymous-struct literals
@@ -417,6 +632,48 @@ fn string(name: &[u8], v: &[u8]) -> Capability {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // PORT NOTE (shim verification, not a ghostty test): the official wyhash
+    // test vectors from Zig `lib/std/hash/wyhash.zig` `test "test vectors"`,
+    // proving the `wyhash` shim above matches `std.hash.Wyhash` byte-for-byte
+    // (they cover the smallKey, final1-only, and round/final0 paths).
+    #[test]
+    fn wyhash_test_vectors() {
+        const VECTORS: [(u64, u64, &[u8]); 7] = [
+            (0, 0x409638ee2bde459, b""),
+            (1, 0xa8412d091b5fe0a9, b"a"),
+            (2, 0x32dd92e4b2915153, b"abc"),
+            (3, 0x8619124089a3a16b, b"message digest"),
+            (4, 0x7a43afb61d7f5f40, b"abcdefghijklmnopqrstuvwxyz"),
+            (
+                5,
+                0xff42329b90e50d58,
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+            ),
+            (
+                6,
+                0xc39cab13b115aad3,
+                b"12345678901234567890123456789012345678901234567890123456789012345678901234567890",
+            ),
+        ];
+        for (seed, expected, input) in VECTORS {
+            assert_eq!(expected, wyhash::hash(seed, input));
+        }
+    }
+
+    // Negative control for `version` (assessment P4-E4): the value is
+    // content-derived — hashing the actual encoded bytes must reproduce it,
+    // and hashing mutated bytes must not.
+    #[test]
+    fn version_is_content_derived() {
+        let mut buf: Vec<u8> = Vec::new();
+        rustty().encode(&mut buf).unwrap();
+        assert_eq!(version(), format!("{:x}", wyhash::hash(0, &buf)));
+
+        // Mutate the encoded source: the version must change.
+        buf.push(b'X');
+        assert_ne!(version(), format!("{:x}", wyhash::hash(0, &buf)));
+    }
 
     #[test]
     fn encode() {
