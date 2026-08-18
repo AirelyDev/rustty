@@ -134,9 +134,47 @@ pub struct Handler<'a> {
     // dcs_handler: dcs.Handler = .{},
     pub dcs_handler: crate::dcs::Handler,
 
+    /// Called for sequence identifiers not supported by this library.
+    /// Currently, only APC is reported. Content is borrowed and only valid
+    /// for the duration of the callback. Set `apc_handler.unknown_max_bytes`
+    /// before starting the Stream to enable APC capture.
+    // unknown_sequence: ?*const fn (*Handler, UnknownSequence) void = null,
+    //
+    // PORT NOTE: the `for<'b>` is the same "borrowed and only valid for the
+    // duration of the callback" spelling the `desktop_notification` effect
+    // uses — the content slice points into the APC handler's own buffer.
+    pub unknown_sequence: Option<for<'b> fn(&mut Handler<'a>, UnknownSequence<'b>)>,
+
     // PORT NOTE: ties the `'a` effect-callback lifetime to the handler without a
     // stored borrow; the actual aliased `Terminal` is held as a raw pointer.
     _phantom: PhantomData<&'a ()>,
+}
+
+/// A sequence unsupported by the active handler. Payload data is borrowed
+/// only for the duration of the handler callback.
+// pub const UnknownSequence = union(enum) {
+//     apc: String,
+//     ...
+// };
+// PORT NOTE: the reference nests this type (and its `String` payload struct)
+// inside `Handler`; Rust types cannot nest in a struct, so both live at module
+// scope with the `Handler.`-qualified names flattened (`UnknownSequenceString`
+// for `UnknownSequence.String` — `String` alone would collide with
+// `std::string::String`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnknownSequence<'b> {
+    Apc(UnknownSequenceString<'b>),
+}
+
+/// Content between a string sequence's introducer and terminator.
+// pub const String = struct {
+//     content: []const u8,
+//     truncated: bool,
+// };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnknownSequenceString<'b> {
+    pub content: &'b [u8],
+    pub truncated: bool,
 }
 
 /// Callbacks for certain effects that handlers may have.
@@ -355,8 +393,22 @@ impl<'a> Handler<'a> {
             apc_handler: ApcHandler::default(),
             // dcs_handler: .{} (the reference field default)
             dcs_handler: crate::dcs::Handler::default(),
+            // unknown_sequence: ... = null (the reference field default)
+            unknown_sequence: None,
             _phantom: PhantomData,
         }
+    }
+
+    // fn unknownSequence(self: *Handler, value: UnknownSequence) void {
+    //     const func = self.unknown_sequence orelse return;
+    //     func(self, value);
+    // }
+    fn unknown_sequence(&mut self, value: UnknownSequence) {
+        let func = match self.unknown_sequence {
+            Some(func) => func,
+            None => return,
+        };
+        func(self, value);
     }
 
     /// Resize the terminal and apply any side effects (if supported)
@@ -1647,13 +1699,28 @@ impl<'a> Handler<'a> {
     // response then appends a `\0` and writes `final[0..final.len-1 :0]` (a Zig
     // sentinel slice); our `write_pty` takes a bare `&[u8]`, so we write the
     // encoded bytes directly with no sentinel byte.
-    fn apc_end(&mut self) {
+    fn apc_end(&mut self, terminated: bool) {
         let alloc = self.term().gpa();
         let Some(mut cmd) = self.apc_handler.end(alloc) else {
             return;
         };
 
         match &mut cmd {
+            // .unknown => |*unknown| {
+            //     if (terminated) self.unknownSequence(.{ .apc = .{
+            //         .content = unknown.content,
+            //         .truncated = unknown.truncated,
+            //     } });
+            // },
+            crate::apc::Command::Unknown(unknown) => {
+                if terminated {
+                    self.unknown_sequence(UnknownSequence::Apc(UnknownSequenceString {
+                        content: &unknown.content,
+                        truncated: unknown.truncated,
+                    }));
+                }
+            }
+
             // .kitty => |*kitty_cmd| if (comptime build_options.kitty_graphics) {
             crate::apc::Command::Kitty(kitty_cmd) => {
                 if crate::options::KITTY_GRAPHICS {
@@ -2255,9 +2322,9 @@ impl<'a> stream::Handler for Handler<'a> {
         self.apc_handler.feed_slice(gpa, bytes);
     }
 
-    // .apc_end => self.apcEnd(),
-    fn apc_end(&mut self) {
-        Handler::apc_end(self);
+    // .apc_end => self.apcEnd(value.terminated),
+    fn apc_end(&mut self, v: stream::ApcEnd) {
+        Handler::apc_end(self, v.terminated);
     }
 
     // .start_hyperlink => try self.terminal.screens.active.startHyperlink(value.uri, value.id),
@@ -2580,6 +2647,69 @@ mod tests {
         assert_eq!(720_u32, t.width_px);
         assert_eq!(432_u32, t.height_px);
 
+        t.deinit(Global);
+    }
+
+    // test "unknown APC effect callback"
+    #[test]
+    fn unknown_apc_effect_callback() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        // const S = struct {
+        //     var count: usize = 0;
+        //     var content: [16]u8 = undefined;
+        //     var content_len: usize = undefined;
+        //     var truncated: bool = undefined;
+        //     fn unknownSequence(_: *Handler, value: Handler.UnknownSequence) void { ... }
+        // };
+        // PORT NOTE: the reference hangs `var`s on a local `S` struct; the
+        // callback is a bare `fn` pointer here, so the captures live in
+        // thread-locals (the module's established `CAPTURE` idiom).
+        thread_local! {
+            static UNKNOWN_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+            static UNKNOWN_CONTENT: core::cell::RefCell<Vec<u8>> =
+                const { core::cell::RefCell::new(Vec::new()) };
+            static UNKNOWN_TRUNCATED: core::cell::Cell<bool> =
+                const { core::cell::Cell::new(false) };
+        }
+
+        fn unknown_sequence(_: &mut Handler, value: UnknownSequence) {
+            match value {
+                UnknownSequence::Apc(apc_value) => {
+                    UNKNOWN_CONTENT.with(|c| *c.borrow_mut() = apc_value.content.to_vec());
+                    UNKNOWN_TRUNCATED.with(|c| c.set(apc_value.truncated));
+                }
+            }
+            UNKNOWN_COUNT.with(|c| c.set(c.get() + 1));
+        }
+        // S.count = 0;
+        UNKNOWN_COUNT.with(|c| c.set(0));
+
+        // var handler: Handler = .init(&t);
+        // handler.unknown_sequence = &S.unknownSequence;
+        // handler.apc_handler.unknown_max_bytes = 8;
+        // var s: Stream = .init(.{ .allocator = testing.allocator, .handler = handler });
+        // defer s.deinit();
+        let mut s = t.vt_stream();
+        s.handler.unknown_sequence = Some(unknown_sequence);
+        s.handler.apc_handler.unknown_max_bytes = 8;
+
+        // Unknown OSC commands retain their legacy behavior and are ignored.
+        s.next_slice(b"\x1B]999;abcdef\x07");
+        s.next_slice(b"\x1B_abcd;payload\x1B\\");
+
+        assert_eq!(1, UNKNOWN_COUNT.with(|c| c.get()));
+        assert_eq!(
+            b"abcd;pay".as_slice(),
+            UNKNOWN_CONTENT.with(|c| c.borrow().clone()).as_slice()
+        );
+        assert!(UNKNOWN_TRUNCATED.with(|c| c.get()));
+
+        // Aborted unknown APCs are suppressed.
+        s.next_slice(b"\x1B_Xpayload\x18");
+        assert_eq!(1, UNKNOWN_COUNT.with(|c| c.get()));
+
+        drop(s);
         t.deinit(Global);
     }
 
@@ -5310,5 +5440,184 @@ mod tests {
         assert_eq!(kitty::graphics_command::Format::Rgb, img.format);
 
         t.deinit(Global);
+    }
+
+    // test "continuation reconstructs standard stream without duplicate effects"
+    #[test]
+    fn continuation_reconstructs_standard_stream_without_duplicate_effects() {
+        use crate::clipboard;
+        use crate::stream_continuation::FixedIoWriter;
+
+        // `testing.allocator` for the `Options.allocator` gate (the same
+        // process-global zig allocator `Terminal::vt_stream` uses).
+        static CONT_ZIG_ALLOC: rustty_lib::allocator::GlobalZigAllocator =
+            rustty_lib::allocator::GlobalZigAllocator;
+        fn cont_alloc() -> rustty_lib::allocator::ZigAllocatorRef<'static> {
+            rustty_lib::allocator::ZigAllocatorRef::new(&CONT_ZIG_ALLOC)
+        }
+
+        // const S = struct { var bell_count ... fn reset() ... };
+        // PORT NOTE: the reference hangs `var`s on a local `S` struct; the
+        // callbacks are bare `fn` pointers here, so the counters live in
+        // thread-locals (the module's established idiom).
+        thread_local! {
+            static BELL_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+            static TITLE_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+            static WRITE_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+            static NOTIFICATION_COUNT: core::cell::Cell<usize> =
+                const { core::cell::Cell::new(0) };
+            static CLIPBOARD_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        }
+
+        fn bell(_: &mut Handler) {
+            BELL_COUNT.with(|c| c.set(c.get() + 1));
+        }
+        fn title_changed(_: &mut Handler) {
+            TITLE_COUNT.with(|c| c.set(c.get() + 1));
+        }
+        fn write_pty(_: &mut Handler, _: &[u8]) {
+            WRITE_COUNT.with(|c| c.set(c.get() + 1));
+        }
+        fn desktop_notification(_: &mut Handler, _: stream::ShowDesktopNotification) {
+            NOTIFICATION_COUNT.with(|c| c.set(c.get() + 1));
+        }
+        fn clipboard_write(_: &mut Handler, _: clipboard::Write) -> clipboard::WriteResult {
+            CLIPBOARD_COUNT.with(|c| c.set(c.get() + 1));
+            clipboard::WriteResult::Success
+        }
+        fn reset() {
+            BELL_COUNT.with(|c| c.set(0));
+            TITLE_COUNT.with(|c| c.set(0));
+            WRITE_COUNT.with(|c| c.set(0));
+            NOTIFICATION_COUNT.with(|c| c.set(0));
+            CLIPBOARD_COUNT.with(|c| c.set(0));
+        }
+        reset();
+
+        // const committed = "A\n\x07" ++ "\x1b]2;title\x1b\\" ++ "\x1b[5n" ++
+        //     "\x1b]9;body\x1b\\" ++ "\x1b]52;c;aA==\x1b\\";
+        const COMMITTED: &[u8] =
+            b"A\n\x07\x1b]2;title\x1b\\\x1b[5n\x1b]9;body\x1b\\\x1b]52;c;aA==\x1b\\";
+
+        let mut source_terminal = Terminal::init(Global, opts(80, 24)).unwrap();
+        // PORT NOTE (SB discipline): the handler aliases the terminal through a
+        // raw pointer while the test also reads terminal state directly. Both
+        // go through ONE `*mut Terminal` per terminal so no fresh `&mut`
+        // invalidates the stream's stored pointer mid-test (the module's
+        // raw-pointer seam; memory rust-mut-args-strongly-protected).
+        let source_ptr: *mut Terminal = &mut source_terminal;
+
+        // var source_handler: Handler = .init(&source_terminal);
+        let mut source_handler = Handler::init(source_ptr);
+        source_handler.effects.bell = Some(bell);
+        source_handler.effects.title_changed = Some(title_changed);
+        source_handler.effects.write_pty = Some(write_pty);
+        source_handler.effects.desktop_notification = Some(desktop_notification);
+        source_handler.effects.clipboard_write = Some(clipboard_write);
+        // var source = Stream.init(.{
+        //     .allocator = testing.allocator,
+        //     .handler = source_handler,
+        //     .continuation_max_bytes = 1024,
+        // });
+        // defer source.deinit();
+        let mut source = Stream::init(stream::Options {
+            allocator: Some(cont_alloc()),
+            handler: source_handler,
+            continuation_max_bytes: Some(1024),
+        });
+
+        // Terminal mutation and all callbacks have already committed. The
+        // unfinished CSI is the only input needed to recreate the stream state.
+        let mut committed_and_pending = COMMITTED.to_vec();
+        committed_and_pending.extend_from_slice(b"\x1b[31");
+        source.next_slice(&committed_and_pending);
+        assert_eq!(1, BELL_COUNT.with(|c| c.get()));
+        assert_eq!(1, TITLE_COUNT.with(|c| c.get()));
+        assert_eq!(1, WRITE_COUNT.with(|c| c.get()));
+        assert_eq!(1, NOTIFICATION_COUNT.with(|c| c.get()));
+        assert_eq!(1, CLIPBOARD_COUNT.with(|c| c.get()));
+
+        let mut continuation_buf = [0u8; 1024];
+        let mut continuation_writer = FixedIoWriter::new(&mut continuation_buf);
+        source.write_continuation(&mut continuation_writer).unwrap();
+        assert_eq!(b"\x1b[31".as_slice(), continuation_writer.buffered());
+
+        let mut restored_terminal = Terminal::init(Global, opts(80, 24)).unwrap();
+        let restored_ptr: *mut Terminal = &mut restored_terminal;
+
+        // Stand in for restoring the already-committed terminal snapshot.
+        {
+            // var snapshot_stream: Stream = .init(.{
+            //     .allocator = testing.allocator,
+            //     .handler = .init(&restored_terminal),
+            // });
+            // defer snapshot_stream.deinit();
+            let mut snapshot_stream = Stream::init(stream::Options {
+                allocator: Some(cont_alloc()),
+                handler: Handler::init(restored_ptr),
+                continuation_max_bytes: None,
+            });
+            snapshot_stream.next_slice(COMMITTED);
+        }
+
+        // const before = try restored_terminal.plainString(testing.allocator);
+        let before = unsafe { (*restored_ptr).plain_string(Global) }.unwrap();
+        let before_x = unsafe { (*(*restored_ptr).screens.active).cursor.x };
+        let before_y = unsafe { (*(*restored_ptr).screens.active).cursor.y };
+        let before_style = unsafe { (*(*restored_ptr).screens.active).cursor.style_id };
+        let before_title = unsafe { (*restored_ptr).get_title() }.unwrap().to_vec();
+
+        let mut restored_handler = Handler::init(restored_ptr);
+        restored_handler.effects.bell = Some(bell);
+        restored_handler.effects.title_changed = Some(title_changed);
+        restored_handler.effects.write_pty = Some(write_pty);
+        restored_handler.effects.desktop_notification = Some(desktop_notification);
+        restored_handler.effects.clipboard_write = Some(clipboard_write);
+        // var restored = Stream.init(.{ ... .continuation_max_bytes = 1024 });
+        // defer restored.deinit();
+        let mut restored = Stream::init(stream::Options {
+            allocator: Some(cont_alloc()),
+            handler: restored_handler,
+            continuation_max_bytes: Some(1024),
+        });
+
+        // S.reset();
+        reset();
+        restored.next_slice(continuation_writer.buffered());
+        assert_eq!(0, BELL_COUNT.with(|c| c.get()));
+        assert_eq!(0, TITLE_COUNT.with(|c| c.get()));
+        assert_eq!(0, WRITE_COUNT.with(|c| c.get()));
+        assert_eq!(0, NOTIFICATION_COUNT.with(|c| c.get()));
+        assert_eq!(0, CLIPBOARD_COUNT.with(|c| c.get()));
+        let after = unsafe { (*restored_ptr).plain_string(Global) }.unwrap();
+        assert_eq!(before, after);
+        assert_eq!(before_x, unsafe {
+            (*(*restored_ptr).screens.active).cursor.x
+        });
+        assert_eq!(before_y, unsafe {
+            (*(*restored_ptr).screens.active).cursor.y
+        });
+        assert_eq!(before_style, unsafe {
+            (*(*restored_ptr).screens.active).cursor.style_id
+        });
+        assert_eq!(
+            before_title.as_slice(),
+            unsafe { (*restored_ptr).get_title() }.unwrap()
+        );
+
+        source.next_slice(b"mB");
+        restored.next_slice(b"mB");
+        let source_text = unsafe { (*source_ptr).plain_string(Global) }.unwrap();
+        let restored_text = unsafe { (*restored_ptr).plain_string(Global) }.unwrap();
+        assert_eq!(source_text, restored_text);
+        assert_eq!(
+            unsafe { (*(*source_ptr).screens.active).cursor.style_id },
+            unsafe { (*(*restored_ptr).screens.active).cursor.style_id },
+        );
+
+        source.deinit();
+        restored.deinit();
+        restored_terminal.deinit(Global);
+        source_terminal.deinit(Global);
     }
 }

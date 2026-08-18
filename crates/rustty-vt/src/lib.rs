@@ -34,6 +34,10 @@
 pub mod charsets;
 // const stream = @import("stream.zig");
 pub mod stream;
+// PORT NOTE: like `utf8_decoder`, `terminal/stream_continuation.zig` has no
+// top-level re-export in `main.zig` (it is an internal sibling imported by
+// `stream.zig`). Declared here so the stream can reference it.
+pub mod stream_continuation;
 // const ansi = @import("ansi.zig");
 pub mod ansi;
 // const csi = @import("csi.zig");
@@ -215,6 +219,8 @@ pub use stream::Stream;
 // at `stream.rs` ("The possible actions that can be emitted by the Stream"). The
 // omission of a root `StreamAction` is therefore a consequence of that settled
 // design fork, not an unported alias.
+// pub const UnknownSequence = stream_terminal.Handler.UnknownSequence;
+pub use stream_terminal::UnknownSequence;
 // pub const Cursor = Screen.Cursor;
 // pub const CursorStyle = Screen.CursorStyle;
 // pub const CursorStyleReq = ansi.CursorStyle;

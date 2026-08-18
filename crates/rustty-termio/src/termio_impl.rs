@@ -77,9 +77,10 @@ use crate::Backend;
 use crate::Error;
 
 /// PORT NOTE: the process-static Zig allocator that backs the terminal
-/// `Stream`'s OSC parser (`terminal_stream = .initAlloc(alloc, handler)`). The
-/// reference threads the same `std.mem.Allocator` it passes to `Termio.init`;
-/// Rustty's `Stream::init_alloc` wants a `ZigAllocatorRef`, so we back the OSC
+/// `Stream`'s OSC parser (`terminal_stream = .init(.{ .allocator = alloc,
+/// .handler = handler })`). The reference threads the same `std.mem.Allocator`
+/// it passes to `Termio.init`;
+/// Rustty's `stream::Options.allocator` wants a `ZigAllocatorRef`, so we back the OSC
 /// parser with the process-static global zig allocator — the identical choice
 /// `Terminal::vt_stream` and the vt-c `TerminalWrapper` make (supports dynamic
 /// OSC growth, e.g. large OSC 52 clipboard payloads). `GlobalZigAllocator` is a
@@ -96,7 +97,7 @@ static GLOBAL_ZIG_ALLOCATOR_FOR_OSC: rustty_lib::allocator::GlobalZigAllocator =
 /// (= `terminal.Stream(StreamHandler)`, src/termio/stream_handler.zig — landed
 /// stage 4). The vt Stream's OSC-parser allocator lifetime is `'static` here
 /// (the field owns its handler for the Termio lifetime; only the deferred
-/// `Termio::init` constructs it — `.initAlloc(alloc, handler)`).
+/// `Termio::init` constructs it — `.init(.{ .allocator = alloc, .handler = handler })`).
 pub type StreamHandlerStream<M> = crate::stream_handler::Stream<'static, M>;
 
 /// Mutex state argument for queueMessage.
@@ -695,14 +696,21 @@ impl<M: AppMailbox> Termio<M> {
             seen_title: false,
         };
 
-        // .terminal_stream = .initAlloc(alloc, handler),
+        // .terminal_stream = .init(.{
+        //     .allocator = alloc,
+        //     .handler = handler,
+        // }),
         //
         // SAFETY: `terminal_stream` is the last unwritten field of `*self_`; the
         // handler it takes references the already-written self fields above.
-        let terminal_stream: StreamHandlerStream<M> = crate::stream_handler::Stream::init_alloc(
-            rustty_lib::allocator::ZigAllocatorRef::new(&GLOBAL_ZIG_ALLOCATOR_FOR_OSC),
-            handler,
-        );
+        let terminal_stream: StreamHandlerStream<M> =
+            crate::stream_handler::Stream::init(rustty_vt::stream::Options {
+                allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
+                    &GLOBAL_ZIG_ALLOCATOR_FOR_OSC,
+                )),
+                handler,
+                continuation_max_bytes: None,
+            });
         unsafe { (&raw mut (*self_).terminal_stream).write(terminal_stream) };
 
         Ok(())

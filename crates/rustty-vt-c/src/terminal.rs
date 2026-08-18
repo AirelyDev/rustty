@@ -1101,11 +1101,17 @@ fn new_(
     //     .terminal = t,
     //     .io_impl = io_impl,
     //     .tmp_dir_path = undefined, // Only used if temporary directory is set with API calls
-    //     .stream = .initAlloc(alloc, handler),
+    //     .stream = Stream.init(.{
+    //         .allocator = alloc,
+    //         .handler = handler,
+    //     }),
     // };
     // PORT NOTE (F-008): the C-resolved allocator now backs the OSC parser,
-    // exactly like the reference's `.initAlloc(alloc, handler)` — dynamic OSC
-    // growth (e.g. OSC 52 clipboard) goes through the CALLER's allocator.
+    // exactly like the reference's `Stream.init(.{ .allocator = alloc, ... })` —
+    // dynamic OSC growth (e.g. OSC 52 clipboard) goes through the CALLER's
+    // allocator. (68beeeb3f: `initAlloc` became the `Options`-taking `init`;
+    // the C surface passes no continuation cap — `terminal_continuation_*`
+    // is area C's later bundle.)
     // SAFETY: `wrapper_ptr` is valid uninitialized `TerminalWrapper` storage.
     unsafe {
         std::ptr::write(
@@ -1113,10 +1119,11 @@ fn new_(
             TerminalWrapper {
                 terminal: terminal_ptr,
                 alloc: alloc_holder,
-                stream: Stream::init_alloc(
-                    rustty_lib::allocator::ZigAllocatorRef::new(alloc),
+                stream: Stream::init(rustty_vt::stream::Options {
+                    allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(alloc)),
                     handler,
-                ),
+                    continuation_max_bytes: None,
+                }),
                 effects: Effects::default(),
                 tracked_grid_refs: HashSet::new(),
             },

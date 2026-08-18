@@ -164,6 +164,10 @@ pub unsafe fn destroy_raw<T>(alloc: &dyn ZigAllocator, ptr: *mut T) {
 /// stores (by thin pointer) in `ctx`. `from_zig` takes `&ZigAllocatorRef`; the
 /// ref must remain pointer-stable for the lifetime of the resulting
 /// `Allocator`, exactly mirroring the reference's pointer-stability contract.
+// PORT NOTE: `Clone + Copy` — the value is morally a `*const
+// std.mem.Allocator` (a shared borrow), freely copyable exactly as the Zig
+// allocator value is.
+#[derive(Clone, Copy)]
 pub struct ZigAllocatorRef<'a> {
     inner: &'a dyn ZigAllocator,
 }

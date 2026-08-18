@@ -430,7 +430,8 @@ impl Register {
     }
 
     /// Decode this request's base64 glyf payload into an owned outline.
-    // PORT NOTE: reference `decodeGlyfPayload(self, alloc) DecodeError!Glyf.Outline`.
+    // PORT NOTE: reference `decodeGlyfPayload(self, alloc, max_allocation_bytes)
+    // DecodeError!Glyf.Outline`.
     // The reference uses a `stackFallback(max_payload_size, alloc)` allocator for
     // the decode scratch buffer (stack-first, heap-fallback); since `size` is
     // capped at `MAX_PAYLOAD_SIZE`, an owned `Vec<u8>` scratch is the faithful
@@ -439,7 +440,7 @@ impl Register {
     // Decoder` (alphabet + `'='` pad). `Glyf.Entry` borrows `data` only for the
     // `decode` call; `Glyf.Entry::decode` returns an owned `Outline` (Rust:
     // owned `Vec`s), so the scratch buffer is freed after `decode` returns.
-    pub fn decode_glyf_payload(&self) -> Result<Outline, DecodeError> {
+    pub fn decode_glyf_payload(&self, max_allocation_bytes: usize) -> Result<Outline, DecodeError> {
         // Prep base64 decoding, initial validation.
         // const Decoder = std.base64.standard.Decoder;
         let decoder = std_base64_standard_decoder();
@@ -479,15 +480,23 @@ impl Register {
             Ok(entry) => entry,
             Err(_) => return Err(DecodeError::MalformedPayload),
         };
-        // return glyf_entry.decode(alloc) catch |err| switch (err) { ... };
-        match glyf_entry.decode() {
+        // The points slice is the dominant decoded allocation. Limiting
+        // every allocation made by the decoder prevents a compact record
+        // from expanding into an unbounded persistent outline.
+        // var limited: LimitedAllocator = .init(alloc, max_allocation_bytes);
+        // return glyf_entry.decode(limited.allocator()) catch |err| switch (err) { ... };
+        match glyf_entry.decode_limited(max_allocation_bytes) {
             Ok(outline) => Ok(outline),
-            // PORT NOTE: the reference maps the glyf decode error set onto the
-            // protocol `DecodeError`. `Allocator.Error` (`OutOfMemory`) has no
-            // port-side analog (`decode` allocates owned `Vec`s and does not
-            // surface OOM as a typed error), so that arm is absent; every other
-            // arm is preserved.
             Err(err) => Err(match err {
+                // error.OutOfMemory => if (limited.limit_exceeded)
+                //     error.PayloadTooLarge
+                // else
+                //     error.OutOfMemory,
+                // PORT NOTE: `decode_limited` only produces `OutOfMemory` when
+                // the per-allocation limit is exceeded (real OOM aborts), so
+                // the reference's `limit_exceeded` discriminant collapses to
+                // the `PayloadTooLarge` arm.
+                GlyfDecodeError::OutOfMemory => DecodeError::PayloadTooLarge,
                 // error.CompositeNotSupported => error.CompositeUnsupported,
                 GlyfDecodeError::CompositeNotSupported => DecodeError::CompositeUnsupported,
                 // error.InstructionsNotSupported => error.HintingUnsupported,
@@ -1529,8 +1538,11 @@ mod tests {
         let Request::Register(reg) = &cmd else {
             panic!("expected register");
         };
-        // var outline = try cmd.register.decodeGlyfPayload(testing.allocator);
-        let outline = reg.decode_glyf_payload().unwrap();
+        // var outline = try cmd.register.decodeGlyfPayload(
+        //     testing.allocator,
+        //     std.math.maxInt(usize),
+        // );
+        let outline = reg.decode_glyf_payload(usize::MAX).unwrap();
         // try testing.expectEqual(@as(usize, 0), outline.points.len);
         assert_eq!(0usize, outline.points.len());
         // try testing.expectEqual(@as(usize, 0), outline.contours.len);
@@ -1545,12 +1557,15 @@ mod tests {
         let Request::Register(reg) = &cmd else {
             panic!("expected register");
         };
-        // try testing.expectError(error.MalformedPayload, cmd.register.decodeGlyfPayload(...));
+        // try testing.expectError(
+        //     error.MalformedPayload,
+        //     cmd.register.decodeGlyfPayload(testing.allocator, std.math.maxInt(usize)),
+        // );
         // PORT NOTE: `Outline` (the Ok payload) has no `PartialEq`/`Debug`, so
         // the result is mapped to `()` before the `assert_eq!` error comparison.
         assert_eq!(
             Err(DecodeError::MalformedPayload),
-            reg.decode_glyf_payload().map(|_| ())
+            reg.decode_glyf_payload(usize::MAX).map(|_| ())
         );
     }
 

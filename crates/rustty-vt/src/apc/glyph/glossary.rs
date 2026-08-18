@@ -39,6 +39,12 @@ use rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged;
 /// Defined by the specification.
 pub const MAX_ENTRIES: usize = 1024;
 
+/// Maximum size of any allocation made while decoding a glyf registration.
+/// This is limited by the dynamic allocations not the struct size so the
+/// actual size allowed is slightly larger, but worst case only by 10KB.
+// pub const max_glyf_allocation = 64 * 1024; // 64 KiB
+pub const MAX_GLYF_ALLOCATION: usize = 64 * 1024; // 64 KiB
+
 /// Errors that can occur while registering a glossary entry.
 // PORT NOTE: reference `RegisterError = Allocator.Error || error{OutOfNamespace}`.
 // `OutOfMemory` is preserved for fidelity even though the port's map insertion
@@ -278,11 +284,11 @@ impl Entry {
         // Decode the payload into some usable glyph format for
         // future rasterization.
         // const glyph: Glyph = switch (fmt) {
-        //     .glyf => .{ .glyf = try req.decodeGlyfPayload(alloc) },
+        //     .glyf => .{ .glyf = try req.decodeGlyfPayload(alloc, max_glyf_allocation) },
         //     .colrv0, .colrv1 => return error.UnsupportedFormat,
         // };
         let glyph: Glyph = match fmt {
-            request::Format::Glyf => Glyph::Glyf(req.decode_glyf_payload()?),
+            request::Format::Glyf => Glyph::Glyf(req.decode_glyf_payload(MAX_GLYF_ALLOCATION)?),
             request::Format::Colrv0 | request::Format::Colrv1 => {
                 return Err(EntryInitError::UnsupportedFormat);
             }
@@ -503,6 +509,120 @@ mod tests {
             Err(EntryInitError::MalformedPayload),
             Entry::init(&req).map(|_| ())
         );
+    }
+
+    // fn testRepeatedPointRegisterReq(
+    //     alloc: Allocator,
+    //     end_points: []const u16,
+    // ) !RegisterReq {
+    fn test_repeated_point_register_req(end_points: &[u16]) -> RegisterReq {
+        // assert(end_points.len > 0);
+        assert!(!end_points.is_empty());
+
+        // var decoded: std.ArrayList(u8) = .empty;
+        let mut decoded: Vec<u8> = Vec::new();
+
+        // Simple glyph header with zero bounds.
+        // const contour_count: u16 = @intCast(end_points.len);
+        let contour_count: u16 = u16::try_from(end_points.len()).unwrap();
+        // try decoded.appendSlice(alloc, &.{ @truncate(contour_count >> 8), @truncate(contour_count) });
+        decoded.extend_from_slice(&[(contour_count >> 8) as u8, contour_count as u8]);
+        // try decoded.appendNTimes(alloc, 0, 8);
+        decoded.extend(core::iter::repeat_n(0u8, 8));
+        // for (end_points) |end_point| try decoded.appendSlice(
+        //     alloc,
+        //     &.{ @truncate(end_point >> 8), @truncate(end_point) },
+        // );
+        for &end_point in end_points {
+            decoded.extend_from_slice(&[(end_point >> 8) as u8, end_point as u8]);
+        }
+        // try decoded.appendSlice(alloc, &.{ 0x00, 0x00 }); // No instructions.
+        decoded.extend_from_slice(&[0x00, 0x00]); // No instructions.
+
+        // Maximum-length runs describe on-curve, zero-delta points compactly.
+        // var remaining: usize = @as(usize, end_points[end_points.len - 1]) + 1;
+        let mut remaining: usize = end_points[end_points.len() - 1] as usize + 1;
+        // while (remaining > 0) { ... }
+        while remaining > 0 {
+            let run = core::cmp::min(remaining, 256);
+            if run == 1 {
+                decoded.push(0x31);
+            } else {
+                decoded.extend_from_slice(&[0x39, u8::try_from(run - 1).unwrap()]);
+            }
+            remaining -= run;
+        }
+
+        // const Encoder = std.base64.standard.Encoder;
+        // const payload = try alloc.alloc(u8, Encoder.calcSize(decoded.items.len));
+        // const encoded = Encoder.encode(payload, decoded.items);
+        let encoded = test_base64_standard_encode(&decoded);
+
+        // const command = try std.fmt.allocPrint(alloc, "r;cp=e000;{s}", .{encoded});
+        let command = format!("r;cp=e000;{encoded}").into_bytes();
+        // return try testParseRegister(alloc, command);
+        test_parse_register(&command)
+    }
+
+    /// `std.base64.standard.Encoder` (alphabet + `'='` pad) for the test
+    /// helper above; the crate only ports the decoder.
+    fn test_base64_standard_encode(data: &[u8]) -> String {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in data.chunks(3) {
+            let b0 = chunk[0] as u32;
+            let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+            let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+            let n = (b0 << 16) | (b1 << 8) | b2;
+            out.push(ALPHABET[(n >> 18) as usize & 0x3F] as char);
+            out.push(ALPHABET[(n >> 12) as usize & 0x3F] as char);
+            out.push(if chunk.len() > 1 {
+                ALPHABET[(n >> 6) as usize & 0x3F] as char
+            } else {
+                '='
+            });
+            out.push(if chunk.len() > 2 {
+                ALPHABET[n as usize & 0x3F] as char
+            } else {
+                '='
+            });
+        }
+        out
+    }
+
+    // test "Entry init rejects glyf allocation over limit"
+    #[test]
+    fn entry_init_rejects_glyf_allocation_over_limit() {
+        // 5,462 points require a 65,544-byte points allocation.
+        // const req = try testRepeatedPointRegisterReq(alloc, &.{5461});
+        let req = test_repeated_point_register_req(&[5461]);
+        // defer alloc.free(req.raw);
+
+        // try testing.expectError(error.PayloadTooLarge, Entry.init(alloc, req));
+        assert_eq!(
+            Err(EntryInitError::PayloadTooLarge),
+            Entry::init(&req).map(|_| ())
+        );
+    }
+
+    // test "Entry init accepts largest glyf points allocation under limit"
+    #[test]
+    fn entry_init_accepts_largest_glyf_points_allocation_under_limit() {
+        // 5,461 points require a 65,532-byte points allocation.
+        // const req = try testRepeatedPointRegisterReq(alloc, &.{ 0, 5460 });
+        let req = test_repeated_point_register_req(&[0, 5460]);
+        // defer alloc.free(req.raw);
+
+        // var entry = try Entry.init(alloc, req);
+        // defer entry.deinit(alloc);
+        let mut entry = Entry::init(&req).unwrap();
+        // try testing.expectEqual(@as(usize, 5461), entry.glyph.glyf.points.len);
+        // try testing.expectEqual(@as(usize, 2), entry.glyph.glyf.contours.len);
+        let Glyph::Glyf(outline) = &entry.glyph;
+        assert_eq!(5461usize, outline.points.len());
+        assert_eq!(2usize, outline.contours.len());
+        entry.deinit();
     }
 
     #[test]

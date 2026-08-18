@@ -6247,7 +6247,9 @@ mod tests {
                 termio_messaged: false,
                 seen_title: false,
             };
-            let terminal_stream = crate::stream_handler::Stream::init(handler);
+            let terminal_stream = crate::stream_handler::Stream::init(
+                rustty_vt::stream::Options::with_handler(handler),
+            );
 
             // Assemble + heap-pin the Termio.
             let io: *mut crate::Termio<TestMailbox> = Box::into_raw(Box::new(crate::Termio {

@@ -49,6 +49,7 @@
 // const modes = @import("modes.zig");
 // const osc = @import("osc.zig");
 // const sgr = @import("sgr.zig");
+// const continuationpkg = @import("stream_continuation.zig");
 // const UTF8Decoder = @import("UTF8Decoder.zig");
 // const MouseShape = @import("mouse.zig").Shape;
 // PORT NOTE: retargeted to the ported crate-relative paths.
@@ -63,6 +64,7 @@ use crate::mouse::Shape as MouseShape;
 use crate::osc;
 use crate::parser::{self, Parser};
 use crate::sgr;
+use crate::stream_continuation as continuationpkg;
 use crate::utf8_decoder::UTF8Decoder;
 
 // const log = std.log.scoped(.stream);
@@ -233,6 +235,17 @@ pub struct StartHyperlink<'a> {
 pub struct ClipboardContents<'a> {
     pub kind: u8,
     pub data: &'a [u8],
+}
+
+/// `Action.ApcEnd`
+// pub const ApcEnd = extern struct {
+//     /// False when CAN, SUB, or another aborting transition ended the APC.
+//     terminated: bool,
+// };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ApcEnd {
+    /// False when CAN, SUB, or another aborting transition ended the APC.
+    pub terminated: bool,
 }
 
 /// `Action.ColorOperation`
@@ -612,7 +625,9 @@ pub trait Handler {
     }
 
     /// `apc_end`
-    fn apc_end(&mut self) {}
+    // .apc_end: ApcEnd — `terminated` is false when CAN, SUB, or another
+    // aborting transition ended the APC (b53728241).
+    fn apc_end(&mut self, _v: ApcEnd) {}
 
     // --- hyperlink ---
 
@@ -700,66 +715,295 @@ pub struct Stream<'a, H: Handler> {
     pub parser: Parser<'a>,
     // utf8decoder: UTF8Decoder,
     pub utf8decoder: UTF8Decoder,
+    // continuation: ?continuationpkg.Tracker,
+    pub continuation: Option<continuationpkg::Tracker>,
+}
+
+// pub const Options = struct { ... };
+pub struct Options<'a, H> {
+    /// The handler initial value, must be set.
+    // handler: Handler,
+    pub handler: H,
+
+    /// Allocator to use. If this is not set then the stream
+    /// will be fully allocation free. There are some operations
+    /// that will be dropped in this case such as OSC 52 clipboard
+    /// ops.
+    // allocator: ?Allocator = null,
+    pub allocator: Option<rustty_lib::allocator::ZigAllocatorRef<'a>>,
+
+    /// Maximum size in bytes of the continuation suffix. If this is
+    /// null or zero then continuation tracking is disabled. This is
+    /// only applied when `allocator` is non-null; without an allocator
+    /// continuation tracking is disabled. Feeding this continuation
+    /// suffix into an equivalent stream at ground reconstructs the
+    /// unfinished state without repeating committed terminal effects.
+    /// Continuation tracking is only supported by TerminalStream.
+    // continuation_max_bytes: ?usize = null,
+    pub continuation_max_bytes: Option<usize>,
+}
+
+impl<'a, H> Options<'a, H> {
+    /// `.{ .handler = h }` — the reference's Zig field defaults
+    /// (`allocator = null`, `continuation_max_bytes = null`) have no Rust
+    /// struct-literal equivalent, so this constructor fills them.
+    pub fn with_handler(handler: H) -> Options<'a, H> {
+        Options {
+            handler,
+            allocator: None,
+            continuation_max_bytes: None,
+        }
+    }
+}
+
+/// The error set of `writeContinuation`:
+/// `(std.Io.Writer.Error || error{ContinuationDisabled, ContinuationUnavailable})`.
+#[derive(Debug)]
+pub enum WriteContinuationError {
+    /// `std.Io.Writer.Error` (`error.WriteFailed`).
+    WriteFailed(std::io::Error),
+    ContinuationDisabled,
+    ContinuationUnavailable,
 }
 
 impl<'a, H: Handler> Stream<'a, H> {
-    /// Initialize an allocation-free stream. This will preallocate various
-    /// sizes as necessary and anything over that will be dropped. If you
-    /// want to support more dynamic behavior use initAlloc instead.
+    /// Initialize a stream. Without an allocator, operations that require
+    /// heap allocation are dropped.
     ///
     /// As a concrete example of something that requires heap allocation,
     /// consider OSC 52 (clipboard operations) which can be arbitrarily
     /// large.
     ///
-    /// If you want to limit allocation size, use an allocator with
-    /// a size limit with initAlloc.
-    ///
     /// This takes ownership of the handler and will call deinit
     /// when the stream is deinitialized.
-    // pub fn init(h: Handler) Self {
-    pub fn init(h: H) -> Stream<'a, H> {
-        // return .{ .handler = h, .parser = .init(), .utf8decoder = .{} };
-        Stream {
-            handler: h,
-            parser: Parser::init(),
-            utf8decoder: UTF8Decoder::new(),
+    // pub fn init(options: Options) Self {
+    pub fn init(options: Options<'a, H>) -> Stream<'a, H> {
+        // Initialize the parser
+        // var parser: Parser = .init();
+        // if (options.allocator) |alloc| parser.osc_parser.alloc = alloc;
+        let mut parser = Parser::init();
+        if let Some(alloc) = options.allocator {
+            parser.osc_parser.alloc = Some(alloc);
         }
-    }
 
-    /// Initialize the stream that supports heap allocation as necessary.
-    // pub fn initAlloc(alloc: Allocator, h: Handler) Self {
-    // PORT NOTE: `alloc` is the OSC parser's allocator (Zig `std.mem.Allocator`
-    // -> `ZigAllocatorRef`); threading it enables dynamic OSC buffer growth
-    // (e.g. arbitrarily large OSC 52 clipboard payloads).
-    pub fn init_alloc(alloc: rustty_lib::allocator::ZigAllocatorRef<'a>, h: H) -> Stream<'a, H> {
-        // var self: Self = .init(h);
-        let mut stream = Stream::init(h);
-        // self.parser.osc_parser.alloc = alloc;
-        stream.parser.osc_parser.alloc = Some(alloc);
-        // return self;
-        stream
+        // Initialize the continuation tracker if one is requested.
+        // var tracker: ?continuationpkg.Tracker = null;
+        // if (options.allocator) |alloc| {
+        //     if (options.continuation_max_bytes) |max_bytes| {
+        //         if (max_bytes > 0) tracker = .init(alloc, max_bytes);
+        //     }
+        // }
+        // PORT NOTE: the Rust `Tracker` allocates on the global allocator (see
+        // its `alloc` PORT NOTE), so the gate consumes `options.allocator`'s
+        // presence only.
+        let mut tracker: Option<continuationpkg::Tracker> = None;
+        if options.allocator.is_some() {
+            if let Some(max_bytes) = options.continuation_max_bytes {
+                if max_bytes > 0 {
+                    tracker = Some(continuationpkg::Tracker::init(max_bytes));
+                }
+            }
+        }
+
+        // return .{
+        //     .handler = options.handler,
+        //     .parser = parser,
+        //     .utf8decoder = .{},
+        //     .continuation = tracker,
+        // };
+        Stream {
+            handler: options.handler,
+            parser,
+            utf8decoder: UTF8Decoder::new(),
+            continuation: tracker,
+        }
     }
 
     // pub fn deinit(self: *Self) void {
     pub fn deinit(&mut self) {
+        // if (self.continuation) |*tracker| tracker.deinit();
+        if let Some(tracker) = &mut self.continuation {
+            tracker.deinit();
+        }
         // self.parser.deinit();
         self.parser.deinit();
         // self.handler.deinit();
         self.handler.deinit();
     }
 
+    /// Write the current continuation suffix directly to a caller-owned
+    /// writer. The caller must pause and serialize access to this Stream.
+    // pub fn writeContinuation(
+    //     self: *const Self,
+    //     writer: *std.Io.Writer,
+    // ) (std.Io.Writer.Error || error{
+    //     ContinuationDisabled,
+    //     ContinuationUnavailable,
+    // })!void {
+    pub fn write_continuation(
+        &self,
+        writer: &mut dyn std::io::Write,
+    ) -> Result<(), WriteContinuationError> {
+        // const tracker = self.continuation orelse
+        //     return error.ContinuationDisabled;
+        let tracker = self
+            .continuation
+            .as_ref()
+            .ok_or(WriteContinuationError::ContinuationDisabled)?;
+        // if (tracker.broken)
+        //     return error.ContinuationUnavailable;
+        if tracker.broken {
+            return Err(WriteContinuationError::ContinuationUnavailable);
+        }
+        // try tracker.write(writer);
+        tracker
+            .write(writer)
+            .map_err(WriteContinuationError::WriteFailed)
+    }
+
+    /// True when no continuation suffix is needed to reproduce the
+    /// stream's current parsing state.
+    // pub inline fn ground(self: *const Self) bool {
+    #[inline]
+    pub fn ground(&self) -> bool {
+        // Parser ground alone is not sufficient because the UTF-8
+        // decoder may have some state.
+        self.parser.state == parser::State::Ground && self.utf8decoder.state == 0
+    }
+
+    /// Update the continuation suffix after one complete feed call.
+    /// Must only be called when tracking is enabled.
+    // fn trackContinuation(self: *Self, input: []const u8) void {
+    fn track_continuation(&mut self, input: &[u8]) {
+        // const tracker = &self.continuation.?;
+        // (deferred below: the ground() check borrows `self` immutably first)
+
+        // If we're in a ground state, we have no continuation suffix
+        // to track by definition.
+        // if (self.ground()) { tracker.reset(); return; }
+        if self.ground() {
+            self.continuation.as_mut().unwrap().reset();
+            return;
+        }
+
+        // Retain the part of this feed needed to replay the unfinished
+        // state. When the parser is grounded here, the feed must have
+        // ended inside a UTF-8 codepoint instead, because the ground
+        // check above covers both state machines.
+        // tracker.append(
+        //     if (self.parser.state != .ground) .vt else .utf8,
+        //     input,
+        // );
+        let pending = if self.parser.state != parser::State::Ground {
+            continuationpkg::Pending::Vt
+        } else {
+            continuationpkg::Pending::Utf8
+        };
+        self.continuation.as_mut().unwrap().append(pending, input);
+    }
+
     /// Process a string of characters.
-    // pub inline fn nextSlice(self: *Self, input: []const u8) void { ... }
+    // pub inline fn nextSlice(self: *Self, input: []const u8) void {
     pub fn next_slice(&mut self, input: &[u8]) {
+        // self.nextSliceUntracked(input);
+        self.next_slice_untracked(input);
+
+        // Continuation tracking is opt-in and this branch predicts
+        // perfectly, so disabled streams pay nothing else here.
+        // if (self.continuation != null) self.trackContinuation(input);
+        if self.continuation.is_some() {
+            self.track_continuation(input);
+        }
+    }
+
+    /// Process a string of characters, but only the shortest prefix
+    /// needed to reach the ground state.
+    ///
+    /// The ground state is when the stream isn't in the middle of any
+    /// type of sequence: UTF-8, ESC, CSI, OSC, etc. It is the stateless
+    /// point of the stream.
+    ///
+    /// If the stream is already at ground then this consumes nothing
+    /// and returns zero. A non-null return is the number of bytes consumed
+    /// before reaching ground, including the byte that reaches it. A null
+    /// return means the full slice was consumed without reaching ground.
+    ///
+    /// This is anywhere from 1% to 5% slower than nextSlice, depending
+    /// on the types of inputs provided (e.g. OSC vs APC, whether it
+    /// ever reaches ground, etc.).
+    // pub inline fn nextSliceUntilGround(
+    //     self: *Self,
+    //     input: []const u8,
+    // ) ?usize {
+    pub fn next_slice_until_ground(&mut self, input: &[u8]) -> Option<usize> {
+        // const consumed = self.nextSliceUntilGroundUntracked(input);
+        let consumed = self.next_slice_until_ground_untracked(input);
+        // const consumed_len = consumed orelse input.len;
+        let consumed_len = consumed.unwrap_or(input.len());
+        // if (self.continuation != null and consumed_len > 0) {
+        //     self.trackContinuation(input[0..consumed_len]);
+        // }
+        if self.continuation.is_some() && consumed_len > 0 {
+            self.track_continuation(&input[0..consumed_len]);
+        }
+
+        // return consumed;
+        consumed
+    }
+
+    // inline fn nextSliceUntilGroundUntracked(
+    //     self: *Self,
+    //     input: []const u8,
+    // ) ?usize {
+    fn next_slice_until_ground_untracked(&mut self, input: &[u8]) -> Option<usize> {
+        // if (self.ground()) return 0;
+        if self.ground() {
+            return Some(0);
+        }
+
+        // Process UTF-8 if we're within that state.
+        // var offset: usize = 0;
+        // while (self.utf8decoder.state != 0) {
+        //     if (offset >= input.len) return null;
+        //     self.nextUtf8(input[offset]);
+        //     offset += 1;
+        // }
+        let mut offset: usize = 0;
+        while self.utf8decoder.state != 0 {
+            if offset >= input.len() {
+                return None;
+            }
+            self.next_utf8(input[offset]);
+            offset += 1;
+        }
+
+        // Process non-UTF-8
+        // if (self.parser.state != .ground) {
+        //     offset += self.consumeUntilGround(input[offset..]);
+        // }
+        if self.parser.state != parser::State::Ground {
+            offset += self.consume_until_ground(&input[offset..]);
+        }
+
+        // return if (self.ground()) offset else null;
+        if self.ground() {
+            Some(offset)
+        } else {
+            None
+        }
+    }
+
+    // inline fn nextSliceUntracked(self: *Self, input: []const u8) void { ... }
+    fn next_slice_untracked(&mut self, input: &[u8]) {
         // Disable SIMD optimizations if build requests it or if our
         // manual debug mode is on.
         // if (comptime debug or !build_options.simd) {
-        //     for (input) |c| self.next(c);
+        //     for (input) |c| self.nextUntracked(c);
         //     return;
         // }
         if DEBUG || !crate::options::SIMD {
             for &c in input {
-                self.next(c);
+                self.next_untracked(c);
             }
             return;
         }
@@ -1025,8 +1269,36 @@ impl<'a, H: Handler> Stream<'a, H> {
                     if offset >= input.len() {
                         return input.len();
                     }
-                    // The next byte exits the string state; let
-                    // nextNonUtf8 below handle it.
+
+                    // Fast-path normal string termination. This matches
+                    // Parser.next's exit and entry actions while avoiding
+                    // the generic action loop for every completed APC.
+                    // switch (input[offset]) {
+                    //     std.ascii.control_code.esc => { ... },
+                    //     0x9C => { ... },
+                    //     else => {},
+                    // }
+                    match input[offset] {
+                        0x1B => {
+                            self.parser.clear();
+                            self.parser.state = parser::State::Escape;
+                            // self.handler.vt(.apc_end, .{ .terminated = true });
+                            self.handler.apc_end(ApcEnd { terminated: true });
+                            offset += 1;
+                            continue;
+                        }
+                        0x9C => {
+                            self.parser.state = parser::State::Ground;
+                            // self.handler.vt(.apc_end, .{ .terminated = true });
+                            self.handler.apc_end(ApcEnd { terminated: true });
+                            offset += 1;
+                            continue;
+                        }
+                        _ => {}
+                    }
+
+                    // Aborting transitions need the scalar path so the
+                    // handler can distinguish them from terminators.
                 }
             }
 
@@ -1277,8 +1549,18 @@ impl<'a, H: Handler> Stream<'a, H> {
     /// Like nextSlice but takes one byte and is necessarily a scalar
     /// operation that can't use SIMD. Prefer nextSlice if you can and
     /// try to get multiple bytes at once.
-    // pub inline fn next(self: *Self, c: u8) void { ... }
+    // pub inline fn next(self: *Self, c: u8) void {
     pub fn next(&mut self, c: u8) {
+        // self.nextUntracked(c);
+        self.next_untracked(c);
+        // if (self.continuation != null) self.trackContinuation(&.{c});
+        if self.continuation.is_some() {
+            self.track_continuation(&[c]);
+        }
+    }
+
+    // inline fn nextUntracked(self: *Self, c: u8) void {
+    fn next_untracked(&mut self, c: u8) {
         // The scalar path can be responsible for decoding UTF-8.
         // if (self.parser.state == .ground) { self.nextUtf8(c); return; }
         if self.parser.state == parser::State::Ground {
@@ -1508,7 +1790,12 @@ impl<'a, H: Handler> Stream<'a, H> {
                 parser::Action::DcsUnhook => self.handler.dcs_unhook(),
                 parser::Action::ApcStart => self.handler.apc_start(),
                 parser::Action::ApcPut(code) => self.handler.apc_put(code),
-                parser::Action::ApcEnd => self.handler.apc_end(),
+                // .apc_end => self.handler.vt(.apc_end, .{
+                //     .terminated = c == std.ascii.control_code.esc or c == 0x9C,
+                // }),
+                parser::Action::ApcEnd => self.handler.apc_end(ApcEnd {
+                    terminated: c == 0x1B || c == 0x9C,
+                }),
             }
         }
     }
@@ -3809,7 +4096,7 @@ mod tests {
         struct H;
         impl Handler for H {}
 
-        let mut s: Stream<H> = Stream::init(H);
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H));
         s.next_slice(b"\x1b]1;icon\x07");
         assert_eq!(
             1,
@@ -4007,7 +4294,7 @@ mod tests {
     /// runs when SIMD is on, calling `consume_until_ground` directly, so the
     /// bulk path is exercised in BOTH feature configurations.
     fn drive_bulk<H: Handler + Default>(input: &[u8]) -> H {
-        let mut s: Stream<H> = Stream::init(H::default());
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
         let mut i = 0usize;
         while i < input.len() {
             if s.parser.state != parser::State::Ground {
@@ -4055,13 +4342,13 @@ mod tests {
     /// `simd` feature is on; identical to `drive_per_byte` when it is off.
     /// Both configurations are asserted, so neither can rot.
     fn drive_slice<H: Handler + Default>(input: &[u8]) -> H {
-        let mut s: Stream<H> = Stream::init(H::default());
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
         s.next_slice(input);
         s.handler
     }
 
     fn drive_per_byte<H: Handler + Default>(input: &[u8]) -> H {
-        let mut s: Stream<H> = Stream::init(H::default());
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
         for b in input {
             s.next(*b);
         }
@@ -4092,7 +4379,7 @@ mod tests {
     /// calling it directly exercises the batching in BOTH feature
     /// configurations.
     fn drive_ground<H: Handler + Default>(input: &[u8]) -> H {
-        let mut s: Stream<H> = Stream::init(H::default());
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
         let mut cp_buf: [u32; 4096] = [0; 4096];
         assert!(input.len() <= cp_buf.len());
         s.next_slice_capped(input, &mut cp_buf);
@@ -4263,7 +4550,7 @@ mod tests {
         fn apc_start(&mut self) {
             self.started += 1;
         }
-        fn apc_end(&mut self) {
+        fn apc_end(&mut self, _v: ApcEnd) {
             self.ended += 1;
         }
         fn apc_put(&mut self, code: u8) {
@@ -4308,10 +4595,27 @@ mod tests {
         assert_eq!(0, h.puts);
     }
 
+    // test "stream: apc bulk slice C1 ST"
+    #[test]
+    fn stream_apc_bulk_slice_c1_st() {
+        // var s: Stream(ApcTestHandler) = .init(.{ .handler = .{} });
+        // s.nextSlice("\x1b_Gpayload\x9c");
+        //
+        // PORT NOTE: driven through `drive_apc_bulk` (the module's bulk-path
+        // driver, see its vacuity note) so the C1 ST fast path in
+        // `consume_until_ground` is exercised in both feature configurations.
+        let h = drive_apc_bulk(b"\x1b_Gpayload\x9c");
+
+        assert_eq!(1, h.started);
+        assert_eq!(1, h.ended);
+        assert_eq!(b"Gpayload".as_slice(), &h.buf[0..h.len]);
+    }
+
     // test "stream: apc bulk slice split across inputs"
     #[test]
     fn stream_apc_bulk_slice_split_across_inputs() {
-        let mut s: Stream<ApcTestHandler> = Stream::init(ApcTestHandler::default());
+        let mut s: Stream<ApcTestHandler> =
+            Stream::init(Options::with_handler(ApcTestHandler::default()));
         for chunk in [
             b"\x1b_Gf=24,s=10".as_slice(),
             b",v=20;aGVs".as_slice(),
@@ -4473,7 +4777,8 @@ mod tests {
             // exit), so a mid-parameter split is exactly where a save/restore
             // bug would hide.
             for split in 1..input.len() {
-                let mut s: Stream<RecordingHandler> = Stream::init(RecordingHandler::default());
+                let mut s: Stream<RecordingHandler> =
+                    Stream::init(Options::with_handler(RecordingHandler::default()));
                 let mut feed = |chunk: &[u8]| {
                     let mut i = 0usize;
                     while i < chunk.len() {
@@ -4570,7 +4875,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { c: Some(0) });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { c: Some(0) }));
         s.next(b'x');
         assert_eq!(120u32, s.handler.c.unwrap());
     }
@@ -4589,7 +4894,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { count: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { count: None }));
         // CSI 500 b => REP with the max-clamped u16 param widened to usize 500.
         for b in b"\x1b[500b" {
             s.next(*b);
@@ -4609,7 +4914,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { c: Some(0) });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { c: Some(0) }));
         s.next_slice(&[0xFF]);
         assert_eq!(0xFFFDu32, s.handler.c.unwrap());
     }
@@ -4626,7 +4931,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { c: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { c: None }));
         s.next_slice(&[0xE0]); // 3 byte
         assert!(s.handler.c.is_none());
         s.next_slice(&[0xA0]); // still incomplete
@@ -4647,7 +4952,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { amount: 0 });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { amount: 0 }));
         s.next_slice(b"\x1B[C");
         assert_eq!(1u16, s.handler.amount);
 
@@ -4681,9 +4986,9 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H {
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H {
             mode: modes::Mode::CursorKeys,
-        });
+        }));
         s.next_slice(b"\x1B[?6h");
         assert_eq!(modes::Mode::Origin, s.handler.mode);
 
@@ -4710,7 +5015,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { mode: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { mode: None }));
         s.next_slice(b"\x1B[4h");
         assert_eq!(modes::Mode::Insert, s.handler.mode.unwrap());
 
@@ -4734,7 +5039,7 @@ mod tests {
         }
         impl Handler for H {}
 
-        let mut s: Stream<H> = Stream::init(H { mode: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { mode: None }));
         s.next_slice(b"\x1B[6h");
         assert!(s.handler.mode.is_none());
 
@@ -4754,7 +5059,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { called: false });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { called: false }));
         for c in b"\x1B[?42r" {
             s.next(*c);
         }
@@ -4773,7 +5078,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { n: 0 });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { n: 0 }));
         for c in b"\x1B[<u" {
             s.next(*c);
         }
@@ -4798,7 +5103,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { v: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { v: None }));
         {
             for c in b"\x1B[\"q" {
                 s.next(*c);
@@ -4855,10 +5160,10 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H {
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H {
             mode: None,
             protected: None,
-        });
+        }));
         {
             for c in b"\x1B[?J" {
                 s.next(*c);
@@ -4966,10 +5271,10 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H {
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H {
             mode: None,
             protected: None,
-        });
+        }));
         {
             for c in b"\x1B[?K" {
                 s.next(*c);
@@ -5049,7 +5354,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { style: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { style: None }));
         s.next_slice(b"\x1B[ q");
         assert!(s.handler.style.unwrap() == ansi::CursorStyle::Default);
 
@@ -5073,7 +5378,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { style: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { style: None }));
         s.next_slice(b"\x1B[q");
         assert!(s.handler.style.is_none());
 
@@ -5093,7 +5398,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { escape: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { escape: None }));
         s.next_slice(b"\x1B[>2s");
         assert!(s.handler.escape.is_none());
 
@@ -5124,13 +5429,13 @@ mod tests {
         }
 
         {
-            let mut s: Stream<H> = Stream::init(H { seen: false });
+            let mut s: Stream<H> = Stream::init(Options::with_handler(H { seen: false }));
             s.next_slice(b"\x1b]2;abc\x1b\\");
             assert!(s.handler.seen);
         }
 
         {
-            let mut s: Stream<H> = Stream::init(H { seen: false });
+            let mut s: Stream<H> = Stream::init(Options::with_handler(H { seen: false }));
             s.next_slice(b"\x1b]2;abc\xc0\x1b\\");
             assert!(!s.handler.seen);
         }
@@ -5148,7 +5453,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { called: false });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { called: false }));
         for c in b"\x1B[42@" {
             s.next(*c);
         }
@@ -5173,7 +5478,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { value: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { value: None }));
         for c in b"\x1B[0@" {
             s.next(*c);
         }
@@ -5195,7 +5500,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { called: false });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { called: false }));
         for c in b"\x1B[s" {
             s.next(*c);
         }
@@ -5214,7 +5519,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { called: false });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { called: false }));
         for c in b"\x1B[u" {
             s.next(*c);
         }
@@ -5231,7 +5536,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H {});
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H {}));
         s.next_slice(b"\x1B[1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1;1C");
     }
 
@@ -5241,7 +5546,7 @@ mod tests {
         struct H {}
         impl Handler for H {}
 
-        let mut s: Stream<H> = Stream::init(H {});
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H {}));
         s.next_slice(b"\x1B[1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111C");
     }
 
@@ -5257,7 +5562,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { style: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { style: None }));
 
         s.next_slice(b"\x1b[14t");
         assert_eq!(Some(csi::SizeReportStyle::Csi14T), s.handler.style);
@@ -5282,7 +5587,7 @@ mod tests {
         }
         impl Handler for H {}
 
-        let mut s: Stream<H> = Stream::init(H { style: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { style: None }));
 
         s.next_slice(b"\x1b[19t");
         assert_eq!(None, s.handler.style);
@@ -5300,7 +5605,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { index: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { index: None }));
 
         s.next_slice(b"\x1b[22;0t");
         assert_eq!(0u16, s.handler.index.unwrap());
@@ -5318,7 +5623,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { index: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { index: None }));
 
         s.next_slice(b"\x1b[22;2t");
         assert_eq!(0u16, s.handler.index.unwrap());
@@ -5336,7 +5641,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { index: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { index: None }));
 
         s.next_slice(b"\x1b[22;1t");
         assert_eq!(None, s.handler.index);
@@ -5354,7 +5659,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { index: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { index: None }));
 
         s.next_slice(b"\x1b[22;0;5t");
         assert_eq!(5u16, s.handler.index.unwrap());
@@ -5372,7 +5677,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { index: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { index: None }));
 
         s.next_slice(b"\x1b[23;0t");
         assert_eq!(0u16, s.handler.index.unwrap());
@@ -5390,7 +5695,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { index: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { index: None }));
 
         s.next_slice(b"\x1b[23;2t");
         assert_eq!(0u16, s.handler.index.unwrap());
@@ -5408,7 +5713,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { index: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { index: None }));
 
         s.next_slice(b"\x1b[23;1t");
         assert_eq!(None, s.handler.index);
@@ -5426,7 +5731,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { index: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { index: None }));
 
         s.next_slice(b"\x1b[23;0;5t");
         assert_eq!(5u16, s.handler.index.unwrap());
@@ -5467,7 +5772,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { action: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { action: None }));
 
         s.next_slice(b"\x1b[2W");
         assert_eq!(
@@ -5508,7 +5813,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { action: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { action: None }));
 
         s.next_slice(b"\x1b[W");
         assert_eq!(Observed::TabSet, *s.handler.action.as_ref().unwrap());
@@ -5555,7 +5860,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { action: None });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { action: None }));
 
         s.next_slice(b"\x1b[?2W");
         assert!(s.handler.action.is_none());
@@ -5584,7 +5889,7 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { called: false });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { called: false }));
 
         // Kakoune-style SGR with underline color as 17th parameter
         // This tests the fix where param 17 was being dropped
@@ -5610,9 +5915,898 @@ mod tests {
             }
         }
 
-        let mut s: Stream<H> = Stream::init(H { called: false });
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H { called: false }));
         // This is the exact input from the fuzz crash (minus the mode byte):
         // CSI with a huge numeric param that saturates to 65535, followed by 'g'.
         s.next_slice(b"\x1b[388888888888888888888888888888888888g\x1b[0m");
+    }
+
+    // ---------------------------------------------------------------------
+    // Phase-4 A-3 (68beeeb3f + a69a591af): continuation tracking + ground
+    // detection.
+    // ---------------------------------------------------------------------
+
+    use crate::stream_continuation::FixedIoWriter;
+    #[cfg(debug_assertions)]
+    use crate::stream_continuation::{tracker_tw_end, tracker_tw_error_always, TrackerFp};
+
+    /// `testing.allocator` for the `Options.allocator` gate: the tests only
+    /// need the allocator's *presence* (the Rust `Tracker` allocates on the
+    /// global allocator; see its PORT NOTE), backed by the process-global zig
+    /// allocator exactly as `Terminal::vt_stream` does.
+    static CONTINUATION_TEST_ALLOC: rustty_lib::allocator::GlobalZigAllocator =
+        rustty_lib::allocator::GlobalZigAllocator;
+
+    fn testing_allocator() -> rustty_lib::allocator::ZigAllocatorRef<'static> {
+        rustty_lib::allocator::ZigAllocatorRef::new(&CONTINUATION_TEST_ALLOC)
+    }
+
+    // const ContinuationTestHandler = struct { ... };
+    //
+    // PORT NOTE: the reference handler's `vt` switch ends in
+    // `else => self.committed += 1`. Rust cannot express a catch-all over the
+    // `Handler` trait's per-action methods, so the `else` arm is expanded into
+    // explicit overrides of every other action the continuation test corpora
+    // can produce (`bell`, `set_attribute`, `window_title`); the assertions
+    // (absolute counts and source/restored equalities) validate the coverage.
+    struct ContinuationTestHandler {
+        committed: usize,
+        apc_active: bool,
+        apc_buf: [u8; 256],
+        apc_len: usize,
+        dcs_active: bool,
+    }
+
+    impl Default for ContinuationTestHandler {
+        fn default() -> ContinuationTestHandler {
+            ContinuationTestHandler {
+                committed: 0,
+                apc_active: false,
+                apc_buf: [0; 256],
+                apc_len: 0,
+                dcs_active: false,
+            }
+        }
+    }
+
+    impl Handler for ContinuationTestHandler {
+        // pub fn deinit(_: *@This()) void {}
+        fn deinit(&mut self) {}
+
+        // .apc_start => self.apc_active = true,
+        fn apc_start(&mut self) {
+            self.apc_active = true;
+        }
+        // .apc_put => { self.apc_buf[self.apc_len] = value; self.apc_len += 1; },
+        fn apc_put(&mut self, code: u8) {
+            self.apc_buf[self.apc_len] = code;
+            self.apc_len += 1;
+        }
+        // .apc_put_slice => { @memcpy(...); self.apc_len += value.bytes.len; },
+        fn apc_put_slice(&mut self, bytes: &[u8]) {
+            self.apc_buf[self.apc_len..self.apc_len + bytes.len()].copy_from_slice(bytes);
+            self.apc_len += bytes.len();
+        }
+        // .dcs_hook => self.dcs_active = true,
+        fn dcs_hook(&mut self, _dcs: parser::DCS) {
+            self.dcs_active = true;
+        }
+        // .dcs_put => {},
+        fn dcs_put(&mut self, _code: u8) {}
+        // .apc_end => { ...; self.committed += 1; },
+        fn apc_end(&mut self, _v: ApcEnd) {
+            self.apc_active = false;
+            self.apc_len = 0;
+            self.committed += 1;
+        }
+        // .dcs_unhook => { self.dcs_active = false; self.committed += 1; },
+        fn dcs_unhook(&mut self) {
+            self.dcs_active = false;
+            self.committed += 1;
+        }
+        // .print => self.committed += 1,
+        fn print(&mut self, _cp: u32) {
+            self.committed += 1;
+        }
+        // .print_slice => self.committed += value.cps.len,
+        fn print_slice(&mut self, cps: &[u32]) {
+            self.committed += cps.len();
+        }
+        // .print_repeat => self.committed += value,
+        fn print_repeat(&mut self, count: usize) {
+            self.committed += count;
+        }
+        // else => self.committed += 1, (expanded; see the PORT NOTE above)
+        fn bell(&mut self) {
+            self.committed += 1;
+        }
+        fn set_attribute(&mut self, _attr: sgr::Attribute) {
+            self.committed += 1;
+        }
+        fn window_title(&mut self, _v: WindowTitle) {
+            self.committed += 1;
+        }
+    }
+
+    // const ContinuationNullHandler = struct { ... };
+    #[derive(Default)]
+    struct ContinuationNullHandler;
+    impl Handler for ContinuationNullHandler {}
+
+    // test "stream: nextSliceUntilGround stops at the earliest boundary"
+    #[test]
+    fn stream_next_slice_until_ground_stops_at_the_earliest_boundary() {
+        let mut stream: Stream<ContinuationTestHandler> =
+            Stream::init(Options::with_handler(ContinuationTestHandler::default()));
+        // defer stream.deinit();
+
+        stream.next_slice(b"\x1b[31");
+        assert!(!stream.ground());
+        stream.handler.committed = 0;
+
+        let input = b"mABC\x1b[";
+        let consumed = stream.next_slice_until_ground(input).unwrap();
+        assert_eq!(1, consumed);
+        assert!(stream.ground());
+        assert_eq!(1, stream.handler.committed);
+
+        // The suffix was not inspected by the handler and can be processed after
+        // the caller performs work at the boundary.
+        stream.next_slice(&input[consumed..]);
+        assert!(!stream.ground());
+        assert_eq!(parser::State::CsiEntry, stream.parser.state);
+        assert_eq!(4, stream.handler.committed);
+
+        stream.deinit();
+    }
+
+    // test "stream: nextSliceUntilGround consumes all input without a boundary"
+    #[test]
+    fn stream_next_slice_until_ground_consumes_all_input_without_a_boundary() {
+        let mut stream: Stream<ContinuationNullHandler> =
+            Stream::init(Options::with_handler(ContinuationNullHandler));
+        // defer stream.deinit();
+
+        assert_eq!(Some(0), stream.next_slice_until_ground(b"unprocessed"));
+        assert!(stream.ground());
+
+        stream.next_slice(b"\x1b[");
+        assert_eq!(None, stream.next_slice_until_ground(b"123"));
+        assert!(!stream.ground());
+
+        // A boundary on the final byte is distinguishable from exhausting the
+        // input while still pending.
+        assert_eq!(Some(1), stream.next_slice_until_ground(b"m"));
+        assert!(stream.ground());
+
+        stream.deinit();
+    }
+
+    // test "stream: nextSliceUntilGround handles UTF-8 boundaries"
+    #[test]
+    fn stream_next_slice_until_ground_handles_utf8_boundaries() {
+        // A completed codepoint is committed synchronously, and the printable
+        // suffix remains untouched.
+        let mut valid: Stream<ContinuationTestHandler> =
+            Stream::init(Options::with_handler(ContinuationTestHandler::default()));
+        // defer valid.deinit();
+        valid.next_slice(&[0xF0]);
+        let valid_input = [0x9Fu8, 0x98, 0x84, b'X'];
+        assert_eq!(Some(3), valid.next_slice_until_ground(&valid_input));
+        assert!(valid.ground());
+        assert_eq!(1, valid.handler.committed);
+
+        // A malformed continuation emits the replacement codepoint and retries
+        // the same byte. Ground is observed after that complete byte operation.
+        let mut malformed: Stream<ContinuationTestHandler> =
+            Stream::init(Options::with_handler(ContinuationTestHandler::default()));
+        // defer malformed.deinit();
+        malformed.next_slice(&[0xE0, 0xA0]);
+        assert_eq!(Some(1), malformed.next_slice_until_ground(b"A!"));
+        assert!(malformed.ground());
+        assert_eq!(2, malformed.handler.committed);
+
+        // If the retried byte is ESC, the stream has begun VT state at the end of
+        // that byte and must continue to the following ground boundary.
+        let mut retry_escape: Stream<ContinuationTestHandler> =
+            Stream::init(Options::with_handler(ContinuationTestHandler::default()));
+        // defer retry_escape.deinit();
+        retry_escape.next_slice(&[0xE0, 0xA0]);
+        assert_eq!(Some(3), retry_escape.next_slice_until_ground(b"\x1b[mX"));
+        assert!(retry_escape.ground());
+
+        retry_escape.deinit();
+        malformed.deinit();
+        valid.deinit();
+    }
+
+    // test "stream: nextSliceUntilGround handles aborts and bulk strings"
+    #[test]
+    fn stream_next_slice_until_ground_handles_aborts_and_bulk_strings() {
+        let mut aborted: Stream<ContinuationTestHandler> =
+            Stream::init(Options::with_handler(ContinuationTestHandler::default()));
+        // defer aborted.deinit();
+        aborted.next_slice(b"\x1b[123");
+        assert_eq!(Some(1), aborted.next_slice_until_ground(&[0x18, b'X']));
+        assert!(aborted.ground());
+
+        let mut apc: Stream<ContinuationTestHandler> =
+            Stream::init(Options::with_handler(ContinuationTestHandler::default()));
+        // defer apc.deinit();
+        apc.next_slice(b"\x1b_Gseed");
+        let mut input = [0u8; 131];
+        input[0..128].fill(b'a');
+        input[128..130].copy_from_slice(b"\x1b\\");
+        input[130] = b'X';
+        assert_eq!(Some(130), apc.next_slice_until_ground(&input));
+        assert!(apc.ground());
+
+        apc.deinit();
+        aborted.deinit();
+    }
+
+    // test "stream: nextSliceUntilGround tracks only the consumed prefix"
+    #[test]
+    fn stream_next_slice_until_ground_tracks_only_the_consumed_prefix() {
+        let mut stream: Stream<ContinuationNullHandler> = Stream::init(Options {
+            allocator: Some(testing_allocator()),
+            handler: ContinuationNullHandler,
+            continuation_max_bytes: Some(64),
+        });
+        // defer stream.deinit();
+
+        stream.next_slice(b"\x1b[31");
+        assert_eq!(Some(1), stream.next_slice_until_ground(b"mX\x1b["));
+
+        let mut buf = [0u8; 64];
+        let mut writer = FixedIoWriter::new(&mut buf);
+        stream.write_continuation(&mut writer).unwrap();
+        assert_eq!(0, writer.buffered().len());
+
+        stream.next_slice(b"\x1b[");
+        assert_eq!(None, stream.next_slice_until_ground(b"123"));
+        let mut pending_buf = [0u8; 64];
+        let mut pending_writer = FixedIoWriter::new(&mut pending_buf);
+        stream.write_continuation(&mut pending_writer).unwrap();
+        assert_eq!(b"\x1b[123".as_slice(), pending_writer.buffered());
+
+        stream.deinit();
+    }
+
+    // test "stream: continuation lifecycle"
+    #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "the FailingAllocator arm needs the TRACKER_TW tripwire, which \
+                  (like Zig's builtin.is_test gate) is debug-only"
+    )]
+    fn stream_continuation_lifecycle() {
+        let mut disabled: Stream<ContinuationTestHandler> =
+            Stream::init(Options::with_handler(ContinuationTestHandler::default()));
+        // defer disabled.deinit();
+        let mut disabled_buf = [0u8; 1];
+        let mut disabled_writer = FixedIoWriter::new(&mut disabled_buf);
+        assert!(matches!(
+            disabled.write_continuation(&mut disabled_writer),
+            Err(WriteContinuationError::ContinuationDisabled)
+        ));
+
+        let mut zero_capacity: Stream<ContinuationTestHandler> = Stream::init(Options {
+            handler: ContinuationTestHandler::default(),
+            allocator: None,
+            continuation_max_bytes: Some(0),
+        });
+        // defer zero_capacity.deinit();
+        let mut zero_capacity_buf = [0u8; 1];
+        let mut zero_capacity_writer = FixedIoWriter::new(&mut zero_capacity_buf);
+        assert!(matches!(
+            zero_capacity.write_continuation(&mut zero_capacity_writer),
+            Err(WriteContinuationError::ContinuationDisabled)
+        ));
+        let mut no_allocator: Stream<ContinuationTestHandler> = Stream::init(Options {
+            handler: ContinuationTestHandler::default(),
+            allocator: None,
+            continuation_max_bytes: Some(64),
+        });
+        // defer no_allocator.deinit();
+        let mut no_allocator_buf = [0u8; 1];
+        let mut no_allocator_writer = FixedIoWriter::new(&mut no_allocator_buf);
+        assert!(matches!(
+            no_allocator.write_continuation(&mut no_allocator_writer),
+            Err(WriteContinuationError::ContinuationDisabled)
+        ));
+
+        let mut tracked: Stream<ContinuationTestHandler> = Stream::init(Options {
+            allocator: Some(testing_allocator()),
+            handler: ContinuationTestHandler::default(),
+            continuation_max_bytes: Some(64),
+        });
+        // defer tracked.deinit();
+
+        tracked.next_slice(b"complete input");
+        let mut empty_buf = [0u8; 1];
+        let mut empty_writer = FixedIoWriter::new(&mut empty_buf);
+        tracked.write_continuation(&mut empty_writer).unwrap();
+        assert_eq!(0, empty_writer.end);
+
+        tracked.next_slice(b"\x1b[");
+        let mut short_buf = [0u8; 1];
+        let mut short_writer = FixedIoWriter::new(&mut short_buf);
+        assert!(matches!(
+            tracked.write_continuation(&mut short_writer),
+            Err(WriteContinuationError::WriteFailed(_))
+        ));
+
+        // var failing = testing.FailingAllocator.init(testing.allocator, .{
+        //     .fail_index = 0,
+        // });
+        // PORT NOTE: FailingAllocator → the TRACKER_TW tripwire seam.
+        #[cfg(debug_assertions)]
+        {
+            tracker_tw_error_always(TrackerFp::Alloc);
+            let mut failing_stream: Stream<ContinuationNullHandler> = Stream::init(Options {
+                allocator: Some(testing_allocator()),
+                handler: ContinuationNullHandler,
+                continuation_max_bytes: Some(64),
+            });
+            // defer failing_stream.deinit();
+            failing_stream.next_slice(b"\x1b[");
+            let mut unavailable_buf = [0u8; 1];
+            let mut unavailable_writer = FixedIoWriter::new(&mut unavailable_buf);
+            assert!(matches!(
+                failing_stream.write_continuation(&mut unavailable_writer),
+                Err(WriteContinuationError::ContinuationUnavailable)
+            ));
+            tracker_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+            failing_stream.deinit();
+        }
+
+        tracked.deinit();
+        no_allocator.deinit();
+        zero_capacity.deinit();
+        disabled.deinit();
+    }
+
+    // test "stream: continuation suffixes are replay safe"
+    #[test]
+    fn stream_continuation_suffixes_are_replay_safe() {
+        struct Case {
+            input: &'static [u8],
+            expected: &'static [u8],
+        }
+        let cases = [
+            Case {
+                input: b"text\x1b",
+                expected: b"\x1b",
+            },
+            Case {
+                input: b"text\x1b[12;",
+                expected: b"\x1b[12;",
+            },
+            Case {
+                input: b"text\x1b[1\x07;2",
+                expected: b"\x1b[1;2",
+            },
+            Case {
+                input: b"text\x1b]2;hello",
+                expected: b"\x1b]2;hello",
+            },
+            Case {
+                input: b"text\x1b_Gabc",
+                expected: b"\x1b_Gabc",
+            },
+            Case {
+                input: b"text\x1bP+qabc",
+                expected: b"\x1bP+qabc",
+            },
+            Case {
+                input: b"text\xE0\xA0\xF0",
+                expected: b"\xF0",
+            },
+            Case {
+                input: b"text\x1b[12\x1b",
+                expected: b"\x1b",
+            },
+            Case {
+                input: b"text\x1b[12\x9D2;title",
+                expected: b"\x1b[12\x9D2;title",
+            },
+        ];
+
+        for case in &cases {
+            let mut stream: Stream<ContinuationTestHandler> = Stream::init(Options {
+                allocator: Some(testing_allocator()),
+                handler: ContinuationTestHandler::default(),
+                continuation_max_bytes: Some(1024),
+            });
+            // defer stream.deinit();
+            stream.next_slice(case.input);
+
+            let mut buf = [0u8; 1024];
+            let mut writer = FixedIoWriter::new(&mut buf);
+            stream.write_continuation(&mut writer).unwrap();
+            assert_eq!(case.expected, writer.buffered());
+
+            stream.deinit();
+        }
+    }
+
+    // test "stream: continuation reconstructs every unfinished VT state"
+    #[test]
+    fn stream_continuation_reconstructs_every_unfinished_vt_state() {
+        struct Case {
+            input: &'static [u8],
+            state: parser::State,
+        }
+        let cases = [
+            Case {
+                input: b"\x1b",
+                state: parser::State::Escape,
+            },
+            Case {
+                input: b"\x1b(",
+                state: parser::State::EscapeIntermediate,
+            },
+            Case {
+                input: b"\x1b[",
+                state: parser::State::CsiEntry,
+            },
+            Case {
+                input: b"\x1b[1",
+                state: parser::State::CsiParam,
+            },
+            Case {
+                input: b"\x1b[1$",
+                state: parser::State::CsiIntermediate,
+            },
+            Case {
+                input: b"\x1b[:",
+                state: parser::State::CsiIgnore,
+            },
+            Case {
+                input: b"\x1bP",
+                state: parser::State::DcsEntry,
+            },
+            Case {
+                input: b"\x1bP1",
+                state: parser::State::DcsParam,
+            },
+            Case {
+                input: b"\x1bP1$",
+                state: parser::State::DcsIntermediate,
+            },
+            Case {
+                input: b"\x1bP1q",
+                state: parser::State::DcsPassthrough,
+            },
+            Case {
+                input: b"\x1bP:",
+                state: parser::State::DcsIgnore,
+            },
+            Case {
+                input: b"\x1b]2;title",
+                state: parser::State::OscString,
+            },
+            Case {
+                input: b"\x1b_Gpayload",
+                state: parser::State::SosPmApcString,
+            },
+        ];
+
+        for case in &cases {
+            let mut source: Stream<ContinuationTestHandler> = Stream::init(Options {
+                allocator: Some(testing_allocator()),
+                handler: ContinuationTestHandler::default(),
+                continuation_max_bytes: Some(1024),
+            });
+            // defer source.deinit();
+            source.next_slice(case.input);
+            assert_eq!(case.state, source.parser.state);
+
+            let mut buf = [0u8; 1024];
+            let mut writer = FixedIoWriter::new(&mut buf);
+            source.write_continuation(&mut writer).unwrap();
+
+            let mut restored: Stream<ContinuationTestHandler> = Stream::init(Options {
+                allocator: Some(testing_allocator()),
+                handler: ContinuationTestHandler::default(),
+                continuation_max_bytes: Some(1024),
+            });
+            // defer restored.deinit();
+            restored.next_slice(writer.buffered());
+            assert_eq!(0, restored.handler.committed);
+            assert_eq!(source.parser.state, restored.parser.state);
+            assert_eq!(source.utf8decoder.state, restored.utf8decoder.state);
+
+            restored.deinit();
+            source.deinit();
+        }
+
+        // Parser ground is still unfinished while the UTF-8 decoder is waiting
+        // for the remaining bytes of a codepoint.
+        let mut utf8: Stream<ContinuationTestHandler> = Stream::init(Options {
+            allocator: Some(testing_allocator()),
+            handler: ContinuationTestHandler::default(),
+            continuation_max_bytes: Some(4),
+        });
+        // defer utf8.deinit();
+        utf8.next(0xF0);
+        assert_eq!(parser::State::Ground, utf8.parser.state);
+        assert!(utf8.utf8decoder.state != 0);
+        let mut utf8_buf = [0u8; 4];
+        let mut utf8_writer = FixedIoWriter::new(&mut utf8_buf);
+        utf8.write_continuation(&mut utf8_writer).unwrap();
+        assert_eq!(&[0xF0u8], utf8_writer.buffered());
+
+        utf8.deinit();
+    }
+
+    // test "stream: continuation is chunking-independent and idempotent"
+    #[test]
+    fn stream_continuation_is_chunking_independent_and_idempotent() {
+        let input = b"committed\x1b[1\x07;2";
+
+        let mut bulk: Stream<ContinuationTestHandler> = Stream::init(Options {
+            allocator: Some(testing_allocator()),
+            handler: ContinuationTestHandler::default(),
+            continuation_max_bytes: Some(1024),
+        });
+        // defer bulk.deinit();
+        bulk.next_slice(input);
+
+        let mut scalar: Stream<ContinuationTestHandler> = Stream::init(Options {
+            allocator: Some(testing_allocator()),
+            handler: ContinuationTestHandler::default(),
+            continuation_max_bytes: Some(1024),
+        });
+        // defer scalar.deinit();
+        for &c in input {
+            scalar.next(c);
+        }
+
+        let mut bulk_buf = [0u8; 1024];
+        let mut bulk_writer = FixedIoWriter::new(&mut bulk_buf);
+        bulk.write_continuation(&mut bulk_writer).unwrap();
+        let mut scalar_buf = [0u8; 1024];
+        let mut scalar_writer = FixedIoWriter::new(&mut scalar_buf);
+        scalar.write_continuation(&mut scalar_writer).unwrap();
+        assert_eq!(bulk_writer.buffered(), scalar_writer.buffered());
+
+        let mut restored: Stream<ContinuationTestHandler> = Stream::init(Options {
+            allocator: Some(testing_allocator()),
+            handler: ContinuationTestHandler::default(),
+            continuation_max_bytes: Some(1024),
+        });
+        // defer restored.deinit();
+        restored.next_slice(bulk_writer.buffered());
+        assert_eq!(0, restored.handler.committed);
+
+        let mut restored_buf = [0u8; 1024];
+        let mut restored_writer = FixedIoWriter::new(&mut restored_buf);
+        restored.write_continuation(&mut restored_writer).unwrap();
+        assert_eq!(bulk_writer.buffered(), restored_writer.buffered());
+
+        bulk.handler.committed = 0;
+        restored.handler.committed = 0;
+        bulk.next_slice(b"mZ");
+        restored.next(b'm');
+        restored.next(b'Z');
+        assert_eq!(bulk.handler.committed, restored.handler.committed);
+
+        restored.deinit();
+        scalar.deinit();
+        bulk.deinit();
+    }
+
+    // test "stream: continuation rebuilds APC handler input"
+    #[test]
+    fn stream_continuation_rebuilds_apc_handler_input() {
+        let mut source: Stream<ContinuationTestHandler> = Stream::init(Options {
+            allocator: Some(testing_allocator()),
+            handler: ContinuationTestHandler::default(),
+            continuation_max_bytes: Some(1024),
+        });
+        // defer source.deinit();
+        source.next_slice(b"committed\x1b_Gabc");
+
+        let mut continuation = [0u8; 1024];
+        let mut writer = FixedIoWriter::new(&mut continuation);
+        source.write_continuation(&mut writer).unwrap();
+
+        let mut restored: Stream<ContinuationTestHandler> = Stream::init(Options {
+            allocator: Some(testing_allocator()),
+            handler: ContinuationTestHandler::default(),
+            continuation_max_bytes: Some(1024),
+        });
+        // defer restored.deinit();
+        restored.next_slice(writer.buffered());
+        assert_eq!(0, restored.handler.committed);
+        assert!(restored.handler.apc_active);
+        assert_eq!(
+            &source.handler.apc_buf[0..source.handler.apc_len],
+            &restored.handler.apc_buf[0..restored.handler.apc_len],
+        );
+
+        source.handler.committed = 0;
+        restored.handler.committed = 0;
+        source.next_slice(b"\x1b\\");
+        restored.next_slice(b"\x1b\\");
+        assert_eq!(source.handler.committed, restored.handler.committed);
+        assert!(!source.handler.apc_active);
+        assert!(!restored.handler.apc_active);
+
+        restored.deinit();
+        source.deinit();
+    }
+
+    // test "stream: continuation cap and recovery"
+    #[test]
+    fn stream_continuation_cap_and_recovery() {
+        // The raw feed exceeds the cap, but only the unfinished three-byte
+        // CSI suffix is retained.
+        let mut seeded: Stream<ContinuationTestHandler> = Stream::init(Options {
+            allocator: Some(testing_allocator()),
+            handler: ContinuationTestHandler::default(),
+            continuation_max_bytes: Some(4),
+        });
+        // defer seeded.deinit();
+        seeded.next_slice(b"committed text\x1b[1");
+        let mut seeded_buf = [0u8; 4];
+        let mut seeded_writer = FixedIoWriter::new(&mut seeded_buf);
+        seeded.write_continuation(&mut seeded_writer).unwrap();
+        assert_eq!(b"\x1b[1".as_slice(), seeded_writer.buffered());
+
+        let mut exceeded: Stream<ContinuationTestHandler> = Stream::init(Options {
+            allocator: Some(testing_allocator()),
+            handler: ContinuationTestHandler::default(),
+            continuation_max_bytes: Some(4),
+        });
+        // defer exceeded.deinit();
+        exceeded.next_slice(b"\x1b[123");
+        let mut unavailable_buf = [0u8; 1];
+        let mut unavailable_writer = FixedIoWriter::new(&mut unavailable_buf);
+        assert!(matches!(
+            exceeded.write_continuation(&mut unavailable_writer),
+            Err(WriteContinuationError::ContinuationUnavailable)
+        ));
+
+        // Completing the CSI reaches ground and recovers without rebuilding the
+        // Stream. A later unfinished sequence is tracked normally.
+        exceeded.next_slice(b"mtext\x1b[");
+        let mut recovered_buf = [0u8; 4];
+        let mut recovered_writer = FixedIoWriter::new(&mut recovered_buf);
+        exceeded.write_continuation(&mut recovered_writer).unwrap();
+        assert_eq!(b"\x1b[".as_slice(), recovered_writer.buffered());
+
+        // A fresh ESC seed also recovers broken tracking even when the stream
+        // never reaches ground: the ESC abandons the previous unfinished
+        // state and everything after it is retained.
+        exceeded.next_slice(b"\x1b[123");
+        let mut reexceeded_buf = [0u8; 1];
+        let mut reexceeded_writer = FixedIoWriter::new(&mut reexceeded_buf);
+        assert!(matches!(
+            exceeded.write_continuation(&mut reexceeded_writer),
+            Err(WriteContinuationError::ContinuationUnavailable)
+        ));
+        exceeded.next_slice(b"\x1b]0;");
+        let mut seed_buf = [0u8; 4];
+        let mut seed_writer = FixedIoWriter::new(&mut seed_buf);
+        exceeded.write_continuation(&mut seed_writer).unwrap();
+        assert_eq!(b"\x1b]0;".as_slice(), seed_writer.buffered());
+
+        exceeded.deinit();
+        seeded.deinit();
+    }
+
+    // test "stream: continuation spans multiple bulk feeds"
+    #[test]
+    fn stream_continuation_spans_multiple_bulk_feeds() {
+        // An unfinished APC grows across feeds that contain no new seed.
+        let mut apc: Stream<ContinuationTestHandler> = Stream::init(Options {
+            allocator: Some(testing_allocator()),
+            handler: ContinuationTestHandler::default(),
+            continuation_max_bytes: Some(1024),
+        });
+        // defer apc.deinit();
+        apc.next_slice(b"text\x1b_Gab");
+        apc.next_slice(b"cd");
+        apc.next_slice(b"ef");
+        let mut apc_buf = [0u8; 16];
+        let mut apc_writer = FixedIoWriter::new(&mut apc_buf);
+        apc.write_continuation(&mut apc_writer).unwrap();
+        assert_eq!(b"\x1b_Gabcdef".as_slice(), apc_writer.buffered());
+
+        // An incomplete UTF-8 sequence grows across feeds of its
+        // continuation bytes.
+        let mut utf8: Stream<ContinuationTestHandler> = Stream::init(Options {
+            allocator: Some(testing_allocator()),
+            handler: ContinuationTestHandler::default(),
+            continuation_max_bytes: Some(1024),
+        });
+        // defer utf8.deinit();
+        utf8.next_slice(b"text\xF0");
+        utf8.next_slice(b"\x9F");
+        let mut utf8_buf = [0u8; 4];
+        let mut utf8_writer = FixedIoWriter::new(&mut utf8_buf);
+        utf8.write_continuation(&mut utf8_writer).unwrap();
+        assert_eq!(b"\xF0\x9F".as_slice(), utf8_writer.buffered());
+
+        // A later feed with its own seed drops everything retained earlier.
+        utf8.next_slice(b"\x98\x84 done \x1b[38;5");
+        let mut seed_buf = [0u8; 8];
+        let mut seed_writer = FixedIoWriter::new(&mut seed_buf);
+        utf8.write_continuation(&mut seed_writer).unwrap();
+        assert_eq!(b"\x1b[38;5".as_slice(), seed_writer.buffered());
+
+        utf8.deinit();
+        apc.deinit();
+    }
+
+    // test "stream: continuation exact cap and large unfinished string"
+    #[test]
+    fn stream_continuation_exact_cap_and_large_unfinished_string() {
+        let mut exact: Stream<ContinuationNullHandler> = Stream::init(Options {
+            allocator: Some(testing_allocator()),
+            handler: ContinuationNullHandler,
+            continuation_max_bytes: Some(5),
+        });
+        // defer exact.deinit();
+        exact.next_slice(b"\x1b[123");
+        let mut exact_buf = [0u8; 5];
+        let mut exact_writer = FixedIoWriter::new(&mut exact_buf);
+        exact.write_continuation(&mut exact_writer).unwrap();
+        assert_eq!(b"\x1b[123".as_slice(), exact_writer.buffered());
+
+        let payload_len = 12 * 1024;
+        let mut input = vec![0u8; payload_len];
+        input[0..3].copy_from_slice(b"\x1b_G");
+        input[3..].fill(b'A');
+
+        let mut large: Stream<ContinuationNullHandler> = Stream::init(Options {
+            allocator: Some(testing_allocator()),
+            handler: ContinuationNullHandler,
+            continuation_max_bytes: Some(payload_len),
+        });
+        // defer large.deinit();
+        large.next_slice(&input);
+        let mut large_buf = vec![0u8; payload_len];
+        let mut large_writer = FixedIoWriter::new(&mut large_buf);
+        large.write_continuation(&mut large_writer).unwrap();
+        assert_eq!(input.as_slice(), large_writer.buffered());
+
+        large.deinit();
+        exact.deinit();
+    }
+
+    // test "stream: continuation allocation failure recovers"
+    #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "needs the TRACKER_TW tripwire (the FailingAllocator stand-in), \
+                  which is debug-only"
+    )]
+    fn stream_continuation_allocation_failure_recovers() {
+        #[cfg(debug_assertions)]
+        {
+            let mut stream: Stream<ContinuationNullHandler> = Stream::init(Options {
+                allocator: Some(testing_allocator()),
+                handler: ContinuationNullHandler,
+                continuation_max_bytes: Some(16 * 1024),
+            });
+            // defer stream.deinit();
+
+            let mut input = vec![0u8; 12 * 1024];
+            input[0..2].copy_from_slice(b"\x1b[");
+            input[2..].fill(b'1');
+
+            // failing.fail_index = failing.alloc_index;
+            tracker_tw_error_always(TrackerFp::Alloc);
+            stream.next_slice(&input);
+            let mut unavailable_buf = [0u8; 1];
+            let mut unavailable_writer = FixedIoWriter::new(&mut unavailable_buf);
+            assert!(matches!(
+                stream.write_continuation(&mut unavailable_writer),
+                Err(WriteContinuationError::ContinuationUnavailable)
+            ));
+
+            // failing.fail_index = std.math.maxInt(usize);
+            tracker_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+            stream.next(b'm');
+            let mut recovered_buf = [0u8; 1];
+            let mut recovered_writer = FixedIoWriter::new(&mut recovered_buf);
+            stream.write_continuation(&mut recovered_writer).unwrap();
+            assert_eq!(0, recovered_writer.end);
+
+            stream.deinit();
+        }
+    }
+
+    // test "stream: continuation every-byte cuts preserve future behavior"
+    #[test]
+    fn stream_continuation_every_byte_cuts_preserve_future_behavior() {
+        let corpora: [&[u8]; 10] = [
+            b"plain \xF0\x9F\x98\x84 utf8",
+            b"bad \xE0\xA0\xF0\x9F\x98\x84 utf8",
+            b"\x1b[1\x07;2mstyled\x1b[0m",
+            b"\x1b]2;window title\x1b\\text",
+            b"\x1bP$qm\x1b\\text",
+            b"\x1b_Ga=q;payload\x1b\\text",
+            b"\x1b_25a1;s\x1b\\text",
+            b"\x1b]2;first\x1b\\\x1b_Gsecond",
+            b"\x1b[12\x9D2;title\x1b\\text",
+            b"\x1b[12\x18text\x1b[1\x1Atext",
+        ];
+
+        for corpus in &corpora {
+            for cut in 0..corpus.len() + 1 {
+                let mut source: Stream<ContinuationTestHandler> = Stream::init(Options {
+                    allocator: Some(testing_allocator()),
+                    handler: ContinuationTestHandler::default(),
+                    continuation_max_bytes: Some(64 * 1024),
+                });
+                // defer source.deinit();
+                source.next_slice(&corpus[0..cut]);
+
+                let mut continuation = vec![0u8; 64 * 1024];
+                let mut continuation_writer = FixedIoWriter::new(&mut continuation);
+                source.write_continuation(&mut continuation_writer).unwrap();
+
+                let mut restored: Stream<ContinuationTestHandler> = Stream::init(Options {
+                    allocator: Some(testing_allocator()),
+                    handler: ContinuationTestHandler::default(),
+                    continuation_max_bytes: Some(64 * 1024),
+                });
+                // defer restored.deinit();
+                restored.next_slice(continuation_writer.buffered());
+                assert_eq!(0, restored.handler.committed);
+                assert_eq!(source.handler.apc_active, restored.handler.apc_active);
+                assert_eq!(source.handler.dcs_active, restored.handler.dcs_active);
+                if source.handler.apc_active {
+                    assert_eq!(
+                        &source.handler.apc_buf[0..source.handler.apc_len],
+                        &restored.handler.apc_buf[0..restored.handler.apc_len],
+                    );
+                }
+
+                let mut reexport = vec![0u8; 64 * 1024];
+                let mut reexport_writer = FixedIoWriter::new(&mut reexport);
+                restored.write_continuation(&mut reexport_writer).unwrap();
+                assert_eq!(continuation_writer.buffered(), reexport_writer.buffered());
+
+                source.handler.committed = 0;
+                restored.handler.committed = 0;
+                source.next_slice(&corpus[cut..]);
+                let mut offset = cut;
+                // var partition = cut +% corpus.len +% 1;
+                let mut partition = cut.wrapping_add(corpus.len()).wrapping_add(1);
+                while offset < corpus.len() {
+                    // partition = partition *% 1664525 +% 1013904223;
+                    partition = partition.wrapping_mul(1664525).wrapping_add(1013904223);
+                    // const len = @min(1 + partition % 7, corpus.len - offset);
+                    let len = core::cmp::min(1 + partition % 7, corpus.len() - offset);
+                    restored.next_slice(&corpus[offset..offset + len]);
+                    offset += len;
+                }
+                assert_eq!(source.handler.committed, restored.handler.committed);
+                assert_eq!(source.handler.apc_active, restored.handler.apc_active);
+                assert_eq!(source.handler.dcs_active, restored.handler.dcs_active);
+
+                let mut source_final = [0u8; 64];
+                let mut source_final_writer = FixedIoWriter::new(&mut source_final);
+                source.write_continuation(&mut source_final_writer).unwrap();
+                let mut restored_final = [0u8; 64];
+                let mut restored_final_writer = FixedIoWriter::new(&mut restored_final);
+                restored
+                    .write_continuation(&mut restored_final_writer)
+                    .unwrap();
+                assert_eq!(
+                    source_final_writer.buffered(),
+                    restored_final_writer.buffered()
+                );
+
+                restored.deinit();
+                source.deinit();
+            }
+        }
     }
 }

@@ -118,13 +118,22 @@ impl Stream {
         // var handler: VTHandler = .init;
         let handler = VTHandler::init();
 
-        // return .{ .events = events, .parser_stream = .initAlloc(alloc, handler) };
+        // return .{
+        //     .events = events,
+        //     .parser_stream = .init(.{
+        //         .allocator = alloc,
+        //         .handler = handler,
+        //     }),
+        // };
         Stream {
             events,
-            parser_stream: VtStream::init_alloc(
-                rustty_lib::allocator::ZigAllocatorRef::new(&TERMIO_STREAM_ALLOC),
+            parser_stream: VtStream::init(rustty_vt::stream::Options {
+                allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
+                    &TERMIO_STREAM_ALLOC,
+                )),
                 handler,
-            ),
+                continuation_max_bytes: None,
+            }),
             selected_event_seq: None,
             need_scroll_to_selected: false,
             is_keyboard_selection: false,

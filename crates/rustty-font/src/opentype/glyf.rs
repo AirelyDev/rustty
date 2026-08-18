@@ -370,6 +370,12 @@ pub enum DecodeError {
 
     /// Coordinate delta accumulation overflowed.
     CoordinateOverflow,
+
+    /// Allocation failure while decoding.
+    // PORT NOTE (433b16bcb): the reference `Allocator.Error` member. In this
+    // port real OOM aborts, so the only producer is `decode_limited`'s
+    // per-allocation limit (the `LimitedAllocator` seam).
+    OutOfMemory,
 }
 
 // PORT NOTE: the reference's `DecodeError` is a superset of `SizeError` via the
@@ -603,6 +609,19 @@ impl<'a> Entry<'a> {
     // `errdefer alloc.free(...)` cleanup on the partial allocations is implicit:
     // a `Vec` dropped by the `?`/early return frees itself.
     pub fn decode(&self) -> Result<Outline, DecodeError> {
+        self.decode_limited(usize::MAX)
+    }
+
+    /// `decode` through a per-allocation byte limit.
+    ///
+    /// PORT NOTE (433b16bcb): the reference expresses the limit by threading a
+    /// `datastruct.LimitedAllocator` through `decode(alloc)` — an allocator
+    /// that rejects any single allocation larger than `limit` bytes. This
+    /// port's decode owns its `Vec`s (no allocator parameter), so the limit is
+    /// threaded explicitly and each allocation site checks its request size,
+    /// failing with `DecodeError::OutOfMemory` exactly where the reference's
+    /// limited allocator would return null.
+    pub fn decode_limited(&self, max_allocation_bytes: usize) -> Result<Outline, DecodeError> {
         // We only support simple glyphs.
         match self.entry_type() {
             Type::Simple => {}
@@ -622,7 +641,12 @@ impl<'a> Entry<'a> {
         }
 
         // We now know our full amount of contour ending points.
-        // PORT NOTE: `alloc.alloc(uint16, num_contours)` + `errdefer free`.
+        // PORT NOTE: `alloc.alloc(uint16, num_contours)` + `errdefer free`;
+        // the request goes through the (possible) per-allocation limit.
+        if num_contours.saturating_mul(core::mem::size_of::<sfnt::Uint16>()) > max_allocation_bytes
+        {
+            return Err(DecodeError::OutOfMemory);
+        }
         let mut end_points: Vec<sfnt::Uint16> = vec![0; num_contours];
 
         // If we have no contours, then the only possible remaining
@@ -673,6 +697,12 @@ impl<'a> Entry<'a> {
         // Allocate our points right away even though the next entries
         // are flags. We want to do this so that if the allocator is
         // a bump allocator, the flags free will actually free it.
+        // PORT NOTE (433b16bcb): the points slice is the dominant decoded
+        // allocation; its request size is what the reference's limited
+        // allocator bounds.
+        if point_count.saturating_mul(core::mem::size_of::<Point>()) > max_allocation_bytes {
+            return Err(DecodeError::OutOfMemory);
+        }
         let mut points: Vec<Point> = vec![
             Point {
                 x: 0,
@@ -694,6 +724,15 @@ impl<'a> Entry<'a> {
         // buffer; it is semantically a `[]SimpleFlags` of length `point_count`.
         // Rust has no stack-fallback allocator, so the temporary is a plain
         // `Vec<SimpleFlags>` (freed at end of scope, like the reference `defer`).
+        // PORT NOTE (433b16bcb): the per-allocation limit only sees this
+        // request when it spills past the 4096-byte stack half of the
+        // reference's `stackFallback`, so the check mirrors that threshold.
+        {
+            let flags_bytes = point_count.saturating_mul(core::mem::size_of::<SimpleFlags>());
+            if flags_bytes > 4096 && flags_bytes > max_allocation_bytes {
+                return Err(DecodeError::OutOfMemory);
+            }
+        }
         let mut flags: Vec<SimpleFlags> = vec![SimpleFlags(0); point_count];
         {
             let mut point_i: usize = 0;

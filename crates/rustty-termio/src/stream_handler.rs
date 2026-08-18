@@ -619,22 +619,24 @@ impl<M: AppMailbox> StreamHandler<M> {
 
     // pub fn apcEnd(self: *StreamHandler) !void {
     pub fn apcEnd(&mut self) -> Result<(), crate::Error> {
-        // var cmd = self.apc.end() orelse return;
-        let mut cmd = match self.apc.end(self.alloc) {
-            Some(cmd) => cmd,
+        // var result = self.apc.end() orelse return;
+        let mut result = match self.apc.end(self.alloc) {
+            Some(result) => result,
             None => return Ok(()),
         };
-        // defer cmd.deinit(self.alloc);
-        let result = self.apcCommand(&mut cmd);
-        cmd.deinit(self.alloc);
-        result
+        // defer result.deinit(self.alloc);
+        let r = self.apcCommand(&mut result);
+        result.deinit(self.alloc);
+        r
     }
 
-    // (PORT NOTE, Rust-only glue: the `switch (cmd)` body of apcEnd, factored
-    // so the `defer cmd.deinit(self.alloc)` runs on every path.)
+    // (PORT NOTE, Rust-only glue: the `switch (result)` body of apcEnd, factored
+    // so the `defer result.deinit(self.alloc)` runs on every path.)
     fn apcCommand(&mut self, cmd: &mut rustty_vt::apc::Command) -> Result<(), crate::Error> {
-        // log.warn("APC command: {}", .{cmd});
+        // log.warn("APC command: {}", .{result});
         match cmd {
+            // .unknown => return,
+            rustty_vt::apc::Command::Unknown(_) => return Ok(()),
             // .kitty => |*kitty_cmd| {
             rustty_vt::apc::Command::Kitty(kitty_cmd) => {
                 // if (self.terminal.kittyGraphics(self.alloc, kitty_cmd)) |resp| {
@@ -3076,7 +3078,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     }
 
     // .apc_end => try self.apcEnd(),
-    fn apc_end(&mut self) {
+    fn apc_end(&mut self, _v: rustty_vt::stream::ApcEnd) {
         let r = self.apcEnd();
         self.vt(r);
     }

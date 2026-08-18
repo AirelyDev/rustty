@@ -29,6 +29,11 @@ pub struct Handler {
     // state: State = .inactive,
     state: State,
 
+    /// Maximum content bytes retained for unsupported APC identifiers. Zero
+    /// drops and ignores unknown APC values.
+    // unknown_max_bytes: usize = 0,
+    pub unknown_max_bytes: usize,
+
     /// Maximum bytes each APC protocol can buffer. This is to prevent
     /// malicious input from causing us to allocate too much memory.
     /// If you want to be lazy and set a single value for all protocols,
@@ -47,8 +52,7 @@ pub struct Handler {
     pub max_bytes: [usize; Protocol::COUNT],
 
     /// Protocols recognized by this APC handler. When a protocol is absent,
-    /// matching APC sequences are ignored so callers see the same behavior as
-    /// an unsupported protocol: no command execution and no response.
+    /// matching APC sequences are ignored and are not reported as unknown.
     // enabled: std.EnumSet(Protocol) = .initFull(),
     // PORT NOTE: `std.EnumSet(Protocol)` ports to a per-key `[bool; COUNT]`
     // presence array indexed by `Protocol as usize`; `.initFull()` is all-true.
@@ -61,6 +65,7 @@ impl Default for Handler {
     fn default() -> Handler {
         Handler {
             state: State::Inactive,
+            unknown_max_bytes: 0,
             max_bytes: [
                 Protocol::default_max_bytes(Protocol::Kitty),
                 Protocol::default_max_bytes(Protocol::Glyph),
@@ -111,79 +116,113 @@ impl Handler {
             // .ignore => return,
             State::Ignore => (),
 
+            // Unsupported APC content is retained only when enabled.
+            // .unknown => |*unknown| unknown.append(&.{byte}),
+            State::Unknown(unknown) => unknown.append(&[byte]),
+
             // We identify the APC command by the first byte.
             // .identify => |*id| id: {
             State::Identify(id) => {
                 // PORT NOTE: the reference `break :id;` labeled-block early exits
                 // are reproduced by short-circuiting through nested branches; the
-                // tail (buffer-append) only runs when none of the prior branches
-                // matched, mirroring the `break :id` control flow exactly.
+                // tail (buffer-append + prefix check) only runs when none of the
+                // prior branches matched, mirroring the `break :id` control flow
+                // exactly. The `beginUnknown` calls take a copied prefix (the
+                // identify buffer is 4 bytes, `Copy`) because `id` borrows
+                // `self.state`, the very union `beginUnknown` overwrites — the
+                // same in-place hazard the reference's "Build the replacement
+                // before overwriting identify" comment documents.
 
                 // Kitty graphics is detected immediately on the `G` byte,
                 // since commands begin immediately after with no termination
                 // character after the 'G'.
-                // if (comptime build_options.kitty_graphics) {
-                //     if (id.len == 0 and byte == 'G' and
-                //         self.enabled.contains(.kitty))
-                //     {
-                //         self.state = .{ .kitty = .init(alloc,
-                //             self.max_bytes.get(.kitty) orelse
-                //                 Protocol.defaultMaxBytes(.kitty)) };
-                //         break :id;
+                // if (id.len == 0 and byte == 'G') {
+                //     if (comptime build_options.kitty_graphics) {
+                //         if (self.enabled.contains(.kitty)) { ... }
+                //         else { self.state = .ignore; }
+                //     } else {
+                //         self.state = .ignore;
                 //     }
+                //     break :id;
                 // }
-                if KITTY_GRAPHICS
-                    && id.len == 0
-                    && byte == b'G'
-                    && self.enabled[Protocol::Kitty as usize]
-                {
-                    self.state = State::Kitty(kitty_gfx::CommandParser::init(
-                        self.max_bytes[Protocol::Kitty as usize],
-                    ));
+                if id.len == 0 && byte == b'G' {
+                    if KITTY_GRAPHICS {
+                        if self.enabled[Protocol::Kitty as usize] {
+                            self.state = State::Kitty(kitty_gfx::CommandParser::init(
+                                self.max_bytes[Protocol::Kitty as usize],
+                            ));
+                        } else {
+                            self.state = State::Ignore;
+                        }
+                    } else {
+                        self.state = State::Ignore;
+                    }
                     return;
                 }
 
                 // If we hit `;` then identify...
                 // if (byte == ';') {
                 //     const str = id.buf[0..id.len];
-                //     if (std.mem.eql(u8, str, "25a1") and
-                //         self.enabled.contains(.glyph))
-                //     {
-                //         self.state = .{ .glyph = .init(alloc,
-                //             self.max_bytes.get(.glyph) orelse
-                //                 Protocol.defaultMaxBytes(.glyph)) };
+                //     if (std.mem.eql(u8, str, glyph.identifier)) {
+                //         if (self.enabled.contains(.glyph)) { ... }
+                //         else { self.state = .ignore; }
                 //     } else {
-                //         self.state = .ignore;
+                //         self.beginUnknown(alloc, str, &.{byte});
                 //     }
                 //     break :id;
                 // }
                 if byte == b';' {
-                    let str = &id.buf[0..id.len as usize];
-                    if str == b"25a1" && self.enabled[Protocol::Glyph as usize] {
-                        self.state = State::Glyph(glyph::CommandParser::init(
-                            self.max_bytes[Protocol::Glyph as usize],
-                        ));
+                    let prefix_buf = id.buf;
+                    let prefix_len = id.len as usize;
+                    let str = &prefix_buf[0..prefix_len];
+                    if str == glyph::IDENTIFIER {
+                        if self.enabled[Protocol::Glyph as usize] {
+                            self.state = State::Glyph(glyph::CommandParser::init(
+                                self.max_bytes[Protocol::Glyph as usize],
+                            ));
+                        } else {
+                            self.state = State::Ignore;
+                        }
                     } else {
-                        self.state = State::Ignore;
+                        self.begin_unknown(alloc, str, &[byte]);
                     }
 
                     return;
                 }
 
-                // If we're out of space to buffer then we're done.
+                // If we're out of identification space, the identifier is
+                // unsupported. Preserve the buffered prefix before replacing
+                // the identify union state.
                 // if (id.len >= id.buf.len) {
-                //     self.state = .ignore;
+                //     self.beginUnknown(alloc, id.buf[0..id.len], &.{byte});
                 //     break :id;
                 // }
                 if id.len as usize >= id.buf.len() {
-                    self.state = State::Ignore;
+                    let prefix_buf = id.buf;
+                    let prefix_len = id.len as usize;
+                    self.begin_unknown(alloc, &prefix_buf[0..prefix_len], &[byte]);
                     return;
                 }
 
+                // const expected_idx: usize = id.len;
                 // id.buf[id.len] = byte;
                 // id.len += 1;
+                let expected_idx: usize = id.len as usize;
                 id.buf[id.len as usize] = byte;
                 id.len += 1;
+
+                // Once the buffered input is no longer a prefix of a known
+                // protocol, it is an unsupported identifier.
+                // if (self.unknown_max_bytes > 0 and
+                //     byte != glyph.identifier[expected_idx])
+                // {
+                //     self.beginUnknown(alloc, id.buf[0..id.len], &.{});
+                // }
+                if self.unknown_max_bytes > 0 && byte != glyph::IDENTIFIER[expected_idx] {
+                    let prefix_buf = id.buf;
+                    let prefix_len = id.len as usize;
+                    self.begin_unknown(alloc, &prefix_buf[0..prefix_len], &[]);
+                }
             }
 
             // .kitty => |*p| if (comptime build_options.kitty_graphics) {
@@ -223,6 +262,34 @@ impl Handler {
         }
     }
 
+    /// Transition from protocol identification to bounded unknown capture.
+    // fn beginUnknown(
+    //     self: *Handler,
+    //     alloc: Allocator,
+    //     prefix: []const u8,
+    //     suffix: []const u8,
+    // ) void {
+    fn begin_unknown(&mut self, alloc: Allocator, prefix: &[u8], suffix: &[u8]) {
+        let _ = alloc;
+        // const max_bytes = self.unknown_max_bytes;
+        let max_bytes = self.unknown_max_bytes;
+        // if (max_bytes == 0) { self.state = .ignore; return; }
+        if max_bytes == 0 {
+            self.state = State::Ignore;
+            return;
+        }
+
+        // Build the replacement before overwriting identify because prefix
+        // points into that union field.
+        // PORT NOTE: the Rust callers copy the 4-byte identify buffer out
+        // before calling (see the `feed` PORT NOTE), so `prefix` here never
+        // aliases `self.state`.
+        let mut unknown = UnknownBuilder::init(max_bytes);
+        unknown.append(prefix);
+        unknown.append(suffix);
+        self.state = State::Unknown(unknown);
+    }
+
     /// Feed a slice of bytes to the handler. This is equivalent to
     /// calling feed for each byte in order, but protocol payload bytes
     /// are passed through in bulk so large payloads (e.g. Kitty graphics
@@ -251,6 +318,16 @@ impl Handler {
                 // We're ignoring this APC command; drop the whole slice.
                 // .ignore => return,
                 State::Ignore => return,
+
+                // We're capturing an unknown APC command, so store it.
+                // .unknown => |*unknown| {
+                //     unknown.append(rem);
+                //     return;
+                // },
+                State::Unknown(unknown) => {
+                    unknown.append(rem);
+                    return;
+                }
 
                 // Identification consumes at most a few bytes; step
                 // through them one at a time until the state changes.
@@ -303,6 +380,9 @@ impl Handler {
     // way, so the explicit `deinit()` is the no-op call-site fidelity hook).
     // `alloc` is threaded for fidelity (kitty `complete` consumes it via the
     // arena `child_allocator` in the reference; the Rust parser ignores it).
+    //
+    /// Complete the current APC. The caller owns a returned result and must
+    /// call `Command.deinit` with the allocator used while feeding the APC.
     pub fn end(&mut self, alloc: Allocator) -> Option<Command> {
         let _ = alloc;
         let state = core::mem::replace(&mut self.state, State::Inactive);
@@ -311,6 +391,8 @@ impl Handler {
             State::Inactive => unreachable!(),
             // .ignore, .identify => null,
             State::Ignore | State::Identify(_) => None,
+            // .unknown => |*unknown| .{ .unknown = unknown.toOwned() },
+            State::Unknown(mut unknown) => Some(Command::Unknown(unknown.to_owned())),
             // .kitty => |*p| kitty: {
             //     if (comptime !build_options.kitty_graphics) unreachable;
             //     const alloc = p.arena.child_allocator;
@@ -393,12 +475,19 @@ pub enum State {
     /// Glyph protocol
     // glyph: glyph.CommandParser,
     Glyph(glyph::CommandParser),
+
+    /// An unsupported APC retained for the optional unknown callback.
+    /// Keep this after recognized protocol states so their tag values and
+    /// generated dispatch stay stable when unknown capture is unused.
+    // unknown: UnknownBuilder,
+    Unknown(UnknownBuilder),
 }
 
 impl State {
     // pub fn deinit(self: *State) void {
     //     switch (self.*) {
     //         .inactive, .ignore, .identify => {},
+    //         .unknown => |*v| v.deinit(),
     //         .glyph => |*v| v.deinit(),
     //         .kitty => |*v| if (comptime build_options.kitty_graphics)
     //             v.deinit()
@@ -409,6 +498,7 @@ impl State {
     pub fn deinit(&mut self) {
         match self {
             State::Inactive | State::Ignore | State::Identify(_) => {}
+            State::Unknown(v) => v.deinit(),
             State::Glyph(v) => v.deinit(),
             State::Kitty(_v) => {
                 if KITTY_GRAPHICS {
@@ -424,13 +514,148 @@ impl State {
 }
 
 /// The identify-phase buffer that accumulates the protocol prefix up to `;`.
-// PORT NOTE: reference `identify: struct { len: u3 = 0, buf: [4]u8 = undefined }`.
-// `len: u3` (0..=4 needed) ports to `u8`; `buf: [4]u8 = undefined` starts zeroed
+// PORT NOTE: reference `identify: struct { len: u3 = 0,
+// buf: [glyph.identifier.len]u8 = undefined }`.
+// `len: u3` (0..=4 needed) ports to `u8`; `buf = undefined` starts zeroed
 // (only `buf[0..len]` is ever read, so the initial fill is unobservable).
 #[derive(Default)]
 pub struct Identify {
     len: u8,
-    buf: [u8; 4],
+    buf: [u8; glyph::IDENTIFIER.len()],
+}
+
+/// UnknownBuilder is responsible for accumulating bytes for an
+/// unidentified APC command if unknown capture is enabled.
+// const UnknownBuilder = struct { ... };
+pub struct UnknownBuilder {
+    // data: std.ArrayList(u8) = .empty,
+    data: Vec<u8>,
+    // alloc: Allocator,
+    // PORT NOTE: the `Vec` allocates on the global allocator (the crate's
+    // established ArrayList mapping); the reference's allocation-failure arms
+    // (`catch { self.truncated = true; return; }` / `toOwnedSlice` failure)
+    // have no port-side analog because the global allocator aborts on OOM.
+    max_bytes: usize,
+    truncated: bool,
+}
+
+impl UnknownBuilder {
+    // fn init(alloc: Allocator, max_bytes: usize) UnknownBuilder {
+    fn init(max_bytes: usize) -> UnknownBuilder {
+        UnknownBuilder {
+            data: Vec::new(),
+            max_bytes,
+            truncated: false,
+        }
+    }
+
+    // fn deinit(self: *UnknownBuilder) void {
+    //     self.data.deinit(self.alloc);
+    //     self.data = .empty;
+    // }
+    fn deinit(&mut self) {
+        self.data = Vec::new();
+    }
+
+    // Append some bytes to the unknown capture. This flags as truncated
+    // if allocation fails or we reach our byte limit, therefore
+    // it can't fail.
+    // fn append(self: *UnknownBuilder, bytes: []const u8) void {
+    fn append(&mut self, bytes: &[u8]) {
+        // if (bytes.len == 0) return;
+        if bytes.is_empty() {
+            return;
+        }
+        // const current = self.data.items.len;
+        let current = self.data.len();
+
+        // Determine how many bytes we can store in this append and
+        // if it is less than our input, then we have to note we're
+        // truncating.
+        // const retained = @min(bytes.len, self.max_bytes -| current);
+        // if (retained < bytes.len) self.truncated = true;
+        let retained = core::cmp::min(bytes.len(), self.max_bytes.saturating_sub(current));
+        if retained < bytes.len() {
+            self.truncated = true;
+        }
+
+        // If we require more bytes than our capacity allows then we
+        // need to grow.
+        // const required = current + retained;
+        // if (required > self.data.capacity) {
+        //     const capacity = @min(
+        //         self.max_bytes,
+        //         @max(required, @max(self.data.capacity *| 2, 1)),
+        //     );
+        //     self.data.ensureTotalCapacityPrecise(self.alloc, capacity) catch {
+        //         self.truncated = true;
+        //         return;
+        //     };
+        // }
+        let required = current + retained;
+        if required > self.data.capacity() {
+            let capacity = core::cmp::min(
+                self.max_bytes,
+                core::cmp::max(
+                    required,
+                    core::cmp::max(self.data.capacity().saturating_mul(2), 1),
+                ),
+            );
+            self.data.reserve_exact(capacity - self.data.len());
+        }
+
+        // self.data.appendSliceAssumeCapacity(bytes[0..retained]);
+        self.data.extend_from_slice(&bytes[0..retained]);
+    }
+
+    /// Convert the current capture state to an Unknown where allocator
+    /// ownership shifts to Unknown. Removes any accumulated unknown
+    /// capture in this struct.
+    ///
+    /// This can't fail because if there is an allocator issue we return
+    /// an empty truncate-flagged Unknown.
+    // fn toOwned(self: *UnknownBuilder) Unknown {
+    // PORT NOTE: `toOwnedSlice` → `mem::take` of the `Vec` (its failure arm
+    // has no analog, see the `alloc` PORT NOTE above). The inherent name
+    // shadows `ToOwned::to_owned` deliberately — the receiver is `&mut self`,
+    // so there is no ambiguity in practice.
+    #[allow(clippy::should_implement_trait, clippy::wrong_self_convention)]
+    fn to_owned(&mut self) -> Unknown {
+        // toOwnedSlice allows us to reuse data but this makes error
+        // handling a little simpler.
+        let content = core::mem::take(&mut self.data);
+
+        Unknown {
+            content,
+            truncated: self.truncated,
+        }
+    }
+}
+
+/// An unsupported APC returned by `Handler.end`.
+// pub const Unknown = struct {
+//     content: []u8,
+//     truncated: bool,
+//     ...
+// };
+pub struct Unknown {
+    pub content: Vec<u8>,
+    pub truncated: bool,
+}
+
+impl Unknown {
+    // pub fn deinit(self: *Unknown, alloc: Allocator) void {
+    //     if (self.content.len > 0) alloc.free(self.content);
+    //     self.* = undefined;
+    // }
+    // PORT NOTE: the owned `Vec` frees on drop; the explicit free is the
+    // no-op call-site fidelity hook (`alloc` unused).
+    pub fn deinit(&mut self, alloc: Allocator) {
+        let _ = alloc;
+        if !self.content.is_empty() {
+            self.content = Vec::new();
+        }
+    }
 }
 
 /// Possible APC command types.
@@ -464,17 +689,38 @@ impl Protocol {
             Protocol::Glyph => 1024 * 1024,
         }
     }
+
+    /// Return the largest default buffer limit across every APC protocol.
+    /// Consumers that must retain any unfinished APC can derive their limit
+    /// here instead of duplicating a particular protocol's current default.
+    // pub fn maxDefaultBytes() usize {
+    //     var result: usize = 0;
+    //     for (std.enums.values(Protocol)) |protocol| {
+    //         result = @max(result, protocol.defaultMaxBytes());
+    //     }
+    //     return result;
+    // }
+    pub fn max_default_bytes() -> usize {
+        let mut result: usize = 0;
+        // `std.enums.values(Protocol)` — every variant, in declaration order.
+        for protocol in [Protocol::Kitty, Protocol::Glyph] {
+            result = core::cmp::max(result, protocol.default_max_bytes());
+        }
+        result
+    }
 }
 
-/// Possible APC commands.
-// pub const Command = union(Protocol) {
+/// A recognized or unsupported APC command.
+// pub const Command = union(enum) {
 //     kitty: if (build_options.kitty_graphics) kitty_gfx.Command else void,
 //     glyph: glyph.Request,
+//     unknown: Unknown,
 //     ...
 // };
 pub enum Command {
     Kitty(kitty_gfx::Command),
     Glyph(glyph::Request),
+    Unknown(Unknown),
 }
 
 impl Command {
@@ -491,16 +737,18 @@ impl Command {
     // via `Vec`s and free them on drop, so the per-arm `deinit(alloc)` calls are
     // no-ops retained for call-site fidelity (`alloc` is unused).
     pub fn deinit(&mut self, alloc: Allocator) {
-        let _ = alloc;
         match self {
             Command::Kitty(_v) => {
                 if !KITTY_GRAPHICS {
                     unreachable!();
                 }
                 // v.deinit(alloc) — Rust drops the owned data; no-op.
+                let _ = alloc;
             }
             // v.deinit(alloc) — `Request::deinit` frees on drop; no-op.
             Command::Glyph(v) => v.deinit(),
+            // .unknown => |*v| v.deinit(alloc),
+            Command::Unknown(v) => v.deinit(alloc),
         }
     }
 }
@@ -521,6 +769,94 @@ mod tests {
             h.feed(alloc, c);
         }
         assert!(h.end(alloc).is_none());
+    }
+
+    // test "capture unknown APC command"
+    #[test]
+    fn capture_unknown_apc_command() {
+        let alloc = Global;
+
+        // var h: Handler = .{ .unknown_max_bytes = 5 };
+        let mut h: Handler = Handler {
+            unknown_max_bytes: 5,
+            ..Handler::default()
+        };
+        // defer h.deinit();
+        h.start();
+        h.feed_slice(alloc, b"abcd;payload");
+
+        // var result = h.end().?;
+        let mut result = h.end(alloc).unwrap();
+        // defer result.deinit(alloc);
+        let Command::Unknown(unknown) = &result else {
+            panic!("expected unknown");
+        };
+        assert_eq!(b"abcd;".as_slice(), unknown.content.as_slice());
+        assert!(unknown.truncated);
+        result.deinit(alloc);
+        h.deinit();
+    }
+
+    // test "capture short unknown APC command"
+    #[test]
+    fn capture_short_unknown_apc_command() {
+        let alloc = Global;
+
+        // var h: Handler = .{ .unknown_max_bytes = 16 };
+        let mut h: Handler = Handler {
+            unknown_max_bytes: 16,
+            ..Handler::default()
+        };
+        // defer h.deinit();
+        h.start();
+        h.feed(alloc, b'X');
+
+        let mut result = h.end(alloc).unwrap();
+        {
+            let Command::Unknown(unknown) = &result else {
+                panic!("expected unknown");
+            };
+            assert_eq!(b"X".as_slice(), unknown.content.as_slice());
+            assert!(!unknown.truncated);
+        }
+        result.deinit(alloc);
+
+        h.unknown_max_bytes = 1;
+        h.start();
+        h.feed_slice(alloc, b"XYZ");
+        result = h.end(alloc).unwrap();
+        {
+            let Command::Unknown(truncated) = &result else {
+                panic!("expected unknown");
+            };
+            assert_eq!(b"X".as_slice(), truncated.content.as_slice());
+            assert!(truncated.truncated);
+        }
+        result.deinit(alloc);
+        h.deinit();
+    }
+
+    // test "disabled known APC protocol is not unknown"
+    #[test]
+    fn disabled_known_apc_protocol_is_not_unknown() {
+        let alloc = Global;
+
+        // var h: Handler = .{ .unknown_max_bytes = 64 };
+        let mut h: Handler = Handler {
+            unknown_max_bytes: 64,
+            ..Handler::default()
+        };
+        // defer h.deinit();
+        h.enable(Protocol::Glyph, false);
+        h.start();
+        h.feed_slice(alloc, b"25a1;q;cp=E0A0");
+        assert!(h.end(alloc).is_none());
+
+        // An incomplete known protocol identifier is malformed, not unknown.
+        h.start();
+        h.feed_slice(alloc, b"25a");
+        assert!(h.end(alloc).is_none());
+        h.deinit();
     }
 
     // test "garbage Kitty command"
@@ -657,12 +993,12 @@ mod tests {
             h.feed(alloc, c);
         }
 
-        // var cmd = h.end().?;
-        let mut cmd = h.end(alloc).unwrap();
-        // defer cmd.deinit(alloc);
-        // try testing.expect(cmd == .kitty);
-        assert!(matches!(cmd, Command::Kitty(_)));
-        cmd.deinit(alloc);
+        // var result = h.end().?;
+        let mut result = h.end(alloc).unwrap();
+        // defer result.deinit(alloc);
+        // try testing.expect(result == .kitty);
+        assert!(matches!(result, Command::Kitty(_)));
+        result.deinit(alloc);
     }
 
     // test "identify with unrecognized command"
@@ -739,14 +1075,14 @@ mod tests {
             h.feed(alloc, c);
         }
 
-        // var cmd = h.end().?;
-        let mut cmd = h.end(alloc).unwrap();
-        // defer cmd.deinit(alloc);
-        // try testing.expect(cmd == .glyph);
-        assert!(matches!(cmd, Command::Glyph(_)));
-        // try testing.expect(cmd.glyph == .query);
-        assert!(matches!(cmd, Command::Glyph(glyph::Request::Query(_))));
-        cmd.deinit(alloc);
+        // var result = h.end().?;
+        let mut result = h.end(alloc).unwrap();
+        // defer result.deinit(alloc);
+        // try testing.expect(result == .glyph);
+        assert!(matches!(result, Command::Glyph(_)));
+        // try testing.expect(result.glyph == .query);
+        assert!(matches!(result, Command::Glyph(glyph::Request::Query(_))));
+        result.deinit(alloc);
     }
 
     // test "feedSlice valid Kitty command"
@@ -763,14 +1099,14 @@ mod tests {
         h.start();
         h.feed_slice(alloc, b"Gf=24,s=10,v=20;aGVsbG8=");
 
-        let mut cmd = h.end(alloc).unwrap();
-        assert!(matches!(cmd, Command::Kitty(_)));
+        let mut result = h.end(alloc).unwrap();
+        assert!(matches!(result, Command::Kitty(_)));
 
         // The payload is base64-decoded by the parser on completion.
-        if let Command::Kitty(ref k) = cmd {
+        if let Command::Kitty(ref k) = result {
             assert_eq!(b"hello".as_slice(), k.data.as_slice());
         }
-        cmd.deinit(alloc);
+        result.deinit(alloc);
     }
 
     // test "feedSlice identify split across slices"
@@ -788,14 +1124,14 @@ mod tests {
         h.feed_slice(alloc, b"f=24,s=10,");
         h.feed_slice(alloc, b"v=20;aGVsbG8=");
 
-        let mut cmd = h.end(alloc).unwrap();
-        assert!(matches!(cmd, Command::Kitty(_)));
+        let mut result = h.end(alloc).unwrap();
+        assert!(matches!(result, Command::Kitty(_)));
 
         // The payload is base64-decoded by the parser on completion.
-        if let Command::Kitty(ref k) = cmd {
+        if let Command::Kitty(ref k) = result {
             assert_eq!(b"hello".as_slice(), k.data.as_slice());
         }
-        cmd.deinit(alloc);
+        result.deinit(alloc);
     }
 
     // test "feedSlice unknown APC command is ignored"
@@ -820,10 +1156,10 @@ mod tests {
         h.start();
         h.feed_slice(alloc, b"25a1;q;cp=E0A0");
 
-        let mut cmd = h.end(alloc).unwrap();
-        assert!(matches!(cmd, Command::Glyph(_)));
-        assert!(matches!(cmd, Command::Glyph(glyph::Request::Query(_))));
-        cmd.deinit(alloc);
+        let mut result = h.end(alloc).unwrap();
+        assert!(matches!(result, Command::Glyph(_)));
+        assert!(matches!(result, Command::Glyph(glyph::Request::Query(_))));
+        result.deinit(alloc);
     }
 
     // test "feedSlice kitty max bytes exceeded"

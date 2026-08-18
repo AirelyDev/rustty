@@ -276,7 +276,8 @@ impl TestSurface {
             termio_messaged: false,
             seen_title: false,
         };
-        let terminal_stream = termio::stream_handler::Stream::init(handler);
+        let terminal_stream =
+            termio::stream_handler::Stream::init(rustty_vt::stream::Options::with_handler(handler));
 
         unsafe {
             std::ptr::addr_of_mut!((*sp).io).write(termio::Termio {

@@ -993,17 +993,23 @@ impl Terminal {
     /// for handling escape sequences split across write boundaries), you
     /// must store and reuse the returned stream.
     pub fn vt_stream(&mut self) -> Stream<'_> {
-        // return .initAlloc(self.gpa(), self.vtHandler());
+        // return Stream.init(.{
+        //     .allocator = self.gpa(),
+        //     .handler = self.vtHandler(),
+        // });
         // PORT NOTE: the reference threads `self.gpa()` (a `std.mem.Allocator`)
-        // into the OSC parser. Rustty's `Stream::init_alloc` wants a
+        // into the stream options. Rustty's `stream::Options.allocator` wants a
         // `ZigAllocatorRef`; `gpa()` is the global allocator, so we back the OSC
         // parser with the process-static `GLOBAL_ZIG_ALLOCATOR` (see its note).
         let _gpa = self.gpa();
         let handler = self.vt_handler();
-        Stream::init_alloc(
-            rustty_lib::allocator::ZigAllocatorRef::new(&GLOBAL_ZIG_ALLOCATOR),
+        Stream::init(crate::stream::Options {
+            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
+                &GLOBAL_ZIG_ALLOCATOR,
+            )),
             handler,
-        )
+            continuation_max_bytes: None,
+        })
     }
 
     /// This is the handler-side only for vtStream.

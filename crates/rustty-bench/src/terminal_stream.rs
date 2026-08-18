@@ -72,7 +72,15 @@ pub struct Options {
     terminal_rows: u16,
     terminal_cols: u16,
 
-    /// The data to read as a filepath. If this is "-" then
+    /// Enable opt-in continuation tracking on the stream.
+    // @"continuation-enabled": bool = false,
+    continuation_enabled: bool,
+
+    /// Maximum continuation suffix retained when tracking is enabled.
+    // @"continuation-max-bytes": usize = 1024 * 1024,
+    continuation_max_bytes: usize,
+
+    /// Pre-generated data from rustty-gen. If this is "-" then
     /// we will read stdin. If this is unset, then we will
     /// do nothing (benchmark is a noop). It'd be more unixy to
     /// use stdin by default but I find that a hanging CLI command
@@ -86,6 +94,8 @@ impl Default for Options {
         Options {
             terminal_rows: 80,
             terminal_cols: 120,
+            continuation_enabled: false,
+            continuation_max_bytes: 1024 * 1024,
             data: None,
         }
     }
@@ -104,6 +114,14 @@ impl rustty_args::args::Target for Options {
             }
             b"terminal-cols" => {
                 self.terminal_cols = rustty_args::args::parse_field_int(value)?;
+                Ok(())
+            }
+            b"continuation-enabled" => {
+                self.continuation_enabled = rustty_args::args::parse_field_bool(value)?;
+                Ok(())
+            }
+            b"continuation-max-bytes" => {
+                self.continuation_max_bytes = rustty_args::args::parse_field_int(value)?;
                 Ok(())
             }
             b"data" => {
@@ -137,21 +155,42 @@ impl TerminalStream {
         // Box first (so the terminal's address is stable), then patch the
         // self-reference: the handler's `*mut Terminal` points into `b.terminal`.
         // This is the port's spelling of the reference's `.stream = undefined;`
-        // followed by `ptr.stream = .initAlloc(alloc, .init(&ptr.terminal));`.
+        // followed by:
+        //     errdefer ptr.terminal.deinit(alloc);
+        //     ptr.stream = .init(.{
+        //         .allocator = alloc,
+        //         .handler = .init(&ptr.terminal),
+        //         .continuation_max_bytes = if (opts.@"continuation-enabled")
+        //             opts.@"continuation-max-bytes"
+        //         else
+        //             null,
+        //     });
+        // (The `errdefer` is subsumed: nothing after boxing can fail.)
+        let continuation_max_bytes = if opts.continuation_enabled {
+            Some(opts.continuation_max_bytes)
+        } else {
+            None
+        };
         let mut b = Box::new(TerminalStream {
             opts,
             terminal,
-            stream: Stream::init_alloc(
-                rustty_lib::allocator::ZigAllocatorRef::new(&GLOBAL_ZIG_ALLOCATOR),
-                Handler::init(core::ptr::null_mut()),
-            ),
+            stream: Stream::init(rustty_vt::stream::Options {
+                allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
+                    &GLOBAL_ZIG_ALLOCATOR,
+                )),
+                handler: Handler::init(core::ptr::null_mut()),
+                continuation_max_bytes,
+            }),
             data_f: None,
         });
         let tptr: *mut Terminal = &mut b.terminal;
-        b.stream = Stream::init_alloc(
-            rustty_lib::allocator::ZigAllocatorRef::new(&GLOBAL_ZIG_ALLOCATOR),
-            Handler::init(tptr),
-        );
+        b.stream = Stream::init(rustty_vt::stream::Options {
+            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
+                &GLOBAL_ZIG_ALLOCATOR,
+            )),
+            handler: Handler::init(tptr),
+            continuation_max_bytes,
+        });
         Ok(b)
     }
 
@@ -188,8 +227,8 @@ impl TerminalStream {
         // self.terminal.fullReset();
         self_.terminal.full_reset();
 
-        // Open our data file to prepare for reading. We can do more
-        // validation here eventually.
+        // Open our data file to prepare for reading. We can do more validation
+        // here eventually.
         // assert(self.data_f == null);
         assert!(self_.data_f.is_none());
         self_.data_f = match options::data_file(self_.opts.data.as_deref()) {
@@ -364,6 +403,21 @@ fn terminal_stream() {
     let bench = impl_.benchmark();
     let _ = bench.run(crate::benchmark::RunMode::Once).unwrap();
     impl_.destroy(alloc);
+
+    // const tracked: *TerminalStream = try .create(alloc, .{
+    //     .@"continuation-enabled" = true,
+    // });
+    let mut tracked = TerminalStream::create(
+        alloc,
+        Options {
+            continuation_enabled: true,
+            ..Options::default()
+        },
+    )
+    .unwrap();
+    let tracked_bench = tracked.benchmark();
+    let _ = tracked_bench.run(crate::benchmark::RunMode::Once).unwrap();
+    tracked.destroy(alloc);
 }
 
 impl BenchmarkAction for TerminalStream {
