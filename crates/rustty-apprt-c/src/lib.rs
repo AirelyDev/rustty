@@ -690,19 +690,24 @@ pub unsafe extern "C" fn rustty_app_keyboard_changed(v: *mut App) {
 /// `v` must be a valid pointer returned by [`rustty_app_new`].
 #[no_mangle]
 pub unsafe extern "C" fn rustty_app_open_config(v: *mut App) {
-    // _ = v.performAction(.app, .open_config, {}) catch |err| {
+    // _ = v.performAction(.app, .open_config, .new_window) catch |err| {
     //     log.err("error reloading config err={}", .{err});
     //     return;
     // };
     //
-    // PORT NOTE: the reference `*App` method `performAction(.app, .open_config, {})`
-    // maps to the `apprt_api::App` trait's `perform_action(Target::App,
-    // Action::OpenConfig)` (the embedded `App` is the first concrete backend). The
-    // `Target::App` carries no surface, so its `C: CoreSurfaceHandle` type parameter
-    // is annotated as `CoreSurface`. The `bool` result is discarded (reference `_ =`).
+    // PORT NOTE: the reference `*App` method `performAction(.app, .open_config,
+    // .new_window)` maps to the `apprt_api::App` trait's `perform_action(Target::App,
+    // Action::OpenConfig(OpenConfig::NewWindow))` (the embedded `App` is the first
+    // concrete backend). The `Target::App` carries no surface, so its
+    // `C: CoreSurfaceHandle` type parameter is annotated as `CoreSurface`. The `bool`
+    // result is discarded (reference `_ =`).
     // SAFETY: `v` validity is the caller's contract.
-    if let Err(err) = unsafe { (*v).perform_action(Target::<CoreSurface>::App, Action::OpenConfig) }
-    {
+    if let Err(err) = unsafe {
+        (*v).perform_action(
+            Target::<CoreSurface>::App,
+            Action::OpenConfig(rustty_apprt_api::action::OpenConfig::NewWindow),
+        )
+    } {
         eprintln!("error reloading config err={err:?}");
     }
 }

@@ -234,10 +234,12 @@ const _: () = assert!(NewSurfaceContext::Window as c_int == 0);
 const _: () = assert!(NewSurfaceContext::Tab as c_int == 1);
 const _: () = assert!(NewSurfaceContext::Split as c_int == 2);
 // ghostty_action_tag_e — positional. The first and last ordinals bracket the
-// append-only ABI (action.zig:65-77 / ghostty.h:885-952); the exhaustive
-// positional map is checked in `action_key_positional_ordinals` below.
+// positional ABI (upstream reserves the right to renumber: this range's
+// `ad96613a8`/`8b7c57c75` MID-ENUM inserts shifted every later tag, and
+// `25b2d8a38` appended the new tail); the exhaustive positional map is
+// checked in `action_key_positional_ordinals` below.
 const _: () = assert!(ActionKey::Quit as c_int == 0);
-const _: () = assert!(ActionKey::CopyTitleToClipboard as c_int == 65);
+const _: () = assert!(ActionKey::MoveTabToNewWindow as c_int == 68);
 
 // ── Info.BuildMode (ghostty_info_s / ghostty_build_mode_e, ghostty.h:385-396) ──
 // `rustty_info()` and its `Info`/`BuildMode` types ARE ported (lib.rs:945-1040), so
@@ -264,10 +266,13 @@ const _: () = assert!(BuildMode::ReleaseSmall as c_int == 3);
 // Runtime re-checks (readable diagnostics + a runnable test target).
 // ============================================================================
 
-/// The full positional `ghostty_action_tag_e` → `ActionKey` map (ghostty.h:885-952).
-/// This is the ABI contract: actions are append-only, and each key's ordinal is
-/// its position. A reorder/insertion anywhere shifts every later ordinal and this
-/// exhaustive check names the first divergence.
+/// The full positional `ghostty_action_tag_e` → `ActionKey` map (rustty-embed.h,
+/// mirroring the pinned ghostty.h). This is the ABI contract: each key's ordinal
+/// is its position. A reorder/insertion anywhere shifts every later ordinal and
+/// this exhaustive check names the first divergence. (Upstream does NOT promise
+/// append-only here — this range's `ad96613a8`/`8b7c57c75` inserted
+/// `export_terminal_io`/`set_window_title` MID-ENUM, renumbering tags 31+ — so
+/// the map must be regenerated from the header whenever it advances.)
 #[rustfmt::skip]
 const ACTION_KEY_ORDINALS: &[(ActionKey, c_int)] = &[
     (ActionKey::Quit, 0),
@@ -301,41 +306,44 @@ const ACTION_KEY_ORDINALS: &[(ActionKey, c_int)] = &[
     (ActionKey::Inspector, 28),
     (ActionKey::ShowGtkInspector, 29),
     (ActionKey::RenderInspector, 30),
-    (ActionKey::DesktopNotification, 31),
-    (ActionKey::SetTitle, 32),
-    (ActionKey::SetTabTitle, 33),
-    (ActionKey::PromptTitle, 34),
-    (ActionKey::Pwd, 35),
-    (ActionKey::MouseShape, 36),
-    (ActionKey::MouseVisibility, 37),
-    (ActionKey::MouseOverLink, 38),
-    (ActionKey::RendererHealth, 39),
-    (ActionKey::OpenConfig, 40),
-    (ActionKey::QuitTimer, 41),
-    (ActionKey::FloatWindow, 42),
-    (ActionKey::SecureInput, 43),
-    (ActionKey::KeySequence, 44),
-    (ActionKey::KeyTable, 45),
-    (ActionKey::ColorChange, 46),
-    (ActionKey::ReloadConfig, 47),
-    (ActionKey::ConfigChange, 48),
-    (ActionKey::CloseWindow, 49),
-    (ActionKey::RingBell, 50),
-    (ActionKey::SelectionChanged, 51),
-    (ActionKey::Undo, 52),
-    (ActionKey::Redo, 53),
-    (ActionKey::CheckForUpdates, 54),
-    (ActionKey::OpenUrl, 55),
-    (ActionKey::ShowChildExited, 56),
-    (ActionKey::ProgressReport, 57),
-    (ActionKey::ShowOnScreenKeyboard, 58),
-    (ActionKey::CommandFinished, 59),
-    (ActionKey::StartSearch, 60),
-    (ActionKey::EndSearch, 61),
-    (ActionKey::SearchTotal, 62),
-    (ActionKey::SearchSelected, 63),
-    (ActionKey::Readonly, 64),
-    (ActionKey::CopyTitleToClipboard, 65),
+    (ActionKey::ExportTerminalIO, 31),
+    (ActionKey::DesktopNotification, 32),
+    (ActionKey::SetTitle, 33),
+    (ActionKey::SetTabTitle, 34),
+    (ActionKey::SetWindowTitle, 35),
+    (ActionKey::PromptTitle, 36),
+    (ActionKey::Pwd, 37),
+    (ActionKey::MouseShape, 38),
+    (ActionKey::MouseVisibility, 39),
+    (ActionKey::MouseOverLink, 40),
+    (ActionKey::RendererHealth, 41),
+    (ActionKey::OpenConfig, 42),
+    (ActionKey::QuitTimer, 43),
+    (ActionKey::FloatWindow, 44),
+    (ActionKey::SecureInput, 45),
+    (ActionKey::KeySequence, 46),
+    (ActionKey::KeyTable, 47),
+    (ActionKey::ColorChange, 48),
+    (ActionKey::ReloadConfig, 49),
+    (ActionKey::ConfigChange, 50),
+    (ActionKey::CloseWindow, 51),
+    (ActionKey::RingBell, 52),
+    (ActionKey::SelectionChanged, 53),
+    (ActionKey::Undo, 54),
+    (ActionKey::Redo, 55),
+    (ActionKey::CheckForUpdates, 56),
+    (ActionKey::OpenUrl, 57),
+    (ActionKey::ShowChildExited, 58),
+    (ActionKey::ProgressReport, 59),
+    (ActionKey::ShowOnScreenKeyboard, 60),
+    (ActionKey::CommandFinished, 61),
+    (ActionKey::StartSearch, 62),
+    (ActionKey::EndSearch, 63),
+    (ActionKey::SearchTotal, 64),
+    (ActionKey::SearchSelected, 65),
+    (ActionKey::Readonly, 66),
+    (ActionKey::CopyTitleToClipboard, 67),
+    (ActionKey::MoveTabToNewWindow, 68),
 ];
 
 #[test]
@@ -584,7 +592,7 @@ fn action_key_positional_ordinals() {
     // catches an append that forgets to update the header (and vice-versa).
     assert_eq!(
         ACTION_KEY_ORDINALS.len(),
-        66,
+        69,
         "ghostty_action_tag_e cardinality"
     );
     for &(key, ord) in ACTION_KEY_ORDINALS {
@@ -595,8 +603,8 @@ fn action_key_positional_ordinals() {
     }
     assert_eq!(ActionKey::Quit as c_int, 0, "GHOSTTY_ACTION_QUIT");
     assert_eq!(
-        ActionKey::CopyTitleToClipboard as c_int,
-        65,
-        "GHOSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD (append-only ABI tail)"
+        ActionKey::MoveTabToNewWindow as c_int,
+        68,
+        "GHOSTTY_ACTION_MOVE_TAB_TO_NEW_WINDOW (positional ABI tail)"
     );
 }

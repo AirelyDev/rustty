@@ -5,15 +5,17 @@
 //! PORT STATUS: IN PROGRESS (mutual-atom Stage B v4 — D3 SEAM landed). The D3
 //! trampoline seam + `ZigTerminal` lifecycle machinery are filled: `zig_terminal`,
 //! `new`/`new_`/`free` (Box-based lifecycle), `vt_write`, `resize`, `reset`,
-//! `mode_get`/`mode_set`, `scroll_viewport` (the `ScrollViewport` `[2]u64` union
+//! `scroll_viewport` (the `ScrollViewport` `[2]u64` union
 //! dispatch), `get`/`get_multi`/`get_typed` (the non-deferred-type arms), and the
-//! 9 `Effects` trampolines (each recovers the owning `TerminalWrapper` from the
+//! `Effects` trampolines (each recovers the owning `TerminalWrapper` from the
 //! stream handler via the exposed-provenance `container_of` and calls the C
 //! fn-ptr). The get/set + grid_ref sub-batches have LANDED (VALIDATION_REPORT
 //! M3): `set`/`setTyped`, every `get_typed` arm, and
 //! `grid_ref`/`grid_ref_track`/`point_from_grid_ref` are live — zero
 //! `todo!()` remains in this crate. The formerly irreducible mutual cluster
 //! (terminal<->grid_ref<->grid_ref_tracked<->selection) is fully resolved.
+//! P4-W5 Bundle M (cfc19e805) REMOVED `mode_get`/`mode_set` in favor of the
+//! `.mode`/`.mode_default` option arms and the `.mode` data arm.
 
 // const std = @import("std");
 // const testing = std.testing;
@@ -158,14 +160,28 @@ pub struct TerminalWrapper {
     // itself, so there is no borrow needing stable backing. The LENGTH BOUND
     // the field imposes is still observable through the C API and survives as
     // `MAX_PATH_BYTES`; see its PORT NOTE above.
+    //
+    /// The terminfo name reported for XTGETTCAP "TN". The stream handler holds
+    /// a slice into this.
+    // terminfo_name_buf: [Handler.max_terminfo_name_bytes]u8,
+    //
+    // SB (SOUNDNESS): the handler's `terminfo_name: Option<&[u8]>` slice is a
+    // self-referential borrow of this buffer. It is created from a raw place
+    // projection off the wrapper base pointer (`set_typed(.terminfo_name)`),
+    // and every write into the buffer also goes through that base — never
+    // through a wrapper-level `&mut` that would invalidate the stored slice
+    // (the rust-mut-args-strongly-protected discipline). The wrapper is
+    // heap-stable for its whole life, so the slice address never moves.
+    pub terminfo_name_buf: [u8; rustty_vt::stream_terminal::MAX_TERMINFO_NAME_BYTES],
     pub stream: Stream<'static>,
     pub effects: Effects,
     pub tracked_grid_refs: HashSet<*mut TrackedGridRef>,
 }
 
-/// C callback state for terminal effects. Trampolines are always
-/// installed on the stream handler; they check these fields and
-/// no-op when the corresponding callback is null.
+/// C callback state for terminal effects. Most trampolines are always
+/// installed on the stream handler; they check these fields and no-op when
+/// the corresponding callback is null. The unknown-sequence trampoline is
+/// installed dynamically to preserve its null fast path.
 // PORT NOTE (internal, NOT C-ABI): mirrors the reference `Effects` struct field
 // for field. The fn-ptr typedefs and `CDeviceAttributes` ARE part of the C ABI
 // (named below). `da_features_buf` is the scratch buffer the device-attributes
@@ -184,6 +200,7 @@ pub struct Effects {
     pub clipboard_write: Option<ClipboardWriteFn>,
     pub desktop_notification: Option<DesktopNotificationFn>,
     pub progress_report: Option<ProgressReportFn>,
+    pub unknown_sequence: Option<UnknownSequenceFn>,
 
     /// Scratch buffer for DA1 feature codes. The device attributes
     /// trampoline converts C feature codes into this buffer and returns
@@ -214,6 +231,7 @@ impl Default for Effects {
             clipboard_write: None,
             desktop_notification: None,
             progress_report: None,
+            unknown_sequence: None,
             da_features_buf: [rustty_vt::device_attributes::Feature::AnsiColor; 64],
         }
     }
@@ -372,6 +390,102 @@ pub struct ProgressReport {
 /// borrowed and only valid for the callback duration.
 // pub const ProgressReportFn = *const fn (Terminal, ?*anyopaque, *const ProgressReport) callconv(lib.calling_conv) void;
 pub type ProgressReportFn = extern "C" fn(Terminal, *mut c_void, *const ProgressReport);
+
+/// A borrowed unsupported string sequence.
+///
+/// C: GhosttyTerminalUnknownStringSequence -> RusttyTerminalUnknownStringSequence (R2)
+// pub const UnknownStringSequence = extern struct {
+//     truncated: bool,
+//     content: lib.String,
+// };
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct UnknownStringSequence {
+    pub truncated: bool,
+    pub content: LibString,
+}
+
+/// C: GhosttyTerminalUnknownSequenceTag -> RusttyTerminalUnknownSequenceTag (R2)
+/// — checked by the A5 enum-discriminant arm.
+// pub const Tag = lib.Enum(lib.target, &.{"apc"});
+//
+// PORT NOTE: the reference nests `Tag` inside `UnknownSequence`; Rust types
+// cannot nest, so it lives at module scope (the vt `UnknownSequence` flattening
+// precedent).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnknownSequenceTag {
+    Apc = 0,
+}
+
+/// C: GhosttyTerminalUnknownSequenceValue -> RusttyTerminalUnknownSequenceValue (R2)
+// const c_union = lib.TaggedUnion(lib.target, @This(), .{ .padding = [16]u64 });
+// pub const CValue = c_union.CValue;
+//
+// A future borrowed CSI payload may need parameter, separator, and
+// intermediate arrays. Reserve 128 bytes so that representation and
+// other structured sequence types can be added without an ABI break.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union UnknownSequenceValue {
+    pub apc: UnknownStringSequence,
+    pub _padding: [u64; 16],
+}
+
+/// An unsupported terminal sequence reported to the C callback.
+///
+/// C: GhosttyTerminalUnknownSequence -> RusttyTerminalUnknownSequence (R2)
+// pub const UnknownSequence = union(Tag) { apc: UnknownStringSequence, ... };
+// pub const C = c_union.C;
+//
+// PORT NOTE: the reference declares the tagged Zig union and derives the C
+// projection through the `lib.TaggedUnion` factory; rustty hand-authors the
+// projection (`{ tag, value }`) like `ScrollViewportC`. The value crosses the
+// ABI outbound-only (by const pointer to the callback), so the tag field keeps
+// its typed enum form. `UnknownSequence.cval` is the trampoline's constructor
+// of this struct.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct UnknownSequence {
+    pub tag: UnknownSequenceTag,
+    pub value: UnknownSequenceValue,
+}
+
+// BUILD-failure gate (D2): pin the `[16]u64` padding size, the natural
+// alignment, and the `c_int`-width tag. Drift here fails the build.
+const _: () = assert!(size_of::<UnknownSequenceValue>() == size_of::<[u64; 16]>());
+const _: () = assert!(align_of::<UnknownSequenceValue>() == 8);
+const _: () = assert!(size_of::<UnknownSequenceTag>() == size_of::<c_int>());
+
+/// C function pointer type for the unknown_sequence callback. The request
+/// and its content are borrowed for the callback duration.
+// pub const UnknownSequenceFn = *const fn (Terminal, ?*anyopaque, *const UnknownSequence.C) callconv(lib.calling_conv) void;
+pub type UnknownSequenceFn = extern "C" fn(Terminal, *mut c_void, *const UnknownSequence);
+
+/// A terminal mode and boolean value used for mode configuration.
+///
+/// C: GhosttyTerminalModeConfig -> RusttyTerminalModeConfig (R2)
+// pub const ModeConfig = extern struct {
+//     mode: modes.ModeTag.Backing,
+//     value: bool,
+// };
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ModeConfig {
+    pub mode: modes::ModeTagBacking,
+    pub value: bool,
+}
+
+impl ModeConfig {
+    // fn toMode(self: ModeConfig) ?modes.Mode {
+    //     const tag: modes.ModeTag = @bitCast(self.mode);
+    //     return modes.modeFromInt(tag.value, tag.ansi);
+    // }
+    fn to_mode(self) -> Option<modes::Mode> {
+        let tag = modes::ModeTag::from_backing(self.mode);
+        modes::mode_from_int(tag.value, tag.ansi)
+    }
+}
 
 /// C-compatible device attributes struct.
 /// C: GhosttyDeviceAttributes -> RusttyDeviceAttributes (R2)
@@ -778,6 +892,54 @@ impl Effects {
         };
         func(wrapper, userdata, &request);
     }
+
+    // fn unknownSequenceTrampoline(
+    //     handler: *Handler,
+    //     sequence: Handler.UnknownSequence,
+    // ) void {
+    //     const wrapper = TerminalWrapper.fromHandler(handler);
+    //     const func = wrapper.effects.unknown_sequence orelse return;
+    //     const value = UnknownSequence.cval(switch (sequence) {
+    //         .apc => |apc_value| .{
+    //             .apc = .{
+    //                 .truncated = apc_value.truncated,
+    //                 .content = .{
+    //                     .ptr = apc_value.content.ptr,
+    //                     .len = apc_value.content.len,
+    //                 },
+    //             },
+    //         },
+    //     });
+    //     func(@ptrCast(wrapper), wrapper.effects.userdata, &value);
+    // }
+    pub(crate) fn unknown_sequence_trampoline(
+        handler: &mut Handler<'static>,
+        sequence: rustty_vt::stream_terminal::UnknownSequence<'_>,
+    ) {
+        let wrapper = wrapper_from_handler(handler);
+        let Some(func) = (unsafe { (*wrapper).effects.unknown_sequence }) else {
+            return;
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+        // PORT NOTE: `UnknownSequence.cval(...)` — rustty hand-authors the
+        // TaggedUnion C projection, so `cval` is this literal construction
+        // (tag + payload zero-extended into the padded union).
+        let value = match sequence {
+            rustty_vt::stream_terminal::UnknownSequence::Apc(apc_value) => UnknownSequence {
+                tag: UnknownSequenceTag::Apc,
+                value: UnknownSequenceValue {
+                    apc: UnknownStringSequence {
+                        truncated: apc_value.truncated,
+                        content: LibString {
+                            ptr: apc_value.content.as_ptr(),
+                            len: apc_value.content.len(),
+                        },
+                    },
+                },
+            },
+        };
+        func(wrapper, userdata, &value);
+    }
 }
 
 // PORT NOTE: the reference uses `@enumFromInt` on the DA enums (always safe
@@ -1119,6 +1281,10 @@ fn new_(
             TerminalWrapper {
                 terminal: terminal_ptr,
                 alloc: alloc_holder,
+                // .terminfo_name_buf = undefined,
+                // (a zeroed seed — never observed before `set(.terminfo_name)`
+                // overwrites the prefix it then publishes)
+                terminfo_name_buf: [0; rustty_vt::stream_terminal::MAX_TERMINFO_NAME_BYTES],
                 stream: Stream::init(rustty_vt::stream::Options {
                     allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(alloc)),
                     handler,
@@ -1272,6 +1438,21 @@ pub enum Option_ {
     DesktopNotification = 29,
     /// Input type: `ProgressReportFn` (oracle 47d602c42).
     ProgressReport = 30,
+    // continuation_max_bytes = 31,
+    //   ^ DEFERRED (Bundle S): rides the snapshot/continuation C surface
+    //     (d7bb4b863); the discriminant is reserved.
+    /// Input type: `*const bool` (oracle 38e891e6c).
+    TitleReport = 32,
+    /// Input type: `*const ModeConfig` (oracle cfc19e805).
+    ModeDefault = 33,
+    /// Input type: `*const ModeConfig` (oracle cfc19e805).
+    Mode = 34,
+    /// Input type: `UnknownSequenceFn` (oracle 6b990de5b).
+    UnknownSequence = 35,
+    /// Input type: `*const usize` (oracle 6b990de5b).
+    UnknownMaxBytes = 36,
+    /// Input type: `*const lib.String` (oracle 74efadb44).
+    TerminfoName = 37,
     // /// Input type expected for setting the option.
     // pub fn InType(comptime self: Option) type {
     //     return switch (self) {
@@ -1285,23 +1466,28 @@ pub enum Option_ {
     //         .title_changed => ?Effects.TitleChangedFn,
     //         .pwd_changed => ?Effects.PwdChangedFn,
     //         .size_cb => ?Effects.SizeFn,
-    //         .title, .pwd => ?*const lib.String,
+    //         .clipboard_write => ?Effects.ClipboardWriteFn,
+    //         .unknown_sequence => ?Effects.UnknownSequenceFn,
+    //         .title, .pwd, .terminfo_name => ?*const lib.String,
     //         .color_foreground, .color_background, .color_cursor => ?*const color.RGB.C,
     //         .color_palette => ?*const color.PaletteC,
     //         .kitty_image_storage_limit => ?*const u64,
     //         .kitty_image_medium_file,
     //         .kitty_image_medium_shared_mem,
     //         .glyph_protocol,
+    //         .title_report,
     //         => ?*const bool,
     //         .kitty_image_medium_temp_file => ?*const lib.String,
     //         .apc_max_bytes,
     //         .apc_max_bytes_kitty,
     //         .scrollback_max_bytes,
     //         .scrollback_max_lines,
+    //         .unknown_max_bytes,
     //         => ?*const usize,
     //         .selection => ?*const selection_c.CSelection,
     //         .default_cursor_style => ?*const TerminalCursorStyle,
     //         .default_cursor_blink => ?*const bool,
+    //         .mode, .mode_default => ?*const ModeConfig,
     //     };
     // }
     //
@@ -1310,6 +1496,7 @@ pub enum Option_ {
     // boundary and reads it back as the per-arm type inside `set_typed`, so this
     // comptime projection has no Rust analog; it is preserved verbatim as the
     // reference contract for each arm's expected pointee type.
+    // (`.continuation_max_bytes => ?*const usize` rides Bundle S.)
 }
 
 // pub fn set(terminal_: Terminal, option: Option, value: ?*const anyopaque) ... {
@@ -1417,6 +1604,41 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
                 std::mem::transmute::<*const c_void, Option<ClipboardWriteFn>>(value);
         },
 
+        // .unknown_sequence => {
+        //     wrapper.effects.unknown_sequence = value;
+        //     wrapper.stream.handler.unknown_sequence = if (value != null)
+        //         &Effects.unknownSequenceTrampoline
+        //     else
+        //         null;
+        // },
+        Option_::UnknownSequence => unsafe {
+            (*terminal_).effects.unknown_sequence =
+                std::mem::transmute::<*const c_void, Option<UnknownSequenceFn>>(value);
+            // The trampoline is installed dynamically to preserve the
+            // handler's null fast path.
+            (*terminal_).stream.handler.unknown_sequence = if !value.is_null() {
+                Some(Effects::unknown_sequence_trampoline)
+            } else {
+                None
+            };
+        },
+
+        // .title_report => wrapper.stream.handler.title_report = if (value) |ptr|
+        //     ptr.*
+        // else
+        //     false,
+        Option_::TitleReport => {
+            let ptr = value as *const bool;
+            let v = if !ptr.is_null() {
+                // SAFETY: `value` points to a readable `bool` (caller contract).
+                unsafe { *ptr }
+            } else {
+                false
+            };
+            // SAFETY: raw place write off the handle (no wrapper-level `&mut`).
+            unsafe { (*terminal_).stream.handler.title_report = v };
+        }
+
         // .desktop_notification => wrapper.effects.desktop_notification = value,
         Option_::DesktopNotification => unsafe {
             (*terminal_).effects.desktop_notification =
@@ -1475,6 +1697,58 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             };
             if unsafe { (*t).set_pwd_raw(src, src_len) }.is_err() {
                 return Result::OutOfMemory;
+            }
+        }
+
+        // .terminfo_name => {
+        //     const str = if (value) |v| v.ptr[0..v.len] else "";
+        //     if (str.len > wrapper.terminfo_name_buf.len) return .invalid_value;
+        //     @memcpy(wrapper.terminfo_name_buf[0..str.len], str);
+        //     wrapper.stream.handler.terminfo_name = if (str.len > 0)
+        //         wrapper.terminfo_name_buf[0..str.len]
+        //     else
+        //         null;
+        // },
+        Option_::TerminfoName => {
+            // const str = if (value) |v| v.ptr[0..v.len] else "";
+            let ptr = value as *const LibString;
+            let (src, src_len): (*const u8, usize) = if !ptr.is_null() {
+                let s = unsafe { *ptr };
+                (s.ptr, s.len)
+            } else {
+                (b"".as_ptr(), 0)
+            };
+            // if (str.len > wrapper.terminfo_name_buf.len) return .invalid_value;
+            //
+            // The bounds check FIRST, then a copy of EXACTLY `str.len` bytes
+            // (the `960c2cca5` overflow-class contract).
+            if src_len > rustty_vt::stream_terminal::MAX_TERMINFO_NAME_BYTES {
+                return Result::InvalidValue;
+            }
+            // @memcpy(wrapper.terminfo_name_buf[0..str.len], str);
+            //
+            // SB (SOUNDNESS): the buffer is written via a raw place projection
+            // off the wrapper base and the handler's published slice is rebuilt
+            // from the SAME projection — no wrapper-level `&mut` is formed, so
+            // the stream handler's other self-referential aliases survive (see
+            // the `terminfo_name_buf` field note).
+            let buf: *mut u8 =
+                unsafe { core::ptr::addr_of_mut!((*terminal_).terminfo_name_buf) } as *mut u8;
+            // SAFETY: `src` has `src_len` readable bytes (caller contract);
+            // `src_len <= MAX_TERMINFO_NAME_BYTES` was checked above; the C
+            // caller's string cannot alias this internal buffer (it is never
+            // exposed), so the ranges do not overlap (`@memcpy`'s contract).
+            unsafe { core::ptr::copy_nonoverlapping(src, buf, src_len) };
+            // wrapper.stream.handler.terminfo_name = ...;
+            // SAFETY: the published slice borrows the heap-stable wrapper
+            // buffer; it lives exactly as long as the wrapper (freed in `free`
+            // together with the stream).
+            unsafe {
+                (*terminal_).stream.handler.terminfo_name = if src_len > 0 {
+                    Some(core::slice::from_raw_parts(buf as *const u8, src_len))
+                } else {
+                    None
+                };
             }
         }
 
@@ -1864,6 +2138,62 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             };
             unsafe { (*t).set_scrollback_max_lines(max) };
         }
+
+        // .unknown_max_bytes => wrapper.stream.handler.apc_handler.unknown_max_bytes =
+        //     if (value) |ptr| ptr.* else 0,
+        Option_::UnknownMaxBytes => {
+            let ptr = value as *const usize;
+            let v = if !ptr.is_null() {
+                // SAFETY: `value` points to a readable `usize` (caller contract).
+                unsafe { *ptr }
+            } else {
+                0
+            };
+            // SAFETY: raw place write off the handle (no wrapper-level `&mut`).
+            unsafe { (*terminal_).stream.handler.apc_handler.unknown_max_bytes = v };
+        }
+
+        // .mode, .mode_default => {
+        //     const config = (value orelse return .invalid_value).*;
+        //     const mode = config.toMode() orelse return .invalid_value;
+        //     switch (option) {
+        //         .mode => wrapper.terminal.modes.set(mode, config.value),
+        //         .mode_default => {
+        //             if (!modes.defaultConfigurable(mode)) return .invalid_value;
+        //             wrapper.terminal.modes.setDefault(mode, config.value);
+        //         },
+        //         else => unreachable,
+        //     }
+        // },
+        Option_::Mode | Option_::ModeDefault => {
+            // const config = (value orelse return .invalid_value).*;
+            let ptr = value as *const ModeConfig;
+            if ptr.is_null() {
+                return Result::InvalidValue;
+            }
+            // SAFETY: `value` points to a readable `ModeConfig` (caller contract).
+            let config = unsafe { *ptr };
+            // const mode = config.toMode() orelse return .invalid_value;
+            let Some(mode) = config.to_mode() else {
+                return Result::InvalidValue;
+            };
+            match option {
+                // .mode => wrapper.terminal.modes.set(mode, config.value),
+                // SAFETY: raw place access to the owned heap terminal.
+                Option_::Mode => unsafe { (*t).modes.set(mode, config.value) },
+                Option_::ModeDefault => {
+                    // if (!modes.defaultConfigurable(mode)) return .invalid_value;
+                    if !modes::default_configurable(mode) {
+                        return Result::InvalidValue;
+                    }
+                    // wrapper.terminal.modes.setDefault(mode, config.value);
+                    // SAFETY: raw place access to the owned heap terminal.
+                    unsafe { (*t).modes.set_default(mode, config.value) };
+                }
+                // else => unreachable,
+                _ => unreachable!(),
+            }
+        }
     }
 
     // return .success;
@@ -1980,6 +2310,23 @@ pub union ScrollViewportCValue {
     /// Padding to the PINNED ABI size. `[2]u64` (16 bytes) per the reference.
     pub _padding: [u64; 2],
 }
+
+/// PORT NOTE (`9673a22b0` ABI manifest): `ScrollViewport`'s `lib.TaggedUnion`
+/// options carry NO `field_renames` (Terminal.zig: `.{ .padding = [2]u64 }`),
+/// so `cFieldRename` yields null for the payload-less `top`/`bottom` tags and
+/// the tag name for `delta`/`row`. Consumed by `types.rs` for the
+/// `RusttyTerminalScrollViewport` arms and the `RusttyTerminalScrollViewportValue`
+/// union fields.
+pub const SCROLL_VIEWPORT_C_FIELD_ARMS: &[(&str, Option<&str>)] = &[
+    ("top", None),
+    ("bottom", None),
+    ("delta", Some("delta")),
+    ("row", Some("row")),
+];
+
+/// `cFieldRename` arms for the `UnknownSequence` tagged value field (the
+/// `types.zig` `.generated` union arms; consumed by the ABI manifest rows).
+pub const UNKNOWN_SEQUENCE_C_FIELD_ARMS: &[(&str, Option<&str>)] = &[("apc", Some("apc"))];
 
 /// C: GhosttyTerminalScrollViewport -> RusttyTerminalScrollViewport (R2) — the hand-authored tagged union.
 #[repr(C)]
@@ -2151,63 +2498,9 @@ pub unsafe fn reset(terminal_: Terminal) {
     unsafe { (*t).full_reset() };
 }
 
-// pub fn mode_get(terminal_, tag: modes.ModeTag.Backing, out_value: *bool) ... {
-//     const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
-//     const mode_tag: modes.ModeTag = @bitCast(tag);
-//     const mode = modes.modeFromInt(mode_tag.value, mode_tag.ansi) orelse return .invalid_value;
-//     out_value.* = t.modes.get(mode);
-//     return .success;
-// }
-/// # Safety
-/// `terminal_`, if non-null, must be a live terminal handle; `out_value` must be
-/// a valid writable pointer to a `bool`.
-pub unsafe fn mode_get(
-    terminal_: Terminal,
-    tag: modes::ModeTagBacking,
-    out_value: *mut bool,
-) -> Result {
-    if terminal_.is_null() {
-        return Result::InvalidValue;
-    }
-    // SAFETY: `terminal_` is a live wrapper.
-    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
-    // const mode_tag: modes.ModeTag = @bitCast(tag);
-    let mode_tag = modes::ModeTag::from_backing(tag);
-    // const mode = modes.modeFromInt(mode_tag.value, mode_tag.ansi) orelse return .invalid_value;
-    let mode = match modes::mode_from_int(mode_tag.value, mode_tag.ansi) {
-        Some(m) => m,
-        None => return Result::InvalidValue,
-    };
-    // out_value.* = t.modes.get(mode);
-    // SAFETY: `out_value` is a valid writable bool pointer (caller contract).
-    unsafe { *out_value = (*t).modes.get(mode) };
-    Result::Success
-}
-
-// pub fn mode_set(terminal_, tag: modes.ModeTag.Backing, value: bool) ... {
-//     const t: *ZigTerminal = (terminal_ orelse return .invalid_value).terminal;
-//     const mode_tag: modes.ModeTag = @bitCast(tag);
-//     const mode = modes.modeFromInt(mode_tag.value, mode_tag.ansi) orelse return .invalid_value;
-//     t.modes.set(mode, value);
-//     return .success;
-// }
-/// # Safety
-/// `terminal_`, if non-null, must be a live terminal handle.
-pub unsafe fn mode_set(terminal_: Terminal, tag: modes::ModeTagBacking, value: bool) -> Result {
-    if terminal_.is_null() {
-        return Result::InvalidValue;
-    }
-    // SAFETY: `terminal_` is a live wrapper.
-    let t: *mut ZigTerminal = unsafe { (*terminal_).terminal };
-    let mode_tag = modes::ModeTag::from_backing(tag);
-    let mode = match modes::mode_from_int(mode_tag.value, mode_tag.ansi) {
-        Some(m) => m,
-        None => return Result::InvalidValue,
-    };
-    // t.modes.set(mode, value);
-    unsafe { (*t).modes.set(mode, value) };
-    Result::Success
-}
+// (cfc19e805: `mode_get`/`mode_set` were REMOVED — replaced by the
+// `.mode`/`.mode_default` option arms in `set_typed` and the `.mode`
+// `TerminalData` arm in `get_typed`.)
 
 /// C: GhosttyKittyGraphics -> RusttyKittyGraphics (R2)
 // pub const KittyGraphics = kitty_gfx_c.KittyGraphics;
@@ -2262,6 +2555,16 @@ pub enum TerminalData {
     VtProcessingError = 33,
     ScrollbackMaxBytes = 34,
     ScrollbackMaxLines = 35,
+    // continuation_max_bytes = 36,
+    //   ^ DEFERRED (Bundle S): rides the snapshot/continuation C surface
+    //     (d7bb4b863); the discriminant is reserved.
+    /// Output type: `ModeConfig` (input/output — oracle cfc19e805).
+    Mode = 37,
+    // vt_ground = 38,
+    //   ^ DEFERRED (Bundle S): rides a69a591af's ground-state C API; the
+    //     discriminant is reserved.
+    /// Output type: `bool` (oracle bdb566068).
+    CursorAtPrompt = 39,
     // /// Output type expected for querying the data of the given kind.
     // pub fn OutType(comptime self: TerminalData) type {
     //     return switch (self) {
@@ -2272,6 +2575,8 @@ pub enum TerminalData {
     //         .mouse_tracking,
     //         .viewport_active,
     //         .vt_processing_error,
+    //         .vt_ground,          (DEFERRED: Bundle S)
+    //         .cursor_at_prompt,
     //         => bool,
     //         .active_screen => TerminalScreen,
     //         .kitty_keyboard_flags => u8,
@@ -2299,8 +2604,10 @@ pub enum TerminalData {
     //         .kitty_image_medium_temp_file => lib.String,
     //         .kitty_graphics => KittyGraphics,
     //         .selection => selection_c.CSelection,
+    //         .mode => ModeConfig,
     //     };
     // }
+    // (`.continuation_max_bytes => usize` rides Bundle S.)
     //
     // PORT NOTE: `OutType` is a comptime type-returning fn (the output type expected
     // for querying each data kind). rustty erases `out` to `*mut c_void` at the FFI
@@ -2326,8 +2633,10 @@ const _: () = assert!(std::mem::size_of::<TerminalData>() == std::mem::size_of::
 // holes are rejected explicitly. The MECHANISM stays even though the list is
 // now empty: 36+ may reopen a hole, and re-deriving it from scratch under time
 // pressure is exactly how that UB gets reintroduced.
-const TERMINAL_DATA_MAX: c_int = 35;
-const TERMINAL_DATA_HOLES: &[c_int] = &[];
+// Bundle M reopened the holes: 36 (`continuation_max_bytes`) and 38
+// (`vt_ground`) are reserved for Bundle S's snapshot/continuation surface.
+const TERMINAL_DATA_MAX: c_int = 39;
+const TERMINAL_DATA_HOLES: &[c_int] = &[36, 38];
 
 impl TerminalData {
     /// Narrow an inbound C integer to a `TerminalData`, mirroring
@@ -2371,11 +2680,15 @@ impl TerminalData {
 /// `terminal_`, if non-null, must be a live terminal handle; `out`, if non-null,
 /// must point to storage of the type required by `data` (`TerminalData::out_type`).
 pub unsafe fn get(terminal_: Terminal, data: TerminalData, out: *mut c_void) -> Result {
+    // const out_ptr = out orelse return .invalid_value;
+    if out.is_null() {
+        return Result::InvalidValue;
+    }
     // .invalid => .invalid_value,
     if matches!(data, TerminalData::Invalid) {
         return Result::InvalidValue;
     }
-    // inline else => |comptime_data| getTyped(terminal_, comptime_data, @ptrCast(@alignCast(out)))
+    // inline else => |comptime_data| getTyped(terminal_, comptime_data, @ptrCast(@alignCast(out_ptr)))
     unsafe { get_typed(terminal_, data, out) }
 }
 
@@ -2525,6 +2838,31 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
                 return Result::NoValue;
             }
             unsafe { *(out as *mut usize) = max };
+        }
+
+        // .mode => {
+        //     const mode = out.toMode() orelse return .invalid_value;
+        //     out.value = t.modes.get(mode);
+        // },
+        TerminalData::Mode => {
+            // PORT NOTE: `.mode` is the one IN/OUT arm — the caller initializes
+            // `mode` and receives `value`.
+            // SAFETY: `out` points to a readable+writable `ModeConfig` (caller
+            // contract; `get` already rejected a null `out`).
+            let config = unsafe { &mut *(out as *mut ModeConfig) };
+            let Some(mode) = config.to_mode() else {
+                return Result::InvalidValue;
+            };
+            // SAFETY: shared read of the owned heap terminal's modes.
+            config.value = unsafe { (*t).modes.get(mode) };
+        }
+
+        // .cursor_at_prompt => out.* = t.cursorIsAtPrompt(),
+        TerminalData::CursorAtPrompt => {
+            // SAFETY: `cursor_is_at_prompt` takes `&mut Terminal`; the transient
+            // field-level autoref off the raw handle dies within the statement
+            // (the rust-mut-args-strongly-protected shape).
+            unsafe { *(out as *mut bool) = (*t).cursor_is_at_prompt() };
         }
 
         // .scrollbar => out.* = t.screens.active.pages.scrollbar().cval(),
@@ -3866,35 +4204,54 @@ mod tests {
         });
     }
 
-    // test "mode_get and mode_set"
+    // test "set and get mode"
     #[test]
-    fn mode_get_and_mode_set() {
+    fn set_and_get_mode() {
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
             let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
-            let mut value: bool = false;
-
             // DEC mode 25 (cursor_visible) defaults to true
+            // const cursor_visible: modes.ModeTag.Backing = @bitCast(modes.ModeTag{ .value = 25, .ansi = false });
             let cursor_visible = modes::ModeTag {
                 value: 25,
                 ansi: false,
             }
             .to_backing();
+            // var config: ModeConfig = .{ .mode = cursor_visible, .value = undefined };
+            let mut config = ModeConfig {
+                mode: cursor_visible,
+                value: false,
+            };
+            // try testing.expectEqual(Result.success, get(t, .mode, @ptrCast(&config)));
             assert_eq!(Result::Success, unsafe {
-                mode_get(t, cursor_visible, &mut value)
+                get(
+                    t,
+                    TerminalData::Mode,
+                    &mut config as *mut ModeConfig as *mut c_void,
+                )
             });
-            assert!(value);
+            // try testing.expect(config.value);
+            assert!(config.value);
 
             // Set it to false
+            config.value = false;
             assert_eq!(Result::Success, unsafe {
-                mode_set(t, cursor_visible, false)
+                set(
+                    t,
+                    Option_::Mode,
+                    &config as *const ModeConfig as *const c_void,
+                )
             });
             assert_eq!(Result::Success, unsafe {
-                mode_get(t, cursor_visible, &mut value)
+                get(
+                    t,
+                    TerminalData::Mode,
+                    &mut config as *mut ModeConfig as *mut c_void,
+                )
             });
-            assert!(!value);
+            assert!(!config.value);
 
             // ANSI mode 4 (insert) defaults to false
             let insert = modes::ModeTag {
@@ -3902,78 +4259,247 @@ mod tests {
                 ansi: true,
             }
             .to_backing();
-            assert_eq!(Result::Success, unsafe { mode_get(t, insert, &mut value) });
-            assert!(!value);
+            config.mode = insert;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::Mode,
+                    &mut config as *mut ModeConfig as *mut c_void,
+                )
+            });
+            assert!(!config.value);
 
-            assert_eq!(Result::Success, unsafe { mode_set(t, insert, true) });
-            assert_eq!(Result::Success, unsafe { mode_get(t, insert, &mut value) });
-            assert!(value);
+            config.value = true;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::Mode,
+                    &config as *const ModeConfig as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::Mode,
+                    &mut config as *mut ModeConfig as *mut c_void,
+                )
+            });
+            assert!(config.value);
             unsafe { free(t) };
         });
     }
 
-    // test "mode_get null"
+    // test "set mode default updates current and reset value"
     #[test]
-    fn mode_get_null() {
-        let mut value: bool = false;
-        let tag = modes::ModeTag {
-            value: 25,
-            ansi: false,
-        }
-        .to_backing();
-        assert_eq!(Result::InvalidValue, unsafe {
-            mode_get(std::ptr::null_mut(), tag, &mut value)
-        });
-    }
-
-    // test "mode_set null"
-    #[test]
-    fn mode_set_null() {
-        let tag = modes::ModeTag {
-            value: 25,
-            ansi: false,
-        }
-        .to_backing();
-        assert_eq!(Result::InvalidValue, unsafe {
-            mode_set(std::ptr::null_mut(), tag, true)
-        });
-    }
-
-    // test "mode_get unknown mode"
-    #[test]
-    fn mode_get_unknown_mode() {
+    fn set_mode_default_updates_current_and_reset_value() {
         with_test_allocator(|alloc| {
-            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
             let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
-            let mut value: bool = false;
-            let unknown = modes::ModeTag {
-                value: 9999,
+            // const tag: modes.ModeTag.Backing = @bitCast(modes.ModeTag{ .value = 2027, .ansi = false });
+            let tag = modes::ModeTag {
+                value: 2027,
                 ansi: false,
             }
             .to_backing();
-            assert_eq!(Result::InvalidValue, unsafe {
-                mode_get(t, unknown, &mut value)
+            // var config: ModeConfig = .{ .mode = tag, .value = true };
+            let mut config = ModeConfig {
+                mode: tag,
+                value: true,
+            };
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ModeDefault,
+                    &config as *const ModeConfig as *const c_void,
+                )
+            });
+            // try testing.expect(t.?.terminal.modes.get(.grapheme_cluster));
+            assert!(unsafe { (*(*t).terminal).modes.get(modes::Mode::GraphemeCluster) });
+            // try testing.expect(t.?.terminal.modes.default.grapheme_cluster);
+            assert!(unsafe {
+                (*(*t).terminal)
+                    .modes
+                    .default
+                    .get_mode(modes::Mode::GraphemeCluster)
+            });
+
+            config.value = false;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::Mode,
+                    &config as *const ModeConfig as *const c_void,
+                )
+            });
+            assert!(!unsafe { (*(*t).terminal).modes.get(modes::Mode::GraphemeCluster) });
+            assert!(unsafe {
+                (*(*t).terminal)
+                    .modes
+                    .default
+                    .get_mode(modes::Mode::GraphemeCluster)
+            });
+
+            // Setting the default also unconditionally replaces the current value.
+            config.value = true;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ModeDefault,
+                    &config as *const ModeConfig as *const c_void,
+                )
+            });
+            assert!(unsafe { (*(*t).terminal).modes.get(modes::Mode::GraphemeCluster) });
+
+            config.value = false;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::Mode,
+                    &config as *const ModeConfig as *const c_void,
+                )
+            });
+            // vt_write(t, "\x1bc", 2);
+            let ris = b"\x1bc";
+            unsafe { vt_write(t, ris.as_ptr(), ris.len()) };
+            assert!(unsafe { (*(*t).terminal).modes.get(modes::Mode::GraphemeCluster) });
+
+            config.value = false;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ModeDefault,
+                    &config as *const ModeConfig as *const c_void,
+                )
+            });
+            assert!(!unsafe { (*(*t).terminal).modes.get(modes::Mode::GraphemeCluster) });
+            assert!(!unsafe {
+                (*(*t).terminal)
+                    .modes
+                    .default
+                    .get_mode(modes::Mode::GraphemeCluster)
             });
             unsafe { free(t) };
         });
     }
 
-    // test "mode_set unknown mode"
+    // test "set mode default validates configuration"
     #[test]
-    fn mode_set_unknown_mode() {
+    fn set_mode_default_validates_configuration() {
         with_test_allocator(|alloc| {
-            // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
             let (new_result, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
 
-            let unknown = modes::ModeTag {
-                value: 9999,
+            // try testing.expectEqual(Result.invalid_value, set(t, .mode_default, null));
+            assert_eq!(Result::InvalidValue, unsafe {
+                set(t, Option_::ModeDefault, std::ptr::null())
+            });
+
+            // var config: ModeConfig = .{ .mode = @bitCast(modes.ModeTag{ .value = 9999, .ansi = false }), .value = true };
+            let mut config = ModeConfig {
+                mode: modes::ModeTag {
+                    value: 9999,
+                    ansi: false,
+                }
+                .to_backing(),
+                value: true,
+            };
+            assert_eq!(Result::InvalidValue, unsafe {
+                set(
+                    t,
+                    Option_::ModeDefault,
+                    &config as *const ModeConfig as *const c_void,
+                )
+            });
+
+            // config.mode = @bitCast(modes.ModeTag{ .value = 1047, .ansi = false });
+            config.mode = modes::ModeTag {
+                value: 1047,
                 ansi: false,
             }
             .to_backing();
-            assert_eq!(Result::InvalidValue, unsafe { mode_set(t, unknown, true) });
+            assert_eq!(Result::InvalidValue, unsafe {
+                set(
+                    t,
+                    Option_::ModeDefault,
+                    &config as *const ModeConfig as *const c_void,
+                )
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set and get mode null"
+    #[test]
+    fn set_and_get_mode_null() {
+        // const tag: modes.ModeTag.Backing = @bitCast(modes.ModeTag{ .value = 25, .ansi = false });
+        let tag = modes::ModeTag {
+            value: 25,
+            ansi: false,
+        }
+        .to_backing();
+        // var config: ModeConfig = .{ .mode = tag, .value = true };
+        let mut config = ModeConfig {
+            mode: tag,
+            value: true,
+        };
+        // try testing.expectEqual(Result.invalid_value, set(null, .mode, @ptrCast(&config)));
+        assert_eq!(Result::InvalidValue, unsafe {
+            set(
+                std::ptr::null_mut(),
+                Option_::Mode,
+                &config as *const ModeConfig as *const c_void,
+            )
+        });
+        // try testing.expectEqual(Result.invalid_value, get(null, .mode, @ptrCast(&config)));
+        assert_eq!(Result::InvalidValue, unsafe {
+            get(
+                std::ptr::null_mut(),
+                TerminalData::Mode,
+                &mut config as *mut ModeConfig as *mut c_void,
+            )
+        });
+    }
+
+    // test "set and get mode validate configuration"
+    #[test]
+    fn set_and_get_mode_validate_configuration() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+
+            // try testing.expectEqual(Result.invalid_value, set(t, .mode, null));
+            assert_eq!(Result::InvalidValue, unsafe {
+                set(t, Option_::Mode, std::ptr::null())
+            });
+            // try testing.expectEqual(Result.invalid_value, get(t, .mode, null));
+            assert_eq!(Result::InvalidValue, unsafe {
+                get(t, TerminalData::Mode, std::ptr::null_mut())
+            });
+
+            // var config: ModeConfig = .{ .mode = @bitCast(modes.ModeTag{ .value = 9999, .ansi = false }), .value = true };
+            let mut config = ModeConfig {
+                mode: modes::ModeTag {
+                    value: 9999,
+                    ansi: false,
+                }
+                .to_backing(),
+                value: true,
+            };
+            assert_eq!(Result::InvalidValue, unsafe {
+                set(
+                    t,
+                    Option_::Mode,
+                    &config as *const ModeConfig as *const c_void,
+                )
+            });
+            assert_eq!(Result::InvalidValue, unsafe {
+                get(
+                    t,
+                    TerminalData::Mode,
+                    &mut config as *mut ModeConfig as *mut c_void,
+                )
+            });
             unsafe { free(t) };
         });
     }
@@ -4172,13 +4698,22 @@ mod tests {
             assert!(visible);
 
             // DEC mode 25 controls cursor visibility
-            let cursor_visible_mode = modes::ModeTag {
-                value: 25,
-                ansi: false,
-            }
-            .to_backing();
+            // var config: ModeConfig = .{ .mode = @bitCast(modes.ModeTag{ .value = 25, .ansi = false }), .value = false };
+            let config = ModeConfig {
+                mode: modes::ModeTag {
+                    value: 25,
+                    ansi: false,
+                }
+                .to_backing(),
+                value: false,
+            };
+            // try testing.expectEqual(Result.success, set(t, .mode, @ptrCast(&config)));
             assert_eq!(Result::Success, unsafe {
-                mode_set(t, cursor_visible_mode, false)
+                set(
+                    t,
+                    Option_::Mode,
+                    &config as *const ModeConfig as *const c_void,
+                )
             });
             assert_eq!(Result::Success, unsafe {
                 get(
@@ -4188,6 +4723,55 @@ mod tests {
                 )
             });
             assert!(!visible);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "get cursor_at_prompt"
+    #[test]
+    fn get_cursor_at_prompt() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+
+            // var at_prompt: bool = undefined;
+            let mut at_prompt: bool = false;
+            // try testing.expectEqual(Result.success, get(t, .cursor_at_prompt, @ptrCast(&at_prompt)));
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::CursorAtPrompt,
+                    &mut at_prompt as *mut bool as *mut c_void,
+                )
+            });
+            // try testing.expect(!at_prompt);
+            assert!(!at_prompt);
+
+            // const prompt_start = "\x1b]133;A\x07";
+            let prompt_start = b"\x1b]133;A\x07";
+            unsafe { vt_write(t, prompt_start.as_ptr(), prompt_start.len()) };
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::CursorAtPrompt,
+                    &mut at_prompt as *mut bool as *mut c_void,
+                )
+            });
+            // try testing.expect(at_prompt);
+            assert!(at_prompt);
+
+            // const alternate_screen = "\x1b[?1049h";
+            let alternate_screen = b"\x1b[?1049h";
+            unsafe { vt_write(t, alternate_screen.as_ptr(), alternate_screen.len()) };
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::CursorAtPrompt,
+                    &mut at_prompt as *mut bool as *mut c_void,
+                )
+            });
+            // try testing.expect(!at_prompt);
+            assert!(!at_prompt);
             unsafe { free(t) };
         });
     }
@@ -4265,51 +4849,49 @@ mod tests {
             assert_eq!(Result::Success, get_tracking(t, &mut tracking));
             assert!(!tracking);
 
+            // PORT NOTE (cfc19e805): mode writes go through `set(.mode)` with a
+            // `ModeConfig`; this closure is the `set(t, .mode, @ptrCast(&config))`
+            // call shared by every step below.
+            let set_mode = |t: Terminal, value: u16, on: bool| {
+                let config = ModeConfig {
+                    mode: modes::ModeTag { value, ansi: false }.to_backing(),
+                    value: on,
+                };
+                unsafe {
+                    set(
+                        t,
+                        Option_::Mode,
+                        &config as *const ModeConfig as *const c_void,
+                    )
+                }
+            };
+
             // Enable X10 mouse (DEC mode 9)
-            let x10_mode = modes::ModeTag {
-                value: 9,
-                ansi: false,
-            }
-            .to_backing();
-            assert_eq!(Result::Success, unsafe { mode_set(t, x10_mode, true) });
+            // var config: ModeConfig = .{ .mode = @bitCast(modes.ModeTag{ .value = 9, .ansi = false }), .value = true };
+            assert_eq!(Result::Success, set_mode(t, 9, true));
             assert_eq!(Result::Success, get_tracking(t, &mut tracking));
             assert!(tracking);
 
             // Disable X10, enable normal mouse (DEC mode 1000)
-            assert_eq!(Result::Success, unsafe { mode_set(t, x10_mode, false) });
-            let normal_mode = modes::ModeTag {
-                value: 1000,
-                ansi: false,
-            }
-            .to_backing();
-            assert_eq!(Result::Success, unsafe { mode_set(t, normal_mode, true) });
+            assert_eq!(Result::Success, set_mode(t, 9, false));
+            assert_eq!(Result::Success, set_mode(t, 1000, true));
             assert_eq!(Result::Success, get_tracking(t, &mut tracking));
             assert!(tracking);
 
             // Disable normal, enable button mouse (DEC mode 1002)
-            assert_eq!(Result::Success, unsafe { mode_set(t, normal_mode, false) });
-            let button_mode = modes::ModeTag {
-                value: 1002,
-                ansi: false,
-            }
-            .to_backing();
-            assert_eq!(Result::Success, unsafe { mode_set(t, button_mode, true) });
+            assert_eq!(Result::Success, set_mode(t, 1000, false));
+            assert_eq!(Result::Success, set_mode(t, 1002, true));
             assert_eq!(Result::Success, get_tracking(t, &mut tracking));
             assert!(tracking);
 
             // Disable button, enable any mouse (DEC mode 1003)
-            assert_eq!(Result::Success, unsafe { mode_set(t, button_mode, false) });
-            let any_mode = modes::ModeTag {
-                value: 1003,
-                ansi: false,
-            }
-            .to_backing();
-            assert_eq!(Result::Success, unsafe { mode_set(t, any_mode, true) });
+            assert_eq!(Result::Success, set_mode(t, 1002, false));
+            assert_eq!(Result::Success, set_mode(t, 1003, true));
             assert_eq!(Result::Success, get_tracking(t, &mut tracking));
             assert!(tracking);
 
             // Disable all - should be false again
-            assert_eq!(Result::Success, unsafe { mode_set(t, any_mode, false) });
+            assert_eq!(Result::Success, set_mode(t, 1003, false));
             assert_eq!(Result::Success, get_tracking(t, &mut tracking));
             assert!(!tracking);
             unsafe { free(t) };
@@ -5593,6 +6175,101 @@ mod tests {
         });
     }
 
+    // test "set terminfo_name option"
+    #[test]
+    fn set_terminfo_name_option() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        fn deinit() {
+            // if (last_data) |d| testing.allocator.free(d);
+            unsafe { LAST_DATA = None };
+        }
+        fn last_data() -> Option<&'static Vec<u8>> {
+            unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+        }
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe { LAST_DATA = Some(data) };
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            unsafe { LAST_DATA = None };
+            // defer S.deinit();
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+
+            // While no name is set the query goes unanswered; other capabilities
+            // are still served from the static map.
+            // const query = "\x1BP+q" ++ std.fmt.bytesToHex("TN", .upper) ++ "\x1B\\";
+            let query = b"\x1BP+q544E\x1B\\";
+            vtw(t, query);
+            // try testing.expect(S.last_data == null);
+            assert!(last_data().is_none());
+            // const co_query = "\x1BP+q" ++ std.fmt.bytesToHex("Co", .upper) ++ "\x1B\\";
+            let co_query = b"\x1BP+q436F\x1B\\";
+            vtw(t, co_query);
+            // try testing.expectEqualStrings("\x1BP1+r" ++ hex("Co") ++ "=" ++ hex("256") ++ "\x1B\\", S.last_data.?);
+            assert_eq!(
+                b"\x1BP1+r436F=323536\x1B\\".as_slice(),
+                last_data().unwrap().as_slice()
+            );
+            deinit();
+
+            // The name is copied, so the caller's buffer can go away afterwards.
+            // var name: [14]u8 = "xterm-256color".*;
+            let mut name: [u8; 14] = *b"xterm-256color";
+            let value = LibString {
+                ptr: name.as_ptr(),
+                len: name.len(),
+            };
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::TerminfoName,
+                    &value as *const LibString as *const c_void,
+                )
+            });
+            // @memset(&name, 'z');
+            name.fill(b'z');
+
+            vtw(t, query);
+            // try testing.expect(S.last_data != null);
+            assert!(last_data().is_some());
+            // try testing.expectEqualStrings("\x1BP1+r" ++ hex("TN") ++ "=" ++ hex("xterm-256color") ++ "\x1B\\", S.last_data.?);
+            assert_eq!(
+                b"\x1BP1+r544E=787465726D2D323536636F6C6F72\x1B\\".as_slice(),
+                last_data().unwrap().as_slice()
+            );
+
+            // Clearing with NULL leaves the query unanswered again.
+            deinit();
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::TerminfoName, std::ptr::null())
+            });
+            vtw(t, query);
+            assert!(last_data().is_none());
+
+            // Names beyond the maximum are rejected rather than truncated.
+            // const long: [Handler.max_terminfo_name_bytes + 1]u8 = @splat('a');
+            let long = [b'a'; rustty_vt::stream_terminal::MAX_TERMINFO_NAME_BYTES + 1];
+            let long_value = LibString {
+                ptr: long.as_ptr(),
+                len: long.len(),
+            };
+            assert_eq!(Result::InvalidValue, unsafe {
+                set(
+                    t,
+                    Option_::TerminfoName,
+                    &long_value as *const LibString as *const c_void,
+                )
+            });
+            unsafe { free(t) };
+        });
+    }
+
     // test "set title_changed callback"
     #[test]
     fn set_title_changed_callback() {
@@ -5893,6 +6570,159 @@ mod tests {
             });
             vtw(t, b"\x1B]9;4;1;90\x1B\\");
             assert_eq!(cases.len(), unsafe { COUNT });
+
+            unsafe { free(t) };
+        });
+    }
+
+    // test "set unknown_sequence callback"
+    #[test]
+    fn set_unknown_sequence_callback() {
+        static mut COUNT: usize = 0;
+        static mut LAST_TERMINAL: Terminal = std::ptr::null_mut();
+        static mut LAST_USERDATA: *mut c_void = std::ptr::null_mut();
+        static mut LAST_TAG: UnknownSequenceTag = UnknownSequenceTag::Apc;
+        static mut LAST_TRUNCATED: bool = false;
+        static mut CONTENT: [u8; 64] = [0; 64];
+        static mut CONTENT_LEN: usize = 0;
+
+        extern "C" fn unknown_sequence(
+            terminal_: Terminal,
+            ud: *mut c_void,
+            sequence: *const UnknownSequence,
+        ) {
+            unsafe {
+                COUNT += 1;
+                LAST_TERMINAL = terminal_;
+                LAST_USERDATA = ud;
+                LAST_TAG = (*sequence).tag;
+                // const apc_value = sequence.value.apc;
+                let apc_value = (*sequence).value.apc;
+                LAST_TRUNCATED = apc_value.truncated;
+                // content_len = @min(apc_value.content.len, content.len);
+                CONTENT_LEN = core::cmp::min(apc_value.content.len, 64);
+                // @memcpy(content[0..content_len], apc_value.content.ptr[0..content_len]);
+                core::ptr::copy_nonoverlapping(
+                    apc_value.content.ptr,
+                    core::ptr::addr_of_mut!(CONTENT) as *mut u8,
+                    CONTENT_LEN,
+                );
+            }
+        }
+        fn content() -> &'static [u8] {
+            unsafe {
+                core::slice::from_raw_parts(core::ptr::addr_of!(CONTENT) as *const u8, CONTENT_LEN)
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            // S.count = 0; ... (the reference resets its statics)
+            unsafe {
+                COUNT = 0;
+                LAST_TERMINAL = std::ptr::null_mut();
+                LAST_USERDATA = std::ptr::null_mut();
+                LAST_TAG = UnknownSequenceTag::Apc;
+                LAST_TRUNCATED = false;
+                CONTENT_LEN = 0;
+            }
+
+            // var sentinel: u8 = 101;
+            let mut sentinel: u8 = 101;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::Userdata,
+                    &mut sentinel as *mut u8 as *const c_void,
+                )
+            });
+
+            // const max_bytes: usize = 8;
+            let max_bytes: usize = 8;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::UnknownMaxBytes,
+                    &max_bytes as *const usize as *const c_void,
+                )
+            });
+            // try testing.expectEqual(max_bytes, t.?.stream.handler.apc_handler.unknown_max_bytes);
+            assert_eq!(max_bytes, unsafe {
+                (*t).stream.handler.apc_handler.unknown_max_bytes
+            });
+
+            // A byte limit without a callback performs no external effect.
+            // const before_callback = "\x1B_abc;xy\x1B\\";
+            let before_callback = b"\x1B_abc;xy\x1B\\";
+            vtw(t, before_callback);
+            assert_eq!(0, unsafe { COUNT });
+            // try testing.expect(t.?.stream.handler.unknown_sequence == null);
+            assert!(unsafe { (*t).stream.handler.unknown_sequence }.is_none());
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::UnknownSequence, unknown_sequence as *const c_void)
+            });
+            // try testing.expect(t.?.stream.handler.unknown_sequence != null);
+            assert!(unsafe { (*t).stream.handler.unknown_sequence }.is_some());
+
+            // Split a complete APC across writes to exercise persistent parser state.
+            // const seq_a = "\x1B_abc;"; const seq_b = "xy\x1B\\";
+            let seq_a = b"\x1B_abc;";
+            let seq_b = b"xy\x1B\\";
+            vtw(t, seq_a);
+            assert_eq!(0, unsafe { COUNT });
+            vtw(t, seq_b);
+            assert_eq!(1, unsafe { COUNT });
+            // try testing.expectEqual(t, S.last_terminal);
+            assert_eq!(t, unsafe { LAST_TERMINAL });
+            // try testing.expectEqual(@as(?*anyopaque, @ptrCast(&sentinel)), S.last_userdata);
+            assert_eq!(&mut sentinel as *mut u8 as *mut c_void, unsafe {
+                LAST_USERDATA
+            });
+            // try testing.expectEqual(UnknownSequence.Tag.apc, S.last_tag);
+            assert_eq!(UnknownSequenceTag::Apc, unsafe { LAST_TAG });
+            // try testing.expect(!S.last_truncated);
+            assert!(!unsafe { LAST_TRUNCATED });
+            // try testing.expectEqualStrings("abc;xy", S.content[0..S.content_len]);
+            assert_eq!(b"abc;xy".as_slice(), content());
+
+            // Content beyond the generic limit is omitted and marked truncated.
+            // const truncated = "\x1B_abcdefghijkl\x1B\\";
+            let truncated = b"\x1B_abcdefghijkl\x1B\\";
+            vtw(t, truncated);
+            assert_eq!(2, unsafe { COUNT });
+            assert!(unsafe { LAST_TRUNCATED });
+            // try testing.expectEqualStrings("abcdefgh", S.content[0..S.content_len]);
+            assert_eq!(b"abcdefgh".as_slice(), content());
+
+            // CAN aborts the APC and must not invoke the callback.
+            // const aborted = "\x1B_abcdef\x18";
+            let aborted = b"\x1B_abcdef\x18";
+            vtw(t, aborted);
+            assert_eq!(2, unsafe { COUNT });
+
+            // Clearing the callback restores the null fast path immediately.
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::UnknownSequence, std::ptr::null())
+            });
+            assert!(unsafe { (*t).stream.handler.unknown_sequence }.is_none());
+            vtw(t, before_callback);
+            assert_eq!(2, unsafe { COUNT });
+
+            // A NULL limit disables capture even after reinstalling the callback.
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::UnknownSequence, unknown_sequence as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::UnknownMaxBytes, std::ptr::null())
+            });
+            // try testing.expectEqual(@as(usize, 0), t.?.stream.handler.apc_handler.unknown_max_bytes);
+            assert_eq!(0, unsafe {
+                (*t).stream.handler.apc_handler.unknown_max_bytes
+            });
+            vtw(t, before_callback);
+            assert_eq!(2, unsafe { COUNT });
 
             unsafe { free(t) };
         });
@@ -6562,6 +7392,72 @@ mod tests {
         });
     }
 
+    // test "title report requires explicit opt in"
+    #[test]
+    fn title_report_requires_explicit_opt_in() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        fn deinit() {
+            // if (last_data) |data| testing.allocator.free(data);
+            unsafe { LAST_DATA = None };
+        }
+        fn last_data() -> Option<&'static Vec<u8>> {
+            unsafe { (*std::ptr::addr_of!(LAST_DATA)).as_ref() }
+        }
+        extern "C" fn write_pty(_t: Terminal, _ud: *mut c_void, ptr: *const u8, len: usize) {
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) }.to_vec();
+            unsafe { LAST_DATA = Some(data) };
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            // S.last_data = null;
+            unsafe { LAST_DATA = None };
+            // defer S.deinit();
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+
+            // const set_title = "\x1B]2;echo vulnerable\x1B\\";
+            let set_title = b"\x1B]2;echo vulnerable\x1B\\";
+            // const query_title = "\x1B[21t";
+            let query_title = b"\x1B[21t";
+            vtw(t, set_title);
+
+            // WRITE_PTY alone must not enable the security-sensitive response.
+            vtw(t, query_title);
+            // try testing.expect(S.last_data == null);
+            assert!(last_data().is_none());
+
+            // const enabled = true;
+            let enabled: bool = true;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::TitleReport,
+                    &enabled as *const bool as *const c_void,
+                )
+            });
+            vtw(t, query_title);
+            // try testing.expectEqualStrings("\x1b]lecho vulnerable\x1b\\", S.last_data.?);
+            assert_eq!(
+                b"\x1b]lecho vulnerable\x1b\\".as_slice(),
+                last_data().unwrap().as_slice()
+            );
+
+            // NULL restores the secure default.
+            deinit();
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::TitleReport, std::ptr::null())
+            });
+            vtw(t, query_title);
+            assert!(last_data().is_none());
+
+            unsafe { free(t) };
+        });
+    }
+
     // test "resize updates pixel dimensions"
     #[test]
     fn resize_updates_pixel_dimensions() {
@@ -7222,6 +8118,10 @@ mod tests {
     // test "set glyph protocol disables APC handling and clears glossary"
     #[test]
     fn set_glyph_protocol_disables_apc_handling_and_clears_glossary() {
+        // if (comptime !build_options.glyph_protocol) return error.SkipZigTest;
+        if !rustty_vt::options::GLYPH_PROTOCOL {
+            return;
+        }
         with_test_allocator(|alloc| {
             // try testing.expectEqual(Result.success, new(&test_allocator, &t, .{ ... }));
             let (new_result, t) = new_t(alloc, 80, 24);

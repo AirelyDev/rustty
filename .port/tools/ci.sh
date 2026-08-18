@@ -627,6 +627,21 @@ GATE_REGISTRY=(
   # continuously layout-gated (the vt header declares no by-value struct returns,
   # so this covers field-offset drift rather than the A4 sret crash class).
   "A5|PROGRESS|sh $GATES/check_rustty_vt_headers.sh"
+  # G-ABISCHEMA (P4-W5 Bundle T, oracle c75559589) — the librustty-vt ABI type
+  # manifest (`rustty_type_json`) validates against its checked-in JSON Schema
+  # (`crates/rustty-vt-c/types.schema.json`) via the ported
+  # `types-schema-verify.py` (the oracle's `test-lib-vt-schema` build step).
+  # The gate builds the ISOLATED `-p rustty-vt-c` dylib (G-VTCLIB publish rule)
+  # and ctypes-loads it, so the validated bytes are the SHIPPED manifest, not a
+  # fixture. FAIL arm proven by a NEGATIVE CONTROL that runs on EVERY
+  # invocation: a deliberately broken local schema copy (`"schema"` const
+  # flipped 1 -> 2) must be rejected or the gate goes RED — executed at
+  # landing (broken copy failed with `/schema: 2 was expected`; the real
+  # schema validated 134 types). PROGRESS on first landing per the D1-D9
+  # bedding-in convention; a genuine schema regression is still escalated by
+  # run_gate's PROGRESS-went-RED branch. Exits 3 BLOCKED (never green) when no
+  # python with jsonschema exists and the cached venv cannot be provisioned.
+  "G-ABISCHEMA|PROGRESS|bash $GATES/check_abi_schema.sh"
 )
 
 HARD_FAILURES=()   # hard-fail checks that failed, or a claimed-done regression

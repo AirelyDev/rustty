@@ -1326,7 +1326,6 @@ dependencies = [
  "rustty-helpgen",
  "rustty-identity",
  "rustty-input",
- "rustty-lib",
  "rustty-os",
  "rustty-terminfo",
  "rustty-vaxis",

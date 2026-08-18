@@ -49,7 +49,7 @@ use rustty_vt::render::{
     CellList, Dirty as RenderDirty, RenderState as ZigRenderState, Row as RenderRow,
 };
 use rustty_vt::size;
-use rustty_vt::style::{ColorTag, Fg, Style};
+use rustty_vt::style::ColorTag;
 
 // const log = std.log.scoped(.render_state_c);
 //
@@ -80,17 +80,32 @@ pub struct RenderStateWrapper {
     pub state: ZigRenderState,
 }
 
+// /// The "before the first element" position for the iterator wrappers
+// /// below. Represented as a sentinel index rather than an optional because
+// /// optional codegens into something that is less efficient than this.
+// const position_none = std.math.maxInt(usize);
+/// The "before the first element" position for the iterator wrappers
+/// below. Represented as a sentinel index rather than an optional because
+/// optional codegens into something that is less efficient than this.
+pub const POSITION_NONE: usize = usize::MAX;
+
 // const RowIteratorWrapper = struct {
 //     alloc: std.mem.Allocator,
 //
-//     /// The current index (also y value) into the row list.
-//     y: ?size.CellCountInt,
+//     /// The current index (also y value) into the row list, or
+//     /// `position_none` if iteration hasn't started. Always validate
+//     /// against `raws.len` before use.
+//     y: usize,
 //
 //     /// These are the raw pointers into the render state data.
 //     raws: []const page.Row,
 //     cells: []const std.MultiArrayList(renderpkg.RenderState.Cell),
 //     selection: []const ?[2]size.CellCountInt,
 //     dirty: []bool,
+//
+//     /// The global dirty state from the render state that populated this
+//     /// iterator. This has the same borrowed lifetime as the row slices.
+//     state_dirty: *const Dirty,
 //
 //     /// The color palette from the render state, needed to resolve
 //     /// palette-indexed background colors on cells.
@@ -102,8 +117,10 @@ pub struct RenderStateWrapper {
 pub struct RowIteratorWrapper {
     pub alloc: Box<dyn rustty_lib::allocator::ZigAllocator>,
 
-    /// The current index (also y value) into the row list.
-    pub y: Option<size::CellCountInt>,
+    /// The current index (also y value) into the row list, or
+    /// `POSITION_NONE` if iteration hasn't started. Always validate
+    /// against `raws.len` before use.
+    pub y: usize,
 
     /// These are the raw pointers into the render state data.
     // PORT NOTE: `raws`/`cells`/`selection`/`dirty` collapse to a raw `*mut
@@ -112,7 +129,24 @@ pub struct RowIteratorWrapper {
     // writable and `row_set(.dirty)` writes through this pointer — a
     // `*const`-derived (SharedReadOnly) tag cast to `*mut` still forbids the
     // write under Stacked Borrows (Miri-caught in `render_row_get_set_dirty`).
+    //
+    // SB (SOUNDNESS, 0d37f2d34 interleave): this pointer carries the provenance
+    // of the `Vec<Row>` BUFFER root (`Vec::as_mut_ptr`), NOT of a transient
+    // `&mut RenderStateWrapper`. `rustty_render_state_clean` mutates the same
+    // rows between `get(.row_iterator)` and `row_iterator_next_dirty` (the
+    // "existing iterators observe cleaning" contract); transient `&mut` slices
+    // formed inside `clean` are children of the same buffer root, so they die
+    // without invalidating this alias. A wrapper-level `&mut` reborrow anywhere
+    // in this module WOULD invalidate `state_dirty` below — which is why every
+    // state access in this module goes through raw place projections off the
+    // handle (the rust-mut-args-strongly-protected discipline).
     pub rows: *mut [RenderRow],
+
+    /// The global dirty state from the render state that populated this
+    /// iterator. This has the same borrowed lifetime as the row slices.
+    // SB: raw projection off the wrapper base pointer (`addr_of!`), so it stays
+    // valid across the transient field-level borrows the exports create.
+    pub state_dirty: *const RenderDirty,
 
     /// The color palette from the render state, needed to resolve
     /// palette-indexed background colors on cells.
@@ -121,7 +155,12 @@ pub struct RowIteratorWrapper {
 
 // const RowCellsWrapper = struct {
 //     alloc: std.mem.Allocator,
-//     x: ?size.CellCountInt,
+//
+//     /// The current index (also x value) into the cell list, or
+//     /// `position_none` if iteration hasn't started. Always validate
+//     /// against `raws.len` before use.
+//     x: usize,
+//
 //     raws: []const page.Cell,
 //     graphemes: []const []const u21,
 //     styles: []const Style,
@@ -137,7 +176,12 @@ pub struct RowIteratorWrapper {
 // `(*cells).raw()[x]` / `.style()[x]` / `.grapheme(x)` — the same projections.
 pub struct RowCellsWrapper {
     pub alloc: Box<dyn rustty_lib::allocator::ZigAllocator>,
-    pub x: Option<size::CellCountInt>,
+
+    /// The current index (also x value) into the cell list, or
+    /// `POSITION_NONE` if iteration hasn't started. Always validate
+    /// against `raws.len` before use.
+    pub x: usize,
+
     pub cells: *const CellList,
     pub selection: Option<[size::CellCountInt; 2]>,
 
@@ -273,6 +317,32 @@ impl CursorVisualStyle {
     }
 }
 
+/// C: GhosttyRenderStateCursor -> RusttyRenderStateCursor (R2)
+// pub const Cursor = extern struct {
+//     size: usize = @sizeOf(Cursor),
+//     viewport_has_value: bool,
+//     viewport_x: u16,
+//     viewport_y: u16,
+//     wide_tail: bool,
+//     visible: bool,
+//     blinking: bool,
+//     password_input: bool,
+//     visual_style: CursorVisualStyle,
+// };
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Cursor {
+    pub size: usize,
+    pub viewport_has_value: bool,
+    pub viewport_x: u16,
+    pub viewport_y: u16,
+    pub wide_tail: bool,
+    pub visible: bool,
+    pub blinking: bool,
+    pub password_input: bool,
+    pub visual_style: CursorVisualStyle,
+}
+
 /// C: GhosttyRenderStateData -> RusttyRenderStateData (R2)
 // pub const Data = enum(c_int) { invalid = 0, ... };
 #[repr(C)]
@@ -296,6 +366,8 @@ pub enum Data {
     CursorViewportX = 15,
     CursorViewportY = 16,
     CursorViewportWideTail = 17,
+    Cursor = 18,
+    Colors = 19,
 }
 
 // D11 (P3-W6 T2): proves reading this value out of C memory as a `c_int` leaves
@@ -310,8 +382,8 @@ impl Data {
     // `std.enums.fromInt(Data, @intFromEnum(data))`; `Data` is a contiguous
     // `#[repr(C)]` enum here, so the range check IS `fromInt`.
     pub fn from_c_int(v: c_int) -> Option<Data> {
-        // contiguous 0..=17
-        if (0..=17).contains(&v) {
+        // contiguous 0..=19
+        if (0..=19).contains(&v) {
             // SAFETY: `v` is a valid `Data` discriminant (range-checked above).
             Some(unsafe { std::mem::transmute::<c_int, Data>(v) })
         } else {
@@ -333,6 +405,8 @@ impl Data {
 //     .cursor_visible, .cursor_blinking, .cursor_password_input => bool,
 //     .cursor_viewport_has_value, .cursor_viewport_wide_tail => bool,
 //     .cursor_viewport_x, .cursor_viewport_y => size.CellCountInt,
+//     .cursor => Cursor,
+//     .colors => Colors,
 // In Rust the OutType mapping is preserved as the per-arm pointer cast in
 // `get_typed`.
 
@@ -412,6 +486,74 @@ fn colors_struct_type() -> rustty_lib::r#struct::StructType {
                 size: std::mem::size_of::<[RGB; 256]>(),
                 natural_align: std::mem::align_of::<[RGB; 256]>(),
                 alignment: std::mem::align_of::<[RGB; 256]>(),
+            },
+        ],
+    }
+}
+
+// PORT NOTE: the `Cursor` struct descriptor used by `struct_sized_field_fits`
+// (the reference `lib.structSizedFieldFits(Cursor, out_size, "<field>")`).
+// `bool` 1/1, `u16` 2/2, `usize` 8/8, `CursorVisualStyle` is `c_int`-sized. The
+// `#[repr(C)]` layout is reproduced exactly so `offset_of`/`field_size` match.
+fn cursor_struct_type() -> rustty_lib::r#struct::StructType {
+    use rustty_lib::r#struct::{FieldInfo, Layout, StructType};
+    StructType {
+        layout: Layout::Extern,
+        is_tuple: false,
+        fields: vec![
+            FieldInfo {
+                name: "size",
+                size: std::mem::size_of::<usize>(),
+                natural_align: std::mem::align_of::<usize>(),
+                alignment: std::mem::align_of::<usize>(),
+            },
+            FieldInfo {
+                name: "viewport_has_value",
+                size: std::mem::size_of::<bool>(),
+                natural_align: std::mem::align_of::<bool>(),
+                alignment: std::mem::align_of::<bool>(),
+            },
+            FieldInfo {
+                name: "viewport_x",
+                size: std::mem::size_of::<u16>(),
+                natural_align: std::mem::align_of::<u16>(),
+                alignment: std::mem::align_of::<u16>(),
+            },
+            FieldInfo {
+                name: "viewport_y",
+                size: std::mem::size_of::<u16>(),
+                natural_align: std::mem::align_of::<u16>(),
+                alignment: std::mem::align_of::<u16>(),
+            },
+            FieldInfo {
+                name: "wide_tail",
+                size: std::mem::size_of::<bool>(),
+                natural_align: std::mem::align_of::<bool>(),
+                alignment: std::mem::align_of::<bool>(),
+            },
+            FieldInfo {
+                name: "visible",
+                size: std::mem::size_of::<bool>(),
+                natural_align: std::mem::align_of::<bool>(),
+                alignment: std::mem::align_of::<bool>(),
+            },
+            FieldInfo {
+                name: "blinking",
+                size: std::mem::size_of::<bool>(),
+                natural_align: std::mem::align_of::<bool>(),
+                alignment: std::mem::align_of::<bool>(),
+            },
+            FieldInfo {
+                name: "password_input",
+                size: std::mem::size_of::<bool>(),
+                natural_align: std::mem::align_of::<bool>(),
+                alignment: std::mem::align_of::<bool>(),
+            },
+            FieldInfo {
+                name: "visual_style",
+                size: std::mem::size_of::<CursorVisualStyle>(),
+                natural_align: std::mem::align_of::<CursorVisualStyle>(),
+                alignment: std::mem::align_of::<CursorVisualStyle>(),
             },
         ],
     }
@@ -597,43 +739,63 @@ pub unsafe fn end_update(state_: RenderState) -> Result {
     Result::Success
 }
 
-// pub fn get(state_: RenderState, data: Data, out: ?*anyopaque) ... Result {
-//     if (comptime std.debug.runtime_safety) {
-//         _ = std.meta.intToEnum(Data, @intFromEnum(data)) catch {
-//             log.warn("render_state_get invalid data value={d}", .{@intFromEnum(data)});
-//             return .invalid_value;
-//         };
-//     }
-//     return switch (data) {
-//         .invalid => .invalid_value,
-//         inline else => |comptime_data| getTyped(state_, comptime_data, @ptrCast(@alignCast(out))),
-//     };
+// pub fn clean(
+//     state_: RenderState,
+// ) callconv(lib.calling_conv) Result {
+//     const state = state_ orelse return .invalid_value;
+//     state.state.clean();
+//     return .success;
 // }
-//
-// PORT NOTE: the `intToEnum(Data, ...)` runtime-safety guard on the raw `c_int`
-// crossing the C boundary lives in `get_checked` below; by the time `get` is
-// reached the `data` enum is already validated.
+/// # Safety
+/// `state_`, if non-null, must be a live handle.
+pub unsafe fn clean(state_: RenderState) -> Result {
+    // const state = state_ orelse return .invalid_value;
+    if state_.is_null() {
+        return Result::InvalidValue;
+    }
+    // state.state.clean();
+    // SB (SOUNDNESS): a NARROW field-level `&mut (*state_).state` autoref, not a
+    // wrapper-level `&mut *state_` — a live row iterator holds raw aliases into
+    // this state (`rows` with buffer-root provenance, `state_dirty` off the
+    // wrapper base tag), and a whole-wrapper `&mut` reborrow would invalidate
+    // them for the documented clean-then-`next_dirty` interleave.
+    // SAFETY: `state_` is live (caller contract); no other reference into the
+    // wrapper is live during this call.
+    unsafe { (*state_).state.clean() };
+    Result::Success
+}
+
+// pub fn get(state_: RenderState, data: Data, out: ?*anyopaque) ... Result {
+//     const state = state_ orelse return .invalid_value;
+//     return getDispatch(state, data, out);
+// }
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
 pub unsafe fn get(state_: RenderState, data: Data, out: *mut c_void) -> Result {
-    match data {
-        Data::Invalid => Result::InvalidValue,
-        // SAFETY: `out` validity/type is the caller's contract per `data`.
-        _ => unsafe { get_typed(state_, data, out) },
+    // const state = state_ orelse return .invalid_value;
+    if state_.is_null() {
+        return Result::InvalidValue;
     }
+    // return getDispatch(state, data, out);
+    // SAFETY: `out` validity/type is the caller's contract per `data`.
+    unsafe { get_dispatch(state_, data, out) }
 }
 
-// PORT NOTE (W34-B02): the reference carries the runtime-safety guard INSIDE
-// `get`, so every caller reaches it — including `get_multi`, which calls `get`
-// per array element. rustty's `get` takes the already-narrowed `Data` (a
-// `#[repr(C)]` enum cannot even hold an out-of-range tag), so the guard lives
-// here, in the raw-`c_int` entry point shared by the `extern "C"` wrapper in
-// `lib.rs` AND by `get_multi` — the same "every path goes through the guard"
-// shape as the reference.
+// PORT NOTE (W34-B02): the reference carries the runtime-safety guard inside
+// `getDispatch`, so every caller reaches it — including `get_multi`, which
+// calls `getDispatch` per array element. rustty's `get_dispatch` takes the
+// already-narrowed `Data` (a `#[repr(C)]` enum cannot even hold an out-of-range
+// tag), so the guard lives here, in the raw-`c_int` entry point shared by the
+// `extern "C"` wrapper in `lib.rs` AND by `get_multi` — the same "every path
+// goes through the guard" shape as the reference.
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
 pub unsafe fn get_checked(state_: RenderState, data: c_int, out: *mut c_void) -> Result {
-    // _ = std.meta.intToEnum(Data, @intFromEnum(data)) catch {
+    // const state = state_ orelse return .invalid_value;
+    if state_.is_null() {
+        return Result::InvalidValue;
+    }
+    // _ = std.enums.fromInt(Data, @intFromEnum(data)) orelse {
     //     log.warn("render_state_get invalid data value={d}", .{@intFromEnum(data)});
     //     return .invalid_value;
     // };
@@ -646,14 +808,49 @@ pub unsafe fn get_checked(state_: RenderState, data: c_int, out: *mut c_void) ->
         return Result::InvalidValue;
     };
     // SAFETY: `out` validity/type is the caller's contract.
-    unsafe { get(state_, d, out) }
+    unsafe { get_dispatch(state_, d, out) }
+}
+
+// inline fn getDispatch(
+//     state: *RenderStateWrapper,
+//     data: Data,
+//     out: ?*anyopaque,
+// ) Result {
+//     if (comptime std.debug.runtime_safety) { ... }
+//     const out_ptr = out orelse return .invalid_value;
+//     return switch (data) {
+//         .invalid => .invalid_value,
+//         inline else => |comptime_data| getTyped(state, comptime_data, @ptrCast(@alignCast(out_ptr))),
+//     };
+// }
+/// # Safety
+/// `state_` must be non-null and live; `out` must point to writable storage of
+/// the type required by `data`.
+#[inline]
+unsafe fn get_dispatch(state_: RenderState, data: Data, out: *mut c_void) -> Result {
+    // const out_ptr = out orelse return .invalid_value;
+    if out.is_null() {
+        return Result::InvalidValue;
+    }
+    match data {
+        // .invalid => .invalid_value,
+        Data::Invalid => Result::InvalidValue,
+        // SAFETY: `out` validity/type is the caller's contract per `data`.
+        _ => unsafe { get_typed(state_, data, out) },
+    }
 }
 
 // pub fn get_multi(state_, count, keys, values, out_written) ... Result {
 //     const k = keys orelse return .invalid_value;
 //     const v = values orelse return .invalid_value;
+//
+//     // Unwrap the handle once for the whole batch rather than per key.
+//     // A null handle fails on the first key, matching the per-call
+//     // behavior.
+//     const state: ?*RenderStateWrapper = state_;
+//
 //     for (0..count) |i| {
-//         const result = get(state_, k[i], v[i]);
+//         const result = if (state) |s| getDispatch(s, k[i], v[i]) else Result.invalid_value;
 //         if (result != .success) { if (out_written) |w| w.* = i; return result; }
 //     }
 //     if (out_written) |w| w.* = count;
@@ -663,8 +860,8 @@ pub unsafe fn get_checked(state_: RenderState, data: c_int, out: *mut c_void) ->
 /// `keys`/`values`/`out_written` validity is the caller's contract.
 // PORT NOTE (W34-B02): `keys` is C memory typed `const RusttyRenderStateData *`
 // in the published header; each element is read as a raw `c_int` (ABI-identical
-// — `Data` is `#[repr(C)]`, asserted int-sized above) and range-checked by
-// `get_checked`. Reading an element straight into a `Data` would materialize an
+// — `Data` is `#[repr(C)]`, asserted int-sized above) and range-checked per
+// element. Reading an element straight into a `Data` would materialize an
 // out-of-range discriminant, which is UB in Rust in EVERY build mode.
 pub unsafe fn get_multi(
     state_: RenderState,
@@ -682,12 +879,38 @@ pub unsafe fn get_multi(
         return Result::InvalidValue;
     }
 
+    // Unwrap the handle once for the whole batch rather than per key.
+    // A null handle fails on the first key, matching the per-call
+    // behavior.
+    let state: RenderState = state_;
+
     for i in 0..count {
         // SAFETY: caller guarantees `keys`/`values` have `count` elements.
         let key = unsafe { *keys.add(i) };
         let value = unsafe { *values.add(i) };
-        // const result = get(state_, k[i], v[i]);
-        let result = unsafe { get_checked(state_, key, value) };
+        // const result = if (state) |s| getDispatch(s, k[i], v[i]) else Result.invalid_value;
+        //
+        // PORT NOTE (W34-B02): the reference's `getDispatch` receives a
+        // possibly-invalid Zig enum and guards it; rustty narrows the raw
+        // `c_int` per element (with the same `log.warn`) before dispatching.
+        let result = if !state.is_null() {
+            let Some(d) = Data::from_c_int(key) else {
+                crate::sys::log_fn(
+                    crate::sys::StdLevel::Warn,
+                    LOG_SCOPE,
+                    format_args!("render_state_get invalid data value={key}"),
+                );
+                if !out_written.is_null() {
+                    // SAFETY: caller-provided out pointer, checked non-null.
+                    unsafe { *out_written = i };
+                }
+                return Result::InvalidValue;
+            };
+            // SAFETY: `out` validity/type is the caller's contract.
+            unsafe { get_dispatch(state, d, value) }
+        } else {
+            Result::InvalidValue
+        };
         if result != Result::Success {
             if !out_written.is_null() {
                 // SAFETY: caller-provided out pointer, checked non-null.
@@ -703,43 +926,45 @@ pub unsafe fn get_multi(
     Result::Success
 }
 
-// fn getTyped(state_: RenderState, comptime data: Data, out: *data.OutType()) Result {
-//     const state = state_ orelse return .invalid_value;
+// fn getTyped(state: *RenderStateWrapper, comptime data: Data, out: *data.OutType()) Result {
 //     switch (data) { ... }
 //     return .success;
 // }
+//
+// SB (SOUNDNESS): every arm reads through raw place projections off the handle
+// (`(*state_).state...`) instead of a wrapper-level `&mut *state_` — a live row
+// iterator holds raw aliases into this wrapper (`state_dirty` off the wrapper
+// base tag), and a whole-wrapper `&mut` reborrow would invalidate them (the
+// rust-mut-args-strongly-protected discipline).
 /// # Safety
-/// `out` must point to writable storage of the type required by `data`.
+/// `state_` must be non-null and live; `out` must point to writable storage of
+/// the type required by `data`.
 unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result {
-    // const state = state_ orelse return .invalid_value;
-    if state_.is_null() {
-        return Result::InvalidValue;
-    }
-    // SAFETY: `state_` is a live wrapper (caller contract).
-    let state = unsafe { &mut *state_ };
     match data {
         // .invalid => return .invalid_value,
         Data::Invalid => return Result::InvalidValue,
         // .cols => out.* = state.state.cols,
         Data::Cols => {
             // SAFETY: `out` points to a writable `size::CellCountInt`.
-            unsafe { *(out as *mut size::CellCountInt) = state.state.cols };
+            unsafe { *(out as *mut size::CellCountInt) = (*state_).state.cols };
         }
         // .rows => out.* = state.state.rows,
         Data::Rows => {
             // SAFETY: `out` points to a writable `size::CellCountInt`.
-            unsafe { *(out as *mut size::CellCountInt) = state.state.rows };
+            unsafe { *(out as *mut size::CellCountInt) = (*state_).state.rows };
         }
         // .dirty => out.* = state.state.dirty,
         Data::Dirty => {
             // SAFETY: `out` points to a writable `Dirty` — the int-sized C
             // projection (W34-B03), so the caller's full slot is written.
-            unsafe { *(out as *mut Dirty) = Dirty::from(state.state.dirty) };
+            unsafe { *(out as *mut Dirty) = Dirty::from((*state_).state.dirty) };
         }
         // .row_iterator => {
         //     const it = out.* orelse return .invalid_value;
         //     const row_data = state.state.row_data.slice();
-        //     it.* = .{ .alloc = it.alloc, .y = null, .raws = ..., .cells = ..., .selection = ..., .dirty = ..., .palette = &state.state.colors.palette };
+        //     it.* = .{ .alloc = it.alloc, .y = position_none, .raws = ..., .cells = ...,
+        //               .selection = ..., .dirty = ..., .state_dirty = &state.state.dirty,
+        //               .palette = &state.state.colors.palette };
         // },
         Data::RowIterator => {
             // const it = out.* orelse return .invalid_value;
@@ -754,29 +979,44 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
             // SAFETY: `it_ptr` is a live `row_iterator_new`-returned wrapper.
             let it = unsafe { &mut *it_ptr };
             // const row_data = state.state.row_data.slice();
-            // it.* = .{ .alloc = it.alloc, .y = null, .raws = row_data.items(.raw), ... .palette = &state.state.colors.palette };
-            it.y = None;
+            // it.* = .{ .alloc = it.alloc, .y = position_none, .raws = row_data.items(.raw),
+            //           ..., .state_dirty = &state.state.dirty, .palette = &state.state.colors.palette };
+            it.y = POSITION_NONE;
             // MUT slice: `row_set(.dirty)` later writes through this pointer,
-            // so it must carry write provenance (see the field's PORT NOTE).
-            it.rows = state.state.row_data.as_mut_slice() as *mut [RenderRow];
-            it.palette = &state.state.colors.palette as *const Palette;
+            // so it must carry write provenance. SB: derive it from the
+            // `Vec<Row>` BUFFER root (`as_mut_ptr` through a transient
+            // field-level `&mut`), so the alias survives `clean`'s later
+            // transient reborrows of the same rows (see the field's PORT NOTE).
+            let row_data: *mut Vec<RenderRow> =
+                unsafe { core::ptr::addr_of_mut!((*state_).state.row_data) };
+            // SAFETY: `row_data` is a live `Vec` field of the live wrapper; the
+            // autorefs below are transient and die within this statement.
+            it.rows = core::ptr::slice_from_raw_parts_mut(
+                unsafe { (*row_data).as_mut_ptr() },
+                unsafe { (*row_data).len() },
+            );
+            // SB: raw projections off the wrapper base tag (`addr_of!`), never
+            // through an intermediate reference, so they stay valid across the
+            // transient borrows other exports create.
+            it.state_dirty = unsafe { core::ptr::addr_of!((*state_).state.dirty) };
+            it.palette = unsafe { core::ptr::addr_of!((*state_).state.colors.palette) };
         }
         // .color_background => out.* = state.state.colors.background.cval(),
         Data::ColorBackground => {
             // SAFETY: `out` points to a writable `RGB`.
-            unsafe { *(out as *mut RGB) = state.state.colors.background };
+            unsafe { *(out as *mut RGB) = (*state_).state.colors.background };
         }
         // .color_foreground => out.* = state.state.colors.foreground.cval(),
         Data::ColorForeground => {
             // SAFETY: `out` points to a writable `RGB`.
-            unsafe { *(out as *mut RGB) = state.state.colors.foreground };
+            unsafe { *(out as *mut RGB) = (*state_).state.colors.foreground };
         }
         // .color_cursor => {
         //     const cursor = state.state.colors.cursor orelse return .invalid_value;
         //     out.* = cursor.cval();
         // },
         Data::ColorCursor => {
-            let cursor = match state.state.colors.cursor {
+            let cursor = match unsafe { (*state_).state.colors.cursor } {
                 Some(cursor) => cursor,
                 None => return Result::InvalidValue,
             };
@@ -786,13 +1026,15 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
         // .color_cursor_has_value => out.* = state.state.colors.cursor != null,
         Data::ColorCursorHasValue => {
             // SAFETY: `out` points to a writable `bool`.
-            unsafe { *(out as *mut bool) = state.state.colors.cursor.is_some() };
+            unsafe { *(out as *mut bool) = (*state_).state.colors.cursor.is_some() };
         }
         // .color_palette => out.* = colorpkg.paletteCval(&state.state.colors.palette),
         Data::ColorPalette => {
-            // SAFETY: `out` points to a writable `PaletteC` (`[RGB; 256]`).
+            // SAFETY: `out` points to a writable `PaletteC` (`[RGB; 256]`); the
+            // shared reborrow of the palette is transient.
             unsafe {
-                *(out as *mut [RGB; 256]) = crate::color::palette_cval(&state.state.colors.palette)
+                *(out as *mut [RGB; 256]) =
+                    crate::color::palette_cval(&(*state_).state.colors.palette)
             };
         }
         // .cursor_visual_style => out.* = CursorVisualStyle.fromCursorStyle(state.state.cursor.visual_style),
@@ -800,32 +1042,32 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
             // SAFETY: `out` points to a writable `CursorVisualStyle`.
             unsafe {
                 *(out as *mut CursorVisualStyle) =
-                    CursorVisualStyle::from_cursor_style(state.state.cursor.visual_style)
+                    CursorVisualStyle::from_cursor_style((*state_).state.cursor.visual_style)
             };
         }
         // .cursor_visible => out.* = state.state.cursor.visible,
         Data::CursorVisible => {
             // SAFETY: `out` points to a writable `bool`.
-            unsafe { *(out as *mut bool) = state.state.cursor.visible };
+            unsafe { *(out as *mut bool) = (*state_).state.cursor.visible };
         }
         // .cursor_blinking => out.* = state.state.cursor.blinking,
         Data::CursorBlinking => {
             // SAFETY: `out` points to a writable `bool`.
-            unsafe { *(out as *mut bool) = state.state.cursor.blinking };
+            unsafe { *(out as *mut bool) = (*state_).state.cursor.blinking };
         }
         // .cursor_password_input => out.* = state.state.cursor.password_input,
         Data::CursorPasswordInput => {
             // SAFETY: `out` points to a writable `bool`.
-            unsafe { *(out as *mut bool) = state.state.cursor.password_input };
+            unsafe { *(out as *mut bool) = (*state_).state.cursor.password_input };
         }
         // .cursor_viewport_has_value => out.* = state.state.cursor.viewport != null,
         Data::CursorViewportHasValue => {
             // SAFETY: `out` points to a writable `bool`.
-            unsafe { *(out as *mut bool) = state.state.cursor.viewport.is_some() };
+            unsafe { *(out as *mut bool) = (*state_).state.cursor.viewport.is_some() };
         }
         // .cursor_viewport_x => { const vp = state.state.cursor.viewport orelse return .invalid_value; out.* = vp.x; },
         Data::CursorViewportX => {
-            let vp = match &state.state.cursor.viewport {
+            let vp = match unsafe { &(*state_).state.cursor.viewport } {
                 Some(vp) => vp,
                 None => return Result::InvalidValue,
             };
@@ -834,7 +1076,7 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
         }
         // .cursor_viewport_y => { const vp = ... orelse return .invalid_value; out.* = vp.y; },
         Data::CursorViewportY => {
-            let vp = match &state.state.cursor.viewport {
+            let vp = match unsafe { &(*state_).state.cursor.viewport } {
                 Some(vp) => vp,
                 None => return Result::InvalidValue,
             };
@@ -843,12 +1085,22 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
         }
         // .cursor_viewport_wide_tail => { const vp = ... orelse return .invalid_value; out.* = vp.wide_tail; },
         Data::CursorViewportWideTail => {
-            let vp = match &state.state.cursor.viewport {
+            let vp = match unsafe { &(*state_).state.cursor.viewport } {
                 Some(vp) => vp,
                 None => return Result::InvalidValue,
             };
             // SAFETY: `out` points to a writable `bool`.
             unsafe { *(out as *mut bool) = vp.wide_tail };
+        }
+        // .cursor => return writeCursor(state, out),
+        Data::Cursor => {
+            // SAFETY: `out` points to a writable `Cursor` (caller contract).
+            return unsafe { write_cursor(state_, out as *mut Cursor) };
+        }
+        // .colors => return writeColors(state, out),
+        Data::Colors => {
+            // SAFETY: `out` points to a writable `Colors` (caller contract).
+            return unsafe { write_colors(state_, out as *mut Colors) };
         }
     }
 
@@ -889,8 +1141,6 @@ unsafe fn set_typed(state_: RenderState, option: SetOption, value: *const c_void
     if state_.is_null() {
         return Result::InvalidValue;
     }
-    // SAFETY: `state_` is a live wrapper (caller contract).
-    let state = unsafe { &mut *state_ };
     match option {
         // .dirty => state.state.dirty = value.*,
         SetOption::Dirty => {
@@ -907,18 +1157,101 @@ unsafe fn set_typed(state_: RenderState, option: SetOption, value: *const c_void
             let Some(dirty) = Dirty::from_c_int(raw) else {
                 return Result::InvalidValue;
             };
-            state.state.dirty = dirty.into();
+            // SB: raw place write off the handle — no wrapper-level `&mut`
+            // (see `get_typed`'s SOUNDNESS note).
+            // SAFETY: `state_` is a live wrapper (caller contract).
+            unsafe { (*state_).state.dirty = dirty.into() };
         }
     }
     Result::Success
 }
 
-// pub fn colors_get(state_: RenderState, out_colors_: ?*Colors) ... Result {
-//     const state = state_ orelse return .invalid_value;
-//     const out_colors = out_colors_ orelse return .invalid_value;
+// fn writeCursor(state: *RenderStateWrapper, out_cursor: *Cursor) Result {
+//     const out_size = out_cursor.size;
+//     if (out_size < @sizeOf(usize)) return .invalid_value;
+//     const cursor = &state.state.cursor;
+//     if (lib.structSizedFieldFits(Cursor, out_size, "viewport_has_value")) {
+//         out_cursor.viewport_has_value = cursor.viewport != null;
+//     }
+//     if (cursor.viewport) |viewport| {
+//         if (lib.structSizedFieldFits(Cursor, out_size, "viewport_x")) out_cursor.viewport_x = viewport.x;
+//         if (lib.structSizedFieldFits(Cursor, out_size, "viewport_y")) out_cursor.viewport_y = viewport.y;
+//         if (lib.structSizedFieldFits(Cursor, out_size, "wide_tail")) out_cursor.wide_tail = viewport.wide_tail;
+//     }
+//     if (lib.structSizedFieldFits(Cursor, out_size, "visible")) out_cursor.visible = cursor.visible;
+//     if (lib.structSizedFieldFits(Cursor, out_size, "blinking")) out_cursor.blinking = cursor.blinking;
+//     if (lib.structSizedFieldFits(Cursor, out_size, "password_input")) out_cursor.password_input = cursor.password_input;
+//     if (lib.structSizedFieldFits(Cursor, out_size, "visual_style")) {
+//         out_cursor.visual_style = CursorVisualStyle.fromCursorStyle(cursor.visual_style);
+//     }
+//     return .success;
+// }
+/// # Safety
+/// `state_` must be non-null and live; `out_cursor_` must be a valid writable
+/// pointer to a `Cursor` (its readable prefix per the sized-struct contract).
+unsafe fn write_cursor(state_: RenderState, out_cursor_: *mut Cursor) -> Result {
+    // SAFETY: `out_cursor_` is a valid writable `Cursor` (caller contract).
+    let out_cursor = unsafe { &mut *out_cursor_ };
+    // const out_size = out_cursor.size;
+    let out_size = out_cursor.size;
+    // if (out_size < @sizeOf(usize)) return .invalid_value;
+    if out_size < std::mem::size_of::<usize>() {
+        return Result::InvalidValue;
+    }
+
+    // const cursor = &state.state.cursor;
+    // SB: shared reborrow of the cursor sub-field only (transient), never a
+    // wrapper-level `&mut` (see `get_typed`'s SOUNDNESS note).
+    // SAFETY: `state_` is a live wrapper (caller contract).
+    let cursor = unsafe { &(*state_).state.cursor };
+    let cursor_ty = cursor_struct_type();
+    // if (lib.structSizedFieldFits(Cursor, out_size, "viewport_has_value")) { ... }
+    if rustty_lib::struct_sized_field_fits(&cursor_ty, out_size, "viewport_has_value") {
+        out_cursor.viewport_has_value = cursor.viewport.is_some();
+    }
+
+    // if (cursor.viewport) |viewport| { ... }
+    if let Some(viewport) = &cursor.viewport {
+        if rustty_lib::struct_sized_field_fits(&cursor_ty, out_size, "viewport_x") {
+            out_cursor.viewport_x = viewport.x;
+        }
+
+        if rustty_lib::struct_sized_field_fits(&cursor_ty, out_size, "viewport_y") {
+            out_cursor.viewport_y = viewport.y;
+        }
+
+        if rustty_lib::struct_sized_field_fits(&cursor_ty, out_size, "wide_tail") {
+            out_cursor.wide_tail = viewport.wide_tail;
+        }
+    }
+
+    // if (lib.structSizedFieldFits(Cursor, out_size, "visible")) out_cursor.visible = cursor.visible;
+    if rustty_lib::struct_sized_field_fits(&cursor_ty, out_size, "visible") {
+        out_cursor.visible = cursor.visible;
+    }
+
+    // if (lib.structSizedFieldFits(Cursor, out_size, "blinking")) out_cursor.blinking = cursor.blinking;
+    if rustty_lib::struct_sized_field_fits(&cursor_ty, out_size, "blinking") {
+        out_cursor.blinking = cursor.blinking;
+    }
+
+    // if (lib.structSizedFieldFits(Cursor, out_size, "password_input")) ...
+    if rustty_lib::struct_sized_field_fits(&cursor_ty, out_size, "password_input") {
+        out_cursor.password_input = cursor.password_input;
+    }
+
+    // if (lib.structSizedFieldFits(Cursor, out_size, "visual_style")) ...
+    if rustty_lib::struct_sized_field_fits(&cursor_ty, out_size, "visual_style") {
+        out_cursor.visual_style = CursorVisualStyle::from_cursor_style(cursor.visual_style);
+    }
+
+    Result::Success
+}
+
+// fn writeColors(state: *RenderStateWrapper, out_colors: *Colors) Result {
 //     const out_size = out_colors.size;
 //     if (out_size < @sizeOf(usize)) return .invalid_value;
-//     const colors = state.state.colors;
+//     const colors = &state.state.colors;
 //     if (lib.structSizedFieldFits(Colors, out_size, "background")) out_colors.background = colors.background.cval();
 //     if (lib.structSizedFieldFits(Colors, out_size, "foreground")) out_colors.foreground = colors.foreground.cval();
 //     if (colors.cursor) |cursor| { if (lib.structSizedFieldFits(Colors, out_size, "cursor")) out_colors.cursor = cursor.cval(); }
@@ -927,24 +1260,18 @@ unsafe fn set_typed(state_: RenderState, option: SetOption, value: *const c_void
 //       if (out_size > palette_offset) {
 //         const available = out_size - palette_offset;
 //         const max_entries = @min(colors.palette.len, available / @sizeOf(colorpkg.RGB.C));
-//         for (0..max_entries) |i| out_colors.palette[i] = colors.palette[i].cval();
+//         colorpkg.paletteCvalSlice(
+//             colors.palette[0..max_entries],
+//             out_colors.palette[0..max_entries],
+//         );
 //       } }
 //     return .success;
 // }
 /// # Safety
-/// `out_colors_`, if non-null, must be a valid writable pointer to a `Colors`.
-pub unsafe fn colors_get(state_: RenderState, out_colors_: *mut Colors) -> Result {
-    // const state = state_ orelse return .invalid_value;
-    if state_.is_null() {
-        return Result::InvalidValue;
-    }
-    // SAFETY: `state_` is a live wrapper (caller contract).
-    let state = unsafe { &*state_ };
-    // const out_colors = out_colors_ orelse return .invalid_value;
-    if out_colors_.is_null() {
-        return Result::InvalidValue;
-    }
-    // SAFETY: `out_colors_` is a non-null valid writable `Colors`.
+/// `state_` must be non-null and live; `out_colors_` must be a valid writable
+/// pointer to a `Colors` (its readable prefix per the sized-struct contract).
+unsafe fn write_colors(state_: RenderState, out_colors_: *mut Colors) -> Result {
+    // SAFETY: `out_colors_` is a valid writable `Colors` (caller contract).
     let out_colors = unsafe { &mut *out_colors_ };
     // const out_size = out_colors.size;
     let out_size = out_colors.size;
@@ -953,8 +1280,11 @@ pub unsafe fn colors_get(state_: RenderState, out_colors_: *mut Colors) -> Resul
         return Result::InvalidValue;
     }
 
-    // const colors = state.state.colors;
-    let colors = &state.state.colors;
+    // const colors = &state.state.colors;
+    // SB: shared reborrow of the colors sub-field only (transient), never a
+    // wrapper-level `&mut` (see `get_typed`'s SOUNDNESS note).
+    // SAFETY: `state_` is a live wrapper (caller contract).
+    let colors = unsafe { &(*state_).state.colors };
     let colors_ty = colors_struct_type();
     // if (lib.structSizedFieldFits(Colors, out_size, "background")) out_colors.background = colors.background.cval();
     if rustty_lib::struct_sized_field_fits(&colors_ty, out_size, "background") {
@@ -983,7 +1313,10 @@ pub unsafe fn colors_get(state_: RenderState, out_colors_: *mut Colors) -> Resul
     //     if (out_size > palette_offset) {
     //         const available = out_size - palette_offset;
     //         const max_entries = @min(colors.palette.len, available / @sizeOf(colorpkg.RGB.C));
-    //         for (0..max_entries) |i| out_colors.palette[i] = colors.palette[i].cval();
+    //         colorpkg.paletteCvalSlice(
+    //             colors.palette[0..max_entries],
+    //             out_colors.palette[0..max_entries],
+    //         );
     //     }
     // }
     {
@@ -992,9 +1325,10 @@ pub unsafe fn colors_get(state_: RenderState, out_colors_: *mut Colors) -> Resul
             let available = out_size - palette_offset;
             let max_entries =
                 std::cmp::min(colors.palette.len(), available / std::mem::size_of::<RGB>());
-            for i in 0..max_entries {
-                out_colors.palette[i] = colors.palette[i];
-            }
+            rustty_vt::color::palette_cval_slice(
+                &colors.palette[0..max_entries],
+                &mut out_colors.palette[0..max_entries],
+            );
         }
     }
 
@@ -1004,7 +1338,7 @@ pub unsafe fn colors_get(state_: RenderState, out_colors_: *mut Colors) -> Resul
 // pub fn row_iterator_new(alloc_: ?*const CAllocator, result: *RowIterator) ... Result {
 //     const alloc = lib.alloc.default(alloc_);
 //     const ptr = alloc.create(RowIteratorWrapper) catch { result.* = null; return .out_of_memory; };
-//     ptr.* = .{ .alloc, .y = undefined, .raws = undefined, .cells = undefined, .selection = undefined, .dirty = undefined, .palette = undefined };
+//     ptr.* = .{ .alloc, .y = undefined, .raws = undefined, .cells = undefined, .selection = undefined, .dirty = undefined, .state_dirty = undefined, .palette = undefined };
 //     result.* = ptr;
 //     return .success;
 // }
@@ -1024,22 +1358,24 @@ pub unsafe fn row_iterator_new(alloc_: Option<&CAllocator>, result: *mut RowIter
             return Result::OutOfMemory;
         }
     };
-    // PORT NOTE: the reference `undefined` fields become null/`None` sentinels:
-    // `y = None`, `rows = &[]` (empty slice), `palette = null`. Real values are
-    // installed by `get(.., .row_iterator, ..)` before any observation.
+    // PORT NOTE: the reference `undefined` fields become null/sentinel values:
+    // `y = POSITION_NONE`, `rows = &[]` (empty slice), `state_dirty`/`palette`
+    // null. Real values are installed by `get(.., .row_iterator, ..)` before
+    // any observation.
     // SAFETY: `ptr` is valid uninitialized `RowIteratorWrapper` storage.
     unsafe {
         std::ptr::write(
             ptr,
             RowIteratorWrapper {
                 alloc,
-                y: None,
+                y: POSITION_NONE,
                 // Empty placeholder slice (never dereferenced: `len == 0` makes
                 // `row_iterator_next` return false; `get` installs the real slice).
                 rows: std::ptr::slice_from_raw_parts_mut(
                     std::ptr::NonNull::<RenderRow>::dangling().as_ptr(),
                     0,
                 ),
+                state_dirty: std::ptr::null(),
                 palette: std::ptr::null(),
             },
         )
@@ -1075,7 +1411,8 @@ pub unsafe fn row_iterator_free(iterator_: RowIterator) {
 
 // pub fn row_iterator_next(iterator_: RowIterator) ... bool {
 //     const it = iterator_ orelse return false;
-//     const next_y: size.CellCountInt = if (it.y) |y| y + 1 else 0;
+//     // The none sentinel wraps to zero.
+//     const next_y = it.y +% 1;
 //     if (next_y >= it.raws.len) return false;
 //     it.y = next_y;
 //     return true;
@@ -1089,21 +1426,108 @@ pub unsafe fn row_iterator_next(iterator_: RowIterator) -> bool {
     }
     // SAFETY: `iterator_` is a live wrapper (caller contract).
     let it = unsafe { &mut *iterator_ };
-    // const next_y: size.CellCountInt = if (it.y) |y| y + 1 else 0;
-    let next_y: size::CellCountInt = match it.y {
-        Some(y) => y + 1,
-        None => 0,
-    };
+    // The none sentinel wraps to zero.
+    // const next_y = it.y +% 1;
+    let next_y = it.y.wrapping_add(1);
     // if (next_y >= it.raws.len) return false;
     // PORT NOTE: `<*const [T]>::len` reads the slice-pointer metadata without
     // dereferencing, so no `&*` autoref of the raw pointer is needed.
     let rows_len = it.rows.len();
-    if (next_y as usize) >= rows_len {
+    if next_y >= rows_len {
         return false;
     }
     // it.y = next_y;
-    it.y = Some(next_y);
+    it.y = next_y;
     true
+}
+
+// pub fn row_iterator_next_dirty(
+//     iterator_: RowIterator,
+//     out_y: ?*size.CellCountInt,
+// ) callconv(lib.calling_conv) bool {
+//     const it = iterator_ orelse return false;
+//     const y_out = out_y orelse return false;
+//
+//     switch (it.state_dirty.*) {
+//         .false => return false,
+//         .full => { ... },
+//         .partial => { ... },
+//     }
+// }
+/// # Safety
+/// `iterator_`, if non-null, must be a live iterator whose borrowed render
+/// state has not been updated since it was populated; `out_y`, if non-null,
+/// must be a valid writable pointer.
+pub unsafe fn row_iterator_next_dirty(
+    iterator_: RowIterator,
+    out_y: *mut size::CellCountInt,
+) -> bool {
+    // const it = iterator_ orelse return false;
+    if iterator_.is_null() {
+        return false;
+    }
+    // SAFETY: `iterator_` is a live wrapper (caller contract).
+    let it = unsafe { &mut *iterator_ };
+    // const y_out = out_y orelse return false;
+    if out_y.is_null() {
+        return false;
+    }
+
+    // switch (it.state_dirty.*) { ... }
+    // SAFETY: `it.state_dirty` was installed by `get(.row_iterator)` as a raw
+    // projection off the live wrapper base (see the field's SB note); the
+    // caller contract keeps that wrapper live and un-updated.
+    match unsafe { *it.state_dirty } {
+        // .false => return false,
+        RenderDirty::False => false,
+        // .full => {
+        //     // The none sentinel wraps to zero.
+        //     const next_y = it.y +% 1;
+        //     if (next_y >= it.raws.len) return false;
+        //     it.y = next_y;
+        //     y_out.* = @intCast(next_y);
+        //     return true;
+        // },
+        RenderDirty::Full => {
+            // The none sentinel wraps to zero.
+            let next_y = it.y.wrapping_add(1);
+            if next_y >= it.rows.len() {
+                return false;
+            }
+            it.y = next_y;
+            // SAFETY: `out_y` is non-null and writable (caller contract).
+            // `@intCast`: rows never exceed `CellCountInt`.
+            unsafe { *out_y = next_y as size::CellCountInt };
+            true
+        }
+        // .partial => {
+        //     var next_y = it.y +% 1;
+        //     while (next_y < it.raws.len) : (next_y += 1) {
+        //         if (!it.dirty[next_y]) continue;
+        //         it.y = next_y;
+        //         y_out.* = @intCast(next_y);
+        //         return true;
+        //     }
+        //     return false;
+        // },
+        RenderDirty::Partial => {
+            let mut next_y = it.y.wrapping_add(1);
+            while next_y < it.rows.len() {
+                // if (!it.dirty[next_y]) continue;
+                // SAFETY: `it.rows` is the live row slice installed by `get`;
+                // `next_y` is bounds-checked by the loop condition.
+                if !unsafe { (*it.rows)[next_y].dirty } {
+                    next_y += 1;
+                    continue;
+                }
+                it.y = next_y;
+                // SAFETY: `out_y` is non-null and writable (caller contract).
+                unsafe { *out_y = next_y as size::CellCountInt };
+                return true;
+            }
+            false
+        }
+    }
 }
 
 // pub fn row_cells_new(alloc_: ?*const CAllocator, result: *RowCells) ... Result {
@@ -1129,7 +1553,7 @@ pub unsafe fn row_cells_new(alloc_: Option<&CAllocator>, result: *mut RowCells) 
             return Result::OutOfMemory;
         }
     };
-    // PORT NOTE: reference `undefined` fields become null/`None` sentinels;
+    // PORT NOTE: reference `undefined` fields become null/sentinel values;
     // real values are installed by `row_get(.., .cells, ..)`.
     // PORT NOTE (reshape): the sentinel is a pointer to a shared empty `CellList`
     // (len 0). `row_cells_next`/`select` must deref it to read the length, so it
@@ -1142,7 +1566,7 @@ pub unsafe fn row_cells_new(alloc_: Option<&CAllocator>, result: *mut RowCells) 
             ptr,
             RowCellsWrapper {
                 alloc,
-                x: None,
+                x: POSITION_NONE,
                 cells: &EMPTY_CELLS as *const CellList,
                 selection: None,
                 palette: std::ptr::null(),
@@ -1157,7 +1581,8 @@ pub unsafe fn row_cells_new(alloc_: Option<&CAllocator>, result: *mut RowCells) 
 
 // pub fn row_cells_next(cells_: RowCells) ... bool {
 //     const cells = cells_ orelse return false;
-//     const next_x: size.CellCountInt = if (cells.x) |x| x + 1 else 0;
+//     // The none sentinel wraps to zero.
+//     const next_x = cells.x +% 1;
 //     if (next_x >= cells.raws.len) return false;
 //     cells.x = next_x;
 //     return true;
@@ -1171,20 +1596,18 @@ pub unsafe fn row_cells_next(cells_: RowCells) -> bool {
     }
     // SAFETY: `cells_` is a live wrapper (caller contract).
     let cells = unsafe { &mut *cells_ };
-    // const next_x: size.CellCountInt = if (cells.x) |x| x + 1 else 0;
-    let next_x: size::CellCountInt = match cells.x {
-        Some(x) => x + 1,
-        None => 0,
-    };
+    // The none sentinel wraps to zero.
+    // const next_x = cells.x +% 1;
+    let next_x = cells.x.wrapping_add(1);
     // if (next_x >= cells.raws.len) return false;
     // PORT NOTE (reshape): `cells.cells` is now a `*const CellList`, so the length
     // is read via a deref of the (valid) pointer's `raw` column.
     let cells_len = unsafe { (*cells.cells).len() };
-    if (next_x as usize) >= cells_len {
+    if next_x >= cells_len {
         return false;
     }
     // cells.x = next_x;
-    cells.x = Some(next_x);
+    cells.x = next_x;
     true
 }
 
@@ -1210,7 +1633,7 @@ pub unsafe fn row_cells_select(cells_: RowCells, x: size::CellCountInt) -> Resul
         return Result::InvalidValue;
     }
     // cells.x = x;
-    cells.x = Some(x);
+    cells.x = x as usize;
     Result::Success
 }
 
@@ -1285,38 +1708,46 @@ impl RowCellsData {
 // `row_cells_get_typed`.
 
 // pub fn row_cells_get(cells_: RowCells, data: RowCellsData, out: ?*anyopaque) ... Result {
-//     if (comptime std.debug.runtime_safety) { _ = intToEnum(RowCellsData, ...) catch { log.warn(...); return .invalid_value; } }
-//     if (out == null) return .invalid_value;
-//     return switch (data) {
-//         .invalid => .invalid_value,
-//         inline else => |comptime_data| rowCellsGetTyped(cells_, comptime_data, @ptrCast(@alignCast(out))),
-//     };
+//     const cells = cells_ orelse return .invalid_value;
+//     const x = cells.x;
+//     if (x >= cells.raws.len) return .invalid_value;
+//     return rowCellsGetDispatch(cells, x, data, out);
 // }
-//
-// PORT NOTE: the `intToEnum(RowCellsData, ...)` guard lives in
-// `row_cells_get_checked` below.
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
 pub unsafe fn row_cells_get(cells_: RowCells, data: RowCellsData, out: *mut c_void) -> Result {
-    // if (out == null) return .invalid_value;
-    if out.is_null() {
+    // const cells = cells_ orelse return .invalid_value;
+    if cells_.is_null() {
         return Result::InvalidValue;
     }
-    match data {
-        // .invalid => .invalid_value,
-        RowCellsData::Invalid => Result::InvalidValue,
-        // SAFETY: `out` validity/type is the caller's contract per `data`.
-        _ => unsafe { row_cells_get_typed(cells_, data, out) },
+    // const x = cells.x;
+    // if (x >= cells.raws.len) return .invalid_value;
+    let x = unsafe { (*cells_).x };
+    if x >= unsafe { (*(*cells_).cells).len() } {
+        return Result::InvalidValue;
     }
+    // return rowCellsGetDispatch(cells, x, data, out);
+    // SAFETY: `out` validity/type is the caller's contract per `data`.
+    unsafe { row_cells_get_dispatch(cells_, x, data, out) }
 }
 
 // PORT NOTE (W34-B02): see `get_checked` — the raw-`c_int` entry point carrying
-// the reference's runtime-safety guard, shared by the `extern "C"` wrapper in
-// `lib.rs` and by `row_cells_get_multi`.
+// the reference's runtime-safety guard (which the reference keeps inside
+// `rowCellsGetDispatch`), shared by the `extern "C"` wrapper in `lib.rs`.
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
 pub unsafe fn row_cells_get_checked(cells_: RowCells, data: c_int, out: *mut c_void) -> Result {
-    // _ = std.meta.intToEnum(RowCellsData, @intFromEnum(data)) catch {
+    // const cells = cells_ orelse return .invalid_value;
+    if cells_.is_null() {
+        return Result::InvalidValue;
+    }
+    // const x = cells.x;
+    // if (x >= cells.raws.len) return .invalid_value;
+    let x = unsafe { (*cells_).x };
+    if x >= unsafe { (*(*cells_).cells).len() } {
+        return Result::InvalidValue;
+    }
+    // _ = std.enums.fromInt(RowCellsData, @intFromEnum(data)) orelse {
     //     log.warn("render_state_row_cells_get invalid data value={d}", .{...});
     //     return .invalid_value;
     // };
@@ -1329,20 +1760,34 @@ pub unsafe fn row_cells_get_checked(cells_: RowCells, data: c_int, out: *mut c_v
         return Result::InvalidValue;
     };
     // SAFETY: `out` validity/type is the caller's contract.
-    unsafe { row_cells_get(cells_, d, out) }
+    unsafe { row_cells_get_dispatch(cells_, x, d, out) }
 }
 
 // pub fn row_cells_get_multi(cells_, count, keys, values, out_written) ... Result {
 //     const k = keys orelse return .invalid_value;
 //     const v = values orelse return .invalid_value;
-//     for (0..count) |i| { const result = row_cells_get(cells_, k[i], v[i]); if (result != .success) { if (out_written) |w| w.* = i; return result; } }
+//
+//     // Unwrap the handle and position once for the whole batch rather
+//     // than per key. An invalid handle/position fails on the first
+//     // key, matching the per-call behavior.
+//     const unwrapped: ?struct { *RowCellsWrapper, usize } = valid: {
+//         const cells = cells_ orelse break :valid null;
+//         const x = cells.x;
+//         if (x >= cells.raws.len) break :valid null;
+//         break :valid .{ cells, x };
+//     };
+//
+//     for (0..count) |i| {
+//         const result = if (unwrapped) |u| rowCellsGetDispatch(u[0], u[1], k[i], v[i]) else Result.invalid_value;
+//         if (result != .success) { if (out_written) |w| w.* = i; return result; }
+//     }
 //     if (out_written) |w| w.* = count;
 //     return .success;
 // }
 /// # Safety
 /// `keys`/`values`/`out_written` validity is the caller's contract.
 // PORT NOTE (W34-B02): `keys` elements are read as raw `c_int` and
-// range-checked by `row_cells_get_checked` — see `get_multi`.
+// range-checked per element (the reference's `rowCellsGetDispatch` guard).
 pub unsafe fn row_cells_get_multi(
     cells_: RowCells,
     count: usize,
@@ -1359,12 +1804,43 @@ pub unsafe fn row_cells_get_multi(
         return Result::InvalidValue;
     }
 
+    // Unwrap the handle and position once for the whole batch rather
+    // than per key. An invalid handle/position fails on the first
+    // key, matching the per-call behavior.
+    let unwrapped: Option<(RowCells, usize)> = 'valid: {
+        if cells_.is_null() {
+            break 'valid None;
+        }
+        let x = unsafe { (*cells_).x };
+        if x >= unsafe { (*(*cells_).cells).len() } {
+            break 'valid None;
+        }
+        Some((cells_, x))
+    };
+
     for i in 0..count {
         // SAFETY: caller guarantees `keys`/`values` have `count` elements.
         let key = unsafe { *keys.add(i) };
         let value = unsafe { *values.add(i) };
-        // const result = row_cells_get(cells_, k[i], v[i]);
-        let result = unsafe { row_cells_get_checked(cells_, key, value) };
+        // const result = if (unwrapped) |u| rowCellsGetDispatch(u[0], u[1], k[i], v[i]) else Result.invalid_value;
+        let result = if let Some((cells, x)) = unwrapped {
+            let Some(d) = RowCellsData::from_c_int(key) else {
+                crate::sys::log_fn(
+                    crate::sys::StdLevel::Warn,
+                    LOG_SCOPE,
+                    format_args!("render_state_row_cells_get invalid data value={key}"),
+                );
+                if !out_written.is_null() {
+                    // SAFETY: caller-provided out pointer, checked non-null.
+                    unsafe { *out_written = i };
+                }
+                return Result::InvalidValue;
+            };
+            // SAFETY: `out` validity/type is the caller's contract.
+            unsafe { row_cells_get_dispatch(cells, x, d, value) }
+        } else {
+            Result::InvalidValue
+        };
         if result != Result::Success {
             if !out_written.is_null() {
                 // SAFETY: caller-provided out pointer, checked non-null.
@@ -1380,27 +1856,62 @@ pub unsafe fn row_cells_get_multi(
     Result::Success
 }
 
-// fn rowCellsGetTyped(cells_: RowCells, comptime data: RowCellsData, out: *data.OutType()) Result {
-//     const cells = cells_ orelse return .invalid_value;
-//     const x = cells.x orelse return .invalid_value;
+// inline fn rowCellsGetDispatch(
+//     cells: *const RowCellsWrapper,
+//     x: usize,
+//     data: RowCellsData,
+//     out: ?*anyopaque,
+// ) Result {
+//     if (comptime std.debug.runtime_safety) { ... }
+//     if (out == null) return .invalid_value;
+//     return switch (data) {
+//         .invalid => .invalid_value,
+//         inline else => |comptime_data| rowCellsGetTypedInner(cells, x, comptime_data, @ptrCast(@alignCast(out))),
+//     };
+// }
+/// # Safety
+/// `cells_` must be non-null and live; `x` in bounds; `out` must point to
+/// writable storage of the type required by `data`.
+#[inline]
+unsafe fn row_cells_get_dispatch(
+    cells_: RowCells,
+    x: usize,
+    data: RowCellsData,
+    out: *mut c_void,
+) -> Result {
+    // if (out == null) return .invalid_value;
+    if out.is_null() {
+        return Result::InvalidValue;
+    }
+    match data {
+        // .invalid => .invalid_value,
+        RowCellsData::Invalid => Result::InvalidValue,
+        // SAFETY: `out` validity/type is the caller's contract per `data`.
+        _ => unsafe { row_cells_get_typed_inner(cells_, x, data, out) },
+    }
+}
+
+// fn rowCellsGetTypedInner(
+//     cells: *const RowCellsWrapper,
+//     x: usize,
+//     comptime data: RowCellsData,
+//     out: *data.OutType(),
+// ) Result {
 //     const cell = cells.raws[x];
 //     switch (data) { ... }
 //     return .success;
 // }
 /// # Safety
-/// `out` must point to writable storage of the type required by `data`.
-unsafe fn row_cells_get_typed(cells_: RowCells, data: RowCellsData, out: *mut c_void) -> Result {
-    // const cells = cells_ orelse return .invalid_value;
-    if cells_.is_null() {
-        return Result::InvalidValue;
-    }
+/// `cells_` must be non-null and live; `x` in bounds; `out` must point to
+/// writable storage of the type required by `data`.
+unsafe fn row_cells_get_typed_inner(
+    cells_: RowCells,
+    x: usize,
+    data: RowCellsData,
+    out: *mut c_void,
+) -> Result {
     // SAFETY: `cells_` is a live wrapper (caller contract).
     let cells = unsafe { &*cells_ };
-    // const x = cells.x orelse return .invalid_value;
-    let x = match cells.x {
-        Some(x) => x,
-        None => return Result::InvalidValue,
-    };
     // const cell = cells.raws[x];
     // PORT NOTE (reshape): rustty-vt stores cells SoA (`CellList`); `cell` is the
     // `page.Cell` (`(*cells.cells).raw()[x]`), and the `style`/`grapheme` columns
@@ -1417,15 +1928,21 @@ unsafe fn row_cells_get_typed(cells_: RowCells, data: RowCellsData, out: *mut c_
             // SAFETY: `out` points to a writable `page.Cell.C` (`u64`).
             unsafe { *(out as *mut u64) = cell.cval() };
         }
-        // .style => out.* = if (cell.hasStyling()) style_c.Style.fromStyle(cells.styles[x]) else style_c.Style.fromStyle(.{}),
+        // .style => if (cell.hasStyling()) {
+        //     style_c.Style.write(cells.styles[x], out);
+        // } else {
+        //     out.* = style_c.Style.default;
+        // },
         RowCellsData::Style => {
-            let s = if cell.has_styling() {
-                style_c::Style::from_style(cell_list.style()[x as usize])
+            if cell.has_styling() {
+                // SAFETY: `out` points to a writable `style_c::Style`.
+                style_c::Style::write(cell_list.style()[x], unsafe {
+                    &mut *(out as *mut style_c::Style)
+                });
             } else {
-                style_c::Style::from_style(Style::default())
-            };
-            // SAFETY: `out` points to a writable `style_c::Style`.
-            unsafe { *(out as *mut style_c::Style) = s };
+                // SAFETY: `out` points to a writable `style_c::Style`.
+                unsafe { *(out as *mut style_c::Style) = style_c::Style::DEFAULT };
+            }
         }
         // .graphemes_len => {
         //     if (!cell.hasText()) { out.* = 0; return .success; }
@@ -1477,58 +1994,95 @@ unsafe fn row_cells_get_typed(cells_: RowCells, data: RowCellsData, out: *mut c_
             }
         }
         // .bg_color => {
-        //     const s: Style = if (cell.hasStyling()) cells.styles[x] else .{};
-        //     const bg = s.bg(&cell, cells.palette) orelse return .invalid_value;
-        //     out.* = bg.cval();
+        //     // Avoid copying the full struct when only partial changes happen.
+        //     switch (cell.content_tag) {
+        //         .bg_color_palette => { out.* = cells.palette[cell.content.color_palette.data].cval(); },
+        //         .bg_color_rgb => { const rgb = cell.content.color_rgb; out.* = .{ .r = rgb.r, .g = rgb.g, .b = rgb.b }; },
+        //         .codepoint, .codepoint_grapheme, => {
+        //             // The default style has no background.
+        //             if (!cell.hasStyling()) return .invalid_value;
+        //             switch (cells.styles[x].bg_color) {
+        //                 .none => return .invalid_value,
+        //                 .palette => |idx| out.* = cells.palette[idx].cval(),
+        //                 .rgb => |rgb| out.* = rgb.cval(),
+        //             }
+        //         },
+        //     }
         // },
         RowCellsData::BgColor => {
-            let s: Style = if cell.has_styling() {
-                cell_list.style()[x as usize]
-            } else {
-                Style::default()
-            };
-            // SAFETY: `cells.palette` is a valid palette pointer installed by
-            // `row_get`.
-            let palette = unsafe { &*cells.palette };
-            let bg = match s.bg(&cell, palette) {
-                Some(bg) => bg,
-                None => return Result::InvalidValue,
-            };
-            // SAFETY: `out` points to a writable `RGB`.
-            unsafe { *(out as *mut RGB) = bg };
+            // Avoid copying the full struct when only partial changes happen.
+            match cell.content_tag() {
+                page::ContentTag::BgColorPalette => {
+                    // SAFETY: `cells.palette` is a valid palette pointer
+                    // installed by `row_get`; `out` points to a writable `RGB`.
+                    unsafe {
+                        *(out as *mut RGB) =
+                            (*cells.palette)[cell.content_color_palette() as usize]
+                    };
+                }
+
+                page::ContentTag::BgColorRgb => {
+                    let rgb = cell.content_color_rgb();
+                    // SAFETY: `out` points to a writable `RGB`.
+                    unsafe {
+                        *(out as *mut RGB) = RGB {
+                            r: rgb.r,
+                            g: rgb.g,
+                            b: rgb.b,
+                        }
+                    };
+                }
+
+                page::ContentTag::Codepoint | page::ContentTag::CodepointGrapheme => {
+                    // The default style has no background.
+                    if !cell.has_styling() {
+                        return Result::InvalidValue;
+                    }
+                    // PORT NOTE (WS19 T5): `style_pkg::Color` is a byte-complete
+                    // `{ tag, data }` value, so the reference's payload `switch`
+                    // is a switch on `.tag()` with tag-checked accessors.
+                    let bg_color = cell_list.style()[x].bg_color;
+                    match bg_color.tag() {
+                        ColorTag::None => return Result::InvalidValue,
+                        // SAFETY: `cells.palette` is a valid palette pointer
+                        // installed by `row_get`; `out` is a writable `RGB`.
+                        ColorTag::Palette => unsafe {
+                            *(out as *mut RGB) = (*cells.palette)[bg_color.palette() as usize]
+                        },
+                        // SAFETY: `out` points to a writable `RGB`.
+                        ColorTag::Rgb => unsafe { *(out as *mut RGB) = bg_color.rgb() },
+                    }
+                }
+            }
         }
         // .fg_color => {
-        //     const s: Style = if (cell.hasStyling()) cells.styles[x] else .{};
-        //     if (s.fg_color == .none) return .invalid_value;
-        //     const fg = s.fg(.{ .default = .{}, .palette = cells.palette });
-        //     out.* = fg.cval();
+        //     if (!cell.hasStyling()) return .invalid_value;
+        //     switch (cells.styles[x].fg_color) {
+        //         .none => return .invalid_value,
+        //         .palette => |idx| out.* = cells.palette[idx].cval(),
+        //         .rgb => |rgb| out.* = rgb.cval(),
+        //     }
         // },
         RowCellsData::FgColor => {
-            let s: Style = if cell.has_styling() {
-                cell_list.style()[x as usize]
-            } else {
-                Style::default()
-            };
-            if matches!(s.fg_color.tag(), ColorTag::None) {
+            if !cell.has_styling() {
                 return Result::InvalidValue;
             }
-            // SAFETY: `cells.palette` is a valid palette pointer installed by
-            // `row_get`.
-            let palette = unsafe { &*cells.palette };
-            // PORT NOTE: `.{ .default = .{}, .palette = cells.palette }` relies on
-            // `Fg`'s field defaults: `default = RGB{0,0,0}` and `bold = null`.
-            let fg = s.fg(Fg {
-                default: RGB { r: 0, g: 0, b: 0 },
-                palette,
-                bold: None,
-            });
-            // SAFETY: `out` points to a writable `RGB`.
-            unsafe { *(out as *mut RGB) = fg };
+            let fg_color = cell_list.style()[x].fg_color;
+            match fg_color.tag() {
+                ColorTag::None => return Result::InvalidValue,
+                // SAFETY: `cells.palette` is a valid palette pointer installed
+                // by `row_get`; `out` points to a writable `RGB`.
+                ColorTag::Palette => unsafe {
+                    *(out as *mut RGB) = (*cells.palette)[fg_color.palette() as usize]
+                },
+                // SAFETY: `out` points to a writable `RGB`.
+                ColorTag::Rgb => unsafe { *(out as *mut RGB) = fg_color.rgb() },
+            }
         }
         // .selected => out.* = if (cells.selection) |sel| x >= sel[0] and x <= sel[1] else false,
         RowCellsData::Selected => {
             let selected = match cells.selection {
-                Some(sel) => x >= sel[0] && x <= sel[1],
+                Some(sel) => x >= sel[0] as usize && x <= sel[1] as usize,
                 None => false,
             };
             // SAFETY: `out` points to a writable `bool`.
@@ -1555,15 +2109,17 @@ unsafe fn row_cells_get_typed(cells_: RowCells, data: RowCellsData, out: *mut c_
 }
 
 // fn rowCellsGetGraphemesUtf8(cell: page.Cell, extra: []const u21, out: *lib.Buffer) Result {
+//     if (!cell.hasText()) { out.len = 0; return .success; }
+//     const first = cell.codepoint();
+//     ... (single-ASCII fast path) ...
 //     out.len = 0;
-//     if (!cell.hasText()) return .success;
-//     var needed = std.unicode.utf8CodepointSequenceLength(cell.codepoint()) catch return .invalid_value;
+//     var needed = std.unicode.utf8CodepointSequenceLength(first) catch return .invalid_value;
 //     for (extra) |cp| needed += std.unicode.utf8CodepointSequenceLength(cp) catch return .invalid_value;
 //     out.len = needed;
 //     if (out.ptr == null or out.cap < needed) return .out_of_space;
 //     const buf = out.ptr.?[0..out.cap];
 //     var i: usize = 0;
-//     i += std.unicode.utf8Encode(cell.codepoint(), buf[i..]) catch return .invalid_value;
+//     i += std.unicode.utf8Encode(first, buf[i..]) catch return .invalid_value;
 //     for (extra) |cp| i += std.unicode.utf8Encode(cp, buf[i..]) catch return .invalid_value;
 //     out.len = i;
 //     return .success;
@@ -1581,16 +2137,42 @@ unsafe fn row_cells_get_graphemes_utf8(
 ) -> Result {
     // SAFETY: `out` is a valid writable `Buffer` (caller contract).
     let out = unsafe { &mut *out };
-    // out.len = 0;
-    out.len = 0;
 
-    // if (!cell.hasText()) return .success;
+    // if (!cell.hasText()) { out.len = 0; return .success; }
     if !cell.has_text() {
+        out.len = 0;
         return Result::Success;
     }
 
-    // var needed = std.unicode.utf8CodepointSequenceLength(cell.codepoint()) catch return .invalid_value;
-    let cp0 = match char::from_u32(cell.codepoint()) {
+    // const first = cell.codepoint();
+    let first = cell.codepoint();
+
+    // Fast path: a single ASCII codepoint written to an adequately
+    // sized buffer. This is the overwhelmingly common case for
+    // terminal content.
+    // if (first < 0x80 and extra.len == 0) {
+    //     @branchHint(.likely);
+    //     if (out.ptr) |ptr| { if (out.cap >= 1) { ptr[0] = @intCast(first); out.len = 1; return .success; } }
+    //     out.len = 1;
+    //     return .out_of_space;
+    // }
+    if first < 0x80 && extra.is_empty() {
+        if !out.ptr.is_null() && out.cap >= 1 {
+            // SAFETY: `out.ptr` is non-null with `out.cap >= 1` writable bytes
+            // (caller contract).
+            unsafe { *out.ptr = first as u8 };
+            out.len = 1;
+            return Result::Success;
+        }
+        out.len = 1;
+        return Result::OutOfSpace;
+    }
+
+    // out.len = 0;
+    out.len = 0;
+
+    // var needed = std.unicode.utf8CodepointSequenceLength(first) catch return .invalid_value;
+    let cp0 = match char::from_u32(first) {
         Some(c) => c,
         None => return Result::InvalidValue,
     };
@@ -1616,7 +2198,7 @@ unsafe fn row_cells_get_graphemes_utf8(
     let buf = unsafe { std::slice::from_raw_parts_mut(out.ptr, out.cap) };
     // var i: usize = 0;
     let mut i: usize = 0;
-    // i += std.unicode.utf8Encode(cell.codepoint(), buf[i..]) catch return .invalid_value;
+    // i += std.unicode.utf8Encode(first, buf[i..]) catch return .invalid_value;
     i += cp0.encode_utf8(&mut buf[i..]).len();
     // for (extra) |cp| i += std.unicode.utf8Encode(cp, buf[i..]) catch return .invalid_value;
     for &cp in extra {
@@ -1634,7 +2216,7 @@ unsafe fn row_cells_get_graphemes_utf8(
 }
 
 /// C: GhosttyRenderStateRowData -> RusttyRenderStateRowData (R2)
-// pub const RowData = enum(c_int) { invalid = 0, dirty = 1, raw = 2, cells = 3, selection = 4 };
+// pub const RowData = enum(c_int) { invalid = 0, dirty = 1, raw = 2, cells = 3, selection = 4, cells_raw = 5 };
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowData {
@@ -1643,6 +2225,7 @@ pub enum RowData {
     Raw = 2,
     Cells = 3,
     Selection = 4,
+    CellsRaw = 5,
 }
 
 // D11 (P3-W6 T2): see `Data::from_c_int`; same rule, same header hazard.
@@ -1652,8 +2235,8 @@ impl RowData {
     /// Narrow an inbound C integer to a `RowData`, mirroring
     /// `std.meta.intToEnum`; `None` outside the declared range.
     pub fn from_c_int(v: c_int) -> Option<RowData> {
-        // contiguous 0..=4
-        if (0..=4).contains(&v) {
+        // contiguous 0..=5
+        if (0..=5).contains(&v) {
             // SAFETY: `v` is a valid `RowData` discriminant (range-checked).
             Some(unsafe { std::mem::transmute::<c_int, RowData>(v) })
         } else {
@@ -1669,6 +2252,7 @@ impl RowData {
 //     .raw => row.CRow,
 //     .cells => RowCells,
 //     .selection => RowSelection,
+//     .cells_raw => cell_c.CellsView,
 // In Rust the OutType mapping is preserved as the per-arm pointer cast in
 // `row_get_typed`.
 
@@ -1684,33 +2268,46 @@ pub enum RowOption {
 // PORT NOTE: `pub fn InType(comptime self: RowOption) type`: `.dirty => bool`.
 
 // pub fn row_get(iterator_: RowIterator, data: RowData, out: ?*anyopaque) ... Result {
-//     if (comptime std.debug.runtime_safety) { _ = intToEnum(RowData, ...) catch { log.warn(...); return .invalid_value; } }
-//     return switch (data) {
-//         .invalid => .invalid_value,
-//         inline else => |comptime_data| rowGetTyped(iterator_, comptime_data, @ptrCast(@alignCast(out))),
-//     };
+//     const it = iterator_ orelse return .invalid_value;
+//     const y = it.y;
+//     if (y >= it.raws.len) return .invalid_value;
+//     return rowGetDispatch(it, y, data, out);
 // }
-//
-// PORT NOTE: the `intToEnum(RowData, ...)` guard lives in `row_get_checked`
-// below.
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
 pub unsafe fn row_get(iterator_: RowIterator, data: RowData, out: *mut c_void) -> Result {
-    match data {
-        // .invalid => .invalid_value,
-        RowData::Invalid => Result::InvalidValue,
-        // SAFETY: `out` validity/type is the caller's contract per `data`.
-        _ => unsafe { row_get_typed(iterator_, data, out) },
+    // const it = iterator_ orelse return .invalid_value;
+    if iterator_.is_null() {
+        return Result::InvalidValue;
     }
+    // const y = it.y;
+    // if (y >= it.raws.len) return .invalid_value;
+    let y = unsafe { (*iterator_).y };
+    if y >= unsafe { (*iterator_).rows.len() } {
+        return Result::InvalidValue;
+    }
+    // return rowGetDispatch(it, y, data, out);
+    // SAFETY: `out` validity/type is the caller's contract per `data`.
+    unsafe { row_get_dispatch(iterator_, y, data, out) }
 }
 
 // PORT NOTE (W34-B02): see `get_checked` — the raw-`c_int` entry point carrying
-// the reference's runtime-safety guard, shared by the `extern "C"` wrapper in
-// `lib.rs` and by `row_get_multi`.
+// the reference's runtime-safety guard (which the reference keeps inside
+// `rowGetDispatch`), shared by the `extern "C"` wrapper in `lib.rs`.
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
 pub unsafe fn row_get_checked(iterator_: RowIterator, data: c_int, out: *mut c_void) -> Result {
-    // _ = std.meta.intToEnum(RowData, @intFromEnum(data)) catch {
+    // const it = iterator_ orelse return .invalid_value;
+    if iterator_.is_null() {
+        return Result::InvalidValue;
+    }
+    // const y = it.y;
+    // if (y >= it.raws.len) return .invalid_value;
+    let y = unsafe { (*iterator_).y };
+    if y >= unsafe { (*iterator_).rows.len() } {
+        return Result::InvalidValue;
+    }
+    // _ = std.enums.fromInt(RowData, @intFromEnum(data)) orelse {
     //     log.warn("render_state_row_get invalid data value={d}", .{...});
     //     return .invalid_value;
     // };
@@ -1723,14 +2320,34 @@ pub unsafe fn row_get_checked(iterator_: RowIterator, data: c_int, out: *mut c_v
         return Result::InvalidValue;
     };
     // SAFETY: `out` validity/type is the caller's contract.
-    unsafe { row_get(iterator_, d, out) }
+    unsafe { row_get_dispatch(iterator_, y, d, out) }
 }
 
-// pub fn row_get_multi(iterator_, count, keys, values, out_written) ... Result { ... }
+// pub fn row_get_multi(iterator_, count, keys, values, out_written) ... Result {
+//     const k = keys orelse return .invalid_value;
+//     const v = values orelse return .invalid_value;
+//
+//     // Unwrap the handle and position once for the whole batch rather
+//     // than per key. An invalid handle/position fails on the first
+//     // key, matching the per-call behavior.
+//     const unwrapped: ?struct { *RowIteratorWrapper, usize } = valid: {
+//         const it = iterator_ orelse break :valid null;
+//         const y = it.y;
+//         if (y >= it.raws.len) break :valid null;
+//         break :valid .{ it, y };
+//     };
+//
+//     for (0..count) |i| {
+//         const result = if (unwrapped) |u| rowGetDispatch(u[0], u[1], k[i], v[i]) else Result.invalid_value;
+//         if (result != .success) { if (out_written) |w| w.* = i; return result; }
+//     }
+//     if (out_written) |w| w.* = count;
+//     return .success;
+// }
 /// # Safety
 /// `keys`/`values`/`out_written` validity is the caller's contract.
 // PORT NOTE (W34-B02): `keys` elements are read as raw `c_int` and
-// range-checked by `row_get_checked` — see `get_multi`.
+// range-checked per element (the reference's `rowGetDispatch` guard).
 pub unsafe fn row_get_multi(
     iterator_: RowIterator,
     count: usize,
@@ -1747,12 +2364,43 @@ pub unsafe fn row_get_multi(
         return Result::InvalidValue;
     }
 
+    // Unwrap the handle and position once for the whole batch rather
+    // than per key. An invalid handle/position fails on the first
+    // key, matching the per-call behavior.
+    let unwrapped: Option<(RowIterator, usize)> = 'valid: {
+        if iterator_.is_null() {
+            break 'valid None;
+        }
+        let y = unsafe { (*iterator_).y };
+        if y >= unsafe { (*iterator_).rows.len() } {
+            break 'valid None;
+        }
+        Some((iterator_, y))
+    };
+
     for i in 0..count {
         // SAFETY: caller guarantees `keys`/`values` have `count` elements.
         let key = unsafe { *keys.add(i) };
         let value = unsafe { *values.add(i) };
-        // const result = row_get(iterator_, k[i], v[i]);
-        let result = unsafe { row_get_checked(iterator_, key, value) };
+        // const result = if (unwrapped) |u| rowGetDispatch(u[0], u[1], k[i], v[i]) else Result.invalid_value;
+        let result = if let Some((it, y)) = unwrapped {
+            let Some(d) = RowData::from_c_int(key) else {
+                crate::sys::log_fn(
+                    crate::sys::StdLevel::Warn,
+                    LOG_SCOPE,
+                    format_args!("render_state_row_get invalid data value={key}"),
+                );
+                if !out_written.is_null() {
+                    // SAFETY: caller-provided out pointer, checked non-null.
+                    unsafe { *out_written = i };
+                }
+                return Result::InvalidValue;
+            };
+            // SAFETY: `out` validity/type is the caller's contract.
+            unsafe { row_get_dispatch(it, y, d, value) }
+        } else {
+            Result::InvalidValue
+        };
         if result != Result::Success {
             if !out_written.is_null() {
                 // SAFETY: caller-provided out pointer, checked non-null.
@@ -1768,29 +2416,49 @@ pub unsafe fn row_get_multi(
     Result::Success
 }
 
-// fn rowGetTyped(iterator_: RowIterator, comptime data: RowData, out: *data.OutType()) Result {
-//     const it = iterator_ orelse return .invalid_value;
-//     const y = it.y orelse return .invalid_value;
+// inline fn rowGetDispatch(
+//     it: *RowIteratorWrapper,
+//     y: usize,
+//     data: RowData,
+//     out: ?*anyopaque,
+// ) Result {
+//     if (comptime std.debug.runtime_safety) { ... }
+//     return switch (data) {
+//         .invalid => .invalid_value,
+//         inline else => |comptime_data| rowGetTyped(it, y, comptime_data, @ptrCast(@alignCast(out))),
+//     };
+// }
+/// # Safety
+/// `iterator_` must be non-null and live; `y` in bounds; `out` must point to
+/// writable storage of the type required by `data`.
+#[inline]
+unsafe fn row_get_dispatch(
+    iterator_: RowIterator,
+    y: usize,
+    data: RowData,
+    out: *mut c_void,
+) -> Result {
+    match data {
+        // .invalid => .invalid_value,
+        RowData::Invalid => Result::InvalidValue,
+        // SAFETY: `out` validity/type is the caller's contract per `data`.
+        _ => unsafe { row_get_typed(iterator_, y, data, out) },
+    }
+}
+
+// fn rowGetTyped(it: *RowIteratorWrapper, y: usize, comptime data: RowData, out: *data.OutType()) Result {
 //     switch (data) { ... }
 //     return .success;
 // }
 /// # Safety
-/// `out` must point to writable storage of the type required by `data`.
-unsafe fn row_get_typed(iterator_: RowIterator, data: RowData, out: *mut c_void) -> Result {
-    // const it = iterator_ orelse return .invalid_value;
-    if iterator_.is_null() {
-        return Result::InvalidValue;
-    }
+/// `iterator_` must be non-null and live; `y` in bounds; `out` must point to
+/// writable storage of the type required by `data`.
+unsafe fn row_get_typed(iterator_: RowIterator, y: usize, data: RowData, out: *mut c_void) -> Result {
     // SAFETY: `iterator_` is a live wrapper (caller contract).
     let it = unsafe { &*iterator_ };
-    // const y = it.y orelse return .invalid_value;
-    let y = match it.y {
-        Some(y) => y,
-        None => return Result::InvalidValue,
-    };
     // SAFETY: `it.rows` is a valid slice pointer installed by `get`; `y` is
-    // bounds-checked by `row_iterator_next`.
-    let row = unsafe { &(*it.rows)[y as usize] };
+    // bounds-checked by the caller (`row_get`/`row_get_checked`/`row_get_multi`).
+    let row = unsafe { &(*it.rows)[y] };
     match data {
         // .invalid => return .invalid_value,
         RowData::Invalid => return Result::InvalidValue,
@@ -1807,7 +2475,7 @@ unsafe fn row_get_typed(iterator_: RowIterator, data: RowData, out: *mut c_void)
         // .cells => {
         //     const cells = out.* orelse return .invalid_value;
         //     const cell_data = it.cells[y].slice();
-        //     cells.* = .{ .alloc = cells.alloc, .x = null, .raws = ..., .graphemes = ..., .styles = ..., .selection = it.selection[y], .palette = it.palette };
+        //     cells.* = .{ .alloc = cells.alloc, .x = position_none, .raws = ..., .graphemes = ..., .styles = ..., .selection = it.selection[y], .palette = it.palette };
         // },
         RowData::Cells => {
             // const cells = out.* orelse return .invalid_value;
@@ -1819,7 +2487,7 @@ unsafe fn row_get_typed(iterator_: RowIterator, data: RowData, out: *mut c_void)
             // SAFETY: `cells_ptr` is a live `row_cells_new`-returned wrapper.
             let cells = unsafe { &mut *cells_ptr };
             // cells.* = .{ ... };
-            cells.x = None;
+            cells.x = POSITION_NONE;
             cells.cells = &row.cells as *const CellList;
             cells.selection = row.selection;
             cells.palette = it.palette;
@@ -1850,6 +2518,26 @@ unsafe fn row_get_typed(iterator_: RowIterator, data: RowData, out: *mut c_void)
             // out.end_x = sel[1];
             out_sel.end_x = sel[1];
         }
+        // .cells_raw => {
+        //     const raws: []const page.Cell = it.cells[y].items(.raw);
+        //     out.* = .{
+        //         .ptr = @ptrCast(raws.ptr),
+        //         .len = raws.len,
+        //     };
+        // },
+        RowData::CellsRaw => {
+            // PORT NOTE (reshape): the raw column is the row's `CellList.raw()`
+            // slice; `page.Cell` is `#[repr(transparent)]` over the `u64` cval
+            // (`CCell`), so `@ptrCast(raws.ptr)` is the pointer cast below.
+            let raws: &[page::Cell] = row.cells.raw();
+            // SAFETY: `out` points to a writable `cell_c::CellsView`.
+            unsafe {
+                *(out as *mut crate::cell::CellsView) = crate::cell::CellsView {
+                    ptr: raws.as_ptr() as *const crate::cell::CCell,
+                    len: raws.len(),
+                }
+            };
+        }
     }
 
     Result::Success
@@ -1879,7 +2567,8 @@ pub unsafe fn row_set(iterator_: RowIterator, option: RowOption, value: *const c
 
 // fn rowSetTyped(iterator_: RowIterator, comptime option: RowOption, value: *const option.InType()) Result {
 //     const it = iterator_ orelse return .invalid_value;
-//     const y = it.y orelse return .invalid_value;
+//     const y = it.y;
+//     if (y >= it.raws.len) return .invalid_value;
 //     switch (option) { .dirty => it.dirty[y] = value.* }
 //     return .success;
 // }
@@ -1892,27 +2581,28 @@ unsafe fn row_set_typed(iterator_: RowIterator, option: RowOption, value: *const
     }
     // SAFETY: `iterator_` is a live wrapper (caller contract).
     let it = unsafe { &mut *iterator_ };
-    // const y = it.y orelse return .invalid_value;
-    let y = match it.y {
-        Some(y) => y,
-        None => return Result::InvalidValue,
-    };
+    // const y = it.y;
+    // if (y >= it.raws.len) return .invalid_value;
+    let y = it.y;
+    if y >= it.rows.len() {
+        return Result::InvalidValue;
+    }
     match option {
         // .dirty => it.dirty[y] = value.*,
         RowOption::Dirty => {
             // PORT NOTE: the reference writes through the `dirty` per-field slice
             // (`it.dirty[y] = value.*`). The Rust iterator stores a `*mut [Row]`
-            // with write provenance (installed from `row_data.as_mut_slice()` in
+            // with write provenance (installed from the `Vec<Row>` buffer root in
             // `get`); we write `row_data[y].dirty` through it. This mutates the
             // `RenderState.row_data` the iterator points into, exactly as the
             // reference slice write does.
             // SAFETY: `value` points to a readable `bool`.
             let v = unsafe { *(value as *const bool) };
-            // SAFETY: `it.rows` came from `RenderState.row_data.as_mut_slice()`
-            // (write provenance); the backing storage is uniquely owned by the
-            // live `RenderStateWrapper` and no other reference into it is live
-            // during this call. `y` is bounds-checked by `row_iterator_next`.
-            unsafe { (*it.rows)[y as usize].dirty = v };
+            // SAFETY: `it.rows` carries the `Vec<Row>` buffer-root write
+            // provenance; the backing storage is uniquely owned by the live
+            // `RenderStateWrapper` and no other reference into it is live
+            // during this call. `y` is bounds-checked above.
+            unsafe { (*it.rows)[y].dirty = v };
         }
     }
 

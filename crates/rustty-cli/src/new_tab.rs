@@ -581,9 +581,9 @@ where
 }
 
 /// `std.mem.cutPrefix(u8, arg, prefix)` — the end-state reference uses the
-/// (upstreamed) std helper; identical semantics to `rustty_lib::cut_prefix`,
-/// inlined here to keep this file's helper set self-contained like its
-/// template.
+/// (upstreamed) std helper (`1d6bc6829` deleted `lib/string.zig`'s
+/// `cutPrefix`); identical semantics, inlined here to keep this file's helper
+/// set self-contained like its template.
 fn cut_prefix<'a>(slice: &'a [u8], prefix: &[u8]) -> Option<&'a [u8]> {
     slice.strip_prefix(prefix)
 }

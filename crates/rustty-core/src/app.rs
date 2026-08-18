@@ -727,16 +727,18 @@ where
             //         .new_window => .new_window,
             //     },
             // ),
-            //
-            // PORT NOTE (P4 partial, 0a183c923 — W6-tail): the core-side
-            // `Message.OpenConfig` payload IS wired (drainMailbox above); the
-            // apprt `Action.OpenConfig` payload (`apprt.action.OpenConfig`, a
-            // C-ABI enum feeding `rustty_action_open_config_e`) is the W5-E
-            // header bundle (W7 T2); until it lands the payload is dropped at
-            // this seam and the pre-range void apprt action is performed.
-            ScopedApp::OpenConfig(_) => {
-                let _ = rt_app
-                    .perform_action(apprt::Target::<Surface<A>>::App, apprt::Action::OpenConfig)?;
+            ScopedApp::OpenConfig(v) => {
+                let _ = rt_app.perform_action(
+                    apprt::Target::<Surface<A>>::App,
+                    apprt::Action::OpenConfig(match v {
+                        rustty_input::binding::OpenConfig::OsOpen => {
+                            apprt::action::OpenConfig::OsOpen
+                        }
+                        rustty_input::binding::OpenConfig::NewWindow => {
+                            apprt::action::OpenConfig::NewWindow
+                        }
+                    }),
+                )?;
             }
             ScopedApp::ReloadConfig => {
                 // _ = try rt_app.performAction(.app, .reload_config, .{});

@@ -11493,26 +11493,22 @@ where
             }
 
             // .set_window_title => |v| {
-            //     const title = try self.alloc.dupeZ(u8, v);
-            //     defer self.alloc.free(title);
-            //     return try self.rt_app.performAction(
-            //         .{ .surface = self },
-            //         .set_window_title,
-            //         .{ .title = title },
-            //     );
-            // },
-            //
-            // PORT NOTE (P4 partial, 8b7c57c75 — W6-tail): the apprt half is
-            // still seamed: the `set_window_title` `ActionKey` tag is a
-            // POSITIONAL C-ABI enumerator (upstream inserts it between
-            // `set_tab_title` and `prompt_title`, renumbering every later tag),
-            // pinned by `rustty-apprt-c`'s `action_key_positional_ordinals`
-            // against `rustty-embed.h`. It lands with the W5-E header advance +
-            // KAT in one motion (W7 T2); until then this binding is accepted
-            // but not performed (false). (`prompt_window_title` above IS wired —
-            // `PromptTitle.window` is an append-only payload value, not a tag.)
-            binding::ScopedSurface::SetWindowTitle(_) => {
-                return Ok(false);
+            binding::ScopedSurface::SetWindowTitle(v) => {
+                // const title = try self.alloc.dupeZ(u8, v);
+                // defer self.alloc.free(title);
+                //
+                // PORT NOTE: see `.set_surface_title` — the `dupeZ` collapses
+                // into the deferred C-ABI sentinel; the borrowed bytes pass
+                // directly.
+                // return try self.rt_app.performAction(
+                //     .{ .surface = self },
+                //     .set_window_title,
+                //     .{ .title = title },
+                // );
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::SetWindowTitle(SetTitle { title: v }),
+                )?);
             }
 
             // .clear_screen => {
@@ -11798,17 +11794,11 @@ where
             //     .move_tab_to_new_window,
             //     {},
             // ),
-            //
-            // PORT NOTE (P4 partial, 25b2d8a38 — W6-tail): the apprt half is
-            // still seamed: the `move_tab_to_new_window` `ActionKey` tag is a
-            // POSITIONAL C-ABI enumerator whose addition renumbers/extends
-            // `rustty_action_tag_e`, pinned by `rustty-apprt-c`'s
-            // `action_key_positional_ordinals` against `rustty-embed.h`
-            // (cardinality 66). It lands with the W5-E header advance + KAT in
-            // one motion (W7 T2); until then this binding is accepted but not
-            // performed (false).
             binding::ScopedSurface::MoveTabToNewWindow => {
-                return Ok(false);
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::MoveTabToNewWindow,
+                )?);
             }
 
             // .new_split => |direction| return try self.rt_app.performAction(

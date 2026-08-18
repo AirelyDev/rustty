@@ -387,7 +387,10 @@ pub enum Key {
 /// operate on those snake_case names, so this table maps each `Key` variant to
 /// its reference `@tagName` string. This is the single source of truth for the
 /// name-based methods, replacing Zig's `@tagName`/`std.meta.stringToEnum`.
-const TAG_NAMES: &[(Key, &str)] = &[
+/// PORT NOTE (`9673a22b0` ABI manifest): `pub` so `rustty-vt-c`'s
+/// `types.rs` can reflect the key names + values into `rustty_type_json`
+/// exactly like the reference's `inline for (@typeInfo(Key).@"enum".fields)`.
+pub const TAG_NAMES: &[(Key, &str)] = &[
     (Key::Unidentified, "unidentified"),
     (Key::Backquote, "backquote"),
     (Key::Backslash, "backslash"),

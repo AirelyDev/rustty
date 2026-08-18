@@ -1367,19 +1367,271 @@ impl Capacity {
     }
 }
 
-// PORT NOTE (`0e8b7bea6` "vt: expose packed cell layout" — CORE half,
-// P4-W2 T4): the reference adds `Cell.CLayout = lib.Packed(Cell, .{ .fields =
-// ... })` here — C-facing layout METADATA (reflected bit offsets/widths for
-// every field, including the tagged-union content arms `codepoint` /
-// `codepoint_grapheme` / `bg_color_palette` / `bg_color_rgb`, with
-// `_pad`/`_padding` omitted) kept next to Cell itself and consumed by the ABI
-// manifest (`c/types.zig`, `types.schema.json`). It is pure comptime
-// reflection over `lib.Packed`/`lib.PackedTaggedUnion` (`src/lib/packed.zig`,
-// +290) which rustty-lib does not carry yet: that machinery is area C's W5
-// Bundle T ("packed.zig GhosttyPackedCell (couples W2's cell layout)"), and
-// the Rust `CLayout` equivalent lands WITH it against this anchor. The
-// physical bit ranges it would reflect are already named here by
-// `CellField::range` below (single source for shifts/widths).
+// `0e8b7bea6` "vt: expose packed cell layout" — CORE half (P4-W5 Bundle T
+// against the P4-W2 T4 anchor): the reference adds `Cell.CLayout =
+// lib.Packed(Cell, .{ .fields = ... })` here — C-facing layout METADATA
+// (reflected bit offsets/widths for every field, including the tagged-union
+// content arms `codepoint` / `codepoint_grapheme` / `bg_color_palette` /
+// `bg_color_rgb`, with `_pad`/`_padding` omitted) kept next to Cell itself and
+// consumed by the ABI manifest (`c/types.zig`, `types.schema.json`). It is
+// pure comptime reflection over `lib.Packed`/`lib.PackedTaggedUnion`
+// (`src/lib/packed.zig`); rustty-lib models those factories as `'static`
+// descriptor tables (`rustty_lib::packed`), so the reflected bit ranges are
+// spelled from the `CELL_*` shift/width constants below (single source for
+// shifts/widths) and const-validated by the same checks the reference runs at
+// comptime.
+
+/// Metadata for the C representation. All physical bit offsets and
+/// widths are reflected from Cell.
+// pub const CLayout = lib.Packed(Cell, .{ .fields = .{ ... } });
+pub mod cell_c_layout {
+    use super::{
+        CELL_CONTENT_BITS, CELL_CONTENT_SHIFT, CELL_CONTENT_TAG_BITS, CELL_CONTENT_TAG_SHIFT,
+        CELL_HYPERLINK_SHIFT, CELL_PADDING_SHIFT, CELL_PROTECTED_SHIFT, CELL_SEMANTIC_CONTENT_BITS,
+        CELL_SEMANTIC_CONTENT_SHIFT, CELL_STYLE_ID_BITS, CELL_STYLE_ID_SHIFT, CELL_WIDE_BITS,
+        CELL_WIDE_SHIFT,
+    };
+    use rustty_lib::packed::{
+        Encoding, FieldOptions, PackedField, PackedLayout, PackedTaggedUnionArm,
+        PackedTaggedUnionLayout,
+    };
+
+    // PORT NOTE: arm-layout `size`/`align` mirror the arm's Zig backing
+    // integer but are never observed by the manifest writer (arms emit only
+    // `width` + `bits`); the top-level `CLAYOUT` size/align (8/8) are the
+    // observed `@sizeOf(CLayout.Zig)`/`@alignOf` values.
+
+    // .codepoint = .{ .codepoint = lib.Packed(
+    //     @FieldType(@FieldType(Cell, "content"), "codepoint"),
+    //     .{ .fields = .{
+    //         .data = .{ .name = "codepoint" },
+    //         ._pad = .{ .omit = true },
+    //     } },
+    // ) },  (shared verbatim by `.codepoint_grapheme`)
+    pub const CONTENT_CODEPOINT: PackedLayout = PackedLayout {
+        size: 3,
+        align: 1,
+        bit_size: CELL_CONTENT_BITS as usize,
+        backing: "u24",
+        fields: &[
+            PackedField {
+                zig_name: "data",
+                bit_offset: 0,
+                bit_width: 21,
+                zig_type_name: "u21",
+                options: FieldOptions {
+                    name: Some("codepoint"),
+                    ..FieldOptions::DEFAULT
+                },
+            },
+            PackedField {
+                zig_name: "_pad",
+                bit_offset: 21,
+                bit_width: 3,
+                zig_type_name: "u3",
+                options: FieldOptions {
+                    omit: true,
+                    ..FieldOptions::DEFAULT
+                },
+            },
+        ],
+    };
+    const _: () = CONTENT_CODEPOINT.validate();
+
+    // .bg_color_palette = .{ .color_palette = lib.Packed(
+    //     @FieldType(@FieldType(Cell, "content"), "color_palette"),
+    //     .{ .fields = .{
+    //         .data = .{
+    //             .name = "index",
+    //             .type_name = "GhosttyColorPaletteIndex",  (R2: Rustty)
+    //         },
+    //         ._pad = .{ .omit = true },
+    //     } },
+    // ) },
+    pub const CONTENT_COLOR_PALETTE: PackedLayout = PackedLayout {
+        size: 3,
+        align: 1,
+        bit_size: CELL_CONTENT_BITS as usize,
+        backing: "u24",
+        fields: &[
+            PackedField {
+                zig_name: "data",
+                bit_offset: 0,
+                bit_width: 8,
+                zig_type_name: "u8",
+                options: FieldOptions {
+                    name: Some("index"),
+                    type_name: Some("RusttyColorPaletteIndex"),
+                    ..FieldOptions::DEFAULT
+                },
+            },
+            PackedField {
+                zig_name: "_pad",
+                bit_offset: 8,
+                bit_width: 16,
+                zig_type_name: "u16",
+                options: FieldOptions {
+                    omit: true,
+                    ..FieldOptions::DEFAULT
+                },
+            },
+        ],
+    };
+    const _: () = CONTENT_COLOR_PALETTE.validate();
+
+    // .bg_color_rgb = .{ .color_rgb = lib.Packed(
+    //     @FieldType(@FieldType(Cell, "content"), "color_rgb"),
+    //     .{},
+    // ) },
+    pub const CONTENT_COLOR_RGB: PackedLayout = PackedLayout {
+        size: 3,
+        align: 1,
+        bit_size: CELL_CONTENT_BITS as usize,
+        backing: "u24",
+        fields: &[
+            PackedField {
+                zig_name: "r",
+                bit_offset: 0,
+                bit_width: 8,
+                zig_type_name: "u8",
+                options: FieldOptions::DEFAULT,
+            },
+            PackedField {
+                zig_name: "g",
+                bit_offset: 8,
+                bit_width: 8,
+                zig_type_name: "u8",
+                options: FieldOptions::DEFAULT,
+            },
+            PackedField {
+                zig_name: "b",
+                bit_offset: 16,
+                bit_width: 8,
+                zig_type_name: "u8",
+                options: FieldOptions::DEFAULT,
+            },
+        ],
+    };
+    const _: () = CONTENT_COLOR_RGB.validate();
+
+    // .content = .{ .encoding = .{ .tagged_union = lib.PackedTaggedUnion(
+    //     Cell, .content, .content_tag, .{ .arms = .{ ... } },
+    // ) } },
+    pub const CONTENT: PackedTaggedUnionLayout = PackedTaggedUnionLayout {
+        union_field: "content",
+        tag_field: "content_tag",
+        union_bit_size: CELL_CONTENT_BITS as usize,
+        arms: &[
+            PackedTaggedUnionArm {
+                tag_name: "codepoint",
+                source: Some(("codepoint", &CONTENT_CODEPOINT)),
+            },
+            PackedTaggedUnionArm {
+                tag_name: "codepoint_grapheme",
+                source: Some(("codepoint", &CONTENT_CODEPOINT)),
+            },
+            PackedTaggedUnionArm {
+                tag_name: "bg_color_palette",
+                source: Some(("color_palette", &CONTENT_COLOR_PALETTE)),
+            },
+            PackedTaggedUnionArm {
+                tag_name: "bg_color_rgb",
+                source: Some(("color_rgb", &CONTENT_COLOR_RGB)),
+            },
+        ],
+    };
+    const _: () = CONTENT.validate();
+
+    pub const CLAYOUT: PackedLayout = PackedLayout {
+        size: 8,
+        align: 8,
+        bit_size: 64,
+        backing: "u64",
+        fields: &[
+            // .content_tag = .{ .type_name = "GhosttyCellContentTag" },  (R2)
+            PackedField {
+                zig_name: "content_tag",
+                bit_offset: CELL_CONTENT_TAG_SHIFT as usize,
+                bit_width: CELL_CONTENT_TAG_BITS as usize,
+                zig_type_name: "enum",
+                options: FieldOptions {
+                    type_name: Some("RusttyCellContentTag"),
+                    ..FieldOptions::DEFAULT
+                },
+            },
+            PackedField {
+                zig_name: "content",
+                bit_offset: CELL_CONTENT_SHIFT as usize,
+                bit_width: CELL_CONTENT_BITS as usize,
+                zig_type_name: "union",
+                options: FieldOptions {
+                    encoding: Encoding::TaggedUnion(&CONTENT),
+                    ..FieldOptions::DEFAULT
+                },
+            },
+            // .style_id = .{ .type_name = "GhosttyStyleId" },  (R2)
+            PackedField {
+                zig_name: "style_id",
+                bit_offset: CELL_STYLE_ID_SHIFT as usize,
+                bit_width: CELL_STYLE_ID_BITS as usize,
+                zig_type_name: "u16",
+                options: FieldOptions {
+                    type_name: Some("RusttyStyleId"),
+                    ..FieldOptions::DEFAULT
+                },
+            },
+            // .wide = .{ .type_name = "GhosttyCellWide" },  (R2)
+            PackedField {
+                zig_name: "wide",
+                bit_offset: CELL_WIDE_SHIFT as usize,
+                bit_width: CELL_WIDE_BITS as usize,
+                zig_type_name: "enum",
+                options: FieldOptions {
+                    type_name: Some("RusttyCellWide"),
+                    ..FieldOptions::DEFAULT
+                },
+            },
+            PackedField {
+                zig_name: "protected",
+                bit_offset: CELL_PROTECTED_SHIFT as usize,
+                bit_width: 1,
+                zig_type_name: "bool",
+                options: FieldOptions::DEFAULT,
+            },
+            PackedField {
+                zig_name: "hyperlink",
+                bit_offset: CELL_HYPERLINK_SHIFT as usize,
+                bit_width: 1,
+                zig_type_name: "bool",
+                options: FieldOptions::DEFAULT,
+            },
+            // .semantic_content = .{ .type_name = "GhosttyCellSemanticContent" },  (R2)
+            PackedField {
+                zig_name: "semantic_content",
+                bit_offset: CELL_SEMANTIC_CONTENT_SHIFT as usize,
+                bit_width: CELL_SEMANTIC_CONTENT_BITS as usize,
+                zig_type_name: "enum",
+                options: FieldOptions {
+                    type_name: Some("RusttyCellSemanticContent"),
+                    ..FieldOptions::DEFAULT
+                },
+            },
+            // ._padding = .{ .omit = true },
+            PackedField {
+                zig_name: "_padding",
+                bit_offset: CELL_PADDING_SHIFT as usize,
+                bit_width: 16,
+                zig_type_name: "u16",
+                options: FieldOptions {
+                    omit: true,
+                    ..FieldOptions::DEFAULT
+                },
+            },
+        ],
+    };
+    const _: () = CLAYOUT.validate();
+}
+
 //
 // =============================================================================
 // Masked compares over the packed backing integers (446f80f4e, WS10 T19).

@@ -130,6 +130,8 @@ typedef enum {
 } TerminalCompressionResult;
 
 
+
+
 /**
  * C: GhosttyCellData -> RusttyCellData (R2)
  */
@@ -203,6 +205,7 @@ typedef enum {
     ROW_DATA_ROW_DATA_RAW = 2,
     ROW_DATA_ROW_DATA_CELLS = 3,
     ROW_DATA_ROW_DATA_SELECTION = 4,
+    ROW_DATA_ROW_DATA_CELLS_RAW = 5,
 } RowData;
 
 /**
@@ -314,6 +317,14 @@ typedef enum {
     TERMINAL_DATA_TERMINAL_DATA_VT_PROCESSING_ERROR = 33,
     TERMINAL_DATA_TERMINAL_DATA_SCROLLBACK_MAX_BYTES = 34,
     TERMINAL_DATA_TERMINAL_DATA_SCROLLBACK_MAX_LINES = 35,
+    /**
+     * Output type: `ModeConfig` (input/output — oracle cfc19e805).
+     */
+    TERMINAL_DATA_TERMINAL_DATA_MODE = 37,
+    /**
+     * Output type: `bool` (oracle bdb566068).
+     */
+    TERMINAL_DATA_TERMINAL_DATA_CURSOR_AT_PROMPT = 39,
 } TerminalData;
 
 /**
@@ -475,6 +486,10 @@ typedef struct {
     bool overline;
     int underline;
 } Style;
+/**
+ * The default (empty) style in C representation. C
+ */
+#define Style_DEFAULT (Style){ .size = (size_of){  }, .fg_color = (Color){ .tag = ColorTag_None, .value = (ColorValue){  } }, .bg_color = (Color){ .tag = ColorTag_None, .value = (ColorValue){  } }, .underline_color = (Color){ .tag = ColorTag_None, .value = (ColorValue){  } }, .bold = false, .italic = false, .faint = false, .blink = false, .inverse = false, .invisible = false, .strikethrough = false, .overline = false, .underline = 0 }
 
 /**
  * C: RusttyOscParser (R2)
@@ -693,18 +708,6 @@ typedef struct {
  * C: GhosttyRenderState -> RusttyRenderState (R2)
  */
 typedef RenderStateWrapper *RenderState;
-
-/**
- * C: GhosttyRenderStateColors -> RusttyRenderStateColors (R2)
- */
-typedef struct {
-    uintptr_t size;
-    RGB background;
-    RGB foreground;
-    RGB cursor;
-    bool cursor_has_value;
-    RGB palette[256];
-} Colors;
 
 /**
  * C: GhosttyRenderStateRowIterator -> RusttyRenderStateRowIterator (R2)
@@ -1857,6 +1860,14 @@ int rustty_render_state_begin_update(RenderState state, Terminal terminal);
 int rustty_render_state_end_update(RenderState state);
 
 /**
+ * C: rustty_render_state_clean
+ *
+ * # Safety
+ * `state`, if non-null, must be a live handle.
+ */
+int rustty_render_state_clean(RenderState state);
+
+/**
  * C: rustty_render_state_get
  *
  * # Safety
@@ -1885,14 +1896,6 @@ int rustty_render_state_get_multi(RenderState state,
 int rustty_render_state_set(RenderState state, int option, const void *value);
 
 /**
- * C: rustty_render_state_colors_get
- *
- * # Safety
- * `out_colors`, if non-null, must be a valid, writable pointer to a `Colors`.
- */
-int rustty_render_state_colors_get(RenderState state, Colors *out_colors);
-
-/**
  * C: rustty_render_state_row_iterator_new
  *
  * # Safety
@@ -1908,6 +1911,16 @@ int rustty_render_state_row_iterator_new(const Allocator *alloc_, RowIterator *r
  * `iterator`, if non-null, must be a live iterator.
  */
 bool rustty_render_state_row_iterator_next(RowIterator iterator);
+
+/**
+ * C: rustty_render_state_row_iterator_next_dirty
+ *
+ * # Safety
+ * `iterator`, if non-null, must be a live iterator whose borrowed render state
+ * has not been updated since it was populated; `out_y`, if non-null, must be a
+ * valid writable pointer.
+ */
+bool rustty_render_state_row_iterator_next_dirty(RowIterator iterator, uint16_t *out_y);
 
 /**
  * C: rustty_render_state_row_iterator_free
@@ -2163,23 +2176,6 @@ int rustty_terminal_compression_activity(Terminal terminal, uint64_t *out_activi
  * `RusttyTerminalCompressionResult`.
  */
 int rustty_terminal_compress(Terminal terminal, int mode, CompressionResult *out_result);
-
-/**
- * C: rustty_terminal_mode_get
- *
- * # Safety
- * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out_value`
- * must be a valid, writable pointer to a `bool`.
- */
-int rustty_terminal_mode_get(Terminal terminal, ModeTagBacking tag, bool *out_value);
-
-/**
- * C: rustty_terminal_mode_set
- *
- * # Safety
- * `terminal`, if non-null, must be a handle returned by `rustty_terminal_new`.
- */
-int rustty_terminal_mode_set(Terminal terminal, ModeTagBacking tag, bool value);
 
 /**
  * C: rustty_terminal_get

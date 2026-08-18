@@ -244,6 +244,9 @@ pub enum Action<'a> {
     /// rendered at the next opportunity.
     RenderInspector,
 
+    /// Export the Terminal IO inspector event log.
+    ExportTerminalIO(ExportTerminalIO<'a>),
+
     /// Show a desktop notification.
     DesktopNotification(DesktopNotification<'a>),
 
@@ -252,6 +255,9 @@ pub enum Action<'a> {
 
     /// Set the tab title override for the target's tab.
     SetTabTitle(SetTitle<'a>),
+
+    /// Set the window title override for the target's tab.
+    SetWindowTitle(SetTitle<'a>),
 
     /// Set the title of the target to a prompted value. It is up to
     /// the apprt to prompt. The value specifies whether to prompt for the
@@ -276,7 +282,7 @@ pub enum Action<'a> {
     /// Open the rustty configuration. This is platform-specific about
     /// what it means; it can mean opening a dedicated UI or just opening
     /// a file in a text editor.
-    OpenConfig,
+    OpenConfig(OpenConfig),
 
     /// Called when there are no more surfaces and the app should quit
     /// after the configured delay.
@@ -395,6 +401,9 @@ pub enum Action<'a> {
     /// The effective title is the user-overridden title if set,
     /// otherwise the terminal-set title.
     CopyTitleToClipboard,
+
+    /// Move a tab to a new window.
+    MoveTabToNewWindow,
 }
 
 /// Sync with: rustty_action_tag_e
@@ -432,9 +441,11 @@ pub enum ActionKey {
     Inspector,
     ShowGtkInspector,
     RenderInspector,
+    ExportTerminalIO,
     DesktopNotification,
     SetTitle,
     SetTabTitle,
+    SetWindowTitle,
     PromptTitle,
     Pwd,
     MouseShape,
@@ -467,6 +478,7 @@ pub enum ActionKey {
     SearchSelected,
     Readonly,
     CopyTitleToClipboard,
+    MoveTabToNewWindow,
 }
 
 /// Sync with: rustty_action_u
@@ -514,16 +526,18 @@ pub union ActionCValue {
     pub inspector: Inspector,
     pub show_gtk_inspector: (),
     pub render_inspector: (),
+    pub export_terminal_io: ExportTerminalIOC,
     pub desktop_notification: DesktopNotificationC,
     pub set_title: SetTitleC,
     pub set_tab_title: SetTitleC,
+    pub set_window_title: SetTitleC,
     pub prompt_title: PromptTitle,
     pub pwd: PwdC,
     pub mouse_shape: MouseShape,
     pub mouse_visibility: MouseVisibility,
     pub mouse_over_link: MouseOverLinkC,
     pub renderer_health: Health,
-    pub open_config: (),
+    pub open_config: OpenConfig,
     pub quit_timer: QuitTimer,
     pub float_window: FloatWindow,
     pub secure_input: SecureInput,
@@ -549,6 +563,7 @@ pub union ActionCValue {
     pub search_selected: SearchSelectedC,
     pub readonly: Readonly,
     pub copy_title_to_clipboard: (),
+    pub move_tab_to_new_window: (),
 }
 
 /// Sync with: rustty_action_s
@@ -559,7 +574,8 @@ pub struct ActionC {
 }
 
 // PORT NOTE: reference `comptime { assert(@sizeOf(CValue) == switch(@sizeOf(usize))
-// { 4 => 16, 8 => 24 }); }`. Reference comptime-block comments preserved verbatim:
+// { 4 => 24, 8 => 24 }); }` (0a183c923 widened the 4-byte arm 16 -> 24).
+// Reference comptime-block comments preserved verbatim:
 //   For ABI compatibility, we expect that this is our union size.
 //   At the time of writing, we don't promise ABI compatibility
 //   so we can change this but I want to be aware of it.
@@ -604,16 +620,18 @@ impl<'a> Action<'a> {
             Action::Inspector(_) => ActionKey::Inspector,
             Action::ShowGtkInspector => ActionKey::ShowGtkInspector,
             Action::RenderInspector => ActionKey::RenderInspector,
+            Action::ExportTerminalIO(_) => ActionKey::ExportTerminalIO,
             Action::DesktopNotification(_) => ActionKey::DesktopNotification,
             Action::SetTitle(_) => ActionKey::SetTitle,
             Action::SetTabTitle(_) => ActionKey::SetTabTitle,
+            Action::SetWindowTitle(_) => ActionKey::SetWindowTitle,
             Action::PromptTitle(_) => ActionKey::PromptTitle,
             Action::Pwd(_) => ActionKey::Pwd,
             Action::MouseShape(_) => ActionKey::MouseShape,
             Action::MouseVisibility(_) => ActionKey::MouseVisibility,
             Action::MouseOverLink(_) => ActionKey::MouseOverLink,
             Action::RendererHealth(_) => ActionKey::RendererHealth,
-            Action::OpenConfig => ActionKey::OpenConfig,
+            Action::OpenConfig(_) => ActionKey::OpenConfig,
             Action::QuitTimer(_) => ActionKey::QuitTimer,
             Action::FloatWindow(_) => ActionKey::FloatWindow,
             Action::SecureInput(_) => ActionKey::SecureInput,
@@ -639,6 +657,7 @@ impl<'a> Action<'a> {
             Action::SearchSelected(_) => ActionKey::SearchSelected,
             Action::Readonly(_) => ActionKey::Readonly,
             Action::CopyTitleToClipboard => ActionKey::CopyTitleToClipboard,
+            Action::MoveTabToNewWindow => ActionKey::MoveTabToNewWindow,
         }
     }
 
@@ -719,6 +738,9 @@ impl<'a> Action<'a> {
             Action::RenderInspector => ActionCValue {
                 render_inspector: (),
             },
+            Action::ExportTerminalIO(v) => ActionCValue {
+                export_terminal_io: v.cval(),
+            },
             Action::DesktopNotification(v) => ActionCValue {
                 desktop_notification: v.cval(),
             },
@@ -727,6 +749,9 @@ impl<'a> Action<'a> {
             },
             Action::SetTabTitle(v) => ActionCValue {
                 set_tab_title: v.cval(),
+            },
+            Action::SetWindowTitle(v) => ActionCValue {
+                set_window_title: v.cval(),
             },
             Action::PromptTitle(v) => ActionCValue { prompt_title: *v },
             Action::Pwd(v) => ActionCValue { pwd: v.cval() },
@@ -740,7 +765,7 @@ impl<'a> Action<'a> {
             Action::RendererHealth(v) => ActionCValue {
                 renderer_health: *v,
             },
-            Action::OpenConfig => ActionCValue { open_config: () },
+            Action::OpenConfig(v) => ActionCValue { open_config: *v },
             Action::QuitTimer(v) => ActionCValue { quit_timer: *v },
             Action::FloatWindow(v) => ActionCValue { float_window: *v },
             Action::SecureInput(v) => ActionCValue { secure_input: *v },
@@ -791,6 +816,9 @@ impl<'a> Action<'a> {
             Action::Readonly(v) => ActionCValue { readonly: *v },
             Action::CopyTitleToClipboard => ActionCValue {
                 copy_title_to_clipboard: (),
+            },
+            Action::MoveTabToNewWindow => ActionCValue {
+                move_tab_to_new_window: (),
             },
         };
 
@@ -925,6 +953,44 @@ pub enum Inspector {
     Hide,
 }
 
+/// Terminal IO inspector contents to export. The contents are only valid for
+/// the duration of the action callback.
+//
+// PORT NOTE: reference `contents: []const u8` -> borrowed raw bytes `&'a [u8]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExportTerminalIO<'a> {
+    pub contents: &'a [u8],
+}
+
+// Sync with: rustty_action_export_terminal_io_s
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct ExportTerminalIOC {
+    pub contents: *const u8,
+    pub len: usize,
+}
+
+impl<'a> ExportTerminalIO<'a> {
+    pub fn cval(&self) -> ExportTerminalIOC {
+        ExportTerminalIOC {
+            contents: self.contents.as_ptr(),
+            len: self.contents.len(),
+        }
+    }
+}
+
+impl core::fmt::Display for ExportTerminalIO<'_> {
+    // PORT NOTE: reference `format` prints `"{s}{{ contents: {d} bytes }}"` of
+    // `@typeName` + `contents.len` (the byte payload itself is never rendered).
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "ExportTerminalIO{{ contents: {} bytes }}",
+            self.contents.len()
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
 pub enum QuitTimer {
@@ -946,16 +1012,12 @@ pub enum MouseVisibility {
     Hidden,
 }
 
-/// Whether to prompt for the surface title or tab title.
+/// Whether to prompt for the surface, tab, or window title.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
 pub enum PromptTitle {
     Surface,
     Tab,
-    // PORT NOTE (P4 W6-tail, 8b7c57c75): appended value — existing ordinals
-    // are untouched (append-only C-ABI). `rustty-embed.h` does not carry
-    // `RUSTTY_PROMPT_TITLE_WINDOW` yet: the header advance + its KAT are the
-    // W5-E bundle.
     Window,
 }
 
@@ -1319,12 +1381,6 @@ pub enum OpenUrlKind {
     /// The URL came from an OSC 8 hyperlink. Application runtimes should
     /// treat this as untrusted terminal output and apply a platform-specific
     /// safe-opening policy.
-    //
-    // PORT NOTE (P4 W6-tail, 77537c806): appended value — existing ordinals are
-    // untouched (append-only C-ABI). `rustty-embed.h` does not carry
-    // `RUSTTY_ACTION_OPEN_URL_KIND_OSC8` yet: the header advance + its KAT are
-    // the W5-E bundle (the macOS Swift mapping is seamed on it —
-    // `Rustty.Action.swift` PORT-SEAM(w7-macos, upstream 77537c806)).
     Osc8,
 }
 
@@ -1452,4 +1508,15 @@ impl SearchSelected {
             },
         }
     }
+}
+
+/// Sync with: rustty_action_open_config_e
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)]
+pub enum OpenConfig {
+    /// Open the config in the OS default editor.
+    OsOpen,
+
+    /// Open the config in a new window using $EDITOR or $VISUAL
+    NewWindow,
 }

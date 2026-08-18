@@ -198,7 +198,14 @@ if [ -n "$missing" ]; then echo "  MISMATCH — declared+cbindgen but NOT export
 #   * an EXACT identity for `vt_decl \ intersection` — the tokens the curated
 #     headers mention that are deliberately not cbindgen exports.
 # Neither can be satisfied by deleting anything.
-VT_BOTH_FLOOR=185
+# P4-W5 (bundles R+M): 185 -> 184. The oracle range REMOVED three exports
+# (`terminal_mode_get`/`terminal_mode_set`, cfc19e805; `render_state_colors_get`,
+# b4079f00c) and rustty deleted them with it, while ADDING two
+# (`render_state_clean` + `render_state_row_iterator_next_dirty`, 0d37f2d34):
+# net -1. This is a deliberate, oracle-driven shrink, not a vacuous one — the
+# removed names no longer exist upstream, and arm (d) tracks the still-missing
+# oracle exports. Re-float upward at W5 T8 as the remaining bundles land.
+VT_BOTH_FLOOR=184
 both_n=$(wc -l < "$T/vt_both.txt" | tr -d ' ')
 if [ "$both_n" -lt "$VT_BOTH_FLOOR" ]; then
   echo "  VACUOUS SHRINK — the (vt.h ∩ cbindgen) intersection is $both_n, below the"

@@ -80,11 +80,10 @@ use super::record;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Bytes,
-    // PORT NOTE: `Page`/`Snapshot` are constructed by the next-stage
-    // grid-coupled page tests and codec-driver tests (see the PORT STATUS in
-    // page.rs / codec.rs); their formatters below are live and reachable.
-    #[allow(dead_code)]
     Page,
+    // PORT NOTE: `Snapshot` is constructed by the next-stage codec-driver
+    // tests (see the PORT STATUS in codec.rs); its formatter below is live
+    // and reachable.
     #[allow(dead_code)]
     Snapshot,
 }

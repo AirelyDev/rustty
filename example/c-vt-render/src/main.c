@@ -97,7 +97,8 @@ int main(void) {
   // state. These are needed to resolve palette-indexed cell colors.
   RusttyRenderStateColors colors =
       RUSTTY_INIT_SIZED(RusttyRenderStateColors);
-  result = rustty_render_state_colors_get(render_state, &colors);
+  result = rustty_render_state_get(
+      render_state, RUSTTY_RENDER_STATE_DATA_COLORS, &colors);
   assert(result == RUSTTY_SUCCESS);
 
   printf("Background: #%02x%02x%02x\n",
@@ -107,31 +108,16 @@ int main(void) {
   //! [render-colors]
 
   //! [render-cursor]
-  // Read cursor position and visual style from the render state.
-  bool cursor_visible = false;
-  rustty_render_state_get(
-      render_state, RUSTTY_RENDER_STATE_DATA_CURSOR_VISIBLE,
-      &cursor_visible);
+  // Read all cursor state in one call.
+  RusttyRenderStateCursor cursor =
+      RUSTTY_INIT_SIZED(RusttyRenderStateCursor);
+  result = rustty_render_state_get(
+      render_state, RUSTTY_RENDER_STATE_DATA_CURSOR, &cursor);
+  assert(result == RUSTTY_SUCCESS);
 
-  bool cursor_in_viewport = false;
-  rustty_render_state_get(
-      render_state, RUSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_HAS_VALUE,
-      &cursor_in_viewport);
-
-  if (cursor_visible && cursor_in_viewport) {
-    uint16_t cx, cy;
-    rustty_render_state_get(
-        render_state, RUSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_X, &cx);
-    rustty_render_state_get(
-        render_state, RUSTTY_RENDER_STATE_DATA_CURSOR_VIEWPORT_Y, &cy);
-
-    RusttyRenderStateCursorVisualStyle style;
-    rustty_render_state_get(
-        render_state, RUSTTY_RENDER_STATE_DATA_CURSOR_VISUAL_STYLE,
-        &style);
-
+  if (cursor.visible && cursor.viewport_has_value) {
     const char* style_name = "unknown";
-    switch (style) {
+    switch (cursor.visual_style) {
       case RUSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BAR:
         style_name = "bar";
         break;
@@ -145,7 +131,8 @@ int main(void) {
         style_name = "hollow";
         break;
     }
-    printf("Cursor at (%u, %u), style: %s\n", cx, cy, style_name);
+    printf("Cursor at (%u, %u), style: %s\n",
+           cursor.viewport_x, cursor.viewport_y, style_name);
   }
   //! [render-cursor]
 
@@ -165,15 +152,9 @@ int main(void) {
   result = rustty_render_state_row_cells_new(NULL, &cells);
   assert(result == RUSTTY_SUCCESS);
 
-  int row_index = 0;
-  while (rustty_render_state_row_iterator_next(row_iter)) {
-    // Check per-row dirty state; a real renderer would skip clean rows.
-    bool row_dirty = false;
-    rustty_render_state_row_get(
-        row_iter, RUSTTY_RENDER_STATE_ROW_DATA_DIRTY, &row_dirty);
-
-    printf("Row %2d [%s]: ", row_index,
-           row_dirty ? "dirty" : "clean");
+  uint16_t row_y = 0;
+  while (rustty_render_state_row_iterator_next_dirty(row_iter, &row_y)) {
+    printf("Row %2u [dirty]: ", row_y);
 
     // Query the row-local selection range. Rows without a selection return
     // RUSTTY_NO_VALUE; selected rows return inclusive start/end columns.
@@ -239,22 +220,13 @@ int main(void) {
     }
 
     printf("\n");
-
-    // Clear per-row dirty flag after "rendering" it.
-    bool clean = false;
-    rustty_render_state_row_set(
-        row_iter, RUSTTY_RENDER_STATE_ROW_OPTION_DIRTY, &clean);
-
-    row_index++;
   }
   //! [render-row-iterate]
 
   //! [render-dirty-reset]
-  // After finishing the frame, reset the global dirty state so the next
-  // update can report changes accurately.
-  RusttyRenderStateDirty clean_state = RUSTTY_RENDER_STATE_DIRTY_FALSE;
-  result = rustty_render_state_set(
-      render_state, RUSTTY_RENDER_STATE_OPTION_DIRTY, &clean_state);
+  // After successfully rendering the complete frame, clear both the global
+  // and per-row dirty state in one call.
+  result = rustty_render_state_clean(render_state);
   assert(result == RUSTTY_SUCCESS);
   //! [render-dirty-reset]
 

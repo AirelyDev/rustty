@@ -9,6 +9,8 @@
 
 #include <stdint.h>
 
+#include <rustty/vt/types.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif

@@ -156,13 +156,17 @@
 //! document the reference API; the port's live surface is the module list
 //! below).
 //!
-//! PORT STATUS: partial (phase-4 wsnap-1, assessment B clusters C1+C2) — the
-//! scaffold (envelope, io, record framing, checkpoints, continuation) and the
-//! page/style/hyperlink record codecs are live. `grid` (cluster C3) and
-//! `screen`/`terminal`/`history` plus the codec drivers in `codec.rs`
-//! (cluster C4) are the next stage; their files drop in beside these modules
-//! (see the commented re-exports below and the PORT STATUS notes in
-//! `page.rs` / `codec.rs`).
+//! PORT STATUS: partial (phase-4 wsnap-2, assessment B clusters C1+C2+C3 and
+//! the history half of C4) — the scaffold (envelope, io, record framing,
+//! checkpoints, continuation), the page/style/hyperlink record codecs, the
+//! COMPLETE grid codec (cluster C3: 8-byte cells with blank elision, per-row
+//! variable cell width, bulk encode/decode, batched grapheme suffixes,
+//! per-row wide-pair resolution), the complete framed PAGE
+//! encode/decode/Decoder, and the HISTORY record are live. `screen` and
+//! `terminal` (the rest of cluster C4) plus the codec drivers in `codec.rs`
+//! are the next stage; their files drop in beside these modules (see the
+//! commented re-exports below and the PORT STATUS notes in `history.rs` /
+//! `codec.rs`).
 
 // pub const checkpoint = @import("checkpoint.zig");
 pub mod checkpoint;
@@ -171,14 +175,9 @@ pub mod continuation;
 // pub const envelope = @import("envelope.zig");
 pub mod envelope;
 // pub const grid = @import("grid.zig");
-// PORT NOTE (wsnap-1 boundary): `snapshot/grid.rs` is the next-stage grid
-// codec (assessment B cluster C3: 8-byte cells with blank elision, per-row
-// variable cell width, vectorized encode/decode, batched grapheme suffixes,
-// per-row wide-pair resolution; golden `testdata/grid-v1.hex` is already
-// checked in).
+pub mod grid;
 // pub const history = @import("history.zig");
-// PORT NOTE (wsnap-1 boundary): `snapshot/history.rs` is next-stage (cluster
-// C4; golden `testdata/history-header-v1.hex` is already checked in).
+pub mod history;
 // pub const hyperlink = @import("hyperlink.zig");
 pub mod hyperlink;
 // pub const page = @import("page.zig");
@@ -186,13 +185,14 @@ pub mod page;
 // pub const record = @import("record.zig");
 pub mod record;
 // pub const screen = @import("screen.zig");
-// PORT NOTE (wsnap-1 boundary): `snapshot/screen.rs` is next-stage (cluster
+// PORT NOTE (wsnap-2 boundary): `snapshot/screen.rs` is next-stage (cluster
 // C4; goldens `testdata/screen-header-v1.hex` /
-// `testdata/screen-saved-cursor-v1.hex` are already checked in).
+// `testdata/screen-saved-cursor-v1.hex` are already checked in). It also
+// unblocks the deferred history test (see history.rs PORT STATUS).
 // pub const style = @import("style.zig");
 pub mod style;
 // pub const terminal = @import("terminal.zig");
-// PORT NOTE (wsnap-1 boundary): `snapshot/terminal.rs` is next-stage (cluster
+// PORT NOTE (wsnap-2 boundary): `snapshot/terminal.rs` is next-stage (cluster
 // C4; golden `testdata/terminal-header-v1.hex` is already checked in).
 
 // const codec = @import("snapshot.zig");

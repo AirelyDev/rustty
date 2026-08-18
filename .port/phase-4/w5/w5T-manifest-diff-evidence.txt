@@ -1,0 +1,32 @@
+types: oracle=146 mine=134
+NOTE: identity library_version: mine='0.1.0' oracle='0.1.0-dev'
+NOTE: deferred type absent (expected): GhosttyCellsView
+NOTE: deferred type absent (expected): GhosttyReader
+NOTE: deferred type absent (expected): GhosttyRenderStateCursor
+NOTE: deferred type absent (expected): GhosttyTerminalModeConfig
+NOTE: deferred type absent (expected): GhosttyTerminalUnknownSequence
+NOTE: deferred type absent (expected): GhosttyTerminalUnknownStringSequence
+NOTE: deferred type absent (expected): GhosttyTerminalUnknownSequenceValue
+NOTE: deferred type absent (expected): GhosttyWriter
+NOTE: deferred type absent (expected): GhosttySnapshotDecoderData
+NOTE: deferred type absent (expected): GhosttySnapshotDecoderOption
+NOTE: deferred type absent (expected): GhosttyTerminalUnknownSequenceTag
+NOTE: deferred type absent (expected): GhosttySnapshotDecoder
+NOTE: deferred enum value absent (expected): GhosttyResult.LIMIT_EXCEEDED
+NOTE: deferred enum value absent (expected): GhosttyResult.IO_ERROR
+NOTE: deferred enum value absent (expected): GhosttyRenderStateData.CURSOR
+NOTE: deferred enum value absent (expected): GhosttyRenderStateData.COLORS
+NOTE: deferred enum value absent (expected): GhosttyRenderStateRowData.CELLS_RAW
+NOTE: deferred enum value absent (expected): GhosttyTerminalData.VT_GROUND
+NOTE: deferred enum value absent (expected): GhosttyTerminalData.MODE
+NOTE: deferred enum value absent (expected): GhosttyTerminalData.CONTINUATION_MAX_BYTES
+NOTE: deferred enum value absent (expected): GhosttyTerminalData.CURSOR_AT_PROMPT
+NOTE: deferred enum value absent (expected): GhosttyTerminalOption.UNKNOWN_MAX_BYTES
+NOTE: deferred enum value absent (expected): GhosttyTerminalOption.TITLE_REPORT
+NOTE: deferred enum value absent (expected): GhosttyTerminalOption.CONTINUATION_MAX_BYTES
+NOTE: deferred enum value absent (expected): GhosttyTerminalOption.UNKNOWN_SEQUENCE
+NOTE: deferred enum value absent (expected): GhosttyTerminalOption.TERMINFO_NAME
+NOTE: deferred enum value absent (expected): GhosttyTerminalOption.MODE
+NOTE: deferred enum value absent (expected): GhosttyTerminalOption.MODE_DEFAULT
+
+OK: manifest matches the oracle modulo the declared deferrals.

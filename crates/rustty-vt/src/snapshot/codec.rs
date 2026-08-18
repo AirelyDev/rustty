@@ -3,10 +3,11 @@
 //! PORTS: ghostty src/terminal/snapshot/snapshot.zig (imported by the
 //! reference `main.zig` under the local name `codec`, hence this file name).
 //!
-//! PORT STATUS: partial (phase-4 wsnap-1) — `Continuation`, `EncodeOptions`,
-//! and `DecodeOptions` are live. The codec drivers are BLOCKED on the
-//! next-stage modules `snapshot/{grid,screen,terminal,history}.rs`
-//! (assessment B clusters C3/C4) and land with them, END STATE unchanged:
+//! PORT STATUS: partial (phase-4 wsnap-2) — `Continuation`, `EncodeOptions`,
+//! and `DecodeOptions` are live, and `grid`/`page`/`history` now are too. The
+//! codec drivers remain BLOCKED on the next-stage modules
+//! `snapshot/{screen,terminal}.rs` (assessment B cluster C4's screen/terminal
+//! half) and land with them, END STATE unchanged:
 //!
 //!   * `EncodeError` / `DecodeError` / `DecodeExactError` (unions over the
 //!     terminal/screen/history/checkpoint/continuation record error sets)
@@ -52,7 +53,7 @@
 // const continuation = @import("continuation.zig");
 // const envelope = @import("envelope.zig");
 // const test_fixture = @import("fixture.zig");
-// const history = @import("history.zig"); — NEXT STAGE
+// const history = @import("history.zig");
 // const page = @import("page.zig");
 // const record = @import("record.zig");
 // const screen = @import("screen.zig"); — NEXT STAGE

@@ -21,6 +21,18 @@ use rustty_vt::page::Cell;
 // pub const CCell = u64;
 pub type CCell = u64;
 
+/// C: GhosttyCellsView -> RusttyCellsView (R2)
+// pub const CellsView = extern struct {
+//     ptr: ?[*]const CCell,
+//     len: usize,
+// };
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CellsView {
+    pub ptr: *const CCell,
+    pub len: usize,
+}
+
 /// C: GhosttyCellContentTag -> RusttyCellContentTag (R2)
 // pub const ContentTag = enum(c_int) { codepoint = 0, ... };
 #[repr(C)]

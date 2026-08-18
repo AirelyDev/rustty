@@ -31,8 +31,6 @@ use rustty_args::args;
 use rustty_args::args::{ArgIterator, HookOutcome};
 // const diagnostics = @import("diagnostics.zig");
 use rustty_args::diagnostics::{DiagnosticList, Location, LocationProvider};
-// const lib = @import("../lib/main.zig");
-use rustty_lib::cut_prefix;
 // const homedir = @import("../os/homedir.zig");
 use rustty_os::expandHome;
 
@@ -113,7 +111,7 @@ impl Options {
     // fn checkArg(self: *Options, alloc: Allocator, arg: []const u8) (error{InvalidValue}
     //     || homedir.ExpandError || std.fs.Dir.RealPathAllocError || Allocator.Error)!?[:0]const u8 {
     fn check_arg(&mut self, arg: &[u8]) -> Result<Option<Vec<u8>>, CheckArgError> {
-        // if (lib.cutPrefix(u8, arg, "--class=")) |rest| {
+        // if (std.mem.cutPrefix(u8, arg, "--class=")) |rest| {
         if let Some(rest) = cut_prefix(arg, b"--class=") {
             // self.class = try alloc.dupeZ(u8, std.mem.trim(u8, rest, &std.ascii.whitespace));
             self.class = Some(trim(rest, ASCII_WHITESPACE).to_vec());
@@ -121,7 +119,7 @@ impl Options {
             return Ok(None);
         }
 
-        // if (lib.cutPrefix(u8, arg, "--working-directory=")) |rest| {
+        // if (std.mem.cutPrefix(u8, arg, "--working-directory=")) |rest| {
         if let Some(rest) = cut_prefix(arg, b"--working-directory=") {
             // const stripped = std.mem.trim(u8, rest, &std.ascii.whitespace);
             let stripped = trim(rest, ASCII_WHITESPACE);
@@ -517,6 +515,15 @@ where
     writeln!(stderr, "+new-window is not supported on this platform.")?;
     // return 1;
     Ok(1)
+}
+
+/// `std.mem.cutPrefix(u8, arg, prefix)` — the end-state reference uses the
+/// (upstreamed) std helper (`1d6bc6829` deleted `lib/string.zig`'s `cutPrefix`
+/// and moved every caller to `std.mem.cutPrefix`); identical semantics,
+/// inlined here to keep this file's helper set self-contained like its
+/// template (`new_tab.rs` precedent).
+fn cut_prefix<'a>(slice: &'a [u8], prefix: &[u8]) -> Option<&'a [u8]> {
+    slice.strip_prefix(prefix)
 }
 
 /// `std.mem.trim(u8, slice, values)` — trim leading/trailing bytes contained in

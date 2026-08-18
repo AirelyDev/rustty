@@ -1966,16 +1966,17 @@ fn action_open_config(
     parameter: Option<&glib::Variant>,
     app: &Application,
 ) {
-    use rustty_input::binding::OpenConfig;
+    use rustty_apprt_api::action::OpenConfig;
 
     // `const target: CoreApp.Message.OpenConfig = target: { ... }` (`:2119-
     // 2146`): the `StaticStringMap` lookup over the two detailed-action target
     // strings, defaulting to `.os_open` on every malformed-parameter path.
     //
-    // PORT NOTE (P4 partial, 0a183c923): the target type is the input
-    // binding's `OpenConfig` because the core `Message.OpenConfig` payload
-    // (coupling A) and the apprt C-ABI half (W5) have not landed; see
-    // [`action::open_config`].
+    // PORT NOTE: the target type is the apprt-api `action::OpenConfig` (the
+    // same two-variant `os_open`/`new_window` enum as the reference's
+    // `CoreApp.Message.OpenConfig`) because rustty routes the parsed target
+    // straight to [`action::open_config`] rather than through the core
+    // mailbox; see the routing note below.
     let target: OpenConfig = 'target: {
         let Some(parameter) = parameter else {
             eprintln!("warn(gtk): no parameter provided to app.open-config action");
@@ -2015,8 +2016,7 @@ fn action_open_config(
     // `action::open_config` is self-contained (config path + `open_url` /
     // edit-command window; needs no core mailbox/surface), so route it
     // directly WITH the parsed target, the same precedent as
-    // [`action_reload_config`]. (The core `Message::OpenConfig` payload is
-    // W5-pending; routing directly keeps the `new-window` target live.)
+    // [`action_reload_config`].
     let _ = action::open_config(app, target);
 }
 
@@ -3317,12 +3317,9 @@ impl Application {
 
             // `.export_terminal_io => return try Action.exportTerminalIO(self,
             // target, value)` (`:713-717`, B9/ad96613a8).
-            //
-            // PORT NOTE (P4 partial, ad96613a8): the apprt-api
-            // `Action::ExportTerminalIO` C-ABI variant is the W5 bundle; this
-            // arm lands with it. The GTK consumer half
-            // ([`action::export_terminal_io`] + `ExportTerminalIORequest`) is
-            // ported below and waiting.
+            Action::ExportTerminalIO(v) => {
+                return Ok(action::export_terminal_io(self, target, v.contents))
+            }
 
             // `.key_sequence => return Action.keySequence(target, value)` (`:699`).
             Action::KeySequence(v) => return Ok(action::key_sequence(target, v)),
@@ -3341,12 +3338,7 @@ impl Application {
 
             // `.move_tab_to_new_window => return Action.moveTabToNewWindow(
             // target)` (`:727`, f6fca9aab).
-            //
-            // PORT NOTE (P4 partial, 25b2d8a38/f6fca9aab): the apprt-api
-            // `Action::MoveTabToNewWindow` C-ABI key is the W5 bundle; this
-            // arm lands with it. The GTK consumer half
-            // ([`action::move_tab_to_new_window`] →
-            // [`Window::move_tab_to_new_window`]) is ported below and waiting.
+            Action::MoveTabToNewWindow => return Ok(action::move_tab_to_new_window(target)),
 
             // `.new_split => return Action.newSplit(target, value)` (`:708`).
             Action::NewSplit(v) => return Ok(action::new_split(target, v)),
@@ -3359,19 +3351,7 @@ impl Application {
 
             // `.open_config => return Action.openConfig(self, value)` (`:742`,
             // 0a183c923).
-            //
-            // PORT NOTE (P4 partial, 0a183c923): the apprt `Action.OpenConfig`
-            // C-ABI payload is the W5 bundle; until it lands the void variant
-            // dispatches the default (`.os_open`) — the same seam note as
-            // core's `ScopedApp::OpenConfig`. The payload-carrying GTK path
-            // (`app.open-config::new-window`) is LIVE via
-            // [`action_open_config`], which routes its parsed target directly.
-            Action::OpenConfig => {
-                return Ok(action::open_config(
-                    self,
-                    rustty_input::binding::OpenConfig::DEFAULT,
-                ))
-            }
+            Action::OpenConfig(v) => return Ok(action::open_config(self, v)),
 
             // `.open_url => Action.openUrl(self, value)` (`:723`).
             Action::OpenUrl(v) => action::open_url(self, v),
@@ -3420,12 +3400,7 @@ impl Application {
 
             // `.set_window_title => return Action.setWindowTitle(target,
             // value)` (`:773`, 8b7c57c75).
-            //
-            // PORT NOTE (P4 partial, 8b7c57c75): the apprt-api
-            // `Action::SetWindowTitle` C-ABI key is the W5 bundle; this arm
-            // lands with it. The GTK consumer half
-            // ([`action::set_window_title`] → the `title-override` property)
-            // is ported below and waiting.
+            Action::SetWindowTitle(v) => return Ok(action::set_window_title(target, v)),
 
             // `.show_child_exited => return Action.showChildExited(target, value)` (`:754`).
             Action::ShowChildExited(v) => return Ok(action::show_child_exited(target, v)),
@@ -3907,11 +3882,6 @@ mod action {
     }
 
     /// `pub fn moveTabToNewWindow(target) bool` (`:2615-2633`, f6fca9aab).
-    ///
-    /// PORT NOTE (P4 partial, 25b2d8a38/f6fca9aab): unreachable until W5 lands
-    /// the apprt-api `Action::MoveTabToNewWindow` C-ABI key (see the dispatch
-    /// PORT NOTE); `allow(dead_code)` until that arm calls it.
-    #[allow(dead_code)]
     pub(super) fn move_tab_to_new_window<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
         match target {
             Target::App => false,
@@ -4058,14 +4028,11 @@ mod action {
 
     /// `pub fn openConfig(self, value) bool` (`:2780-2831`; 0a183c923 added the
     /// `apprt.action.OpenConfig` parameter and the `.new_window` arm).
-    ///
-    /// PORT NOTE (P4 partial, 0a183c923): the parameter is typed as the input
-    /// binding's [`rustty_input::binding::OpenConfig`] — the same two-variant
-    /// `os_open`/`new_window` enum — because the apprt-api C-ABI
-    /// `apprt.action.OpenConfig` half is the W5 bundle; swap the type when it
-    /// lands.
-    pub(super) fn open_config(app: &Application, value: rustty_input::binding::OpenConfig) -> bool {
-        use rustty_input::binding::OpenConfig;
+    pub(super) fn open_config(
+        app: &Application,
+        value: rustty_apprt_api::action::OpenConfig,
+    ) -> bool {
+        use rustty_apprt_api::action::OpenConfig;
 
         // Get the config file path (`:2783-2788`, `configpkg.edit.openPath`).
         let path = match rustty_config::edit::open_path() {
@@ -4292,28 +4259,21 @@ mod action {
             },
             // `.window => { ... win.promptWindowTitle(); return true; }`
             // (`:2923-2939`, 8b7c57c75).
-            //
-            // PORT NOTE (P4 partial, 8b7c57c75): the apprt-api
-            // `PromptTitle::Window` C-ABI value is the W5 bundle; this arm
-            // lands with it:
-            //
-            //     PromptTitle::Window => match target {
-            //         Target::App => false,
-            //         Target::Surface(v) => {
-            //             let Some(w) = widget(v) else { return false };
-            //             let Some(win) = ext::ancestor::<Window>(&w) else {
-            //                 eprintln!(
-            //                     "warn(gtk): surface is not in a window, \
-            //                      ignoring prompt_window_title"
-            //                 );
-            //                 return false;
-            //             };
-            //             win.prompt_window_title();
-            //             true
-            //         }
-            //     },
-            //
-            // The `Window::prompt_window_title` consumer is ported and waiting.
+            PromptTitle::Window => match target {
+                Target::App => false,
+                Target::Surface(v) => {
+                    let Some(w) = widget(v) else { return false };
+                    let Some(win) = ext::ancestor::<Window>(&w) else {
+                        eprintln!(
+                            "warn(gtk): surface is not in a window, \
+                             ignoring prompt_window_title"
+                        );
+                        return false;
+                    };
+                    win.prompt_window_title();
+                    true
+                }
+            },
         }
     }
 
@@ -4586,11 +4546,6 @@ mod action {
 
     /// `pub fn setWindowTitle(target, value) bool` (`:3111-3133`, 8b7c57c75 —
     /// the window-title renaming pair).
-    ///
-    /// PORT NOTE (P4 partial, 8b7c57c75): unreachable until W5 lands the
-    /// apprt-api `Action::SetWindowTitle` C-ABI key (see the dispatch PORT
-    /// NOTE); `allow(dead_code)` until that arm calls it.
-    #[allow(dead_code)]
     pub(super) fn set_window_title<C: CoreSurfaceHandle>(
         target: Target<'_, C>,
         value: rustty_apprt_api::action::SetTitle<'_>,
@@ -4838,14 +4793,12 @@ mod action {
     /// borrowed contents, opens a native save dialog, and writes the file on
     /// accept.
     ///
-    /// PORT NOTE (P4 partial, ad96613a8): unreachable until W5 lands the
-    /// apprt-api `Action::ExportTerminalIO` variant (see the dispatch PORT
-    /// NOTE); `contents` stands in for `value.contents` (the variant's
-    /// one-field payload) until that struct exists. `_app` is the reference's
-    /// `self` — used only for `self.allocator()`, which Rust ownership
-    /// absorbs. `allow(deprecated)`: `gtk.FileChooserNative` is deprecated
-    /// since GTK 4.10; the reference uses it deliberately on GTK4.
-    #[allow(dead_code)]
+    /// PORT NOTE: `contents` is `value.contents` (the apprt-api
+    /// `Action::ExportTerminalIO` variant's one-field payload, passed as raw
+    /// bytes). `_app` is the reference's `self` — used only for
+    /// `self.allocator()`, which Rust ownership absorbs. `allow(deprecated)`:
+    /// `gtk.FileChooserNative` is deprecated since GTK 4.10; the reference
+    /// uses it deliberately on GTK4.
     #[allow(deprecated)]
     pub(super) fn export_terminal_io<C: CoreSurfaceHandle>(
         _app: &Application,

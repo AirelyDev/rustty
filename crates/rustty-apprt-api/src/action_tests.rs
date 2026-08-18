@@ -1,4 +1,4 @@
-//! PORTS: the `test {}` blocks of ghostty `src/apprt/action.zig` — the 16
+//! PORTS: the `test {}` blocks of ghostty `src/apprt/action.zig` — the 17
 //! `checkGhosttyHEnum` C-enum-sync tests + the top-level `refAllDeclsRecursive`
 //! smoke. Split into its own file (mirrors rustty-font-shaper's
 //! `harfbuzz.rs`/`harfbuzz_tests.rs` convention).
@@ -84,9 +84,11 @@ fn ghostty_h_action_key() {
             "inspector",
             "show_gtk_inspector",
             "render_inspector",
+            "export_terminal_io",
             "desktop_notification",
             "set_title",
             "set_tab_title",
+            "set_window_title",
             "prompt_title",
             "pwd",
             "mouse_shape",
@@ -119,6 +121,7 @@ fn ghostty_h_action_key() {
             "search_selected",
             "readonly",
             "copy_title_to_clipboard",
+            "move_tab_to_new_window",
         ],
     );
 }
@@ -239,10 +242,6 @@ fn ghostty_h_mouse_visibility() {
 #[test]
 fn ghostty_h_prompt_title() {
     let _ = PromptTitle::Surface;
-    // PORT NOTE (P4 W6-tail, 8b7c57c75): "window" is the appended upstream
-    // value; `rustty-embed.h` gains RUSTTY_PROMPT_TITLE_WINDOW in the W5-E
-    // header bundle (this KAT models the header from the key list — the
-    // append-only ordinal contract it checks is already the end-state one).
     run_henum("RUSTTY_PROMPT_TITLE_", &["surface", "tab", "window"]);
 }
 
@@ -252,10 +251,6 @@ fn ghostty_h_prompt_title() {
 #[test]
 fn ghostty_h_open_url_kind() {
     let _ = OpenUrlKind::Unknown;
-    // PORT NOTE (P4 W6-tail, 77537c806): "osc8" is the appended upstream
-    // value; `rustty-embed.h` gains RUSTTY_ACTION_OPEN_URL_KIND_OSC8 in the
-    // W5-E header bundle (this KAT models the header from the key list — the
-    // append-only ordinal contract it checks is already the end-state one).
     run_henum(
         "RUSTTY_ACTION_OPEN_URL_KIND_",
         &["unknown", "text", "html", "osc8"],
@@ -269,6 +264,15 @@ fn ghostty_h_open_url_kind() {
 fn ghostty_h_close_tab_mode() {
     let _ = CloseTabMode::This;
     run_henum("RUSTTY_ACTION_CLOSE_TAB_MODE_", &["this", "other", "right"]);
+}
+
+// test "ghostty.h OpenConfig" {
+//     try lib.checkGhosttyHEnum(OpenConfig, "GHOSTTY_ACTION_OPEN_CONFIG_");
+// }
+#[test]
+fn ghostty_h_open_config() {
+    let _ = OpenConfig::OsOpen;
+    run_henum("RUSTTY_ACTION_OPEN_CONFIG_", &["os_open", "new_window"]);
 }
 
 // test {
@@ -285,13 +289,13 @@ fn ref_all_decls_recursive() {
     use crate::action::{
         Action, ActionC, ActionCValue, ActionKey, CellSize, CloseTabMode, ColorChange, ColorKind,
         CommandFinished, ConfigChange, ConfigChangeC, DesktopNotification, DesktopNotificationC,
-        FloatWindow, Fullscreen, GotoSplit, GotoTab, GotoWindow, InitialSize, Inspector,
-        KeySequence, KeySequenceC, KeyTable, KeyTableActivateC, KeyTableC, KeyTableCValue,
-        KeyTableTag, MouseOverLink, MouseOverLinkC, MouseVisibility, MoveTab, OpenUrl, OpenUrlC,
-        OpenUrlKind, PromptTitle, Pwd, PwdC, Readonly, ReloadConfig, ResizeSplit,
-        ResizeSplitDirection, SearchSelected, SearchSelectedC, SearchTotal, SearchTotalC,
-        SecureInput, SetTitle, SetTitleC, SizeLimit, SplitDirection, StartSearch, StartSearchC,
-        Target, TargetC, TargetCValue, TargetKey,
+        ExportTerminalIO, ExportTerminalIOC, FloatWindow, Fullscreen, GotoSplit, GotoTab,
+        GotoWindow, InitialSize, Inspector, KeySequence, KeySequenceC, KeyTable, KeyTableActivateC,
+        KeyTableC, KeyTableCValue, KeyTableTag, MouseOverLink, MouseOverLinkC, MouseVisibility,
+        MoveTab, OpenConfig, OpenUrl, OpenUrlC, OpenUrlKind, PromptTitle, Pwd, PwdC, Readonly,
+        ReloadConfig, ResizeSplit, ResizeSplitDirection, SearchSelected, SearchSelectedC,
+        SearchTotal, SearchTotalC, SecureInput, SetTitle, SetTitleC, SizeLimit, SplitDirection,
+        StartSearch, StartSearchC, Target, TargetC, TargetCValue, TargetKey,
     };
     use crate::seam::CoreSurfaceHandle;
 
@@ -373,6 +377,12 @@ fn ref_all_decls_recursive() {
     .cval();
     let _ = Action::SearchTotal(SearchTotal { total: Some(3) }).cval();
     let _ = Action::SearchSelected(SearchSelected { selected: None }).cval();
+    let _ = Action::OpenConfig(OpenConfig::NewWindow).cval();
+    assert_eq!(
+        Action::MoveTabToNewWindow.key(),
+        ActionKey::MoveTabToNewWindow
+    );
+    let _ = Action::MoveTabToNewWindow.cval();
 
     // Borrow-carrying payloads + their Display formatters + C projections.
     let st = SetTitle { title: b"title" };
@@ -392,6 +402,14 @@ fn ref_all_decls_recursive() {
     let _ = mol.cval();
     let ss = StartSearch { needle: b"n" };
     let _ = ss.cval();
+    let etio = ExportTerminalIO {
+        contents: b"Seq\tKind\tDescription\n",
+    };
+    let etio_c: ExportTerminalIOC = etio.cval();
+    assert_eq!(etio_c.len, etio.contents.len());
+    let _ = format!("{etio}");
+    let _ = Action::ExportTerminalIO(etio).cval();
+    let _ = Action::SetWindowTitle(SetTitle { title: b"title" }).cval();
 
     // ConfigChange needs a real Config borrow (exercises the config dep).
     let cfg = rustty_config::Config::default();

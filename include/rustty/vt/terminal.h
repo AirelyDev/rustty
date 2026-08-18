@@ -53,17 +53,17 @@ extern "C" {
  *
  * ## Effects
  *
- * By default, the terminal sequence processing with rustty_terminal_vt_write() 
- * only process sequences that directly affect terminal state and 
+ * By default, terminal sequence processing with the VT write functions only
+ * processes sequences that directly affect terminal state and
  * ignores sequences that have side effect behavior or require responses.
  * These sequences include things like bell characters, title changes, device
  * attributes queries, and more. To handle these sequences, the embedder
  * must configure "effects."
  *
  * Effects are callbacks that the terminal invokes in response to VT
- * sequences processed during rustty_terminal_vt_write(). They let the
- * embedding application react to terminal-initiated events such as bell
- * characters, title changes, device status report responses, and more.
+ * sequences processed during VT writes. They let the embedding application
+ * react to terminal-initiated events such as bell characters, title changes,
+ * device status report responses, and more.
  *
  * Each effect is registered with rustty_terminal_set() using the
  * corresponding `RusttyTerminalOption` identifier. A `NULL` value
@@ -96,6 +96,7 @@ extern "C" {
  * | `RUSTTY_TERMINAL_OPT_CLIPBOARD_WRITE`  | `RusttyTerminalClipboardWriteFn` | Clipboard write via OSC 52 / OSC 1337     |
  * | `RUSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION`| `RusttyTerminalDesktopNotificationFn` | Desktop notification via OSC 9 / OSC 777 |
  * | `RUSTTY_TERMINAL_OPT_PROGRESS_REPORT`  | `RusttyTerminalProgressReportFn` | Progress report via OSC 9;4               |
+ * | `RUSTTY_TERMINAL_OPT_UNKNOWN_SEQUENCE` | `RusttyTerminalUnknownSequenceFn` | Unsupported sequence identifier          |
  *
  * ### Defining a write_pty callback
  * @snippet c-vt-effects/src/main.c effects-write-pty
@@ -108,6 +109,9 @@ extern "C" {
  *
  * ### Defining a clipboard_write callback
  * @snippet c-vt-effects/src/main.c effects-clipboard-write
+ *
+ * ### Defining an unknown_sequence callback
+ * @snippet c-vt-effects/src/main.c effects-unknown-sequence
  *
  * ### Registering effects and processing VT data
  * @snippet c-vt-effects/src/main.c effects-register
@@ -329,6 +333,88 @@ typedef struct {
  */
 typedef void (*RusttyTerminalBellFn)(RusttyTerminal terminal,
                                       void* userdata);
+
+/**
+ * Unsupported terminal sequence tags.
+ *
+ * Only APC sequences are currently reported. Additional sequence types may
+ * be added without changing the callback shape.
+ *
+ * @ingroup terminal
+ */
+typedef enum RUSTTY_ENUM_TYPED {
+  /** Application Program Command (APC). */
+  RUSTTY_TERMINAL_UNKNOWN_SEQUENCE_APC = 0,
+  RUSTTY_TERMINAL_UNKNOWN_SEQUENCE_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
+} RusttyTerminalUnknownSequenceTag;
+
+/**
+ * An unsupported string terminal sequence.
+ *
+ * The content is borrowed and valid only for the callback duration. It
+ * contains the bytes between the sequence introducer and terminator, may
+ * contain arbitrary binary data, and is not null-terminated.
+ *
+ * @ingroup terminal
+ */
+typedef struct {
+  /** Whether content was shortened by the byte limit or allocation failure. */
+  bool truncated;
+
+  /** Retained sequence content. */
+  RusttyString content;
+} RusttyTerminalUnknownStringSequence;
+
+/**
+ * Unsupported terminal sequence value.
+ *
+ * @ingroup terminal
+ */
+typedef union {
+  /** Application Program Command (APC). */
+  RusttyTerminalUnknownStringSequence apc;
+
+  /**
+   * Padding for ABI compatibility. Do not use.
+   *
+   * 128 bytes leaves room for future structured sequence payloads, such as
+   * CSI with borrowed parameter, separator, and intermediate arrays, without
+   * changing the tagged union's ABI.
+   */
+  uint64_t _padding[16];
+} RusttyTerminalUnknownSequenceValue;
+
+/**
+ * An unsupported terminal sequence.
+ *
+ * @ingroup terminal
+ */
+typedef struct {
+  RusttyTerminalUnknownSequenceTag tag;
+  RusttyTerminalUnknownSequenceValue value;
+} RusttyTerminalUnknownSequence;
+
+/**
+ * Callback function type for unsupported terminal sequences.
+ *
+ * Called synchronously for normally terminated sequences whose identifier is
+ * not supported by the active terminal handler. Aborted sequences, malformed
+ * recognized commands, and explicitly disabled known protocols are ignored.
+ *
+ * Capture must also be enabled with a nonzero
+ * RUSTTY_TERMINAL_OPT_UNKNOWN_MAX_BYTES value. Installing this callback alone
+ * does not retain sequence content or allocate memory.
+ *
+ * @param terminal The terminal handle
+ * @param userdata The userdata pointer set via RUSTTY_TERMINAL_OPT_USERDATA
+ * @param sequence Borrowed unsupported sequence
+ *
+ * @ingroup terminal
+ */
+typedef void (*RusttyTerminalUnknownSequenceFn)(
+    RusttyTerminal terminal,
+    void* userdata,
+    const RusttyTerminalUnknownSequence* sequence);
 
 /**
  * Clipboard destination for a clipboard write.
@@ -695,6 +781,24 @@ typedef RusttyString (*RusttyTerminalXtversionFn)(RusttyTerminal terminal,
                                                      void* userdata);
 
 /**
+ * A terminal mode and boolean value used for mode configuration and queries.
+ *
+ * For RUSTTY_TERMINAL_DATA_MODE, initialize `mode` before calling
+ * rustty_terminal_get(). On success, `value` contains the current mode value.
+ *
+ * This struct has a frozen layout and will not gain fields in future versions.
+ *
+ * @ingroup terminal
+ */
+typedef struct {
+  /** Mode to configure or query. */
+  RusttyMode mode;
+
+  /** Value to set, or the current value returned by a query. */
+  bool value;
+} RusttyTerminalModeConfig;
+
+/**
  * Terminal option identifiers.
  *
  * These values are used with rustty_terminal_set() to configure
@@ -1027,6 +1131,83 @@ typedef enum RUSTTY_ENUM_TYPED {
    * Input type: RusttyTerminalProgressReportFn
    */
   RUSTTY_TERMINAL_OPT_PROGRESS_REPORT = 30,
+
+  /* RUSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES = 31 is reserved for the
+   * snapshot/continuation surface (not yet available in this build). */
+
+  /**
+   * Enable window title reports in response to CSI 21 t.
+   *
+   * This is disabled by default because a running program can set a title and
+   * query it back into the pty input stream, potentially injecting commands
+   * that execute after user interaction. Passing NULL or a pointer to false
+   * disables title reporting.
+   *
+   * Input type: bool*
+   */
+  RUSTTY_TERMINAL_OPT_TITLE_REPORT = 32,
+
+  /**
+   * Set the reset default for a terminal mode.
+   *
+   * This unconditionally updates both the current value and the value restored
+   * by a full terminal reset (RIS).
+   *
+   * Some recognized modes represent transitions or mirror additional terminal
+   * state and cannot safely be configured as reset defaults. Those modes return
+   * RUSTTY_INVALID_VALUE. A NULL value pointer also returns
+   * RUSTTY_INVALID_VALUE.
+   *
+   * Input type: RusttyTerminalModeConfig*
+   */
+  RUSTTY_TERMINAL_OPT_MODE_DEFAULT = 33,
+
+  /**
+   * Set the current value of a terminal mode.
+   *
+   * This does not change the value restored by a full terminal reset (RIS).
+   * A NULL value pointer or unknown mode returns RUSTTY_INVALID_VALUE.
+   *
+   * Input type: RusttyTerminalModeConfig*
+   */
+  RUSTTY_TERMINAL_OPT_MODE = 34,
+
+  /**
+   * Callback invoked for unsupported terminal sequence identifiers. Set to
+   * NULL to ignore unsupported sequences. Capture must also be enabled with
+   * RUSTTY_TERMINAL_OPT_UNKNOWN_MAX_BYTES.
+   *
+   * Input type: RusttyTerminalUnknownSequenceFn
+   */
+  RUSTTY_TERMINAL_OPT_UNKNOWN_SEQUENCE = 35,
+
+  /**
+   * Set the maximum content bytes retained for each unsupported terminal
+   * sequence. A NULL value pointer or zero disables capture and prevents
+   * unknown-sequence callbacks.
+   *
+   * When this limit is hit, the unknown sequence callback will still
+   * be invoked but `truncated` will be set to true.
+   *
+   * Input type: size_t*
+   */
+  RUSTTY_TERMINAL_OPT_UNKNOWN_MAX_BYTES = 36,
+
+  /**
+   * Set the name of the terminfo entry this terminal runs as, reported
+   * in response to an XTGETTCAP query for "TN" (e.g. "xterm-256color").
+   *
+   * The string data is copied into the terminal. A NULL value pointer
+   * clears the name (equivalent to setting an empty string). A name
+   * longer than 128 bytes returns RUSTTY_INVALID_VALUE.
+   *
+   * If this is unset then we don't report anything for an XTGETTCAP
+   * TN query, because we don't know what the embedding terminal around
+   * librustty is advertising itself as.
+   *
+   * Input type: RusttyString*
+   */
+  RUSTTY_TERMINAL_OPT_TERMINFO_NAME = 37,
   RUSTTY_TERMINAL_OPT_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttyTerminalOption;
 
@@ -1138,9 +1319,9 @@ typedef enum RUSTTY_ENUM_TYPED {
   /**
    * The terminal title as set by escape sequences (e.g. OSC 0/2).
    *
-   * Returns a borrowed string. The pointer is valid until the next call
-   * to rustty_terminal_vt_write() or rustty_terminal_reset(). An empty
-   * string (len=0) is returned when no title has been set.
+   * Returns a borrowed string. The pointer is valid until the next mutating
+   * terminal call. An empty string (len=0) is returned when no title has been
+   * set.
    *
    * Output type: RusttyString *
    */
@@ -1150,9 +1331,9 @@ typedef enum RUSTTY_ENUM_TYPED {
    * The terminal's current working directory as set by escape sequences
    * (e.g. OSC 7).
    *
-   * Returns a borrowed string. The pointer is valid until the next call
-   * to rustty_terminal_vt_write() or rustty_terminal_reset(). An empty
-   * string (len=0) is returned when no pwd has been set.
+   * Returns a borrowed string. The pointer is valid until the next mutating
+   * terminal call. An empty string (len=0) is returned when no pwd has been
+   * set.
    *
    * Output type: RusttyString *
    */
@@ -1376,6 +1557,32 @@ typedef enum RUSTTY_ENUM_TYPED {
    * Output type: size_t *
    */
   RUSTTY_TERMINAL_DATA_SCROLLBACK_MAX_LINES = 35,
+
+  /* RUSTTY_TERMINAL_DATA_CONTINUATION_MAX_BYTES = 36 and
+   * RUSTTY_TERMINAL_DATA_VT_GROUND = 38 are reserved for the
+   * snapshot/continuation surface (not yet available in this build). */
+
+  /**
+   * Get the current value of a terminal mode.
+   *
+   * The caller must initialize the `mode` field. On success, the `value` field
+   * is updated with the current value. A NULL pointer or unknown mode returns
+   * RUSTTY_INVALID_VALUE.
+   *
+   * Input/output type: RusttyTerminalModeConfig *
+   */
+  RUSTTY_TERMINAL_DATA_MODE = 37,
+
+  /**
+   * Whether the cursor is currently at a semantic shell prompt or input area.
+   *
+   * This depends on semantic prompt markers such as OSC 133. Returns false
+   * when semantic prompt information is unavailable or the alternate screen
+   * is active.
+   *
+   * Output type: bool *
+   */
+  RUSTTY_TERMINAL_DATA_CURSOR_AT_PROMPT = 39,
   RUSTTY_TERMINAL_DATA_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttyTerminalData;
 
@@ -1573,41 +1780,6 @@ RUSTTY_API RusttyResult rustty_terminal_compress(
     RusttyTerminal terminal,
     RusttyTerminalCompressionMode mode,
     RusttyTerminalCompressionResult* out_result);
-
-/**
- * Get the current value of a terminal mode.
- *
- * Returns the value of the mode identified by the given mode.
- *
- * @param terminal The terminal handle (NULL returns RUSTTY_INVALID_VALUE)
- * @param mode The mode identifying the mode to query
- * @param[out] out_value On success, set to true if the mode is set, false
- *             if it is reset
- * @return RUSTTY_SUCCESS on success, RUSTTY_INVALID_VALUE if the terminal
- *         is NULL or the mode does not correspond to a known mode
- *
- * @ingroup terminal
- */
-RUSTTY_API RusttyResult rustty_terminal_mode_get(RusttyTerminal terminal,
-                                        RusttyMode mode,
-                                        bool* out_value);
-
-/**
- * Set the value of a terminal mode.
- *
- * Sets the mode identified by the given mode to the specified value.
- *
- * @param terminal The terminal handle (NULL returns RUSTTY_INVALID_VALUE)
- * @param mode The mode identifying the mode to set
- * @param value true to set the mode, false to reset it
- * @return RUSTTY_SUCCESS on success, RUSTTY_INVALID_VALUE if the terminal
- *         is NULL or the mode does not correspond to a known mode
- *
- * @ingroup terminal
- */
-RUSTTY_API RusttyResult rustty_terminal_mode_set(RusttyTerminal terminal,
-                                         RusttyMode mode,
-                                         bool value);
 
 /**
  * Get data from a terminal instance.

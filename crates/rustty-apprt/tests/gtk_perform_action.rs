@@ -80,16 +80,18 @@ fn perform_action_arm_coverage() {
             Action::Inspector(_) => "inspector",
             Action::ShowGtkInspector => "show_gtk_inspector",
             Action::RenderInspector => "render_inspector",
+            Action::ExportTerminalIO(_) => "export_terminal_io",
             Action::DesktopNotification(_) => "desktop_notification",
             Action::SetTitle(_) => "set_title",
             Action::SetTabTitle(_) => "set_tab_title",
+            Action::SetWindowTitle(_) => "set_window_title",
             Action::PromptTitle(_) => "prompt_title",
             Action::Pwd(_) => "pwd",
             Action::MouseShape(_) => "mouse_shape",
             Action::MouseVisibility(_) => "mouse_visibility",
             Action::MouseOverLink(_) => "mouse_over_link",
             Action::RendererHealth(_) => "renderer_health",
-            Action::OpenConfig => "open_config",
+            Action::OpenConfig(_) => "open_config",
             Action::QuitTimer(_) => "quit_timer",
             Action::FloatWindow(_) => "float_window",
             Action::SecureInput(_) => "secure_input",
@@ -115,6 +117,7 @@ fn perform_action_arm_coverage() {
             Action::SearchSelected(_) => "search_selected",
             Action::Readonly(_) => "readonly",
             Action::CopyTitleToClipboard => "copy_title_to_clipboard",
+            Action::MoveTabToNewWindow => "move_tab_to_new_window",
         }
     }
 

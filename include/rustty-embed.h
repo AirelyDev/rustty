@@ -2,13 +2,17 @@
 // umbrella (oracle: ghostty's upstream include/ghostty.h,
 // verified via check_rustty_h_abi.sh against the pinned checkout).
 //
-// The documentation for the embedding API is only within the Zig source
-// files that define the implementations. This isn't meant to be a general
-// purpose embedding API (yet) so there hasn't been documentation or example
-// work beyond that.
+// Rustty's internal embedder API, a.k.a. "librustty-internal".
 //
-// The only consumer of this API is the macOS app, but the API is built to
-// be more general purpose.
+// The only consumer of this API is the macOS app, and while it is fairly
+// comprehensive, it is tailored to the needs of the macOS app and not designed
+// for external use, hence why most functions are undocumented and some are
+// macOS-specific (e.g. ones dealing with the Metal graphics API).
+//
+// External embedders should instead use `librustty-vt` or other related
+// packages, which are extensively documented and designed from the ground up
+// to be used in other software. Header files for which can be found in
+// `include/rustty/`.
 #ifndef RUSTTY_H
 #define RUSTTY_H
 
@@ -649,6 +653,12 @@ typedef enum {
   RUSTTY_INSPECTOR_HIDE,
 } rustty_action_inspector_e;
 
+// apprt.action.ExportTerminalIO.C
+typedef struct {
+  const char* contents;
+  size_t len;
+} rustty_action_export_terminal_io_s;
+
 // apprt.action.QuitTimer
 typedef enum {
   RUSTTY_QUIT_TIMER_START,
@@ -676,12 +686,21 @@ typedef struct {
 typedef enum {
   RUSTTY_PROMPT_TITLE_SURFACE,
   RUSTTY_PROMPT_TITLE_TAB,
+  RUSTTY_PROMPT_TITLE_WINDOW,
 } rustty_action_prompt_title_e;
 
 // apprt.action.Pwd.C
 typedef struct {
   const char* pwd;
 } rustty_action_pwd_s;
+
+// apprt.action.OpenConfig
+typedef enum {
+  // Open the config in the OS default editor.
+  RUSTTY_ACTION_OPEN_CONFIG_OS_OPEN,
+  // Open the config in a new window using $EDITOR or $VISUAL
+  RUSTTY_ACTION_OPEN_CONFIG_NEW_WINDOW,
+} rustty_action_open_config_e;
 
 // terminal.MouseShape
 typedef enum {
@@ -816,6 +835,7 @@ typedef enum {
   RUSTTY_ACTION_OPEN_URL_KIND_UNKNOWN,
   RUSTTY_ACTION_OPEN_URL_KIND_TEXT,
   RUSTTY_ACTION_OPEN_URL_KIND_HTML,
+  RUSTTY_ACTION_OPEN_URL_KIND_OSC8,
 } rustty_action_open_url_kind_e;
 
 // apprt.action.OpenUrl.C
@@ -918,9 +938,11 @@ typedef enum {
   RUSTTY_ACTION_INSPECTOR,
   RUSTTY_ACTION_SHOW_GTK_INSPECTOR,
   RUSTTY_ACTION_RENDER_INSPECTOR,
+  RUSTTY_ACTION_EXPORT_TERMINAL_IO,
   RUSTTY_ACTION_DESKTOP_NOTIFICATION,
   RUSTTY_ACTION_SET_TITLE,
   RUSTTY_ACTION_SET_TAB_TITLE,
+  RUSTTY_ACTION_SET_WINDOW_TITLE,
   RUSTTY_ACTION_PROMPT_TITLE,
   RUSTTY_ACTION_PWD,
   RUSTTY_ACTION_MOUSE_SHAPE,
@@ -953,6 +975,7 @@ typedef enum {
   RUSTTY_ACTION_SEARCH_SELECTED,
   RUSTTY_ACTION_READONLY,
   RUSTTY_ACTION_COPY_TITLE_TO_CLIPBOARD,
+  RUSTTY_ACTION_MOVE_TAB_TO_NEW_WINDOW,
 } rustty_action_tag_e;
 
 typedef union {
@@ -968,6 +991,7 @@ typedef union {
   rustty_action_cell_size_s cell_size;
   rustty_action_scrollbar_s scrollbar;
   rustty_action_inspector_e inspector;
+  rustty_action_export_terminal_io_s export_terminal_io;
   rustty_action_desktop_notification_s desktop_notification;
   rustty_action_set_title_s set_title;
   rustty_action_set_title_s set_tab_title;
@@ -994,6 +1018,7 @@ typedef union {
   rustty_action_search_total_s search_total;
   rustty_action_search_selected_s search_selected;
   rustty_action_readonly_e readonly;
+  rustty_action_open_config_e open_config;
 } rustty_action_u;
 
 typedef struct {
@@ -1059,6 +1084,7 @@ typedef union {
 // apprt.ipc.Action.Key
 typedef enum {
   RUSTTY_IPC_ACTION_NEW_WINDOW,
+  RUSTTY_IPC_ACTION_NEW_TAB,
   RUSTTY_IPC_ACTION_TOGGLE_QUICK_TERMINAL,
 } rustty_ipc_action_tag_e;
 

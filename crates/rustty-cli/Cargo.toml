@@ -73,9 +73,6 @@ rustty-apprt-api = { workspace = true }
 # the workspace-standard allocator-api2 `Allocator` trait; the headless CLI passes
 # `Global` (none ignores it, returning Ok(false)).
 allocator-api2 = { workspace = true }
-# C4: new_window's `checkArg` uses `lib.cutPrefix` (`--class=` / `--working-directory=`
-# prefix cuts). rustty-lib is a low, strictly-earlier member — acyclic (G7).
-rustty-lib = { workspace = true }
 # C5 (WIRE1): the interactive `list_colors`/`list_keybinds` `prettyPrint` render
 # paths drive the vaxis TUI core (Tty/Vaxis/Window/ctlseqs/Style/Color/pretty_print).
 # rustty-vaxis is a low/mid vendored crate with NO edge back to cli/config/apprt,

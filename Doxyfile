@@ -58,7 +58,8 @@ GENERATE_HTML          = YES
 HTML_OUTPUT            = librustty
 HTML_EXTRA_STYLESHEET  = dist/doxygen/rustty.css
 HTML_EXTRA_FILES       = dist/doxygen/favicon.png \
-                         dist/doxygen/mobile-nav.js
+                         dist/doxygen/mobile-nav.js \
+                         crates/rustty-vt-c/types.schema.json
 HTML_COLORSTYLE        = DARK
 HTML_CODE_FOLDING      = NO
 HTML_HEADER            = dist/doxygen/header.html

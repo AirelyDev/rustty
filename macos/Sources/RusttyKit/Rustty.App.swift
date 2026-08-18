@@ -506,11 +506,8 @@ extension Rustty {
             case RUSTTY_ACTION_RENDER_INSPECTOR:
                 renderInspector(app, target: target)
 
-            // PORT-SEAM(w7-macos, upstream ad96613a8): the export-terminal-io
-            // action enum/struct are not in rustty.h yet (C bundle lands later).
-            // Restore when the header gains them:
-            // case RUSTTY_ACTION_EXPORT_TERMINAL_IO:
-            //     return exportTerminalIO(app, target: target, v: action.action.export_terminal_io)
+            case RUSTTY_ACTION_EXPORT_TERMINAL_IO:
+                return exportTerminalIO(app, target: target, v: action.action.export_terminal_io)
 
             case RUSTTY_ACTION_DESKTOP_NOTIFICATION:
                 showDesktopNotification(app, target: target, n: action.action.desktop_notification)
@@ -1386,9 +1383,6 @@ extension Rustty {
             }
         }
 
-        // PORT-SEAM(w7-macos, upstream ad96613a8): `rustty_action_export_terminal_io_s`
-        // is not in rustty.h yet (C bundle lands later). Un-comment with the case above.
-        /*
         private static func exportTerminalIO(
             _ app: rustty_app_t,
             target: rustty_target_s,
@@ -1423,7 +1417,6 @@ extension Rustty {
 
             return true
         }
-        */
 
         private static func showDesktopNotification(
             _ app: rustty_app_t,

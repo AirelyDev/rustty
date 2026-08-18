@@ -62,17 +62,14 @@ const UNMAPPED = {
 // The listed `headerCount` is asserted exactly, so a header that later drifts
 // further behind — or catches up — fails instead of silently widening the
 // exception. The first `headerCount` discriminants are still fully checked.
-const PREFIX_OK = {
-  RusttyOscCommandType: {
-    headerCount: 23,
-    reason:
-      "R1-faithful: the ORACLE's own include/ghostty/vt/osc.h at origin/main " +
-      "also stops at GHOSTTY_OSC_COMMAND_KITTY_TEXT_SIZING = 22 (23 " +
-      "enumerators), while both sides' CommandKey carries three more " +
-      "(kitty_clipboard_protocol, kitty_dnd_protocol, context_signal). The " +
-      "header gap is upstream's; rustty must not diverge from it.",
-  },
-};
+// EMPTY as of P4-W5 Bundle T: the one exception (RusttyOscCommandType,
+// header stopped at KITTY_TEXT_SIZING = 22 mirroring the OLD-pin oracle
+// header) retired itself exactly as designed — the oracle's osc.h gained
+// KITTY_CLIPBOARD_PROTOCOL/KITTY_DND_PROTOCOL/CONTEXT_SIGNAL (23..25) in the
+// 6ad1fe7d8..12967b68f range (9673a22b0), rustty's osc.h now carries them
+// too, and the exact `headerCount` assert forced this row's deletion rather
+// than a silent widening.
+const PREFIX_OK = {};
 
 const CC = (() => {
   try {

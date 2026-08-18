@@ -1224,9 +1224,12 @@ pub unsafe extern "C" fn rustty_style_is_default(s: *const style::Style) -> bool
 //
 // contiguous 0..=30 (27/28 = scrollback max bytes/lines; 29/30 = the
 // desktop-notification and progress-report effects, oracle c3655ba25 47d602c42)
-const TERMINAL_OPTION_COUNT: c_int = 31;
+// PORT NOTE (Bundle M): `Option` is no longer contiguous — discriminant 31
+// (`continuation_max_bytes`) is reserved for Bundle S's snapshot/continuation
+// surface — so the range check carries an explicit hole until it lands.
+const TERMINAL_OPTION_COUNT: c_int = 38;
 fn terminal_option_from_c_int(v: c_int) -> Option<terminal::Option_> {
-    if (0..TERMINAL_OPTION_COUNT).contains(&v) {
+    if (0..TERMINAL_OPTION_COUNT).contains(&v) && v != 31 {
         // SAFETY: `v` is a valid terminal `Option` discriminant (range-checked).
         Some(unsafe { std::mem::transmute::<c_int, terminal::Option_>(v) })
     } else {
@@ -1962,6 +1965,17 @@ pub unsafe extern "C" fn rustty_render_state_end_update(state: render::RenderSta
     unsafe { render::end_update(state) }.to_c_int()
 }
 
+// pub const render_state_clean = render.clean;
+/// C: rustty_render_state_clean
+///
+/// # Safety
+/// `state`, if non-null, must be a live handle.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_render_state_clean(state: render::RenderState) -> c_int {
+    // SAFETY: `state` validity is the caller's contract.
+    unsafe { render::clean(state) }.to_c_int()
+}
+
 // pub const render_state_get = render.get;
 /// C: rustty_render_state_get
 ///
@@ -2033,20 +2047,6 @@ pub unsafe extern "C" fn rustty_render_state_set(
     unsafe { render::set(state, opt, value) }.to_c_int()
 }
 
-// pub const render_state_colors_get = render.colors_get;
-/// C: rustty_render_state_colors_get
-///
-/// # Safety
-/// `out_colors`, if non-null, must be a valid, writable pointer to a `Colors`.
-#[no_mangle]
-pub unsafe extern "C" fn rustty_render_state_colors_get(
-    state: render::RenderState,
-    out_colors: *mut render::Colors,
-) -> c_int {
-    // SAFETY: `out_colors` validity is the caller's contract.
-    unsafe { render::colors_get(state, out_colors) }.to_c_int()
-}
-
 // pub const render_state_row_iterator_new = render.row_iterator_new;
 /// C: rustty_render_state_row_iterator_new
 ///
@@ -2073,6 +2073,22 @@ pub unsafe extern "C" fn rustty_render_state_row_iterator_next(
 ) -> bool {
     // SAFETY: `iterator` validity is the caller's contract.
     unsafe { render::row_iterator_next(iterator) }
+}
+
+// pub const render_state_row_iterator_next_dirty = render.row_iterator_next_dirty;
+/// C: rustty_render_state_row_iterator_next_dirty
+///
+/// # Safety
+/// `iterator`, if non-null, must be a live iterator whose borrowed render state
+/// has not been updated since it was populated; `out_y`, if non-null, must be a
+/// valid writable pointer.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_render_state_row_iterator_next_dirty(
+    iterator: render::RowIterator,
+    out_y: *mut u16,
+) -> bool {
+    // SAFETY: `iterator`/`out_y` validity is the caller's contract.
+    unsafe { render::row_iterator_next_dirty(iterator, out_y) }
 }
 
 // pub const render_state_row_iterator_free = render.row_iterator_free;
@@ -2613,36 +2629,10 @@ pub unsafe extern "C" fn rustty_terminal_compress(
     unsafe { terminal::compress(terminal, mode, out_result) }.to_c_int()
 }
 
-// pub const terminal_mode_get = terminal.mode_get;  (ghostty_terminal_mode_get)
-/// C: rustty_terminal_mode_get
-///
-/// # Safety
-/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out_value`
-/// must be a valid, writable pointer to a `bool`.
-#[no_mangle]
-pub unsafe extern "C" fn rustty_terminal_mode_get(
-    terminal: terminal::Terminal,
-    tag: rustty_vt::modes::ModeTagBacking,
-    out_value: *mut bool,
-) -> c_int {
-    // SAFETY: `terminal`/`out_value` validity is the caller's contract.
-    unsafe { terminal::mode_get(terminal, tag, out_value) }.to_c_int()
-}
-
-// pub const terminal_mode_set = terminal.mode_set;  (ghostty_terminal_mode_set)
-/// C: rustty_terminal_mode_set
-///
-/// # Safety
-/// `terminal`, if non-null, must be a handle returned by `rustty_terminal_new`.
-#[no_mangle]
-pub unsafe extern "C" fn rustty_terminal_mode_set(
-    terminal: terminal::Terminal,
-    tag: rustty_vt::modes::ModeTagBacking,
-    value: bool,
-) -> c_int {
-    // SAFETY: `terminal` validity is the caller's contract.
-    unsafe { terminal::mode_set(terminal, tag, value) }.to_c_int()
-}
+// (cfc19e805: `terminal_mode_get`/`terminal_mode_set` were REMOVED from the
+// export list — modes are configured through `RUSTTY_TERMINAL_OPT_MODE` /
+// `RUSTTY_TERMINAL_OPT_MODE_DEFAULT` and queried via
+// `RUSTTY_TERMINAL_DATA_MODE`.)
 
 // pub const terminal_get = terminal.get;  (ghostty_terminal_get)
 /// C: rustty_terminal_get

@@ -1365,9 +1365,9 @@ pub unsafe fn placement_render_info(
 /// the placement's origin has scrolled above the top of the viewport.
 ///
 /// A placement is considered not visible if it is a virtual (unicode
-/// placeholder) placement, or if it is fully off-screen (its bottom
-/// edge is above the viewport or its top edge is at or below the
-/// viewport's last row).
+/// placeholder) placement, its tracked content has been pruned, or it is
+/// fully off-screen (its bottom edge is above the viewport or its top edge is
+/// at or below the viewport's last row).
 // fn computeViewportPos(p: *const ...Placement, image: *const Image, t: *Terminal) struct { col: i32, row: i32, visible: bool } { ... }
 //
 /// # Safety
@@ -1393,6 +1393,15 @@ unsafe fn compute_viewport_pos(
             }
         }
     };
+    // if (pin.garbage) return .{ .col = 0, .row = 0, .visible = false };
+    // SAFETY: `pin` is a live tracked pin owned by the page list.
+    if unsafe { (*pin).garbage } {
+        return ViewportPos {
+            col: 0,
+            row: 0,
+            visible: false,
+        };
+    }
 
     // Convert both the placement's pin and the viewport's top-left
     // corner to screen-absolute coordinates so we can subtract them
@@ -1438,12 +1447,12 @@ unsafe fn compute_viewport_pos(
     // viewport's last row.
     // const grid_size = p.gridSize(image.*, t);
     let grid_size = p.grid_size(image, unsafe { &*t });
-    // const rows_i32: i32 = @intCast(grid_size.rows);
-    let rows_i32: i32 = grid_size.rows as i32;
-    // const term_rows: i32 = @intCast(t.rows);
-    let term_rows: i32 = unsafe { (*t).rows } as i32;
-    // const visible = vp_row + rows_i32 > 0 and vp_row < term_rows;
-    let visible = vp_row + rows_i32 > 0 && vp_row < term_rows;
+    // const bottom_row = @as(i64, vp_row) + @as(i64, grid_size.rows);
+    // R7: `grid_size.rows` is `u32`, so the old `@intCast` to `i32` trapped on
+    // rows > i32::MAX; the END STATE widens the sum to `i64` instead.
+    let bottom_row = vp_row as i64 + grid_size.rows as i64;
+    // const visible = bottom_row > 0 and vp_row < @as(i32, t.rows);
+    let visible = bottom_row > 0 && vp_row < unsafe { (*t).rows } as i32;
 
     // return .{ .col = vp_col, .row = vp_row, .visible = visible };
     ViewportPos {
@@ -1493,6 +1502,10 @@ mod tests {
     // test "placement_iterator new/free"
     #[test]
     fn placement_iterator_new_free() {
+        // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+        if !KITTY_GRAPHICS {
+            return;
+        }
         with_test_allocator(|ta| {
             // var iter: PlacementIterator = null;
             let mut iter: PlacementIterator = core::ptr::null_mut();
@@ -2059,6 +2072,119 @@ mod tests {
             });
             // try testing.expect(data_len > 0);
             assert!(data_len > 0);
+
+            unsafe { terminal_c::free(t) };
+        });
+    }
+
+    // test "image_get exposes pending metadata without a data pointer"
+    #[test]
+    fn image_get_exposes_pending_metadata_without_a_data_pointer() {
+        // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+        if !KITTY_GRAPHICS {
+            return;
+        }
+        with_test_allocator(|ta| {
+            // var t: terminal_c.Terminal = null;
+            let mut t: terminal_c::Terminal = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
+            });
+            // defer terminal_c.free(t);
+
+            // var graphics: KittyGraphics = undefined;
+            let mut graphics: KittyGraphics = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::get(
+                    t,
+                    terminal_c::TerminalData::KittyGraphics,
+                    &mut graphics as *mut KittyGraphics as *mut c_void,
+                )
+            });
+
+            // const alloc = lib.alloc.default(&lib.alloc.test_allocator);
+            // const pending = try graphics.addPendingImage(testing.io, alloc, terminal_c.zigTerminal(t).?.screens.active, .{ ... });
+            //
+            // PORT NOTE (F-008 Tier-2 residual): the storage internals allocate
+            // through `Global` in rustty, so the direct storage call takes the
+            // internals allocator (see DEFERRALS.md "F-008/W12-01 Tier 2").
+            let alloc = allocator_api2::alloc::Global;
+            let storage = graphics as *mut rustty_vt::kitty::graphics_storage::ImageStorage;
+            let screen = unsafe { (*terminal_c::zig_terminal(t)).screens.active };
+            let pending = unsafe {
+                (*storage).add_pending_image(
+                    alloc,
+                    screen,
+                    rustty_vt::kitty::graphics_image::Image {
+                        id: 42,
+                        number: 7,
+                        width: 1,
+                        height: 4,
+                        format: rustty_vt::kitty::graphics_command::Format::Rgb,
+                        data: rustty_vt::kitty::graphics_image::Data::Pending(12),
+                        ..rustty_vt::kitty::graphics_image::Image::default()
+                    },
+                )
+            }
+            .unwrap();
+
+            // const img = image_get_handle(graphics, 42);
+            let img = unsafe { image_get_handle(graphics, 42) };
+            // try testing.expect(img != null);
+            assert!(!img.is_null());
+
+            // var number: u32 = 0;
+            let mut number: u32 = 0;
+            assert_eq!(Result::Success, unsafe {
+                image_get(img, ImageData::Number, &mut number as *mut u32 as *mut c_void)
+            });
+            // try testing.expectEqual(@as(u32, 7), number);
+            assert_eq!(7u32, number);
+
+            // var data_len: usize = 0;
+            let mut data_len: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                image_get(
+                    img,
+                    ImageData::DataLen,
+                    &mut data_len as *mut usize as *mut c_void,
+                )
+            });
+            // try testing.expectEqual(@as(usize, 12), data_len);
+            assert_eq!(12usize, data_len);
+
+            // var data_ptr: [*]const u8 = undefined;
+            let mut data_ptr: *const u8 = core::ptr::null();
+            // try testing.expectEqual(Result.no_value, image_get(img, .data_ptr, @ptrCast(&data_ptr)));
+            assert_eq!(Result::NoValue, unsafe {
+                image_get(
+                    img,
+                    ImageData::DataPtr,
+                    &mut data_ptr as *mut *const u8 as *mut c_void,
+                )
+            });
+
+            // const pixels = try alloc.dupe(u8, "*" ** 12);
+            let pixels: Vec<u8> = b"************".to_vec();
+            let expected = pixels.clone();
+            // try testing.expect(pending.complete(graphics, testing.io, pixels));
+            assert!(unsafe { pending.complete(&mut *storage, pixels) });
+            // const completed_img = image_get_handle(graphics, 42);
+            let completed_img = unsafe { image_get_handle(graphics, 42) };
+            // try testing.expect(completed_img != null);
+            assert!(!completed_img.is_null());
+            assert_eq!(Result::Success, unsafe {
+                image_get(
+                    completed_img,
+                    ImageData::DataPtr,
+                    &mut data_ptr as *mut *const u8 as *mut c_void,
+                )
+            });
+            // try testing.expectEqualSlices(u8, pixels, data_ptr[0..data_len]);
+            assert_eq!(
+                expected.as_slice(),
+                unsafe { core::slice::from_raw_parts(data_ptr, data_len) }
+            );
 
             unsafe { terminal_c::free(t) };
         });
@@ -2939,6 +3065,97 @@ mod tests {
             assert_eq!(0, ri.source_y);
             assert_eq!(1, ri.source_width);
             assert_eq!(2, ri.source_height);
+
+            // const entry = iter.?.entry.?;
+            // const pin = switch (entry.value_ptr.location) {
+            //     .pin => |pin| pin,
+            //     .virtual => unreachable,
+            // };
+            // pin.garbage = true;
+            let (_, placement_ptr) = unsafe { (*iter).entry }.unwrap();
+            let pin = match unsafe { &(*placement_ptr).location } {
+                Location::Pin(pin) => *pin,
+                Location::Virtual => unreachable!(),
+            };
+            // SAFETY: `pin` is the live tracked pin owned by the page list.
+            unsafe { (*pin).garbage = true };
+
+            // ri = .{};
+            ri = PlacementRenderInfo::default();
+            assert_eq!(Result::Success, unsafe {
+                placement_render_info(iter, img, t, &mut ri)
+            });
+            // try testing.expect(!ri.viewport_visible);
+            assert!(!ri.viewport_visible);
+
+            // var rect: selection_c.CSelection = undefined;
+            let mut rect = CSelection::default();
+            // try testing.expectEqual(Result.no_value, placement_rect(iter, img, t, &rect));
+            assert_eq!(Result::NoValue, unsafe {
+                placement_rect(iter, img, t, &mut rect)
+            });
+
+            unsafe { placement_iterator_free(iter) };
+            unsafe { terminal_c::free(t) };
+        });
+    }
+
+    // test "placement_render_info handles maximum grid dimensions"
+    #[test]
+    fn placement_render_info_handles_maximum_grid_dimensions() {
+        // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+        if !KITTY_GRAPHICS {
+            return;
+        }
+        with_test_allocator(|ta| {
+            // var t: terminal_c.Terminal = null;
+            let mut t: terminal_c::Terminal = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
+            });
+            // defer terminal_c.free(t);
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::resize(t, 80, 24, 10, 20)
+            });
+
+            // const cmd = "\x1b_Ga=T,t=d,f=24,i=1,p=1,s=1,v=2,c=1,r=4294967295,C=1;////////\x1b\\";
+            let cmd = b"\x1b_Ga=T,t=d,f=24,i=1,p=1,s=1,v=2,c=1,r=4294967295,C=1;////////\x1b\\";
+            vt_write(t, cmd);
+
+            let mut graphics: KittyGraphics = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::get(
+                    t,
+                    terminal_c::TerminalData::KittyGraphics,
+                    &mut graphics as *mut KittyGraphics as *mut c_void,
+                )
+            });
+            let img = unsafe { image_get_handle(graphics, 1) };
+            assert!(!img.is_null());
+
+            let mut iter: PlacementIterator = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                placement_iterator_new(Some(ta), &mut iter)
+            });
+            // defer placement_iterator_free(iter);
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    graphics,
+                    Data::PlacementIterator,
+                    &mut iter as *mut PlacementIterator as *mut c_void,
+                )
+            });
+            assert!(unsafe { placement_iterator_next(iter) });
+
+            // var ri: PlacementRenderInfo = .{};
+            let mut ri = PlacementRenderInfo::default();
+            assert_eq!(Result::Success, unsafe {
+                placement_render_info(iter, img, t, &mut ri)
+            });
+            // try testing.expect(ri.viewport_visible);
+            assert!(ri.viewport_visible);
+            // try testing.expectEqual(std.math.maxInt(u32), ri.grid_rows);
+            assert_eq!(u32::MAX, ri.grid_rows);
 
             unsafe { placement_iterator_free(iter) };
             unsafe { terminal_c::free(t) };

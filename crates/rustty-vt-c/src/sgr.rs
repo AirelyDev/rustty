@@ -165,6 +165,60 @@ pub union CValue {
     pub _padding: [u64; 8],
 }
 
+/// PORT NOTE (RECONCILIATION O3, `9673a22b0` ABI manifest): the reference's
+/// `Attribute.C` becomes `lib.TaggedUnion(lib.target, @This(), .{ .padding =
+/// [8]u64, .field_renames = .{ .@"256_underline_color" =
+/// "underline_color_256", .@"8_bg" = "bg_8", .@"8_fg" = "fg_8",
+/// .@"8_bright_bg" = "bright_bg_8", .@"8_bright_fg" = "bright_fg_8",
+/// .@"256_bg" = "bg_256", .@"256_fg" = "fg_256" } })` (sgr.zig) — the 7
+/// digit-leading Zig tag names get C-header-legal value-field names. This
+/// table is `Attribute.C.cFieldRename` evaluated over the tag declaration
+/// order (rename ?? (payload-less -> null) ?? tag name), consumed by
+/// `types.rs` for the `RusttySgrAttribute` tagged-union arms and the deduped
+/// `RusttySgrAttributeValue` union fields. The rename OPTIONS machinery
+/// itself lives in `rustty_lib::union` (`UnionField::rename` +
+/// `TaggedUnion::c_field_rename`).
+pub const C_FIELD_ARMS: &[(&str, Option<&str>)] = &[
+    ("unset", None),
+    ("unknown", Some("unknown")),
+    ("bold", None),
+    ("reset_bold", None),
+    ("italic", None),
+    ("reset_italic", None),
+    ("faint", None),
+    ("underline", Some("underline")),
+    ("underline_color", Some("underline_color")),
+    // .@"256_underline_color" = "underline_color_256",
+    ("256_underline_color", Some("underline_color_256")),
+    ("reset_underline_color", None),
+    ("overline", None),
+    ("reset_overline", None),
+    ("blink", None),
+    ("reset_blink", None),
+    ("inverse", None),
+    ("reset_inverse", None),
+    ("invisible", None),
+    ("reset_invisible", None),
+    ("strikethrough", None),
+    ("reset_strikethrough", None),
+    ("direct_color_fg", Some("direct_color_fg")),
+    ("direct_color_bg", Some("direct_color_bg")),
+    // .@"8_bg" = "bg_8",
+    ("8_bg", Some("bg_8")),
+    // .@"8_fg" = "fg_8",
+    ("8_fg", Some("fg_8")),
+    ("reset_fg", None),
+    ("reset_bg", None),
+    // .@"8_bright_bg" = "bright_bg_8",
+    ("8_bright_bg", Some("bright_bg_8")),
+    // .@"8_bright_fg" = "bright_fg_8",
+    ("8_bright_fg", Some("bright_fg_8")),
+    // .@"256_bg" = "bg_256",
+    ("256_bg", Some("bg_256")),
+    // .@"256_fg" = "fg_256",
+    ("256_fg", Some("fg_256")),
+];
+
 /// C: GhosttySgrAttribute -> RusttySgrAttribute (R2) — the hand-authored tagged union (`Attribute.C`).
 // pub const C = extern struct { tag: Tag, value: CValue };
 #[repr(C)]

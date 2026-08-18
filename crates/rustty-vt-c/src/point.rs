@@ -100,6 +100,20 @@ pub union PointCValue {
     pub _padding: [u64; 2],
 }
 
+/// PORT NOTE (`9673a22b0` ABI manifest): the reference passes
+/// `.field_renames = .{ .active = "coordinate", .viewport = "coordinate",
+/// .screen = "coordinate", .history = "coordinate" }` to `lib.TaggedUnion`
+/// (point.zig) — every tag's C value field is the shared `coordinate`. This
+/// table is `Point.C.cFieldRename` evaluated over the tag order, consumed by
+/// `types.rs` for the `RusttyPoint` tagged-union arms and the deduped
+/// `RusttyPointValue` union fields.
+pub const C_FIELD_ARMS: &[(&str, Option<&str>)] = &[
+    ("active", Some("coordinate")),
+    ("viewport", Some("coordinate")),
+    ("screen", Some("coordinate")),
+    ("history", Some("coordinate")),
+];
+
 /// C: GhosttyPoint -> RusttyPoint (R2) — the C ABI compatible tagged union.
 // PORT NOTE: `Point.C = extern struct { tag: Tag, value: CValue }`.
 #[repr(C)]

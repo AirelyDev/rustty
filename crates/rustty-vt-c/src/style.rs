@@ -44,38 +44,62 @@ pub struct Color {
 }
 
 impl Color {
+    // // fromColor converts the tag as a plain integer, which requires
+    // // the internal and C tag values to line up.
+    // comptime {
+    //     const Tag = std.meta.Tag(style.Style.Color);
+    //     for (@typeInfo(Tag).@"enum".fields) |f| {
+    //         assert(f.value == @intFromEnum(@field(ColorTag, f.name)));
+    //     }
+    // }
+    // (the Rust analog is the module-level `const` block below `Color`)
+
     // pub fn fromColor(c: style.Style.Color) Color
     pub fn from_color(c: style_pkg::Color) -> Color {
-        // return switch (c) {
-        //     .none => .{ .tag = .none, .value = .{ ._padding = 0 } },
-        //     .palette => |idx| .{ .tag = .palette, .value = .{ .palette = idx } },
-        //     .rgb => |rgb| .{ .tag = .rgb, .value = .{ .rgb = rgb.cval() } },
-        // };
         // PORT NOTE (WS19 T5): `style_pkg::Color` is a byte-complete `{ tag, data }`
         // value rather than a Rust enum (it lives inside the page mapping, which is
         // compressed as raw bytes), so the reference's `switch (c)` is a switch on
         // `c.tag()` with tag-checked payload accessors.
-        match c.tag() {
-            style_pkg::ColorTag::None => Color {
-                tag: ColorTag::None,
-                value: ColorValue { _padding: 0 },
+        //
+        // The value is built as a single integer rather than through
+        // the per-variant union fields: the C union layout puts
+        // .palette at byte 0 and .rgb at bytes 0-2, which is exactly
+        // the internal payload representation, so each variant is the
+        // payload zero-extended to the u64 union backing. This keeps
+        // the conversion to two stores (tag + value) per color, which
+        // matters for the per-cell style reads in the render state
+        // API.
+        let value: u64 = match c.tag() {
+            style_pkg::ColorTag::None => 0,
+            style_pkg::ColorTag::Palette => c.palette() as u64,
+            // `@as(u24, @bitCast(rgb))` — the packed `RGB` layout is
+            // r | g<<8 | b<<16 (see `PackedStyle`'s `data_from_color`).
+            style_pkg::ColorTag::Rgb => {
+                let rgb = c.rgb();
+                (rgb.r as u64) | ((rgb.g as u64) << 8) | ((rgb.b as u64) << 16)
+            }
+        };
+        Color {
+            // .tag = @enumFromInt(@intFromEnum(std.meta.activeTag(c))),
+            // SAFETY: the internal and C tag values line up 1:1 (const-asserted
+            // below), and `c.tag()` only yields declared variants.
+            tag: unsafe {
+                std::mem::transmute::<std::os::raw::c_int, ColorTag>(
+                    c.tag() as std::os::raw::c_int,
+                )
             },
-            style_pkg::ColorTag::Palette => Color {
-                tag: ColorTag::Palette,
-                value: ColorValue {
-                    palette: c.palette(),
-                },
-            },
-            // PORT NOTE: `rgb.cval()` yields `color.RGB.C`; in rustty `RGB` already
-            // IS that `#[repr(C)] { r, g, b: u8 }` C-ABI type, so `cval()` is the
-            // identity on `RGB`.
-            style_pkg::ColorTag::Rgb => Color {
-                tag: ColorTag::Rgb,
-                value: ColorValue { rgb: c.rgb() },
-            },
+            value: ColorValue { _padding: value },
         }
     }
 }
+
+// fromColor converts the tag as a plain integer, which requires
+// the internal and C tag values to line up.
+const _: () = {
+    assert!(style_pkg::ColorTag::None as i64 == ColorTag::None as i64);
+    assert!(style_pkg::ColorTag::Palette as i64 == ColorTag::Palette as i64);
+    assert!(style_pkg::ColorTag::Rgb as i64 == ColorTag::Rgb as i64);
+};
 
 /// C: GhosttyStyle -> RusttyStyle (R2)
 // pub const Style = extern struct {
@@ -103,35 +127,132 @@ pub struct Style {
 }
 
 impl Style {
-    // pub fn fromStyle(s: style.Style) Style
+    /// The default (empty) style in C representation. C
+    // pub const default: Style = .{ ... };
+    pub const DEFAULT: Style = Style {
+        size: size_of::<Style>(),
+        fg_color: Color {
+            tag: ColorTag::None,
+            value: ColorValue { _padding: 0 },
+        },
+        bg_color: Color {
+            tag: ColorTag::None,
+            value: ColorValue { _padding: 0 },
+        },
+        underline_color: Color {
+            tag: ColorTag::None,
+            value: ColorValue { _padding: 0 },
+        },
+        bold: false,
+        italic: false,
+        faint: false,
+        blink: false,
+        inverse: false,
+        invisible: false,
+        strikethrough: false,
+        overline: false,
+        underline: 0,
+    };
+
+    // // fromStyle writes the eight bool fields as one 8-byte store,
+    // // which requires them to be consecutive and to match the low
+    // // eight flag bits in order.
+    // comptime {
+    //     const flag_names = [8][:0]const u8{
+    //         "bold",    "italic",    "faint",         "blink",
+    //         "inverse", "invisible", "strikethrough", "overline",
+    //     };
+    //     const base = @offsetOf(Style, "bold");
+    //     for (flag_names, 0..) |name, i| {
+    //         assert(@offsetOf(Style, name) == base + i);
+    //         assert(@bitOffsetOf(@FieldType(style.Style, "flags"), name) == i);
+    //     }
+    // }
+    // (the C-struct half is the module-level `const` block below; the internal
+    // `@bitOffsetOf` half is anchored by `Flags::to_u16`, whose bit order —
+    // bold..overline in bits 0..7 — IS rustty's definition of the packed
+    // layout and is exercised by the vt `flags_eq_matches_packed_eq` test.)
+
+    /// Write the C representation of the given style directly through
+    /// the out pointer. The hot per-cell style read in the render
+    /// state API uses this rather than `out.* = fromStyle(s)`: the
+    /// by-value form materializes a stack temporary plus a
+    /// @sizeOf(Style)-byte copy that LLVM does not elide.
+    // pub fn write(s: style.Style, out: *Style) void { ... }
+    pub fn write(s: style_pkg::Style, out: &mut Style) {
+        // out.size = @sizeOf(Style);
+        out.size = size_of::<Style>();
+        // out.fg_color = .fromColor(s.fg_color);
+        out.fg_color = Color::from_color(s.fg_color);
+        // out.bg_color = .fromColor(s.bg_color);
+        out.bg_color = Color::from_color(s.bg_color);
+        // out.underline_color = .fromColor(s.underline_color);
+        out.underline_color = Color::from_color(s.underline_color);
+
+        // I know this looks scary, but this results in truly measurable
+        // performance improvements due to how often styles are written
+        // especially in render loops. We vectorize our 8-bit to 8-byte
+        // write.
+        //
+        // We have to align(1) because we're ptrCasting a u8 pointer.
+        // @as(*align(1) u64, @ptrCast(&out.bold)).* = bytes: { ... };
+        let bytes: u64 = {
+            // Spread the low eight flag bits (the eight bool fields, in
+            // order) into one byte each and write them with a single
+            // 8-byte store.
+            // const flag_bits: u8 = @truncate(@as(u16, @bitCast(s.flags)));
+            let flag_bits: u8 = s.flags.to_u16() as u8;
+            // const masks: @Vector(8, u8) = .{ 1, 2, 4, 8, 16, 32, 64, 128 };
+            // const hits = (@splat(flag_bits) & masks) == masks;
+            // const bytes: @Vector(8, u8) = @select(u8, hits, @splat(1), @splat(0));
+            let masks: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
+            let mut lanes = [0u8; 8];
+            let mut i = 0;
+            while i < 8 {
+                lanes[i] = if flag_bits & masks[i] == masks[i] { 1 } else { 0 };
+                i += 1;
+            }
+            u64::from_ne_bytes(lanes)
+        };
+        // SAFETY: the eight bool fields are consecutive starting at `bold`
+        // (const-asserted below) with unique 0/1 representations, so the
+        // unaligned 8-byte store writes exactly those fields.
+        unsafe { (&mut out.bold as *mut bool as *mut u64).write_unaligned(bytes) };
+
+        // out.underline = @intFromEnum(s.flags.underline);
+        out.underline = s.flags.underline as std::os::raw::c_int;
+    }
+
+    // pub fn fromStyle(s: style.Style) Style {
+    //     var result: Style = undefined;
+    //     write(s, &result);
+    //     return result;
+    // }
+    //
+    // PORT NOTE: `undefined` -> a `DEFAULT` seed (a `&mut` to uninit memory is
+    // UB in Rust); `write` overwrites every field either way.
     pub fn from_style(s: style_pkg::Style) -> Style {
-        // return .{
-        //     .fg_color = .fromColor(s.fg_color),
-        //     .bg_color = .fromColor(s.bg_color),
-        //     .underline_color = .fromColor(s.underline_color),
-        //     .bold = s.flags.bold, .italic = s.flags.italic, .faint = s.flags.faint,
-        //     .blink = s.flags.blink, .inverse = s.flags.inverse, .invisible = s.flags.invisible,
-        //     .strikethrough = s.flags.strikethrough, .overline = s.flags.overline,
-        //     .underline = @intFromEnum(s.flags.underline),
-        // };
-        Style {
-            // size: usize = @sizeOf(Style),
-            size: size_of::<Style>(),
-            fg_color: Color::from_color(s.fg_color),
-            bg_color: Color::from_color(s.bg_color),
-            underline_color: Color::from_color(s.underline_color),
-            bold: s.flags.bold,
-            italic: s.flags.italic,
-            faint: s.flags.faint,
-            blink: s.flags.blink,
-            inverse: s.flags.inverse,
-            invisible: s.flags.invisible,
-            strikethrough: s.flags.strikethrough,
-            overline: s.flags.overline,
-            underline: s.flags.underline as std::os::raw::c_int,
-        }
+        let mut result: Style = Style::DEFAULT;
+        Style::write(s, &mut result);
+        result
     }
 }
+
+// fromStyle writes the eight bool fields as one 8-byte store, which requires
+// them to be consecutive (and to match the low eight flag bits in order — the
+// internal half of the reference's comptime block; see the note in `Style`).
+const _: () = {
+    use core::mem::offset_of;
+    let base = offset_of!(Style, bold);
+    assert!(offset_of!(Style, bold) == base);
+    assert!(offset_of!(Style, italic) == base + 1);
+    assert!(offset_of!(Style, faint) == base + 2);
+    assert!(offset_of!(Style, blink) == base + 3);
+    assert!(offset_of!(Style, inverse) == base + 4);
+    assert!(offset_of!(Style, invisible) == base + 5);
+    assert!(offset_of!(Style, strikethrough) == base + 6);
+    assert!(offset_of!(Style, overline) == base + 7);
+};
 
 /// Returns the default style.
 // pub fn default_style(result: *Style) callconv(lib.calling_conv) void
@@ -139,9 +260,9 @@ impl Style {
 /// # Safety
 /// `result` must be a valid, writable pointer to a `Style`.
 pub unsafe fn default_style(result: *mut Style) {
-    // result.* = .fromStyle(.{});
+    // result.* = .default;
     // SAFETY: `result` validity is the caller's contract.
-    unsafe { *result = Style::from_style(style_pkg::Style::default()) };
+    unsafe { *result = Style::DEFAULT };
     // assert(result.size == @sizeOf(Style));
     // SAFETY: `result` validity is the caller's contract.
     assert!(unsafe { (*result).size } == size_of::<Style>());

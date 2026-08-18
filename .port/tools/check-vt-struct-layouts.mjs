@@ -53,11 +53,25 @@ execFileSync(CC, [
   "-o",
   runnerBin,
 ]);
-const LAYOUT = JSON.parse(
+const MANIFEST = JSON.parse(
   execFileSync(runnerBin, [], {
     env: { ...process.env, DYLD_LIBRARY_PATH: `${ROOT}/target/release` },
   }).toString(),
 );
+// P4-W5 Bundle T: `rustty_type_json` now returns the versioned ABI manifest
+// (oracle 9673a22b0 / c75559589): `{schema, abi, ..., types: {...}}` with
+// per-kind descriptors (struct/union/enum/packed/alias/opaque). This arm
+// consumes the struct/union descriptors (they carry `fields` with offsets);
+// an unknown schema version means the document's shape can no longer be
+// assumed, which is a FAIL rather than a skip.
+if (MANIFEST.schema !== 1) {
+  console.log(
+    `    FAIL: rustty_type_json() reports schema ${MANIFEST.schema}; this ` +
+      `checker understands schema 1.`,
+  );
+  process.exit(1);
+}
+const LAYOUT = MANIFEST.types;
 
 // --- 2. which structs do the curated headers actually declare? ---
 function allHeaders(dir) {
@@ -94,23 +108,12 @@ const declared = new Set(
 // is absent there too, so omitting it is R1-faithful, not a porting gap. The
 // oracle-parity check below enforces that claim mechanically: if upstream ever
 // registers one of these, rustty's key set diverges and this arm goes RED.
-const ORACLE_ALSO_OMITS =
-  "R1-faithful: absent from the oracle's own " +
-  "origin/main:src/terminal/c/types.zig `structs` registry too";
-const NOT_IN_TYPE_JSON = {
-  RusttyAllocator: ORACLE_ALSO_OMITS,
-  RusttyAllocatorVtable: ORACLE_ALSO_OMITS,
-  RusttyKittyGraphicsPlacementRenderInfo: ORACLE_ALSO_OMITS,
-  RusttyPointValue: ORACLE_ALSO_OMITS,
-  RusttyRenderStateRowSelection: ORACLE_ALSO_OMITS,
-  RusttySgrAttribute: ORACLE_ALSO_OMITS,
-  RusttySgrAttributeValue: ORACLE_ALSO_OMITS,
-  RusttySgrUnknown: ORACLE_ALSO_OMITS,
-  RusttyStyleColorValue: ORACLE_ALSO_OMITS,
-  RusttySysImage: ORACLE_ALSO_OMITS,
-  RusttyTerminalScrollViewportValue: ORACLE_ALSO_OMITS,
-  RusttyTerminalSelectionFormatOptions: ORACLE_ALSO_OMITS,
-};
+// EMPTY as of P4-W5 Bundle T: the registry expansion (oracle 309440e07 "all
+// public structs" + 9673a22b0) registered every previously-allowlisted
+// aggregate, so each old row tripped the "type_json now reports it — delete
+// the row" stale check and was retired by REGISTERING the struct, exactly as
+// designed.
+const NOT_IN_TYPE_JSON = {};
 
 // --- oracle parity for the REGISTRY ITSELF ---------------------------------
 // The allowlist above is only trustworthy if "the oracle also omits it" is
@@ -132,8 +135,14 @@ const oracleTypes = execFileSync(
   ["-C", ORACLE, "show", "origin/main:src/terminal/c/types.zig"],
   { stdio: "pipe", maxBuffer: 1 << 24 },
 ).toString();
+// P4-W5 Bundle T: the oracle registry is now the `type_decls` list of
+// `.initStruct/.initTaggedStruct/.initUnion/.initEnum/.initEnumSentinel/
+// .initPacked/.initAlias/.initOpaque("Ghostty...")` rows (all six kinds, not
+// only structs) — the parity below therefore binds the WHOLE registry.
 const oracleKeys = new Set(
-  [...oracleTypes.matchAll(/\.\{\s*"Ghostty([A-Za-z0-9_]+)"/g)].map((m) => m[1]),
+  [...oracleTypes.matchAll(/\.init[A-Za-z]+\(\s*"Ghostty([A-Za-z0-9_]+)"/g)].map(
+    (m) => m[1],
+  ),
 );
 if (oracleKeys.size === 0) {
   console.log(
@@ -155,7 +164,23 @@ const rusttyKeys = new Set(Object.keys(LAYOUT).map((k) => k.replace(/^Rustty/, "
 // triggers prescribed. The stale check below is what forced it — registering the
 // two structs turned the gate RED with "delete the row" rather than letting the
 // allowlist rot silently.
-const REGISTRY_RESIDUALS = {};
+//
+// RE-POPULATED by P4-W5 Bundle T: the registry now spans all six kinds and
+// matches the oracle's `type_decls` EXCEPT the 12 rows whose C types ride the
+// later W5 bundles (the oracle pin is 12967b68f; each row names its owner and
+// lands WITH that bundle, which deletes the row here — the stale check
+// enforces it). Evidence: `.port/phase-4/w5/w5T-manifest-diff-evidence.txt`
+// (full manifest diff vs the oracle's own ghostty_type_json output).
+const REGISTRY_RESIDUALS = {
+  // (Bundle R and Bundle M rows landed with P4-W5 T2/T3 and were deleted per
+  // the stale check.)
+  // Bundle S (snapshot/io C API, P4-W5 T5):
+  Reader: "owner P4-W5 Bundle S (d7bb4b863 io.Reader)",
+  Writer: "owner P4-W5 Bundle S (d7bb4b863 io.Writer)",
+  SnapshotDecoder: "owner P4-W5 Bundle S (d7bb4b863 snapshot decoder)",
+  SnapshotDecoderData: "owner P4-W5 Bundle S (d7bb4b863)",
+  SnapshotDecoderOption: "owner P4-W5 Bundle S (d7bb4b863 + 9be6c2ea2)",
+};
 const missingHere = [...oracleKeys]
   .filter((k) => !rusttyKeys.has(k) && !REGISTRY_RESIDUALS[k])
   .sort();
@@ -235,17 +260,11 @@ for (const [name, info] of Object.entries(LAYOUT)) {
   probe += `_Static_assert(sizeof(${name})==${info.size}, "sizeof ${name}");\n`;
   sizeofs++;
   const fields = Object.entries(info.fields);
-  // type_json models some tagged-unions/handles as a single whole-struct
-  // "opaque" blob (one field, offset 0, size == struct size). The hand-written
-  // header exposes the real fields inside that ABI-sized region — the offset of
-  // type_json's synthetic `value` field is meaningless there. For those, verify
-  // sizeof only (ABI size is what matters); check field offsets otherwise.
-  const wholeOpaque =
-    fields.length === 1 &&
-    fields[0][1].type === "opaque" &&
-    fields[0][1].offset === 0 &&
-    fields[0][1].size === info.size;
-  if (wholeOpaque) continue;
+  // P4-W5 Bundle T: the pre-manifest registry modeled tagged unions as a
+  // single whole-struct "opaque" blob and this loop skipped their offsets.
+  // The manifest now reports REAL fields for every struct AND union (union
+  // member offsets are all 0, matching the C header's members), so every
+  // field row asserts — the whole-opaque skip is retired (tighten-only).
   for (const [f, fi] of fields) {
     probe += `_Static_assert(offsetof(${name},${f})==${fi.offset}, "offsetof ${name}.${f}");\n`;
     checked++;
@@ -275,8 +294,8 @@ try {
   console.log(
     `    ${sizeofs} sizeof + ${checked} offsetof asserts across ` +
       `${aggregates.size} header aggregates OK ` +
-      `[type_json registry vs oracle: ${oracleKeys.size} structs, ` +
-      `${Object.keys(REGISTRY_RESIDUALS).length} beyond-pin residuals owned by P3-W6] ` +
+      `[type_json registry vs oracle: ${oracleKeys.size} types, ` +
+      `${Object.keys(REGISTRY_RESIDUALS).length} residuals owned by the later P4-W5 bundles] ` +
       `(${Object.keys(NOT_IN_TYPE_JSON).length} documented as not in type_json)`,
   );
   process.exit(0);

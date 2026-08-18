@@ -21,19 +21,21 @@ extern "C" {
  * Terminal screen cell and row types.
  *
  * These types represent the contents of a terminal screen. A RusttyCell
- * is a single grid cell and a RusttyRow is a single row. Both are opaque
- * values whose fields are accessed via rustty_cell_get() and
- * rustty_row_get() respectively.
+ * is a single grid cell and a RusttyRow is a single row. Cell fields can
+ * be accessed via rustty_cell_get() or decoded from the packed layout in
+ * rustty_type_json(). Rows are opaque and accessed via rustty_row_get().
  *
  * @{
  */
 
 /**
- * Opaque cell value.
+ * Packed cell value.
  *
- * Represents a single terminal cell. The internal layout is opaque and
- * must be queried via rustty_cell_get(). Obtain cell values from
- * terminal query APIs.
+ * Represents a single terminal cell. Portable callers can query fields via
+ * rustty_cell_get(). Boundary-sensitive callers can decode the packed value
+ * using the RusttyCell descriptor returned by rustty_type_json(). The
+ * manifest is authoritative for the linked build; hardcoding bit positions
+ * is unsupported.
  *
  * @ingroup screen
  */
@@ -49,6 +51,24 @@ typedef uint64_t RusttyCell;
  * @ingroup screen
  */
 typedef uint64_t RusttyRow;
+
+/**
+ * A borrowed view of contiguous raw cell values.
+ *
+ * The memory is not owned by this struct. The pointer is only valid
+ * for the lifetime documented by the API that produces it. Each value
+ * can be queried via rustty_cell_get() or decoded using the RusttyCell
+ * packed descriptor returned by rustty_type_json().
+ *
+ * @ingroup screen
+ */
+typedef struct {
+  /** Pointer to len contiguous cell values. */
+  const RusttyCell* ptr;
+
+  /** Number of cells. */
+  size_t len;
+} RusttyCellsView;
 
 /**
  * Cell content tag.
