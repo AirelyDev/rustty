@@ -81,6 +81,7 @@ fn parity_callbacks_do_not_abort() {
     // exact signature/marshalling risk without the slow core-build + teardown.
     let surface = Surface::new(SurfaceOverrides {
         command: Some(Command::Direct(vec![b"/bin/sh".to_vec()])),
+        shell_integration: None,
         working_directory: None,
         title: None,
     });

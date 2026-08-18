@@ -79,6 +79,7 @@ fn placeholder_overlays_do_not_capture_input() {
 
     let surface = Surface::new(SurfaceOverrides {
         command: Some(Command::Direct(vec![b"/bin/sh".to_vec()])),
+        shell_integration: None,
         working_directory: None,
         title: None,
     });

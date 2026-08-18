@@ -53,8 +53,8 @@ use rustty_config::Config;
 use rustty_datastruct::blocking_queue::{Size, Timeout};
 use rustty_datastruct::BlockingQueue;
 // const renderer = @import("renderer.zig");
-// PORT NOTE: imported but unused in the reference file body (no `renderer.`
-// reference in App.zig) — preserved as this comment only.
+// PORT NOTE: used by `create`'s warmup probe (`renderer.Renderer.API.warmup`,
+// the P4 warmup chain) — referenced by full path there (`rustty_renderer::`).
 // const font = @import("font/main.zig");
 use rustty_font_shaper::SharedGridSet;
 
@@ -194,6 +194,63 @@ where
         // errdefer alloc.destroy(app);
         // try app.init(alloc);
         let app = Box::new(App::init(alloc)?);
+
+        // If font discovery supports warmup, then we call it. Some font
+        // mechanisms (e.g. CoreText) have a multi-millisecond one-time cost
+        // on startup.
+        // if (comptime @hasDecl(font.Discover, "warmup")) {
+        //     if (std.Thread.spawn(
+        //         .{},
+        //         font.Discover.warmup,
+        //         .{},
+        //     )) |thr| thr.detach() else |err| {
+        //         log.warn("font warmup thread spawn failed err={}", .{err});
+        //     }
+        // }
+        //
+        // PORT NOTE (`c454a3bf4`..`931a538a3` warmup chain, END STATE — the
+        // intermediate `threadedWarmup` shape was dissolved and is NOT
+        // ported): the `@hasDecl` probe is a comptime backend fold — of the
+        // monomorphic backends only CoreText declares `warmup`
+        // (discovery.zig; fontconfig does not), and `font.Discover` IS
+        // CoreText exactly on macOS (`discovery::Discover`), so the probe
+        // folds to `cfg(target_os = "macos")` (the renderer_seam `@hasDecl`
+        // two-case-fold precedent). Detach == dropping the `JoinHandle`.
+        #[cfg(target_os = "macos")]
+        {
+            if let Err(_err) = std::thread::Builder::new()
+                .spawn(rustty_font_shaper::discovery::Discover::warmup)
+                .map(|thr| drop(thr))
+            {
+                // log.warn("font warmup thread spawn failed err={}", .{err});
+            }
+        }
+
+        // Same for the renderer's graphics API (e.g. Metal), which pays
+        // one-time framework initialization costs on first use.
+        // if (comptime @hasDecl(renderer.Renderer.API, "warmup")) {
+        //     if (std.Thread.spawn(
+        //         .{},
+        //         renderer.Renderer.API.warmup,
+        //         .{},
+        //     )) |thr| thr.detach() else |err| {
+        //         log.warn("renderer warmup thread spawn failed err={}", .{err});
+        //     }
+        // }
+        //
+        // PORT NOTE: same `@hasDecl` fold — `renderer.Renderer.API` is the
+        // comptime graphics API (`Metal` on macOS, which declares `warmup`;
+        // OpenGL/WebGL do not), so the probe folds to the same macOS cfg.
+        #[cfg(target_os = "macos")]
+        {
+            if let Err(_err) = std::thread::Builder::new()
+                .spawn(rustty_renderer::metal::Metal::warmup)
+                .map(|thr| drop(thr))
+            {
+                // log.warn("renderer warmup thread spawn failed err={}", .{err});
+            }
+        }
+
         Ok(app)
     }
 
@@ -432,14 +489,24 @@ where
             //     }
             // }
             match message {
-                // PORT NOTE (P4 partial, 0a183c923): upstream `Message.open_config`
-                // carries its own `App.Message.OpenConfig` payload mapped into the
-                // binding enum here. The core `Message` payload union is the W5/W7
-                // apprt/C-ABI bundle; until it lands the mailbox message keeps the
-                // pre-range void shape and dispatches the default (`.os_open`).
-                Message::OpenConfig => self.performAction(
+                // .open_config => |v| try self.performAction(
+                //     rt_app,
+                //     .{
+                //         .open_config = switch (v) {
+                //             .os_open => .os_open,
+                //             .new_window => .new_window,
+                //         },
+                //     },
+                // ),
+                //
+                // (`0a183c923`: the `App.Message.OpenConfig` payload maps
+                // arm-for-arm onto the binding `OpenConfig` enum.)
+                Message::OpenConfig(v) => self.performAction(
                     rt_app,
-                    ScopedApp::OpenConfig(rustty_input::binding::OpenConfig::DEFAULT),
+                    ScopedApp::OpenConfig(match v {
+                        OpenConfig::OsOpen => rustty_input::binding::OpenConfig::OsOpen,
+                        OpenConfig::NewWindow => rustty_input::binding::OpenConfig::NewWindow,
+                    }),
                 )?,
                 Message::NewWindow(msg) => self.newWindow(rt_app, msg)?,
                 Message::Close(surface) => self.closeSurface(surface),
@@ -655,13 +722,18 @@ where
             // .open_config => |v| _ = try rt_app.performAction(
             //     .app,
             //     .open_config,
-            //     switch (v) { .os_open => .os_open, .new_window => .new_window },
+            //     switch (v) {
+            //         .os_open => .os_open,
+            //         .new_window => .new_window,
+            //     },
             // ),
             //
-            // PORT NOTE (P4 partial, 0a183c923): the apprt `Action.OpenConfig`
-            // payload (`apprt.action.OpenConfig`, a C-ABI enum) is the W5/W7
-            // bundle; until it lands the payload is dropped at this seam and the
-            // pre-range void apprt action is performed.
+            // PORT NOTE (P4 partial, 0a183c923 — W6-tail): the core-side
+            // `Message.OpenConfig` payload IS wired (drainMailbox above); the
+            // apprt `Action.OpenConfig` payload (`apprt.action.OpenConfig`, a
+            // C-ABI enum feeding `rustty_action_open_config_e`) is the W5-E
+            // header bundle (W7 T2); until it lands the payload is dropped at
+            // this seam and the pre-range void apprt action is performed.
             ScopedApp::OpenConfig(_) => {
                 let _ = rt_app
                     .perform_action(apprt::Target::<Surface<A>>::App, apprt::Action::OpenConfig)?;
@@ -885,7 +957,8 @@ where
 #[allow(clippy::large_enum_variant)]
 pub enum Message<A: apprt::App + 'static> {
     // Open the configuration file
-    OpenConfig,
+    // open_config: OpenConfig,
+    OpenConfig(OpenConfig),
 
     /// Create a new terminal window.
     NewWindow(NewWindow<A>),
@@ -939,6 +1012,19 @@ impl<A: apprt::App + 'static> Default for NewWindow<A> {
     fn default() -> Self {
         NewWindow { parent: None }
     }
+}
+
+// pub const OpenConfig = enum { ... };
+//
+// PORT NOTE (`0a183c923`): hoisted from the reference's nested
+// `Message.OpenConfig` (Rust enum variants have no type namespace — the
+// `NewWindow` precedent above).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenConfig {
+    /// Open the config in the OS default editor.
+    OsOpen,
+    /// Open the config in a new window using $EDITOR or $VISUAL
+    NewWindow,
 }
 
 /// The type used for sending messages to the app thread.
@@ -1070,8 +1156,11 @@ pub mod wasm {
 /// `Mutex<Vec<_>>` and counts `wakeup`s, driving the App.zig seams end to
 /// end. App.zig itself has 0 `test {}` blocks — every test below is a
 /// rustty-only extra (`core_app` MAP row).
+//
+// (pub(crate): surface.rs's ported `queueIo` readonly test borrows `TestApp`
+// as its `Surface<A>` type parameter — P4 W6-tail, `957ed21d5`.)
 #[cfg(test)]
-mod test_runtime {
+pub(crate) mod test_runtime {
     use super::*;
     use rustty_apprt_api::action::{ActionKey, TargetKey};
     use rustty_input::binding::{Trigger, TriggerKey};
@@ -1090,7 +1179,7 @@ mod test_runtime {
     }
 
     /// The fake apprt runtime (backend `A`).
-    struct TestApp {
+    pub(crate) struct TestApp {
         /// The backend-owned Config (`embedded.zig:125 config: Config`) the
         /// `App::config()` seam hands out — real default keybinds, plus
         /// whatever a test `put`s.
@@ -1163,7 +1252,7 @@ mod test_runtime {
 
     /// The fake runtime surface (backend `A::Surface`), wired the way the
     /// C0 prototype wires it: `core`/`app` back-pointers into test locals.
-    struct TestSurface {
+    pub(crate) struct TestSurface {
         core: *mut Surface<TestApp>,
         app: *mut TestApp,
     }
@@ -1279,12 +1368,15 @@ mod test_runtime {
         // no-`A: Copy`-bound copy.
         let copy = mailbox;
 
-        assert_eq!(copy.push(Message::OpenConfig, Timeout::Instant), 1);
+        assert_eq!(
+            copy.push(Message::OpenConfig(OpenConfig::OsOpen), Timeout::Instant),
+            1
+        );
         assert_eq!(rt_app.wakeups.load(Ordering::SeqCst), 1);
         assert_eq!(mailbox.push(Message::Quit, Timeout::Instant), 2);
         assert_eq!(rt_app.wakeups.load(Ordering::SeqCst), 2);
 
-        assert!(matches!(app.mailbox.pop(), Some(Message::OpenConfig)));
+        assert!(matches!(app.mailbox.pop(), Some(Message::OpenConfig(_))));
         assert!(matches!(app.mailbox.pop(), Some(Message::Quit)));
         assert!(app.mailbox.pop().is_none());
 
@@ -1300,7 +1392,8 @@ mod test_runtime {
         let mut app = App::<TestApp>::init(Allocator).unwrap();
 
         // Plain dispatch: open_config reaches the apprt.
-        app.mailbox.push(Message::OpenConfig, Timeout::Instant);
+        app.mailbox
+            .push(Message::OpenConfig(OpenConfig::OsOpen), Timeout::Instant);
         app.tick(&rt_app).unwrap();
         assert_eq!(
             rt_app.recorded(),
@@ -1313,14 +1406,15 @@ mod test_runtime {
 
         // Short circuit: quit first, another message queued behind it.
         app.mailbox.push(Message::Quit, Timeout::Instant);
-        app.mailbox.push(Message::OpenConfig, Timeout::Instant);
+        app.mailbox
+            .push(Message::OpenConfig(OpenConfig::OsOpen), Timeout::Instant);
         app.tick(&rt_app).unwrap();
         assert_eq!(
             rt_app.recorded(),
             vec![(TargetKey::App, RecordedAction::Simple(ActionKey::Quit))]
         );
         // The open_config message is still in the queue for the next tick.
-        assert!(matches!(app.mailbox.pop(), Some(Message::OpenConfig)));
+        assert!(matches!(app.mailbox.pop(), Some(Message::OpenConfig(_))));
 
         app.deinit();
     }

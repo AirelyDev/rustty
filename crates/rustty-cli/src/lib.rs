@@ -73,6 +73,7 @@ pub mod list_colors;
 pub mod list_fonts;
 pub mod list_keybinds;
 pub mod list_themes;
+pub mod new_tab;
 pub mod new_window;
 pub mod pager;
 // WIRE1: the arena analogue threaded into the `list_colors`/`list_keybinds`
@@ -118,7 +119,7 @@ mod tests {
         use crate::rustty::Action;
 
         // The Action enum + its dispatcher-facing surface.
-        assert_eq!(Action::ALL.len(), 18);
+        assert_eq!(Action::ALL.len(), 19);
         assert_eq!(Action::Version.tag_name(), "version");
         assert_eq!(Action::Version.file().as_str(), "cli/version.rs");
         assert_eq!(

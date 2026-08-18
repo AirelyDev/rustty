@@ -73,6 +73,12 @@ pub struct BitmapAllocator<const CHUNK_SIZE: usize> {
     pub bitmap: Offset<u64>,
     pub bitmap_count: usize,
 
+    /// Lowest bitmap word index that may contain a free bit; words
+    /// below it are fully allocated, so alloc scans can start here
+    /// instead of at zero.
+    // search_start: usize = 0,
+    pub search_start: usize,
+
     /// The contiguous buffer of chunks.
     pub chunks: Offset<u8>,
 }
@@ -120,6 +126,8 @@ impl<const CHUNK_SIZE: usize> BitmapAllocator<CHUNK_SIZE> {
         BitmapAllocator {
             bitmap,
             bitmap_count: l.bitmap_count,
+            // search_start: the `= 0` field default.
+            search_start: 0,
             chunks: buf.member(l.chunks_start),
         }
     }
@@ -167,11 +175,29 @@ impl<const CHUNK_SIZE: usize> BitmapAllocator<CHUNK_SIZE> {
         let chunk_count = byte_count.div_ceil(CHUNK_SIZE);
 
         // Find the index of the free chunk. This also marks it as used.
+        // Words below search_start have no free bits, so no free span
+        // can start in or cross them and it is safe to skip them.
         let bitmaps =
             unsafe { core::slice::from_raw_parts_mut(self.bitmap.ptr(base), self.bitmap_count) };
-        let idx = match find_free_chunks(bitmaps, chunk_count) {
-            Some(idx) => idx,
+        // const start = @min(self.search_start, self.bitmap_count);
+        let start = core::cmp::min(self.search_start, self.bitmap_count);
+        // const rel = findFreeChunks(bitmaps[start..self.bitmap_count], chunk_count) orelse
+        //     return error.OutOfMemory;
+        let rel = match find_free_chunks(&mut bitmaps[start..], chunk_count) {
+            Some(rel) => rel,
             None => return Err(OutOfMemory),
+        };
+        // const idx = start * bitmap_bit_size + rel;
+        let idx = start * Self::BITMAP_BIT_SIZE + rel;
+
+        // Advance past any words the allocation just filled so the
+        // next scan starts at the first word with a free bit.
+        self.search_start = {
+            let mut new_start = start;
+            while new_start < self.bitmap_count && bitmaps[new_start] == 0 {
+                new_start += 1;
+            }
+            new_start
         };
 
         let chunks = unsafe { self.chunks.ptr(base) };
@@ -199,6 +225,10 @@ impl<const CHUNK_SIZE: usize> BitmapAllocator<CHUNK_SIZE> {
         let chunks = unsafe { self.chunks.ptr(base) };
         // const chunk_idx = @divExact(@intFromPtr(slice.ptr) - @intFromPtr(chunks), chunk_size);
         let chunk_idx = div_exact((slice.as_ptr() as usize) - (chunks as usize), CHUNK_SIZE);
+
+        // The freed word gains free bits, so scans must not skip it.
+        // self.search_start = @min(self.search_start, @divFloor(chunk_idx, bitmap_bit_size));
+        self.search_start = core::cmp::min(self.search_start, chunk_idx / Self::BITMAP_BIT_SIZE);
 
         let bitmaps =
             unsafe { core::slice::from_raw_parts_mut(self.bitmap.ptr(base), self.bitmap_count) };
@@ -880,6 +910,96 @@ mod tests {
         // All of our bitmaps should be free.
         let bitmaps: &[u64] = unsafe { core::slice::from_raw_parts(bm.bitmap.ptr(buf.base()), 3) };
         assert_eq!(&[!0u64; 3][..], bitmaps);
+    }
+
+    // test "BitmapAllocator search hint skips full words"
+    #[test]
+    fn BitmapAllocator_search_hint_skips_full_words() {
+        type Alloc = BitmapAllocator<1>;
+        // Capacity such that we'll have 3 bitmaps.
+        let cap = Alloc::BITMAP_BIT_SIZE * 3;
+
+        let layout = Alloc::layout(cap);
+        let buf = AlignedBuf::new(layout.total_size, Alloc::BASE_ALIGN);
+
+        let mut bm = unsafe { Alloc::init(buf.offset_buf(), layout) };
+        assert_eq!(0usize, bm.search_start);
+
+        // Fill the first bitmap word exactly with single-chunk allocations.
+        // var first: []u8 = undefined;
+        // for (0..Alloc.bitmap_bit_size) |i| { ... }
+        let mut first: (usize, usize) = (0, 0);
+        for i in 0..Alloc::BITMAP_BIT_SIZE {
+            let slice = unsafe { bm.alloc::<u8, _>(buf.base(), 1) }.unwrap();
+            if i == 0 {
+                first = (slice.as_ptr() as usize, slice.len());
+            }
+        }
+
+        // The first word is exhausted so scans start at the second word.
+        assert_eq!(1usize, bm.search_start);
+
+        // The next allocation is the first chunk of the second word, so
+        // the skipped-word index arithmetic must still yield the right
+        // chunk address.
+        let next = unsafe { bm.alloc::<u8, _>(buf.base(), 1) }.unwrap();
+        assert_eq!(
+            first.0 + Alloc::BITMAP_BIT_SIZE,
+            next.as_ptr() as usize,
+        );
+
+        // Freeing a chunk in the first word lowers the hint so the freed
+        // space is found again.
+        let first_ref: &[u8] =
+            unsafe { core::slice::from_raw_parts(first.0 as *const u8, first.1) };
+        unsafe { bm.free(buf.base(), first_ref) };
+        assert_eq!(0usize, bm.search_start);
+        let again = unsafe { bm.alloc::<u8, _>(buf.base(), 1) }.unwrap();
+        assert_eq!(first.0, again.as_ptr() as usize);
+    }
+
+    // test "BitmapAllocator search hint does not skip partial words"
+    #[test]
+    fn BitmapAllocator_search_hint_does_not_skip_partial_words() {
+        type Alloc = BitmapAllocator<1>;
+        // Capacity such that we'll have 2 bitmaps.
+        let cap = Alloc::BITMAP_BIT_SIZE * 2;
+
+        let layout = Alloc::layout(cap);
+        let buf = AlignedBuf::new(layout.total_size, Alloc::BASE_ALIGN);
+
+        let mut bm = unsafe { Alloc::init(buf.offset_buf(), layout) };
+
+        // Allocate all but 4 chunks of the first word.
+        let mut first: usize = 0;
+        for i in 0..Alloc::BITMAP_BIT_SIZE - 4 {
+            let slice = unsafe { bm.alloc::<u8, _>(buf.base(), 1) }.unwrap();
+            if i == 0 {
+                first = slice.as_ptr() as usize;
+            }
+        }
+
+        // An 8-chunk run can't fit the 4 remaining bits (small runs never
+        // span words), so it comes from the second word — but the hint
+        // must stay at the first word, which still has free bits.
+        let big = unsafe { bm.alloc::<u8, _>(buf.base(), 8) }.unwrap();
+        assert_eq!(
+            first + Alloc::BITMAP_BIT_SIZE,
+            big.as_ptr() as usize,
+        );
+        assert_eq!(0usize, bm.search_start);
+
+        // A 4-chunk run fits the first word's remaining bits exactly; a
+        // hint that skipped the partial word would wrongly place this in
+        // the second word (or report OutOfMemory once that filled).
+        let small = unsafe { bm.alloc::<u8, _>(buf.base(), 4) }.unwrap();
+        assert_eq!(
+            first + Alloc::BITMAP_BIT_SIZE - 4,
+            small.as_ptr() as usize,
+        );
+
+        // Now the first word is full and the hint advances past it.
+        assert_eq!(1usize, bm.search_start);
     }
 
     #[test]

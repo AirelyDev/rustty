@@ -153,13 +153,16 @@ impl App {
         target: ipc::Target<'_>,
         action: ipc::Action<'_>,
     ) -> Result<bool, ipc::Errors> {
-        // `switch (action) { ... }` (`App.zig:86-89`).
+        // `switch (action) { ... }` (`App.zig:86-90`).
         match action {
             // `.new_window => return try ipcNewWindow(alloc, target, value)`
             // (`App.zig:87`).
             ipc::Action::NewWindow(v) => ipc_new_window(target, v),
+            // `.new_tab => return try ipcNewTab(alloc, target, value)`
+            // (`App.zig:88`).
+            ipc::Action::NewTab(v) => ipc_new_tab(target, v),
             // `.toggle_quick_terminal => return try ipcToggleQuickTerminal(alloc,
-            // target)` (`App.zig:88`).
+            // target)` (`App.zig:89`).
             ipc::Action::ToggleQuickTerminal => ipc_toggle_quick_terminal(target),
         }
     }
@@ -198,7 +201,7 @@ fn ipc_bus_target(target: &ipc::Target<'_>) -> Result<(String, String), ipc::Err
 fn ipc_send(
     target: &ipc::Target<'_>,
     action: &str,
-    args: Option<&[&[u8]]>,
+    param: Option<glib::Variant>,
 ) -> Result<bool, ipc::Errors> {
     use gio::prelude::*;
     let (bus_name, object_path) = ipc_bus_target(target)?;
@@ -211,17 +214,12 @@ fn ipc_send(
         }
     };
 
-    // parameters: `av`. For `new-window-command`, a single element that is the
-    // `as` array of CLI arguments (`ipc/new_window.zig:33-59`).
-    let params: Vec<glib::Variant> = match args {
-        Some(args) => {
-            let arg_strings: Vec<String> = args
-                .iter()
-                .map(|a| String::from_utf8_lossy(a).into_owned())
-                .collect();
-            let as_variant = arg_strings.to_variant();
-            vec![glib::Variant::from_variant(&as_variant)]
-        }
+    // parameters: `av`. Each ipc file builds its own parameter variant
+    // (`DBus.zig` `addParameter`): `new-window-command` an `as` of CLI
+    // arguments (`ipc/new_window.zig:33-59`), `new-tab` a `(tas)` tuple
+    // (`ipc/new_tab.zig:31-67`).
+    let params: Vec<glib::Variant> = match param {
+        Some(p) => vec![glib::Variant::from_variant(&p)],
         None => vec![],
     };
     let params_v = glib::Variant::array_from_iter_with_type(glib::VariantTy::VARIANT, params);
@@ -248,12 +246,67 @@ fn ipc_send(
 /// PORTS: `ipc/new_window.zig` `newWindow` — the `new-window` (or
 /// `new-window-command` when CLI args are present) D-Bus IPC.
 fn ipc_new_window(target: ipc::Target<'_>, value: ipc::NewWindow<'_>) -> Result<bool, ipc::Errors> {
+    use glib::prelude::*;
     let action = if value.arguments.is_none() {
         "new-window"
     } else {
         "new-window-command"
     };
-    ipc_send(&target, action, value.arguments)
+    // The `as` array of CLI arguments (`ipc/new_window.zig:33-59`); no
+    // parameter at all for the bare `new-window` action.
+    let param = value.arguments.map(|args| {
+        let arg_strings: Vec<String> = args
+            .iter()
+            .map(|a| String::from_utf8_lossy(a).into_owned())
+            .collect();
+        arg_strings.to_variant()
+    });
+    ipc_send(&target, action, param)
+}
+
+// Use a D-Bus method call to open a new tab on GTK.
+// See: https://wiki.gnome.org/Projects/GLib/GApplication/DBusAPI
+//
+// `rustty +new-tab` is equivalent to the following command (on a release build):
+//
+// ```
+// gdbus call --session --dest io.airely.rustty --object-path /io/airely/rustty --method org.gtk.Actions.Activate new-tab '[<@(tas) (0, [])>]' []
+// ```
+//
+// `rustty +new-tab -e echo hello` would be equivalent to the following command (on a release build):
+//
+// ```
+// gdbus call --session --dest io.airely.rustty --object-path /io/airely/rustty --method org.gtk.Actions.Activate new-tab '[<@(tas) (0, ["-e" "echo" "hello"])>]' []
+// ```
+/// PORTS: `ipc/new_tab.zig` `newTab` — the `new-tab` D-Bus IPC. The parameter
+/// is always present: a `(tas)` tuple of the target surface ID and the CLI
+/// argument array (empty when no arguments were specified).
+fn ipc_new_tab(target: ipc::Target<'_>, value: ipc::NewTab<'_>) -> Result<bool, ipc::Errors> {
+    use glib::prelude::*;
+    // {
+    //     // Add the target surface ID to the parameter.
+    //     const t = glib.Variant.newUint64(value.surface_id);
+    //     parameter.addValue(t);
+    // }
+    // {
+    //     // If any arguments were specified on the command line, this value is an
+    //     // array of strings that contain the arguments. They will be sent to the
+    //     // main Rustty instance and interpreted as CLI arguments.
+    //     ...
+    // }
+    let arg_strings: Vec<String> = value
+        .arguments
+        .unwrap_or(&[])
+        .iter()
+        .map(|a| String::from_utf8_lossy(a).into_owned())
+        .collect();
+    // `(tas)`: the VariantBuilder init/addValue/end sequence collapses to the
+    // tuple `ToVariant` impl (u64 -> `t`, Vec<String> -> `as`).
+    let param = (value.surface_id, arg_strings).to_variant();
+    ipc_send(&target, "new-tab", Some(param))?;
+
+    // return true;
+    Ok(true)
 }
 
 /// PORTS: `ipc/toggle_quick_terminal.zig` `toggleQuickTerminal` — the

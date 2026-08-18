@@ -86,9 +86,21 @@ impl Source {
     /// The value is the value that should be sent as a response to XTGETTCAP.
     /// Important: the value is the FULL response included the escape sequences.
     ///
-    /// The reference builds a comptime `std.StaticStringMap([]const u8)`; the
+    /// The responses are null-terminated so that they can be handed directly
+    /// to APIs that require a sentinel (e.g. the libghostty-vt write_pty
+    /// callback) without copying.
+    ///
+    /// The reference builds a comptime `std.StaticStringMap([:0]const u8)`; the
     /// faithful Rust port builds the same key/value pairs into a `HashMap` at
     /// runtime (the keys/values are raw bytes, see [`Source`]).
+    ///
+    /// PORT NOTE (`74efadb44`): the reference's `[]const u8` -> `[:0]const u8`
+    /// value change (and the sentinel-driven buffer growth: numeric buf 10->11,
+    /// response buf +1, `comptimeReplace` +1) exists only for the Zig `[:0]`
+    /// sentinel that its `write_pty` callback type requires. rustty's
+    /// `write_pty` takes a plain `&[u8]` (the established DCS-response
+    /// precedent in `stream_terminal.rs`), so no NUL byte is materialized here
+    /// and the response BYTES are unchanged.
     pub fn xtgettcap_map(&self) -> HashMap<Vec<u8>, Vec<u8>> {
         // We have all of our capabilities plus To, TN, and RGB which aren't
         // in the capabilities list but are query-able.

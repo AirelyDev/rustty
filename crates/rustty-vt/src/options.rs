@@ -102,10 +102,47 @@ const _: () = assert!(!SIMD, "ghostty builds wasm targets with simd=false");
 // release — the same lifecycle as the reference build knob.
 pub const SLOW_RUNTIME_SAFETY: bool = cfg!(debug_assertions);
 
+// PORT NOTE (`1fdbb8c91` `-Dvt-features`): the feature gates below are the
+// flat bools `Options.add`'s feature loop emits (e.g. `options.snapshot`),
+// resolved from `Options.features` (see `build_options::Features`). Rustty
+// builds the application artifact, which "always builds with every feature
+// enabled" (the Features doc), so each const is the `Features::default()`
+// value. The `-Dvt-features` CARGO-FEATURE plumbing (letting a lib build trim
+// features) lands with the C-API/build tier per the Phase-4 plan (W5 Bundle
+// M / W7 T6); when it does, these consts become `cfg!(feature = ...)`-driven
+// exactly like `SIMD` above.
+
+/// Whether terminal state serialization (the snapshot subsystem) is enabled.
+pub const SNAPSHOT: bool = true;
+
+/// Whether the textual export formatter is enabled.
+pub const FORMATTER: bool = true;
+
+/// Whether text selection is enabled.
+pub const SELECTION: bool = true;
+
+/// Whether the render state API is enabled.
+pub const RENDER_STATE: bool = true;
+
+/// Whether host input-event encoding is enabled.
+pub const INPUT_ENCODE: bool = true;
+
+/// Whether the color utilities are enabled.
+pub const COLOR: bool = true;
+
+/// Whether direct grid introspection is enabled.
+pub const GRID_INTROSPECTION: bool = true;
+
+/// Whether the APC glyph protocol is enabled.
+// PORT NOTE: gates the stream handling + glossary storage
+// (`stream_terminal.rs` glyph arm, the two glyph-protocol tests).
+pub const GLYPH_PROTOCOL: bool = true;
+
 /// Whether the Kitty graphics protocol is enabled.
-// PORT NOTE: synthesized by `Options.add`:
-//   !(target.cpu.arch == .wasm32 and target.os.tag == .freestanding)
-// Disabled only on wasm32-freestanding (no way to get timestamps there).
+// PORT NOTE: synthesized by `Options.add`'s feature loop (`1fdbb8c91`): the
+// `kitty_graphics` feature (default true) with the per-field override
+//   `!(target.cpu.arch == .wasm32 and target.os.tag == .freestanding)`
+// — always disabled on wasm32-freestanding (no way to get timestamps there).
 pub const KITTY_GRAPHICS: bool = !(cfg!(target_arch = "wasm32") && cfg!(target_os = "none"));
 
 /// Whether Tmux control mode is enabled.

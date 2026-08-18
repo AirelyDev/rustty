@@ -319,7 +319,9 @@ impl Software {
             if remaining & 1 != 0 {
                 let mat = &Software::ZERO_SHIFT_MATRICES[k / 2];
                 s = Software::mat_times_vec(mat, s);
-                if k % 2 != 0 {
+                // (clippy `manual_is_multiple_of`, rust 1.93: the odd-`k`
+                // check spelled through `is_multiple_of` — same predicate.)
+                if !k.is_multiple_of(2) {
                     s = Software::mat_times_vec(mat, s);
                 }
             }

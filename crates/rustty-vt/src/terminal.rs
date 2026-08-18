@@ -1197,11 +1197,39 @@ impl Terminal {
 
     /// Print the previous printed character a repeated amount of times.
     pub fn print_repeat(&mut self, count_req: usize) -> Result<(), OutOfMemory> {
-        if let Some(c) = self.previous_char {
-            let count = core::cmp::max(count_req, 1);
-            for _ in 0..count {
-                self.print(c)?;
-            }
+        // const c = self.previous_char orelse return;
+        let Some(c) = self.previous_char else {
+            return Ok(());
+        };
+        // var remaining = @max(count_req, 1);
+        let mut remaining = core::cmp::max(count_req, 1);
+
+        // Print the repeated codepoint in slices so that eligible runs
+        // take the batched printSlice fast path. printSlice is semantically
+        // identical to calling print per codepoint: ineligible characters
+        // or terminal states (insert mode, grapheme clustering, hyperlinks,
+        // etc.) fall back to the per-codepoint print() path internally.
+        //
+        // The buffer is filled with a runtime-bounded loop rather than
+        // `= @splat(c)`: a comptime-known 4096-element splat gets fully
+        // unrolled into ~33KB of consecutive stores (LLVM won't re-roll
+        // or vectorize it, see quirks_memset.zig), and it would fill the
+        // whole buffer even for the typical small repeat counts.
+        //
+        // PORT NOTE: `var buf: [4096]u32 = undefined;` — Rust has no
+        // `undefined` locals; the array is zero-initialized, and only the
+        // `min(remaining, buf.len)` prefix the reference fills is ever read
+        // (`print_slice` only sees `buf[0..n]` with `n <= remaining`).
+        let mut buf: [u32; 4096] = [0; 4096];
+        // for (buf[0..@min(remaining, buf.len)]) |*cp| cp.* = c;
+        for cp in buf[0..core::cmp::min(remaining, 4096)].iter_mut() {
+            *cp = c;
+        }
+        while remaining > 0 {
+            // const n = @min(remaining, buf.len);
+            let n = core::cmp::min(remaining, buf.len());
+            self.print_slice(&buf[0..n])?;
+            remaining -= n;
         }
         Ok(())
     }
@@ -1222,11 +1250,64 @@ impl Terminal {
     /// slower per-codepoint path. They're less common and this is optimized
     /// for the aforementioned cases.
     pub fn print_slice(&mut self, cps: &[u32]) -> Result<(), OutOfMemory> {
+        // Check if we can do the fast path up front. If we can't
+        // we need to go back to scalar `print`.
+        let fast = 'fast: {
+            // Only the main display is supported.
+            if self.status_display != ansi::StatusDisplay::Main {
+                break 'fast false;
+            }
+
+            // Modes that require per-codepoint handling in print().
+            // Wraparound is required (its the default) so that our
+            // row-fill logic below can assume soft-wrap semantics. Insert
+            // mode shifts cells per print.
+            if self.modes.get(modespkg::Mode::Insert) {
+                break 'fast false;
+            }
+            if !self.modes.get(modespkg::Mode::Wraparound) {
+                break 'fast false;
+            }
+
+            // Charset must map ASCII as-is (true unless a DEC special
+            // charset is actively invoked, which is rare).
+            let screen: *mut Screen = self.screens.active;
+            if unsafe { (*screen).charset.single_shift }.is_some() {
+                break 'fast false;
+            }
+            match unsafe { (*screen).charset.charsets.get((*screen).charset.gl) } {
+                charsets::Charset::Utf8 | charsets::Charset::Ascii => {}
+                _ => break 'fast false,
+            }
+
+            // Hyperlinks require per-cell map bookkeeping.
+            if unsafe { (*screen).cursor.hyperlink_id } != 0 {
+                break 'fast false;
+            }
+
+            true
+        };
+        if !fast {
+            // for (cps) |cp| try self.print(@intCast(cp));
+            for &cp in cps {
+                self.print(cp)?;
+            }
+            return Ok(());
+        }
+
+        let grapheme_cluster = self.modes.get(modespkg::Mode::GraphemeCluster);
+
+        // When grapheme clustering is enabled and a left margin is set,
+        // print() consults the cell left of the margin after wrapping,
+        // which we can't reason about here. Restrict the fast path to
+        // the [0x10, 0xFF] range in that case (those never cluster).
+        let allow_unicode = !grapheme_cluster || self.scrolling_region.left == 0;
+
         let mut i: usize = 0;
         while i < cps.len() {
             // Try the fast-path print first. This will return the number of
             // codepoints it consumed.
-            let consumed = self.print_slice_fast(&cps[i..])?;
+            let consumed = self.print_slice_fast(&cps[i..], grapheme_cluster, allow_unicode)?;
             if consumed > 0 {
                 i += consumed;
                 continue;
@@ -1249,42 +1330,16 @@ impl Terminal {
     ///
     /// The fast path handles runs of narrow (width 1) and wide (width 2)
     /// codepoints being written to simple cells. Everything else (zero
-    /// width codepoints, grapheme cluster continuations, insert mode,
-    /// charset mapping, hyperlinks, complex cells, etc.) is rejected so
-    /// `print` can handle it with full generality.
-    fn print_slice_fast(&mut self, cps: &[u32]) -> Result<usize, OutOfMemory> {
-        // Only the main display is supported.
-        if self.status_display != ansi::StatusDisplay::Main {
-            return Ok(0);
-        }
-
-        // Modes that require per-codepoint handling in print(). Wraparound
-        // is required (its the default) so that our row-fill logic below can
-        // assume soft-wrap semantics. Insert mode shifts cells per print.
-        if self.modes.get(modespkg::Mode::Insert) {
-            return Ok(0);
-        }
-        if !self.modes.get(modespkg::Mode::Wraparound) {
-            return Ok(0);
-        }
-
+    /// width codepoints, grapheme cluster continuations, complex cells,
+    /// etc.) is rejected so `print` can handle it with full generality.
+    fn print_slice_fast(
+        &mut self,
+        cps: &[u32],
+        grapheme_cluster: bool,
+        allow_unicode: bool,
+    ) -> Result<usize, OutOfMemory> {
         // const screen: *Screen = self.screens.active;
         let screen: *mut Screen = self.screens.active;
-
-        // Charset must map ASCII as-is (true unless a DEC special charset
-        // is actively invoked, which is rare).
-        if unsafe { (*screen).charset.single_shift }.is_some() {
-            return Ok(0);
-        }
-        match unsafe { (*screen).charset.charsets.get((*screen).charset.gl) } {
-            charsets::Charset::Utf8 | charsets::Charset::Ascii => {}
-            _ => return Ok(0),
-        }
-
-        // Hyperlinks require per-cell map bookkeeping.
-        if unsafe { (*screen).cursor.hyperlink_id } != 0 {
-            return Ok(0);
-        }
 
         // Codepoints in [0x10, 0xFF] are always narrow (width 1, matching
         // the c <= 0xFF fast path in print) and can never interact with
@@ -1296,13 +1351,6 @@ impl Terminal {
         // 2027) is enabled, if they are a grapheme break from the
         // previously printed codepoint (so print would never attach them
         // to the previous cell).
-        let grapheme_cluster = self.modes.get(modespkg::Mode::GraphemeCluster);
-
-        // When grapheme clustering is enabled and a left margin is set,
-        // print() consults the cell left of the margin after wrapping,
-        // which we can't reason about here. Restrict the fast path to
-        // the [0x10, 0xFF] range in that case (those never cluster).
-        let allow_unicode = !grapheme_cluster || self.scrolling_region.left == 0;
 
         // Codepoints in [0x10, 0xFF] are always narrow: print()
         // hardcodes width 1 for c <= 0xFF (no width table lookup).
@@ -1337,16 +1385,59 @@ impl Terminal {
         }
 
         // The first codepoint requires care when grapheme clustering is
-        // enabled: print() examines the previous *cell* which can hold
-        // state (grapheme data) that we can't cheaply reason about here.
-        // Note this includes the pending-wrap state: print() may attach
-        // to the pending cell *instead of wrapping*. We only take the
-        // first codepoint if the cursor is at column zero with no pending
-        // wrap, where print() skips clustering entirely.
-        if grapheme_cluster
-            && (unsafe { (*screen).cursor.pending_wrap } || unsafe { (*screen).cursor.x } != 0)
-        {
-            return Ok(0);
+        // enabled: print() may attach it to the previous *cell* instead
+        // of writing a new one. Take the first codepoint only when we can
+        // determine — computing exactly what print() would — that it
+        // starts a new cluster. At column zero with no pending wrap,
+        // print() skips clustering entirely. Otherwise resolve the
+        // previous cell the way print() does and check for a break.
+        //
+        // Note the pending-wrap rejection: print() may attach to the
+        // pending cell *instead of wrapping*, which we can't model here.
+        if grapheme_cluster && unsafe { (*screen).cursor.x } != 0 {
+            'gate: {
+                if unsafe { (*screen).cursor.pending_wrap } {
+                    return Ok(0);
+                }
+
+                // Resolve the content cell to our left exactly like print():
+                // if the immediate left cell is a wide spacer tail, the
+                // content lives one further left. (A spacer tail can never
+                // be at column zero — its wide half would have to be in the
+                // previous row — so the second cursorCellLeft is in bounds.)
+                let immediate: *mut pagepkg::Cell = unsafe { (*screen).cursor_cell_left(1) };
+                let prev: *mut pagepkg::Cell = match unsafe { (*immediate).wide() } {
+                    pagepkg::Wide::SpacerTail => unsafe { (*screen).cursor_cell_left(2) },
+                    _ => immediate,
+                };
+
+                // An empty previous cell is necessarily a grapheme break.
+                if unsafe { (*prev).codepoint() } == 0 {
+                    break 'gate;
+                }
+
+                // Grapheme data on the previous cell requires the full
+                // cluster state machine replay; only print() can do that.
+                if unsafe { (*prev).has_grapheme() } {
+                    return Ok(0);
+                }
+
+                // A simple single-codepoint previous cell: print() would run
+                // exactly this break check from the default state.
+                let mut state = unicode::grapheme::BreakState::Default;
+                if !unicode::graphemeBreak(unsafe { (*prev).content_codepoint() }, cp0, &mut state)
+                {
+                    return Ok(0);
+                }
+            }
+        } else if grapheme_cluster {
+            // PORT NOTE: kept as the reference's nested `if` (not collapsed
+            // into the `else if` condition) so the branch structure matches
+            // line-for-line.
+            #[allow(clippy::collapsible_if)]
+            if unsafe { (*screen).cursor.pending_wrap } {
+                return Ok(0);
+            }
         }
 
         // The width lookup is a runtime value while printSliceFill is
@@ -4917,9 +5008,15 @@ impl Terminal {
                 (0, x + 1)
             }
 
-            // Note that it seems like complete should reset the soft-wrap
-            // state of the line but in xterm it does not.
-            csi::EraseLine::Complete => (0, self.cols),
+            // .complete => complete: { ... }
+            csi::EraseLine::Complete => {
+                // Xterm preserves this flag for EL2, but it also doesn't reflow
+                // rows when resizing. Since we do, the erased row must no longer
+                // continue onto the next row.
+                self.active_mut().cursor_reset_wrap();
+
+                (0, self.cols)
+            }
 
             _ => {
                 // log.err("unimplemented erase line mode: {}", .{mode});
@@ -16556,6 +16653,50 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "Terminal: eraseLine complete resets wrap"
+    #[test]
+    fn terminal_erase_line_complete_resets_wrap() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        // for ("ABCDE123") |c| try t.print(c);
+        for c in "ABCDE123".chars() {
+            t.print(c as u32).unwrap();
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
+            // try testing.expect(list_cell.row.wrap);
+            assert!(unsafe { (*list_cell.row).wrap() });
+        }
+
+        t.set_cursor_pos(1, 1);
+        t.erase_line(csi::EraseLine::Complete, false);
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap();
+            // try testing.expect(!list_cell.row.wrap);
+            assert!(!unsafe { (*list_cell.row).wrap() });
+        }
+        t.print('X' as u32).unwrap();
+        // try t.resize(alloc, .{ .rows = 5, .cols = 10 });
+        t.resize(
+            alloc,
+            Resize {
+                rows: 5,
+                cols: 10,
+                cell_size_px: None,
+            },
+        )
+        .unwrap();
+
+        {
+            let str = t.plain_string(Global).unwrap();
+            assert_eq!(str.as_slice(), "X\n123".as_bytes());
+        }
+
+        t.deinit(alloc);
+    }
+
     // test "Terminal: eraseLine complete protected attributes respected with iso"
     #[test]
     fn terminal_erase_line_complete_protected_attributes_respected_with_iso() {
@@ -17967,6 +18108,11 @@ mod tests {
     // test "Terminal: glyph APC stores session glossary entries"
     #[test]
     fn terminal_glyph_apc_stores_session_glossary_entries() {
+        // if (comptime !build_options.glyph_protocol) return error.SkipZigTest;
+        if !crate::options::GLYPH_PROTOCOL {
+            return;
+        }
+
         use crate::apc::glyph::response::{Coverage, Response, ResponseQuery, ResponseRegister};
 
         let alloc = Global;

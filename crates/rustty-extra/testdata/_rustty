@@ -264,6 +264,7 @@ _rustty() {
         '+crash-report'
         '+boo'
         '+new-window'
+        '+new-tab'
         '+toggle-quick-terminal'
       )
       _describe '' opt
@@ -350,6 +351,11 @@ _rustty() {
         (+new-window)
           _arguments \
             '--class=-:::( )' \
+        ;;
+        (+new-tab)
+          _arguments \
+            '--class=-:::( )' \
+            '--surface-id=-:::( )' \
         ;;
         (+toggle-quick-terminal)
           _arguments \

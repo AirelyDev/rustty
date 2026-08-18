@@ -303,7 +303,7 @@ mod tests {
         let s = String::from_utf8(out).unwrap();
 
         use rustty_cli::rustty::Action;
-        assert_eq!(Action::ALL.len(), 18);
+        assert_eq!(Action::ALL.len(), 19);
         for action in Action::ALL {
             let expect = match action {
                 Action::Help => "**`--help`**".to_string(),

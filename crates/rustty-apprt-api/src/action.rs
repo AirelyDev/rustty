@@ -952,6 +952,11 @@ pub enum MouseVisibility {
 pub enum PromptTitle {
     Surface,
     Tab,
+    // PORT NOTE (P4 W6-tail, 8b7c57c75): appended value — existing ordinals
+    // are untouched (append-only C-ABI). `rustty-embed.h` does not carry
+    // `RUSTTY_PROMPT_TITLE_WINDOW` yet: the header advance + its KAT are the
+    // W5-E bundle.
+    Window,
 }
 
 /// PORT NOTE: reference `url: [:0]const u8` -> borrowed raw bytes `&'a [u8]`.
@@ -1310,6 +1315,17 @@ pub enum OpenUrlKind {
 
     /// The URL is known to contain HTML content.
     Html,
+
+    /// The URL came from an OSC 8 hyperlink. Application runtimes should
+    /// treat this as untrusted terminal output and apply a platform-specific
+    /// safe-opening policy.
+    //
+    // PORT NOTE (P4 W6-tail, 77537c806): appended value — existing ordinals are
+    // untouched (append-only C-ABI). `rustty-embed.h` does not carry
+    // `RUSTTY_ACTION_OPEN_URL_KIND_OSC8` yet: the header advance + its KAT are
+    // the W5-E bundle (the macOS Swift mapping is seamed on it —
+    // `Rustty.Action.swift` PORT-SEAM(w7-macos, upstream 77537c806)).
+    Osc8,
 }
 
 // Sync with: rustty_action_open_url_s

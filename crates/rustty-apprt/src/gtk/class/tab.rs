@@ -20,6 +20,7 @@ use libadwaita as adw;
 
 use rustty_apprt_api::NewSurfaceContext;
 use rustty_config::command::Command;
+use rustty_config::value_types::ShellIntegration;
 
 use super::config::Config;
 use super::split_tree::{SplitTree, Tree};
@@ -32,9 +33,11 @@ use crate::gtk::ext;
 pub struct TabOverrides {
     /// PORTS: `tab.zig:191` `command`.
     pub command: Option<Command>,
-    /// PORTS: `tab.zig:192` `working_directory`.
+    /// PORTS: `tab.zig:192` `shell_integration` (B5, 3650bef4e).
+    pub shell_integration: Option<ShellIntegration>,
+    /// PORTS: `tab.zig:193` `working_directory`.
     pub working_directory: Option<String>,
-    /// PORTS: `tab.zig:193` `title`.
+    /// PORTS: `tab.zig:194` `title`.
     pub title: Option<String>,
 }
 
@@ -183,6 +186,7 @@ impl Tab {
                 None,
                 SurfaceOverrides {
                     command: overrides.command,
+                    shell_integration: overrides.shell_integration,
                     working_directory: overrides.working_directory,
                     title: overrides.title,
                 },

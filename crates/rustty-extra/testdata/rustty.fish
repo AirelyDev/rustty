@@ -1,4 +1,4 @@
-set -l commands "+version +help +list-fonts +list-keybinds +list-themes +list-colors +list-actions +ssh +ssh-cache +edit-config +show-config +explain-config +validate-config +show-face +crash-report +boo +new-window +toggle-quick-terminal"
+set -l commands "+version +help +list-fonts +list-keybinds +list-themes +list-colors +list-actions +ssh +ssh-cache +edit-config +show-config +explain-config +validate-config +show-face +crash-report +boo +new-window +new-tab +toggle-quick-terminal"
 complete -c rustty -f
 complete -c rustty -s e -l help -f
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l version -f
@@ -210,7 +210,7 @@ complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l enquiry-res
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l async-backend -r -f -a "auto epoll io_uring" -d "Configures the low-level API to use for async IO, eventing, etc."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l auto-update -r -f -d "Control the auto-update functionality of Rustty."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l auto-update-channel -r -f -d "The release channel to use for auto-updates."
-complete -c rustty -n "string match -q -- '+*' (commandline -pt)" -f -a "+version +help +list-fonts +list-keybinds +list-themes +list-colors +list-actions +ssh +ssh-cache +edit-config +show-config +explain-config +validate-config +show-face +crash-report +boo +new-window +toggle-quick-terminal"
+complete -c rustty -n "string match -q -- '+*' (commandline -pt)" -f -a "+version +help +list-fonts +list-keybinds +list-themes +list-colors +list-actions +ssh +ssh-cache +edit-config +show-config +explain-config +validate-config +show-face +crash-report +boo +new-window +new-tab +toggle-quick-terminal"
 complete -c rustty -n "__fish_seen_subcommand_from +list-fonts" -l family -r -f
 complete -c rustty -n "__fish_seen_subcommand_from +list-fonts" -l style -r -f
 complete -c rustty -n "__fish_seen_subcommand_from +list-fonts" -l bold -f
@@ -244,4 +244,6 @@ complete -c rustty -n "__fish_seen_subcommand_from +show-face" -l string -r -f
 complete -c rustty -n "__fish_seen_subcommand_from +show-face" -l style -r -f -a "regular bold italic bold_italic"
 complete -c rustty -n "__fish_seen_subcommand_from +show-face" -l presentation -r -f -a "text emoji"
 complete -c rustty -n "__fish_seen_subcommand_from +new-window" -l class -r -f
+complete -c rustty -n "__fish_seen_subcommand_from +new-tab" -l class -r -f
+complete -c rustty -n "__fish_seen_subcommand_from +new-tab" -l surface-id -r -f
 complete -c rustty -n "__fish_seen_subcommand_from +toggle-quick-terminal" -l class -r -f

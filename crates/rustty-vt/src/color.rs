@@ -1155,29 +1155,26 @@ impl RGB {
     // by BYTE index; taking a `&str` here would make those slices panic on a
     // non-char-boundary index instead of failing the parse (see `parse`).
     fn from_intensity(value: &[u8]) -> Result<u8, InvalidFormat> {
-        // const i = std.fmt.parseFloat(f64, value) catch return error.InvalidFormat;
+        // const i = fraction.parse(value) orelse {
+        //     @branchHint(.cold);
+        //     return error.InvalidFormat;
+        // };
         //
-        // PORT NOTE: `parseFloat` only ever accepts ASCII (digits, `.`, `eE`,
-        // sign, `inf`/`nan`, `0x` hex floats, `_` separators), so non-UTF-8
-        // bytes are an `InvalidFormat` in the reference too; rejecting them
-        // here before the `f64` parse is behavior-preserving.
-        let value = std::str::from_utf8(value).map_err(|_| InvalidFormat)?;
-        let i = value.parse::<f64>().map_err(|_| InvalidFormat)?;
-        // if (i < 0.0 or i > 1.0) return error.InvalidFormat;
-        //
-        // PORT NOTE: written as two comparisons, NOT `(0.0..=1.0).contains(&i)`.
-        // The reference lets NaN through (`NaN < 0.0` and `NaN > 1.0` are both
-        // false) whereas `contains` rejects it; Ghostty therefore accepts
-        // `rgbi:NaN/0/0` as black. `+inf` is still rejected (`inf > 1.0`).
-        #[allow(clippy::manual_range_contains)]
-        if i < 0.0 || i > 1.0 {
+        // PORT NOTE (`946422dbc`): `std.fmt.parseFloat` + the separate
+        // `[0, 1]` range check became `fraction.parse` (which rejects
+        // exponent/hex-float syntax, `NaN`, `inf`, and out-of-range values
+        // itself — including the `rgbi:NaN/0/0` input the old parser
+        // accepted as black).
+        let Some(i) = crate::fraction::parse(value) else {
+            // @branchHint(.cold);
             return Err(InvalidFormat);
-        }
+        };
 
         // return @intFromFloat(i * std.math.maxInt(u8));
         //
-        // PORT NOTE: Rust's saturating `as u8` maps NaN → 0, reproducing the
-        // observed `@intFromFloat(NaN * 255)` == 0 of the reference without UB.
+        // PORT NOTE: `fraction::parse` guarantees `0.0 <= i <= 1.0`, so the
+        // product is in `[0, 255]` and the `as u8` cast is the reference's
+        // `@intFromFloat` truncation exactly.
         Ok((i * u8::MAX as f64) as u8)
     }
 
@@ -2007,20 +2004,22 @@ mod tests {
     /// naive Rust translation gets wrong.
     #[test]
     fn rgb_parse_intensity_and_hex_zig_edge_semantics() {
-        // `if (i < 0.0 or i > 1.0)` lets NaN through; `@intFromFloat(NaN * 255)`
-        // is observed to be 0, so a NaN intensity parses as black.
-        assert_eq!(Ok(RGB { r: 0, g: 0, b: 0 }), RGB::parse(b"rgbi:NaN/0/0"));
-        assert_eq!(Ok(RGB { r: 0, g: 0, b: 0 }), RGB::parse(b"rgbi:nan/0/0"));
-        assert_eq!(
-            Ok(RGB { r: 0, g: 255, b: 0 }),
-            RGB::parse(b"rgbi:nan/1.0/0")
-        );
-
-        // Infinities are still out of range (`inf > 1.0`, `-inf < 0.0`).
+        // `946422dbc` intensity semantics: `fraction.parse` rejects everything
+        // `parseFloat` accepted beyond simple decimals — `NaN` (which the old
+        // `if (i < 0.0 or i > 1.0)` range check let through as black), `inf`,
+        // exponents — as well as out-of-range values.
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgbi:NaN/0/0"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgbi:nan/0/0"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgbi:nan/1.0/0"));
         assert_eq!(Err(InvalidFormat), RGB::parse(b"rgbi:inf/0/0"));
         assert_eq!(Err(InvalidFormat), RGB::parse(b"rgbi:-inf/0/0"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"rgbi:1e-1/0/0"));
         assert_eq!(Err(InvalidFormat), RGB::parse(b"rgbi:1.5/0/0"));
         assert_eq!(Err(InvalidFormat), RGB::parse(b"rgbi:-0.5/0/0"));
+        // ...while simple decimals (including the sign forms fraction.parse
+        // allows) still work.
+        assert_eq!(Ok(RGB { r: 0, g: 255, b: 0 }), RGB::parse(b"rgbi:0/1.0/0"));
+        assert_eq!(Ok(RGB { r: 0, g: 0, b: 0 }), RGB::parse(b"rgbi:-0/0/0"));
 
         // `std.fmt.parseUnsigned` accepts NO sign prefix.
         assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:+f/0/0"));

@@ -93,6 +93,16 @@ mod imp {
         #[property(get, set, nullable)]
         pub config: RefCell<Option<Config>>,
 
+        /// The manually overridden title.
+        ///
+        /// PORTS: `window.zig:217-230` `title-override` (8b7c57c75, the
+        /// window-title renaming pair) + `Private.title_override` (`:276-277`).
+        /// The derived setter IS the reference's `setTitleOverride`
+        /// (`:1328-1337`, write + `notifyByPspec`); the reference's explicit
+        /// `glib.free` in `finalize` (`:1431`) is the `RefCell` field drop.
+        #[property(name = "title-override", get, set, nullable)]
+        pub title_override: RefCell<Option<String>>,
+
         /// PORTS: `window.zig:82-99` `debug` (const `build_config.is_debug`).
         #[property(name = "debug", get = Self::debug_prop)]
         pub debug_prop: PhantomData<bool>,
@@ -329,8 +339,9 @@ mod imp {
                 "tab overview focus timer",
             );
 
-            // `command_palette.set(null)` (**invariant 4**, `window.zig:1267`).
-            self.command_palette.set(None);
+            // `command_palette.deinit()` (**invariant 4**, `window.zig:1267`;
+            // 1dbc8ca30: the named clear-before-free — see `weak_ref.rs` `deinit`).
+            self.command_palette.deinit();
 
             // `config` unref+null (`window.zig:1269-1272`). Scope-end drop unrefs.
             drop(self.config.take());
@@ -697,6 +708,7 @@ mod imp {
                     action_prompt_context_tab_title,
                     None,
                 ),
+                Action::init("prompt-window-title", action_prompt_window_title, None),
                 Action::init("ring-bell", action_ring_bell, None),
                 Action::init("split-right", action_split_right, None),
                 Action::init("split-left", action_split_left, None),
@@ -1555,15 +1567,16 @@ impl Window {
         self.imp().toggle_window_decorations();
     }
 
-    /// PORTS: `window.zig:393-395` `newTab`. Create a new tab with the given
-    /// parent, inserted at the `window-new-tab-position` and selected.
-    pub fn new_tab(&self, parent: Option<*mut CoreSurface>) {
+    /// PORTS: `window.zig:408-424` `newTab` (B5, 034506f14: gains the
+    /// overrides struct). Create a new tab with the given parent, inserted at
+    /// the `window-new-tab-position` and selected.
+    pub fn new_tab(&self, parent: Option<*mut CoreSurface>, overrides: TabOverrides) {
         let _ = self
             .imp()
-            .new_tab_page(parent, NewSurfaceContext::Tab, TabOverrides::default());
+            .new_tab_page(parent, NewSurfaceContext::Tab, overrides);
     }
 
-    /// PORTS: `window.zig:397-417` `newTabForWindow`. The first tab of a new
+    /// PORTS: `window.zig:426-450` `newTabForWindow`. The first tab of a new
     /// window (`.window` context: inherits the parent's initial size hints and
     /// window-context working-directory inheritance).
     pub fn new_tab_for_window(&self, parent: Option<*mut CoreSurface>, overrides: TabOverrides) {
@@ -1675,6 +1688,68 @@ impl Window {
         debug_assert!(desired_pos < total);
 
         tab_view.reorder_page(&page, desired_pos)
+    }
+
+    /// PORTS: `window.zig:641-663` `moveTabToNewWindow` (f6fca9aab). Transfer
+    /// the page containing `surface` to a fresh window; skip (returning false)
+    /// if it is the only tab in the existing window.
+    pub fn move_tab_to_new_window(&self, surface: &Surface) -> bool {
+        let tab_view = self.imp().tab_view.get();
+        let Some(tab) = ext::ancestor::<Tab>(surface) else {
+            return false;
+        };
+        let page = tab_view.page(&tab);
+
+        // Skip if this is the only tab in the existing window
+        if tab_view.n_pages() <= 1 {
+            return false;
+        }
+
+        let app = Application::default();
+        // `Window.new(app, .none)` (`:654`).
+        let window = Window::new(&app, None);
+
+        tab_view.transfer_page(&page, &window.imp().tab_view.get(), 0);
+        window.present();
+        true
+    }
+
+    /// PORTS: `window.zig:1344-1366` `promptWindowTitle` + `titleDialogSet`
+    /// (`:1339-1342`; 8b7c57c75, the window-title renaming pair). The initial
+    /// value is `priv.title_override orelse title` (`:1356`, the GtkWindow
+    /// `title` property read `:1347-1354`); the dialog's `set` signal applies
+    /// the `titleDialogSet` empty-string → `None` normalization. The
+    /// reference's `setTitleOverride` is the derived `title-override` setter
+    /// (see the property).
+    pub fn prompt_window_title(&self) {
+        use super::title_dialog::{Target, TitleDialog};
+
+        let title: Option<String> = self.title().map(|t| t.to_string());
+        let initial = self.title_override().or(title);
+        let dialog = TitleDialog::new(Target::Window, initial.as_deref());
+
+        // `TitleDialog.signals.set.connect(dialog, *Self, titleDialogSet, self,
+        // .{})` (`:1358-1364`).
+        dialog.connect_local(
+            "set",
+            false,
+            glib::clone!(
+                #[weak(rename_to = this)]
+                self,
+                #[upgrade_or]
+                None,
+                move |args| {
+                    // arg 0 is the emitter; arg 1 is the string param.
+                    let title: String = args[1].get().expect("set arg is a string");
+                    // PORTS: `window.zig:1339-1342` `titleDialogSet`.
+                    this.set_title_override(if title.is_empty() { None } else { Some(title) });
+                    None
+                }
+            ),
+        );
+
+        // `dialog.present(self.as(gtk.Widget))` (`:1366`).
+        dialog.present(self.upcast_ref::<gtk4::Widget>());
     }
 }
 
@@ -2051,7 +2126,31 @@ impl Window {
         value == TITLEBAR_STYLE_TABS
     }
 
-    /// PORTS: `window.zig:1239-1252` `closureSubtitle`. Closure: `this` FIRST, then
+    /// PORTS: `window.zig:1368-1378` `closureTitle` (8b7c57c75; bound as
+    /// `computed_title`, `window.blp` `$computed_title(template.config,
+    /// template.title, template.title-override)`). The override wins, then the
+    /// surface-synced title, then the app-name fallback. PORT NOTE (R2): the
+    /// fallback is sourced from `rustty_identity`, NOT the reference's
+    /// hardcoded `"Ghostty"` (the `tab.rs` `computed_title` precedent). The
+    /// `config` parameter is unused (a notify subscription only), exactly the
+    /// reference's `_: ?*Config`.
+    #[template_callback(name = "computed_title")]
+    fn closure_computed_title(
+        _this: &Window,
+        _config: Option<Config>,
+        title: Option<String>,
+        title_override: Option<String>,
+    ) -> Option<String> {
+        if let Some(v) = title_override {
+            return Some(v);
+        }
+        if let Some(v) = title {
+            return Some(v);
+        }
+        Some(rustty_identity::APP_NAME_TITLECASE.to_owned())
+    }
+
+    /// PORTS: `window.zig:1380-1393` `closureSubtitle`. Closure: `this` FIRST, then
     /// the config + the active surface pwd. Returns the working-directory subtitle
     /// when configured, else `None`.
     #[template_callback(name = "computed_subtitle")]
@@ -2186,6 +2285,16 @@ fn action_prompt_tab_title(
 ) {
     this.imp()
         .perform_binding_action(binding::Action::PromptTabTitle);
+}
+
+/// PORTS: `window.zig:2088-2095` `actionPromptWindowTitle` (8b7c57c75).
+fn action_prompt_window_title(
+    _action: &gio::SimpleAction,
+    _param: Option<&glib::Variant>,
+    this: &Window,
+) {
+    this.imp()
+        .perform_binding_action(binding::Action::PromptWindowTitle);
 }
 
 /// PORTS: `window.zig:1915-1921` `actionSplitRight`.

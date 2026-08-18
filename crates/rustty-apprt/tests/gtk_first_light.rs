@@ -270,6 +270,7 @@ fn first_light_renders_a_live_terminal_frame() {
     //         shell builtin). ----
     let surface = Surface::new(SurfaceOverrides {
         command: Some(Command::Direct(vec![b"/bin/sh".to_vec()])),
+        shell_integration: None,
         working_directory: None,
         title: None,
     });

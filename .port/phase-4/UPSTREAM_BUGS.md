@@ -85,3 +85,42 @@ export `XDG_CACHE_HOME` to redirect caches would get their Sentry database in
 **Upstream report:** to be filed against ghostty (`cacheDir` comment/code
 contradiction introduced by 15c50c1db). Once upstream fixes it (in either
 direction), re-sync this fn and close this entry.
+
+---
+
+## P4-U2 — `apprt/ipc.zig` `NewTab.C.deinit` / `NewTab.cval` are `NewWindow` copy-paste (dead comptime code; corrected in the port)
+
+**Kind:** faithfully-intended port of the evident intent; the literal upstream
+text is uncompilable-if-instantiated and was corrected (recorded here rather
+than silently).
+
+**Introduced by:** `034506f14` "gtk: add +new-tab cli action" (2026-03-22),
+surviving unchanged to the range head `12967b68f`.
+
+**The upstream lines** (`src/apprt/ipc.zig`, inside `pub const NewTab`):
+
+```zig
+            pub fn deinit(self: *NewWindow.C, alloc: Allocator) void {
+                if (self.arguments) |arguments| alloc.free(arguments);
+            }
+        };
+
+        pub fn cval(self: *NewWindow, alloc: Allocator) Allocator.Error!NewWindow.C {
+```
+
+Both receivers name `NewWindow`(`.C`) although they live in `NewTab`, and the
+`cval` body never writes the `surface_id` field that `NewTab.C` declares. This
+compiles upstream only because Zig analyzes functions lazily and nothing ever
+instantiates `Action.cval` (the Zig apprts consume the union directly; the C
+conversion path for ipc actions has no callers), so the wrong-receiver methods
+are never type-checked.
+
+**What rustty does** (`crates/rustty-apprt-api/src/ipc.rs`): Rust compiles
+every item, so `NewTabC::deinit` takes its own receiver and `NewTab::cval`
+performs the evidently-intended conversion — the same argument-array
+marshalling as `NewWindow::cval` plus the `surface_id` passthrough the C
+struct declares. Inline `UPSTREAM QUIRK` notes at both methods point here.
+
+**Upstream report:** to be filed against ghostty (`NewTab.C.deinit`/`NewTab.cval`
+wrong receiver type + dropped `surface_id`, introduced by `034506f14`). Once
+upstream fixes it, re-sync and close this entry.

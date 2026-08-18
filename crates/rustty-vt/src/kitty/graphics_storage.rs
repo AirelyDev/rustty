@@ -1204,6 +1204,11 @@ impl Placement {
         }
     }
 
+    // The raw `*mut Screen` arg is the established raw-page-aliasing
+    // discipline (memory `rust-mut-args-strongly-protected`); the deref is
+    // covered by the SAFETY contract below (the rustty-xev precedent for this
+    // allow).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn deinit(&self, s: *mut Screen) {
         match self.location {
             // .pin => |p| s.pages.untrackPin(p),

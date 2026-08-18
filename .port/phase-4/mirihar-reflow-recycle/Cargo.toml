@@ -1,0 +1,14 @@
+# mirihar-reflow-recycle — isolated, non-FFI Miri proof artifact for the W2
+# (46276d046 + c249b9de3/88ed6bebf) PageList reflow page-recycling + bulk
+# copyRun aliasing discipline.
+[package]
+name = "mirihar-reflow-recycle"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "mirihar-reflow-recycle"
+path = "src/main.rs"
+
+# Standalone: not part of the rustty root workspace (this is a proof artifact).
+[workspace]

@@ -37,7 +37,7 @@ pub fn parse(value: &[u8]) -> Option<f64> {
         let mut int_part: f64 = 0.0;
         while i < v.len() && v[i] != b'.' {
             let d = v[i];
-            if d < b'0' || d > b'9' {
+            if !d.is_ascii_digit() {
                 return None;
             }
             int_part = int_part * 10.0 + f64::from(d - b'0');
@@ -54,7 +54,7 @@ pub fn parse(value: &[u8]) -> Option<f64> {
         i += 1;
         while i < v.len() {
             let d = v[i];
-            if d < b'0' || d > b'9' {
+            if !d.is_ascii_digit() {
                 return None;
             }
             // Stop accumulating after 15 digits so that frac and scale
@@ -78,8 +78,8 @@ pub fn parse(value: &[u8]) -> Option<f64> {
     let result = if negative { -magnitude } else { magnitude };
 
     // Range check. Written so that -0 passes and any out-of-range or
-    // non-finite value fails.
-    if !(result >= 0.0 && result <= 1.0) {
+    // non-finite value fails (NaN fails `contains`).
+    if !(0.0..=1.0).contains(&result) {
         return None;
     }
     Some(result)

@@ -1658,6 +1658,7 @@ dependencies = [
  "rustty-os",
  "rustty-render-types",
  "rustty-simd",
+ "rustty-terminfo",
  "rustty-unicode",
  "rustty-util",
  "rustty-wuffs",

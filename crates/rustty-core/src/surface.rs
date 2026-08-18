@@ -814,6 +814,8 @@ pub struct DerivedConfig {
     pub title_report: bool,
     // links: []DerivedConfig.Link,
     pub links: Vec<DerivedConfigLink>,
+    // link_osc8: bool,
+    pub link_osc8: bool,
     // link_previews: configpkg.LinkPreviews,
     pub link_previews: configpkg::value_types::LinkPreviews,
     // scroll_to_bottom: configpkg.Config.ScrollToBottom,
@@ -997,6 +999,8 @@ impl DerivedConfig {
             title_report: config.title_report,
             // .links = links,
             links,
+            // .link_osc8 = config.@"link-osc8",
+            link_osc8: config.link_osc8,
             // .link_previews = config.@"link-previews",
             link_previews: config.link_previews,
             // .scroll_to_bottom = config.@"scroll-to-bottom",
@@ -2877,7 +2881,14 @@ where
                 // .write_small,
                 // .write_stable,
                 // .write_alloc,
-                // => return,
+                // => {
+                //     msg.deinit();
+                //     return;
+                // },
+                //
+                // (`msg.deinit()` — `2f7fbadb0`, freeing discarded messages —
+                // is Drop in Rustty: the moved `msg` (incl. a `write_alloc`
+                // payload, `957ed21d5`) drops on this return.)
                 termio::Message::WriteSmall(_)
                 | termio::Message::WriteStable(_)
                 | termio::Message::WriteAlloc(_) => return,
@@ -3325,26 +3336,43 @@ where
                 // (`WriteReq.deinit` — the alloc-variant free — is Drop in
                 // Rustty; runs at arm scope end, the datastruct precedent.)
 
-                // We always allocate for this because we need to null-terminate.
-                // const str = try self.alloc.dupeZ(u8, w.slice());
-                // defer self.alloc.free(str);
+                // var stack = std.heap.stackFallback(256, self.alloc);
+                // const alloc = stack.get();
+                // const str = try alloc.dupeZ(u8, w.slice());
+                // defer alloc.free(str);
                 //
-                // PORT NOTE: the apprt-api `Pwd` payload carries raw bytes
-                // (`&[u8]`); the reference's NUL-termination (`dupeZ`) is part
-                // of the deferred C-ABI pinning (the action.rs `PwdC` PORT
-                // NOTE). The owned dupe + scope-end drop realize the
+                // PORT NOTE (`f1d225020`): the apprt-api `Pwd` payload carries
+                // raw bytes (`&[u8]`); the reference's NUL-termination
+                // (`dupeZ`) is part of the deferred C-ABI pinning (the
+                // action.rs `PwdC` PORT NOTE). `stackFallback(256, ..)` serves
+                // the `dupeZ` allocation (len + the NUL byte) from a 256-byte
+                // stack buffer when it fits and falls back to the heap for
+                // longer paths — the two arms below reproduce that split
+                // exactly (the SURFACE_ID stack-`bufPrint` precedent); the
+                // heap arm's owned dupe + scope-end drop realize the
                 // alloc/free pair (Zig defer LIFO == Rust reverse-declaration
                 // drop: `str` before `w`).
-                let str_ = w.slice().to_vec();
+                let mut stack = [0u8; 256];
+                let heap: Vec<u8>;
+                let str_: &[u8] = if w.slice().len() + 1 <= stack.len() {
+                    let len = w.slice().len();
+                    stack[..len].copy_from_slice(w.slice());
+                    &stack[..len]
+                } else {
+                    heap = w.slice().to_vec();
+                    &heap
+                };
 
                 // _ = try self.rt_app.performAction(
                 //     .{ .surface = self },
                 //     .pwd,
                 //     .{ .pwd = str },
                 // );
+                // (performAction continues to borrow the value only for the
+                // duration of the call.)
                 let _ = unsafe { &*self.rt_app }.perform_action(
                     apprt::Target::Surface(&*self),
-                    apprt::Action::Pwd(Pwd { pwd: &str_ }),
+                    apprt::Action::Pwd(Pwd { pwd: str_ }),
                 )?;
             }
 
@@ -7244,12 +7272,10 @@ where
             // defer alloc_writer.deinit();
             //
             // (the growable `Vec` sink is the Allocating writer; the defer
-            // is its drop — `WriteReq.init` below copies out of it.)
+            // is its drop — `toOwnedSlice` below transfers out of it.)
             let mut alloc_writer: Vec<u8> =
                 Vec::with_capacity(std::cmp::max(event.utf8.len() * 2, data.len() * 2));
 
-            // This results in a double allocation but this is such an unlikely
-            // path the performance impact is unimportant.
             // try input.key_encode.encode(
             //     &alloc_writer.writer,
             //     event,
@@ -7260,14 +7286,19 @@ where
             // infallible, the `try` collapses.)
             key_encode::encode(&mut alloc_writer, event, encoding_opts)
                 .expect("Vec writer is infallible");
-            // break :req try termio.Message.WriteReq.init(
-            //     self.alloc,
-            //     alloc_writer.writer.buffered(),
-            // );
+            // break :req .{ .alloc = .{
+            //     .alloc = self.alloc,
+            //     .data = try alloc_writer.toOwnedSlice(),
+            // } };
             //
-            // (`WriteReq.init`'s only error is OOM — collapses, the termio
-            // message.rs writeReq precedent.)
-            break 'req termio::message::WriteReq::init(&alloc_writer);
+            // (`fb4c56159`: transfer the encoding buffer instead of copying it.
+            // `toOwnedSlice` shrinks the allocation to the written length and
+            // hands over ownership — `into_boxed_slice` is the same contract:
+            // shrink-to-fit, remapping or copy-and-free as the allocator
+            // allows; its only error is OOM, the `try` collapses.)
+            break 'req MessageData::Alloc(Alloc {
+                data: alloc_writer.into_boxed_slice(),
+            });
         };
 
         // Copy the encoded data into the inspector event if we have one.
@@ -8063,6 +8094,9 @@ where
         Ok(())
     }
 
+    /// Same as `isMouseReporting` but takes the renderer state lock, so it
+    /// is safe to call from the apprt (any thread that is not already holding
+    /// the lock).
     /// Returns true if mouse reporting is enabled both in the config and
     /// the terminal state.
     // fn isMouseReporting(self: *const Surface) bool {
@@ -8073,6 +8107,24 @@ where
         //     self.io.terminal.flags.mouse_event != .none;
         self.config.mouse_reporting
             && self.io.terminal.flags.mouse_event != terminal::mouse::Event::None
+    }
+
+    // pub fn mouseReportingActive(self: *Surface) bool {
+    //
+    // (`488b7109b` + the `48d85eaeb` lock fix, END STATE: the gtk apprt asks
+    // whether to forward a middle click to a mouse-reporting TUI.)
+    pub fn mouseReportingActive(&mut self) -> bool {
+        // self.renderer_state.mutex.lockUncancelable(global.io());
+        // defer self.renderer_state.mutex.unlock(global.io());
+        //
+        // (guard-less zigstd Mutex — the `lockUncancelable`/deferred-unlock
+        // pair maps to the explicit lock/unlock around the read, the
+        // `setVisible` precedent.)
+        unsafe { (*self.renderer_state.mutex).lock() };
+        // return self.isMouseReporting();
+        let result = self.isMouseReporting();
+        unsafe { (*self.renderer_state.mutex).unlock() };
+        result
     }
 
     // fn mouseReport(
@@ -9466,8 +9518,10 @@ where
         let mouse_mods = self.mouseModsWithCapture(self.mouse.mods);
 
         // If we have the proper modifiers set then we can check for OSC8 links.
-        // if (mouse_mods.equal(input.ctrlOrSuper(.{}))) hyperlink: {
-        if mouse_mods.equal(key::ctrl_or_super(Mods::default())) {
+        // if (self.config.link_osc8 and
+        //     mouse_mods.equal(input.ctrlOrSuper(.{})))
+        // hyperlink: {
+        if self.config.link_osc8 && mouse_mods.equal(key::ctrl_or_super(Mods::default())) {
             'hyperlink: {
                 // const rac = mouse_pin.rowAndCell();
                 let rac = mouse_pin.row_and_cell();
@@ -9741,9 +9795,9 @@ where
                         return Ok(false);
                     }
                 };
-                // try self.openUrl(.{ .kind = .unknown, .url = uri });
+                // try self.openUrl(.{ .kind = .osc8, .url = uri });
                 self.openUrl(OpenUrl {
-                    kind: OpenUrlKind::Unknown,
+                    kind: OpenUrlKind::Osc8,
                     url: uri,
                 })?;
             }
@@ -9793,6 +9847,9 @@ where
                 OpenUrlKind::Unknown => internal_os::open::Kind::Unknown,
                 OpenUrlKind::Text => internal_os::open::Kind::Text,
                 OpenUrlKind::Html => internal_os::open::Kind::Html,
+                // (`77537c806`: the os-side `Kind::Osc8` arm fails closed on
+                // macOS — apprt owns the OSC 8 safe-opening policy.)
+                OpenUrlKind::Osc8 => internal_os::open::Kind::Osc8,
             },
             action.url,
         )?;
@@ -11409,12 +11466,11 @@ where
             //     .prompt_title,
             //     .window,
             // ),
-            //
-            // PORT NOTE (P4 partial, 8b7c57c75): the apprt half — the
-            // `PromptTitle.window` C-ABI enum value — is the W5/W7 bundle; until
-            // it lands this binding is accepted but not performed (false).
             binding::ScopedSurface::PromptWindowTitle => {
-                return Ok(false);
+                return Ok(unsafe { &*self.rt_app }.perform_action(
+                    apprt::Target::Surface(&*self),
+                    apprt::Action::PromptTitle(PromptTitle::Window),
+                )?);
             }
 
             // .set_tab_title => |v| {
@@ -11446,9 +11502,15 @@ where
             //     );
             // },
             //
-            // PORT NOTE (P4 partial, 8b7c57c75): the apprt half — the
-            // `set_window_title` C-ABI action tag — is the W5/W7 bundle; until
-            // it lands this binding is accepted but not performed (false).
+            // PORT NOTE (P4 partial, 8b7c57c75 — W6-tail): the apprt half is
+            // still seamed: the `set_window_title` `ActionKey` tag is a
+            // POSITIONAL C-ABI enumerator (upstream inserts it between
+            // `set_tab_title` and `prompt_title`, renumbering every later tag),
+            // pinned by `rustty-apprt-c`'s `action_key_positional_ordinals`
+            // against `rustty-embed.h`. It lands with the W5-E header advance +
+            // KAT in one motion (W7 T2); until then this binding is accepted
+            // but not performed (false). (`prompt_window_title` above IS wired —
+            // `PromptTitle.window` is an append-only payload value, not a tag.)
             binding::ScopedSurface::SetWindowTitle(_) => {
                 return Ok(false);
             }
@@ -11737,9 +11799,14 @@ where
             //     {},
             // ),
             //
-            // PORT NOTE (P4 partial, 25b2d8a38): the apprt half — the
-            // `move_tab_to_new_window` C-ABI action tag — is the W5/W7 bundle;
-            // until it lands this binding is accepted but not performed (false).
+            // PORT NOTE (P4 partial, 25b2d8a38 — W6-tail): the apprt half is
+            // still seamed: the `move_tab_to_new_window` `ActionKey` tag is a
+            // POSITIONAL C-ABI enumerator whose addition renumbers/extends
+            // `rustty_action_tag_e`, pinned by `rustty-apprt-c`'s
+            // `action_key_positional_ordinals` against `rustty-embed.h`
+            // (cardinality 66). It lands with the W5-E header advance + KAT in
+            // one motion (W7 T2); until then this binding is accepted but not
+            // performed (false).
             binding::ScopedSurface::MoveTabToNewWindow => {
                 return Ok(false);
             }
@@ -12435,31 +12502,36 @@ where
     ) -> Result<(), Error> {
         // Create a temporary directory to store our scrollback.
         // var tmp_dir = try internal_os.TempDir.init();
-        // errdefer tmp_dir.deinit();
+        // var retain_tmp_dir = false;
+        // defer if (retain_tmp_dir) tmp_dir.close(.retain) else tmp_dir.deinit();
         //
-        // PORT NOTE: `internal_os.TempDir` is the struct-file `os/TempDir.zig`,
-        // ported to the `tempdir` module (`internal_os::tempdir::TempDir`).
-        // Zig's `errdefer tmp_dir.deinit()` + the null-selection explicit
-        // `deinit` (below) are realized by [`TmpDirGuard`]: its `Drop` deinits
-        // the TempDir (deleting the tree) UNLESS `armed` is cleared. Only the
-        // success-with-data path disarms it — the reference leaves the temp file
-        // on disk for the copy/open/paste consumer; every `?` error exit and the
-        // null-selection exit leave it armed, exactly reproducing errdefer +
-        // the explicit deinit (the [`ThreadStateGuard`] Drop-guard precedent).
+        // PORT NOTE (`2b32b5b75`): `internal_os.TempDir` is the struct-file
+        // `os/TempDir.zig`, ported to the `tempdir` module
+        // (`internal_os::tempdir::TempDir`). The reference defer ALWAYS closes
+        // the directory handles; the `retain_tmp_dir` flag — set only after
+        // successful dispatch — selects between deleting the tree
+        // (`deinit` == `close(.delete)`) and retaining the temp file on disk
+        // for the copy/open/paste consumer (`close(.retain)`). [`TmpDirGuard`]'s
+        // `Drop` is that defer: every `?` error exit and the null-selection
+        // exit run it with `retain` still false (the delete arm), and only the
+        // success-with-data path flips `retain` (the
+        // [`ThreadStateGuard`] Drop-guard precedent).
         struct TmpDirGuard {
             td: internal_os::tempdir::TempDir,
-            armed: bool,
+            retain: bool,
         }
         impl Drop for TmpDirGuard {
             fn drop(&mut self) {
-                if self.armed {
+                if self.retain {
+                    self.td.close(internal_os::tempdir::CloseMode::Retain);
+                } else {
                     self.td.deinit();
                 }
             }
         }
         let mut tmp_dir = TmpDirGuard {
             td: internal_os::tempdir::TempDir::init()?,
-            armed: true,
+            retain: false,
         };
 
         // var filename_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -12597,7 +12669,6 @@ where
 
             // const sel = sel_ orelse {
             //     // If we have no selection we have no data so we do nothing.
-            //     tmp_dir.deinit();
             //     return;
             // };
             let sel = match sel_ {
@@ -12605,8 +12676,8 @@ where
                 None => {
                     // If we have no selection we have no data so we do nothing.
                     // (the null-selection exit: unlock, then return — `tmp_dir`
-                    // stays armed so its `Drop` deinits the TempDir, exactly the
-                    // reference's explicit `tmp_dir.deinit()`.)
+                    // drops with `retain` false, so its `Drop` runs the
+                    // reference defer's `tmp_dir.deinit()` arm.)
                     unsafe { (*self.renderer_state.mutex).unlock() };
                     return Ok(());
                 }
@@ -12734,10 +12805,13 @@ where
             }
         }
 
-        // (the success-with-data exit: disarm the errdefer guard — the reference
-        // does NOT `deinit` `tmp_dir` here, leaving the temp file on disk for the
-        // copy/open/paste consumer.)
-        tmp_dir.armed = false;
+        // The action accepted the path, so retain the file for its consumer.
+        // retain_tmp_dir = true;
+        //
+        // (the guard drop now takes the `close(.retain)` arm — handles
+        // released, the temp file left on disk for the copy/open/paste
+        // consumer.)
+        tmp_dir.retain = true;
         Ok(())
     }
 
@@ -13032,10 +13106,11 @@ where
         // const enc = std.base64.standard.Encoder;
         // const size = enc.calcSize(data.len);
         let size = zig_base64::calc_size(data.len());
-        // var buf = try self.alloc.alloc(u8, size + 9); // const for OSC
-        // defer self.alloc.free(buf);
+        // const buf = try self.alloc.alloc(u8, size + 9); // const for OSC
+        // errdefer self.alloc.free(buf);
         //
-        // (the owned `buf` drops on every exit below.)
+        // (the owned `buf` drops on every error exit below; the success exit
+        // transfers it into the `.write_alloc` message — `c11fe5486`.)
         let mut buf: Vec<u8> = vec![0u8; size + 9]; // const for OSC
 
         // const kind: u8 = switch (clipboard_type) {
@@ -13075,12 +13150,17 @@ where
         let encoded_len = zig_base64::encode(&mut buf[prefix_len..], data).len();
         debug_assert!(encoded_len == size);
 
-        // self.queueIo(try termio.Message.writeReq(
-        //     self.alloc,
-        //     buf,
-        // ), .unlocked);
+        // self.queueIo(.{ .write_alloc = .{
+        //     .alloc = self.alloc,
+        //     .data = buf,
+        // } }, .unlocked);
+        //
+        // (the allocated response transfers directly — a move, no copy; the
+        // exact-capacity `Vec` boxes without reallocating.)
         self.queueIo(
-            termio::Message::writeReq(&buf),
+            termio::Message::WriteAlloc(Alloc {
+                data: buf.into_boxed_slice(),
+            }),
             termio::termio_impl::MutexState::Unlocked,
         );
 
@@ -14215,6 +14295,55 @@ mod freetype_load_flags_tests {
             derived.freetype_load_flags,
             rustty_font_shaper::face::FREETYPE_LOAD_FLAGS_DEFAULT,
             "regression: the configured freetype-load-flags were replaced by the default"
+        );
+    }
+}
+
+// test "queueIo frees allocated writes in readonly mode" {
+//
+// (`957ed21d5`; the readonly discard arm's free is `msg.deinit()` at END
+// STATE (`2f7fbadb0`) == the Rust drop — see the arm's PORT NOTE in
+// `queueIo`.)
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod queue_io_readonly_tests {
+    use super::*;
+    use crate::app::test_runtime::TestApp;
+
+    #[test]
+    fn queueIo_frees_allocated_writes_in_readonly_mode() {
+        // const testing = std.testing;
+        //
+        // const surface = try testing.allocator.create(Surface);
+        // defer testing.allocator.destroy(surface);
+        // surface.readonly = true;
+        //
+        // PORT NOTE: `testing.allocator.create(Surface)` returns UNINITIALIZED
+        // memory and the test writes exactly ONE field — the established
+        // `fabricateSurface`/`surface_visibility_kat` MaybeUninit fabrication
+        // (field-projected raw-pointer writes; the untouched fields are never
+        // read — the readonly discard arm returns before `self.io` — and
+        // `MaybeUninit` never drops, which is `destroy`-without-`deinit`).
+        let mut surface: Box<std::mem::MaybeUninit<Surface<TestApp>>> =
+            Box::new(std::mem::MaybeUninit::uninit());
+        let ptr = surface.as_mut_ptr();
+        unsafe { std::ptr::addr_of_mut!((*ptr).readonly).write(true) };
+
+        // queueIo must free allocated writes in read-only mode.
+        // const data = try testing.allocator.dupe(u8, "\x1b]lGhostty\x1b\\");
+        // surface.queueIo(.{ .write_alloc = .{
+        //     .alloc = testing.allocator,
+        //     .data = data,
+        // } }, .unlocked);
+        //
+        // (R2: the test payload's product name; the free assertion is the
+        // allocator leak check — Zig's `testing.allocator` there, the Miri
+        // leak gate here. A leak would also re-appear as the `Box<[u8]>` not
+        // dropping under any leak-checking run of this lane.)
+        let data: Box<[u8]> = b"\x1b]lRustty\x1b\\".to_vec().into_boxed_slice();
+        unsafe { &mut *ptr }.queueIo(
+            termio::Message::WriteAlloc(Alloc { data }),
+            termio::termio_impl::MutexState::Unlocked,
         );
     }
 }

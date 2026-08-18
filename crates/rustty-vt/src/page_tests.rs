@@ -3045,6 +3045,61 @@ mod tests {
             assert_eq!(M::strip(styled), M::strip(styled_other));
             assert!(M::strip(styled) != M::strip(styled2));
         }
+
+        // eqlAny: presence of a matching value anywhere in the group
+        {
+            let expected = M::pattern(styled);
+            let mut cells: [Cell; 4] = [plain, plain, plain, plain];
+            assert!(!M::eql_any(&cells, 0, expected));
+
+            cells[2] = styled;
+            assert!(M::eql_any(&cells, 0, expected));
+
+            // Masked compare: same masked fields with a different
+            // codepoint still matches.
+            cells[2] = styled2;
+            assert!(M::eql_any(&cells, 0, expected));
+        }
+    }
+
+    // test "Mask nested field path" (0fb3565c7)
+    #[test]
+    fn mask_nested_field_path() {
+        // Mask only the codepoint data bits of the content field, not
+        // the padding next to it or any other field.
+        type M = Mask<Cell, { cell_field_mask(&[CellField::ContentCodepointData]) }, 4>;
+
+        let a: Cell = Cell::init('A' as u32);
+        let mut b: Cell = Cell::init('A' as u32);
+        b.set_style_id(5);
+        b.set_wide(Wide::Wide);
+        let c: Cell = Cell::init('C' as u32);
+
+        // Same codepoint matches regardless of other fields.
+        let expected = M::pattern(a);
+        assert!(M::eql_scalar(b, expected));
+        assert!(!M::eql_scalar(c, expected));
+
+        // The mask must cover exactly the codepoint data bits.
+        let cp_offset = CELL_CONTENT_SHIFT;
+        assert_eq!(
+            (U21_MAX as u64) << cp_offset,
+            cell_field_mask(&[CellField::ContentCodepointData]),
+        );
+
+        // Group variants
+        {
+            let mut cells: [Cell; 4] = [a, b, a, b];
+            assert!(M::eql(&cells, 0, expected));
+            assert!(M::eql_any(&cells, 0, expected));
+
+            cells[1] = c;
+            assert!(!M::eql(&cells, 0, expected));
+            assert!(M::eql_any(&cells, 0, expected));
+
+            let none: [Cell; 4] = [c, c, c, c];
+            assert!(!M::eql_any(&none, 0, expected));
+        }
     }
 
     /// W62-B06-001. The reference's group ops reduce a

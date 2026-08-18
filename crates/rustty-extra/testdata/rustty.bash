@@ -491,6 +491,7 @@ _rustty() {
     local validate_config="--config-file= --help"
     local show_face="--cp= --string= --style= --presentation= --help"
     local new_window="--class= --help"
+    local new_tab="--class= --surface-id= --help"
     local toggle_quick_terminal="--class= --help"
 
     case "${COMP_WORDS[1]}" in
@@ -593,6 +594,13 @@ _rustty() {
           *) _compreply compgen -W "$new_window" -- "$cur" ;;
         esac
       ;;
+      +new-tab)
+        case $prev in
+          --class) return;;
+          --surface-id) return;;
+          *) _compreply compgen -W "$new_tab" -- "$cur" ;;
+        esac
+      ;;
       +toggle-quick-terminal)
         case $prev in
           --class) return;;
@@ -626,6 +634,7 @@ _rustty() {
   topLevel+=" +crash-report"
   topLevel+=" +boo"
   topLevel+=" +new-window"
+  topLevel+=" +new-tab"
   topLevel+=" +toggle-quick-terminal"
 
   local cur=""; local prev=""; local prevWasEq=false; COMPREPLY=()

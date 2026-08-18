@@ -1148,6 +1148,77 @@ fn pagelist_increaseCapacity_to_increase_styles() {
     s.deinit();
 }
 
+// ref: test "PageList increaseCapacity styles projects capacity from page density"
+#[test]
+fn pagelist_increaseCapacity_styles_projects_capacity_from_page_density() {
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 2)
+    })
+    .unwrap();
+
+    let original_cap = unsafe { super::Node::capacity(s.pages.first).styles };
+
+    // Write styled cells so the page has a measurable per-row style
+    // density (unlike the plain doubling test above, which grows a
+    // page with no styles in use).
+    let bold = Style {
+        flags: stylepkg::Flags {
+            bold: true,
+            ..stylepkg::Flags::default()
+        },
+        ..Style::default()
+    };
+    {
+        assert!(core::ptr::eq(s.pages.first, s.pages.last));
+        let page = unsafe { super::Node::page(s.pages.first) };
+        let base = unsafe { (*page).memory_ptr() };
+
+        for y in 0..s.rows as usize {
+            for x in 0..s.cols as usize {
+                let rac = unsafe { (*page).get_row_and_cell(x, y) };
+                // const style_id = try page.styles.add(page.memory, bold);
+                let style_id = unsafe { (*page).styles.add(base, bold) }.unwrap();
+                unsafe {
+                    (*rac.row).set_styled(true);
+                    // rac.cell.* = .{ .content_tag = .codepoint, .content = ...,
+                    //                 .style_id = style_id };
+                    let mut c = cell_codepoint((x + 1) as u32);
+                    c.set_style_id(style_id);
+                    *rac.cell = c;
+                }
+            }
+        }
+    }
+
+    let _ = s
+        .increase_capacity(s.pages.first, Some(IncreaseCapacity::Styles))
+        .unwrap();
+
+    {
+        assert!(core::ptr::eq(s.pages.first, s.pages.last));
+        let page = unsafe { &(*super::Node::page(s.pages.first)) };
+
+        // The page uses only two active rows out of thousands of rows
+        // of capacity, so the projected full-page need saturates the
+        // 32x-per-event growth bound instead of merely doubling.
+        assert_eq!(original_cap * 32, page.capacity.styles);
+
+        // All cell content and styles are preserved by the growth.
+        let base = page.memory_ptr();
+        for y in 0..s.rows as usize {
+            for x in 0..s.cols as usize {
+                let rac = page.get_row_and_cell(x, y);
+                assert_eq!((x + 1) as u32, unsafe { (*rac.cell).content_codepoint() });
+                assert!(unsafe { (*rac.cell).style_id() } != stylepkg::DEFAULT_ID);
+                assert!(bold.eql(unsafe { &*page.styles.get(base, (*rac.cell).style_id()) }));
+            }
+        }
+    }
+
+    s.deinit();
+}
+
 // ref: test "PageList increaseCapacity to increase graphemes"
 #[test]
 fn pagelist_increaseCapacity_to_increase_graphemes() {
@@ -1187,6 +1258,69 @@ fn pagelist_increaseCapacity_to_increase_graphemes() {
             for x in 0..s.cols as usize {
                 let rac = page.get_row_and_cell(x, y);
                 assert_eq!(x as u32, unsafe { (*rac.cell).content_codepoint() });
+            }
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList increaseCapacity graphemes projects capacity from page density"
+#[test]
+fn pagelist_increaseCapacity_graphemes_projects_capacity_from_page_density() {
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(2, 2)
+    })
+    .unwrap();
+
+    let original_cap = unsafe { super::Node::capacity(s.pages.first).grapheme_bytes };
+
+    // Write cells with grapheme data so the page has a measurable
+    // per-row grapheme density (unlike the plain doubling test above,
+    // which grows a page with no grapheme usage).
+    {
+        assert!(core::ptr::eq(s.pages.first, s.pages.last));
+        let page = unsafe { super::Node::page(s.pages.first) };
+
+        for y in 0..s.rows as usize {
+            for x in 0..s.cols as usize {
+                let rac = unsafe { (*page).get_row_and_cell(x, y) };
+                unsafe {
+                    *rac.cell = cell_codepoint((x + 1) as u32);
+                }
+                unsafe { (*page).append_grapheme(rac.row, rac.cell, 0x0301) }.unwrap();
+                unsafe { (*page).append_grapheme(rac.row, rac.cell, 0x0302) }.unwrap();
+            }
+        }
+    }
+
+    let _ = s
+        .increase_capacity(s.pages.first, Some(IncreaseCapacity::GraphemeBytes))
+        .unwrap();
+
+    {
+        assert!(core::ptr::eq(s.pages.first, s.pages.last));
+        let page = unsafe { &(*super::Node::page(s.pages.first)) };
+
+        // The page uses only two active rows out of thousands of rows
+        // of capacity, so the projected full-page need saturates the
+        // 32x-per-event growth bound instead of merely doubling.
+        assert_eq!(original_cap * 32, page.capacity.grapheme_bytes);
+
+        // All cell and grapheme content is preserved by the growth.
+        assert_eq!(
+            (s.rows as usize) * (s.cols as usize),
+            page.grapheme_count(),
+        );
+        for y in 0..s.rows as usize {
+            for x in 0..s.cols as usize {
+                let rac = page.get_row_and_cell(x, y);
+                assert_eq!((x + 1) as u32, unsafe { (*rac.cell).content_codepoint() });
+                let cps = page.lookup_grapheme(rac.cell).unwrap();
+                assert_eq!(2usize, cps.len());
+                assert_eq!(0x0301u32, cps[0]);
+                assert_eq!(0x0302u32, cps[1]);
             }
         }
     }
@@ -14384,6 +14518,469 @@ fn pagelist_resize_reflow_less_cols_to_wrap_a_wide_char() {
             let rac = unsafe { (*page).get_row_and_cell(1, 1) };
             assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
             assert_eq!(crate::page::Wide::SpacerTail, unsafe { (*rac.cell).wide() });
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols wide char bulk run" (88ed6bebf)
+#[test]
+fn pagelist_resize_reflow_less_cols_wide_char_bulk_run() {
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(8, 1)
+    })
+    .unwrap();
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { super::Node::page(s.pages.first) };
+
+        // A full row of wide character pairs so the reflow takes
+        // the bulk run path.
+        for i in 0..4usize {
+            {
+                let rac = unsafe { (*page).get_row_and_cell(i * 2, 0) };
+                unsafe {
+                    let mut c = cell_codepoint(0x4E00 + i as u32);
+                    c.set_wide(crate::page::Wide::Wide);
+                    *rac.cell = c;
+                }
+            }
+            {
+                let rac = unsafe { (*page).get_row_and_cell(i * 2 + 1, 0) };
+                unsafe {
+                    let mut c = cell_codepoint(0);
+                    c.set_wide(crate::page::Wide::SpacerTail);
+                    *rac.cell = c;
+                }
+            }
+        }
+    }
+
+    // Resize to exactly two pairs per row: runs end on the row
+    // boundary with no spacer heads needed.
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(2usize, s.total_rows());
+
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { super::Node::page(s.pages.first) };
+
+        for i in 0..4usize {
+            let y = i / 2;
+            let x = (i % 2) * 2;
+            {
+                let rac = unsafe { (*page).get_row_and_cell(x, y) };
+                assert_eq!(0x4E00 + i as u32, unsafe {
+                    (*rac.cell).content_codepoint()
+                });
+                assert_eq!(crate::page::Wide::Wide, unsafe { (*rac.cell).wide() });
+            }
+            {
+                let rac = unsafe { (*page).get_row_and_cell(x + 1, y) };
+                assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
+                assert_eq!(crate::page::Wide::SpacerTail, unsafe { (*rac.cell).wide() });
+            }
+        }
+
+        {
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
+            assert!(unsafe { (*rac.row).wrap() });
+            assert!(!unsafe { (*rac.row).wrap_continuation() });
+        }
+        {
+            let rac = unsafe { (*page).get_row_and_cell(0, 1) };
+            assert!(!unsafe { (*rac.row).wrap() });
+            assert!(unsafe { (*rac.row).wrap_continuation() });
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols wide char bulk run odd cols spacer head" (88ed6bebf)
+#[test]
+fn pagelist_resize_reflow_less_cols_wide_char_bulk_run_odd_cols_spacer_head() {
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(8, 1)
+    })
+    .unwrap();
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { super::Node::page(s.pages.first) };
+
+        for i in 0..4usize {
+            {
+                let rac = unsafe { (*page).get_row_and_cell(i * 2, 0) };
+                unsafe {
+                    let mut c = cell_codepoint(0x4E00 + i as u32);
+                    c.set_wide(crate::page::Wide::Wide);
+                    *rac.cell = c;
+                }
+            }
+            {
+                let rac = unsafe { (*page).get_row_and_cell(i * 2 + 1, 0) };
+                unsafe {
+                    let mut c = cell_codepoint(0);
+                    c.set_wide(crate::page::Wide::SpacerTail);
+                    *rac.cell = c;
+                }
+            }
+        }
+    }
+
+    // Resize to an odd number of columns: the bulk run must stop a
+    // pair short of the row boundary and the slow path inserts a
+    // spacer head in the final column.
+    s.resize(Resize {
+        cols: Some(5),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(5usize, s.cols as usize);
+    assert_eq!(2usize, s.total_rows());
+
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { super::Node::page(s.pages.first) };
+
+        for i in 0..4usize {
+            let y = i / 2;
+            let x = (i % 2) * 2;
+            {
+                let rac = unsafe { (*page).get_row_and_cell(x, y) };
+                assert_eq!(0x4E00 + i as u32, unsafe {
+                    (*rac.cell).content_codepoint()
+                });
+                assert_eq!(crate::page::Wide::Wide, unsafe { (*rac.cell).wide() });
+            }
+            {
+                let rac = unsafe { (*page).get_row_and_cell(x + 1, y) };
+                assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
+                assert_eq!(crate::page::Wide::SpacerTail, unsafe { (*rac.cell).wide() });
+            }
+        }
+
+        {
+            let rac = unsafe { (*page).get_row_and_cell(4, 0) };
+            assert_eq!(0u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::SpacerHead, unsafe { (*rac.cell).wide() });
+            assert!(unsafe { (*rac.row).wrap() });
+        }
+        {
+            let rac = unsafe { (*page).get_row_and_cell(4, 1) };
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
+            assert!(unsafe { (*rac.row).wrap_continuation() });
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols wide char bulk run mixed narrow round trip" (88ed6bebf)
+#[test]
+fn pagelist_resize_reflow_less_cols_wide_char_bulk_run_mixed_narrow_round_trip() {
+    // The emoji-in-prose shape: single wide pairs separated by
+    // narrow cells, which must all share a single bulk run.
+    struct Shape {
+        cp: u32,
+        wide: crate::page::Wide,
+    }
+    let shape: &[Shape] = &[
+        Shape {
+            cp: 0x4E00,
+            wide: crate::page::Wide::Wide,
+        },
+        Shape {
+            cp: 0,
+            wide: crate::page::Wide::SpacerTail,
+        },
+        Shape {
+            cp: 'x' as u32,
+            wide: crate::page::Wide::Narrow,
+        },
+        Shape {
+            cp: 0x4E01,
+            wide: crate::page::Wide::Wide,
+        },
+        Shape {
+            cp: 0,
+            wide: crate::page::Wide::SpacerTail,
+        },
+        Shape {
+            cp: 'y' as u32,
+            wide: crate::page::Wide::Narrow,
+        },
+        Shape {
+            cp: 0x4E02,
+            wide: crate::page::Wide::Wide,
+        },
+        Shape {
+            cp: 0,
+            wide: crate::page::Wide::SpacerTail,
+        },
+        Shape {
+            cp: 'z' as u32,
+            wide: crate::page::Wide::Narrow,
+        },
+    ];
+
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(9, 1)
+    })
+    .unwrap();
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { super::Node::page(s.pages.first) };
+        for (x, c) in shape.iter().enumerate() {
+            let rac = unsafe { (*page).get_row_and_cell(x, 0) };
+            unsafe {
+                let mut cell = cell_codepoint(c.cp);
+                cell.set_wide(c.wide);
+                *rac.cell = cell;
+            }
+        }
+    }
+
+    // Shrink: the run ends exactly on the row boundary after the
+    // second narrow cell.
+    s.resize(Resize {
+        cols: Some(6),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(6usize, s.cols as usize);
+    assert_eq!(2usize, s.total_rows());
+
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { super::Node::page(s.pages.first) };
+        for (x, c) in shape[0..6].iter().enumerate() {
+            let rac = unsafe { (*page).get_row_and_cell(x, 0) };
+            assert_eq!(c.cp, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(c.wide, unsafe { (*rac.cell).wide() });
+        }
+        for (x, c) in shape[6..].iter().enumerate() {
+            let rac = unsafe { (*page).get_row_and_cell(x, 1) };
+            assert_eq!(c.cp, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(c.wide, unsafe { (*rac.cell).wide() });
+        }
+        assert!(unsafe { (*(*page).get_row_and_cell(0, 0).row).wrap() });
+        assert!(unsafe { (*(*page).get_row_and_cell(0, 1).row).wrap_continuation() });
+    }
+
+    // Grow back: the wrapped rows must rejoin into the original
+    // single-row layout.
+    s.resize(Resize {
+        cols: Some(9),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(9usize, s.cols as usize);
+    assert_eq!(1usize, s.total_rows());
+
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { super::Node::page(s.pages.first) };
+        for (x, c) in shape.iter().enumerate() {
+            let rac = unsafe { (*page).get_row_and_cell(x, 0) };
+            assert_eq!(c.cp, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(c.wide, unsafe { (*rac.cell).wide() });
+        }
+        assert!(!unsafe { (*(*page).get_row_and_cell(0, 0).row).wrap() });
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols wide char bulk run styled" (88ed6bebf)
+#[test]
+fn pagelist_resize_reflow_less_cols_wide_char_bulk_run_styled() {
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(8, 1)
+    })
+    .unwrap();
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { super::Node::page(s.pages.first) };
+
+        // Create a style
+        let style = Style {
+            flags: stylepkg::Flags {
+                bold: true,
+                ..stylepkg::Flags::default()
+            },
+            ..Style::default()
+        };
+        let base = unsafe { (*page).memory_ptr() };
+        let style_id = unsafe { (*page).styles.add(base, style) }.unwrap();
+
+        // Styled pairs: the tail shares the wide cell's style, as
+        // the print path writes them.
+        for i in 0..4usize {
+            {
+                let rac = unsafe { (*page).get_row_and_cell(i * 2, 0) };
+                unsafe {
+                    let mut c = cell_codepoint(0x4E00 + i as u32);
+                    c.set_wide(crate::page::Wide::Wide);
+                    c.set_style_id(style_id);
+                    *rac.cell = c;
+                    (*page).styles.use_id(base, style_id);
+                }
+            }
+            {
+                let rac = unsafe { (*page).get_row_and_cell(i * 2 + 1, 0) };
+                unsafe {
+                    let mut c = cell_codepoint(0);
+                    c.set_wide(crate::page::Wide::SpacerTail);
+                    c.set_style_id(style_id);
+                    *rac.cell = c;
+                    (*page).styles.use_id(base, style_id);
+                }
+            }
+        }
+
+        // We're over-counted by 1 because `add` implies `use`.
+        unsafe { (*page).styles.release(base, style_id) };
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(4),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(4usize, s.cols as usize);
+    assert_eq!(2usize, s.total_rows());
+
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { super::Node::page(s.pages.first) };
+
+        for y in 0..2usize {
+            for x in 0..4usize {
+                let rac = unsafe { (*page).get_row_and_cell(x, y) };
+                let style_id = unsafe { (*rac.cell).style_id() };
+                assert!(style_id != 0);
+
+                let style = unsafe { &*(*page).styles.get((*page).memory_ptr(), style_id) };
+                assert!(style.flags.bold);
+                assert!(unsafe { (*rac.row).styled() });
+                assert_eq!(
+                    if x % 2 == 0 {
+                        crate::page::Wide::Wide
+                    } else {
+                        crate::page::Wide::SpacerTail
+                    },
+                    unsafe { (*rac.cell).wide() },
+                );
+            }
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize reflow less cols wide char bulk run degenerate spacer tail style" (88ed6bebf)
+#[test]
+fn pagelist_resize_reflow_less_cols_wide_char_bulk_run_degenerate_spacer_tail_style() {
+    let mut s = PageList::init(Options {
+        max_size: Some(0),
+        ..Options::new(4, 1)
+    })
+    .unwrap();
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { super::Node::page(s.pages.first) };
+
+        // A styled wide cell whose tail does NOT share its style.
+        // This can't come from the print path, but the run scan must
+        // reject the pair (slow path) rather than rewrite the tail
+        // to the wide cell's style.
+        let style = Style {
+            flags: stylepkg::Flags {
+                bold: true,
+                ..stylepkg::Flags::default()
+            },
+            ..Style::default()
+        };
+        let base = unsafe { (*page).memory_ptr() };
+        let style_id = unsafe { (*page).styles.add(base, style) }.unwrap();
+
+        {
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
+            unsafe {
+                let mut c = cell_codepoint(0x4E00);
+                c.set_wide(crate::page::Wide::Wide);
+                c.set_style_id(style_id);
+                *rac.cell = c;
+            }
+        }
+        {
+            let rac = unsafe { (*page).get_row_and_cell(1, 0) };
+            unsafe {
+                let mut c = cell_codepoint(0);
+                c.set_wide(crate::page::Wide::SpacerTail);
+                *rac.cell = c;
+            }
+        }
+        {
+            let rac = unsafe { (*page).get_row_and_cell(2, 0) };
+            unsafe {
+                *rac.cell = cell_codepoint('x' as u32);
+            }
+        }
+    }
+
+    // Resize
+    s.resize(Resize {
+        cols: Some(3),
+        reflow: true,
+        ..Default::default()
+    })
+    .unwrap();
+    assert_eq!(3usize, s.cols as usize);
+    assert_eq!(1usize, s.total_rows());
+
+    {
+        assert!(s.pages.first == s.pages.last);
+        let page = unsafe { super::Node::page(s.pages.first) };
+
+        {
+            let rac = unsafe { (*page).get_row_and_cell(0, 0) };
+            assert_eq!(0x4E00u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Wide, unsafe { (*rac.cell).wide() });
+            assert!(unsafe { (*rac.cell).style_id() } != 0);
+            let style = unsafe {
+                &*(*page)
+                    .styles
+                    .get((*page).memory_ptr(), (*rac.cell).style_id())
+            };
+            assert!(style.flags.bold);
+        }
+        {
+            let rac = unsafe { (*page).get_row_and_cell(1, 0) };
+            assert_eq!(crate::page::Wide::SpacerTail, unsafe { (*rac.cell).wide() });
+            assert_eq!(stylepkg::DEFAULT_ID, unsafe { (*rac.cell).style_id() });
+        }
+        {
+            let rac = unsafe { (*page).get_row_and_cell(2, 0) };
+            assert_eq!('x' as u32, unsafe { (*rac.cell).content_codepoint() });
+            assert_eq!(crate::page::Wide::Narrow, unsafe { (*rac.cell).wide() });
         }
     }
 

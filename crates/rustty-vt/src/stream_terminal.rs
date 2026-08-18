@@ -145,6 +145,19 @@ pub struct Handler<'a> {
     // uses — the content slice points into the APC handler's own buffer.
     pub unknown_sequence: Option<for<'b> fn(&mut Handler<'a>, UnknownSequence<'b>)>,
 
+    /// The name of the terminfo entry this terminal runs as, reported in
+    /// response to an XTGETTCAP query for "TN".
+    ///
+    /// The memory must remain valid for the lifetime of the handler.
+    /// Empty names and names longer than `max_terminfo_name_bytes` are
+    /// silently ignored.
+    // terminfo_name: ?[]const u8 = null,
+    //
+    // PORT NOTE: "must remain valid for the lifetime of the handler" is the
+    // `'a` bound (the same lifetime the `enquiry`/`xtversion` effect payloads
+    // use).
+    pub terminfo_name: Option<&'a [u8]>,
+
     // PORT NOTE: ties the `'a` effect-callback lifetime to the handler without a
     // stored borrow; the actual aliased `Terminal` is held as a raw pointer.
     _phantom: PhantomData<&'a ()>,
@@ -175,6 +188,36 @@ pub enum UnknownSequence<'b> {
 pub struct UnknownSequenceString<'b> {
     pub content: &'b [u8],
     pub truncated: bool,
+}
+
+/// Maximum byte length accepted for `terminfo_name`.
+// pub const max_terminfo_name_bytes = 128;
+//
+// PORT NOTE: the reference nests this const inside `Handler`
+// (`Handler.max_terminfo_name_bytes`); it lives at module scope here (the
+// `UnknownSequence` flattening precedent) so the response-size const below can
+// use it in a const context.
+pub const MAX_TERMINFO_NAME_BYTES: usize = 128;
+
+// Hex-encoded "TN", the XTGETTCAP key naming the terminfo entry.
+// The static map also carries this key with Rustty's own name, so
+// it is intercepted before the lookup: an embedder that never
+// configured a name must not be reported as Rustty's entry.
+// const encoded_tn_key = &std.fmt.bytesToHex("TN", .upper);
+const ENCODED_TN_KEY: &[u8] = b"544E";
+
+/// The static XTGETTCAP capability map.
+// const map = comptime terminfo.ghostty.xtgettcapMap();
+//
+// PORT NOTE: the reference builds the map at comptime over the comptime
+// terminfo Source; `rustty_terminfo::entry::rustty()` builds its Source at
+// runtime (its names come from `rustty-identity`, R2), so the map is built
+// once at first use (the same OnceLock idiom `rustty_terminfo::entry::
+// version()` uses).
+fn xtgettcap_map() -> &'static std::collections::HashMap<Vec<u8>, Vec<u8>> {
+    static MAP: std::sync::OnceLock<std::collections::HashMap<Vec<u8>, Vec<u8>>> =
+        std::sync::OnceLock::new();
+    MAP.get_or_init(|| rustty_terminfo::entry::rustty().xtgettcap_map())
 }
 
 /// Callbacks for certain effects that handlers may have.
@@ -395,6 +438,8 @@ impl<'a> Handler<'a> {
             dcs_handler: crate::dcs::Handler::default(),
             // unknown_sequence: ... = null (the reference field default)
             unknown_sequence: None,
+            // terminfo_name: ... = null (the reference field default)
+            terminfo_name: None,
             _phantom: PhantomData,
         }
     }
@@ -652,9 +697,80 @@ impl<'a> Handler<'a> {
                 Ok(())
             }
 
-            // .tmux, .xtgettcap => {},
-            crate::dcs::Command::Tmux(_) | crate::dcs::Command::Xtgettcap(_) => Ok(()),
+            // .xtgettcap => |*gettcap| { ... }
+            crate::dcs::Command::Xtgettcap(gettcap) => {
+                // if (self.effects.write_pty == null) return;
+                if self.effects.write_pty.is_none() {
+                    return Ok(());
+                }
+                // const map = comptime terminfo.ghostty.xtgettcapMap();
+                let map = xtgettcap_map();
+                // while (gettcap.next()) |key| { ... }
+                while let Some(key) = gettcap.next() {
+                    if key == ENCODED_TN_KEY {
+                        self.write_terminfo_name();
+                        continue;
+                    }
+                    // self.writePty(map.get(key) orelse continue);
+                    let Some(response) = map.get(key) else {
+                        continue;
+                    };
+                    self.write_pty(response);
+                }
+                Ok(())
+            }
+
+            // .tmux => {},
+            crate::dcs::Command::Tmux(_) => Ok(()),
         }
+    }
+
+    /// Answer an XTGETTCAP "TN" query from the configured terminfo name.
+    /// Unset, empty, or over-long names leave the query unanswered.
+    // fn writeTerminfoName(self: *Handler) void { ... }
+    fn write_terminfo_name(&mut self) {
+        // const name = self.terminfo_name orelse return;
+        let Some(name) = self.terminfo_name else {
+            return;
+        };
+        // if (name.len == 0 or name.len > max_terminfo_name_bytes) return;
+        if name.is_empty() || name.len() > MAX_TERMINFO_NAME_BYTES {
+            return;
+        }
+
+        // Fixed upper bound for an encoded "TN" reply calculated
+        // at comptime from our max terminfo size.
+        const MAX_TN_RESPONSE_BYTES: usize = "\x1bP1+r".len()
+            + ENCODED_TN_KEY.len()
+            + "=".len()
+            + (MAX_TERMINFO_NAME_BYTES * 2)
+            + "\x1b\\".len()
+            + 1; // null terminator
+
+        // Values are hex-encoded uppercase, matching the static map. The
+        // buffer fits any name allowed above, so the print cannot fail.
+        //
+        // PORT NOTE: the reference `std.fmt.bufPrintZ(&buf, "\x1bP1+r" ++
+        // encoded_tn_key ++ "={X}\x1b\\", .{name}) catch unreachable` appends a
+        // NUL sentinel for the Zig `[:0]const u8` callback parameter; rustty's
+        // `write_pty` takes a plain `&[u8]` (the DCS-response precedent), so
+        // the reserved byte is kept in the capacity budget but no NUL is
+        // appended. `{X}` is uppercase hex, one byte -> two digits.
+        let mut buf = [0u8; MAX_TN_RESPONSE_BYTES];
+        let mut len: usize = 0;
+        for part in [b"\x1bP1+r".as_slice(), ENCODED_TN_KEY, b"="] {
+            buf[len..len + part.len()].copy_from_slice(part);
+            len += part.len();
+        }
+        const CHARSET: &[u8; 16] = b"0123456789ABCDEF";
+        for &b in name {
+            buf[len] = CHARSET[(b >> 4) as usize];
+            buf[len + 1] = CHARSET[(b & 0xf) as usize];
+            len += 2;
+        }
+        buf[len..len + 2].copy_from_slice(b"\x1b\\");
+        len += 2;
+        self.write_pty(&buf[..len]);
     }
 
     // fn bell(self: *Handler) void {
@@ -1772,40 +1888,47 @@ impl<'a> Handler<'a> {
                 }
             }
 
-            // .glyph => |*glyph_req| {
+            // .glyph => |*glyph_req| if (comptime build_options.glyph_protocol) {
+            //
+            // PORT NOTE: the comptime gate is the const `options::GLYPH_PROTOCOL`
+            // wrapped around the arm body (a Rust match guard would make the
+            // match non-exhaustive when false); with the feature off the
+            // sequence is consumed and safely ignored, like the reference.
             crate::apc::Command::Glyph(glyph_req) => {
-                // const resp = self.terminal.glyphProtocol(alloc, glyph_req);
-                let resp = self.term().glyph_protocol(alloc, glyph_req);
-                // if (resp) |r| resp_block: {
-                if let Some(r) = resp {
-                    'resp_block: {
-                        // Don't waste time encoding if we can't write responses
-                        // anyways.
-                        // if (self.effects.write_pty == null) break :resp_block;
-                        if self.effects.write_pty.is_none() {
-                            break 'resp_block;
-                        }
+                if crate::options::GLYPH_PROTOCOL {
+                    // const resp = self.terminal.glyphProtocol(alloc, glyph_req);
+                    let resp = self.term().glyph_protocol(alloc, glyph_req);
+                    // if (resp) |r| resp_block: {
+                    if let Some(r) = resp {
+                        'resp_block: {
+                            // Don't waste time encoding if we can't write responses
+                            // anyways.
+                            // if (self.effects.write_pty == null) break :resp_block;
+                            if self.effects.write_pty.is_none() {
+                                break 'resp_block;
+                            }
 
-                        // Glyph responses are short and bounded by the protocol
-                        // fields we emit, so this matches the Kitty response
-                        // buffer size above with ample headroom.
-                        // var buf: [apc.glyph.Response.max_wire_bytes]u8 = undefined;
-                        // var writer: std.Io.Writer = .fixed(&buf);
-                        // r.formatWire(&writer) catch return;
-                        // writer.writeByte(0) catch return;
-                        // const final = writer.buffered();
-                        // self.writePty(final[0 .. final.len - 1 :0]);
-                        // PORT NOTE: `formatWire` writes to a `std.Io.Writer` over a
-                        // fixed `[max_wire_bytes]u8`; the Rust `format_wire` writes to
-                        // a `String` (the bounded wire payload is ASCII). We then
-                        // write the UTF-8 bytes directly (no sentinel `\0`).
-                        let mut buf = String::new();
-                        // PORT NOTE: see the kitty-arm note above — bare `return`
-                        // (cmd drops/frees) reproduces the reference `catch return`.
-                        if r.format_wire(&mut buf).is_err() {
-                            return;
+                            // Glyph responses are short and bounded by the protocol
+                            // fields we emit, so this matches the Kitty response
+                            // buffer size above with ample headroom.
+                            // var buf: [apc.glyph.Response.max_wire_bytes]u8 = undefined;
+                            // var writer: std.Io.Writer = .fixed(&buf);
+                            // r.formatWire(&writer) catch return;
+                            // writer.writeByte(0) catch return;
+                            // const final = writer.buffered();
+                            // self.writePty(final[0 .. final.len - 1 :0]);
+                            // PORT NOTE: `formatWire` writes to a `std.Io.Writer` over a
+                            // fixed `[max_wire_bytes]u8`; the Rust `format_wire` writes to
+                            // a `String` (the bounded wire payload is ASCII). We then
+                            // write the UTF-8 bytes directly (no sentinel `\0`).
+                            let mut buf = String::new();
+                            // PORT NOTE: see the kitty-arm note above — bare `return`
+                            // (cmd drops/frees) reproduces the reference `catch return`.
+                            if r.format_wire(&mut buf).is_err() {
+                                return;
+                            }
+                            self.write_pty(buf.as_bytes());
                         }
-                        self.write_pty(buf.as_bytes());
                     }
                 }
             }
@@ -2454,42 +2577,42 @@ impl<'a> stream::Handler for Handler<'a> {
             return;
         }
 
-        // const decoder = std.base64.standard.Decoder;
-        // const decoded_len = try decoder.calcSizeForSlice(data);
+        // Decode the base64 payload with the SIMD decoder (the same one
+        // used for Kitty graphics payloads) rather than the scalar std
+        // implementation; clipboard payloads can be megabytes.
         // const alloc = self.terminal.gpa();
-        // const decoded = try alloc.alloc(u8, decoded_len);
-        // defer alloc.free(decoded);
-        // try decoder.decode(decoded, data);
-        let decoder = crate::apc::glyph::request::std_base64_standard_decoder();
-        let Ok(decoded_len) = decoder.calc_size_for_slice(data) else {
-            return;
-        };
-
-        // PORT NOTE: `try alloc.alloc(u8, decoded_len)` is a FALLIBLE
-        // allocation whose failure the dispatch arm swallows. `Vec::with_capacity`
-        // would abort instead, so we reserve through the terminal allocator with
+        // const buf = try alloc.alloc(u8, simd.base64.maxLen(data));
+        // defer alloc.free(buf);
+        // const decoded = try simd.base64.decode(data, buf);
+        //
+        // PORT NOTE: `try alloc.alloc(u8, ...)` is a FALLIBLE allocation whose
+        // failure the dispatch arm swallows. `Vec::with_capacity` would abort
+        // instead, so we reserve through the terminal allocator with
         // `try_reserve_exact` (same shape as `dcs::Allocating::init_capacity`)
-        // and bail out on `OutOfMemory` without invoking the effect.
+        // and bail out on `OutOfMemory` without invoking the effect. A decode
+        // error likewise returns without invoking the effect (the reference
+        // `try` propagates to the dispatch arm's graceful catch).
         let alloc = self.term().gpa();
-        let mut decoded: allocator_api2::vec::Vec<u8, _> = allocator_api2::vec::Vec::new_in(alloc);
+        let max_len = rustty_simd::base64::max_len(data);
+        let mut buf: allocator_api2::vec::Vec<u8, _> = allocator_api2::vec::Vec::new_in(alloc);
         #[cfg(test)]
         if clipboard_contents_tw_check(ClipboardContentsFp::DecodeScratch).is_err() {
             return;
         }
-        if decoded.try_reserve_exact(decoded_len).is_err() {
+        if buf.try_reserve_exact(max_len).is_err() {
             return;
         }
         // The capacity above is already reserved, so this never allocates.
-        decoded.resize(decoded_len, 0);
-        if decoder.decode(&mut decoded, data).is_err() {
+        buf.resize(max_len, 0);
+        let Ok(decoded) = rustty_simd::base64::decode(data, &mut buf) else {
             return;
-        }
+        };
 
         // const contents = [_]clipboard.Content{.{ .mime = "text/plain", .data = decoded }};
         // _ = func(self, .{ .location, .contents = &contents });
         let contents = [clipboard::Content {
             mime: b"text/plain",
-            data: &decoded,
+            data: decoded,
         }];
         let _ = func(
             self,
@@ -3162,6 +3285,15 @@ mod tests {
             );
             calls_reset();
 
+            // Overline
+            s.next_slice(b"\x1B[0;53m\x1BP$qm\x1B\\");
+            assert_eq!(1_usize, calls_get());
+            assert_eq!(
+                b"\x1BP1$r0;53m\x1B\\".as_slice(),
+                cap_take().unwrap().as_slice()
+            );
+            calls_reset();
+
             // Requests larger than the parser's fixed request buffer are
             // ignored, and the next DCS command must still be processed
             // normally.
@@ -3171,7 +3303,7 @@ mod tests {
             s.next_slice(b"\x1BP$qm\x1B\\");
             assert_eq!(1_usize, calls_get());
             assert_eq!(
-                b"\x1BP1$r0;1m\x1B\\".as_slice(),
+                b"\x1BP1$r0;53m\x1B\\".as_slice(),
                 cap_take().unwrap().as_slice()
             );
         }
@@ -3191,6 +3323,221 @@ mod tests {
         t.deinit(Global);
     }
 
+    // `std.fmt.bytesToHex(bytes, .upper / .lower)` for the XTGETTCAP tests'
+    // query construction (the reference builds these at comptime with `++`).
+    fn test_hex(input: &[u8], upper: bool) -> Vec<u8> {
+        let charset: &[u8; 16] = if upper {
+            b"0123456789ABCDEF"
+        } else {
+            b"0123456789abcdef"
+        };
+        let mut out = Vec::with_capacity(input.len() * 2);
+        for &b in input {
+            out.push(charset[(b >> 4) as usize]);
+            out.push(charset[(b & 0xf) as usize]);
+        }
+        out
+    }
+
+    // Query/response byte-string concatenation (the reference's comptime `++`).
+    fn test_concat(parts: &[&[u8]]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for part in parts {
+            out.extend_from_slice(part);
+        }
+        out
+    }
+
+    // PORT NOTE: the reference XTGETTCAP tests hang `var response/response_len/
+    // calls` + `writePty`/`expectResponse` on a local `S` struct; the callback
+    // is a bare `fn` pointer here, so the captures live in thread-locals (the
+    // module's established `CAPTURE`/`WRITE_CALLS` idiom, shared by both
+    // XTGETTCAP tests exactly as each reference test's `S` is test-local).
+    thread_local! {
+        static XT_RESPONSE: core::cell::RefCell<Vec<u8>> =
+            const { core::cell::RefCell::new(Vec::new()) };
+        static XT_CALLS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    }
+
+    // fn reset() void { response_len = 0; calls = 0; }
+    fn xt_reset() {
+        XT_RESPONSE.with(|c| c.borrow_mut().clear());
+        XT_CALLS.with(|c| c.set(0));
+    }
+
+    // fn writePty(_: *Handler, data: [:0]const u8) void { ... }
+    fn xt_write_pty(_: &mut Handler, data: &[u8]) {
+        XT_RESPONSE.with(|c| *c.borrow_mut() = data.to_vec());
+        XT_CALLS.with(|c| c.set(c.get() + 1));
+    }
+
+    // fn expectResponse(expected: []const u8) !void { ... }
+    fn xt_expect_response(expected: &[u8]) {
+        assert_eq!(1usize, XT_CALLS.with(|c| c.get()));
+        assert_eq!(
+            expected,
+            XT_RESPONSE.with(|c| c.borrow().clone()).as_slice(),
+        );
+        xt_reset();
+    }
+
+    // test "XTGETTCAP responses"
+    #[test]
+    fn xtgettcap_responses() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        xt_reset();
+
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(xt_write_pty);
+
+            // The full capability table comes from the static terminfo map; this
+            // checks the wiring for a valued and a valueless (boolean) capability.
+            s.next_slice(&test_concat(&[
+                b"\x1BP+q",
+                &test_hex(b"Co", true),
+                b"\x1B\\",
+            ]));
+            xt_expect_response(&test_concat(&[
+                b"\x1BP1+r",
+                &test_hex(b"Co", true),
+                b"=",
+                &test_hex(b"256", true),
+                b"\x1B\\",
+            ]));
+            s.next_slice(&test_concat(&[
+                b"\x1BP+q",
+                &test_hex(b"am", true),
+                b"\x1B\\",
+            ]));
+            xt_expect_response(&test_concat(&[
+                b"\x1BP1+r",
+                &test_hex(b"am", true),
+                b"\x1B\\",
+            ]));
+
+            // One response per requested key; lowercase hex is normalized by the
+            // DCS parser. The capture holds the last ("Co") reply.
+            s.next_slice(&test_concat(&[
+                b"\x1BP+q",
+                &test_hex(b"am", false),
+                b";",
+                &test_hex(b"Co", false),
+                b"\x1B\\",
+            ]));
+            assert_eq!(2usize, XT_CALLS.with(|c| c.get()));
+            assert_eq!(
+                test_concat(&[
+                    b"\x1BP1+r",
+                    &test_hex(b"Co", true),
+                    b"=",
+                    &test_hex(b"256", true),
+                    b"\x1B\\",
+                ])
+                .as_slice(),
+                XT_RESPONSE.with(|c| c.borrow().clone()).as_slice(),
+            );
+            xt_reset();
+
+            // Unknown and malformed keys are skipped without an error.
+            s.next_slice(b"\x1BP+qWHO;5;GG\x1B\\");
+            assert_eq!(0usize, XT_CALLS.with(|c| c.get()));
+            assert!(!s.handler.semantic_failure);
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "XTGETTCAP without write effect is ignored"
+    #[test]
+    fn xtgettcap_without_write_effect_is_ignored() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+
+            s.next_slice(&test_concat(&[
+                b"\x1BP+q",
+                &test_hex(b"TN", true),
+                b";",
+                &test_hex(b"am", true),
+                b"\x1B\\",
+            ]));
+            assert!(!s.handler.semantic_failure);
+        }
+        t.deinit(Global);
+    }
+
+    // test "XTGETTCAP TN responses"
+    #[test]
+    fn xtgettcap_tn_responses() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        xt_reset();
+
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(xt_write_pty);
+
+            // const tn_query = "\x1BP+q" ++ std.fmt.bytesToHex("TN", .upper) ++ "\x1B\\";
+            let tn_query = test_concat(&[b"\x1BP+q", &test_hex(b"TN", true), b"\x1B\\"]);
+
+            // While no name is configured the query goes unanswered.
+            s.next_slice(&tn_query);
+            assert_eq!(0usize, XT_CALLS.with(|c| c.get()));
+
+            // A configured name is reported hex-encoded.
+            s.handler.terminfo_name = Some(b"xterm-256color");
+            s.next_slice(&tn_query);
+            xt_expect_response(&test_concat(&[
+                b"\x1BP1+r",
+                &test_hex(b"TN", true),
+                b"=",
+                &test_hex(b"xterm-256color", true),
+                b"\x1B\\",
+            ]));
+
+            // A maximum-length name is still reported in full.
+            // const max_name = "a" ** Handler.max_terminfo_name_bytes;
+            const MAX_NAME: [u8; MAX_TERMINFO_NAME_BYTES] = [b'a'; MAX_TERMINFO_NAME_BYTES];
+            s.handler.terminfo_name = Some(&MAX_NAME);
+            s.next_slice(&tn_query);
+            xt_expect_response(&test_concat(&[
+                b"\x1BP1+r",
+                &test_hex(b"TN", true),
+                b"=",
+                &test_hex(&MAX_NAME, true),
+                b"\x1B\\",
+            ]));
+
+            // An empty name is silent; "Co" is still answered.
+            s.handler.terminfo_name = Some(b"");
+            s.next_slice(&test_concat(&[
+                b"\x1BP+q",
+                &test_hex(b"TN", true),
+                b";",
+                &test_hex(b"Co", true),
+                b"\x1B\\",
+            ]));
+            xt_expect_response(&test_concat(&[
+                b"\x1BP1+r",
+                &test_hex(b"Co", true),
+                b"=",
+                &test_hex(b"256", true),
+                b"\x1B\\",
+            ]));
+
+            // As are names beyond the maximum length.
+            // s.handler.terminfo_name = "a" ** (Handler.max_terminfo_name_bytes + 1);
+            const OVERLONG_NAME: [u8; MAX_TERMINFO_NAME_BYTES + 1] =
+                [b'a'; MAX_TERMINFO_NAME_BYTES + 1];
+            s.handler.terminfo_name = Some(&OVERLONG_NAME);
+            s.next_slice(&tn_query);
+            assert_eq!(0usize, XT_CALLS.with(|c| c.get()));
+            assert!(!s.handler.semantic_failure);
+        }
+
+        t.deinit(Global);
+    }
+
     // test "DCS command memory is released"
     //
     // PORT NOTE: the reference relies on `testing.allocator` to detect a leak.
@@ -3204,9 +3551,8 @@ mod tests {
         {
             let mut s = t.vt_stream();
 
-            // A completed, unsupported command transfers its allocation to
-            // Command; dcsCommand must release it even though stream_terminal
-            // ignores it.
+            // A completed command transfers its allocation to Command;
+            // dcsCommand must release it even when there is no write effect.
             s.next_slice(b"\x1BP+q536D756C78\x1B\\");
 
             // An incomplete command remains owned by the handler and must be
@@ -4069,6 +4415,11 @@ mod tests {
     // test "glyph protocol APC with write_pty callback"
     #[test]
     fn glyph_protocol_apc_with_write_pty_callback() {
+        // if (comptime !build_options.glyph_protocol) return error.SkipZigTest;
+        if !crate::options::GLYPH_PROTOCOL {
+            return;
+        }
+
         let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
 
         cap_reset();
@@ -4274,6 +4625,10 @@ mod tests {
             // Query an unknown mode
             s.next_slice(b"\x1B[?9999$p");
             assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[?9999;0$y");
+
+            // Query DECECM, which Rustty recognizes but does not allow changing
+            s.next_slice(b"\x1B[?117$p");
+            assert_eq!(cap_take().unwrap().as_slice(), b"\x1B[?117;4$y");
         }
 
         t.deinit(Global);

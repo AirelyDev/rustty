@@ -608,10 +608,20 @@ impl Window {
             .kde_decoration_manager()
             .map(|mgr| mgr.create(&surface, &qh, ()));
 
-        // `mgr.getBackgroundEffect(wl_surface)` (`wayland.zig:155-167`).
-        let bg_effect = g
-            .ext_background_effect()
-            .map(|mgr| mgr.get_background_effect(&surface, &qh, ()));
+        // `mgr.getBackgroundEffect(wl_surface)` (`wayland.zig:175-192`; B8,
+        // 04f1bc096).
+        let bg_effect = if crate::gtk::gtk_version::runtime_at_least(4, 23, 3) {
+            // GTK 4.23.3 added an official way to do background blur,
+            // so we don't need to do anything on our own.
+            //
+            // (The atomic B8 pair: `Surface::snapshot` renders the native
+            // blur there — `class/surface.rs`, 3263fc6c4. Skipping the custom
+            // `ext_background_effect` here prevents a double blur.)
+            None
+        } else {
+            g.ext_background_effect()
+                .map(|mgr| mgr.get_background_effect(&surface, &qh, ()))
+        };
 
         // `wayland.zig:169-177`: for the quick terminal only, connect the GDK
         // surface `enter-monitor` signal so the window is (re)sized to the monitor
@@ -809,9 +819,17 @@ impl Window {
         }
         bg.set_blur_region(Some(&wl_region));
         // `set_blur_region` has copy semantics (the wl_region may be destroyed
-        // immediately per the protocol); the reference keeps the region proxy, we
-        // free it to avoid a per-sync leak.
+        // immediately per the protocol). a6fc3e0e2 fixed the reference to match
+        // this shape: its `errdefer wl_region.destroy()` (success-path leak)
+        // became `defer wl_region.destroy()` — the unconditional destroy this
+        // port already performed.
         wl_region.destroy();
+        // `self.blur_region.deinit(self.globals.alloc); self.blur_region =
+        // region;` (a6fc3e0e2's second half — free the OLD region's slices
+        // before overwriting). VERIFIED at port time: rustty's `BlurRegion`
+        // owns a `Vec` of slices, so this assignment drops the old value —
+        // the deinit is Rust's move-assign drop glue; no explicit call exists
+        // to add.
         self.blur_region = region;
     }
 

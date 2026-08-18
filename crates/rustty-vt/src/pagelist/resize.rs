@@ -392,9 +392,12 @@ impl PageList {
         //
         // PORT NOTE: this reference `errdefer` cleans up orphaned pages on error.
         // We replay it inline at each fallible exit below (the `reflowRow` and
-        // `grow` error arms).
+        // `grow` error arms). The reference `defer` registered after it (see
+        // `defer_destroy_recycle_node!` below) runs FIRST at those exits (Zig
+        // defers run LIFO), so the macro leads with it.
         macro_rules! errdefer_cleanup {
             () => {{
+                defer_destroy_recycle_node!();
                 let mut node_: *mut Node = match it.chunk {
                     Some(chunk) => chunk.node,
                     None => core::ptr::null_mut(),
@@ -402,6 +405,23 @@ impl PageList {
                 while !node_.is_null() {
                     let node = node_;
                     node_ = unsafe { (*node).next };
+                    self.destroy_node(node);
+                }
+            }};
+        }
+
+        // Reflowed source pages are stashed for reuse as destination
+        // pages (see recycle_node). Whether we succeed or fail, a stashed
+        // node must not outlive the reflow.
+        //
+        // PORT NOTE: Rust has no `defer`. This is replayed at every exit past
+        // this point: inside `errdefer_cleanup!` (every error exit, in the
+        // reference's LIFO order) and before the success return.
+        macro_rules! defer_destroy_recycle_node {
+            () => {{
+                if !self.recycle_node.is_null() {
+                    let node = self.recycle_node;
+                    self.recycle_node = core::ptr::null_mut();
                     self.destroy_node(node);
                 }
             }};
@@ -429,11 +449,23 @@ impl PageList {
                     return Err(e);
                 }
 
-                // Once we're done reflowing a page, destroy it immediately.
-                // This frees memory and makes it more likely in memory
-                // constrained environments that the next reflow will work.
+                // Once we're done reflowing a page, we're done with it, so
+                // make it available for reuse (or destroy it). Making it
+                // immediately available frees memory and makes it more
+                // likely in memory constrained environments that the next
+                // reflow will work.
                 if row_y == unsafe { super::Node::rows(row_node) } - 1 {
-                    self.destroy_node(row_node);
+                    'destroy_node: {
+                        if !self.recycle_node.is_null()
+                            || unsafe { (*row_node).owned } != super::Owned::Pool
+                            || unsafe { super::Node::page_if_resident(row_node) }.is_null()
+                        {
+                            self.destroy_node(row_node);
+                            break 'destroy_node;
+                        }
+
+                        self.recycle_node = row_node;
+                    }
                 }
             }
 
@@ -527,6 +559,10 @@ impl PageList {
                 }
             }
         }
+
+        // defer replay (success path): a stashed node must not outlive
+        // the reflow.
+        defer_destroy_recycle_node!();
 
         Ok(())
     }
@@ -1183,6 +1219,54 @@ struct ReflowCursor {
 
     /// This is the final row count of the reflowed pages.
     total_rows: usize,
+
+    /// Memoizes the most recent source-to-destination style id
+    /// mapping. Styled cells come in long runs sharing the same style
+    /// so this lets writeCell bump the destination ref count directly
+    /// instead of performing a set lookup for every styled cell.
+    ///
+    /// The destination id is only valid for the current destination
+    /// page, which is why this lives on the cursor: every destination
+    /// page change goes through init() which resets this.
+    style_cache: StyleCache,
+
+    /// Memoizes the capacity adjustment for new destination pages
+    /// (see reflowRow). It only depends on the source page so this is
+    /// keyed by the source page pointer, which reflow visits
+    /// sequentially and never revisits.
+    cap_memo: Option<CapMemo>,
+}
+
+/// `ReflowCursor.StyleCache`
+//
+// PORT NOTE: the reference `src_page: ?*const Page` becomes a nullable raw
+// pointer (`invalid` stores null). Raw and non-owning: it only ever KEYS a
+// pointer-identity compare against the current source page — it is never
+// dereferenced (`c5ca2db1b`; ledger row in .port/audits/GHOSTTY_LIFETIMES.tsv).
+#[derive(Clone, Copy)]
+struct StyleCache {
+    src_page: *const Page,
+    src_id: stylepkg::Id,
+    dst_id: stylepkg::Id,
+}
+
+impl StyleCache {
+    /// `StyleCache.invalid`
+    const INVALID: StyleCache = StyleCache {
+        src_page: core::ptr::null(),
+        src_id: stylepkg::DEFAULT_ID,
+        dst_id: stylepkg::DEFAULT_ID,
+    };
+}
+
+// PORT NOTE: the reference `cap_memo` is an anonymous optional struct
+// (`?struct { src_page: *const Page, cap: Capacity }`); Rust has no anonymous
+// struct types, so we name it. `src_page` is the same never-dereferenced
+// pointer-identity key as `StyleCache.src_page` (`179161c08`).
+#[derive(Clone, Copy)]
+struct CapMemo {
+    src_page: *const Page,
+    cap: Capacity,
 }
 
 // PORT NOTE: the reference `writeCell` returns `IncreaseCapacityError!enum {
@@ -1192,6 +1276,51 @@ enum WriteCellResult {
     Repeat,
     SkipNext,
 }
+
+/// The group length for the vectorized bulk run scan below: the
+/// SIMD lane count where the target supports it, otherwise a
+/// plain unrolled group like other cell scans use (e.g. the
+/// render state scans).
+//
+// PORT NOTE: the reference declares this (and the two masks below) inside
+// `ReflowCursor`; Rust inherent associated types are unstable, so they live at
+// module scope like this file's other `ReflowCursor`-support items.
+const BULK_GROUP_LEN: usize = match rustty_simd::lanes(core::mem::size_of::<u64>()) {
+    Some(n) => n,
+    None => 8,
+};
+
+/// Masked compare helper covering every cell field that a run
+/// must share to be copied by copyRun: given that the first cell
+/// of a run passed the full bulkCopyable predicate, equality on
+/// these fields implies the same for every subsequent cell, with
+/// the same style.
+///
+/// Note this is slightly stricter than bulkCopyable (e.g. a
+/// bg-color cell won't extend an unstyled text run even though it
+/// is copyable): that only splits the copy into multiple runs,
+/// which is still correct.
+type BulkRunMask = pagepkg::Mask<
+    Cell,
+    {
+        pagepkg::cell_field_mask(&[
+            pagepkg::CellField::ContentTag,
+            pagepkg::CellField::StyleId,
+            pagepkg::CellField::Wide,
+            pagepkg::CellField::Hyperlink,
+        ])
+    },
+    BULK_GROUP_LEN,
+>;
+
+/// Masked compare helper for detecting the Kitty virtual
+/// placeholder codepoint in text cells. Placeholders take the
+/// slow path (they must set a row flag), so they terminate a run.
+type PlaceholderMask = pagepkg::Mask<
+    Cell,
+    { pagepkg::cell_field_mask(&[pagepkg::CellField::ContentCodepointData]) },
+    BULK_GROUP_LEN,
+>;
 
 impl ReflowCursor {
     fn init(node: *mut Node) -> ReflowCursor {
@@ -1210,6 +1339,9 @@ impl ReflowCursor {
 
             // Initially whatever size our input node is.
             total_rows: unsafe { super::Node::rows(node) } as usize,
+
+            style_cache: StyleCache::INVALID,
+            cap_memo: None,
         }
     }
 
@@ -1250,17 +1382,25 @@ impl ReflowCursor {
             }
         }
 
-        // Handle tracked pin adjustments.
+        // Handle tracked pin adjustments. We also note whether any
+        // tracked pin is on this row at all so that the per-cell loop
+        // below can skip pin scans entirely for the overwhelmingly
+        // common case of a row with no pins. Note we compare nodes
+        // rather than pages since a node owns exactly one page; this
+        // is cheaper and avoids `page()` restoring unrelated
+        // compressed nodes purely for a comparison.
+        let mut row_has_pins = false;
         {
             for p in list.tracked_pins.keys() {
                 let p: *mut Pin = *p;
-                if !core::ptr::eq(
-                    unsafe { super::Node::page((*p).node) } as *const _,
-                    src_page as *const _,
-                ) || unsafe { (*p).y } != src_y
+                if !core::ptr::eq(unsafe { (*p).node } as *const _, row.node as *const _)
+                    || unsafe { (*p).y } != src_y
                 {
                     continue;
                 }
+
+                // This row has pins
+                row_has_pins = true;
 
                 if cursor_pin.is_some() && p == cursor_pin.unwrap() {
                     continue;
@@ -1285,10 +1425,8 @@ impl ReflowCursor {
         // If the cursor is after blanks on the right, those cells are still
         // before the next write and must reflow with it.
         if let Some(p) = cursor_pin {
-            if core::ptr::eq(
-                unsafe { super::Node::page((*p).node) } as *const _,
-                src_page as *const _,
-            ) && unsafe { (*p).y } == src_y
+            if core::ptr::eq(unsafe { (*p).node } as *const _, row.node as *const _)
+                && unsafe { (*p).y } == src_y
             {
                 cols_len = core::cmp::max(cols_len, unsafe { (*p).x } + 1);
             }
@@ -1308,21 +1446,20 @@ impl ReflowCursor {
 
         // Inherit increased styles or grapheme bytes from the src page
         // we're reflowing from for new pages.
-        let cap = match unsafe { (*src_page).capacity }.adjust(Adjustment {
-            cols: Some(unsafe { (*self.page).size.cols }),
-        }) {
-            Ok(cap) => cap,
-            Err(_err) => {
-                // comptime assert(@TypeOf(err) == error{OutOfMemory});
-
-                let mut cap = unsafe { (*src_page).capacity };
-                cap.cols = unsafe { (*self.page).size.cols };
-                // We're already a non-standard page. We don't want to
-                // inherit a massive set of rows, so cap it at our std size.
-                cap.rows =
-                    core::cmp::min(unsafe { (*src_page).size.rows }, super::std_capacity().rows);
-                cap
+        //
+        // This only depends on the source page, which we process row
+        // by row, so memoize it: computing the adjustment requires a
+        // full page layout calculation which is much too expensive to
+        // do for every row.
+        let cap: Capacity = if let Some(memo) = self.cap_memo {
+            if core::ptr::eq(memo.src_page, src_page as *const Page) {
+                memo.cap
+            } else {
+                // Source page changed, fall through to recompute.
+                self.compute_and_memoize_cap(src_page)
             }
+        } else {
+            self.compute_and_memoize_cap(src_page)
         };
 
         // Our row isn't blank, write any new rows we deferred.
@@ -1346,14 +1483,33 @@ impl ReflowCursor {
                 }
             }
 
+            // Fast path: bulk-copy a run of simple cells directly
+            // into the destination row. The vast majority of cells
+            // are narrow cells or complete wide pairs, have no
+            // managed memory (graphemes, hyperlinks), and share a
+            // single style in long runs, so this avoids the
+            // per-cell state machine below for most of the work.
+            // Rows with tracked pins take the slow path so pin
+            // remapping behaves identically.
+            if !row_has_pins {
+                let max_run = core::cmp::min(
+                    cols_len as usize - x,
+                    unsafe { (*self.page).size.cols } as usize - self.x as usize,
+                );
+                let window = &cells[x..x + max_run];
+                let run = Self::bulk_run_length(window);
+                if run > 0 && self.copy_run(&window[..run], src_page) {
+                    x += run;
+                    continue;
+                }
+            }
+
             // Move any tracked pins from the source.
-            {
+            if row_has_pins {
                 for p in list.tracked_pins.keys() {
                     let p: *mut Pin = *p;
-                    if !core::ptr::eq(
-                        unsafe { super::Node::page((*p).node) } as *const _,
-                        src_page as *const _,
-                    ) || unsafe { (*p).y } != src_y
+                    if !core::ptr::eq(unsafe { (*p).node } as *const _, row.node as *const _)
+                        || unsafe { (*p).y } != src_y
                         || unsafe { (*p).x } != x as size::CellCountInt
                     {
                         continue;
@@ -1377,21 +1533,23 @@ impl ReflowCursor {
                     WriteCellResult::SkipNext => {
                         // Remap any tracked pins at the skipped position (x+1)
                         // since we won't process that cell in the loop.
-                        for p in list.tracked_pins.keys() {
-                            let p: *mut Pin = *p;
-                            if !core::ptr::eq(
-                                unsafe { super::Node::page((*p).node) } as *const _,
-                                src_page as *const _,
-                            ) || unsafe { (*p).y } != src_y
-                                || unsafe { (*p).x } != x as size::CellCountInt + 1
-                            {
-                                continue;
-                            }
+                        if row_has_pins {
+                            for p in list.tracked_pins.keys() {
+                                let p: *mut Pin = *p;
+                                if !core::ptr::eq(
+                                    unsafe { (*p).node } as *const _,
+                                    row.node as *const _,
+                                ) || unsafe { (*p).y } != src_y
+                                    || unsafe { (*p).x } != x as size::CellCountInt + 1
+                                {
+                                    continue;
+                                }
 
-                            unsafe {
-                                (*p).node = self.node;
-                                (*p).x = self.x;
-                                (*p).y = self.y;
+                                unsafe {
+                                    (*p).node = self.node;
+                                    (*p).x = self.x;
+                                    (*p).y = self.y;
+                                }
                             }
                         }
 
@@ -1435,6 +1593,267 @@ impl ReflowCursor {
         }
 
         Ok(())
+    }
+
+    /// Compute and memoize the new-page capacity for the given source
+    /// page. See the call site in reflowRow for details.
+    fn compute_and_memoize_cap(&mut self, src_page: *const Page) -> Capacity {
+        let cap = match unsafe { (*src_page).capacity }.adjust(Adjustment {
+            cols: Some(unsafe { (*self.page).size.cols }),
+        }) {
+            Ok(cap) => cap,
+            Err(_err) => {
+                // comptime assert(@TypeOf(err) == error{OutOfMemory});
+
+                let mut cap = unsafe { (*src_page).capacity };
+                cap.cols = unsafe { (*self.page).size.cols };
+                // We're already a non-standard page. We don't want to
+                // inherit a massive set of rows, so cap it at our std size.
+                cap.rows =
+                    core::cmp::min(unsafe { (*src_page).size.rows }, super::std_capacity().rows);
+                cap
+            }
+        };
+
+        self.cap_memo = Some(CapMemo { src_page, cap });
+        cap
+    }
+
+    /// True if this cell can be copied verbatim as part of a bulk
+    /// run: a narrow plain-text or bg-color cell with no managed
+    /// memory (graphemes, hyperlinks) and no special reflow handling
+    /// (wide characters, spacers, Kitty virtual placeholders). For
+    /// these cells writeCell reduces to a copy of the raw cell plus
+    /// a style ref count adjustment.
+    #[inline]
+    fn bulk_copyable(cell: Cell) -> bool {
+        match cell.content_tag() {
+            ContentTag::Codepoint => 'copyable: {
+                if cell.wide() != Wide::Narrow {
+                    break 'copyable false;
+                }
+                if cell.hyperlink() {
+                    break 'copyable false;
+                }
+                if KITTY_GRAPHICS {
+                    // Placeholders must set a row flag, so they take
+                    // the slow path.
+                    if cell.content_codepoint() == KITTY_PLACEHOLDER {
+                        break 'copyable false;
+                    }
+                }
+                true
+            }
+
+            // Grapheme data must be cloned cell-by-cell.
+            ContentTag::CodepointGrapheme => false,
+
+            // These are guaranteed to have no style or grapheme data
+            // (see writeCell) so they are pure copies. The style
+            // check is defensive so that a bg cell can never join or
+            // extend a styled run.
+            ContentTag::BgColorPalette | ContentTag::BgColorRgb => {
+                cell.style_id() == stylepkg::DEFAULT_ID
+            }
+        }
+    }
+
+    /// The length of the prefix of cells that can be copied at once
+    /// with copyRun: bulk-copyable cells sharing a single style. The
+    /// scan uses masked compares of the raw cell bits (see
+    /// BulkRunMask), which is significantly cheaper than the
+    /// field-wise predicate for this hot loop.
+    fn bulk_run_length(cells: &[Cell]) -> usize {
+        if cells.is_empty() {
+            return 0;
+        }
+        let first = cells[0];
+
+        // A run may start on a bulk-copyable narrow cell or on a wide pair.
+        let pair_start = first.content_tag() == ContentTag::Codepoint
+            && first.wide() == Wide::Wide
+            && !first.hyperlink();
+        if !pair_start && !Self::bulk_copyable(first) {
+            return 0;
+        }
+
+        // Patterns for each cell shape admitted to the run.
+        let mut proto = first;
+        proto.set_wide(Wide::Narrow);
+        let narrow_pattern = BulkRunMask::pattern(proto);
+        proto.set_wide(Wide::Wide);
+        let wide_pattern = BulkRunMask::pattern(proto);
+        proto.set_wide(Wide::SpacerTail);
+        let tail_pattern = BulkRunMask::pattern(proto);
+
+        // Only text cells can contain a placeholder; for bg color
+        // tags the content bits are a color, so we skip the check for
+        // those (the tag is part of BulkRunMask, making tags uniform
+        // per run).
+        let check_placeholder =
+            KITTY_GRAPHICS && first.content_tag() == ContentTag::Codepoint;
+        let placeholder_pattern: pagepkg::Backing = if !KITTY_GRAPHICS {
+            // Never used without kitty graphics (check_placeholder
+            // is comptime-false), but it must still compile and the
+            // placeholder codepoint doesn't exist in that build.
+            0
+        } else {
+            PlaceholderMask::pattern(Cell::init(KITTY_PLACEHOLDER))
+        };
+
+        let mut len: usize = 0;
+        'outer: loop {
+            // Vectorized scan: check whole groups of narrow cells at
+            // once. If a group fully matches, the run extends by the
+            // whole group; otherwise fall through to the scalar loop
+            // below, which finds the exact end of the run within it
+            // or continues through a wide pair.
+            while cells.len() - len >= BULK_GROUP_LEN {
+                if !BulkRunMask::eql(cells, len, narrow_pattern) {
+                    break;
+                }
+                if check_placeholder && PlaceholderMask::eql_any(cells, len, placeholder_pattern)
+                {
+                    break;
+                }
+                len += BULK_GROUP_LEN;
+            }
+
+            while len < cells.len() {
+                let cell = cells[len];
+                if BulkRunMask::eql_scalar(cell, narrow_pattern) {
+                    if check_placeholder
+                        && PlaceholderMask::eql_scalar(cell, placeholder_pattern)
+                    {
+                        break 'outer;
+                    }
+                    len += 1;
+                    continue;
+                }
+
+                // Wide pairs are consumed atomically so the run
+                // (or window) end can never split a pair.
+                if len + 1 < cells.len()
+                    && BulkRunMask::eql_scalar(cell, wide_pattern)
+                    && BulkRunMask::eql_scalar(cells[len + 1], tail_pattern)
+                {
+                    len += 2;
+                    // Re-enter the vectorized loop: narrow groups
+                    // commonly follow a stretch of pairs.
+                    continue 'outer;
+                }
+
+                break 'outer;
+            }
+
+            break;
+        }
+
+        len
+    }
+
+    /// Copy a run of bulk-copyable cells (see bulkCopyable) sharing
+    /// one style into the destination row at the current position,
+    /// then advance the cursor. The run must fit in the remaining
+    /// columns of the destination row.
+    ///
+    /// Returns false without any state change if the style could not
+    /// be mapped into the destination page without a capacity
+    /// change; the caller should fall back to writeCell which
+    /// handles growing capacity.
+    fn copy_run(&mut self, src_cells: &[Cell], src_page: *const Page) -> bool {
+        assert!(!self.pending_wrap);
+        assert!(src_cells.len() >= 1);
+        assert!(src_cells.len() <= (unsafe { (*self.page).size.cols } - self.x) as usize);
+
+        let style_id = src_cells[0].style_id();
+        // PORT NOTE (R7): the reference `@intCast` narrows under safety
+        // checks; the assert above bounds the run by the destination page's
+        // u16 column count, so the cast cannot truncate.
+        let n: u16 = src_cells.len() as u16;
+
+        // Resolve the destination style id for this run and take one
+        // reference per cell. This mirrors the per-cell style logic
+        // in writeCell, including the memoization (see StyleCache).
+        let dst_style_id: stylepkg::Id = if style_id == stylepkg::DEFAULT_ID {
+            stylepkg::DEFAULT_ID
+        } else {
+            'dst: {
+                if core::ptr::eq(self.style_cache.src_page, src_page)
+                    && self.style_cache.src_id == style_id
+                {
+                    let id = self.style_cache.dst_id;
+                    let base = unsafe { (*self.page).memory_ptr() };
+                    unsafe { (*self.page).styles.use_multiple(base, id, n) };
+                    break 'dst id;
+                }
+
+                let style = unsafe { Page::style_get_of(src_page, style_id) };
+
+                // Any error here (set full or needs rehash) is handled
+                // by falling back to the slow path, which grows capacity.
+                // No state has been modified yet at this point.
+                let base = unsafe { (*self.page).memory_ptr() };
+                let id = match unsafe {
+                    (*self.page).styles.add_with_id(base, style, style_id)
+                } {
+                    Ok(v) => v,
+                    Err(_) => return false,
+                }
+                .unwrap_or(style_id);
+
+                // addWithId took one reference, take the rest.
+                if n > 1 {
+                    unsafe { (*self.page).styles.use_multiple(base, id, n - 1) };
+                }
+
+                self.style_cache = StyleCache {
+                    src_page,
+                    src_id: style_id,
+                    dst_id: id,
+                };
+
+                id
+            }
+        };
+
+        // Copy the raw cell contents.
+        //
+        // SAFETY: `self.page_cell` points at the run start in the DESTINATION
+        // page and the assert above guarantees the run fits in the remaining
+        // columns of the destination row; `src_cells` lives in a DIFFERENT
+        // page's memory (a source node is only stashed for reuse as a
+        // destination after every one of its rows has been reflowed — see
+        // recycle_node), so the ranges cannot overlap. Aliasing discipline
+        // proven on `.port/phase-4/mirihar-reflow-recycle`.
+        unsafe {
+            core::ptr::copy_nonoverlapping(src_cells.as_ptr(), self.page_cell, src_cells.len());
+        }
+
+        // If the style resolved to a different id in the destination
+        // page then rewrite the copied cells to point at it.
+        if dst_style_id != style_id {
+            for i in 0..src_cells.len() {
+                unsafe { (*self.page_cell.add(i)).set_style_id(dst_style_id) };
+            }
+        }
+        if dst_style_id != stylepkg::DEFAULT_ID {
+            unsafe { (*self.page_row).set_styled(true) };
+        }
+
+        // Advance the cursor, matching what repeated cursorForward
+        // calls after each cell write would have done.
+        let cols = unsafe { (*self.page).size.cols };
+        if self.x + n == cols {
+            self.x = cols - 1;
+            self.page_cell = unsafe { self.page_cell.add(n as usize - 1) };
+            self.pending_wrap = true;
+        } else {
+            self.x += n;
+            self.page_cell = unsafe { self.page_cell.add(n as usize) };
+        }
+
+        true
     }
 
     /// Write a cell. On error, this will not unwrite the cell but
@@ -1792,6 +2211,26 @@ impl ReflowCursor {
         // Copy style data.
         if cell.has_styling() {
             'style: {
+                // Fast path: styled cells come in long runs sharing the
+                // same style. If this source style was just mapped into
+                // the current destination page, bump the ref count
+                // directly and skip the set lookup. The destination id is
+                // guaranteed alive because a previously written cell in
+                // this page holds a reference, and the cache is reset
+                // whenever the destination page changes (see init).
+                if core::ptr::eq(self.style_cache.src_page, src_page)
+                    && self.style_cache.src_id == cell.style_id()
+                {
+                    let id = self.style_cache.dst_id;
+                    let base = unsafe { (*self.page).memory_ptr() };
+                    unsafe { (*self.page).styles.use_id(base, id) };
+                    unsafe {
+                        (*self.page_row).set_styled(true);
+                        (*self.page_cell).set_style_id(id);
+                    }
+                    break 'style;
+                }
+
                 let style = unsafe { Page::style_get_of(src_page, cell.style_id()) };
 
                 let base = unsafe { (*self.page).memory_ptr() };
@@ -1846,6 +2285,14 @@ impl ReflowCursor {
                     }
                 }
                 .unwrap_or(cell.style_id());
+
+                // Update our style cache with the latest style set so runs
+                // of cells with the same style are faster to write.
+                self.style_cache = StyleCache {
+                    src_page,
+                    src_id: cell.style_id(),
+                    dst_id: id,
+                };
 
                 unsafe {
                     (*self.page_row).set_styled(true);

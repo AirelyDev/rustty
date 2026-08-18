@@ -240,7 +240,9 @@ mod imp {
 
         /// PORTS: `split_tree.zig:580-605` `dispose`.
         fn dispose(&self) {
-            self.last_focused.set(None);
+            // `priv.last_focused.deinit()` (1dbc8ca30: the named
+            // clear-before-free; see `weak_ref.rs` `deinit`).
+            self.last_focused.deinit();
             remove_source_id(self.rebuild_source.borrow_mut().take(), "rebuild");
             remove_source_id(
                 self.restore_focus_source.borrow_mut().take(),
@@ -332,10 +334,10 @@ impl SplitTree {
             }
         }
 
-        // Bind is-split for the new surface (`:242-247`).
-        self.bind_property("is-split", &surface, "is-split")
-            .sync_create()
-            .build();
+        // Bind is-split property for new surface (`:243-244`; B6, 1d053bd6e:
+        // the inline `bindProperty` moved into `Surface.bindIsSplit` so a
+        // cross-tree move can unbind the stale binding before re-binding).
+        surface.bind_is_split(self);
 
         // Build the single-node tree (`:250`).
         let single = Tree::init_single(&surface)?;
@@ -470,6 +472,93 @@ impl SplitTree {
         }
 
         true
+    }
+
+    /// Move the source split onto the target split in a given direction.
+    /// The target split must be located within this tree.
+    //
+    // PORTS: `split_tree.zig:389-459` `moveSplit` (B6, 1d053bd6e). The
+    // reference's `Application.default().allocator()` + the `defer
+    // branch/after_split/after_remove.deinit()` trio collapse into Rust
+    // ownership (scope-end drops); `getTree` here is the live borrow of the
+    // widget's tree (the reference returns the live `?*Tree` pointer).
+    pub fn move_split(
+        &self,
+        source: &Surface,
+        target: &Surface,
+        dir: Direction,
+    ) -> Result<(), DsError> {
+        let imp = self.imp();
+
+        let (source_handle, after_split) = {
+            let tref = imp.tree.borrow();
+            let Some(target_tree) = tref.as_ref() else {
+                return Ok(());
+            };
+
+            // This really shouldn't fail, but just in case
+            let Some(target_handle) = target_tree.0.locate(target) else {
+                eprintln!("warn(gtk): target is not placed in a split tree");
+                return Ok(());
+            };
+
+            // Try to find the source within the current tree.
+            // If it exists, then it's a local move; otherwise the logic gets more
+            // complicated
+            let source_handle = target_tree.0.locate(source);
+
+            // First add the source into this tree.
+            // We have to do this no matter what
+            let branch = Tree::init_single(source)?;
+
+            let after_split = Tree(target_tree.0.split(
+                target_handle,
+                dir,
+                F16::from_f32(0.5),
+                &branch.0,
+            )?);
+
+            (source_handle, after_split)
+        };
+
+        if let Some(handle) = source_handle {
+            // Happy path: source and target are located within the same tree.
+            // In that case, we just remove the existing source from this tree
+
+            let after_remove = Tree(after_split.0.remove(handle)?);
+
+            self.set_tree_inner(Some(&after_remove));
+        } else {
+            // :( Cross-tree moves are a bit more complicated.
+
+            // TODO: Find a better way to access the split tree from here
+            let Some(source_tree_widget) = ext::ancestor::<SplitTree>(source) else {
+                eprintln!("warn(gtk): source is not placed in a split tree");
+                return Ok(());
+            };
+
+            let new_source_tree = {
+                let sref = source_tree_widget.imp().tree.borrow();
+                let Some(source_tree) = sref.as_ref() else {
+                    return Ok(());
+                };
+
+                // Remove the source from its own tree
+                let Some(handle) = source_tree.0.locate(source) else {
+                    return Ok(());
+                };
+                Tree(source_tree.0.remove(handle)?)
+            };
+
+            // Finally, set the final tree structures for both tree widgets
+            source_tree_widget.set_tree_inner(Some(&new_source_tree));
+            self.set_tree_inner(Some(&after_split));
+
+            // Re-bind vital properties like `is-split`
+            source.bind_is_split(self);
+        }
+
+        Ok(())
     }
 
     /// PORTS: `split_tree.zig:390-405` `disconnectSurfaceHandlers`.
@@ -648,22 +737,17 @@ impl SplitTree {
         let imp = self.imp();
         *imp.pending_close.borrow_mut() = None;
 
-        // Find the surface's handle (`:708-718`).
+        // Find the surface in the tree to verify this is valid and
+        // set our pending close handle.
+        //
+        // (`:773-774`, B6/1d053bd6e: the open-coded iterator loop collapsed
+        // into `tree.locate(surface)`.)
         let handle = {
             let tref = imp.tree.borrow();
             let Some(tree) = tref.as_ref() else {
                 return;
             };
-            let mut found = None;
-            let mut it = tree.0.iterator();
-            while let Some(entry) = it.next() {
-                // SAFETY: leaf pointers are live tree-owned boxes.
-                if *unsafe { &*entry.view } == *surface {
-                    found = Some(entry.handle);
-                    break;
-                }
-            }
-            match found {
+            match tree.0.locate(surface) {
                 Some(h) => h,
                 None => return,
             }
@@ -1002,7 +1086,14 @@ mod split_imp {
     pub struct SplitTreeSplit {
         /// PORTS: `split_tree.zig:1116` `handle`.
         pub handle: Cell<Handle>,
-        /// PORTS: `split_tree.zig:1119` `idle` source (Invariant 11).
+        /// Cache the split ratio. Looking it up is relatively expensive
+        /// because we have to first walk the widget tree to find the
+        /// SplitTree widget.
+        ///
+        /// PORTS: `split_tree.zig:1177-1180` `ratio` (90da3aba5, the split
+        /// flicker fix).
+        pub ratio: Cell<f64>,
+        /// PORTS: `split_tree.zig:1183` `idle` source (Invariant 11).
         pub idle: RefCell<Option<glib::SourceId>>,
         /// PORTS: `split_tree.zig:1124` `max_changed`.
         pub max_changed: Cell<bool>,
@@ -1017,6 +1108,7 @@ mod split_imp {
         fn default() -> Self {
             Self {
                 handle: Cell::new(Handle::ROOT),
+                ratio: Cell::new(0.0),
                 idle: RefCell::new(None),
                 max_changed: Cell::new(false),
                 pos_changed: Cell::new(false),
@@ -1062,9 +1154,19 @@ glib::wrapper! {
         @implements gtk4::Accessible, gtk4::Buildable, gtk4::ConstraintTarget;
 }
 
+/// PORTS: `split_tree.zig:1242-1248` `SyncDirection` (90da3aba5). A
+/// module-level enum (Rust cannot nest a type inside an inherent impl).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SyncDirection {
+    /// Update gtk.Paned widget to match ratio from split tree node.
+    TreeToWidget,
+    /// Update split tree node to match ratio from gtk.Paned widget.
+    WidgetToTree,
+}
+
 #[gtk4::template_callbacks]
 impl SplitTreeSplit {
-    /// PORTS: `split_tree.zig:1138-1160` `new`.
+    /// PORTS: `split_tree.zig:1202-1237` `new` (90da3aba5 end state).
     fn new(
         handle: Handle,
         split: &DsSplit,
@@ -1074,6 +1176,10 @@ impl SplitTreeSplit {
         let obj: Self = glib::Object::new();
         let imp = obj.imp();
         imp.handle.set(handle);
+        // `priv.ratio = split.ratio` (`:1211`, 90da3aba5 — the reference's
+        // `f16` ratio widened to f64, exactly the old tree-lookup's
+        // `@floatCast`).
+        imp.ratio.set(f64::from(split.ratio.to_f32()));
 
         let paned = imp.paned.get();
         paned.set_start_child(Some(start_child));
@@ -1083,9 +1189,99 @@ impl SplitTreeSplit {
             Layout::Vertical => gtk4::Orientation::Vertical,
         });
 
+        // Request min width/height 1 for surfaces to prevent them from
+        // becoming temporarily invisible in nested layouts. Otherwise
+        // gtk.Paned might mark a surface as not visible and unmap it
+        // for a single frame. See the comments below in propMaxPosition.
+        // (`:1222-1231`, 90da3aba5.)
+        if start_child.is::<SurfaceScrolledWindow>() {
+            start_child.set_size_request(1, 1);
+        }
+        if end_child.is::<SurfaceScrolledWindow>() {
+            end_child.set_size_request(1, 1);
+        }
+
+        // Signals and so on are setup in the template.
+
         obj
     }
 
+    /// PORTS: `split_tree.zig:1242-1248` `SyncDirection` (90da3aba5).
+    // Sync split ratio between the gtk.Paned widget and the split tree.
+    fn sync_split_ratio(&self, direction: SyncDirection) {
+        let imp = self.imp();
+        let paned = imp.paned.get();
+
+        // Current, min, and max positions as pixels.
+        let pos = paned.position();
+        let min: i32 = paned.property("min-position");
+        let max: i32 = paned.property("max-position");
+
+        // We don't use min but assert it's zero (`:1272`).
+        debug_assert_eq!(min, 0);
+
+        // If our max is zero then we can't do any math. I don't know
+        // if this is possible but I suspect it can be if you make a nested
+        // split completely minimized.
+        if max == 0 {
+            return;
+        }
+
+        // Determine our current ratio.
+        let current_ratio = f64::from(pos) / f64::from(max);
+        // `const desired_ratio: f64 = priv.ratio;` (`:1292` — the cached
+        // ratio, no widget-tree walk; 90da3aba5).
+        let desired_ratio = imp.ratio.get();
+
+        // If our ratio is close enough to our desired ratio, then
+        // we ignore the update. This is to avoid constant split updates
+        // (`std.math.approxEqAbs(f64, ..., 0.001)`, `:1298-1303`).
+        if (current_ratio - desired_ratio).abs() <= 0.001 {
+            return;
+        }
+
+        match direction {
+            SyncDirection::TreeToWidget => {
+                // Update position in gtk.Paned to match desired ratio. Note that if
+                // max-position is small, it might not be possible to accurately set
+                // the desired ratio. E.g. with max-position=2 you can only have
+                // ratios 0, 0.5 and 1.
+                let desired_pos = (f64::from(max) * desired_ratio).round() as i32;
+                paned.set_position(desired_pos);
+            }
+            SyncDirection::WidgetToTree => {
+                // Update ratio of the split tree node. This is the most dangerous
+                // part of this widget. We assume that this widget is always a child
+                // of a SplitTree, we assume that our handle is valid, and we assume
+                // the handle is always a split node.
+                let Some(split_tree) = ext::ancestor::<SplitTree>(self) else {
+                    eprintln!("warn(gtk): SplitTree ancestor not found");
+                    return;
+                };
+                let handle = imp.handle.get();
+                let mut tref = split_tree.imp().tree.borrow_mut();
+                let Some(tree) = tref.as_mut() else {
+                    eprintln!("warn(gtk): no tree data model set");
+                    return;
+                };
+                debug_assert!(handle.idx() < tree.0.nodes.len());
+                debug_assert!(matches!(&tree.0.nodes[handle.idx()], Node::Split(_)));
+                tree.0
+                    .resize_in_place(handle, F16::from_f32(current_ratio as f32));
+                imp.ratio.set(current_ratio);
+            }
+        }
+    }
+
+    // We need to keep the split ratios from the tree datastructure and
+    // widget tree in sync. Using the max-position and position properties
+    // of the gtk.Paned widget, we can distinguish a resize from a manual
+    // update (e.g. the user dragging the divider). If max-position changes,
+    // we always have a widget resize and we sync the ratio directly from
+    // the propMaxPosition function. Usually position will change as well
+    // but it might not if the size change is small enough. If only position
+    // changes, we have a manual human update and we sync the ratio here.
+    //
     // This is a hack, it relies on the timing of property notifcations.
     // From looking at the GTK source code, it should not be possible that
     // we interpret a position change from a resize as a manual update.
@@ -1095,63 +1291,27 @@ impl SplitTreeSplit {
     // widget is resized, it should not be possible for onIdle to run before
     // we have been notified of both property changes.
     //
-    /// PORTS: `split_tree.zig:1182-1277` `onIdle`.
+    /// PORTS: `split_tree.zig:1343-1386` `onIdle` (90da3aba5 end state).
     fn on_idle(&self) {
         let imp = self.imp();
 
         // Body runs first; the source/flags are cleared AFTER so a re-entrant
         // `set_position` (which fires `propPosition`) sees `idle != None` and
-        // does not schedule a second idle (`:1187-1192`, the load-bearing defer
+        // does not schedule a second idle (`:1364-1369`, the load-bearing defer
         // ordering).
         (|| {
-            if !imp.max_changed.get() && !imp.pos_changed.get() {
-                return;
-            }
-            let paned = imp.paned.get();
-
-            let Some(split_tree) = ext::ancestor::<SplitTree>(self) else {
-                return;
-            };
-            let handle = imp.handle.get();
-
-            let pos = paned.position();
-            let min: i32 = paned.property("min-position");
-            let max: i32 = paned.property("max-position");
-
-            // We don't use min but assert it's zero (`:1234`).
-            debug_assert_eq!(min, 0);
-            if max == 0 {
-                return;
-            }
-
-            let current_ratio = f64::from(pos) / f64::from(max);
-            let desired_ratio = {
-                let tref = split_tree.imp().tree.borrow();
-                let Some(tree) = tref.as_ref() else {
-                    return;
-                };
-                match &tree.0.nodes[handle.idx()] {
-                    Node::Split(s) => f64::from(s.ratio.to_f32()),
-                    Node::Leaf(_) => return,
-                }
-            };
-
-            if (current_ratio - desired_ratio).abs() <= 0.001 {
-                return;
-            }
-
             if imp.max_changed.get() {
-                // Resize → update position to match the desired ratio (`:1261-1270`).
-                let desired_pos = (f64::from(max) * desired_ratio).round() as i32;
-                paned.set_position(desired_pos);
-            } else {
-                // Manual drag → write the ratio back to the tree (`:1271-1274`).
-                let mut tref = split_tree.imp().tree.borrow_mut();
-                if let Some(tree) = tref.as_mut() {
-                    tree.0
-                        .resize_in_place(handle, F16::from_f32(current_ratio as f32));
-                }
+                // Nothing to do, syncSplitRatio was already called
+                // directly from propMaxPosition.
+                return;
             }
+            if !imp.pos_changed.get() {
+                return;
+            }
+
+            // If only position changed, this is a manual human update and
+            // we need to write our update back to the tree.
+            self.sync_split_ratio(SyncDirection::WidgetToTree);
         })();
 
         imp.idle.borrow_mut().take();
@@ -1173,7 +1333,8 @@ impl SplitTreeSplit {
         }
     }
 
-    /// PORTS: `split_tree.zig:1282-1293` `propMaxPosition`.
+    /// PORTS: `split_tree.zig:1388-1434` `propMaxPosition` (90da3aba5 end
+    /// state).
     #[template_callback(name = "notify_max_position")]
     fn on_notify_max_position(
         _paned: &gtk4::Paned,
@@ -1181,10 +1342,45 @@ impl SplitTreeSplit {
         this: &SplitTreeSplit,
     ) {
         this.imp().max_changed.set(true);
+
+        // Widget got resized, update position to match desired ratio.
+        //
+        // Syncing the split ratio directly here ensures that every surface
+        // gets the correct size allocated immediately. This works because
+        // this callback runs during size allocation, so that we update the
+        // divider position right after the gtk.Paned widget computes it and
+        // right before it will use the position to compute the sizes of its
+        // children. See the size_allocate and calc_position functions of the
+        // gtk.Paned widget.
+        //
+        // If we synced the ratio in an idle callback, there might be some
+        // flickering as surfaces are shown with the wrong size for a few
+        // frames until our idle callback runs. Depending on the split layout
+        // it might take multiple rounds of size allocation and idle callbacks
+        // for every widget to get the correct size.
+        //
+        // Note that gtk.Paned calls Widget.setChildVisible(true/false) for
+        // both children based on the initial divider position it computes.
+        // If we then update the position here, we might sometimes have to
+        // call setChildVisible again. This would be necessary if we updated
+        // the position from initially 0 (max), where start (end) child is
+        // invisible, to a value > 0 (< max). However, we can skip this because
+        // set_position already queues another round of size allocation, during
+        // which gtk.Paned will keep the correct position we set manually and
+        // then call setChildVisible again based on that. The only problematic
+        // situation is when we update the position from 0 to a value > 0,
+        // because setChildVisible(false) will unmap the start child widget.
+        // It will not be visible for a single frame which introduces some
+        // flickering. To prevent this from happening we set a min size request
+        // of 1 for all surfaces (see the "new" function above).
+        this.sync_split_ratio(SyncDirection::TreeToWidget);
+
+        // We still need the idle callback to clear the max_changed field
+        // later, because propPosition might or might not still get called.
         this.schedule_idle();
     }
 
-    /// PORTS: `split_tree.zig:1295-1306` `propPosition`.
+    /// PORTS: `split_tree.zig:1436-1450` `propPosition`.
     #[template_callback(name = "notify_position")]
     fn on_notify_position(_paned: &gtk4::Paned, _pspec: &glib::ParamSpec, this: &SplitTreeSplit) {
         this.imp().pos_changed.set(true);

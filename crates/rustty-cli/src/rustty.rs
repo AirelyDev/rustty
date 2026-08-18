@@ -20,7 +20,7 @@ use crate::action::{self, SpecialCase};
 // + `show_face` port against rustty-font-shaper's discovery + SharedGridSet.
 use crate::{
     boo, crash_report, edit_config, explain_config, help, list_actions, list_colors, list_fonts,
-    list_keybinds, list_themes, new_window, show_config, show_face, ssh, ssh_cache,
+    list_keybinds, list_themes, new_tab, new_window, show_config, show_face, ssh, ssh_cache,
     toggle_quick_terminal, validate_config, version,
 };
 
@@ -224,6 +224,9 @@ pub enum Action {
     // Use IPC to tell the running Rustty to open a new window.
     NewWindow,
 
+    // Use IPC to tell the running Rustty to open a new tab.
+    NewTab,
+
     // Use IPC to tell the running Rustty to toggle the quick terminal.
     ToggleQuickTerminal,
 }
@@ -252,6 +255,7 @@ impl action::Action for Action {
             b"crash-report" => Action::CrashReport,
             b"boo" => Action::Boo,
             b"new-window" => Action::NewWindow,
+            b"new-tab" => Action::NewTab,
             b"toggle-quick-terminal" => Action::ToggleQuickTerminal,
             _ => return None,
         })
@@ -287,7 +291,7 @@ impl Action {
     /// All actions in declaration order — the reference `@typeInfo(Action)
     /// .@"enum".fields` iteration order. Kept EXACT (help/completions/C-enum
     /// parity; CLI_BLUEPRINT.md Risk 7).
-    pub const ALL: [Action; 18] = [
+    pub const ALL: [Action; 19] = [
         Action::Version,
         Action::Help,
         Action::ListFonts,
@@ -305,6 +309,7 @@ impl Action {
         Action::CrashReport,
         Action::Boo,
         Action::NewWindow,
+        Action::NewTab,
         Action::ToggleQuickTerminal,
     ];
 
@@ -329,6 +334,7 @@ impl Action {
             Action::CrashReport => "crash-report",
             Action::Boo => "boo",
             Action::NewWindow => "new-window",
+            Action::NewTab => "new-tab",
             Action::ToggleQuickTerminal => "toggle-quick-terminal",
         }
     }
@@ -404,6 +410,7 @@ impl Action {
             Action::ShowFace => show_face::run(),
             Action::Boo => boo::run(),
             Action::NewWindow => new_window::run(),
+            Action::NewTab => new_tab::run(),
             Action::ToggleQuickTerminal => toggle_quick_terminal::run(),
         }
     }
@@ -471,6 +478,7 @@ impl Action {
     //                 .@"show-face" => show_face.Options,
     //                 .boo => boo.Options,
     //                 .@"new-window" => new_window.Options,
+    //                 .@"new-tab" => new_tab.Options,
     //                 .@"toggle-quick-terminal" => toggle_quick_terminal.Options,
     //             };
     //         }
@@ -662,6 +670,18 @@ impl Action {
                 name: b"class",
                 kind: OptionalOther,
             }],
+            // new_tab.Options: class ?str, surface-id ?u64 (+ `_`-prefixed
+            // fields, all skipped).
+            Action::NewTab => &[
+                OptSpec {
+                    name: b"class",
+                    kind: OptionalOther,
+                },
+                OptSpec {
+                    name: b"surface-id",
+                    kind: OptionalOther,
+                },
+            ],
             // toggle_quick_terminal.Options: class ?str.
             Action::ToggleQuickTerminal => &[OptSpec {
                 name: b"class",

@@ -128,6 +128,17 @@ pub type AutoOffsetHashMap<K, V, const MAX_LOAD_PERCENTAGE: u8> =
 // impl hashes just that field) writes exactly the native-endian bytes
 // `std.mem.asBytes(&key)` yields — see the hasher note in
 // `rustty_zigstd::wyhash`.
+//
+// PORT NOTE (`3d9b2b483` wasm arm, DEFERRED): the reference's `hash` gains a
+// wasm32-only small-key (`@sizeOf(K) <= 8`) branch — a splitmix64-style
+// finalizer instead of Wyhash, because Wyhash's 64×64→128 multiplies lower to
+// `__multi3` libcalls on wasm (no widening multiply instruction). That arm is
+// `comptime builtin.cpu.arch.isWasm()`-gated dead code on every native target
+// and — because it changes home slots/fingerprints/probe order, i.e. the raw
+// page bytes — must land TOGETHER with rustty's wasm target decision
+// (`492c26067` WasmPagePool, `87f69a12e` wasm arms; Phase-4 plan, wasm/
+// datastruct tier), not before. Blocked on the wasm pool wiring; tracked in
+// the P4-W2 T4 report.
 pub struct AutoContext<K>(PhantomData<K>);
 
 impl<K> Default for AutoContext<K> {

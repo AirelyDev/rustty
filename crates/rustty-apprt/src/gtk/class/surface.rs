@@ -62,7 +62,7 @@ use rustty_apprt_api::{
     NewSurfaceContext, SurfaceSize,
 };
 use rustty_config::command::Command;
-use rustty_config::value_types::{ClipboardAccess, WorkingDirectory};
+use rustty_config::value_types::{ClipboardAccess, ShellIntegration, WorkingDirectory};
 use rustty_core::surface::{Error as CoreSurfaceError, InputEffect};
 use rustty_font_shaper::face::DesiredSize;
 use rustty_vt::input::key::{Action, Key, KeyEvent};
@@ -84,7 +84,12 @@ use super::inspector_window::InspectorWindow;
 use super::key_state_overlay::KeyStateOverlay;
 use super::resize_overlay::ResizeOverlay;
 use super::search_overlay::SearchOverlay;
+use super::split_tree::SplitTree;
 use super::surface_child_exited::SurfaceChildExited;
+
+/// PORTS: `Tree.Split.Direction` (`datastruct/split_tree.zig`) as named at the
+/// B6 DnD call sites (`calcDropDirection`/`moveSplit`).
+use rustty_datastruct::split_tree::Direction as SplitDirection;
 
 /// The core surface backing a GTK `Surface`. PORTS: `surface.zig:20`
 /// `const CoreSurface = @import("../../../Surface.zig")`; here the apprt backend's
@@ -167,9 +172,12 @@ pub struct FontSizeRequest(pub DesiredSize);
 pub struct SurfaceOverrides {
     /// PORTS: `surface.zig:748` `command: ?configpkg.Command`.
     pub command: Option<Command>,
-    /// PORTS: `surface.zig:749` `working_directory: ?[:0]const u8`.
+    /// PORTS: `surface.zig:749` `shell_integration:
+    /// ?configpkg.Config.ShellIntegration` (3650bef4e).
+    pub shell_integration: Option<ShellIntegration>,
+    /// PORTS: `surface.zig:750` `working_directory: ?[:0]const u8`.
     pub working_directory: Option<String>,
-    /// PORTS: `surface.zig:750` `title: ?[:0]const u8` (the `title-override`
+    /// PORTS: `surface.zig:751` `title: ?[:0]const u8` (the `title-override`
     /// construct property).
     pub title: Option<String>,
 }
@@ -337,6 +345,16 @@ mod imp {
         /// PORTS: `surface.zig:715` `drop_target`.
         #[template_child]
         pub drop_target: TemplateChild<gtk4::DropTarget>,
+        /// PORTS: `surface.zig:713` `surface_drop_target` (B6 split DnD,
+        /// 1d053bd6e): the uint64 surface-id drop target.
+        #[template_child]
+        pub surface_drop_target: TemplateChild<gtk4::DropTarget>,
+        /// PORTS: `surface.zig:714` `drag_handle` (B6).
+        #[template_child]
+        pub drag_handle: TemplateChild<gtk4::Widget>,
+        /// PORTS: `surface.zig:715` `drop_overlay` (B6).
+        #[template_child]
+        pub drop_overlay: TemplateChild<gtk4::Widget>,
         /// PORTS: `surface.zig:658` `im_context`.
         #[template_child]
         pub im_context: TemplateChild<gtk4::IMMulticontext>,
@@ -390,8 +408,15 @@ mod imp {
         /// (OWNED handle; `Source.remove` in dispose, **invariant 11**, T14).
         pub progress_bar_timer: RefCell<Option<glib::SourceId>>,
 
-        /// PORTS: `surface.zig:681` `bell_media: ?*gtk.MediaFile` (OWNED; unref T14).
-        pub bell_media: RefCell<Option<gtk4::MediaFile>>,
+        /// PORTS: `surface.zig:694` `is_split_binding: ?*gobject.Binding` (B6,
+        /// 1d053bd6e) — the live `is-split` property binding installed by
+        /// [`super::Surface::bind_is_split`]; unbound before re-binding on a
+        /// cross-tree move.
+        //
+        // PORT NOTE (B7, f0f3f4d8d): the reference DELETED the surface-owned
+        // `bell_media` field here — the audio bell moved to the application
+        // (`Application.Private.bell_media` + the `app.ring-bell` action).
+        pub is_split_binding: RefCell<Option<glib::Binding>>,
 
         /// PORTS: `surface.zig:690` `idle_rechild: ?c_uint` (OWNED source; T14).
         pub idle_rechild: RefCell<Option<glib::SourceId>>,
@@ -437,7 +462,10 @@ mod imp {
         /// PORTS: `surface.zig:738` `overrides.command: ?configpkg.Command`
         /// (OWNED; `deinit` T15).
         pub overrides_command: RefCell<Option<Command>>,
-        /// PORTS: `surface.zig:739` `overrides.working_directory: ?[:0]const u8`
+        /// PORTS: `surface.zig:739` `overrides.shell_integration:
+        /// ?configpkg.Config.ShellIntegration` (3650bef4e; Copy — no free site).
+        pub overrides_shell_integration: Cell<Option<ShellIntegration>>,
+        /// PORTS: `surface.zig:740` `overrides.working_directory: ?[:0]const u8`
         /// (OWNED; free T15).
         pub overrides_working_directory: RefCell<Option<CString>>,
     }
@@ -488,6 +516,9 @@ mod imp {
                 key_state_overlay: TemplateChild::default(),
                 terminal_page: TemplateChild::default(),
                 drop_target: TemplateChild::default(),
+                surface_drop_target: TemplateChild::default(),
+                drag_handle: TemplateChild::default(),
+                drop_overlay: TemplateChild::default(),
                 im_context: TemplateChild::default(),
                 rt_surface: ApprtSurface::default(),
                 core_surface: AtomicPtr::new(std::ptr::null_mut()),
@@ -499,7 +530,7 @@ mod imp {
                 ime: RefCell::new(ImeState::default()),
                 precision_scroll: Cell::new(false),
                 progress_bar_timer: RefCell::new(None),
-                bell_media: RefCell::new(None),
+                is_split_binding: RefCell::new(None),
                 idle_rechild: RefCell::new(None),
                 inspector: RefCell::new(None),
                 action_group: RefCell::new(None),
@@ -514,6 +545,7 @@ mod imp {
                 pending_horizontal_scroll: Cell::new(0.0),
                 pending_horizontal_scroll_reset: RefCell::new(None),
                 overrides_command: RefCell::new(None),
+                overrides_shell_integration: Cell::new(None),
                 overrides_working_directory: RefCell::new(None),
             }
         }
@@ -642,8 +674,15 @@ mod imp {
                 String::static_type(),
             ]);
 
-            // `setCursorFromName("text")` (`surface.zig:1829`).
+            // Also have to set up the surface drop target to accept other surfaces
+            // (in particular, their surface IDs) (`surface.zig:1846-1854`, B6).
+            self.surface_drop_target.set_types(&[u64::static_type()]);
+
+            // Setup properties we can't set from our Blueprint file.
+            // `setCursorFromName("text")` (`surface.zig:1858`).
             obj.set_cursor_from_name(Some("text"));
+            // `priv.drag_handle.setCursorFromName("grab")` (`surface.zig:1859`, B6).
+            self.drag_handle.set_cursor_from_name(Some("grab"));
 
             // Initial `propConfig` (`surface.zig:1832`) — call the handler directly
             // (no spurious `notify::config` emission), matching the reference.
@@ -664,8 +703,8 @@ mod imp {
             // `config` unref+null (`surface.zig:1858-1861`). Scope-end drop unrefs.
             drop(self.config.take());
 
-            // `bell_media` unref+null (`surface.zig:1863-1866`).
-            drop(self.bell_media.take());
+            // (B7, f0f3f4d8d: the reference deleted the `bell_media` unref here —
+            // the audio bell is application-owned now.)
 
             // `vadj_signal_group`: `setTarget(null)` THEN unref (`:1868-1872` — the
             // order matters: detach the target before releasing our ref). The typed
@@ -813,7 +852,76 @@ mod imp {
         }
     }
 
-    impl WidgetImpl for Surface {}
+    impl WidgetImpl for Surface {
+        /// PORTS: `surface.zig:2014-2065` `snapshot` (B8, 3263fc6c4): the widget
+        /// `snapshot` virtual override that renders the native GTK blur behind
+        /// the terminal on GTK >= 4.23.3 (paired with the wayland winproto
+        /// skipping its own `ext_background_effect` there, 04f1bc096 — the
+        /// atomic B8 pair: porting only one half double-blurs or de-blurs).
+        fn snapshot(&self, snap: &gtk4::Snapshot) {
+            let blur: Option<f32> = 'blur: {
+                // Native GTK blur is only available since GTK 4.23.3
+                if crate::gtk::gtk_version::runtime_until(4, 23, 3) {
+                    break 'blur None;
+                }
+                let cfg = self.config.borrow();
+                let Some(config) = cfg.as_ref() else {
+                    break 'blur None;
+                };
+
+                match config.get().background_blur {
+                    rustty_config::value_types::BackgroundBlur::Radius(v) => Some(f32::from(v)),
+                    rustty_config::value_types::BackgroundBlur::True
+                    | rustty_config::value_types::BackgroundBlur::MacosGlassRegular
+                    | rustty_config::value_types::BackgroundBlur::MacosGlassClear => Some(20.0),
+                    rustty_config::value_types::BackgroundBlur::False => None,
+                }
+            };
+
+            if let Some(b) = blur {
+                // pushCopy and appendPaste are only supported since 4.22.
+                // These two functions are crucial for the blur function
+                // and it cannot be implemented otherwise, so if you compile
+                // Rustty on an older GTK version, you won't get blur.
+                // Sorry.
+                //
+                // PORT NOTE: the reference's `comptime !gtk_version.atLeast(4,
+                // 22, 0)` compile gate maps to the opt-in `gtk-v4_22` cargo
+                // feature (the `gtk-v4_16`/`gtk-v4_20` convention: the feature
+                // raises the gtk4-rs API ceiling so `push_copy`/`push_blur`/
+                // `append_paste` exist; the `runtime_until(4, 23, 3)` guard
+                // above stays live either way).
+                #[cfg(feature = "gtk-v4_22")]
+                {
+                    let widget = self.obj();
+                    let width = widget.width();
+                    let height = widget.height();
+
+                    // Push the current render state (background)
+                    // to be appended below
+                    snap.push_copy();
+
+                    // Apply blur to the copied background
+                    snap.push_blur(f64::from(b));
+
+                    snap.append_paste(
+                        &gtk4::graphene::Rect::new(0.0, 0.0, width as f32, height as f32),
+                        0,
+                    );
+
+                    // The reference's `defer snap.pop()` pair — blur first,
+                    // then the copy — runs here in reverse push order.
+                    snap.pop();
+                    snap.pop();
+                }
+                #[cfg(not(feature = "gtk-v4_22"))]
+                let _ = b;
+            }
+
+            // Draw the children normally
+            self.parent_snapshot(snap);
+        }
+    }
     impl BinImpl for Surface {}
     impl ScrollableImpl for Surface {}
 
@@ -1063,9 +1171,11 @@ impl Surface {
             .build();
 
         let imp = obj.imp();
-        // `priv.overrides = .{ .command = …clone, .working_directory = …dupeZ }`
-        // (`surface.zig:759-762`).
+        // `priv.overrides = .{ .command = …clone, .shell_integration = …,
+        // .working_directory = …dupeZ }` (`surface.zig:759-764`).
         imp.overrides_command.replace(overrides.command);
+        imp.overrides_shell_integration
+            .set(overrides.shell_integration);
         imp.overrides_working_directory.replace(
             overrides
                 .working_directory
@@ -1073,6 +1183,25 @@ impl Surface {
         );
 
         obj
+    }
+
+    /// PORTS: `surface.zig:854-864` `bindIsSplit` (B6, 1d053bd6e). (Re)binds this
+    /// surface's `is-split` property to the given tree's, unbinding any stale
+    /// binding first (the cross-tree-move re-bind).
+    pub fn bind_is_split(&self, tree: &super::split_tree::SplitTree) {
+        let imp = self.imp();
+        // `if (priv.is_split_binding) |bind| bind.unbind();`
+        if let Some(bind) = imp.is_split_binding.take() {
+            bind.unbind();
+        }
+
+        // `priv.is_split_binding = tree.bindProperty("is-split", self,
+        // "is-split", .{ .sync_create = true });`
+        imp.is_split_binding.replace(Some(
+            tree.bind_property("is-split", self, "is-split")
+                .sync_create()
+                .build(),
+        ));
     }
 
     /// PORTS: `surface.zig:766-769` `core` — `return priv.core_surface` (a raw
@@ -1455,80 +1584,44 @@ impl Surface {
         true
     }
 
-    /// PORTS: `surface.zig:2472-2509` `ringBell`. Ring the terminal bell: emit the
-    /// `bell` signal, fan out to the `tab.ring-bell`/`win.ring-bell` widget actions
-    /// (system beep, title bell, urgency — `window.rs`/`tab.rs`), play the custom
-    /// audio bell, and light the bell border via the `bell-ringing` property.
+    /// Handle bell features that need to happen every time a BEL is received
+    /// Currently this is audio and system but this could change in the future.
+    ///
+    /// PORTS: `surface.zig:2548-2563` `ringBell` (B7 end state, f0f3f4d8d): emit
+    /// the `bell` signal, then fan out to the `tab.`/`win.`/`app.ring-bell`
+    /// widget actions (system beep, title bell, urgency — `window.rs`/`tab.rs` —
+    /// and the application-owned audio bell, `application.rs` `action_ring_bell`).
+    /// The surface no longer owns any audio state.
     ///
     /// PORT NOTE: the reference's `ringBell` is invoked by `setBellRinging(true)`
-    /// (`surface.zig:2216`); rustty keeps `set_bell_ringing` as the plain property
-    /// write and hosts the full bell here, so the `.ring_bell` apprt action
-    /// (`application.rs`) and `commandFinished` both funnel through this one method.
+    /// (`surface.zig:2287-2294`); rustty keeps `set_bell_ringing` as the plain
+    /// property write and hosts the full bell here, so the `.ring_bell` apprt
+    /// action (`application.rs`) and `commandFinished` both funnel through this
+    /// one method — including the reference handler's focused guard (f5419b9b1).
     pub fn ring_bell(&self) {
-        // `signals.bell.impl.emit(...)` (`:2472-2478`) — fire any bell subscriber
+        // Emit the signal
+        // `signals.bell.impl.emit(...)` (`:2551-2556`) — fire any bell subscriber
         // BEFORE the action fan-out.
         self.emit_by_name::<()>("bell", &[]);
 
-        // Action fan-out (`:2480-2481`): the `tab.ring-bell` / `win.ring-bell`
-        // widget actions do the system beep, title bell, and attention/urgency
-        // (`window.rs:1968`, `tab.rs:410`). They bubble up from the surface widget.
+        // Activate actions if they exist
+        // (`:2558-2560`): the `tab.ring-bell` / `win.ring-bell` widget actions do
+        // the system beep, title bell, and attention/urgency (`window.rs`,
+        // `tab.rs`); `app.ring-bell` plays the application-owned audio bell
+        // (B7, `application.rs`). They bubble up from the surface widget.
         let _ = self.activate_action("tab.ring-bell", None);
         let _ = self.activate_action("win.ring-bell", None);
+        let _ = self.activate_action("app.ring-bell", None);
 
-        // The custom audio bell (`:2484-2509`).
-        self.ring_bell_audio();
+        // focus clears ringing state, so we should not change state to
+        // ringing if we're already focused (`surface.zig:2289-2294`, f5419b9b1).
+        if self.focused() {
+            return;
+        }
 
-        // The `bell-ringing` property write (`:2221`); the border's bind-time
+        // The `bell-ringing` property write (`:2296-2300`); the border's bind-time
         // `should_border_be_shown` closure re-evaluates, lighting the bell border.
         self.set_bell_ringing(true);
-    }
-
-    /// PORTS: `surface.zig:2484-2509` — the audio-bell block of `ringBell`. Plays
-    /// the configured custom bell sound (when `bell-features.audio` is set and a
-    /// `bell-audio-path` is configured), reusing one cached `MediaFile` per
-    /// surface to avoid the GStreamer pipeline leak (see `media.rs`). The
-    /// border/system-beep/urgency of `ringBell` are the sibling steps in
-    /// [`Surface::ring_bell`].
-    pub fn ring_bell_audio(&self) {
-        use std::os::unix::ffi::OsStrExt;
-
-        let imp = self.imp();
-        let cfg = imp.config.borrow();
-        let Some(config) = cfg.as_ref() else {
-            return;
-        };
-        let config = config.get();
-
-        // `if (config.@"bell-features".audio)` (`:2487`).
-        if !config.bell_features.audio {
-            return;
-        }
-
-        // `const config_path = config.@"bell-audio-path" orelse break :audio`
-        // (`:2488-2492`): the `Path` union carries the optional/required flag.
-        let Some(config_path) = config.bell_audio_path.as_ref() else {
-            return;
-        };
-        let (path_bytes, required) = match config_path {
-            rustty_config::path::Path::Optional(p) => (p.as_slice(), false),
-            rustty_config::path::Path::Required(p) => (p.as_slice(), true),
-        };
-
-        // `std.math.clamp(config.@"bell-audio-volume", 0.0, 1.0)` (`:2494-2498`).
-        let volume = config.bell_audio_volume.clamp(0.0, 1.0);
-
-        let path = std::path::Path::new(std::ffi::OsStr::from_bytes(path_bytes));
-
-        // Reuse one MediaFile per surface, rebuilt only when the path changes
-        // (`:2506-2508`). `bell_media_file` frees any stale MediaFile and returns
-        // the current slot value (possibly None if the path is inaccessible), so
-        // `bell_media` never dangles.
-        let current = imp.bell_media.borrow_mut().take();
-        let media_file = crate::gtk::media::bell_media_file(current, path, required);
-        if let Some(media_file) = &media_file {
-            crate::gtk::media::play_bell(media_file, volume);
-        }
-        imp.bell_media.replace(media_file);
     }
 
     /// PORTS: `surface.zig:1126-1133` `present`. Request that this terminal come to
@@ -2883,10 +2976,13 @@ impl Surface {
             rustty_core::app::new_config(unsafe { &*core_app }, core_cfg, imp.context.get())
         };
 
-        // `if (priv.overrides.command) |c| config.command = c.clone(...)` (`:3445-3447`).
-        if let Some(cmd) = imp.overrides_command.borrow().as_ref() {
-            config.command = Some(cmd.clone());
-        }
+        // `try applyCommandOverrides(&config, priv.overrides.command,
+        // priv.overrides.shell_integration)` (`:3533-3537`, 3650bef4e).
+        apply_command_overrides(
+            &mut config,
+            imp.overrides_command.borrow().as_ref(),
+            imp.overrides_shell_integration.get(),
+        );
         // `if (priv.overrides.working_directory) |wd| ...` (`:3448-3453`).
         if let Some(wd) = imp.overrides_working_directory.borrow().as_ref() {
             let mut wd_val = WorkingDirectory::Path(wd.to_bytes().to_vec());
@@ -3151,7 +3247,16 @@ impl Surface {
             return;
         }
 
-        if button == Button::Middle && !imp.gtk_enable_primary_paste.get() {
+        // (488b7109b) `button == .middle and !priv.gtk_enable_primary_paste and
+        // !core_surface.mouseReportingActive()`: middle clicks are forwarded to
+        // the TUI when it is actively reporting mouse events, even with primary
+        // paste disabled.
+        //
+        // SAFETY: `core` is the widget's boxed, initialized core surface.
+        if button == Button::Middle
+            && !imp.gtk_enable_primary_paste.get()
+            && !unsafe { (*core).mouseReportingActive() }
+        {
             return;
         }
 
@@ -3194,7 +3299,14 @@ impl Surface {
             return;
         }
 
-        if button == Button::Middle && !imp.gtk_enable_primary_paste.get() {
+        // (488b7109b) see the matching `mouse_down` guard: forward middle-click
+        // releases to a mouse-reporting TUI.
+        //
+        // SAFETY: `core` is the widget's boxed, initialized core surface.
+        if button == Button::Middle
+            && !imp.gtk_enable_primary_paste.get()
+            && !unsafe { (*core).mouseReportingActive() }
+        {
             return;
         }
 
@@ -4230,6 +4342,242 @@ impl Surface {
             eprintln!("warn(gtk): unable to perform navigate_search action err={err:?}");
         }
     }
+
+    // -- Split drag-and-drop (B6, 1d053bd6e; surface.blp `drag_handle` /
+    // -- `drop_overlay` / `surface_drop_target`) ---------------------------
+
+    /// PORTS: `surface.zig:3671-3684` `closureShouldDragHandleBeShown` (bind-time
+    /// closure; `&self` first like the other closures).
+    #[template_callback]
+    fn should_drag_handle_be_shown(&self, config: Option<Config>, is_split: bool) -> bool {
+        let Some(config) = config else {
+            return false;
+        };
+
+        // `switch (config.get().@"drag-handle")` (74f91d1b4's `drag-handle`
+        // config option).
+        match config.get().drag_handle {
+            rustty_config::value_types::DragHandle::Always => true,
+            rustty_config::value_types::DragHandle::Auto => is_split,
+            rustty_config::value_types::DragHandle::Never => false,
+        }
+    }
+
+    /// PORTS: `surface.zig:3686-3699` `surfaceDragPrepare` — the DragSource
+    /// `prepare` closure: a uint64 content provider carrying this surface's
+    /// core id.
+    #[template_callback]
+    fn surface_drag_prepare(
+        _src: &gtk4::DragSource,
+        _x: f64,
+        _y: f64,
+        this: &Surface,
+    ) -> gdk4::ContentProvider {
+        // TODO: Use a static content provider once we make `self.core()`
+        // available immediately when constructing the surface widget
+        //
+        // `self.core().?.id` — the reference `.?` unwrap (panic -> abort in a C
+        // callback per DG5).
+        let core = this.core().expect("surface core is initialized");
+        // SAFETY: a non-null `core()` result is a live, published core surface.
+        let id = unsafe { (*core).id };
+        gdk4::ContentProvider::for_value(&id.to_value())
+    }
+
+    /// PORTS: `surface.zig:3701-3745` `surfaceDragBegin` — set a 0.2×-scaled
+    /// `WidgetPaintable` snapshot of the surface as the drag icon.
+    #[template_callback]
+    fn surface_drag_begin(src: &gtk4::DragSource, _drag: &gdk4::Drag, this: &Surface) {
+        // The scale of the preview
+        const PREVIEW_SCALE: f32 = 0.2;
+
+        // Snapshot the entire surface widget as the icon preview
+        let paintable = gtk4::WidgetPaintable::new(Some(this));
+
+        // Center the preview
+        let width = this.width();
+        let height = this.height();
+        let mid_x = width as f32 / 2.0;
+        let mid_y = height as f32 / 2.0;
+
+        // Create a snapshot to render the scaled paintable
+        let snap = gtk4::Snapshot::new();
+        snap.scale(PREVIEW_SCALE, PREVIEW_SCALE);
+        paintable.snapshot(&snap, f64::from(width), f64::from(height));
+
+        // `snap.freeToPaintable(null)` — `to_paintable` consumes the snapshot
+        // (the "free" half) and returns the rendered paintable.
+        if let Some(scaled) = snap.to_paintable(None) {
+            src.set_icon(
+                Some(&scaled),
+                (mid_x * PREVIEW_SCALE) as i32,
+                (mid_y * PREVIEW_SCALE) as i32,
+            );
+        } else {
+            // The scaling process somehow failed.
+            // Use the original paintable as a fail-safe
+            eprintln!("warn(gtk): preview scaling failed - falling back to original paintable");
+            src.set_icon(Some(&paintable), mid_x as i32, mid_y as i32);
+        }
+    }
+
+    /// PORTS: `surface.zig:3747-3774` `surfaceDrop` — resolve the dropped
+    /// surface id, then `SplitTree::move_split` it onto this surface in the
+    /// pointer-derived direction.
+    #[template_callback]
+    fn surface_drop(_tgt: &gtk4::DropTarget, v: &glib::Value, x: f64, y: f64, this: &Surface) {
+        // `v.getUint64()`.
+        let Ok(dropped_id) = v.get::<u64>() else {
+            return;
+        };
+        // `self.core().?.app.findSurfaceByID(dropped_id) orelse return`.
+        let core = this.core().expect("surface core is initialized");
+        // SAFETY: a non-null `core()` result is a live core surface; its `app`
+        // backref is the live core App (app-thread dispatch).
+        let Some(dropped) = (unsafe { (*(*core).app).findSurfaceByID(dropped_id) }) else {
+            return;
+        };
+        // `dropped.rt_surface.gobj()`.
+        // SAFETY: `findSurfaceByID` returns a validated live surface whose
+        // `rt_surface` points at the pinned apprt surface in the widget private.
+        let Some(from) = (unsafe { (*(*dropped).rt_surface).widget() }) else {
+            return;
+        };
+
+        let Some(st) = ext::ancestor::<SplitTree>(this) else {
+            eprintln!("warn(gtk): surface is not placed in a split tree");
+            return;
+        };
+
+        let dir = this.calc_drop_direction(x, y);
+
+        // The only error that could happen here is an OOM,
+        // and in that case we're already milliseconds away from crashing, so...
+        if st.move_split(&from, this, dir).is_err() {
+            return;
+        }
+
+        // Clean up overlay state
+        this.set_drop_overlay_direction(None);
+    }
+
+    /// PORTS: `surface.zig:3776-3781` `surfaceDropLeave`.
+    #[template_callback]
+    fn surface_drop_leave(_tgt: &gtk4::DropTarget, this: &Surface) {
+        // Hide overlay
+        this.set_drop_overlay_direction(None);
+    }
+
+    /// PORTS: `surface.zig:3783-3793` `surfaceDropMotion` — recalculate the
+    /// drop region and light the overlay gradient.
+    #[template_callback]
+    fn surface_drop_motion(
+        _tgt: &gtk4::DropTarget,
+        x: f64,
+        y: f64,
+        this: &Surface,
+    ) -> gdk4::DragAction {
+        // Recalculate the drop region
+        let dir = this.calc_drop_direction(x, y);
+        this.set_drop_overlay_direction(Some(dir));
+        gdk4::DragAction::MOVE
+    }
+
+    /// PORTS: `surface.zig:3795-3809` `propDropValue` (`notify::value` on the
+    /// preloading `surface_drop_target`).
+    ///
+    /// Reject the drop if we're dropping a surface onto itself.
+    /// Note that we cannot implement this via the `accept` signal,
+    /// since the decision of whether to accept or deny a drop is dependent
+    /// on the payload (i.e. the surface being dropped). This is
+    /// well-documented in GTK docs.
+    #[template_callback]
+    fn notify_drop_value(tgt: &gtk4::DropTarget, _pspec: &glib::ParamSpec, this: &Surface) {
+        let Some(core_surface) = this.core() else {
+            return;
+        };
+        let Some(value) = tgt.value() else {
+            return;
+        };
+        let Ok(surface_id) = value.get::<u64>() else {
+            return;
+        };
+        // SAFETY: a non-null `core()` result is a live core surface.
+        if unsafe { (*core_surface).id } == surface_id {
+            tgt.reject();
+        }
+    }
+}
+
+impl Surface {
+    /// PORTS: `surface.zig:3811-3824` `setDropOverlayDirection` — swap the
+    /// `drop-{top,left,right,bottom}` CSS class on the drop overlay.
+    fn set_drop_overlay_direction(&self, dir: Option<SplitDirection>) {
+        let overlay = &self.imp().drop_overlay;
+        for c in ["drop-top", "drop-left", "drop-right", "drop-bottom"] {
+            overlay.remove_css_class(c);
+        }
+
+        if let Some(d) = dir {
+            overlay.add_css_class(match d {
+                SplitDirection::Up => "drop-top",
+                SplitDirection::Left => "drop-left",
+                SplitDirection::Right => "drop-right",
+                SplitDirection::Down => "drop-bottom",
+            });
+        }
+    }
+
+    /// PORTS: `surface.zig:3826-3840` `calcDropDirection` — nearest edge wins.
+    fn calc_drop_direction(&self, x: f64, y: f64) -> SplitDirection {
+        let width = f64::from(self.width());
+        let height = f64::from(self.height());
+
+        let l_dist = x / width;
+        let t_dist = y / height;
+        let r_dist = 1.0 - l_dist;
+        let b_dist = 1.0 - t_dist;
+        let min = l_dist.min(t_dist).min(r_dist).min(b_dist);
+
+        if min == l_dist {
+            return SplitDirection::Left;
+        }
+        if min == r_dist {
+            return SplitDirection::Right;
+        }
+        if min == t_dist {
+            return SplitDirection::Up;
+        }
+        SplitDirection::Down
+    }
+}
+
+/// Apply command and shell integration overrides received from the CLI.
+/// Explicit commands should only receive shell integration when their
+/// executable can be detected as a supported shell. An explicit shell
+/// integration override is also valid without a command.
+//
+// PORTS: `surface.zig:4401-4417` `applyCommandOverrides` (3650bef4e — the
+// `+new-window`/`+new-tab` `-e <command>` forced-shell-integration fix). The
+// reference clones the command with `config.arenaAlloc()`; rustty's `Command`
+// owns its bytes, so `clone()` is the whole story.
+fn apply_command_overrides(
+    config: &mut rustty_config::Config,
+    command: Option<&Command>,
+    shell_integration: Option<ShellIntegration>,
+) {
+    if let Some(value) = command {
+        // config.command = try value.clone(config.arenaAlloc());
+        config.command = Some(value.clone());
+
+        if let Some(integration) = shell_integration {
+            config.shell_integration = integration;
+        } else if config.shell_integration != ShellIntegration::None {
+            config.shell_integration = ShellIntegration::Detect;
+        }
+    } else if let Some(value) = shell_integration {
+        config.shell_integration = value;
+    }
 }
 
 #[cfg(test)]
@@ -4403,6 +4751,71 @@ mod tests {
         assert_eq!(compute_fraction(255), 1.0);
         assert_eq!(compute_fraction(0), 0.0);
         assert_eq!(compute_fraction(50), 0.5);
+    }
+
+    /// PORTS: `surface.zig:4419-4448` `test "command and shell integration
+    /// overrides"` (3650bef4e; 7 `expectEqual` assertions, carried
+    /// assertion-for-assertion). Display-free — pure over `Config`.
+    ///
+    /// NEGATIVE-CONTROL NOTE (assessment §5): the gtk modules have no G1b row,
+    /// so this test is INVISIBLE to the gate — it is named here explicitly as
+    /// the B5 rider test and runs in the `--features gtk` lane.
+    #[test]
+    fn command_and_shell_integration_overrides() {
+        // var config = try configpkg.Config.default(testing.allocator);
+        // defer config.deinit();
+        let mut config = rustty_config::Config::default_config();
+
+        // config.@"shell-integration" = .nushell;
+        // try applyCommandOverrides(&config, .{ .shell = "vim" }, null);
+        // try testing.expectEqual(.detect, config.@"shell-integration");
+        config.shell_integration = ShellIntegration::Nushell;
+        apply_command_overrides(&mut config, Some(&Command::Shell(b"vim".to_vec())), None);
+        assert_eq!(ShellIntegration::Detect, config.shell_integration);
+
+        // config.@"shell-integration" = .none;
+        // try applyCommandOverrides(&config, .{ .shell = "vim" }, null);
+        // try testing.expectEqual(.none, config.@"shell-integration");
+        config.shell_integration = ShellIntegration::None;
+        apply_command_overrides(&mut config, Some(&Command::Shell(b"vim".to_vec())), None);
+        assert_eq!(ShellIntegration::None, config.shell_integration);
+
+        // try applyCommandOverrides(&config, .{ .shell = "nu" }, .nushell);
+        // try testing.expectEqual(.nushell, config.@"shell-integration");
+        apply_command_overrides(
+            &mut config,
+            Some(&Command::Shell(b"nu".to_vec())),
+            Some(ShellIntegration::Nushell),
+        );
+        assert_eq!(ShellIntegration::Nushell, config.shell_integration);
+
+        // try applyCommandOverrides(&config, .{ .shell = "vim" }, .none);
+        // try testing.expectEqual(.none, config.@"shell-integration");
+        apply_command_overrides(
+            &mut config,
+            Some(&Command::Shell(b"vim".to_vec())),
+            Some(ShellIntegration::None),
+        );
+        assert_eq!(ShellIntegration::None, config.shell_integration);
+
+        // config.@"shell-integration" = .nushell;
+        // try applyCommandOverrides(&config, null, null);
+        // try testing.expectEqual(.nushell, config.@"shell-integration");
+        config.shell_integration = ShellIntegration::Nushell;
+        apply_command_overrides(&mut config, None, None);
+        assert_eq!(ShellIntegration::Nushell, config.shell_integration);
+
+        // config.@"shell-integration" = .none;
+        // try applyCommandOverrides(&config, null, .nushell);
+        // try testing.expectEqual(.nushell, config.@"shell-integration");
+        config.shell_integration = ShellIntegration::None;
+        apply_command_overrides(&mut config, None, Some(ShellIntegration::Nushell));
+        assert_eq!(ShellIntegration::Nushell, config.shell_integration);
+
+        // try applyCommandOverrides(&config, null, .none);
+        // try testing.expectEqual(.none, config.@"shell-integration");
+        apply_command_overrides(&mut config, None, Some(ShellIntegration::None));
+        assert_eq!(ShellIntegration::None, config.shell_integration);
     }
 
     /// **Invariant 9 KAT** — a key event routes through the IM context FIRST, and a

@@ -15,16 +15,15 @@
 // const Allocator = std.mem.Allocator;
 // const testing = std.testing;
 // const assert = @import("../quirks.zig").inlineAssert;
-// const fastmem = @import("../fastmem.zig");
 //
-// PORT NOTE: `tripwire`, `quirks.inlineAssert`, and `fastmem` live in
-// `rustty-util` (the FIRM leaf crate). `std.mem.Allocator` is faithfully
-// modeled by `allocator_api2::alloc::Allocator` (the same map used by
-// PageList); callers pass `allocator_api2::alloc::Global` for the prior
-// `std::alloc` behavior.
+// PORT NOTE: `tripwire` and `quirks.inlineAssert` live in `rustty-util` (the
+// FIRM leaf crate). `std.mem.Allocator` is faithfully modeled by
+// `allocator_api2::alloc::Allocator` (the same map used by PageList); callers
+// pass `allocator_api2::alloc::Global` for the prior `std::alloc` behavior.
+// (`ac4dc1205` dropped the `fastmem` import along with the alloc+copy+free
+// resize path.)
 use allocator_api2::alloc::{Allocator, Global};
 use allocator_api2::boxed::Box;
-use rustty_util::fastmem;
 use rustty_util::quirks::inlineAssert as assert;
 
 /// Unit is the type we use per tabstop unit (see file docs).
@@ -247,47 +246,44 @@ impl<A: Allocator> Tabstops<A> {
             return Ok(());
         }
 
-        // What we need in the dynamic size
-        let size = cols - PREALLOC_COLUMNS;
-        if size <= self.dynamic_stops.len() {
+        // Number of units needed beyond the preallocated columns.
+        // const dynamic_count = std.math.divCeil(
+        //     usize,
+        //     cols - prealloc_columns,
+        //     unit_bits,
+        // ) catch unreachable;
+        //
+        // R7: `cols - prealloc_columns` cannot underflow (the `cols <=
+        // PREALLOC_COLUMNS` early-return above guarantees it), asserted; the
+        // reference `divCeil ... catch unreachable` only errors on a zero
+        // divisor (`UNIT_BITS` is a nonzero constant), matching `div_ceil`.
+        debug_assert!(cols > PREALLOC_COLUMNS);
+        let dynamic_count = (cols - PREALLOC_COLUMNS).div_ceil(UNIT_BITS);
+        if dynamic_count <= self.dynamic_stops.len() {
             self.cols = cols;
             return Ok(());
         }
 
-        // Note: we can probably try to realloc here but I'm not sure it matters.
         // try tw.check(.dynamic_alloc);
         #[cfg(test)]
         resize_tw_check(ResizeFp::DynamicAlloc)?;
-        // const new = try alloc.alloc(Unit, size);
-        // errdefer comptime unreachable;
-        // @memset(new, 0);
-        // if (self.dynamic_stops.len > 0) {
-        //     fastmem.copy(Unit, new, self.dynamic_stops);
-        //     alloc.free(self.dynamic_stops);
-        // }
-        //
-        // self.dynamic_stops = new;
+        // const old_len = self.dynamic_stops.len;
+        // self.dynamic_stops = try alloc.realloc(self.dynamic_stops, dynamic_count);
+        // @memset(self.dynamic_stops[old_len..], 0);
         // self.cols = cols;
         //
-        // PORT NOTE: `errdefer comptime unreachable` asserts no error can occur
-        // after this point; the Rust code below is infallible (no `?`). We
-        // allocate a zeroed `[]Unit` via `allocator_api2::vec::Vec` over `A`
-        // (mirroring `alloc.alloc` + `@memset(new, 0)`), copy the old contents
-        // in with `fastmem::copy`, then drop the old `Box` (`alloc.free`).
-        let mut new_vec: allocator_api2::vec::Vec<Unit, A> =
-            allocator_api2::vec::Vec::with_capacity_in(size, alloc);
-        // @memset(new, 0): the bytes are zero-initialized.
-        new_vec.resize(size, 0);
-        let mut new = new_vec.into_boxed_slice();
-        // `if (self.dynamic_stops.len > 0)` (verbatim from the reference).
-        #[allow(clippy::len_zero)]
-        if self.dynamic_stops.len() > 0 {
-            fastmem::copy(&mut new, &self.dynamic_stops);
-            // alloc.free(self.dynamic_stops): swapping `new` in below drops the
-            // old slice's `Box`, freeing it via its owning allocator.
-        }
-
-        self.dynamic_stops = new;
+        // PORT NOTE: `alloc.realloc(old, dynamic_count)` grows the slice in
+        // place where possible, preserving the existing stops. The Rust model
+        // moves the `Box` back into a `Vec` over the same allocator `A`,
+        // grows it with `resize(dynamic_count, 0)` (realloc + the reference's
+        // tail-only `@memset`), and re-boxes it.
+        let old = core::mem::replace(
+            &mut self.dynamic_stops,
+            allocator_api2::vec::Vec::new_in(alloc).into_boxed_slice(),
+        );
+        let mut new_vec: allocator_api2::vec::Vec<Unit, A> = old.into_vec();
+        new_vec.resize(dynamic_count, 0);
+        self.dynamic_stops = new_vec.into_boxed_slice();
         self.cols = cols;
         Ok(())
     }
@@ -424,7 +420,9 @@ mod tests {
     // test "Tabstops: resize to existing capacity does not allocate"
     //
     // PORT NOTE: the reference proves "no second allocation" with a
-    // `FixedBufferAllocator` sized exactly `prealloc_columns` Units -- the first
+    // `FixedBufferAllocator` sized exactly `prealloc_count` Units (`ac4dc1205`
+    // shrank the backing from `prealloc_columns` Units to match the new
+    // unit-sized dynamic storage) -- the first
     // resize consumes the whole buffer, so a second allocating resize would fail
     // with OutOfMemory. rustty's tabstops allocate through the generic `A`
     // parameter and the module already carries a tripwire fail point at exactly
@@ -471,19 +469,29 @@ mod tests {
         // defer t.deinit(testing.allocator);
         let mut t: Tabstops = Tabstops::default();
 
-        // Grow the capacity by 2.
+        // Grow by less than one unit to verify the allocation rounds up.
         // const cap = t.capacity();
         let cap = t.capacity();
-        // try t.resize(testing.allocator, cap * 2);
-        t.resize(Global, cap * 2).unwrap();
+        // try t.resize(testing.allocator, cap + 5);
+        t.resize(Global, cap + 5).unwrap();
+        // try testing.expectEqual(cap + unit_bits, t.capacity());
+        assert_eq!(cap + UNIT_BITS, t.capacity());
 
         // Set something that was out of range of the first
-        // t.set(cap + 5);
-        t.set(cap + 5);
-        // try testing.expect(t.get(cap + 5));
-        assert!(t.get(cap + 5));
-        // try testing.expect(!t.get(cap + 4));
-        assert!(!t.get(cap + 4));
+        // t.set(cap + 4);
+        t.set(cap + 4);
+        // try testing.expect(t.get(cap + 4));
+        assert!(t.get(cap + 4));
+        // try testing.expect(!t.get(cap + 3));
+        assert!(!t.get(cap + 3));
+
+        // Growing again preserves existing stops and clears the new unit.
+        // try t.resize(testing.allocator, cap + unit_bits + 1);
+        t.resize(Global, cap + UNIT_BITS + 1).unwrap();
+        // try testing.expect(t.get(cap + 4));
+        assert!(t.get(cap + 4));
+        // try testing.expect(!t.get(cap + unit_bits));
+        assert!(!t.get(cap + UNIT_BITS));
 
         // Prealloc still works
         // try testing.expect(!t.get(5));

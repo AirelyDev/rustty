@@ -92,8 +92,11 @@ pub enum Action<'a> {
     // 4. Update `include/rustty.h`: add the new key, value, and union
     //    entry. If the value type is void then only the key needs to be
     //    added. Ensure the order matches exactly with the Zig code.
-    /// The arguments to pass to Ghostty as the command.
+    /// Create a new window.
     NewWindow(NewWindow<'a>),
+
+    /// Create a new tab.
+    NewTab(NewTab<'a>),
 
     /// Toggle the quick terminal.
     ToggleQuickTerminal,
@@ -102,9 +105,10 @@ pub enum Action<'a> {
 /// PORT NOTE: reference `arguments: ?[][:0]const u8` -> borrowed
 /// `Option<&'a [&'a [u8]]>` (a borrowed slice of borrowed raw-byte args).
 pub struct NewWindow<'a> {
-    /// A list of command arguments to launch in the new window. If this is
-    /// `null` the command configured in the config or the user's default
-    /// shell should be launched.
+    /// A list of configuration entries that will override the configuration
+    /// of the first surface of the new window. If this is `null` there
+    /// are no overrides. Note that not all configuration entries may be
+    /// overridden.
     ///
     /// It is an error for this to be non-`null`, but zero length.
     pub arguments: Option<&'a [&'a [u8]]>,
@@ -113,11 +117,17 @@ pub struct NewWindow<'a> {
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct NewWindowC {
-    /// null terminated list of arguments
-    /// it will be null itself if there are no arguments
+    /// A list of configuration entries that will override the
+    /// configuration of the first surface of the new tab. If this is
+    /// `null` there are no overrides. Note that not all configuration
+    /// entries may be overridden.
+    ///
+    /// It is an error for this to be non-`null`, but zero length.
     //
     // PORT NOTE: reference `?[*]?[*:0]const u8` -> `*mut *const u8` (null array
     // pointer == None; null element == the NUL terminator / a None argument).
+    // (The "new tab" wording above is the reference's own text, verbatim —
+    // `ipc.zig` `NewWindow.C` says "new tab"; R1 keeps it.)
     pub arguments: *mut *const u8,
 }
 
@@ -170,11 +180,115 @@ impl<'a> NewWindow<'a> {
     }
 }
 
+/// PORT NOTE: reference `arguments: ?[][:0]const u8` -> borrowed
+/// `Option<&'a [&'a [u8]]>` (same treatment as [`NewWindow`]).
+pub struct NewTab<'a> {
+    /// The unique ID of a surface. If the ID is zero the currently focused
+    /// surface is assumed. This will be used to identify the window to add
+    /// the tab to.
+    pub surface_id: u64,
+
+    /// A list of configuration entries that will override the configuration
+    /// of the first surface of the new tab. If this is `null` there
+    /// are no overrides. Note that not all configuration entries may be
+    /// overridden.
+    ///
+    /// It is an error for this to be non-`null`, but zero length.
+    pub arguments: Option<&'a [&'a [u8]]>,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct NewTabC {
+    /// The unique ID of a surface. If the ID is zero the currently
+    /// focused surface is assumed. This will be used to identify the
+    /// window to add the tab to.
+    pub surface_id: u64,
+    /// A list of configuration entries that will override the
+    /// configuration of the first surface of the new tab. If this is
+    /// `null` there are no overrides. Note that not all configuration
+    /// entries may be overridden.
+    ///
+    /// It is an error for this to be non-`null`, but zero length.
+    //
+    // PORT NOTE: reference `?[*]?[*:0]const u8` -> `*mut *const u8` (null array
+    // pointer == None; null element == the NUL terminator / a None argument).
+    pub arguments: *mut *const u8,
+}
+
+impl NewTabC {
+    /// # Safety
+    /// `alloc` must be the same allocator that produced `self.arguments` (via
+    /// [`NewTab::cval`]).
+    //
+    // UPSTREAM QUIRK (034506f14, ipc.zig `NewTab.C`): the reference declares
+    // this as `pub fn deinit(self: *NewWindow.C, alloc: Allocator)` — a
+    // copy-paste of the `NewWindow.C` method that names the WRONG receiver
+    // type. It compiles upstream only because Zig analyzes functions lazily
+    // and nothing ever calls `NewTab.C.deinit` (or `Action.cval` at all — the
+    // apprts consume the Zig union directly). Rust compiles every item, so
+    // this is the same body with the correct receiver. Recorded in
+    // `.port/phase-4/UPSTREAM_BUGS.md`.
+    pub unsafe fn deinit<A: Allocator>(&mut self, alloc: A) {
+        // PORT NOTE: reference `if (self.arguments) |arguments| alloc.free(arguments);`
+        // (see `NewWindowC::deinit` for the length-recovery rationale).
+        if let Some(base) = NonNull::new(self.arguments) {
+            let mut n = 0usize;
+            // SAFETY: `cval` NUL-terminates the array.
+            while unsafe { !(*base.as_ptr().add(n)).is_null() } {
+                n += 1;
+            }
+            n += 1; // include the NUL terminator slot
+            let layout = Layout::array::<*const u8>(n).unwrap();
+            // SAFETY: `base`/`layout` match the `cval` allocation.
+            unsafe { alloc.deallocate(base.cast::<u8>(), layout) };
+        }
+    }
+}
+
+impl<'a> NewTab<'a> {
+    // UPSTREAM QUIRK (034506f14, ipc.zig `NewTab.cval`): the reference's
+    // signature is `pub fn cval(self: *NewWindow, alloc) !NewWindow.C` — the
+    // `NewWindow` copy-paste again, and the body never writes `surface_id`.
+    // Dead comptime code upstream (never instantiated); Rust must compile it,
+    // so this is the evidently-intended conversion: the same argument-array
+    // marshalling PLUS the `surface_id` passthrough the C struct declares.
+    // Recorded in `.port/phase-4/UPSTREAM_BUGS.md`.
+    pub fn cval<A: Allocator>(&self, alloc: A) -> Result<NewTabC, AllocError> {
+        match self.arguments {
+            Some(arguments) => {
+                let n = arguments.len() + 1;
+                let layout = Layout::array::<*const u8>(n).map_err(|_| AllocError)?;
+                let ptr = alloc.allocate(layout)?;
+                let base = ptr.cast::<*const u8>().as_ptr();
+                // SAFETY: `base` points to `n` freshly-allocated, aligned,
+                // uninitialized `*const u8` slots.
+                unsafe {
+                    for (i, argument) in arguments.iter().enumerate() {
+                        base.add(i).write(argument.as_ptr());
+                    }
+                    // add null terminator
+                    base.add(arguments.len()).write(core::ptr::null());
+                }
+                Ok(NewTabC {
+                    surface_id: self.surface_id,
+                    arguments: base,
+                })
+            }
+            None => Ok(NewTabC {
+                surface_id: self.surface_id,
+                arguments: core::ptr::null_mut(),
+            }),
+        }
+    }
+}
+
 /// Sync with: rustty_ipc_action_tag_e
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
 pub enum ActionKey {
     NewWindow,
+    NewTab,
     ToggleQuickTerminal,
 }
 
@@ -183,6 +297,7 @@ pub enum ActionKey {
 #[repr(C)]
 pub union ActionCValue {
     pub new_window: NewWindowC,
+    pub new_tab: NewTabC,
     pub toggle_quick_terminal: (),
 }
 
@@ -193,17 +308,29 @@ pub struct ActionC {
     pub value: ActionCValue,
 }
 
+// For ABI compatibility, we expect that this is our union size.
+// At the time of writing, we don't promise ABI compatibility
+// so we can change this but I want to be aware of it.
+//
 // PORT NOTE: reference `comptime { assert(@sizeOf(CValue) == switch(@sizeOf(usize))
-// { 4 => 4, 8 => 8 }); }`. Reproduced against the ACTUAL Rust layout (the union is
-// a single `*mut *const u8` = one pointer). Byte-exact `rustty.h` ABI pinning is
-// DEFERRED to the embedded C-API milestone.
-const _: () = assert!(core::mem::size_of::<ActionCValue>() == core::mem::size_of::<usize>());
+// { 4 => 12, 8 => 16, else => unreachable }); }` (034506f14 widened 4/8 -> 12/16
+// when `NewTabC` — `{u64, ptr}` — joined the union). Byte-exact `rustty.h` ABI
+// pinning is DEFERRED to the embedded C-API milestone.
+const _: () = assert!(
+    core::mem::size_of::<ActionCValue>()
+        == match core::mem::size_of::<usize>() {
+            4 => 12,
+            8 => 16,
+            _ => unreachable!(),
+        }
+);
 
 impl<'a> Action<'a> {
     /// The active tag (`@as(Key, self)`).
     pub fn key(&self) -> ActionKey {
         match self {
             Action::NewWindow(_) => ActionKey::NewWindow,
+            Action::NewTab(_) => ActionKey::NewTab,
             Action::ToggleQuickTerminal => ActionKey::ToggleQuickTerminal,
         }
     }
@@ -218,6 +345,9 @@ impl<'a> Action<'a> {
         let value = match self {
             Action::NewWindow(v) => ActionCValue {
                 new_window: v.cval(alloc)?,
+            },
+            Action::NewTab(v) => ActionCValue {
+                new_tab: v.cval(alloc)?,
             },
             Action::ToggleQuickTerminal => ActionCValue {
                 toggle_quick_terminal: (),
@@ -262,10 +392,18 @@ mod tests {
     // }
     #[test]
     fn ghostty_h_action_key() {
-        let _ = (ActionKey::NewWindow, ActionKey::ToggleQuickTerminal);
+        let _ = (
+            ActionKey::NewWindow,
+            ActionKey::NewTab,
+            ActionKey::ToggleQuickTerminal,
+        );
         let t = enum_type(
             EnumTarget::C,
-            &[Some("new_window"), Some("toggle_quick_terminal")],
+            &[
+                Some("new_window"),
+                Some("new_tab"),
+                Some("toggle_quick_terminal"),
+            ],
         );
         let fields = t.fields.clone();
         check_ghostty_henum(&t, "RUSTTY_IPC_ACTION_", |name| {

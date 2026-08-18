@@ -966,6 +966,7 @@ impl PageList {
             page_serial,
             page_serial_epoch: 0,
             page_compression: super::compress::IncrementalCompressionState::default(),
+            recycle_node: core::ptr::null_mut(),
             page_size,
             limits: self.limits,
             cols: self.cols,

@@ -6,7 +6,7 @@ byte-exact against a committed per-file digest manifest [R1].
 Why this exists (`P3-W9 T5` step 2). `xtask/src/res_themes.rs` asserts the
 emitted corpus has EXACTLY N files. That catches an added or deleted theme and
 nothing else: **content drift inside an existing theme file is invisible to a
-count.** The corpus is 592 files of upstream data that no rustty test reads the
+count.** The corpus is 602 files of upstream data that no rustty test reads the
 body of (`res_themes.rs` spot-checks exactly one file for the substring
 `palette = 0=`), it is shipped to users by `xtask resources`, and it is
 re-vendored by hand from a tarball. A single mistyped hex value, a stray editor

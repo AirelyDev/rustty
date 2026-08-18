@@ -1367,6 +1367,20 @@ impl Capacity {
     }
 }
 
+// PORT NOTE (`0e8b7bea6` "vt: expose packed cell layout" — CORE half,
+// P4-W2 T4): the reference adds `Cell.CLayout = lib.Packed(Cell, .{ .fields =
+// ... })` here — C-facing layout METADATA (reflected bit offsets/widths for
+// every field, including the tagged-union content arms `codepoint` /
+// `codepoint_grapheme` / `bg_color_palette` / `bg_color_rgb`, with
+// `_pad`/`_padding` omitted) kept next to Cell itself and consumed by the ABI
+// manifest (`c/types.zig`, `types.schema.json`). It is pure comptime
+// reflection over `lib.Packed`/`lib.PackedTaggedUnion` (`src/lib/packed.zig`,
+// +290) which rustty-lib does not carry yet: that machinery is area C's W5
+// Bundle T ("packed.zig GhosttyPackedCell (couples W2's cell layout)"), and
+// the Rust `CLayout` equivalent lands WITH it against this anchor. The
+// physical bit ranges it would reflect are already named here by
+// `CellField::range` below (single source for shifts/widths).
+//
 // =============================================================================
 // Masked compares over the packed backing integers (446f80f4e, WS10 T19).
 // =============================================================================
@@ -1395,6 +1409,12 @@ pub type Backing = u64;
 pub enum CellField {
     ContentTag,
     Content,
+    /// The `data: u21` bits of the `content.codepoint` union member — the
+    /// reference's nested field path `"content.codepoint.data"`
+    /// (`0fb3565c7`). Packed union members all share bit offset zero, so the
+    /// path's bit offset is the content field's own offset and its width is
+    /// the codepoint's 21 bits, excluding the `_pad: u3` next to it.
+    ContentCodepointData,
     StyleId,
     Wide,
     Protected,
@@ -1408,6 +1428,8 @@ impl CellField {
         match self {
             CellField::ContentTag => (CELL_CONTENT_TAG_SHIFT, CELL_CONTENT_TAG_BITS),
             CellField::Content => (CELL_CONTENT_SHIFT, CELL_CONTENT_BITS),
+            // `@bitSizeOf(u21)` bits at the content union's bit offset.
+            CellField::ContentCodepointData => (CELL_CONTENT_SHIFT, 21),
             CellField::StyleId => (CELL_STYLE_ID_SHIFT, CELL_STYLE_ID_BITS),
             CellField::Wide => (CELL_WIDE_SHIFT, CELL_WIDE_BITS),
             CellField::Protected => (CELL_PROTECTED_SHIFT, 1),
@@ -1453,8 +1475,17 @@ impl RowField {
 /// (e.g. `Row.Backing`, `Cell.Backing`). This is an implementation
 /// detail of `Mask`, which is the public API built on top of this.
 ///
+/// A field may be a dot-separated path (e.g. "content.codepoint.data")
+/// to cover only a nested field of a packed struct or packed union
+/// member. This allows a mask to be more precise than a whole
+/// top-level field, e.g. covering the codepoint bits of a cell without
+/// its padding.
+///
 /// PORT NOTE: reference `fn fieldMask(comptime T, comptime fields)`; the port
-/// takes the already-resolved `(shift, bits)` field ranges.
+/// takes the already-resolved `(shift, bits)` field ranges. Nested paths
+/// (`0fb3565c7`) become dedicated enum variants carrying their resolved range
+/// (see `CellField::ContentCodepointData` — packed union members all share
+/// bit offset zero, so the resolution is a constant).
 pub const fn field_mask(fields: &[(u32, u32)]) -> Backing {
     let mut m: Backing = 0;
     let mut i = 0;
@@ -1716,6 +1747,24 @@ impl<T: Packed, const MASK: Backing, const GROUP_LEN: usize> Mask<T, MASK, GROUP
     #[inline]
     pub fn eql_scalar(v: T, expected: Backing) -> bool {
         Self::pattern(v) == expected
+    }
+
+    /// Returns true if any value in the group of group_len values
+    /// starting at index i has masked fields equal to the expected
+    /// pattern (see `pattern`). This is the "any" counterpart to
+    /// `eql`: use it to detect the presence of a specific value
+    /// within a group, e.g. a run scan that must stop when it
+    /// encounters a sentinel codepoint anywhere in the group.
+    #[inline]
+    pub fn eql_any(values: &[T], i: usize, expected: Backing) -> bool {
+        let g = Self::load(values, i);
+        let mut ok = false;
+        let mut k = 0;
+        while k < GROUP_LEN {
+            ok |= (g[k] & MASK) == expected;
+            k += 1;
+        }
+        ok
     }
 
     /// Like `eql` but returns the number of leading values whose

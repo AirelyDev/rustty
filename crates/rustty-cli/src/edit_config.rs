@@ -3,7 +3,8 @@
 //! PORTS: ghostty src/cli/edit_config.zig (0t) — the `+edit-config` action:
 //! open the user config file in `$VISUAL`/`$EDITOR` via a `/bin/sh -c` exec.
 //! Backed by rustty-config (`Config.load`, `preferredDefaultFilePath`) and
-//! rustty-os (`getenv`, `ShellEscapeWriter`, the POSIX exec). Byte-faithful (R1);
+//! rustty-os (`getConfigEditCommand` — the `0a183c923` shared editor-command
+//! resolver — and the POSIX exec). Byte-faithful (R1);
 //! the editor / path bytes stay raw (R3). R2: the `ghostty +edit-config` binary
 //! name, the "Ghostty configuration" brand, and the illustrative config paths are
 //! retargeted to the Rustty product identity via rustty-identity. 0 tests.
@@ -21,8 +22,7 @@ use crate::rustty::{Action, Error};
 use rustty_config::file_load::preferred_default_file_path;
 use rustty_config::Config;
 // const internal_os = @import("../os/main.zig");
-use rustty_os::string_encoding::{AllocatingWriter, Writer};
-use rustty_os::ShellEscapeWriter;
+use rustty_os::edit::{DefaultEditor, Options as EditOptions};
 
 use std::io::Write;
 
@@ -151,140 +151,101 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
         //     \\The `ghostty +edit-config` command is not supported on Windows.
         //     \\Please edit the configuration file manually at the following path:
         //     \\
-        //     \\{s}
         //     \\
-        // , .{path});
+        // , .{});
         //   R2: the `ghostty` binary name -> the Rustty product name.
+        //   (`0a183c923` dropped the `{s}` path interpolation from this arm.)
         write!(
             stderr,
             "The `{app} +edit-config` command is not supported on Windows.\n\
              Please edit the configuration file manually at the following path:\n\
              \n\
-             {path}\n",
-            app = rustty_identity::APP_NAME,
-            path = show(&path),
-        )?;
-        // return 1;
-        return Ok(1);
-    }
-
-    // Get our editor
-    // const get_env_: ?internal_os.GetEnvResult = env: {
-    //
-    // PORT NOTE (P3-W7 T4): `internal_os.getenv`/`GetEnvResult` died with
-    // `src/os/env.zig` (`e8525c0fd`); the read goes through the captured
-    // environment block. The `deinit` calls collapse (the Windows-only free the
-    // reference's `GetEnvResult.deinit` performed is Drop in Rust), and the
-    // values are byte-typed, so a non-UTF-8 `$EDITOR` is no longer silently
-    // reported as unset.
-    let environ = rustty_global::environ();
-    let get_env_: Option<Vec<u8>> = 'env: {
-        // VISUAL vs. EDITOR: https://unix.stackexchange.com/questions/4859/visual-vs-editor-what-s-the-difference
-        // if (try internal_os.getenv(alloc, "VISUAL")) |v| {
-        //     if (v.value.len > 0) break :env v;
-        //     v.deinit(alloc);
-        // }
-        if let Some(v) = environ.get_alloc(b"VISUAL") {
-            if !v.is_empty() {
-                break 'env Some(v);
-            }
-        }
-
-        // if (try internal_os.getenv(alloc, "EDITOR")) |v| {
-        //     if (v.value.len > 0) break :env v;
-        //     v.deinit(alloc);
-        // }
-        if let Some(v) = environ.get_alloc(b"EDITOR") {
-            if !v.is_empty() {
-                break 'env Some(v);
-            }
-        }
-
-        // break :env null;
-        None
-    };
-    // defer if (get_env_) |v| v.deinit(alloc); — `get_env_` drops at scope end.
-    // const editor: []const u8 = if (get_env_) |v| v.value else "";
-    let editor: &[u8] = match &get_env_ {
-        Some(v) => v.as_slice(),
-        None => b"",
-    };
-
-    // If we don't have `$EDITOR` set then we can't do anything
-    // but we can still print a helpful message.
-    // if (editor.len == 0) {
-    if editor.is_empty() {
-        // try stderr.print(
-        //     \\The $EDITOR or $VISUAL environment variable is not set or is empty.
-        //     \\This environment variable is required to edit the Ghostty configuration
-        //     \\via this CLI command.
-        //     ...
-        // , .{});
-        //   R2: "Ghostty configuration" -> the Rustty product name
-        //   (APP_NAME_TITLECASE; the oracle prints the capitalized product name).
-        write!(
-            stderr,
-            "The $EDITOR or $VISUAL environment variable is not set or is empty.\n\
-             This environment variable is required to edit the {app} configuration\n\
-             via this CLI command.\n\
-             \n\
-             Please set the environment variable to your preferred terminal\n\
-             text editor and try again.\n\
-             \n\
-             If you prefer to edit the configuration file another way,\n\
-             you can find the configuration file at the following path:\n\
-             \n\
              \n",
-            app = rustty_identity::APP_NAME_TITLECASE,
+            app = rustty_identity::APP_NAME,
         )?;
-
-        // Output the path using the OSC8 sequence so that it is linked.
-        // try stderr.print(
-        //     "\x1b]8;;file://{s}\x1b\\{s}\x1b]8;;\x1b\\\n",
-        //     .{ path, path },
-        // );
-        //   (W94-B02-01: `{s}` writes the RAW path bytes; segmented `write_all`
-        //   keeps that byte-exact for a non-UTF-8 path.)
-        stderr.write_all(b"\x1b]8;;file://")?;
-        stderr.write_all(&path)?;
-        stderr.write_all(b"\x1b\\")?;
-        stderr.write_all(&path)?;
-        stderr.write_all(b"\x1b]8;;\x1b\\\n")?;
-
         // return 1;
         return Ok(1);
     }
 
-    // const command = command: {
-    //     var buffer: std.io.Writer.Allocating = .init(alloc);
-    //     defer buffer.deinit();
-    //     const writer = &buffer.writer;
-    //     try writer.writeAll(editor);
-    //     try writer.writeByte(' ');
-    //     {
-    //         var sh: internal_os.ShellEscapeWriter = .init(writer);
-    //         try sh.writer.writeAll(path);
-    //         try sh.writer.flush();
+    // const command = internal_os.getConfigEditCommand(alloc, path, .{ .default_editor = .failure }) catch |err| {
+    //     switch (err) {
+    //         error.NoEditorConfigured => { ... return 1; },
+    //         error.WriteFailed,
+    //         error.OutOfMemory,
+    //         => |e| return e,
     //     }
-    //     try writer.flush();
-    //     break :command try buffer.toOwnedSliceSentinel(0);
     // };
     // defer alloc.free(command);
-    let command: Vec<u8> = {
-        let mut buffer = AllocatingWriter::init();
-        buffer.writeAll(editor)?;
-        buffer.writeByte(b' ')?;
-        {
-            let mut sh = ShellEscapeWriter::init(&mut buffer);
-            sh.writeAll(&path)?;
-            // sh.writer.flush() — the allocating writer has no buffered state.
+    //
+    // PORT NOTE (`0a183c923`): the VISUAL/EDITOR resolution + shell-escaped
+    // command build moved into the shared `internal_os.getConfigEditCommand`
+    // (rustty-os `edit.rs`, landed W1). Its rustty error set is only
+    // `NoEditorConfigured` (the `WriteFailed`/`OutOfMemory` propagation arms
+    // collapse — the allocating writer is infallible, the edit.rs Error PORT
+    // NOTE), so the `catch` is a single-arm match. The returned bytes carry
+    // the `toOwnedSliceSentinel(0)` trailing NUL (the edit.rs contract).
+    let command: Vec<u8> = match rustty_os::getConfigEditCommand(
+        &path,
+        &EditOptions {
+            default_editor: DefaultEditor::Failure,
+        },
+    ) {
+        Ok(v) => v,
+        Err(rustty_os::edit::Error::NoEditorConfigured) => {
+            // try stderr.print(
+            //     \\The $EDITOR or $VISUAL environment variable is not set or is empty.
+            //     \\This environment variable is required to edit the Ghostty configuration
+            //     \\via this CLI command.
+            //     \\
+            //     \\Please set the environment variable to your preferred terminal
+            //     \\text editor and try again.
+            //     \\
+            //     \\If you prefer to edit the configuration file another way,
+            //     \\you can find the configuration file at the following path:
+            //     \\
+            //     \\
+            // , .{});
+            //   R2: "Ghostty configuration" -> the Rustty product name
+            //   (APP_NAME_TITLECASE; the oracle prints the capitalized product name).
+            write!(
+                stderr,
+                "The $EDITOR or $VISUAL environment variable is not set or is empty.\n\
+                 This environment variable is required to edit the {app} configuration\n\
+                 via this CLI command.\n\
+                 \n\
+                 Please set the environment variable to your preferred terminal\n\
+                 text editor and try again.\n\
+                 \n\
+                 If you prefer to edit the configuration file another way,\n\
+                 you can find the configuration file at the following path:\n\
+                 \n\
+                 \n",
+                app = rustty_identity::APP_NAME_TITLECASE,
+            )?;
+
+            // Output the path using the OSC8 sequence so that it is linked.
+            // try stderr.print(
+            //     "\x1b]8;;file://{s}\x1b\\{s}\x1b]8;;\x1b\\\n",
+            //     .{ path, path },
+            // );
+            //   (W94-B02-01: `{s}` writes the RAW path bytes; segmented `write_all`
+            //   keeps that byte-exact for a non-UTF-8 path.)
+            stderr.write_all(b"\x1b]8;;file://")?;
+            stderr.write_all(&path)?;
+            stderr.write_all(b"\x1b\\")?;
+            stderr.write_all(&path)?;
+            stderr.write_all(b"\x1b]8;;\x1b\\\n")?;
+
+            // return 1;
+            return Ok(1);
         }
-        // writer.flush() — no-op for the allocating writer.
-        // break :command try buffer.toOwnedSliceSentinel(0);
-        //   PORT NOTE: `toOwnedSliceSentinel(0)` yields a NUL-terminated `[:0]const
-        //   u8` for `execvpeZ`; Rust's `Command::arg` re-appends the C NUL, so the
-        //   logical (NUL-free) bytes are kept here.
-        buffer.written().to_vec()
+    };
+    // (the NUL-free command bytes: `command.ptr` hands the C string to execve;
+    // Rust's `Command::arg` re-appends the C NUL, so the sentinel is stripped
+    // for the argv/display sites below.)
+    let command_bytes: &[u8] = match command.split_last() {
+        Some((0, rest)) => rest,
+        _ => &command,
     };
 
     // We require libc because we want to use std.c.environ for envp
@@ -294,6 +255,9 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
     // comptime assert(builtin.link_libc);
     //   PORT NOTE: Rust always links libc; the compile-time assertion holds
     //   trivially and needs no runtime check.
+    //
+    // (the reference hoists this assert ABOVE the config load at END STATE;
+    // kept at the exec site — it is a comptime no-op either way.)
 
     // Run/replace process (using execve)
     // const argv = [_:null]?[*:0]const u8{ "/bin/sh", "-c", command.ptr };
@@ -307,17 +271,23 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
         use std::os::unix::process::CommandExt;
         let err = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg(as_os_str(&command))
+            .arg(as_os_str(command_bytes))
             .exec();
 
         // If we reached this point then exec failed.
         // try stderr.print(
-        //     \\Failed to execute the editor (E{s}).
-        //     ...
-        //     \\Editor: {s}
-        //     \\Path: {s}
+        //     \\Failed to execute the editor (E{t}).
         //     \\
-        // , .{ @tagName(errno), editor, path });
+        //     \\This is usually due to the executable path not existing, invalid
+        //     \\permissions, or the shell environment not being set up
+        //     \\correctly.
+        //     \\
+        //     \\Command: {s}
+        //     \\
+        // , .{
+        //     err,
+        //     command,
+        // });
         writeln!(
             stderr,
             "Failed to execute the editor (E{err}).\n\
@@ -326,12 +296,22 @@ fn run_inner<We: Write>(stderr: &mut We) -> Result<u8, Error> {
              permissions, or the shell environment not being set up\n\
              correctly.\n\
              \n\
-             Editor: {editor}\n\
-             Path: {path}",
-            editor = show(editor),
-            path = show(&path),
+             Command: {command}",
+            command = show(command_bytes),
             err = errno_suffix(&err),
         )?;
+        // Output the path using the OSC8 sequence so that it is linked.
+        // try stderr.print(
+        //     "Path: \x1b]8;;file://{s}\x1b\\{s}\x1b]8;;\x1b\\\n",
+        //     .{ path, path },
+        // );
+        //   (segmented `write_all` keeps the raw path bytes byte-exact, the
+        //   NoEditorConfigured arm's precedent.)
+        stderr.write_all(b"Path: \x1b]8;;file://")?;
+        stderr.write_all(&path)?;
+        stderr.write_all(b"\x1b\\")?;
+        stderr.write_all(&path)?;
+        stderr.write_all(b"\x1b]8;;\x1b\\\n")?;
         // return 1;
         Ok(1)
     }

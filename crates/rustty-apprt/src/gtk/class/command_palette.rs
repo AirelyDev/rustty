@@ -494,12 +494,18 @@ mod imp_command {
     /// PORTS: `command_palette.zig:550-555` `JumpData`.
     pub struct JumpData {
         /// Weak ref to the surface this jump focuses (`:551`).
+        //
+        // PORT NOTE (1dbc8ca30): the reference `Command.dispose` now releases
+        // this via the named `j.surface.deinit()`. rustty's `Command` has no
+        // dispose override — the `RefCell<Option<CommandData>>` drop glue runs
+        // the [`WeakRef`] `Drop`, whose `g_weak_ref_clear` IS the deinit
+        // requirement (see `weak_ref.rs` `deinit`'s verification note).
         pub surface: WeakRef<Surface>,
         /// Cached "Focus: {title}" (`:552`).
         pub title: Option<String>,
         /// Cached description / pwd (`:553`).
         pub description: Option<String>,
-        /// Stable sort key (surface pointer) (`:554`).
+        /// Stable sort key (the core surface id; f17b425aa) (`:554`).
         pub sort_key: usize,
     }
 
@@ -672,10 +678,17 @@ impl Command {
         let obj: Self = glib::Object::builder().property("config", config).build();
         let weak: WeakRef<Surface> = WeakRef::default();
         weak.set(Some(surface));
-        // TODO: Replace with surface id whenever Rustty adds one
+        // Surface should be initialized at this point.
         //
-        // `sort_key = @intFromPtr(surface)` (`:587`).
-        let sort_key = surface.as_ptr() as usize;
+        // `sort_key = surface.core().?.id` (f17b425aa: the stable core surface
+        // id replaces the old `@intFromPtr(surface)` pointer key; the reference
+        // `.?` unwrap is the `expect`).
+        let sort_key = unsafe {
+            (*surface
+                .core()
+                .expect("Surface should be initialized at this point"))
+            .id
+        } as usize;
         obj.imp().data.replace(Some(imp_command::CommandData::Jump(
             imp_command::JumpData {
                 surface: weak,

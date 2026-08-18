@@ -274,6 +274,22 @@ pub struct Row {
 
     /// The highlights within this row.
     pub highlights: Vec<Highlight>,
+
+    /// The style runs applied to this row's per-cell style data
+    /// by the last `endUpdate` that touched it. This is what lets
+    /// `endUpdate` skip the (comparatively large) per-cell style
+    /// fill when a rebuilt row produced identical runs, which is
+    /// the common case: text changes far more often than styling.
+    ///
+    /// The invariant is that this always describes the current
+    /// contents of the cell style data for the covered ranges. It
+    /// is cleared whenever the cell storage is reallocated.
+    ///
+    /// This uses the general allocator (NOT the row arena)
+    /// because it must survive row rebuilds. `endUpdate` cannot
+    /// allocate, so `beginUpdate` reserves the capacity.
+    // applied_styles: std.ArrayList(StyleRun),
+    pub applied_styles: Vec<StyleRun>,
 }
 
 pub struct Highlight {
@@ -614,21 +630,130 @@ impl RenderState {
         }
 
         let row_len = self.row_data.len();
-        for run in self.pending_styles.iter() {
+
+        // Process the pending runs one row segment at a time. All the
+        // runs for a row are appended contiguously by a single
+        // beginUpdate, so a segment boundary is simply a change in y.
+        let runs: &[StyleRun] = &self.pending_styles;
+        let mut i: usize = 0;
+        while i < runs.len() {
+            let y = runs[i].y;
+            let mut j = i + 1;
+            while j < runs.len() && runs[j].y == y {
+                j += 1;
+            }
+            let segment = &runs[i..j];
+            i = j;
+
             // Defensive: the row data may have changed shape if the
             // caller violated ordering (e.g. an error path skipped an
             // endUpdate between updates). Any update that changes
             // dimensions clears the pending list (redraw), so this
             // should never actually trigger, but the cost is trivial.
-            if run.y as usize >= row_len {
+            if y as usize >= row_len {
                 continue;
             }
-            let styles = self.row_data[run.y as usize].cells.style_mut();
-            let end = core::cmp::min(run.end as usize, styles.len());
-            let start = core::cmp::min(run.start as usize, end);
-            styles[start..end].fill(run.style);
+
+            // If the segment matches the runs already denormalized
+            // into this row's cell data then the per-cell styles are
+            // already correct and the (comparatively large) fill can
+            // be skipped entirely. This is the common case: rebuilt
+            // rows usually keep their styling (only the text
+            // changed), and full redraws of an unchanged screen keep
+            // both.
+            let row = &mut self.row_data[y as usize];
+            if Self::runs_eql(&row.applied_styles, segment) {
+                continue;
+            }
+
+            for run in segment {
+                let styles = row.cells.style_mut();
+                let end = core::cmp::min(run.end as usize, styles.len());
+                let start = core::cmp::min(run.start as usize, end);
+
+                Self::fill_styles(&mut styles[start..end], run.style);
+            }
+
+            // Record what we applied so the next rebuild of this row
+            // can skip the fill. beginUpdate reserved the capacity
+            // (we cannot allocate here); if it doesn't fit (e.g.
+            // segments merged across multiple begins without an end)
+            // leave the cache empty, which never matches and simply
+            // means the next rebuild applies its runs.
+            //
+            // PORT NOTE: `appendSliceAssumeCapacity` — the capacity check
+            // above guarantees `extend_from_slice` never allocates.
+            row.applied_styles.clear();
+            if row.applied_styles.capacity() >= segment.len() {
+                row.applied_styles.extend_from_slice(segment);
+            }
         }
         self.pending_styles.clear();
+    }
+
+    /// Mark all render-state data as consumed by the renderer.
+    ///
+    /// This clears both the global dirty state and every per-row dirty flag.
+    /// Callers that only consume part of a frame should clear the two layers
+    /// individually instead.
+    // pub fn clean(self: *RenderState) void { ... }
+    pub fn clean(&mut self) {
+        self.dirty = Dirty::False;
+        // @memset(self.row_data.items(.dirty), false);
+        for row in self.row_data.iter_mut() {
+            row.dirty = false;
+        }
+    }
+
+    /// Fill a slice of styles with one value.
+    ///
+    /// This is equivalent to `@memset(dst, value)` but manually vectorized:
+    /// `@memset` with a struct value lowers to a per-element field copy
+    /// that reloads the source at every iteration because LLVM cannot
+    /// prove the destination doesn't alias it. And, Zig 0.16 disables
+    /// auto-vectorization due to an LLVM bug.
+    ///
+    /// This complexity is justified by accounting for ~10% of the endUpdate
+    /// times under heavily styled cases.
+    // fn fillStyles(dst: []Style, value: Style) void { ... }
+    //
+    // PORT NOTE (`74a233b54`, Phase-3 `f2a7652ab` precedent): the reference's
+    // manual two-overlapping-16-byte-vector-stores body exists solely because
+    // of ZIG 0.16 codegen (per-field `@memset` lowering + the disabled LLVM
+    // loop vectorizer). Rust's `<[T]>::fill` with a `Copy` struct lowers to a
+    // plain fill loop that LLVM vectorizes normally, so the SEMANTICS are
+    // ported and the vector trick is not replicated (its `16 <= @sizeOf(Style)
+    // <= 32` comptime assert is kept as the same guard the reference compiles
+    // under).
+    fn fill_styles(dst: &mut [Style], value: Style) {
+        // const elem_size = @sizeOf(Style);
+        // comptime assert(elem_size >= 16 and elem_size <= 32);
+        let () = Self::_STYLE_SIZE_ASSERT;
+
+        dst.fill(value);
+    }
+
+    // The `fill_styles` comptime size assertion (forced by the `let ()` above).
+    const _STYLE_SIZE_ASSERT: () = {
+        let elem_size = core::mem::size_of::<Style>();
+        assert!(elem_size >= 16 && elem_size <= 32);
+    };
+
+    /// Returns true if the two style run lists denormalize to
+    /// identical per-cell style data. This is a semantic comparison
+    /// (styles are compared field-wise, never by bytes, since padding
+    /// is undefined).
+    // fn runsEql(a: []const StyleRun, b: []const StyleRun) bool { ... }
+    fn runs_eql(a: &[StyleRun], b: &[StyleRun]) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        for (ar, br) in a.iter().zip(b.iter()) {
+            if ar.start != br.start || ar.end != br.end || !ar.style.eql(&br.style) {
+                return false;
+            }
+        }
+        true
     }
 
     /// Begin an update of the render state to the latest terminal
@@ -783,6 +908,8 @@ impl RenderState {
                         dirty: true,
                         selection: None,
                         highlights: Vec::new(),
+                        // .applied_styles = .empty,
+                        applied_styles: Vec::new(),
                     });
                 }
             } else {
@@ -1473,6 +1600,20 @@ fn row_builder(
 
         // Copy our raw row data
         row.raw = unsafe { *page_row };
+
+        // The cell storage (including the per-cell style data) is
+        // being reallocated, so the applied style cache no longer
+        // describes it. Clear it before the resize so an error
+        // can't leave it stale.
+        //
+        // PORT NOTE: the reference's resize moment is `cells.len != b.cols`
+        // before `cells.resize`; rustty's equivalent reallocation moment is
+        // the style-column resize inside `rebuild_raw` (`style.len() != cols`
+        // — the raw column was just logically cleared above, so the style
+        // column is the stable indicator). Same gate, same effect.
+        if row.cells.style().len() != cols as usize {
+            row.applied_styles.clear();
+        }
     }
 
     // Get all our cells in the page.
@@ -1507,6 +1648,8 @@ fn row_builder(
     }
 
     let n = page_cells.len();
+    // const runs_start = b.pending_styles.items.len;
+    let runs_start = pending_styles.len();
     // PERF(port) [PRESERVED]: hoist the style-set base resolution once per row —
     // `(*p).memory_ptr()` and the set's items offset are loop-invariant, but the
     // grapheme arm's `extend_from_slice` clobbers memory, so LLVM re-loads both
@@ -1667,6 +1810,20 @@ fn row_builder(
                 });
             }
         }
+    }
+
+    // Reserve the applied style cache capacity for the runs we
+    // appended so that endUpdate (which cannot allocate) is able
+    // to record what it applies. See Row.applied_styles.
+    //
+    // PORT NOTE: `ensureTotalCapacity(alloc, runs_added)` guarantees TOTAL
+    // capacity >= runs_added; `Vec::reserve` is relative to len, so reserve
+    // the shortfall.
+    let runs_added = pending_styles.len() - runs_start;
+    if runs_added > 0 {
+        let applied = &mut row_data[vy].applied_styles;
+        let need = runs_added.saturating_sub(applied.len());
+        applied.reserve(need);
     }
 }
 
@@ -2905,6 +3062,75 @@ mod tests {
             assert!(state.row_data[0].cells.get(0).style.flags.bold);
             assert!(state.row_data[0].cells.get(1).style.flags.bold);
             assert!(state.row_data[0].cells.get(2).style.flags.italic);
+        }
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    // test "endUpdate skips unchanged style runs"
+    //
+    // PORT NOTE: the reference keeps ONE `Stream` alive across the updates
+    // (`var s = t.vtStream(); defer s.deinit();`); rustty's `vt_stream()`
+    // mutably borrows the terminal, so each write takes a scoped stream (the
+    // `begin_and_end_update` precedent). The byte sequences and assertions are
+    // identical.
+    #[test]
+    fn end_update_skips_unchanged_style_runs() {
+        let alloc = Global;
+
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[1mAB"); // Bold
+            s.deinit();
+        }
+
+        let mut state: RenderState = RenderState::empty();
+        state.update(alloc, &mut t).unwrap();
+
+        // The applied cache should record the bold run for row 0.
+        {
+            let applied = &state.row_data[0].applied_styles;
+            assert_eq!(1, applied.len());
+            assert!(applied[0].style.flags.bold);
+            assert!(state.row_data[0].cells.get(0).style.flags.bold);
+        }
+
+        // Rewrite the text without changing the styling: the row is
+        // rebuilt, the run matches the cache, and the styles must remain
+        // correct (the fill is skipped internally).
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[1;1H\x1b[1mXY");
+            s.deinit();
+        }
+        state.update(alloc, &mut t).unwrap();
+        {
+            let cells = &state.row_data[0].cells;
+            assert_eq!('X' as u32, cells.get(0).raw.codepoint());
+            assert!(cells.get(0).style.flags.bold);
+            assert!(cells.get(1).style.flags.bold);
+        }
+
+        // Change the styling: the cache mismatches and the new styles
+        // must be applied and recorded.
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"\x1b[1;1H\x1b[0;3mZW"); // Italic
+            s.deinit();
+        }
+        state.update(alloc, &mut t).unwrap();
+        {
+            let cells = &state.row_data[0].cells;
+            assert_eq!('Z' as u32, cells.get(0).raw.codepoint());
+            assert!(!cells.get(0).style.flags.bold);
+            assert!(cells.get(0).style.flags.italic);
+
+            let applied = &state.row_data[0].applied_styles;
+            assert_eq!(1, applied.len());
+            assert!(applied[0].style.flags.italic);
         }
 
         state.deinit(alloc);

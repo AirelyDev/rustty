@@ -622,6 +622,8 @@ impl App {
         match action {
             // .new_window => return false,
             ipc::Action::NewWindow(_) => Ok(false),
+            // .new_tab => return false,
+            ipc::Action::NewTab(_) => Ok(false),
             // .toggle_quick_terminal => return false,
             ipc::Action::ToggleQuickTerminal => Ok(false),
         }

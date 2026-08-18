@@ -68,7 +68,12 @@ wuffs = ["dep:rustty-wuffs"]
 # to the reference ghostty value by forwarding to `rustty-identity`'s feature
 # of the same name, so the G4 differential output (c-vt-build-info) matches
 # the oracle byte-for-byte. Harness only — never for published artifacts.
-identity-oracle = ["rustty-identity/identity-oracle"]
+# Also forwarded to `rustty-terminfo` so the XTGETTCAP static-map responses
+# (`74efadb44`, stream_terminal.rs) carry a coherent identity profile.
+identity-oracle = [
+    "rustty-identity/identity-oracle",
+    "rustty-terminfo/identity-oracle",
+]
 # Whether the apprt-layer `dcimgui` (cimgui) binding is available. Gates
 # `input::key::Key::imgui_key` (the Key->cimgui-constant mapping), an apprt-layer
 # GUI-glue dependency (R3). Off by default so the VT crate has no GUI dependency;
@@ -107,6 +112,11 @@ rustty-unicode = { workspace = true }
 # NEVER gain a rustty-vt edge (prod or dev) — enforced by check_acyclic.sh.
 rustty-font = { workspace = true }
 rustty-simd = { workspace = true }
+# `74efadb44` "lib-vt: answer XTGETTCAP queries" — "This is the first
+# dependency from src/terminal on src/terminfo": stream_terminal answers
+# XTGETTCAP from the static terminfo map. Acyclic (rustty-terminfo depends only
+# on the leaf rustty-identity); verified by check_acyclic.sh.
+rustty-terminfo = { workspace = true }
 rustty-os = { workspace = true }
 rustty-lib = { workspace = true }
 rustty-util = { workspace = true }

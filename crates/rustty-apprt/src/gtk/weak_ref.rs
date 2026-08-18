@@ -53,6 +53,42 @@ impl<T: ObjectType> WeakRef<T> {
         self.0.set(v);
     }
 
+    /// Release this weak reference.
+    ///
+    /// You MUST call this before the memory holding this struct is freed,
+    /// which in practice means from the owner's `dispose`. The target keeps
+    /// a pointer to this `GWeakRef` so that it can clear it when the target
+    /// is finalized; if this memory is gone by then, the target walks into
+    /// whatever now occupies it. That is an invalid read at best, and can
+    /// hang: the target takes a lock inside each registered weak ref, and
+    /// reused memory with the low bit set is a lock nothing will release.
+    ///
+    /// `set(null)` also unregisters and remains valid. This exists so the
+    /// requirement has a name at the use site rather than looking like an
+    /// ordinary assignment.
+    //
+    // PORTS: `weak_ref.zig` `deinit` (1dbc8ca30). VERIFICATION (recorded per the
+    // assessment's warning against a blind copy): rustty's `WeakRef` wraps
+    // gtk4-rs `glib::WeakRef<T>`, which is `Pin<Box<gobject_ffi::GWeakRef>>`
+    // WITH a `Drop` impl that calls `g_weak_ref_clear`
+    // (glib-0.22.8 `src/object.rs:3510,3563-3568`). Two consequences:
+    //  1. The upstream memory hazard the doc above describes cannot occur here:
+    //     the `GWeakRef` cell is its own heap allocation, and dropping the
+    //     wrapper always `g_weak_ref_clear`s it before the box is freed.
+    //  2. The reference body (`self.ref.clear()` = `g_weak_ref_clear`) must NOT
+    //     be blind-copied: gtk4-rs does not expose `clear` precisely because its
+    //     `Drop` owns that call, and clearing out from under it would be a
+    //     double-clear. The faithful mapping is `set(None)` — `g_weak_ref_set
+    //     (NULL)` — which unregisters the ref NOW (the teardown semantic the
+    //     reference names) and leaves the cell valid for the wrapper's `Drop`.
+    // The four reference `dispose` call sites (`application config_errors_dialog`,
+    // `command_palette` jump surface, `split_tree last_focused`, `window
+    // command_palette`) port as `deinit()` calls so the requirement keeps its
+    // name at the use sites.
+    pub fn deinit(&self) {
+        self.set(None);
+    }
+
     /// PORTS: `weak_ref.zig:27` `get`. "Get a strong reference to the object, or
     /// null if the object has been finalized. This increases the reference count
     /// by one." (`weak_ref.zig:25-26`) — Invariant 4. The returned `T` owns that

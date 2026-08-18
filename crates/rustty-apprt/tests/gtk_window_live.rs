@@ -146,6 +146,7 @@ fn window_hosts_a_live_terminal() {
         None,
         TabOverrides {
             command: Some(Command::Direct(vec![b"/bin/sh".to_vec()])),
+            shell_integration: None,
             working_directory: None,
             title: None,
         },

@@ -201,8 +201,262 @@ pub struct Options {
     /// Options.
     pub c_abi: bool,
 
+    /// Optional feature gates, all enabled by default. See Features.
+    pub features: Features,
+
     /// The version of the application.
     pub version: SemanticVersion,
+}
+
+/// Optional features for lib artifacts. Disabling a feature removes
+/// its C API exports and any stream-integrated handling from the
+/// build, primarily so size-conscious embedders (e.g. wasm) can trim
+/// the binary. The Ghostty application itself always builds with
+/// every feature enabled.
+///
+/// Field names are the accepted tokens for `-Dvt-features`, which
+/// acts like `-Dcpu`: comma-separated modifications applied on top
+/// of the default (all enabled) set. `+feature` and `feature`
+/// enable, `-feature` disables. The special name `all` refers to
+/// every feature, so `-Dvt-features=-all,+render-state` builds only
+/// the render state API. Hyphens in names are interchangeable with
+/// underscores. Fields are emitted verbatim as bool options on the
+/// `terminal_options` module.
+// PORT NOTE: the reference declares this as `pub const Features = packed
+// struct` nested inside `Options`; hoisted to a sibling type like `Artifact`
+// above. The packed-struct backing integer only serves the test's
+// `@bitCast(0)` all-false constructor, ported as [`Features::NONE`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Features {
+    /// Terminal state serialization: encode a full terminal (screen
+    /// contents, scrollback, cursor, styles, modes, etc.) to a
+    /// compact binary format and decode it back into a live
+    /// terminal. Used for session persistence, window restoration,
+    /// and moving terminal state between processes.
+    ///
+    /// C API: `ghostty_snapshot_*` and, together with
+    /// `grid_introspection`, `ghostty_tracked_grid_ref_snapshot`.
+    pub snapshot: bool,
+
+    /// Textual export of terminal contents as plain text, VT
+    /// (replayable escape sequences), or HTML, with optional extras
+    /// such as cursor position, palette, modes, and tabstops. Used
+    /// for copy-to-clipboard, dump-to-file, and debugging.
+    ///
+    /// C API: `ghostty_formatter_*` and, together with `selection`,
+    /// `ghostty_terminal_selection_format_*`.
+    pub formatter: bool,
+
+    /// Text selection: select word/line/output/all, selection
+    /// ordering, adjustment, and containment math, and the
+    /// click/drag gesture state machine (single/double/triple
+    /// click behaviors). Selections are expressed in grid
+    /// references, so enabling this also keeps the untracked grid
+    /// reference constructors even if `grid_introspection` is
+    /// disabled.
+    ///
+    /// C API: `ghostty_terminal_select_*`,
+    /// `ghostty_terminal_selection_*`, `ghostty_selection_gesture_*`.
+    pub selection: bool,
+
+    /// The render state API: a coherent, update-in-place view of
+    /// the visible screen (rows, cells, styles, cursor, colors,
+    /// palette) designed to drive a renderer at frame rates. This
+    /// is the primary read path for embedders that draw the
+    /// terminal.
+    ///
+    /// C API: `ghostty_render_state_*`.
+    pub render_state: bool,
+
+    /// Encoding of host input events into the byte sequences a
+    /// terminal application expects: keyboard input (including the
+    /// Kitty keyboard protocol), mouse reporting, focus reporting,
+    /// and (bracketed) paste. Any interactive embedder needs this;
+    /// a read-only viewer does not.
+    ///
+    /// C API: `ghostty_key_event_*`, `ghostty_key_encoder_*`,
+    /// `ghostty_mouse_event_*`, `ghostty_mouse_encoder_*`,
+    /// `ghostty_focus_encode`, `ghostty_paste_*`.
+    pub input_encode: bool,
+
+    /// Color utilities: luminance, perceived luminance, and
+    /// contrast math (e.g. for minimum-contrast rendering), color
+    /// string parsing (`#rrggbb`, X11 color names, XParseColor
+    /// `rgb:`/`rgbi:` device specs), the default 256-color palette
+    /// and palette generation from configurable bases, and the X11
+    /// color name table itself.
+    ///
+    /// C API: `ghostty_color_*`.
+    pub color: bool,
+
+    /// Direct inspection of grid contents at a position via grid
+    /// references: cell and row data getters (codepoints,
+    /// graphemes, style, hyperlink URI, wrap state, ...) plus
+    /// tracked grid references that stay valid across terminal
+    /// updates. Used for hyperlink hover/open, accessibility, and
+    /// tests; deliberately not built for render loops (use
+    /// `render_state` for that).
+    ///
+    /// C API: `ghostty_grid_ref_*`, `ghostty_tracked_grid_ref_*`,
+    /// `ghostty_cell_get*`, `ghostty_row_get*`, and (shared with
+    /// `selection`) `ghostty_terminal_grid_ref` /
+    /// `ghostty_terminal_point_from_grid_ref`.
+    pub grid_introspection: bool,
+
+    /// The APC glyph protocol: a Ghostty extension that lets
+    /// terminal applications register custom font glyphs (glyf
+    /// outlines) for private-use-area codepoints. Embedders that
+    /// don't render registered glyphs can disable this; the
+    /// sequences are still consumed and safely ignored.
+    ///
+    /// No C API surface of its own; this gates the stream handling
+    /// and glossary storage.
+    pub glyph_protocol: bool,
+
+    /// The Kitty graphics protocol: APC command parsing, image
+    /// transmission and storage (PNG decoding via the sys
+    /// interface), and placement tracking, plus the read APIs a
+    /// renderer uses to draw placed images. Disabled sequences are
+    /// still consumed and safely ignored.
+    ///
+    /// This requires the ability to get timestamps from the OS, so
+    /// it is always disabled on freestanding targets (e.g.
+    /// wasm32-freestanding) regardless of this setting.
+    ///
+    /// C API: `ghostty_kitty_graphics_*`.
+    pub kitty_graphics: bool,
+}
+
+/// `error{UnknownFeature}` from [`Features::parse`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnknownFeature;
+
+// PORT NOTE: the reference iterates `@typeInfo(Features).@"struct".fields` in
+// `parse` and `Options.add` (`inline for`). Rust has no field reflection, so
+// this macro is the single source for the field list, invoked wherever the
+// reference does an `inline for` over the fields. Order matches the struct
+// declaration (the reference's field order, which is also the option-emission
+// order in `add`).
+macro_rules! for_each_feature {
+    ($m:ident, $features:expr, $($args:tt)*) => {{
+        $m!($features, snapshot, $($args)*);
+        $m!($features, formatter, $($args)*);
+        $m!($features, selection, $($args)*);
+        $m!($features, render_state, $($args)*);
+        $m!($features, input_encode, $($args)*);
+        $m!($features, color, $($args)*);
+        $m!($features, grid_introspection, $($args)*);
+        $m!($features, glyph_protocol, $($args)*);
+        $m!($features, kitty_graphics, $($args)*);
+    }};
+}
+
+impl Default for Features {
+    // `.{}` — every field takes its `= true` default.
+    fn default() -> Features {
+        Features {
+            snapshot: true,
+            formatter: true,
+            selection: true,
+            render_state: true,
+            input_encode: true,
+            color: true,
+            grid_introspection: true,
+            glyph_protocol: true,
+            kitty_graphics: true,
+        }
+    }
+}
+
+impl Features {
+    /// The all-false feature set.
+    // PORT NOTE: the reference test builds this via `@bitCast(0)` over the
+    // packed struct's backing integer; Rust structs have no bit backing, so
+    // the all-false value is a named const.
+    pub const NONE: Features = Features {
+        snapshot: false,
+        formatter: false,
+        selection: false,
+        render_state: false,
+        input_encode: false,
+        color: false,
+        grid_introspection: false,
+        glyph_protocol: false,
+        kitty_graphics: false,
+    };
+
+    // pub fn parse(list: []const u8) error{UnknownFeature}!Features {
+    pub fn parse(list: &[u8]) -> Result<Features, UnknownFeature> {
+        // Modifications apply on top of the default set.
+        let mut result: Features = Features::default();
+
+        // var it = std.mem.splitAny(u8, list, ", ");
+        // while (it.next()) |raw| { ... }
+        for raw in list.split(|&b| b == b',' || b == b' ') {
+            if raw.is_empty() {
+                continue;
+            }
+
+            let mut name = raw;
+            let mut enable = true;
+            match name[0] {
+                b'+' => name = &name[1..],
+                b'-' => {
+                    enable = false;
+                    name = &name[1..];
+                }
+                _ => {}
+            }
+
+            // A dangling sign with no name is malformed.
+            if name.is_empty() {
+                return Err(UnknownFeature);
+            }
+
+            // The special name "all" refers to every feature.
+            if name == b"all" {
+                macro_rules! set_all {
+                    ($features:expr, $field:ident, $enable:expr) => {
+                        $features.$field = $enable
+                    };
+                }
+                for_each_feature!(set_all, result, enable);
+                continue;
+            }
+
+            let mut found = false;
+            macro_rules! set_named {
+                ($features:expr, $field:ident, $name:expr, $enable:expr, $found:expr) => {
+                    if eql_name($name, stringify!($field).as_bytes()) {
+                        $features.$field = $enable;
+                        $found = true;
+                    }
+                };
+            }
+            for_each_feature!(set_named, result, name, enable, found);
+            if !found {
+                return Err(UnknownFeature);
+            }
+        }
+
+        Ok(result)
+    }
+}
+
+/// Feature name equality where '-' in the input matches '_' in
+/// the field name.
+// fn eqlName(input: []const u8, name: []const u8) bool { ... }
+fn eql_name(input: &[u8], name: &[u8]) -> bool {
+    if input.len() != name.len() {
+        return false;
+    }
+    for (&a, &b) in input.iter().zip(name.iter()) {
+        let norm: u8 = if a == b'-' { b'_' } else { a };
+        if norm != b {
+            return false;
+        }
+    }
+    true
 }
 
 /// The target artifact to build.
@@ -234,8 +488,18 @@ pub struct Resolved {
     pub oniguruma: bool,
     pub simd: bool,
     pub slow_runtime_safety: bool,
-    pub kitty_graphics: bool,
     pub tmux_control_mode: bool,
+    // Feature gates, emitted as flat bools (e.g. `options.snapshot`) in the
+    // reference's feature loop, in field order (`1fdbb8c91`).
+    pub snapshot: bool,
+    pub formatter: bool,
+    pub selection: bool,
+    pub render_state: bool,
+    pub input_encode: bool,
+    pub color: bool,
+    pub grid_introspection: bool,
+    pub glyph_protocol: bool,
+    pub kitty_graphics: bool,
     pub version_string: String,
     pub version_major: usize,
     pub version_minor: usize,
@@ -300,6 +564,21 @@ impl Options {
         // `MAJOR.MINOR.PATCH[-PRE][+BUILD]` rendering directly.
         let version_string = format_version(&self.version);
 
+        // Feature gates, emitted as flat bools (e.g. `options.snapshot`).
+        //
+        // PORT NOTE: the reference's `inline for` reads each feature field,
+        // applies the kitty_graphics freestanding override, and emits
+        // `opts.addOption(bool, field.name, value)`. Ported field-by-field
+        // (Rust has no field reflection); only kitty_graphics carries a
+        // per-field override, exactly like the reference's `comptime
+        // std.mem.eql` name check.
+        let features = self.features;
+        // Kitty graphics requires the ability to get timestamps and
+        // there is no way to do that on freestanding targets, so it
+        // is always disabled there regardless of the feature setting.
+        let kitty_graphics = features.kitty_graphics
+            && !(target.cpu_arch == CpuArch::Wasm32 && target.os_tag == OsTag::Freestanding);
+
         Resolved {
             artifact: self.artifact,
             c_abi: self.c_abi,
@@ -307,20 +586,18 @@ impl Options {
             simd: self.simd,
             slow_runtime_safety: self.slow_runtime_safety,
 
-            // Kitty graphics is almost always true. This used to be conditional on
-            // some other factors but we've since generalized the implementation
-            // to support optional PNG decoding, OS capabilities like filesystems,
-            // etc. So its safe to always enable it and just have the
-            // implementation deal with unsupported features as needed.
-            //
-            // We disable it on wasm32-freestanding because we at the least
-            // require the ability to get timestamps and there is no way to
-            // do that with freestanding targets.
-            kitty_graphics: !(target.cpu_arch == CpuArch::Wasm32
-                && target.os_tag == OsTag::Freestanding),
-
             // These are synthesized based on other options.
             tmux_control_mode: self.oniguruma,
+
+            snapshot: features.snapshot,
+            formatter: features.formatter,
+            selection: features.selection,
+            render_state: features.render_state,
+            input_encode: features.input_encode,
+            color: features.color,
+            grid_introspection: features.grid_introspection,
+            glyph_protocol: features.glyph_protocol,
+            kitty_graphics,
 
             // Version information.
             version_string,
@@ -370,6 +647,8 @@ mod tests {
             simd: true,
             slow_runtime_safety: false,
             c_abi: false,
+            // features: .{} (the reference field default — all enabled)
+            features: Features::default(),
             version: base_version(),
         }
     }
@@ -476,6 +755,65 @@ mod tests {
         assert_eq!("0.9.1-alpha.1+g1234abc", resolved.version_string);
         assert_eq!(Some("alpha.1"), resolved.version_pre);
         assert_eq!(Some("g1234abc"), resolved.version_build);
+    }
+
+    // test "parse" (nested in Features; discovered via the reference's
+    // trailing `test { _ = Options.Features; }`)
+    #[test]
+    fn features_parse() {
+        // const none: Features = @bitCast(
+        //     @as(@typeInfo(Features).@"struct".backing_integer.?, 0),
+        // );
+        let none: Features = Features::NONE;
+
+        // Empty input keeps the defaults.
+        assert_eq!(Features::default(), Features::parse(b"").unwrap());
+
+        // All three token forms, comma separated.
+        assert_eq!(
+            Features {
+                snapshot: false,
+                ..Features::default()
+            },
+            Features::parse(b"-snapshot").unwrap(),
+        );
+        assert_eq!(
+            Features {
+                snapshot: false,
+                formatter: false,
+                ..Features::default()
+            },
+            Features::parse(b"-snapshot,+render_state,-formatter,color").unwrap(),
+        );
+
+        // The special "all" name refers to every feature.
+        assert_eq!(none, Features::parse(b"-all").unwrap());
+        assert_eq!(Features::default(), Features::parse(b"-all,+all").unwrap());
+        // var render_only = none;
+        // render_only.render_state = true;
+        let mut render_only = none;
+        render_only.render_state = true;
+        assert_eq!(render_only, Features::parse(b"-all,+render-state").unwrap());
+
+        // Hyphens are interchangeable with underscores.
+        assert_eq!(
+            Features {
+                input_encode: false,
+                grid_introspection: false,
+                ..Features::default()
+            },
+            Features::parse(b"-input-encode,-grid_introspection").unwrap(),
+        );
+
+        // Later tokens win.
+        assert_eq!(
+            Features::default(),
+            Features::parse(b"-snapshot,+snapshot").unwrap(),
+        );
+
+        // Unknown names and dangling signs are errors.
+        assert_eq!(Err(UnknownFeature), Features::parse(b"bogus"));
+        assert_eq!(Err(UnknownFeature), Features::parse(b"-snapshot,-"));
     }
 
     #[test]

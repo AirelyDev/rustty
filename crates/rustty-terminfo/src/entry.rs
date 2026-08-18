@@ -105,6 +105,9 @@ pub fn rustty() -> Source {
             ),
             // Curly, dashed, etc underlines
             string(b"Smulx", b"\\E[4:%p1%dm"),
+            // Overline
+            string(b"Smol", b"\\E[53m"),
+            string(b"Rmol", b"\\E[55m"),
             // Colored underlines
             string(
                 b"Setulc",

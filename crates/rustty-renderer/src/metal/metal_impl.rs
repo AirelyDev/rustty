@@ -796,6 +796,58 @@ impl Metal {
         )
     }
 
+    /// Warm up the Metal device machinery. The first Metal device query in
+    /// a process takes multiple milliseconds; once warm, subsequent queries
+    /// are effectively free. Calling this early (e.g. on a background
+    /// thread at app startup; Metal device queries are thread-safe) moves
+    /// that one-time cost off the critical path of the first surface's
+    /// renderer initialization.
+    //
+    // pub fn warmup() void {
+    //
+    // (`c454a3bf4`..`931a538a3` warmup chain, END STATE — the intermediate
+    // `threadedWarmup` shape was dissolved and is NOT ported.)
+    pub fn warmup() {
+        // const device = chooseDevice() catch return;
+        // defer device.release();
+        //
+        // (ARC: the `Retained` device drops at end of scope.)
+        let Ok(device) = choose_device() else { return };
+
+        // Create and release a command queue. The first command queue
+        // created for a device pays additional one-time driver setup
+        // costs; subsequent creations are much cheaper.
+        // const queue = device.msgSend(objc.Object, objc.sel("newCommandQueue"), .{});
+        // queue.release();
+        let queue = device.newCommandQueue();
+        drop(queue);
+
+        // Build and discard our shader pipelines for both pixel formats we
+        // may use (which one is used depends on the blending config). The
+        // first pipeline state creation compiles shaders which is slow;
+        // once warm, later creations hit driver and OS caches.
+        //
+        // (Zig `inline for` over the two comptime formats -> a plain loop;
+        // `shaders.Shaders.init(std.heap.c_allocator, ..)`'s allocator param
+        // dissolved in the port — the shaders.rs `init` PORT NOTE.)
+        for format in [
+            api::MTLPixelFormat::BGRA8Unorm_sRGB,
+            api::MTLPixelFormat::BGRA8Unorm,
+        ] {
+            match Shaders::init(&device, &[], format) {
+                // var s_mut = s;
+                // s_mut.deinit(std.heap.c_allocator);
+                Ok(s) => {
+                    let mut s_mut = s;
+                    s_mut.deinit();
+                }
+                Err(_err) => {
+                    // log.warn("metal warmup shader init failed err={}", .{err});
+                }
+            }
+        }
+    }
+
     /// Present the provided target.
     // pub inline fn present(self: *Metal, target: Target, sync: bool) !void
     //

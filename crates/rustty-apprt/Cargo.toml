@@ -52,6 +52,20 @@ gtk = ["dep:glib", "dep:gio", "dep:gdk4", "dep:gtk4", "dep:libadwaita", "rustty-
 # >= 4.16 ones, so ghostty compiled there takes BOTH modern arms.
 gtk-v4_20 = ["gtk", "gtk-v4_16", "gtk4/v4_20"]
 
+# OPT-IN GTK 4.22 API surface — the third member of the `gtk-v4_16`/`gtk-v4_20`
+# convention, added for B8 (3263fc6c4, native blur). DEFAULT OFF: at the AD-3
+# `v4_14` baseline gtk4-rs exposes none of `Snapshot::push_copy`/`push_blur`/
+# `append_paste` (all `#[cfg(feature = "v4_22")]`, gtk4-0.11.4
+# `src/auto/snapshot.rs`), so the stock build compiles the `Surface::snapshot`
+# blur arm OUT — exactly the reference's `comptime !gtk_version.atLeast(4, 22,
+# 0)` fold ("if you compile Ghostty on an older GTK version, you won't get
+# blur", `surface.zig:2033-2037`). Turning this on raises the compile-time
+# ceiling and lights the `#[cfg(feature = "gtk-v4_22")]` blur push in
+# `class/surface.rs`; that push STILL carries the live runtime
+# `gtk_version::runtime_until(4, 23, 3)` guard, so it self-disables at runtime
+# on older loaded GTK. Same DEFERRALS row as `gtk-v4_20`.
+gtk-v4_22 = ["gtk", "gtk-v4_20", "gtk4/v4_22"]
+
 # OPT-IN GTK 4.16 API surface — the sibling of `gtk-v4_20` above, and the second
 # (and last) of the two arms the `v4_14` ceiling forces to their legacy shape.
 # DEFAULT OFF: at `v4_14` gtk4-rs does not expose `CssSection::bytes()`

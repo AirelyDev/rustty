@@ -324,7 +324,7 @@ mod tests {
         use rustty_cli::rustty::Action;
         let s = String::from_utf8(commands_mdx()).unwrap();
         assert!(s.starts_with("---\ntitle: Reference\n"));
-        assert_eq!(Action::ALL.len(), 18);
+        assert_eq!(Action::ALL.len(), 19);
         for action in Action::ALL {
             let name = action.tag_name();
             assert_eq!(
@@ -340,7 +340,7 @@ mod tests {
             };
             assert!(s.contains(&invocation), "missing invocation {invocation:?}");
         }
-        assert_eq!(s.matches("\n## ").count(), 18);
+        assert_eq!(s.matches("\n## ").count(), 19);
         // Negative controls.
         assert!(
             !s.contains(&format!("{} +help\n", rustty_identity::APP_NAME)),

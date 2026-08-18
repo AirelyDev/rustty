@@ -119,6 +119,12 @@ mod imp {
     /// [`PresentSurfaceThunk`].
     type ColorSchemeThunk = RefCell<Option<Box<dyn Fn(bool)>>>;
 
+    /// Storage for the type-erased `new-tab` seam
+    /// ([`Application::new_tab_thunk`]), named for the same reason as
+    /// [`PresentSurfaceThunk`]. The `Option<u64>` is the reference's
+    /// `surface_id_` (`None` == the `surface_id == 0` "no target" case).
+    type NewTabThunk = RefCell<Option<Box<dyn Fn(Option<u64>, super::TabOverrides)>>>;
+
     /// PORTS: `application.zig:163-222` `Application.Private`. Every pointer-typed
     /// field maps a PREPORT_GTK §1.1 LIFETIMES row; the transfer/ownership mode is
     /// preserved 1:1 (see the field docs). Interior mutability is `RefCell`/`Cell`
@@ -164,6 +170,15 @@ mod imp {
         /// cheap `Rc` handle, created eagerly so `openUri()` is always valid, and
         /// `deinit_private` calls its `deinit`.
         pub open_uri: OpenUri,
+
+        /// The audio bell's MediaFile, reused across bells so we don't leak a
+        /// GStreamer pipeline (and its GL threads) on every ring. Built lazily
+        /// on the first audio bell and rebuilt when `bell-audio-path` changes;
+        /// unref'd on dispose. See ringBell and media.zig.
+        ///
+        /// PORTS: `application.zig:227-232` `bell_media: ?*gtk.MediaFile` (B7,
+        /// f0f3f4d8d — moved here from the surface; OWNED, dropped at dispose).
+        pub bell_media: RefCell<Option<gtk4::MediaFile>>,
 
         /// PORTS: `application.zig:203-205` `config_errors_dialog:
         /// WeakRef(ConfigErrorsDialog)` (SHARED / non-owning — the dialog may close
@@ -244,6 +259,18 @@ mod imp {
         /// it here. `None` until bound; the `present-surface` handler is then a
         /// no-op (placeholder-leaf doctrine).
         pub present_surface_thunk: PresentSurfaceThunk,
+
+        /// rustty-only seam carrying the monomorphized `new-tab` surface
+        /// resolution + dispatch (`actionNewTab`'s
+        /// `core_app.findSurfaceByID(surface_id)` / `core_app.focusedSurface()`
+        /// lookup and the `Action.newTab`-or-`Action.newWindow` fan-out,
+        /// `application.zig:1858-1907`, B5/034506f14). Same type-erasure
+        /// rationale as [`Self::present_surface_thunk`]: the non-generic
+        /// `Application` cannot name the concrete `rustty_core::app::App<A>`,
+        /// so [`super::Application::bind_core_app`] captures it here. `None`
+        /// until bound; the `new-tab` handler is then a no-op
+        /// (placeholder-leaf doctrine).
+        pub new_tab_thunk: NewTabThunk,
 
         /// rustty-only seam carrying the monomorphized color-scheme propagation
         /// (`core_app.colorSchemeEvent(self.rt(), scheme)` plus, per surface,
@@ -375,7 +402,9 @@ mod imp {
                 // unref'd here by Rust's scope-end drop (`:1479`).
                 diag.close();
             }
-            self.config_errors_dialog.set(None);
+            // `priv.config_errors_dialog.deinit()` (1dbc8ca30: the named
+            // clear-before-free; see `weak_ref.rs` `deinit`).
+            self.config_errors_dialog.deinit();
 
             // Remove the SIGUSR2 source (invariant 11, `:1482-1487`). `take()`
             // gives us the OWNED `SourceId`; we remove it via the raw
@@ -387,6 +416,10 @@ mod imp {
                     eprintln!("warn(gtk): unable to remove signal source");
                 }
             }
+
+            // `if (priv.bell_media) |v| { v.unref(); priv.bell_media = null; }`
+            // (`:1570-1573`, B7/f0f3f4d8d) — the scope-end drop is the unref.
+            drop(self.bell_media.take());
         }
     }
 
@@ -769,14 +802,20 @@ mod imp {
             self.signal_source.replace(Some(source));
         }
 
-        /// PORTS: `application.zig:1411-1429` `startupActionMap`. Registers the
-        /// seven application actions verbatim (`:1418-1426`).
+        /// PORTS: `application.zig:1473-1497` `startupActionMap`. Registers the
+        /// nine application actions verbatim (`:1483-1492`).
         fn startup_action_map(&self) {
-            // `glib.ext.VariantType.newFor(u64)` (`:1412`) — the `present-surface`
-            // parameter is a `t` (u64); `"as"` (`:1415`) is an array-of-strings for
-            // `new-window-command`.
+            // `glib.ext.VariantType.newFor(u64)` (`:1477`) — the `present-surface`
+            // parameter is a `t` (u64); `"as"` (`:1480`) is an array-of-strings for
+            // `new-window-command`; `"(tas)"` (`:1483-1484`) is B5's `new-tab`
+            // surface-id + argument tuple; `glib.ext.VariantType.newFor([:0]const
+            // u8)` (`:1486-1487`) is the `open-config` target string.
             let t_variant_type = glib::VariantTy::UINT64.to_owned();
             let as_variant_type = glib::VariantTy::STRING_ARRAY.to_owned();
+            let tas_variant_type = glib::VariantTy::new("(tas)")
+                .expect("valid variant type")
+                .to_owned();
+            let s_variant_type = glib::VariantTy::STRING.to_owned();
 
             let obj = self.obj();
             let actions = [
@@ -786,7 +825,8 @@ mod imp {
                     action_new_window,
                     Some(as_variant_type),
                 ),
-                ext::actions::Action::init("open-config", action_open_config, None),
+                ext::actions::Action::init("new-tab", action_new_tab, Some(tas_variant_type)),
+                ext::actions::Action::init("open-config", action_open_config, Some(s_variant_type)),
                 ext::actions::Action::init(
                     "present-surface",
                     action_present_surface,
@@ -799,6 +839,7 @@ mod imp {
                     action_toggle_quick_terminal,
                     None,
                 ),
+                ext::actions::Action::init("ring-bell", action_ring_bell, None),
             ];
 
             ext::actions::add(&*obj, &actions);
@@ -999,12 +1040,18 @@ mod imp {
                 Action, CloseTabMode, CopyToClipboard, InspectorMode, OpenConfig, SplitDirection,
             };
             self.sync_action_accelerator("app.quit", &Action::Quit);
-            // PORT NOTE (P4 partial, 0a183c923): upstream syncs the two
-            // parameterized targets (`app.open-config::os-open` /
-            // `::new-window`, application.zig:1208-1209); that GTK rework is
-            // the F-lane half of the bundle. Until it lands the single action
-            // keeps the default (`.os_open`) accelerator.
-            self.sync_action_accelerator("app.open-config", &Action::OpenConfig(OpenConfig::DEFAULT));
+            // The two parameterized `open-config` targets (`application.zig:
+            // 1208-1209`, 0a183c923): each detailed action name carries its
+            // target string, and each maps to the binding action with the
+            // matching payload.
+            self.sync_action_accelerator(
+                "app.open-config::os-open",
+                &Action::OpenConfig(OpenConfig::OsOpen),
+            );
+            self.sync_action_accelerator(
+                "app.open-config::new-window",
+                &Action::OpenConfig(OpenConfig::NewWindow),
+            );
             self.sync_action_accelerator("app.reload-config", &Action::ReloadConfig);
             self.sync_action_accelerator(
                 "win.toggle-inspector",
@@ -1477,6 +1524,38 @@ mod imp {
              }\n\
              \n\
              /*\n\
+             \x20* Drag and Drop Overlay\n\
+             \x20*/\n\
+             .drop-overlay.drop-left {\n\
+             \x20 background: linear-gradient(\n\
+             \x20   to left,\n\
+             \x20   transparent, 50%,\n\
+             \x20   color-mix(in srgb, var(--accent-bg-color), transparent 80%) 50%\n\
+             \x20 );\n\
+             }\n\
+             .drop-overlay.drop-right {\n\
+             \x20 background: linear-gradient(\n\
+             \x20   to right,\n\
+             \x20   transparent, 50%,\n\
+             \x20   color-mix(in srgb, var(--accent-bg-color), transparent 80%) 50%\n\
+             \x20 );\n\
+             }\n\
+             .drop-overlay.drop-top {\n\
+             \x20 background: linear-gradient(\n\
+             \x20   to top,\n\
+             \x20   transparent, 50%,\n\
+             \x20   color-mix(in srgb, var(--accent-bg-color), transparent 80%) 50%\n\
+             \x20 );\n\
+             }\n\
+             .drop-overlay.drop-bottom {\n\
+             \x20 background: linear-gradient(\n\
+             \x20   to bottom,\n\
+             \x20   transparent, 50%,\n\
+             \x20   color-mix(in srgb, var(--accent-bg-color), transparent 80%) 50%\n\
+             \x20 );\n\
+             }\n\
+             \n\
+             /*\n\
              \x20* Splits\n\
              \x20*/\n\
              \n\
@@ -1646,133 +1725,350 @@ extern "C" {
     ) -> core::ffi::c_uint;
 }
 
-// PORTS: the seven `app.*` action callbacks (`application.zig:1665-1850`). Each is
+// PORTS: the nine `app.*` action callbacks (`application.zig:1854-2202`; B5's
+// `new-tab` and B7's `ring-bell` joined the original seven). Each is
 // the `gio.SimpleAction::activate` handler `ext::actions` wires with a WEAK ref to
 // the target `Application` (see `ext/actions.rs`). Their bodies dispatch through
 // the core app / action surface (`core_app.performAction`, `Action.newWindow`,
 // `core().mailbox.push`), which reaches the type-erased `core_app`/`core()` and
 // the `performAction` dispatch (Task 23) — placeholder-leaves until then, but
 // REGISTERED verbatim so the action map is complete (the `startup` KAT asserts all
-// seven names).
+// nine names).
 
-/// PORTS: `application.zig:1699-1809` `actionNewWindow` (`new-window` /
-/// `new-window-command`). Parses the optional `as` argv override, then requests a
-/// new window.
+/// PORTS: `application.zig:1899-1936` `actionNewWindow` (`new-window` /
+/// `new-window-command`; B5 end state — the argv parse is factored into
+/// [`parse_overrides`]). Parses the optional `as` argv override, then requests
+/// a new window.
 fn action_new_window(
     _action: &gio::SimpleAction,
     parameter: Option<&glib::Variant>,
     app: &Application,
 ) {
-    use rustty_config::command::Command;
+    // `log.debug("received new window action")` (`:1904`).
 
-    // `log.debug("received new window action")` (`:1704`).
-
-    // The parsed argv override (`-e`, `--command=`, `--working-directory=`, `--title=`)
-    // applied to the received `new-window-command` action (`:1711-1795`). `command` may
-    // also be built from the collected `-e` args below (`:1797-1801`).
-    let mut working_directory: Option<String> = None;
-    let mut title: Option<String> = None;
-    let mut command: Option<Command> = None;
-    let mut args: Vec<Vec<u8>> = Vec::new();
-
-    // `overrides:` block (`:1711-1796`) — parse the optional `as` parameter.
-    'overrides: {
-        // Were we given a parameter? (`:1713`.)
-        let Some(parameter) = parameter else {
-            break 'overrides;
+    // `const overrides = overrides: { ... }` (`:1911-1930`) — parse the
+    // optional `as` parameter; a parse failure collapses to null (`catch
+    // null`, `:1929`).
+    let overrides: Option<TabOverrides> = 'overrides: {
+        // were we given a parameter? (`:1913`.)
+        let Some(arguments) = parameter else {
+            break 'overrides None;
         };
 
-        // Ensure that the supplied parameter is an array of strings (`:1719-1728`).
-        if !parameter.is_type(glib::VariantTy::STRING_ARRAY) {
+        // ensure that the supplied parameter is an array of strings
+        // (`:1918-1925`).
+        if !arguments.is_type(glib::VariantTy::STRING_ARRAY) {
             eprintln!(
                 "warn(gtk): parameter is of type '{}', not 'as'",
-                parameter.type_().as_str(),
+                arguments.type_().as_str(),
             );
-            break 'overrides;
+            break 'overrides None;
         }
 
-        // `var e_seen: bool = false;` (`:1738`.)
-        let mut e_seen = false;
+        parse_overrides(arguments.iter())
+    };
 
-        // `while (it.nextValue()) |value|` (`:1741`) — iterate the array elements.
-        for (i, value) in parameter.iter().enumerate() {
-            // Just to be sure it's a string (`:1745`).
-            let Some(str) = value.str() else {
-                continue;
-            };
-
-            // `log.debug("new-window argument: {d} {s}", .{ i, str });` (`:1751`).
-            let _ = i;
-
-            if e_seen {
-                // `args.append(alloc, duplicated)` (`:1753-1763`) — everything after
-                // `-e` is a direct-exec argument.
-                args.push(str.as_bytes().to_vec());
-                continue;
-            }
-
-            // `if (std.mem.eql(u8, str, "-e"))` (`:1765-1768`).
-            if str == "-e" {
-                e_seen = true;
-                continue;
-            }
-
-            // `if (lib.cutPrefix(u8, str, "--command="))` (`:1770-1778`).
-            if let Some(v) = str.strip_prefix("--command=") {
-                let mut cmd = Command::Shell(Vec::new());
-                match cmd.parse_cli(Some(v.as_bytes())) {
-                    Ok(()) => command = Some(cmd),
-                    Err(err) => eprintln!("warn(gtk): unable to parse command: {err:?}"),
-                }
-                continue;
-            }
-            // `if (lib.cutPrefix(u8, str, "--working-directory="))` (`:1779-1785`).
-            if let Some(v) = str.strip_prefix("--working-directory=") {
-                working_directory = Some(v.trim().to_string());
-                continue;
-            }
-            // `if (lib.cutPrefix(u8, str, "--title="))` (`:1786-1792`).
-            if let Some(v) = str.strip_prefix("--title=") {
-                title = Some(v.trim().to_string());
-                continue;
-            }
-        }
-    }
-
-    // `if (args.items.len > 0) command = .{ .direct = args.items };` (`:1797-1801`).
-    if !args.is_empty() {
-        command = Some(Command::Direct(args));
-    }
-
-    // `Action.newWindow(self, null, .{ .command, .working_directory, .title })`
-    // (`:1802-1808`). Unlike `activate` (which queues a `.new_window` on the core
-    // mailbox), the received action opens the window directly so the overrides are
-    // honored; `parent` is null → `.app` target.
+    // `Action.newWindow(self, null, if (overrides) |o| .{ ... } else .none)`
+    // (`:1932-1944`). Unlike `activate` (which queues a `.new_window` on the
+    // core mailbox), the received action opens the window directly so the
+    // overrides are honored; `parent` is null → `.app` target.
     if let Err(err) = action::new_window(
         app,
         Target::<AppTargetHandle>::App,
-        TabOverrides {
-            command,
-            working_directory,
-            title,
-        },
+        overrides.unwrap_or_default(),
     ) {
         eprintln!("warn(gtk): unable to create new window: {err:?}");
     }
 }
 
-/// PORTS: `application.zig:1811-1817` `actionOpenConfig` (`open-config`).
+/// Handle `app.new-tab` GTK action
+///
+/// PORTS: `application.zig:1946-2011` `actionNewTab` (B5, 034506f14): the
+/// `(tas)` parameter carries the target surface ID (0 == focused) and the CLI
+/// argument array. The surface lookup + `Action.newTab`/`Action.newWindow`
+/// fan-out needs the typed core app, so it lives in the monomorphized
+/// `new_tab_thunk` installed by [`Application::bind_core_app`] (the
+/// `present_surface_thunk` precedent); unbound core → no-op
+/// (placeholder-leaf doctrine).
+fn action_new_tab(
+    _action: &gio::SimpleAction,
+    parameter: Option<&glib::Variant>,
+    app: &Application,
+) {
+    // `log.debug("received new tab action")` (`:1951`).
+
+    // `const surface_id_, const overrides = result: { ... }` (`:1959-1993`).
+    let (surface_id, overrides) = {
+        // were we given a parameter? (`:1961-1964`.)
+        let Some(parameter) = parameter else {
+            eprintln!("warn(gtk): app.new-tab did not receive a parameter");
+            return;
+        };
+
+        // `log.warn("got parameter: {s}", .{parameter.getTypeString()})`
+        // (`:1966` — the reference logs this unconditionally).
+        eprintln!("warn(gtk): got parameter: {}", parameter.type_().as_str());
+
+        // ensure that the supplied parameter is an array of strings
+        // (`:1968-1978` — the `(tas)` tuple check).
+        let Ok(tas) = glib::VariantTy::new("(tas)") else {
+            return;
+        };
+        if !parameter.is_type(tas) {
+            eprintln!(
+                "warn(gtk): parameter is of type '{}', not '(tas)'",
+                parameter.type_().as_str(),
+            );
+            return;
+        }
+
+        // `parameter.get("(tas)", &surface_id, &arguments_it_)` (`:1980-1986`).
+        let surface_id = parameter.child_value(0).get::<u64>().unwrap_or(0);
+        let arguments = parameter.child_value(1);
+
+        // `const overrides = parseOverrides(alloc, arguments_it) catch return;`
+        // (`:1988`).
+        let Some(overrides) = parse_overrides(arguments.iter()) else {
+            return;
+        };
+
+        // `break :result .{ if (surface_id == 0) null else surface_id,
+        // overrides };` (`:1990`).
+        (
+            if surface_id == 0 {
+                None
+            } else {
+                Some(surface_id)
+            },
+            overrides,
+        )
+    };
+
+    // The surface lookup + dispatch (`:1995-2010`), monomorphized in
+    // [`imp::Application::new_tab_thunk`].
+    if let Some(thunk) = app.imp().new_tab_thunk.borrow().as_ref() {
+        thunk(surface_id, overrides);
+    }
+}
+
+/// PORTS: `application.zig:2013-2098` `parseOverrides` (B5, 3650bef4e — the
+/// factored `new-window`/`new-tab` argv override parser; adds
+/// `--shell-integration=`). Returns `None` where the reference returns an
+/// error (`Allocator.Error || error{ValueRequired}`); the infallible-alloc
+/// arms keep only the shape.
+fn parse_overrides(arguments_it: glib::VariantIter) -> Option<TabOverrides> {
+    use rustty_config::command::Command;
+    use rustty_config::value_types::ShellIntegration;
+
+    // `var args: std.ArrayList([:0]const u8) = .empty;` (`:2019`).
+    let mut args: Vec<Vec<u8>> = Vec::new();
+
+    let mut working_directory: Option<String> = None;
+    let mut title: Option<String> = None;
+    let mut command: Option<Command> = None;
+    // `var parsed_shell_integration: struct { @"shell-integration":
+    // ?configpkg.Config.ShellIntegration = null } = .{};` (`:2024-2026`) — the
+    // one-field struct exists only to give `cli.args.parseIntoField` a target;
+    // the bare optional is its Rust collapse.
+    let mut parsed_shell_integration: Option<ShellIntegration> = None;
+
+    // `var e_seen: bool = false;` (`:2031`.)
+    let mut e_seen = false;
+
+    // `while (arguments_it.nextValue()) |value|` (`:2034`) — iterate the array
+    // elements.
+    for (i, value) in arguments_it.enumerate() {
+        // just to be sure (`:2037-2038`).
+        let Some(str) = value.str() else {
+            continue;
+        };
+
+        // `log.debug("argument: {d} {s}", .{ i, str });` (`:2044`).
+        let _ = i;
+
+        if e_seen {
+            // `args.append(arena_alloc, copy)` (`:2046-2056`) — everything
+            // after `-e` is a direct-exec argument. The two alloc-failure
+            // `return err` arms (`:2048,2053`) are infallible here.
+            args.push(str.as_bytes().to_vec());
+            continue;
+        }
+
+        // `if (std.mem.eql(u8, str, "-e"))` (`:2058-2061`).
+        if str == "-e" {
+            e_seen = true;
+            continue;
+        }
+
+        // `if (std.mem.cutPrefix(u8, str, "--command="))` (`:2063-2071`) —
+        // a parse failure warns and RETURNS the error (the B5 rework; the old
+        // handler continued).
+        if let Some(v) = str.strip_prefix("--command=") {
+            let mut cmd = Command::Shell(Vec::new());
+            match cmd.parse_cli(Some(v.as_bytes())) {
+                Ok(()) => command = Some(cmd),
+                Err(err) => {
+                    eprintln!("warn(gtk): unable to parse command: {err:?}");
+                    return None;
+                }
+            }
+            continue;
+        }
+        // `if (std.mem.cutPrefix(u8, str, "--shell-integration="))`
+        // (`:2072-2084`): `cli.args.parseIntoField(..., "shell-integration",
+        // trim(v))` — for a bare optional enum field that is
+        // `std.meta.stringToEnum` (== `string_to_enum`, the config name-map);
+        // a parse failure warns and CONTINUES (`:2079-2082`), unlike the
+        // command arm.
+        if let Some(v) = str.strip_prefix("--shell-integration=") {
+            match ShellIntegration::string_to_enum(v.trim().as_bytes()) {
+                Some(parsed) => parsed_shell_integration = Some(parsed),
+                None => {
+                    eprintln!("warn(gtk): unable to parse shell integration {v}: InvalidValue")
+                }
+            }
+            continue;
+        }
+        // `if (std.mem.cutPrefix(u8, str, "--working-directory="))`
+        // (`:2085-2091`).
+        if let Some(v) = str.strip_prefix("--working-directory=") {
+            working_directory = Some(v.trim().to_string());
+            continue;
+        }
+        // `if (std.mem.cutPrefix(u8, str, "--title="))` (`:2092-2097`).
+        if let Some(v) = str.strip_prefix("--title=") {
+            title = Some(v.trim().to_string());
+            continue;
+        }
+    }
+
+    // `if (args.items.len > 0) command = .{ .direct = args.items };`
+    // (`:2101-2105`).
+    if !args.is_empty() {
+        command = Some(Command::Direct(args));
+    }
+
+    // `return .{ .command, .shell_integration, .working_directory, .title };`
+    // (`:2107-2112`).
+    Some(TabOverrides {
+        command,
+        shell_integration: parsed_shell_integration,
+        working_directory,
+        title,
+    })
+}
+
+/// PORTS: `application.zig:2114-2148` `actionOpenConfig` (`open-config`;
+/// 0a183c923 — the string parameter selects the `os-open` / `new-window`
+/// target).
 fn action_open_config(
+    _action: &gio::SimpleAction,
+    parameter: Option<&glib::Variant>,
+    app: &Application,
+) {
+    use rustty_input::binding::OpenConfig;
+
+    // `const target: CoreApp.Message.OpenConfig = target: { ... }` (`:2119-
+    // 2146`): the `StaticStringMap` lookup over the two detailed-action target
+    // strings, defaulting to `.os_open` on every malformed-parameter path.
+    //
+    // PORT NOTE (P4 partial, 0a183c923): the target type is the input
+    // binding's `OpenConfig` because the core `Message.OpenConfig` payload
+    // (coupling A) and the apprt C-ABI half (W5) have not landed; see
+    // [`action::open_config`].
+    let target: OpenConfig = 'target: {
+        let Some(parameter) = parameter else {
+            eprintln!("warn(gtk): no parameter provided to app.open-config action");
+            break 'target OpenConfig::OsOpen;
+        };
+
+        if !parameter.is_type(glib::VariantTy::STRING) {
+            eprintln!(
+                "warn(gtk): parameter to app.open-config action is of type '{}' not 's'",
+                parameter.type_().as_str(),
+            );
+            break 'target OpenConfig::OsOpen;
+        }
+
+        let Some(str) = parameter.str() else {
+            break 'target OpenConfig::OsOpen;
+        };
+
+        // `target_map.get(str) orelse { warn; break :target .os_open; }`
+        // (`:2120-2123,2141-2145`).
+        match str {
+            "os-open" => OpenConfig::OsOpen,
+            "new-window" => OpenConfig::NewWindow,
+            _ => {
+                eprintln!(
+                    "warn(gtk): '{str}' is not configured as a target for the \
+                     app.open-config action"
+                );
+                OpenConfig::OsOpen
+            }
+        }
+    };
+
+    // `self.core().mailbox.push(global.io(), .{ .open_config = target },
+    // .forever)` (`:2147`) is drained to `rt_app.performAction(.app,
+    // .open_config, <target>)` — a pure passthrough. rustty's
+    // `action::open_config` is self-contained (config path + `open_url` /
+    // edit-command window; needs no core mailbox/surface), so route it
+    // directly WITH the parsed target, the same precedent as
+    // [`action_reload_config`]. (The core `Message::OpenConfig` payload is
+    // W5-pending; routing directly keeps the `new-window` target live.)
+    let _ = action::open_config(app, target);
+}
+
+/// PORTS: `application.zig:2170-2202` `actionRingBell` (B7, f0f3f4d8d — the
+/// application-owned audio bell; the surface's `ringBell` activates
+/// `app.ring-bell`, `surface.rs` `ring_bell`).
+fn action_ring_bell(
     _action: &gio::SimpleAction,
     _parameter: Option<&glib::Variant>,
     app: &Application,
 ) {
-    // `self.core().mailbox.push(.open_config, ...)` (`:1816`) is drained to
-    // `rt_app.performAction(.app, .open_config)` (`App.zig:427`) — a pure
-    // passthrough. rustty's `action::open_config` is self-contained (config path +
-    // `open_url`; needs no core mailbox/surface), so route it directly, the same
-    // precedent as [`action_reload_config`].
-    let _ = action::open_config(app);
+    use std::os::unix::ffi::OsStrExt;
+
+    let Some(config) = app.get_config() else {
+        return;
+    };
+    let config = config.get();
+
+    // Do our sound
+    // `if (config.@"bell-features".audio) audio: { ... }` (`:2178-2201`).
+    if !config.bell_features.audio {
+        return;
+    }
+
+    // `const config_path = config.@"bell-audio-path" orelse break :audio;`
+    // (`:2179-2183`): the `Path` union carries the optional/required flag.
+    let Some(config_path) = config.bell_audio_path.as_ref() else {
+        return;
+    };
+    let (path_bytes, required) = match config_path {
+        rustty_config::path::Path::Optional(p) => (p.as_slice(), false),
+        rustty_config::path::Path::Required(p) => (p.as_slice(), true),
+    };
+
+    // `std.math.clamp(config.@"bell-audio-volume", 0.0, 1.0)` (`:2185-2189`).
+    let volume = config.bell_audio_volume.clamp(0.0, 1.0);
+
+    let path = std::path::Path::new(std::ffi::OsStr::from_bytes(path_bytes));
+
+    // Reuse one MediaFile per application (rebuilt only when the path
+    // changes) so each bell replays the same pipeline instead of
+    // leaking a fresh one. Assign unconditionally: bellMediaFile frees
+    // any stale MediaFile and returns the current slot value (possibly
+    // null if the path is now inaccessible), so priv.bell_media never
+    // dangles. (`:2191-2200`.)
+    let imp = app.imp();
+    let current = imp.bell_media.borrow_mut().take();
+    let media_file = crate::gtk::media::bell_media_file(current, path, required);
+    if let Some(media_file) = &media_file {
+        crate::gtk::media::play_bell(media_file, volume);
+    }
+    imp.bell_media.replace(media_file);
 }
 
 /// PORTS: `application.zig:1819-1850` `actionPresentSurface` (`present-surface`,
@@ -1881,6 +2177,7 @@ fn deinit_private(priv_: &imp::Application) {
     // they release their captured `core_app`/`rt_app` pointers; the pointers are
     // BACKREFs (never owned here).
     priv_.new_window_thunk.replace(None);
+    priv_.new_tab_thunk.replace(None);
     priv_.tick_thunk.replace(None);
     priv_.needs_confirm_quit_thunk.replace(None);
     priv_.update_config_thunk.replace(None);
@@ -2515,6 +2812,64 @@ impl Application {
                 }
             })));
 
+        // The `new-tab` surface resolution + dispatch (`actionNewTab`,
+        // `application.zig:1858-1907`, B5/034506f14): resolve the target
+        // surface (by ID, else the focused surface), then `Action.newTab` on
+        // it — falling back to `Action.newWindow` when no surface is found.
+        {
+            let weak = self.downgrade();
+            self.imp()
+                .new_tab_thunk
+                .replace(Some(Box::new(move |surface_id_, overrides| {
+                    // `const surface_ = surface: { ... }` (`:1858-1876`): an
+                    // ID lookup that misses FALLS THROUGH to the focused
+                    // surface; a focused-surface miss yields null.
+                    //
+                    // SAFETY: `core_app` is the stable heap pointer the caller
+                    // passed to `new`; the app thread drives this and
+                    // validates surface pointers before use (core's threading
+                    // contract).
+                    let surface_ = 'surface: {
+                        if let Some(surface_id) = surface_id_ {
+                            match unsafe { &*core_app }.findSurfaceByID(surface_id) {
+                                Some(s) => break 'surface Some(s),
+                                None => eprintln!(
+                                    "warn(gtk): new-tab: unable to find surface 0x{surface_id:016x}"
+                                ),
+                            }
+                        }
+                        match unsafe { &*core_app }.focusedSurface() {
+                            Some(s) => Some(s),
+                            None => {
+                                eprintln!("warn(gtk): new-tab: unable to find surface");
+                                None
+                            }
+                        }
+                    };
+
+                    let Some(app) = weak.upgrade() else { return };
+
+                    if let Some(surface) = surface_ {
+                        // `Action.newTab(.{ .surface = surface }, .{ ... })`
+                        // (`:1878-1893`).
+                        //
+                        // SAFETY: `findSurfaceByID`/`focusedSurface` return
+                        // live app-thread surfaces (validated above).
+                        if !action::new_tab(Target::Surface(unsafe { &*surface }), overrides) {
+                            eprintln!("warn(gtk): new-tab: unable to create tab");
+                        }
+                    } else {
+                        // `Action.newWindow(self, null, .{ ... })`
+                        // (`:1895-1906`).
+                        if let Err(err) =
+                            action::new_window(&app, Target::<AppTargetHandle>::App, overrides)
+                        {
+                            eprintln!("warn(gtk): new-tab: unable to create new window: {err:?}");
+                        }
+                    }
+                })));
+        }
+
         // The inline core tick (`try priv.core_app.tick(priv.rt_app)`,
         // `application.zig:552`). `tick` takes `&mut App<A>` and `rt_app: &A`; the
         // apprt `App` (`= A`) is the type-erased `rt_app` backref. Both pointers are
@@ -2960,6 +3315,15 @@ impl Application {
             // `.inspector => return Action.controlInspector(target, value)` (`:697`).
             Action::Inspector(v) => return Ok(action::control_inspector(target, v)),
 
+            // `.export_terminal_io => return try Action.exportTerminalIO(self,
+            // target, value)` (`:713-717`, B9/ad96613a8).
+            //
+            // PORT NOTE (P4 partial, ad96613a8): the apprt-api
+            // `Action::ExportTerminalIO` C-ABI variant is the W5 bundle; this
+            // arm lands with it. The GTK consumer half
+            // ([`action::export_terminal_io`] + `ExportTerminalIORequest`) is
+            // ported below and waiting.
+
             // `.key_sequence => return Action.keySequence(target, value)` (`:699`).
             Action::KeySequence(v) => return Ok(action::key_sequence(target, v)),
             // `.key_table => return Action.keyTable(target, value)` (`:700`).
@@ -2975,17 +3339,39 @@ impl Application {
             // `.move_tab => return Action.moveTab(target, value)` (`:706`).
             Action::MoveTab(v) => return Ok(action::move_tab(target, v)),
 
+            // `.move_tab_to_new_window => return Action.moveTabToNewWindow(
+            // target)` (`:727`, f6fca9aab).
+            //
+            // PORT NOTE (P4 partial, 25b2d8a38/f6fca9aab): the apprt-api
+            // `Action::MoveTabToNewWindow` C-ABI key is the W5 bundle; this
+            // arm lands with it. The GTK consumer half
+            // ([`action::move_tab_to_new_window`] →
+            // [`Window::move_tab_to_new_window`]) is ported below and waiting.
+
             // `.new_split => return Action.newSplit(target, value)` (`:708`).
             Action::NewSplit(v) => return Ok(action::new_split(target, v)),
 
-            // `.new_tab => return Action.newTab(target)` (`:710`).
-            Action::NewTab => return Ok(action::new_tab(target)),
+            // `.new_tab => return Action.newTab(target, .none)` (`:728`, B5).
+            Action::NewTab => return Ok(action::new_tab(target, TabOverrides::default())),
 
             // `.new_window => try Action.newWindow(self, <parent>, .none)` (`:712-719`).
             Action::NewWindow => action::new_window(self, target, TabOverrides::default())?,
 
-            // `.open_config => return Action.openConfig(self)` (`:721`).
-            Action::OpenConfig => return Ok(action::open_config(self)),
+            // `.open_config => return Action.openConfig(self, value)` (`:742`,
+            // 0a183c923).
+            //
+            // PORT NOTE (P4 partial, 0a183c923): the apprt `Action.OpenConfig`
+            // C-ABI payload is the W5 bundle; until it lands the void variant
+            // dispatches the default (`.os_open`) — the same seam note as
+            // core's `ScopedApp::OpenConfig`. The payload-carrying GTK path
+            // (`app.open-config::new-window`) is LIVE via
+            // [`action_open_config`], which routes its parsed target directly.
+            Action::OpenConfig => {
+                return Ok(action::open_config(
+                    self,
+                    rustty_input::binding::OpenConfig::DEFAULT,
+                ))
+            }
 
             // `.open_url => Action.openUrl(self, value)` (`:723`).
             Action::OpenUrl(v) => action::open_url(self, v),
@@ -3031,6 +3417,15 @@ impl Application {
             Action::SetTitle(v) => action::set_title(target, v),
             // `.set_tab_title => return Action.setTabTitle(target, value)` (`:752`).
             Action::SetTabTitle(v) => return Ok(action::set_tab_title(target, v)),
+
+            // `.set_window_title => return Action.setWindowTitle(target,
+            // value)` (`:773`, 8b7c57c75).
+            //
+            // PORT NOTE (P4 partial, 8b7c57c75): the apprt-api
+            // `Action::SetWindowTitle` C-ABI key is the W5 bundle; this arm
+            // lands with it. The GTK consumer half
+            // ([`action::set_window_title`] → the `title-override` property)
+            // is ported below and waiting.
 
             // `.show_child_exited => return Action.showChildExited(target, value)` (`:754`).
             Action::ShowChildExited(v) => return Ok(action::show_child_exited(target, v)),
@@ -3139,7 +3534,8 @@ mod action {
     use super::super::surface::{CoreSurface, Size, Surface as GhosttySurface};
     use super::super::tab::{Tab, TabOverrides};
     use super::super::window::{SelectTab, Window};
-    use super::{ext, Application, Config, CoreConfig};
+    use super::{ext, AppTargetHandle, Application, Config, CoreConfig};
+    use crate::gtk::i18n::tr;
     use crate::gtk::surface::Surface as ApprtSurface;
 
     /// Reach the [`GhosttySurface`] widget for a `.surface` target — the reference's
@@ -3510,6 +3906,33 @@ mod action {
         }
     }
 
+    /// `pub fn moveTabToNewWindow(target) bool` (`:2615-2633`, f6fca9aab).
+    ///
+    /// PORT NOTE (P4 partial, 25b2d8a38/f6fca9aab): unreachable until W5 lands
+    /// the apprt-api `Action::MoveTabToNewWindow` C-ABI key (see the dispatch
+    /// PORT NOTE); `allow(dead_code)` until that arm calls it.
+    #[allow(dead_code)]
+    pub(super) fn move_tab_to_new_window<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
+        match target {
+            Target::App => false,
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                let Some(window) = ext::ancestor::<Window>(&w) else {
+                    // `log.warn("surface is not in a window, ignoring
+                    // new_tab_to_new_window")` (`:2626` — the reference's
+                    // "new_tab_to_new_window" text, verbatim).
+                    eprintln!(
+                        "warn(gtk): surface is not in a window, ignoring new_tab_to_new_window"
+                    );
+                    return false;
+                };
+
+                // `window.moveTabToNewWindow(surface)` (`:2630`).
+                window.move_tab_to_new_window(&w)
+            }
+        }
+    }
+
     /// `pub fn newSplit(target, direction) bool` (`:2205-2226`). Activates
     /// `split-tree.new-split` with the direction tag-name (`split_tree.rs:306`).
     pub(super) fn new_split<C: CoreSurfaceHandle>(
@@ -3535,10 +3958,14 @@ mod action {
         }
     }
 
-    /// `pub fn newTab(target) bool` (`:2228-2251`). Reaches the enclosing [`Window`]
-    /// and calls [`Window::new_tab`] with the target's core surface as the parent
+    /// `pub fn newTab(target, overrides) bool` (`:2657-2690`; B5, 034506f14
+    /// added the overrides struct). Reaches the enclosing [`Window`] and calls
+    /// [`Window::new_tab`] with the target's core surface as the parent
     /// (`window.rs` `new_tab` → `new_tab_page`, the Tab + SplitTree model).
-    pub(super) fn new_tab<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
+    pub(super) fn new_tab<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        overrides: TabOverrides,
+    ) -> bool {
         match target {
             Target::App => {
                 eprintln!("warn(gtk): new tab to app is unexpected");
@@ -3550,9 +3977,11 @@ mod action {
                     eprintln!("warn(gtk): surface is not in a window, ignoring new_tab");
                     return false;
                 };
-                // `window.newTab(core)` (`:2245`) — the parent core surface for font/dir
-                // inheritance, read off the widget (its `core()`), not the generic handle.
-                window.new_tab(w.core());
+                // `window.newTab(core, .{ .command, .shell_integration,
+                // .working_directory, .title })` (`:2686-2691`) — the parent core
+                // surface for font/dir inheritance, read off the widget (its
+                // `core()`), not the generic handle.
+                window.new_tab(w.core(), overrides);
                 true
             }
         }
@@ -3627,9 +4056,18 @@ mod action {
         win.upcast_ref::<gtk4::Window>().present();
     }
 
-    /// `pub fn openConfig(self) bool` (`:2333-2347`).
-    pub(super) fn open_config(app: &Application) -> bool {
-        // Get the config file path (`:2336-2340`, `configpkg.edit.openPath`).
+    /// `pub fn openConfig(self, value) bool` (`:2780-2831`; 0a183c923 added the
+    /// `apprt.action.OpenConfig` parameter and the `.new_window` arm).
+    ///
+    /// PORT NOTE (P4 partial, 0a183c923): the parameter is typed as the input
+    /// binding's [`rustty_input::binding::OpenConfig`] — the same two-variant
+    /// `os_open`/`new_window` enum — because the apprt-api C-ABI
+    /// `apprt.action.OpenConfig` half is the W5 bundle; swap the type when it
+    /// lands.
+    pub(super) fn open_config(app: &Application, value: rustty_input::binding::OpenConfig) -> bool {
+        use rustty_input::binding::OpenConfig;
+
+        // Get the config file path (`:2783-2788`, `configpkg.edit.openPath`).
         let path = match rustty_config::edit::open_path() {
             Ok(p) => p,
             Err(err) => {
@@ -3638,15 +4076,74 @@ mod action {
             }
         };
 
-        // Open it using openUrl. "path" isn't actually a URL but at the time of
-        // writing that works just fine for GTK (`:2342-2345`).
-        open_url(
-            app,
-            rustty_apprt_api::action::OpenUrl {
-                kind: rustty_apprt_api::action::OpenUrlKind::Text,
-                url: &path,
-            },
-        );
+        match value {
+            OpenConfig::OsOpen => {
+                // Open it using openUrl. "path" isn't actually a URL but
+                // at the time of writing that works just fine for GTK
+                // (`:2791-2795`).
+                open_url(
+                    app,
+                    rustty_apprt_api::action::OpenUrl {
+                        kind: rustty_apprt_api::action::OpenUrlKind::Text,
+                        url: &path,
+                    },
+                );
+            }
+
+            OpenConfig::NewWindow => {
+                // `internal_os.getConfigEditCommand(alloc, path, .default)`
+                // (`:2798-2802`). The returned command carries its trailing
+                // NUL (the `[:0]` sentinel modeled in-band, `os/edit.rs` PORT
+                // NOTE); strip it for the logical argv bytes.
+                let mut cmd = match rustty_os::getConfigEditCommand(
+                    &path,
+                    &rustty_os::edit::Options::default(),
+                ) {
+                    Ok(c) => c,
+                    Err(err) => {
+                        eprintln!("warn(gtk): unable to get command to edit the config: {err:?}");
+                        return false;
+                    }
+                };
+                if cmd.last() == Some(&0) {
+                    cmd.pop();
+                }
+
+                // `const command: configpkg.Command = .{ .direct = &.{
+                // "/bin/sh", "-c", cmd } };` (`:2805-2807`).
+                let command = rustty_config::command::Command::Direct(vec![
+                    b"/bin/sh".to_vec(),
+                    b"-c".to_vec(),
+                    cmd,
+                ]);
+
+                // `std.fmt.allocPrintSentinel("{s} {s}", .{ i18n._("Editing
+                // configuration file"), path }, 0)` (`:2809-2817`) — the
+                // format itself is infallible in Rust, matching the
+                // `catch ... break :t null` only in shape.
+                let title = format!(
+                    "{} {}",
+                    tr(c"Editing configuration file"),
+                    String::from_utf8_lossy(&path)
+                );
+
+                // `Action.newWindow(self, null, .{ .command, .title })`
+                // (`:2820-2826`).
+                if let Err(err) = new_window(
+                    app,
+                    Target::<AppTargetHandle>::App,
+                    TabOverrides {
+                        command: Some(command),
+                        title: Some(title),
+                        ..Default::default()
+                    },
+                ) {
+                    eprintln!("warn(gtk): unable to create new window: {err:?}");
+                    return false;
+                }
+            }
+        }
+
         true
     }
 
@@ -3681,6 +4178,13 @@ mod action {
             OpenUrlKind::Unknown => rustty_os::open::Kind::Unknown,
             OpenUrlKind::Text => rustty_os::open::Kind::Text,
             OpenUrlKind::Html => rustty_os::open::Kind::Html,
+            // PORT NOTE (P4 W6-tail, 77537c806): the reference passes the ONE
+            // `apprt.action.OpenUrl.Kind` enum straight through to
+            // `internal_os.open`; this seam mapping is arm-for-arm, so the new
+            // `osc8` value maps too (the macOS fail-closed guard lives inside
+            // `rustty_os::open::open`; on Linux the generic opener handles it,
+            // exactly as upstream).
+            OpenUrlKind::Osc8 => rustty_os::open::Kind::Osc8,
         };
         if let Err(err) = rustty_os::open::open(kind, url) {
             eprintln!("warn(gtk): unable to open url: {err:?}");
@@ -3786,6 +4290,30 @@ mod action {
                     true
                 }
             },
+            // `.window => { ... win.promptWindowTitle(); return true; }`
+            // (`:2923-2939`, 8b7c57c75).
+            //
+            // PORT NOTE (P4 partial, 8b7c57c75): the apprt-api
+            // `PromptTitle::Window` C-ABI value is the W5 bundle; this arm
+            // lands with it:
+            //
+            //     PromptTitle::Window => match target {
+            //         Target::App => false,
+            //         Target::Surface(v) => {
+            //             let Some(w) = widget(v) else { return false };
+            //             let Some(win) = ext::ancestor::<Window>(&w) else {
+            //                 eprintln!(
+            //                     "warn(gtk): surface is not in a window, \
+            //                      ignoring prompt_window_title"
+            //                 );
+            //                 return false;
+            //             };
+            //             win.prompt_window_title();
+            //             true
+            //         }
+            //     },
+            //
+            // The `Window::prompt_window_title` consumer is ported and waiting.
         }
     }
 
@@ -3905,15 +4433,16 @@ mod action {
     /// `pub fn ringBell(target) void` (`application.zig:2521-2526`) →
     /// `surface.setBellRinging(true)` (`surface.zig:2208-2222`).
     ///
-    /// `setBellRinging(true)` first runs `ringBell` (`surface.zig:2467-2509`),
-    /// which activates `tab.ring-bell` / `win.ring-bell` (system beep + urgency),
-    /// plays the custom audio bell, then sets the `bell-ringing` property. The
-    /// property drives the bind-time `should_border_be_shown` closure
-    /// (`surface.rs:3029`) so the bell border lights up. We reproduce that here on
-    /// the `Surface` widget: the generated `set_bell_ringing` setter (from
-    /// `#[property(get, set)]` on `bell_ringing`) is the property write, the two
-    /// `activate_action`s are `ringBell`'s action fan-out (`surface.zig:2480-2481`),
-    /// and `ring_bell_audio` is its audio block (`surface.zig:2484-2509`).
+    /// `setBellRinging(true)` first runs `ringBell` (`surface.zig:2548-2563`, B7
+    /// end state), which activates `tab.ring-bell` / `win.ring-bell` (system
+    /// beep and urgency) and `app.ring-bell` (the application-owned audio bell,
+    /// [`super::action_ring_bell`]), then sets the `bell-ringing` property
+    /// unless the surface is focused (f5419b9b1). The property drives the
+    /// bind-time `should_border_be_shown` closure (`surface.rs`) so the bell
+    /// border lights up. We reproduce that here on the `Surface` widget: the
+    /// generated `set_bell_ringing` setter (from `#[property(get, set)]` on
+    /// `bell_ringing`) is the property write and the three `activate_action`s
+    /// are `ringBell`'s action fan-out (`surface.zig:2558-2560`).
     pub(super) fn ring_bell<C: CoreSurfaceHandle>(target: Target<'_, C>) {
         match target {
             Target::App => {}
@@ -4050,6 +4579,43 @@ mod action {
                     Some(String::from_utf8_lossy(value.title).into_owned())
                 };
                 tab.apply_title_override(title.as_deref());
+                true
+            }
+        }
+    }
+
+    /// `pub fn setWindowTitle(target, value) bool` (`:3111-3133`, 8b7c57c75 —
+    /// the window-title renaming pair).
+    ///
+    /// PORT NOTE (P4 partial, 8b7c57c75): unreachable until W5 lands the
+    /// apprt-api `Action::SetWindowTitle` C-ABI key (see the dispatch PORT
+    /// NOTE); `allow(dead_code)` until that arm calls it.
+    #[allow(dead_code)]
+    pub(super) fn set_window_title<C: CoreSurfaceHandle>(
+        target: Target<'_, C>,
+        value: rustty_apprt_api::action::SetTitle<'_>,
+    ) -> bool {
+        match target {
+            Target::App => {
+                // `log.warn("set_tab_title to app is unexpected")` (`:3117` —
+                // the reference's copy-pasted "set_tab_title" text, verbatim).
+                eprintln!("warn(gtk): set_tab_title to app is unexpected");
+                false
+            }
+            Target::Surface(v) => {
+                let Some(w) = widget(v) else { return false };
+                let Some(window) = ext::ancestor::<Window>(&w) else {
+                    eprintln!("warn(gtk): surface is not in a window, ignoring set_window_title");
+                    return false;
+                };
+                // `window.setTitleOverride(if (value.title.len == 0) null
+                // else value.title)` (`:3129`).
+                let title = if value.title.is_empty() {
+                    None
+                } else {
+                    Some(String::from_utf8_lossy(value.title).into_owned())
+                };
+                window.set_title_override(title);
                 true
             }
         }
@@ -4263,6 +4829,128 @@ mod action {
                 Some(w) => w.control_inspector(value),
                 None => false,
             },
+        }
+    }
+
+    /// `pub fn exportTerminalIO(self, target, value) Allocator.Error!bool`
+    /// (`:2259-2301`, B9 — ad96613a8's export-terminal-io consumer with
+    /// 2c0d2588a's type-safe FileChooser cast folded in). Duplicates the
+    /// borrowed contents, opens a native save dialog, and writes the file on
+    /// accept.
+    ///
+    /// PORT NOTE (P4 partial, ad96613a8): unreachable until W5 lands the
+    /// apprt-api `Action::ExportTerminalIO` variant (see the dispatch PORT
+    /// NOTE); `contents` stands in for `value.contents` (the variant's
+    /// one-field payload) until that struct exists. `_app` is the reference's
+    /// `self` — used only for `self.allocator()`, which Rust ownership
+    /// absorbs. `allow(deprecated)`: `gtk.FileChooserNative` is deprecated
+    /// since GTK 4.10; the reference uses it deliberately on GTK4.
+    #[allow(dead_code)]
+    #[allow(deprecated)]
+    pub(super) fn export_terminal_io<C: CoreSurfaceHandle>(
+        _app: &Application,
+        target: Target<'_, C>,
+        contents: &[u8],
+    ) -> bool {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // `.app => return false, .surface => |v| v.rt_surface.gobj()`
+        // (`:2264-2267`).
+        let surface = match target {
+            Target::App => return false,
+            Target::Surface(v) => match widget(v) {
+                Some(w) => w,
+                None => return false,
+            },
+        };
+
+        // `const contents = try alloc.dupe(u8, value.contents);` + the heap
+        // `ExportTerminalIORequest` (`:2269-2277`): the request owns the copy;
+        // the closure capture is the reference's `destroyData` lifetime.
+        let request = ExportTerminalIORequest {
+            contents: contents.to_vec(),
+        };
+
+        // `ext.getAncestor(gtk.Window, surface.as(gtk.Widget))` (`:2279`).
+        let parent = ext::ancestor::<gtk4::Window>(&surface);
+
+        // `gtk.FileChooserNative.new(...)` (`:2280-2286`).
+        let dialog = gtk4::FileChooserNative::new(
+            Some(tr(c"Export Terminal IO Events")),
+            parent.as_ref(),
+            gtk4::FileChooserAction::Save,
+            Some(tr(c"Export")),
+            Some(tr(c"Cancel")),
+        );
+        // `chooser.setCreateFolders(1)` + `chooser.setCurrentName(...)`
+        // (`:2287-2289`; R2: the default file name carries the rustty
+        // identity).
+        dialog.set_create_folders(true);
+        dialog.set_current_name("rustty-terminal-io.txt");
+
+        // `gtk.NativeDialog.signals.response.connect(dialog, ..., .{
+        // .destroyData = ExportTerminalIORequest.destroy })` (`:2291-2297`).
+        // The keep-alive slot models the reference's ownership: `new` hands us
+        // one strong ref which the response handler releases (`defer
+        // dialog.unref()`, `:2311`); a native dialog is not a widget, so
+        // nothing else holds it. `take()` breaks the dialog → closure → slot
+        // → dialog cycle when the response fires.
+        let keep_alive: Rc<RefCell<Option<gtk4::FileChooserNative>>> =
+            Rc::new(RefCell::new(Some(dialog.clone())));
+        dialog.connect_response(move |dialog, response_id| {
+            let _keep = keep_alive.borrow_mut().take();
+            request.response(dialog, response_id);
+        });
+
+        // `dialog.as(gtk.NativeDialog).show()` (`:2298`).
+        dialog.show();
+        true
+    }
+
+    /// PORTS: `application.zig:2303-2352` `ExportTerminalIORequest` (B9): the
+    /// heap context for one export dialog. `destroy` (`:2307-2310`, the signal
+    /// `destroyData`) is the struct's `Drop` — the closure capture frees the
+    /// contents when the handler is released.
+    struct ExportTerminalIORequest {
+        contents: Vec<u8>,
+    }
+
+    impl ExportTerminalIORequest {
+        /// `fn response(dialog, response_id, self)` (`:2312-2351`).
+        #[allow(deprecated)]
+        fn response(&self, dialog: &gtk4::FileChooserNative, response_id: gtk4::ResponseType) {
+            // (`defer dialog.unref()` (`:2316`) is the caller's keep-alive
+            // `take()`.)
+
+            // `if (response_id != @intFromEnum(gtk.ResponseType.accept))
+            // return;` (`:2318`).
+            if response_id != gtk4::ResponseType::Accept {
+                return;
+            }
+
+            // `dialog.as(gtk.FileChooser).getFile() orelse { warn; return; }`
+            // (`:2320-2324`).
+            let Some(file) = dialog.file() else {
+                eprintln!("warn(gtk): inspector export dialog returned no file");
+                return;
+            };
+
+            // `file.replaceContents(contents.ptr, contents.len, null, 0, .{},
+            // null, null, &gerr)` (`:2326-2336`): etag null, no backup, no
+            // flags, synchronous. The gio binding folds the `gerr` out-param
+            // and the `replaced == 0` result into one `Result`, so the
+            // reference's two failure logs (`:2337-2349`) collapse to the
+            // `Err` arm.
+            if let Err(err) = file.replace_contents(
+                &self.contents,
+                None,
+                false,
+                gio::FileCreateFlags::empty(),
+                gio::Cancellable::NONE,
+            ) {
+                eprintln!("err(gtk): failed to export terminal IO events err={err}");
+            }
         }
     }
 
@@ -4568,16 +5256,19 @@ mod tests {
             "startup must set our application as the process-global default"
         );
 
-        // All seven actions are present (`:1418-1426`).
+        // All nine actions are present (`:1483-1492` — B5's `new-tab` and B7's
+        // `ring-bell` joined the original seven).
         let names: Vec<String> = app.list_actions().into_iter().map(Into::into).collect();
         for expected in [
             "new-window",
             "new-window-command",
+            "new-tab",
             "open-config",
             "present-surface",
             "quit",
             "reload-config",
             "toggle-quick-terminal",
+            "ring-bell",
         ] {
             assert!(
                 names.iter().any(|n| n == expected),

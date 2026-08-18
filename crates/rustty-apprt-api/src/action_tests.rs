@@ -239,7 +239,11 @@ fn ghostty_h_mouse_visibility() {
 #[test]
 fn ghostty_h_prompt_title() {
     let _ = PromptTitle::Surface;
-    run_henum("RUSTTY_PROMPT_TITLE_", &["surface", "tab"]);
+    // PORT NOTE (P4 W6-tail, 8b7c57c75): "window" is the appended upstream
+    // value; `rustty-embed.h` gains RUSTTY_PROMPT_TITLE_WINDOW in the W5-E
+    // header bundle (this KAT models the header from the key list — the
+    // append-only ordinal contract it checks is already the end-state one).
+    run_henum("RUSTTY_PROMPT_TITLE_", &["surface", "tab", "window"]);
 }
 
 // test "ghostty.h OpenUrl.Kind" {
@@ -248,7 +252,14 @@ fn ghostty_h_prompt_title() {
 #[test]
 fn ghostty_h_open_url_kind() {
     let _ = OpenUrlKind::Unknown;
-    run_henum("RUSTTY_ACTION_OPEN_URL_KIND_", &["unknown", "text", "html"]);
+    // PORT NOTE (P4 W6-tail, 77537c806): "osc8" is the appended upstream
+    // value; `rustty-embed.h` gains RUSTTY_ACTION_OPEN_URL_KIND_OSC8 in the
+    // W5-E header bundle (this KAT models the header from the key list — the
+    // append-only ordinal contract it checks is already the end-state one).
+    run_henum(
+        "RUSTTY_ACTION_OPEN_URL_KIND_",
+        &["unknown", "text", "html", "osc8"],
+    );
 }
 
 // test "ghostty.h CloseTabMode" {

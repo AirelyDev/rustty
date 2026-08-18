@@ -444,6 +444,7 @@ impl Builder {
             page_serial: self.page_serial,
             page_serial_epoch: 0,
             page_compression: super::compress::IncrementalCompressionState::default(),
+            recycle_node: core::ptr::null_mut(),
             page_size: self.page_size,
             limits,
             total_rows,

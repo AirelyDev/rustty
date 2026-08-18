@@ -371,6 +371,31 @@ impl<V: View> SplitTree<V> {
         }
     }
 
+    /// Find the handle within this tree that corresponds
+    /// to the given view. Uses pointer equality.
+    //
+    // PORT NOTE (equality): the reference compares `entry.view == view` — raw
+    // view POINTERS. rustty's leaves are per-ref boxed clones (`View::view_ref`
+    // copies into a fresh box, exactly like the reference test view), so a
+    // caller can never hold the leaf box's address; the sound analogue of the
+    // reference's pointer identity is `V: PartialEq` — which for the live
+    // consumer (the gtk `Surface` GObject wrapper) IS pointer identity on the
+    // underlying object, the established idiom of the gtk split-tree loops
+    // this fn replaces (`class/split_tree.zig:773-775`).
+    pub fn locate(&self, view: &V) -> Option<Handle>
+    where
+        V: PartialEq,
+    {
+        let mut it = self.iterator();
+        while let Some(entry) = it.next() {
+            // SAFETY: leaf pointers are live tree-owned boxes.
+            if unsafe { &*entry.view } == view {
+                return Some(entry.handle);
+            }
+        }
+        None
+    }
+
     /// An iterator over all the views in the tree.
     pub fn iterator(&self) -> Iterator<'_, V> {
         Iterator {

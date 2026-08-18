@@ -205,6 +205,7 @@ fn inspector_dump() {
 
     let surface = Surface::new(SurfaceOverrides {
         command: Some(Command::Direct(vec![b"/bin/sh".to_vec()])),
+        shell_integration: None,
         working_directory: None,
         title: None,
     });

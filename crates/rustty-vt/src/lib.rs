@@ -115,10 +115,13 @@ pub mod parse_table;
 // pub const search = @import("search.zig");
 pub mod search;
 // pub const snapshot = @import("snapshot/main.zig");
-// PORT NOTE (phase-4 d44baa914): the `snapshot` module re-export lands with the
-// snapshot subsystem area; its PageList-side enablers (`pagelist::Builder`,
+// PORT NOTE (phase-4 wsnap-1): live for the C1+C2 stage (scaffold +
+// page/style/hyperlink records); `snapshot/main.zig` maps to `snapshot/mod.rs`,
+// whose PORT STATUS lists the next-stage modules (grid, screen, terminal,
+// history, codec drivers). Its PageList-side enablers (`pagelist::Builder`,
 // `pagelist::PageAllocation`, `PageList::allocate_page`, the RefCountedSet
 // iterator) are already ported below.
+pub mod snapshot;
 // pub const sgr = @import("sgr.zig");
 pub mod sgr;
 // pub const size = @import("size.zig");

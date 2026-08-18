@@ -93,11 +93,40 @@ impl TempDir {
     /// Finish with the temporary directory. This deletes all contents in the
     /// directory.
     pub fn deinit(&mut self) {
-        self.dir.close();
-        if let Err(err) = self.parent.deleteTree(self.name()) {
-            log_err(&format!("error deleting temp dir err={err}"));
-        }
+        self.close(CloseMode::Delete);
     }
+
+    /// Close the directory handles, optionally retaining the temporary directory
+    /// and its contents on disk.
+    //
+    // pub fn close(self: *TempDir, mode: CloseMode) void {
+    //     self.dir.close(global.io());
+    //     switch (mode) {
+    //         .delete => self.parent.deleteTree(global.io(), self.name()) catch |err|
+    //             log.err("error deleting temp dir err={}", .{err}),
+    //         .retain => {},
+    //     }
+    //     self.parent.close(global.io());
+    // }
+    pub fn close(&mut self, mode: CloseMode) {
+        self.dir.close();
+        match mode {
+            CloseMode::Delete => {
+                if let Err(err) = self.parent.deleteTree(self.name()) {
+                    log_err(&format!("error deleting temp dir err={err}"));
+                }
+            }
+            CloseMode::Retain => {}
+        }
+        self.parent.close();
+    }
+}
+
+// pub const CloseMode = enum { delete, retain };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseMode {
+    Delete,
+    Retain,
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +160,25 @@ impl Dir {
 
     /// `std.fs.Dir.close`: release the handle (a no-op for our path model).
     fn close(&mut self) {}
+
+    /// `std.Io.Dir.realPath`: resolve this directory handle's own canonical
+    /// absolute path. The reference fills a caller-provided
+    /// `[max_path_bytes]u8` buffer and returns the written length; the Rust
+    /// port returns an owning `PathBuf`.
+    pub fn realPath(&self) -> std::io::Result<PathBuf> {
+        std::fs::canonicalize(&self.path)
+    }
+
+    /// `std.Io.Dir.openDirAbsolute`: open a directory by absolute path.
+    pub fn openDirAbsolute(path: &Path) -> std::io::Result<Dir> {
+        open_dir_abs(path)
+    }
+
+    /// `std.Io.Dir.deleteDirAbsolute`: delete the (empty) directory at the
+    /// absolute path.
+    pub fn deleteDirAbsolute(path: &Path) -> std::io::Result<()> {
+        std::fs::remove_dir(path)
+    }
 
     /// `std.fs.Dir.deleteTree`: recursively delete `sub_path` and its contents.
     fn deleteTree(&self, sub_path: &[u8]) -> std::io::Result<()> {
@@ -237,26 +285,130 @@ fn log_err(msg: &str) {
 mod tests {
     use super::*;
 
+    // PORT NOTE (2b32b5b75): the reference's two lifecycle tests capture the
+    // raw `Dir.Handle` fds and probe them with `fcntl(F.GETFD)`, expecting
+    // `EBADF` after close — proof that BOTH the dir and parent descriptors were
+    // released. rustty's `Dir` models a handle as its PATH (no fd is ever
+    // held; see the module PORT NOTE), so the descriptor leak the upstream fix
+    // closes CANNOT occur and the fd-BADF probes are N-A. The on-disk
+    // assertions (deleted after `deinit`; retained after `close(.retain)`) are
+    // carried in full.
+
+    // test {
     #[test]
     #[cfg_attr(miri, ignore)] // real-OS makeDir/openDir/deleteTree syscalls
     fn tempdir_create_open_delete() {
-        let mut td = TempDir::init().unwrap();
-        // errdefer td.deinit() — handled by the explicit deinit below in the
-        // success path (a panic before then leaves the dir, matching errdefer's
-        // best-effort semantics on the abnormal path).
+        // var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        // var path_len: usize = undefined;
+        // var dir_handle: Dir.Handle = undefined;
+        // var parent_handle: Dir.Handle = undefined;
+        //
+        // (the handle captures are N-A — path model, see the module-test PORT
+        // NOTE above.)
+        let path_buf: PathBuf;
+        {
+            // var td = try init();
+            // errdefer td.deinit();
+            //
+            // (errdefer — handled by the explicit deinit below in the success
+            // path; a panic before then leaves the dir, matching errdefer's
+            // best-effort semantics on the abnormal path.)
+            let mut td = TempDir::init().unwrap();
 
-        let nameval = td.name().to_vec();
-        assert!(!nameval.is_empty());
+            // const nameval = td.name();
+            // try testing.expect(nameval.len > 0);
+            let nameval = td.name().to_vec();
+            assert!(!nameval.is_empty());
 
-        // Can open a new handle to it proves it exists.
-        let mut dir = td.parent.openDir(&nameval).unwrap();
-        dir.close();
+            // Can open a new handle to it proves it exists.
+            // var dir = try td.parent.openDir(testing.io, nameval, .{});
+            // dir.close(testing.io);
+            let mut dir = td.parent.openDir(&nameval).unwrap();
+            dir.close();
 
-        // Should be deleted after we deinit
-        td.deinit();
+            // path_len = try td.dir.realPath(testing.io, &path_buf);
+            // dir_handle = td.dir.handle;
+            // parent_handle = td.parent.handle;
+            path_buf = td.dir.realPath().unwrap();
+
+            // Should be deleted after we deinit.
+            // td.deinit();
+            td.deinit();
+        }
+
+        // switch (builtin.os.tag) {
+        //     .freebsd, .ios, .linux, .macos => {
+        //         for ([_]Dir.Handle{ dir_handle, parent_handle }) |handle| {
+        //             const result = std.posix.system.fcntl(handle, std.posix.F.GETFD);
+        //             try testing.expectEqual(std.posix.E.BADF, std.posix.errno(result));
+        //         }
+        //     },
+        //
+        //     else => {},
+        // }
+        //
+        // (N-A — no fds exist in the path model, see the module-test PORT NOTE.)
+
+        // try testing.expectError(
+        //     error.FileNotFound,
+        //     Dir.openDirAbsolute(testing.io, path_buf[0..path_len], .{}),
+        // );
         assert_eq!(
-            td.parent.openDir(&nameval).unwrap_err().kind(),
+            Dir::openDirAbsolute(&path_buf).unwrap_err().kind(),
             std::io::ErrorKind::NotFound
         );
+    }
+
+    // test "close retains temporary directory" {
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS makeDir/openDir/deleteTree syscalls
+    fn close_retains_temporary_directory() {
+        // var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        // var path_len: usize = undefined;
+        // var dir_handle: Dir.Handle = undefined;
+        // var parent_handle: Dir.Handle = undefined;
+        //
+        // (the handle captures are N-A — path model, see the module-test PORT
+        // NOTE above.)
+        let path_buf: PathBuf;
+        {
+            // var td = try init();
+            // errdefer td.deinit();
+            let mut td = TempDir::init().unwrap();
+
+            // path_len = try td.dir.realPath(testing.io, &path_buf);
+            // dir_handle = td.dir.handle;
+            // parent_handle = td.parent.handle;
+            path_buf = td.dir.realPath().unwrap();
+
+            // td.close(.retain);
+            td.close(CloseMode::Retain);
+        }
+        // defer Dir.deleteDirAbsolute(testing.io, path_buf[0..path_len]) catch {};
+        //
+        // (deferred cleanup — performed at the end of this test; a panic before
+        // then leaves the retained dir behind, matching the Zig defer's
+        // best-effort `catch {}` semantics.)
+
+        // switch (builtin.os.tag) {
+        //     .freebsd, .ios, .linux, .macos => {
+        //         for ([_]Dir.Handle{ dir_handle, parent_handle }) |handle| {
+        //             const result = std.posix.system.fcntl(handle, std.posix.F.GETFD);
+        //             try testing.expectEqual(std.posix.E.BADF, std.posix.errno(result));
+        //         }
+        //     },
+        //
+        //     else => {},
+        // }
+        //
+        // (N-A — no fds exist in the path model, see the module-test PORT NOTE.)
+
+        // var dir = try Dir.openDirAbsolute(testing.io, path_buf[0..path_len], .{});
+        // dir.close(testing.io);
+        let mut dir = Dir::openDirAbsolute(&path_buf).unwrap();
+        dir.close();
+
+        // (the deferred deleteDirAbsolute.)
+        let _ = Dir::deleteDirAbsolute(&path_buf);
     }
 }

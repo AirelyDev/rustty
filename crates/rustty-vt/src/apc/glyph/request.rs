@@ -993,18 +993,13 @@ impl Pad {
 /// Parse one pad component from the spec's `0.0`–`1.0` fractional range.
 /// Top/bottom fractions are relative to cell height; left/right fractions
 /// are relative to render span width.
-// PORT NOTE: `#[allow(clippy::manual_range_contains)]` keeps the reference's
-// explicit `!(result >= 0 and result <= 1)` comparison verbatim rather than
-// rewriting it as `(0.0..=1.0).contains(&result)`.
-#[allow(clippy::manual_range_contains)]
+// PORT NOTE (`946422dbc`): `std.fmt.parseFloat` + the explicit `[0, 1]`
+// range check became `return fraction.parse(value);` — the fraction parser
+// carries the range check (and rejects exponent/hex-float syntax the old
+// parser accepted).
 fn parse_fraction(value: &[u8]) -> Option<f64> {
-    // const result = std.fmt.parseFloat(f64, value) catch return null;
-    let result = parse_float(value)?;
-    // if (!(result >= 0 and result <= 1)) return null;
-    if !(result >= 0.0 && result <= 1.0) {
-        return None;
-    }
-    Some(result)
+    // return fraction.parse(value);
+    crate::fraction::parse(value)
 }
 
 /// Find the last occurrence of `key=value` for a lazily-parsed option list.
@@ -1068,13 +1063,10 @@ fn parse_u32(value: &[u8], radix: u32) -> Option<u32> {
     u32::from_str_radix(s, radix).ok()
 }
 
-/// `std.fmt.parseFloat(f64, value) catch null`.
-// PORT NOTE: Rust's `f64::from_str` accepts the same decimal float grammar used
-// by the protocol's `0.0`–`1.0` fractions; parse failures map to `null`.
-fn parse_float(value: &[u8]) -> Option<f64> {
-    let s = std::str::from_utf8(value).ok()?;
-    s.parse::<f64>().ok()
-}
+// PORT NOTE (`946422dbc`): the `parse_float` helper (`std.fmt.parseFloat(f64,
+// value) catch null`) is deleted with its only caller's switch to
+// `crate::fraction::parse` — the reference removed its `parseFloat` dependency
+// entirely.
 
 /// `std.base64.standard.Decoder`.
 // PORT NOTE: reference `std.base64.standard.Decoder` is `Base64Decoder.init(

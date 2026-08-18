@@ -35,12 +35,20 @@ pub enum Kind {
     Text,
     /// The URL is known to contain HTML content.
     Html,
+    /// The URL came from an OSC 8 hyperlink. Application runtimes should
+    /// treat this as untrusted terminal output and apply a platform-specific
+    /// safe-opening policy.
+    Osc8,
 }
 
 /// PORT NOTE: the reference's error union from `open`/`std.process.Child` operations.
 #[derive(Debug)]
 pub enum OpenError {
     Unimplemented,
+    /// `error.UnsafeOSC8Link` (`77537c806`): a macOS OSC 8 target reached the
+    /// generic opener fallback — fail closed instead of handing
+    /// producer-controlled terminal output to `open`.
+    UnsafeOSC8Link,
     Spawn(std::io::Error),
 }
 
@@ -60,6 +68,18 @@ pub enum OpenError {
 // bytes). The collapsed `alloc` param is the Rust `Command` ownership.
 #[allow(unused_variables)]
 pub fn open(kind: Kind, url: &[u8]) -> Result<(), OpenError> {
+    // On macOS, the apprt handles OSC 8 targets before this fallback. Rustty's
+    // native apprt applies its allowlist, confirmation, and file safety policy.
+    // If a macOS embedder declines the action, fail closed rather than bypassing
+    // that policy by handing producer-controlled terminal output to `open`.
+    // if (comptime builtin.os.tag == .macos) {
+    //     if (kind == .osc8) return error.UnsafeOSC8Link;
+    // }
+    #[cfg(target_os = "macos")]
+    if kind == Kind::Osc8 {
+        return Err(OpenError::UnsafeOSC8Link);
+    }
+
     let mut exe: std::process::Command = {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
@@ -88,6 +108,8 @@ pub fn open(kind: Kind, url: &[u8]) -> Result<(), OpenError> {
                     c.arg(crate::path::os_str_from_bytes(url));
                     c
                 }
+                // .osc8 => unreachable,
+                Kind::Osc8 => unreachable!(),
             }
         }
         #[cfg(target_os = "ios")]
@@ -144,6 +166,30 @@ pub fn open(kind: Kind, url: &[u8]) -> Result<(), OpenError> {
     let thread = std::thread::spawn(move || openThread(child.stderr.take(), child));
     drop(thread);
     Ok(())
+}
+
+// test "macOS OSC 8 links have no generic opener fallback" {
+//     if (builtin.os.tag != .macos) return error.SkipZigTest;
+//
+//     try std.testing.expectError(
+//         error.UnsafeOSC8Link,
+//         open(.osc8, "file:///tmp/payload.command"),
+//     );
+// }
+//
+// (the `SkipZigTest` non-macOS arm maps to the `cfg(target_os = "macos")`
+// test gate.)
+#[cfg(all(test, target_os = "macos"))]
+mod osc8_tests {
+    use super::*;
+
+    #[test]
+    fn macos_osc8_links_have_no_generic_opener_fallback() {
+        assert!(matches!(
+            open(Kind::Osc8, b"file:///tmp/payload.command"),
+            Err(OpenError::UnsafeOSC8Link)
+        ));
+    }
 }
 
 #[allow(non_snake_case)]

@@ -1098,6 +1098,22 @@ pub struct PageList {
     /// that there and on `IncrementalCompressionState`.
     pub page_compression: compress::IncrementalCompressionState,
 
+    /// A node available for immediate reuse by createPage, bypassing the
+    /// memory pool round trip. This is only set during column reflow
+    /// (resizeCols), which destroys one source page for roughly every
+    /// destination page it creates: returning a page buffer to the pool
+    /// decommits it and taking one back recommits it, and that syscall
+    /// pair per page is a significant part of reflow cost. Always null
+    /// outside of an in-progress reflow.
+    //
+    // PORT NOTE (46276d046): the reference `?*List.Node = null` becomes a
+    // nullable raw pointer, matching `pages.first`/`viewport_pin`. Raw and
+    // never `&mut`: the stashed node is orphaned (not in `pages`) and its
+    // page buffer is re-initialized IN PLACE by `create_page` while reflow
+    // holds live raw pointers/slices into OTHER pages — proven on the
+    // isolated Miri harness `.port/phase-4/mirihar-reflow-recycle`.
+    pub(crate) recycle_node: *mut Node,
+
     /// Byte size of the raw backing mappings owned by active page nodes. This is
     /// logical scrollback accounting and does not change while a mapping is
     /// decommitted. It excludes encoded storage and unused preheated pool items.
@@ -1648,6 +1664,7 @@ impl PageList {
             page_serial,
             page_serial_epoch: 0,
             page_compression: compress::IncrementalCompressionState::default(),
+            recycle_node: core::ptr::null_mut(),
             page_size,
             limits,
             total_rows: rows as usize,
@@ -2123,6 +2140,77 @@ impl PageList {
     #[allow(dead_code)]
     fn create_page(&mut self, opts: CreatePage) -> Result<*mut Node, OutOfMemory> {
         // log.debug("create page cap={}", .{opts.cap});
+
+        // If we have a node available for recycling (only during reflow,
+        // see recycle_node), reuse it directly rather than going through
+        // the memory pool.
+        if !self.recycle_node.is_null() {
+            'recycle: {
+                let node = self.recycle_node;
+
+                // Only a standard pool-owned resident node can be rebuilt
+                // in place for a standard-size layout.
+                if opts.exact_size {
+                    break 'recycle;
+                }
+                if unsafe { (*node).owned } != Owned::Pool {
+                    break 'recycle;
+                }
+                // node.data != .resident — `page_if_resident` never restores
+                // a compressed node; null means not resident.
+                let page: *mut Page = unsafe { Node::page_if_resident(node) };
+                if page.is_null() {
+                    break 'recycle;
+                }
+                let layout = Page::layout(opts.cap);
+                if layout.total_size > std_size() {
+                    break 'recycle;
+                }
+
+                self.recycle_node = core::ptr::null_mut();
+
+                // The pool guarantees that buffers it hands out are zeroed.
+                // A pool-owned page dirties only its Page.memory prefix of
+                // the underlying standard-size item, so zeroing that prefix
+                // re-establishes the guarantee (this mirrors destroyNodeExt,
+                // minus the decommit).
+                let (item, len) = Self::page_memory(page);
+                // SAFETY: `item` is the stored base pointer of the node's
+                // live pool-owned page buffer (root provenance over the
+                // whole standard-size item; the page memory prefix starts at
+                // offset 0), `len <= std_size()`, and the node is orphaned —
+                // no reference into the buffer survives the reflow stash
+                // (proven on `.port/phase-4/mirihar-reflow-recycle`).
+                unsafe { core::ptr::write_bytes(item, 0, len) };
+
+                // Accounting: a pool-owned node always accounts for a full
+                // pool item in page_size, so destroying the node and
+                // creating a new pooled one is a net zero.
+
+                let buf = OffsetBuf::init(item as *const u8);
+                let mut data = Page::init_buf(buf, layout);
+                data.size.rows = 0;
+                // SAFETY: `node` is a live pool-owned node; the old value is
+                // a plain resident `Page` (no drop glue), so a whole-value
+                // raw write reinitializes it exactly like the reference
+                // `node.* = .{ ... }`.
+                unsafe {
+                    core::ptr::write(
+                        node,
+                        Node {
+                            prev: core::ptr::null_mut(),
+                            next: core::ptr::null_mut(),
+                            data: NodeData::Resident(data),
+                            serial: self.page_serial,
+                            owned: Owned::Pool,
+                        },
+                    );
+                }
+                self.page_serial += 1;
+                return Ok(node);
+            }
+        }
+
         Self::create_page_ext(
             &mut self.pool,
             opts,
