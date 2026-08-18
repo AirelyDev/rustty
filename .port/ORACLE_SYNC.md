@@ -6,9 +6,9 @@ R3 forbids any build-time dependency on it).
 ## Pinned baseline
 
 ```
-commit  6ad1fe7d8cbda36c77b337a96c9bea8a77883699   (short: 6ad1fe7d8 / 6ad1fe7)
-date    2026-07-29
-subject url: exclude trailing spaces from path matches (#13505)
+commit  12967b68f7d46bdbfb2cfffb6768332fb9db68c0   (short: 12967b68f / 12967b6)
+date    2026-08-17
+subject libghostty: option to retain continuations on snapshot decode (#13878)
 ```
 
 There is **one** sync point. The oracle working tree is checked out (detached) at this commit, and
@@ -18,7 +18,7 @@ it is the SHA referenced by `.port/PORT_RULES.md` (R12 main-parity tracking) and
 Verify with:
 
 ```sh
-git -C ../ghostty rev-parse HEAD          # 6ad1fe7d8cbda36c77b337a96c9bea8a77883699
+git -C ../ghostty rev-parse HEAD          # 12967b68f7d46bdbfb2cfffb6768332fb9db68c0
 git -C ../ghostty status --porcelain      # empty
 ```
 
@@ -34,6 +34,16 @@ at an empty tree and every gate finds zero reference sentences, i.e. vacuous gre
 | advanced | from | to | by |
 |---|---|---|---|
 | 2026-07-31 | `4749c4e93` (2026-06-20) | `6ad1fe7d8` (2026-07-29) | `P3-W10 T3`, Phase 3 upstream resync |
+| 2026-08-17 | `6ad1fe7d8` (2026-07-29) | `12967b68f` (2026-08-17) | Phase 4 upstream resync (advance-first by explicit user direction; before/after gate states in `.port/phase-4/w0/`) |
+
+**Phase-4 note on ordering.** Unlike `P3-W10`, this advance happened at the *start* of the
+resync (explicit user direction: update the oracle, then port the whole range). The
+tree-reading gates therefore measure against the TARGET during Phase-4 porting:
+G1b recorded RED with 10 modules / ~36 dropped tests (`w0/g1b-after-at-12967b68f.txt`) and
+G3b's missing counts grew by the range's new reference text (`w0/g3b-after-at-12967b68f.txt`).
+Those REDs are the honest progress meter for Phase 4, not regressions; both were GREEN at
+`6ad1fe7d8` immediately before the advance (`w0/*-before-at-6ad1fe7d8.txt`). They MUST be
+green again at the Phase-4 finale.
 
 The previous pin, `4749c4e93`, was a **stale baseline**: work from beyond it had been ported by
 WS5–WS8 and tracked in an ad-hoc "beyond-pin series" table (BL-1…BL-7) that existed only because the
@@ -70,8 +80,10 @@ before/after reports, the per-crate delta table, and the per-file attribution of
 
 ## Upstream beyond this pin
 
-At the time of the advance `origin/main` was `4d605bf0d` — upstream moved during Phase 3. The
-`6ad1fe7d8..4d605bf0d` gap is the seed of the **next** resync and is deliberately not chased here.
+At the time of the Phase-4 advance (2026-08-17) the pin IS `origin/main` — there is no
+beyond-pin gap. The absorbed range was `6ad1fe7d8..12967b68f` (543 commits, 359 non-merge,
+381 files, +72,554/−8,106); its artifacts live in `.port/phase-4/`. Any future upstream
+movement is the seed of the next resync.
 
 ```sh
 git -C ../ghostty fetch origin main          # once

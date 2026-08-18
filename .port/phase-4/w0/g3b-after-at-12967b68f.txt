@@ -1,0 +1,262 @@
+G3b [apprt]: SKIPPED — PORT STATUS is not done (57 oracle file(s) unexamined)
+G3b [apprt-api]: SKIPPED — PORT STATUS is not done (5 oracle file(s) unexamined)
+G3b [args]: distinctive ref comments=186 missing=1 review=2
+    REVIEW (ratio 0.7): ignore blank lines and comments. if this line consumed the
+    REVIEW (ratio 0.79): returns true if this type can track diagnostics.
+    MISSING ref comment: remaining buffer, refill before the loop condition checks for
+G3b [bench]: distinctive ref comments=137 missing=2 review=1
+    REVIEW (ratio 0.62): pre-generated data from rustty-gen. if this is "-" then
+    MISSING ref comment: enable opt-in continuation tracking on the stream.
+    MISSING ref comment: maximum continuation suffix retained when tracking is enabled.
+G3b [bin]: SKIPPED — PORT STATUS is not done (7 oracle file(s) unexamined)
+G3b [build-config]: distinctive ref comments=27 missing=0 review=0
+G3b [cfg-fmt]: SKIPPED — PORT STATUS is not done (2 oracle file(s) unexamined)
+G3b [cli]: distinctive ref comments=602 missing=8 review=6
+    REVIEW (ratio 0.65): `--title` are supported. `-e` will also work as an alias for `--command`, except that if
+    REVIEW (ratio 0.71): `-e` is found on the command line all following arguments will become part
+    REVIEW (ratio 0.75): of the command and no more arguments will be parsed for configuration
+    REVIEW (ratio 0.76): returns false if the cache file doesn't exist or the version doesn't match.
+    REVIEW (ratio 0.68): this should be returned by actions that want to print the help text.
+    REVIEW (ratio 0.72): var buf: [std.compress.flate.max_window_len]u8 = undefined;
+    MISSING ref comment: * `--shell-integration=<mode>`: whether to enable shell integration and
+    MISSING ref comment: `--working-directory`, `--command`, `--shell-integration=<mode>`, and
+    MISSING ref comment: a directory where the cache file belongs fails every operation.
+    MISSING ref comment: both leave the cache healthy, so neither is worth reporting.
+    MISSING ref comment: itself. a destination we can't key on and a lock held by another process
+    MISSING ref comment: remote host using `ssh tic -x -` over a shared `controlmaster`
+    MISSING ref comment: whether an error from a cache operation reflects a problem with the cache
+    MISSING ref comment: which shell to use. see the main configuration documentation for
+G3b [config]: distinctive ref comments=2836 missing=24 review=15
+    REVIEW (ratio 0.64): 3. "application support" directory (macos only)
+    REVIEW (ratio 0.69): additional configuration or rustty's shell integration features to be
+    REVIEW (ratio 0.78): attempts to install rustty's embedded terminfo entry using `tic` on local
+    REVIEW (ratio 0.73): automatically show and hide the drag handle.
+    REVIEW (ratio 0.63): cache misses. requires `tic` to be available on remote hosts. successful
+    REVIEW (ratio 0.75): create config directory recursively. note that this does not
+    REVIEW (ratio 0.67): enable hyperlinks created with the osc 8 escape sequence. when disabled,
+    REVIEW (ratio 0.68): expand tilde paths to absolute paths to the user's home directory.
+    REVIEW (ratio 0.71): load the configuration according to the default rules:
+    REVIEW (ratio 0.64): options for copy on select behavior.
+    MISSING ref comment: (v4.1+) and nu (0.111+) natively support this while others may require
+    MISSING ref comment: allow intermediate symlinks by design, see
+    MISSING ref comment: allowing splits to be rearranged with mouse controls.
+    MISSING ref comment: check to see if dir exists.
+    MISSING ref comment: complex symlink structure is needed, it will need to be created
+    MISSING ref comment: controls when drag handles are shown over splits,
+    MISSING ref comment: escape sequences represent unicode codepoints.
+    MISSING ref comment: if expansion fails, an error is logged and the original path is returned.
+    MISSING ref comment: in **fullscreen** mode, otherwise it's shown when hovered.
+    MISSING ref comment: installations are cached locally to avoid repeat installations.
+    MISSING ref comment: never show the drag handle. splits then cannot be rearranged with
+    MISSING ref comment: on linux, the handle is only shown when there are two or
+    MISSING ref comment: on macos, the handle is only hidden when there's one split
+    MISSING ref comment: on macos, we only show scrollbars while actively scrolling or hovering
+    MISSING ref comment: osc 8 hyperlinks are not highlighted, previewed, copied, or opened.
+    MISSING ref comment: std.io.threaded.dircreatedirpath for why. if some sort of
+    MISSING ref comment: the gutter. if the system setting is set to "always", the scrollbar
+    MISSING ref comment: the macos app a localized command palette in an otherwise
+    MISSING ref comment: this does not affect url matching controlled by `link-url`.
+    MISSING ref comment: this feature requires prompt marking via `osc 133`. some shells like fish
+    MISSING ref comment: translating these shared strings for the embedded runtime gives
+    MISSING ref comment: translation is currently a gtk-only feature. in particular,
+    MISSING ref comment: will be shown when the mouse is over the gutter area.
+    MISSING ref comment: zig's \xnn syntax represents a single byte, while the other
+G3b [core]: distinctive ref comments=1169 missing=8 review=2
+    REVIEW (ratio 0.72): queue a message for the io thread, taking ownership of `msg`.
+    REVIEW (ratio 0.69): setup the next set we'll look at only after all fallible work.
+    MISSING ref comment: if font discovery supports warmup, then we call it. some font
+    MISSING ref comment: mechanisms (e.g. coretext) have a multi-millisecond one-time cost
+    MISSING ref comment: one-time framework initialization costs on first use.
+    MISSING ref comment: open the config in a new window using $editor or $visual
+    MISSING ref comment: open the config in the os default editor.
+    MISSING ref comment: queueio must free allocated writes in read-only mode.
+    MISSING ref comment: same for the renderer's graphics api (e.g. metal), which pays
+    MISSING ref comment: the action accepted the path, so retain the file for its consumer.
+G3b [crash]: distinctive ref comments=167 missing=13 review=1
+    REVIEW (ratio 0.63): linux). on darwin the thread names itself in initthread.
+    MISSING ref comment: (e.g. ensurelocale on the main thread).
+    MISSING ref comment: can take multiple milliseconds on macos (apple apis) and sentry's
+    MISSING ref comment: directory memory, holds the cache and state dirs persistently. this
+    MISSING ref comment: done for saving the crash report.
+    MISSING ref comment: holds the xdg cache dir.
+    MISSING ref comment: holds the xdg state dir.
+    MISSING ref comment: naming the thread from here only works on some platforms (e.g.
+    MISSING ref comment: own init does disk i/o. everything sentry is doing initially is safe
+    MISSING ref comment: prevents any sort of crashes due to initialization races.
+    MISSING ref comment: slow enough to matter for process startup: resolving our directories
+    MISSING ref comment: so it is safe against concurrent mutations of the process environment
+    MISSING ref comment: the environ map is a snapshot owned by the thread (and freed there),
+    MISSING ref comment: the i/o and allocator we use here are just meant to get the job
+G3b [datastruct]: distinctive ref comments=478 missing=2 review=1
+    REVIEW (ratio 0.65): fix up our head/tail for the new capacity.
+    MISSING ref comment: find the handle within this tree that corresponds
+    MISSING ref comment: to the given view. uses pointer equality.
+G3b [extra]: distinctive ref comments=20 missing=0 review=2
+    REVIEW (ratio 0.67): generates the syntax file at comptime.
+    REVIEW (ratio 0.72): this results leading or tailing spaces being necessary to move onto the next match.
+G3b [font]: SKIPPED — PORT STATUS is not done (50 oracle file(s) unexamined)
+G3b [global]: distinctive ref comments=106 missing=1 review=3
+    REVIEW (ratio 0.64): asserts that `self.io_impl` has been initialized.
+    REVIEW (ratio 0.67): initialize our crash reporting. the environ map snapshot is
+    REVIEW (ratio 0.78): returns the global state action.
+    MISSING ref comment: owned by crash.init (it is freed by the init thread).
+G3b [input]: SKIPPED — PORT STATUS is not done (13 oracle file(s) unexamined)
+G3b [inspector]: distinctive ref comments=202 missing=4 review=0
+    MISSING ref comment: ask the application runtime to save all recorded events to a file.
+    MISSING ref comment: copy all recorded events to the standard clipboard in chronological
+    MISSING ref comment: format all recorded events as tab-separated text. events are exported
+    MISSING ref comment: oldest-first even though the inspector displays the newest event first.
+G3b [lib]: distinctive ref comments=82 missing=15 review=2
+    REVIEW (ratio 0.79): `options.padding` is a type that is always added to the c union with the key
+    REVIEW (ratio 0.79): to the expected size and should never change to ensure abi compatibility.
+    MISSING ref comment: `_padding`. it should have the size and alignment needed to pad the c union
+    MISSING ref comment: a null key removes that field while preserving its integer hole.
+    MISSING ref comment: be changed when the integer values are part of an abi or serialized format.
+    MISSING ref comment: c enums use `c_int`. zig enums use the smallest unsigned integer that can
+    MISSING ref comment: c value field. multiple tags may map to the same field when their c value
+    MISSING ref comment: each tag has an optional field in `options.field_renames` that may rename its
+    MISSING ref comment: for metadata and should match the c headers directly.
+    MISSING ref comment: in all cases, each enum value is its index in `keys`. the order must not
+    MISSING ref comment: it does not rename fields in `cvalue`.
+    MISSING ref comment: null when the tag has no value field. this is metadata only;
+    MISSING ref comment: options for generating the c representation of a tagged union.
+    MISSING ref comment: remove null fields while preserving their positions as integer holes.
+    MISSING ref comment: represent every key index, including holes.
+    MISSING ref comment: returns the public c value-union field name for `tag`, or
+    MISSING ref comment: types are identical. tags with no payload are omitted. this is used
+G3b [os]: distinctive ref comments=666 missing=14 review=2
+    REVIEW (ratio 0.75): first check the env var. on windows we treat `localappdata` as a
+    REVIEW (ratio 0.66): not great, but xev timer can't fail atm
+    MISSING ref comment: a log function that discards everything. since the format string and
+    MISSING ref comment: and its contents on disk.
+    MISSING ref comment: close the directory handles, optionally retaining the temporary directory
+    MISSING ref comment: if a macos embedder declines the action, fail closed rather than bypassing
+    MISSING ref comment: if this is called at comptime, the direct msgid is returned without
+    MISSING ref comment: machinery: call sites, format strings, and the std.fmt code they
+    MISSING ref comment: mark a string for translation without translating it immediately.
+    MISSING ref comment: native apprt applies its allowlist, confirmation, and file safety policy.
+    MISSING ref comment: on macos, the apprt handles osc 8 targets before this fallback. rustty's
+    MISSING ref comment: reference (~220kb in a releasefast wasm build).
+    MISSING ref comment: scope are comptime parameters, using this compiles out all logging
+    MISSING ref comment: that policy by handing producer-controlled terminal output to `open`.
+    MISSING ref comment: translation. this still allows the string to be marked for translation
+    MISSING ref comment: while remaining usable in comptime contexts.
+G3b [render-types]: distinctive ref comments=149 missing=0 review=0
+G3b [renderer]: SKIPPED — PORT STATUS is not done (35 oracle file(s) unexamined)
+G3b [simd]: distinctive ref comments=103 missing=11 review=0
+    MISSING ref comment: ascii fast path. use vectorization if it is available. this
+    MISSING ref comment: continuation bytes are always 80-bf. range validity per
+    MISSING ref comment: direct bit assembly with no further checks.
+    MISSING ref comment: encodings, so a fully valid sequence can be decoded by
+    MISSING ref comment: lead byte contributes its low 7-len bits.
+    MISSING ref comment: lead-dependent valid range per unicode table 3-7; later
+    MISSING ref comment: maximal subpart), accumulating codepoint bits as we go. the
+    MISSING ref comment: multi-byte sequence. only the first continuation byte has a
+    MISSING ref comment: path is only run when simd=false, but that only controls our c++
+    MISSING ref comment: simd builds. we can still rely on zig intrinsics for platforms
+    MISSING ref comment: table 3-7 excludes overlong, surrogate, and out-of-range
+G3b [synthetic]: distinctive ref comments=101 missing=6 review=0
+    MISSING ref comment: bytes that relies on terminal wrapping.
+    MISSING ref comment: distributed in `[line-min, line-max]`, each terminated by cr lf.
+    MISSING ref comment: every emitted line respects the configured bounds.
+    MISSING ref comment: the fixed buffer may end mid-line.
+    MISSING ref comment: when nonzero, emit lines whose printable length is uniformly
+    MISSING ref comment: when zero (the default), emit an unbroken stream of printable
+G3b [terminfo]: distinctive ref comments=99 missing=5 review=0
+    MISSING ref comment: a content-derived version of the encoded terminfo source.
+    MISSING ref comment: after the response is already the null terminator.
+    MISSING ref comment: the responses are null-terminated so that they can be handed directly
+    MISSING ref comment: the value is more complex. the buffer is zeroed so the byte
+    MISSING ref comment: to apis that require a sentinel (e.g. the librustty-vt write_pty
+G3b [termio]: distinctive ref comments=1155 missing=8 review=5
+    REVIEW (ratio 0.67): backpointer to the thread data so the write completion
+    REVIEW (ratio 0.75): child. empirically chosen through measurements on an m4 max.
+    REVIEW (ratio 0.65): or if due to race conditions it doesn't exist or any various other
+    REVIEW (ratio 0.7): reasons. we don't want to crash the entire process if this fails so we
+    REVIEW (ratio 0.68): sets the fd to non-blocking mode. returns false on failure.
+    MISSING ref comment: but the number of messages we send to the io thread is also very small.
+    MISSING ref comment: callback can put this back into the pool.
+    MISSING ref comment: free resources owned by a message that will not be processed.
+    MISSING ref comment: the buffer for the data being written.
+    MISSING ref comment: the buffer it writes from must both remain pointer-stable until
+    MISSING ref comment: the message is invalid after this call.
+    MISSING ref comment: the state for a single queued pty write. the write request and
+    MISSING ref comment: the write completes, so they're pooled together and checked out
+G3b [unicode]: distinctive ref comments=124 missing=0 review=0
+G3b [util]: distinctive ref comments=146 missing=0 review=0
+G3b [vt]: distinctive ref comments=12469 missing=921 review=203
+    REVIEW (ratio 0.74): (markmutated sets both); dirty set without a generation change
+    REVIEW (ratio 0.7): - the codepoint map is empty.
+    REVIEW (ratio 0.79): `page_serial`. consequently, every previously captured pointer-plus-serial
+    REVIEW (ratio 0.71): `page` metadata. a resident page can access the mapping directly since
+    REVIEW (ratio 0.79): a caller may pass our current tracked selection back to us by value, so
+    REVIEW (ratio 0.74): a completed command transfers its allocation to command; dcscommand
+    REVIEW (ratio 0.62): a group of raw values for the vectorized operations.
+    REVIEW (ratio 0.69): a live entry returned by `iterator`.
+    REVIEW (ratio 0.64): a=t creates one new placement after deleting the previous image and
+    REVIEW (ratio 0.78): accounting: a pool-owned node always accounts for a full
+    MISSING ref comment: "permanently reset" response for recognized modes that cannot be changed.
+    MISSING ref comment: (2 chunks) and a 31-byte explicit id (1 chunk) is reflowed into
+    MISSING ref comment: (e.g. bg-color-only cells which synthesize styles).
+    MISSING ref comment: (inclusive) until the next entry's offset (or the end of the
+    MISSING ref comment: (or window) end can never split a pair.
+    MISSING ref comment: (pointer cast) because a value-level @bitcast of packed
+    MISSING ref comment: (rare) grapheme case doesn't bloat the writecellrun hot loop.
+    MISSING ref comment: (replayable escape sequences), or html, with optional extras
+    MISSING ref comment: (resizecols), which destroys one source page for roughly every
+    MISSING ref comment: (see reflowrow). it only depends on the source page so this is
+    MISSING ref comment: (see writecell) so they are pure copies. the style
+    MISSING ref comment: (slower) format string machinery with a write per sequence.
+    MISSING ref comment: (styles are compared field-wise, never by bytes, since padding
+    MISSING ref comment: (we cannot allocate here); if it doesn't fit (e.g.
+    MISSING ref comment: (wide characters, spacers, kitty virtual placeholders). for
+    MISSING ref comment: - for html, no hyperlink is currently open.
+    MISSING ref comment: - for styled formats, `run_style_id` is the valid interned
+    MISSING ref comment: 16-byte store. the store intentionally overlaps the next
+    MISSING ref comment: 32x-per-event growth bound instead of merely doubling.
+    MISSING ref comment: 5,461 points require a 65,532-byte points allocation.
+    MISSING ref comment: 5,462 points require a 65,544-byte points allocation.
+    MISSING ref comment: __multi3 libcalls (wasm has no widening multiply
+    MISSING ref comment: `= @splat(c)`: a comptime-known 4096-element splat gets fully
+    MISSING ref comment: `@memset` with a struct value lowers to a per-element field copy
+    MISSING ref comment: `\x1b[4:2m` (6) + 3 rgb colors (19 each = 57) = 100.
+G3b [vt-c]: distinctive ref comments=583 missing=187 review=12
+    REVIEW (ratio 0.66): (see `os/stderr.zig`). on freestanding/wasm targets this is a no-op
+    REVIEW (ratio 0.68): `rustty_type_json`. it is intended for ffi consumers that cannot use the
+    REVIEW (ratio 0.72): at or below the viewport's last row).
+    REVIEW (ratio 0.66): clearing the callback restores the null fast path immediately.
+    REVIEW (ratio 0.63): comptime-generated abi metadata for the public librustty-vt c types.
+    REVIEW (ratio 0.65): detected before a required length is reported.
+    REVIEW (ratio 0.67): fully off-screen (its bottom edge is above the viewport or its top edge is
+    REVIEW (ratio 0.65): null restores the secure default.
+    REVIEW (ratio 0.79): request and its strings are borrowed for the callback duration.
+    REVIEW (ratio 0.76): split a complete apc across writes to exercise persistent parser state.
+    MISSING ref comment: .palette at byte 0 and .rgb at bytes 0-2, which is exactly
+    MISSING ref comment: @sizeof(style)-byte copy that llvm does not elide.
+    MISSING ref comment: `continuation_max_bytes` selects the returned terminal's tracking policy:
+    MISSING ref comment: `end` is the initialized prefix of the fixed destination.
+    MISSING ref comment: `position_none` if iteration hasn't started. always validate
+    MISSING ref comment: `std.debug.lockstderr` because it routes through `std.options.debug_io`
+    MISSING ref comment: `std.io.threaded` since tinyio doesn't implement the nt
+    MISSING ref comment: a byte limit without a callback performs no external effect.
+    MISSING ref comment: a complete replay start and repairs tracking without first grounding.
+    MISSING ref comment: a full redraw returns every row, even if its row flag was cleared.
+    MISSING ref comment: a future borrowed csi payload may need parameter, separator, and
+    MISSING ref comment: a malformed continuation resets the decoder and reaches ground after
+    MISSING ref comment: a null handle fails on the first key, matching the per-call
+    MISSING ref comment: a null limit disables capture even after reinstalling the callback.
+    MISSING ref comment: a null/zero destination is the explicit size-query form. discarding
+    MISSING ref comment: a partial redraw skips clean rows without consuming dirty flags.
+    MISSING ref comment: a terminal mode and boolean value used for mode configuration.
+    MISSING ref comment: a write failure from an allocating writer can only be allocation failure;
+    MISSING ref comment: absence of a tracker is the public representation of disabled tracking.
+    MISSING ref comment: accounting overflow. keep that distinct from callback rejection.
+    MISSING ref comment: against `raws.len` before use.
+    MISSING ref comment: all failure paths leave deterministic output metadata.
+    MISSING ref comment: allocate the native i/o implementation when the platform requires it.
+    MISSING ref comment: allocation failures possible while constructing an i/o owner.
+    MISSING ref comment: allocator. it can immediately track only if no earlier bytes are needed.
+
+G3b SCOPE: 7 crate(s) SKIPPED (PORT STATUS not done) = 169 oracle file(s) unexamined: apprt, apprt-api, bin, cfg-fmt, font, input, renderer
+  The verdict below covers the EXAMINED crates only. Use --strict or --crate <name> to include a skipped crate.
+RED: dropped reference comment(s) — see MISSING above (R1 violation)

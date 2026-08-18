@@ -1,0 +1,543 @@
+12967b68f libghostty: option to retain continuations on snapshot decode (#13878)
+9be6c2ea2 libghostty: option to retain continuations on snapshot decode
+56e1f3a62 libghostty: buffer the writer adapter used by streaming C APIs (#13877)
+846d24e12 libghostty: buffer the writer adapter used by streaming C APIs
+159cf6d7e pkg/wuffs: use C-only mirror of wuffs (#13789)
+385a378fe termio: preserve UTF-8 in desktop notification truncation (#13811)
+4816afc74 macos: simplify command palette sort keys (#13872)
+007397623 terminal: preserve pending wrap in VT formatter (#13876)
+997a2aff2 terminal: preserve pending wrap in VT formatter
+5c952ac97 macos: simplify command palette sort keys
+ee57b9417 libghostty: C api to stream formatter output through a GhosttyWriter (#13875)
+faaf07e7c macos: remove unused hosting window helper (#13873)
+0baa0fd54 inspector: remove obsolete detachable header helper (#13874)
+924c8a90d libghostty: C api to stream formatter output through a GhosttyWriter
+c8980b853 macos: don't put 0x7F as text in key event (#13871)
+d19f8f7f9 macos: remove unused hosting window helper
+2349e974b inspector: remove obsolete detachable header helper
+6c30dc1bf i18n: Update ko_KR translations (#13815)
+f4309055f macos: don't put 0x7F as text in key event
+3924a3255 Update VOUCHED list (#13870)
+b97b17f06 i18n: translate v1.4 strings (be) (#13771)
+e9db8d2b0 libghostty: use custom memory pool for Wasm, reduce terminal memory by ~75% (#13865)
+492c26067 libghostty: use custom memory pool for Wasm
+8d70c5dca libghostty: reduce Wasm stack reservation (#13864)
+5364e5158 libghostty: reduce Wasm stack reservation
+9a770be61 build(deps): bump cachix/install-nix-action from 31.11.0 to 31.11.1 (#13863)
+7a966438f build(deps): bump cachix/install-nix-action from 31.11.0 to 31.11.1
+820ed688e i18n(be): fix translation issues per review
+602497e9b input: skip text fallback for kitty key releases (#13861)
+f8856a78a config: preserve bytes in hex escapes (#13862)
+29b82dd80 config: preserve bytes in hex escapes
+7557944b4 feat: expand tildes in config theme path to HOME (#13840)
+3790fb78f libghostty: simplify Wasm allocation API (#13860)
+a8e9b413f libghostty: simplify Wasm allocation API
+7b57c0a02 Update VOUCHED list (#13859)
+bd647035e input: don't emit fallback text on key release
+68a2008b3 fix: format
+0ba625038 libghostty: `ghostty_type_json` expanded with more metadata, every enum member, packed layouts, etc. (#13856)
+26df373ec i18n: update Hebrew translations for v1.4 (#13785)
+37174c73b add helper and expand also if light/dark is specified
+0e8b7bea6 vt: expose packed cell layout
+c75559589 libghostty: add ABI manifest schema
+9673a22b0 libghostty: expand ABI type metadata
+ad6e72ddc libghostty: add dedicated dirty row iteration + clear functions (#13852)
+16c833c5f libghostty: add render state structured cursor read (#13851)
+0d37f2d34 libghostty: add dedicated dirty row iteration + clear functions
+b4079f00c libghostty: add render state structured cursor read
+02436fd4e Update iTerm2 colorschemes (#13850)
+f2897f31d deps: Update iTerm2 color schemes
+900912295 macos: send all `insertText` commits as key events (#13817)
+cbe8a0ed4 cli: keep cached SSH terminfo installs current (#13844)
+e524df6c8 terminal/apc: limit glyf decode allocations (#13849)
+746a11c72 libghostty: much faster terminal snapshot encode and decode for wasm (#13848)
+433b16bcb terminal/apc: limit glyf decode allocations
+eb09bf829 terminal/snapshot: interleave software CRC32C streams
+1359973ae terminal/snapshot: single-pass style entry codec
+47a518262 terminal/snapshot: skip remap tables for pages without styles
+7c1014ef6 terminal/snapshot: resolve wide pairs in a per-row pass
+2aaad3ca9 terminal/snapshot: vectorize grid cell decoding
+593762cfa terminal/snapshot: batch grapheme suffix codec
+973f619a2 terminal/snapshot: vectorize grid row encoding
+c1a61fddd terminal/snapshot: borrow fully buffered record payloads
+36d8e3f77 terminal/snapshot: slicing-by-16 software CRC32C
+c12173429 move shell expand of theme from theme.zig to config.zig
+69b9abf09 cli: version SSH terminfo cache entries
+06b63c485 i18n: update Hebrew translations for v1.4
+fff9f62f3 cli: always install embedded SSH terminfo
+cecf81678 Update VOUCHED list (#13843)
+f748b17e2 feat: expand tildes in config theme path to HOME
+e3939d0f6 terminal: replace std.fmt.parseFloat with custom fraction parsing (#13839)
+946422dbc terminal: replace std.fmt.parseFloat with custom fraction parsing
+53c6fdbe7 apprt: own desktop notification truncation
+b5aa8e7a0 i18n: complete Kazakh (kk) translation for v1.4 (#13778)
+794515ba6 libghostty: -Dvt-features to compile out unused features (#13834)
+1fdbb8c91 libghostty: -Dvt-features to compile out unused features
+348f714ff Update VOUCHED list (#13833)
+0e0893adf libghostty: attacking wasm binary size (#13830)
+e84dd3015 Update VOUCHED list (#13829)
+51a4311ef terminal: clean up overzealous inlining
+d61920d80 lib-vt: disable logging in wasm release builds
+d760ee96e terminal: much faster wide-character reflow on resize (#13827)
+88ed6bebf libghostty: much faster wide-character reflow on resize
+6b22215c5 libghostty: much faster grapheme-heavy IO throughput (#13826)
+3d9b2b483 libghostty: much faster grapheme-heavy IO throughput
+16833f5e5 libghostty: faster render state reads and updates on wasm targets (#13825)
+74a233b54 libghostty: faster render state reads and updates on wasm targets
+8f485a7f4 ci: publish wasm tip artifacts (#13822)
+29a70bc36 ci: publish wasm tip artifacts
+2f72b041f libghostty: much faster vt_write on wasm targets (#13821)
+87f69a12e libghostty: much faster vt_write on wasm targets
+53be7d035 libghostty: faster render state updates and C API reads (#13818)
+e3056658d libghostty: faster render state updates and C API reads
+4a174e1c8 renderer: simplify cell row storage (#13599)
+ecbeb60ca macos: send all insertText commits as key events
+1eceea92d i18n: Update ko_KR translations
+cde7f9343 renderer: simplify cell row storage
+f81dcadc8 Update VOUCHED list (#13814)
+562f21a6e macOS: avoid holding SurfaceView when sending notifications (#13810)
+1ff3deb1b i18n: Update es_ES translations (#13800)
+658445027 i18n: Update Norwegian translations (#13781)
+375ce7874 i18n: Update Norwegian translations
+ae6d97ea7 termio: avoid rescanning UTF-8 prefixes
+fa392baf2 i18n: add missing Hungarian translations (#13799)
+485864cd6 po/zh_CN: add missing translations (#13608)
+f2022fe88 macOS: avoid holding SurfaceView when sending notifications
+034f5843f fix: apply kk translation review feedback
+6cadad06f termio: preserve UTF-8 in desktop notification truncation
+93e7e7e99 po/zh_CN: add missing translations
+89a26a39e Update VOUCHED list (#13808)
+365e0bd00 i18n: Updating `es_AR` for 1.4 (#13784)
+710b87239 Update VOUCHED list (#13805)
+0ee8a7297 i18n: add missing Polish translations + minor fixes (#13798)
+226a91658 Update Turkish translations (#13770)
+119f4fd60 libghostty: minor C/C++ compatibility fixes (#13801)
+250a36fe6 i18n: Update es_ES translations
+d930c74c4 libghostty: make sized initialization valid C++
+309440e07 libghostty: include all public structs in type JSON
+e4ec4f0f9 libghostty: fix enum underlying type detection
+51992ab01 libghostty: make device and point headers self-contained
+bedb6f2ff i18n: update es_BO translations for 1.4 (#13782)
+987ee5275 Update and (hopefully) complete Hungarian translations in hu.po
+8fd2013a0 i18n: add missing Polish translations + minor fixes
+43fe69907 Update VOUCHED list (#13797)
+908961f8a terminal: size dynamic tabstops by bits (#13600)
+27d164287 Update Turkish translations
+bb019cac2 Update VOUCHED list (#13794)
+47703753a Update VOUCHED list (#13793)
+9f8550b7f Add danish translations (#13538)
+7c4c7adad pkg/wuffs: use C-only mirror of wuffs
+7c1d0d414 i18n: update Hebrew translations for v1.4
+d7f782dbc i18n: update Hebrew translations for v1.4
+aa25679da i18n: update Hebrew translations for v1.4
+dd22396bd i18n: update es_BO translations for 1.4
+613050ddf i18n - Latvian translation of command palette, typo fixes and more natural translations (#11663)
+dab1b105b config: flush autogenerated config template (#13780)
+47136687d add command palette translations
+98b828a02 config: flush autogenerated config template
+1d9fcdc15 i18n: complete Kazakh (kk) translation for v1.4
+004f79e27 Merge branch 'ghostty-org:main' into localization-da
+d2c70a8c7 Update VOUCHED list (#13775)
+c54ec80c5 gtk: Fix +new-window -e <command> inheriting forced shell integration from the running GTK application. Fixes #12378. (#13741)
+3650bef4e Fix +new-window -e <command> inheriting forced shell integration from the running GTK application.
+e2662d7b6 i18n: translate v1.4 command palette and remaining strings (be)
+b2fa2931b Expose semantic prompt state through libghostty-vt (#13767)
+c80c37362 Remove internal surface prompt query
+491806fbe i18n(lv): last two missing translations
+b3514d562 i18n: Latvian translation. Additional strings.
+b104a3f0b i18n - Latvian translation of command palette, typo fixes and more natural translations
+bdb566068 Expose semantic prompt state through C APIs
+d2eeb734b github: remove the issue templates (#13765)
+4a516fa39 github: remove the issue templates
+99b877ad2 terminal: move cursor home after formatting tabstops (#13763)
+e523cf810 terminal: move cursor home after formatting tabstops
+1eaf457b1 gtk: add window title renaming (#10999)
+7e3ddc2c8 macOS: fix swift warnings (#13762)
+cb7eaa059 macOS: silent weak ownership difference warnings
+c78226bfa macOS:  fix Main actor-isolated static property 'find' warnings
+51ed437cd libghostty: functions to detect and write until stream ground state (#13761)
+97ae25749 macOS: fix warnings in showUserNotification
+da8b17126 macOS: fix Sendable warning for UnsafeMutablePointer
+a69a591af libghostty: functions to detect and write until stream ground state
+396166ecb build: stop building Ghostty.xcframework for iOS (#13760)
+7a171895d build: stop building Ghostty.xcframework for iOS
+4f39c506e macOS: remove iOS target and clean up cross platform checks (#13759)
+b112f3954 build: stop building Ghostty for iOS
+daab08ec0 macOS: drop the cross-platform check and abstraction
+400be4cc1 macOS: adjust file tree
+3901168b1 macOS: remove iOS target
+9f9b8d1d0 Update VOUCHED list (#13756)
+fad7f854e Update VOUCHED list (#13754)
+b0b9fbc8d macOS: support decoding the surrogate pair with UnicodeHexInput (#13737)
+d1937d63e macOS: remove unused menu validations (#13726)
+8e4715b6e terminal/kitty: use fixed table for control keys (#13729)
+92cdfc748 issue-triage: add a documentation search checkbox (#13752)
+04d1939d5 issue-triage: add a documentation search checkbox
+5ce1fe1ff terminal/kitty: document the experiment variants that were considered
+f719af00c terminal/kitty: use fixed table for control keys
+8c9fd7aa7 macos: normalize command paths as file URLs
+a858bd4d3 macos: ignore -e arguments as open files (#13748)
+90154e289 macos: ignore -e arguments as open files
+426386b85 Update VOUCHED list (#13747)
+046b8fcc2 macos: defer OSC52 clipboard read confirmations until focused (#13744)
+d695ffff3 macos: defer OSC52 clipboard read confirmations until focused
+94d775fef Update VOUCHED list (#13743)
+44f06d4e4 macOS: rework for #12712 and #13645 (#13717)
+09557e91d Update VOUCHED list (#13739)
+d929e6a34 config/edit: better handling of existing paths (#13736)
+b68eb67e9 config/edit: better handling of existing paths
+f0e3be3ee macOS: support decoding the surrogate pair with UnicodeHexInput
+951a03b58 apprt/gtk: add WeakRef.deinit and use it at teardown sites (#13732)
+8b7c57c75 gtk: add window title renaming
+0914c5c2f core/gtk: allow editing Ghostty config in a Ghostty window (#11905)
+e53b18a64 gtk: free hotkeys memory on app teardown (#13727)
+0a183c923 core/gtk: allow editing Ghostty config in a Ghostty window
+1dbc8ca30 apprt/gtk: add WeakRef.deinit and use it at teardown sites
+fd47b15cd gtk: free hotkeys memory on app teardown
+0c8ec225b macOS: remove unused menu validations
+4b9d589bc macOS: disable text selection on macOS 15
+7e463bc65 ghostty.h: mark as internal (#13724)
+d6248a32d ghostty.h: mark as internal
+156bc8c81 terminal/kitty: clear placements on image retransmit (#13723)
+b8222f4a8 terminal/kitty: clear placements on image retransmit
+ad08f3b03 macos: reduce app launch time ~15%, time to first frame ~27% (#13722)
+931a538a3 comments
+da745630b macos: only check for auto-tabbing when tabbing preference is always
+4b1e02c7c macos: do not load the config errors window when there are no errors
+db6d20dce apprt/embedded: initialize the TIS keymap lazily
+de1336fad renderer/metal: warm up command queue and shader pipelines
+131b293db renderer/metal: warm up the Metal device machinery at app creation
+c454a3bf4 font: support warmup threads
+afc79b8cc font: look up Apple Color Emoji by exact name on macOS
+3225e9ebb macos: cache unified logging loggers per scope
+a82637b53 crash: resolve sentry directories on the init thread
+bb876a0d2 build(deps): bump dorny/paths-filter from 4.0.2 to 4.0.3 (#13718)
+c285d3c24 build(deps): bump dorny/paths-filter from 4.0.2 to 4.0.3
+fea378e56 libghostty: reduce binary size ~16% (macOS), ~22% (Linux) (#13715)
+49e4df783 macOS: rework for #12712 and #13645
+a15dddae2 TinyIo: fix failing tests in CI
+d524a0fe6 libghostty: guard release builds against std debug Io
+82df79ec8 libghostty: replace Io.Threaded with custom Io impl (TinyIo)
+579db4189 libghostty: log to stderr with raw writes, not lockStderr
+f36854345 libghostty: skip stack traces in release panic handlers
+0aa71d02e terminal: reduce Parser.Action log formatting code size
+9d8fbd15b gtk: add +new-tab action (#11762)
+2dc08839b build: fix Linux Android SDK fallback path (#13705)
+da59a2ec4 macOS: support `drag-handle` config (#13709)
+349664f03 agents: remove double negative (#13710)
+fde9e281c agents: remove double negative
+74f91d1b4 macOS: support `drag-handle` config
+05221c11c core,gtk: add `drag-handle` config (#13706)
+850ca8c7b gtk: rebind is-split after moving split cross-tree
+65a3e666e gtk: drag overlay toggle
+c6e7e9e4e config: add `drag-handle`
+16e13a59a build: fix Linux Android SDK fallback path
+f64f4aca2 lib-vt: answer XTGETTCAP queries (#13530)
+74efadb44 lib-vt: answer XTGETTCAP queries
+163e22975 Update iTerm2 colorschemes (#13704)
+94beef81e libghostty: effect for unknown sequence (APC only this PR) (#13702)
+7e8b4f360 deps: Update iTerm2 color schemes
+6b990de5b terminal: C API for unknown sequences
+136f436a3 gtk/wayland: clean up blur regions (#13699)
+a6fc3e0e2 gtk/wayland: clean up blur regions
+6e647a1cb Update VOUCHED list (#13697)
+b53728241 terminal/apc: support reporting unknown APC sequences
+afb351f83 terminal/stream: fast-path APC termination
+034506f14 gtk: add +new-tab cli action
+47147324c Update VOUCHED list (#13691)
+260288614 macOS: fix quit alert missing when hidden (#13686)
+e83cf0b06 macOS: fix quit alert missing when hidden
+4693e1b54 macos: sync appearance when new windows are created (#13675)
+34282fc7b macOS: fix swiftlint (#13684)
+204989ad9 terminal/snapshot: remove BLAKE3 digests (#13680)
+0a78672e7 build: fix flatpak/snap, restore rpath opt, fix local gtk4-layer-shell (#13677)
+fd9837021 macOS: fix swiftlint
+faeac91fa macOS: fix window sizing after dragging a split into a window (#13682)
+571c62dad font/coretext: creation functions can return null, handle OOM (#13679)
+7f96e0bda Update VOUCHED list (#13683)
+fcee19819 macos: discard debounced selection notification (#13676)
+96826853b macOS: fix window sizing after dragging a split into a window
+7e567c3f0 cli: add g/G as vi-style aliases for Home/End in list-themes (#13681)
+987f44260 cli: add g/G as vi-style aliases for Home/End in list-themes
+219173ab3 terminal/snapshot: remove BLAKE3 digests
+daeed25b3 font/coretext: creation functions can return null, handle OOM
+f9b2ad8db input: update toggle_maximize documentation (#13673)
+b9113d2e7 build: fix flatpak/snap, restore rpath opt, fix local gtk4-layer-shell
+44a05a88a macos: discard debounced selection notification
+e11bfb513 macos: sync appearance when new windows are created (#13324)
+c011ad870 Update wording
+a14eba747 input: update toggle_maximize documentation
+22d13172c macOS: fix unsupported action falls through wrong handling (#13668)
+111877354 core,gtk: add move_tab_to_new_window action (#13621)
+18f06ef03 macOS: fix unsupported action falls through wrong handling
+afa9e4fad libghostty: add configurable mode defaults, remove mode_set/get (#13661)
+99c483f47 macOS: hide settings menu icon on macOS 27 (#13664)
+33bdeed1c macOS: remove flaky color match tests (#13667)
+76907d8de macOS: remove flaky color match tests
+301bd6f8b macOS: hide settings menu icon on macOS 27
+ec58fbc6a build: default dependencies to lib-vt mode to avoid Xcode requirements (#13660)
+cfc19e805 libghostty: add configurable mode defaults, remove mode_set/get
+49fd1ae65 build: default dependencies to lib-vt mode
+f948d4207 termio: replace SegmentedPool with std.MemoryPool (#13659)
+e0ef934f7 termio: replace SegmentedPool with std.MemoryPool
+63da4e84d lib: remove backported cutPrefix implementation (#13658)
+e1fc390c1 GTK: move audio bell processing to the application (#13657)
+1d6bc6829 lib: remove cutPrefix implementation
+f0f3f4d8d GTK: move audio bell processing to the application
+8eecb8fdb terminal: release Kitty placement pins on eviction (#13656)
+ea21a2f14 core: avoid allocating for pwd change actions (#13654)
+b5e86a428 terminal/kitty: release evicted placement pins
+f1d225020 core: avoid allocating for small pwd change actions
+e88601239 macOS: update command options match order (#13624)
+9cb214764 terminal/kitty: evict without scratch allocation (#13627)
+090d161b2 terminal: report overline in DECRQSS SGR response (#13653)
+a61e15efd terminal/kitty: fix point deletion calculations (d=p, d=c) (#13652)
+ae0ff51c4 macos: defer overlapping clipboard completion (#13648)
+c9ef382fc macos: synchronize cached value access (#13646)
+f973bd53b terminal: report overline in DECRQSS SGR response
+8524cb593 terminal/kitty: fix point deletion calculations (d=p, d=c)
+947e83993 macos: prevent stale search selection crash (#13645)
+9ed61428d libghostty-vt: spacer-tail handling needs to respect slow runtime safety (#13651)
+1aeca6705 terminal: color reset should set override to null, not default (#13650)
+78dec345b terminfo: advertise overline support (#13649)
+0dcb41168 fix screen action fd leak from tempdir (#13644)
+5033ea83d terminal: preserve cursor when formatting tabstops (#13643)
+b60970ce2 macos: handle missing CoreText display names (#13642)
+71c2d68eb macos: tolerate display link creation failures (#13639)
+b30387a80 renderer/metal: clear callback before layer release (#13641)
+e20564791 libghostty-vt: spacer-tail handling needs to respect slow runtime safety
+7cd2f65f5 terminal: color reset should set override to null, not default
+bb1f5908f terminfo: advertise overline support
+57c1baf43 macos: defer overlapping clipboard completion
+d28bc121a macos: synchronize cached value access
+880eded15 macos: avoid IOSurface leak on automated surface creation (#13640)
+2b32b5b75 core: close retained temp directory handles
+7a9c369cf terminal: preserve cursor when formatting tabstops
+74f01cf5d macos: prevent stale search selection crash
+d166c05ed font: handle missing CoreText display names
+15ac61db1 gtk: implement drag-to-move for splits (#10423)
+a177ba90a macos: tolerate display link creation failures
+4b4a5b241 renderer/metal: clear callback before layer release
+7a047553c macos: avoid IOSurface leak on automated surface creation
+168c7b946 core: fix encoded key request cleanup (#13635)
+d0659ba52 macos: guard fullscreen tab presentation with objc catcher (#13636)
+b1887bd71 terminal: reset wrap state for CSI 2 K (#13637)
+713ad0eb1 config: refill after ignored line boundaries (#13638)
+c247e455c config: refill after ignored line boundaries
+bfd40c84b terminal: reset wrap state for CSI 2 K
+8696bef64 macos: guard fullscreen tab presentation
+0060d89b5 core: fix encoded key request cleanup
+54fe8e188 macos: handled untrusted OSC8 hyperlinks more carefully (#13634)
+77537c806 macos: handled untrusted OSC8 hyperlinks more carefully
+4371871bc terminal/kitty: evict without scratch allocation
+46767b521 terminal: bound OSC and grapheme allocations (#13633)
+ad27c989a libghostty-vt: require opt-in for title reports (#13632)
+727b8a02f terminal: bound OSC and grapheme allocations
+38e891e6c terminal: require opt-in for title reports
+bd21ff153 terminal: avoid VS15 cursor underflow (#13631)
+fe98aef21 terminal: report DECECM as permanently reset (#12660)
+33d34cf5c terminal: avoid VS15 cursor underflow
+dd035284c Kitty graphics protocol bugs (#13630)
+e2065583a core: transfer long key encoding buffer (#13628)
+402b9227d terminal/kitty: reclaim pruned placements
+d0c516f8f terminal/kitty: release replaced placement pins
+590d669c4 terminal/kitty: limit png decoder allocations
+f766f303a terminal/kitty: validate shared memory ranges
+f03d71d97 po: update template
+f6fca9aab gtk: implement `move_tab_to_new_window`
+ec04900ab terminal/kitty: validate opened image file paths
+fb4c56159 core: transfer long key encoding buffer
+e5840bb9b terminal/kitty: harden placement geometry
+af2faa311 terminal/kitty: restrict temporary image file paths
+d866fa455 terminal/kitty: fix graphics range deletion
+d02ad967b macOS: update command options match order
+5944ab286 macOS: suppress restart tips for auto update (#13623)
+3f8b99bb6 terminal: print repeated characters through printSlice (#13625)
+19e9f4908 surface: use id instead of intFromPtr (#13620)
+5b70f208b terminal: print repeated characters through printSlice
+c93752a00 macOS: suppress restart tips for auto update
+25b2d8a38 input,apprt: add new_tab_to_new_window action
+261848c2f gtk: reformat blueprints
+98fae16a0 gtk: support cross-tree surface drag and drop
+1d053bd6e gtk: implement drag-to-move for splits
+f17b425aa surface: use id instead of intFromPtr
+9e30f70f2 gtk: do not set bell ringing if already focused (#13597)
+2346c4fe4 Update VOUCHED list (#13617)
+d7f7a4e73 macOS: rename UpdateState.isIdle to isHidden (#13613)
+d2f08f158 config: limit command translations to GTK (#13615)
+a00d155e9 config: limit command translations to GTK
+ccb08f35f macOS: show cancel update option when its actually cancellable (#13612)
+a86c49d7a macOS: rename UpdateState.isIdle to isHidden
+63d08c034 macOS: show cancel update option when its actually cancellable
+b8ab2ff16 macOS: show/search description when subtitle missing in CommandPalette (#13610)
+760a25002 config: formatted action should be parsable into the original  (#13609)
+51cf09967 datastruct: remove unused LRU implementation (#13607)
+066a0b7c4 macOS: show description when subtitle missing in CommandPalette
+b67f8ef51 config: don't escape Binding.Action.String
+8cfbaf545 config: formatted action should be parsable into the original
+02f34835e datastruct: remove unused LRU implementation
+48d85eaeb core: fix mouse reporting mutex lock
+ca56412bf gtk: forward middle click to TUIs with mouse reporting (#13108)
+08342c924 Update VOUCHED list (#13603)
+594ee212b macos: defer transparent titlebar KVO rebinding (#13601)
+363e6e6b4 i18n: translation support for command palete (#11641)
+cfa0ca710 macos: defer transparent titlebar KVO rebinding
+ac4dc1205 terminal: size dynamic tabstops by bits
+1f6e26642 config: clarify cursor-click-to-move's relation to shell-integration (#13589)
+85083d23c config: clarify cursor-click-to-move's relation to shell-integration
+bdd849fc2 Update VOUCHED list (#13596)
+f5419b9b1 gtk: do not set bell ringing if already focused
+e0744dde6 i18n - command palette - empty translations
+1125fa26d i18n: note about i18n.N_ usage and @inComptime() return msgid for i18n._
+df23bef0e i18n: translation support for command palete and Latvian translation for it
+6687d6089 macos: avoid leaking ports while awaiting accessibility (#13590)
+b9d88292b terminal: speed up formatting anywhere from ~1.5x to ~8x (#13587)
+e69dc2bee renderer: reset terminal state cleanup counter (#13585)
+74b426458 gtk: use native blur on GTK 4.23.3+ (#13586)
+2ed67cadd terminal: redesign pin map for formatter
+2b6a1e41f macos: avoid leaking ports while awaiting accessibility
+d4391ff83 fastprint: fix compile errors
+79aa256fa terminal: speed up formatter mostly by avoiding std.fmt
+8838c37f4 terminal: fast print styles
+85b1dd0dd benchmark: formatter benchmark
+b11d60818 synthetic: styled output generator
+3263fc6c4 gtk: use native blur on GTK 4.23.3+
+04f1bc096 winproto/wayland: disable custom blur on GTK >=4.23.3
+9e6e2ea96 renderer: reset terminal state cleanup counter
+f124c42ab font/shaper: eliminate grapheme candidate allocations (#13584)
+ca8868a29 font/shaper: eliminate grapheme candidate allocations
+ca5b3dc77 Update po/da.po
+bd381c4a5 Update po/da.po
+7e5035664 terminal: support pending image payloads for kitty graphics (#13582)
+5700414f1 libghostty-vt: add C API for snapshotting functions (#13580)
+a01104378 termio: free resources for discarded messages (#13579)
+6760c6482 terminal: support pending image payloads for kitty graphics
+d7bb4b863 libghostty-vt: add C API for snapshotting functions
+2f7fbadb0 termio: free resources for discarded messages
+ac04fc276 core: avoid copying OSC 52 clipboard responses (#13577)
+c11fe5486 core: avoid copying OSC 52 clipboard responses
+da581e0fb gtk: improve split sizing (#13414)
+7d748097a core: free allocated writes in read-only mode (#13574)
+957ed21d5 core: free allocated writes in read-only mode
+863fc9531 terminal/snapshot: more misc bugs (#13573)
+5c65304a2 crash: do not use global state (#13567)
+7d9aaa297 terminal/snapshot: clarify incremental history errors
+cafe7d5da terminal/snapshot: clamp decoded saved cursors
+f99896bf8 terminal/snapshot: preserve style reader errors
+b5290e74c terminal/snapshot: release decoded hyperlink table refs
+0b940ed58 terminal/snapshot: misc bugs (#13572)
+418b5d180 terminal/snapshot: harden grapheme suffix decode
+9a5279db6 terminal/snapshot: release decoded style table refs
+e89ff37aa terminal/snapshot: encode screen pages safely
+cbc9f360b terminal/snapshot: report invalid decoder states
+d14847183 terminal/snapshot: preserve mixed-width pending wrap
+15c50c1db crash: do not use global state
+b4592eefd terminal/snapshot: add incremental decoder (#13569)
+e37865bed terminal/snapshot: add incremental decoder
+d351d9ce0 terminal/snapshot: more efficient binary form, optimize wire size + encode/decode speeds (#13566)
+9e3019f19 terminal/snapshot: variable-width grid cell encoding
+3e5d12835 terminal/snapshot: stage PAGE payloads while decoding
+9f6656347 terminal/snapshot: gate page verification on slow runtime safety
+9cc061c28 terminal/snapshot: hardware-accelerated CRC32C
+ed0f54fb8 terminal/snapshot: 8-byte grid cells with blank elision
+f424b2058 macOS: install update with same code path (#13562)
+39799a61c terminal/osc: decode OSC 52 base64 with the SIMD decoder (#13565)
+c992658b2 terminal/osc: decode OSC 52 base64 with the SIMD decoder
+a4f9b9cea Update VOUCHED list (#13564)
+0b5e12453 benchmark: add terminal-snapshot benchmark
+3a606c6c4 macOS: install update with same code path
+7031c892b synthetic: line length options for the ascii generator
+bab076c1a build: lower iOS deployment target version (#13539)
+915496c22 libghostty(formatter): fix superfluous newline in html formatting (#13543)
+f6830420c termio: fix doc comment grammar and PTY casing in message.zig (#13549)
+322636bfb config: update scrollbar doc per current implementation (#13553)
+e85bf9fb2 terminal/snapshot: pty continuation record (#13556)
+70e41e96d terminal/snapshot: pty continuation
+a7cfa6fc2 config: update scrollbar doc per current implementation
+6837d7027 Update VOUCHED list (#13550)
+f5911d696 comment: fix grammar and acronym casing in message.zig doc comments
+75302feda Add test for superfluous newline in html formatting
+46edeee40 macOS: fix update error pill is not showing properly (#13540)
+f5880782f terminal: add stream continuation tracking for replay (#13544)
+68beeeb3f terminal: add stream continuation tracking for replay
+90da3aba5 gtk: fix split sizing to eliminate flickering
+f024d21fc Fix superfluous newline in html formatting
+2ee42adc7 datastruct/circ_buf: fix metadata after shrinking (#13515)
+b2d446259 gtk: fix capitalization of banner title (#10642)
+e9e7864b4 remove fuzze entries in *.po files
+74ad15c10 Update VOUCHED list (#13542)
+7a512c312 gtk: fix capitalization of banner title
+631c71e41 inspector: add copy and export for terminal IO events (#13519)
+57ad6c77a Rewrite the localization teams docs to improve legibility, and explicitly permit members who know each other (#12720)
+cc1d26210 macOS: fix update error pill is not showing properly
+aa21caeaa terminal: improve resize with reflow performance (~6x faster) (#13537)
+aa7497128 build: lower iOS deployment target version
+af9ead681 Add danish translation file
+30e5eabe9 Add 'da' to `CODEOWNERS` and `src/os/i18n_locales.zig`
+ec5b36961 terminal: vectorize reflow run scan
+d4e446c48 terminal: reduce reflow run scan to masked compares
+0fb3565c7 terminal: support nested field paths and eqlAny in Mask
+46276d046 terminal: recycle pages within a column reflow
+179161c08 terminal: memoize reflow new-page capacity adjustment
+c249b9de3 terminal: bulk-copy runs of simple cells during reflow
+c5ca2db1b terminal: memoize style id mapping during reflow
+4a88cc594 terminal: skip reflow pin scans for rows without pins
+dc52c248e benchmark: terminal-resize
+08f039fbb cli: report ssh terminfo cache failures (#13533)
+154ddc2a2 terminal/snapshot: binary snapshot format (#13534)
+ca3dc9eea cli: classify ssh cache errors in DiskCache
+6b09bb3fc terminal/snapshot: ignore hex files in typos
+05d493484 terminal/snapshot: better root export
+8fca64957 cli: report ssh terminfo cache failures
+e2e74fecb terminal/snapshot: move history size hints to screen record
+d37e1fe18 terminal/snapshot: format doesn't require EOF
+f0fe788fc terminal/snapshot: less buffering, better stream writing
+58e92098a terminal/snapshot: snapshot robustness
+9d1c6a921 terminal/snapshot: terminal robustness
+7c64181b6 terminal/snapshot: history robustness
+a44eb8335 terminal/snapshot: style/hyperlink robustness in page and screen
+465488d6b terminal/snapshot: screen robustness
+2c0d2588a inspector: make `FileChooser` cast type-safe
+31f4931f8 i18n: add missing strings
+a508720a8 terminal/snapshot: grid decode robustness principle
+f8ac0ca98 terminal/snapshot: accept kitty placeholder cells, track rows
+66ea61dd9 ci: verify snapshot kaitai
+38d92c50c terminal/snapshot: kaitai verification
+13bc78b7f terminal/snapshot: grid tests
+627f34309 build: helpgen needs terminal options
+32f11a466 terminal/snapshot: test fixtures
+92c8dfd50 terminal/snapshot: clean up tests
+43ec9b373 terminal/snapshot: harden hyperlink decoding, allow invalid hyperlinks for page
+b867a0f59 terminal/snapshot: use lib.Enum enums where possible
+86ec14633 terminal/snapshot: full encode/decode
+83e482700 terminal/snapshot: ready/finish checkpoints
+0288bec3c terminal/snapshot: terminal record
+7d91b8776 terminal/snapshot: history record
+d34fd0593 terminal/snapshot: screen decoding
+f50bdfab2 terminal/snapshot: screen plus active encoding
+6508cbbb4 terminal/snapshot: screen record
+e8e56e782 terminal/snapshot: small edits
+83ffa74e2 terminal/snapshot: page records
+406f5e7d8 terminal/snapshot: encode sparse page grids
+2fc238ed0 terminal/snapshot: decode directly into pages
+d44baa914 terminal/snapshot: setup the snapshot main
+805c3b0ba terminal/snapshot: start page encoding
+b4fd26f0d terminal/snapshot: hyperlink and style encoding
+fdf8dfd7b terminal/snapshot: define v0 record framing
+4d605bf0d Misc improvements for future binary snapshot API (#13525)
+457c5a0a6 terminal: PageList align Builder/PageAllocation APIs better
+506de8517 terminal: fix string capacity check in hyperlink reflow (#13524)
+d5c7e54ae terminal: fix string capacity check in hyperlink reflow
+e77c2612e lib: Zig enums have stable values
+35db32078 terminal: PageList allocatePage
+70c498ac3 Update VOUCHED list (#13521)
+ad96613a8 inspector: add copy and export for terminal IO events
+96e39f823 Update VOUCHED list (#13518)
+60b4a3585 Fix CircBuf metadata after shrinking
+fc1bd06a1 terminal: PageList builder to build from raw pages
+b61fd5fbb terminal: add iterator to ref counted set
+488b7109b gtk: forward middle click to TUIs with mouse reporting
+e40a5475d Rewrite localization teams docs for clarity and permit reviewer bias.
+7bb375800 terminal: document DECECM report behavior
+f1ca88da3 terminal: clarify DECECM report handling
+c092b2bcf terminal: report DECECM as permanently reset
