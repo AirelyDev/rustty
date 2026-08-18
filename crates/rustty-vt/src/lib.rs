@@ -110,6 +110,11 @@ pub mod page;
 pub mod parse_table;
 // pub const search = @import("search.zig");
 pub mod search;
+// pub const snapshot = @import("snapshot/main.zig");
+// PORT NOTE (phase-4 d44baa914): the `snapshot` module re-export lands with the
+// snapshot subsystem area; its PageList-side enablers (`pagelist::Builder`,
+// `pagelist::PageAllocation`, `PageList::allocate_page`, the RefCountedSet
+// iterator) are already ported below.
 // pub const sgr = @import("sgr.zig");
 pub mod sgr;
 // pub const size = @import("size.zig");

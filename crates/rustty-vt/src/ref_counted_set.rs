@@ -23,9 +23,11 @@
 // `RefCountIntTrait` helper traits defined below, which expose exactly the
 // operations the reference uses (`maxInt`, wrapping add, `&`, `+= 1`, etc.).
 //
-// PORT NOTE: there are NO `test {}` blocks in the reference file, so this port
-// adds none (the Phase-0 inventory records 0 tests for ref_counted_set.zig). The
-// type is exercised transitively by the page.zig sub-batch's tests.
+// PORT NOTE: the pre-range reference file had NO `test {}` blocks (the Phase-0
+// inventory records 0 tests for ref_counted_set.zig); the type is exercised
+// transitively by the page.zig sub-batch's tests. Upstream b61fd5fbb ("add
+// iterator to ref counted set") added the first one — `test "iterator visits
+// live entries in ID order"` — carried in the `tests` module below.
 //
 // PORT NOTE: the offset/pointer machinery is reproduced with raw pointers and is
 // `unsafe`, exactly as the reference relies on raw pointer arithmetic against the
@@ -900,6 +902,19 @@ where
         self.living
     }
 
+    /// Return an iterator over the live entries in this set.
+    ///
+    /// # Safety: `base` must be the true base of the backing buffer, and the
+    /// returned iterator must not outlive that buffer.
+    pub unsafe fn iterator<B: IntFromBase + Copy>(&self, base: B) -> Iterator<T, Id, RefCount> {
+        Iterator {
+            items: unsafe { self.items.ptr(base) },
+            // id: Id = 1 (the reference field default; ID 0 is reserved).
+            id: Id::ONE,
+            end: self.next_id,
+        }
+    }
+
     /// Delete an item, removing any references from
     /// the table, and freeing its ID to be reused.
     ///
@@ -1274,6 +1289,66 @@ where
     }
 }
 
+/// A live entry returned by `Iterator`.
+//
+// PORT NOTE: the reference nests `Entry`/`Iterator` inside the comptime
+// `RefCountedSet(...)` type; Rust hoists them to sibling generics (the same
+// treatment as `Item`/`Metadata`/`Layout` above). The reference
+// `value_ptr: *T` maps to a raw `*mut T`, not a `&mut T`: the pointee lives in
+// the set's backing buffer and a held reference would alias any later set
+// access (see the `Iterator` invalidation note below).
+pub struct Entry<T, Id: IdInt> {
+    pub id: Id,
+    pub value_ptr: *mut T,
+}
+
+/// Iterates live entries in ascending ID order.
+///
+/// Released entries whose reference count reached zero are skipped.
+/// Any mutation of the set invalidates the iterator.
+//
+// LIFETIMES:
+//   items: *mut Item — BORROW_FIELD, raw non-owning pointer into the set's
+//     backing buffer (`self.items.ptr(base)`, the reference `[*]Item`); the
+//     buffer's owner (the page / test harness) outlives the iterator per the
+//     `iterator()` safety contract. Kept raw exactly as the reference keeps a
+//     many-item pointer: any mutation of the set invalidates it, and no `&`/
+//     `&mut` is ever formed over the whole item array.
+pub struct Iterator<T, Id: IdInt, RefCount: RefCountIntTrait> {
+    pub items: *mut Item<T, Id, RefCount>,
+    pub id: Id,
+    pub end: Id,
+}
+
+impl<T, Id: IdInt, RefCount: RefCountIntTrait> Iterator<T, Id, RefCount> {
+    pub fn next(&mut self) -> Option<Entry<T, Id>> {
+        while self.id < self.end {
+            let id = self.id;
+            self.id = self.id.add(Id::ONE);
+
+            // const item = &self.items[id];
+            //
+            // SAFETY: `items` points at the live item array of the set this
+            // iterator was created from (invalidation contract above), and
+            // `id < end <= next_id <= layout.cap` bounds the index. Raw
+            // pointer arithmetic + field projections only — no reference to
+            // the item array is formed.
+            let item = unsafe { self.items.add(id.to_usize()) };
+            if unsafe { (*item).meta.ref_count } == RefCount::ZERO {
+                continue;
+            }
+
+            return Some(Entry {
+                id,
+                // &item.value
+                value_ptr: unsafe { core::ptr::addr_of_mut!((*item).value) },
+            });
+        }
+
+        None
+    }
+}
+
 /// `@max(a, b)` over `Id`.
 #[inline]
 fn max_id<Id: IdInt>(a: Id, b: Id) -> Id {
@@ -1313,3 +1388,92 @@ fn log2_int(x: usize) -> u32 {
 fn align_forward(value: usize, alignment: usize) -> usize {
     value.next_multiple_of(alignment)
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(non_snake_case)]
+
+    use super::*;
+
+    // The reference test context:
+    //   struct {
+    //       pub fn hash(_: *const @This(), value: u32) u64 {
+    //           return std.hash.int(value);
+    //       }
+    //       pub fn eql(_: *const @This(), a: u32, b: u32) bool {
+    //           return a == b;
+    //       }
+    //   },
+    #[derive(Default, Clone, Copy)]
+    struct TestContext;
+
+    impl RefCountedSetContext<u32> for TestContext {
+        fn hash(&self, value: u32) -> u64 {
+            // std.hash.int(value) — u32 result widened to u64.
+            hash_int_u32(value) as u64
+        }
+
+        fn eql(&self, a: u32, b: u32) -> bool {
+            a == b
+        }
+    }
+
+    // PORT NOTE: `std.hash.int` on a u32 dispatches to `uint32` (the lowbias32
+    // finalizer). Ported verbatim, matching the `hash_int_u64` treatment in
+    // `style.rs`.
+    fn hash_int_u32(input: u32) -> u32 {
+        // fn uint32(input: u32) u32 {
+        let mut x: u32 = input;
+        x = (x ^ (x >> 16)).wrapping_mul(0x7feb352d);
+        x = (x ^ (x >> 15)).wrapping_mul(0x846ca68b);
+        x = x ^ (x >> 16);
+        x
+    }
+
+    // const TestSet = RefCountedSet(u32, u16, u16, ...);
+    type TestSet = RefCountedSet<u32, u16, u16, TestContext>;
+
+    // ref: test "iterator visits live entries in ID order"
+    #[test]
+    fn iterator_visits_live_entries_in_ID_order() {
+        // const layout: TestSet.Layout = .init(8);
+        let layout: Layout<u16> = Layout::init::<u32, u16>(8);
+        // const buf = try alloc.alignedAlloc(u8, TestSet.base_align, layout.total_size);
+        // defer alloc.free(buf);
+        let alloc_layout =
+            core::alloc::Layout::from_size_align(layout.total_size, TestSet::base_align()).unwrap();
+        // SAFETY: `total_size` for a cap-8 layout is non-zero.
+        let buf = unsafe { std::alloc::alloc(alloc_layout) };
+        assert!(!buf.is_null());
+        let base = OffsetBuf::init(buf);
+
+        // var set: TestSet = .init(.init(buf), layout, .{});
+        //
+        // SAFETY: `buf` is a live `base_align`-aligned allocation of
+        // `layout.total_size` bytes, used as the base for every call below.
+        unsafe {
+            let mut set: TestSet = TestSet::init(base, layout, TestContext);
+            let first = set.add(base, 11).unwrap();
+            let released = set.add(base, 22).unwrap();
+            let last = set.add(base, 33).unwrap();
+            let _ = set.add(base, 11).unwrap();
+            set.release(base, released);
+
+            let mut it = set.iterator(base);
+
+            let first_entry = it.next().unwrap();
+            assert_eq!(first, first_entry.id);
+            assert_eq!(11u32, *first_entry.value_ptr);
+
+            let last_entry = it.next().unwrap();
+            assert_eq!(last, last_entry.id);
+            assert_eq!(33u32, *last_entry.value_ptr);
+
+            assert!(it.next().is_none());
+
+            // defer alloc.free(buf);
+            std::alloc::dealloc(buf, alloc_layout);
+        }
+    }
+}
+

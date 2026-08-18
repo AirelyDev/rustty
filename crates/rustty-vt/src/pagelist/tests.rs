@@ -15965,3 +15965,581 @@ fn pagelist_eraseRowBounded_hyperlink_dense_row_crosses_page_boundary() {
 
     s.deinit();
 }
+
+// =====================================================================
+// PageList Builder / allocatePage / PageAllocation (phase-4 w2, bundle A-1)
+//
+// PORTS: the end state of oracle commits fc1bd06a1 ("PageList builder to
+// build from raw pages") + 35db32078 ("PageList allocatePage") + 457c5a0a6
+// ("PageList align Builder/PageAllocation APIs better"). Each `#[test]` is an
+// assertion-for-assertion port of the reference `test {}` block of the same
+// name against oracle@main PageList.zig.
+// =====================================================================
+
+// ref: test "PageList Builder transfers mixed-width pages"
+#[test]
+fn pagelist_builder_transfers_mixed_width_pages() {
+    use super::Builder;
+
+    // Build two populated pages whose widths differ from each other and from
+    // the final active-area width. The first page also includes one row of
+    // incidental history above the three-row active area.
+    let mut result: PageList = {
+        let mut builder = Builder::init(Options {
+            cols: 4,
+            rows: 3,
+            max_size: None,
+            max_lines: None,
+        })
+        .unwrap();
+        // defer builder.deinit(); — runs after `finish` below (no-op then).
+
+        let first = builder
+            .allocate_page(Capacity {
+                cols: 2,
+                rows: 2,
+                ..Capacity::default()
+            })
+            .unwrap();
+        unsafe {
+            (*first).size.rows = 2;
+            *(*first).get_row_and_cell(0, 0).cell = Cell::init('A' as u32);
+        }
+
+        let second = builder
+            .allocate_page(Capacity {
+                cols: 4,
+                rows: 2,
+                ..Capacity::default()
+            })
+            .unwrap();
+        unsafe {
+            (*second).size.rows = 2;
+            *(*second).get_row_and_cell(0, 0).cell = Cell::init('B' as u32);
+        }
+
+        let r = builder.finish().unwrap();
+        builder.deinit();
+        r
+    };
+    // defer result.deinit();
+
+    // Successful finish transfers ownership and initializes the PageList's
+    // desired geometry, viewport, and required tracked viewport pin.
+    assert_eq!(4, result.cols);
+    assert_eq!(3, result.rows);
+    assert_eq!(2, result.total_pages());
+    assert_eq!(1, result.count_tracked_pins());
+    assert!(result.viewport == Viewport::Active);
+
+    // Complete pages and their contents are preserved in insertion order,
+    // including widths which have not yet been reflowed.
+    let screen_top = result.get_top_left(point::Tag::Screen);
+    assert_eq!(2, unsafe { super::Node::cols(screen_top.node) });
+    assert_eq!('A' as u32, unsafe {
+        (*(*super::Node::page(screen_top.node)).get_row_and_cell(0, 0).cell).codepoint()
+    });
+
+    // The active area is calculated backward from the newest page, so it
+    // begins at row one of the oldest page and leaves row zero as history.
+    let active_top = result.get_top_left(point::Tag::Active);
+    assert_eq!(screen_top.node, active_top.node);
+    assert_eq!(1, active_top.y);
+    let next = unsafe { (*active_top.node).next };
+    assert_eq!(4, unsafe { super::Node::cols(next) });
+    assert_eq!('B' as u32, unsafe {
+        (*(*super::Node::page(next)).get_row_and_cell(0, 0).cell).codepoint()
+    });
+
+    result.assert_integrity();
+    result.deinit();
+}
+
+// ref: test "PageList Builder validates the finished list"
+#[test]
+fn pagelist_builder_validates_the_finished_list() {
+    use super::builder::FinishError;
+    use super::Builder;
+
+    // The desired PageList geometry must describe a non-empty screen.
+    {
+        let mut builder = Builder::init(Options::new(0, 1)).unwrap();
+        // defer builder.deinit();
+        assert!(matches!(
+            builder.finish(),
+            Err(FinishError::InvalidDimensions)
+        ));
+        builder.deinit();
+    }
+
+    // A PageList cannot be finished without any backing pages.
+    {
+        let mut builder = Builder::init(Options::new(1, 1)).unwrap();
+        // defer builder.deinit();
+        assert!(matches!(builder.finish(), Err(FinishError::NoPages)));
+        builder.deinit();
+    }
+
+    // Allocated capacity alone is insufficient: callers must populate a
+    // nonzero logical page size before transferring ownership.
+    {
+        let mut builder = Builder::init(Options::new(1, 1)).unwrap();
+        // defer builder.deinit();
+        let page = builder
+            .allocate_page(Capacity {
+                cols: 1,
+                rows: 1,
+                ..Capacity::default()
+            })
+            .unwrap();
+        unsafe { (*page).size.rows = 0 };
+        assert!(matches!(
+            builder.finish(),
+            Err(FinishError::InvalidPageDimensions)
+        ));
+        builder.deinit();
+    }
+
+    // The populated pages must contain enough rows to cover the active area.
+    {
+        let mut builder = Builder::init(Options::new(1, 2)).unwrap();
+        // defer builder.deinit();
+        let page = builder
+            .allocate_page(Capacity {
+                cols: 1,
+                rows: 1,
+                ..Capacity::default()
+            })
+            .unwrap();
+        unsafe { (*page).size.rows = 1 };
+        assert!(matches!(
+            builder.finish(),
+            Err(FinishError::InsufficientRows)
+        ));
+        builder.deinit();
+    }
+}
+
+// ref: test "PageList Builder finish is transactional on allocation failure"
+#[test]
+// PORT NOTE: the reference wraps the builder in a `testing.FailingAllocator`
+// and fails the allocator's next request; the Rust pools are infallible, so
+// the same failure is injected through the `FINISH_TW` tripwire fail point at
+// the same allocation site (see the builder.rs module PORT NOTE). Tripwire
+// injection is compiled out without `debug_assertions`, so the test is inert
+// under `--release` and ignored there — same convention as
+// `pagelist_init_error`. NOT disabled to hide a failure.
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "tripwire failure injection is disabled without debug_assertions"
+)]
+fn pagelist_builder_finish_is_transactional_on_allocation_failure() {
+    use super::builder::{FinishError, FinishFp, FINISH_TW};
+    use super::{Builder, OutOfMemory};
+    use rustty_util::tripwire::ResetMode;
+
+    // Construct a valid builder so finish reaches its fallible bookkeeping
+    // allocations after all page and geometry validation succeeds.
+    let mut builder = Builder::init(Options::new(1, 1)).unwrap();
+    // defer builder.deinit();
+    let page = builder
+        .allocate_page(Capacity {
+            cols: 1,
+            rows: 1,
+            ..Capacity::default()
+        })
+        .unwrap();
+    unsafe { (*page).size.rows = 1 };
+
+    // The pools are preheated, so the next general allocation is the tracked
+    // viewport pin map created by finish.
+    // (failing.fail_index = failing.alloc_index;)
+    FINISH_TW.with(|tw| {
+        tw.borrow_mut()
+            .errorAlways(FinishFp::ViewportPinTrack, OutOfMemory)
+    });
+    assert!(matches!(builder.finish(), Err(FinishError::OutOfMemory)));
+    // try testing.expect(failing.has_induced_failure); — `end` errors if the
+    // armed expectation never tripped.
+    FINISH_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+
+    // Failed finish leaves page ownership with the builder so its normal
+    // deinit path can release the still-linked page.
+    assert!(!builder.pages.first.is_null());
+    assert_eq!(builder.pages.first, builder.pages.last);
+
+    builder.deinit();
+}
+
+// ref: test "PageList PageAllocation finalizes pages and preserves live state"
+#[test]
+fn pagelist_page_allocation_finalizes_pages_and_preserves_live_state() {
+    use super::builder::Location;
+    use super::Builder;
+
+    // Build an existing list with history, a two-row active area, an external
+    // active pin, and a pinned viewport whose absolute offset is cached.
+    let mut result: PageList = {
+        let mut builder = Builder::init(Options {
+            cols: 4,
+            rows: 2,
+            max_size: None,
+            max_lines: None,
+        })
+        .unwrap();
+        // defer builder.deinit();
+
+        let first = builder
+            .allocate_page(Capacity {
+                cols: 3,
+                rows: 2,
+                ..Capacity::default()
+            })
+            .unwrap();
+        unsafe {
+            (*first).size.rows = 2;
+            *(*first).get_row_and_cell(0, 0).cell = Cell::init('C' as u32);
+        }
+
+        let second = builder
+            .allocate_page(Capacity {
+                cols: 4,
+                rows: 2,
+                ..Capacity::default()
+            })
+            .unwrap();
+        unsafe {
+            (*second).size.rows = 2;
+            *(*second).get_row_and_cell(0, 0).cell = Cell::init('D' as u32);
+        }
+
+        let r = builder.finish().unwrap();
+        builder.deinit();
+        r
+    };
+    // defer result.deinit();
+
+    let old_first = result.pages.first;
+    let old_last = result.pages.last;
+    let active_top = result.get_top_left(point::Tag::Active);
+    let tracked_active = result.track_pin(active_top).unwrap();
+    result.scroll(Scroll::Row(1));
+    assert!(result.viewport == Viewport::Pin);
+    assert_eq!(1, result.scrollbar().offset);
+
+    // PORT NOTE (raw-self seam): `allocate_page` stores its receiver in the
+    // returned allocation, so every allocation goes through this single raw
+    // root; see the PORT NOTE on `PageList::allocate_page`.
+    let this: *mut PageList = &mut result;
+
+    // Prepend differently sized historical pages newest-first. Each page is
+    // populated while detached and joins the live list only on success.
+    {
+        let mut allocation = unsafe {
+            PageList::allocate_page(
+                this,
+                Capacity {
+                    cols: 4,
+                    rows: 1,
+                    ..Capacity::default()
+                },
+            )
+        }
+        .unwrap();
+        // defer allocation.deinit();
+        let page = allocation.page();
+        unsafe {
+            (*page).size.rows = 1;
+            *(*page).get_row_and_cell(0, 0).cell = Cell::init('B' as u32);
+        }
+        allocation.finalize(Location::Prepend).unwrap();
+        allocation.deinit();
+    }
+    {
+        let mut allocation = unsafe {
+            PageList::allocate_page(
+                this,
+                Capacity {
+                    cols: 2,
+                    rows: 2,
+                    ..Capacity::default()
+                },
+            )
+        }
+        .unwrap();
+        // defer allocation.deinit();
+        let page = allocation.page();
+        unsafe {
+            (*page).size.rows = 2;
+            *(*page).get_row_and_cell(0, 0).cell = Cell::init('A' as u32);
+        }
+        allocation.finalize(Location::Prepend).unwrap();
+        allocation.deinit();
+    }
+
+    // Repeated prepends reconstruct oldest-to-newest order without replacing
+    // any existing nodes or tracked pins.
+    assert_eq!(4, result.total_pages());
+    assert_eq!(7, result.total_rows);
+    assert_eq!(old_last, result.pages.last);
+    assert_eq!(old_first, unsafe { (*(*result.pages.first).next).next });
+    assert_eq!('A' as u32, unsafe {
+        (*(*super::Node::page(result.pages.first)).get_row_and_cell(0, 0).cell).codepoint()
+    });
+    assert_eq!('B' as u32, unsafe {
+        (*(*super::Node::page((*result.pages.first).next))
+            .get_row_and_cell(0, 0)
+            .cell)
+            .codepoint()
+    });
+    assert!(active_top.eql(result.get_top_left(point::Tag::Active)));
+    assert!(active_top.eql(unsafe { *tracked_active }));
+
+    // The viewport remains pinned to the same content, while its cached row
+    // offset and the scrollbar total include the three new historical rows.
+    assert!(result.viewport == Viewport::Pin);
+    assert_eq!(old_first, unsafe { (*result.viewport_pin).node });
+    assert_eq!(1, unsafe { (*result.viewport_pin).y });
+    let scrollbar_state = result.scrollbar();
+    assert_eq!(7, scrollbar_state.total);
+    assert_eq!(4, scrollbar_state.offset);
+    assert_eq!(2, scrollbar_state.len);
+
+    result.assert_integrity();
+    result.deinit();
+}
+
+// ref: test "PageList PageAllocation stays detached until finalize"
+#[test]
+fn pagelist_page_allocation_stays_detached_until_finalize() {
+    use super::builder::{FinalizeError, Location};
+
+    let mut result = PageList::init(Options {
+        cols: 1,
+        rows: 1,
+        max_size: None,
+        max_lines: None,
+    })
+    .unwrap();
+    // defer result.deinit();
+
+    let initial_first = result.pages.first;
+    let initial_last = result.pages.last;
+    let initial_total_rows = result.total_rows;
+    let initial_page_size = result.page_size;
+
+    // PORT NOTE (raw-self seam): see
+    // `pagelist_page_allocation_finalizes_pages_and_preserves_live_state`.
+    let this: *mut PageList = &mut result;
+
+    // Allocating and populating a detached page does not alter any live list
+    // links or accounting. Deinit returns it to the same PageList pools.
+    let mut detached = unsafe {
+        PageList::allocate_page(
+            this,
+            Capacity {
+                cols: 1,
+                rows: 1,
+                ..Capacity::default()
+            },
+        )
+    }
+    .unwrap();
+    unsafe { (*detached.page()).size.rows = 1 };
+    assert_eq!(initial_first, result.pages.first);
+    assert_eq!(initial_last, result.pages.last);
+    assert_eq!(initial_total_rows, result.total_rows);
+    assert_eq!(initial_page_size, result.page_size);
+    result.assert_integrity();
+    detached.deinit();
+    result.assert_integrity();
+
+    // Invalid populated dimensions leave ownership with the allocation so it
+    // can still be released normally.
+    let mut invalid = unsafe {
+        PageList::allocate_page(
+            this,
+            Capacity {
+                cols: 1,
+                rows: 1,
+                ..Capacity::default()
+            },
+        )
+    }
+    .unwrap();
+    // defer invalid.deinit();
+    assert!(matches!(
+        invalid.finalize(Location::Prepend),
+        Err(FinalizeError::InvalidPageDimensions)
+    ));
+
+    assert_eq!(initial_first, result.pages.first);
+    assert_eq!(initial_last, result.pages.last);
+    assert_eq!(initial_total_rows, result.total_rows);
+    assert_eq!(initial_page_size, result.page_size);
+    result.assert_integrity();
+
+    invalid.deinit();
+    result.deinit();
+}
+
+// ref: test "PageList PageAllocation rejects limits before modifying the destination"
+#[test]
+fn pagelist_page_allocation_rejects_limits_before_modifying_the_destination() {
+    use super::builder::{FinalizeError, Location};
+
+    let mut result = PageList::init(Options {
+        cols: 1,
+        rows: 1,
+        max_size: Some(0),
+        max_lines: None,
+    })
+    .unwrap();
+    // defer result.deinit();
+
+    // PORT NOTE (raw-self seam): see
+    // `pagelist_page_allocation_finalizes_pages_and_preserves_live_state`.
+    let this: *mut PageList = &mut result;
+
+    // The effective minimum permits one complete page beyond the active page.
+    // Fill that allowance so the following allocation exceeds the byte limit.
+    {
+        let mut allocation = unsafe {
+            PageList::allocate_page(
+                this,
+                Capacity {
+                    cols: 1,
+                    rows: 1,
+                    ..Capacity::default()
+                },
+            )
+        }
+        .unwrap();
+        // defer allocation.deinit();
+        unsafe { (*allocation.page()).size.rows = 1 };
+        allocation.finalize(Location::Prepend).unwrap();
+        allocation.deinit();
+    }
+
+    let before_first = result.pages.first;
+    let before_total_rows = result.total_rows;
+    let before_page_size = result.page_size;
+
+    let mut allocation = unsafe {
+        PageList::allocate_page(
+            this,
+            Capacity {
+                cols: 1,
+                rows: 1,
+                ..Capacity::default()
+            },
+        )
+    }
+    .unwrap();
+    // defer allocation.deinit();
+    unsafe { (*allocation.page()).size.rows = 1 };
+    assert!(matches!(
+        allocation.finalize(Location::Prepend),
+        Err(FinalizeError::MaxSizeExceeded)
+    ));
+
+    assert_eq!(before_first, result.pages.first);
+    assert_eq!(before_total_rows, result.total_rows);
+    assert_eq!(before_page_size, result.page_size);
+    result.assert_integrity();
+
+    allocation.deinit();
+    result.deinit();
+}
+
+// ref: test "PageList PageAllocation allocation failure leaves list unchanged"
+#[test]
+// PORT NOTE: the reference wraps the whole PageList in a
+// `testing.FailingAllocator` and fails the allocator's next request, which
+// lands on node-pool growth once the preheated slots run out; the Rust pools
+// are infallible, so the same failure is injected through the
+// `ALLOCATE_PAGE_TW` tripwire fail point above the transitive `createPageExt`
+// call (see the builder.rs module PORT NOTE), armed to let `PAGE_PREHEAT`
+// allocations succeed first — the pool-capacity implementation detail the
+// reference deliberately tolerates with its 64-iteration bound. Ignored
+// without `debug_assertions` (tripwire compiled out), same convention as
+// `pagelist_init_error`.
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "tripwire failure injection is disabled without debug_assertions"
+)]
+fn pagelist_page_allocation_allocation_failure_leaves_list_unchanged() {
+    use super::builder::{AllocatePageFp, ALLOCATE_PAGE_TW};
+    use super::{OutOfMemory, PageAllocation, PAGE_PREHEAT};
+    use rustty_util::tripwire::ResetMode;
+
+    let mut result = PageList::init(Options {
+        cols: 1,
+        rows: 1,
+        max_size: None,
+        max_lines: None,
+    })
+    .unwrap();
+    // defer result.deinit();
+
+    let initial_first = result.pages.first;
+    let initial_total_rows = result.total_rows;
+    let initial_page_size = result.page_size;
+
+    // Existing pool capacity is deliberately an implementation detail. Allow
+    // preheated slots to succeed until allocation reaches node-pool growth.
+    // (failing.fail_index = failing.alloc_index;)
+    ALLOCATE_PAGE_TW.with(|tw| {
+        tw.borrow_mut()
+            .errorAfter(AllocatePageFp::PageNode, OutOfMemory, PAGE_PREHEAT)
+    });
+
+    // var allocations: [64]PageAllocation = undefined;
+    // var allocation_count: usize = 0;
+    // defer for (allocations[0..allocation_count]) |*allocation|
+    //     allocation.deinit();
+    let mut allocations: Vec<PageAllocation> = Vec::with_capacity(64);
+
+    // PORT NOTE (raw-self seam): see
+    // `pagelist_page_allocation_finalizes_pages_and_preserves_live_state`.
+    let this: *mut PageList = &mut result;
+
+    let mut failed = false;
+    for _ in 0..64 {
+        match unsafe {
+            PageList::allocate_page(
+                this,
+                Capacity {
+                    cols: 1,
+                    rows: 1,
+                    ..Capacity::default()
+                },
+            )
+        } {
+            Ok(allocation) => allocations.push(allocation),
+            Err(err) => {
+                assert_eq!(OutOfMemory, err);
+                failed = true;
+                break;
+            }
+        }
+    }
+    assert!(failed);
+    // try testing.expect(failing.has_induced_failure); — `end` errors if the
+    // armed expectation never tripped.
+    ALLOCATE_PAGE_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+
+    // Detached allocations and failed pool growth never publish into the live
+    // list; the deferred cleanup returns every successful allocation.
+    assert_eq!(initial_first, result.pages.first);
+    assert_eq!(initial_total_rows, result.total_rows);
+    assert_eq!(initial_page_size, result.page_size);
+    result.assert_integrity();
+
+    // defer for (allocations[0..allocation_count]) |*allocation|
+    //     allocation.deinit();
+    for allocation in allocations.iter_mut() {
+        allocation.deinit();
+    }
+    result.deinit();
+}

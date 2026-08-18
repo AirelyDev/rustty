@@ -23,6 +23,8 @@
 //!   - iter.rs   : prompt / cell / row / page iterators
 //!   - access.rs : getCell / getTopLeft / getBottomRight / totalPages /
 //!     dirty / clone / split / diagram / highlightSemanticContent / cval / eql
+//!   - builder.rs: allocatePage / PageAllocation / Builder (the
+//!     snapshot-enabling detached-page and build-from-raw-pages APIs)
 //!
 //! PORT NOTE (vt-3c, this batch): the CORE methods are ported on top of the
 //! `rustty_zigstd` faithful Zig-stdlib equivalents. The Node pool is
@@ -66,6 +68,7 @@
 // Cluster sub-files (each an `impl PageList {}` carrying that cluster's owner
 // doc headers). See the module doc comment above for the cluster map.
 pub mod access;
+pub mod builder;
 pub mod compress;
 pub mod erase;
 pub mod grow;
@@ -86,6 +89,10 @@ mod tests;
 // `page_tracking` TrackingAllocator seam). Not part of the parity contract.
 #[cfg(test)]
 mod bench;
+
+// Zig surface parity: the reference nests these in PageList.zig
+// (`PageList.Builder` / `PageList.PageAllocation`).
+pub use builder::{Builder, PageAllocation};
 
 use rustty_datastruct::IntrusiveDoublyLinkedList as DoublyLinkedList;
 use rustty_os::page_allocator::{page_allocator, PageAllocator};
