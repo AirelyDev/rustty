@@ -49,6 +49,10 @@ pub mod cgroup;
 pub mod dbus;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod desktop;
+// PORT NOTE: `os/main.zig:22` `pub const edit = @import("edit.zig");`. Ungated:
+// `edit` reaches only `rustty-global`'s `environ()` and the crate-local
+// `shell`/`string_encoding` writers, all of which are available on every target.
+pub mod edit;
 // PORT NOTE (P3-W7 T4): `pub mod env;` is GONE — upstream DELETED
 // `src/os/env.zig` (-178) in `e8525c0fd`, and `src/os/main.zig` dropped all of
 // its re-exports (`GetEnvResult`, `getEnvMap`, `appendEnv`, `appendEnvAlways`,
@@ -112,6 +116,10 @@ pub mod pty;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod resourcesdir;
 pub mod shell;
+// PORT NOTE: `os/main.zig:32` `pub const stderr = @import("stderr.zig");`.
+// Ungated: the module is self-contained (hand-rolled `extern`s + a no-op arm for
+// freestanding/other), so it compiles on every target including wasm32.
+pub mod stderr;
 pub mod string_encoding;
 pub mod systemd;
 #[cfg(not(target_arch = "wasm32"))]
@@ -191,6 +199,9 @@ pub use crate::tempdir as TempDir;
 // the type to `Kind` (the R4 parity image of `apprt.action.OpenUrl.Kind`); the
 // `OpenType` alias is preserved.
 pub use crate::kernel_info::getKernelInfo;
+// PORT NOTE: `os/main.zig:59` `pub const getConfigEditCommand =
+// edit.getConfigEditCommand;`.
+pub use crate::edit::getConfigEditCommand;
 #[cfg(not(target_arch = "wasm32"))]
 pub use crate::open::Kind as OpenType;
 #[cfg(not(target_arch = "wasm32"))]
@@ -217,7 +228,7 @@ mod tests {
     fn main_test_refs() {
         // PORT NOTE: the reference's `os/main.zig` `test {}` block forces the test
         // analysis of the named submodules:
-        //     _ = file; _ = i18n; _ = path; _ = uri; _ = shell;
+        //     _ = file; _ = stderr; _ = edit; _ = i18n; _ = path; _ = uri; _ = shell;
         //     if (comptime builtin.os.tag == .linux) { _ = kernel_info; }
         //     else if (comptime builtin.os.tag.isDarwin()) { _ = mach; _ = macos; }
         // In Rust submodules are compiled and tested unconditionally as part of
@@ -233,6 +244,8 @@ mod tests {
             let _ = stringify!(macos);
         }
         let _ = stringify!(file);
+        let _ = stringify!(stderr);
+        let _ = stringify!(edit);
         let _ = stringify!(i18n);
         let _ = stringify!(path);
         let _ = stringify!(uri);

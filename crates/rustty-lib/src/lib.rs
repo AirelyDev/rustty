@@ -12,10 +12,16 @@
 //! the SAME layout/value algorithms the reference tests observe.
 //!
 //! `lib/main.zig` is ported here as the crate root (the module re-export hub).
+//!
+//! PORT NOTE: `crc32c` ports ghostty `src/crc32c.zig` (NOT under `src/lib/`).
+//! It is co-located in this firm leaf crate because it must be reachable by
+//! `rustty-vt` (snapshot) without forming a crate cycle; `rustty-vt` already
+//! depends on `rustty-lib`, so no new edge is introduced.
 
 #![allow(clippy::manual_div_ceil)]
 
 pub mod allocator;
+pub mod crc32c;
 pub mod r#enum;
 pub mod string;
 pub mod r#struct;

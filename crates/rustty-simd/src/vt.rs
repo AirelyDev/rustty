@@ -73,11 +73,43 @@ fn utf8_decode_until_control_seq_scalar(input: &[u8], output: &mut [u32]) -> Dec
     while decode_offset < decode.len() {
         let b0 = decode[decode_offset];
 
-        // ASCII fast path
+        // ASCII fast path. Use vectorization if it is available. This
+        // path is only run when simd=false, but that only controls our C++
+        // simd builds. We can still rely on Zig intrinsics for platforms
+        // like wasm32+simd128.
         if b0 < 0x80 {
-            output[decode_count] = b0 as u32;
-            decode_count += 1;
-            decode_offset += 1;
+            // `comptime std.simd.suggestVectorLength(u8)`: the target's
+            // native vector width in u8 lanes, or `None` where the target
+            // has no usable vectors (e.g. wasm32 without simd128). Spelled
+            // out from the same target facts Zig queries — see
+            // `crate::native_vector_bits`; a `u8` lane is one byte wide, so
+            // the lane count is the register width in bytes.
+            const VL: Option<usize> = match crate::native_vector_bits() {
+                Some(bits) => Some(bits / 8),
+                None => None,
+            };
+            if let Some(vl) = VL {
+                while decode_offset + vl <= decode.len() {
+                    let v = &decode[decode_offset..][0..vl];
+                    if v.iter().any(|&b| b >= 0x80) {
+                        break;
+                    }
+                    for (i, &b) in v.iter().enumerate() {
+                        output[decode_count + i] = b as u32;
+                    }
+                    decode_count += vl;
+                    decode_offset += vl;
+                }
+            }
+            while decode_offset < decode.len() {
+                let b = decode[decode_offset];
+                if b >= 0x80 {
+                    break;
+                }
+                output[decode_count] = b as u32;
+                decode_count += 1;
+                decode_offset += 1;
+            }
             continue;
         }
 
@@ -93,15 +125,33 @@ fn utf8_decode_until_control_seq_scalar(input: &[u8], output: &mut [u32]) -> Dec
             continue;
         }
 
-        // Multi-byte sequence. Determine expected length and the valid
-        // range for each continuation byte per Unicode Table 3-7.
-        let seq = utf8_seq_info(b0);
+        // Multi-byte sequence. Only the first continuation byte has a
+        // lead-dependent valid range per Unicode Table 3-7; later
+        // continuation bytes are always 80-BF. Range validity per
+        // Table 3-7 excludes overlong, surrogate, and out-of-range
+        // encodings, so a fully valid sequence can be decoded by
+        // direct bit assembly with no further checks.
+        let seq_len: usize = if b0 < 0xE0 {
+            2
+        } else if b0 < 0xF0 {
+            3
+        } else {
+            4
+        };
+        let (cb1_lo, cb1_hi): (u8, u8) = match b0 {
+            0xE0 => (0xA0, 0xBF),
+            0xED => (0x80, 0x9F),
+            0xF0 => (0x90, 0xBF),
+            0xF4 => (0x80, 0x8F),
+            _ => (0x80, 0xBF),
+        };
 
         // Check how many continuation bytes form a valid prefix (the
-        // maximal subpart). We check each byte against its specific
-        // valid range.
+        // maximal subpart), accumulating codepoint bits as we go. The
+        // lead byte contributes its low 7-len bits.
+        let mut cp: u32 = (b0 as u32) & (0x7F_u32 >> seq_len);
         let mut valid: usize = 1; // lead byte is valid
-        for ci in 0..(seq.len as usize - 1) {
+        while valid < seq_len {
             if decode_offset + valid >= decode.len() {
                 // The sequence is cut off by the end of the decode
                 // region. If the region ends at the true end of the
@@ -119,32 +169,19 @@ fn utf8_decode_until_control_seq_scalar(input: &[u8], output: &mut [u32]) -> Dec
                 break;
             }
             let cb = decode[decode_offset + valid];
-            if cb < seq.ranges[ci][0] || cb > seq.ranges[ci][1] {
-                // Byte doesn't match expected range. The maximal
-                // subpart ends here.
+            let lo: u8 = if valid == 1 { cb1_lo } else { 0x80 };
+            let hi: u8 = if valid == 1 { cb1_hi } else { 0xBF };
+            if cb < lo || cb > hi {
                 break;
             }
+            cp = (cp << 6) | (cb & 0x3F) as u32;
             valid += 1;
         }
 
-        if valid == seq.len as usize {
-            // Full sequence present and structurally valid. Decode it.
-            // (Structural validity per Table 3-7 guarantees decode success.)
-            let cp_bytes = &decode[decode_offset..][0..seq.len as usize];
-            match utf8_decode(cp_bytes) {
-                Ok(cp) => {
-                    output[decode_count] = cp;
-                    decode_count += 1;
-                    decode_offset += seq.len as usize;
-                }
-                Err(_) => {
-                    // Should not happen given Table 3-7 validation, but
-                    // be safe: emit FFFD for the lead byte.
-                    output[decode_count] = 0xFFFD;
-                    decode_count += 1;
-                    decode_offset += 1;
-                }
-            }
+        if valid == seq_len {
+            output[decode_count] = cp;
+            decode_count += 1;
+            decode_offset += seq_len;
         } else {
             // Incomplete/ill-formed: the maximal subpart (valid bytes)
             // maps to a single FFFD.
@@ -158,61 +195,6 @@ fn utf8_decode_until_control_seq_scalar(input: &[u8], output: &mut [u32]) -> Dec
         consumed: decode_offset,
         decoded: decode_count,
     }
-}
-
-struct Utf8SeqInfo {
-    len: u8, // u3
-    ranges: [[u8; 2]; 3],
-}
-
-/// Returns the expected byte count and valid continuation byte ranges
-/// for a UTF-8 sequence based on its lead byte, per Unicode Table 3-7.
-fn utf8_seq_info(lead: u8) -> Utf8SeqInfo {
-    match lead {
-        0xC2..=0xDF => Utf8SeqInfo {
-            len: 2,
-            ranges: [[0x80, 0xBF], [0, 0], [0, 0]],
-        },
-        0xE0 => Utf8SeqInfo {
-            len: 3,
-            ranges: [[0xA0, 0xBF], [0x80, 0xBF], [0, 0]],
-        },
-        0xE1..=0xEC => Utf8SeqInfo {
-            len: 3,
-            ranges: [[0x80, 0xBF], [0x80, 0xBF], [0, 0]],
-        },
-        0xED => Utf8SeqInfo {
-            len: 3,
-            ranges: [[0x80, 0x9F], [0x80, 0xBF], [0, 0]],
-        },
-        0xEE..=0xEF => Utf8SeqInfo {
-            len: 3,
-            ranges: [[0x80, 0xBF], [0x80, 0xBF], [0, 0]],
-        },
-        0xF0 => Utf8SeqInfo {
-            len: 4,
-            ranges: [[0x90, 0xBF], [0x80, 0xBF], [0x80, 0xBF]],
-        },
-        0xF1..=0xF3 => Utf8SeqInfo {
-            len: 4,
-            ranges: [[0x80, 0xBF], [0x80, 0xBF], [0x80, 0xBF]],
-        },
-        0xF4 => Utf8SeqInfo {
-            len: 4,
-            ranges: [[0x80, 0x8F], [0x80, 0xBF], [0x80, 0xBF]],
-        },
-        _ => unreachable!(),
-    }
-}
-
-/// `std.unicode.utf8Decode`: decode a structurally validated UTF-8 byte
-/// sequence into its scalar value. Returns `Err` on any decode failure.
-fn utf8_decode(bytes: &[u8]) -> Result<u32, ()> {
-    std::str::from_utf8(bytes)
-        .ok()
-        .and_then(|s| s.chars().next())
-        .map(|c| c as u32)
-        .ok_or(())
 }
 
 #[cfg(test)]

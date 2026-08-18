@@ -135,6 +135,19 @@ pub mod x11_color;
 //     pub const codepointWidth = unicode_pkg.codepointWidth;
 //     pub const graphemeWidth = unicode_pkg.graphemeWidth;
 // };
+// PORT NOTE: `terminal/fraction.zig` (the custom decimal-fraction parser from
+// upstream 946422dbc that replaced `std.fmt.parseFloat`) has no top-level
+// re-export in `main.zig`; there it is referenced only via
+// `_ = @import("fraction.zig")` for test discovery and used internally by
+// `color.zig`. Ported here as a leaf; the call-site switch is a later wave.
+pub mod fraction;
+
+// PORT NOTE: `src/fastprint.zig` is a top-level (non-terminal) helper imported
+// by `formatter.zig` and `style.zig` as `@import("../fastprint.zig")`. It has
+// no `main.zig` surface entry; ported here as a leaf sibling. The call-site
+// switch is a later wave.
+pub mod fastprint;
+
 /// Unicode utilities that match the terminal's text layout semantics.
 pub mod unicode {
     pub use rustty_unicode::codepoint_width;

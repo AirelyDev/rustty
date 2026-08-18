@@ -6,14 +6,15 @@
 // `pub use` re-exports; this module exists to carry `main.zig`'s module doc
 // comment and its `refAllDecls` test verbatim. The Zig imports/`pub const`
 // aliases map to the `pub use` lines in `lib.rs`:
-//   - lru                         -> pub mod lru
 //   - BlockingQueue               -> blocking_queue::BlockingQueue
 //   - CacheTable                  -> cache_table::CacheTable
 //   - CircBuf                     -> circ_buf::CircBuf
 //   - IntrusiveDoublyLinkedList   -> intrusive_linked_list::DoublyLinkedList
+//   - LimitedAllocator            -> limited_allocator::LimitedAllocator
 //   - MessageData                 -> message_data::MessageData
 //   - SegmentedPool               -> segmented_pool::SegmentedPool
 //   - SplitTree                   -> split_tree::SplitTree
+//   - WasmPagePool                -> wasm_page_pool::WasmPagePool
 
 #[cfg(test)]
 mod tests {

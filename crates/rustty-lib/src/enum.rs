@@ -61,53 +61,39 @@ fn int_fitting_range(to: usize) -> TagType {
 /// if we're targeting C, otherwise a Zig enum with smallest possible
 /// backing type.
 ///
-/// In all cases, the enum keys will be created in the order given.
-/// For C ABI, this means that the order MUST NOT be changed in order
-/// to preserve ABI compatibility. You can set a key to null to
-/// remove it from the Zig enum while keeping the "hole" in the C enum
-/// to preserve ABI compatibility.
+/// In all cases, each enum value is its index in `keys`. The order MUST NOT
+/// be changed when the integer values are part of an ABI or serialized format.
+/// A null key removes that field while preserving its integer hole.
 ///
 /// C detection is up to the caller, since there are multiple ways
 /// to do that. We rely on the `target` parameter to determine whether we
 /// should create a C compatible enum or a Zig enum.
 ///
-/// For the Zig enum, the enum value is not guaranteed to be stable, so
-/// it shouldn't be relied for things like serialization.
+/// C enums use `c_int`. Zig enums use the smallest unsigned integer that can
+/// represent every key index, including holes.
 ///
-/// PORT NOTE (`e8525c0fd`): upstream restructured this from a
-/// `fields_i`/`holes` running pair into a `names_raw`/`values_raw` pair fed to
-/// Zig 0.16's `@Enum` builtin. The two forms compute the SAME values — for the
-/// `.c` target the old `fields_i + holes` is exactly the new `from` (nulls seen
-/// plus non-nulls seen), and for `.zig` `holes` never increments so it is
-/// exactly the new `to`. Rustty builds a runtime `EnumType` descriptor rather
-/// than synthesizing a type, so the `@Enum`/`comptime_int` half has no
-/// analogue; the naming below follows the new upstream shape.
+/// PORT NOTE (`e77c2612e`): upstream made Zig enum values STABLE — each key's
+/// value is now its index in `keys` (`values_raw[to] = from`) for BOTH targets,
+/// where previously the `.zig` target renumbered the retained keys densely
+/// (`to`). The `.zig` backing integer now covers the full key range including
+/// trailing holes (`IntFittingRange(0, keys.len - 1)`), not just the retained
+/// count. Rustty builds a runtime `EnumType` descriptor rather than
+/// synthesizing a type, so upstream's `@Enum`/`comptime_int`-widening half has
+/// no analogue; the value/tag algorithm below follows the new upstream shape.
 pub fn enum_type(target: Target, keys: &[Option<&str>]) -> EnumType {
-    // Remove any holes in the input (null values). As mentioned in the
-    // function docs, in the event of the C ABI, we need to preserve the
-    // original value, so we account for that.
     let mut names_actual: Vec<String> = Vec::with_capacity(keys.len());
     let mut values_actual: Vec<usize> = Vec::with_capacity(keys.len());
-    let mut to: usize = 0;
+    // Remove null fields while preserving their positions as integer holes.
     for (from, key) in keys.iter().enumerate() {
         if let Some(key) = key {
             names_actual.push((*key).to_string());
-            values_actual.push(match target {
-                // For C we must track holes to preserve ABI compatibility
-                // with subsequent values.
-                Target::C => from,
-                // For Zig we don't track holes because the enum value
-                // isn't guaranteed to be stable and we want to use the
-                // smallest possible backing type.
-                Target::Zig => to,
-            });
-            to += 1;
+            values_actual.push(from);
         }
     }
 
     let tag_int = match target {
         Target::C => TagType::CInt,
-        Target::Zig => int_fitting_range(to - 1),
+        Target::Zig => int_fitting_range(keys.len() - 1),
     };
 
     // PORT NOTE: upstream's `@Enum(TagInt, .exhaustive, names_actual, ...)` is
@@ -218,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn abi_by_removing_a_key() {
+    fn stable_values_when_removing_a_key() {
         // C
         {
             let t = enum_type(Target::C, &[Some("a"), Some("b"), None, Some("d")]);
@@ -232,7 +218,28 @@ mod tests {
             let t = enum_type(Target::Zig, &[Some("a"), Some("b"), None, Some("d")]);
             let info = &t;
             assert_eq!(TagType::U(2), info.tag_type);
-            assert_eq!(2, info.value("d"));
+            assert_eq!(3, info.value("d"));
         }
+    }
+
+    #[test]
+    fn zig_backing_integer_includes_trailing_holes() {
+        let t = enum_type(Target::Zig, &[Some("a"), None, None, None, None]);
+        let info = &t;
+        assert_eq!(TagType::U(3), info.tag_type);
+        assert_eq!(0, info.value("a"));
+    }
+
+    #[test]
+    fn zig_values_remain_stable_across_multiple_holes() {
+        let t = enum_type(
+            Target::Zig,
+            &[None, Some("b"), None, Some("d"), None, Some("f")],
+        );
+        let info = &t;
+        assert_eq!(TagType::U(3), info.tag_type);
+        assert_eq!(1, info.value("b"));
+        assert_eq!(3, info.value("d"));
+        assert_eq!(5, info.value("f"));
     }
 }
