@@ -124,3 +124,25 @@ struct declares. Inline `UPSTREAM QUIRK` notes at both methods point here.
 **Upstream report:** to be filed against ghostty (`NewTab.C.deinit`/`NewTab.cval`
 wrong receiver type + dropped `surface_id`, introduced by `034506f14`). Once
 upstream fixes it, re-sync and close this entry.
+
+## P4-U3 — `pkg/fontconfig/test.zig` "fc-match" defers double-destroy the prepared patterns (corrected in the port)
+
+The reference test pairs `defer fs.destroy()` with
+`defer for (fs.fonts()) |font| font.destroy()` (test.zig:39-40). fontconfig's
+`FcFontSetDestroy` itself calls `FcPatternDestroy` on every member, so the LIFO
+defer order destroys each `fontRenderPrepare`d pattern (refcount 1 → 0, freed)
+and then `FcFontSetDestroy` re-destroys the freed patterns — a use-after-free
+that Zig CI tolerates by allocator luck. Fedora glibc's hardening catches it
+deterministically: `corrupted size vs. prev_size while consolidating`, SIGABRT,
+reproduced on the `rvm` lane 2026-08-25 and bisected to exactly this shape (the
+port passed with `FcFontSetDestroy` alone; the experiment is recorded in the
+Phase-4 finale session).
+
+**Port state:** `crates/rustty-font-shaper/src/fc.rs` `fc_match` uses the
+fontconfig-documented teardown (`fs.destroy()` alone) with an inline
+`UPSTREAM BUG` note pointing here. Every assertion of the reference test is
+otherwise carried verbatim.
+
+**Upstream report:** to be filed against ghostty (`pkg/fontconfig/test.zig`
+"fc-match" double-destroy). Once upstream fixes it, re-sync and close this
+entry.

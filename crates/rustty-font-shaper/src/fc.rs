@@ -1267,10 +1267,18 @@ mod tests {
             }
         }
 
+        // defer fs.destroy();
         // defer for (fs.fonts()) |font| font.destroy();
-        for &font in fs.fonts() {
-            unsafe { (*font).destroy() };
-        }
+        //
+        // UPSTREAM BUG — NOT PORTED AS WRITTEN (P4-U3, .port/phase-4/
+        // UPSTREAM_BUGS.md): the reference's defer PAIR double-destroys every
+        // member — `FcFontSetDestroy` itself calls `FcPatternDestroy` on each
+        // pattern in the set, so the per-font `destroy()` loop drops each
+        // refcount to zero (freeing the pattern) and the subsequent
+        // `fs.destroy()` then re-destroys freed patterns. glibc's allocator
+        // hardening catches it deterministically on Fedora ("corrupted size
+        // vs. prev_size"); Zig CI tolerates the UAF by luck. The
+        // fontconfig-documented teardown is `FcFontSetDestroy` alone.
         fs.destroy();
         cfg.destroy();
     }

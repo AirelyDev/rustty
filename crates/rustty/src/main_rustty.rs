@@ -528,7 +528,8 @@ mod tests {
     #[test]
     fn ref_all_decls() {
         // The dispatcher surface the bin drives (`state.action` detection + run).
-        assert_eq!(Action::ALL.len(), 18);
+        // (19: P4 par-3 added `+new-tab`, 034506f14.)
+        assert_eq!(Action::ALL.len(), 19);
         // The `.none` / `.gtk` branch predicate `main` switches on.
         let _ = build_config::app_runtime();
         let _ = build_config::Runtime::None;

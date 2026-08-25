@@ -1617,12 +1617,21 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
     fn image_load_temporary_file_outside_directory_prefix_is_rejected() {
-        let mut tmp_dir = temp_dir::TempDir::init().unwrap();
-        let base = tmp_dir.dir().realpath(".").unwrap();
+        // PORT NOTE (Linux parity): the reference test's `testing.tmpDir` lives
+        // under the CWD-relative `.zig-cache/tmp`, NOT the system temp dir —
+        // and that placement is LOAD-BEARING here: `isPathInTempDir` accepts
+        // anything under `/tmp`, and `rustty_os::temp_dir::TempDir` resolves
+        // there on Linux, which would satisfy the `/tmp` arm and mask the
+        // directory-prefix rejection this test exists to prove (green-on-macOS
+        // only because its TempDir lands under `/var/folders`). Mirror the
+        // reference with a target-dir scratch on both platforms.
+        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target")
+            .join(format!("kitty-prefix-scratch-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let base = std::fs::canonicalize(&base).unwrap();
         // try tmp_dir.dir.createDir(io, "temp", .default_dir);
         // try tmp_dir.dir.createDir(io, "temp-suffix", .default_dir);
-        // PORT NOTE: rustty_os::TempDir's Dir has no createDir; std::fs over the
-        // canonical base is the same operation.
         std::fs::create_dir(base.join("temp")).unwrap();
         std::fs::create_dir(base.join("temp-suffix")).unwrap();
 
@@ -1656,8 +1665,10 @@ mod tests {
         );
 
         // Rejection must happen before temporary-file cleanup is armed.
-        tmp_dir.dir().access(&outside_path).unwrap();
-        tmp_dir.deinit();
+        // (`tmp_dir.dir.access(...)` on the reference tmpDir; `metadata` is the
+        // std::fs existence probe over the scratch dir.)
+        std::fs::metadata(&outside_path).unwrap();
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     #[test]

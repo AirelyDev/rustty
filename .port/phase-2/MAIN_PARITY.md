@@ -11,6 +11,15 @@
 
 Updating/fetching the reference checkout ports nothing. Every verdict below is against the rustty working tree as of this triage.
 
+> **PHASE-4 CLOSURE (2026-08-25).** The next resync range `6ad1fe7d8..12967b68f` (543 commits,
+> 359 non-merge, 381 files, +72,554/−8,106) was absorbed wholesale by **Phase 4** — the
+> authoritative record is `docs/superpowers/plans/2026-08-17-phase4-upstream-resync.md` plus
+> `.port/phase-4/` (assessments with per-commit verdicts and R11 reconciliation, before/after
+> gate evidence in `w0/`, `NON_PORTS.md` for the TinyIo class row, `UPSTREAM_BUGS.md` P4-U1/P4-U2).
+> Verdict totals: 403 ABSENT / 10 PARTIAL / 0 already-PORTED / 60 N-A area-rows, all ABSENT and
+> PARTIAL rows ported (no deferrals). This ledger remains a Phase-2 provenance artifact and speaks
+> for nothing beyond `53bd14fec`.
+
 > **SCOPE WARNING (`P3-W10 T2`, 2026-07-31).** This ledger was triaged at `53bd14fec` (2026-07-10) and
 > scoped to `src/` + `include/` only. It therefore **cannot speak** for the `53bd14fec..6ad1fe7d8`
 > range, nor for `pkg/`, `po/`, or `macos/` in any range. It is a Phase-2 artifact kept for provenance;

@@ -45,6 +45,12 @@ Those REDs are the honest progress meter for Phase 4, not regressions; both were
 `6ad1fe7d8` immediately before the advance (`w0/*-before-at-6ad1fe7d8.txt`). They MUST be
 green again at the Phase-4 finale.
 
+**FINALE (2026-08-25): re-greened.** G1b GREEN (every module rust ≥ zig; the 10 RED rows
+closed by their owning waves). A5 all arms GREEN (194 oracle exports both directions, 0
+residuals). A3 re-pinned GREEN. G-BENCH/G-THEMES/G7/D11 GREEN. G3b finale sweep recorded at
+`w0/g3b-finale-at-12967b68f.txt`. The absorbed range's execution record is
+`docs/superpowers/plans/2026-08-17-phase4-upstream-resync.md` + the `phase-4 *` commit series.
+
 The previous pin, `4749c4e93`, was a **stale baseline**: work from beyond it had been ported by
 WS5–WS8 and tracked in an ad-hoc "beyond-pin series" table (BL-1…BL-7) that existed only because the
 pin had not moved. That table is **gone**. Its contents were either absorbed by the advance (the
