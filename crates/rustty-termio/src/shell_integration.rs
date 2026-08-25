@@ -525,14 +525,15 @@ fn setupBash(
     }
 
     // Return a copy of our modified command line to use as the shell command.
-    // return .{ .shell = try alloc.dupeZ(u8, try cmd.toOwnedSlice()) };
+    // return .{ .shell = try alloc.dupeZ(u8, cmd.buffer.written()) };
     //
-    // (PORT NOTE: `toOwnedSlice` yields the sentinel-terminated bytes; the `dupeZ`
-    // copy strips into the owned `Command::Shell` payload, which carries no
-    // sentinel — config command.rs precedent.)
-    let owned = cmd.toOwnedSlice();
+    // (PORT NOTE (8e8d76b63): the reference now `dupeZ`s straight from the
+    // builder's borrowed accumulated bytes instead of materializing an owned
+    // `toOwnedSlice` intermediate; the one `to_vec` copy below IS the `dupeZ`
+    // into the owned `Command::Shell` payload, which carries no sentinel —
+    // config command.rs precedent.)
     Ok(Some(configpkg::command::Command::Shell(
-        owned[..owned.len() - 1].to_vec(),
+        cmd.written().to_vec(),
     )))
 }
 
@@ -714,10 +715,12 @@ fn setupNushell(
     iter.deinit();
 
     // Return a copy of our modified command line to use as the shell command.
-    // return .{ .shell = try alloc.dupeZ(u8, try cmd.toOwnedSlice()) };
-    let owned = cmd.toOwnedSlice();
+    // return .{ .shell = try alloc.dupeZ(u8, cmd.buffer.written()) };
+    //
+    // (PORT NOTE (8e8d76b63): dupe from the builder's borrowed bytes — no owned
+    // intermediate; see the `setupBash` note.)
     Ok(Some(configpkg::command::Command::Shell(
-        owned[..owned.len() - 1].to_vec(),
+        cmd.written().to_vec(),
     )))
 }
 

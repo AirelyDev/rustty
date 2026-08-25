@@ -5071,24 +5071,26 @@ impl Terminal {
             .clear_unprotected_cells(page, row, cells_slice);
     }
 
-    /// Delete every Kitty graphics image and placement on the active screen
-    /// (the reference's `kitty_images.delete(.., .{ .all = true })`).
+    /// Clear the active screen's Kitty graphics state for a terminal clear
+    /// (the reference's `kitty_images.clearScreen(...)`; upstream `f8b40a023`
+    /// replaced the old `delete(.., .{ .all = true })` here so ED2 preserves
+    /// scrollback references while reclaiming every unreferenced image).
     ///
     /// PORT NOTE: the reference writes this inline as
-    /// `self.screens.active.kitty_images.delete(self.screens.active.alloc, self, .{ .all = true })`,
+    /// `self.screens.active.kitty_images.clearScreen(self.io(), self.screens.active.alloc, self)`,
     /// which aliases the storage field and the whole terminal at once. Rust
     /// cannot, so — exactly as `kitty::graphics_exec::delete` and
     /// `set_kitty_graphics_size_limit` already do — the storage is MOVED out of
-    /// the screen, `delete` runs against the borrowed terminal, and the storage
-    /// is moved back. `ImageStorage::delete` only reaches the active screen
-    /// itself through `t` (never its `kitty_images` slot), so the
+    /// the screen, `clear_screen` runs against the borrowed terminal, and the
+    /// storage is moved back. `ImageStorage::clear_screen` only reaches the
+    /// active screen itself through `t` (never its `kitty_images` slot), so the
     /// temporarily-defaulted slot is never observed.
-    fn delete_active_kitty_images(&mut self) {
+    fn clear_screen_active_kitty_images(&mut self) {
         // SAFETY: `self.screens.active` is a stable heap pointer owned by
         // `self.screens`; we hold `&mut self`, so no other alias exists.
         let alloc = unsafe { (*self.screens.active).alloc };
         let mut storage = core::mem::take(unsafe { &mut (*self.screens.active).kitty_images });
-        storage.delete(alloc, self, kitty::graphics_command::Delete::All(true));
+        storage.clear_screen(alloc, self);
         unsafe { (*self.screens.active).kitty_images = storage };
     }
 
@@ -5114,16 +5116,18 @@ impl Terminal {
                 unsafe { (*self.screens.active).cursor.pending_wrap = false };
 
                 // if (comptime build_options.kitty_graphics) {
-                //     // Clear all Kitty graphics state for this screen
-                //     self.screens.active.kitty_images.delete(
+                //     // Clear only placements still visible after moving the active
+                //     // area into scrollback.
+                //     self.screens.active.kitty_images.clearScreen(
+                //         self.io(),
                 //         self.screens.active.alloc,
                 //         self,
-                //         .{ .all = true },
                 //     );
                 // }
                 if crate::options::KITTY_GRAPHICS {
-                    // Clear all Kitty graphics state for this screen
-                    self.delete_active_kitty_images();
+                    // Clear only placements still visible after moving the active
+                    // area into scrollback.
+                    self.clear_screen_active_kitty_images();
                 }
             }
 
@@ -5198,16 +5202,18 @@ impl Terminal {
                 unsafe { (*self.screens.active).cursor.pending_wrap = false };
 
                 // if (comptime build_options.kitty_graphics) {
-                //     // Clear all Kitty graphics state for this screen
-                //     self.screens.active.kitty_images.delete(
+                //     // ED2 clears visible placements but preserves graphics that
+                //     // are wholly in scrollback.
+                //     self.screens.active.kitty_images.clearScreen(
+                //         self.io(),
                 //         self.screens.active.alloc,
                 //         self,
-                //         .{ .all = true },
                 //     );
                 // }
                 if crate::options::KITTY_GRAPHICS {
-                    // Clear all Kitty graphics state for this screen
-                    self.delete_active_kitty_images();
+                    // ED2 clears visible placements but preserves graphics that
+                    // are wholly in scrollback.
+                    self.clear_screen_active_kitty_images();
                 }
 
                 // Cleared screen dirty bit

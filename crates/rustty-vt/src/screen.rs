@@ -864,7 +864,15 @@ impl Screen {
         self.pages.reset();
 
         // The above reset preserves tracked pins so we can still use
-        // our cursor pin, which should be at the top-left already.
+        // our cursor pin, which should be at the top-left already. The
+        // reset marks every tracked pin as garbage, but we keep using
+        // this one at its new valid position, so clear the flag: copies
+        // of the cursor pin (e.g. for Kitty image placements) must not
+        // be born garbage.
+        //
+        // PORT NOTE (oracle `d30a9c424`, ridden in with the `33ca9e5dd`
+        // relative-placement end state — its "placements created after a full
+        // reset are retained" regression test requires this fix).
         let cursor_pin: *mut Pin = self.cursor.page_pin;
         debug_assert!(std::ptr::eq(
             unsafe { (*cursor_pin).node },
@@ -872,6 +880,9 @@ impl Screen {
         ));
         debug_assert!(unsafe { (*cursor_pin).x } == 0);
         debug_assert!(unsafe { (*cursor_pin).y } == 0);
+        // cursor_pin.garbage = false;
+        // SAFETY: `cursor_pin` is the screen's own tracked cursor pin.
+        unsafe { (*cursor_pin).garbage = false };
         let cursor_rac = unsafe { (*cursor_pin).row_and_cell() };
         self.cursor.deinit(self.alloc);
         self.cursor = Cursor {
@@ -6056,6 +6067,33 @@ mod tests {
         assert_eq!(usize::MAX, s.pages.limits.bytes.explicit);
         assert_eq!(max_lines, s.pages.limits.lines.explicit);
         assert!(!s.no_scrollback);
+
+        s.deinit();
+    }
+
+    // test "Screen reset cursor pin is not garbage" (oracle `d30a9c424`)
+    #[test]
+    fn screen_reset_cursor_pin_is_not_garbage() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 80,
+                rows: 24,
+                max_scrollback_bytes: Some(1000),
+                max_scrollback_lines: None,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+        s.test_write_string(b"hello, world").unwrap();
+
+        // The page reset marks every tracked pin garbage but the screen
+        // keeps using the cursor pin, so it must come back clean: anything
+        // that copies it (e.g. Kitty image placements) would otherwise be
+        // born garbage and reaped.
+        s.reset();
+        assert!(!unsafe { (*s.cursor.page_pin).garbage });
 
         s.deinit();
     }

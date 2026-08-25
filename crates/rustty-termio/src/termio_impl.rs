@@ -223,10 +223,28 @@ impl ThreadEnterState {
     // []const Input`; the OOM half collapses with the arena, leaving
     // `InputNotFound`.
     pub fn prepareInput(&mut self) -> Result<Vec<Input>, PrepareInputError> {
-        let mut input = Vec::with_capacity(self.input.list.len());
+        // var inputs: std.ArrayList(Input) = try .initCapacity(
+        //     alloc,
+        //     self.input.list.items.len,
+        // );
+        //
+        // PERF(port): `appendAssumeCapacity` — `with_capacity` + plain `push`.
+        let mut inputs = Vec::with_capacity(self.input.list.len());
+        // errdefer for (inputs.items) |item| item.deinit();
+        //
+        // (PORT NOTE (9566a1a87): N-A by ownership — the error return below
+        // drops the partially-built `Vec`, and `Input::File`'s `std::fs::File`
+        // closes on Drop; `Input.deinit` is Rust Drop.)
         for item in &self.input.list {
-            input.push(match item {
-                // .raw => |v| .{ .string = try alloc.dupe(u8, v) },
+            inputs.push(match item {
+                // .raw => |v| .{ .string = v },
+                //
+                // PERF(port) (9566a1a87): upstream stopped arena-duping the raw
+                // bytes (`.string = v` borrows the ThreadEnterState arena); the
+                // port keeps the owned clone — a borrow into
+                // `(*self_).thread_enter_state` would be held across the
+                // `(*self_).queueWrite(&mut ...)` calls in `threadEnter`
+                // (SB hazard, memory `rust-mut-args-strongly-protected`).
                 rustty_config::io::ReadableIO::Raw(v) => Input::String(v.clone()),
                 // .path => |path| file: { ... },
                 rustty_config::io::ReadableIO::Path(path) => {
@@ -243,7 +261,7 @@ impl ThreadEnterState {
             });
         }
 
-        Ok(input)
+        Ok(inputs)
     }
 }
 
@@ -252,12 +270,23 @@ impl ThreadEnterState {
 pub enum Input {
     // string: []const u8,
     //
-    // PORT NOTE: the reference `string` is the arena-`dupe`d byte slice ->
-    // owned `Vec<u8>` (R1: byte slices stay raw bytes, never a lossy String).
+    // PORT NOTE: the reference `string` is the raw byte slice -> owned
+    // `Vec<u8>` (R1: byte slices stay raw bytes, never a lossy String; see the
+    // PERF(port) note at the `.raw` arm above).
     String(Vec<u8>),
-    // file: std.fs.File,
+    // file: std.Io.File,
     File(std::fs::File),
 }
+
+// fn deinit(self: Input) void {
+//     switch (self) {
+//         .string => {},
+//         .file => |f| f.close(global.io()),
+//     }
+// }
+//
+// (PORT NOTE (9566a1a87): `Input.deinit` is Rust Drop — `.string` drops its
+// `Vec` and `.file`'s `std::fs::File` closes the descriptor on drop.)
 
 /// The error set of [`ThreadEnterState::prepareInput`] (see its PORT NOTE).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -759,6 +788,9 @@ impl<M: AppMailbox> Termio<M> {
     //         try v.prepareInput()
     //     else
     //         null;
+    //     defer if (inputs) |items| {
+    //         for (items) |input| input.deinit();
+    //     };
     //
     //     data.* = .{
     //         .alloc = self.alloc,
@@ -779,19 +811,21 @@ impl<M: AppMailbox> Termio<M> {
     //             log.warn("failed to queue input string err={}", .{err});
     //             return error.InputFailed;
     //         },
-    //         .file => |f| self.queueWrite(
-    //             data,
-    //             f.readToEndAlloc(
+    //         .file => |f| {
+    //             const contents = compat_file.readToEndAlloc(
+    //                 f,
     //                 self.alloc,
     //                 10 * 1024 * 1024, // 10 MiB max
     //             ) catch |err| {
     //                 log.warn("failed to read input file err={}", .{err});
     //                 return error.InputFailed;
-    //             },
-    //             false,
-    //         ) catch |err| {
-    //             log.warn("failed to queue input file err={}", .{err});
-    //             return error.InputFailed;
+    //             };
+    //             defer self.alloc.free(contents);
+    //
+    //             self.queueWrite(data, contents, false) catch |err| {
+    //                 log.warn("failed to queue input file err={}", .{err});
+    //                 return error.InputFailed;
+    //             };
     //         },
     //     };
     // }
@@ -840,6 +874,14 @@ impl<M: AppMailbox> Termio<M> {
                 Some(v) => Some(v.prepareInput().map_err(|_| Error)?),
                 None => None,
             };
+            // defer if (inputs) |items| {
+            //     for (items) |input| input.deinit();
+            // };
+            //
+            // (PORT NOTE (9566a1a87): N-A by ownership — `inputs` is consumed by
+            // `into_iter().flatten()` below, dropping each `Input` (the File
+            // closes) at the end of its iteration; any error return drops the
+            // remainder. Rust Drop IS the reference `defer`.)
 
             // data.* = .{ .alloc, .loop = &thread.loop, .renderer_state,
             //             .surface_mailbox, .mailbox = &self.mailbox,
@@ -886,17 +928,25 @@ impl<M: AppMailbox> Termio<M> {
                     //     return error.InputFailed;
                     // },
                     Input::String(v) => unsafe { (*self_).queueWrite(&mut *data, &v, false) },
-                    // .file => |f| self.queueWrite(
-                    //     data,
-                    //     f.readToEndAlloc(self.alloc, 10 * 1024 * 1024) catch |err| {
+                    // .file => |f| {
+                    //     const contents = compat_file.readToEndAlloc(
+                    //         f,
+                    //         self.alloc,
+                    //         10 * 1024 * 1024, // 10 MiB max
+                    //     ) catch |err| {
                     //         log.warn("failed to read input file err={}", .{err});
                     //         return error.InputFailed;
-                    //     },
-                    //     false,
-                    // ) catch |err| {
-                    //     log.warn("failed to queue input file err={}", .{err});
-                    //     return error.InputFailed;
+                    //     };
+                    //     defer self.alloc.free(contents);
+                    //
+                    //     self.queueWrite(data, contents, false) catch |err| {
+                    //         log.warn("failed to queue input file err={}", .{err});
+                    //         return error.InputFailed;
+                    //     };
                     // },
+                    //
+                    // (the `defer self.alloc.free(contents)` is `bytes` dropping
+                    // at the end of this arm.)
                     Input::File(f) => match read_input_file(f, 10 * 1024 * 1024) {
                         Ok(bytes) => unsafe { (*self_).queueWrite(&mut *data, &bytes, false) },
                         Err(_err) => {
@@ -1311,7 +1361,7 @@ impl<M: AppMailbox> Termio<M> {
                 storage.delete(
                     alloc,
                     &mut self.terminal,
-                    rustty_vt::kitty::graphics_command::Delete::All(true),
+                    rustty_vt::kitty::graphics_command::DeleteAction::All(true),
                 );
                 unsafe { (*active).kitty_images = storage };
 

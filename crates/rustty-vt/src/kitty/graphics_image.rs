@@ -111,6 +111,10 @@ pub struct LoadingImage {
     /// used if q isn't set on subsequent chunks.
     pub quiet: command::Quiet,
 
+    /// Response identifiers from the initial load command. Subsequent chunks
+    /// omit these, so completion responses must use the saved values.
+    pub response: command::Response,
+
     /// The temporary directory for file transmission (null means that
     /// temporary directory transmission is disabled).
     // PORT NOTE (oracle `e8525c0fd`): `temporary_directory: ?[]const u8`. Zig
@@ -198,6 +202,12 @@ impl LoadingImage {
         // These can be overwritten by the data loading process. For example,
         // PNG loading sets the width/height from the data.
         let t = cmd.transmission().unwrap();
+
+        // Validated here rather than while parsing so the response can
+        // carry the image id, matching Kitty's initialize_load_data.
+        if t.format_unknown {
+            return Err(Error::UnsupportedFormat);
+        }
         let mut result: LoadingImage = LoadingImage {
             image: Image {
                 id: t.image_id,
@@ -217,6 +227,12 @@ impl LoadingImage {
             data: Vec::new(),
             display: cmd.display(),
             quiet: cmd.quiet,
+            response: command::Response {
+                id: t.image_id,
+                image_number: t.image_number,
+                placement_id: t.placement_id,
+                ..Default::default()
+            },
             // .temporary_directory = switch (limits.temporary_file) {
             //     .enabled => |d| d.directory,
             //     .disabled => null,
@@ -593,23 +609,39 @@ impl LoadingImage {
             }
         }
 
-        // PORT NOTE: the reference reads through a 4096-byte buffered reader,
-        // appending the remaining bytes up to `size` into a managed ArrayList.
-        // We read with the same `size` cap into a `Vec<u8>`.
+        // PORT NOTE: the reference reads through a 4096-byte buffered reader.
+        // We read with the same semantics into a `Vec<u8>`.
         // Read the file
-        let size: usize = if t.size > 0 {
-            std::cmp::min(t.size as usize, MAX_SIZE)
-        } else {
-            MAX_SIZE
-        };
-
         let mut managed: Vec<u8> = Vec::new();
-        {
+        if t.size > 0 {
+            // S is the exact number of bytes to read, not a maximum:
+            // https://sw.kovidgoyal.net/kitty/graphics-protocol/#local-client
+            let size: usize = match usize::try_from(t.size) {
+                Ok(s) => s,
+                Err(_) => return Err(Error::InvalidData),
+            };
+            if size > MAX_SIZE {
+                return Err(Error::InvalidData);
+            }
+
+            // Read exact size
+            // PORT NOTE: `reader.readAlloc(alloc, size)` reads EXACTLY `size`
+            // bytes or fails (a short read is `error.EndOfStream`); every
+            // failure other than OOM maps to `error.InvalidData`. `read_exact`
+            // reproduces that contract (Vec growth aborts on OOM, which is the
+            // Rust-global OOM policy).
             use std::io::Read;
-            // `.limited(size)`: read at most `size` bytes.
-            let mut limited = (&mut file).take(size as u64);
+            managed.resize(size, 0);
+            if file.read_exact(&mut managed).is_err() {
+                // log.warn("failed to read image file: {}", .{err});
+                return Err(Error::InvalidData);
+            }
+        } else {
+            use std::io::Read;
+            // `.limited(max_size)`: read at most `max_size` bytes.
+            let mut limited = (&mut file).take(MAX_SIZE as u64);
             if limited.read_to_end(&mut managed).is_err() {
-                // log.warn("failed to read temporary file: {?}", .{buf_reader.err});
+                // log.warn("failed to read image file: {?}", .{buf_reader.err});
                 return Err(Error::InvalidData);
             }
         }
@@ -946,8 +978,12 @@ pub struct Metadata {
     pub transient: bool,
 
     /// Set this if the image was loaded without an ID or number. Such
-    /// images must not receive responses even though they currently get
-    /// IDs in the public range (which is bad!).
+    /// images must not receive responses. Kitty gives these client ID
+    /// 0 (unaddressable); our storage keys everything by one public
+    /// u32 ID, so they get an ID from the upper half of the range
+    /// that is guaranteed unused at assignment time, but a client
+    /// that explicitly transmits that ID later can still replace
+    /// them.
     pub implicit_id: bool,
 
     /// Number of placements referencing this image.
@@ -1292,6 +1328,7 @@ mod tests {
             data: Vec::new(),
             display: None,
             quiet: command::Quiet::No,
+            response: command::Response::default(),
             temporary_directory: None,
         }
     }
@@ -1747,6 +1784,107 @@ mod tests {
         let img = loading.complete().unwrap();
         assert!(img.compression == command::Compression::None);
         tmp_dir.dir().access(&path).unwrap();
+        tmp_dir.deinit();
+    }
+
+    // test "image load: regular file size reads exactly requested bytes"
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_regular_file_size_reads_exactly_requested_bytes() {
+        let mut tmp_dir = temp_dir::TempDir::init().unwrap();
+        tmp_dir
+            .dir()
+            .writeFile("image.data", &[1, 2, 3, 4, 5, 6])
+            .unwrap();
+
+        let path = tmp_dir.dir().realpath("image.data").unwrap();
+        let path_bytes = path_to_bytes(&path);
+
+        struct Case {
+            offset: u32,
+            expected: [u8; 3],
+        }
+        let cases = [
+            Case {
+                offset: 0,
+                expected: [1, 2, 3],
+            },
+            Case {
+                offset: 3,
+                expected: [4, 5, 6],
+            },
+        ];
+        for case in cases.iter() {
+            let cmd: command::Command = command::Command {
+                control: command::Control::Transmit(command::Transmission {
+                    format: command::Format::Rgb,
+                    medium: command::Medium::File,
+                    width: 1,
+                    height: 1,
+                    size: 3,
+                    offset: case.offset,
+                    image_id: 31,
+                    ..Default::default()
+                }),
+                quiet: command::Quiet::No,
+                data: path_bytes.clone(),
+            };
+
+            let mut loading = LoadingImage::init(
+                &cmd,
+                &Limits {
+                    file: true,
+                    temporary_file: TemporaryFileLimit::Disabled,
+                    shared_memory: false,
+                },
+            )
+            .unwrap();
+            let img = loading.complete().unwrap();
+
+            let Data::Complete(bytes) = &img.data else {
+                unreachable!()
+            };
+            assert_eq!(case.expected.as_slice(), bytes.as_slice());
+        }
+        tmp_dir.deinit();
+    }
+
+    // test "image load: regular file size rejects short data"
+    #[test]
+    #[cfg_attr(miri, ignore)] // real-OS temp-file filesystem syscalls
+    fn image_load_regular_file_size_rejects_short_data() {
+        let mut tmp_dir = temp_dir::TempDir::init().unwrap();
+        tmp_dir.dir().writeFile("image.data", &[1, 2]).unwrap();
+
+        let path = tmp_dir.dir().realpath("image.data").unwrap();
+        let path_bytes = path_to_bytes(&path);
+
+        let cmd: command::Command = command::Command {
+            control: command::Control::Transmit(command::Transmission {
+                format: command::Format::Rgb,
+                medium: command::Medium::File,
+                width: 1,
+                height: 1,
+                size: 3,
+                image_id: 31,
+                ..Default::default()
+            }),
+            quiet: command::Quiet::No,
+            data: path_bytes,
+        };
+
+        assert_eq!(
+            Err(Error::InvalidData),
+            LoadingImage::init(
+                &cmd,
+                &Limits {
+                    file: true,
+                    temporary_file: TemporaryFileLimit::Disabled,
+                    shared_memory: false,
+                },
+            )
+            .map(|_| ())
+        );
         tmp_dir.deinit();
     }
 

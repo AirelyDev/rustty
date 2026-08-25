@@ -51,7 +51,7 @@ pub fn appSupportDir(sub_path: &str) -> Result<String, AppSupportDirError> {
         // PORT NOTE: reference `.NSApplicationSupportDirectory`; the `objc2-foundation`
         // binding drops the `NS` prefix (`ApplicationSupportDirectory == 14`).
         NSSearchPathDirectory::ApplicationSupportDirectory,
-        &[build_config::BUNDLE_ID, sub_path],
+        sub_path,
     )
 }
 
@@ -67,7 +67,7 @@ pub fn cacheDir(sub_path: &str) -> Result<String, CacheDirError> {
         // PORT NOTE: reference `.NSCachesDirectory`; the `objc2-foundation` binding
         // drops the `NS` prefix (`CachesDirectory == 13`).
         NSSearchPathDirectory::CachesDirectory,
-        &[build_config::BUNDLE_ID, sub_path],
+        sub_path,
     )
 }
 
@@ -137,7 +137,7 @@ pub use objc2_foundation::{NSSearchPathDirectory, NSSearchPathDomainMask};
 
 fn commonDir(
     directory: NSSearchPathDirectory,
-    sub_paths: &[&str],
+    sub_path: &str,
 ) -> Result<String, AppleApiError> {
     // PORT NOTE: `comptime assert(builtin.target.os.tag.isDarwin())`. See the note in
     // `isAtLeastVersion`.
@@ -172,12 +172,14 @@ fn commonDir(
         .to_str()
         .map_err(|_| AppleApiError::AppleAPIFailed)?;
 
-    // Create a new array with base_dir as the first element
-    let mut paths: Vec<&str> = Vec::with_capacity(sub_paths.len() + 1);
-    paths.push(base_dir);
-    paths.extend_from_slice(sub_paths);
-
-    Ok(fs_path_join(&paths))
+    // return try std.fs.path.join(
+    //     alloc,
+    //     &.{ base_dir, build_config.bundle_id, sub_path },
+    // );
+    //
+    // (PORT NOTE (a436a9edc): upstream dropped the temporary `paths` array
+    // alloc/`@memcpy`/free for a single direct join — same output bytes.)
+    Ok(fs_path_join(&[base_dir, build_config::BUNDLE_ID, sub_path]))
 }
 
 /// PORT NOTE: reproduces `std.fs.path.join` for POSIX (Darwin): joins the components

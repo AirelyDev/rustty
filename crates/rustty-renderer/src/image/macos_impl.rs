@@ -571,6 +571,12 @@ impl State {
                         // placement itself.
                         continue;
                     }
+                    // PORT NOTE (P5-W2 seam): upstream `cd5f9eef0` positions
+                    // relative placements here by resolving the parent chain
+                    // (`renderer/image.zig` half); that half lands with the
+                    // renderer wave (W7). Until then relative placements are
+                    // skipped, never drawn from this path.
+                    Location::Relative(_) => continue,
                 }
 
                 // Get the image for the placement

@@ -15,6 +15,17 @@ authors.workspace = true
 [lints]
 workspace = true
 
+# The `pub fn run` `///` doc comments ported from ghostty `src/cli/*.zig` (R1)
+# contain indented shell-invocation examples (`rustty +ssh user@example.com`,
+# `rustty +ssh-cache --clear`, re-indented to code blocks by upstream 88dc6f972
+# for its help-book rendering) which rustdoc would misinterpret as runnable Rust
+# doc examples. These are shell syntax, never Rust; this crate defines no
+# intended doc examples (all tests live in `#[test]` blocks), so doctests are
+# disabled rather than altering the faithful comment text (the same rationale as
+# rustty-config / rustty-font / rustty-font-shaper).
+[lib]
+doctest = false
+
 [features]
 # Route the IPC actions (+new-window / +toggle-quick-terminal) through the GTK
 # apprt's perform_ipc instead of the none backend when built for Linux/GTK.

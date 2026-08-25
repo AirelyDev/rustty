@@ -7,8 +7,8 @@
 //! PORTS: ghostty src/terminal/osc.zig
 //!
 //! PORT STATUS: ported — Command enum + Terminator + Parser state machine
-//! (init/deinit/reset/next/end) and the per-command parsers in `parsers/*` are
-//! all ported with their tests. osc.zig's own two `test {}` blocks (the
+//! (init/deinit/reset/next/nextSlice/end, Capture writeByte/writeSlice) and
+//! the per-command parsers in `parsers/*` are all ported with their tests. osc.zig's own two `test {}` blocks (the
 //! `ProgressReport.State` ghostty.h check and the bottom `parsers`/`encoding`
 //! reference) are ported below.
 
@@ -21,6 +21,10 @@ use rustty_lib::target::Target;
 use crate::kitty::color as kitty_color;
 
 pub mod encoding;
+// PORT NOTE (ca9e5b130): `osc/kitty_metadata.zig` has no importer in osc.zig
+// itself (the parsers import it as `@import("../kitty_metadata.zig")`); the
+// Rust module tree registers it here, on the `osc/` directory owner.
+pub mod kitty_metadata;
 pub mod parsers;
 
 // pub const color = parsers.color;
@@ -190,6 +194,9 @@ pub enum Command {
     /// OSC 3008. Hierarchical context signalling (UAPI spec).
     /// https://uapi-group.org/specifications/specs/osc_context/
     ContextSignal(parsers::context_signal::Command),
+
+    /// Kitty desktop notifications (OSC 99)
+    KittyDesktopNotification(KittyDesktopNotification),
 }
 
 // PORT NOTE: `conemu_change_tab_title: union(enum) { reset, value: [:0]const u8 }`
@@ -216,8 +223,9 @@ impl Command {
     // conemu_change_tab_title, conemu_progress_report, conemu_wait_input,
     // conemu_guimacro, conemu_run_process, conemu_output_environment_variable,
     // conemu_xterm_emulation, conemu_comment, kitty_text_sizing,
-    // kitty_clipboard_protocol, context_signal). NOTE: Order matters, see
-    // LibEnum documentation.
+    // kitty_clipboard_protocol, kitty_dnd_protocol, context_signal,
+    // kitty_desktop_notification). NOTE: Order matters, see LibEnum
+    // documentation.
 
     // comptime {
     //     assert(@sizeOf(Command) == switch (@sizeOf(usize)) {
@@ -266,6 +274,7 @@ impl Command {
             Command::KittyClipboardProtocol(_) => CommandKey::KittyClipboardProtocol,
             Command::KittyDndProtocol(_) => CommandKey::KittyDndProtocol,
             Command::ContextSignal(_) => CommandKey::ContextSignal,
+            Command::KittyDesktopNotification(_) => CommandKey::KittyDesktopNotification,
         }
     }
 }
@@ -306,6 +315,7 @@ pub enum CommandKey {
     KittyClipboardProtocol,
     KittyDndProtocol,
     ContextSignal,
+    KittyDesktopNotification,
 }
 
 /// PORT NOTE: `parsers.semantic_prompt.Command` re-exported as
@@ -319,6 +329,10 @@ pub type KittyClipboardProtocol = parsers::kitty_clipboard_protocol::OSC;
 /// PORT NOTE: `parsers.kitty_dnd_protocol.OSC` re-exported as
 /// `Command.KittyDndProtocol`.
 pub type KittyDndProtocol = parsers::kitty_dnd_protocol::OSC;
+
+/// PORT NOTE: `parsers.kitty_desktop_notification.OSC` re-exported as
+/// `Command.KittyDesktopNotification` (`9a8e7ae18`).
+pub type KittyDesktopNotification = parsers::kitty_desktop_notification::OSC;
 
 /// PORT NOTE: `Command.ProgressReport` — the ConEmu progress report payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -562,6 +576,7 @@ pub enum State {
     S66,
     S72,
     S77,
+    S99,
     S104,
     S110,
     S111,
@@ -701,6 +716,78 @@ impl Capture {
             }
         }
     }
+
+    /// Append a slice without permitting the backing allocation to
+    /// grow beyond max_bytes. This matches the byte-at-a-time
+    /// semantics of writeByte: bytes are retained up to exactly
+    /// max_bytes and the first byte that doesn't fit fails the
+    /// write.
+    // pub fn writeSlice(
+    //     self: *Capture,
+    //     bytes: []const u8,
+    // ) error{WriteFailed}!void { ... }
+    //
+    /// Returns `true` on success and `false` on the `error.WriteFailed`
+    /// truncation path (the natural mirror of the Zig error union — same
+    /// convention as `write_byte`). Note the truncate-at-limit bound is
+    /// enforced with release-checked arithmetic (R7), never a debug assert:
+    /// OSC input is untrusted.
+    // PERF(port): like `write_byte`, the fixed backing stores directly into
+    // the Parser's inline buffer (threaded in) — zero allocation, exactly
+    // like `std.Io.Writer.fixed`'s `writeAll`.
+    pub fn write_slice(&mut self, buffer: &mut [u8; MAX_BUF], bytes: &[u8]) -> bool {
+        // const avail = self.max_bytes - self.writer.buffered().len;
+        let buffered_len = match &self.backing {
+            CaptureBacking::Fixed(len) => *len,
+            CaptureBacking::Allocating(w) => w.len(),
+        };
+        let avail = self.max_bytes - buffered_len;
+        // const n = @min(bytes.len, avail);
+        let n = bytes.len().min(avail);
+
+        match &mut self.backing {
+            // .fixed => {},
+            // (the fixed writer's `writeAll` below is the buffer copy; its
+            // capacity IS `max_bytes`, so `n` always fits)
+            CaptureBacking::Fixed(len) => {
+                // try self.writer.writeAll(bytes[0..n]);
+                buffer[*len..*len + n].copy_from_slice(&bytes[..n]);
+                *len += n;
+            }
+            CaptureBacking::Allocating(w) => {
+                // const needed = w.writer.end + n;
+                let needed = w.len() + n;
+                // if (needed > w.writer.buffer.len) { ... }
+                if needed > w.capacity() {
+                    // const new_capacity = @min(
+                    //     self.max_bytes,
+                    //     @max(w.writer.buffer.len *| 2, needed),
+                    // );
+                    // R7: `*|` is a saturating multiply.
+                    let new_capacity = self
+                        .max_bytes
+                        .min(w.capacity().saturating_mul(2).max(needed));
+                    // w.writer.buffer = w.allocator.realloc(
+                    //     w.writer.buffer,
+                    //     new_capacity,
+                    // ) catch return error.WriteFailed;
+                    // PORT NOTE: `reserve_exact` mirrors the bounded realloc
+                    // (allocation failure aborts in Rust rather than
+                    // surfacing `error.WriteFailed`; the reference's OOM arm
+                    // is unreachable through the ported allocator).
+                    w.reserve_exact(new_capacity - w.len());
+                }
+                // try self.writer.writeAll(bytes[0..n]);
+                w.extend_from_slice(&bytes[..n]);
+            }
+        }
+
+        // if (n < bytes.len) return error.WriteFailed;
+        if n < bytes.len() {
+            return false;
+        }
+        true
+    }
 }
 
 impl<'a> Parser<'a> {
@@ -781,6 +868,7 @@ impl<'a> Parser<'a> {
             | Command::KittyTextSizing(_)
             | Command::KittyClipboardProtocol(_)
             | Command::KittyDndProtocol(_)
+            | Command::KittyDesktopNotification(_)
             | Command::ContextSignal(_) => {}
         }
 
@@ -861,6 +949,50 @@ impl<'a> Parser<'a> {
                     max_bytes: self.max_allocating_bytes,
                 });
             }
+        }
+    }
+
+    /// Consume a slice of bytes, advancing the parser state. This is
+    /// equivalent to calling `next` for each byte in order, but is much
+    /// faster once a data capture is active because the remaining bytes
+    /// are appended to the capture in bulk.
+    // pub fn nextSlice(self: *Parser, input: []const u8) void {
+    pub fn next_slice(&mut self, input: &[u8]) {
+        // if (self.state == .invalid) return;
+        if self.state == State::Invalid {
+            return;
+        }
+
+        // Run the state machine byte-at-a-time until a capture begins.
+        // The command prefix before a capture starts is only a handful
+        // of bytes so this loop is short in practice.
+        let mut offset: usize = 0;
+        while self.capture.is_none() {
+            if offset >= input.len() {
+                return;
+            }
+            self.next(input[offset]);
+            offset += 1;
+            if self.state == State::Invalid {
+                return;
+            }
+        }
+
+        // const rem = input[offset..];
+        let rem = &input[offset..];
+        if rem.is_empty() {
+            return;
+        }
+        // self.capture.?.writeSlice(rem) catch |err| switch (err) {
+        //     // We have overflowed our buffer or had some other error, set
+        //     // the state to invalid so that we discard any further input.
+        //     error.WriteFailed => self.state = .invalid,
+        // };
+        let cap = self.capture.as_mut().unwrap();
+        if !cap.write_slice(&mut self.buffer, rem) {
+            // We have overflowed our buffer or had some other error, set
+            // the state to invalid so that we discard any further input.
+            self.state = State::Invalid;
         }
     }
 
@@ -1132,7 +1264,19 @@ impl<'a> Parser<'a> {
                 _ => self.state = State::Invalid,
             },
 
-            State::S0 | State::S22 | State::S777 | State::S8 | State::S9 => match c {
+            State::S9 => match c {
+                b';' => self.capture_trailing(CaptureMode::Fixed),
+                b'9' => self.state = State::S99,
+                _ => self.state = State::Invalid,
+            },
+
+            State::S99 => match c {
+                // OSC 99 encoded payloads can exceed the fixed buffer.
+                b';' => self.capture_trailing(CaptureMode::Allocating),
+                _ => self.state = State::Invalid,
+            },
+
+            State::S0 | State::S22 | State::S777 | State::S8 => match c {
                 b';' => self.capture_trailing(CaptureMode::Fixed),
                 _ => self.state = State::Invalid,
             },
@@ -1206,6 +1350,8 @@ impl<'a> Parser<'a> {
 
             State::S77 => None,
 
+            State::S99 => parsers::kitty_desktop_notification::parse(self, terminator_ch),
+
             State::S133 => parsers::semantic_prompt::parse(self, terminator_ch),
 
             State::S552 => None,
@@ -1248,7 +1394,7 @@ mod capture_tests {
     // test "Parser allocating captures have a hard limit"
     #[test]
     fn parser_allocating_captures_have_a_hard_limit() {
-        let prefixes: [&str; 4] = ["52;", "66;", "72;", "5522;"];
+        let prefixes: [&str; 5] = ["52;", "66;", "72;", "99;", "5522;"];
         let limit = MAX_BUF + 1;
 
         for prefix in prefixes {
@@ -1286,6 +1432,110 @@ mod capture_tests {
                     CaptureBacking::Allocating(w) => assert_eq!(limit, w.capacity()),
                     CaptureBacking::Fixed(_) => unreachable!(),
                 }
+            }
+
+            p.deinit();
+        }
+    }
+
+    // test "Parser nextSlice allocating captures have a hard limit"
+    #[test]
+    fn parser_next_slice_allocating_captures_have_a_hard_limit() {
+        let limit = MAX_BUF + 1;
+
+        let backend = GlobalZigAllocator;
+        let alloc = ZigAllocatorRef::new(&backend);
+        let mut p: Parser = Parser::init(Some(alloc));
+        p.max_allocating_bytes = limit;
+
+        // const data = try testing.allocator.alloc(u8, limit);
+        // defer testing.allocator.free(data);
+        // @memset(data, 'a');
+        let data = vec![b'a'; limit];
+
+        // Exactly at the limit stays valid and bounded.
+        p.next_slice(b"52;");
+        p.next_slice(&data);
+        {
+            let cap = p.capture.as_ref().unwrap();
+            assert!(p.state != State::Invalid);
+            assert_eq!(limit, cap.trailing(&p.buffer).len());
+            // try testing.expectEqual(@as(usize, limit), cap.writer.buffer.len);
+            // PORT NOTE: the allocating writer's backing buffer length is the
+            // Vec's capacity here (explicit bounded growth keeps it exact).
+            match &cap.backing {
+                CaptureBacking::Allocating(w) => assert_eq!(limit, w.capacity()),
+                CaptureBacking::Fixed(_) => unreachable!(),
+            }
+        }
+
+        // One more byte overflows: the state becomes invalid and the
+        // retained bytes and allocation stay bounded.
+        p.next_slice(b"a");
+        assert_eq!(State::Invalid, p.state);
+        {
+            let cap = p.capture.as_ref().unwrap();
+            assert_eq!(limit, cap.trailing(&p.buffer).len());
+            match &cap.backing {
+                CaptureBacking::Allocating(w) => assert_eq!(limit, w.capacity()),
+                CaptureBacking::Fixed(_) => unreachable!(),
+            }
+        }
+        assert!(p.end(None).is_none());
+
+        p.deinit();
+    }
+
+    // test "Parser nextSlice overflowing slice is truncated at the limit"
+    #[test]
+    fn parser_next_slice_overflowing_slice_is_truncated_at_the_limit() {
+        let backend = GlobalZigAllocator;
+        let alloc = ZigAllocatorRef::new(&backend);
+        let mut p: Parser = Parser::init(Some(alloc));
+        p.max_allocating_bytes = 4;
+
+        p.next_slice(b"52;abcdef");
+        assert_eq!(State::Invalid, p.state);
+        assert!(p.end(None).is_none());
+
+        let cap = p.capture.as_ref().unwrap();
+        // try testing.expectEqualStrings("abcd", cap.trailing());
+        assert_eq!(b"abcd".as_slice(), cap.trailing(&p.buffer));
+        // try testing.expectEqual(@as(usize, 4), cap.writer.buffer.len);
+        match &cap.backing {
+            CaptureBacking::Allocating(w) => assert_eq!(4, w.capacity()),
+            CaptureBacking::Fixed(_) => unreachable!(),
+        }
+
+        p.deinit();
+    }
+
+    // test "Parser nextSlice matches per-byte parsing"
+    #[test]
+    fn parser_next_slice_matches_per_byte_parsing() {
+        let input = b"52;c;aGVsbG8=";
+
+        // Every two-way split of the input must parse identically to
+        // the byte-at-a-time path.
+        for split in 0..=input.len() {
+            let backend = GlobalZigAllocator;
+            let alloc = ZigAllocatorRef::new(&backend);
+            let mut p: Parser = Parser::init(Some(alloc));
+            p.next_slice(&input[0..split]);
+            p.next_slice(&input[split..]);
+
+            // const cmd = p.end(null).?.*;
+            let cmd = p.end(None).unwrap().clone();
+            // try testing.expect(cmd == .clipboard_contents);
+            assert!(matches!(cmd, Command::ClipboardContents { .. }));
+            match &cmd {
+                Command::ClipboardContents { kind, data } => {
+                    // try testing.expectEqual(@as(u8, 'c'), cmd.clipboard_contents.kind);
+                    assert_eq!(b'c', *kind);
+                    // try testing.expectEqualStrings("aGVsbG8=", cmd.clipboard_contents.data);
+                    assert_eq!(b"aGVsbG8=".as_slice(), data.as_slice());
+                }
+                _ => unreachable!(),
             }
 
             p.deinit();

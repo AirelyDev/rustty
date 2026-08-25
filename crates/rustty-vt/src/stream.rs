@@ -87,6 +87,14 @@ const APC_SCAN_LANES: Option<usize> = match rustty_simd::native_vector_bits() {
     None => None,
 };
 
+/// `std.simd.suggestVectorLength(u8)` for `8c5bc3d29`'s OSC payload scan —
+/// the same NATIVE width the APC scan uses (see `APC_SCAN_LANES`'s note; the
+/// reference calls `suggestVectorLength` directly here too).
+const OSC_SCAN_LANES: Option<usize> = match rustty_simd::native_vector_bits() {
+    Some(bits) => Some(bits / 8),
+    None => None,
+};
+
 /// `simd.lanes(u32)` for the printable-run scan in `next_slice_capped`
 /// (f2a7652ab). See `rustty_simd::lanes`.
 const PRINT_RUN_LANES: Option<usize> = rustty_simd::lanes(core::mem::size_of::<u32>());
@@ -1303,6 +1311,71 @@ impl<'a, H: Handler> Stream<'a, H> {
                     // Aborting transitions need the scalar path so the
                     // handler can distinguish them from terminators.
                 }
+
+                // Bulk-consume OSC string bytes into the OSC parser.
+                // OSC payloads (e.g. OSC 52 clipboard operations and
+                // the kitty clipboard protocol) can be megabytes of
+                // base64 data, so per-byte dispatch is far too slow.
+                // This can't be used for handlers with a vtRaw hook
+                // because the bytes never produce osc_put actions.
+                // if (self.parser.state == .osc_string) {
+                if self.parser.state == parser::State::OscString {
+                    // offset += self.consumeOscString(input[offset..]);
+                    offset += self.consume_osc_string(&input[offset..]);
+                    // if (offset >= input.len) return input.len;
+                    if offset >= input.len() {
+                        return input.len();
+                    }
+
+                    // Fast-path normal string termination. This matches
+                    // Parser.next's exit and entry actions while avoiding
+                    // the generic action loop for every completed OSC.
+                    // switch (input[offset]) { ... }
+                    match input[offset] {
+                        // The sequence should be terminated by a full
+                        // ST ("ESC \"); the "\" that should follow is
+                        // dispatched as a normal escape sequence.
+                        // std.ascii.control_code.esc => { ... }
+                        0x1B => {
+                            // if (self.parser.osc_parser.end(
+                            //     std.ascii.control_code.esc,
+                            // )) |cmd| self.oscDispatch(cmd.*);
+                            // PORT NOTE: `cmd.*` copies the command out of the
+                            // parser — mirrored as the same clone the scalar
+                            // path's OscDispatch exit action performs.
+                            let cmd = self
+                                .parser
+                                .osc_parser
+                                .end(Some(0x1B))
+                                .map(|cmd| cmd.clone());
+                            if let Some(cmd) = cmd {
+                                self.osc_dispatch(cmd);
+                            }
+                            self.parser.clear();
+                            self.parser.state = parser::State::Escape;
+                            offset += 1;
+                            continue;
+                        }
+                        // BEL terminates the string directly.
+                        // std.ascii.control_code.bel => { ... }
+                        0x07 => {
+                            let cmd = self
+                                .parser
+                                .osc_parser
+                                .end(Some(0x07))
+                                .map(|cmd| cmd.clone());
+                            if let Some(cmd) = cmd {
+                                self.osc_dispatch(cmd);
+                            }
+                            self.parser.state = parser::State::Ground;
+                            offset += 1;
+                            continue;
+                        }
+                        // CAN/SUB abort and ignored C0 bytes go
+                        // through the state machine below.
+                        _ => {}
+                    }
+                }
             }
 
             // self.nextNonUtf8(input[offset]);
@@ -1378,6 +1451,76 @@ impl<'a, H: Handler> Stream<'a, H> {
         // if (end > 0) self.handler.vt(.apc_put_slice, .{ .bytes = input[0..end] });
         if end > 0 {
             self.handler.apc_put_slice(&input[0..end]);
+        }
+        // return end;
+        end
+    }
+
+    /// Bulk-consume OSC string bytes into the OSC parser. Returns
+    /// the number of bytes consumed. Stops at the first byte that
+    /// is not an osc_put byte in the parse table, leaving it for
+    /// the caller to process through the state machine. Every
+    /// byte >= 0x20 is an osc_put byte; bytes below either terminate
+    /// or abort the string (BEL, CAN, SUB, ESC) or are ignored.
+    ///
+    /// Must not be used by handlers with a vtRaw hook because the
+    /// consumed bytes never produce osc_put actions.
+    // fn consumeOscString(self: *Self, input: []const u8) usize {
+    fn consume_osc_string(&mut self, input: &[u8]) -> usize {
+        // comptime assert(!@hasDecl(T, "vtRaw"));
+        //
+        // Same treatment as `consume_apc_string`: Rust cannot assert an
+        // associated const inside a generic fn body (the fn is monomorphized
+        // for EVERY handler), so this is a debug assertion and
+        // `stream_fast_paths_bypassed_when_vt_raw_hooked` is the real guard.
+        debug_assert!(!H::HAS_VT_RAW);
+        // assert(self.parser.state == .osc_string);
+        assert!(self.parser.state == parser::State::OscString);
+
+        // var end: usize = 0;
+        let mut end: usize = 0;
+
+        // `8c5bc3d29`: scan ordinary OSC bytes a vector at a time, keeping the
+        // scalar loop below as the tail and as the whole scan on targets with
+        // no recommended vector width (mirroring the APC path).
+        // if (comptime std.simd.suggestVectorLength(u8)) |vector_len| {
+        //     const ByteVector = @Vector(vector_len, u8);
+        //     while (end + vector_len <= input.len) {
+        //         const bytes: ByteVector = input[end..][0..vector_len].*;
+        //         const stop = bytes < @as(ByteVector, @splat(0x20));
+        //         if (@reduce(.Or, stop)) break;
+        //         end += vector_len;
+        //     }
+        // }
+        if let Some(vector_len) = OSC_SCAN_LANES {
+            while end + vector_len <= input.len() {
+                let mut stop = false;
+                for j in 0..vector_len {
+                    stop |= input[end + j] < 0x20;
+                }
+                if stop {
+                    break;
+                }
+                end += vector_len;
+            }
+        }
+
+        // while (end < input.len) {
+        while end < input.len() {
+            match input[end] {
+                // Not osc_put bytes: BEL/CAN/SUB/ESC terminate or
+                // abort the state; other C0 bytes are ignored by it.
+                // 0x00...0x1F => break,
+                0x00..=0x1F => break,
+                // Everything else is an osc_put byte.
+                // else => end += 1,
+                _ => end += 1,
+            }
+        }
+
+        // if (end > 0) self.parser.osc_parser.nextSlice(input[0..end]);
+        if end > 0 {
+            self.parser.osc_parser.next_slice(&input[0..end]);
         }
         // return end;
         end
@@ -3455,7 +3598,7 @@ impl<'a, H: Handler> Stream<'a, H> {
             // .conemu_wait_input, .conemu_guimacro, .conemu_comment,
             // .conemu_xterm_emulation, .conemu_output_environment_variable,
             // .conemu_run_process, .kitty_text_sizing, .kitty_clipboard_protocol,
-            // .context_signal => { ... }
+            // .kitty_desktop_notification, .context_signal => { ... }
             osc::Command::ConemuSleep { .. }
             | osc::Command::ConemuShowMessageBox(_)
             | osc::Command::ConemuChangeTabTitle(_)
@@ -3468,6 +3611,7 @@ impl<'a, H: Handler> Stream<'a, H> {
             | osc::Command::KittyTextSizing(_)
             | osc::Command::KittyClipboardProtocol(_)
             | osc::Command::KittyDndProtocol(_)
+            | osc::Command::KittyDesktopNotification(_)
             | osc::Command::ContextSignal(_) => {
                 // log.debug("unimplemented OSC callback: {}", .{cmd});
             }
@@ -5441,6 +5585,238 @@ mod tests {
             let mut s: Stream<H> = Stream::init(Options::with_handler(H { seen: false }));
             s.next_slice(b"\x1b]2;abc\xc0\x1b\\");
             assert!(!s.handler.seen);
+        }
+    }
+
+    // test "stream: osc 52 large payload in chunks" { ... }
+    #[test]
+    fn stream_osc_52_large_payload_in_chunks() {
+        struct H {
+            data: Vec<u8>,
+            kind: u8,
+            // PORT NOTE (W3 seam): the reference handler also records
+            // `terminator: ?osc.Terminator = null` from
+            // `value.terminator` and asserts `osc.Terminator.st` below —
+            // the `terminator` field on the `clipboard_contents` action
+            // lands with `e03475c0c` (B-1/W3). Carry the field + assert
+            // when W3 ports that commit.
+            count: usize,
+        }
+        impl Handler for H {
+            // .clipboard_contents => { ... }
+            fn clipboard_contents(&mut self, v: ClipboardContents) {
+                self.count += 1;
+                self.kind = v.kind;
+                // self.terminator = value.terminator;  (W3 seam, see above)
+                // self.data.appendSlice(testing.allocator, value.data) catch @panic("OOM");
+                self.data.extend_from_slice(v.data);
+            }
+        }
+
+        // A payload that far exceeds the fixed buffer so the allocating
+        // capture is used, fed in chunk sizes that don't align with the
+        // sequence so the bulk path sees every kind of boundary.
+        let prefix = b"\x1b]52;c;";
+        let payload_len: usize = 150_000;
+        let mut input: Vec<u8> = Vec::new();
+        input.extend_from_slice(prefix);
+        // for (0..payload_len) |i| try input.append(alloc, 'A' + @as(u8, @intCast(i % 26)));
+        for i in 0..payload_len {
+            input.push(b'A' + u8::try_from(i % 26).unwrap());
+        }
+        input.extend_from_slice(b"\x1b\\");
+
+        // var s: Stream(H) = .init(.{ .handler = .{}, .allocator = alloc });
+        let mut s: Stream<H> = Stream::init(Options {
+            handler: H {
+                data: Vec::new(),
+                kind: 0,
+                count: 0,
+            },
+            allocator: Some(testing_allocator()),
+            continuation_max_bytes: None,
+        });
+
+        let mut i: usize = 0;
+        while i < input.len() {
+            // const end = @min(i + 4093, input.items.len);
+            let end = (i + 4093).min(input.len());
+            s.next_slice(&input[i..end]);
+            i = end;
+        }
+
+        assert_eq!(1usize, s.handler.count);
+        assert_eq!(b'c', s.handler.kind);
+        // try testing.expectEqual(osc.Terminator.st, s.handler.terminator.?);
+        // (W3 seam — see the handler PORT NOTE above.)
+        assert_eq!(
+            &input[prefix.len()..prefix.len() + payload_len],
+            s.handler.data.as_slice()
+        );
+
+        // defer s.parser.deinit();
+        s.parser.deinit();
+    }
+
+    // test "stream: osc bulk path matches per-byte path" { ... }
+    #[test]
+    fn stream_osc_bulk_path_matches_per_byte_path() {
+        // Records every dispatch relevant to OSC processing in a
+        // normalized text form so streams fed different ways can be
+        // compared byte-for-byte.
+        //
+        // PORT NOTE: the reference handler carries `alloc: Allocator` for
+        // `std.fmt.allocPrint`; the ported journal is an owned `Vec<u8>`
+        // built by direct byte appends (`{s}` prints RAW bytes — kept
+        // byte-exact rather than routed through a lossy UTF-8 format).
+        #[derive(Default)]
+        struct H {
+            journal: Vec<u8>,
+        }
+        impl H {
+            // fn record(self: *Self, comptime fmt: []const u8, args: anytype) void { ... }
+            fn record(&mut self, s: &[u8]) {
+                self.journal.extend_from_slice(s);
+            }
+        }
+        impl Handler for H {
+            // .clipboard_contents => self.record(
+            //     "clip kind={c} term={s} data={s}\n",
+            //     .{ value.kind, @tagName(value.terminator), value.data },
+            // ),
+            // PORT NOTE (W3 seam): ` term={s}` (`@tagName(value.terminator)`)
+            // is omitted until `e03475c0c` (B-1/W3) lands the `terminator`
+            // field on the clipboard_contents action; both the per-byte and
+            // bulk streams journal identically without it, preserving the
+            // equality property this test checks.
+            fn clipboard_contents(&mut self, v: ClipboardContents) {
+                let mut msg: Vec<u8> = Vec::new();
+                msg.extend_from_slice(b"clip kind=");
+                msg.push(v.kind);
+                msg.extend_from_slice(b" data=");
+                msg.extend_from_slice(v.data);
+                msg.push(b'\n');
+                self.record(&msg);
+            }
+            // .kitty_clipboard => self.record(
+            //     "kitty meta={s} payload={?s}\n",
+            //     .{ value.metadata, value.payload },
+            // ),
+            // PORT NOTE (W3 seam): the `kitty_clipboard` stream action does
+            // not exist yet (B-1/W3, the `6959fd46c` dispatch chain); rustty
+            // still routes `Command::KittyClipboardProtocol` to the ignored
+            // `osc_dispatch` arm, so BOTH the per-byte and bulk paths journal
+            // nothing for the 5522 case below — the equality property is
+            // preserved. Add the journal arm when W3 lands the dispatch.
+            //
+            // .window_title => self.record("title {s}\n", .{value.title}),
+            fn window_title(&mut self, v: WindowTitle) {
+                let mut msg: Vec<u8> = Vec::new();
+                msg.extend_from_slice(b"title ");
+                msg.extend_from_slice(v.title);
+                msg.push(b'\n');
+                self.record(&msg);
+            }
+            // Normalize prints to per-codepoint so the per-byte
+            // and slice paths journal identically.
+            // .print => self.record("print {u}\n", .{value.cp}),
+            fn print(&mut self, cp: u32) {
+                let mut msg: Vec<u8> = Vec::new();
+                msg.extend_from_slice(b"print ");
+                let mut buf = [0u8; 4];
+                msg.extend_from_slice(char::from_u32(cp).unwrap().encode_utf8(&mut buf).as_bytes());
+                msg.push(b'\n');
+                self.record(&msg);
+            }
+            // .print_slice => for (value.cps) |cp| self.record(
+            //     "print {u}\n",
+            //     .{@as(u21, @intCast(cp))},
+            // ),
+            fn print_slice(&mut self, cps: &[u32]) {
+                for &cp in cps {
+                    self.print(cp);
+                }
+            }
+        }
+
+        // const cases = [_][]const u8{ ... };
+        let mut cases: Vec<Vec<u8>> = vec![
+            b"\x1b]52;c;aGVsbG8=\x1b\\".to_vec(),
+            b"\x1b]52;c;aGVsbG8=\x07".to_vec(),
+            b"\x1b]52;;aGVsbG8=\x07".to_vec(),
+            // Ignored C0 byte embedded in the payload.
+            b"\x1b]52;c;aGVs\x01bG8=\x07".to_vec(),
+            // CAN and SUB aborts.
+            b"\x1b]52;c;aGVsbG8=\x18".to_vec(),
+            b"\x1b]52;c;aGVsbG8=\x1a".to_vec(),
+            // C1 byte embedded in the payload is data.
+            b"\x1b]0;ab\x9ccd\x07".to_vec(),
+            // Terminated with trailing printable text.
+            b"\x1b]0;a title\x07x".to_vec(),
+            // Back-to-back sequences.
+            b"\x1b]2;another title\x1b\\\x1b]0;t2\x07".to_vec(),
+            b"\x1b]5522;type=write;aGVsbG8=\x1b\\".to_vec(),
+            // Invalid OSC number.
+            b"\x1b]999;junk\x07".to_vec(),
+        ];
+        // Exceeds the fixed buffer: allocating capture.
+        // "\x1b]52;c;" ++ "y" ** 3000 ++ "\x1b\\",
+        {
+            let mut c = b"\x1b]52;c;".to_vec();
+            c.extend(std::iter::repeat(b'y').take(3000));
+            c.extend_from_slice(b"\x1b\\");
+            cases.push(c);
+        }
+        // Exceeds the fixed buffer: overflow, no dispatch.
+        // "\x1b]0;" ++ "x" ** 3000 ++ "\x07",
+        {
+            let mut c = b"\x1b]0;".to_vec();
+            c.extend(std::iter::repeat(b'x').take(3000));
+            c.extend_from_slice(b"\x07");
+            cases.push(c);
+        }
+
+        for case in &cases {
+            // Reference: byte-at-a-time.
+            let mut r: Stream<H> = Stream::init(Options {
+                handler: H::default(),
+                allocator: Some(testing_allocator()),
+                continuation_max_bytes: None,
+            });
+            for &c in case.iter() {
+                r.next(c);
+            }
+
+            // The whole slice at once.
+            {
+                let mut s: Stream<H> = Stream::init(Options {
+                    handler: H::default(),
+                    allocator: Some(testing_allocator()),
+                    continuation_max_bytes: None,
+                });
+                s.next_slice(case);
+                // try testing.expectEqualSlices(u8, ref.handler.journal.items, s.handler.journal.items);
+                assert_eq!(r.handler.journal, s.handler.journal);
+                // defer s.parser.deinit();
+                s.parser.deinit();
+            }
+
+            // Split into two slices at every possible boundary.
+            for split in 0..=case.len() {
+                let mut s: Stream<H> = Stream::init(Options {
+                    handler: H::default(),
+                    allocator: Some(testing_allocator()),
+                    continuation_max_bytes: None,
+                });
+                s.next_slice(&case[..split]);
+                s.next_slice(&case[split..]);
+                assert_eq!(r.handler.journal, s.handler.journal);
+                // defer s.parser.deinit();
+                s.parser.deinit();
+            }
+
+            // defer ref.parser.deinit();
+            r.parser.deinit();
         }
     }
 

@@ -1385,7 +1385,11 @@ unsafe fn compute_viewport_pos(
     // const pin = switch (p.location) { .pin => |pin| pin, .virtual => return ... };
     let pin = match p.location {
         Location::Pin(pin) => pin,
-        Location::Virtual => {
+        // PORT NOTE (P5-W2 seam): upstream `cd5f9eef0` resolves relative
+        // placements through `resolveChain` in this C half; that half lands
+        // with the C-API wave (W6). Until then a relative placement is
+        // reported not-visible here, like virtual.
+        Location::Virtual | Location::Relative(_) => {
             return ViewportPos {
                 col: 0,
                 row: 0,
@@ -3075,7 +3079,7 @@ mod tests {
             let (_, placement_ptr) = unsafe { (*iter).entry }.unwrap();
             let pin = match unsafe { &(*placement_ptr).location } {
                 Location::Pin(pin) => *pin,
-                Location::Virtual => unreachable!(),
+                Location::Virtual | Location::Relative(_) => unreachable!(),
             };
             // SAFETY: `pin` is the live tracked pin owned by the page list.
             unsafe { (*pin).garbage = true };

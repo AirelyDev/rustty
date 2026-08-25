@@ -13,6 +13,14 @@
 # You must gracefully exit Rustty (do not SIGINT) by closing all windows
 # and quitting. Otherwise, we leave a number of GTK resources around.
 
+# PORT NOTE (c5f4f00ed): the reference adds a suppression here for Zig's
+# DEFLATE encoder ("Zig std DEFLATE unused Huffman code",
+# fun:compress.flate.Compress.huffman.buildValues — an intentional undefined
+# base[0] increment for unused Huffman symbols). That frame is a
+# Zig-toolchain symbol that can never appear in a rustty binary (rustty's
+# DEFLATE is vendored zlib via zlib-sys), so the suppression is intentionally
+# omitted: rustty's valgrind.supp carries no Zig-toolchain-only suppressions.
+
 
 # Reproduction:
 # 1. Launch Rustty (no config)

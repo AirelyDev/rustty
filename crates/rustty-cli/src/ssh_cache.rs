@@ -138,13 +138,14 @@ impl args::Target for Options {
 /// `--prune=6h`, `--prune=1y`.
 ///
 /// Examples:
-///   rustty +ssh-cache                           # List all cached destinations
-///   rustty +ssh-cache user@example.com          # Show that destination
-///   rustty +ssh-cache example.com               # Show all users on that host
-///   rustty +ssh-cache --add=user@example.com    # Manually add a destination
-///   rustty +ssh-cache --remove=user@example.com # Remove a destination
-///   rustty +ssh-cache --prune=30d               # Remove entries older than 30 days
-///   rustty +ssh-cache --clear                   # Clear entire cache
+///
+///     rustty +ssh-cache                           # List all cached destinations
+///     rustty +ssh-cache user@example.com          # Show that destination
+///     rustty +ssh-cache example.com               # Show all users on that host
+///     rustty +ssh-cache --add=user@example.com    # Manually add a destination
+///     rustty +ssh-cache --remove=user@example.com # Remove a destination
+///     rustty +ssh-cache --prune=30d               # Remove entries older than 30 days
+///     rustty +ssh-cache --clear                   # Clear entire cache
 // pub fn run(alloc_gpa: Allocator) !u8 {
 pub fn run() -> Result<u8, Error> {
     // var arena = std.heap.ArenaAllocator.init(alloc_gpa);

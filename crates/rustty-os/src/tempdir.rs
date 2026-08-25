@@ -285,14 +285,14 @@ fn log_err(msg: &str) {
 mod tests {
     use super::*;
 
-    // PORT NOTE (2b32b5b75): the reference's two lifecycle tests capture the
-    // raw `Dir.Handle` fds and probe them with `fcntl(F.GETFD)`, expecting
-    // `EBADF` after close — proof that BOTH the dir and parent descriptors were
-    // released. rustty's `Dir` models a handle as its PATH (no fd is ever
-    // held; see the module PORT NOTE), so the descriptor leak the upstream fix
-    // closes CANNOT occur and the fd-BADF probes are N-A. The on-disk
-    // assertions (deleted after `deinit`; retained after `close(.retain)`) are
-    // carried in full.
+    // PORT NOTE (1ffdd7415): upstream DELETED its flaky fd-BADF probes from
+    // both lifecycle tests ("Don't check the raw handles after close:
+    // descriptor numbers can be reused immediately, so a valid number does not
+    // imply that we leaked it.") — rustty never ran them (its `Dir` models a
+    // handle as its PATH; no fd is ever held), so the tests were already at
+    // this end state. The on-disk assertions (deleted after `deinit`; retained
+    // after `close(.retain)`) are carried in full; the BADF expects must NOT
+    // be resurrected.
 
     // test {
     #[test]
@@ -300,11 +300,6 @@ mod tests {
     fn tempdir_create_open_delete() {
         // var path_buf: [std.fs.max_path_bytes]u8 = undefined;
         // var path_len: usize = undefined;
-        // var dir_handle: Dir.Handle = undefined;
-        // var parent_handle: Dir.Handle = undefined;
-        //
-        // (the handle captures are N-A — path model, see the module-test PORT
-        // NOTE above.)
         let path_buf: PathBuf;
         {
             // var td = try init();
@@ -327,27 +322,13 @@ mod tests {
             dir.close();
 
             // path_len = try td.dir.realPath(testing.io, &path_buf);
-            // dir_handle = td.dir.handle;
-            // parent_handle = td.parent.handle;
             path_buf = td.dir.realPath().unwrap();
 
-            // Should be deleted after we deinit.
+            // Don't check the raw handles after close: descriptor numbers can be
+            // reused immediately, so a valid number does not imply that we leaked it.
             // td.deinit();
             td.deinit();
         }
-
-        // switch (builtin.os.tag) {
-        //     .freebsd, .ios, .linux, .macos => {
-        //         for ([_]Dir.Handle{ dir_handle, parent_handle }) |handle| {
-        //             const result = std.posix.system.fcntl(handle, std.posix.F.GETFD);
-        //             try testing.expectEqual(std.posix.E.BADF, std.posix.errno(result));
-        //         }
-        //     },
-        //
-        //     else => {},
-        // }
-        //
-        // (N-A — no fds exist in the path model, see the module-test PORT NOTE.)
 
         // try testing.expectError(
         //     error.FileNotFound,
@@ -365,11 +346,6 @@ mod tests {
     fn close_retains_temporary_directory() {
         // var path_buf: [std.fs.max_path_bytes]u8 = undefined;
         // var path_len: usize = undefined;
-        // var dir_handle: Dir.Handle = undefined;
-        // var parent_handle: Dir.Handle = undefined;
-        //
-        // (the handle captures are N-A — path model, see the module-test PORT
-        // NOTE above.)
         let path_buf: PathBuf;
         {
             // var td = try init();
@@ -377,10 +353,10 @@ mod tests {
             let mut td = TempDir::init().unwrap();
 
             // path_len = try td.dir.realPath(testing.io, &path_buf);
-            // dir_handle = td.dir.handle;
-            // parent_handle = td.parent.handle;
             path_buf = td.dir.realPath().unwrap();
 
+            // Don't check the raw handles after close: descriptor numbers can be
+            // reused immediately, so a valid number does not imply that we leaked it.
             // td.close(.retain);
             td.close(CloseMode::Retain);
         }
@@ -389,19 +365,6 @@ mod tests {
         // (deferred cleanup — performed at the end of this test; a panic before
         // then leaves the retained dir behind, matching the Zig defer's
         // best-effort `catch {}` semantics.)
-
-        // switch (builtin.os.tag) {
-        //     .freebsd, .ios, .linux, .macos => {
-        //         for ([_]Dir.Handle{ dir_handle, parent_handle }) |handle| {
-        //             const result = std.posix.system.fcntl(handle, std.posix.F.GETFD);
-        //             try testing.expectEqual(std.posix.E.BADF, std.posix.errno(result));
-        //         }
-        //     },
-        //
-        //     else => {},
-        // }
-        //
-        // (N-A — no fds exist in the path model, see the module-test PORT NOTE.)
 
         // var dir = try Dir.openDirAbsolute(testing.io, path_buf[0..path_len], .{});
         // dir.close(testing.io);

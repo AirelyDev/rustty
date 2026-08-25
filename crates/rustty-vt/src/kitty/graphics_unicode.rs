@@ -440,46 +440,16 @@ impl Placement {
     ) -> Result<Grid, Error> {
         // Get the placement. If an ID is specified we look for the exact one.
         // If no ID, then we find the first virtual placement for this image.
-        // PORT NOTE: the reference uses `storage.placements.get(.{...}) orelse
-        // return Error.PlacementMissingPlacement` for the ID case, and a
-        // labeled `placement:` block iterating `storage.placements.iterator()`
-        // for the no-ID case. The success value is `Placement` (copied by value
-        // in the reference); we hold a reference to the stored placement, which
-        // is sufficient since we only read `rows`/`columns`.
-        let placement: &crate::kitty::graphics_storage::Placement = if self.placement_id > 0 {
-            match storage
-                .placements
-                .get(&crate::kitty::graphics_storage::PlacementKey {
-                    image_id: self.image_id,
-                    placement_id: crate::kitty::graphics_storage::PlacementId {
-                        tag: crate::kitty::graphics_storage::PlacementIdTag::External,
-                        id: self.placement_id,
-                    },
-                }) {
-                Some(p) => p,
-                None => {
-                    return Err(Error::PlacementMissingPlacement);
-                }
-            }
-        } else {
-            let mut found: Option<&crate::kitty::graphics_storage::Placement> = None;
-            for (key, value) in storage.placements.iter() {
-                if key.image_id == self.image_id
-                    && matches!(
-                        value.location,
-                        crate::kitty::graphics_storage::Location::Virtual
-                    )
-                {
-                    found = Some(value);
-                    break;
-                }
-            }
-
-            match found {
-                Some(p) => p,
-                None => return Err(Error::PlacementMissingPlacement),
-            }
+        // const target = storage.placeholderTarget(
+        //     self.image_id,
+        //     self.placement_id,
+        // ) orelse return Error.PlacementMissingPlacement;
+        // const placement = target.placement;
+        let target = match storage.placeholder_target(self.image_id, self.placement_id) {
+            Some(target) => target,
+            None => return Err(Error::PlacementMissingPlacement),
         };
+        let placement = target.placement;
 
         // Use requested rows/columns if specified
         // For unspecified rows/columns, calculate based on the image size.

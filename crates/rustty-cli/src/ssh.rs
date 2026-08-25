@@ -302,17 +302,17 @@ impl cli_args::Target for Options {
 ///
 /// Examples:
 ///
-///   # Basic invocation using defaults:
-///   rustty +ssh user@example.com
+///     # Basic invocation using defaults:
+///     rustty +ssh user@example.com
 ///
-///   # Forward Rustty env vars but skip the terminfo install:
-///   rustty +ssh --terminfo=false user@example.com
+///     # Forward Rustty env vars but skip the terminfo install:
+///     rustty +ssh --terminfo=false user@example.com
 ///
-///   # `ssh` flags (short-form `-p`, etc.) pass through unchanged:
-///   rustty +ssh -p 2222 -i ~/.ssh/id_ed25519 user@example.com
+///     # `ssh` flags (short-form `-p`, etc.) pass through unchanged:
+///     rustty +ssh -p 2222 -i ~/.ssh/id_ed25519 user@example.com
 ///
-///   # Use `--` explicitly if your ssh args might collide with our flags:
-///   rustty +ssh -- --some-rare-ssh-arg user@example.com
+///     # Use `--` explicitly if your ssh args might collide with our flags:
+///     rustty +ssh -- --some-rare-ssh-arg user@example.com
 ///
 /// Pass `--verbose` to see what `+ssh` is doing. For cache inspection
 /// and management, see `rustty +ssh-cache`.

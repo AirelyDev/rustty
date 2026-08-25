@@ -1347,6 +1347,7 @@ fn osc_tag_name(osc: &OscCommand) -> &'static str {
         OscCommand::KittyClipboardProtocol(_) => "kitty_clipboard_protocol",
         OscCommand::KittyDndProtocol(_) => "kitty_dnd_protocol",
         OscCommand::ContextSignal(_) => "context_signal",
+        OscCommand::KittyDesktopNotification(_) => "kitty_desktop_notification",
     }
 }
 
@@ -1506,6 +1507,16 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
             md.put(b"action", dupe_z(context_action_tag(cmd.action).as_bytes()));
             md.put(b"id", dupe_z(&cmd.id));
             md.put(b"metadata", dupe_z(&cmd.metadata));
+        }
+
+        // kitty_desktop_notification: OSC { metadata: []const u8, payload: []const u8, terminator: enum }
+        OscCommand::KittyDesktopNotification(o) => {
+            md.put(b"metadata", dupe_z(&o.metadata));
+            md.put(b"payload", dupe_z(&o.payload));
+            md.put(
+                b"terminator",
+                dupe_z(terminator_tag(o.terminator).as_bytes()),
+            );
         }
     }
 }

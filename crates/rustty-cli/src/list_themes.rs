@@ -1730,13 +1730,13 @@ fn draw_preview<'a>(st: &DrawState<'a>, win: Window<'a>, x_off_unconverted: i32)
             next_start += child.height;
         }
 
-        // { 24-row ziggzagg.zig `bat` sample }
+        // { 28-row ziggzagg.zig `bat` sample }
         {
             let child = win.child(ChildOptions {
                 x_off: x_off as i32,
                 y_off: next_start as i32,
                 width: Some(width),
-                height: Some(24),
+                height: Some(28),
                 ..Default::default()
             });
             let bold = Style {
@@ -1853,7 +1853,9 @@ fn draw_preview<'a>(st: &DrawState<'a>, win: Window<'a>, x_off_unconverted: i32)
                     styled(b"pub ", color5),
                     styled(b"fn ", color12),
                     styled(b"main", color2),
-                    styled(b"() ", standard),
+                    styled(b"(init: ", standard),
+                    styled(b"std.process.Init", color12),
+                    styled(b") ", standard),
                     styled(b"!", color5),
                     styled(b"void", color12),
                     styled(b" {", standard),
@@ -1863,10 +1865,11 @@ fn draw_preview<'a>(st: &DrawState<'a>, win: Window<'a>, x_off_unconverted: i32)
             let _ = child.print(
                 &[
                     styled("   4   │     ".as_bytes(), color238),
-                    styled(b"const ", color5),
-                    styled(b"stdout ", standard),
-                    styled(b"=", color5),
-                    styled(b" std.Io.getStdOut().writer();", standard),
+                    styled(b"var ", color5),
+                    styled(b"buf:", standard),
+                    styled(b" [1024]u8", color12),
+                    styled(b" =", color5),
+                    styled(b" undefined;", standard),
                 ],
                 propt(7, 2),
             );
@@ -1874,17 +1877,38 @@ fn draw_preview<'a>(st: &DrawState<'a>, win: Window<'a>, x_off_unconverted: i32)
                 &[
                     styled("   5   │     ".as_bytes(), color238),
                     styled(b"var ", color5),
-                    styled(b"i:", standard),
-                    styled(b" usize", color12),
-                    styled(b" =", color5),
-                    styled(b" 1", color4),
-                    styled(b";", standard),
+                    styled(b"stdout ", standard),
+                    styled(b"=", color5),
+                    styled(b" std.Io.File.stdout().writer(init.io, &buf);", standard),
                 ],
                 propt(8, 2),
             );
             let _ = child.print(
                 &[
                     styled("   6   │     ".as_bytes(), color238),
+                    styled(b"const ", color5),
+                    styled(b"w ", standard),
+                    styled(b"=", color5),
+                    styled(b" &stdout.interface;", standard),
+                ],
+                propt(9, 2),
+            );
+            let _ = child.print(&[styled("   7   │".as_bytes(), color238)], propt(10, 2));
+            let _ = child.print(
+                &[
+                    styled("   8   │     ".as_bytes(), color238),
+                    styled(b"var ", color5),
+                    styled(b"i:", standard),
+                    styled(b" usize", color12),
+                    styled(b" =", color5),
+                    styled(b" 1", color4),
+                    styled(b";", standard),
+                ],
+                propt(11, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("   9   │     ".as_bytes(), color238),
                     styled(b"while ", color5),
                     styled(b"(i ", standard),
                     styled(b"<= ", color5),
@@ -1894,11 +1918,11 @@ fn draw_preview<'a>(st: &DrawState<'a>, win: Window<'a>, x_off_unconverted: i32)
                     styled(b"1", color4),
                     styled(b") {", standard),
                 ],
-                propt(9, 2),
+                propt(12, 2),
             );
             let _ = child.print(
                 &[
-                    styled("   7   │         ".as_bytes(), color238),
+                    styled("  10   │         ".as_bytes(), color238),
                     styled(b"if ", color5),
                     styled(b"(i ", standard),
                     styled(b"% ", color5),
@@ -1907,23 +1931,23 @@ fn draw_preview<'a>(st: &DrawState<'a>, win: Window<'a>, x_off_unconverted: i32)
                     styled(b"0", color4),
                     styled(b") {", standard),
                 ],
-                propt(10, 2),
+                propt(13, 2),
             );
             let _ = child.print(
                 &[
-                    styled("   8   │             ".as_bytes(), color238),
+                    styled("  11   │             ".as_bytes(), color238),
                     styled(b"try ", color5),
-                    styled(b"stdout.writeAll(", standard),
+                    styled(b"w.writeAll(", standard),
                     styled("\"ZiggZagg".as_bytes(), color10),
                     styled("\\n".as_bytes(), color12),
                     styled("\"".as_bytes(), color10),
                     styled(b");", standard),
                 ],
-                propt(11, 2),
+                propt(14, 2),
             );
             let _ = child.print(
                 &[
-                    styled("   9   │         ".as_bytes(), color238),
+                    styled("  12   │         ".as_bytes(), color238),
                     styled(b"} ", standard),
                     styled(b"else if ", color5),
                     styled(b"(i ", standard),
@@ -1933,23 +1957,23 @@ fn draw_preview<'a>(st: &DrawState<'a>, win: Window<'a>, x_off_unconverted: i32)
                     styled(b"0", color4),
                     styled(b") {", standard),
                 ],
-                propt(12, 2),
+                propt(15, 2),
             );
             let _ = child.print(
                 &[
-                    styled("  10   │             ".as_bytes(), color238),
+                    styled("  13   │             ".as_bytes(), color238),
                     styled(b"try ", color5),
-                    styled(b"stdout.writeAll(", standard),
+                    styled(b"w.writeAll(", standard),
                     styled("\"Zigg".as_bytes(), color10),
                     styled("\\n".as_bytes(), color12),
                     styled("\"".as_bytes(), color10),
                     styled(b");", standard),
                 ],
-                propt(13, 2),
+                propt(16, 2),
             );
             let _ = child.print(
                 &[
-                    styled("  11   │         ".as_bytes(), color238),
+                    styled("  14   │         ".as_bytes(), color238),
                     styled(b"} ", standard),
                     styled(b"else if ", color5),
                     styled(b"(i ", standard),
@@ -1959,67 +1983,72 @@ fn draw_preview<'a>(st: &DrawState<'a>, win: Window<'a>, x_off_unconverted: i32)
                     styled(b"0", color4),
                     styled(b") {", standard),
                 ],
-                propt(14, 2),
+                propt(17, 2),
             );
             let _ = child.print(
                 &[
-                    styled("  12   │             ".as_bytes(), color238),
+                    styled("  15   │             ".as_bytes(), color238),
                     styled(b"try ", color5),
-                    styled(b"stdout.writeAll(", standard),
+                    styled(b"w.writeAll(", standard),
                     styled("\"Zagg".as_bytes(), color10),
                     styled("\\n".as_bytes(), color12),
                     styled("\"".as_bytes(), color10),
                     styled(b");", standard),
                 ],
-                propt(15, 2),
-            );
-            let _ = child.print(
-                &[
-                    styled("  13   │         ".as_bytes(), color238),
-                    styled(b"} ", standard),
-                    styled(b"else ", color5),
-                    styled(b"{", standard),
-                ],
-                propt(16, 2),
-            );
-            let _ = child.print(
-                &[
-                    styled("  14   │             ".as_bytes(), color238),
-                    styled(b"try ", color5),
-                    styled(
-                        "stdout.print(\"{d}\\n\", .{i})".as_bytes(),
-                        standard_selection,
-                    ),
-                    styled(b";", cursor),
-                ],
-                propt(17, 2),
-            );
-            let _ = child.print(
-                &[
-                    styled("  15   │         ".as_bytes(), color238),
-                    styled(b"}", standard),
-                ],
                 propt(18, 2),
             );
             let _ = child.print(
                 &[
-                    styled("  16   │     ".as_bytes(), color238),
-                    styled(b"}", standard),
+                    styled("  16   │         ".as_bytes(), color238),
+                    styled(b"} ", standard),
+                    styled(b"else ", color5),
+                    styled(b"{", standard),
                 ],
                 propt(19, 2),
             );
             let _ = child.print(
                 &[
-                    styled("  17   │ ".as_bytes(), color238),
-                    styled(b"}", standard),
+                    styled("  17   │             ".as_bytes(), color238),
+                    styled(b"try ", color5),
+                    styled("w.print(\"{d}\\n\", .{i})".as_bytes(), standard_selection),
+                    styled(b";", cursor),
                 ],
                 propt(20, 2),
             );
+            let _ = child.print(
+                &[
+                    styled("  18   │         ".as_bytes(), color238),
+                    styled(b"}", standard),
+                ],
+                propt(21, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("  19   │     ".as_bytes(), color238),
+                    styled(b"}", standard),
+                ],
+                propt(22, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("  20   │     ".as_bytes(), color238),
+                    styled(b"try ", color5),
+                    styled(b"w.flush();", standard),
+                ],
+                propt(23, 2),
+            );
+            let _ = child.print(
+                &[
+                    styled("  21   │ ".as_bytes(), color238),
+                    styled(b"}", standard),
+                ],
+                propt(24, 2),
+            );
             {
-                let _ = child.print(&[styled("───────┴".as_bytes(), color238)], propt(21, 2));
+                let _ = child.print(&[styled("───────┴".as_bytes(), color238)], propt(25, 2));
                 if child.width > 10 {
                     for col in 10..child.width {
-                        let _ = child.print(&[styled("─".as_bytes(), color238)], propt(21, col));
+                        let _ = child.print(&[styled("─".as_bytes(), color238)], propt(25, col));
                     }
                 }
             }
@@ -2030,11 +2059,11 @@ fn draw_preview<'a>(st: &DrawState<'a>, win: Window<'a>, x_off_unconverted: i32)
                     styled(" main ".as_bytes(), color4),
                     styled(b"[+] ", color1),
                     styled(b"via ", standard),
-                    styled(" v0.13.0 ".as_bytes(), color3),
+                    styled(" v0.16.0 ".as_bytes(), color3),
                     styled(b"via ", standard),
                     styled("  impure (rustty-env)".as_bytes(), color4),
                 ],
-                propt(22, 2),
+                propt(26, 2),
             );
             let _ = child.print(
                 &[
@@ -2043,7 +2072,7 @@ fn draw_preview<'a>(st: &DrawState<'a>, win: Window<'a>, x_off_unconverted: i32)
                     styled(b"10:36:15 ", color3),
                     styled("→".as_bytes(), color2),
                 ],
-                propt(23, 2),
+                propt(27, 2),
             );
             next_start += child.height;
         }

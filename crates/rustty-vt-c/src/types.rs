@@ -1763,6 +1763,7 @@ static DECLS: &[TypeDecl] = {
                     ("kitty_clipboard_protocol", KittyClipboardProtocol),
                     ("kitty_dnd_protocol", KittyDndProtocol),
                     ("context_signal", ContextSignal),
+                    ("kitty_desktop_notification", KittyDesktopNotification),
                 ]
             )
         ),
@@ -3386,6 +3387,8 @@ mod tests {
         assert_eq!(23i64, get(osc_values, "KITTY_CLIPBOARD_PROTOCOL").as_int());
         assert_eq!(24i64, get(osc_values, "KITTY_DND_PROTOCOL").as_int());
         assert_eq!(25i64, get(osc_values, "CONTEXT_SIGNAL").as_int());
+        // try std.testing.expectEqual(@as(i64, 26), osc_values.get("KITTY_DESKTOP_NOTIFICATION").?.integer);
+        assert_eq!(26i64, get(osc_values, "KITTY_DESKTOP_NOTIFICATION").as_int());
         // try std.testing.expect(osc_values.contains("TYPE_MAX_VALUE"));
         assert!(contains(osc_values, "TYPE_MAX_VALUE"));
         // try std.testing.expect(!osc_values.contains("MAX_VALUE"));

@@ -106,10 +106,14 @@ impl<'a> FileFormatter<'a> {
         // the non-`_` fields (the same 204 fields, a COUNT CONTRACT).
         for &(name, key) in CONFIG_FIELDS {
             // const value = @field(self.config, field.name);
-            // const do_format = if (default) |d| format: {
+            // const do_format = if (default) |*d| format: {
             //     const key = @field(Key, field.name);
             //     break :format d.changed(self.config, key);
             // } else true;
+            //
+            // (PORT NOTE (c5f4f00ed): the `|*d|` capture-by-pointer — upstream's
+            // Valgrind fix for the whole-Config by-value copy — is structurally
+            // N-A here: `&default` already borrows, and `Config` is not `Copy`.)
             let do_format = if let Some(d) = &default {
                 d.changed(self.config, key)
             } else {

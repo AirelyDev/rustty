@@ -125,11 +125,10 @@ pub struct ImageStorage {
     /// This field must only be written via `mark_mutated`.
     pub generation: u64,
 
-    /// This is the next automatically assigned image ID. We start mid-way
-    /// through the u32 range to avoid collisions with buggy programs.
-    /// TODO: This isn't good enough, it's perfectly legal for programs
-    ///       to use IDs in the latter half of the range and collisions
-    ///       are not gracefully handled.
+    /// This is the next automatically assigned image ID for images
+    /// transmitted without an ID or number. We start mid-way through
+    /// the u32 range to stay clear of the low IDs client programs
+    /// typically pick. See next_image_id_for.
     pub next_image_id: u32,
 
     /// This is the next automatically assigned placement ID. This is never
@@ -161,6 +160,63 @@ pub struct ImageStorage {
 type ImageMap = HashMap<u32, Image>;
 // const PlacementMap = std.AutoHashMapUnmanaged(PlacementKey, Placement);
 type PlacementMap = HashMap<PlacementKey, Placement>;
+
+/// Maximum number of parent links in a relative placement chain,
+/// matching the minimum specified in the spec and the actual
+/// limit defined by Kitty at the time of authoring.
+//
+// PORT NOTE: `ImageStorage.parent_chain_limit` upstream; hoisted to module
+// level (Rust associated consts can't be referenced from a nested item the
+// way Zig decls can, and the module is the ImageStorage namespace here).
+pub const PARENT_CHAIN_LIMIT: usize = 8;
+
+/// `pub const ParentError = error{...}` on ImageStorage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParentError {
+    /// The parent image (P=) does not exist.
+    ParentImageNotFound,
+    /// The parent image exists but the requested placement (Q=, or
+    /// any placement when Q is omitted) does not.
+    ParentPlacementNotFound,
+    /// The placement refers to itself as its own parent.
+    SelfParent,
+    /// The parent chain loops back to the placement being created.
+    Cycle,
+    /// The parent chain exceeds parent_chain_limit links.
+    TooDeep,
+    /// An ancestor in the chain no longer exists. This should not
+    /// happen since removeOrphans keeps chains intact, but we
+    /// check anyway rather than trusting the invariant.
+    AncestorNotFound,
+}
+
+/// The result of resolving a relative placement's parent chain:
+/// the chain's root placement (always pin or virtual, never
+/// relative) and the total cell offset from the root's origin.
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedChain {
+    pub root_key: PlacementKey,
+    pub root: Placement,
+    pub horizontal_offset: i32,
+    pub vertical_offset: i32,
+}
+
+/// PORT NOTE: the reference's `placeholderTarget` returns an anonymous
+/// `?struct { key: PlacementKey, placement: Placement }`; named here because
+/// Rust has no anonymous structs.
+#[derive(Debug, Clone, Copy)]
+pub struct PlaceholderTarget {
+    pub key: PlacementKey,
+    pub placement: Placement,
+}
+
+/// PORT NOTE: the reference's `nextImageId(mode: enum { explicit, implicit })`
+/// anonymous parameter enum, named because Rust has no anonymous enums.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NextImageIdMode {
+    Explicit,
+    Implicit,
+}
 
 impl Default for ImageStorage {
     // PORT NOTE: the reference declares all field defaults inline on the struct
@@ -309,6 +365,48 @@ impl ImageStorage {
         self.total_limit = limit;
     }
 
+    /// Returns the next ID to automatically assign to an image that
+    /// was transmitted without an explicit ID (i=). The result is
+    /// never zero (zero means "no ID") and never an ID currently in
+    /// use, so an automatic ID never replaces an existing image.
+    //
+    // PORT NOTE: the reference is `nextImageId(self, mode: enum { explicit,
+    // implicit })` with an anonymous parameter enum; Rust needs the named
+    // `NextImageIdMode`, and the method is `next_image_id_for` because the
+    // `next_image_id` name is taken by the field.
+    pub fn next_image_id_for(&mut self, mode: NextImageIdMode) -> u32 {
+        // Starting ID depends on mode.
+        let mut id: u32 = match mode {
+            // Yeah, starting from 1 is wasteful. This matches what Kitty
+            // does. In the future we can probably cache a low-water-mark
+            // based on delete behavior.
+            NextImageIdMode::Explicit => 1,
+            NextImageIdMode::Implicit => self.next_image_id,
+        };
+
+        // Go through all possible images. We have +2 because we can
+        // exceed the total by 1 (new ID).
+        let count: usize = self.images.len();
+        for _ in 0..count + 2 {
+            if id != 0 && !self.images.contains_key(&id) {
+                break;
+            }
+            id = id.wrapping_add(1);
+        }
+
+        // Zero is never allowed.
+        if id == 0 {
+            id = 1;
+        }
+
+        // Keep track of our next image id for implicit to speed that up.
+        if mode == NextImageIdMode::Implicit {
+            self.next_image_id = id.wrapping_add(1);
+        }
+
+        id
+    }
+
     /// Add an image to the storage. This will automatically free any existing
     /// image with the same ID. Prefer addPendingImage for pending data so the
     /// caller receives a completion token.
@@ -360,16 +458,21 @@ impl ImageStorage {
 
         // log.debug("addImage image={}", .{img.withoutData()});
 
-        // Retransmitting a specific image ID replaces the old image and all
-        // of its placements, as required by the Kitty graphics protocol.
         // if (gop.found_existing) {
         //     self.removePlacementsByImageId(s, img.id);
+        //     _ = self.removeOrphans(s, null);
         //     self.total_bytes -= gop.value_ptr.data.len();
         //     gop.value_ptr.deinit(alloc);
         // }
         let id = img.id;
         if self.images.contains_key(&id) {
+            // Retransmitting a specific image ID replaces the old image and all
+            // of its placements, as required by the Kitty graphics protocol.
             self.remove_placements_by_image_id(s, id);
+
+            // Relative placements parented to the removed placements go too.
+            let _ = self.remove_orphans(s, None);
+
             self.total_bytes -= self.images.get(&id).unwrap().data.len();
             // the existing `Image` (and its payload) is dropped by the
             // `insert` below.
@@ -434,16 +537,11 @@ impl ImageStorage {
         //     p,
         // });
 
-        // Tracked pins are marked garbage when their underlying history is
-        // pruned. Kitty removes placements once they scroll out of retained
-        // history, so reclaim those placements before growing the map for a
-        // new one. If allocation below fails, the sweep is still a content
-        // mutation and must be visible to consumers.
-        // const removed_garbage = self.removeGarbagePlacements(s);
-        // errdefer if (removed_garbage) self.markMutated(io);
-        // PORT NOTE: the `errdefer` fires only on the error return below; Rust
-        // marks the mutation inline on that path.
-        let removed_garbage = self.remove_garbage_placements(s);
+        // When we add a placement, take this opportunity to reap garbage.
+        // Garbage are placements that disappeared off scrollback (were
+        // pruned). We don't clear Kitty state in the hot path so we do
+        // this opportunistically here.
+        self.reap_garbage_placements(s);
 
         // The important piece here is that the placement ID needs to
         // be marked internal if it is zero. This allows multiple placements
@@ -497,22 +595,25 @@ impl ImageStorage {
                     img.metadata.placement_count = count;
                 }
                 _ => {
-                    if removed_garbage {
-                        self.mark_mutated();
-                    }
                     return Err(OutOfMemory);
                 }
             }
         }
         self.placements.insert(key, p);
 
+        // This always mutates
         self.mark_mutated();
         Ok(())
     }
 
-    /// Remove pin-backed placements whose tracked content has been pruned.
-    /// Virtual placements have no tracked screen location and are retained.
-    fn remove_garbage_placements(&mut self, s: *mut Screen) -> bool {
+    /// Reap pin-backed placements whose tracked content has been pruned
+    /// from history, along with any relative placements orphaned by
+    /// that, marking the content mutation.
+    ///
+    /// Virtual and relative placements have no tracked screen location and
+    /// are never pruned themselves. Kitty removes placements once they
+    /// scroll out of retained history.
+    fn reap_garbage_placements(&mut self, s: *mut Screen) {
         let mut removed = false;
         // var it = self.placements.iterator();
         // while (it.next()) |entry| { ... }
@@ -520,7 +621,7 @@ impl ImageStorage {
         for key in keys {
             let pin = match self.placements.get(&key).unwrap().location {
                 Location::Pin(pin) => pin,
-                Location::Virtual => continue,
+                Location::Virtual | Location::Relative(_) => continue,
             };
             // if (!pin.garbage) continue;
             // SAFETY(raw-page-aliasing/graphics_storage): `pin` is a tracked
@@ -530,12 +631,18 @@ impl ImageStorage {
                 continue;
             }
 
-            self.placements.get(&key).unwrap().deinit(s);
-            self.remove_placement_by_key(&key);
+            self.remove_placement(s, &key);
             removed = true;
         }
+        if !removed {
+            return;
+        }
 
-        removed
+        // If we removed a placement, then also remove any orphan
+        // children if this was a parent.
+        let _ = self.remove_orphans(s, None);
+
+        self.mark_mutated();
     }
 
     fn clear_placements(&mut self, s: *mut Screen) {
@@ -555,20 +662,292 @@ impl ImageStorage {
             if key.image_id != image_id {
                 continue;
             }
-            self.placements.get(&key).unwrap().deinit(s);
-            self.remove_placement_by_key(&key);
+            self.remove_placement(s, &key);
         }
     }
 
-    // fn removePlacementByPtr(self: *ImageStorage, key: *PlacementKey) void
-    // PORT NOTE: Zig removes by entry pointer during iteration; the collect-
-    // keys-first shape removes by key value (observably identical, see the
-    // hash-map PORT NOTE on the struct).
-    fn remove_placement_by_key(&mut self, key: &PlacementKey) {
+    /// Remove a placement by its map entry, releasing any tracked pin
+    /// and keeping the image's placement count in sync. The entry must
+    /// point into the placements map (via iteration or getEntry).
+    //
+    // PORT NOTE: the reference takes `entry: PlacementMap.Entry` (a pointer
+    // pair into the map) and does `entry.value_ptr.deinit(s)` +
+    // `removeByPtr(entry.key_ptr)`. The collect-keys-first shape removes by
+    // key value (observably identical, see the hash-map PORT NOTE on the
+    // struct); the value deinit happens here so every call site keeps the
+    // deinit+decrement+remove trio atomic, exactly like upstream.
+    fn remove_placement(&mut self, s: *mut Screen, key: &PlacementKey) {
+        self.placements.get(key).unwrap().deinit(s);
         let img = self.images.get_mut(&key.image_id).unwrap();
         assert(img.metadata.placement_count > 0);
         img.metadata.placement_count -= 1;
         self.placements.remove(key);
+    }
+
+    /// Remove relative placements whose parent placement no longer
+    /// exists, keeping a relative placement's lifetime tied to its
+    /// parent chain. Chains can be several links deep, so this loops
+    /// until a pass removes nothing to take out entire orphaned
+    /// subtrees. Returns true if anything was removed.
+    ///
+    /// If `delete_unused` is non-null, an image left without placements
+    /// by the reap is freed using it. This matches uppercase delete
+    /// semantics; every other removal path retains image data and
+    /// passes null.
+    ///
+    /// This must be called, outside of any placements iteration, after
+    /// every operation that removes placements. Kitty gets the same
+    /// effect lazily by dropping unresolvable placements while drawing;
+    /// we do it eagerly because our renderer never mutates terminal
+    /// state.
+    //
+    // PORT NOTE: `delete_unused: ?Allocator` — the option is the switch, the
+    // allocator payload is a ZST here.
+    fn remove_orphans(&mut self, s: *mut Screen, delete_unused: Option<Allocator>) -> bool {
+        let mut removed_any = false;
+        let mut removed = true;
+        while removed {
+            removed = false;
+            // var it = self.placements.iterator();
+            // while (it.next()) |entry| { ... } — collect-keys-first, the
+            // sanctioned no-removeByPtr-during-iteration shape.
+            let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
+            for key in keys {
+                let rel = match self.placements.get(&key).unwrap().location {
+                    Location::Relative(rel) => rel,
+                    Location::Pin(_) | Location::Virtual => continue,
+                };
+                if self.placements.contains_key(&rel.parent) {
+                    continue;
+                }
+
+                // Parent is gone, remove this placement.
+                let image_id = key.image_id;
+                self.remove_placement(s, &key);
+                removed = true;
+                removed_any = true;
+
+                if let Some(alloc) = delete_unused {
+                    self.delete_if_unused(alloc, image_id);
+                }
+            }
+        }
+
+        removed_any
+    }
+
+    /// Resolve and validate the parent reference (P=/Q=) of a relative
+    /// placement, returning the concrete key of the parent placement.
+    /// `child` is the key of the placement being created when it is
+    /// addressable (an explicit placement ID); null for placements that
+    /// will receive a fresh internal ID, which nothing can refer to yet.
+    ///
+    /// Checks: the parent must exist, the placement must not
+    /// parent itself, and the resulting ancestor chain must be acyclic
+    /// and within parent_chain_limit.
+    pub fn resolve_parent(
+        &mut self,
+        s: *mut Screen,
+        child: Option<PlacementKey>,
+        parent_image_id: u32,
+        parent_placement_id: u32,
+    ) -> Result<PlacementKey, ParentError> {
+        // Reap placements whose content has been pruned from history
+        // before resolving: a pruned parent must be reported as missing,
+        // not accepted and then immediately reaped by addPlacement's own
+        // sweep, which would store an orphan.
+        self.reap_garbage_placements(s);
+
+        // If the parent doesn't exist we're already failed.
+        if !self.images.contains_key(&parent_image_id) {
+            return Err(ParentError::ParentImageNotFound);
+        }
+
+        // Find the parent
+        let parent: PlacementKey = 'parent: {
+            // An explicit parent placement ID (Q=) selects exactly that
+            // placement.
+            if parent_placement_id > 0 {
+                let key: PlacementKey = PlacementKey {
+                    image_id: parent_image_id,
+                    placement_id: PlacementId {
+                        tag: PlacementIdTag::External,
+                        id: parent_placement_id,
+                    },
+                };
+                if !self.placements.contains_key(&key) {
+                    return Err(ParentError::ParentPlacementNotFound);
+                }
+                break 'parent key;
+            }
+
+            // No Q: pick a placement of the parent image. Kitty picks
+            // the oldest surviving placement; our placement map doesn't
+            // track creation order so we pick by PlacementId.preferredOver
+            // instead. This is unspecified so any behavior here is fine.
+            // In practice the parent image has a single placement, and
+            // clients use Q when it doesn't.
+            let best: PlacementId = {
+                let mut best: Option<PlacementId> = None;
+                // var it = self.placements.keyIterator();
+                for key in self.placements.keys() {
+                    if key.image_id != parent_image_id {
+                        continue;
+                    }
+                    let id = key.placement_id;
+                    let b = match best {
+                        Some(b) => b,
+                        None => {
+                            best = Some(id);
+                            continue;
+                        }
+                    };
+                    if id.preferred_over(b) {
+                        best = Some(id);
+                    }
+                }
+                match best {
+                    Some(best) => best,
+                    None => return Err(ParentError::ParentPlacementNotFound),
+                }
+            };
+
+            PlacementKey {
+                image_id: parent_image_id,
+                placement_id: best,
+            }
+        };
+
+        // A placement cannot be its own parent. This must be checked
+        // before the chain walk so it reports EINVAL, not ECYCLE.
+        if let Some(c) = child {
+            if parent.eql(c) {
+                return Err(ParentError::SelfParent);
+            }
+        }
+
+        // Walk the would-be ancestor chain. `depth` counts parent links,
+        // starting at one for the link we are about to create.
+        let mut depth: usize = 1;
+        let mut key = parent;
+        loop {
+            if let Some(c) = child {
+                if key.eql(c) {
+                    return Err(ParentError::Cycle);
+                }
+            }
+            let p = match self.placements.get(&key) {
+                Some(p) => p,
+                None => return Err(ParentError::AncestorNotFound),
+            };
+            let rel = match p.location {
+                Location::Relative(rel) => rel,
+                // A pin or virtual placement is the chain root.
+                Location::Pin(_) | Location::Virtual => break,
+            };
+            if depth >= PARENT_CHAIN_LIMIT {
+                return Err(ParentError::TooDeep);
+            }
+            depth += 1;
+            key = rel.parent;
+        }
+
+        Ok(parent)
+    }
+
+    /// Resolve a relative placement's parent chain to its root,
+    /// accumulating the cell offsets (H=/V=) of every link on the way.
+    /// The placement's position is the root's origin plus the accumulated
+    /// offsets.
+    ///
+    /// Returns null when the chain is broken or too deep. Neither can
+    /// normally happen for stored placements (resolveParent validates
+    /// chains and removeOrphans removes broken ones), with one kitty
+    /// quirk: replacing an ancestor placement can deepen the chains
+    /// below it beyond parent_chain_limit after the fact.
+    pub fn resolve_chain(&self, rel: Relative) -> Option<ResolvedChain> {
+        let mut horizontal = rel.horizontal_offset;
+        let mut vertical = rel.vertical_offset;
+        let mut key = rel.parent;
+        let mut depth: usize = 1;
+        loop {
+            let p = self.placements.get(&key)?;
+            match p.location {
+                Location::Relative(parent_rel) => {
+                    if depth >= PARENT_CHAIN_LIMIT {
+                        return None;
+                    }
+                    depth += 1;
+                    horizontal = horizontal.saturating_add(parent_rel.horizontal_offset);
+                    vertical = vertical.saturating_add(parent_rel.vertical_offset);
+                    key = parent_rel.parent;
+                }
+
+                Location::Pin(_) | Location::Virtual => {
+                    return Some(ResolvedChain {
+                        root_key: key,
+                        root: *p,
+                        horizontal_offset: horizontal,
+                        vertical_offset: vertical,
+                    })
+                }
+            }
+        }
+    }
+
+    /// Returns the placement that a unicode placeholder cell referencing
+    /// this image/placement ID pair targets, or null if there is none. A
+    /// zero placement ID targets one of the image's virtual placements,
+    /// chosen by PlacementId.preferredOver so the choice is stable (an
+    /// image rarely has more than one). This is the shared lookup used
+    /// both for sizing placeholder runs and for positioning relative
+    /// placements whose chain roots at a virtual placement.
+    pub fn placeholder_target(
+        &self,
+        image_id: u32,
+        placement_id: u32,
+    ) -> Option<PlaceholderTarget> {
+        if placement_id > 0 {
+            let key: PlacementKey = PlacementKey {
+                image_id,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id: placement_id,
+                },
+            };
+            let p = self.placements.get(&key)?;
+            return Some(PlaceholderTarget {
+                key,
+                placement: *p,
+            });
+        }
+
+        let mut best: Option<PlacementKey> = None;
+        // var it = self.placements.iterator();
+        for (key, value) in self.placements.iter() {
+            if key.image_id != image_id {
+                continue;
+            }
+            if !matches!(value.location, Location::Virtual) {
+                continue;
+            }
+            let b = match best {
+                Some(b) => b,
+                None => {
+                    best = Some(*key);
+                    continue;
+                }
+            };
+            if key.placement_id.preferred_over(b.placement_id) {
+                best = Some(*key);
+            }
+        }
+
+        let key = best?;
+        Some(PlaceholderTarget {
+            key,
+            placement: *self.placements.get(&key).unwrap(),
+        })
     }
 
     /// Get an image by its ID. If the image doesn't exist, null is returned.
@@ -597,58 +976,54 @@ impl ImageStorage {
         newest
     }
 
-    /// Delete placements, images.
-    pub fn delete(&mut self, alloc: Allocator, t: &mut Terminal, cmd: command::Delete) {
-        // Deletes only ever remove placements/images, so comparing counts
-        // before and after tells us whether anything actually changed.
-        // Only then do we mark a mutation. This matters because a
-        // delete-all runs on every screen clear (e.g. `ESC [ 2 J`), and
-        // we don't want empty clears to dirty the image state or bump
-        // the generation.
-        //
-        // PORT NOTE: Zig's `defer` runs on every return path; Rust has no
-        // `defer`. To keep the trailing generation check unconditionally
-        // correct — including if a future arm needs to bail out after
-        // already removing a placement/image — the `match` is wrapped in a
-        // labeled block and every early exit is a `break 'delete` rather
-        // than a bare `return`, so control always reaches the count
-        // comparison below.
+    /// Clear placements intersecting the active screen, then reclaim every
+    /// image with no remaining placement. Unlike protocol d=A, a terminal
+    /// clear also reclaims images that were already unplaced.
+    pub fn clear_screen(&mut self, alloc: Allocator, t: &mut Terminal) {
         let placements_before = self.placements.len();
         let images_before = self.images.len();
 
-        'delete: {
+        // Delete unused placements and images. Orphaned relative
+        // placements must be reaped before the image sweep so that
+        // their images are reclaimable too.
+        self.delete_visible_placements(alloc, t, true);
+        let _ = self.remove_orphans(t.screens.active, None);
+        // var image_it = self.images.iterator();
+        // while (image_it.next()) |entry| { ... }
+        let image_keys: Vec<u32> = self.images.keys().copied().collect();
+        for k in image_keys {
+            self.delete_if_unused(alloc, k);
+        }
+
+        // Mark mutated only if things changed.
+        if self.placements.len() != placements_before || self.images.len() != images_before {
+            self.mark_mutated();
+        }
+    }
+
+    /// Delete placements, images.
+    pub fn delete(&mut self, alloc: Allocator, t: &mut Terminal, cmd: command::DeleteAction) {
+        // Deletes only ever remove placements/images, so comparing counts
+        // before and after tells us whether anything actually changed.
+        // Only then do we mark a mutation, so a delete that matches nothing
+        // doesn't dirty the image state or bump the generation.
+        //
+        // PORT NOTE: Zig's `defer` runs on every return path; Rust has no
+        // `defer`. The `match` is wrapped in a labeled block whose arm-local
+        // early exits (`break 'arms`, the reference's `break :range` /
+        // `break :newest` etc.) skip only the rest of that arm; the trailing
+        // orphan sweep and the count comparison below always run, exactly as
+        // upstream.
+        let placements_before = self.placements.len();
+        let images_before = self.images.len();
+
+        'arms: {
             match cmd {
-                command::Delete::All(delete_images) => {
-                    // var it = self.placements.iterator();
-                    // while (it.next()) |entry| { ... }
-                    let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
-                    for key in keys {
-                        // Skip virtual placements
-                        match self.placements.get(&key).unwrap().location {
-                            Location::Pin(_) => {}
-                            Location::Virtual => continue,
-                        }
-
-                        // Deinit the placement and remove it
-                        let image_id = key.image_id;
-                        self.placements.get(&key).unwrap().deinit(t.screens.active);
-                        self.remove_placement_by_key(&key);
-                        if delete_images {
-                            self.delete_if_unused(alloc, image_id);
-                        }
-                    }
-
-                    if delete_images {
-                        // var image_it = self.images.iterator();
-                        // while (image_it.next()) |kv| self.deleteIfUnused(alloc, kv.key_ptr.*);
-                        let image_keys: Vec<u32> = self.images.keys().copied().collect();
-                        for k in image_keys {
-                            self.delete_if_unused(alloc, k);
-                        }
-                    }
+                command::DeleteAction::All(delete_images) => {
+                    self.delete_visible_placements(alloc, t, delete_images)
                 }
 
-                command::Delete::Id {
+                command::DeleteAction::Id {
                     delete,
                     image_id,
                     placement_id,
@@ -660,7 +1035,7 @@ impl ImageStorage {
                     delete,
                 ),
 
-                command::Delete::Newest {
+                command::DeleteAction::Newest {
                     delete,
                     image_number,
                     placement_id,
@@ -668,12 +1043,12 @@ impl ImageStorage {
                     // const img = self.imageByNumber(v.image_number) orelse break :newest;
                     let img = match self.image_by_number(image_number) {
                         Some(img) => img,
-                        None => break 'delete,
+                        None => break 'arms,
                     };
                     self.delete_by_id(alloc, t.screens.active, img.id, placement_id, delete);
                 }
 
-                command::Delete::IntersectCursor(delete_images) => {
+                command::DeleteAction::IntersectCursor(delete_images) => {
                     let cursor = unsafe { &(*t.screens.active).cursor };
                     let p = point::Point::Active(point::Coordinate {
                         x: cursor.x,
@@ -688,16 +1063,16 @@ impl ImageStorage {
                 // `== 0`) per R1, which trips clippy's `absurd_extreme_comparisons`
                 // on the redundant `< 0` half — allowed here for fidelity.
                 #[allow(clippy::absurd_extreme_comparisons)]
-                command::Delete::IntersectCell { delete, x, y } => {
+                command::DeleteAction::IntersectCell { delete, x, y } => {
                     if x <= 0 || y <= 0 {
                         // log.warn("delete intersect cell coords must be at least 1", .{});
-                        break 'delete;
+                        break 'arms;
                     }
 
                     // .x = std.math.cast(size.CellCountInt, v.x - 1) orelse break :intersect_cell,
                     let cx = match size::CellCountInt::try_from(x - 1) {
                         Ok(v) => v,
-                        Err(_) => break 'delete,
+                        Err(_) => break 'arms,
                     };
                     // .y = std.math.cast(size.CellCountInt, v.y - 1) orelse break :intersect_cell,
                     // PORT NOTE: the reference casts `v.y - 1` to `size.CellCountInt`
@@ -705,28 +1080,28 @@ impl ImageStorage {
                     // port, so we range-check against `CellCountInt` first, then widen.
                     let cy = match size::CellCountInt::try_from(y - 1) {
                         Ok(v) => v as u32,
-                        Err(_) => break 'delete,
+                        Err(_) => break 'arms,
                     };
                     let p = point::Point::Active(point::Coordinate { x: cx, y: cy });
                     self.delete_intersecting(alloc, t, p, delete, |_p| true);
                 }
 
                 #[allow(clippy::absurd_extreme_comparisons)]
-                command::Delete::IntersectCellZ { delete, x, y, z } => {
+                command::DeleteAction::IntersectCellZ { delete, x, y, z } => {
                     if x <= 0 || y <= 0 {
                         // log.warn("delete intersect cell coords must be at least 1", .{});
-                        break 'delete;
+                        break 'arms;
                     }
 
                     // .x = std.math.cast(size.CellCountInt, v.x - 1) orelse break :intersect_cell_z,
                     let cx = match size::CellCountInt::try_from(x - 1) {
                         Ok(v) => v,
-                        Err(_) => break 'delete,
+                        Err(_) => break 'arms,
                     };
                     // .y = std.math.cast(size.CellCountInt, v.y - 1) orelse break :intersect_cell_z,
                     let cy = match size::CellCountInt::try_from(y - 1) {
                         Ok(v) => v as u32,
-                        Err(_) => break 'delete,
+                        Err(_) => break 'arms,
                     };
                     let p = point::Point::Active(point::Coordinate { x: cx, y: cy });
                     // struct { fn filter(ctx: i32, p: Placement) bool { return p.z == ctx; } }.filter
@@ -736,10 +1111,10 @@ impl ImageStorage {
                 }
 
                 #[allow(clippy::absurd_extreme_comparisons)]
-                command::Delete::Column { delete, x } => {
+                command::DeleteAction::Column { delete, x } => {
                     if x <= 0 {
                         // log.warn("delete column must be greater than zero", .{});
-                        break 'delete;
+                        break 'arms;
                     }
 
                     let x = x - 1;
@@ -754,8 +1129,7 @@ impl ImageStorage {
                             None => continue,
                         };
                         if rect.top_left.x as u32 <= x && rect.bottom_right.x as u32 >= x {
-                            self.placements.get(&key).unwrap().deinit(t.screens.active);
-                            self.remove_placement_by_key(&key);
+                            self.remove_placement(t.screens.active, &key);
                             if delete {
                                 self.delete_if_unused(alloc, img.id);
                             }
@@ -764,23 +1138,23 @@ impl ImageStorage {
                 }
 
                 #[allow(clippy::absurd_extreme_comparisons)]
-                command::Delete::Row { delete, y } => {
+                command::DeleteAction::Row { delete, y } => {
                     if y <= 0 {
                         // log.warn("delete row must be greater than zero", .{});
-                        break 'delete;
+                        break 'arms;
                     }
 
                     // v.y is in active coords so we want to convert it to a pin
                     // so we can compare by page offsets.
                     let ty = match size::CellCountInt::try_from(y - 1) {
                         Ok(v) => v,
-                        Err(_) => break 'delete,
+                        Err(_) => break 'arms,
                     };
                     let target_pin = match unsafe { &(*t.screens.active).pages }.pin(
                         point::Point::Active(point::Coordinate { x: 0, y: ty as u32 }),
                     ) {
                         Some(p) => p,
-                        None => break 'delete,
+                        None => break 'arms,
                     };
 
                     let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
@@ -799,8 +1173,7 @@ impl ImageStorage {
                         let mut target_pin_copy = target_pin;
                         target_pin_copy.x = rect.top_left.x;
                         if target_pin_copy.is_between(rect.top_left, rect.bottom_right) {
-                            self.placements.get(&key).unwrap().deinit(t.screens.active);
-                            self.remove_placement_by_key(&key);
+                            self.remove_placement(t.screens.active, &key);
                             if delete {
                                 self.delete_if_unused(alloc, img.id);
                             }
@@ -808,11 +1181,13 @@ impl ImageStorage {
                     }
                 }
 
-                command::Delete::Z { delete, z } => {
+                command::DeleteAction::Z { delete, z } => {
                     let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
                     for key in keys {
                         match self.placements.get(&key).unwrap().location {
-                            Location::Pin(_) => {}
+                            // Relative placements carry their own z value and
+                            // are matched by z deletes just like kitty does.
+                            Location::Pin(_) | Location::Relative(_) => {}
 
                             // Virtual placeholders cannot delete by z according
                             // to the spec.
@@ -821,8 +1196,7 @@ impl ImageStorage {
 
                         if self.placements.get(&key).unwrap().z == z {
                             let image_id = key.image_id;
-                            self.placements.get(&key).unwrap().deinit(t.screens.active);
-                            self.remove_placement_by_key(&key);
+                            self.remove_placement(t.screens.active, &key);
                             if delete {
                                 self.delete_if_unused(alloc, image_id);
                             }
@@ -830,42 +1204,135 @@ impl ImageStorage {
                     }
                 }
 
-                #[allow(clippy::absurd_extreme_comparisons)]
-                command::Delete::Range {
+                command::DeleteAction::Range {
                     delete,
                     first,
                     last,
-                } => {
-                    if first <= 0 || last <= 0 {
-                        // log.warn("delete range values must be greater than zero", .{});
-                        break 'delete;
-                    }
-                    if first > last {
-                        // log.warn("delete range 'x' ({}) must be less than or equal to 'y' ({})", .{ v.first, v.last });
-                        break 'delete;
+                } => 'range: {
+                    // Both bounds default to zero when omitted. An inverted range
+                    // or a zero upper bound is not an error, it just selects
+                    // nothing: image IDs are always non-zero.
+                    if last == 0 || first > last {
+                        break 'range;
                     }
 
+                    // Remove matching placements in one pass.
                     let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
                     for key in keys {
-                        if key.image_id >= first && key.image_id <= last {
-                            let image_id = key.image_id;
-                            self.placements.get(&key).unwrap().deinit(t.screens.active);
-                            self.remove_placement_by_key(&key);
-                            if delete {
-                                self.delete_if_unused(alloc, image_id);
-                            }
+                        if key.image_id < first || key.image_id > last {
+                            continue;
+                        }
+
+                        self.remove_placement(t.screens.active, &key);
+                    }
+
+                    // Uppercase deletion also frees matching images that are now
+                    // unused, including images that had no placements initially.
+                    if !delete {
+                        break 'range;
+                    }
+                    let image_keys: Vec<u32> = self.images.keys().copied().collect();
+                    for image_id in image_keys {
+                        if image_id >= first && image_id <= last {
+                            self.delete_if_unused(alloc, image_id);
                         }
                     }
                 }
 
                 // We don't support animation frames yet so they are successfully
                 // deleted!
-                command::Delete::AnimationFrames(_) => {}
+                command::DeleteAction::AnimationFrames(_) => {}
             }
         }
 
+        // Deleting placements orphans any relative placements parented
+        // to them (transitively). Their lifetime is tied to the parent
+        // so they are removed as well, and an uppercase delete also
+        // frees any image the cascade leaves without placements (the
+        // per-branch deleteIfUnused calls above ran while the orphans
+        // still counted as placements).
+        //
+        // PORT NOTE: the reference's `inline else => |v| v.delete` expands over
+        // every remaining union arm; spelled out per-variant here.
+        let delete_unused: bool = match cmd {
+            command::DeleteAction::All(v) | command::DeleteAction::IntersectCursor(v) => v,
+            command::DeleteAction::Id { delete, .. }
+            | command::DeleteAction::Newest { delete, .. }
+            | command::DeleteAction::IntersectCell { delete, .. }
+            | command::DeleteAction::IntersectCellZ { delete, .. }
+            | command::DeleteAction::Range { delete, .. }
+            | command::DeleteAction::Column { delete, .. }
+            | command::DeleteAction::Row { delete, .. }
+            | command::DeleteAction::Z { delete, .. } => delete,
+            command::DeleteAction::AnimationFrames(v) => v.delete,
+        };
+        let _ = self.remove_orphans(
+            t.screens.active,
+            if delete_unused { Some(alloc) } else { None },
+        );
+
         if self.placements.len() != placements_before || self.images.len() != images_before {
             self.mark_mutated();
+        }
+    }
+
+    /// Delete only non-virtual placements that intersect the active screen.
+    /// The protocol defines d=a/A in terms of visible placements, and an
+    /// uppercase delete only frees data for images selected by those
+    /// placements.
+    fn delete_visible_placements(
+        &mut self,
+        alloc: Allocator,
+        t: &mut Terminal,
+        delete_unused: bool,
+    ) {
+        // var it = self.placements.iterator();
+        // while (it.next()) |entry| { ... }
+        let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
+        for key in keys {
+            let pin = match self.placements.get(&key).unwrap().location {
+                Location::Pin(pin) => pin,
+                // Virtual placements are never selected by visible
+                // deletes per the protocol. Relative placements are
+                // removed with their parents instead (removeOrphans).
+                Location::Virtual | Location::Relative(_) => continue,
+            };
+            // if (pin.garbage) continue;
+            // SAFETY(raw-page-aliasing/graphics_storage): `pin` is a tracked
+            // pin owned by the screen's pagelist; only shared reads are
+            // performed and no `&mut` to the pin is live across them.
+            if unsafe { (*pin).garbage } {
+                continue;
+            }
+
+            // Placements anchored in the active area are necessarily visible.
+            // Only compute their extent when the anchor is already in history
+            // and the bottom edge may still intersect the active area.
+            if unsafe { &(*t.screens.active).pages }
+                .point_from_pin(point::Tag::Active, unsafe { *pin })
+                .is_none()
+            {
+                let image = match self.image_by_id(key.image_id) {
+                    Some(image) => image,
+                    None => continue,
+                };
+                let rect = match self.placements.get(&key).unwrap().rect(&image, t) {
+                    Some(rect) => rect,
+                    None => continue,
+                };
+                if unsafe { &(*t.screens.active).pages }
+                    .point_from_pin(point::Tag::Active, rect.bottom_right)
+                    .is_none()
+                {
+                    continue;
+                }
+            }
+
+            let image_id = key.image_id;
+            self.remove_placement(t.screens.active, &key);
+            if delete_unused {
+                self.delete_if_unused(alloc, image_id);
+            }
         }
     }
 
@@ -877,17 +1344,11 @@ impl ImageStorage {
         placement_id: u32,
         delete_unused: bool,
     ) {
+        let mut matched = placement_id == 0;
+
         // If no placement, we delete all placements with the ID
         if placement_id == 0 {
-            // var it = self.placements.iterator();
-            // while (it.next()) |entry| { ... }
-            let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
-            for key in keys {
-                if key.image_id == image_id {
-                    self.placements.get(&key).unwrap().deinit(s);
-                    self.remove_placement_by_key(&key);
-                }
-            }
+            self.remove_placements_by_image_id(s, image_id);
         } else {
             let key = PlacementKey {
                 image_id,
@@ -896,15 +1357,16 @@ impl ImageStorage {
                     id: placement_id,
                 },
             };
-            if let Some(entry) = self.placements.get(&key) {
-                entry.deinit(s);
-                self.remove_placement_by_key(&key);
+            if self.placements.contains_key(&key) {
+                self.remove_placement(s, &key);
+                matched = true;
             }
         }
 
-        // If this is specified, then we also delete the image
-        // if it is no longer in use.
-        if delete_unused {
+        // A placement ID narrows the selection to that exact placement, so an
+        // unmatched selector must not free otherwise-unreferenced image data.
+        // https://sw.kovidgoyal.net/kitty/graphics-protocol/#deleting-images
+        if delete_unused && matched {
             self.delete_if_unused(alloc, image_id);
         }
     }
@@ -964,8 +1426,7 @@ impl ImageStorage {
                 if !filter(self.placements.get(&key).unwrap()) {
                     continue;
                 }
-                self.placements.get(&key).unwrap().deinit(t.screens.active);
-                self.remove_placement_by_key(&key);
+                self.remove_placement(t.screens.active, &key);
                 if delete_unused {
                     self.delete_if_unused(alloc, img.id);
                 }
@@ -997,11 +1458,13 @@ impl ImageStorage {
 
         // Evicting anything is a content mutation. This matters for the
         // setLimit path in particular, which doesn't otherwise mark it.
+        // Evicted placements can also orphan relative placements of
+        // other images, which must be reaped along with them.
         //
-        // PORT NOTE: Zig `defer if (self.images.count() != images_before)
-        // self.markMutated(io);`. Rust has no `defer`, so the count is checked
-        // at BOTH exits: the `return false` inside the loop and the trailing
-        // `return true`.
+        // PORT NOTE: Zig `defer if (self.images.count() != images_before) {
+        // _ = self.removeOrphans(s, null); self.markMutated(io); };`. Rust has
+        // no `defer`, so the count is checked at BOTH exits: the `return
+        // false` inside the loop and the trailing `return true`.
         let images_before = self.images.len();
 
         let mut evicted: usize = 0;
@@ -1026,6 +1489,7 @@ impl ImageStorage {
                     Some(best) => best,
                     None => {
                         if self.images.len() != images_before {
+                            let _ = self.remove_orphans(s, None);
                             self.mark_mutated();
                         }
                         return false;
@@ -1038,8 +1502,7 @@ impl ImageStorage {
             let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
             for key in keys {
                 if key.image_id == c.id {
-                    self.placements.get(&key).unwrap().deinit(s);
-                    self.remove_placement_by_key(&key);
+                    self.remove_placement(s, &key);
                 }
             }
 
@@ -1055,6 +1518,7 @@ impl ImageStorage {
         }
 
         if self.images.len() != images_before {
+            let _ = self.remove_orphans(s, None);
             self.mark_mutated();
         }
         true
@@ -1133,10 +1597,35 @@ pub struct PlacementKey {
     pub placement_id: PlacementId,
 }
 
+impl PlacementKey {
+    // pub fn eql(self: PlacementKey, other: PlacementKey) bool {
+    //     return std.meta.eql(self, other);
+    // }
+    pub fn eql(self, other: PlacementKey) -> bool {
+        self == other
+    }
+}
+
+/// Internal placement IDs are assigned by us for placements created
+/// without an explicit ID (p=0); external IDs are client-specified.
+/// The two are separate namespaces, hence the tag.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PlacementId {
     pub tag: PlacementIdTag,
     pub id: u32,
+}
+
+impl PlacementId {
+    /// Deterministic preference order used when an operation must
+    /// pick a single placement out of several (kitty uses creation
+    /// order, which our map doesn't track): external IDs win over
+    /// internal ones, and lower IDs win within a tag.
+    pub fn preferred_over(self, other: PlacementId) -> bool {
+        if self.tag != other.tag {
+            return self.tag == PlacementIdTag::External;
+        }
+        self.id < other.id
+    }
 }
 
 // tag: enum(u1) { internal, external }
@@ -1146,6 +1635,11 @@ pub enum PlacementIdTag {
     External,
 }
 
+// PORT NOTE: `Copy` matches the reference, which copies `Placement` values
+// out of the map freely (`entry.value_ptr.*`, `resolveChain`'s `root`,
+// `placeholderTarget`); the pin variant carries a raw pointer, which copies
+// like the Zig `*Pin`.
+#[derive(Debug, Clone, Copy)]
 pub struct Placement {
     /// The location where this placement should be drawn.
     pub location: Location,
@@ -1168,7 +1662,8 @@ pub struct Placement {
     pub z: i32,
 }
 
-/// `pub const Location = union(enum) { pin, virtual }`.
+/// `pub const Location = union(enum) { pin, virtual, relative }`.
+#[derive(Debug, Clone, Copy)]
 pub enum Location {
     /// Exactly placed on a screen pin.
     //
@@ -1179,6 +1674,29 @@ pub enum Location {
 
     /// Virtual placement (U=1) for unicode placeholders.
     Virtual,
+
+    /// Placed relative to a parent placement (P=/Q=). The
+    /// placement has no screen position of its own; it is
+    /// positioned at render time by resolving the parent chain
+    /// to its root (see resolveChain) and therefore follows the
+    /// parent through scrolls automatically. Its lifetime is
+    /// tied to the parent: removing any ancestor removes it
+    /// too (see removeOrphans).
+    Relative(Relative),
+}
+
+/// PORT NOTE: nested as `Placement.Relative` upstream; a module-level sibling
+/// here (Rust cannot nest types inside structs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Relative {
+    /// The parent placement. Resolved to a concrete key when
+    /// the placement is created, so the parent is guaranteed
+    /// to exist at that point.
+    pub parent: PlacementKey,
+
+    /// Cell offsets from the parent's origin (H=/V=).
+    pub horizontal_offset: i32,
+    pub vertical_offset: i32,
 }
 
 impl Placement {
@@ -1218,8 +1736,8 @@ impl Placement {
             // projection of its `pages` field is scoped to this one call and
             // never overlaps a live borrow of `kitty_images`.
             Location::Pin(p) => unsafe { (*s).pages.untrack_pin(p) },
-            // .virtual => {},
-            Location::Virtual => {}
+            // .virtual, .relative => {},
+            Location::Virtual | Location::Relative(_) => {}
         }
     }
 
@@ -1249,21 +1767,62 @@ impl Placement {
         u32::try_from(rounded).unwrap_or(u32::MAX)
     }
 
+    /// Returns the requested source rectangle intersected with the image.
+    /// A zero width or height requests the full corresponding image
+    /// dimension before intersection, as defined by the Kitty protocol.
+    pub fn source_rect(&self, image: &Image) -> SourceRect {
+        let x = core::cmp::min(self.source_x, image.width);
+        let y = core::cmp::min(self.source_y, image.height);
+        SourceRect {
+            x,
+            y,
+            width: core::cmp::min(
+                if self.source_width > 0 {
+                    self.source_width
+                } else {
+                    image.width
+                },
+                image.width - x,
+            ),
+            height: core::cmp::min(
+                if self.source_height > 0 {
+                    self.source_height
+                } else {
+                    image.height
+                },
+                image.height - y,
+            ),
+        }
+    }
+
+    /// Returns the placement offset clamped within the first cell. Pixel
+    /// geometry may temporarily be unavailable, in which case there is no
+    /// valid offset within the cell.
+    pub fn cell_offset(&self, t: &Terminal) -> CellOffset {
+        let cell_width: u32 = t.width_px / t.cols as u32;
+        let cell_height: u32 = t.height_px / t.rows as u32;
+
+        CellOffset {
+            x: if cell_width > 0 {
+                core::cmp::min(self.x_offset, cell_width - 1)
+            } else {
+                0
+            },
+            y: if cell_height > 0 {
+                core::cmp::min(self.y_offset, cell_height - 1)
+            } else {
+                0
+            },
+        }
+    }
+
     /// Returns the size of this placement's image in pixels,
     /// taking into account the source rectangle, specified
     /// rows/columns, and aspect ratio.
     pub fn pixel_size(&self, image: &Image, t: &Terminal) -> PixelSize {
-        // Height / width of the image in px.
-        let width = if self.source_width > 0 {
-            self.source_width
-        } else {
-            image.width
-        };
-        let height = if self.source_height > 0 {
-            self.source_height
-        } else {
-            image.height
-        };
+        let source = self.source_rect(image);
+        let width = source.width;
+        let height = source.height;
 
         // If we don't have any specified cols or rows then the placement
         // should be the native size of the image, and doesn't need to be
@@ -1279,6 +1838,7 @@ impl Placement {
         // count and the height by the row count, because it should be.
         let cell_width: u32 = t.width_px / t.cols as u32;
         let cell_height: u32 = t.height_px / t.rows as u32;
+        let cell_offset = self.cell_offset(t);
 
         // If we have a specified cols AND rows then we calculate
         // the width and height from them directly, we don't need
@@ -1288,8 +1848,8 @@ impl Placement {
             let calc_height = Self::saturating_mul(cell_height, self.rows);
 
             return PixelSize {
-                width: calc_width,
-                height: calc_height,
+                width: calc_width.saturating_sub(cell_offset.x),
+                height: calc_height.saturating_sub(cell_offset.y),
             };
         }
 
@@ -1299,7 +1859,8 @@ impl Placement {
         // If only the columns were specified, we determine
         // the height of the image based on the aspect ratio.
         if self.columns > 0 {
-            let calc_width = Self::saturating_mul(cell_width, self.columns);
+            let calc_width =
+                Self::saturating_mul(cell_width, self.columns).saturating_sub(cell_offset.x);
             let calc_height = Self::scale_dimension(calc_width, height, width);
 
             return PixelSize {
@@ -1311,7 +1872,8 @@ impl Placement {
         // Otherwise, only the rows were specified, so we
         // determine the width based on the aspect ratio.
         {
-            let calc_height = Self::saturating_mul(cell_height, self.rows);
+            let calc_height =
+                Self::saturating_mul(cell_height, self.rows).saturating_sub(cell_offset.y);
             let calc_width = Self::scale_dimension(calc_height, width, height);
 
             PixelSize {
@@ -1334,20 +1896,21 @@ impl Placement {
         // Otherwise we calculate the pixel size, divide by
         // cell size, and round up to the nearest integer.
         // PORT NOTE (R7): the numerators are `+|` upstream (`e5840bb9b` — the
-        // offsets are protocol-controlled and MAY saturate by design; the
-        // untrusted-dimensions test drives them at `maxInt(u32)`), so this is
-        // `saturating_add` without a no-overflow debug_assert.
+        // offsets are protocol-controlled and MAY saturate by design), so this
+        // is `saturating_add` without a no-overflow debug_assert; `c5a3c7e2e`
+        // clamps the offsets to the cell first (`cellOffset`).
         let calc_size = self.pixel_size(image, t);
+        let cell_offset = self.cell_offset(t);
         GridSize {
-            // std.math.divCeil(u32, calc_size.width +| self.x_offset, t.width_px / t.cols) catch 0,
+            // std.math.divCeil(u32, calc_size.width +| cell_offset.x, t.width_px / t.cols) catch 0,
             cols: div_ceil_u32(
-                calc_size.width.saturating_add(self.x_offset),
+                calc_size.width.saturating_add(cell_offset.x),
                 t.width_px / t.cols as u32,
             )
             .unwrap_or(0),
-            // std.math.divCeil(u32, calc_size.height +| self.y_offset, t.height_px / t.rows) catch 0,
+            // std.math.divCeil(u32, calc_size.height +| cell_offset.y, t.height_px / t.rows) catch 0,
             rows: div_ceil_u32(
-                calc_size.height.saturating_add(self.y_offset),
+                calc_size.height.saturating_add(cell_offset.y),
                 t.height_px / t.rows as u32,
             )
             .unwrap_or(0),
@@ -1359,11 +1922,16 @@ impl Placement {
     /// Returns a selection of the entire rectangle this placement
     /// occupies within the screen. This can return null for a virtual
     /// placement or when unavailable pixel geometry makes it empty.
+    ///
+    /// Relative placements also return null: they have no screen
+    /// position of their own, so geometric queries (delete by
+    /// intersection, row, column, etc.) never match them directly.
+    /// They are instead removed when their parent chain is removed.
     pub fn rect(&self, image: &Image, t: &Terminal) -> Option<Rect> {
         let grid_size = self.grid_size(image, t);
         let pin = match self.location {
             Location::Pin(p) => p,
-            Location::Virtual => return None,
+            Location::Virtual | Location::Relative(_) => return None,
         };
         // if (pin.garbage) return null;
         // SAFETY(raw-page-aliasing/graphics_storage): `pin` is a tracked pin
@@ -1406,6 +1974,22 @@ impl Placement {
             bottom_right: br,
         })
     }
+}
+
+/// `pub const SourceRect = struct { x, y, width, height: u32 }` on `Placement`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Return type of `Placement::cellOffset`: `struct { x: u32, y: u32 }`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CellOffset {
+    pub x: u32,
+    pub y: u32,
 }
 
 /// Return type of `Placement::pixelSize`: `struct { width: u32, height: u32 }`.
@@ -1563,9 +2147,13 @@ mod tests {
         t.deinit(alloc);
     }
 
-    // test "storage: delete all placements and images"
+    // test "storage: delete all visible placements and matching images"
+    // (upstream `f8b40a023` DELETED the pin-era "storage: delete all placements
+    // and images" test and replaced it with this one: d=A only frees images
+    // selected by a matching visible placement, so the unplaced image 3
+    // survives.)
     #[test]
-    fn delete_all_placements_and_images() {
+    fn delete_all_visible_placements_and_matching_images() {
         let alloc = allocator_api2::alloc::Global;
         let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
         let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
@@ -1620,9 +2208,10 @@ mod tests {
         .unwrap();
 
         s.dirty = false;
-        s.delete(alloc, &mut t, command::Delete::All(true));
+        s.delete(alloc, &mut t, command::DeleteAction::All(true));
         assert!(s.dirty);
-        assert_eq!(0usize, s.images.len());
+        assert_eq!(1usize, s.images.len());
+        assert!(s.images.contains_key(&3));
         assert_eq!(0usize, s.placements.len());
         assert_eq!(
             tracked,
@@ -1691,9 +2280,10 @@ mod tests {
         .unwrap();
 
         s.dirty = false;
-        s.delete(alloc, &mut t, command::Delete::All(true));
+        s.delete(alloc, &mut t, command::DeleteAction::All(true));
         assert!(s.dirty);
-        assert_eq!(0usize, s.images.len());
+        assert_eq!(1usize, s.images.len());
+        assert!(s.images.contains_key(&3));
         assert_eq!(0usize, s.placements.len());
         assert_eq!(5000usize, s.total_limit);
         assert_eq!(
@@ -1762,7 +2352,7 @@ mod tests {
         .unwrap();
 
         s.dirty = false;
-        s.delete(alloc, &mut t, command::Delete::All(false));
+        s.delete(alloc, &mut t, command::DeleteAction::All(false));
         assert!(s.dirty);
         assert_eq!(0usize, s.placements.len());
         assert_eq!(3usize, s.images.len());
@@ -1835,7 +2425,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Id {
+            command::DeleteAction::Id {
                 delete: false,
                 image_id: 2,
                 placement_id: 0,
@@ -1913,7 +2503,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Id {
+            command::DeleteAction::Id {
                 delete: true,
                 image_id: 2,
                 placement_id: 0,
@@ -2001,7 +2591,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Id {
+            command::DeleteAction::Id {
                 delete: true,
                 image_id: 1,
                 placement_id: 2,
@@ -2075,7 +2665,7 @@ mod tests {
         unsafe { (*t.screens.active).cursor_absolute(12, 12) };
 
         s.dirty = false;
-        s.delete(alloc, &mut t, command::Delete::IntersectCursor(false));
+        s.delete(alloc, &mut t, command::DeleteAction::IntersectCursor(false));
         assert!(s.dirty);
         assert_eq!(1usize, s.placements.len());
         assert_eq!(2usize, s.images.len());
@@ -2156,7 +2746,7 @@ mod tests {
         unsafe { (*t.screens.active).cursor_absolute(12, 12) };
 
         s.dirty = false;
-        s.delete(alloc, &mut t, command::Delete::IntersectCursor(true));
+        s.delete(alloc, &mut t, command::DeleteAction::IntersectCursor(true));
         assert!(s.dirty);
         assert_eq!(1usize, s.placements.len());
         assert_eq!(2usize, s.images.len());
@@ -2237,7 +2827,7 @@ mod tests {
         unsafe { (*t.screens.active).cursor_absolute(26, 26) };
 
         s.dirty = false;
-        s.delete(alloc, &mut t, command::Delete::IntersectCursor(true));
+        s.delete(alloc, &mut t, command::DeleteAction::IntersectCursor(true));
         assert!(s.dirty);
         assert_eq!(0usize, s.placements.len());
         assert_eq!(1usize, s.images.len());
@@ -2307,7 +2897,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Column {
+            command::DeleteAction::Column {
                 delete: false,
                 x: 60,
             },
@@ -2390,7 +2980,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Column {
+            command::DeleteAction::Column {
                 delete: false,
                 x: 2,
             },
@@ -2481,7 +3071,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Row {
+            command::DeleteAction::Row {
                 delete: false,
                 y: 60,
             },
@@ -2564,7 +3154,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Row {
+            command::DeleteAction::Row {
                 delete: false,
                 y: 2,
             },
@@ -2660,7 +3250,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Range {
+            command::DeleteAction::Range {
                 delete: false,
                 first: 1,
                 last: 2,
@@ -2740,7 +3330,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Range {
+            command::DeleteAction::Range {
                 delete: true,
                 first: 1,
                 last: 2,
@@ -2830,7 +3420,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Range {
+            command::DeleteAction::Range {
                 delete: false,
                 first: 2,
                 last: 2,
@@ -2940,7 +3530,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Range {
+            command::DeleteAction::Range {
                 delete: true,
                 first: 2,
                 last: 2,
@@ -3142,7 +3732,7 @@ mod tests {
         let _ = s.image_by_number(1);
         assert_eq!(gen_place, s.generation);
 
-        s.delete(alloc, &mut t, command::Delete::All(true));
+        s.delete(alloc, &mut t, command::DeleteAction::All(true));
         assert!(s.generation > gen_place);
 
         s.deinit(alloc, t.screens.active);
@@ -3257,7 +3847,7 @@ mod tests {
 
         // A delete-all on an empty storage (this runs on every screen
         // clear) must not dirty the state or bump the generation.
-        s.delete(alloc, &mut t, command::Delete::All(true));
+        s.delete(alloc, &mut t, command::DeleteAction::All(true));
         assert!(!s.dirty);
         assert_eq!(0u64, s.generation);
 
@@ -3285,7 +3875,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Id {
+            command::DeleteAction::Id {
                 delete: false,
                 image_id: 42,
                 placement_id: 0,
@@ -3298,7 +3888,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Id {
+            command::DeleteAction::Id {
                 delete: false,
                 image_id: 1,
                 placement_id: 0,
@@ -3537,7 +4127,7 @@ mod tests {
             .location
         {
             Location::Pin(p) => assert_eq!(replacement_pin, p),
-            Location::Virtual => panic!("expected pin location"),
+            Location::Virtual | Location::Relative(_) => panic!("expected pin location"),
         }
 
         s.deinit(alloc, t.screens.active);
@@ -3603,7 +4193,7 @@ mod tests {
             .location
         {
             Location::Pin(p) => assert_eq!(new_pin, p),
-            Location::Virtual => panic!("expected pin location"),
+            Location::Virtual | Location::Relative(_) => panic!("expected pin location"),
         }
 
         s.deinit(alloc, t.screens.active);
@@ -3707,7 +4297,7 @@ mod tests {
         // This is inside the right placement and on an interior row shared by
         // both placements, but it is outside the left placement's columns.
         unsafe { (*t.screens.active).cursor_absolute(21, 5) };
-        s.delete(alloc, &mut t, command::Delete::IntersectCursor(false));
+        s.delete(alloc, &mut t, command::DeleteAction::IntersectCursor(false));
 
         assert_eq!(1usize, s.placements.len());
         assert!(s
@@ -3770,7 +4360,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::IntersectCell {
+            command::DeleteAction::IntersectCell {
                 delete: false,
                 x: 22,
                 y: 6,
@@ -3847,8 +4437,8 @@ mod tests {
             assert_eq!(max, actual.height);
         }
 
-        // Pixel offsets are protocol-controlled too. Include them without
-        // allowing the grid-size numerator to wrap.
+        // Pixel offsets are protocol-controlled too. Clamp them to the cell
+        // before including them in grid geometry.
         t.width_px = 2;
         t.height_px = 2;
         {
@@ -3858,8 +4448,8 @@ mod tests {
                 ..Placement::with_location(Location::Virtual)
             };
             let actual = placement.grid_size(&image_1x1, &t);
-            assert_eq!(max, actual.cols);
-            assert_eq!(max, actual.rows);
+            assert_eq!(1u32, actual.cols);
+            assert_eq!(1u32, actual.rows);
         }
 
         let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap();
@@ -4096,7 +4686,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Id {
+            command::DeleteAction::Id {
                 delete: true,
                 image_id: 1,
                 placement_id: 0,
@@ -4259,7 +4849,7 @@ mod tests {
         s.delete(
             alloc,
             &mut t,
-            command::Delete::Id {
+            command::DeleteAction::Id {
                 delete: true,
                 image_id: 1,
                 placement_id: 0,
@@ -4344,6 +4934,1108 @@ mod tests {
         assert!(s.images.contains_key(&2));
         assert!(!s.images.contains_key(&3));
         assert_eq!(128usize, s.total_bytes);
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+    // test "storage: delete all visible placements preserves scrollback"
+    #[test]
+    fn delete_all_visible_placements_preserves_scrollback() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(
+            alloc,
+            crate::terminal::Options {
+                max_scrollback_bytes: Some(4096),
+                ..opts(2, 2)
+            },
+        )
+        .unwrap();
+        t.width_px = 2;
+        t.height_px = 2;
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                width: 1,
+                height: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap(),
+            )),
+        )
+        .unwrap();
+        t.scroll_up(1).unwrap();
+
+        let history_key: PlacementKey = PlacementKey {
+            image_id: 1,
+            placement_id: PlacementId {
+                tag: PlacementIdTag::External,
+                id: 1,
+            },
+        };
+        {
+            let pin = match s.placements.get(&history_key).unwrap().location {
+                Location::Pin(pin) => pin,
+                _ => unreachable!(),
+            };
+            assert!(unsafe { &(*t.screens.active).pages }
+                .point_from_pin(point::Tag::Active, unsafe { *pin })
+                .is_none());
+        }
+
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            2,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap(),
+            )),
+        )
+        .unwrap();
+
+        s.delete(alloc, &mut t, command::DeleteAction::All(true));
+        assert_eq!(1usize, s.placements.len());
+        assert!(s.placements.contains_key(&history_key));
+        assert_eq!(1usize, s.images.len());
+        assert!(s.images.contains_key(&1));
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: delete all includes placements spanning into active area"
+    #[test]
+    fn delete_all_includes_placements_spanning_into_active_area() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(
+            alloc,
+            crate::terminal::Options {
+                max_scrollback_bytes: Some(4096),
+                ..opts(2, 2)
+            },
+        )
+        .unwrap();
+        t.width_px = 2;
+        t.height_px = 2;
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                width: 1,
+                height: 2,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap(),
+            )),
+        )
+        .unwrap();
+        t.scroll_up(1).unwrap();
+
+        let placement = *s
+            .placements
+            .get(&PlacementKey {
+                image_id: 1,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id: 1,
+                },
+            })
+            .unwrap();
+        {
+            let pin = match placement.location {
+                Location::Pin(pin) => pin,
+                _ => unreachable!(),
+            };
+            assert!(unsafe { &(*t.screens.active).pages }
+                .point_from_pin(point::Tag::Active, unsafe { *pin })
+                .is_none());
+        }
+        let rect = placement.rect(&s.image_by_id(1).unwrap(), &t).unwrap();
+        assert!(unsafe { &(*t.screens.active).pages }
+            .point_from_pin(point::Tag::Active, rect.bottom_right)
+            .is_some());
+
+        s.delete(alloc, &mut t, command::DeleteAction::All(true));
+        assert_eq!(0usize, s.placements.len());
+        assert_eq!(0usize, s.images.len());
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: uppercase id delete preserves image when placement does not match"
+    #[test]
+    fn storage_uppercase_id_delete_preserves_image_when_placement_does_not_match() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+
+        s.dirty = false;
+        let generation = s.generation;
+        s.delete(
+            alloc,
+            &mut t,
+            command::DeleteAction::Id {
+                delete: true,
+                image_id: 1,
+                placement_id: 7,
+            },
+        );
+
+        assert!(s.image_by_id(1).is_some());
+        assert!(!s.dirty);
+        assert_eq!(generation, s.generation);
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: uppercase id delete frees image after placement matches"
+    #[test]
+    fn storage_uppercase_id_delete_frees_image_after_placement_matches() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+        let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            9,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap(),
+            )),
+        )
+        .unwrap();
+
+        s.dirty = false;
+        s.delete(
+            alloc,
+            &mut t,
+            command::DeleteAction::Id {
+                delete: true,
+                image_id: 1,
+                placement_id: 9,
+            },
+        );
+
+        assert_eq!(0usize, s.placements.len());
+        assert_eq!(0usize, s.images.len());
+        assert!(s.dirty);
+        assert_eq!(
+            tracked,
+            unsafe { &(*t.screens.active).pages }.count_tracked_pins()
+        );
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: uppercase id delete without placement frees unplaced image"
+    #[test]
+    fn storage_uppercase_id_delete_without_placement_frees_unplaced_image() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+
+        s.dirty = false;
+        s.delete(
+            alloc,
+            &mut t,
+            command::DeleteAction::Id {
+                delete: true,
+                image_id: 1,
+                placement_id: 0,
+            },
+        );
+
+        assert_eq!(0usize, s.images.len());
+        assert!(s.dirty);
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: uppercase range deletes unplaced image data"
+    #[test]
+    fn storage_uppercase_range_deletes_unplaced_image_data() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 2,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 3,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+
+        s.delete(
+            alloc,
+            &mut t,
+            command::DeleteAction::Range {
+                delete: true,
+                // Zero is the default lower bound when x is omitted.
+                first: 0,
+                last: 2,
+            },
+        );
+        assert_eq!(1usize, s.images.len());
+        assert!(s.images.contains_key(&3));
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: delete images by empty range"
+    #[test]
+    fn delete_images_by_empty_range() {
+        // Ranges that select nothing are a silent no-op, matching kitty, which
+        // performs no validation and filters with `x <= image_id <= y`.
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+        let tracked = unsafe { &(*t.screens.active).pages }.count_tracked_pins();
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 2,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap(),
+            )),
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            2,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap(),
+            )),
+        )
+        .unwrap();
+
+        // Inverted range.
+        s.delete(
+            alloc,
+            &mut t,
+            command::DeleteAction::Range {
+                delete: true,
+                first: 5,
+                last: 4,
+            },
+        );
+        assert_eq!(2usize, s.images.len());
+        assert_eq!(2usize, s.placements.len());
+
+        // Upper bound omitted, so it defaults to zero.
+        s.delete(
+            alloc,
+            &mut t,
+            command::DeleteAction::Range {
+                delete: true,
+                first: 5,
+                last: 0,
+            },
+        );
+        assert_eq!(2usize, s.images.len());
+        assert_eq!(2usize, s.placements.len());
+
+        // Both bounds omitted. Image IDs are never zero so this matches nothing.
+        s.delete(
+            alloc,
+            &mut t,
+            command::DeleteAction::Range {
+                delete: true,
+                first: 0,
+                last: 0,
+            },
+        );
+        assert_eq!(2usize, s.images.len());
+        assert_eq!(2usize, s.placements.len());
+
+        // Both placements survive, so both of their pins are still tracked.
+        assert_eq!(
+            tracked + 2,
+            unsafe { &(*t.screens.active).pages }.count_tracked_pins()
+        );
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: erase display preserves scrollback and reclaims unplaced images"
+    #[test]
+    fn storage_erase_display_preserves_scrollback_and_reclaims_unplaced_images() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(
+            alloc,
+            crate::terminal::Options {
+                max_scrollback_bytes: Some(4096),
+                ..opts(2, 2)
+            },
+        )
+        .unwrap();
+        t.width_px = 2;
+        t.height_px = 2;
+
+        // const s = &t.screens.active.kitty_images;
+        // PORT NOTE: this test drives the TERMINAL's own storage (so
+        // `t.eraseDisplay` reaches it); every access re-derives the reference
+        // from the raw screen pointer so no alias survives a `&mut t` call.
+        let sp = t.screens.active;
+        unsafe { &mut (*sp).kitty_images }
+            .add_image(
+                alloc,
+                sp,
+                Image {
+                    id: 1,
+                    width: 1,
+                    height: 1,
+                    ..Image::default()
+                },
+            )
+            .unwrap();
+        {
+            let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap();
+            unsafe { &mut (*sp).kitty_images }
+                .add_placement(alloc, sp, 1, 1, Placement::with_location(Location::Pin(pin)))
+                .unwrap();
+        }
+        t.scroll_up(1).unwrap();
+
+        let history_key: PlacementKey = PlacementKey {
+            image_id: 1,
+            placement_id: PlacementId {
+                tag: PlacementIdTag::External,
+                id: 1,
+            },
+        };
+        {
+            let s = unsafe { &(*sp).kitty_images };
+            let pin = match s.placements.get(&history_key).unwrap().location {
+                Location::Pin(pin) => pin,
+                _ => unreachable!(),
+            };
+            assert!(unsafe { &(*sp).pages }
+                .point_from_pin(point::Tag::Active, unsafe { *pin })
+                .is_none());
+        }
+
+        unsafe { &mut (*sp).kitty_images }
+            .add_image(
+                alloc,
+                sp,
+                Image {
+                    id: 2,
+                    width: 1,
+                    height: 1,
+                    ..Image::default()
+                },
+            )
+            .unwrap();
+        {
+            let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap();
+            unsafe { &mut (*sp).kitty_images }
+                .add_placement(alloc, sp, 2, 1, Placement::with_location(Location::Pin(pin)))
+                .unwrap();
+        }
+        unsafe { &mut (*sp).kitty_images }
+            .add_image(
+                alloc,
+                sp,
+                Image {
+                    id: 3,
+                    width: 1,
+                    height: 1,
+                    ..Image::default()
+                },
+            )
+            .unwrap();
+
+        t.erase_display(crate::csi::EraseDisplay::Complete, false);
+        {
+            let s = unsafe { &(*sp).kitty_images };
+            assert_eq!(1usize, s.placements.len());
+            assert!(s.placements.contains_key(&history_key));
+            assert_eq!(1usize, s.images.len());
+            assert!(s.images.contains_key(&1));
+            assert!(!s.images.contains_key(&2));
+            assert!(!s.images.contains_key(&3));
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: cell offsets stay within explicit destination rectangle"
+    #[test]
+    fn storage_cell_offsets_stay_within_explicit_destination_rectangle() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        t.width_px = 50; // 10 px per col
+        t.height_px = 100; // 20 px per row
+
+        // Explicit columns and rows describe the far cell boundaries. Offsets
+        // move the near edge inward without moving those far edges.
+        let placement: Placement = Placement {
+            x_offset: 3,
+            y_offset: 4,
+            columns: 2,
+            rows: 1,
+            ..Placement::with_location(Location::Virtual)
+        };
+        let image_4x3 = Image {
+            width: 4,
+            height: 3,
+            ..Image::default()
+        };
+        let actual = placement.pixel_size(&image_4x3, &t);
+        assert_eq!(17u32, actual.width);
+        assert_eq!(16u32, actual.height);
+        assert_eq!(2u32, placement.grid_size(&image_4x3, &t).cols);
+        assert_eq!(1u32, placement.grid_size(&image_4x3, &t).rows);
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: cell offsets clamp to cell bounds"
+    #[test]
+    fn storage_cell_offsets_clamp_to_cell_bounds() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        t.width_px = 50; // 10 px per col
+        t.height_px = 100; // 20 px per row
+
+        let placement: Placement = Placement {
+            x_offset: u32::MAX,
+            y_offset: u32::MAX,
+            columns: 1,
+            rows: 1,
+            ..Placement::with_location(Location::Virtual)
+        };
+        let offset = placement.cell_offset(&t);
+        assert_eq!(9u32, offset.x);
+        assert_eq!(19u32, offset.y);
+
+        // Even hostile offsets leave one pixel inside the requested cell.
+        let image_1x1 = Image {
+            width: 1,
+            height: 1,
+            ..Image::default()
+        };
+        let actual = placement.pixel_size(&image_1x1, &t);
+        assert_eq!(1u32, actual.width);
+        assert_eq!(1u32, actual.height);
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: default source rectangle is intersected before sizing"
+    #[test]
+    fn storage_default_source_rectangle_is_intersected_before_sizing() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        let placement: Placement = Placement {
+            source_x: 3,
+            source_y: 1,
+            ..Placement::with_location(Location::Virtual)
+        };
+        let actual = placement.pixel_size(
+            &Image {
+                width: 4,
+                height: 3,
+                ..Image::default()
+            },
+            &t,
+        );
+        assert_eq!(1u32, actual.width);
+        assert_eq!(2u32, actual.height);
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: explicit source rectangle is intersected before sizing"
+    #[test]
+    fn storage_explicit_source_rectangle_is_intersected_before_sizing() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(10, 10)).unwrap();
+        t.width_px = 100;
+        t.height_px = 100;
+
+        // The requested 8x8 rectangle intersects this 10x10 image as 2x3.
+        // With a two-column destination, the clipped 2:3 aspect ratio produces
+        // a 20x30 pixel destination.
+        let placement: Placement = Placement {
+            source_x: 8,
+            source_y: 7,
+            source_width: 8,
+            source_height: 8,
+            columns: 2,
+            ..Placement::with_location(Location::Virtual)
+        };
+        let actual = placement.pixel_size(
+            &Image {
+                width: 10,
+                height: 10,
+                ..Image::default()
+            },
+            &t,
+        );
+        assert_eq!(20u32, actual.width);
+        assert_eq!(30u32, actual.height);
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: nextImageId number matches Kitty get_free_client_id"
+    #[test]
+    fn storage_next_image_id_number_matches_kitty_get_free_client_id() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+
+        // Empty storage returns 1, as does Kitty.
+        assert_eq!(1u32, s.next_image_id_for(NextImageIdMode::Explicit));
+
+        // Contiguous IDs from 1: the next ID after them.
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 2,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 3,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(4u32, s.next_image_id_for(NextImageIdMode::Explicit));
+
+        // The first gap is filled, even when higher IDs exist.
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 100,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.delete(
+            alloc,
+            &mut t,
+            command::DeleteAction::Id {
+                image_id: 2,
+                delete: true,
+                placement_id: 0,
+            },
+        );
+        assert_eq!(2u32, s.next_image_id_for(NextImageIdMode::Explicit));
+
+        // 1 is reused as soon as it is free.
+        s.delete(
+            alloc,
+            &mut t,
+            command::DeleteAction::Id {
+                image_id: 1,
+                delete: true,
+                placement_id: 0,
+            },
+        );
+        assert_eq!(1u32, s.next_image_id_for(NextImageIdMode::Explicit));
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: nextImageId implicit skips in-use ids and zero"
+    #[test]
+    fn storage_next_image_id_implicit_skips_in_use_ids_and_zero() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+
+        // A client image already sits on the counter's first two values.
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 2147483647,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 2147483648,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            2147483649u32,
+            s.next_image_id_for(NextImageIdMode::Implicit)
+        );
+        assert_eq!(
+            2147483650u32,
+            s.next_image_id_for(NextImageIdMode::Implicit)
+        );
+
+        // Wrapping skips zero, which means "no ID" protocol-wide.
+        s.next_image_id = u32::MAX;
+        assert_eq!(u32::MAX, s.next_image_id_for(NextImageIdMode::Implicit));
+        assert_eq!(1u32, s.next_image_id_for(NextImageIdMode::Implicit));
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: resolveChain accumulates offsets to the pin root"
+    #[test]
+    fn storage_resolve_chain_accumulates_offsets_to_the_pin_root() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap(),
+            )),
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            2,
+            Placement::with_location(Location::Relative(Relative {
+                parent: PlacementKey {
+                    image_id: 1,
+                    placement_id: PlacementId {
+                        tag: PlacementIdTag::External,
+                        id: 1,
+                    },
+                },
+                horizontal_offset: 2,
+                vertical_offset: 1,
+            })),
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            3,
+            Placement::with_location(Location::Relative(Relative {
+                parent: PlacementKey {
+                    image_id: 1,
+                    placement_id: PlacementId {
+                        tag: PlacementIdTag::External,
+                        id: 2,
+                    },
+                },
+                horizontal_offset: -1,
+                vertical_offset: 4,
+            })),
+        )
+        .unwrap();
+
+        let grandchild = *s
+            .placements
+            .get(&PlacementKey {
+                image_id: 1,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id: 3,
+                },
+            })
+            .unwrap();
+        let rel = match grandchild.location {
+            Location::Relative(rel) => rel,
+            _ => unreachable!(),
+        };
+        let chain = s.resolve_chain(rel).unwrap();
+        assert!(chain.root_key.eql(PlacementKey {
+            image_id: 1,
+            placement_id: PlacementId {
+                tag: PlacementIdTag::External,
+                id: 1,
+            },
+        }));
+        assert!(matches!(chain.root.location, Location::Pin(_)));
+        assert_eq!(1i32, chain.horizontal_offset);
+        assert_eq!(5i32, chain.vertical_offset);
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: resolveChain finds virtual roots"
+    #[test]
+    fn storage_resolve_chain_finds_virtual_roots() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Virtual),
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            2,
+            Placement::with_location(Location::Relative(Relative {
+                parent: PlacementKey {
+                    image_id: 1,
+                    placement_id: PlacementId {
+                        tag: PlacementIdTag::External,
+                        id: 1,
+                    },
+                },
+                horizontal_offset: 1,
+                vertical_offset: 0,
+            })),
+        )
+        .unwrap();
+
+        let child = *s
+            .placements
+            .get(&PlacementKey {
+                image_id: 1,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id: 2,
+                },
+            })
+            .unwrap();
+        let rel = match child.location {
+            Location::Relative(rel) => rel,
+            _ => unreachable!(),
+        };
+        let chain = s.resolve_chain(rel).unwrap();
+        assert!(matches!(chain.root.location, Location::Virtual));
+        assert!(chain.root_key.eql(PlacementKey {
+            image_id: 1,
+            placement_id: PlacementId {
+                tag: PlacementIdTag::External,
+                id: 1,
+            },
+        }));
+        assert_eq!(1i32, chain.horizontal_offset);
+        assert_eq!(0i32, chain.vertical_offset);
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: eviction removes orphaned relative placements"
+    #[test]
+    fn storage_eviction_removes_orphaned_relative_placements() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.total_limit = 8;
+
+        // Image 1 holds most of the byte budget and has a pin placement.
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                width: 2,
+                height: 1,
+                data: Data::Complete(vec![0, 0, 0, 0, 0, 0]),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            1,
+            Placement::with_location(Location::Pin(
+                track_pin(&mut t, point::Coordinate { x: 1, y: 1 }).unwrap(),
+            )),
+        )
+        .unwrap();
+
+        // Image 2's placement is relative to image 1's placement.
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 2,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            2,
+            1,
+            Placement::with_location(Location::Relative(Relative {
+                parent: PlacementKey {
+                    image_id: 1,
+                    placement_id: PlacementId {
+                        tag: PlacementIdTag::External,
+                        id: 1,
+                    },
+                },
+                horizontal_offset: 0,
+                vertical_offset: 0,
+            })),
+        )
+        .unwrap();
+
+        // Adding image 3 exceeds the limit and evicts image 1 (oldest),
+        // removing its placement, which orphans image 2's placement.
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 3,
+                width: 2,
+                height: 1,
+                data: Data::Complete(vec![0, 0, 0, 0, 0, 0]),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+
+        assert!(s.image_by_id(1).is_none());
+        assert_eq!(0usize, s.placements.len());
+        assert!(s.image_by_id(2).is_some());
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: placeholderTarget lookup"
+    #[test]
+    fn storage_placeholder_target_lookup() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage::default();
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            5,
+            Placement::with_location(Location::Virtual),
+        )
+        .unwrap();
+
+        // Exact external ID match.
+        {
+            let target = s.placeholder_target(1, 5).unwrap();
+            let expected: PlacementKey = PlacementKey {
+                image_id: 1,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id: 5,
+                },
+            };
+            assert_eq!(expected, target.key);
+            assert!(matches!(target.placement.location, Location::Virtual));
+        }
+
+        // Zero placement ID falls back to the image's virtual placement.
+        {
+            let target = s.placeholder_target(1, 0).unwrap();
+            let expected: PlacementKey = PlacementKey {
+                image_id: 1,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id: 5,
+                },
+            };
+            assert_eq!(expected, target.key);
+        }
+
+        assert!(s.placeholder_target(1, 9).is_none());
+        assert!(s.placeholder_target(2, 0).is_none());
+
+        // With multiple virtual placements, the zero-ID fallback picks
+        // deterministically by PlacementId.preferredOver: lowest external.
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            3,
+            Placement::with_location(Location::Virtual),
+        )
+        .unwrap();
+        {
+            let expected: PlacementKey = PlacementKey {
+                image_id: 1,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id: 3,
+                },
+            };
+            assert_eq!(expected, s.placeholder_target(1, 0).unwrap().key);
+        }
 
         s.deinit(alloc, t.screens.active);
         t.deinit(alloc);

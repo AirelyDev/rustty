@@ -342,18 +342,18 @@ impl Parser {
             b'p' => Control::Display(Display::parse(&self.kv)?),
             b'd' => Control::Delete(Delete::parse(&self.kv)?),
             b'f' => Control::TransmitAnimationFrame(AnimationFrameLoading::parse(&self.kv)?),
-            b'a' => Control::ControlAnimation(AnimationControl::parse(&self.kv)?),
-            b'c' => Control::ComposeAnimation(AnimationFrameComposition::parse(&self.kv)?),
+            b'a' => Control::ControlAnimation(AnimationControl::parse(&self.kv)),
+            b'c' => Control::ComposeAnimation(AnimationFrameComposition::parse(&self.kv)),
             _ => return Err(Error::InvalidFormat),
         };
 
-        // Determine our quiet value
+        // Determine our quiet value. The spec specifies 0 and 1 but Kitty
+        // allows anything greater than 1 to suppress.
         let quiet: Quiet = if let Some(v) = self.kv.get(b'q') {
             match v {
                 0 => Quiet::No,
                 1 => Quiet::Ok,
-                2 => Quiet::Failures,
-                _ => return Err(Error::InvalidFormat),
+                _ => Quiet::Failures,
             }
         } else {
             Quiet::No
@@ -563,6 +563,10 @@ pub struct Response {
     pub id: u32,
     pub image_number: u32,
     pub placement_id: u32,
+    /// The 1-based animation frame number, echoed as "r=" for the
+    /// animation frame actions. This is how clients learn the frame
+    /// number assigned to a newly created frame.
+    pub frame: u32,
     pub message: Vec<u8>,
 }
 
@@ -572,6 +576,7 @@ impl Default for Response {
             id: 0,
             image_number: 0,
             placement_id: 0,
+            frame: 0,
             message: b"OK".to_vec(),
         }
     }
@@ -609,12 +614,20 @@ impl Response {
             if prior {
                 writer.write_all(b",")?;
             } else {
+                prior = true;
+            }
+            write!(writer, "p={}", self.placement_id)?;
+        }
+        if self.frame > 0 {
+            if prior {
+                writer.write_all(b",")?;
+            } else {
                 #[allow(unused_assignments)]
                 {
                     prior = true;
                 }
             }
-            write!(writer, "p={}", self.placement_id)?;
+            write!(writer, "r={}", self.frame)?;
         }
         writer.write_all(b";")?;
         writer.write_all(&self.message)?;
@@ -674,6 +687,58 @@ pub enum Control {
     ComposeAnimation(AnimationFrameComposition),
 }
 
+/// PORT NOTE: the reference nests this as `Control.Identifiers`; a
+/// module-level sibling here (Rust cannot nest types inside enums).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Identifiers {
+    pub image_id: u32,
+    pub image_number: u32,
+    pub placement_id: u32,
+}
+
+impl Control {
+    /// Returns the image and placement identifiers for any action.
+    pub fn identifiers(&self) -> Identifiers {
+        match self {
+            Control::Query(t) | Control::Transmit(t) => Identifiers {
+                image_id: t.image_id,
+                image_number: t.image_number,
+                placement_id: t.placement_id,
+            },
+            Control::TransmitAndDisplay { transmission: t, .. } => Identifiers {
+                image_id: t.image_id,
+                image_number: t.image_number,
+                placement_id: t.placement_id,
+            },
+            Control::Display(d) => Identifiers {
+                image_id: d.image_id,
+                image_number: d.image_number,
+                placement_id: d.placement_id,
+            },
+            Control::Delete(d) => Identifiers {
+                image_id: d.image_id,
+                image_number: d.image_number,
+                placement_id: d.placement_id,
+            },
+            Control::TransmitAnimationFrame(f) => Identifiers {
+                image_id: f.transmission.image_id,
+                image_number: f.transmission.image_number,
+                placement_id: f.transmission.placement_id,
+            },
+            Control::ControlAnimation(a) => Identifiers {
+                image_id: a.image_id,
+                image_number: a.image_number,
+                placement_id: a.placement_id,
+            },
+            Control::ComposeAnimation(c) => Identifiers {
+                image_id: c.image_id,
+                image_number: c.image_number,
+                placement_id: c.placement_id,
+            },
+        }
+    }
+}
+
 impl Command {
     /// Take ownership over the data in this command. If the returned value
     /// has a length of zero, then the data was empty and need not be freed.
@@ -687,6 +752,7 @@ impl Command {
             Control::Query(t) => Some(*t),
             Control::Transmit(t) => Some(*t),
             Control::TransmitAndDisplay { transmission, .. } => Some(*transmission),
+            Control::TransmitAnimationFrame(f) => Some(f.transmission),
             _ => None,
         }
     }
@@ -709,7 +775,12 @@ impl Command {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Transmission {
-    pub format: Format,           // f
+    pub format: Format, // f
+    /// Set when "f" carried a value we don't recognize. Kitty rejects these
+    /// while handling the command so the EINVAL response can carry the image
+    /// id, so we defer to `LoadingImage.init`. `format` is meaningless when
+    /// this is set.
+    pub format_unknown: bool,
     pub medium: Medium,           // t
     pub width: u32,               // s
     pub height: u32,              // v
@@ -726,7 +797,8 @@ pub struct Transmission {
 impl Default for Transmission {
     fn default() -> Self {
         Transmission {
-            format: Format::Rgba,           // f
+            format: Format::Rgba, // f
+            format_unknown: false,
             medium: Medium::Direct,         // t
             width: 0,                       // s
             height: 0,                      // v
@@ -873,9 +945,13 @@ impl Transmission {
         if let Some(v) = kv.get(b'f') {
             result.format = match v {
                 24 => Format::Rgb,
-                32 => Format::Rgba,
+                0 | 32 => Format::Rgba,
                 100 => Format::Png,
-                _ => return Err(Error::InvalidFormat),
+                _ => {
+                    // Defer returning an error until the image is processed.
+                    result.format_unknown = true;
+                    Format::Rgba
+                }
             };
         }
 
@@ -1036,19 +1112,17 @@ impl Display {
         }
 
         if let Some(v) = kv.get(b'C') {
-            result.cursor_movement = match v {
-                0 => CursorMovement::After,
-                1 => CursorMovement::None,
-                _ => return Err(Error::InvalidFormat),
+            // Kitty only tests this against 1 so any other value moves the cursor.
+            result.cursor_movement = if v == 1 {
+                CursorMovement::None
+            } else {
+                CursorMovement::After
             };
         }
 
         if let Some(v) = kv.get(b'U') {
-            result.virtual_placement = match v {
-                0 => false,
-                1 => true,
-                _ => return Err(Error::InvalidFormat),
-            };
+            // Kitty stores this in a bool, so any non-zero value is virtual.
+            result.virtual_placement = v != 0;
         }
 
         if let Some(v) = kv.get(b'z') {
@@ -1080,40 +1154,70 @@ impl Display {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AnimationFrameLoading {
-    pub x: u32,                            // x
-    pub y: u32,                            // y
-    pub create_frame: u32,                 // c
-    pub edit_frame: u32,                   // r
-    pub gap_ms: u32,                       // z
+    /// Frame data is transmitted exactly like image data, so an a=f
+    /// command carries a full set of transmission keys: medium (t),
+    /// format (f), the frame rectangle size (s/v), chunking (m), etc.
+    /// The image id/number here identify the (existing) image the
+    /// frame belongs to.
+    pub transmission: Transmission,
+
+    /// The left/top edge (pixels) of the rectangle within the frame
+    /// that the transmitted data updates.
+    pub x: u32, // x
+    pub y: u32, // y
+
+    /// The 1-based frame number whose pixels serve as the base canvas
+    /// for a newly created frame. Zero means no base frame: the
+    /// canvas is filled with `background` instead.
+    pub create_frame: u32, // c
+
+    /// The 1-based frame number of an existing frame to edit. Zero
+    /// (or any value past the next frame number) creates a new frame.
+    pub edit_frame: u32, // r
+
+    /// The gap in milliseconds before the next frame is shown. For
+    /// new frames, zero selects the default gap and a negative value
+    /// creates a gapless (never displayed) frame. For edits, zero
+    /// leaves the gap unchanged.
+    pub gap_ms: i32, // z
+
     pub composition_mode: CompositionMode, // X
     pub background: Background,            // Y
 }
 
+/// The canvas background color as a 32-bit RGBA value where R is
+/// the most significant byte (0xRRGGBBAA), e.g. Y=4278190335
+/// (0xff0000ff) is opaque red. Bit-cast from the little-endian
+/// u32 value, so the field order is reversed from the byte order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Background {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
     pub a: u8,
+    pub b: u8,
+    pub g: u8,
+    pub r: u8,
 }
 
 impl Background {
     /// PORT NOTE: `@bitCast(u32)` of a `packed struct(u32)` whose fields are
-    /// `r, g, b, a` in declaration order. `r` occupies the least significant
-    /// byte and `a` the most significant, which this reproduces.
+    /// `a, b, g, r` in declaration order. `a` occupies the least significant
+    /// byte and `r` the most significant, which this reproduces (so the u32
+    /// value reads 0xRRGGBBAA, matching the doc comment above).
     pub fn from_int(v: u32) -> Background {
         Background {
-            r: (v & 0xff) as u8,
-            g: ((v >> 8) & 0xff) as u8,
-            b: ((v >> 16) & 0xff) as u8,
-            a: ((v >> 24) & 0xff) as u8,
+            a: (v & 0xff) as u8,
+            b: ((v >> 8) & 0xff) as u8,
+            g: ((v >> 16) & 0xff) as u8,
+            r: ((v >> 24) & 0xff) as u8,
         }
     }
 }
 
 impl AnimationFrameLoading {
     fn parse(kv: &Kv) -> Result<AnimationFrameLoading, Error> {
-        let mut result: AnimationFrameLoading = AnimationFrameLoading::default();
+        let mut result: AnimationFrameLoading = AnimationFrameLoading {
+            transmission: Transmission::parse(kv)?,
+            ..Default::default()
+        };
 
         if let Some(v) = kv.get(b'x') {
             result.x = v;
@@ -1132,14 +1236,18 @@ impl AnimationFrameLoading {
         }
 
         if let Some(v) = kv.get(b'z') {
-            result.gap_ms = v;
+            // 'z' is one of the keys Parser.finishValue parses as an
+            // i32, so the u32 in the KV table is the bit pattern of
+            // that i32 and this reconstructs it exactly.
+            result.gap_ms = i32::from_ne_bytes(v.to_ne_bytes());
         }
 
+        // Tested only against 1 like Kitty.
         if let Some(v) = kv.get(b'X') {
-            result.composition_mode = match v {
-                0 => CompositionMode::AlphaBlend,
-                1 => CompositionMode::Overwrite,
-                _ => return Err(Error::InvalidFormat),
+            result.composition_mode = if v == 1 {
+                CompositionMode::Overwrite
+            } else {
+                CompositionMode::AlphaBlend
             };
         }
 
@@ -1153,27 +1261,58 @@ impl AnimationFrameLoading {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AnimationFrameComposition {
-    pub frame: u32,                        // c
-    pub edit_frame: u32,                   // r
-    pub x: u32,                            // x
-    pub y: u32,                            // y
-    pub width: u32,                        // w
-    pub height: u32,                       // h
-    pub left_edge: u32,                    // X
-    pub top_edge: u32,                     // Y
+    pub image_id: u32,      // i
+    pub image_number: u32,  // I
+    pub placement_id: u32,  // p
+
+    /// The 1-based frame number being edited (the destination).
+    pub dest_frame: u32, // c
+
+    /// The 1-based frame number whose pixels are composed onto the
+    /// destination (the source).
+    pub source_frame: u32, // r
+
+    /// The left/top edge (pixels) of the destination rectangle.
+    pub x: u32, // x
+    pub y: u32, // y
+
+    /// The size of the rectangle to compose. Zero selects the full
+    /// image width/height.
+    pub width: u32, // w
+    pub height: u32, // h
+
+    /// The left/top edge (pixels) of the source rectangle.
+    pub left_edge: u32, // X
+    pub top_edge: u32, // Y
+
     pub composition_mode: CompositionMode, // C
 }
 
 impl AnimationFrameComposition {
-    fn parse(kv: &Kv) -> Result<AnimationFrameComposition, Error> {
+    // Cannot fail: every key is stored as parsed, with no range
+    // validation (Kitty range-checks these while handling the
+    // command; see the comment above the execution-deferral tests).
+    fn parse(kv: &Kv) -> AnimationFrameComposition {
         let mut result: AnimationFrameComposition = AnimationFrameComposition::default();
 
+        if let Some(v) = kv.get(b'i') {
+            result.image_id = v;
+        }
+
+        if let Some(v) = kv.get(b'I') {
+            result.image_number = v;
+        }
+
+        if let Some(v) = kv.get(b'p') {
+            result.placement_id = v;
+        }
+
         if let Some(v) = kv.get(b'c') {
-            result.frame = v;
+            result.dest_frame = v;
         }
 
         if let Some(v) = kv.get(b'r') {
-            result.edit_frame = v;
+            result.source_frame = v;
         }
 
         if let Some(v) = kv.get(b'x') {
@@ -1201,24 +1340,39 @@ impl AnimationFrameComposition {
         }
 
         if let Some(v) = kv.get(b'C') {
-            result.composition_mode = match v {
-                0 => CompositionMode::AlphaBlend,
-                1 => CompositionMode::Overwrite,
-                _ => return Err(Error::InvalidFormat),
+            // Kitty tests this against zero for compose so any non-zero overwrites
+            result.composition_mode = if v == 0 {
+                CompositionMode::AlphaBlend
+            } else {
+                CompositionMode::Overwrite
             };
         }
 
-        Ok(result)
+        result
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AnimationControl {
+    pub image_id: u32,           // i
+    pub image_number: u32,       // I
+    pub placement_id: u32,       // p
     pub action: AnimationAction, // s
-    pub frame: u32,              // r
-    pub gap_ms: u32,             // z
-    pub current_frame: u32,      // c
-    pub loops: u32,              // v
+
+    /// The 1-based frame number whose gap is set from gap_ms.
+    pub frame: u32, // r
+
+    /// The new gap for `frame` in milliseconds. Zero is ignored and a
+    /// negative value makes the frame gapless.
+    pub gap_ms: i32, // z
+
+    /// The 1-based frame number to make current (client-driven
+    /// animation). Zero is ignored.
+    pub current_frame: u32, // c
+
+    /// The loop count: zero is ignored, 1 loops forever, and any
+    /// larger value plays that many minus one loops.
+    pub loops: u32, // v
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1231,16 +1385,32 @@ pub enum AnimationAction {
 }
 
 impl AnimationControl {
-    fn parse(kv: &Kv) -> Result<AnimationControl, Error> {
+    // Cannot fail: every key is stored as parsed. Out-of-range values
+    // (frame numbers, states) are silently ignored during execution,
+    // matching Kitty.
+    fn parse(kv: &Kv) -> AnimationControl {
         let mut result: AnimationControl = AnimationControl::default();
 
+        if let Some(v) = kv.get(b'i') {
+            result.image_id = v;
+        }
+
+        if let Some(v) = kv.get(b'I') {
+            result.image_number = v;
+        }
+
+        if let Some(v) = kv.get(b'p') {
+            result.placement_id = v;
+        }
+
         if let Some(v) = kv.get(b's') {
+            // Kitty ignores values it doesn't know, leaving the animation
+            // state untouched, which is what `.invalid` means here.
             result.action = match v {
-                0 => AnimationAction::Invalid,
                 1 => AnimationAction::Stop,
                 2 => AnimationAction::RunWait,
                 3 => AnimationAction::Run,
-                _ => return Err(Error::InvalidFormat),
+                _ => AnimationAction::Invalid,
             };
         }
 
@@ -1249,7 +1419,10 @@ impl AnimationControl {
         }
 
         if let Some(v) = kv.get(b'z') {
-            result.gap_ms = v;
+            // 'z' is one of the keys Parser.finishValue parses as an
+            // i32, so the u32 in the KV table is the bit pattern of
+            // that i32 and this reconstructs it exactly.
+            result.gap_ms = i32::from_ne_bytes(v.to_ne_bytes());
         }
 
         if let Some(v) = kv.get(b'c') {
@@ -1260,12 +1433,33 @@ impl AnimationControl {
             result.loops = v;
         }
 
-        Ok(result)
+        result
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Delete {
+pub struct Delete {
+    pub image_id: u32,      // i
+    pub image_number: u32,  // I
+    pub placement_id: u32,  // p
+    pub action: DeleteAction,
+}
+
+impl Delete {
+    fn parse(kv: &Kv) -> Result<Delete, Error> {
+        Ok(Delete {
+            image_id: kv.get(b'i').unwrap_or(0),
+            image_number: kv.get(b'I').unwrap_or(0),
+            placement_id: kv.get(b'p').unwrap_or(0),
+            action: DeleteAction::parse(kv)?,
+        })
+    }
+}
+
+/// PORT NOTE: the reference nests this as `Delete.Action`; Rust cannot nest a
+/// type inside a struct, so it is a sibling named `DeleteAction`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteAction {
     // a/A
     All(bool),
 
@@ -1287,7 +1481,7 @@ pub enum Delete {
     IntersectCursor(bool),
 
     // f/F
-    AnimationFrames(bool),
+    AnimationFrames(DeleteAnimationFrames),
 
     // p/P
     IntersectCell {
@@ -1330,8 +1524,17 @@ pub enum Delete {
     },
 }
 
-impl Delete {
-    fn parse(kv: &Kv) -> Result<Delete, Error> {
+/// PORT NOTE: the reference nests this as `Delete.Action.AnimationFrames`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DeleteAnimationFrames {
+    pub delete: bool,      // uppercase
+    pub image_id: u32,     // i
+    pub image_number: u32, // I
+    pub frame: u32,        // r
+}
+
+impl DeleteAction {
+    fn parse(kv: &Kv) -> Result<DeleteAction, Error> {
         let what: u8 = {
             let value = match kv.get(b'd') {
                 Some(v) => v,
@@ -1344,21 +1547,21 @@ impl Delete {
         };
 
         Ok(match what {
-            b'a' | b'A' => Delete::All(what == b'A'),
+            b'a' | b'A' => DeleteAction::All(what == b'A'),
 
             b'i' | b'I' => {
-                let mut result: Delete = Delete::Id {
+                let mut result: DeleteAction = DeleteAction::Id {
                     delete: what == b'I',
                     image_id: 0,
                     placement_id: 0,
                 };
                 if let Some(v) = kv.get(b'i') {
-                    if let Delete::Id { image_id, .. } = &mut result {
+                    if let DeleteAction::Id { image_id, .. } = &mut result {
                         *image_id = v;
                     }
                 }
                 if let Some(v) = kv.get(b'p') {
-                    if let Delete::Id { placement_id, .. } = &mut result {
+                    if let DeleteAction::Id { placement_id, .. } = &mut result {
                         *placement_id = v;
                     }
                 }
@@ -1367,18 +1570,18 @@ impl Delete {
             }
 
             b'n' | b'N' => {
-                let mut result: Delete = Delete::Newest {
+                let mut result: DeleteAction = DeleteAction::Newest {
                     delete: what == b'N',
                     image_number: 0,
                     placement_id: 0,
                 };
                 if let Some(v) = kv.get(b'I') {
-                    if let Delete::Newest { image_number, .. } = &mut result {
+                    if let DeleteAction::Newest { image_number, .. } = &mut result {
                         *image_number = v;
                     }
                 }
                 if let Some(v) = kv.get(b'p') {
-                    if let Delete::Newest { placement_id, .. } = &mut result {
+                    if let DeleteAction::Newest { placement_id, .. } = &mut result {
                         *placement_id = v;
                     }
                 }
@@ -1386,23 +1589,39 @@ impl Delete {
                 result
             }
 
-            b'c' | b'C' => Delete::IntersectCursor(what == b'C'),
+            b'c' | b'C' => DeleteAction::IntersectCursor(what == b'C'),
 
-            b'f' | b'F' => Delete::AnimationFrames(what == b'F'),
+            b'f' | b'F' => {
+                let mut result: DeleteAnimationFrames = DeleteAnimationFrames {
+                    delete: what == b'F',
+                    ..Default::default()
+                };
+                if let Some(v) = kv.get(b'i') {
+                    result.image_id = v;
+                }
+                if let Some(v) = kv.get(b'I') {
+                    result.image_number = v;
+                }
+                if let Some(v) = kv.get(b'r') {
+                    result.frame = v;
+                }
+
+                DeleteAction::AnimationFrames(result)
+            }
 
             b'p' | b'P' => {
-                let mut result: Delete = Delete::IntersectCell {
+                let mut result: DeleteAction = DeleteAction::IntersectCell {
                     delete: what == b'P',
                     x: 0,
                     y: 0,
                 };
                 if let Some(v) = kv.get(b'x') {
-                    if let Delete::IntersectCell { x, .. } = &mut result {
+                    if let DeleteAction::IntersectCell { x, .. } = &mut result {
                         *x = v;
                     }
                 }
                 if let Some(v) = kv.get(b'y') {
-                    if let Delete::IntersectCell { y, .. } = &mut result {
+                    if let DeleteAction::IntersectCell { y, .. } = &mut result {
                         *y = v;
                     }
                 }
@@ -1411,25 +1630,25 @@ impl Delete {
             }
 
             b'q' | b'Q' => {
-                let mut result: Delete = Delete::IntersectCellZ {
+                let mut result: DeleteAction = DeleteAction::IntersectCellZ {
                     delete: what == b'Q',
                     x: 0,
                     y: 0,
                     z: 0,
                 };
                 if let Some(v) = kv.get(b'x') {
-                    if let Delete::IntersectCellZ { x, .. } = &mut result {
+                    if let DeleteAction::IntersectCellZ { x, .. } = &mut result {
                         *x = v;
                     }
                 }
                 if let Some(v) = kv.get(b'y') {
-                    if let Delete::IntersectCellZ { y, .. } = &mut result {
+                    if let DeleteAction::IntersectCellZ { y, .. } = &mut result {
                         *y = v;
                     }
                 }
                 if let Some(v) = kv.get(b'z') {
                     // We can bitcast here because of how we parse it earlier.
-                    if let Delete::IntersectCellZ { z, .. } = &mut result {
+                    if let DeleteAction::IntersectCellZ { z, .. } = &mut result {
                         *z = v as i32;
                     }
                 }
@@ -1438,31 +1657,35 @@ impl Delete {
             }
 
             b'r' | b'R' => {
-                let x = match kv.get(b'x') {
-                    Some(v) => v,
-                    None => return Err(Error::InvalidFormat),
-                };
-                let y = match kv.get(b'y') {
-                    Some(v) => v,
-                    None => return Err(Error::InvalidFormat),
-                };
-                if x > y {
-                    return Err(Error::InvalidFormat);
-                }
-                Delete::Range {
+                // Both bounds default to zero when omitted and no
+                // validation is performed; an inverted or zero range
+                // simply matches no images.
+                let mut result: DeleteAction = DeleteAction::Range {
                     delete: what == b'R',
-                    first: x,
-                    last: y,
+                    first: 0,
+                    last: 0,
+                };
+                if let Some(v) = kv.get(b'x') {
+                    if let DeleteAction::Range { first, .. } = &mut result {
+                        *first = v;
+                    }
                 }
+                if let Some(v) = kv.get(b'y') {
+                    if let DeleteAction::Range { last, .. } = &mut result {
+                        *last = v;
+                    }
+                }
+
+                result
             }
 
             b'x' | b'X' => {
-                let mut result: Delete = Delete::Column {
+                let mut result: DeleteAction = DeleteAction::Column {
                     delete: what == b'X',
                     x: 0,
                 };
                 if let Some(v) = kv.get(b'x') {
-                    if let Delete::Column { x, .. } = &mut result {
+                    if let DeleteAction::Column { x, .. } = &mut result {
                         *x = v;
                     }
                 }
@@ -1471,12 +1694,12 @@ impl Delete {
             }
 
             b'y' | b'Y' => {
-                let mut result: Delete = Delete::Row {
+                let mut result: DeleteAction = DeleteAction::Row {
                     delete: what == b'Y',
                     y: 0,
                 };
                 if let Some(v) = kv.get(b'y') {
-                    if let Delete::Row { y, .. } = &mut result {
+                    if let DeleteAction::Row { y, .. } = &mut result {
                         *y = v;
                     }
                 }
@@ -1485,13 +1708,13 @@ impl Delete {
             }
 
             b'z' | b'Z' => {
-                let mut result: Delete = Delete::Z {
+                let mut result: DeleteAction = DeleteAction::Z {
                     delete: what == b'Z',
                     z: 0,
                 };
                 if let Some(v) = kv.get(b'z') {
                     // We can bitcast here because of how we parse it earlier.
-                    if let Delete::Z { z, .. } = &mut result {
+                    if let DeleteAction::Z { z, .. } = &mut result {
                         *z = v as i32;
                     }
                 }
@@ -1727,12 +1950,12 @@ mod tests {
 
         assert!(matches!(command.control, Control::Delete(_)));
         let v = match command.control {
-            Control::Delete(v) => v,
+            Control::Delete(v) => v.action,
             _ => unreachable!(),
         };
-        assert!(matches!(v, Delete::IntersectCell { .. }));
+        assert!(matches!(v, DeleteAction::IntersectCell { .. }));
         let dv = match v {
-            Delete::IntersectCell { delete, x, y } => (delete, x, y),
+            DeleteAction::IntersectCell { delete, x, y } => (delete, x, y),
             _ => unreachable!(),
         };
         assert!(!dv.0);
@@ -2109,12 +2332,12 @@ mod tests {
 
         assert!(matches!(command.control, Control::Delete(_)));
         let v = match command.control {
-            Control::Delete(v) => v,
+            Control::Delete(v) => v.action,
             _ => unreachable!(),
         };
-        assert!(matches!(v, Delete::Range { .. }));
+        assert!(matches!(v, DeleteAction::Range { .. }));
         let range = match v {
-            Delete::Range {
+            DeleteAction::Range {
                 delete,
                 first,
                 last,
@@ -2138,12 +2361,12 @@ mod tests {
 
         assert!(matches!(command.control, Control::Delete(_)));
         let v = match command.control {
-            Control::Delete(v) => v,
+            Control::Delete(v) => v.action,
             _ => unreachable!(),
         };
-        assert!(matches!(v, Delete::Range { .. }));
+        assert!(matches!(v, DeleteAction::Range { .. }));
         let range = match v {
-            Delete::Range {
+            DeleteAction::Range {
                 delete,
                 first,
                 last,
@@ -2157,24 +2380,65 @@ mod tests {
 
     #[test]
     fn delete_range_command_3() {
+        // An inverted range is accepted; it simply matches no images. This
+        // matches kitty, which does no validation and filters with
+        // `x <= image_id <= y`.
         let mut p = Parser::init(1024 * 1024);
 
         let input = b"a=d,d=R,x=5,y=4";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        assert_eq!(Err(Error::InvalidFormat), p.complete());
+        let command = p.complete().unwrap();
+
+        assert!(matches!(command.control, Control::Delete(_)));
+        let v = match command.control {
+            Control::Delete(v) => v.action,
+            _ => unreachable!(),
+        };
+        assert!(matches!(v, DeleteAction::Range { .. }));
+        let range = match v {
+            DeleteAction::Range {
+                delete,
+                first,
+                last,
+            } => (delete, first, last),
+            _ => unreachable!(),
+        };
+        assert!(range.0);
+        assert_eq!(5u32, range.1);
+        assert_eq!(4u32, range.2);
     }
 
     #[test]
     fn delete_range_command_4() {
+        // An omitted upper bound defaults to zero, which matches no images
+        // since image IDs are always non-zero.
         let mut p = Parser::init(1024 * 1024);
 
         let input = b"a=d,d=R,x=5";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        assert_eq!(Err(Error::InvalidFormat), p.complete());
+        let command = p.complete().unwrap();
+
+        assert!(matches!(command.control, Control::Delete(_)));
+        let v = match command.control {
+            Control::Delete(v) => v.action,
+            _ => unreachable!(),
+        };
+        assert!(matches!(v, DeleteAction::Range { .. }));
+        let range = match v {
+            DeleteAction::Range {
+                delete,
+                first,
+                last,
+            } => (delete, first, last),
+            _ => unreachable!(),
+        };
+        assert!(range.0);
+        assert_eq!(5u32, range.1);
+        assert_eq!(0u32, range.2);
     }
 
     #[test]
@@ -2185,6 +2449,187 @@ mod tests {
         for c in input.iter() {
             p.feed(*c).unwrap();
         }
-        assert_eq!(Err(Error::InvalidFormat), p.complete());
+        let command = p.complete().unwrap();
+
+        assert!(matches!(command.control, Control::Delete(_)));
+        let v = match command.control {
+            Control::Delete(v) => v.action,
+            _ => unreachable!(),
+        };
+        assert!(matches!(v, DeleteAction::Range { .. }));
+        let range = match v {
+            DeleteAction::Range {
+                delete,
+                first,
+                last,
+            } => (delete, first, last),
+            _ => unreachable!(),
+        };
+        assert!(range.0);
+        assert_eq!(0u32, range.1);
+        assert_eq!(5u32, range.2);
+    }
+
+    #[test]
+    fn delete_range_command_6() {
+        // Both bounds omitted defaults to the empty range [0, 0].
+        let mut p = Parser::init(1024 * 1024);
+
+        let input = b"a=d,d=r";
+        for c in input.iter() {
+            p.feed(*c).unwrap();
+        }
+        let command = p.complete().unwrap();
+
+        assert!(matches!(command.control, Control::Delete(_)));
+        let v = match command.control {
+            Control::Delete(v) => v.action,
+            _ => unreachable!(),
+        };
+        assert!(matches!(v, DeleteAction::Range { .. }));
+        let range = match v {
+            DeleteAction::Range {
+                delete,
+                first,
+                last,
+            } => (delete, first, last),
+            _ => unreachable!(),
+        };
+        assert!(!range.0);
+        assert_eq!(0u32, range.1);
+        assert_eq!(0u32, range.2);
+    }
+
+    // Kitty range-checks non-flag keys while handling the command, not while
+    // parsing, so a bad value never drops the command (which would make a
+    // response impossible even when the client gave an id). The flag keys
+    // "a", "d", "t" and "o" are the exception.
+
+    #[test]
+    fn unknown_format_value_is_deferred_to_execution() {
+        let command = Parser::parse_string(b"a=t,f=42,i=31,s=1,v=1").unwrap();
+
+        assert!(matches!(command.control, Control::Transmit(_)));
+        let v = match command.control {
+            Control::Transmit(v) => v,
+            _ => unreachable!(),
+        };
+        assert!(v.format_unknown);
+        assert_eq!(31u32, v.image_id);
+    }
+
+    #[test]
+    fn zero_format_value_is_rgba() {
+        let command = Parser::parse_string(b"a=t,f=0,i=31,s=1,v=1").unwrap();
+
+        assert!(matches!(command.control, Control::Transmit(_)));
+        let v = match command.control {
+            Control::Transmit(v) => v,
+            _ => unreachable!(),
+        };
+        assert!(!v.format_unknown);
+        assert_eq!(Format::Rgba, v.format);
+    }
+
+    #[test]
+    fn known_format_values_are_not_unknown() {
+        for (input, want) in [
+            (b"f=24".as_slice(), Format::Rgb),
+            (b"f=32".as_slice(), Format::Rgba),
+            (b"f=100".as_slice(), Format::Png),
+        ] {
+            let command = Parser::parse_string(input).unwrap();
+
+            let v = match command.control {
+                Control::Transmit(v) => v,
+                _ => unreachable!(),
+            };
+            assert!(!v.format_unknown);
+            assert_eq!(want, v.format);
+        }
+    }
+
+    #[test]
+    fn quiet_value_above_two_suppresses_all_responses() {
+        let command = Parser::parse_string(b"a=t,q=3,i=31,s=1,v=1").unwrap();
+
+        assert_eq!(Quiet::Failures, command.quiet);
+    }
+
+    #[test]
+    fn cursor_movement_value_above_one_moves_the_cursor() {
+        let command = Parser::parse_string(b"a=p,i=31,C=2").unwrap();
+
+        assert!(matches!(command.control, Control::Display(_)));
+        let v = match command.control {
+            Control::Display(v) => v,
+            _ => unreachable!(),
+        };
+        assert_eq!(CursorMovement::After, v.cursor_movement);
+    }
+
+    #[test]
+    fn virtual_placement_value_above_one_is_virtual() {
+        let command = Parser::parse_string(b"a=p,i=31,U=2").unwrap();
+
+        assert!(matches!(command.control, Control::Display(_)));
+        let v = match command.control {
+            Control::Display(v) => v,
+            _ => unreachable!(),
+        };
+        assert!(v.virtual_placement);
+    }
+
+    #[test]
+    fn animation_frame_composition_value_above_one_alpha_blends() {
+        let command = Parser::parse_string(b"a=f,i=31,X=2").unwrap();
+
+        assert!(matches!(command.control, Control::TransmitAnimationFrame(_)));
+        let v = match command.control {
+            Control::TransmitAnimationFrame(v) => v,
+            _ => unreachable!(),
+        };
+        assert_eq!(CompositionMode::AlphaBlend, v.composition_mode);
+    }
+
+    #[test]
+    fn animation_compose_value_above_one_overwrites() {
+        let command = Parser::parse_string(b"a=c,i=31,C=2").unwrap();
+
+        assert!(matches!(command.control, Control::ComposeAnimation(_)));
+        let v = match command.control {
+            Control::ComposeAnimation(v) => v,
+            _ => unreachable!(),
+        };
+        assert_eq!(CompositionMode::Overwrite, v.composition_mode);
+    }
+
+    #[test]
+    fn animation_control_action_above_three_is_ignored() {
+        let command = Parser::parse_string(b"a=a,i=31,s=4").unwrap();
+
+        assert!(matches!(command.control, Control::ControlAnimation(_)));
+        let v = match command.control {
+            Control::ControlAnimation(v) => v,
+            _ => unreachable!(),
+        };
+        assert_eq!(AnimationAction::Invalid, v.action);
+    }
+
+    #[test]
+    fn unknown_flag_key_values_still_fail_parsing() {
+        // Kitty rejects these while parsing too. See gen/apc_parsers.py.
+        for input in [
+            b"a=z,i=31".as_slice(),     // action
+            b"a=d,d=w,i=31".as_slice(), // delete action
+            b"a=t,t=q,i=31".as_slice(), // transmission medium
+            b"a=t,o=q,i=31".as_slice(), // compression
+        ] {
+            assert_eq!(
+                Err(Error::InvalidFormat),
+                Parser::parse_string(input),
+                "input: {input:?}"
+            );
+        }
     }
 }
