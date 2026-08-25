@@ -378,8 +378,8 @@ impl Handler {
     // to consume; the per-arm `deinit()` calls on the moved-out parsers reproduce
     // the deferred `state.deinit()` (the moved-out value drops at scope end either
     // way, so the explicit `deinit()` is the no-op call-site fidelity hook).
-    // `alloc` is threaded for fidelity (kitty `complete` consumes it via the
-    // arena `child_allocator` in the reference; the Rust parser ignores it).
+    // `alloc` is threaded for fidelity (kitty `complete` consumes the
+    // parser's own `alloc` in the reference; the Rust parser ignores it).
     //
     /// Complete the current APC. The caller owns a returned result and must
     /// call `Command.deinit` with the allocator used while feeding the APC.
@@ -395,7 +395,7 @@ impl Handler {
             State::Unknown(mut unknown) => Some(Command::Unknown(unknown.to_owned())),
             // .kitty => |*p| kitty: {
             //     if (comptime !build_options.kitty_graphics) unreachable;
-            //     const alloc = p.arena.child_allocator;
+            //     const alloc = p.alloc;
             //     const command = p.complete(alloc) catch |err| {
             //         log.warn("kitty graphics protocol error: {}", .{err});
             //         break :kitty null;

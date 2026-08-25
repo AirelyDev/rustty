@@ -117,7 +117,44 @@ const MAX_PATH_BYTES: usize = if cfg!(any(
 // pub const default_continuation_max_bytes: usize = 0;
 pub const DEFAULT_CONTINUATION_MAX_BYTES: usize = 0;
 
-// pub const Io = struct { ... };
+// /// Owns the `std.Io` implementation retained by every C terminal.
+// ///
+// /// Snapshot decoding creates this before the native terminal exists and
+// /// transfers it into the final C wrapper after READY.
+// pub const Io = struct {
+//     impl: Impl,
+//
+//     /// Platform-specific storage backing the public `std.Io` value.
+//     ///
+//     /// Where supported (POSIX) we use TinyIo, which is stateless and
+//     /// supports exactly the operations the terminal needs at a fraction
+//     /// of the code size (see lib/TinyIo.zig). On Windows we use
+//     /// `std.Io.Threaded` since TinyIo doesn't implement the NT
+//     /// operations. On the remaining targets (e.g. freestanding wasm)
+//     /// TinyIo degrades to `std.Io.failing`, which is correct: they have
+//     /// no filesystem.
+//     const Impl = if (builtin.os.tag == .windows)
+//         *std.Io.Threaded
+//     else
+//         lib.TinyIo;
+//
+//     /// Allocation failures possible while constructing an I/O owner.
+//     pub const Error = error{OutOfMemory};
+//
+//     /// Allocate the native I/O implementation when the platform requires it.
+//     pub fn init(alloc: std.mem.Allocator) Error!Io { ... }
+//
+//     /// Return the value passed to native terminal construction and decoding.
+//     pub fn io(self: Io) std.Io { ... }
+//
+//     /// Release an I/O implementation that has not already been transferred.
+//     pub fn deinit(self: Io, alloc: std.mem.Allocator) void {
+//         // Note: this must not name `std.Io.Threaded` in the condition
+//         // because resolving that type trips its container-level comptime
+//         // checks on targets it doesn't support (e.g. wasm32-freestanding).
+//         if (comptime Impl != lib.TinyIo) { ... }
+//     }
+// };
 //
 // PORT NOTE (Bundle S, extends the `io_impl` note below): the reference `Io`
 // owns the `std.Io` implementation retained by every C terminal (TinyIo on
@@ -158,18 +195,16 @@ pub struct TerminalWrapper {
     // that reference under Stacked Borrows. `free` reclaims it LAST.
     pub alloc: *mut dyn rustty_lib::allocator::ZigAllocator,
 
-    // /// We need to keep an I/O instance here as part of the terminal since we
-    // /// have no way of taking it in the C API. This is set up in `new` and
-    // /// destroyed on `free`.
-    // ///
-    // /// This is set to null on freestanding platforms, which get std.Io.failing
-    // /// instead.
-    // io_impl: IoImpl,
+    // /// C construction has no I/O argument, so the wrapper retains the owner
+    // /// created by `new` or transferred from snapshot decoding until `free`.
+    // /// Freestanding owners contain no native allocation and expose failing I/O.
+    // io: Io,
     //
-    // PORT NOTE (`e8525c0fd`/`da04b65d4`): N/A. Zig 0.16 threads an explicit
-    // `std.Io` through every blocking call, so the C API — which has no place to
-    // take one — must own a `*std.Io.Threaded`. Rust's I/O is ambient, so there
-    // is nothing to store, allocate in `new`, or `deinit` in `free`.
+    // PORT NOTE (`e8525c0fd`/`da04b65d4`, pin field `io: Io`): N/A. Zig 0.16
+    // threads an explicit `std.Io` through every blocking call, so the C API —
+    // which has no place to take one — must own the `Io` owner quoted above.
+    // Rust's I/O is ambient, so there is nothing to store, allocate in `new`,
+    // transfer from snapshot decoding, or `deinit` in `free`.
     //
     // /// We also need to store a temp dir path for some operations (e.g., kitty
     // /// graphics). This provides stable storage for the API calls.

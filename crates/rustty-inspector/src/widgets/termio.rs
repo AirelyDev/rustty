@@ -60,6 +60,13 @@ use rustty_vt::style;
 use rustty_vt::terminal::{ScrollingRegion, Terminal};
 
 use super::screen;
+use super::surface::SurfaceData;
+
+// const log = std.log.scoped(.inspector_terminal_io);
+//
+// PORT NOTE: no logging facade is wired into the inspector crate (the
+// renderer.rs precedent); the `log.err`/`log.warn` arms below are preserved as
+// comments at their sites.
 
 /// Minimal `defer`-style scope guard — runs `f` on drop (mirrors the private
 /// `Defer` in `widgets.rs`/`screen.rs`). panic=abort means no unwinding ever
@@ -191,8 +198,19 @@ impl Stream {
         self.parser_stream.handler.state = None;
     }
 
-    // pub fn draw(self: *Stream, alloc: Allocator, palette: *const terminal.color.Palette) void {
-    pub fn draw(&mut self, alloc: Allocator, palette: &Palette) {
+    // pub fn draw(
+    //     self: *Stream,
+    //     surface: *Surface,
+    //     palette: *const terminal.color.Palette,
+    // ) void {
+    //
+    // PORT NOTE (R4 acyclic Surface seam): `surface: &SurfaceData` replaces
+    // the reference's `surface: *Surface` (`ad96613a8` widened the parameter
+    // from `alloc: Allocator` so Copy/Export can reach `rt_surface`/`rt_app`
+    // — here through the SurfaceData seam trampolines).
+    pub fn draw(&mut self, surface: &SurfaceData, palette: &Palette) {
+        // const alloc = surface.alloc;
+        let alloc = surface.alloc;
         // const events = &self.events;
         // const handler = &self.parser_stream.handler;
         // const popup_filter = "Filter";
@@ -250,6 +268,34 @@ impl Stream {
                     self.events.clear();
                     // handler.current_seq = 1;
                     self.parser_stream.handler.current_seq = 1;
+                }
+
+                // cimgui.c.ImGui_SameLineEx(0, cimgui.c.ImGui_GetStyle().*.ItemInnerSpacing.x);
+                unsafe {
+                    dcimgui_sys::ImGui_SameLineEx(
+                        0.0,
+                        (*dcimgui_sys::ImGui_GetStyle()).ItemInnerSpacing.x,
+                    )
+                };
+                // if (cimgui.c.ImGui_Button("Copy")) {
+                //     self.copyEvents(surface);
+                // }
+                if unsafe { dcimgui_sys::ImGui_Button(c"Copy".as_ptr()) } {
+                    self.copyEvents(surface);
+                }
+
+                // cimgui.c.ImGui_SameLineEx(0, cimgui.c.ImGui_GetStyle().*.ItemInnerSpacing.x);
+                unsafe {
+                    dcimgui_sys::ImGui_SameLineEx(
+                        0.0,
+                        (*dcimgui_sys::ImGui_GetStyle()).ItemInnerSpacing.x,
+                    )
+                };
+                // if (cimgui.c.ImGui_Button("Export to file")) {
+                //     self.exportEvents(surface);
+                // }
+                if unsafe { dcimgui_sys::ImGui_Button(c"Export to file".as_ptr()) } {
+                    self.exportEvents(surface);
                 }
             }
         }
@@ -670,6 +716,155 @@ impl Stream {
                 self.is_keyboard_selection = true;
             }
         }
+    }
+
+    /// Copy all recorded events to the standard clipboard in chronological
+    /// order.
+    // fn copyEvents(
+    //     self: *const Stream,
+    //     surface: *Surface,
+    // ) void {
+    #[allow(non_snake_case)] // faithful Zig name (R1)
+    fn copyEvents(&self, surface: &SurfaceData) {
+        // const alloc = surface.alloc;
+        let alloc = surface.alloc;
+        // const contents = self.formatEvents(alloc) catch |err| {
+        //     log.err("failed to format terminal IO events for copy err={}", .{err});
+        //     return;
+        // };
+        // defer alloc.free(contents);
+        //
+        // PORT NOTE: `formatEvents` is infallible under the global allocator
+        // (the `!` collapses, OOM aborts — panic=abort parity; this file's
+        // `init` precedent), so the `catch log.err` early-return arm is
+        // structurally unreachable; `contents` frees on `Drop` (the `defer
+        // alloc.free`).
+        let contents = self.formatEvents(alloc);
+
+        // surface.rt_surface.setClipboard(.standard, &.{.{
+        //     .mime = "text/plain",
+        //     .data = contents,
+        // }}, false) catch |err| {
+        //     log.err("failed to copy terminal IO events err={}", .{err});
+        // };
+        //
+        // The `.standard` target is fixed inside the caller's trampoline (the
+        // `SurfaceData::rt_set_clipboard` doc); the reference's `[:0]u8` ->
+        // `[]const u8` coercion of `.data` excludes the sentinel from the
+        // slice LENGTH while the backing NUL stays one past it, hence the
+        // `len - 1` slice of the NUL-terminated `contents`. The `catch
+        // log.err` arm is comment-preserved (no logging facade — module note);
+        // the error is swallowed exactly as the reference does.
+        //
+        // SAFETY: `surface.surface` is the erased live `*Surface` and
+        // `rt_set_clipboard` its matching trampoline, both caller-supplied and
+        // valid for this draw call (INV-1/INV-11 — the `SurfaceData`
+        // contract).
+        let _ = unsafe {
+            (surface.rt_set_clipboard)(
+                surface.surface,
+                b"text/plain",
+                &contents[..contents.len() - 1],
+                false,
+            )
+        };
+    }
+
+    /// Ask the application runtime to save all recorded events to a file.
+    // fn exportEvents(
+    //     self: *const Stream,
+    //     surface: *Surface,
+    // ) void {
+    #[allow(non_snake_case)] // faithful Zig name (R1)
+    fn exportEvents(&self, surface: &SurfaceData) {
+        // const alloc = surface.alloc;
+        let alloc = surface.alloc;
+        // const contents = self.formatEvents(alloc) catch |err| {
+        //     log.err("failed to format terminal IO events for export err={}", .{err});
+        //     return;
+        // };
+        // defer alloc.free(contents);
+        //
+        // PORT NOTE: infallible in the port (see copyEvents); frees on `Drop`.
+        let contents = self.formatEvents(alloc);
+
+        // const handled = surface.rt_app.performAction(
+        //     .{ .surface = surface },
+        //     .export_terminal_io,
+        //     .{ .contents = contents },
+        // ) catch |err| {
+        //     log.err("failed to export terminal IO events err={}", .{err});
+        //     return;
+        // };
+        //
+        // (`.contents` again excludes the sentinel byte — the `[:0]u8` ->
+        // `[]const u8` coercion, see copyEvents.)
+        //
+        // SAFETY: `surface.surface` is the erased live `*Surface` and
+        // `rt_export_terminal_io` its matching trampoline, both
+        // caller-supplied and valid for this draw call (INV-1/INV-11 — the
+        // `SurfaceData` contract).
+        let _handled = match unsafe {
+            (surface.rt_export_terminal_io)(surface.surface, &contents[..contents.len() - 1])
+        } {
+            Ok(v) => v,
+            Err(()) => {
+                // log.err("failed to export terminal IO events err={}", .{err});
+                return;
+            }
+        };
+
+        // if (!handled) {
+        //     log.warn("application runtime does not support exporting terminal IO events", .{});
+        // }
+        //
+        // (the `!handled` arm's body is only the log.warn — comment-preserved,
+        // no logging facade; module note.)
+    }
+
+    /// Format all recorded events as tab-separated text. Events are exported
+    /// oldest-first even though the inspector displays the newest event first.
+    // fn formatEvents(
+    //     self: *const Stream,
+    //     alloc: Allocator,
+    // ) ![:0]u8 {
+    //
+    // PORT NOTE: infallible under the global allocator (the `!` collapses, OOM
+    // aborts — panic=abort parity); `alloc` retained for call-shape parity.
+    // Returns the reference `[:0]u8` as a NUL-terminated byte vec (the
+    // `raw_description` convention).
+    #[allow(non_snake_case)] // faithful Zig name (R1)
+    fn formatEvents(&self, _alloc: Allocator) -> Vec<u8> {
+        // var buf: std.Io.Writer.Allocating = .init(alloc);
+        // errdefer buf.deinit();
+        let mut buf: Vec<u8> = Vec::new();
+
+        // try buf.writer.writeAll("Seq\tKind\tDescription\n");
+        buf.extend_from_slice(b"Seq\tKind\tDescription\n");
+        // var it = self.events.iterator(.forward);
+        let mut it = self.events.iterator(Direction::Forward);
+        // while (it.next()) |ev| {
+        while let Some(ev) = it.next() {
+            // try buf.writer.print(
+            //     "{d}\t{s}\t{s}\n",
+            //     .{ ev.seq, @tagName(ev.kind), ev.raw_description },
+            // );
+            //
+            // (`{s}` of the stored `[:0]const u8` prints the bytes WITHOUT the
+            // sentinel, so the NUL-terminated `raw_description` is sliced
+            // short of it; `@tagName` is the `Kind::tag_name` C-string minus
+            // its NUL.)
+            buf.extend_from_slice(format!("{}", ev.seq).as_bytes());
+            buf.push(b'\t');
+            buf.extend_from_slice(ev.kind.tag_name().to_bytes());
+            buf.push(b'\t');
+            buf.extend_from_slice(&ev.raw_description[..ev.raw_description.len() - 1]);
+            buf.push(b'\n');
+        }
+
+        // return try buf.toOwnedSliceSentinel(0);
+        buf.push(0);
+        buf
     }
 }
 
@@ -1910,6 +2105,145 @@ mod tests {
         assert!(osc_md(&C::HyperlinkEnd).is_empty());
         assert!(osc_md(&C::Invalid).is_empty());
         assert!(osc_md(&C::ConemuWaitInput).is_empty());
+    }
+
+    // Build a Stream with the given (seq, kind, description) events appended
+    // oldest-first (the `ad96613a8` copy/export tests' shared fixture; the
+    // ring starts at capacity 2, so grow first when more are needed).
+    fn stream_with_events(events: &[(usize, Kind, &[u8])]) -> Stream {
+        let mut s = Stream::init(Allocator);
+        if events.len() > s.events.capacity() {
+            s.events.resize(events.len()).unwrap();
+        }
+        for &(seq, kind, desc) in events {
+            let ev = VTEvent {
+                seq,
+                kind,
+                raw_description: dupe_z(desc),
+                cursor: default_cursor(),
+                scrolling_region: ScrollRegionSnapshot {
+                    top: 0,
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                },
+                metadata: Metadata::new(),
+                imgui_selected: false,
+            };
+            s.events.append(ev).unwrap();
+        }
+        s
+    }
+
+    // ad96613a8 (inspector terminal-IO copy/export): formatEvents emits the
+    // "Seq\tKind\tDescription\n" header + one "{d}\t{s}\t{s}\n" row per event,
+    // oldest-first, NUL-terminated (`toOwnedSliceSentinel(0)`).
+    #[test]
+    fn format_events_tab_separated_oldest_first() {
+        let mut s = stream_with_events(&[
+            (1, Kind::Print, b"'A' (U+41)"),
+            (2, Kind::Csi, b"1;49 h"),
+        ]);
+        let out = s.formatEvents(Allocator);
+        assert_eq!(
+            out,
+            b"Seq\tKind\tDescription\n1\tprint\t'A' (U+41)\n2\tcsi\t1;49 h\n\0".to_vec()
+        );
+        // Empty stream: header only (+ sentinel).
+        s.deinit(Allocator);
+        let empty = Stream::init(Allocator);
+        assert_eq!(
+            empty.formatEvents(Allocator),
+            b"Seq\tKind\tDescription\n\0".to_vec()
+        );
+    }
+
+    // ad96613a8: copyEvents/exportEvents hand the trampolines the formatted
+    // contents MINUS the NUL sentinel (the `[:0]u8` -> `[]const u8` coercion),
+    // with the widget-named "text/plain" mime + confirm=false, and swallow
+    // seam errors (no panic, no state change).
+    #[test]
+    fn copy_and_export_events_seam_contract() {
+        use std::sync::Mutex;
+        static CAPTURED: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+
+        unsafe fn cap_clipboard(
+            surface: *mut c_void,
+            mime: &[u8],
+            data: &[u8],
+            confirm: bool,
+        ) -> Result<(), ()> {
+            assert!(surface.is_null()); // the erased ctx passes through untouched
+            assert_eq!(mime, b"text/plain");
+            assert!(!confirm);
+            CAPTURED.lock().unwrap().push(data.to_vec());
+            Ok(())
+        }
+        unsafe fn cap_export(surface: *mut c_void, contents: &[u8]) -> Result<bool, ()> {
+            assert!(surface.is_null());
+            CAPTURED.lock().unwrap().push(contents.to_vec());
+            Ok(false) // the !handled log.warn arm — must not panic
+        }
+        unsafe fn err_clipboard(
+            _surface: *mut c_void,
+            _mime: &[u8],
+            _data: &[u8],
+            _confirm: bool,
+        ) -> Result<(), ()> {
+            Err(())
+        }
+        unsafe fn err_export(_surface: *mut c_void, _contents: &[u8]) -> Result<bool, ()> {
+            Err(())
+        }
+
+        // A SurfaceData whose non-seam fields are inert (nothing in
+        // copyEvents/exportEvents touches them).
+        let data = |clip: crate::widgets::surface::RtSetClipboardFn,
+                    export: crate::widgets::surface::RtExportTerminalIOFn| SurfaceData {
+            renderer_state: core::ptr::null_mut(),
+            alloc: Allocator,
+            size: rustty_renderer::size::Size {
+                screen: rustty_renderer::size::ScreenSize {
+                    width: 0,
+                    height: 0,
+                },
+                cell: rustty_renderer::size::CellSize {
+                    width: 1,
+                    height: 1,
+                },
+                padding: rustty_renderer::size::Padding {
+                    top: 0,
+                    bottom: 0,
+                    right: 0,
+                    left: 0,
+                },
+            },
+            font_size_points: 0.0,
+            font_size_pixels: 0.0,
+            mouse_click_state: [rustty_vt::input::mouse::ButtonState::Release;
+                rustty_vt::input::mouse::Button::MAX as usize],
+            selection_gesture: core::ptr::null(),
+            surface: core::ptr::null_mut(),
+            rt_set_clipboard: clip,
+            rt_export_terminal_io: export,
+        };
+
+        let s = stream_with_events(&[(7, Kind::Osc, b"change_window_title ")]);
+        let expected: &[u8] = b"Seq\tKind\tDescription\n7\tosc\tchange_window_title \n";
+
+        s.copyEvents(&data(cap_clipboard, cap_export));
+        s.exportEvents(&data(cap_clipboard, cap_export));
+        {
+            let captured = CAPTURED.lock().unwrap();
+            assert_eq!(captured.len(), 2);
+            assert_eq!(captured[0], expected); // no trailing NUL crosses the seam
+            assert_eq!(captured[1], expected);
+        }
+
+        // Seam errors are swallowed exactly as the reference `catch log.err`.
+        s.copyEvents(&data(err_clipboard, err_export));
+        s.exportEvents(&data(err_clipboard, err_export));
+        assert_eq!(CAPTURED.lock().unwrap().len(), 2);
     }
 
     #[test]

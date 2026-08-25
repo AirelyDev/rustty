@@ -1,0 +1,132 @@
+G3b [apprt]: SKIPPED — PORT STATUS is not done (57 oracle file(s) unexamined)
+G3b [apprt-api]: SKIPPED — PORT STATUS is not done (5 oracle file(s) unexamined)
+G3b [args]: distinctive ref comments=186 missing=1 review=2
+    REVIEW (ratio 0.7): ignore blank lines and comments. if this line consumed the
+    REVIEW (ratio 0.79): returns true if this type can track diagnostics.
+    MISSING ref comment: remaining buffer, refill before the loop condition checks for
+G3b [bench]: distinctive ref comments=137 missing=0 review=0
+G3b [bin]: SKIPPED — PORT STATUS is not done (7 oracle file(s) unexamined)
+G3b [build-config]: distinctive ref comments=27 missing=0 review=0
+G3b [cfg-fmt]: SKIPPED — PORT STATUS is not done (2 oracle file(s) unexamined)
+G3b [cli]: distinctive ref comments=602 missing=0 review=2
+    REVIEW (ratio 0.68): this should be returned by actions that want to print the help text.
+    REVIEW (ratio 0.72): var buf: [std.compress.flate.max_window_len]u8 = undefined;
+G3b [config]: distinctive ref comments=2836 missing=0 review=8
+    REVIEW (ratio 0.64): 3. "application support" directory (macos only)
+    REVIEW (ratio 0.71): load the configuration according to the default rules:
+    REVIEW (ratio 0.64): options for copy on select behavior.
+    REVIEW (ratio 0.73): see "clipboard-codepoint-map" for documentation.
+    REVIEW (ratio 0.69): see `font-synthetic-style` for documentation.
+    REVIEW (ratio 0.75): see macos-dock-drop-behavior
+    REVIEW (ratio 0.74): see window-show-tab-bar
+    REVIEW (ratio 0.63): valid values for confirm-close-surface
+G3b [core]: distinctive ref comments=1169 missing=0 review=0
+G3b [crash]: distinctive ref comments=167 missing=0 review=2
+    REVIEW (ratio 0.75): linux). on darwin the thread names itself in initthread.
+    REVIEW (ratio 0.76): naming the thread from here only works on some platforms (e.g.
+G3b [datastruct]: distinctive ref comments=478 missing=0 review=0
+G3b [extra]: distinctive ref comments=20 missing=0 review=2
+    REVIEW (ratio 0.67): generates the syntax file at comptime.
+    REVIEW (ratio 0.72): this results leading or tailing spaces being necessary to move onto the next match.
+G3b [font]: SKIPPED — PORT STATUS is not done (50 oracle file(s) unexamined)
+G3b [global]: distinctive ref comments=106 missing=0 review=2
+    REVIEW (ratio 0.64): asserts that `self.io_impl` has been initialized.
+    REVIEW (ratio 0.78): returns the global state action.
+G3b [input]: SKIPPED — PORT STATUS is not done (13 oracle file(s) unexamined)
+G3b [inspector]: distinctive ref comments=202 missing=4 review=0
+    MISSING ref comment: ask the application runtime to save all recorded events to a file.
+    MISSING ref comment: copy all recorded events to the standard clipboard in chronological
+    MISSING ref comment: format all recorded events as tab-separated text. events are exported
+    MISSING ref comment: oldest-first even though the inspector displays the newest event first.
+G3b [lib]: distinctive ref comments=82 missing=0 review=0
+G3b [os]: distinctive ref comments=666 missing=3 review=2
+    REVIEW (ratio 0.75): first check the env var. on windows we treat `localappdata` as a
+    REVIEW (ratio 0.66): not great, but xev timer can't fail atm
+    MISSING ref comment: if this is called at comptime, the direct msgid is returned without
+    MISSING ref comment: translation. this still allows the string to be marked for translation
+    MISSING ref comment: while remaining usable in comptime contexts.
+G3b [render-types]: distinctive ref comments=149 missing=0 review=0
+G3b [renderer]: SKIPPED — PORT STATUS is not done (35 oracle file(s) unexamined)
+G3b [simd]: distinctive ref comments=103 missing=0 review=0
+G3b [synthetic]: distinctive ref comments=101 missing=0 review=0
+G3b [terminfo]: distinctive ref comments=99 missing=2 review=0
+    MISSING ref comment: after the response is already the null terminator.
+    MISSING ref comment: the value is more complex. the buffer is zeroed so the byte
+G3b [termio]: distinctive ref comments=1155 missing=2 review=4
+    REVIEW (ratio 0.75): child. empirically chosen through measurements on an m4 max.
+    REVIEW (ratio 0.65): or if due to race conditions it doesn't exist or any various other
+    REVIEW (ratio 0.7): reasons. we don't want to crash the entire process if this fails so we
+    REVIEW (ratio 0.68): sets the fd to non-blocking mode. returns false on failure.
+    MISSING ref comment: free resources owned by a message that will not be processed.
+    MISSING ref comment: the message is invalid after this call.
+G3b [unicode]: distinctive ref comments=124 missing=0 review=0
+G3b [util]: distinctive ref comments=146 missing=0 review=0
+G3b [vt]: distinctive ref comments=12469 missing=54 review=66
+    REVIEW (ratio 0.74): (markmutated sets both); dirty set without a generation change
+    REVIEW (ratio 0.79): `page_serial`. consequently, every previously captured pointer-plus-serial
+    REVIEW (ratio 0.71): `page` metadata. a resident page can access the mapping directly since
+    REVIEW (ratio 0.79): a caller may pass our current tracked selection back to us by value, so
+    REVIEW (ratio 0.62): a group of raw values for the vectorized operations.
+    REVIEW (ratio 0.68): backing int of the packed struct
+    REVIEW (ratio 0.72): behind the raw mapping is discarded. however, we retain the
+    REVIEW (ratio 0.75): both states retain the same `page.memory` virtual mapping and the same
+    REVIEW (ratio 0.76): bumping the generation for geometry changes would break the
+    REVIEW (ratio 0.76): committed their new sizes and the remaining terminal state must follow.
+    MISSING ref comment: (pointer cast) because a value-level @bitcast of packed
+    MISSING ref comment: 16-byte store. the store intentionally overlaps the next
+    MISSING ref comment: `line` allows movement within one input line. `multiple` allows movement
+    MISSING ref comment: `std.enummap` added optional-return lowering,
+    MISSING ref comment: `std.staticbitset(52)` kept the same size but generated larger code
+    MISSING ref comment: a `[52]?u32` table is 416 bytes versus 216 bytes for this layout, and
+    MISSING ref comment: across lines with left/right sequences. the two vertical modes additionally
+    MISSING ref comment: affect both binary size and performance due to icache busts.
+    MISSING ref comment: all intermediaries have to also go through a vector type
+    MISSING ref comment: allow up/down sequences, with `smart_vertical` permitting editor-aware
+    MISSING ref comment: an indexed load. the values are undefined until their presence bit is set.
+    MISSING ref comment: bar, block, and underline correspond to decscusr 5/6, 1/2, and 3/4.
+    MISSING ref comment: batched path below is much faster than per-byte dispatch
+    MISSING ref comment: because it decodes utf-8 in bulk (via scalar fallbacks) and
+    MISSING ref comment: but did not improve end-to-end throughput. keep this representation
+    MISSING ref comment: byte-at-a-time parsing in debug mode only. even without
+    MISSING ref comment: depth of 1: this is only used for logging so we
+    MISSING ref comment: doesn't bloat the hot dispatch path which has been measured to actually
+    MISSING ref comment: each element is written as two overlapping 16-byte vector
+    MISSING ref comment: for cpus that are le, we can do some clever byte shuffling
+    MISSING ref comment: for the packed mask. passing the table by pointer removed the copies
+    MISSING ref comment: future. some of them were:
+    MISSING ref comment: group by 4 (garbage) bytes so that it stays a single
+    MISSING ref comment: hollow block is rustty-specific and is reported as decscusr 1 or 2.
+    MISSING ref comment: ignored, matching how unknown letter keys are ignored when building a
+G3b [vt-c]: distinctive ref comments=583 missing=27 review=3
+    REVIEW (ratio 0.66): (see `os/stderr.zig`). on freestanding/wasm targets this is a no-op
+    REVIEW (ratio 0.79): snapshot decoding creates this before the native terminal exists and
+    REVIEW (ratio 0.62): the caller owns the returned slice and must free it with `alloc`.
+    MISSING ref comment: `std.debug.lockstderr` because it routes through `std.options.debug_io`
+    MISSING ref comment: `std.io.threaded` since tinyio doesn't implement the nt
+    MISSING ref comment: allocate the native i/o implementation when the platform requires it.
+    MISSING ref comment: allocation failures possible while constructing an i/o owner.
+    MISSING ref comment: and would keep the entire `std.io.threaded` vtable alive in the binary
+    MISSING ref comment: because resolving that type trips its container-level comptime
+    MISSING ref comment: c construction has no i/o argument, so the wrapper retains the owner
+    MISSING ref comment: checks on targets it doesn't support (e.g. wasm32-freestanding).
+    MISSING ref comment: concurrent log lines from interleaving. we intentionally avoid
+    MISSING ref comment: created by `new` or transferred from snapshot decoding until `free`.
+    MISSING ref comment: each log line is emitted with a single raw write to stderr, which keeps
+    MISSING ref comment: freestanding owners contain no native allocation and expose failing i/o.
+    MISSING ref comment: large enough for a full logfn chunk plus the level/scope prefix.
+    MISSING ref comment: note: this must not name `std.io.threaded` in the condition
+    MISSING ref comment: of the code size (see lib/tinyio.zig). on windows we use
+    MISSING ref comment: operations. on the remaining targets (e.g. freestanding wasm)
+    MISSING ref comment: platform-specific storage backing the public `std.io` value.
+    MISSING ref comment: release an i/o implementation that has not already been transferred.
+    MISSING ref comment: return the value passed to native terminal construction and decoding.
+    MISSING ref comment: separately; interleaving with other threads is possible here but
+    MISSING ref comment: supports exactly the operations the terminal needs at a fraction
+    MISSING ref comment: the line didn't fit in our buffer (an embedder called us directly
+    MISSING ref comment: this is a best-effort diagnostic path.
+    MISSING ref comment: tinyio degrades to `std.io.failing`, which is correct: they have
+    MISSING ref comment: transfers it into the final c wrapper after ready.
+
+G3b SCOPE: 7 crate(s) SKIPPED (PORT STATUS not done) = 169 oracle file(s) unexamined: apprt, apprt-api, bin, cfg-fmt, font, input, renderer
+  The verdict below covers the EXAMINED crates only. Use --strict or --crate <name> to include a skipped crate.
+RED: dropped reference comment(s) — see MISSING above (R1 violation)

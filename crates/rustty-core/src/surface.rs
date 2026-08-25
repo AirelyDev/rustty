@@ -13514,6 +13514,77 @@ impl<A: apprt::App + 'static> apprt::CoreSurfaceHandle for Surface<A> {
     }
 }
 
+/// The termio Copy/Export seam trampolines (`ad96613a8` — the inspector
+/// widget's `copyEvents`/`exportEvents` reach `surface.rt_surface`/
+/// `surface.rt_app` through the `surface: *Surface` they receive).
+/// rustty-inspector cannot name core (the R4 acyclic Surface seam,
+/// `rustty_inspector::widgets::surface` module doc), so the apprt caller
+/// stores the erased `*mut Surface<A>` plus these monomorphized trampolines
+/// into the inspector's `SurfaceData`; the widget invokes them with the values
+/// the reference names at its callsites.
+impl<A: apprt::App + 'static> Surface<A> {
+    /// `surface.rt_surface.setClipboard(.standard, &.{.{ .mime = ..., .data =
+    /// ... }}, confirm)` (termio.zig `copyEvents`): the `.standard` clipboard
+    /// target is the only kind the widget names, fixed here; the concrete
+    /// backend error erases to `Err(())` (consumed by the widget's `catch
+    /// log.err` arm). Matches `SurfaceData::rt_set_clipboard`.
+    ///
+    /// # Safety
+    ///
+    /// `surface` must be the erased live `*mut Surface<A>` stored into the
+    /// same `SurfaceData` as this trampoline, valid for the inspector draw
+    /// call (INV-1/INV-11); `data`'s backing memory must carry a NUL one past
+    /// the slice (the `[:0]const u8` convention of the `setClipboard`
+    /// callsites above).
+    pub unsafe fn inspector_rt_set_clipboard(
+        surface: *mut core::ffi::c_void,
+        mime: &[u8],
+        data: &[u8],
+        confirm: bool,
+    ) -> Result<(), ()> {
+        let self_: *mut Surface<A> = surface.cast();
+        // SAFETY: caller contract above — `self_` and its `rt_surface` are
+        // live for this call; a narrow shared reborrow of the runtime surface
+        // (the same shape as this file's other `&*self.rt_surface` callsites).
+        unsafe { &*(*self_).rt_surface }
+            .set_clipboard(
+                apprt::Clipboard::Standard,
+                &[apprt::ClipboardContent { mime, data }],
+                confirm,
+            )
+            .map_err(|_| ())
+    }
+
+    /// `surface.rt_app.performAction(.{ .surface = surface },
+    /// .export_terminal_io, .{ .contents = contents })` (termio.zig
+    /// `exportEvents`): returns the reference `!bool` ("handled"); the
+    /// concrete backend error erases to `Err(())`. Matches
+    /// `SurfaceData::rt_export_terminal_io`.
+    ///
+    /// # Safety
+    ///
+    /// `surface` must be the erased live `*mut Surface<A>` stored into the
+    /// same `SurfaceData` as this trampoline, valid for the inspector draw
+    /// call (INV-1/INV-11).
+    pub unsafe fn inspector_rt_export_terminal_io(
+        surface: *mut core::ffi::c_void,
+        contents: &[u8],
+    ) -> Result<bool, ()> {
+        let self_: *mut Surface<A> = surface.cast();
+        // SAFETY: caller contract above — `self_` and its `rt_app` are live
+        // for this call; the `&*self_` target reborrow is narrow (the action
+        // dispatch), the same shape as this file's other `performAction`
+        // callsites.
+        unsafe {
+            (*(*self_).rt_app).perform_action(
+                apprt::Target::Surface(&*self_),
+                apprt::Action::ExportTerminalIO(apprt::action::ExportTerminalIO { contents }),
+            )
+        }
+        .map_err(|_| ())
+    }
+}
+
 /// The crash seam realized (CORE_BLUEPRINT §1; landed with C8's
 /// `crashThreadState`, ahead of its C10 row): `beforeSend`'s surface
 /// metadata reads — `surface.size.screen`, `surface.size.grid()`,

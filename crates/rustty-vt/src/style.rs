@@ -329,6 +329,14 @@ impl Style {
     /// True if the style is the default style.
     #[inline]
     pub fn default_style(&self) -> bool {
+        // On wasm, eql converts both sides to packed form; the default
+        // side is comptime-known, so bake it and convert only self.
+        // This is called on every SGR change so it's worth it.
+        // PORT NOTE: the reference bakes the default's packed form via
+        // `comptime @bitCast(PackedStyle.fromStyle(.{}))` inside `default()`;
+        // the port delegates to `eql`, whose wasm arm packs both sides — the
+        // `Style::default()` side is a constant, so its conversion folds at
+        // compile time to the same baked value.
         self.eql(&Style::default())
     }
 

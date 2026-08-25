@@ -344,6 +344,11 @@ pub mod option {
 
 /// The `cl` option specifies what kind of cursor key sequences are handled
 /// by the application for click-to-move-cursor functionality.
+///
+/// `line` allows movement within one input line. `multiple` allows movement
+/// across lines with left/right sequences. The two vertical modes additionally
+/// allow up/down sequences, with `smart_vertical` permitting editor-aware
+/// column clamping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Click {
     /// Value: "line". Allows motion within a single input line using standard

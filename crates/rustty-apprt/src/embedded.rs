@@ -2223,6 +2223,14 @@ impl Inspector {
                     selection_gesture: unsafe {
                         &raw const (*core_surface).mouse.selection_gesture
                     },
+                    // The `ad96613a8` termio Copy/Export seam: the erased core
+                    // `*Surface` itself plus core's monomorphized trampolines
+                    // (the reference passes `surface` down into
+                    // `vt_stream.draw`, which reaches `rt_surface`/`rt_app`
+                    // through it).
+                    surface: core_surface.cast(),
+                    rt_set_clipboard: CoreSurface::inspector_rt_set_clipboard,
+                    rt_export_terminal_io: CoreSurface::inspector_rt_export_terminal_io,
                 };
                 let wakeup: &rustty_xev::Async = unsafe { &(*core_surface).renderer_thread.wakeup };
                 // SAFETY: `inspector` is non-null (validated above) and owned by

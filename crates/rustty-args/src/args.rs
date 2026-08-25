@@ -1822,8 +1822,23 @@ impl<'a> LineIterator<'a> {
                 cur_len = tl;
             }
 
-            // Ignore blank lines and comments
-            // if (entry.len == 0 or entry[0] == '#') continue;
+            // Ignore blank lines and comments. If this line consumed the
+            // remaining buffer, refill before the loop condition checks for
+            // more data.
+            //
+            // if (entry.len == 0 or entry[0] == '#') {
+            //     if (self.r.seek == self.r.end) {
+            //         self.r.fillMore() catch {};
+            //     }
+            //     continue;
+            // }
+            //
+            // PORT NOTE: the reference reads through a streaming
+            // `std.Io.Reader`, so a blank/comment line that drained the
+            // buffered window must `fillMore` before the loop condition
+            // re-checks for data. The port's reader is the whole in-memory
+            // source slice (see the `r` field note), so there is no buffered
+            // window to refill and `continue` alone is equivalent.
             if cur_len == 0 || self.entry[2] == b'#' {
                 continue;
             }

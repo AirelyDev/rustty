@@ -164,7 +164,14 @@ impl Source {
             // The key is just the raw hex-encoded string
             entry.0 = hexencode(&entry.0);
 
-            // The value is more complex
+            // The value is more complex. The buffer is zeroed so the byte
+            // after the response is already the null terminator.
+            //
+            // PORT NOTE: the reference formats into a fixed `[N]u8` buffer
+            // initialized to all zeroes (`@splat(0)`), so the byte after the
+            // formatted response is an implicit NUL terminator. The port
+            // builds a `Vec<u8>` whose length delimits the response (crate
+            // byte-slice convention), so no zeroed tail is required.
             let out: Vec<u8> = if entry.1 == b"" {
                 let mut buf = Vec::new();
                 // important: hex-encoded name

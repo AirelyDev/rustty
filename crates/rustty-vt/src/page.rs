@@ -1744,9 +1744,15 @@ impl RowField {
 /// its padding.
 ///
 /// PORT NOTE: reference `fn fieldMask(comptime T, comptime fields)`; the port
-/// takes the already-resolved `(shift, bits)` field ranges. Nested paths
-/// (`0fb3565c7`) become dedicated enum variants carrying their resolved range
-/// (see `CellField::ContentCodepointData` — packed union members all share
+/// takes the already-resolved `(shift, bits)` field ranges. The reference's
+/// comptime resolution loop:
+///
+///     // Walk the path to find the total bit offset and the type of
+///     // the (possibly nested) field.
+///
+/// is done once by hand here instead: nested paths (`0fb3565c7`) become
+/// dedicated enum variants carrying their resolved range (see
+/// `CellField::ContentCodepointData` — packed union members all share
 /// bit offset zero, so the resolution is a constant).
 pub const fn field_mask(fields: &[(u32, u32)]) -> Backing {
     let mut m: Backing = 0;

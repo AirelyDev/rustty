@@ -36,7 +36,7 @@ use gtk4::CompositeTemplate;
 use libadwaita::subclass::prelude::*;
 
 use super::imgui_widget::{ImguiWidget, ImguiWidgetImpl};
-use super::surface::Surface;
+use super::surface::{CoreSurface, Surface};
 
 mod imp {
     use super::*;
@@ -188,6 +188,14 @@ mod imp {
                 font_size_pixels: unsafe { (*core_surface).font_size.pixels() },
                 mouse_click_state: unsafe { (*core_surface).mouse.click_state },
                 selection_gesture: unsafe { &raw const (*core_surface).mouse.selection_gesture },
+                // The `ad96613a8` termio Copy/Export seam: the erased core
+                // `*Surface` itself plus core's monomorphized trampolines (the
+                // reference passes `surface` down into `vt_stream.draw`, which
+                // reaches `rt_surface`/`rt_app` through it). Built EXACTLY as
+                // the macOS Metal path does in `embedded::Inspector::renderMetal`.
+                surface: core_surface.cast(),
+                rt_set_clipboard: CoreSurface::inspector_rt_set_clipboard,
+                rt_export_terminal_io: CoreSurface::inspector_rt_export_terminal_io,
             };
             let wakeup: &rustty_xev::Async = unsafe { &(*core_surface).renderer_thread.wakeup };
             // SAFETY: `inspector` is non-null (validated above) and owned by

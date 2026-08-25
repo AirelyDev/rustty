@@ -126,6 +126,15 @@ pub fn initGlobalDomain() -> Result<(), OutOfMemoryError> {
 pub struct OutOfMemoryError;
 
 /// Translate a message for the Rustty domain.
+///
+/// If this is called at comptime, the direct msgid is returned without
+/// translation. This still allows the string to be marked for translation
+/// while remaining usable in comptime contexts.
+//
+// PORT NOTE: the comptime paragraph above documents the reference's
+// `if (@inComptime()) return msgid;` arm. Rust has no comptime evaluation of
+// this function (it is not `const fn`; FFI cannot run at const-eval), so that
+// arm collapses with no behavior here — kept per R1 as the reference contract.
 //
 // PORT NOTE: the reference's function is named `_` (used as `_("...")`). `_` is not a
 // valid function name in Rust, so it is named `gettext_` here; its behavior is

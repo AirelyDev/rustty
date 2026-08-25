@@ -152,6 +152,16 @@ impl Message<'_> {
             MessageData::Alloc(v) => Message::WriteAlloc(v),
         }
     }
+
+    // Free resources owned by a message that will not be processed.
+    // The message is invalid after this call.
+    //
+    // PORT NOTE: reference `pub fn deinit(self: *const Message) void` frees the
+    // `change_config` payload (`ptr.deinit()` + `alloc.destroy(ptr)`) and the
+    // `write_alloc` buffer (`alloc.free(data)`). In the port both payloads are
+    // owned values (`ChangeConfig`'s `Box<DerivedConfig>`; `Alloc<u8>`'s
+    // `Box<[u8]>`), so dropping the `Message` performs exactly these frees —
+    // no explicit method is needed.
 }
 
 /// The types of size reports that we support.

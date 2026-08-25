@@ -538,8 +538,16 @@ fn log_fn_c_abi(level: StdLevel, scope: &str, args: core::fmt::Arguments) {
 /// Formats each message as "[level](scope): message\n". Can be passed
 /// directly to rustty_sys_set(RUSTTY_SYS_OPT_LOG, &rustty_sys_log_stderr).
 ///
-/// Uses std.debug.lockStderrWriter for thread-safe, mutex-protected output.
-/// On freestanding/wasm targets this is a no-op (no stderr available).
+/// Each log line is emitted with a single raw write to stderr, which keeps
+/// concurrent log lines from interleaving. We intentionally avoid
+/// `std.debug.lockStderr` because it routes through `std.Options.debug_io`
+/// and would keep the entire `std.Io.Threaded` vtable alive in the binary
+/// (see `os/stderr.zig`). On freestanding/wasm targets this is a no-op
+/// (no stderr available).
+// PORT NOTE: the `std.debug.lockStderr` avoidance above is Zig binary-size
+// machinery (`std.Io` vtable retention) with no Rust analogue; the port gets
+// the same no-interleaving guarantee by holding `std::io::stderr().lock()`
+// for the whole line (see the lock PORT NOTE in the body).
 // pub fn logStderr(_, level, scope_ptr, scope_len, message_ptr, message_len)
 //     callconv(...) void { ... }
 /// PORT NOTE: the C calling convention is the `extern "C"` wrapper in `lib.rs`
@@ -574,12 +582,25 @@ pub unsafe fn log_stderr(
         LogLevel::Debug => "debug",
     };
 
-    // var buffer: [64]u8 = undefined;
-    // const writer = std.debug.lockStderrWriter(&buffer);
-    // defer std.debug.unlockStderrWriter();
-    // PORT NOTE: rustty uses Rust's `eprint!`, which holds the stderr lock for the
-    // duration of the write — the same thread-safe, mutex-protected output the
-    // reference gets from `lockStderrWriter`/`unlockStderrWriter`.
+    // The reference formats the line into a stack buffer and emits it with a
+    // single raw stderr write, falling back to piecewise writes when it does
+    // not fit:
+    //
+    //     // Large enough for a full logFn chunk plus the level/scope prefix.
+    //     var buffer: [LogEmitter.buffer_size + 128]u8 = undefined;
+    //     const line: ?[]const u8 = ...bufPrint(&buffer, ...) catch null;
+    //     if (line) |v| { stderr.write(v); return; }
+    //
+    //     // The line didn't fit in our buffer (an embedder called us directly
+    //     // with a very large message). Fall back to writing the pieces
+    //     // separately; interleaving with other threads is possible here but
+    //     // this is a best-effort diagnostic path.
+    //     stderr.write("["); ...
+    //
+    // PORT NOTE: the port instead holds the stderr lock for the duration of
+    // the write — the same thread-safe, mutex-protected output with the same
+    // no-interleaving observable, and with no fixed buffer there is no
+    // didn't-fit fallback path to reproduce.
     use std::io::Write as _;
     let stderr = std::io::stderr();
     let mut lock = stderr.lock();

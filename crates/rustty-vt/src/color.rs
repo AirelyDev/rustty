@@ -424,6 +424,48 @@ fn trim_space_tab(s: &[u8]) -> &[u8] {
 // there is no 4-to-3 conversion to vectorize: the element-wise copy below IS
 // the whole conversion, and Rust keeps the auto-vectorizer the reference works
 // around. The dst element type is `RGB` itself (rustty's `RGB.C`).
+//
+// The reference's LE fast-path body carries this comment block, preserved
+// verbatim for the N/A'd vectorized path:
+//
+// // For CPUs that are LE, we can do some clever byte shuffling
+// // with vectorization to do a 4-to-3 conversion.
+// if (comptime builtin.cpu.arch.endian() == .little) {
+//     // Process 4 entries at a time: one 16-byte load, one byte
+//     // shuffle dropping the padding byte of each entry, and one
+//     // 16-byte store. The store intentionally overlaps the next
+//     // group by 4 (garbage) bytes so that it stays a single
+//     // vector store; the loop bound guarantees the overlap stays
+//     // in bounds and every overlapped byte is rewritten by the
+//     // next iteration or the scalar tail.
+//     //
+//     // Note the input load is a memory-level reinterpretation
+//     // (pointer cast) because a value-level @bitCast of packed
+//     // structs operates on the 24-bit value bits, not the 4-byte
+//     // in-memory representation.
+//     const V = @Vector(16, u8);
+//     const dst_bytes: [*]u8 = @ptrCast(dst.ptr);
+//     while (i + 6 <= src.len) : (i += 4) {
+//         // All intermediaries have to also go through a Vector type
+//         // to ensure LLVM lowers as vectorized ops. In Zig 0.16 the
+//         // LLVM auto-vectorizer is disabled so this is required.
+//         const in: V = @as(*align(4) const V, @ptrCast(src[i..][0..4])).*;
+//         const out: V = @shuffle(u8, in, undefined, [16]i32{
+//             0,  1,  2,
+//             4,  5,  6,
+//             8,  9,  10,
+//             12, 13, 14,
+//
+//             // Overflow we don't care about
+//             3,  7,  11,
+//             15,
+//         });
+//
+//         // Scary looking but safe, mapping a byte pointer to the full
+//         // vector type (hence align 1).
+//         @as(*align(1) V, @ptrCast(dst_bytes[i * 3 ..][0..16])).* = out;
+//     }
+// }
 pub fn palette_cval_slice(src: &[RGB], dst: &mut [RGB]) {
     // assert(src.len == dst.len);
     assert!(src.len() == dst.len());

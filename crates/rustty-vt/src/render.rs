@@ -715,7 +715,13 @@ impl RenderState {
     ///
     /// This complexity is justified by accounting for ~10% of the endUpdate
     /// times under heavily styled cases.
-    // fn fillStyles(dst: []Style, value: Style) void { ... }
+    // fn fillStyles(dst: []Style, value: Style) void {
+    //     // Each element is written as two overlapping 16-byte vector
+    //     // stores held in registers, which requires 16 <= size <= 32.
+    //     const elem_size = @sizeOf(Style);
+    //     comptime assert(elem_size >= 16 and elem_size <= 32);
+    //     ...
+    // }
     //
     // PORT NOTE (`74a233b54`, Phase-3 `f2a7652ab` precedent): the reference's
     // manual two-overlapping-16-byte-vector-stores body exists solely because

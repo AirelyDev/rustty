@@ -995,13 +995,16 @@ impl<'a, H: Handler> Stream<'a, H> {
 
     // inline fn nextSliceUntracked(self: *Self, input: []const u8) void { ... }
     fn next_slice_untracked(&mut self, input: &[u8]) {
-        // Disable SIMD optimizations if build requests it or if our
-        // manual debug mode is on.
-        // if (comptime debug or !build_options.simd) {
+        // Byte-at-a-time parsing in debug mode only. Even without
+        // SIMD support (build_options.simd == false, e.g. wasm), the
+        // batched path below is much faster than per-byte dispatch
+        // because it decodes UTF-8 in bulk (via scalar fallbacks) and
+        // hands printable runs to the handler as print_slice actions.
+        // if (comptime debug) {
         //     for (input) |c| self.nextUntracked(c);
         //     return;
         // }
-        if DEBUG || !crate::options::SIMD {
+        if DEBUG {
             for &c in input {
                 self.next_untracked(c);
             }

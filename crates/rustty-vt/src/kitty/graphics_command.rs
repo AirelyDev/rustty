@@ -1,14 +1,12 @@
 // const std = @import("std");
 // const assert = @import("../../quirks.zig").inlineAssert;
 // const Allocator = std.mem.Allocator;
-// const ArenaAllocator = std.heap.ArenaAllocator;
 // const simd = @import("../../simd/main.zig");
 // const lib = @import("../lib.zig");
 use rustty_lib::r#enum::EnumType;
 use rustty_lib::target::Target;
 use rustty_simd as simd;
 use rustty_util::quirks::inlineAssert as assert;
-use std::collections::HashMap;
 
 // const log = std.log.scoped(.kitty_gfx);
 
@@ -26,28 +24,112 @@ pub enum Error {
 }
 
 /// The key-value pairs for the control information for a command. The
-/// keys are always single characters and the values are either single
-/// characters or 32-bit unsigned integers.
+/// recognized keys are always single ASCII letters and the values are either
+/// single characters or 32-bit unsigned integers. Unknown non-letter keys are
+/// ignored, matching how unknown letter keys are ignored when building a
+/// command.
 ///
-/// For the value of this: if the value is a single printable ASCII character
-/// it is the ASCII code. Otherwise, it is parsed as a 32-bit unsigned integer.
+/// This is deliberately a dense value table plus a presence bitmap. There are
+/// only 52 possible keys(technically KIP has fever than 52 possible .. at the moment of writing), so a lookup is one machine-word bit test followed by
+/// an indexed load. The values are undefined until their presence bit is set.
 ///
-/// PORT NOTE: `std.AutoHashMapUnmanaged(u8, u32)`. In the reference the map is
-/// arena-allocated and freed wholesale with the arena; here the map owns its
-/// storage and is dropped with the `Parser`.
-type Kv = HashMap<u8, u32>;
+/// Other alternatives were considered and should probably be revisited in the
+/// future. Some of them were:
+/// A `[52]?u32` table is 416 bytes versus 216 bytes for this layout, and
+/// its larger copies erased the smaller lookup code.
+/// `std.EnumMap` added optional-return lowering,
+/// `std.StaticBitSet(52)` kept the same size but generated larger code
+/// for the packed mask. Passing the table by pointer removed the copies
+/// but did not improve end-to-end throughput. Keep this representation
+/// unless a new benchmark shows an improvement in the zig compilers codegen.
+///
+/// For the value itself: if it is a single printable ASCII character it is the
+/// ASCII code. Otherwise, it is parsed as a 32-bit unsigned integer.
+///
+/// PORT NOTE: the alternatives and byte/codegen measurements above are the
+/// reference's, taken against the Zig compiler's codegen (`?u32`,
+/// `std.EnumMap`, `std.StaticBitSet` are Zig constructs); the port keeps the
+/// chosen representation: a `[u32; 52]` dense table plus a `u64` presence
+/// bitmap.
+// const KV = struct {
+//     values: [52]u32 = undefined,
+//     present: u64 = 0,
+struct Kv {
+    /// PORT NOTE: `= undefined` in the reference; zero-initialized here (same
+    /// treatment as `Parser.kv_temp`), which is never observable because
+    /// `get` refuses to read a slot whose presence bit is clear.
+    values: [u32; 52],
+    present: u64,
+}
+
+impl Kv {
+    // fn index(key: u8) ?u6 {
+    //     return switch (key) {
+    //         'a'...'z' => @intCast(key - 'a'),
+    //         'A'...'Z' => @intCast(26 + key - 'A'),
+    //         else => null,
+    //     };
+    // }
+    /// PORT NOTE: the reference returns `?u6`; Rust has no `u6`, so `u8`
+    /// carries the 0..=51 index (the `@intCast` narrowing has no work to do
+    /// either way, both range arms are already in-bounds).
+    fn index(key: u8) -> Option<u8> {
+        match key {
+            b'a'..=b'z' => Some(key - b'a'),
+            b'A'..=b'Z' => Some(26 + key - b'A'),
+            _ => None,
+        }
+    }
+
+    // fn get(self: *const KV, key: u8) ?u32 {
+    //     const idx = index(key) orelse return null;
+    //     if (self.present & (@as(u64, 1) << idx) == 0) return null;
+    //     return self.values[idx];
+    // }
+    fn get(&self, key: u8) -> Option<u32> {
+        let idx = Self::index(key)?;
+        if self.present & (1u64 << idx) == 0 {
+            return None;
+        }
+        Some(self.values[idx as usize])
+    }
+
+    // fn put(self: *KV, key: u8, value: u32) void {
+    //     const idx = index(key) orelse return;
+    //     self.values[idx] = value;
+    //     self.present |= @as(u64, 1) << idx;
+    // }
+    fn put(&mut self, key: u8, value: u32) {
+        let idx = match Self::index(key) {
+            Some(idx) => idx,
+            None => return,
+        };
+        self.values[idx as usize] = value;
+        self.present |= 1u64 << idx;
+    }
+}
+
+/// PORT NOTE: the reference initializes the parser's table with `.kv = .{}`
+/// (field defaults: `values` undefined, `present` zero).
+impl Default for Kv {
+    fn default() -> Kv {
+        Kv {
+            // values: [52]u32 = undefined,
+            values: [0; 52],
+            // present: u64 = 0,
+            present: 0,
+        }
+    }
+}
 
 /// Command parser parses the Kitty graphics protocol escape sequence.
 ///
-/// PORT NOTE: The reference stores temporary parser state in an
-/// `ArenaAllocator` (the `kv` map plus parse-int scratch) and the long-lived
-/// payload in `data`. Rust ownership makes the arena unnecessary: `kv` is an
-/// owning `HashMap` and `data` is an owning `Vec<u8>`, both dropped with the
-/// `Parser`. `max_bytes` and the parser `state` are preserved verbatim.
+/// PORT NOTE: The reference keeps `alloc: Allocator` to grow `data` (the `kv`
+/// table is a plain value, no allocation). Rust's `Vec` carries its own
+/// allocator, so the field is elided; `kv`, `max_bytes`, and the parser
+/// `state` are preserved verbatim.
 pub struct Parser {
-    // /// The memory used by the parser is stored in an arena because it is
-    // /// all freed at the end of the command.
-    // arena: ArenaAllocator,
+    // alloc: Allocator,
     /// This is the list of KV pairs that we're building up.
     kv: Kv,
 
@@ -90,12 +172,11 @@ impl Parser {
     /// Initialize the parser. The allocator given will be used for both
     /// temporary data and long-lived values such as the final image blob.
     pub fn init(max_bytes: usize) -> Parser {
-        // var arena = ArenaAllocator.init(alloc);
-        // errdefer arena.deinit();
         let result: Parser = Parser {
-            // .arena = arena,
+            // .alloc = alloc,
             data: Vec::new(),
-            kv: HashMap::new(),
+            // .kv = .{},
+            kv: Kv::default(),
             kv_temp_len: 0,
             kv_current: 0,
             max_bytes,
@@ -115,9 +196,7 @@ impl Parser {
     // PORT NOTE: `deinit` is the `Drop` glue in Zig. Rust drops `kv`/`data`
     // automatically, so there is no explicit `deinit`.
     // pub fn deinit(self: *Parser) void {
-    //     // We don't free the hash map because its in the arena
-    //     self.data.deinit(self.arena.child_allocator);
-    //     self.arena.deinit();
+    //     self.data.deinit(self.alloc);
     // }
 
     /// Parse a complete command string.
@@ -209,7 +288,7 @@ impl Parser {
                 if self.data.len() + rem.len() > self.max_bytes {
                     return Err(Error::OutOfMemory);
                 }
-                // try self.data.appendSlice(self.arena.child_allocator, rem);
+                // try self.data.appendSlice(self.alloc, rem);
                 self.data.extend_from_slice(rem);
                 return Ok(());
             }
@@ -244,8 +323,8 @@ impl Parser {
 
         // Determine our action, which is always a single character.
         let action: u8 = {
-            let value = match self.kv.get(&b'a') {
-                Some(v) => *v,
+            let value = match self.kv.get(b'a') {
+                Some(v) => v,
                 None => b't' as u32,
             };
             match u8::try_from(value) {
@@ -269,8 +348,8 @@ impl Parser {
         };
 
         // Determine our quiet value
-        let quiet: Quiet = if let Some(v) = self.kv.get(&b'q') {
-            match *v {
+        let quiet: Quiet = if let Some(v) = self.kv.get(b'q') {
+            match v {
                 0 => Quiet::No,
                 1 => Quiet::Ok,
                 2 => Quiet::Failures,
@@ -338,8 +417,6 @@ impl Parser {
     }
 
     fn finish_value(self: &mut Parser, next_state: State) -> Result<(), Error> {
-        // const alloc = self.arena.allocator();
-
         // We can move states right away, we don't use it.
         self.state = next_state;
 
@@ -349,7 +426,7 @@ impl Parser {
             // PARITY: faithful port of the reference `c < '0' or c > '9'`.
             #[allow(clippy::manual_range_contains)]
             if c < b'0' || c > b'9' {
-                self.kv.insert(self.kv_current, c as u32);
+                self.kv.put(self.kv_current, c as u32);
                 self.kv_temp_len = 0;
                 return Ok(());
             }
@@ -363,7 +440,7 @@ impl Parser {
             b'z' | b'H' | b'V' => parse_int_i32(slice)? as u32,
             _ => parse_int_u32(slice)?,
         };
-        self.kv.insert(self.kv_current, v);
+        self.kv.put(self.kv_current, v);
 
         // Clear our temp buffer
         self.kv_temp_len = 0;
@@ -793,8 +870,8 @@ impl Transmission {
 
     fn parse(kv: &Kv) -> Result<Transmission, Error> {
         let mut result: Transmission = Transmission::default();
-        if let Some(v) = kv.get(&b'f') {
-            result.format = match *v {
+        if let Some(v) = kv.get(b'f') {
+            result.format = match v {
                 24 => Format::Rgb,
                 32 => Format::Rgba,
                 100 => Format::Png,
@@ -802,8 +879,8 @@ impl Transmission {
             };
         }
 
-        if let Some(v) = kv.get(&b't') {
-            let c = match u8::try_from(*v) {
+        if let Some(v) = kv.get(b't') {
+            let c = match u8::try_from(v) {
                 Ok(c) => c,
                 Err(_) => return Err(Error::InvalidFormat),
             };
@@ -816,36 +893,36 @@ impl Transmission {
             };
         }
 
-        if let Some(v) = kv.get(&b's') {
-            result.width = *v;
+        if let Some(v) = kv.get(b's') {
+            result.width = v;
         }
 
-        if let Some(v) = kv.get(&b'v') {
-            result.height = *v;
+        if let Some(v) = kv.get(b'v') {
+            result.height = v;
         }
 
-        if let Some(v) = kv.get(&b'S') {
-            result.size = *v;
+        if let Some(v) = kv.get(b'S') {
+            result.size = v;
         }
 
-        if let Some(v) = kv.get(&b'O') {
-            result.offset = *v;
+        if let Some(v) = kv.get(b'O') {
+            result.offset = v;
         }
 
-        if let Some(v) = kv.get(&b'i') {
-            result.image_id = *v;
+        if let Some(v) = kv.get(b'i') {
+            result.image_id = v;
         }
 
-        if let Some(v) = kv.get(&b'I') {
-            result.image_number = *v;
+        if let Some(v) = kv.get(b'I') {
+            result.image_number = v;
         }
 
-        if let Some(v) = kv.get(&b'p') {
-            result.placement_id = *v;
+        if let Some(v) = kv.get(b'p') {
+            result.placement_id = v;
         }
 
-        if let Some(v) = kv.get(&b'o') {
-            let c = match u8::try_from(*v) {
+        if let Some(v) = kv.get(b'o') {
+            let c = match u8::try_from(v) {
                 Ok(c) => c,
                 Err(_) => return Err(Error::InvalidFormat),
             };
@@ -865,16 +942,16 @@ impl Transmission {
         // https://sw.kovidgoyal.net/kitty/graphics-protocol/#the-transmission-medium
         // https://github.com/kovidgoyal/kitty/blob/ccc3bee9af794f332b4e9adcd714a649f639c397/kitty/graphics.c#L547-L592
         if result.medium == Medium::Direct {
-            if let Some(v) = kv.get(&b'm') {
-                result.more_chunks = *v > 0;
+            if let Some(v) = kv.get(b'm') {
+                result.more_chunks = v > 0;
             }
         }
 
         // if (kv.get('N')) |v| {
         //     result.usage = @bitCast(v);
         // }
-        if let Some(v) = kv.get(&b'N') {
-            result.usage = Usage::from_bits(*v);
+        if let Some(v) = kv.get(b'N') {
+            result.usage = Usage::from_bits(v);
         }
 
         Ok(result)
@@ -914,87 +991,87 @@ impl Display {
     fn parse(kv: &Kv) -> Result<Display, Error> {
         let mut result: Display = Display::default();
 
-        if let Some(v) = kv.get(&b'i') {
-            result.image_id = *v;
+        if let Some(v) = kv.get(b'i') {
+            result.image_id = v;
         }
 
-        if let Some(v) = kv.get(&b'I') {
-            result.image_number = *v;
+        if let Some(v) = kv.get(b'I') {
+            result.image_number = v;
         }
 
-        if let Some(v) = kv.get(&b'p') {
-            result.placement_id = *v;
+        if let Some(v) = kv.get(b'p') {
+            result.placement_id = v;
         }
 
-        if let Some(v) = kv.get(&b'x') {
-            result.x = *v;
+        if let Some(v) = kv.get(b'x') {
+            result.x = v;
         }
 
-        if let Some(v) = kv.get(&b'y') {
-            result.y = *v;
+        if let Some(v) = kv.get(b'y') {
+            result.y = v;
         }
 
-        if let Some(v) = kv.get(&b'w') {
-            result.width = *v;
+        if let Some(v) = kv.get(b'w') {
+            result.width = v;
         }
 
-        if let Some(v) = kv.get(&b'h') {
-            result.height = *v;
+        if let Some(v) = kv.get(b'h') {
+            result.height = v;
         }
 
-        if let Some(v) = kv.get(&b'X') {
-            result.x_offset = *v;
+        if let Some(v) = kv.get(b'X') {
+            result.x_offset = v;
         }
 
-        if let Some(v) = kv.get(&b'Y') {
-            result.y_offset = *v;
+        if let Some(v) = kv.get(b'Y') {
+            result.y_offset = v;
         }
 
-        if let Some(v) = kv.get(&b'c') {
-            result.columns = *v;
+        if let Some(v) = kv.get(b'c') {
+            result.columns = v;
         }
 
-        if let Some(v) = kv.get(&b'r') {
-            result.rows = *v;
+        if let Some(v) = kv.get(b'r') {
+            result.rows = v;
         }
 
-        if let Some(v) = kv.get(&b'C') {
-            result.cursor_movement = match *v {
+        if let Some(v) = kv.get(b'C') {
+            result.cursor_movement = match v {
                 0 => CursorMovement::After,
                 1 => CursorMovement::None,
                 _ => return Err(Error::InvalidFormat),
             };
         }
 
-        if let Some(v) = kv.get(&b'U') {
-            result.virtual_placement = match *v {
+        if let Some(v) = kv.get(b'U') {
+            result.virtual_placement = match v {
                 0 => false,
                 1 => true,
                 _ => return Err(Error::InvalidFormat),
             };
         }
 
-        if let Some(v) = kv.get(&b'z') {
+        if let Some(v) = kv.get(b'z') {
             // We can bitcast here because of how we parse it earlier.
-            result.z = *v as i32;
+            result.z = v as i32;
         }
 
-        if let Some(v) = kv.get(&b'P') {
-            result.parent_id = *v;
+        if let Some(v) = kv.get(b'P') {
+            result.parent_id = v;
         }
 
-        if let Some(v) = kv.get(&b'Q') {
-            result.parent_placement_id = *v;
+        if let Some(v) = kv.get(b'Q') {
+            result.parent_placement_id = v;
         }
 
-        if let Some(v) = kv.get(&b'H') {
+        if let Some(v) = kv.get(b'H') {
             // We can bitcast here because of how we parse it earlier.
-            result.horizontal_offset = *v as i32;
+            result.horizontal_offset = v as i32;
         }
 
-        if let Some(v) = kv.get(&b'V') {
+        if let Some(v) = kv.get(b'V') {
             // We can bitcast here because of how we parse it earlier.
-            result.vertical_offset = *v as i32;
+            result.vertical_offset = v as i32;
         }
 
         Ok(result)
@@ -1038,36 +1115,36 @@ impl AnimationFrameLoading {
     fn parse(kv: &Kv) -> Result<AnimationFrameLoading, Error> {
         let mut result: AnimationFrameLoading = AnimationFrameLoading::default();
 
-        if let Some(v) = kv.get(&b'x') {
-            result.x = *v;
+        if let Some(v) = kv.get(b'x') {
+            result.x = v;
         }
 
-        if let Some(v) = kv.get(&b'y') {
-            result.y = *v;
+        if let Some(v) = kv.get(b'y') {
+            result.y = v;
         }
 
-        if let Some(v) = kv.get(&b'c') {
-            result.create_frame = *v;
+        if let Some(v) = kv.get(b'c') {
+            result.create_frame = v;
         }
 
-        if let Some(v) = kv.get(&b'r') {
-            result.edit_frame = *v;
+        if let Some(v) = kv.get(b'r') {
+            result.edit_frame = v;
         }
 
-        if let Some(v) = kv.get(&b'z') {
-            result.gap_ms = *v;
+        if let Some(v) = kv.get(b'z') {
+            result.gap_ms = v;
         }
 
-        if let Some(v) = kv.get(&b'X') {
-            result.composition_mode = match *v {
+        if let Some(v) = kv.get(b'X') {
+            result.composition_mode = match v {
                 0 => CompositionMode::AlphaBlend,
                 1 => CompositionMode::Overwrite,
                 _ => return Err(Error::InvalidFormat),
             };
         }
 
-        if let Some(v) = kv.get(&b'Y') {
-            result.background = Background::from_int(*v);
+        if let Some(v) = kv.get(b'Y') {
+            result.background = Background::from_int(v);
         }
 
         Ok(result)
@@ -1091,40 +1168,40 @@ impl AnimationFrameComposition {
     fn parse(kv: &Kv) -> Result<AnimationFrameComposition, Error> {
         let mut result: AnimationFrameComposition = AnimationFrameComposition::default();
 
-        if let Some(v) = kv.get(&b'c') {
-            result.frame = *v;
+        if let Some(v) = kv.get(b'c') {
+            result.frame = v;
         }
 
-        if let Some(v) = kv.get(&b'r') {
-            result.edit_frame = *v;
+        if let Some(v) = kv.get(b'r') {
+            result.edit_frame = v;
         }
 
-        if let Some(v) = kv.get(&b'x') {
-            result.x = *v;
+        if let Some(v) = kv.get(b'x') {
+            result.x = v;
         }
 
-        if let Some(v) = kv.get(&b'y') {
-            result.y = *v;
+        if let Some(v) = kv.get(b'y') {
+            result.y = v;
         }
 
-        if let Some(v) = kv.get(&b'w') {
-            result.width = *v;
+        if let Some(v) = kv.get(b'w') {
+            result.width = v;
         }
 
-        if let Some(v) = kv.get(&b'h') {
-            result.height = *v;
+        if let Some(v) = kv.get(b'h') {
+            result.height = v;
         }
 
-        if let Some(v) = kv.get(&b'X') {
-            result.left_edge = *v;
+        if let Some(v) = kv.get(b'X') {
+            result.left_edge = v;
         }
 
-        if let Some(v) = kv.get(&b'Y') {
-            result.top_edge = *v;
+        if let Some(v) = kv.get(b'Y') {
+            result.top_edge = v;
         }
 
-        if let Some(v) = kv.get(&b'C') {
-            result.composition_mode = match *v {
+        if let Some(v) = kv.get(b'C') {
+            result.composition_mode = match v {
                 0 => CompositionMode::AlphaBlend,
                 1 => CompositionMode::Overwrite,
                 _ => return Err(Error::InvalidFormat),
@@ -1157,8 +1234,8 @@ impl AnimationControl {
     fn parse(kv: &Kv) -> Result<AnimationControl, Error> {
         let mut result: AnimationControl = AnimationControl::default();
 
-        if let Some(v) = kv.get(&b's') {
-            result.action = match *v {
+        if let Some(v) = kv.get(b's') {
+            result.action = match v {
                 0 => AnimationAction::Invalid,
                 1 => AnimationAction::Stop,
                 2 => AnimationAction::RunWait,
@@ -1167,20 +1244,20 @@ impl AnimationControl {
             };
         }
 
-        if let Some(v) = kv.get(&b'r') {
-            result.frame = *v;
+        if let Some(v) = kv.get(b'r') {
+            result.frame = v;
         }
 
-        if let Some(v) = kv.get(&b'z') {
-            result.gap_ms = *v;
+        if let Some(v) = kv.get(b'z') {
+            result.gap_ms = v;
         }
 
-        if let Some(v) = kv.get(&b'c') {
-            result.current_frame = *v;
+        if let Some(v) = kv.get(b'c') {
+            result.current_frame = v;
         }
 
-        if let Some(v) = kv.get(&b'v') {
-            result.loops = *v;
+        if let Some(v) = kv.get(b'v') {
+            result.loops = v;
         }
 
         Ok(result)
@@ -1256,8 +1333,8 @@ pub enum Delete {
 impl Delete {
     fn parse(kv: &Kv) -> Result<Delete, Error> {
         let what: u8 = {
-            let value = match kv.get(&b'd') {
-                Some(v) => *v,
+            let value = match kv.get(b'd') {
+                Some(v) => v,
                 None => b'a' as u32,
             };
             match u8::try_from(value) {
@@ -1275,14 +1352,14 @@ impl Delete {
                     image_id: 0,
                     placement_id: 0,
                 };
-                if let Some(v) = kv.get(&b'i') {
+                if let Some(v) = kv.get(b'i') {
                     if let Delete::Id { image_id, .. } = &mut result {
-                        *image_id = *v;
+                        *image_id = v;
                     }
                 }
-                if let Some(v) = kv.get(&b'p') {
+                if let Some(v) = kv.get(b'p') {
                     if let Delete::Id { placement_id, .. } = &mut result {
-                        *placement_id = *v;
+                        *placement_id = v;
                     }
                 }
 
@@ -1295,14 +1372,14 @@ impl Delete {
                     image_number: 0,
                     placement_id: 0,
                 };
-                if let Some(v) = kv.get(&b'I') {
+                if let Some(v) = kv.get(b'I') {
                     if let Delete::Newest { image_number, .. } = &mut result {
-                        *image_number = *v;
+                        *image_number = v;
                     }
                 }
-                if let Some(v) = kv.get(&b'p') {
+                if let Some(v) = kv.get(b'p') {
                     if let Delete::Newest { placement_id, .. } = &mut result {
-                        *placement_id = *v;
+                        *placement_id = v;
                     }
                 }
 
@@ -1319,14 +1396,14 @@ impl Delete {
                     x: 0,
                     y: 0,
                 };
-                if let Some(v) = kv.get(&b'x') {
+                if let Some(v) = kv.get(b'x') {
                     if let Delete::IntersectCell { x, .. } = &mut result {
-                        *x = *v;
+                        *x = v;
                     }
                 }
-                if let Some(v) = kv.get(&b'y') {
+                if let Some(v) = kv.get(b'y') {
                     if let Delete::IntersectCell { y, .. } = &mut result {
-                        *y = *v;
+                        *y = v;
                     }
                 }
 
@@ -1340,20 +1417,20 @@ impl Delete {
                     y: 0,
                     z: 0,
                 };
-                if let Some(v) = kv.get(&b'x') {
+                if let Some(v) = kv.get(b'x') {
                     if let Delete::IntersectCellZ { x, .. } = &mut result {
-                        *x = *v;
+                        *x = v;
                     }
                 }
-                if let Some(v) = kv.get(&b'y') {
+                if let Some(v) = kv.get(b'y') {
                     if let Delete::IntersectCellZ { y, .. } = &mut result {
-                        *y = *v;
+                        *y = v;
                     }
                 }
-                if let Some(v) = kv.get(&b'z') {
+                if let Some(v) = kv.get(b'z') {
                     // We can bitcast here because of how we parse it earlier.
                     if let Delete::IntersectCellZ { z, .. } = &mut result {
-                        *z = *v as i32;
+                        *z = v as i32;
                     }
                 }
 
@@ -1361,12 +1438,12 @@ impl Delete {
             }
 
             b'r' | b'R' => {
-                let x = match kv.get(&b'x') {
-                    Some(v) => *v,
+                let x = match kv.get(b'x') {
+                    Some(v) => v,
                     None => return Err(Error::InvalidFormat),
                 };
-                let y = match kv.get(&b'y') {
-                    Some(v) => *v,
+                let y = match kv.get(b'y') {
+                    Some(v) => v,
                     None => return Err(Error::InvalidFormat),
                 };
                 if x > y {
@@ -1384,9 +1461,9 @@ impl Delete {
                     delete: what == b'X',
                     x: 0,
                 };
-                if let Some(v) = kv.get(&b'x') {
+                if let Some(v) = kv.get(b'x') {
                     if let Delete::Column { x, .. } = &mut result {
-                        *x = *v;
+                        *x = v;
                     }
                 }
 
@@ -1398,9 +1475,9 @@ impl Delete {
                     delete: what == b'Y',
                     y: 0,
                 };
-                if let Some(v) = kv.get(&b'y') {
+                if let Some(v) = kv.get(b'y') {
                     if let Delete::Row { y, .. } = &mut result {
-                        *y = *v;
+                        *y = v;
                     }
                 }
 
@@ -1412,10 +1489,10 @@ impl Delete {
                     delete: what == b'Z',
                     z: 0,
                 };
-                if let Some(v) = kv.get(&b'z') {
+                if let Some(v) = kv.get(b'z') {
                     // We can bitcast here because of how we parse it earlier.
                     if let Delete::Z { z, .. } = &mut result {
-                        *z = *v as i32;
+                        *z = v as i32;
                     }
                 }
 
@@ -1682,6 +1759,27 @@ mod tests {
         let mut p = Parser::init(1024 * 1024);
 
         let input = b"f=24,s=10,v=20,hello=world";
+        for c in input.iter() {
+            p.feed(*c).unwrap();
+        }
+        let command = p.complete().unwrap();
+
+        assert!(matches!(command.control, Control::Transmit(_)));
+        let v = match command.control {
+            Control::Transmit(v) => v,
+            _ => unreachable!(),
+        };
+        assert_eq!(Format::Rgb, v.format);
+        assert_eq!(10u32, v.width);
+        assert_eq!(20u32, v.height);
+    }
+
+    // test "ignore unknown keys (non-letter)"
+    #[test]
+    fn ignore_unknown_keys_non_letter() {
+        let mut p = Parser::init(1024 * 1024);
+
+        let input = b"f=24,s=10,v=20,!=1";
         for c in input.iter() {
             p.feed(*c).unwrap();
         }

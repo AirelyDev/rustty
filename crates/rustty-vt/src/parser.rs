@@ -281,12 +281,18 @@ pub struct DCS {
 //                     // of invisible characters we don't want to handle right
 //                     // now.
 //
-//                     // All others do the default behavior
+//                     // All others do the default behavior. Note the max
+//                     // depth of 1: this is only used for logging so we
+//                     // only want the top-level fields. Larger depths
+//                     // instantiate a recursive formatter for every nested
+//                     // type of every action payload (e.g. the full
+//                     // osc.Command union), which costs tens of kilobytes
+//                     // of binary size.
 //                     else => try writer.printValue(
 //                         "any",
 //                         .{},
 //                         @field(self, u_field.name),
-//                         3,
+//                         1,
 //                     ),
 //                 }
 //             }
@@ -813,10 +819,19 @@ impl<'a> Parser<'a> {
 
                 // We only allow colon or mixed separators for the 'm' command.
                 if c != b'm' && self.params_sep.count() > 0 {
+                    // The reference hoists the warning into a dedicated cold helper:
+                    //
+                    // /// Log a warning for a CSI dispatch with colon/mixed separators on a
+                    // /// non-'m' command.
+                    // ///
+                    // /// This is noinline on purpose so that this unlikely (cold) behavior
+                    // /// doesn't bloat the hot dispatch path which has been measured to actually
+                    // /// affect both binary size and performance due to icache busts.
+                    // noinline fn warnCsiSepMismatch(csi: Action.CSI) void {
                     // @branchHint(.cold);
                     // log.warn(
                     //     "CSI colon or mixed separators only allowed for 'm' command, got: {f}",
-                    //     .{result},
+                    //     .{csi},
                     // );
                     // break :csi_dispatch null;
                     return None;

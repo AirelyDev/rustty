@@ -20,9 +20,11 @@
 //!   * the surface `Info` widget with its `draw`, and
 //!   * the `dimensionsTable`/`fontTable`/`mouseTable` free functions.
 //!
-//! **R4 acyclic Surface seam.** The reference's `Inspector.draw` / `Info.draw` /
-//! the three tables all take `*const Surface` (LIFETIMES row: `Inspector.
-//! draw.surface`, BORROW_PARAM — every terminal read under
+//! **R4 acyclic Surface seam.** The reference's `Inspector.draw` (a `*Surface`
+//! since `ad96613a8` — the termio Copy/Export buttons reach
+//! `surface.rt_surface`/`surface.rt_app` through it) / `Info.draw` / the three
+//! tables (still `*const Surface`) take the surface pointer (LIFETIMES row:
+//! `Inspector.draw.surface`, BORROW_PARAM — every terminal read under
 //! `surface.renderer_state.mutex`, INV-1). `Surface` lives in rustty-core,
 //! which ALREADY depends on rustty-inspector (`Option<*mut inspectorpkg::
 //! Inspector>`), so a direct `rustty_core::Surface` name here would CYCLE.
@@ -64,7 +66,7 @@
 // `Surface.Mouse.click_state` array is keyed by); `renderer.Coordinate`
 // (mouseTable's px conversion) in rustty-renderer; `Surface`/`inspector`/
 // `widgets.{terminal,termio,key,renderer}` are the sibling modules named below.
-use core::ffi::{c_int, CStr};
+use core::ffi::{c_int, c_void, CStr};
 
 use allocator_api2::alloc::Global as Allocator;
 
@@ -167,11 +169,21 @@ impl<F: FnMut()> Drop for Defer<F> {
     }
 }
 
+/// The `rt_surface.setClipboard` seam trampoline type — see
+/// [`SurfaceData::rt_set_clipboard`].
+pub type RtSetClipboardFn =
+    unsafe fn(surface: *mut c_void, mime: &[u8], data: &[u8], confirm: bool) -> Result<(), ()>;
+
+/// The `rt_app.performAction(..., .export_terminal_io, ...)` seam trampoline
+/// type — see [`SurfaceData::rt_export_terminal_io`].
+pub type RtExportTerminalIOFn = unsafe fn(surface: *mut c_void, contents: &[u8]) -> Result<bool, ()>;
+
 /// Surface-level state `Inspector::draw`/`Info::draw`/the three tables need —
 /// see the module doc's R4 acyclic Surface seam note. Every field is a plain
-/// `Copy` value or raw pointer, all call-scoped (INV-1), obtained by the
-/// (future) core caller from its `Surface` (under `renderer_state`'s mutex
-/// where the reference reads a live terminal).
+/// `Copy` value, raw pointer, or monomorphized trampoline fn pointer, all
+/// call-scoped (INV-1), obtained by the (future) core caller from its
+/// `Surface` (under `renderer_state`'s mutex where the reference reads a live
+/// terminal).
 pub struct SurfaceData {
     /// `surface.renderer_state` (mutex + terminal raw pointer). `Inspector::
     /// draw` locks/unlocks this itself, exactly mirroring the reference's
@@ -189,6 +201,31 @@ pub struct SurfaceData {
     pub mouse_click_state: [ButtonState; Button::MAX as usize],
     /// `&surface.mouse.selection_gesture` — raw, call-scoped (INV-1).
     pub selection_gesture: *const SelectionGesture,
+
+    /// The reference `surface: *Surface` ITSELF, type-erased (`ad96613a8` made
+    /// the widget signatures non-const so termio's Copy/Export buttons can
+    /// reach `surface.rt_surface`/`surface.rt_app` through it): the context
+    /// pointer the two seam trampolines below recover their `*mut Surface`
+    /// from. Valid for the duration of `draw` (INV-1), like every other field
+    /// here.
+    pub surface: *mut c_void,
+
+    /// `surface.rt_surface.setClipboard(.standard, &.{.{ .mime, .data }},
+    /// confirm)` (termio `copyEvents`, `ad96613a8`), monomorphized by the
+    /// apprt caller. The `.standard` clipboard target is fixed inside the
+    /// trampoline (the only kind the widget names); `mime`/`data`/`confirm`
+    /// cross exactly as the widget passes them, with `data`'s backing memory
+    /// carrying a NUL one past the slice (the `[:0]const u8` convention of
+    /// core's own `setClipboard` callsites). The concrete backend error erases
+    /// to `Err(())` — consumed by the widget's `catch log.err` arm.
+    pub rt_set_clipboard: RtSetClipboardFn,
+
+    /// `surface.rt_app.performAction(.{ .surface = surface },
+    /// .export_terminal_io, .{ .contents = contents })` (termio
+    /// `exportEvents`, `ad96613a8`), monomorphized by the apprt caller.
+    /// Returns the reference `!bool` ("handled"); the concrete backend error
+    /// erases to `Err(())`.
+    pub rt_export_terminal_io: RtExportTerminalIOFn,
 }
 
 // pub const Inspector = struct {
@@ -260,12 +297,13 @@ impl Inspector {
 
     // pub fn draw(
     //     self: *Inspector,
-    //     surface: *const Surface,
+    //     surface: *Surface,
     //     mouse: Mouse,
     // ) void {
     //
     // PORT NOTE (R4 acyclic Surface seam, module doc): `data: SurfaceData`
-    // replaces the reference's `surface: *const Surface`.
+    // replaces the reference's `surface: *Surface` (non-const since
+    // `ad96613a8` for the termio Copy/Export buttons).
     #[allow(non_snake_case)] // faithful Zig name (R1)
     pub fn draw(&mut self, data: SurfaceData, mouse: Mouse) {
         // Create our dockspace first. If we had to setup our dockspace,
@@ -379,11 +417,11 @@ impl Inspector {
                 // if (open) {
                 if open {
                     //     self.vt_stream.draw(
-                    //         surface.alloc,
+                    //         surface,
                     //         &t.colors.palette.current,
                     //     );
                     self.vt_stream
-                        .draw(data.alloc, unsafe { &(*t).colors.palette.current });
+                        .draw(&data, unsafe { &(*t).colors.palette.current });
                 }
             }
 
