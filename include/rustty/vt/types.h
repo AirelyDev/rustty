@@ -96,6 +96,10 @@ typedef enum RUSTTY_ENUM_TYPED {
     RUSTTY_OUT_OF_SPACE = -3,
     /** The requested value has no value */
     RUSTTY_NO_VALUE = -4,
+    /** Operation failed while reading from or writing to external I/O */
+    RUSTTY_IO_ERROR = -5,
+    /** Operation failed because encoded input exceeded a configured limit */
+    RUSTTY_LIMIT_EXCEEDED = -6,
     RUSTTY_RESULT_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttyResult;
 
@@ -107,6 +111,13 @@ typedef enum RUSTTY_ENUM_TYPED {
  * @ingroup terminal
  */
 typedef struct RusttyTerminalImpl* RusttyTerminal;
+
+/**
+ * Opaque handle to an incremental terminal snapshot decoder.
+ *
+ * @ingroup snapshot
+ */
+typedef struct RusttySnapshotDecoderImpl* RusttySnapshotDecoder;
 
 /**
  * Opaque handle to a tracked grid reference.

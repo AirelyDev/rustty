@@ -72,6 +72,26 @@ impl FlagStack {
             self.idx = self.idx.wrapping_sub(u3::ONE);
         }
     }
+
+    // PORT NOTE: the snapshot codec (`snapshot/screen.rs`) reads and rebuilds
+    // the stack's fields directly in the reference (Zig has no field privacy);
+    // the port keeps the fields private and funnels through this constructor
+    // and the accessors below. The reference's `.idx = @intCast(self.index)`
+    // bounds check lives here.
+    pub fn new(idx: u8, flags: [Flags; Self::LEN]) -> FlagStack {
+        assert!((idx as usize) < Self::LEN);
+        FlagStack { flags, idx: u3(idx) }
+    }
+
+    /// `stack.idx` (Zig direct field access; see `new`).
+    pub fn idx(&self) -> u8 {
+        self.idx.get()
+    }
+
+    /// `stack.flags` (Zig direct field access; see `new`).
+    pub fn flags(&self) -> &[Flags; Self::LEN] {
+        &self.flags
+    }
 }
 
 /// PORT NOTE: Zig's `u3` is a 3-bit integer with defined wrap-around

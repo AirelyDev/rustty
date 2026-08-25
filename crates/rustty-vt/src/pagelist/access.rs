@@ -835,28 +835,31 @@ impl PageList {
         // Our list of pages
         let mut page_list: List = List::default();
         // errdefer {
-        //     const page_alloc = pool.pages.arena.child_allocator;
+        //     const page_alloc = pool.pages.allocator;
         //     var page_it = page_list.first;
         //     while (page_it) |node| : (page_it = node.next) {
-        //         if (node.data.memory.len > std_size) {
-        //             page_alloc.free(node.data.memory);
+        //         switch (node.owned) {
+        //             .pool => reclaimPoolPage(&pool, node.page()),
+        //             .heap => page_alloc.free(node.page().memory),
         //         }
         //     }
         // }
         //
-        // PORT NOTE: the reference errdefer frees only the NON-STANDARD page
-        // buffers (those whose backing `memory.len > std_size`) because the
-        // standard-size buffers are owned by `pool.pages` and freed when the
-        // pool is dropped. `free_non_standard_pages` (mod.rs) performs exactly
-        // that walk over `page_list`. Because Rust cannot express a Zig
-        // `errdefer` that captures `&mut page_list` while the loop also mutates
-        // it, we reproduce the errdefer EXPLICITLY: every early-error exit in
-        // the page-copy loop frees the non-standard pages first, then `pool`
-        // drops on return to release the rest. The `clone_err!` helper macro
-        // performs that free + return so the cleanup cannot be forgotten.
+        // PORT NOTE: the reference errdefer releases every page in `page_list`:
+        // heap-owned buffers are freed directly, and pool-owned buffers are
+        // reclaimed into the shared free list when the wasm page pool is active
+        // (natively `reclaimPoolPage` is a comptime no-op — the standard-size
+        // buffers are owned by `pool.pages` and freed when the pool is
+        // dropped). `release_error_pages` (mod.rs) performs exactly that walk
+        // over `page_list`. Because Rust cannot express a Zig `errdefer` that
+        // captures `&mut page_list` while the loop also mutates it, we
+        // reproduce the errdefer EXPLICITLY: every early-error exit in the
+        // page-copy loop releases the pages first, then `pool` drops on return
+        // to release the rest. The `clone_err!` helper macro performs that
+        // release + return so the cleanup cannot be forgotten.
         macro_rules! clone_err {
             ($e:expr) => {{
-                Self::free_non_standard_pages(&mut page_list);
+                Self::release_error_pages(&mut pool, &mut page_list);
                 return Err($e);
             }};
         }

@@ -97,6 +97,10 @@
 #   D10 check_stb_resize_parity.sh    vendored stb_image_resize output vs ghostty's
 #                                     own build recipe (4 zig optimize modes) +
 #                                     a machine-checked negative control  -> PROGRESS
+#   G-KAITAI check_kaitai_snapshot.sh the snapshot .ksy wire spec parses all
+#                                     checked-in snapshot goldens (CRC32C +
+#                                     byte accounting); BLOCKED without
+#                                     kaitai tooling, never silent   -> PROGRESS
 #          Registered PROGRESS not HARD (R5): brand-new, fail-closed against
 #          hand-maintained audit ledgers; PROGRESS avoids a transiently
 #          un-passable CI while a new hit precedes its ledger row by a commit.
@@ -642,6 +646,19 @@ GATE_REGISTRY=(
   # run_gate's PROGRESS-went-RED branch. Exits 3 BLOCKED (never green) when no
   # python with jsonschema exists and the cached venv cannot be provisioned.
   "G-ABISCHEMA|PROGRESS|bash $GATES/check_abi_schema.sh"
+  # G-KAITAI (phase-4 wbench, oracle 38d92c50c) — the snapshot wire format's
+  # normative Kaitai spec (crates/rustty-vt/src/snapshot/snapshot.ksy) parses
+  # every checked-in golden fixture, byte-accounted and CRC32C-checked, via the
+  # ported verify-kaitai.py living beside the .ksy (the oracle runs the same
+  # script CI-side). Anti-vacuity: the success banner's fixture count must
+  # equal the on-disk *.hex golden count, and the count arm's FAIL side is
+  # proven by the script's --self-test. Exits 3 BLOCKED (never a silent green
+  # — the check_test_counts.py oracle-absent precedent) when
+  # kaitai-struct-compiler or a python with kaitaistruct is unavailable; the
+  # python side self-provisions a cached venv (check_abi_schema.sh precedent).
+  # PROGRESS per the bedding-in convention; a genuine spec/golden drift RED is
+  # escalated by run_gate's PROGRESS-went-RED branch.
+  "G-KAITAI|PROGRESS|bash $GATES/check_kaitai_snapshot.sh"
 )
 
 HARD_FAILURES=()   # hard-fail checks that failed, or a claimed-done regression

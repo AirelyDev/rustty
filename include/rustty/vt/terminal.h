@@ -16,6 +16,7 @@
 #include <rustty/vt/modes.h>
 #include <rustty/vt/size_report.h>
 #include <rustty/vt/grid_ref.h>
+#include <rustty/vt/io.h>
 #include <rustty/vt/kitty_graphics.h>
 #include <rustty/vt/screen.h>
 #include <rustty/vt/point.h>
@@ -74,9 +75,10 @@ extern "C" {
  * back to their own application state without global variables.
  * You cannot specify different userdata for different callbacks.
  *
- * All callbacks are invoked synchronously during
- * rustty_terminal_vt_write(). Callbacks **must not** call
- * rustty_terminal_vt_write() on the same terminal (no reentrancy).
+ * All callbacks are invoked synchronously during VT writes. Callbacks
+ * **must not** call rustty_terminal_vt_write() or
+ * rustty_terminal_vt_write_until_ground() on the same terminal
+ * (no reentrancy).
  * And callbacks must be very careful to not block for too long or perform 
  * expensive operations, since they are blocking further IO processing.
  *
@@ -1132,8 +1134,25 @@ typedef enum RUSTTY_ENUM_TYPED {
    */
   RUSTTY_TERMINAL_OPT_PROGRESS_REPORT = 30,
 
-  /* RUSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES = 31 is reserved for the
-   * snapshot/continuation surface (not yet available in this build). */
+  /**
+   * Set the maximum number of replay-safe VT continuation bytes retained.
+   *
+   * Continuation bytes reconstruct an escape sequence or UTF-8 codepoint
+   * which was unfinished at the end of the most recent
+   * VT write call. They are used automatically by terminal snapshots and may
+   * also be exported directly with the continuation APIs.
+   *
+   * Tracking is disabled by default. A nonzero value enables tracking and
+   * sets its byte limit. Passing NULL or a pointer to zero disables tracking.
+   * Lowering the limit below an already-retained
+   * continuation, or enabling tracking while the parser is already
+   * unfinished, makes the current continuation unavailable because earlier
+   * bytes cannot be reconstructed. Tracking recovers automatically after a
+   * later write reaches the ground state or contains a fresh replay start.
+   *
+   * Input type: size_t*
+   */
+  RUSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES = 31,
 
   /**
    * Enable window title reports in response to CSI 21 t.
@@ -1558,9 +1577,16 @@ typedef enum RUSTTY_ENUM_TYPED {
    */
   RUSTTY_TERMINAL_DATA_SCROLLBACK_MAX_LINES = 35,
 
-  /* RUSTTY_TERMINAL_DATA_CONTINUATION_MAX_BYTES = 36 and
-   * RUSTTY_TERMINAL_DATA_VT_GROUND = 38 are reserved for the
-   * snapshot/continuation surface (not yet available in this build). */
+  /**
+   * The configured maximum retained VT continuation size in bytes.
+   *
+   * A value of zero means continuation tracking is disabled. This reports the
+   * configured limit even when a current unfinished continuation is
+   * temporarily unavailable.
+   *
+   * Output type: size_t *
+   */
+  RUSTTY_TERMINAL_DATA_CONTINUATION_MAX_BYTES = 36,
 
   /**
    * Get the current value of a terminal mode.
@@ -1572,6 +1598,21 @@ typedef enum RUSTTY_ENUM_TYPED {
    * Input/output type: RusttyTerminalModeConfig *
    */
   RUSTTY_TERMINAL_DATA_MODE = 37,
+
+  /**
+   * Whether VT processing is at ground.
+   *
+   * Ground is when the stream isn't in the middle of any type of sequence:
+   * UTF-8, ESC, CSI, OSC, etc. It is the stateless point of the stream.
+   *
+   * This is useful to know because it is a point at which you can
+   * safely insert out-of-band VT sequences. For example, while reading
+   * from a pty if you want to make your own changes, you can wait until
+   * the pty input reaches ground, then write yours.
+   *
+   * Output type: bool *
+   */
+  RUSTTY_TERMINAL_DATA_VT_GROUND = 38,
 
   /**
    * Whether the cursor is currently at a semantic shell prompt or input area.
@@ -1668,9 +1709,10 @@ RUSTTY_API RusttyResult rustty_terminal_resize(RusttyTerminal terminal,
  * The behavior of a NULL value is specific to each option and is
  * documented by the corresponding RusttyTerminalOption value.
  *
- * Callbacks are invoked synchronously during rustty_terminal_vt_write().
- * Callbacks must not call rustty_terminal_vt_write() on the same
- * terminal (no reentrancy).
+ * Callbacks are invoked synchronously during VT writes. Callbacks must not
+ * call rustty_terminal_vt_write() or
+ * rustty_terminal_vt_write_until_ground() on the same terminal
+ * (no reentrancy).
  *
  * @param terminal The terminal handle (may be NULL, in which case this is a no-op)
  * @param option The option to set
@@ -1707,6 +1749,129 @@ RUSTTY_API RusttyResult rustty_terminal_set(RusttyTerminal terminal,
 RUSTTY_API void rustty_terminal_vt_write(RusttyTerminal terminal,
                                 const uint8_t* data,
                                 size_t len);
+
+/**
+ * Write VT-encoded data, but only the shortest prefix needed to reach ground.
+ *
+ * Ground is when the stream isn't in the middle of any type of sequence:
+ * UTF-8, ESC, CSI, OSC, etc. It is the stateless point of the stream.
+ *
+ * This is useful to know because it is a point at which you can
+ * safely insert out-of-band VT sequences. For example, while reading
+ * from a pty if you want to make your own changes, you can wait until
+ * the pty input reaches ground, then write yours.
+ *
+ * If the stream is already at ground then this consumes nothing and returns
+ * RUSTTY_SUCCESS. On success, out_consumed is the number of bytes consumed
+ * before reaching ground, including the byte that reaches it.
+ * RUSTTY_NO_VALUE means the full slice was consumed without reaching ground.
+ *
+ * @param terminal The terminal handle (must not be NULL)
+ * @param data Pointer to the data to write, or NULL when len is zero
+ * @param len Length of the data in bytes
+ * @param[out] out_consumed Number of bytes consumed (must not be NULL)
+ * @return RUSTTY_SUCCESS if ground was reached, RUSTTY_NO_VALUE if all input
+ *         was consumed without reaching ground, or RUSTTY_INVALID_VALUE if
+ *         an argument is invalid
+ *
+ * @ingroup terminal
+ */
+RUSTTY_API RusttyResult rustty_terminal_vt_write_until_ground(
+    RusttyTerminal terminal,
+    const uint8_t* data,
+    size_t len,
+    size_t* out_consumed);
+
+/**
+ * Write the terminal's replay-safe VT continuation to a callback writer.
+ *
+ * The continuation is the exact byte suffix needed to reconstruct unfinished
+ * VT parser or UTF-8 decoder state in an equivalent terminal. It is empty
+ * when the stream is at ground. The callback is invoked synchronously and
+ * may be called more than once. It must not call terminal APIs with the same
+ * terminal handle.
+ *
+ * Continuation tracking must have been enabled by setting
+ * RUSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES to a nonzero value before the
+ * input that produced the continuation was written.
+ *
+ * The caller must serialize this operation with both VT write functions and
+ * all other access to the same terminal.
+ *
+ * @param terminal Terminal to read from (must not be NULL)
+ * @param writer Destination writer whose write callback must not be NULL
+ * @return RUSTTY_SUCCESS on success, RUSTTY_IO_ERROR if the callback rejects
+ *         a write, RUSTTY_LIMIT_EXCEEDED if output accounting overflows, or
+ *         RUSTTY_INVALID_VALUE if an argument is invalid, tracking is
+ *         disabled, or the current continuation is unavailable
+ *
+ * @ingroup terminal
+ */
+RUSTTY_API RusttyResult rustty_terminal_continuation_write(
+    RusttyTerminal terminal,
+    RusttyWriter writer);
+
+/**
+ * Copy the terminal's replay-safe VT continuation into a caller buffer.
+ *
+ * Pass NULL for buf with buf_len zero to query the required size. A size query
+ * returns RUSTTY_OUT_OF_SPACE and stores the required size in out_written,
+ * including zero when the stream is at ground. If a non-NULL buffer is too
+ * small, the function has the same result and reports the full required size.
+ * Continuation tracking must have been enabled by setting
+ * RUSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES to a nonzero value before the
+ * input that produced the continuation was written.
+ *
+ * The caller must serialize this operation with all other access to the same
+ * terminal.
+ *
+ * @param terminal Terminal to read from (must not be NULL)
+ * @param buf Destination buffer, or NULL when buf_len is zero
+ * @param buf_len Destination buffer capacity in bytes
+ * @param[out] out_written Bytes written, or required size on
+ *             RUSTTY_OUT_OF_SPACE (must not be NULL)
+ * @return RUSTTY_SUCCESS on success, RUSTTY_OUT_OF_SPACE for a size query or
+ *         insufficient buffer, or RUSTTY_INVALID_VALUE if an argument is
+ *         invalid, tracking is disabled, or the current continuation is
+ *         unavailable
+ *
+ * @ingroup terminal
+ */
+RUSTTY_API RusttyResult rustty_terminal_continuation_buf(
+    RusttyTerminal terminal,
+    uint8_t* buf,
+    size_t buf_len,
+    size_t* out_written);
+
+/**
+ * Return an allocated copy of the terminal's replay-safe VT continuation.
+ *
+ * The returned bytes are allocated with allocator, or the default allocator
+ * when allocator is NULL. The caller must release them with rustty_free(),
+ * passing the same allocator and returned length. An empty continuation is a
+ * successful zero-length allocation.
+ * Continuation tracking must have been enabled by setting
+ * RUSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES to a nonzero value before the
+ * input that produced the continuation was written.
+ *
+ * The caller must serialize this operation with all other access to the same
+ * terminal.
+ *
+ * @param terminal Terminal to read from (must not be NULL)
+ * @param allocator Allocator for the output, or NULL for the default allocator
+ * @param[out] out_ptr Allocated continuation bytes (must not be NULL)
+ * @param[out] out_len Number of continuation bytes (must not be NULL)
+ * @return RUSTTY_SUCCESS on success, RUSTTY_OUT_OF_MEMORY on allocation
+ *         failure, or RUSTTY_INVALID_VALUE if an argument is invalid,
+ *         tracking is disabled, or the current continuation is unavailable
+ *
+ * @ingroup terminal
+ */
+RUSTTY_API RusttyResult rustty_terminal_continuation_alloc(
+    RusttyTerminal terminal,
+    const RusttyAllocator* allocator,
+    uint8_t** out_ptr,
+    size_t* out_len);
 
 /**
  * Scroll the terminal viewport.

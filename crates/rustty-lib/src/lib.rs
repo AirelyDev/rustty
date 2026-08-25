@@ -1,13 +1,15 @@
 //! rustty-lib
 //!
-//! PORTS: ghostty src/lib/ (allocator, allocator/convenience, enum, main, struct,
+//! PORTS: ghostty src/lib/ (allocator, allocator/wasm, c_abi, enum, main, struct,
 //! target, types, union) — allocator utilities. (`string` was deleted upstream
-//! by `1d6bc6829`: callers moved to `std.mem.cutPrefix` / slice `strip_prefix`.)
+//! by `1d6bc6829`: callers moved to `std.mem.cutPrefix` / slice `strip_prefix`;
+//! `allocator/convenience` was deleted upstream by `a8e9b413f`, replaced by the
+//! byte-based `allocator/wasm`.)
 //!
 //! PORT STATUS: done
 //!
 //! PORT NOTE: This crate ports ghostty `src/lib/` — the allocator vtable/ABI
-//! (`allocator`, `allocator/convenience`) plus the comptime ABI helper type
+//! (`allocator`, `allocator/wasm`) plus the comptime ABI helper type
 //! factories (`enum`, `struct`, `union`, `target`, `types`). The
 //! comptime type factories are modeled as runtime descriptors that reproduce
 //! the SAME layout/value algorithms the reference tests observe.
@@ -61,8 +63,8 @@ mod main_tests {
     }
 }
 
-pub mod allocator_convenience {
-    //! PORT NOTE: re-export of `allocator/convenience.zig` under the crate-root
-    //! path (`allocator.convenience` in the reference).
-    pub use crate::allocator::convenience::*;
+pub mod allocator_wasm {
+    //! PORT NOTE: re-export of `allocator/wasm.zig` under the crate-root
+    //! path (`allocator.wasm` in the reference).
+    pub use crate::allocator::wasm::*;
 }

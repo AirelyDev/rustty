@@ -58,13 +58,11 @@
 //!
 //! PORTS: ghostty src/terminal/snapshot/history.zig
 //!
-//! PORT STATUS: partial (phase-4 wsnap-2) — the complete production surface
-//! (Header, encode, Decoder, decode, decodePage) is live. ONE upstream test,
-//! "HISTORY encodes newest first and restores complete history", drives the
-//! sequence through `snapshot/screen.rs` (`screen.encode` / `screen.decode`),
-//! which is the remaining next-stage module (assessment B cluster C4); that
-//! test lands verbatim with it. The other three upstream tests are carried
-//! below.
+//! PORT STATUS: complete (phase-4 wsnap-2 + wsnap-3) — the complete
+//! production surface (Header, encode, Decoder, decode, decodePage) and all
+//! four upstream tests are live ("HISTORY encodes newest first and restores
+//! complete history" landed with `snapshot/screen.rs`, which it drives
+//! through `screen.encode` / `screen.decode`).
 
 // const std = @import("std");
 // const Allocator = std.mem.Allocator;
@@ -72,7 +70,7 @@
 // const io = @import("io.zig");
 // const page = @import("page.zig");
 // const record = @import("record.zig");
-// const screen = @import("screen.zig"); — NEXT STAGE (see PORT STATUS above)
+// const screen = @import("screen.zig"); — test-only import (see the test)
 // const TerminalPage = @import("../page.zig").Page;
 // const TerminalPageList = @import("../PageList.zig");
 // const TerminalScreen = @import("../Screen.zig");
@@ -417,8 +415,19 @@ pub fn decode_page(
 ) -> Result<usize, DecodePageError> {
     // PAGE exposes its exact capacity before decoding the payload, allowing
     // the destination PageList to allocate the final backing memory once.
+    //
+    // PORT NOTE (Stacked Borrows): `allocation` holds a raw alias into
+    // `terminal_screen.pages` until `finalize`/`deinit`. Everything below
+    // therefore works through ONE raw screen pointer taken here — forming
+    // another `&mut TerminalScreen` (e.g. as a `decode_page_inner` argument)
+    // while the alias is live re-protects the screen and invalidates the
+    // alias before `finalize` uses it (the crate's raw-ptr-args discipline;
+    // Miri-proven by the snapshot codec lane).
+    let screen_ptr: *mut TerminalScreen = terminal_screen;
     let mut decoder = page::Decoder::init(&mut *source).map_err(DecodePageError::from)?;
-    let pages_ptr: *mut TerminalPageList = &mut terminal_screen.pages;
+    // SAFETY: `screen_ptr` is live for this call; the raw field projection
+    // forms no reference.
+    let pages_ptr: *mut TerminalPageList = unsafe { core::ptr::addr_of_mut!((*screen_ptr).pages) };
     // SAFETY: `pages_ptr` points at the live PageList owned by
     // `terminal_screen`; until `finalize`/`deinit` below, the list is only
     // touched through the allocation itself (the allocate_page contract).
@@ -426,7 +435,7 @@ pub fn decode_page(
         unsafe { TerminalPageList::allocate_page(pages_ptr, decoder.capacity()) }
             .map_err(|_| DecodePageError::OutOfMemory)?;
     // defer allocation.deinit();
-    let result = decode_page_inner(&mut decoder, &mut allocation, terminal_screen);
+    let result = decode_page_inner(&mut decoder, &mut allocation, screen_ptr);
     allocation.deinit();
     result
 }
@@ -434,7 +443,9 @@ pub fn decode_page(
 fn decode_page_inner(
     decoder: &mut page::Decoder<'_>,
     allocation: &mut PageAllocation,
-    terminal_screen: &mut TerminalScreen,
+    // PORT NOTE: raw, not `&mut` — see the Stacked Borrows note in
+    // `decode_page` (`allocation` aliases this screen's PageList).
+    terminal_screen: *mut TerminalScreen,
 ) -> Result<usize, DecodePageError> {
     // SAFETY: `allocation.page()` is the freshly allocated detached page; the
     // exclusive borrow lives only for this decode call.
@@ -450,7 +461,9 @@ fn decode_page_inner(
     };
     allocation.finalize(Location::Prepend)?;
     if contains_prompt {
-        terminal_screen.semantic_prompt.seen = true;
+        // SAFETY: `terminal_screen` is live (decode_page's argument); a raw
+        // field write that forms no reference over the finalized list.
+        unsafe { (*terminal_screen).semantic_prompt.seen = true };
     }
     Ok(rows)
 }
@@ -660,9 +673,255 @@ mod tests {
     }
 
     // test "HISTORY encodes newest first and restores complete history"
-    // PORT NOTE (wsnap-2 boundary): deferred with `snapshot/screen.rs`
-    // (assessment B cluster C4) — the test drives this module's encode/decode
-    // through `screen.encode` / `screen.decode`; see the module PORT STATUS.
+    #[test]
+    fn history_encodes_newest_first_and_restores_complete_history() {
+        use crate::pagelist::Node;
+        use crate::point;
+        use crate::snapshot::screen;
+
+        // Choose an active height which spans two native pages, then grow
+        // until exactly two additional complete pages precede the active
+        // boundary.
+        let page_rows = {
+            let mut probe = TerminalScreen::init(
+                Allocator,
+                ScreenOptions {
+                    cols: 80,
+                    rows: 1,
+                    max_scrollback_bytes: Some(0),
+                    ..ScreenOptions::default()
+                },
+            )
+            .unwrap();
+            // SAFETY: the top-left node is live within the probe screen.
+            let rows =
+                unsafe { Node::capacity(probe.pages.get_top_left(point::Tag::Screen).node).rows };
+            probe.deinit();
+            rows
+        };
+        let screen_rows = page_rows + 1;
+
+        let mut source_screen =
+            TerminalScreen::init(Allocator, screen_options(80, screen_rows)).unwrap();
+        // defer source_screen.deinit();
+        source_screen.cursor_absolute(0, screen_rows - 1);
+        while source_screen.pages.total_pages() < 4 {
+            source_screen.test_write_string(b"\n").unwrap();
+        }
+
+        let active_top = source_screen.pages.get_top_left(point::Tag::Active);
+        // SAFETY (this block and the marker writes below): live nodes and
+        // resident pages of `source_screen`'s PageList; the writes touch
+        // distinct cells.
+        let (newest_history, oldest_history) = unsafe {
+            let newest_history = (*active_top.node).prev;
+            let oldest_history = (*newest_history).prev;
+            assert_eq!(
+                source_screen.pages.get_top_left(point::Tag::Screen).node,
+                oldest_history,
+            );
+            assert!((*oldest_history).prev.is_null());
+            (newest_history, oldest_history)
+        };
+
+        // Mark the two complete historical pages so the wire sequence and
+        // final native order are visible. The oldest prompt also verifies
+        // derived state is updated only when that page is restored.
+        unsafe {
+            let oldest_cell = (*Node::page(oldest_history)).get_row_and_cell(0, 0).cell;
+            *oldest_cell = crate::page::Cell::init('A' as u32);
+            (*oldest_cell).set_semantic_content(crate::page::SemanticContent::Prompt);
+            *(*Node::page(newest_history)).get_row_and_cell(0, 0).cell =
+                crate::page::Cell::init('B' as u32);
+        }
+
+        // Encode SCREEN before history compression, then compress eligible
+        // history and require HISTORY encoding to preserve each source
+        // storage state.
+        let mut destination = io::AllocatingWriter::new();
+        let mut stream = record::Writer::init(&mut destination);
+        // defer stream.deinit();
+        screen::encode(&source_screen, TerminalScreenKey::Primary, &mut stream).unwrap();
+        let history_offset = stream.destination().written().len();
+
+        let _ = source_screen
+            .pages
+            .compress(crate::pagelist::compress::CompressionMode::Full);
+        // SAFETY: live nodes (see above); `storage` reads the representation.
+        let oldest_storage = unsafe { Node::storage(oldest_history) };
+        let newest_storage = unsafe { Node::storage(newest_history) };
+        encode(&source_screen, TerminalScreenKey::Primary, &mut stream).unwrap();
+        // SAFETY: as above.
+        unsafe {
+            assert_eq!(oldest_storage, Node::storage(oldest_history));
+            assert_eq!(newest_storage, Node::storage(newest_history));
+        }
+
+        let written = stream.destination().written().to_vec();
+        stream.deinit();
+
+        // Inspect the manifest and PAGE records independently. Newest history
+        // is sent first even though native PageList order is oldest-to-newest.
+        let mut history_source = io::FixedReader::new(&written[history_offset..]);
+        let mut history_record = record::Reader::init(&mut history_source).unwrap();
+        assert_eq!(record::Tag::History, history_record.header.tag);
+        let header = Header::decode(history_record.payload_reader()).unwrap();
+        history_record.finish().unwrap();
+        assert_eq!(TerminalScreenKey::Primary, header.key);
+        assert_eq!(2u32, header.page_count);
+
+        let mut decoded_newest = page::decode(&mut history_source).unwrap();
+        // defer decoded_newest.deinit();
+        // SAFETY (here and below): live cells of the standalone decoded pages.
+        assert_eq!('B' as u32, unsafe {
+            (*decoded_newest.get_row_and_cell(0, 0).cell).codepoint()
+        });
+        let mut decoded_oldest = page::decode(&mut history_source).unwrap();
+        // defer decoded_oldest.deinit();
+        assert_eq!('A' as u32, unsafe {
+            (*decoded_oldest.get_row_and_cell(0, 0).cell).codepoint()
+        });
+        assert_eq!(Err(io::ReadError::EndOfStream), history_source.take_byte());
+        decoded_oldest.deinit();
+        decoded_newest.deinit();
+
+        // Restore SCREEN first, then prepend HISTORY directly into that
+        // PageList.
+        let mut restore_source = io::FixedReader::new(&written);
+        let mut decoded_screen = screen::decode(
+            &mut restore_source,
+            Allocator,
+            ScreenOptions {
+                cols: 80,
+                rows: screen_rows,
+                max_scrollback_bytes: None,
+                ..ScreenOptions::default()
+            },
+        )
+        .unwrap();
+        // defer decoded_screen.deinit();
+        assert_eq!(TerminalScreenKey::Primary, decoded_screen.key);
+        assert_eq!(
+            (source_screen.pages.total_rows - screen_rows as usize) as u64,
+            decoded_screen.history_rows,
+        );
+        let restored = &mut decoded_screen.screen;
+        assert!(!restored.semantic_prompt.seen);
+        decode(&mut restore_source, TerminalScreenKey::Primary, restored).unwrap();
+
+        assert_eq!(
+            source_screen.pages.total_pages(),
+            restored.pages.total_pages(),
+        );
+        let restored_oldest = restored.pages.get_top_left(point::Tag::Screen).node;
+        // SAFETY: live nodes/pages of the restored screen; shared reads only.
+        unsafe {
+            assert_eq!(
+                'A' as u32,
+                (*(*Node::page(restored_oldest)).get_row_and_cell(0, 0).cell).codepoint(),
+            );
+            assert_eq!(
+                'B' as u32,
+                (*(*Node::page((*restored_oldest).next))
+                    .get_row_and_cell(0, 0)
+                    .cell)
+                    .codepoint(),
+            );
+        }
+        assert!(restored.semantic_prompt.seen);
+        assert_eq!(Err(io::ReadError::EndOfStream), restore_source.take_byte());
+        decoded_screen.deinit();
+
+        // Reuse a writable copy of the sequence for failure-path fixtures.
+        let mut encoded = written.clone();
+        // defer testing.allocator.free(encoded);
+        let first_page_offset = history_offset + record::Header::LEN + Header::LEN;
+        let first_payload_len = u32::from_le_bytes(
+            encoded[first_page_offset + 2..first_page_offset + 6]
+                .try_into()
+                .unwrap(),
+        );
+        let second_page_offset =
+            first_page_offset + record::Header::LEN + first_payload_len as usize;
+
+        // Truncate the first PAGE only after its header has exposed a
+        // capacity. Its detached allocation is discarded and the live SCREEN
+        // list remains completely unchanged.
+        let mut truncated_source = io::FixedReader::new(&encoded[0..second_page_offset - 1]);
+        let mut decoded_truncated = screen::decode(
+            &mut truncated_source,
+            Allocator,
+            ScreenOptions {
+                cols: 80,
+                rows: screen_rows,
+                max_scrollback_bytes: None,
+                ..ScreenOptions::default()
+            },
+        )
+        .unwrap();
+        // defer decoded_truncated.deinit();
+        {
+            let truncated = &mut decoded_truncated.screen;
+            let truncated_screen_first = truncated.pages.get_top_left(point::Tag::Screen).node;
+            let truncated_screen_page_count = truncated.pages.total_pages();
+            assert_eq!(
+                Err(DecodeError::EndOfStream),
+                decode(&mut truncated_source, TerminalScreenKey::Primary, truncated),
+            );
+            assert_eq!(
+                truncated_screen_page_count,
+                truncated.pages.total_pages(),
+            );
+            assert_eq!(
+                truncated_screen_first,
+                truncated.pages.get_top_left(point::Tag::Screen).node,
+            );
+            truncated.pages.assert_integrity();
+            truncated.assert_integrity();
+        }
+        decoded_truncated.deinit();
+
+        // Corrupt only the older PAGE tag. A failure in a later PAGE keeps
+        // only the successfully prepended newer pages, contiguous with SCREEN.
+        encoded[second_page_offset..second_page_offset + 2]
+            .copy_from_slice(&(record::Tag::Screen as u16).to_le_bytes());
+
+        let mut partial_source = io::FixedReader::new(&encoded);
+        let mut decoded_partial = screen::decode(
+            &mut partial_source,
+            Allocator,
+            ScreenOptions {
+                cols: 80,
+                rows: screen_rows,
+                max_scrollback_bytes: None,
+                ..ScreenOptions::default()
+            },
+        )
+        .unwrap();
+        // defer decoded_partial.deinit();
+        {
+            let partial = &mut decoded_partial.screen;
+            let screen_page_count = partial.pages.total_pages();
+            assert_eq!(
+                Err(DecodeError::UnexpectedRecordTag),
+                decode(&mut partial_source, TerminalScreenKey::Primary, partial),
+            );
+            assert_eq!(screen_page_count + 1, partial.pages.total_pages());
+            // SAFETY: live top-left page of the partially restored screen.
+            assert_eq!('B' as u32, unsafe {
+                (*(*Node::page(partial.pages.get_top_left(point::Tag::Screen).node))
+                    .get_row_and_cell(0, 0)
+                    .cell)
+                    .codepoint()
+            });
+            assert!(!partial.semantic_prompt.seen);
+            partial.pages.assert_integrity();
+            partial.assert_integrity();
+        }
+        decoded_partial.deinit();
+
+        source_screen.deinit();
+    }
 
     // test "HISTORY encodes and restores an empty sequence"
     #[test]

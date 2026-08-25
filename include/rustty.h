@@ -88,17 +88,17 @@ typedef struct {
 
 /**
  * The wasm-allocator `Opaque` handle. WS19 T3 (audit row N2): the wasm
- * convenience exports `rustty_wasm_alloc_opaque` / `rustty_wasm_free_opaque`
- * are typed `*mut conv::Opaque`, where `Opaque` is defined in the SIBLING crate
- * `rustty-lib` (`allocator/convenience.rs:30`, `pub type Opaque = *mut c_void`,
- * porting the reference's `pub const Opaque = *anyopaque`). With
- * `parse_deps = false` cbindgen cannot see it and emitted `Opaque *` against an
- * UNDECLARED type (`WARN: Can't find Opaque`), so `include/rustty.h` did not
- * compile standalone as C at all. Pinned here by hand, like every other
- * cross-crate C-ABI type in this block. `Opaque` == `void *`, so the exports'
- * `Opaque *` is `void **` — one pointer-sized slot, byte-identical to the
- * reference's `?*Opaque`.
- * C: RusttyOpaque (rustty-lib allocator::convenience::Opaque)
+ * exports `rustty_wasm_alloc_opaque` / `rustty_wasm_free_opaque` /
+ * `rustty_wasm_take_opaque` are typed `*mut alloc::Opaque`, where `Opaque` is
+ * defined in the SIBLING crate `rustty-lib` (`allocator/wasm.rs`,
+ * `pub type Opaque = *mut c_void`, porting the reference's
+ * `pub const Opaque = ?*anyopaque`). With `parse_deps = false` cbindgen cannot
+ * see it and emitted `Opaque *` against an UNDECLARED type
+ * (`WARN: Can't find Opaque`), so `include/rustty.h` did not compile standalone
+ * as C at all. Pinned here by hand, like every other cross-crate C-ABI type in
+ * this block. `Opaque` == `void *`, so the exports' `Opaque *` is `void **` —
+ * one pointer-sized slot, byte-identical to the reference's `?*Opaque`.
+ * C: RusttyOpaque (rustty-lib allocator::wasm::Opaque)
  */
 typedef void *Opaque;
 
@@ -130,7 +130,21 @@ typedef enum {
 } TerminalCompressionResult;
 
 
+/**
+ * The buffer length used by the C API entry points that stream through
+ * a callback. 4 KiB amortizes callback overhead while keeping every
+ * adapter's stack footprint modest, mirroring ReaderAdapter's
+ * transfer_buffer sizing.
+ */
+#define WriterAdapter_RECOMMENDED_BUFFER_LEN 4096
 
+
+
+/**
+ * C terminals do not retain replay bytes unless the embedding application
+ * opts in through `RUSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES`.
+ */
+#define DEFAULT_CONTINUATION_MAX_BYTES 0
 
 /**
  * C: GhosttyCellData -> RusttyCellData (R2)
@@ -216,6 +230,23 @@ typedef enum {
     COLOR_TAG_COLOR_TAG_PALETTE = 1,
     COLOR_TAG_COLOR_TAG_RGB = 2,
 } ColorTag;
+
+/**
+ * C: GhosttySnapshotDecoderData -> RusttySnapshotDecoderData (R2)
+ *
+ * Data keys select typed values exposed by the decoder getter APIs.
+ */
+typedef enum {
+    DECODER_DATA_DECODER_DATA_INVALID = 0,
+    DECODER_DATA_DECODER_DATA_MAX_CONTINUATION_BYTES = 1,
+    DECODER_DATA_DECODER_DATA_SOURCE_OFFSET = 2,
+    DECODER_DATA_DECODER_DATA_HISTORY_ROWS_PRIMARY = 3,
+    DECODER_DATA_DECODER_DATA_HISTORY_ROWS_ALTERNATE = 4,
+    DECODER_DATA_DECODER_DATA_PROGRESS_SCREEN = 5,
+    DECODER_DATA_DECODER_DATA_PROGRESS_ROWS = 6,
+    DECODER_DATA_DECODER_DATA_PROGRESS_REMAINING = 7,
+    DECODER_DATA_DECODER_DATA_RETAIN_CONTINUATION = 8,
+} DecoderData;
 
 /**
  * C: GhosttyKittyGraphicsImageData -> RusttyKittyGraphicsImageData (R2)
@@ -318,9 +349,17 @@ typedef enum {
     TERMINAL_DATA_TERMINAL_DATA_SCROLLBACK_MAX_BYTES = 34,
     TERMINAL_DATA_TERMINAL_DATA_SCROLLBACK_MAX_LINES = 35,
     /**
+     * Output type: `usize` (oracle d7bb4b863).
+     */
+    TERMINAL_DATA_TERMINAL_DATA_CONTINUATION_MAX_BYTES = 36,
+    /**
      * Output type: `ModeConfig` (input/output — oracle cfc19e805).
      */
     TERMINAL_DATA_TERMINAL_DATA_MODE = 37,
+    /**
+     * Output type: `bool` (oracle a69a591af).
+     */
+    TERMINAL_DATA_TERMINAL_DATA_VT_GROUND = 38,
     /**
      * Output type: `bool` (oracle bdb566068).
      */
@@ -336,6 +375,11 @@ typedef enum {
     ORDER_ORDER_MIRRORED_FORWARD = 2,
     ORDER_ORDER_MIRRORED_REVERSE = 3,
 } Order;
+
+/**
+ * Owns the source adapter and all state needed by an opaque C decoder handle.
+ */
+typedef struct DecoderWrapper DecoderWrapper;
 
 /**
  * Wrapper around formatter that tracks the allocator for C API usage.
@@ -660,6 +704,27 @@ typedef struct {
      */
     const CSelection *selection;
 } TerminalOptions;
+
+/**
+ * C: GhosttyWriter -> RusttyWriter (R2)
+ */
+typedef struct {
+    bool (*write)(void*, const uint8_t*, uintptr_t);
+    void *userdata;
+} Writer;
+
+/**
+ * C: GhosttySnapshotDecoder, an opaque nullable decoder handle.
+ */
+typedef DecoderWrapper *Decoder;
+
+/**
+ * C: GhosttyReader -> RusttyReader (R2)
+ */
+typedef struct {
+    bool (*read)(void*, uint8_t*, uintptr_t, uintptr_t*);
+    void *userdata;
+} Reader;
 
 /**
  * C: GhosttyKittyGraphics -> RusttyKittyGraphics (R2)
@@ -1603,6 +1668,17 @@ int rustty_formatter_terminal_new(const Allocator *alloc,
                                   TerminalOptions opts);
 
 /**
+ * C: rustty_formatter_format
+ *
+ * # Safety
+ * `formatter`, if non-null, must be a handle returned by
+ * `rustty_formatter_terminal_new`; `writer`'s callback contract is the
+ * caller's (it must not call formatter or terminal APIs using the same
+ * formatter or its terminal).
+ */
+int rustty_formatter_format(Formatter formatter, Writer writer);
+
+/**
  * C: rustty_formatter_format_buf
  *
  * # Safety
@@ -1637,6 +1713,133 @@ int rustty_formatter_format_alloc(Formatter formatter,
  * `rustty_formatter_terminal_new`.
  */
 void rustty_formatter_free(Formatter formatter);
+
+/**
+ * C: rustty_snapshot_encode
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a live `rustty_terminal_new` handle with no
+ * concurrent mutation; `writer`'s callback must not call terminal APIs with
+ * the same terminal handle.
+ */
+int rustty_snapshot_encode(Terminal terminal, Writer writer);
+
+/**
+ * C: rustty_snapshot_encode_buf
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a live terminal handle; `buf`, if non-null,
+ * must point to `buf_len` writable bytes; `out_written` must be writable.
+ */
+int rustty_snapshot_encode_buf(Terminal terminal,
+                               uint8_t *buf,
+                               uintptr_t buf_len,
+                               uintptr_t *out_written);
+
+/**
+ * C: rustty_snapshot_encode_alloc
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a live terminal handle; `alloc`, if
+ * non-null, a valid allocator; `out_ptr`/`out_len` must be writable. The
+ * returned buffer is caller-owned and released with `rustty_free` + the same
+ * allocator.
+ */
+int rustty_snapshot_encode_alloc(Terminal terminal,
+                                 const Allocator *alloc,
+                                 uint8_t **out_ptr,
+                                 uintptr_t *out_len);
+
+/**
+ * C: rustty_snapshot_decoder_new
+ *
+ * # Safety
+ * `alloc`, if non-null, must point to a valid allocator; `decoder` must be
+ * writable; `reader`'s callback and userdata must remain valid until FINISH
+ * is reached or the decoder is freed.
+ */
+int rustty_snapshot_decoder_new(const Allocator *alloc, Decoder *decoder, Reader reader);
+
+/**
+ * C: rustty_snapshot_decoder_new_buf
+ *
+ * # Safety
+ * `alloc`, if non-null, must point to a valid allocator; `decoder` must be
+ * writable; `ptr`, if non-null, must point to `len` bytes that remain valid
+ * and immutable until FINISH is reached or the decoder is freed.
+ */
+int rustty_snapshot_decoder_new_buf(const Allocator *alloc,
+                                    Decoder *decoder,
+                                    const uint8_t *ptr,
+                                    uintptr_t len);
+
+/**
+ * C: rustty_snapshot_decoder_free
+ *
+ * # Safety
+ * `decoder`, if non-null, must be a handle returned by a decoder constructor,
+ * not yet freed.
+ */
+void rustty_snapshot_decoder_free(Decoder decoder);
+
+/**
+ * C: rustty_snapshot_decoder_set
+ *
+ * # Safety
+ * `decoder`, if non-null, must be a live decoder handle; `value`, if
+ * non-null, must point to the type documented for `option`.
+ */
+int rustty_snapshot_decoder_set(Decoder decoder, int option, const void *value);
+
+/**
+ * C: rustty_snapshot_decoder_get
+ *
+ * # Safety
+ * `decoder`, if non-null, must be a live decoder handle; `out`, if non-null,
+ * must point to writable storage of the type documented for `data`.
+ */
+int rustty_snapshot_decoder_get(Decoder decoder, int data, void *out);
+
+/**
+ * C: rustty_snapshot_decoder_get_multi
+ *
+ * # Safety
+ * `decoder`, if non-null, must be a live decoder handle; `keys`/`values`, if
+ * non-null, must point to `count` elements; `out_written`, if non-null, must
+ * be writable.
+ */
+int rustty_snapshot_decoder_get_multi(Decoder decoder,
+                                      uintptr_t count,
+                                      const DecoderData *keys,
+                                      void **values,
+                                      uintptr_t *out_written);
+
+/**
+ * C: rustty_snapshot_decoder_ready
+ *
+ * # Safety
+ * `decoder`, if non-null, must be a live decoder handle; `terminal` must be
+ * writable.
+ */
+int rustty_snapshot_decoder_ready(Decoder decoder, Terminal *terminal);
+
+/**
+ * C: rustty_snapshot_decoder_next
+ *
+ * # Safety
+ * `decoder`, if non-null, must be a live decoder handle whose READY terminal
+ * (if any) is still alive.
+ */
+int rustty_snapshot_decoder_next(Decoder decoder);
+
+/**
+ * C: rustty_snapshot_decoder_decode
+ *
+ * # Safety
+ * `decoder`, if non-null, must be a live decoder handle; `terminal` must be
+ * writable.
+ */
+int rustty_snapshot_decoder_decode(Decoder decoder, Terminal *terminal);
 
 /**
  * C: rustty_type_json
@@ -2151,6 +2354,55 @@ int rustty_terminal_set(Terminal terminal, int option, const void *value);
 void rustty_terminal_vt_write(Terminal terminal, const uint8_t *ptr, uintptr_t len);
 
 /**
+ * C: rustty_terminal_vt_write_until_ground
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `data`, if
+ * non-null, must point to `len` readable bytes; `out_consumed`, if non-null,
+ * must be writable.
+ */
+int rustty_terminal_vt_write_until_ground(Terminal terminal,
+                                          const uint8_t *data,
+                                          uintptr_t len,
+                                          uintptr_t *out_consumed);
+
+/**
+ * C: rustty_terminal_continuation_write
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `writer`'s
+ * callback must not call terminal APIs with the same terminal handle.
+ */
+int rustty_terminal_continuation_write(Terminal terminal, Writer writer);
+
+/**
+ * C: rustty_terminal_continuation_buf
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `buf`, if
+ * non-null, must point to `buf_len` writable bytes; `out_written`, if
+ * non-null, must be writable.
+ */
+int rustty_terminal_continuation_buf(Terminal terminal,
+                                     uint8_t *buf,
+                                     uintptr_t buf_len,
+                                     uintptr_t *out_written);
+
+/**
+ * C: rustty_terminal_continuation_alloc
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `alloc`,
+ * if non-null, a valid allocator; `out_ptr`/`out_len`, if non-null, must be
+ * writable. The returned bytes are caller-owned and released with
+ * `rustty_free` + the same allocator.
+ */
+int rustty_terminal_continuation_alloc(Terminal terminal,
+                                       const Allocator *alloc,
+                                       uint8_t **out_ptr,
+                                       uintptr_t *out_len);
+
+/**
  * C: rustty_terminal_scroll_viewport
  *
  * # Safety
@@ -2456,29 +2708,15 @@ int rustty_tracked_grid_ref_set(CTrackedGridRef ref_, Terminal terminal, PointC 
  */
 int rustty_tracked_grid_ref_snapshot(CTrackedGridRef ref_, CGridRef *out_ref);
 
+uint8_t *rustty_wasm_alloc(uintptr_t len);
+
+void rustty_wasm_free(uint8_t *ptr, uintptr_t len);
+
 Opaque *rustty_wasm_alloc_opaque(void);
 
 void rustty_wasm_free_opaque(Opaque *ptr);
 
-uint8_t *rustty_wasm_alloc_u8_array(uintptr_t len);
-
-void rustty_wasm_free_u8_array(uint8_t *ptr, uintptr_t len);
-
-uint16_t *rustty_wasm_alloc_u16_array(uintptr_t len);
-
-void rustty_wasm_free_u16_array(uint16_t *ptr, uintptr_t len);
-
-uint8_t *rustty_wasm_alloc_u8(void);
-
-void rustty_wasm_free_u8(uint8_t *ptr);
-
-uintptr_t *rustty_wasm_alloc_usize(void);
-
-void rustty_wasm_free_usize(uintptr_t *ptr);
-
-AttributeC *rustty_wasm_alloc_sgr_attribute(void);
-
-void rustty_wasm_free_sgr_attribute(AttributeC *attr);
+Opaque rustty_wasm_take_opaque(Opaque *ptr);
 
 #ifdef __cplusplus
 }  // extern "C"

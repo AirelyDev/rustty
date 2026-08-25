@@ -1290,8 +1290,10 @@ dependencies = [
  "rustty-lib",
  "rustty-os",
  "rustty-simd",
+ "rustty-synthetic",
  "rustty-unicode",
  "rustty-vt",
+ "rustty-zigstd",
 ]
 
 [[package]]
@@ -1671,6 +1673,7 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "rustty-lib",
+ "rustty-os",
  "rustty-render-types",
  "rustty-unicode",
  "rustty-util",

@@ -11,7 +11,11 @@ use crate::osc_parser::OscParser;
 use crate::page_compression::PageCompression;
 use crate::screen_clone::ScreenClone;
 use crate::scrollback_compression::ScrollbackCompression;
+use crate::terminal_formatter::TerminalFormatter;
 use crate::terminal_parser::TerminalParser;
+use crate::terminal_resize::TerminalResize;
+#[cfg(feature = "snapshot-codec")]
+use crate::terminal_snapshot::TerminalSnapshot;
 use crate::terminal_stream::TerminalStream;
 use allocator_api2::alloc::Global as Allocator;
 use rustty_vt::pagelist::OutOfMemory;
@@ -28,8 +32,18 @@ pub enum Action {
     GraphemeBreak,
     // @"screen-clone",
     ScreenClone,
+    // @"terminal-formatter",
+    TerminalFormatter,
     // @"terminal-parser",
     TerminalParser,
+    // @"terminal-resize",
+    TerminalResize,
+    // @"terminal-snapshot",
+    //
+    // PORT NOTE (phase-4 wbench): the action exists unconditionally (the CLI
+    // token set matches the oracle's); only its IMPLEMENTATION module is
+    // cfg-gated on `snapshot-codec` until wsnap-3 lands the codec drivers.
+    TerminalSnapshot,
     // @"terminal-stream",
     TerminalStream,
     // @"is-symbol",
@@ -54,7 +68,10 @@ impl Action {
             b"codepoint-width" => Some(Action::CodepointWidth),
             b"grapheme-break" => Some(Action::GraphemeBreak),
             b"screen-clone" => Some(Action::ScreenClone),
+            b"terminal-formatter" => Some(Action::TerminalFormatter),
             b"terminal-parser" => Some(Action::TerminalParser),
+            b"terminal-resize" => Some(Action::TerminalResize),
+            b"terminal-snapshot" => Some(Action::TerminalSnapshot),
             b"terminal-stream" => Some(Action::TerminalStream),
             b"is-symbol" => Some(Action::IsSymbol),
             b"osc-parser" => Some(Action::OscParser),
@@ -251,7 +268,19 @@ pub fn main_action(alloc: Allocator, action: Action, args: Args) -> Result<(), E
         Action::CodepointWidth => main_action_impl::<CodepointWidth>(alloc, args),
         Action::GraphemeBreak => main_action_impl::<GraphemeBreak>(alloc, args),
         Action::ScreenClone => main_action_impl::<ScreenClone>(alloc, args),
+        Action::TerminalFormatter => main_action_impl::<TerminalFormatter>(alloc, args),
         Action::TerminalParser => main_action_impl::<TerminalParser>(alloc, args),
+        Action::TerminalResize => main_action_impl::<TerminalResize>(alloc, args),
+        #[cfg(feature = "snapshot-codec")]
+        Action::TerminalSnapshot => main_action_impl::<TerminalSnapshot>(alloc, args),
+        // PORT NOTE (phase-4 wbench, placeholder-leaf doctrine): a LOUD leaf,
+        // never a silent no-op — the wsnap-3 orchestrator deletes this arm
+        // (and the feature) when the snapshot codec drivers land.
+        #[cfg(not(feature = "snapshot-codec"))]
+        Action::TerminalSnapshot => unimplemented!(
+            "terminal-snapshot benchmark awaits the snapshot codec drivers \
+             (wsnap-3); build with `--features snapshot-codec` once they land"
+        ),
         Action::TerminalStream => main_action_impl::<TerminalStream>(alloc, args),
         Action::IsSymbol => main_action_impl::<IsSymbol>(alloc, args),
         Action::OscParser => main_action_impl::<OscParser>(alloc, args),
@@ -342,16 +371,21 @@ mod tests {
     /// `from_name`, and nothing else does. Named for what it checks rather
     /// than extending the compression-only test above (WS10 T11).
     ///
-    /// The list is the oracle's `Action` enum at `7e14347c1` minus the actions
-    /// whose upstream commits are not yet ported; `hyperlink-map` is the newest
-    /// member and is what this test was extended for.
+    /// The list is the oracle's complete `Action` enum at the phase-4 pin
+    /// `12967b68f` (the `terminal-formatter`/`terminal-resize`/
+    /// `terminal-snapshot` trio landed with assessment B cluster C8); the
+    /// G-BENCH oracle-parity arm cross-checks the same set from the oracle
+    /// side.
     #[test]
     fn bench_every_action_round_trips_through_from_name() {
         let names: &[(&[u8], Action)] = &[
             (b"codepoint-width", Action::CodepointWidth),
             (b"grapheme-break", Action::GraphemeBreak),
             (b"screen-clone", Action::ScreenClone),
+            (b"terminal-formatter", Action::TerminalFormatter),
             (b"terminal-parser", Action::TerminalParser),
+            (b"terminal-resize", Action::TerminalResize),
+            (b"terminal-snapshot", Action::TerminalSnapshot),
             (b"terminal-stream", Action::TerminalStream),
             (b"is-symbol", Action::IsSymbol),
             (b"osc-parser", Action::OscParser),
@@ -360,7 +394,7 @@ mod tests {
             (b"hyperlink-map", Action::HyperlinkMap),
             (b"apc-parser", Action::ApcParser),
         ];
-        assert_eq!(11, names.len());
+        assert_eq!(14, names.len());
         for (name, expected) in names {
             assert_eq!(Some(*expected), Action::from_name(name), "{name:?}");
         }

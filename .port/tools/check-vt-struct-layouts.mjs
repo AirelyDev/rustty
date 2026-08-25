@@ -165,22 +165,13 @@ const rusttyKeys = new Set(Object.keys(LAYOUT).map((k) => k.replace(/^Rustty/, "
 // two structs turned the gate RED with "delete the row" rather than letting the
 // allowlist rot silently.
 //
-// RE-POPULATED by P4-W5 Bundle T: the registry now spans all six kinds and
-// matches the oracle's `type_decls` EXCEPT the 12 rows whose C types ride the
-// later W5 bundles (the oracle pin is 12967b68f; each row names its owner and
-// lands WITH that bundle, which deletes the row here — the stale check
-// enforces it). Evidence: `.port/phase-4/w5/w5T-manifest-diff-evidence.txt`
-// (full manifest diff vs the oracle's own ghostty_type_json output).
-const REGISTRY_RESIDUALS = {
-  // (Bundle R and Bundle M rows landed with P4-W5 T2/T3 and were deleted per
-  // the stale check.)
-  // Bundle S (snapshot/io C API, P4-W5 T5):
-  Reader: "owner P4-W5 Bundle S (d7bb4b863 io.Reader)",
-  Writer: "owner P4-W5 Bundle S (d7bb4b863 io.Writer)",
-  SnapshotDecoder: "owner P4-W5 Bundle S (d7bb4b863 snapshot decoder)",
-  SnapshotDecoderData: "owner P4-W5 Bundle S (d7bb4b863)",
-  SnapshotDecoderOption: "owner P4-W5 Bundle S (d7bb4b863 + 9be6c2ea2)",
-};
+// RE-POPULATED by P4-W5 Bundle T with the 12 rows whose C types rode the later
+// W5 bundles, then EMPTIED again as each bundle landed: Bundle R and Bundle M
+// rows with P4-W5 T2/T3, and the final five (Reader, Writer, SnapshotDecoder,
+// SnapshotDecoderData, SnapshotDecoderOption) with P4-W5 T5 Bundle S — each
+// deletion forced by the stale check below, exactly as designed. The registry
+// now matches the oracle's `type_decls` EXACTLY.
+const REGISTRY_RESIDUALS = {};
 const missingHere = [...oracleKeys]
   .filter((k) => !rusttyKeys.has(k) && !REGISTRY_RESIDUALS[k])
   .sort();

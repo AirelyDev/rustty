@@ -292,7 +292,10 @@ pub struct SavedCursor {
 }
 
 /// State required for all charset operations.
-#[derive(Clone)]
+// PORT NOTE: Debug/PartialEq are derived for the snapshot codec's saved-cursor
+// structs (`snapshot/screen.rs`), which hold a `CharsetState` and compare it
+// structurally (Zig: `std.meta.eql` via `std.testing.expectEqual`).
+#[derive(Clone, Debug, PartialEq)]
 pub struct CharsetState {
     /// The list of graphical charsets by slot
     pub charsets: CharsetArray,
@@ -311,7 +314,8 @@ pub struct CharsetState {
 /// We use this bespoke struct instead of `std.EnumArray` because
 /// accessing these slots is very performance critical since it's
 /// done for every single print. This benchmarks faster.
-#[derive(Clone)]
+// PORT NOTE: Debug/PartialEq — see CharsetState.
+#[derive(Clone, Debug, PartialEq)]
 pub struct CharsetArray {
     pub g0: charsets::Charset,
     pub g1: charsets::Charset,

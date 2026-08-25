@@ -339,6 +339,19 @@ impl Style {
     // measured insufficient to inline it there).
     #[inline(always)]
     pub fn eql(&self, other: &Style) -> bool {
+        // On wasm, comparing packed forms wins (~13% on SGR-heavy streams).
+        // On native, the branchy early-exit field compare below measures
+        // ~5% faster (unequal styles usually differ in the first
+        // field or two), so each target keeps its own strategy.
+        // if (comptime builtin.cpu.arch.isWasm()) {
+        if cfg!(target_arch = "wasm32") {
+            // const a: u128 = @bitCast(PackedStyle.fromStyle(self));
+            let a: u128 = PackedStyle::from_style(*self).bits;
+            // const b: u128 = @bitCast(PackedStyle.fromStyle(other));
+            let b: u128 = PackedStyle::from_style(*other).bits;
+            return a == b;
+        }
+
         self.flags == other.flags
             && self.fg_color.eql(other.fg_color)
             && self.bg_color.eql(other.bg_color)

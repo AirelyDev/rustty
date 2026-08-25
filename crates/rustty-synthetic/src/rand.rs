@@ -295,6 +295,8 @@ macro_rules! impl_uint_prim {
     };
 }
 impl_uint_prim!(u8, 8, 1);
+// u16: the `rand.uintLessThan(u16, 1024)` draw of cli/Styled.zig (b11d60818).
+impl_uint_prim!(u16, 16, 2);
 // NOTE: `usize` is 64-bit on the target — treated as `u64` LE, matching Zig's
 // `usize`.
 impl_uint_prim!(u64, 64, 8);

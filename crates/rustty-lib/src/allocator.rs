@@ -11,8 +11,8 @@
 
 use std::ffi::c_void;
 
-/// Convenience functions
-pub mod convenience;
+/// Wasm-specific allocation helpers.
+pub mod wasm;
 
 /// PORT NOTE: `std.mem.Alignment` — an enum whose integer value is the
 /// log2 of the alignment. Crossing the C boundary it is a `u8`

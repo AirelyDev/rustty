@@ -3,6 +3,7 @@
 pub mod ascii;
 pub mod kitty;
 pub mod osc;
+pub mod styled;
 pub mod utf8;
 
 use crate::io::{WriteFailed, Writer};
@@ -22,6 +23,8 @@ pub enum Action {
     Utf8,
     // kitty (f6f79acce, WS10 T17)
     Kitty,
+    // styled (b11d60818, phase-4 assessment B cluster C8)
+    Styled,
 }
 
 impl Action {
@@ -33,6 +36,7 @@ impl Action {
             b"osc" => Some(Action::Osc),
             b"utf8" => Some(Action::Utf8),
             b"kitty" => Some(Action::Kitty),
+            b"styled" => Some(Action::Styled),
             _ => None,
         }
     }
@@ -154,6 +158,7 @@ pub fn main_action(action: Action, args: Args) -> Result<(), Error> {
         Action::Osc => main_action_impl_osc(args),
         Action::Utf8 => main_action_impl_utf8(args),
         Action::Kitty => main_action_impl_kitty(args),
+        Action::Styled => main_action_impl_styled(args),
     }
 }
 
@@ -322,6 +327,32 @@ fn main_action_impl_kitty(args: Args) -> Result<(), Error> {
     Ok(())
 }
 
+fn main_action_impl_styled(args: Args) -> Result<(), Error> {
+    // First, parse our CLI options.
+    let mut opts = styled::Options::default();
+    parse_opts(&mut opts, args)?;
+
+    // TODO: Make this a command line option.
+    let rand_prng = time_seeded_prng();
+    let rand = rand_prng.random();
+
+    // Our output always goes to stdout.
+    let mut writer = StdoutWriter::new();
+
+    // Create our implementation
+    //   Styled.create validates rates/weights/line-min/run-min → error.InvalidValue.
+    let impl_ = styled::Styled::create(opts).map_err(|_| Error::InvalidValue)?;
+    // PORT NOTE (§3): when `opts.seed` is `Some`, `Styled::run` internally re-seeds
+    // a fresh `DefaultPrng` and ignores this time-seeded `rand` (faithful to Zig).
+    let run_result = impl_.run(&mut writer, rand);
+    impl_.destroy();
+    run_result.map_err(|_| Error::WriteFailed)?;
+
+    // Always flush
+    let _ = writer.flush();
+    Ok(())
+}
+
 fn main_action_impl_utf8(args: Args) -> Result<(), Error> {
     // First, parse our CLI options.
     let mut opts = utf8::Options::default();
@@ -413,9 +444,11 @@ mod tests {
         let _ = core::mem::size_of::<osc::Osc>();
         let _ = core::mem::size_of::<utf8::Utf8>();
         let _ = core::mem::size_of::<kitty::Kitty>();
+        let _ = core::mem::size_of::<styled::Styled>();
         let _ = Action::Ascii;
         let _ = Action::Osc;
         let _ = Action::Utf8;
         let _ = Action::Kitty;
+        let _ = Action::Styled;
     }
 }

@@ -27,9 +27,17 @@ root=$(CDPATH= cd -- "$here/../.." && pwd)
 # (a) build with the table exported. `cargo rustc` passes the trailing flags
 # only to rustty-vt-c's own compilation; `--export-table` affects the final
 # cdylib link (wasm-ld).
+#
+# `-z stack-size=131072` (5364e5158, GhosttyLibVt.initWasm `exe.stack_size =
+# 128 * 1024`): the default wasm stack (1MB for rust-lld, same as Zig 0.16's
+# default) has to be preallocated up front in Wasm linear memory, so loading the
+# module costs it immediately. Peak stack under various artificial loads is
+# 17 KB at the time of this comment but lets do 128KB to be safe. We can lower
+# later.
 cargo rustc --manifest-path "$root/Cargo.toml" \
   -p rustty-vt-c --target wasm32-unknown-unknown --release "$@" -- \
-  -C link-arg=--export-table
+  -C link-arg=--export-table \
+  -C link-arg=-zstack-size=131072
 
 # (b)+(c) patch the table growable and install as rustty-vt.wasm.
 raw="$root/target/wasm32-unknown-unknown/release/rustty_vt_c.wasm"

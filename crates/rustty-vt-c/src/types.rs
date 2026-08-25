@@ -36,21 +36,15 @@
 // own `ghostty_type_json` output (libghostty-vt.dylib built at the pin).
 //
 // ---------------------------------------------------------------------------
-// DEFERRED ROWS (P4-W5 sequencing — bundle T lands the registry machinery and
-// every row whose C type exists in rustty TODAY; the rows below ride the
-// bundle that lands their type, in the oracle's declaration order, marked at
-// their exact insertion anchor in `DECLS`):
-//   Bundle R (render fast-path): GhosttyCellsView, GhosttyRenderStateCursor;
-//     enum values RenderStateData CURSOR=18 / COLORS=19, RenderStateRowData
-//     CELLS_RAW=5.
-//   Bundle M (mode defaults / unknown sequences): GhosttyTerminalModeConfig,
-//     GhosttyTerminalUnknownSequence, GhosttyTerminalUnknownStringSequence,
-//     GhosttyTerminalUnknownSequenceValue, GhosttyTerminalUnknownSequenceTag;
-//     enum values TerminalOption 31..=37, TerminalData 36..=39.
-//   Bundle S (snapshot/io): GhosttyReader, GhosttyWriter,
-//     GhosttySnapshotDecoderData, GhosttySnapshotDecoderOption,
-//     GhosttySnapshotDecoder (opaque); enum values Result IO_ERROR=-5 /
-//     LIMIT_EXCEEDED=-6.
+// DEFERRED ROWS: NONE. Bundle T landed the registry machinery and every row
+// whose C type existed then; Bundles R/M landed their rows in P4-W5 T2/T3;
+// Bundle S (snapshot/io) landed the last five (GhosttyReader, GhosttyWriter,
+// GhosttySnapshotDecoderData, GhosttySnapshotDecoderOption,
+// GhosttySnapshotDecoder opaque) plus the Result IO_ERROR=-5 /
+// LIMIT_EXCEEDED=-6 values and the TerminalOption 31 / TerminalData 36+38
+// rows. The registry now matches the oracle's `type_decls` EXACTLY (the
+// check-vt-struct-layouts.mjs parity arm binds it with an empty residual
+// list).
 // ---------------------------------------------------------------------------
 use std::ffi::c_char;
 use std::os::raw::c_int;
@@ -652,7 +646,28 @@ static DECLS: &[TypeDecl] = {
             ],
         },
         // .initStruct("GhosttyReader", io.Reader),
-        //   ^ DEFERRED (Bundle S): the snapshot/io C surface owns `io.Reader`.
+        struct_decl!(
+            "RusttyReader",
+            crate::io::Reader,
+            fields!(
+                crate::io::Reader,
+                [
+                    // *const fn (...) -> pointer to function
+                    (
+                        "read",
+                        Option<crate::io::ReaderFn>,
+                        read,
+                        Ty::Pointer("function", true, true)
+                    ),
+                    (
+                        "userdata",
+                        *mut std::ffi::c_void,
+                        userdata,
+                        Ty::Pointer("opaque", false, true)
+                    ),
+                ]
+            )
+        ),
         // .initStruct("GhosttyRenderStateColors", render.Colors),
         struct_decl!(
             "RusttyRenderStateColors",
@@ -1266,7 +1281,28 @@ static DECLS: &[TypeDecl] = {
             ],
         },
         // .initStruct("GhosttyWriter", io.Writer),
-        //   ^ DEFERRED (Bundle S): the snapshot/io C surface owns `io.Writer`.
+        struct_decl!(
+            "RusttyWriter",
+            crate::io::Writer,
+            fields!(
+                crate::io::Writer,
+                [
+                    // *const fn (...) -> pointer to function
+                    (
+                        "write",
+                        Option<crate::io::WriterFn>,
+                        write,
+                        Ty::Pointer("function", true, true)
+                    ),
+                    (
+                        "userdata",
+                        *mut std::ffi::c_void,
+                        userdata,
+                        Ty::Pointer("opaque", false, true)
+                    ),
+                ]
+            )
+        ),
         //
         // ------------------------------------------------------------------
         // Enums.
@@ -1284,8 +1320,8 @@ static DECLS: &[TypeDecl] = {
                     ("invalid_value", InvalidValue),
                     ("out_of_space", OutOfSpace),
                     ("no_value", NoValue),
-                    // DEFERRED (Bundle S): ("io_error", IoError),
-                    //                      ("limit_exceeded", LimitExceeded),
+                    ("io_error", IoError),
+                    ("limit_exceeded", LimitExceeded),
                 ]
             )
         ),
@@ -2056,9 +2092,37 @@ static DECLS: &[TypeDecl] = {
                 ]
             )
         ),
-        // .initEnum("GhosttySnapshotDecoderData", snapshot.DecoderData, ...) +
-        // .initEnum("GhosttySnapshotDecoderOption", snapshot.DecoderOption, ...)
-        //   ^ DEFERRED (Bundle S): the snapshot decoder C surface.
+        // .initEnum("GhosttySnapshotDecoderData", snapshot.DecoderData, "GHOSTTY_SNAPSHOT_DECODER_DATA_"),
+        enum_decl!(
+            "RusttySnapshotDecoderData",
+            "RUSTTY_SNAPSHOT_DECODER_DATA_",
+            enum_values!(
+                crate::snapshot::DecoderData,
+                [
+                    ("invalid", Invalid),
+                    ("max_continuation_bytes", MaxContinuationBytes),
+                    ("source_offset", SourceOffset),
+                    ("history_rows_primary", HistoryRowsPrimary),
+                    ("history_rows_alternate", HistoryRowsAlternate),
+                    ("progress_screen", ProgressScreen),
+                    ("progress_rows", ProgressRows),
+                    ("progress_remaining", ProgressRemaining),
+                    ("retain_continuation", RetainContinuation),
+                ]
+            )
+        ),
+        // .initEnum("GhosttySnapshotDecoderOption", snapshot.DecoderOption, "GHOSTTY_SNAPSHOT_DECODER_OPT_"),
+        enum_decl!(
+            "RusttySnapshotDecoderOption",
+            "RUSTTY_SNAPSHOT_DECODER_OPT_",
+            enum_values!(
+                crate::snapshot::DecoderOption,
+                [
+                    ("max_continuation_bytes", MaxContinuationBytes),
+                    ("retain_continuation", RetainContinuation),
+                ]
+            )
+        ),
         // .initEnumSentinel("GhosttyStyleColorTag", style.ColorTag, "GHOSTTY_STYLE_COLOR_", "TAG_MAX_VALUE"),
         enum_decl!(
             "RusttyStyleColorTag",
@@ -2175,9 +2239,9 @@ static DECLS: &[TypeDecl] = {
                     ("vt_processing_error", VtProcessingError),
                     ("scrollback_max_bytes", ScrollbackMaxBytes),
                     ("scrollback_max_lines", ScrollbackMaxLines),
-                    // DEFERRED (Bundle S): ("continuation_max_bytes", ...=36),
-                    // ("vt_ground", ...=38),
+                    ("continuation_max_bytes", ContinuationMaxBytes),
                     ("mode", Mode),
+                    ("vt_ground", VtGround),
                     ("cursor_at_prompt", CursorAtPrompt),
                 ]
             )
@@ -2221,7 +2285,7 @@ static DECLS: &[TypeDecl] = {
                     ("scrollback_max_lines", ScrollbackMaxLines),
                     ("desktop_notification", DesktopNotification),
                     ("progress_report", ProgressReport),
-                    // DEFERRED (Bundle S): ("continuation_max_bytes", ...=31),
+                    ("continuation_max_bytes", ContinuationMaxBytes),
                     ("title_report", TitleReport),
                     ("mode_default", ModeDefault),
                     ("mode", Mode),
@@ -2322,7 +2386,7 @@ static DECLS: &[TypeDecl] = {
             align: align_of::<u16>(),
             alias_type: "u16",
         },
-        // .initOpaque(...) x19 (GhosttySnapshotDecoder DEFERRED to Bundle S).
+        // .initOpaque(...) x19.
         TypeDecl::Opaque {
             name: "RusttyFormatter",
         },
@@ -2371,7 +2435,10 @@ static DECLS: &[TypeDecl] = {
         TypeDecl::Opaque {
             name: "RusttySgrParser",
         },
-        // .initOpaque("GhosttySnapshotDecoder"),  ^ DEFERRED (Bundle S)
+        // .initOpaque("GhosttySnapshotDecoder"),
+        TypeDecl::Opaque {
+            name: "RusttySnapshotDecoder",
+        },
         TypeDecl::Opaque {
             name: "RusttyTerminal",
         },

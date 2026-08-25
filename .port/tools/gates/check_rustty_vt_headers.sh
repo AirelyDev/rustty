@@ -205,7 +205,22 @@ if [ -n "$missing" ]; then echo "  MISMATCH — declared+cbindgen but NOT export
 # net -1. This is a deliberate, oracle-driven shrink, not a vacuous one — the
 # removed names no longer exist upstream, and arm (d) tracks the still-missing
 # oracle exports. Re-float upward at W5 T8 as the remaining bundles land.
-VT_BOTH_FLOOR=184
+# P4-W5 Bundle S: +12 snapshot exports, +3 terminal_continuation_*,
+# +terminal_vt_write_until_ground, +formatter_format (= +17).
+#
+# P4-W5 (bundle W, a8e9b413f): the oracle DELETED the 12 per-type
+# wasm convenience exports (`wasm_alloc/free_{u8,u8_array,u16_array,usize,
+# sgr_attribute}`) for the byte-based API, and ADDED `wasm_alloc`/`wasm_free`/
+# `wasm_take_opaque` (+3; the opaque pair survives, already counted); the
+# 184-era measurement also predated 2 tokens that only entered the intersection
+# via the regen. Oracle-driven, not vacuous: the curated `wasm.h`/`sgr.h` are
+# byte-identical to the pin, the regenerated `include/rustty.h` matches the
+# crate, and the decl-only identity below still pins the exact non-ABI tokens.
+# regen the checked-in `include/rustty.h` was STALE (intersection 174) — the
+# exact failure class this arm documents.
+# P4-W5 combined re-float (S +17, W net -7): measured 194 on 2026-08-25 with
+# every bundle landed; floor pinned to the measurement.
+VT_BOTH_FLOOR=194
 both_n=$(wc -l < "$T/vt_both.txt" | tr -d ' ')
 if [ "$both_n" -lt "$VT_BOTH_FLOOR" ]; then
   echo "  VACUOUS SHRINK — the (vt.h ∩ cbindgen) intersection is $both_n, below the"
@@ -215,11 +230,17 @@ if [ "$both_n" -lt "$VT_BOTH_FLOOR" ]; then
   echo "  when the surface genuinely grew."
   exit 1
 fi
-# The 5 tokens in the curated headers that are NOT cbindgen exports:
+# The 6 tokens in the curated headers that are NOT cbindgen exports:
 #   rustty_mode_new / rustty_mode_ansi / rustty_mode_value
 #     function-like MACROS (include/rustty/vt/modes.h), not symbols.
 #   rustty_osc_
 #     a prose fragment in a doc comment (include/rustty/vt/osc.h:88).
+#   rustty_terminal_continuation_
+#     a prose fragment ("the existing rustty_terminal_continuation_* APIs") in
+#     snapshot.h's RETAIN_CONTINUATION doc, inherited from the oracle's
+#     `ghostty_terminal_continuation_*` wildcard (P4-W5 Bundle S). The three
+#     REAL rustty_terminal_continuation_{write,buf,alloc} exports are checked
+#     by the intersection and arm (d) as usual.
 #   rustty_vt_osc_free
 #     a doc TYPO inherited verbatim from upstream's `ghostty_vt_osc_free`
 #     (include/rustty/vt/osc.h:99). R1-FAITHFUL — do NOT "fix" it; the port
@@ -229,13 +250,14 @@ rustty_mode_ansi
 rustty_mode_new
 rustty_mode_value
 rustty_osc_
+rustty_terminal_continuation_
 rustty_vt_osc_free
 NONABI
 sort -u "$T/vt_nonabi.txt" -o "$T/vt_nonabi.txt"
 comm -23 "$T/vt_decl.txt" "$T/vt_both.txt" > "$T/vt_declonly.txt"
 if ! diff -q "$T/vt_nonabi.txt" "$T/vt_declonly.txt" >/dev/null; then
   echo "  MISMATCH — the set of curated-header tokens that are NOT cbindgen"
-  echo "  exports changed. Expected exactly the 5 documented non-ABI tokens."
+  echo "  exports changed. Expected exactly the 6 documented non-ABI tokens."
   echo "  '<' = expected but gone, '>' = unexpected new token:"
   diff "$T/vt_nonabi.txt" "$T/vt_declonly.txt" | grep '^[<>]' | sed 's/^/    /'
   echo "  A NEW '>' row usually means include/rustty.h is stale: re-run"
@@ -290,8 +312,13 @@ cp "$T/vt_exp.txt" "$T/a5_have.txt"
 # a red gate green — that is R5. Adding a row requires a ledger entry naming the
 # owner (`.port/phase-2/DEFERRALS.md` / `.port/phase-3/README.md`).
 #
-# The list is currently EMPTY, and that is the point: every oracle export has a
-# rustty_* counterpart.
+# P4-W5 Bundle S emptied the snapshot/io/continuation/formatter rows by PORTING
+# them (17 exports). The 3 rows below are the LAST residuals: the byte-based
+# wasm allocator exports added by a8e9b413f, owned by P4-W5 T6 Bundle W (the
+# wasm-allocator break is atomic: new exports + DELETION of the 12 old per-type
+# exports + wasm.h rewrite + example/index.html rewrites + ws14 sweep — landing
+# the names alone would skew that ABI unit). Trigger: Bundle W lands and MUST
+# delete these rows (the stale check below enforces it).
 #
 #   STRUCK (WS10 T19): rustty_render_state_begin_update / _end_update
 #     Found by THIS arm on the day it landed (WS19 T3). The oracle split
@@ -302,6 +329,8 @@ cp "$T/vt_exp.txt" "$T/a5_have.txt"
 #     field, the two phases, the `page.Mask` group scans and the chunked update —
 #     so both exports now exist and the rows are struck rather than inherited by
 #     the Phase 3 BL-5 re-vet.
+# (P4-W5 Bundle W landed the wasm alloc trio 2026-08-25; the residual list is
+# now EMPTY — every oracle lib_vt export has a rustty counterpart.)
 cat > "$T/a5_allow.txt" <<'ALLOW'
 ALLOW
 sort -u "$T/a5_allow.txt" -o "$T/a5_allow.txt"
@@ -327,7 +356,7 @@ if [ -n "$stale" ]; then
   exit 1
 fi
 echo "  OK ($(wc -l < "$T/a5_oracle.txt" | tr -d ' ') oracle exports checked; \
-$(wc -l < "$T/a5_allow.txt" | tr -d ' ') documented residual(s), owner: Phase 3 BL-5 re-vet P3-RV5)"
+$(wc -l < "$T/a5_allow.txt" | tr -d ' ') documented residual(s), owner: P4-W5 T6 Bundle W)"
 
 echo "== (c) struct layouts match rustty_type_json() =="
 node .port/tools/check-vt-struct-layouts.mjs

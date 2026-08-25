@@ -612,7 +612,9 @@ pub fn generate_256_color(
 
 /// A palette that can have its colors changed and reset. Purposely built
 /// for terminal color operations.
-#[derive(Clone, Copy, Debug)]
+// PORT NOTE: PartialEq is derived for the snapshot TERMINAL codec's
+// round-trip tests (Zig: `std.testing.expectEqualDeep(palette, ...)`).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DynamicPalette {
     /// The current palette including any user modifications.
     pub current: Palette,

@@ -16,6 +16,35 @@
 #[cfg(target_arch = "wasm32")]
 pub use freestanding::log;
 
+/// A log function that discards everything. Since the format string and
+/// scope are comptime parameters, using this compiles out all logging
+/// machinery: call sites, format strings, and the std.fmt code they
+/// reference (~220KB in a ReleaseFast wasm build).
+//
+// pub fn noop(
+//     comptime level: std.log.Level,
+//     comptime scope: @TypeOf(.EnumLiteral),
+//     comptime format: []const u8,
+//     args: anytype,
+// ) void {
+//     _ = level;
+//     _ = scope;
+//     _ = format;
+//     _ = args;
+// }
+//
+// PORT NOTE (`d61920d80`): Rust has no comptime log sink, so a call to this
+// runtime `noop` cannot itself compile the caller's format machinery out. The
+// release-wasm arm of the installed sink (`rustty-vt-c` `sys::log_fn`)
+// therefore returns BEFORE formatting — that early return is the Rust spelling
+// of installing this noop; the function is carried here for file fidelity (R1)
+// and takes the same already-formatted-parts signature as `log` above.
+pub fn noop(level_txt: &str, scope: &str, formatted: &str) {
+    let _ = level_txt;
+    let _ = scope;
+    let _ = formatted;
+}
+
 /// Freestanding implementation calls an extern "log" function.
 #[cfg(target_arch = "wasm32")]
 pub mod freestanding {

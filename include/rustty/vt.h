@@ -31,6 +31,7 @@
  * - @ref terminal "Terminal" - Complete terminal emulator state and rendering
  * - @ref render "Render State" - Incremental render state updates for custom renderers
  * - @ref formatter "Formatter" - Format terminal content as plain text, VT sequences, or HTML
+ * - @ref snapshot "Terminal Snapshot" - Encode and incrementally restore terminal state
  * - @ref osc "OSC Parser" - Parse OSC (Operating System Command) sequences
  * - @ref sgr "SGR Parser" - Parse SGR (Select Graphic Rendition) sequences
  * - @ref paste "Paste Utilities" - Validate paste data safety
@@ -38,6 +39,7 @@
  * - @ref build_info "Build Info" - Query compile-time build configuration
  * - @ref color_scheme "Color Scheme Report Encoding" - Encode color scheme reports into terminal escape sequences
  * - @ref allocator "Memory Management" - Memory management and custom allocators
+ * - @ref io "Byte-stream I/O" - Reusable synchronous reader and writer callbacks
  * - @ref wasm "WebAssembly Utilities" - WebAssembly convenience functions
  *
  * Encoding related APIs:
@@ -147,6 +149,7 @@ extern "C" {
 #include <rustty/vt/terminal.h>
 #include <rustty/vt/grid_ref.h>
 #include <rustty/vt/grid_ref_tracked.h>
+#include <rustty/vt/io.h>
 #include <rustty/vt/osc.h>
 #include <rustty/vt/sgr.h>
 #include <rustty/vt/style.h>
@@ -160,6 +163,7 @@ extern "C" {
 #include <rustty/vt/screen.h>
 #include <rustty/vt/selection.h>
 #include <rustty/vt/size_report.h>
+#include <rustty/vt/snapshot.h>
 #include <rustty/vt/unicode.h>
 #include <rustty/vt/wasm.h>
 

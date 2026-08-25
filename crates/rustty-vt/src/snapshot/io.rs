@@ -145,6 +145,26 @@ pub trait Reader {
         Ok(())
     }
 
+    /// `reader.discardRemaining()` — discard until end-of-stream, returning
+    /// how many bytes were discarded. End-of-stream is the termination
+    /// condition, not an error; only `ReadFailed` fails.
+    fn discard_remaining(&mut self) -> Result<usize, ReadError> {
+        let mut discarded: usize = 0;
+        loop {
+            let avail = self.buffered_len();
+            if avail > 0 {
+                self.toss(avail);
+                discarded += avail;
+                continue;
+            }
+            match self.refill() {
+                Ok(()) => continue,
+                Err(ReadError::EndOfStream) => return Ok(discarded),
+                Err(err @ ReadError::ReadFailed) => return Err(err),
+            }
+        }
+    }
+
     /// Move up to `dest.len()` buffered-or-refilled bytes into `dest`,
     /// returning how many were moved. (Zig: `Reader.stream`, the primitive
     /// adapters pull through.)
@@ -177,8 +197,8 @@ impl<'a> FixedWriter<'a> {
     }
 
     /// `writer.buffered()`
-    // PORT NOTE: consumed by tests today; the next-stage snapshot modules and
-    // the benchmark/C-API tiers are its non-test consumers (see mod.rs).
+    // PORT NOTE: consumed by tests today; the benchmark/C-API tiers are its
+    // non-test consumers (see mod.rs).
     #[allow(dead_code)]
     pub fn buffered(&self) -> &[u8] {
         &self.buf[..self.end]
@@ -249,8 +269,9 @@ impl Writer for AllocatingWriter {
 }
 
 /// `std.Io.Reader.fixed(bytes)` — a reader whose buffer is the complete data.
-// PORT NOTE: constructed by tests today; the next-stage decode drivers are its
-// non-test consumers (see the FixedWriter::buffered note).
+// PORT NOTE: constructed by tests today; the decode drivers take
+// `&mut dyn Reader`, so the benchmark/C-API tiers are its non-test
+// constructors (see the FixedWriter::buffered note).
 #[allow(dead_code)]
 pub struct FixedReader<'a> {
     data: &'a [u8],

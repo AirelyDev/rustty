@@ -49,7 +49,10 @@ const buf = () => ex.memory.buffer;
 
 // --- read the module's own type layout (offsets/sizes) ---
 const jp = ex.rustty_type_json();
-{ let e = jp; const m = new Uint8Array(buf()); while (m[e]) e++; var LAYOUT = JSON.parse(Buffer.from(m.subarray(jp, e)).toString()); }
+// 9673a22b0/c75559589: `type_json` is now the versioned ABI manifest — the type
+// rows live under `.types` (with an `.abi` block and per-row `kind`), not at the
+// top level.
+{ let e = jp; const m = new Uint8Array(buf()); while (m[e]) e++; var LAYOUT = JSON.parse(Buffer.from(m.subarray(jp, e)).toString()).types; }
 const field = (t, f) => LAYOUT[t].fields[f];
 const setField = (base, t, f, val) => {
   const fi = field(t, f); const dv = new DataView(buf(), base + fi.offset, fi.size);
@@ -81,15 +84,18 @@ console.log('terminal_new: OK (handle=' + term + ')');
 // --- 2. vt_write: some VT-encoded data (bold + color + text + newline) ---
 const vt = '\x1b[1;32mHello from rustty-vt.wasm!\x1b[0m\r\nLine two: \x1b[31mred\x1b[0m box.';
 const vtBytes = new TextEncoder().encode(vt);
-const dataPtr = ex.rustty_wasm_alloc_u8_array(vtBytes.length);
+// a8e9b413f: the per-type wasm convenience exports (`rustty_wasm_alloc_u8_array`
+// et al.) were DELETED for the byte-based `rustty_wasm_alloc`/`rustty_wasm_free`
+// pair (freed with the exact allocation length).
+const dataPtr = ex.rustty_wasm_alloc(vtBytes.length);
 new Uint8Array(buf()).set(vtBytes, dataPtr);
 ex.rustty_terminal_vt_write(term, dataPtr, vtBytes.length);
-ex.rustty_wasm_free_u8_array(dataPtr, vtBytes.length);
+ex.rustty_wasm_free(dataPtr, vtBytes.length);
 console.log('vt_write: OK (' + vtBytes.length + ' bytes parsed into the page tree)');
 
 // --- 3. plain-text formatter over the terminal ---
 const FOPT = LAYOUT['RusttyFormatterTerminalOptions'].size;
-const fPtr = ex.rustty_wasm_alloc_u8_array(FOPT);
+const fPtr = ex.rustty_wasm_alloc(FOPT);
 new Uint8Array(buf(), fPtr, FOPT).fill(0);
 setField(fPtr, 'RusttyFormatterTerminalOptions', 'size', FOPT);
 setField(fPtr, 'RusttyFormatterTerminalOptions', 'emit', EMIT_PLAIN);
@@ -103,14 +109,15 @@ new DataView(buf()).setUint32(extraOff + scrOff + field('RusttyFormatterScreenEx
 
 const fSlot = ex.rustty_wasm_alloc_opaque();
 const r2 = ex.rustty_formatter_terminal_new(0, fSlot, term, fPtr);
-ex.rustty_wasm_free_u8_array(fPtr, FOPT);
+ex.rustty_wasm_free(fPtr, FOPT);
 if (r2 !== SUCCESS) throw new Error('rustty_formatter_terminal_new -> ' + r2);
 const fmt = rdU32(fSlot);
 ex.rustty_wasm_free_opaque(fSlot);
 
 // --- 4. format_alloc -> read the plain-text screen contents ---
 const outPP = ex.rustty_wasm_alloc_opaque();
-const outLP = ex.rustty_wasm_alloc_usize();
+const USIZE = 4; // usize on wasm32
+const outLP = ex.rustty_wasm_alloc(USIZE);
 const r3 = ex.rustty_formatter_format_alloc(fmt, 0, outPP, outLP);
 if (r3 !== SUCCESS) throw new Error('rustty_formatter_format_alloc -> ' + r3);
 const outPtr = rdU32(outPP), outLen = rdU32(outLP);
@@ -120,6 +127,8 @@ console.log('\n===== formatted terminal contents (from wasm) =====');
 console.log(text.replace(/\s+$/,''));
 console.log('===================================================');
 
+ex.rustty_wasm_free_opaque(outPP);
+ex.rustty_wasm_free(outLP, USIZE);
 ex.rustty_formatter_free(fmt);
 ex.rustty_terminal_free(term);
 

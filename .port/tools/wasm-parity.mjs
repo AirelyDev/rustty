@@ -71,11 +71,16 @@ async function runFlow(path, P /* symbol prefix: ghostty|rustty */) {
   tableGate(mod, ex, P);
 
   // type layout
+  //
+  // 9673a22b0/c75559589: `type_json` is now the versioned ABI manifest — type
+  // rows live under `.types` (with an `.abi` block carrying usize_size etc.).
   const jp = fn("type_json")();
   let e = jp;
   const mem0 = new Uint8Array(buf());
   while (mem0[e]) e++;
-  const L = JSON.parse(Buffer.from(mem0.subarray(jp, e)).toString());
+  const MANIFEST = JSON.parse(Buffer.from(mem0.subarray(jp, e)).toString());
+  const L = MANIFEST.types;
+  const USIZE = MANIFEST.abi.usize_size;
   const K = P === "ghostty" ? "Ghostty" : "Rustty";
   const setField = (base, sname, f, v) => {
     const fi = L[`${K}${sname}`].fields[f];
@@ -89,28 +94,27 @@ async function runFlow(path, P /* symbol prefix: ghostty|rustty */) {
   const rdU32 = (p) => new DataView(buf()).getUint32(p, true);
 
   // terminal_new(80x24)
-  const TOPT = L[`${K}TerminalOptions`].size;
-  const op = fn("wasm_alloc_u8_array")(TOPT);
-  new Uint8Array(buf(), op, TOPT).fill(0);
-  setField(op, "TerminalOptions", "cols", 80);
-  setField(op, "TerminalOptions", "rows", 24);
-  setField(op, "TerminalOptions", "max_scrollback", 0);
+  //
+  // 03d5fa268 removed the `TerminalOptions` struct from the ABI —
+  // `terminal_new` takes cols/rows directly. a8e9b413f removed the per-type
+  // wasm exports (`wasm_alloc_u8_array` et al.) for the byte-based
+  // `wasm_alloc`/`wasm_free` pair.
   const ts = fn("wasm_alloc_opaque")();
-  if (fn("terminal_new")(0, ts, op) !== SUCCESS) throw new Error("terminal_new");
+  if (fn("terminal_new")(0, ts, 80, 24) !== SUCCESS)
+    throw new Error("terminal_new");
   const term = rdU32(ts);
-  fn("wasm_free_u8_array")(op, TOPT);
   fn("wasm_free_opaque")(ts);
 
   // vt_write
   const vb = new TextEncoder().encode(VT);
-  const dp = fn("wasm_alloc_u8_array")(vb.length);
+  const dp = fn("wasm_alloc")(vb.length);
   new Uint8Array(buf()).set(vb, dp);
   fn("terminal_vt_write")(term, dp, vb.length);
-  fn("wasm_free_u8_array")(dp, vb.length);
+  fn("wasm_free")(dp, vb.length);
 
   // formatter (plain, trim)
   const FOPT = L[`${K}FormatterTerminalOptions`].size;
-  const fp = fn("wasm_alloc_u8_array")(FOPT);
+  const fp = fn("wasm_alloc")(FOPT);
   new Uint8Array(buf(), fp, FOPT).fill(0);
   setField(fp, "FormatterTerminalOptions", "size", FOPT);
   setField(fp, "FormatterTerminalOptions", "emit", EMIT_PLAIN);
@@ -131,18 +135,20 @@ async function runFlow(path, P /* symbol prefix: ghostty|rustty */) {
   const fs = fn("wasm_alloc_opaque")();
   if (fn("formatter_terminal_new")(0, fs, term, fp) !== SUCCESS)
     throw new Error("formatter_terminal_new");
-  fn("wasm_free_u8_array")(fp, FOPT);
+  fn("wasm_free")(fp, FOPT);
   const fmt = rdU32(fs);
   fn("wasm_free_opaque")(fs);
 
   // format_alloc -> bytes
   const opp = fn("wasm_alloc_opaque")();
-  const olp = fn("wasm_alloc_usize")();
+  const olp = fn("wasm_alloc")(USIZE);
   if (fn("formatter_format_alloc")(fmt, 0, opp, olp) !== SUCCESS)
     throw new Error("format_alloc");
   const outP = rdU32(opp),
     outL = rdU32(olp);
   const out = new Uint8Array(buf(), outP, outL).slice(); // copy out before frees
+  fn("wasm_free_opaque")(opp);
+  fn("wasm_free")(olp, USIZE);
   fn("formatter_free")(fmt);
   fn("terminal_free")(term);
   return { bytes: out, inputLen: vb.length };

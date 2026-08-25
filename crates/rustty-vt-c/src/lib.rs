@@ -44,6 +44,7 @@ pub mod focus;
 pub mod formatter;
 pub mod grid_ref;
 pub mod grid_ref_tracked;
+pub mod io;
 pub mod key_encode;
 pub mod key_event;
 pub mod kitty_graphics;
@@ -60,6 +61,7 @@ pub mod selection;
 pub mod selection_gesture;
 pub mod sgr;
 pub mod size_report;
+pub mod snapshot;
 pub mod style;
 pub mod sys;
 pub mod terminal;
@@ -1222,14 +1224,13 @@ pub unsafe extern "C" fn rustty_style_is_default(s: *const style::Style) -> bool
 // `terminal::TerminalData::from_c_int` under W35-B08 — `get_multi` must reach
 // the same guard per array element, so it can no longer live in this file.
 //
-// contiguous 0..=30 (27/28 = scrollback max bytes/lines; 29/30 = the
-// desktop-notification and progress-report effects, oracle c3655ba25 47d602c42)
-// PORT NOTE (Bundle M): `Option` is no longer contiguous — discriminant 31
-// (`continuation_max_bytes`) is reserved for Bundle S's snapshot/continuation
-// surface — so the range check carries an explicit hole until it lands.
+// contiguous 0..=37 (27/28 = scrollback max bytes/lines; 29/30 = the
+// desktop-notification and progress-report effects, oracle c3655ba25 47d602c42;
+// 31 = continuation_max_bytes, Bundle S d7bb4b863, closing the hole Bundle M
+// reserved for it; 32..=37 = the Bundle M options)
 const TERMINAL_OPTION_COUNT: c_int = 38;
 fn terminal_option_from_c_int(v: c_int) -> Option<terminal::Option_> {
-    if (0..TERMINAL_OPTION_COUNT).contains(&v) && v != 31 {
+    if (0..TERMINAL_OPTION_COUNT).contains(&v) {
         // SAFETY: `v` is a valid terminal `Option` discriminant (range-checked).
         Some(unsafe { std::mem::transmute::<c_int, terminal::Option_>(v) })
     } else {
@@ -1468,6 +1469,23 @@ pub unsafe extern "C" fn rustty_formatter_terminal_new(
     unsafe { formatter::terminal_new(alloc.as_ref(), result, terminal, opts) }.to_c_int()
 }
 
+// pub const formatter_format = formatter.format;  (ghostty_formatter_format)
+/// C: rustty_formatter_format
+///
+/// # Safety
+/// `formatter`, if non-null, must be a handle returned by
+/// `rustty_formatter_terminal_new`; `writer`'s callback contract is the
+/// caller's (it must not call formatter or terminal APIs using the same
+/// formatter or its terminal).
+#[no_mangle]
+pub unsafe extern "C" fn rustty_formatter_format(
+    formatter: formatter::Formatter,
+    writer: io::Writer,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { formatter::format(formatter, writer) }.to_c_int()
+}
+
 // pub const formatter_format_buf = formatter.format_buf;  (ghostty_formatter_format_buf)
 /// C: rustty_formatter_format_buf
 ///
@@ -1517,6 +1535,210 @@ pub unsafe extern "C" fn rustty_formatter_free(formatter: formatter::Formatter) 
     unsafe { formatter::free(formatter) }
 }
 
+// ----- snapshot -----
+// pub const snapshot_encode = snapshot.encode;  (ghostty_snapshot_encode)
+/// C: rustty_snapshot_encode
+///
+/// # Safety
+/// `terminal`, if non-null, must be a live `rustty_terminal_new` handle with no
+/// concurrent mutation; `writer`'s callback must not call terminal APIs with
+/// the same terminal handle.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_snapshot_encode(
+    terminal: terminal::Terminal,
+    writer: io::Writer,
+) -> c_int {
+    // SAFETY: pointer/callback validity is the caller's contract.
+    unsafe { snapshot::encode(terminal, writer) }.to_c_int()
+}
+
+// pub const snapshot_encode_buf = snapshot.encode_buf;  (ghostty_snapshot_encode_buf)
+/// C: rustty_snapshot_encode_buf
+///
+/// # Safety
+/// `terminal`, if non-null, must be a live terminal handle; `buf`, if non-null,
+/// must point to `buf_len` writable bytes; `out_written` must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_snapshot_encode_buf(
+    terminal: terminal::Terminal,
+    buf: *mut u8,
+    buf_len: usize,
+    out_written: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { snapshot::encode_buf(terminal, buf, buf_len, out_written) }.to_c_int()
+}
+
+// pub const snapshot_encode_alloc = snapshot.encode_alloc;  (ghostty_snapshot_encode_alloc)
+/// C: rustty_snapshot_encode_alloc
+///
+/// # Safety
+/// `terminal`, if non-null, must be a live terminal handle; `alloc`, if
+/// non-null, a valid allocator; `out_ptr`/`out_len` must be writable. The
+/// returned buffer is caller-owned and released with `rustty_free` + the same
+/// allocator.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_snapshot_encode_alloc(
+    terminal: terminal::Terminal,
+    alloc: *const rustty_lib::allocator::Allocator,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { snapshot::encode_alloc(terminal, alloc.as_ref(), out_ptr, out_len) }.to_c_int()
+}
+
+// pub const snapshot_decoder_new = snapshot.decoder_new;  (ghostty_snapshot_decoder_new)
+/// C: rustty_snapshot_decoder_new
+///
+/// # Safety
+/// `alloc`, if non-null, must point to a valid allocator; `decoder` must be
+/// writable; `reader`'s callback and userdata must remain valid until FINISH
+/// is reached or the decoder is freed.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_snapshot_decoder_new(
+    alloc: *const rustty_lib::allocator::Allocator,
+    decoder: *mut snapshot::Decoder,
+    reader: io::Reader,
+) -> c_int {
+    // SAFETY: pointer/callback validity is the caller's contract.
+    unsafe { snapshot::decoder_new(alloc.as_ref(), decoder, reader) }.to_c_int()
+}
+
+// pub const snapshot_decoder_new_buf = snapshot.decoder_new_buf;  (ghostty_snapshot_decoder_new_buf)
+/// C: rustty_snapshot_decoder_new_buf
+///
+/// # Safety
+/// `alloc`, if non-null, must point to a valid allocator; `decoder` must be
+/// writable; `ptr`, if non-null, must point to `len` bytes that remain valid
+/// and immutable until FINISH is reached or the decoder is freed.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_snapshot_decoder_new_buf(
+    alloc: *const rustty_lib::allocator::Allocator,
+    decoder: *mut snapshot::Decoder,
+    ptr: *const u8,
+    len: usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { snapshot::decoder_new_buf(alloc.as_ref(), decoder, ptr, len) }.to_c_int()
+}
+
+// pub const snapshot_decoder_free = snapshot.decoder_free;  (ghostty_snapshot_decoder_free)
+/// C: rustty_snapshot_decoder_free
+///
+/// # Safety
+/// `decoder`, if non-null, must be a handle returned by a decoder constructor,
+/// not yet freed.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_snapshot_decoder_free(decoder: snapshot::Decoder) {
+    // SAFETY: `decoder` validity is the caller's contract.
+    unsafe { snapshot::decoder_free(decoder) }
+}
+
+// pub const snapshot_decoder_set = snapshot.decoder_set;  (ghostty_snapshot_decoder_set)
+/// C: rustty_snapshot_decoder_set
+///
+/// # Safety
+/// `decoder`, if non-null, must be a live decoder handle; `value`, if
+/// non-null, must point to the type documented for `option`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_snapshot_decoder_set(
+    decoder: snapshot::Decoder,
+    option: c_int,
+    value: *const std::ffi::c_void,
+) -> c_int {
+    // D11: the raw C integer is narrowed here (the reference enum's open `_`
+    // arm returns `.invalid_value` inside `decoder_set`).
+    let Some(opt) = snapshot::DecoderOption::from_c_int(option) else {
+        return result::Result::InvalidValue.to_c_int();
+    };
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { snapshot::decoder_set(decoder, opt, value) }.to_c_int()
+}
+
+// pub const snapshot_decoder_get = snapshot.decoder_get;  (ghostty_snapshot_decoder_get)
+/// C: rustty_snapshot_decoder_get
+///
+/// # Safety
+/// `decoder`, if non-null, must be a live decoder handle; `out`, if non-null,
+/// must point to writable storage of the type documented for `data`.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_snapshot_decoder_get(
+    decoder: snapshot::Decoder,
+    data: c_int,
+    out: *mut std::ffi::c_void,
+) -> c_int {
+    // D11: narrow the raw C integer (the reference's open `_` arm).
+    let Some(key) = snapshot::DecoderData::from_c_int(data) else {
+        return result::Result::InvalidValue.to_c_int();
+    };
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { snapshot::decoder_get(decoder, key, out) }.to_c_int()
+}
+
+// pub const snapshot_decoder_get_multi = snapshot.decoder_get_multi;  (ghostty_snapshot_decoder_get_multi)
+/// C: rustty_snapshot_decoder_get_multi
+///
+/// # Safety
+/// `decoder`, if non-null, must be a live decoder handle; `keys`/`values`, if
+/// non-null, must point to `count` elements; `out_written`, if non-null, must
+/// be writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_snapshot_decoder_get_multi(
+    decoder: snapshot::Decoder,
+    count: usize,
+    keys: *const snapshot::DecoderData,
+    values: *mut *mut std::ffi::c_void,
+    out_written: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract; the per-element key
+    // narrowing lives inside `decoder_get_multi` (it reads the storage as raw
+    // `c_int`s).
+    unsafe { snapshot::decoder_get_multi(decoder, count, keys, values, out_written) }.to_c_int()
+}
+
+// pub const snapshot_decoder_ready = snapshot.decoder_ready;  (ghostty_snapshot_decoder_ready)
+/// C: rustty_snapshot_decoder_ready
+///
+/// # Safety
+/// `decoder`, if non-null, must be a live decoder handle; `terminal` must be
+/// writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_snapshot_decoder_ready(
+    decoder: snapshot::Decoder,
+    terminal: *mut terminal::Terminal,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { snapshot::decoder_ready(decoder, terminal) }.to_c_int()
+}
+
+// pub const snapshot_decoder_next = snapshot.decoder_next;  (ghostty_snapshot_decoder_next)
+/// C: rustty_snapshot_decoder_next
+///
+/// # Safety
+/// `decoder`, if non-null, must be a live decoder handle whose READY terminal
+/// (if any) is still alive.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_snapshot_decoder_next(decoder: snapshot::Decoder) -> c_int {
+    // SAFETY: `decoder` validity is the caller's contract.
+    unsafe { snapshot::decoder_next(decoder) }.to_c_int()
+}
+
+// pub const snapshot_decoder_decode = snapshot.decoder_decode;  (ghostty_snapshot_decoder_decode)
+/// C: rustty_snapshot_decoder_decode
+///
+/// # Safety
+/// `decoder`, if non-null, must be a live decoder handle; `terminal` must be
+/// writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_snapshot_decoder_decode(
+    decoder: snapshot::Decoder,
+    terminal: *mut terminal::Terminal,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { snapshot::decoder_decode(decoder, terminal) }.to_c_int()
+}
+
 // ----- types -----
 // pub const type_json = types.get_json;  (ghostty_type_json)
 /// C: rustty_type_json
@@ -1530,67 +1752,49 @@ pub extern "C" fn rustty_type_json() -> *const std::os::raw::c_char {
 
 // ----- wasm allocator convenience exports -----
 //
-// PORT: `lib_vt.zig`'s `if (builtin.target.cpu.arch.isWasm()) { … }` block
-// (its 12 `@export(&alloc.*, .{ .name = "ghostty_wasm_*" })` / `@export(&c.*)`
-// lines). rustty relies on pointers-to-types for ABI compatibility, and creating
-// those in wasm from JS is tedious — these purely-additive helpers let a wasm
-// host (e.g. browser JS) allocate out-param slots and byte buffers against the
-// module's own allocator without changing the C API. The bodies live in
-// `rustty_lib::allocator::convenience` (the `lib/allocator/convenience.zig`
-// analog) + `sgr::wasm_{alloc,free}_attribute`; here we re-export them under the
+// PORT: `lib_vt.zig`'s `if (builtin.target.cpu.arch.isWasm()) { … }` block:
+//
+//     // On Wasm we need to export our allocator convenience functions.
+//     if (builtin.target.cpu.arch.isWasm()) {
+//         const alloc = @import("lib/allocator/wasm.zig");
+//         @export(&alloc.allocBytes, .{ .name = "ghostty_wasm_alloc" });
+//         @export(&alloc.freeBytes, .{ .name = "ghostty_wasm_free" });
+//         @export(&alloc.allocOpaque, .{ .name = "ghostty_wasm_alloc_opaque" });
+//         @export(&alloc.freeOpaque, .{ .name = "ghostty_wasm_free_opaque" });
+//         @export(&alloc.takeOpaque, .{ .name = "ghostty_wasm_take_opaque" });
+//     }
+//
+// rustty relies on pointers-to-types for ABI compatibility, and creating those
+// in wasm from JS is tedious — the generic byte allocator plus the reusable
+// opaque out-parameter slots let a wasm host (e.g. browser JS) manage caller-
+// owned ABI storage against the module's own allocator without changing the C
+// API. The bodies live in `rustty_lib::allocator::wasm` (the
+// `lib/allocator/wasm.zig` analog); here we re-export them under the
 // `rustty_wasm_*` names, wasm-only (matching the reference's `isWasm()` gate so
 // native builds carry no extra symbols).
 #[cfg(target_arch = "wasm32")]
 mod wasm_alloc_exports {
-    use rustty_lib::allocator::convenience as conv;
+    use rustty_lib::allocator::wasm as alloc;
 
     #[no_mangle]
-    pub extern "C" fn rustty_wasm_alloc_opaque() -> *mut conv::Opaque {
-        conv::alloc_opaque()
+    pub extern "C" fn rustty_wasm_alloc(len: usize) -> *mut u8 {
+        alloc::alloc_bytes(len)
     }
     #[no_mangle]
-    pub extern "C" fn rustty_wasm_free_opaque(ptr: *mut conv::Opaque) {
-        conv::free_opaque(ptr)
+    pub extern "C" fn rustty_wasm_free(ptr: *mut u8, len: usize) {
+        alloc::free_bytes(ptr, len)
     }
     #[no_mangle]
-    pub extern "C" fn rustty_wasm_alloc_u8_array(len: usize) -> *mut u8 {
-        conv::alloc_u8_array(len)
+    pub extern "C" fn rustty_wasm_alloc_opaque() -> *mut alloc::Opaque {
+        alloc::alloc_opaque()
     }
     #[no_mangle]
-    pub extern "C" fn rustty_wasm_free_u8_array(ptr: *mut u8, len: usize) {
-        conv::free_u8_array(ptr, len)
+    pub extern "C" fn rustty_wasm_free_opaque(ptr: *mut alloc::Opaque) {
+        alloc::free_opaque(ptr)
     }
     #[no_mangle]
-    pub extern "C" fn rustty_wasm_alloc_u16_array(len: usize) -> *mut u16 {
-        conv::alloc_u16_array(len)
-    }
-    #[no_mangle]
-    pub extern "C" fn rustty_wasm_free_u16_array(ptr: *mut u16, len: usize) {
-        conv::free_u16_array(ptr, len)
-    }
-    #[no_mangle]
-    pub extern "C" fn rustty_wasm_alloc_u8() -> *mut u8 {
-        conv::alloc_u8()
-    }
-    #[no_mangle]
-    pub extern "C" fn rustty_wasm_free_u8(ptr: *mut u8) {
-        conv::free_u8(ptr)
-    }
-    #[no_mangle]
-    pub extern "C" fn rustty_wasm_alloc_usize() -> *mut usize {
-        conv::alloc_usize()
-    }
-    #[no_mangle]
-    pub extern "C" fn rustty_wasm_free_usize(ptr: *mut usize) {
-        conv::free_usize(ptr)
-    }
-    #[no_mangle]
-    pub extern "C" fn rustty_wasm_alloc_sgr_attribute() -> *mut crate::sgr::AttributeC {
-        crate::sgr::wasm_alloc_attribute()
-    }
-    #[no_mangle]
-    pub extern "C" fn rustty_wasm_free_sgr_attribute(attr: *mut crate::sgr::AttributeC) {
-        crate::sgr::wasm_free_attribute(attr)
+    pub extern "C" fn rustty_wasm_take_opaque(ptr: *mut alloc::Opaque) -> alloc::Opaque {
+        alloc::take_opaque(ptr)
     }
 }
 
@@ -2579,6 +2783,76 @@ pub unsafe extern "C" fn rustty_terminal_vt_write(
 ) {
     // SAFETY: `terminal`/`ptr` validity is the caller's contract.
     unsafe { terminal::vt_write(terminal, ptr, len) }
+}
+
+// pub const terminal_vt_write_until_ground = terminal.vt_write_until_ground;  (ghostty_terminal_vt_write_until_ground)
+/// C: rustty_terminal_vt_write_until_ground
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `data`, if
+/// non-null, must point to `len` readable bytes; `out_consumed`, if non-null,
+/// must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_vt_write_until_ground(
+    terminal: terminal::Terminal,
+    data: *const u8,
+    len: usize,
+    out_consumed: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { terminal::vt_write_until_ground(terminal, data, len, out_consumed) }.to_c_int()
+}
+
+// pub const terminal_continuation_write = terminal.continuation_write;  (ghostty_terminal_continuation_write)
+/// C: rustty_terminal_continuation_write
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `writer`'s
+/// callback must not call terminal APIs with the same terminal handle.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_continuation_write(
+    terminal: terminal::Terminal,
+    writer: io::Writer,
+) -> c_int {
+    // SAFETY: pointer/callback validity is the caller's contract.
+    unsafe { terminal::continuation_write(terminal, writer) }.to_c_int()
+}
+
+// pub const terminal_continuation_buf = terminal.continuation_buf;  (ghostty_terminal_continuation_buf)
+/// C: rustty_terminal_continuation_buf
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `buf`, if
+/// non-null, must point to `buf_len` writable bytes; `out_written`, if
+/// non-null, must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_continuation_buf(
+    terminal: terminal::Terminal,
+    buf: *mut u8,
+    buf_len: usize,
+    out_written: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { terminal::continuation_buf(terminal, buf, buf_len, out_written) }.to_c_int()
+}
+
+// pub const terminal_continuation_alloc = terminal.continuation_alloc;  (ghostty_terminal_continuation_alloc)
+/// C: rustty_terminal_continuation_alloc
+///
+/// # Safety
+/// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `alloc`,
+/// if non-null, a valid allocator; `out_ptr`/`out_len`, if non-null, must be
+/// writable. The returned bytes are caller-owned and released with
+/// `rustty_free` + the same allocator.
+#[no_mangle]
+pub unsafe extern "C" fn rustty_terminal_continuation_alloc(
+    terminal: terminal::Terminal,
+    alloc: *const rustty_lib::allocator::Allocator,
+    out_ptr: *mut *mut u8,
+    out_len: *mut usize,
+) -> c_int {
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { terminal::continuation_alloc(terminal, alloc.as_ref(), out_ptr, out_len) }.to_c_int()
 }
 
 // pub const terminal_scroll_viewport = terminal.scroll_viewport;  (ghostty_terminal_scroll_viewport)

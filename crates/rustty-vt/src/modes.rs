@@ -29,7 +29,9 @@
 use core::fmt::Write;
 
 /// A struct that maintains the state of all the settable modes.
-#[derive(Clone, Copy, Debug)]
+// PORT NOTE: PartialEq/Eq are derived for the snapshot TERMINAL codec's
+// round-trip test (Zig: `std.testing.expectEqualDeep(terminal.modes, ...)`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ModeState {
     /// The values of the current modes.
     pub values: ModePacked,
@@ -222,6 +224,20 @@ impl ModePacked {
     pub fn get_mode(&self, mode: Mode) -> bool {
         self.get_bit(index_for_mode(mode))
     }
+
+    /// Set the value of a mode in this packed set. Mirrors the reference's
+    /// direct packed-field writes (`packed.disable_keyboard = true`); the
+    /// snapshot codec's mode-registry tests and fixtures construct packed
+    /// values this way.
+    pub fn set_mode(&mut self, mode: Mode, value: bool) {
+        self.set_bit(index_for_mode(mode), value);
+    }
+
+    /// `@bitSizeOf(ModePacked)` — the number of packed mode bits (one per
+    /// `ENTRIES` row). The snapshot TERMINAL record's mode registry writes
+    /// these bits zero-extended into a u64 wire slot and treats the higher
+    /// bits as reserved.
+    pub const BITS: usize = ENTRIES.len();
 
     fn set_bit(&mut self, idx: usize, value: bool) {
         if value {

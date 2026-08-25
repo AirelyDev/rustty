@@ -338,6 +338,11 @@ unsafe fn set_typed(option: Option_, value: *const std::ffi::c_void) -> Result {
 
 /// Dispatch a log message to the installed C callback, if any.
 // fn emitLog(level: LogLevel, scope: []const u8, message: []const u8) void { ... }
+//
+// PORT NOTE (`d61920d80`): `cfg(not(wasm32))` on the C-ABI emit path mirrors
+// Zig's lazy analysis — on wasm `std_options` never installs this sink, so the
+// reference never compiles it there (see `log_fn`).
+#[cfg(not(target_arch = "wasm32"))]
 fn emit_log(level: LogLevel, scope: &[u8], message: &[u8]) {
     // const func = global.log orelse return;
     let g = GLOBAL.lock().unwrap();
@@ -361,6 +366,9 @@ fn emit_log(level: LogLevel, scope: &[u8], message: &[u8]) {
 /// Emits logs in chunks. Almost all logs will be less than the chunk size
 /// but this allows emitting larger logs without heap allocation.
 // const LogEmitter = struct { c_level, scope_text, buf: [2048]u8, pos: usize, ... }
+//
+// `cfg(not(wasm32))`: see the `emit_log` port note.
+#[cfg(not(target_arch = "wasm32"))]
 struct LogEmitter<'a> {
     c_level: LogLevel,
     scope_text: &'a [u8],
@@ -368,6 +376,7 @@ struct LogEmitter<'a> {
     pos: usize,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl LogEmitter<'_> {
     // fn write(self: *@This(), bytes: []const u8) error{}!usize { ... }
     fn write(&mut self, bytes: &[u8]) -> usize {
@@ -415,6 +424,7 @@ impl LogEmitter<'_> {
 // `core::fmt::Write` is rustty's writer seam: `core::fmt::write` streams the
 // formatted fragments straight into the stack buffer, exactly like Zig's
 // `writer.print(format, args)`, so no heap allocation is involved.
+#[cfg(not(target_arch = "wasm32"))]
 impl core::fmt::Write for LogEmitter<'_> {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         self.write(s.as_bytes());
@@ -435,6 +445,64 @@ impl core::fmt::Write for LogEmitter<'_> {
 // takes the runtime level, the scope name, and the already-formatted message
 // (`core::fmt::Arguments`), reproducing the same chunked dispatch.
 pub fn log_fn(level: StdLevel, scope: &str, args: core::fmt::Arguments) {
+    // PORT NOTE (`d61920d80`, `lib_vt.zig` `std_options`): on wasm the
+    // installed `std.log` sink is NOT this C-ABI dispatcher — `lib_vt.zig`
+    // selects `os/wasm/log.zig` instead:
+    //
+    //     if (builtin.target.cpu.arch.isWasm()) {
+    //         // In non-debug modes, we want to ship effectively no logging
+    //         // warn and lower add ~200KB at the time of this comment.
+    //         if (builtin.mode == .Debug) {
+    //             options.log_level = .debug;
+    //             options.logFn = @import("os/wasm/log.zig").log;
+    //         } else {
+    //             options.log_level = .err;
+    //             options.logFn = @import("os/wasm/log.zig").noop;
+    //         }
+    //     } else if (terminal.options.c_abi) { ... this sink ... }
+    //
+    // `log_fn` is rustty's single log funnel (the `std_options.logFn` analog),
+    // so the arch selection lives at its head. `builtin.mode == .Debug` ports
+    // as `cfg(debug_assertions)` (R8: build-switchable, never folded).
+    #[cfg(all(target_arch = "wasm32", debug_assertions))]
+    {
+        // options.log_level = .debug;
+        // options.logFn = @import("os/wasm/log.zig").log;
+        //
+        // `os/wasm/log.zig`'s `log` takes `comptime level.asText()` plus the
+        // scope tag; the rustty port takes the already-formatted parts. The
+        // default scope reaches this funnel as "" (see the callers) and maps
+        // to the reference's `.default` tag.
+        let level_txt = match level {
+            StdLevel::Err => "error",
+            StdLevel::Warn => "warning",
+            StdLevel::Info => "info",
+            StdLevel::Debug => "debug",
+        };
+        let scope_txt = if scope.is_empty() { "default" } else { scope };
+        rustty_os::wasm::log::log(level_txt, scope_txt, &std::fmt::format(args));
+    }
+    #[cfg(all(target_arch = "wasm32", not(debug_assertions)))]
+    {
+        // options.log_level = .err;
+        // options.logFn = @import("os/wasm/log.zig").noop;
+        //
+        // Discard WITHOUT formatting — the early return is the Rust spelling
+        // of installing the comptime `noop` sink (see
+        // `rustty_os::wasm::log::noop`), keeping the release wasm module free
+        // of the formatting machinery this call would otherwise pull in.
+        let _ = (level, scope, args);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    log_fn_c_abi(level, scope, args);
+}
+
+/// The non-wasm (C ABI) body of [`log_fn`]: dispatch to the embedder-installed
+/// callback. This is `terminal/c/sys.zig`'s `logFn` proper — the sink the
+/// reference installs for C ABI builds (see the `std_options` note above).
+#[cfg(not(target_arch = "wasm32"))]
+fn log_fn_c_abi(level: StdLevel, scope: &str, args: core::fmt::Arguments) {
     // if (global.log == null) return;
     if GLOBAL.lock().unwrap().log.is_none() {
         return;

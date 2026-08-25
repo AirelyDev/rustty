@@ -129,17 +129,45 @@ pub type AutoOffsetHashMap<K, V, const MAX_LOAD_PERCENTAGE: u8> =
 // `std.mem.asBytes(&key)` yields — see the hasher note in
 // `rustty_zigstd::wyhash`.
 //
-// PORT NOTE (`3d9b2b483` wasm arm, DEFERRED): the reference's `hash` gains a
+// PORT NOTE (`3d9b2b483` wasm arm): the reference's `hash` carries a
 // wasm32-only small-key (`@sizeOf(K) <= 8`) branch — a splitmix64-style
-// finalizer instead of Wyhash, because Wyhash's 64×64→128 multiplies lower to
-// `__multi3` libcalls on wasm (no widening multiply instruction). That arm is
-// `comptime builtin.cpu.arch.isWasm()`-gated dead code on every native target
-// and — because it changes home slots/fingerprints/probe order, i.e. the raw
-// page bytes — must land TOGETHER with rustty's wasm target decision
-// (`492c26067` WasmPagePool, `87f69a12e` wasm arms; Phase-4 plan, wasm/
-// datastruct tier), not before. Blocked on the wasm pool wiring; tracked in
-// the P4-W2 T4 report.
+// finalizer instead of Wyhash (see the comment in `hash` below). That arm is
+// `comptime builtin.cpu.arch.isWasm()`-gated dead code on every native target;
+// because it changes home slots/fingerprints/probe order, i.e. the raw page
+// bytes, it landed TOGETHER with the wasm page-pool wiring (`492c26067`,
+// `87f69a12e` — the wasm/datastruct tier).
 pub struct AutoContext<K>(PhantomData<K>);
+
+/// The byte collector behind the wasm small-key hash arm: gathers the key's
+/// `Hash`-written bytes into the low bytes of a `u64`, exactly the Zig
+/// `var x: u64 = 0; @memcpy(std.mem.asBytes(&x)[0..@sizeOf(K)],
+/// std.mem.asBytes(&key));` on a little-endian target (wasm is always LE) —
+/// the port's key types write exactly their native-endian bytes through `Hash`
+/// (see the note above). `finish` returns the raw collected word; the
+/// splitmix64-style finalizer is applied at the call site so the Zig code
+/// shape stays visible.
+struct SmallKeyBytes {
+    x: u64,
+    len: usize,
+}
+
+impl core::hash::Hasher for SmallKeyBytes {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        // `@sizeOf(K) <= 8` is checked by the branch guard; the port's key
+        // types write only their own bytes.
+        debug_assert!(self.len + bytes.len() <= 8);
+        for &b in bytes {
+            self.x |= (b as u64) << (8 * self.len);
+            self.len += 1;
+        }
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.x
+    }
+}
 
 impl<K> Default for AutoContext<K> {
     fn default() -> Self {
@@ -167,6 +195,39 @@ impl<K: core::hash::Hash + PartialEq> HashMapContext<K> for AutoContext<K> {
     #[inline]
     fn hash(&self, key: K) -> u64 {
         use core::hash::Hasher;
+
+        // On wasm32, Wyhash's 64x64 -> 128 multiplies lower to
+        // __multi3 libcalls (wasm has no widening multiply
+        // instruction), which makes the hash itself the
+        // dominant cost of small-key map operations.
+        //
+        // Keys here fit in a u64, so use a splitmix64-style finalizer
+        // instead: two native i64.mul with full avalanche in
+        // both the low bits (slot index) and high bits
+        // (metadata fingerprint).
+        // if (comptime builtin.cpu.arch.isWasm() and @sizeOf(K) <= 8) {
+        if cfg!(target_arch = "wasm32") && core::mem::size_of::<K>() <= 8 {
+            // var x: u64 = 0;
+            // @memcpy(
+            //     std.mem.asBytes(&x)[0..@sizeOf(K)],
+            //     std.mem.asBytes(&key),
+            // );
+            let mut collector = SmallKeyBytes { x: 0, len: 0 };
+            key.hash(&mut collector);
+            let mut x = collector.finish();
+            // x ^= x >> 33;
+            x ^= x >> 33;
+            // x *%= 0xff51afd7ed558ccd;
+            x = x.wrapping_mul(0xff51afd7ed558ccd);
+            // x ^= x >> 33;
+            x ^= x >> 33;
+            // x *%= 0xc4ceb9fe1a85ec53;
+            x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
+            // x ^= x >> 33;
+            x ^= x >> 33;
+            return x;
+        }
+
         let mut hasher = rustty_zigstd::wyhash::Wyhash::init(0);
         key.hash(&mut hasher);
         hasher.finish()

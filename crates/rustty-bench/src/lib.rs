@@ -34,8 +34,18 @@ pub mod codepoint_width;
 pub mod grapheme_break;
 // pub const ScreenClone = @import("ScreenClone.zig");
 pub mod screen_clone;
+// pub const TerminalFormatter = @import("TerminalFormatter.zig");
+pub mod terminal_formatter;
 // pub const TerminalParser = @import("TerminalParser.zig");
 pub mod terminal_parser;
+// pub const TerminalResize = @import("TerminalResize.zig");
+pub mod terminal_resize;
+// pub const TerminalSnapshot = @import("TerminalSnapshot.zig");
+//
+// PORT NOTE (phase-4 wbench): cfg-gated until the snapshot codec drivers land
+// (wsnap-3) — see the module's own PORT NOTE.
+#[cfg(feature = "snapshot-codec")]
+pub mod terminal_snapshot;
 // pub const IsSymbol = @import("IsSymbol.zig");
 pub mod is_symbol;
 // pub const PageCompression = @import("PageCompression.zig");
@@ -108,8 +118,15 @@ mod tests {
         let _ = core::any::type_name::<crate::grapheme_break::GraphemeBreak>();
         // pub const ScreenClone = @import("ScreenClone.zig");
         let _ = core::any::type_name::<crate::screen_clone::ScreenClone>();
+        // pub const TerminalFormatter = @import("TerminalFormatter.zig");
+        let _ = core::any::type_name::<crate::terminal_formatter::TerminalFormatter>();
         // pub const TerminalParser = @import("TerminalParser.zig");
         let _ = core::any::type_name::<crate::terminal_parser::TerminalParser>();
+        // pub const TerminalResize = @import("TerminalResize.zig");
+        let _ = core::any::type_name::<crate::terminal_resize::TerminalResize>();
+        // pub const TerminalSnapshot = @import("TerminalSnapshot.zig");
+        #[cfg(feature = "snapshot-codec")]
+        let _ = core::any::type_name::<crate::terminal_snapshot::TerminalSnapshot>();
         // pub const IsSymbol = @import("IsSymbol.zig");
         let _ = core::any::type_name::<crate::is_symbol::IsSymbol>();
         // pub const PageCompression = @import("PageCompression.zig");

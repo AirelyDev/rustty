@@ -81,10 +81,6 @@ use super::record;
 pub enum Kind {
     Bytes,
     Page,
-    // PORT NOTE: `Snapshot` is constructed by the next-stage codec-driver
-    // tests (see the PORT STATUS in codec.rs); its formatter below is live
-    // and reachable.
-    #[allow(dead_code)]
     Snapshot,
 }
 

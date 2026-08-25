@@ -58,10 +58,9 @@
 // items live on the container-level `free_list` and are reused by other pools of
 // the same Item type. So an `ItemPtr` OUTLIVES the `WasmPagePool` it came from
 // (deinit/reset intentionally retain items). The consumer wiring — feeding these
-// raw-ptr pages into rustty-vt's `PageList` — is a LATER wave; when it lands, the
-// field-lifetime ledger (LIFETIMES.tsv) must record that the pool does not own
-// the pages and that callers must `destroy` every live item before dropping the
-// pool or they leak (mirroring the Zig deinit doc-comment).
+// raw-ptr pages into rustty-vt's `PageList` — is `DynamicWasmPagePool` below
+// (the pool does not own the pages; callers must `destroy` every live item
+// before dropping the pool or they leak, mirroring the Zig deinit doc-comment).
 
 #[cfg(target_arch = "wasm32")]
 use core::arch::wasm32;
@@ -257,6 +256,135 @@ impl<Item: WasmPageItem, A> WasmPagePool<Item, A> {
         // the link matches the Zig `node.* = .{}` before prepending it.
         unsafe { node.as_mut().next = None };
         Item::free_list().prepend(node);
+    }
+}
+
+/// The runtime-item-size instantiation of [`WasmPagePool`], for consumers whose
+/// item size is a runtime value.
+///
+/// PORT NOTE: the Zig `WasmPagePool(comptime Item: type)` is consumed by
+/// `PageList` as `WasmPagePool([std_size]u8)`, where `std_size =
+/// Page.layout(std_capacity).total_size` is comptime. The Rust port's
+/// `std_size` is a RUNTIME value (it cannot be a const-generic `[std_size]u8`
+/// array length), so — exactly like `rustty_zigstd`'s
+/// `DynamicMemoryPoolAligned` is the runtime-size instantiation of Zig's
+/// `MemoryPoolAligned` — this type carries `item_size` at runtime and the
+/// per-Item-type shared free list as a caller-supplied `&'static FreeList`.
+/// Every pool sharing one `FreeList` MUST be constructed with the same
+/// `item_size` (the Rust spelling of "the same Item type"); `init_capacity`
+/// asserts the same invariants the Zig comptime block checks.
+///
+/// All other behavior is line-for-line `WasmPagePool`: `create` pops the shared
+/// free list or grows linear memory by exactly one item, `destroy` prepends the
+/// item to the shared free list, `deinit`/`reset` intentionally retain every
+/// freed item for the module instance.
+pub struct DynamicWasmPagePool<A> {
+    /// The allocator this managed pool was initialized with,
+    /// carried for interface compatibility with the std managed
+    /// memory pools. Pool items never come from it (they come
+    /// from memory.grow), but callers may use it for related
+    /// allocations that don't fit the pool.
+    pub allocator: A,
+
+    /// The shared free list — the runtime stand-in for the Zig
+    /// per-monomorphization `var free_list` (see `WasmPageItem`).
+    free_list: &'static FreeList,
+
+    /// `@sizeOf(Item)` — the runtime item size, identical for every pool
+    /// sharing `free_list`.
+    item_size: usize,
+}
+
+impl<A> DynamicWasmPagePool<A> {
+    /// `WasmPagePool.initCapacity`, plus the runtime `free_list`/`item_size`
+    /// pair that the comptime instantiation carries in its type.
+    pub fn init_capacity(
+        allocator: A,
+        free_list: &'static FreeList,
+        item_size: usize,
+        preheat: usize,
+    ) -> Result<DynamicWasmPagePool<A>, OutOfMemory> {
+        // PORT NOTE: the runtime spelling of the Zig `comptime { ... }` block
+        // (`WasmPagePool::COMPTIME_CHECKS`); `@alignOf(Item) <=
+        // page_size_min` has no runtime analog here because a byte buffer's
+        // natural alignment is 1 — `create` returns wasm-page-aligned items.
+        // Items are whole wasm pages
+        assert!(item_size > 0);
+        assert!(item_size.is_multiple_of(PAGE_SIZE_MIN));
+        // Free items store the intrusive node in their bytes.
+        assert!(item_size >= core::mem::size_of::<Node>());
+
+        // Preheating is intentionally a no-op: item creation is a
+        // cheap memory.grow or free-list pop. And we want to avoid
+        // the preallocation mem cost.
+        let _ = preheat;
+        Ok(DynamicWasmPagePool {
+            allocator,
+            free_list,
+            item_size,
+        })
+    }
+
+    /// `WasmPagePool.item_size` (the runtime value).
+    pub fn item_size(&self) -> usize {
+        self.item_size
+    }
+
+    pub fn deinit(&mut self) {
+        // Items are global to the instance and outlive the pool so
+        // other pools can reuse them. Callers must destroy() any
+        // items they still hold before deinit or they leak.
+    }
+
+    pub fn reset(&mut self, mode: ResetMode) -> bool {
+        // There is nothing to trim: linear memory cannot shrink,
+        // so retaining every freed item for reuse is always the
+        // right policy on wasm. As with deinit, live items must be
+        // destroyed by the caller first.
+        let _ = mode;
+        true
+    }
+
+    /// `WasmPagePool.create`: pop a recycled item off the shared free list, or
+    /// grow linear memory by exactly one item. The returned pointer addresses
+    /// `item_size` bytes, wasm-page-aligned; fresh items are zero (wasm spec),
+    /// recycled items are dirty (see the module doc comment).
+    #[cfg(target_arch = "wasm32")]
+    pub fn create(&mut self) -> Result<NonNull<u8>, OutOfMemory> {
+        // If we have a free item, use it.
+        if let Some(node) = self.free_list.pop_first() {
+            return Ok(node.cast::<u8>());
+        }
+
+        // Grow linear memory by exactly one item.
+        let pages = self.item_size / PAGE_SIZE_MIN;
+        let page_index = wasm32::memory_grow(0, pages);
+        if page_index == usize::MAX {
+            return Err(OutOfMemory);
+        }
+        let addr = page_index * PAGE_SIZE_MIN;
+        // SAFETY(@ptrFromInt/DynamicWasmPagePool.create): as in
+        // `WasmPagePool::create` — `addr` is the base of the freshly grown,
+        // page-aligned, non-null linear-memory region just reserved for one
+        // item.
+        Ok(unsafe { NonNull::new_unchecked(addr as *mut u8) })
+    }
+
+    /// `WasmPagePool.destroy`.
+    ///
+    /// # Safety
+    /// `ptr` must be a live item handed out by a pool sharing this pool's
+    /// `free_list` (i.e. of this pool's `item_size`), not yet destroyed.
+    /// (`unsafe` — unlike the typed `WasmPagePool::destroy` — because the
+    /// runtime pool cannot type-check that `ptr` addresses `item_size` bytes.)
+    pub unsafe fn destroy(&mut self, ptr: NonNull<u8>) {
+        let mut node: NonNull<Node> = ptr.cast::<Node>();
+        // SAFETY(std.SinglyLinkedList.Node write/DynamicWasmPagePool.destroy):
+        // `ptr` is a live item at least `@sizeOf(Node)` bytes (enforced by the
+        // `init_capacity` asserts); reinterpreting its first bytes as a `Node`
+        // and zeroing the link matches the Zig `node.* = .{}` before prepending.
+        unsafe { node.as_mut().next = None };
+        self.free_list.prepend(node);
     }
 }
 

@@ -221,6 +221,10 @@ rustty-extra = { path = "crates/rustty-extra" }
 # apprt-c force-links it (the `_ = benchmark.CApi` analog) so `ghostty_benchmark_cli` lands
 # in the app C-ABI staticlib under `identity-oracle`.
 rustty-bench = { path = "crates/rustty-bench" }
+# The synthetic data generators (port of src/synthetic/). Sibling of the
+# benchmark suite in the reference's Zig module tree; rustty-bench draws on its
+# std.Random port (`rand.rs`) for deterministic fills (phase-4 C8).
+rustty-synthetic = { path = "crates/rustty-synthetic" }
 # Additive infra glue (R1): Zig stdlib equivalents; not in the parity contract.
 rustty-zigstd = { path = "crates/rustty-zigstd" }
 # Build-time help_strings doc-table extraction (R1 port of src/helpgen.zig). A

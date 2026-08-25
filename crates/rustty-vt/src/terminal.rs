@@ -403,6 +403,9 @@ impl Default for Flags {
 /// The various color configurations a terminal maintains and that can
 /// be set dynamically via OSC, with defaults usually coming from a
 /// configuration.
+// PORT NOTE: Clone/Debug/PartialEq are derived for the snapshot TERMINAL
+// codec's round-trip test (Zig: `std.testing.expectEqualDeep(colors, ...)`).
+#[derive(Clone, Debug, PartialEq)]
 pub struct Colors {
     pub background: DynamicRGB,
     pub foreground: DynamicRGB,
@@ -457,6 +460,8 @@ pub struct Dirty {
 
 /// Scrolling region is the area of the screen designated where scrolling
 /// occurs. When scrolling the screen, only this viewport is scrolled.
+// PORT NOTE: derives — see Colors (snapshot TERMINAL round-trip equality).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScrollingRegion {
     // Top and bottom of the scroll region (0-indexed)
     // Precondition: top < bottom

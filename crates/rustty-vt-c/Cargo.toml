@@ -59,6 +59,12 @@ rustty-lib = { workspace = true }
 rustty-render-types = { workspace = true }
 allocator-api2 = { workspace = true }
 
+# Wasm-only: the `os/wasm/log.zig` sink that `lib_vt.zig`'s `std_options`
+# installs for wasm Debug builds (`d61920d80`; see `sys::log_fn`). rustty-os is
+# already below rustty-vt (R4 acyclic) and builds on wasm32.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rustty-os = { workspace = true }
+
 [dev-dependencies]
 # Test-only: the `rustty_util::tripwire` reset mode used by the
 # `get vt_processing_error` C-API test (rustty-vt's `set_string_tw_end`

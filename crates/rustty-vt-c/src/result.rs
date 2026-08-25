@@ -18,6 +18,8 @@ pub enum Result {
     InvalidValue = -2,
     OutOfSpace = -3,
     NoValue = -4,
+    IoError = -5,
+    LimitExceeded = -6,
 }
 
 impl Result {

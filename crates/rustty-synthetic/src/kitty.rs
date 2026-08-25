@@ -241,6 +241,13 @@ mod tests {
             match h.end(Global) {
                 Some(Command::Kitty(_)) => parsed += 1,
                 Some(Command::Glyph(_)) => panic!("parsed as the GLYPH protocol"),
+                // b53728241: an unrecognized APC now surfaces as `.unknown`
+                // instead of null — for a generated kitty sequence that is
+                // still a rejection.
+                Some(Command::Unknown(_)) => panic!(
+                    "the APC handler did not recognize a generated sequence: {:?}",
+                    String::from_utf8_lossy(&body[..body.len().min(48)])
+                ),
                 None => panic!(
                     "the APC handler REJECTED a generated sequence: {:?}",
                     String::from_utf8_lossy(&body[..body.len().min(48)])

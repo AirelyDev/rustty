@@ -156,17 +156,14 @@
 //! document the reference API; the port's live surface is the module list
 //! below).
 //!
-//! PORT STATUS: partial (phase-4 wsnap-2, assessment B clusters C1+C2+C3 and
-//! the history half of C4) — the scaffold (envelope, io, record framing,
-//! checkpoints, continuation), the page/style/hyperlink record codecs, the
-//! COMPLETE grid codec (cluster C3: 8-byte cells with blank elision, per-row
-//! variable cell width, bulk encode/decode, batched grapheme suffixes,
-//! per-row wide-pair resolution), the complete framed PAGE
-//! encode/decode/Decoder, and the HISTORY record are live. `screen` and
-//! `terminal` (the rest of cluster C4) plus the codec drivers in `codec.rs`
-//! are the next stage; their files drop in beside these modules (see the
-//! commented re-exports below and the PORT STATUS notes in `history.rs` /
-//! `codec.rs`).
+//! PORT STATUS: complete (phase-4 wsnap-2 + wsnap-3, assessment B clusters
+//! C1–C4) — the scaffold (envelope, io, record framing, checkpoints,
+//! continuation), the page/style/hyperlink record codecs, the COMPLETE grid
+//! codec (cluster C3: 8-byte cells with blank elision, per-row variable cell
+//! width, bulk encode/decode, batched grapheme suffixes, per-row wide-pair
+//! resolution), the framed PAGE encode/decode/Decoder, the HISTORY record,
+//! the SCREEN and TERMINAL records, and the codec drivers in `codec.rs`
+//! (encode/decode/decodeExact + the incremental Decoder) are all live.
 
 // pub const checkpoint = @import("checkpoint.zig");
 pub mod checkpoint;
@@ -185,35 +182,49 @@ pub mod page;
 // pub const record = @import("record.zig");
 pub mod record;
 // pub const screen = @import("screen.zig");
-// PORT NOTE (wsnap-2 boundary): `snapshot/screen.rs` is next-stage (cluster
-// C4; goldens `testdata/screen-header-v1.hex` /
-// `testdata/screen-saved-cursor-v1.hex` are already checked in). It also
-// unblocks the deferred history test (see history.rs PORT STATUS).
+pub mod screen;
 // pub const style = @import("style.zig");
 pub mod style;
 // pub const terminal = @import("terminal.zig");
-// PORT NOTE (wsnap-2 boundary): `snapshot/terminal.rs` is next-stage (cluster
-// C4; golden `testdata/terminal-header-v1.hex` is already checked in).
+pub mod terminal;
 
 // const codec = @import("snapshot.zig");
 mod codec;
-// pub const EncodeError = codec.EncodeError; — next-stage (see codec.rs)
-// pub const DecodeError = codec.DecodeError; — next-stage (see codec.rs)
-// pub const DecodeExactError = codec.DecodeExactError; — next-stage (see codec.rs)
+// pub const EncodeError = codec.EncodeError;
+pub use codec::EncodeError;
+// pub const DecodeError = codec.DecodeError;
+pub use codec::DecodeError;
+// pub const DecodeExactError = codec.DecodeExactError;
+pub use codec::DecodeExactError;
 pub use codec::Continuation;
 pub use codec::DecodeOptions;
 pub use codec::EncodeOptions;
-// pub const Decoded = codec.Decoded; — next-stage (see codec.rs)
-// pub const Decoder = codec.Decoder; — next-stage (see codec.rs)
-// pub const encode = codec.encode; — next-stage (see codec.rs)
-// pub const decode = codec.decode; — next-stage (see codec.rs)
-// pub const decodeExact = codec.decodeExact; — next-stage (see codec.rs)
+// pub const Decoded = codec.Decoded;
+pub use codec::Decoded;
+// pub const Decoder = codec.Decoder;
+pub use codec::Decoder;
+// PORT NOTE: `Decoder.Progress` is a nested public type in the reference; the
+// port hoisted it to the module (see codec.rs), so it is re-exported here for
+// the C-API tier. `HistoryRows` is the `Decoded.history_rows` field type (the
+// reference's public-std `std.EnumMap(TerminalScreenKey, u64)`).
+pub use codec::HistoryRows;
+pub use codec::Progress;
+// pub const encode = codec.encode;
+pub use codec::encode;
+// pub const decode = codec.decode;
+pub use codec::decode;
+// pub const decodeExact = codec.decodeExact;
+pub use codec::decode_exact;
 
 // PORT NOTE: `io.zig` and `fixture.zig` are internal siblings (main.zig does
 // not re-export them); `io` also carries the crate's `std.Io` stand-in (see
-// its PORT NOTE) and is crate-visible so the next-stage modules and the
-// benchmark/C-API tiers can reuse it.
-pub(crate) mod io;
+// its PORT NOTE). It is PUBLIC (unlike the reference sibling) because the
+// stand-in traits appear in the public codec signatures (`&mut dyn
+// io::Reader` / `&mut dyn io::Writer` — the reference's `*std.Io.Reader` /
+// `*std.Io.Writer`, which ARE public Zig std types): the C-API tier
+// (rustty-vt-c Bundle S) implements them over the `RusttyReader` /
+// `RusttyWriter` callback pairs.
+pub mod io;
 #[cfg(test)]
 pub(crate) mod fixture;
 
@@ -225,7 +236,8 @@ pub(crate) mod fixture;
 /// tests' `std.testing.FailingAllocator` (the crate's established
 /// failure-injection seam; see `stream_continuation.rs`'s `TRACKER_TW`
 /// PORT NOTE). One point, `Alloc`, sits at the subsystem's fallible
-/// decode allocations (`continuation::decode`, `hyperlink::decode`).
+/// decode allocations (`continuation::decode`, `hyperlink::decode`, and
+/// `terminal::decode_payload`'s tabstops/pwd/title allocations).
 #[cfg(test)]
 pub(crate) mod tw {
     use core::cell::RefCell;

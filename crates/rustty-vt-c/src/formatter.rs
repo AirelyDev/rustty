@@ -436,6 +436,58 @@ unsafe fn terminal_new_(
     Ok(ptr)
 }
 
+/// Format directly to a synchronous C writer callback.
+// pub fn format(
+//     formatter_: Formatter,
+//     writer: io_c.Writer,
+// ) callconv(lib.calling_conv) Result {
+/// # Safety
+/// `formatter_`, if non-null, must be a handle returned by `terminal_new`;
+/// `writer`'s callback contract is the caller's.
+pub unsafe fn format(formatter_: Formatter, writer: crate::io::Writer) -> Result {
+    // const wrapper = formatter_ orelse return .invalid_value;
+    if formatter_.is_null() {
+        return Result::InvalidValue;
+    }
+    // SAFETY: `formatter_` is a live handle (caller contract).
+    let wrapper = unsafe { &*formatter_ };
+    // if (!writer.valid()) return .invalid_value;
+    if !writer.valid() {
+        return Result::InvalidValue;
+    }
+
+    // Batch the formatter's many small writes into few callback calls. The
+    // trailing flush upholds the API contract that success means the
+    // callback has accepted every byte.
+    // var buffer: [io_c.WriterAdapter.recommended_buffer_len]u8 = undefined;
+    // var adapter: io_c.WriterAdapter = .initBuffered(writer, &buffer);
+    let mut adapter = crate::io::WriterAdapter::init_buffered(writer);
+    // format_: { ... }
+    'format_: {
+        match &wrapper.kind {
+            // .terminal => |*t| t.format(adapter.writer()) catch break :format_,
+            Kind::Terminal(inputs) => {
+                if inputs.build().format(&mut adapter).is_err() {
+                    break 'format_;
+                }
+            }
+        }
+        // adapter.writer().flush() catch break :format_;
+        if adapter.flush_buffered().is_err() {
+            break 'format_;
+        }
+        return Result::Success;
+    }
+
+    if adapter.invalid_write {
+        return Result::LimitExceeded;
+    }
+    if adapter.callback_failed {
+        return Result::IoError;
+    }
+    Result::IoError
+}
+
 // pub fn format_buf(formatter_, out_, out_len, out_written) ... Result {
 //     const wrapper = formatter_ orelse return .invalid_value;
 //     var writer: std.Io.Writer = .fixed(if (out_) |out| out[0..out_len] else &.{});
@@ -602,6 +654,7 @@ mod tests {
     use crate::point::{PointC, PointCValue, TagC};
     use crate::test_util::with_test_allocator;
     use rustty_vt::point::Coordinate;
+    use std::ffi::c_void;
 
     // PORT NOTE: the reference test literal
     // `.{ .emit = .plain, .unwrap = false, .trim = true, .extra = .{ ... } }`
@@ -933,6 +986,109 @@ mod tests {
             });
             // try testing.expectEqualStrings("Hello", buf[0..written]);
             assert_eq!(b"Hello", &buf[0..written]);
+
+            unsafe { free(f) };
+            unsafe { terminal_c::free(t) };
+        });
+    }
+
+    // test "format streams to writer" {
+    #[test]
+    fn format_streams_to_writer() {
+        struct Context<'a> {
+            destination: &'a mut [u8],
+            offset: usize,
+            calls: usize,
+        }
+        extern "C" fn write(userdata: *mut c_void, data: *const u8, len: usize) -> bool {
+            let ctx = unsafe { &mut *(userdata as *mut Context<'_>) };
+            if len > ctx.destination.len() - ctx.offset {
+                return false;
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(data, ctx.destination[ctx.offset..].as_mut_ptr(), len)
+            };
+            ctx.offset += len;
+            ctx.calls += 1;
+            true
+        }
+
+        with_test_allocator(|calloc| {
+            // terminal_c.vt_write(t, "Hello\r\nWorld", 12);
+            let (t_new_result, t, f_new_result, f) = setup_plain(
+                calloc,
+                b"Hello\r\nWorld",
+                plain_extra(),
+                Format::Plain,
+                std::ptr::null(),
+            );
+            assert_eq!(Result::Success, t_new_result);
+            assert_eq!(Result::Success, f_new_result);
+
+            let mut buf = [0u8; 1024];
+            let mut context = Context {
+                destination: &mut buf,
+                offset: 0,
+                calls: 0,
+            };
+            assert_eq!(Result::Success, unsafe {
+                format(
+                    f,
+                    crate::io::Writer {
+                        write: Some(write),
+                        userdata: &mut context as *mut Context<'_> as *mut c_void,
+                    },
+                )
+            });
+            assert!(context.calls > 0);
+            let offset = context.offset;
+            assert_eq!(b"Hello\nWorld", &buf[0..offset]);
+
+            unsafe { free(f) };
+            unsafe { terminal_c::free(t) };
+        });
+    }
+
+    // test "format writer errors" {
+    #[test]
+    fn format_writer_errors() {
+        extern "C" fn fail_write(_: *mut c_void, _: *const u8, _: usize) -> bool {
+            false
+        }
+
+        with_test_allocator(|calloc| {
+            assert_eq!(Result::InvalidValue, unsafe {
+                format(
+                    std::ptr::null_mut(),
+                    crate::io::Writer {
+                        write: Some(fail_write),
+                        userdata: std::ptr::null_mut(),
+                    },
+                )
+            });
+
+            let (t_new_result, t, f_new_result, f) = setup_plain(
+                calloc,
+                b"Hello",
+                plain_extra(),
+                Format::Plain,
+                std::ptr::null(),
+            );
+            assert_eq!(Result::Success, t_new_result);
+            assert_eq!(Result::Success, f_new_result);
+
+            assert_eq!(Result::InvalidValue, unsafe {
+                format(f, crate::io::Writer::default())
+            });
+            assert_eq!(Result::IoError, unsafe {
+                format(
+                    f,
+                    crate::io::Writer {
+                        write: Some(fail_write),
+                        userdata: std::ptr::null_mut(),
+                    },
+                )
+            });
 
             unsafe { free(f) };
             unsafe { terminal_c::free(t) };

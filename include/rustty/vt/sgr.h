@@ -319,31 +319,6 @@ RUSTTY_API RusttySgrAttributeTag rustty_sgr_attribute_tag(RusttySgrAttribute att
 RUSTTY_API RusttySgrAttributeValue* rustty_sgr_attribute_value(
     RusttySgrAttribute* attr);
 
-#ifdef __wasm__
-/**
- * Allocate memory for an SGR attribute (WebAssembly only).
- *
- * This is a convenience function for WebAssembly environments to allocate
- * memory for an SGR attribute structure that can be passed to rustty_sgr_next.
- *
- * @return Pointer to the allocated attribute structure
- *
- * @ingroup wasm
- */
-RUSTTY_API RusttySgrAttribute* rustty_wasm_alloc_sgr_attribute(void);
-
-/**
- * Free memory for an SGR attribute (WebAssembly only).
- *
- * Frees memory allocated by rustty_wasm_alloc_sgr_attribute.
- *
- * @param attr Pointer to the attribute structure to free
- *
- * @ingroup wasm
- */
-RUSTTY_API void rustty_wasm_free_sgr_attribute(RusttySgrAttribute* attr);
-#endif
-
 #ifdef __cplusplus
 }
 #endif

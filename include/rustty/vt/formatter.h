@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <rustty/vt/allocator.h>
+#include <rustty/vt/io.h>
 #include <rustty/vt/selection.h>
 #include <rustty/vt/types.h>
 #include <rustty/vt/terminal.h>
@@ -136,6 +137,30 @@ RUSTTY_API RusttyResult rustty_formatter_terminal_new(
     RusttyFormatter* formatter,
     RusttyTerminal terminal,
     RusttyFormatterTerminalOptions options);
+
+/**
+ * Run the formatter and stream output to a writer.
+ *
+ * Each call formats the current terminal state and invokes the writer
+ * synchronously as output becomes available. The callback may be called more
+ * than once and must not call formatter or terminal APIs using the same
+ * formatter or its terminal.
+ *
+ * If an error occurs, the writer may already contain a partial formatted
+ * output. The operation cannot be resumed from that partial output. This
+ * function does not flush or make the caller's destination durable.
+ *
+ * @param formatter The formatter handle (must not be NULL)
+ * @param writer Destination writer whose write callback must not be NULL
+ * @return RUSTTY_SUCCESS on success, RUSTTY_IO_ERROR if the writer rejects
+ *         output, RUSTTY_LIMIT_EXCEEDED if output accounting overflows, or
+ *         RUSTTY_INVALID_VALUE if an argument is invalid
+ *
+ * @ingroup formatter
+ */
+RUSTTY_API RusttyResult rustty_formatter_format(
+    RusttyFormatter formatter,
+    RusttyWriter writer);
 
 /**
  * Run the formatter and produce output into the caller-provided buffer.

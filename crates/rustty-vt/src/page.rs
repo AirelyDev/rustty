@@ -217,6 +217,15 @@ const fn page_size_min_default() -> usize {
     {
         16 << 10
     }
+    // Wasm: the reference's `else => switch (cpu.arch)` arm maps `.wasm32` /
+    // `.wasm64` to the wasm page size (64 KiB) — `memory.grow` operates in whole
+    // 64 KiB pages, and the wasm page pool (`492c26067`,
+    // `rustty_datastruct::wasm_page_pool`) requires `std_size` to be an exact
+    // multiple of it (`Page.layout` aligns `total_size` up to this constant).
+    #[cfg(target_arch = "wasm32")]
+    {
+        64 << 10
+    }
     // Linux: every arch we support uses 4 KiB (aarch64/x86_64/etc.). sparc64 is
     // 8 KiB in the reference but we do not target it.
     #[cfg(all(
@@ -235,6 +244,7 @@ const fn page_size_min_default() -> usize {
         all(target_os = "macos", target_arch = "aarch64"),
         all(target_os = "macos", target_arch = "x86_64"),
         all(target_os = "ios", target_arch = "aarch64"),
+        target_arch = "wasm32",
         all(
             target_os = "linux",
             not(target_arch = "sparc64"),

@@ -50,6 +50,7 @@ use crate::grid_ref_tracked::{CTrackedGridRef, TrackedGridRef};
 use crate::kitty_graphics::KittyGraphics as KittyGraphicsHandle;
 use crate::point::PointC;
 use crate::result::Result;
+use crate::writer::{CountingWriter, FixedWriter};
 use rustty_lib::allocator::Allocator as CAllocator;
 use rustty_lib::String as LibString;
 use rustty_vt::clipboard;
@@ -110,6 +111,24 @@ const MAX_PATH_BYTES: usize = if cfg!(any(
 } else {
     4096
 };
+
+/// C terminals do not retain replay bytes unless the embedding application
+/// opts in through `RUSTTY_TERMINAL_OPT_CONTINUATION_MAX_BYTES`.
+// pub const default_continuation_max_bytes: usize = 0;
+pub const DEFAULT_CONTINUATION_MAX_BYTES: usize = 0;
+
+// pub const Io = struct { ... };
+//
+// PORT NOTE (Bundle S, extends the `io_impl` note below): the reference `Io`
+// owns the `std.Io` implementation retained by every C terminal (TinyIo on
+// POSIX, `std.Io.Threaded` on Windows, failing on freestanding) so snapshot
+// decoding can create it before the native terminal exists and transfer it
+// into the final C wrapper (`fromDecoded` consumes it on every path). rustty
+// has no `std.Io` seam anywhere — the snapshot codec's Rust signatures dropped
+// the `io` parameter entirely (see `rustty_vt::snapshot::codec`'s module PORT
+// NOTE) — so the type, its `init`/`io`/`deinit`, and every transfer edge are
+// structurally N/A. Decision recorded on the TinyIo row of
+// `.port/phase-4/NON_PORTS.md`.
 
 /// Wrapper around ZigTerminal that tracks additional state for C API usage,
 /// such as the persistent VT stream needed to handle escape sequences split
@@ -1166,19 +1185,6 @@ fn new_(
         }
     };
 
-    // const wrapper = alloc.create(TerminalWrapper) catch return error.OutOfMemory;
-    // (errdefer alloc.destroy(t) — the explicit unwind in the Err arm)
-    let wrapper_ptr: *mut TerminalWrapper = match rustty_lib::allocator::create_raw(alloc) {
-        Ok(ptr) => ptr,
-        Err(_) => {
-            // SAFETY: `terminal_ptr` is still uninitialized storage from
-            // `create_raw` above; free it without dropping.
-            unsafe { rustty_lib::allocator::destroy_raw(alloc, terminal_ptr) };
-            drop(unsafe { Box::from_raw(alloc_holder) });
-            return Err(NewError::OutOfMemory);
-        }
-    };
-
     // t.* = try .init(alloc, .{ ... });
     // errdefer t.deinit(alloc);
     // PORT NOTE (F-008 Tier-2 residual): the reference threads `alloc` into
@@ -1208,9 +1214,9 @@ fn new_(
     ) {
         Ok(t) => t,
         Err(_oom) => {
-            // Zig errdefers in reverse order: destroy(wrapper), destroy(t).
-            // SAFETY: both are still uninitialized storage from `create_raw`.
-            unsafe { rustty_lib::allocator::destroy_raw(alloc, wrapper_ptr) };
+            // errdefer alloc.destroy(t);
+            // SAFETY: `terminal_ptr` is still uninitialized storage from
+            // `create_raw`.
             unsafe { rustty_lib::allocator::destroy_raw(alloc, terminal_ptr) };
             drop(unsafe { Box::from_raw(alloc_holder) });
             return Err(NewError::OutOfMemory);
@@ -1228,8 +1234,62 @@ fn new_(
     // SAFETY: `terminal_ptr` is valid uninitialized `ZigTerminal` storage.
     unsafe { std::ptr::write(terminal_ptr, terminal) };
 
-    // Setup our stream with trampolines always installed so that
-    // setting C callbacks at any time takes effect immediately.
+    // return try wrap(alloc, t, io, default_continuation_max_bytes);
+    // (reference errdefers on wrap failure: t.deinit + destroy(t) + io.deinit —
+    // the explicit unwind below; `io` is N/A, see the `Io` PORT NOTE.)
+    match unsafe { wrap(alloc_holder, terminal_ptr, DEFAULT_CONTINUATION_MAX_BYTES) } {
+        Ok(wrapper) => Ok(wrapper),
+        Err(_oom) => {
+            // SAFETY: `terminal_ptr` holds the initialized terminal written
+            // above; deinit + drop it, then return its storage; holder last.
+            unsafe {
+                (*terminal_ptr).deinit(gpa);
+                std::ptr::drop_in_place(terminal_ptr);
+                rustty_lib::allocator::destroy_raw(alloc, terminal_ptr);
+            }
+            drop(unsafe { Box::from_raw(alloc_holder) });
+            Err(NewError::OutOfMemory)
+        }
+    }
+}
+
+/// `error{OutOfMemory}` for `wrap`.
+struct WrapOutOfMemory;
+
+/// Attach the persistent C stream and I/O owner to a heap-stable terminal.
+/// The caller retains ownership of both inputs if wrapper allocation fails.
+// fn wrap(
+//     alloc: std.mem.Allocator,
+//     t: *ZigTerminal,
+//     io: Io,
+//     continuation_max_bytes: usize,
+// ) error{OutOfMemory}!Terminal {
+//
+// PORT NOTE: the `io: Io` owner parameter is N/A (see the `Io` PORT NOTE);
+// rustty's analog of the reference `alloc` parameter is the F-008
+// `alloc_holder` (see `TerminalWrapper.alloc`), whose ownership likewise stays
+// with the caller on failure.
+//
+// # Safety
+// `alloc_holder` must be a live `Box::into_raw` holder; `terminal_ptr` must
+// point to an initialized, heap-stable `ZigTerminal` allocated through it.
+unsafe fn wrap(
+    alloc_holder: *mut dyn rustty_lib::allocator::ZigAllocator,
+    terminal_ptr: *mut ZigTerminal,
+    continuation_max_bytes: usize,
+) -> std::result::Result<Terminal, WrapOutOfMemory> {
+    // SAFETY: `alloc_holder` is live until `free` reclaims it (caller
+    // contract).
+    let alloc: &'static dyn rustty_lib::allocator::ZigAllocator = unsafe { &*alloc_holder };
+
+    // const wrapper = alloc.create(TerminalWrapper) catch return error.OutOfMemory;
+    let wrapper_ptr: *mut TerminalWrapper = match rustty_lib::allocator::create_raw(alloc) {
+        Ok(ptr) => ptr,
+        Err(_) => return Err(WrapOutOfMemory),
+    };
+
+    // Trampolines are always installed so setting C callbacks later takes
+    // effect immediately.
     // var handler: Stream.Handler = t.vtHandler();
     // SB (SOUNDNESS): build the Handler DIRECTLY from the heap box's base raw
     // pointer. Going through `(*terminal_ptr).vt_handler()` would autoref a
@@ -1261,19 +1321,19 @@ fn new_(
 
     // wrapper.* = .{
     //     .terminal = t,
-    //     .io_impl = io_impl,
-    //     .tmp_dir_path = undefined, // Only used if temporary directory is set with API calls
+    //     .io = io,
+    //     .tmp_dir_path = undefined,
+    //     .terminfo_name_buf = undefined,
     //     .stream = Stream.init(.{
     //         .allocator = alloc,
     //         .handler = handler,
+    //         .continuation_max_bytes = continuation_max_bytes,
     //     }),
     // };
     // PORT NOTE (F-008): the C-resolved allocator now backs the OSC parser,
     // exactly like the reference's `Stream.init(.{ .allocator = alloc, ... })` —
     // dynamic OSC growth (e.g. OSC 52 clipboard) goes through the CALLER's
-    // allocator. (68beeeb3f: `initAlloc` became the `Options`-taking `init`;
-    // the C surface passes no continuation cap — `terminal_continuation_*`
-    // is area C's later bundle.)
+    // allocator. (68beeeb3f: `initAlloc` became the `Options`-taking `init`.)
     // SAFETY: `wrapper_ptr` is valid uninitialized `TerminalWrapper` storage.
     unsafe {
         std::ptr::write(
@@ -1288,7 +1348,7 @@ fn new_(
                 stream: Stream::init(rustty_vt::stream::Options {
                     allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(alloc)),
                     handler,
-                    continuation_max_bytes: None,
+                    continuation_max_bytes: Some(continuation_max_bytes),
                 }),
                 effects: Effects::default(),
                 tracked_grid_refs: HashSet::new(),
@@ -1302,6 +1362,192 @@ fn new_(
     // `with_exposed_provenance_mut` — see `wrapper_from_handler`.
     let _ = (wrapper_ptr as *const u8).expose_provenance();
     Ok(wrapper_ptr)
+}
+
+// pub const RestoreContinuationError = error{
+//     OutOfMemory,
+//     ContinuationDisabled,
+//     ContinuationUnavailable,
+//     InvalidContinuation,
+// };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RestoreContinuationError {
+    OutOfMemory,
+    ContinuationDisabled,
+    ContinuationUnavailable,
+    InvalidContinuation,
+}
+
+/// Replay a decoded continuation exactly once into a newly created C terminal
+/// and verify that the persistent stream exports the identical canonical
+/// bytes. The terminal remains valid on error and may be freed normally.
+///
+/// # Safety
+/// `terminal_`, if non-null, must be a live terminal handle.
+pub unsafe fn restore_continuation(
+    terminal_: Terminal,
+    continuation: &[u8],
+) -> std::result::Result<(), RestoreContinuationError> {
+    // const wrapper = terminal_ orelse return error.InvalidContinuation;
+    if terminal_.is_null() {
+        return Err(RestoreContinuationError::InvalidContinuation);
+    }
+    // if (continuation.len > 0) wrapper.stream.nextSlice(continuation);
+    if !continuation.is_empty() {
+        // SAFETY: `terminal_` is a live wrapper (caller contract); the
+        // stream's handler aliases this wrapper's terminal.
+        unsafe { (*terminal_).stream.next_slice(continuation) };
+    }
+
+    // var exported: std.Io.Writer.Allocating = .init(wrapper.terminal.gpa());
+    // defer exported.deinit();
+    // PORT NOTE: the allocating writer maps to a `Vec<u8>` (the crate-wide
+    // `std.Io.Writer.Allocating` treatment); a Vec write cannot fail, so the
+    // reference's `WriteFailed => OutOfMemory` arm is unreachable but kept.
+    let mut exported: Vec<u8> = Vec::new();
+    // wrapper.stream.writeContinuation(&exported.writer) catch |err| switch (err) { ... };
+    // SAFETY: `terminal_` is a live wrapper (caller contract).
+    match unsafe { (*terminal_).stream.write_continuation(&mut exported) } {
+        Ok(()) => {}
+        Err(rustty_vt::stream::WriteContinuationError::WriteFailed(_)) => {
+            return Err(RestoreContinuationError::OutOfMemory)
+        }
+        Err(rustty_vt::stream::WriteContinuationError::ContinuationDisabled) => {
+            return Err(RestoreContinuationError::ContinuationDisabled)
+        }
+        Err(rustty_vt::stream::WriteContinuationError::ContinuationUnavailable) => {
+            return Err(RestoreContinuationError::ContinuationUnavailable)
+        }
+    }
+    // if (!std.mem.eql(u8, continuation, exported.written())) {
+    //     return error.InvalidContinuation;
+    // }
+    if continuation != exported.as_slice() {
+        return Err(RestoreContinuationError::InvalidContinuation);
+    }
+    Ok(())
+}
+
+// pub const FromDecodedError = error{
+//     OutOfMemory,
+//     InvalidContinuation,
+// };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FromDecodedError {
+    OutOfMemory,
+    InvalidContinuation,
+}
+
+/// Transfer a core snapshot result into a caller-owned C terminal.
+///
+/// This function consumes `io` on every path. The decoded terminal is
+/// transferred only after its final heap address has been allocated; its
+/// continuation remains in `decoded` and is replayed before returning.
+/// `continuation_max_bytes` selects the returned terminal's tracking policy:
+/// zero uses a temporary exact-size tracker and restores the ordinary C
+/// default before returning, while a nonzero value leaves tracking enabled
+/// with that limit.
+// pub fn fromDecoded(
+//     alloc: std.mem.Allocator,
+//     io: Io,
+//     decoded: *snapshot_core.Decoded,
+//     continuation_max_bytes: usize,
+// ) FromDecodedError!Terminal {
+//
+// PORT NOTE: the `io: Io` owner parameter (and every `io.deinit(alloc)` unwind
+// arm) is N/A — see the `Io` PORT NOTE. The reference `alloc` is the decoder's
+// resolved allocator; rustty passes the decoder's stored C-allocator COPY and
+// builds a fresh F-008 holder here, so the produced terminal owns its own
+// holder exactly like a `new`-created one (`free` reclaims it).
+///
+/// # Safety
+/// `alloc_`, if provided, must reference a valid `CAllocator`.
+pub unsafe fn from_decoded(
+    alloc_: Option<&CAllocator>,
+    decoded: &mut rustty_vt::snapshot::Decoded,
+    continuation_max_bytes: usize,
+) -> std::result::Result<Terminal, FromDecodedError> {
+    let alloc_holder: *mut dyn rustty_lib::allocator::ZigAllocator =
+        Box::into_raw(rustty_lib::allocator::default(alloc_));
+    // SAFETY: live until `free` (or the unwind arms below) reclaims it.
+    let alloc: &'static dyn rustty_lib::allocator::ZigAllocator = unsafe { &*alloc_holder };
+    let gpa = allocator_api2::alloc::Global;
+
+    // const native = alloc.create(ZigTerminal) catch { io.deinit(alloc); return error.OutOfMemory; };
+    let terminal_ptr: *mut ZigTerminal = match rustty_lib::allocator::create_raw(alloc) {
+        Ok(ptr) => ptr,
+        Err(_) => {
+            drop(unsafe { Box::from_raw(alloc_holder) });
+            return Err(FromDecodedError::OutOfMemory);
+        }
+    };
+    // native.* = decoded.toOwned();
+    // SAFETY: `terminal_ptr` is valid uninitialized `ZigTerminal` storage.
+    unsafe { std::ptr::write(terminal_ptr, decoded.to_owned()) };
+
+    // const continuation = switch (decoded.continuation) {
+    //     .ground => "",
+    //     .bytes => |bytes| bytes,
+    // };
+    let continuation: &[u8] = match &decoded.continuation {
+        rustty_vt::snapshot::Continuation::Ground => b"",
+        rustty_vt::snapshot::Continuation::Bytes(bytes) => bytes,
+    };
+    assert!(continuation_max_bytes == 0 || continuation.len() <= continuation_max_bytes);
+
+    // Without opt-in retention, non-ground state needs tracking only long
+    // enough to verify that replay reconstructed the exact canonical
+    // continuation. With retention, even ground state needs a tracker so its
+    // continuation can be exported successfully as an empty slice.
+    let tracker_max_bytes = if continuation_max_bytes > 0 {
+        continuation_max_bytes
+    } else {
+        continuation.len()
+    };
+    // const terminal = wrap(alloc, native, io, tracker_max_bytes) catch |err| { ... };
+    let terminal = match unsafe { wrap(alloc_holder, terminal_ptr, tracker_max_bytes) } {
+        Ok(terminal) => terminal,
+        Err(_oom) => {
+            // native.deinit(alloc); alloc.destroy(native); io.deinit(alloc);
+            // SAFETY: `terminal_ptr` holds the transferred terminal.
+            unsafe {
+                (*terminal_ptr).deinit(gpa);
+                std::ptr::drop_in_place(terminal_ptr);
+                rustty_lib::allocator::destroy_raw(alloc, terminal_ptr);
+            }
+            drop(unsafe { Box::from_raw(alloc_holder) });
+            return Err(FromDecodedError::OutOfMemory);
+        }
+    };
+    // errdefer free(terminal); — the explicit unwind in the Err arm below.
+
+    if !continuation.is_empty() {
+        // SAFETY: `terminal` is the live wrapper created above.
+        if let Err(err) = unsafe { restore_continuation(terminal, continuation) } {
+            unsafe { free(terminal) };
+            return Err(match err {
+                // The decoded bytes fit this fresh tracker's cap, so losing them
+                // while replaying can only be an allocation failure.
+                RestoreContinuationError::OutOfMemory
+                | RestoreContinuationError::ContinuationUnavailable => {
+                    FromDecodedError::OutOfMemory
+                }
+                RestoreContinuationError::ContinuationDisabled
+                | RestoreContinuationError::InvalidContinuation => {
+                    FromDecodedError::InvalidContinuation
+                }
+            });
+        }
+    }
+
+    // Unless the decoder opted into retention, restore the same disabled
+    // tracking default used by newly created C terminals. Disabling tracking
+    // does not alter the parser or UTF-8 state reconstructed above.
+    if continuation_max_bytes == 0 {
+        // SAFETY: `terminal` is the live wrapper created above.
+        unsafe { set_continuation_max_bytes(terminal, DEFAULT_CONTINUATION_MAX_BYTES) };
+    }
+    Ok(terminal)
 }
 
 // pub fn vt_write(terminal_: Terminal, ptr: [*]const u8, len: usize) ... {
@@ -1321,6 +1567,431 @@ pub unsafe fn vt_write(terminal_: Terminal, ptr: *const u8, len: usize) {
     // contract). The stream's handler aliases this wrapper's terminal.
     let input = unsafe { core::slice::from_raw_parts(ptr, len) };
     unsafe { (*terminal_).stream.next_slice(input) };
+}
+
+// pub fn vt_write_until_ground(
+//     terminal_: Terminal,
+//     ptr_: ?[*]const u8,
+//     len: usize,
+//     out_consumed_: ?*usize,
+// ) callconv(lib.calling_conv) Result {
+/// # Safety
+/// `terminal_`, if non-null, must be a live terminal handle; `ptr_`, if
+/// non-null, must point to `len` readable bytes; `out_consumed_`, if non-null,
+/// must be writable.
+pub unsafe fn vt_write_until_ground(
+    terminal_: Terminal,
+    ptr_: *const u8,
+    len: usize,
+    out_consumed_: *mut usize,
+) -> Result {
+    // const out_consumed = out_consumed_ orelse return .invalid_value;
+    // out_consumed.* = 0;
+    if out_consumed_.is_null() {
+        return Result::InvalidValue;
+    }
+    // SAFETY: `out_consumed_` is non-null and writable (caller contract).
+    unsafe { *out_consumed_ = 0 };
+
+    // const wrapper = terminal_ orelse return .invalid_value;
+    if terminal_.is_null() {
+        return Result::InvalidValue;
+    }
+    // const input: []const u8 = if (ptr_) |ptr| ptr[0..len] else if (len == 0) "" else
+    //     return .invalid_value;
+    let input: &[u8] = if !ptr_.is_null() {
+        // SAFETY: `ptr_[0..len]` is readable (caller contract).
+        unsafe { core::slice::from_raw_parts(ptr_, len) }
+    } else if len == 0 {
+        b""
+    } else {
+        return Result::InvalidValue;
+    };
+
+    // if (wrapper.stream.nextSliceUntilGround(input)) |consumed| { ... }
+    // SAFETY: `terminal_` is a live wrapper; the stream's handler aliases this
+    // wrapper's terminal.
+    if let Some(consumed) = unsafe { (*terminal_).stream.next_slice_until_ground(input) } {
+        unsafe { *out_consumed_ = consumed };
+        return Result::Success;
+    }
+
+    // out_consumed.* = len;
+    unsafe { *out_consumed_ = len };
+    Result::NoValue
+}
+
+// pub const ContinuationWriteError = error{
+//     InvalidValue,
+//     WriteFailed,
+//     ContinuationDisabled,
+//     ContinuationUnavailable,
+// };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContinuationWriteError {
+    InvalidValue,
+    WriteFailed,
+    ContinuationDisabled,
+    ContinuationUnavailable,
+}
+
+/// Write the exact replay-safe continuation for a C terminal to a Zig writer.
+/// Snapshot encoding uses this helper so it can preflight continuation state
+/// without converting its allocator or writer through the C ABI.
+///
+/// # Safety
+/// `terminal_`, if non-null, must be a live terminal handle.
+pub unsafe fn continuation_write_io(
+    terminal_: Terminal,
+    writer: &mut dyn std::io::Write,
+) -> std::result::Result<(), ContinuationWriteError> {
+    // Keep handle validation here so the three public output forms and the
+    // snapshot encoder all use exactly the same continuation preflight.
+    // const wrapper = terminal_ orelse return error.InvalidValue;
+    if terminal_.is_null() {
+        return Err(ContinuationWriteError::InvalidValue);
+    }
+
+    // Stream owns the tracker and distinguishes disabled tracking from a
+    // tracker that lost bytes after allocation failure or limit overflow.
+    // try wrapper.stream.writeContinuation(writer);
+    // SAFETY: `terminal_` is a live wrapper (caller contract).
+    unsafe { (*terminal_).stream.write_continuation(writer) }.map_err(|err| match err {
+        rustty_vt::stream::WriteContinuationError::WriteFailed(_) => {
+            ContinuationWriteError::WriteFailed
+        }
+        rustty_vt::stream::WriteContinuationError::ContinuationDisabled => {
+            ContinuationWriteError::ContinuationDisabled
+        }
+        rustty_vt::stream::WriteContinuationError::ContinuationUnavailable => {
+            ContinuationWriteError::ContinuationUnavailable
+        }
+    })
+}
+
+// pub const ContinuationAllocError = error{
+//     InvalidValue,
+//     OutOfMemory,
+//     ContinuationDisabled,
+//     ContinuationUnavailable,
+// };
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContinuationAllocError {
+    InvalidValue,
+    OutOfMemory,
+    ContinuationDisabled,
+    ContinuationUnavailable,
+}
+
+/// Return an allocator-owned copy of the terminal's replay-safe continuation.
+/// The caller owns the returned bytes.
+///
+/// If `allow_untracked_ground` is true, disabled tracking is accepted only
+/// when the stream is provably at ground and an owned empty slice is returned.
+// pub fn continuationAllocIo(
+//     terminal_: Terminal,
+//     alloc: std.mem.Allocator,
+//     allow_untracked_ground: bool,
+// ) ContinuationAllocError![]u8 {
+//
+// PORT NOTE: the reference returns an `alloc`-owned slice; rustty's snapshot
+// encoder consumes the bytes internally, so the port returns a `Vec<u8>` (the
+// crate-wide `std.Io.Writer.Allocating` treatment) and drops the allocator
+// parameter. The public `continuation_alloc` export below copies through the
+// caller's C allocator itself (the `format_alloc` precedent).
+///
+/// # Safety
+/// `terminal_`, if non-null, must be a live terminal handle.
+pub unsafe fn continuation_alloc_io(
+    terminal_: Terminal,
+    allow_untracked_ground: bool,
+) -> std::result::Result<Vec<u8>, ContinuationAllocError> {
+    // const wrapper = terminal_ orelse return error.InvalidValue;
+    if terminal_.is_null() {
+        return Err(ContinuationAllocError::InvalidValue);
+    }
+    // if (allow_untracked_ground and wrapper.stream.continuation == null and
+    //     wrapper.stream.ground())
+    // { return alloc.dupe(u8, "") catch error.OutOfMemory; }
+    // SAFETY: `terminal_` is a live wrapper (caller contract); shared reads.
+    if allow_untracked_ground
+        && unsafe { (*terminal_).stream.continuation.is_none() }
+        && unsafe { (*terminal_).stream.ground() }
+    {
+        return Ok(Vec::new());
+    }
+
+    // The allocating writer gives snapshot encoding and the public allocation
+    // API one common way to obtain an exact owned continuation.
+    let mut aw: Vec<u8> = Vec::new();
+
+    // A write failure from an Allocating writer can only be allocation failure;
+    // no external callback participates in this path.
+    // SAFETY: `terminal_` is a live wrapper (caller contract).
+    unsafe { continuation_write_io(terminal_, &mut aw) }.map_err(|err| match err {
+        ContinuationWriteError::InvalidValue => ContinuationAllocError::InvalidValue,
+        ContinuationWriteError::WriteFailed => ContinuationAllocError::OutOfMemory,
+        ContinuationWriteError::ContinuationDisabled => ContinuationAllocError::ContinuationDisabled,
+        ContinuationWriteError::ContinuationUnavailable => {
+            ContinuationAllocError::ContinuationUnavailable
+        }
+    })?;
+
+    // Transfer the buffer out before the deferred writer cleanup runs.
+    Ok(aw)
+}
+
+/// Map errors that are intrinsic to continuation export. Public callback
+/// failures receive finer classification in `continuation_write` below.
+fn continuation_error_result(err: ContinuationWriteError) -> Result {
+    match err {
+        ContinuationWriteError::InvalidValue => Result::InvalidValue,
+        ContinuationWriteError::WriteFailed => Result::IoError,
+        ContinuationWriteError::ContinuationDisabled => Result::InvalidValue,
+        ContinuationWriteError::ContinuationUnavailable => Result::InvalidValue,
+    }
+}
+
+// pub fn continuation_write(
+//     terminal_: Terminal,
+//     writer: c_io.Writer,
+// ) callconv(lib.calling_conv) Result {
+/// # Safety
+/// `terminal_`, if non-null, must be a live terminal handle; `writer`'s
+/// callback/userdata contract is the caller's.
+pub unsafe fn continuation_write(terminal_: Terminal, writer: crate::io::Writer) -> Result {
+    // Reject the missing callback before invoking the common helper so this is
+    // classified as a bad argument rather than a write failure.
+    if writer.write.is_none() {
+        return Result::InvalidValue;
+    }
+
+    // The callback was validated above, so invalid_write can only mean output
+    // accounting overflow. Keep that distinct from callback rejection.
+    // var buffer: [c_io.WriterAdapter.recommended_buffer_len]u8 = undefined;
+    // var adapter: c_io.WriterAdapter = .initBuffered(writer, &buffer);
+    let mut adapter = crate::io::WriterAdapter::init_buffered(writer);
+    // write: { ... }
+    let failed = 'write: {
+        // SAFETY: `terminal_` validity is the caller's contract.
+        match unsafe { continuation_write_io(terminal_, &mut adapter) } {
+            Ok(()) => {}
+            Err(ContinuationWriteError::WriteFailed) => break 'write true,
+            Err(err) => return continuation_error_result(err),
+        }
+        if adapter.flush_buffered().is_err() {
+            break 'write true;
+        }
+        return Result::Success;
+    };
+    debug_assert!(failed);
+
+    if adapter.invalid_write {
+        return Result::LimitExceeded;
+    }
+    if adapter.callback_failed {
+        return Result::IoError;
+    }
+    continuation_error_result(ContinuationWriteError::WriteFailed)
+}
+
+// pub fn continuation_buf(
+//     terminal_: Terminal,
+//     out_: ?[*]u8,
+//     out_len: usize,
+//     out_written_: ?*usize,
+// ) callconv(lib.calling_conv) Result {
+/// # Safety
+/// `terminal_`, if non-null, must be a live terminal handle; `out_`, if
+/// non-null, must point to `out_len` writable bytes; `out_written_`, if
+/// non-null, must be writable.
+pub unsafe fn continuation_buf(
+    terminal_: Terminal,
+    out_: *mut u8,
+    out_len: usize,
+    out_written_: *mut usize,
+) -> Result {
+    // const out_written = out_written_ orelse return .invalid_value;
+    if out_written_.is_null() {
+        return Result::InvalidValue;
+    }
+    // All failure paths leave deterministic output metadata.
+    // SAFETY: `out_written_` is non-null and writable (caller contract).
+    unsafe { *out_written_ = 0 };
+    if out_.is_null() && out_len != 0 {
+        return Result::InvalidValue;
+    }
+
+    if out_.is_null() {
+        // A null/zero destination is the explicit size-query form. Discarding
+        // runs the real exporter, so disabled or unavailable tracking is still
+        // detected before a required length is reported.
+        // var discarding: std.Io.Writer.Discarding = .init(&.{});
+        let mut discarding = CountingWriter::new();
+        // SAFETY: `terminal_` validity is the caller's contract.
+        if let Err(err) = unsafe { continuation_write_io(terminal_, &mut discarding) } {
+            return continuation_error_result(err);
+        }
+        unsafe { *out_written_ = discarding.count };
+        return Result::OutOfSpace;
+    }
+
+    // Fixed writers report WriteFailed when capacity is exhausted. The stream
+    // exporter itself remains all-or-nothing from the API's perspective.
+    // var writer: std.Io.Writer = .fixed(out_.?[0..out_len]);
+    // SAFETY: `out_[0..out_len]` is writable (caller contract).
+    let dest = unsafe { core::slice::from_raw_parts_mut(out_, out_len) };
+    let mut writer = FixedWriter::new(dest);
+    // SAFETY: `terminal_` validity is the caller's contract.
+    match unsafe { continuation_write_io(terminal_, &mut writer) } {
+        Ok(()) => {}
+        Err(ContinuationWriteError::WriteFailed) => {
+            // Re-run against a counter to return the full required capacity,
+            // not merely the prefix that fit in the caller's buffer.
+            let mut discarding = CountingWriter::new();
+            // SAFETY: as above.
+            if let Err(count_err) = unsafe { continuation_write_io(terminal_, &mut discarding) } {
+                return continuation_error_result(count_err);
+            }
+            unsafe { *out_written_ = discarding.count };
+            return Result::OutOfSpace;
+        }
+        Err(err) => return continuation_error_result(err),
+    }
+
+    // `end` is the initialized prefix of the fixed destination.
+    unsafe { *out_written_ = writer.end };
+    Result::Success
+}
+
+// pub fn continuation_alloc(
+//     terminal_: Terminal,
+//     alloc_: ?*const CAllocator,
+//     out_ptr_: ?*?[*]u8,
+//     out_len_: ?*usize,
+// ) callconv(lib.calling_conv) Result {
+/// # Safety
+/// `terminal_`, if non-null, must be a live terminal handle; `alloc_`, if
+/// provided, must reference a valid `CAllocator`; `out_ptr_`/`out_len_`, if
+/// non-null, must be writable.
+pub unsafe fn continuation_alloc(
+    terminal_: Terminal,
+    alloc_: Option<&CAllocator>,
+    out_ptr_: *mut *mut u8,
+    out_len_: *mut usize,
+) -> Result {
+    // const out_ptr = out_ptr_ orelse return .invalid_value;
+    // const out_len = out_len_ orelse return .invalid_value;
+    if out_ptr_.is_null() || out_len_.is_null() {
+        return Result::InvalidValue;
+    }
+    // Make ownership unambiguous even if validation or allocation fails.
+    // SAFETY: both outputs are non-null and writable (caller contract).
+    unsafe {
+        *out_ptr_ = std::ptr::null_mut();
+        *out_len_ = 0;
+    }
+
+    // Resolve NULL to librustty-vt's default allocator before entering the
+    // shared Zig allocation path.
+    // SAFETY: `terminal_` validity is the caller's contract.
+    let bytes = match unsafe { continuation_alloc_io(terminal_, false) } {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return match err {
+                ContinuationAllocError::InvalidValue => Result::InvalidValue,
+                ContinuationAllocError::OutOfMemory => Result::OutOfMemory,
+                ContinuationAllocError::ContinuationDisabled => Result::InvalidValue,
+                ContinuationAllocError::ContinuationUnavailable => Result::InvalidValue,
+            }
+        }
+    };
+
+    // Ownership crosses the ABI here; callers release this exact pointer and
+    // length with rustty_free and the same allocator selection.
+    // PORT NOTE: the reference's allocating writer already produced the bytes
+    // in the caller allocator; the port copies the `Vec` through it (the
+    // `format_alloc` precedent) so the ownership contract is identical.
+    let allocator = rustty_lib::allocator::default(alloc_);
+    let len = bytes.len();
+    let dst = allocator.alloc(len, rustty_lib::allocator::Alignment::from_byte_units(1), 0);
+    if dst.is_null() && len != 0 {
+        return Result::OutOfMemory;
+    }
+    if len != 0 {
+        // SAFETY: `dst` is `len` freshly allocated bytes; `bytes` holds `len`
+        // initialized bytes.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, len) };
+    }
+    unsafe {
+        *out_ptr_ = dst;
+        *out_len_ = len;
+    }
+    Result::Success
+}
+
+// fn continuationMaxBytes(wrapper: *const TerminalWrapper) usize {
+/// # Safety
+/// `wrapper` must be a live terminal wrapper pointer.
+unsafe fn continuation_max_bytes(wrapper: *const TerminalWrapper) -> usize {
+    // Absence of a tracker is the public representation of disabled tracking.
+    // SAFETY: `wrapper` is live (caller contract); shared read of its stream.
+    match unsafe { (*wrapper).stream.continuation.as_ref() } {
+        Some(tracker) => tracker.max_bytes,
+        None => 0,
+    }
+}
+
+/// Change continuation tracking policy without disturbing normal VT parser
+/// state. Bytes which were not retained while disabled or after exceeding an
+/// earlier cap cannot be reconstructed: export remains unavailable until a
+/// later feed reaches ground or contains a new replay start.
+// fn setContinuationMaxBytes(wrapper: *TerminalWrapper, max_bytes: usize) void {
+/// # Safety
+/// `wrapper` must be a live terminal wrapper pointer.
+unsafe fn set_continuation_max_bytes(wrapper: *mut TerminalWrapper, max_bytes: usize) {
+    if max_bytes == 0 {
+        // Disabling releases retained bytes immediately. Parser and UTF-8 state
+        // continue normally; only future replay/export information is lost.
+        // if (wrapper.stream.continuation) |*tracker| tracker.deinit();
+        // wrapper.stream.continuation = null;
+        // SAFETY: `wrapper` is live (caller contract).
+        unsafe {
+            if let Some(tracker) = (*wrapper).stream.continuation.as_mut() {
+                tracker.deinit();
+            }
+            (*wrapper).stream.continuation = None;
+        }
+        return;
+    }
+
+    // SAFETY: `wrapper` is live (caller contract).
+    if let Some(tracker) = unsafe { (*wrapper).stream.continuation.as_mut() } {
+        // Changing a live cap preserves retained bytes when they still fit.
+        tracker.max_bytes = max_bytes;
+        if tracker.bytes.len() > max_bytes {
+            // Once a retained prefix is discarded it cannot be reconstructed
+            // from parser state alone. Mark it broken until Stream observes a
+            // ground state or a new replay-safe sequence start.
+            tracker.bytes.clear();
+            tracker.broken = true;
+        }
+        return;
+    }
+
+    // Enabling from zero starts an empty tracker owned by the terminal's
+    // allocator. It can immediately track only if no earlier bytes are needed.
+    // wrapper.stream.continuation = .init(wrapper.terminal.gpa(), max_bytes);
+    // SAFETY: `wrapper` is live (caller contract).
+    unsafe {
+        (*wrapper).stream.continuation =
+            Some(rustty_vt::stream_continuation::Tracker::init(max_bytes));
+        if !(*wrapper).stream.ground() {
+            // The parser was already mid-sequence while tracking was disabled, so
+            // exporting now would omit an unknown prefix.
+            (*wrapper).stream.continuation.as_mut().unwrap().broken = true;
+        }
+    }
 }
 
 // pub fn compression_activity(terminal_: Terminal, out_activity_: ?*u64) ... Result {
@@ -1438,9 +2109,8 @@ pub enum Option_ {
     DesktopNotification = 29,
     /// Input type: `ProgressReportFn` (oracle 47d602c42).
     ProgressReport = 30,
-    // continuation_max_bytes = 31,
-    //   ^ DEFERRED (Bundle S): rides the snapshot/continuation C surface
-    //     (d7bb4b863); the discriminant is reserved.
+    /// Input type: `*const usize` (oracle d7bb4b863).
+    ContinuationMaxBytes = 31,
     /// Input type: `*const bool` (oracle 38e891e6c).
     TitleReport = 32,
     /// Input type: `*const ModeConfig` (oracle cfc19e805).
@@ -1482,6 +2152,7 @@ pub enum Option_ {
     //         .apc_max_bytes_kitty,
     //         .scrollback_max_bytes,
     //         .scrollback_max_lines,
+    //         .continuation_max_bytes,
     //         .unknown_max_bytes,
     //         => ?*const usize,
     //         .selection => ?*const selection_c.CSelection,
@@ -1496,7 +2167,6 @@ pub enum Option_ {
     // boundary and reads it back as the per-arm type inside `set_typed`, so this
     // comptime projection has no Rust analog; it is preserved verbatim as the
     // reference contract for each arm's expected pointee type.
-    // (`.continuation_max_bytes => ?*const usize` rides Bundle S.)
 }
 
 // pub fn set(terminal_: Terminal, option: Option, value: ?*const anyopaque) ... {
@@ -2139,6 +2809,22 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             unsafe { (*t).set_scrollback_max_lines(max) };
         }
 
+        // .continuation_max_bytes => setContinuationMaxBytes(
+        //     wrapper,
+        //     if (value) |ptr| ptr.* else default_continuation_max_bytes,
+        // ),
+        Option_::ContinuationMaxBytes => {
+            let ptr = value as *const usize;
+            let max_bytes = if !ptr.is_null() {
+                // SAFETY: `value` points to a readable `usize` (caller contract).
+                unsafe { *ptr }
+            } else {
+                DEFAULT_CONTINUATION_MAX_BYTES
+            };
+            // SAFETY: `terminal_` is a live wrapper (caller contract).
+            unsafe { set_continuation_max_bytes(terminal_, max_bytes) };
+        }
+
         // .unknown_max_bytes => wrapper.stream.handler.apc_handler.unknown_max_bytes =
         //     if (value) |ptr| ptr.* else 0,
         Option_::UnknownMaxBytes => {
@@ -2555,14 +3241,12 @@ pub enum TerminalData {
     VtProcessingError = 33,
     ScrollbackMaxBytes = 34,
     ScrollbackMaxLines = 35,
-    // continuation_max_bytes = 36,
-    //   ^ DEFERRED (Bundle S): rides the snapshot/continuation C surface
-    //     (d7bb4b863); the discriminant is reserved.
+    /// Output type: `usize` (oracle d7bb4b863).
+    ContinuationMaxBytes = 36,
     /// Output type: `ModeConfig` (input/output — oracle cfc19e805).
     Mode = 37,
-    // vt_ground = 38,
-    //   ^ DEFERRED (Bundle S): rides a69a591af's ground-state C API; the
-    //     discriminant is reserved.
+    /// Output type: `bool` (oracle a69a591af).
+    VtGround = 38,
     /// Output type: `bool` (oracle bdb566068).
     CursorAtPrompt = 39,
     // /// Output type expected for querying the data of the given kind.
@@ -2575,7 +3259,7 @@ pub enum TerminalData {
     //         .mouse_tracking,
     //         .viewport_active,
     //         .vt_processing_error,
-    //         .vt_ground,          (DEFERRED: Bundle S)
+    //         .vt_ground,
     //         .cursor_at_prompt,
     //         => bool,
     //         .active_screen => TerminalScreen,
@@ -2587,6 +3271,7 @@ pub enum TerminalData {
     //         .scrollback_rows,
     //         .scrollback_max_bytes,
     //         .scrollback_max_lines,
+    //         .continuation_max_bytes,
     //         => usize,
     //         .width_px, .height_px => u32,
     //         .color_foreground,
@@ -2633,10 +3318,11 @@ const _: () = assert!(std::mem::size_of::<TerminalData>() == std::mem::size_of::
 // holes are rejected explicitly. The MECHANISM stays even though the list is
 // now empty: 36+ may reopen a hole, and re-deriving it from scratch under time
 // pressure is exactly how that UB gets reintroduced.
-// Bundle M reopened the holes: 36 (`continuation_max_bytes`) and 38
-// (`vt_ground`) are reserved for Bundle S's snapshot/continuation surface.
+// Bundle M reopened the holes at 36/38; Bundle S closed them again
+// (`continuation_max_bytes` = 36, `vt_ground` = 38) — the list is empty but
+// the MECHANISM stays.
 const TERMINAL_DATA_MAX: c_int = 39;
-const TERMINAL_DATA_HOLES: &[c_int] = &[36, 38];
+const TERMINAL_DATA_HOLES: &[c_int] = &[];
 
 impl TerminalData {
     /// Narrow an inbound C integer to a `TerminalData`, mirroring
@@ -2839,6 +3525,18 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
             }
             unsafe { *(out as *mut usize) = max };
         }
+
+        // .continuation_max_bytes => out.* = continuationMaxBytes(wrapper),
+        TerminalData::ContinuationMaxBytes => {
+            // SAFETY: `terminal_` is a live wrapper (caller contract); `out`
+            // points to a writable `usize`.
+            unsafe { *(out as *mut usize) = continuation_max_bytes(terminal_) };
+        }
+
+        // .vt_ground => out.* = wrapper.stream.ground(),
+        TerminalData::VtGround => unsafe {
+            *(out as *mut bool) = (*terminal_).stream.ground()
+        },
 
         // .mode => {
         //     const mode = out.toMode() orelse return .invalid_value;
@@ -3487,6 +4185,353 @@ mod tests {
                 new(alloc as *const CAllocator, &mut t, 80, 0)
             });
             assert!(t.is_null());
+        });
+    }
+
+    // fn testEnableContinuation(terminal: Terminal) !void {
+    fn test_enable_continuation(terminal: Terminal) {
+        let limit: usize = 1024;
+        assert_eq!(Result::Success, unsafe {
+            set(
+                terminal,
+                Option_::ContinuationMaxBytes,
+                &limit as *const usize as *const c_void,
+            )
+        });
+    }
+
+    // test "continuation option and data"
+    #[test]
+    fn continuation_option_and_data() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+
+            let mut value: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ContinuationMaxBytes,
+                    &mut value as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(DEFAULT_CONTINUATION_MAX_BYTES, value);
+
+            let custom: usize = 1234;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ContinuationMaxBytes,
+                    &custom as *const usize as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ContinuationMaxBytes,
+                    &mut value as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(custom, value);
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ContinuationMaxBytes, std::ptr::null())
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ContinuationMaxBytes,
+                    &mut value as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(DEFAULT_CONTINUATION_MAX_BYTES, value);
+
+            let disabled: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ContinuationMaxBytes,
+                    &disabled as *const usize as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ContinuationMaxBytes,
+                    &mut value as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(0usize, value);
+
+            let mut written: usize = 99;
+            assert_eq!(Result::InvalidValue, unsafe {
+                continuation_buf(t, std::ptr::null_mut(), 0, &mut written)
+            });
+            assert_eq!(0usize, written);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "continuation buffer and allocator export exact suffix"
+    #[test]
+    fn continuation_buffer_and_allocator_export_exact_suffix() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            test_enable_continuation(t);
+
+            vtw(t, b"A\x1b[31");
+
+            let mut required: usize = 0;
+            assert_eq!(Result::OutOfSpace, unsafe {
+                continuation_buf(t, std::ptr::null_mut(), 0, &mut required)
+            });
+            assert_eq!(4usize, required);
+
+            let mut short = [0u8; 2];
+            assert_eq!(Result::OutOfSpace, unsafe {
+                continuation_buf(t, short.as_mut_ptr(), short.len(), &mut required)
+            });
+            assert_eq!(4usize, required);
+
+            let mut buf = [0u8; 8];
+            let mut written: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                continuation_buf(t, buf.as_mut_ptr(), buf.len(), &mut written)
+            });
+            assert_eq!(b"\x1b[31", &buf[..written]);
+
+            let mut out_ptr: *mut u8 = std::ptr::null_mut();
+            let mut out_len: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                continuation_alloc(t, Some(alloc), &mut out_ptr, &mut out_len)
+            });
+            assert!(!out_ptr.is_null());
+            // SAFETY: `out_ptr[0..out_len]` is the allocation returned above.
+            assert_eq!(b"\x1b[31", unsafe {
+                core::slice::from_raw_parts(out_ptr, out_len)
+            });
+            // defer lib.alloc.default(&test_allocator).free(allocated[0..out_len]);
+            rustty_lib::allocator::default(Some(alloc)).free(
+                rustty_lib::allocator::ZigSlice::new(out_ptr, out_len),
+                rustty_lib::allocator::Alignment::from_byte_units(1),
+                0,
+            );
+
+            vtw(t, b"m");
+            assert_eq!(Result::OutOfSpace, unsafe {
+                continuation_buf(t, std::ptr::null_mut(), 0, &mut required)
+            });
+            assert_eq!(0usize, required);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "continuation export tracks split UTF-8"
+    #[test]
+    fn continuation_export_tracks_split_utf8() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            test_enable_continuation(t);
+
+            let prefix = [0xF0u8, 0x9F];
+            vtw(t, &prefix);
+
+            let mut buf = [0u8; 4];
+            let mut written: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                continuation_buf(t, buf.as_mut_ptr(), buf.len(), &mut written)
+            });
+            assert_eq!(&prefix[..], &buf[..written]);
+
+            let suffix = [0x98u8, 0x80];
+            vtw(t, &suffix);
+            assert_eq!(Result::OutOfSpace, unsafe {
+                continuation_buf(t, std::ptr::null_mut(), 0, &mut written)
+            });
+            assert_eq!(0usize, written);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "continuation callback writer reports success and failure"
+    #[test]
+    fn continuation_callback_writer_reports_success_and_failure() {
+        struct Sink {
+            bytes: [u8; 8],
+            len: usize,
+        }
+        extern "C" fn sink_write(userdata: *mut c_void, data: *const u8, len: usize) -> bool {
+            let sink = unsafe { &mut *(userdata as *mut Sink) };
+            if len > sink.bytes.len() - sink.len {
+                return false;
+            }
+            unsafe {
+                std::ptr::copy_nonoverlapping(data, sink.bytes[sink.len..].as_mut_ptr(), len)
+            };
+            sink.len += len;
+            true
+        }
+        extern "C" fn sink_fail(_: *mut c_void, _: *const u8, _: usize) -> bool {
+            false
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            test_enable_continuation(t);
+            vtw(t, b"\x1b[31");
+
+            let mut sink = Sink {
+                bytes: [0; 8],
+                len: 0,
+            };
+            assert_eq!(Result::Success, unsafe {
+                continuation_write(
+                    t,
+                    crate::io::Writer {
+                        write: Some(sink_write),
+                        userdata: &mut sink as *mut Sink as *mut c_void,
+                    },
+                )
+            });
+            assert_eq!(b"\x1b[31", &sink.bytes[..sink.len]);
+
+            assert_eq!(Result::IoError, unsafe {
+                continuation_write(
+                    t,
+                    crate::io::Writer {
+                        write: Some(sink_fail),
+                        userdata: std::ptr::null_mut(),
+                    },
+                )
+            });
+            assert_eq!(Result::InvalidValue, unsafe {
+                continuation_write(t, crate::io::Writer::default())
+            });
+            assert_eq!(Result::InvalidValue, unsafe {
+                continuation_write(
+                    std::ptr::null_mut(),
+                    crate::io::Writer {
+                        write: Some(sink_fail),
+                        userdata: std::ptr::null_mut(),
+                    },
+                )
+            });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "continuation runtime reconfiguration recovers safely"
+    #[test]
+    fn continuation_runtime_reconfiguration_recovers_safely() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+
+            let enough: usize = 8;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ContinuationMaxBytes,
+                    &enough as *const usize as *const c_void,
+                )
+            });
+            vtw(t, b"\x1b[123");
+            let too_small: usize = 2;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ContinuationMaxBytes,
+                    &too_small as *const usize as *const c_void,
+                )
+            });
+
+            let mut written: usize = 99;
+            assert_eq!(Result::InvalidValue, unsafe {
+                continuation_buf(t, std::ptr::null_mut(), 0, &mut written)
+            });
+            assert_eq!(0usize, written);
+
+            // Raising the limit cannot reconstruct discarded bytes, but a new ESC is
+            // a complete replay start and repairs tracking without first grounding.
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ContinuationMaxBytes,
+                    &enough as *const usize as *const c_void,
+                )
+            });
+            vtw(t, b"\x1b[");
+            let mut buf = [0u8; 8];
+            assert_eq!(Result::Success, unsafe {
+                continuation_buf(t, buf.as_mut_ptr(), buf.len(), &mut written)
+            });
+            assert_eq!(b"\x1b[", &buf[..written]);
+
+            let disabled: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ContinuationMaxBytes,
+                    &disabled as *const usize as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ContinuationMaxBytes,
+                    &enough as *const usize as *const c_void,
+                )
+            });
+            assert_eq!(Result::InvalidValue, unsafe {
+                continuation_buf(t, std::ptr::null_mut(), 0, &mut written)
+            });
+
+            // Completing the sequence reaches ground and resets the broken marker.
+            vtw(t, b"m");
+            assert_eq!(Result::OutOfSpace, unsafe {
+                continuation_buf(t, std::ptr::null_mut(), 0, &mut written)
+            });
+            assert_eq!(0usize, written);
+            unsafe { free(t) };
+        });
+    }
+
+    // test "continuation internal allocation and restoration"
+    #[test]
+    fn continuation_internal_allocation_and_restoration() {
+        with_test_allocator(|alloc| {
+            let (new_result, source) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            test_enable_continuation(source);
+            vtw(source, b"\x1b[31");
+
+            // const alloc = lib.alloc.default(&lib.alloc.test_allocator);
+            // const bytes = try continuationAllocIo(source, alloc, false);
+            // (rustty: the internal helper returns a `Vec` — see its PORT NOTE.)
+            let bytes = unsafe { continuation_alloc_io(source, false) }.unwrap();
+            assert_eq!(b"\x1b[31", bytes.as_slice());
+
+            let (new_result, restored) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            test_enable_continuation(restored);
+            unsafe { restore_continuation(restored, &bytes) }.unwrap();
+
+            let reexported = unsafe { continuation_alloc_io(restored, false) }.unwrap();
+            assert_eq!(bytes, reexported);
+
+            let (new_result, invalid) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            test_enable_continuation(invalid);
+            assert_eq!(
+                Err(RestoreContinuationError::InvalidContinuation),
+                unsafe { restore_continuation(invalid, b"A") }
+            );
+            unsafe { free(invalid) };
+            unsafe { free(restored) };
+            unsafe { free(source) };
         });
     }
 
@@ -4515,6 +5560,167 @@ mod tests {
             unsafe { vt_write(t, b"Hello".as_ptr(), 5) };
 
             assert_eq!(b"Hello", plain_string(t).as_slice());
+            unsafe { free(t) };
+        });
+    }
+
+    // test "vt_write_until_ground result contract"
+    #[test]
+    fn vt_write_until_ground_result_contract() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+
+            // Input remains untouched when the stream is already at ground.
+            let mut consumed: usize = 99;
+            let untouched = b"unprocessed";
+            assert_eq!(Result::Success, unsafe {
+                vt_write_until_ground(t, untouched.as_ptr(), untouched.len(), &mut consumed)
+            });
+            assert_eq!(0usize, consumed);
+
+            // Complete a split CSI and stop before inspecting the printable suffix.
+            vtw(t, b"\x1b[31");
+            let input = b"mABC\x1b[";
+            assert_eq!(Result::Success, unsafe {
+                vt_write_until_ground(t, input.as_ptr(), input.len(), &mut consumed)
+            });
+            assert_eq!(1usize, consumed);
+            assert!(unsafe { (*t).stream.ground() });
+
+            assert_eq!(b"", plain_string(t).as_slice());
+
+            // The untouched suffix can be processed after work at the boundary.
+            unsafe { vt_write(t, input.as_ptr().add(consumed), input.len() - consumed) };
+            assert_eq!(b"ABC", plain_string(t).as_slice());
+            assert!(!unsafe { (*t).stream.ground() });
+
+            // Exhausting input while unfinished is distinct from reaching ground on
+            // the final byte, even though both consume the entire input.
+            assert_eq!(Result::NoValue, unsafe {
+                vt_write_until_ground(t, b"123".as_ptr(), 3, &mut consumed)
+            });
+            assert_eq!(3usize, consumed);
+            assert!(!unsafe { (*t).stream.ground() });
+
+            assert_eq!(Result::Success, unsafe {
+                vt_write_until_ground(t, b"m".as_ptr(), 1, &mut consumed)
+            });
+            assert_eq!(1usize, consumed);
+            assert!(unsafe { (*t).stream.ground() });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "vt_write_until_ground handles UTF-8 and abort boundaries"
+    #[test]
+    fn vt_write_until_ground_handles_utf8_and_abort_boundaries() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+
+            let mut ground = false;
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::VtGround, &mut ground as *mut bool as *mut c_void)
+            });
+            assert!(ground);
+
+            vtw(t, &[0xF0]);
+            assert_eq!(Result::Success, unsafe {
+                get(t, TerminalData::VtGround, &mut ground as *mut bool as *mut c_void)
+            });
+            assert!(!ground);
+
+            let utf8_suffix = [0x9Fu8, 0x98, 0x84];
+            let mut consumed: usize = 99;
+            assert_eq!(Result::Success, unsafe {
+                vt_write_until_ground(t, utf8_suffix.as_ptr(), utf8_suffix.len(), &mut consumed)
+            });
+            assert_eq!(utf8_suffix.len(), consumed);
+            assert!(unsafe { (*t).stream.ground() });
+
+            // A malformed continuation resets the decoder and reaches ground after
+            // processing the retry byte.
+            vtw(t, &[0xE0, 0xA0]);
+            assert_eq!(Result::Success, unsafe {
+                vt_write_until_ground(t, b"A".as_ptr(), 1, &mut consumed)
+            });
+            assert_eq!(1usize, consumed);
+            assert!(unsafe { (*t).stream.ground() });
+
+            vtw(t, b"\x1b[123");
+            assert_eq!(Result::Success, unsafe {
+                vt_write_until_ground(t, [0x18u8].as_ptr(), 1, &mut consumed)
+            });
+            assert_eq!(1usize, consumed);
+            assert!(unsafe { (*t).stream.ground() });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "vt_write_until_ground invokes effects only for consumed input"
+    #[test]
+    fn vt_write_until_ground_invokes_effects_only_for_consumed_input() {
+        static mut UG_BELL_COUNT: usize = 0;
+        extern "C" fn bell(_t: Terminal, _ud: *mut c_void) {
+            unsafe { UG_BELL_COUNT += 1 };
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+
+            unsafe { UG_BELL_COUNT = 0 };
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::Bell, bell as *const c_void)
+            });
+
+            vtw(t, b"\x1b[31");
+            let input = b"m\x07";
+            let mut consumed: usize = 99;
+            assert_eq!(Result::Success, unsafe {
+                vt_write_until_ground(t, input.as_ptr(), input.len(), &mut consumed)
+            });
+            assert_eq!(1usize, consumed);
+            assert_eq!(0usize, unsafe { UG_BELL_COUNT });
+
+            unsafe { vt_write(t, input.as_ptr().add(consumed), input.len() - consumed) };
+            assert_eq!(1usize, unsafe { UG_BELL_COUNT });
+            unsafe { free(t) };
+        });
+    }
+
+    // test "vt_write_until_ground validates arguments"
+    #[test]
+    fn vt_write_until_ground_validates_arguments() {
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+
+            let mut consumed: usize = 99;
+            assert_eq!(Result::InvalidValue, unsafe {
+                vt_write_until_ground(std::ptr::null_mut(), b"x".as_ptr(), 1, &mut consumed)
+            });
+            assert_eq!(0usize, consumed);
+
+            consumed = 99;
+            assert_eq!(Result::InvalidValue, unsafe {
+                vt_write_until_ground(t, std::ptr::null(), 1, &mut consumed)
+            });
+            assert_eq!(0usize, consumed);
+
+            assert_eq!(Result::InvalidValue, unsafe {
+                vt_write_until_ground(t, b"".as_ptr(), 0, std::ptr::null_mut())
+            });
+
+            // NULL represents a valid empty slice. While unfinished it consumes zero
+            // bytes and reports that no ground boundary was found.
+            vtw(t, b"\x1b[");
+            consumed = 99;
+            assert_eq!(Result::NoValue, unsafe {
+                vt_write_until_ground(t, std::ptr::null(), 0, &mut consumed)
+            });
+            assert_eq!(0usize, consumed);
             unsafe { free(t) };
         });
     }

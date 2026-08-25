@@ -80,7 +80,10 @@ const MASKS: [Unit; UNIT_BITS] = {
 pub struct Tabstops<A: Allocator = Global> {
     /// The number of columns this tabstop is set to manage. Use resize()
     /// to change this number.
-    cols: usize,
+    // PORT NOTE: `pub(crate)` — the snapshot TERMINAL codec reads this field
+    // to validate a tab-stop set against its header (and one of its tests
+    // writes it directly, as the reference does; Zig has no field privacy).
+    pub(crate) cols: usize,
 
     /// Preallocated tab stops.
     prealloc_stops: [Unit; PREALLOC_COUNT],
