@@ -77,6 +77,7 @@ const MAX_SIZE: usize = 400 * 1024 * 1024; // 400MB
 /// `OutOfMemory` variant carries the implicit `Allocator.Error`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
+    InsufficientData,
     InvalidData,
     DecompressionFailed,
     DimensionsRequired,
@@ -107,6 +108,12 @@ pub struct LoadingImage {
     /// so that we display the image after it is fully loaded.
     pub display: Option<command::Display>,
 
+    /// This is non-null when this load is an animation frame
+    /// transmission (a=f) rather than a new image. On completion the
+    /// data is composed into the target image's animation instead of
+    /// being stored as an image.
+    pub frame: Option<FrameContext>,
+
     /// Quiet is the quiet settings for the initial load command. This is
     /// used if q isn't set on subsequent chunks.
     pub quiet: command::Quiet,
@@ -124,6 +131,24 @@ pub struct LoadingImage {
     // infect `ImageStorage`, `Screen` and `Terminal` with a lifetime parameter
     // for no observable gain. Byte-slice rule: `Vec<u8>`, never `String`.
     pub temporary_directory: Option<Vec<u8>>,
+}
+
+/// PORT NOTE: nested `pub const FrameContext = struct { ... }` inside
+/// `LoadingImage`; hoisted to module level (the `SharedMemoryRange`
+/// precedent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FrameContext {
+    /// The frame parameters from the initial a=f command. Chunked
+    /// continuations only contribute payload bytes; all parameters
+    /// come from the command that started the load, matching the
+    /// protocol's requirement that chunks repeat a=f.
+    pub cmd: command::AnimationFrameLoading,
+
+    /// The generation of the target image when the load began.
+    /// A different generation at completion means the image was
+    /// replaced or evicted mid-transmission and the frame must be
+    /// discarded rather than composed onto the wrong image.
+    pub image_generation: u64,
 }
 
 /// PORT NOTE (oracle `e8525c0fd`): the reference's anonymous
@@ -226,7 +251,13 @@ impl LoadingImage {
 
             data: Vec::new(),
             display: cmd.display(),
+            frame: None,
             quiet: cmd.quiet,
+            // .response = .{
+            //     .id = t.image_id,
+            //     .image_number = t.image_number,
+            //     .placement_id = t.placement_id,
+            // },
             response: command::Response {
                 id: t.image_id,
                 image_number: t.image_number,
@@ -771,11 +802,24 @@ impl LoadingImage {
             return Err(Error::DimensionsTooLarge);
         }
 
-        // Data length must be what we expect
+        // Data length must be what we expect.
         let bpp = command::Transmission::format_bpp(self.image.format) as usize;
         let expected_len = self.image.width as usize * self.image.height as usize * bpp;
         let actual_len = self.data.len();
-        if actual_len != expected_len {
+        if self.frame.is_some() {
+            // Kitty allows animation frames to exceed their expected length
+            // and just truncates it. Not sure if thats expected but lets
+            // allow it too.
+            if actual_len < expected_len {
+                // std.log.warn(
+                //     "insufficient frame data image id={} expected_len={} actual_len={}",
+                //     .{ img.id, expected_len, actual_len },
+                // );
+                return Err(Error::InsufficientData);
+            }
+            // self.data.items.len = expected_len;
+            self.data.truncate(expected_len);
+        } else if actual_len != expected_len {
             // std.log.warn(
             //     "unexpected length image id={} width={} height={} bpp={} expected_len={} actual_len={}",
             //     .{ img.id, img.width, img.height, bpp, expected_len, actual_len },
@@ -960,9 +1004,31 @@ pub struct Image {
     /// have changed, even if the dimensions and byte length are the
     /// same (e.g. a retransmission of the same ID). Stamps order by
     /// transmission time. Zero means "never stored".
+    ///
+    /// For animated images this also changes whenever the frame that
+    /// should be displayed changes (advance, edit, or delete of the
+    /// current frame), since consumers key texture caches off it.
     //
     // PORT NOTE: replaces the pre-`bdc0b6c19` `transmit_time: std.time.Instant`.
     pub generation: u64,
+
+    /// Animation state, non-null once any animation command (a=f,
+    /// a=a) has attached animation state to this image. Owned by the
+    /// image; replaced/retransmitted images drop it, which implements
+    /// the protocol's "retransmission resets the animation" rule.
+    ///
+    /// This is only ever attached to images stored in an ImageStorage
+    /// and must only be mutated through the storage's own pointer
+    /// (Image values are copied around freely; copies share this
+    /// pointer and never own it).
+    //
+    // PORT NOTE: the reference is `?*animation.Animation` — a raw heap
+    // pointer shared by Image value-copies and freed once by the stored
+    // image's `deinit`. Rustty's `Image` clones already deep-copy the pixel
+    // `data`, so this is `Option<Box<Animation>>` under the same sanctioned
+    // shape: `Drop` frees it at every removal site and clones deep-copy —
+    // observably identical for every read (see graphics_animation.rs).
+    pub animation: Option<Box<crate::kitty::graphics_animation::Animation>>,
 }
 
 /// PORT NOTE: the reference is an anonymous `metadata: packed struct(u32) {
@@ -1059,16 +1125,97 @@ impl Default for Image {
             data: Data::Complete(Vec::new()),
             metadata: Metadata::default(),
             generation: 0,
+            animation: None,
+        }
+    }
+}
+
+/// Borrowed view of an image's displayable [`Data`], returned by
+/// [`Image::render_data`].
+//
+// PORT NOTE: the reference `renderData` returns the `Data` union BY VALUE —
+// in Zig a cheap slice share. Rustty's `Data` owns its bytes, so returning it
+// would deep-copy the pixels; this borrowed mirror carries the same two arms
+// and the same `bytes()` accessor the consumers use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderData<'a> {
+    Complete(&'a [u8]),
+    Pending(usize),
+}
+
+impl<'a> RenderData<'a> {
+    /// Returns decoded bytes when the payload is complete (the borrowed
+    /// mirror of [`Data::bytes`]).
+    pub fn bytes(&self) -> Option<&'a [u8]> {
+        match self {
+            RenderData::Complete(data) => Some(data),
+            RenderData::Pending(_) => None,
         }
     }
 }
 
 impl Image {
-    // PORT NOTE: `deinit` forwards to `self.data.deinit(alloc)`; Rust drops the
-    // owning `Data` automatically.
+    // PORT NOTE: `deinit` forwards to `self.data.deinit(alloc)` and frees
+    // `self.animation` (`anim.deinit(alloc); alloc.destroy(anim)`); Rust drops
+    // the owning `Data` and `Option<Box<Animation>>` automatically.
     // pub fn deinit(self: *Image, alloc: Allocator) void {
     //     self.data.deinit(alloc);
+    //     if (self.animation) |anim| {
+    //         anim.deinit(alloc);
+    //         alloc.destroy(anim);
+    //         self.animation = null;
+    //     }
     // }
+
+    /// The pixel data that should be displayed for this image. For an
+    /// animated image this is the current animation frame; otherwise
+    /// (and for the root frame) it is the image's own data.
+    pub fn render_data(&self) -> RenderData<'_> {
+        if let Some(anim) = &self.animation {
+            if anim.current_index > 0 {
+                return RenderData::Complete(&anim.frames[(anim.current_index - 1) as usize].data);
+            }
+        }
+
+        match &self.data {
+            Data::Complete(data) => RenderData::Complete(data),
+            Data::Pending(expected_len) => RenderData::Pending(*expected_len),
+        }
+    }
+
+    /// The pixel data of the given 1-based animation frame number, or
+    /// null if the frame doesn't exist. Frame 1 (the root frame)
+    /// always exists as long as the image data is complete, even for
+    /// images without animation state.
+    ///
+    /// The returned slice is owned by the image (or its animation)
+    /// and remains valid until the image or frame is mutated.
+    pub fn frame_data(&self, number: u32) -> Option<&[u8]> {
+        match number {
+            0 => None,
+            1 => self.data.bytes(),
+            _ => {
+                let anim = self.animation.as_ref()?;
+                // Minus 2 because frame is 1-based and frame 1 is the
+                // image base data, so the animation frames start at frame 2.
+                let idx = (number - 2) as usize;
+                if idx >= anim.frames.len() {
+                    return None;
+                }
+                Some(&anim.frames[idx].data)
+            }
+        }
+    }
+
+    /// Total bytes of pixel data reserved against the storage limit
+    /// for this image: the base data plus any animation frames.
+    pub fn storage_size(&self) -> usize {
+        let mut total: usize = self.data.len();
+        if let Some(anim) = &self.animation {
+            total += anim.frame_bytes();
+        }
+        total
+    }
 
     /// Mostly for logging
     pub fn withoutData(&self) -> Image {
@@ -1327,6 +1474,7 @@ mod tests {
             },
             data: Vec::new(),
             display: None,
+            frame: None,
             quiet: command::Quiet::No,
             response: command::Response::default(),
             temporary_directory: None,

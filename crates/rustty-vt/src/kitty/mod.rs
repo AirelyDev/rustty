@@ -25,9 +25,11 @@ pub mod color;
 // preserving the "empty when disabled" behavior at usage. The submodules that
 // `graphics.zig` aggregates are declared here so they are reachable.
 pub mod graphics;
+pub mod graphics_animation;
 pub mod graphics_command;
 pub mod graphics_exec;
 pub mod graphics_image;
+pub mod graphics_pixel;
 pub mod graphics_render;
 pub mod graphics_storage;
 pub mod graphics_unicode;

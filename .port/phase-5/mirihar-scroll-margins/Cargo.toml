@@ -1,0 +1,14 @@
+# mirihar-scroll-margins — isolated, non-FFI Miri proof artifact for the
+# P5-W2.3 (90bce0d2d) two-phase ScrollMargins begin/end guard (phase-5 plan
+# SB/UB hazard #1).
+[package]
+name = "mirihar-scroll-margins"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "mirihar-scroll-margins"
+path = "src/main.rs"
+
+# Standalone: not part of the rustty root workspace (this is a proof artifact).
+[workspace]

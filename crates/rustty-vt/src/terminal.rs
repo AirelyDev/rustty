@@ -3594,12 +3594,32 @@ impl Terminal {
                 && self.scrolling_region.right == self.cols - 1
                 && (!unsafe { (*screen).no_scrollback } || self.scrolling_region.bottom == 0)
             {
+                // If a bottom margin is set, kitty image placements may
+                // need adjusting around the scroll. The rare placements-
+                // present case is handled out of line so this hot path
+                // only pays a count check (a load from a cache line we
+                // already write, above).
+                // if (comptime build_options.kitty_graphics) {
+                if crate::options::KITTY_GRAPHICS {
+                    // if (screen.kitty_images.placements.count() != 0) {
+                    //     @branchHint(.unlikely);
+                    // SAFETY: `screen` is the active screen's stable heap
+                    // pointer, owned by `self.screens`; we hold `&mut self`.
+                    if !unsafe { (*screen).kitty_images.placements.is_empty() } {
+                        self.index_scroll_with_images(
+                            crate::kitty::graphics_storage::ScrollOp::WindowShift,
+                        )?;
+                        return Ok(());
+                    }
+                }
+
                 // try screen.cursorScrollAbove();
                 self.active_mut().cursor_scroll_above()?;
                 return Ok(());
             }
 
             // Slow path for left and right scrolling region margins.
+            // scrollUp handles the kitty image adjustment itself.
             // if (self.scrolling_region.left != 0 or
             //     self.scrolling_region.right != self.cols - 1)
             //
@@ -3613,6 +3633,22 @@ impl Terminal {
                 // try self.scrollUp(1);
                 self.scroll_up(1)?;
                 return Ok(());
+            }
+
+            // Kitty image placements may need adjusting around the scroll;
+            // handled out of line like the scrollback path above.
+            // if (comptime build_options.kitty_graphics) {
+            if crate::options::KITTY_GRAPHICS {
+                // if (screen.kitty_images.placements.count() != 0) {
+                //     @branchHint(.unlikely);
+                // SAFETY: `screen` is the active screen's stable heap pointer,
+                // owned by `self.screens`; we hold `&mut self`.
+                if !unsafe { (*screen).kitty_images.placements.is_empty() } {
+                    self.index_scroll_with_images(
+                        crate::kitty::graphics_storage::ScrollOp::InPlace,
+                    )?;
+                    return Ok(());
+                }
             }
 
             // Otherwise use a fast path function to efficiently scroll
@@ -3636,6 +3672,107 @@ impl Terminal {
         }
 
         Ok(())
+    }
+
+    /// The operation when we have Kitty image placements during index.
+    /// Split out of index() so its hot paths don't carry the adjustment
+    /// state in their stack frame, which measurably slows the scroll
+    /// hot path.
+    //
+    // PORT NOTE (R8): the reference `op` is a `comptime` parameter — a pure
+    // branch-specialization for the scroll hot path, with no compile-time
+    // grammar or emitted-bytes dependence (no runtime bytes can alias any
+    // comptime shape here; the value only selects between two calls below).
+    // Rust const generics cannot carry an enum on stable, so it is a plain
+    // runtime parameter; the hot paths above still pay only the count check
+    // before entering this out-of-line fn.
+    fn index_scroll_with_images(
+        &mut self,
+        op: crate::kitty::graphics_storage::ScrollOp,
+    ) -> Result<(), OutOfMemory> {
+        // var kitty_scroll = self.kittyScrollMarginsBegin(-1, op);
+        // defer if (kitty_scroll) |*state| state.end();
+        // PORT NOTE: the guard's `Drop` performs `end()` (exactly-once by
+        // ownership), so the Zig `defer` semantics — including the error
+        // path through `?` — fall out of scope-drop.
+        let kitty_scroll = self.kitty_scroll_margins_begin(-1, op);
+        let result = match op {
+            // .window_shift => try self.screens.active.cursorScrollAbove(),
+            crate::kitty::graphics_storage::ScrollOp::WindowShift => {
+                self.active_mut().cursor_scroll_above()
+            }
+            // .in_place => try self.screens.active.cursorScrollRegionUp(
+            //     self.scrolling_region.bottom - self.scrolling_region.top,
+            // ),
+            crate::kitty::graphics_storage::ScrollOp::InPlace => {
+                let sr_top = self.scrolling_region.top;
+                let sr_bottom = self.scrolling_region.bottom;
+                self.active_mut()
+                    .cursor_scroll_region_up((sr_bottom - sr_top) as usize)
+            }
+        };
+        if let Some(state) = kitty_scroll {
+            state.end();
+        }
+        result
+    }
+
+    // Handle when Kitty graphics is disabled.
+    // const KittyScrollMargins = if (build_options.kitty_graphics)
+    //     kitty.graphics.ImageStorage.ScrollMargins
+    // else
+    //     struct {
+    //         pub inline fn end(self: *@This()) void {
+    //             _ = self;
+    //         }
+    //     };
+    //
+    // PORT NOTE: Zig needs the empty stub type because the disabled comptime
+    // branch must still typecheck against a named type. Rust compiles the real
+    // `ScrollMargins` type unconditionally (the kitty module is always built;
+    // the `KITTY_GRAPHICS` const-gate dead-codes the calls), so no stub type
+    // is required.
+
+    /// Begin adjusting kitty image placements for a scroll of the
+    /// scrolling region by delta rows (negative moves content up). If
+    /// adjustment is needed this returns state whose end() must be called
+    /// after the scroll's row operations complete (see
+    /// ImageStorage.scrollMarginsBegin for why this is two phases). This
+    /// returns null when the scrolling region is the full screen, because
+    /// placements then follow their anchored rows via pin tracking which
+    /// matches kitty's marginless behavior.
+    ///
+    /// Callers must comptime-gate on build_options.kitty_graphics and
+    /// check that placements exist before calling, which keeps the cost
+    /// on the hot scroll paths cheap.
+    // @branchHint(.cold) → #[cold].
+    #[cold]
+    fn kitty_scroll_margins_begin(
+        &mut self,
+        delta: isize,
+        op: crate::kitty::graphics_storage::ScrollOp,
+    ) -> Option<crate::kitty::graphics_storage::ScrollMargins> {
+        // Full-screen scrolls need no adjustment: placements follow their
+        // anchored rows (possibly into the scrollback) via pin tracking.
+        if self.scrolling_region.top == 0
+            && self.scrolling_region.bottom == self.rows - 1
+            && self.scrolling_region.left == 0
+            && self.scrolling_region.right == self.cols - 1
+        {
+            return None;
+        }
+
+        // const screen: *Screen = self.screens.active;
+        // return screen.kitty_images.scrollMarginsBegin(self.io(), self, delta, op);
+        //
+        // SAFETY: the storage lives INSIDE the active screen; the `&mut`
+        // projection below is scoped to the `kitty_images` field of the
+        // screen's separate heap allocation, and `scroll_margins_begin`
+        // touches the rest of the terminal/screen only through the raw `t`
+        // pointer in narrow read scopes (its hazard-#1 PORT NOTE).
+        let t: *mut Terminal = self;
+        let screen: *mut Screen = self.screens.active;
+        Some(unsafe { &mut (*screen).kitty_images }.scroll_margins_begin(t, delta, op))
     }
 
     /// Move the cursor to the previous line in the scrolling region, possibly
@@ -3860,6 +3997,38 @@ impl Terminal {
             old_wrap: unsafe { (*self.screens.active).cursor.pending_wrap },
         };
 
+        // If margins are set and kitty image placements exist, they need
+        // adjusting around the scroll. Note this wraps scrollDown and NOT
+        // insertLines: kitty scrolls images for SD/RI but leaves them
+        // alone for IL/DL.
+        // var kitty_scroll: ?KittyScrollMargins = null;
+        // defer if (kitty_scroll) |*state| state.end();
+        // PORT NOTE: the guard's `Drop` performs `end()`; locals drop in
+        // reverse declaration order, so the guard ends BEFORE `_restore`
+        // fires — exactly the reference's LIFO `defer` order.
+        let mut kitty_scroll: Option<crate::kitty::graphics_storage::ScrollMargins> = None;
+        // if (comptime build_options.kitty_graphics) {
+        if crate::options::KITTY_GRAPHICS {
+            // if (self.screens.active.kitty_images.placements.count() != 0) {
+            //     @branchHint(.unlikely);
+            // SAFETY: `self.screens.active` is a stable heap pointer owned by
+            // `self.screens`; we hold `&mut self`.
+            if !unsafe { (*self.screens.active).kitty_images.placements.is_empty() } {
+                // const region_height: usize =
+                //     @as(usize, self.scrolling_region.bottom - self.scrolling_region.top) + 1;
+                let region_height: usize =
+                    (self.scrolling_region.bottom - self.scrolling_region.top) as usize + 1;
+                // kitty_scroll = self.kittyScrollMarginsBegin(
+                //     @intCast(@min(count, region_height)),
+                //     .in_place,
+                // );
+                kitty_scroll = self.kitty_scroll_margins_begin(
+                    isize::try_from(core::cmp::min(count, region_height)).unwrap(),
+                    crate::kitty::graphics_storage::ScrollOp::InPlace,
+                );
+            }
+        }
+
         // Move to the top of the scroll region
         // self.screens.active.cursorAbsolute(self.scrolling_region.left, self.scrolling_region.top);
         let sr_left = self.scrolling_region.left;
@@ -3867,6 +4036,11 @@ impl Terminal {
         self.active_mut().cursor_absolute(sr_left, sr_top);
         // self.insertLines(count);
         self.insert_lines(count);
+
+        // defer if (kitty_scroll) |*state| state.end();
+        if let Some(state) = kitty_scroll.take() {
+            state.end();
+        }
     }
 
     /// Removes amount lines from the top of the scroll region. The remaining lines
@@ -3893,6 +4067,51 @@ impl Terminal {
             old_y: unsafe { (*self.screens.active).cursor.y },
             old_wrap: unsafe { (*self.screens.active).cursor.pending_wrap },
         };
+
+        // If margins are set and kitty image placements exist, they need
+        // adjusting around the scroll. Note this wraps scrollUp and NOT
+        // deleteLines: kitty scrolls images for SU/IND but leaves them
+        // alone for IL/DL.
+        // var kitty_scroll: ?KittyScrollMargins = null;
+        // defer if (kitty_scroll) |*state| state.end();
+        // PORT NOTE: the guard's `Drop` performs `end()` on every exit path
+        // (including the early `?`), mirroring the reference `defer`; locals
+        // drop in reverse declaration order, so it ends BEFORE `_restore`
+        // fires — the reference's LIFO `defer` order.
+        let mut _kitty_scroll: Option<crate::kitty::graphics_storage::ScrollMargins> = None;
+        // if (comptime build_options.kitty_graphics) {
+        if crate::options::KITTY_GRAPHICS {
+            // if (self.screens.active.kitty_images.placements.count() != 0) {
+            //     @branchHint(.unlikely);
+            // SAFETY: `self.screens.active` is a stable heap pointer owned by
+            // `self.screens`; we hold `&mut self`.
+            if !unsafe { (*self.screens.active).kitty_images.placements.is_empty() } {
+                // The op must mirror the branch below: the scrollback path
+                // shifts the active window while the deleteLines path
+                // moves rows in place.
+                // const region_height: usize =
+                //     @as(usize, self.scrolling_region.bottom - self.scrolling_region.top) + 1;
+                let region_height: usize =
+                    (self.scrolling_region.bottom - self.scrolling_region.top) as usize + 1;
+                // kitty_scroll = self.kittyScrollMarginsBegin(
+                //     -@as(isize, @intCast(@min(count, region_height))),
+                //     if (...) .window_shift else .in_place,
+                // );
+                _kitty_scroll = self.kitty_scroll_margins_begin(
+                    -isize::try_from(core::cmp::min(count, region_height)).unwrap(),
+                    if self.scrolling_region.top == 0
+                        && self.scrolling_region.left == 0
+                        && self.scrolling_region.right == self.cols - 1
+                        && (!unsafe { (*self.screens.active).no_scrollback }
+                            || self.scrolling_region.bottom == self.rows - 1)
+                    {
+                        crate::kitty::graphics_storage::ScrollOp::WindowShift
+                    } else {
+                        crate::kitty::graphics_storage::ScrollOp::InPlace
+                    },
+                );
+            }
+        }
 
         // If our scroll region is at the top and we have no left/right
         // margins then we move the scrolled out text into the scrollback.

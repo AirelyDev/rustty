@@ -16,10 +16,12 @@
 // const LoadingImage = image.LoadingImage;
 // const Image = image.Image;
 // const ImageStorage = @import("graphics_storage.zig").ImageStorage;
+use crate::kitty::graphics_animation as animation;
 use crate::kitty::graphics_command as command;
 use crate::kitty::graphics_command::{Command, Response};
 use crate::kitty::graphics_image as image;
-use crate::kitty::graphics_image::{Image, LoadingImage};
+use crate::kitty::graphics_image::{FrameContext, Image, LoadingImage};
+use crate::kitty::graphics_pixel as pixel;
 use crate::kitty::graphics_storage::{Location, Placement};
 use crate::terminal::Terminal;
 use allocator_api2::alloc::Global as Allocator;
@@ -84,8 +86,10 @@ pub fn execute(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Opti
         // .delete => delete(alloc, terminal, cmd),
         command::Control::Delete(_) => Some(delete(alloc, terminal, cmd)),
 
-        // .transmit, .transmit_and_display => resp: {
-        command::Control::Transmit(_) | command::Control::TransmitAndDisplay { .. } => {
+        // .transmit, .transmit_and_display, .transmit_animation_frame => resp: {
+        command::Control::Transmit(_)
+        | command::Control::TransmitAndDisplay { .. }
+        | command::Control::TransmitAnimationFrame(_) => {
             // If we're transmitting, then our `q` setting value is complicated.
             // The `q` setting inherits the value from the starting command
             // unless `q` is set >= 1 on this command. If it is, then we save
@@ -111,20 +115,23 @@ pub fn execute(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Opti
                 }
             }
 
-            // break :resp transmit(alloc, terminal, cmd);
-            Some(transmit(alloc, terminal, cmd))
+            // break :resp switch (cmd.control) {
+            //     .transmit_animation_frame => transmitAnimationFrame(...),
+            //     else => transmit(...),
+            // };
+            Some(match &cmd.control {
+                command::Control::TransmitAnimationFrame(_) => {
+                    transmit_animation_frame(alloc, terminal, cmd)
+                }
+                _ => transmit(alloc, terminal, cmd),
+            })
         }
 
-        // .transmit_animation_frame,
-        // .control_animation,
-        // .compose_animation,
-        // => .{ .message = "ERROR: unimplemented action" },
-        command::Control::TransmitAnimationFrame(_)
-        | command::Control::ControlAnimation(_)
-        | command::Control::ComposeAnimation(_) => Some(Response {
-            message: b"ERROR: unimplemented action".to_vec(),
-            ..Response::default()
-        }),
+        // .control_animation => controlAnimation(io, alloc, terminal, cmd),
+        command::Control::ControlAnimation(_) => Some(control_animation(alloc, terminal, cmd)),
+
+        // .compose_animation => composeAnimation(io, alloc, terminal, cmd),
+        command::Control::ComposeAnimation(_) => Some(compose_animation(alloc, terminal, cmd)),
     };
 
     // Handle the quiet settings
@@ -231,12 +238,21 @@ fn query(alloc: Allocator, terminal: &Terminal, cmd: &Command) -> Response {
 fn transmit(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Response {
     let t = cmd.transmission().unwrap();
     // const storage = &terminal.screens.active.kitty_images;
-    // var result: Response = if (storage.loading) |loading|
-    //     loading.response
-    // else
-    //     .{ .id = ..., .image_number = ..., .placement_id = ... };
     let storage = unsafe { &(*terminal.screens.active).kitty_images };
+    // var result: Response = if (storage.loading) |loading| loading: {
+    //     if (loading.frame != null) return transmitAnimationFrame(...);
+    //     break :loading loading.response;
+    // } else .{ .id = ..., .image_number = ..., .placement_id = ... };
     let mut result: Response = if let Some(loading) = storage.loading.as_ref() {
+        // Any transmit-like command received while a load is in progress
+        // is a continuation chunk of that load, and the load completes
+        // according to how it started. If an animation frame load (a=f)
+        // is in progress, this chunk belongs to it even when the client
+        // didn't repeat a=f on the chunk.
+        if loading.frame.is_some() {
+            return transmit_animation_frame(alloc, terminal, cmd);
+        }
+
         loading.response.clone()
     } else {
         Response {
@@ -601,6 +617,755 @@ fn display(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Response
     result
 }
 
+/// Transmit animation frame data (a=f).
+///
+/// Frame data is loaded exactly like image data, including chunking
+/// and every transmission medium, and once complete it is composed
+/// into a frame of an existing image's animation.
+fn transmit_animation_frame(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Response {
+    // const storage = &terminal.screens.active.kitty_images;
+    let storage = unsafe { &mut (*terminal.screens.active).kitty_images };
+
+    // A chunk arriving while a load is in progress continues that load.
+    if storage.loading.is_some() {
+        // If this is the first frame, then we treat it like a normal image
+        // because the first frame is just the image.
+        if storage.loading.as_ref().unwrap().frame.is_none() {
+            return transmit(alloc, terminal, cmd);
+        }
+
+        // Not the first frame, so continue loading similar to transmit
+        // but this is for a subsequent frame.
+        let loading = storage.loading.as_mut().unwrap();
+        // var result = loading.response;
+        let mut result = loading.response.clone();
+        // loading.addData(alloc, cmd.data) catch |err| { ... };
+        if let Err(err) = loading.addData(&cmd.data) {
+            encode_error(&mut result, err);
+            return result;
+        }
+
+        // If more chunks are expected we don't respond yet.
+        let t = cmd.transmission().unwrap();
+        if t.more_chunks {
+            return Response::default();
+        }
+
+        // Final chunk: copy the loading state out and free the
+        // pointer, mirroring loadAndAddImage.
+        // var loading_copy = loading.*;
+        // alloc.destroy(loading);
+        // storage.loading = null;
+        // defer loading_copy.deinit(alloc);
+        let mut loading_copy = *storage.loading.take().unwrap();
+        return complete_animation_frame(alloc, terminal, &mut loading_copy);
+        // `loading_copy` drops here (the reference `defer deinit`).
+    }
+
+    // We are starting our load, either the first frame or a subsequent frame.
+    // const f = cmd.control.transmit_animation_frame;
+    let f = match &cmd.control {
+        command::Control::TransmitAnimationFrame(f) => *f,
+        // PORT NOTE: only invoked from the `.transmit_animation_frame` arms.
+        _ => unreachable!(),
+    };
+    let t = f.transmission;
+    let mut result: Response = Response {
+        id: t.image_id,
+        image_number: t.image_number,
+        placement_id: t.placement_id,
+        // Errors echo the client's frame number; on success this is
+        // replaced with the resolved (possibly newly assigned) one.
+        frame: f.edit_frame,
+        ..Response::default()
+    };
+
+    // A frame can only be added to an existing image.
+    if t.image_id == 0 && t.image_number == 0 {
+        result.message = b"EINVAL: image ID or number required".to_vec();
+        return result;
+    }
+    // const img = storage.imagePtrByIdOrNumber(t.image_id, t.image_number) orelse { ... };
+    let (img_id, img_generation) =
+        match storage.image_ptr_by_id_or_number(t.image_id, t.image_number) {
+            Some(img) => (img.id, img.generation),
+            None => {
+                result.message = b"ENOENT: image not found".to_vec();
+                return result;
+            }
+        };
+    result.id = img_id;
+
+    let mut loading = match LoadingImage::init(cmd, &storage.image_limits) {
+        Ok(loading) => loading,
+        Err(err) => {
+            encode_error(&mut result, err);
+            return result;
+        }
+    };
+    loading.frame = Some(FrameContext {
+        cmd: f,
+        image_generation: img_generation,
+    });
+    loading.response.id = img_id;
+
+    // Chunked: store the loading state and wait for the rest. The
+    // frame parameters above are saved with it; continuation chunks
+    // contribute only payload bytes.
+    if t.more_chunks {
+        // const loading_ptr = alloc.create(LoadingImage) catch |err| {
+        //     loading.deinit(alloc);
+        //     encodeError(&result, err);
+        //     return result;
+        // };
+        // loading_ptr.* = loading;
+        // storage.loading = loading_ptr;
+        // PORT NOTE: `Box::new` aborts on OOM; the catch arm is unreachable.
+        storage.loading = Some(Box::new(loading));
+        return Response::default();
+    }
+
+    // defer loading.deinit(alloc); — `loading` drops at end of scope.
+    complete_animation_frame(alloc, terminal, &mut loading)
+}
+
+/// Complete a fully loaded animation frame: validate it against its
+/// image and compose it into the image's animation.
+fn complete_animation_frame(
+    alloc: Allocator,
+    terminal: &mut Terminal,
+    loading: &mut LoadingImage,
+) -> Response {
+    // const storage = &terminal.screens.active.kitty_images;
+    //
+    // PORT NOTE (hazard #3, phase-5 plan): the reference holds `img: *Image`
+    // (a map-interior pointer) across `reserveAnimationBytes` — which can
+    // EVICT — and re-resolves it afterwards. The port resolves the image's
+    // concrete id once and re-looks it up (`images.get_mut`) around every
+    // storage mutation instead; the id is stable and never evicted by
+    // `reserve_animation_bytes` (it excludes this image), so every re-lookup
+    // is the reference's re-resolve made mandatory.
+    let storage = unsafe { &mut (*terminal.screens.active).kitty_images };
+    let mut result = loading.response.clone();
+    let f = loading.frame.unwrap().cmd;
+
+    // Re-resolve the image: it may have been deleted, evicted, or
+    // replaced while the frame data was being transmitted. The saved
+    // generation pins the exact image the load started against.
+    let (img_id, img_generation, img_width, img_height, img_data_complete) =
+        match storage.image_ptr_by_id_or_number(loading.image.id, loading.image.number) {
+            Some(img) => (
+                img.id,
+                img.generation,
+                img.width,
+                img.height,
+                img.data.bytes().is_some(),
+            ),
+            None => {
+                result.message = b"ENOENT: image not found".to_vec();
+                return result;
+            }
+        };
+    if img_generation != loading.frame.unwrap().image_generation {
+        result.message = b"ENOENT: image not found".to_vec();
+        return result;
+    }
+    if !img_data_complete {
+        result.message = b"EINVAL: image data incomplete".to_vec();
+        return result;
+    }
+
+    // Finish decoding the frame data: decompression, PNG decoding,
+    // and length validation all match image loading.
+    // var frame_img = loading.complete(alloc) catch |err| { ... };
+    // defer frame_img.deinit(alloc);
+    let mut frame_img = match loading.complete() {
+        Ok(img) => img,
+        Err(err) => {
+            encode_error(&mut result, err);
+            return result;
+        }
+    };
+
+    // The frame rectangle may not exceed the image's size. The x/y
+    // offsets are deliberately not validated: composition clips,
+    // matching Kitty.
+    if frame_img.width > img_width || frame_img.height > img_height {
+        result.message = b"EINVAL: frame dimensions exceed image".to_vec();
+        return result;
+    }
+
+    // All composition happens in RGBA; convert both sides as needed.
+    if frame_img.format != command::Format::Rgba {
+        // const rgba = pixel.rgbaFromFormat(alloc, frame_img.format, frame_img.data.bytes().?)
+        //     catch |err| { encodeError(&result, err); return result; };
+        // PORT NOTE: infallible in this port (see graphics_pixel.rs).
+        let rgba = pixel::rgba_from_format(frame_img.format, frame_img.data.bytes().unwrap());
+        // frame_img.data.deinit(alloc); — the assignment drops the old payload.
+        frame_img.data = image::Data::Complete(rgba);
+        frame_img.format = command::Format::Rgba;
+    }
+    // storage.convertImageToRgba(io, alloc, img) catch |err| { ... };
+    // PORT NOTE: infallible in this port (see graphics_storage.rs).
+    storage.convert_image_to_rgba(alloc, img_id);
+
+    // const anim = ensureAnimation(alloc, img) catch |err| { ... };
+    // (re-borrowed per use below, see the hazard-#3 note above.)
+
+    // Resolve the frame number: r in 1..count edits that existing
+    // frame, anything else (including omitted) creates a new frame
+    // appended at count+1. The resolved number is echoed in the
+    // response so clients can learn assigned frame numbers.
+    let count: u32 = ensure_animation(storage.images.get_mut(&img_id).unwrap()).frame_count();
+    let number: u32 = {
+        let r = f.edit_frame;
+        if r == 0 || r > count + 1 {
+            count + 1
+        } else {
+            r
+        }
+    };
+    result.frame = number;
+
+    // const src = frame_img.data.bytes().?;
+    if number == count + 1 {
+        // Creating a new frame. The gap defaults to 40ms when omitted
+        // and a negative gap creates a gapless (never shown) frame.
+        let gap: u32 = if f.gap_ms > 0 {
+            u32::try_from(f.gap_ms).unwrap() // @intCast
+        } else if f.gap_ms < 0 {
+            0
+        } else {
+            animation::DEFAULT_GAP_MS
+        };
+
+        // The base canvas frame must exist before we reserve space.
+        if f.create_frame > 0
+            && storage
+                .images
+                .get(&img_id)
+                .unwrap()
+                .frame_data(f.create_frame)
+                .is_none()
+        {
+            result.message = b"EINVAL: base frame not found".to_vec();
+            return result;
+        }
+
+        // Reserve room for the new frame, evicting other images if
+        // needed. Eviction can remove images (never this one), so we
+        // re-resolve our pointer afterwards to be safe.
+        let frame_len: usize = img_width as usize * img_height as usize * 4;
+        let image_id = img_id;
+        if storage
+            .reserve_animation_bytes(alloc, terminal.screens.active, image_id, frame_len)
+            .is_err()
+        {
+            result.message = b"ENOSPC: animation frame storage full".to_vec();
+            return result;
+        }
+        // img = storage.imagePtrByIdOrNumber(image_id, 0).?; — every access
+        // below re-looks the image up by id (see the hazard-#3 note).
+
+        // const canvas = alloc.alloc(u8, frame_len) catch {
+        //     storage.releaseAnimationBytes(frame_len);
+        //     result.message = "ENOMEM: out of memory";
+        //     return result;
+        // };
+        // PORT NOTE: `vec!` aborts on OOM; the release/ENOMEM arm is
+        // unreachable in this port.
+        let mut canvas = vec![0u8; frame_len];
+        if f.create_frame > 0 {
+            // @memcpy(canvas, img.frameData(f.create_frame).?);
+            canvas.copy_from_slice(
+                storage
+                    .images
+                    .get(&img_id)
+                    .unwrap()
+                    .frame_data(f.create_frame)
+                    .unwrap(),
+            );
+        } else {
+            pixel::fill_background(&mut canvas, f.background);
+        }
+        pixel::compose_rect(
+            &mut canvas,
+            img_width,
+            img_height,
+            frame_img.data.bytes().unwrap(),
+            frame_img.width,
+            frame_img.height,
+            f.x,
+            f.y,
+            f.composition_mode,
+        );
+
+        // anim.frames.append(alloc, .{ .data = canvas, .gap_ms = gap }) catch {
+        //     alloc.free(canvas);
+        //     storage.releaseAnimationBytes(frame_len);
+        //     result.message = "ENOMEM: out of memory";
+        //     return result;
+        // };
+        // PORT NOTE: `Vec::push` aborts on OOM; the catch arm is unreachable.
+        {
+            let img = storage.images.get_mut(&img_id).unwrap();
+            ensure_animation(img).frames.push(animation::Frame {
+                data: canvas,
+                gap_ms: gap,
+            });
+        }
+
+        // A new frame never changes the displayed frame (playback
+        // reaches it later), but the storage content changed.
+        storage.mark_mutated();
+    } else {
+        // Editing an existing frame. A nonzero gap also updates the
+        // frame's gap; the 40ms default doesn't apply to edits.
+        //
+        // Unlike frame creation there is no byte reservation here:
+        // frames are always stored at full image size, so the edit
+        // composes into the existing buffer in place and storage
+        // usage cannot change. Kitty likewise exempts frame edits
+        // from its quota check.
+        if f.gap_ms != 0 {
+            let img = storage.images.get_mut(&img_id).unwrap();
+            ensure_animation(img).set_gap_at(
+                number - 1,
+                if f.gap_ms > 0 {
+                    u32::try_from(f.gap_ms).unwrap()
+                } else {
+                    0
+                },
+            );
+        }
+
+        // The frame data is owned by this storage, so the const cast
+        // is safe (same reasoning as the renderer's image uploads).
+        // const dst = @constCast(img.frameData(number).?);
+        // PORT NOTE: the const-cast is expressed directly as the mutable
+        // frame projection `frame_data_mut`.
+        {
+            let img = storage.images.get_mut(&img_id).unwrap();
+            let dst = frame_data_mut(img, number).unwrap();
+            pixel::compose_rect(
+                dst,
+                img_width,
+                img_height,
+                frame_img.data.bytes().unwrap(),
+                frame_img.width,
+                frame_img.height,
+                f.x,
+                f.y,
+                f.composition_mode,
+            );
+        }
+
+        let is_current = {
+            let img = storage.images.get(&img_id).unwrap();
+            number - 1 == img.animation.as_ref().unwrap().current_index
+        };
+        if is_current {
+            // The displayed pixels changed; restart the frame's gap
+            // timer like Kitty's re-upload does.
+            {
+                let img = storage.images.get_mut(&img_id).unwrap();
+                img.animation.as_mut().unwrap().frame_shown_at_ms = None;
+            }
+            storage.mark_image_content_changed(img_id);
+        } else {
+            storage.mark_mutated();
+        }
+    }
+
+    result
+    // `frame_img` drops here (the reference `defer frame_img.deinit(alloc)`).
+}
+
+/// Control animation playback (a=a).
+///
+/// Successful commands never respond. The only possible responses are
+/// for a missing image or identifier. Invalid key values are silently
+/// ignored, matching Kitty.
+fn control_animation(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Response {
+    // const a = cmd.control.control_animation;
+    let a = match &cmd.control {
+        command::Control::ControlAnimation(a) => *a,
+        // PORT NOTE: only invoked from the `.control_animation` arm.
+        _ => unreachable!(),
+    };
+    // const storage = &terminal.screens.active.kitty_images;
+    let storage = unsafe { &mut (*terminal.screens.active).kitty_images };
+    let _ = &alloc;
+
+    let mut result: Response = Response {
+        id: a.image_id,
+        image_number: a.image_number,
+        placement_id: a.placement_id,
+        ..Response::default()
+    };
+    if a.image_id == 0 && a.image_number == 0 {
+        result.message = b"EINVAL: image ID or number required".to_vec();
+        return result;
+    }
+    let img_id = match storage.image_ptr_by_id_or_number(a.image_id, a.image_number) {
+        Some(img) => img.id,
+        None => {
+            result.message = b"ENOENT: image not found".to_vec();
+            return result;
+        }
+    };
+
+    // const anim = ensureAnimation(alloc, img) catch |err| { ... };
+    // PORT NOTE: infallible in this port (Box aborts on OOM); the `anim`
+    // pointer is re-borrowed per key below (hazard #3: the mark_* calls
+    // between the keys need `&mut storage`).
+    ensure_animation(storage.images.get_mut(&img_id).unwrap());
+
+    // The keys below are applied independently and in the same order as Kitty.
+
+    // Set a frame's gap (r= together with z=). This is the only way
+    // to give the root frame a gap, since it is created gapless.
+    let applied = {
+        let anim = storage
+            .images
+            .get_mut(&img_id)
+            .unwrap()
+            .animation
+            .as_deref_mut()
+            .unwrap();
+        if a.frame != 0 && a.frame <= anim.frame_count() && a.gap_ms != 0 {
+            anim.set_gap_at(
+                a.frame - 1,
+                if a.gap_ms > 0 {
+                    u32::try_from(a.gap_ms).unwrap()
+                } else {
+                    0
+                },
+            );
+            true
+        } else {
+            false
+        }
+    };
+    if applied {
+        storage.mark_mutated();
+    }
+
+    // Set the current frame (c=), the client-driven animation
+    // primitive.
+    let applied = {
+        let anim = storage
+            .images
+            .get_mut(&img_id)
+            .unwrap()
+            .animation
+            .as_deref_mut()
+            .unwrap();
+        if a.current_frame != 0
+            && a.current_frame <= anim.frame_count()
+            && a.current_frame - 1 != anim.current_index
+        {
+            anim.current_index = a.current_frame - 1;
+            anim.frame_shown_at_ms = None;
+            true
+        } else {
+            false
+        }
+    };
+    if applied {
+        storage.mark_image_content_changed(img_id);
+    }
+
+    // Set the playback state (s=). Any state change resets the loop
+    // counter; leaving the stopped state restarts the gap timer.
+    if a.action != command::AnimationAction::Invalid {
+        {
+            let anim = storage
+                .images
+                .get_mut(&img_id)
+                .unwrap()
+                .animation
+                .as_deref_mut()
+                .unwrap();
+            let old = anim.state;
+            anim.state = match a.action {
+                command::AnimationAction::Invalid => unreachable!(),
+                command::AnimationAction::Stop => animation::State::Stopped,
+                command::AnimationAction::RunWait => animation::State::Loading,
+                command::AnimationAction::Run => animation::State::Running,
+            };
+            if old == animation::State::Stopped && anim.state != animation::State::Stopped {
+                anim.frame_shown_at_ms = None;
+            }
+            anim.current_loop = 0;
+        }
+        storage.mark_mutated();
+    }
+
+    // Set the loop count (v=), stored off by one per the protocol:
+    // v=1 loops forever, v=n plays n-1 loops.
+    if a.loops != 0 {
+        {
+            let anim = storage
+                .images
+                .get_mut(&img_id)
+                .unwrap()
+                .animation
+                .as_deref_mut()
+                .unwrap();
+            anim.max_loops = a.loops - 1;
+        }
+        storage.mark_mutated();
+    }
+
+    // Successful animation control commands never respond.
+    Response::default()
+}
+
+/// Compose a rectangle of pixels from one animation frame onto
+/// another (a=c). Frame 1 (the root frame) always exists, so this also works
+/// on images without any animation state.
+fn compose_animation(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Response {
+    // const c = cmd.control.compose_animation;
+    let c = match &cmd.control {
+        command::Control::ComposeAnimation(c) => *c,
+        // PORT NOTE: only invoked from the `.compose_animation` arm.
+        _ => unreachable!(),
+    };
+    // const storage = &terminal.screens.active.kitty_images;
+    let storage = unsafe { &mut (*terminal.screens.active).kitty_images };
+
+    let mut result: Response = Response {
+        id: c.image_id,
+        image_number: c.image_number,
+        placement_id: c.placement_id,
+        ..Response::default()
+    };
+    if c.image_id == 0 && c.image_number == 0 {
+        result.message = b"EINVAL: image ID or number required".to_vec();
+        return result;
+    }
+    let (img_id, img_width, img_height, img_data_complete) =
+        match storage.image_ptr_by_id_or_number(c.image_id, c.image_number) {
+            Some(img) => (img.id, img.width, img.height, img.data.bytes().is_some()),
+            None => {
+                result.message = b"ENOENT: image not found".to_vec();
+                return result;
+            }
+        };
+    result.id = img_id;
+    if !img_data_complete {
+        result.message = b"EINVAL: image data incomplete".to_vec();
+        return result;
+    }
+
+    // Both frames must exist. Note that r is the source frame and c
+    // the destination; the spec's reference table describes these
+    // backwards (see AnimationFrameComposition).
+    {
+        let img = storage.images.get(&img_id).unwrap();
+        if img.frame_data(c.source_frame).is_none() {
+            result.message = b"ENOENT: source frame not found".to_vec();
+            return result;
+        }
+        if img.frame_data(c.dest_frame).is_none() {
+            result.message = b"ENOENT: destination frame not found".to_vec();
+            return result;
+        }
+    }
+
+    // Rectangle validation is done in u64 so untrusted 32-bit values
+    // can't overflow. Out-of-bounds rectangles are errors here,
+    // unlike a=f which clips.
+    let width: u64 = if c.width > 0 {
+        c.width as u64
+    } else {
+        img_width as u64
+    };
+    let height: u64 = if c.height > 0 {
+        c.height as u64
+    } else {
+        img_height as u64
+    };
+    if c.x as u64 + width > img_width as u64 || c.y as u64 + height > img_height as u64 {
+        result.message = b"EINVAL: destination rectangle out of bounds".to_vec();
+        return result;
+    }
+    if c.left_edge as u64 + width > img_width as u64
+        || c.top_edge as u64 + height > img_height as u64
+    {
+        result.message = b"EINVAL: source rectangle out of bounds".to_vec();
+        return result;
+    }
+
+    // Composing a frame onto itself requires non-overlapping
+    // rectangles.
+    if c.source_frame == c.dest_frame {
+        // const x_overlaps = @max(c.left_edge, c.x) < @min(c.left_edge, c.x) + width;
+        // const y_overlaps = @max(c.top_edge, c.y) < @min(c.top_edge, c.y) + height;
+        let x_overlaps = (core::cmp::max(c.left_edge, c.x) as u64)
+            < core::cmp::min(c.left_edge, c.x) as u64 + width;
+        let y_overlaps =
+            (core::cmp::max(c.top_edge, c.y) as u64) < core::cmp::min(c.top_edge, c.y) as u64 + height;
+        if x_overlaps && y_overlaps {
+            result.message = b"EINVAL: source and destination rectangles overlap".to_vec();
+            return result;
+        }
+    }
+
+    // All composition happens in RGBA.
+    // storage.convertImageToRgba(io, alloc, img) catch |err| { ... };
+    // PORT NOTE: infallible in this port (see graphics_storage.rs).
+    storage.convert_image_to_rgba(alloc, img_id);
+
+    // The frame data is owned by this storage, so the const cast is
+    // safe. The rectangles were validated disjoint above, so in-place
+    // composition within one frame is well-defined.
+    // const src = img.frameData(c.source_frame).?;
+    // const dst = @constCast(img.frameData(c.dest_frame).?);
+    {
+        let img = storage.images.get_mut(&img_id).unwrap();
+        // @intCast(width) / @intCast(height)
+        let w = u32::try_from(width).unwrap();
+        let h = u32::try_from(height).unwrap();
+        if c.source_frame == c.dest_frame {
+            // Same frame: the reference aliases dst == src; the port's
+            // in-place variant carries the same math (graphics_pixel.rs).
+            let canvas = frame_data_mut(img, c.dest_frame).unwrap();
+            pixel::compose_canvas_rect_in_place(
+                canvas,
+                img_width,
+                w,
+                h,
+                c.left_edge,
+                c.top_edge,
+                c.x,
+                c.y,
+                c.composition_mode,
+            );
+        } else {
+            let (src, dst) = frame_data_pair(img, c.source_frame, c.dest_frame).unwrap();
+            pixel::compose_canvas_rect(
+                dst,
+                src,
+                img_width,
+                w,
+                h,
+                c.left_edge,
+                c.top_edge,
+                c.x,
+                c.y,
+                c.composition_mode,
+            );
+        }
+    }
+
+    // If the destination is the displayed frame then the on-screen
+    // content changed.
+    // const current: u32 = if (img.animation) |anim| anim.current_index else 0;
+    let current: u32 = {
+        let img = storage.images.get(&img_id).unwrap();
+        img.animation.as_ref().map_or(0, |anim| anim.current_index)
+    };
+    if c.dest_frame - 1 == current {
+        storage.mark_image_content_changed(img_id);
+    } else {
+        storage.mark_mutated();
+    }
+
+    result
+}
+
+/// Get or lazily create the animation state for an image.
+//
+// PORT NOTE: `Allocator.Error!*animation.Animation` — `alloc.create` maps to
+// `Box::default` (aborts on OOM), so the port is infallible; the callers'
+// `catch encodeError` arms are carried as comments at each call site.
+fn ensure_animation(img: &mut Image) -> &mut animation::Animation {
+    // if (img.animation) |anim| return anim;
+    // const anim = try alloc.create(animation.Animation);
+    // anim.* = .{};
+    // img.animation = anim;
+    // return anim;
+    if img.animation.is_none() {
+        img.animation = Some(Box::default());
+    }
+    img.animation.as_deref_mut().unwrap()
+}
+
+/// Mutable access to a frame's pixel buffer — the reference spells this
+/// `@constCast(img.frameData(number).?)` ("the frame data is owned by this
+/// storage, so the const cast is safe"); here the mutability is expressed
+/// directly as a `&mut` projection mirroring `Image::frame_data`.
+fn frame_data_mut(img: &mut Image, number: u32) -> Option<&mut [u8]> {
+    match number {
+        0 => None,
+        1 => match &mut img.data {
+            image::Data::Complete(data) => Some(data.as_mut_slice()),
+            image::Data::Pending(_) => None,
+        },
+        _ => {
+            let anim = img.animation.as_deref_mut()?;
+            let idx = (number - 2) as usize;
+            if idx >= anim.frames.len() {
+                return None;
+            }
+            Some(&mut anim.frames[idx].data)
+        }
+    }
+}
+
+/// Split-borrow two DIFFERENT frames of one image: the source shared, the
+/// destination mutable (the reference just aliases two pointers; the buffers
+/// are distinct heap allocations, so the split borrows are always disjoint).
+fn frame_data_pair(img: &mut Image, src_number: u32, dst_number: u32) -> Option<(&[u8], &mut [u8])> {
+    debug_assert!(src_number != dst_number);
+    if src_number == 0 || dst_number == 0 {
+        return None;
+    }
+    if src_number == 1 {
+        // Source is the base data; destination is an animation frame.
+        let src: &[u8] = match &img.data {
+            image::Data::Complete(data) => data.as_slice(),
+            image::Data::Pending(_) => return None,
+        };
+        let anim = img.animation.as_deref_mut()?;
+        let idx = (dst_number - 2) as usize;
+        if idx >= anim.frames.len() {
+            return None;
+        }
+        return Some((src, &mut anim.frames[idx].data));
+    }
+    if dst_number == 1 {
+        // Destination is the base data; source is an animation frame.
+        let anim = img.animation.as_deref()?;
+        let idx = (src_number - 2) as usize;
+        if idx >= anim.frames.len() {
+            return None;
+        }
+        let src: &[u8] = &anim.frames[idx].data;
+        let dst: &mut [u8] = match &mut img.data {
+            image::Data::Complete(data) => data.as_mut_slice(),
+            image::Data::Pending(_) => return None,
+        };
+        return Some((src, dst));
+    }
+    // Both are animation frames at distinct indices: split the Vec.
+    let anim = img.animation.as_deref_mut()?;
+    let si = (src_number - 2) as usize;
+    let di = (dst_number - 2) as usize;
+    if si >= anim.frames.len() || di >= anim.frames.len() {
+        return None;
+    }
+    if si < di {
+        let (head, tail) = anim.frames.split_at_mut(di);
+        Some((&head[si].data, &mut tail[0].data))
+    } else {
+        let (head, tail) = anim.frames.split_at_mut(si);
+        Some((&tail[0].data, &mut head[di].data))
+    }
+}
+
 /// Display a previously transmitted image.
 fn delete(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -> Response {
     // const storage = &terminal.screens.active.kitty_images;
@@ -828,6 +1593,8 @@ fn encode_error(r: &mut Response, err: image::Error) {
     match err {
         // error.OutOfMemory => r.message = "ENOMEM: out of memory",
         image::Error::OutOfMemory => r.message = b"ENOMEM: out of memory".to_vec(),
+        // error.InsufficientData => r.message = "ENODATA: insufficient data",
+        image::Error::InsufficientData => r.message = b"ENODATA: insufficient data".to_vec(),
         // error.InvalidData => r.message = "EINVAL: invalid data",
         image::Error::InvalidData => r.message = b"EINVAL: invalid data".to_vec(),
         // error.DecompressionFailed => r.message = "EINVAL: decompression failed",
@@ -2517,6 +3284,829 @@ mod tests {
             assert_eq!(0usize, storage.placements.len());
             assert!(storage.image_by_id(1).is_none());
         }
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: new frame with default gap responds with frame number"
+    #[test]
+    fn kittygfx_animation_new_frame_with_default_gap_responds_with_frame_number() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        // Transmit a 1x1 RGB blue frame ("AAD/" is 0000FF).
+        let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1;AAD/").unwrap();
+        let resp = execute(alloc, &mut t, &cmd).unwrap();
+        assert!(resp.ok());
+        assert_eq!(1u32, resp.id);
+        assert_eq!(2u32, resp.frame);
+
+        // var buf: [128]u8 = undefined;
+        // var writer: std.Io.Writer = .fixed(&buf);
+        // try resp.encode(&writer);
+        let mut buf: Vec<u8> = Vec::new();
+        resp.encode(&mut buf).unwrap();
+        assert_eq!(b"\x1b_Gi=1,r=2;OK\x1b\\".as_slice(), buf.as_slice());
+
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let img = storage.image_ptr_by_id_or_number(1, 0).unwrap();
+        assert_eq!(command::Format::Rgba, img.format);
+        assert_eq!(&[255, 0, 0, 255], img.data.bytes().unwrap());
+
+        let anim = img.animation.as_ref().unwrap();
+        assert_eq!(2u32, anim.frame_count());
+        assert_eq!(0u32, anim.root_gap_ms);
+        assert_eq!(40u32, anim.frames[0].gap_ms);
+        assert_eq!(&[0, 0, 255, 255], anim.frames[0].data.as_slice());
+
+        // The displayed frame is still the root: renderData is the base.
+        assert_eq!(&[255, 0, 0, 255], img.render_data().bytes().unwrap());
+
+        // Frame bytes count against the storage total.
+        assert_eq!(8usize, storage.total_bytes);
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: frame gap normalization on create"
+    #[test]
+    fn kittygfx_animation_frame_gap_normalization_on_create() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        for input in [
+            b"a=f,i=1,f=24,s=1,v=1,z=100;AAD/".as_slice(),
+            b"a=f,i=1,f=24,s=1,v=1,z=-5;AAD/".as_slice(),
+        ] {
+            let cmd = command::Parser::parse_string(input).unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let anim = storage
+            .image_ptr_by_id_or_number(1, 0)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap();
+        assert_eq!(100u32, anim.frames[0].gap_ms);
+        assert_eq!(0u32, anim.frames[1].gap_ms);
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: background fill and offset composition"
+    #[test]
+    fn kittygfx_animation_background_fill_and_offset_composition() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        // 2x1 RGB white image ("////////" is FFFFFF FFFFFF).
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=2,v=1,i=1;////////").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        // New frame: 1x1 RGB white transmitted at x=1 over an opaque red
+        // background (Y=4278190335 is 0xff0000ff, R in the MSB).
+        {
+            let cmd =
+                command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1,x=1,Y=4278190335;////")
+                    .unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let anim = storage
+            .image_ptr_by_id_or_number(1, 0)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            &[255, 0, 0, 255, 255, 255, 255, 255],
+            anim.frames[0].data.as_slice()
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: create from base frame with overwrite"
+    #[test]
+    fn kittygfx_animation_create_from_base_frame_with_overwrite() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        // Frame 2 based on the root (c=1) with a semi-transparent blue
+        // pixel ("AAD/gA==" is 0000FF80) in overwrite mode: the source
+        // replaces the canvas including alpha.
+        {
+            let cmd =
+                command::Parser::parse_string(b"a=f,i=1,f=32,s=1,v=1,c=1,X=1;AAD/gA==").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+        }
+
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let anim = storage
+            .image_ptr_by_id_or_number(1, 0)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap();
+        assert_eq!(&[0, 0, 255, 128], anim.frames[0].data.as_slice());
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: alpha blend composes over base frame"
+    #[test]
+    fn kittygfx_animation_alpha_blend_composes_over_base_frame() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        // Blend a fully opaque blue pixel over the root: alpha blending
+        // an opaque source is equivalent to a copy.
+        {
+            let cmd = command::Parser::parse_string(b"a=f,i=1,f=32,s=1,v=1,c=1;AAD//w==").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        // Blend a fully transparent pixel over the root: the canvas is
+        // unchanged (still the red base).
+        {
+            let cmd = command::Parser::parse_string(b"a=f,i=1,f=32,s=1,v=1,c=1;AAD/AA==").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let anim = storage
+            .image_ptr_by_id_or_number(1, 0)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap();
+        assert_eq!(&[0, 0, 255, 255], anim.frames[0].data.as_slice());
+        assert_eq!(&[255, 0, 0, 255], anim.frames[1].data.as_slice());
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: edit root frame bumps generation"
+    #[test]
+    fn kittygfx_animation_edit_root_frame_bumps_generation() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        let gen1 = unsafe { &(*t.screens.active).kitty_images }
+            .image_ptr_by_id_or_number(1, 0)
+            .unwrap()
+            .generation;
+
+        // r=1 edits the root frame in place. The root is the displayed
+        // frame so the image generation must change.
+        let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1,r=1;AAD/").unwrap();
+        let resp = execute(alloc, &mut t, &cmd).unwrap();
+        assert!(resp.ok());
+        assert_eq!(1u32, resp.frame);
+
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let img = storage.image_ptr_by_id_or_number(1, 0).unwrap();
+        assert_eq!(&[0, 0, 255, 255], img.data.bytes().unwrap());
+        assert!(img.generation > gen1);
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: edit frame gap without data change"
+    #[test]
+    fn kittygfx_animation_edit_frame_gap_without_data_change() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        // Create frame 2, then edit it with z=-1: gap becomes gapless.
+        // Editing with z=0 leaves the gap unchanged (no 40ms default).
+        {
+            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1,z=77;AAD/").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        {
+            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1,r=2;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        {
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            let anim = storage
+                .image_ptr_by_id_or_number(1, 0)
+                .unwrap()
+                .animation
+                .as_ref()
+                .unwrap();
+            assert_eq!(77u32, anim.frames[0].gap_ms);
+        }
+
+        {
+            let cmd =
+                command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1,r=2,z=-1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        {
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            let anim = storage
+                .image_ptr_by_id_or_number(1, 0)
+                .unwrap()
+                .animation
+                .as_ref()
+                .unwrap();
+            assert_eq!(0u32, anim.frames[0].gap_ms);
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: frame errors"
+    #[test]
+    fn kittygfx_animation_frame_errors() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        let cases: [(&[u8], &[u8]); 4] = [
+            // Unknown image.
+            (b"a=f,i=9,f=24,s=1,v=1;AAD/", b"ENOENT: image not found"),
+            // Frame bigger than the image.
+            (
+                b"a=f,i=1,f=24,s=2,v=1;////////",
+                b"EINVAL: frame dimensions exceed image",
+            ),
+            // Nonexistent base frame.
+            (
+                b"a=f,i=1,f=24,s=1,v=1,c=5;AAD/",
+                b"EINVAL: base frame not found",
+            ),
+            // Insufficient data for the declared rectangle.
+            (b"a=f,i=1,f=24,s=1,v=1;AA==", b"ENODATA: insufficient data"),
+        ];
+        for (input, message) in cases {
+            let cmd = command::Parser::parse_string(input).unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(!resp.ok());
+            assert_eq!(message, resp.message.as_slice());
+        }
+
+        // None of the failures may have created a frame.
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let img = storage.image_ptr_by_id_or_number(1, 0).unwrap();
+        if let Some(anim) = &img.animation {
+            assert_eq!(0usize, anim.frames.len());
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: excess frame data is truncated"
+    #[test]
+    fn kittygfx_animation_excess_frame_data_is_truncated() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        // Six bytes for a 1x1 RGB frame: Kitty tolerates the excess.
+        let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1;AAD/////").unwrap();
+        assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let anim = storage
+            .image_ptr_by_id_or_number(1, 0)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap();
+        assert_eq!(&[0, 0, 255, 255], anim.frames[0].data.as_slice());
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: chunked frame transmission"
+    #[test]
+    fn kittygfx_animation_chunked_frame_transmission() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        // 2x1 RGB white image.
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=2,v=1,i=1;////////").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        // Transmit a 2x1 frame in two chunks of one pixel each. The
+        // chunks repeat a=f per the protocol. No response until the
+        // final chunk.
+        {
+            let cmd =
+                command::Parser::parse_string(b"a=f,i=1,f=24,s=2,v=1,z=60,m=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).is_none());
+        }
+        assert!(unsafe { &(*t.screens.active).kitty_images }.loading.is_some());
+        {
+            let cmd = command::Parser::parse_string(b"a=f,m=0;AAD/").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+            assert_eq!(1u32, resp.id);
+            assert_eq!(2u32, resp.frame);
+        }
+        assert!(unsafe { &(*t.screens.active).kitty_images }.loading.is_none());
+
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let anim = storage
+            .image_ptr_by_id_or_number(1, 0)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap();
+        assert_eq!(60u32, anim.frames[0].gap_ms);
+        assert_eq!(
+            &[255, 0, 0, 255, 0, 0, 255, 255],
+            anim.frames[0].data.as_slice()
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: chunked frame continuation without a=f"
+    #[test]
+    fn kittygfx_animation_chunked_frame_continuation_without_a_f() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=2,v=1,i=1;////////").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        // The spec requires chunks to repeat a=f, but a bare continuation
+        // (which parses as a transmit action) must still continue the
+        // frame load rather than turn into an image transmission.
+        {
+            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=2,v=1,m=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).is_none());
+        }
+        {
+            let cmd = command::Parser::parse_string(b"m=0;AAD/").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+            assert_eq!(2u32, resp.frame);
+        }
+
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let anim = storage
+            .image_ptr_by_id_or_number(1, 0)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap();
+        assert_eq!(1usize, anim.frames.len());
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: control command sets gap current state and loops"
+    #[test]
+    fn kittygfx_animation_control_command_sets_gap_current_state_and_loops() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        {
+            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1;AAD/").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        let gen1 = unsafe { &(*t.screens.active).kitty_images }
+            .image_ptr_by_id_or_number(1, 0)
+            .unwrap()
+            .generation;
+
+        // One command can set several things: the root frame's gap
+        // (r=1,z=50), the current frame (c=2), the state (s=3, running),
+        // and the loop count (v=3, meaning two loops). Successful a=a
+        // commands never respond.
+        let cmd = command::Parser::parse_string(b"a=a,i=1,r=1,z=50,c=2,s=3,v=3").unwrap();
+        assert!(execute(alloc, &mut t, &cmd).is_none());
+
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let img = storage.image_ptr_by_id_or_number(1, 0).unwrap();
+        let anim = img.animation.as_ref().unwrap();
+        assert_eq!(50u32, anim.root_gap_ms);
+        assert_eq!(1u32, anim.current_index);
+        assert_eq!(animation::State::Running, anim.state);
+        assert_eq!(2u32, anim.max_loops);
+
+        // Changing the current frame changes the displayed content.
+        assert!(img.generation > gen1);
+        assert_eq!(&[0, 0, 255, 255], img.render_data().bytes().unwrap());
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: control command ignores invalid values"
+    #[test]
+    fn kittygfx_animation_control_command_ignores_invalid_values() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        // Out-of-range frame numbers and s values are silently ignored.
+        let cmd = command::Parser::parse_string(b"a=a,i=1,r=9,z=50,c=9,s=7").unwrap();
+        assert!(execute(alloc, &mut t, &cmd).is_none());
+
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let anim = storage
+            .image_ptr_by_id_or_number(1, 0)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap();
+        assert_eq!(0u32, anim.root_gap_ms);
+        assert_eq!(0u32, anim.current_index);
+        assert_eq!(animation::State::Stopped, anim.state);
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: control command missing image responds ENOENT"
+    #[test]
+    fn kittygfx_animation_control_command_missing_image_responds_enoent() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        let cmd = command::Parser::parse_string(b"a=a,i=9,s=3").unwrap();
+        let resp = execute(alloc, &mut t, &cmd).unwrap();
+        assert!(!resp.ok());
+        assert_eq!(b"ENOENT: image not found".as_slice(), resp.message.as_slice());
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: compose frames"
+    #[test]
+    fn kittygfx_animation_compose_frames() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        // 2x1 RGB image: red then blue ("/wAAAAD/" is FF0000 0000FF).
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=2,v=1,i=1;/wAAAAD/").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        // Frame 2 starts as a transparent canvas with a white pixel at
+        // x=0 ("////" is FFFFFF).
+        {
+            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1;////").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        // Compose the root's pixel at (1,0) onto frame 2 at (0,0):
+        // r=1 is the source frame, c=2 the destination, X/Y the source
+        // offsets, x/y the destination offsets.
+        {
+            let cmd = command::Parser::parse_string(b"a=c,i=1,r=1,c=2,w=1,h=1,X=1,x=0").unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(resp.ok());
+            assert_eq!(0u32, resp.frame);
+        }
+
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let anim = storage
+            .image_ptr_by_id_or_number(1, 0)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            &[0, 0, 255, 255, 0, 0, 0, 0],
+            anim.frames[0].data.as_slice()
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: compose current frame bumps generation"
+    #[test]
+    fn kittygfx_animation_compose_current_frame_bumps_generation() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        // 2x1 RGB white image; the root frame is the displayed frame.
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=2,v=1,i=1;////////").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        let gen1 = unsafe { &(*t.screens.active).kitty_images }
+            .image_ptr_by_id_or_number(1, 0)
+            .unwrap()
+            .generation;
+
+        // a=c works on images without animation state: both frames are
+        // the root. Copy pixel 0 onto pixel 1.
+        let cmd = command::Parser::parse_string(b"a=c,i=1,r=1,c=1,w=1,h=1,x=1").unwrap();
+        assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        let img_generation = unsafe { &(*t.screens.active).kitty_images }
+            .image_ptr_by_id_or_number(1, 0)
+            .unwrap()
+            .generation;
+        assert!(img_generation > gen1);
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: compose errors"
+    #[test]
+    fn kittygfx_animation_compose_errors() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        let cases: [(&[u8], &[u8]); 6] = [
+            (b"a=c,i=9,r=1,c=1", b"ENOENT: image not found"),
+            (b"a=c,i=1,r=2,c=1", b"ENOENT: source frame not found"),
+            (b"a=c,i=1,r=1,c=2", b"ENOENT: destination frame not found"),
+            // 1x1 image: any offset pushes the rect out of bounds.
+            (
+                b"a=c,i=1,r=1,c=1,x=1",
+                b"EINVAL: destination rectangle out of bounds",
+            ),
+            (
+                b"a=c,i=1,r=1,c=1,X=1",
+                b"EINVAL: source rectangle out of bounds",
+            ),
+            // Same frame, same (whole-image) rect: overlap.
+            (
+                b"a=c,i=1,r=1,c=1",
+                b"EINVAL: source and destination rectangles overlap",
+            ),
+        ];
+        for (input, message) in cases {
+            let cmd = command::Parser::parse_string(input).unwrap();
+            let resp = execute(alloc, &mut t, &cmd).unwrap();
+            assert!(!resp.ok());
+            assert_eq!(message, resp.message.as_slice());
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: delete frame promotes root and fixes current"
+    #[test]
+    fn kittygfx_animation_delete_frame_promotes_root_and_fixes_current() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        // Frames 2 and 3: blue and white.
+        for input in [
+            b"a=f,i=1,f=24,s=1,v=1,z=10;AAD/".as_slice(),
+            b"a=f,i=1,f=24,s=1,v=1,z=20;////".as_slice(),
+        ] {
+            let cmd = command::Parser::parse_string(input).unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        let total_before = unsafe { &(*t.screens.active).kitty_images }.total_bytes;
+
+        // Delete the root frame (r omitted selects it): frame 2 becomes
+        // the new root, including its gap. Deletes never respond.
+        {
+            let cmd = command::Parser::parse_string(b"a=d,d=f,i=1").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).is_none());
+        }
+        {
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            let img = storage.image_ptr_by_id_or_number(1, 0).unwrap();
+            let anim = img.animation.as_ref().unwrap();
+            assert_eq!(2u32, anim.frame_count());
+            assert_eq!(10u32, anim.root_gap_ms);
+            assert_eq!(&[0, 0, 255, 255], img.data.bytes().unwrap());
+            assert_eq!(total_before - 4, storage.total_bytes);
+        }
+
+        // Delete a frame number past the end: clamps to the last frame.
+        {
+            let cmd = command::Parser::parse_string(b"a=d,d=f,i=1,r=9").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).is_none());
+        }
+        {
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            let anim = storage
+                .image_ptr_by_id_or_number(1, 0)
+                .unwrap()
+                .animation
+                .as_ref()
+                .unwrap();
+            assert_eq!(1u32, anim.frame_count());
+            assert_eq!(total_before - 8, storage.total_bytes);
+        }
+
+        // Down to one frame: d=f is now a no-op and the image survives.
+        {
+            let cmd = command::Parser::parse_string(b"a=d,d=f,i=1").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).is_none());
+        }
+        assert!(unsafe { &(*t.screens.active).kitty_images }
+            .image_by_id(1)
+            .is_some());
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: uppercase frame delete removes non-animated image"
+    #[test]
+    fn kittygfx_animation_uppercase_frame_delete_removes_non_animated_image() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+
+        // Transmit and place: unlike d=I, an uppercase frame delete on a
+        // non-animated image removes it even though it is placed.
+        {
+            let cmd = command::Parser::parse_string(b"a=T,f=24,s=1,v=1,i=1,C=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        assert_eq!(
+            1usize,
+            unsafe { &(*t.screens.active).kitty_images }.placements.len()
+        );
+
+        {
+            let cmd = command::Parser::parse_string(b"a=d,d=F,i=1").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).is_none());
+        }
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        assert!(storage.image_by_id(1).is_none());
+        assert_eq!(0usize, storage.placements.len());
+        assert_eq!(0usize, storage.total_bytes);
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: deleting current frame refreshes display"
+    #[test]
+    fn kittygfx_animation_deleting_current_frame_refreshes_display() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        for input in [
+            b"a=f,i=1,f=24,s=1,v=1;AAD/".as_slice(),
+            b"a=f,i=1,f=24,s=1,v=1;////".as_slice(),
+            b"a=a,i=1,c=3".as_slice(),
+        ] {
+            let cmd = command::Parser::parse_string(input).unwrap();
+            let _ = execute(alloc, &mut t, &cmd);
+        }
+
+        let gen1 = {
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            let img = storage.image_ptr_by_id_or_number(1, 0).unwrap();
+            let anim = img.animation.as_ref().unwrap();
+            assert_eq!(2u32, anim.current_index);
+            img.generation
+        };
+
+        // Deleting the last frame (the current one) clamps the index and
+        // refreshes the display.
+        {
+            let cmd = command::Parser::parse_string(b"a=d,d=f,i=1,r=3").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).is_none());
+        }
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let img = storage.image_ptr_by_id_or_number(1, 0).unwrap();
+        let anim = img.animation.as_ref().unwrap();
+        assert_eq!(1u32, anim.current_index);
+        assert!(img.generation > gen1);
+        assert_eq!(&[0, 0, 255, 255], img.render_data().bytes().unwrap());
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: retransmitting base image resets animation"
+    #[test]
+    fn kittygfx_animation_retransmitting_base_image_resets_animation() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        {
+            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1;AAD/").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        assert_eq!(
+            8usize,
+            unsafe { &(*t.screens.active).kitty_images }.total_bytes
+        );
+
+        // Retransmit the base image: the animation is dropped and the
+        // frame bytes are credited back.
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let img = storage.image_ptr_by_id_or_number(1, 0).unwrap();
+        assert!(img.animation.is_none());
+        assert_eq!(3usize, storage.total_bytes);
+
+        t.deinit(alloc);
+    }
+
+    // test "kittygfx animation: control negative gap makes frame gapless"
+    #[test]
+    fn kittygfx_animation_control_negative_gap_makes_frame_gapless() {
+        let alloc = allocator_api2::alloc::Global;
+
+        let mut t = Terminal::init(alloc, opts(5, 5)).unwrap();
+        {
+            let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=1,i=1;/wAA").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+        {
+            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1;AAD/").unwrap();
+            assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
+        }
+
+        let cmd = command::Parser::parse_string(b"a=a,i=1,r=2,z=-1").unwrap();
+        assert!(execute(alloc, &mut t, &cmd).is_none());
+
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let anim = storage
+            .image_ptr_by_id_or_number(1, 0)
+            .unwrap()
+            .animation
+            .as_ref()
+            .unwrap();
+        assert_eq!(0u32, anim.frames[0].gap_ms);
 
         t.deinit(alloc);
     }

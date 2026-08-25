@@ -1189,6 +1189,12 @@ pub struct AnimationFrameLoading {
 /// the most significant byte (0xRRGGBBAA), e.g. Y=4278190335
 /// (0xff0000ff) is opaque red. Bit-cast from the little-endian
 /// u32 value, so the field order is reversed from the byte order.
+//
+// PORT NOTE: the reference is `packed struct(u32) { a, b, g, r }` — Zig lays a
+// packed struct out least-significant-field-first, so `a` is the low byte and
+// `r` the high byte of the little-endian u32. The bit-cast is spelled out in
+// [`Background::from_int`] and pinned by the
+// `background_bit_cast_is_0x_rrggbbaa` golden-byte KAT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Background {
     pub a: u8,
@@ -1209,6 +1215,14 @@ impl Background {
             g: ((v >> 16) & 0xff) as u8,
             r: ((v >> 24) & 0xff) as u8,
         }
+    }
+
+    /// The inverse of [`Background::from_int`]. Not used by the reference
+    /// (which bit-casts in one direction only), but required to keep the two
+    /// halves of the projection provably consistent — see the round-trip KAT
+    /// (the `Usage::to_bits` precedent).
+    pub fn to_int(self) -> u32 {
+        (self.a as u32) | ((self.b as u32) << 8) | ((self.g as u32) << 16) | ((self.r as u32) << 24)
     }
 }
 
@@ -1239,6 +1253,10 @@ impl AnimationFrameLoading {
             // 'z' is one of the keys Parser.finishValue parses as an
             // i32, so the u32 in the KV table is the bit pattern of
             // that i32 and this reconstructs it exactly.
+            //
+            // PORT NOTE (R7): `@bitCast` — this is the intentional
+            // truncation-free bit-pattern reinterpretation, NOT a checked
+            // narrowing; pinned by the `gap_ms_is_a_bit_pattern_cast` KAT.
             result.gap_ms = i32::from_ne_bytes(v.to_ne_bytes());
         }
 
@@ -1261,9 +1279,9 @@ impl AnimationFrameLoading {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AnimationFrameComposition {
-    pub image_id: u32,      // i
-    pub image_number: u32,  // I
-    pub placement_id: u32,  // p
+    pub image_id: u32,     // i
+    pub image_number: u32, // I
+    pub placement_id: u32, // p
 
     /// The 1-based frame number being edited (the destination).
     pub dest_frame: u32, // c
@@ -1422,6 +1440,8 @@ impl AnimationControl {
             // 'z' is one of the keys Parser.finishValue parses as an
             // i32, so the u32 in the KV table is the bit pattern of
             // that i32 and this reconstructs it exactly.
+            //
+            // PORT NOTE (R7): `@bitCast` — see `AnimationFrameLoading::parse`.
             result.gap_ms = i32::from_ne_bytes(v.to_ne_bytes());
         }
 
@@ -2631,5 +2651,70 @@ mod tests {
                 "input: {input:?}"
             );
         }
+    }
+
+    // Golden-byte KAT (rustty addition, not a reference test; `4b915e3bc`
+    // amends existing parse arms without adding `^test` blocks, so this pins
+    // the amended semantics directly): the a=f/a=a `z` key is parsed by
+    // `finishValue` as an i32 whose BIT PATTERN is stored in the u32 KV table;
+    // `gap_ms` reconstructs it with a bit cast, never a checked narrowing.
+    #[test]
+    fn gap_ms_is_a_bit_pattern_cast() {
+        // z=-5 → parse_int_i32 = -5i32 → stored as 0xFFFF_FFFB.
+        let cmd = Parser::parse_string(b"a=f,z=-5").unwrap();
+        let f = match cmd.control {
+            Control::TransmitAnimationFrame(f) => f,
+            _ => unreachable!(),
+        };
+        assert_eq!(-5i32, f.gap_ms);
+        assert_eq!(0xFFFF_FFFBu32, f.gap_ms as u32);
+
+        let cmd = Parser::parse_string(b"a=a,i=1,z=-1").unwrap();
+        let a = match cmd.control {
+            Control::ControlAnimation(a) => a,
+            _ => unreachable!(),
+        };
+        assert_eq!(-1i32, a.gap_ms);
+        assert_eq!(u32::MAX, a.gap_ms as u32);
+    }
+
+    // Golden-byte KAT (rustty addition, see above): the `Y` background value
+    // is a `packed struct(u32) { a, b, g, r }` bit-cast — `a` in the least
+    // significant byte, `r` in the most significant, i.e. Y=0xRRGGBBAA.
+    // Y=4278190335 (0xff0000ff) is opaque red per the reference doc comment.
+    #[test]
+    fn background_bit_cast_is_0x_rrggbbaa() {
+        let bg = Background::from_int(4278190335);
+        assert_eq!(0xff, bg.r);
+        assert_eq!(0x00, bg.g);
+        assert_eq!(0x00, bg.b);
+        assert_eq!(0xff, bg.a);
+        // Round-trip: the projection halves stay consistent.
+        assert_eq!(4278190335, bg.to_int());
+
+        // A distinct-byte pattern pins each lane: 0x11223344 → r=0x11 g=0x22
+        // b=0x33 a=0x44.
+        let bg = Background::from_int(0x11223344);
+        assert_eq!(
+            (0x11, 0x22, 0x33, 0x44),
+            (bg.r, bg.g, bg.b, bg.a),
+        );
+        assert_eq!(0x11223344, bg.to_int());
+
+        // Parsed through the real KV path.
+        let cmd = Parser::parse_string(b"a=f,Y=4278190335").unwrap();
+        let f = match cmd.control {
+            Control::TransmitAnimationFrame(f) => f,
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            Background {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255
+            },
+            f.background
+        );
     }
 }

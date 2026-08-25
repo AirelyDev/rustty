@@ -3,11 +3,6 @@
 //! Documentation:
 //! https://sw.kovidgoyal.net/kitty/graphics-protocol
 //!
-//! Unimplemented features that are still todo:
-//! - shared memory transmit
-//! - virtual placement w/ unicode
-//! - animation
-//!
 //! Performance:
 //! The performance of this particular subsystem of Ghostty is not great.
 //! We can avoid a lot more allocations, we can replace some C code (which
@@ -33,8 +28,14 @@ use super::graphics_image as image;
 // (->Screen) is a compiling stub; once ported it will re-export `ImageStorage`
 // below alongside the others.
 use super::graphics_storage as storage;
+// pub const animation = @import("graphics_animation.zig");
+pub use super::graphics_animation as animation;
+// pub const pixel = @import("graphics_pixel.zig");
+pub use super::graphics_pixel as pixel;
 // pub const unicode = @import("graphics_unicode.zig");
 pub use super::graphics_unicode as unicode;
+// pub const Animation = animation.Animation;
+pub use animation::Animation;
 // pub const Command = command.Command;
 pub use command::Command;
 // pub const CommandParser = command.Parser;

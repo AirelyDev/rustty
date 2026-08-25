@@ -24,9 +24,11 @@
 // `terminal.Screen`/`terminal.Terminal` are `crate::screen::Screen` /
 // `crate::terminal::Terminal`; `PageList.Pin` is `crate::pagelist::Pin`; the
 // `command`/`Image`/`LoadingImage`/`Rect` come from the sibling kitty modules.
+use crate::kitty::graphics_animation as animation;
 use crate::kitty::graphics_command as command;
 use crate::kitty::graphics_image;
 use crate::kitty::graphics_image::{Image, Limits, LoadingImage, Rect};
+use crate::kitty::graphics_pixel as pixel;
 use crate::pagelist as PageList;
 use crate::point;
 use crate::screen::Screen;
@@ -328,7 +330,10 @@ impl ImageStorage {
     /// switches); those must set only the dirty flag directly. Bumping the
     /// generation for geometry changes would break the contract that an
     /// unchanged generation means unchanged contents.
-    fn mark_mutated(&mut self) {
+    //
+    // PORT NOTE: `pub` since the animation exec paths call it directly
+    // (matching the head `pub fn markMutated`).
+    pub fn mark_mutated(&mut self) {
         self.dirty = true;
         self.generation = next_generation();
     }
@@ -429,7 +434,7 @@ impl ImageStorage {
         // replacing pending snapshot metadata must be able to reuse the
         // reservation without evicting its own ID.
         let old_len = if let Some(old) = self.images.get(&img.id) {
-            old.data.len()
+            old.storage_size()
         } else {
             0
         };
@@ -461,7 +466,7 @@ impl ImageStorage {
         // if (gop.found_existing) {
         //     self.removePlacementsByImageId(s, img.id);
         //     _ = self.removeOrphans(s, null);
-        //     self.total_bytes -= gop.value_ptr.data.len();
+        //     self.total_bytes -= gop.value_ptr.storageSize();
         //     gop.value_ptr.deinit(alloc);
         // }
         let id = img.id;
@@ -473,9 +478,12 @@ impl ImageStorage {
             // Relative placements parented to the removed placements go too.
             let _ = self.remove_orphans(s, None);
 
-            self.total_bytes -= self.images.get(&id).unwrap().data.len();
-            // the existing `Image` (and its payload) is dropped by the
-            // `insert` below.
+            // Replacing an image drops its animation frames with it,
+            // implementing the protocol rule that retransmitting the
+            // base image resets the animation.
+            self.total_bytes -= self.images.get(&id).unwrap().storage_size();
+            // the existing `Image` (its payload and animation) is dropped by
+            // the `insert` below.
         }
         let _ = &alloc;
 
@@ -604,6 +612,230 @@ impl ImageStorage {
         // This always mutates
         self.mark_mutated();
         Ok(())
+    }
+
+    /// Adjust placements for a scroll of the terminal's scrolling region
+    /// by `delta` rows (negative moves content up). This implements the
+    /// Kitty graphics protocol behavior for scrolls bounded by margins:
+    /// placements entirely inside the scrolling region move with the content
+    /// and are clipped when the move would extend them past a margin (deleted
+    /// when fully clipped), while every other placement (straddling a margin,
+    /// outside the region, or in the scrollback) must not move at all.
+    ///
+    /// This is split into two phases around the row operation because
+    /// the various scroll implementations move tracked pins in
+    /// inconsistent ways (some shift the active area so every pin moves,
+    /// some rotate rows in place and adjust only pins inside the
+    /// region). We record the desired final position of every placement
+    /// up front in the returned state, whose end() repositions the pins
+    /// once the rows have settled, making the result independent of the
+    /// path taken. Every call must be paired with exactly one end().
+    ///
+    /// Callers must skip this entirely when the scrolling region is the
+    /// full screen: a full-screen scroll moves placements with their
+    /// anchored rows (possibly into the scrollback) via pin tracking,
+    /// which already matches kitty's marginless scroll behavior.
+    //
+    // PORT NOTE (hazard #1, phase-5 plan — the ScrollMargins guard): the
+    // reference takes `t: *terminal.Terminal` while `self` lives INSIDE
+    // `t.screens.active` (`screen.kitty_images`) — the raw-`*mut` argument
+    // follows `rust-mut-args-strongly-protected` / this file's `s: *mut
+    // Screen` discipline: `t`/`s` are dereferenced only in narrow scopes
+    // (field reads, `grid_size(&*t)`, `Placement::deinit(s)`) that never
+    // overlap a `&mut` reconstruction of the terminal or screen. The
+    // Zig iterate-with-removal over `placements` is the sanctioned
+    // collect-keys-first shape. Proven on the isolated Miri harness at
+    // `.port/phase-5/mirihar-scroll-margins/`.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    pub fn scroll_margins_begin(
+        &mut self,
+        t: *mut Terminal,
+        delta: isize,
+        op: ScrollOp,
+    ) -> ScrollMargins {
+        // const s: *terminal.Screen = t.screens.active;
+        // SAFETY(raw-page-aliasing/graphics_storage): `t` is the terminal
+        // owning this storage's screen (the caller's contract); only field
+        // reads are performed through it in this fn and no `&mut Terminal`
+        // is reconstructed while `&mut self` is live.
+        let s: *mut Screen = unsafe { (*t).screens.active };
+        // assert(self == &s.kitty_images);
+        assert(core::ptr::eq(self as *const ImageStorage, unsafe {
+            &raw const (*s).kitty_images
+        }));
+        let mut result: ScrollMargins = ScrollMargins {
+            screen: s,
+            restores: Vec::new(),
+        };
+
+        // const top: i64 = t.scrolling_region.top;
+        // const bottom: i64 = t.scrolling_region.bottom;
+        let top: i64 = unsafe { (*t).scrolling_region.top } as i64;
+        let bottom: i64 = unsafe { (*t).scrolling_region.bottom } as i64;
+
+        let mut mutated = false;
+        // var it = self.placements.iterator();
+        // while (it.next()) |entry| { ... }
+        let keys: Vec<PlacementKey> = self.placements.keys().copied().collect();
+        'placements: for key in keys {
+            // const p: *Placement = entry.value_ptr;
+
+            // Virtual placements follow their placeholder cells and
+            // relative placements follow their parents, so neither is
+            // ever adjusted by scrolls, matching kitty.
+            let pin: *mut PageList::Pin = match self.placements.get(&key).unwrap().location {
+                Location::Pin(pin) => pin,
+                Location::Virtual | Location::Relative(_) => continue,
+            };
+
+            // Pruned placements are reaped by reapGarbagePlacements.
+            // SAFETY(raw-page-aliasing/graphics_storage): `pin` is a tracked
+            // pin owned by the screen's pagelist; only shared reads are
+            // performed and no `&mut` to the pin is live across them.
+            if unsafe { (*pin).garbage } {
+                continue;
+            }
+
+            // Placements anchored outside the active area (scrollback)
+            // are never touched by a scroll within the margins.
+            // SAFETY: see the `s`/`pin` contracts above; `point_from_pin`
+            // takes `&self.pages` and the pin by value.
+            let coord = match unsafe { (*s).pages.point_from_pin(point::Tag::Active, *pin) } {
+                Some(pt) => pt.coord(),
+                None => continue,
+            };
+            let y: i64 = coord.y as i64;
+
+            // An in-place operation doesn't touch pins anchored outside
+            // the region rows, and a placement anchored there can never
+            // be entirely inside the region, so it needs no work at all.
+            if op == ScrollOp::InPlace && (y < top || y > bottom) {
+                continue;
+            }
+
+            // The final position defaults to unmoved; restoring the pin
+            // to this exact spot afterwards is what stops the row
+            // operations from dragging the placement around.
+            let mut final_y: i64 = y;
+
+            'inside: {
+                // const image = self.images.get(entry.key_ptr.image_id) orelse break :inside;
+                let image = match self.images.get(&key.image_id) {
+                    Some(image) => image,
+                    None => break 'inside,
+                };
+                // const grid = p.gridSize(image, t);
+                // SAFETY: narrow shared reborrow of the terminal for the
+                // geometry read; no `&mut` to the terminal is live.
+                let grid = self
+                    .placements
+                    .get(&key)
+                    .unwrap()
+                    .grid_size(image, unsafe { &*t });
+
+                // Unknown geometry (e.g. pixel sizes not yet reported)
+                // means we can't know the extent, so we can't consider
+                // the placement contained.
+                if grid.rows == 0 || grid.cols == 0 {
+                    break 'inside;
+                }
+
+                // Only placements entirely within the scrolling region
+                // move. Kitty only has top/bottom margins so it only
+                // checks rows; the column check is our generalization
+                // for left/right margins and is trivially true for
+                // full-width regions.
+                if y < top || y + grid.rows as i64 - 1 > bottom {
+                    break 'inside;
+                }
+                let x: i64 = coord.x as i64;
+                // if (x < t.scrolling_region.left or
+                //     @min(x + grid.cols - 1, @as(i64, t.cols) - 1) > t.scrolling_region.right) break :inside;
+                if x < unsafe { (*t).scrolling_region.left } as i64
+                    || core::cmp::min(
+                        x + grid.cols as i64 - 1,
+                        unsafe { (*t).cols } as i64 - 1,
+                    ) > unsafe { (*t).scrolling_region.right } as i64
+                {
+                    break 'inside;
+                }
+
+                let new_y: i64 = y + delta as i64;
+                let rows: i64 = grid.rows as i64;
+                let top_clip: i64 = core::cmp::max(0, top - new_y);
+                let bottom_clip: i64 = core::cmp::max(0, new_y + rows - 1 - bottom);
+                let visible: bool = 'clip: {
+                    if top_clip >= rows || bottom_clip >= rows {
+                        break 'clip false;
+                    }
+
+                    if top_clip > 0 {
+                        // if (!p.clipTop(image, t, @intCast(top_clip), grid.rows)) break :clip false;
+                        if !self.placements.get_mut(&key).unwrap().clip_top(
+                            image,
+                            unsafe { &*t },
+                            u32::try_from(top_clip).unwrap(),
+                            grid.rows,
+                        ) {
+                            break 'clip false;
+                        }
+                        mutated = true;
+                        final_y = top;
+                        break 'clip true;
+                    }
+
+                    if bottom_clip > 0 {
+                        // if (!p.clipBottom(image, t, @intCast(bottom_clip), grid.rows)) break :clip false;
+                        if !self.placements.get_mut(&key).unwrap().clip_bottom(
+                            image,
+                            unsafe { &*t },
+                            u32::try_from(bottom_clip).unwrap(),
+                            grid.rows,
+                        ) {
+                            break 'clip false;
+                        }
+                        mutated = true;
+                    }
+
+                    final_y = new_y;
+                    true
+                };
+
+                // Scrolled or clipped entirely out of the region: the
+                // placement is deleted, like kitty. The image itself is
+                // retained for future placements.
+                if !visible {
+                    // self.removePlacement(s, entry);
+                    self.remove_placement(s, &key);
+                    mutated = true;
+                    continue 'placements;
+                }
+            }
+
+            // result.restores.append(s.alloc, .{ ... }) catch {
+            //     // OOM: this placement is left to the whims of the
+            //     // generic pin tracking. Degraded, but safe.
+            //     log.warn("OOM adjusting image placement for scroll", .{});
+            //     continue;
+            // };
+            // PORT NOTE: Rust's `Vec::push` aborts on OOM, so the reference's
+            // degraded-but-safe fallback arm is unreachable in this port.
+            result.restores.push(Restore {
+                pin,
+                // SAFETY: shared read of the tracked pin, see above.
+                x: unsafe { (*pin).x },
+                // .y = @intCast(final_y),
+                y: u32::try_from(final_y).unwrap(),
+            });
+        }
+
+        if mutated {
+            // Placements deleted by clipping may orphan relative placements.
+            // Orphans have no pins so this never touches the restores.
+            let _ = self.remove_orphans(s, None);
+            self.mark_mutated();
+        }
+        result
     }
 
     /// Reap pin-backed placements whose tracked content has been pruned
@@ -976,6 +1208,317 @@ impl ImageStorage {
         newest
     }
 
+    /// Get a mutable pointer to a stored image, by ID or (newest by)
+    /// number, following the protocol's id/number addressing. Used by
+    /// the animation commands, which mutate images in place. The
+    /// pointer is invalidated by any operation that adds or removes
+    /// images.
+    //
+    // PORT NOTE (hazard #3, phase-5 plan): the reference returns `?*Image` — a
+    // raw pointer INTO `self.images` that exec then holds across storage
+    // mutators which can evict (invalidation upstream is a documented
+    // contract). The port returns a shared borrow; mutating callers resolve
+    // the image's concrete `id` from it and re-look it up per mutation
+    // (`images.get_mut`), which is the sanctioned collect/re-lookup shape and
+    // observably identical (ids are unique and stable).
+    pub fn image_ptr_by_id_or_number(&self, image_id: u32, image_number: u32) -> Option<&Image> {
+        if image_id != 0 {
+            return self.images.get(&image_id);
+        }
+
+        let mut newest: Option<&Image> = None;
+        // var it = self.images.iterator();
+        for kv in self.images.values() {
+            if kv.number != image_number {
+                continue;
+            }
+            if newest.is_none() || kv.generation > newest.unwrap().generation {
+                newest = Some(kv);
+            }
+        }
+
+        newest
+    }
+
+    /// Record that the displayed content of an image changed without
+    /// the image being re-added: marks the storage mutated and stamps
+    /// the image with the fresh generation so consumers (e.g. the
+    /// renderer's texture cache) replace what they hold. Used when an
+    /// animation changes which frame is current or edits the current
+    /// frame's pixels.
+    //
+    // PORT NOTE (hazard #3): the reference takes `img: *Image` aliasing
+    // `&mut self`; the port takes the image id and re-looks it up (the image
+    // is present at every call site — upstream derefs the pointer
+    // unconditionally).
+    pub fn mark_image_content_changed(&mut self, image_id: u32) {
+        self.mark_mutated();
+        let generation = self.generation;
+        self.images.get_mut(&image_id).unwrap().generation = generation;
+    }
+
+    /// Convert a stored image's base data to RGBA in place, adjusting
+    /// byte accounting. All animation composition happens in RGBA;
+    /// this is called before the first composition into an image.
+    ///
+    /// The pixels are unchanged visually but the stored representation
+    /// changed, so the image is stamped with a fresh generation.
+    //
+    // PORT NOTE: `Allocator.Error!void` — the only reference failure is a
+    // real allocation failure inside `rgbaFromFormat`, which aborts in this
+    // port (see graphics_pixel.rs), so the port is infallible; the exec
+    // callers' `catch` ENOMEM arms are carried as comments. `img: *Image` →
+    // image id per the hazard-#3 note above.
+    pub fn convert_image_to_rgba(&mut self, alloc: Allocator, image_id: u32) {
+        let _ = &alloc;
+        let (rgba, old_len) = {
+            let img = self.images.get(&image_id).unwrap();
+            if img.format == command::Format::Rgba {
+                return;
+            }
+            // const old = img.data.bytes() orelse return;
+            let old = match img.data.bytes() {
+                Some(old) => old,
+                None => return,
+            };
+
+            // const rgba = try pixel.rgbaFromFormat(alloc, img.format, old);
+            (pixel::rgba_from_format(img.format, old), old.len())
+        };
+        {
+            let img = self.images.get_mut(&image_id).unwrap();
+            let new_len = rgba.len();
+            // img.data.deinit(alloc); — the assignment below drops the old
+            // payload.
+            img.data = graphics_image::Data::Complete(rgba);
+            img.format = command::Format::Rgba;
+            self.total_bytes -= old_len;
+            self.total_bytes += new_len;
+        }
+        self.mark_image_content_changed(image_id);
+    }
+
+    /// Reserve `bytes` of storage for animation frame data belonging
+    /// to `image_id`, evicting other images if needed, mirroring how
+    /// image transmission reserves space.
+    ///
+    /// Errors if the space cannot be made available. On success the caller
+    /// owns the reservation and must either attach the frame data to the
+    /// image or call releaseAnimationBytes.
+    pub fn reserve_animation_bytes(
+        &mut self,
+        alloc: Allocator,
+        s: *mut Screen,
+        image_id: u32,
+        bytes: usize,
+    ) -> Result<(), OutOfMemory> {
+        if bytes > self.total_limit {
+            return Err(OutOfMemory);
+        }
+
+        let total_bytes = self.total_bytes + bytes;
+        if total_bytes > self.total_limit {
+            let req_bytes = total_bytes - self.total_limit;
+            // Excess this large cannot be recovered by evicting other
+            // images (evictImageExcept also requires it).
+            if req_bytes > self.total_limit {
+                return Err(OutOfMemory);
+            }
+            // log.info("evicting images for animation frame, evicting={}", .{req_bytes});
+            if !self.evict_image_except(alloc, s, req_bytes, Some(image_id)) {
+                // log.warn("failed to evict enough images for animation frame", .{});
+                return Err(OutOfMemory);
+            }
+        }
+
+        self.total_bytes += bytes;
+        Ok(())
+    }
+
+    /// Release a reservation made by reserveAnimationBytes, or credit
+    /// bytes freed by deleting animation frame data.
+    pub fn release_animation_bytes(&mut self, bytes: usize) {
+        assert(bytes <= self.total_bytes);
+        self.total_bytes -= bytes;
+    }
+
+    /// Advance every running animation to the frame that should be
+    /// displayed at `now_ms` and report when the next frame change is
+    /// due, as a delay in milliseconds relative to `now_ms`. Null
+    /// means no running animation needs a future tick.
+    ///
+    /// `now_ms` is a monotonic timestamp on a clock of the caller's
+    /// choosing. The same clock must be used for every call. The
+    /// caller is expected to be the renderer, ticking once per frame
+    /// build and scheduling a wakeup for the returned delay.
+    ///
+    /// PORT NOTE (hazard #4, phase-5 plan): upstream drives this from the
+    /// RENDER thread (`renderer/generic.zig:1388`) while exec mutates the
+    /// same storage from the io/stream side — safe only under the
+    /// renderer/terminal mutex. The rustty renderer half is a later wave
+    /// (W7); when it lands, the tick call MUST sit behind the same lock
+    /// discipline as every other storage access.
+    pub fn animation_tick(&mut self, now_ms: u64) -> Option<u64> {
+        let mut min_delay: Option<u64> = None;
+
+        // var it = self.images.iterator();
+        //
+        // PORT NOTE (hazard #3): the reference mutates `img`/`anim` through
+        // map-interior pointers while calling `self.markImageContentChanged`
+        // (a self-alias). Collect-ids-first + per-id re-lookup; the mark is
+        // deferred to after the per-image borrow ends (it only stamps
+        // dirty/generation, so the reordering is unobservable).
+        let ids: Vec<u32> = self.images.keys().copied().collect();
+        for id in ids {
+            let mut content_changed = false;
+            let mut delay: Option<u64> = None;
+            {
+                let img = self.images.get_mut(&id).unwrap();
+
+                // The gates below mirror Kitty's image_is_animatable.
+
+                let placement_count = img.metadata.placement_count;
+                let data_pending = img.data.is_pending();
+
+                // No animation state was ever attached (plain image).
+                let anim = match img.animation.as_deref_mut() {
+                    Some(anim) => anim,
+                    None => continue,
+                };
+
+                // Stopped is the initial state of every animation: frames
+                // then only change client-driven (a=a c=N), never by time.
+                if anim.state == animation::State::Stopped {
+                    continue;
+                }
+
+                // Only the root frame exists; there is nothing to advance
+                // to yet even in the running state.
+                if anim.frames.is_empty() {
+                    continue;
+                }
+
+                // Unplaced images don't animate. This is our simpler
+                // approximation of Kitty's "is actually drawn" visibility
+                // gate; it is what stops an image that was transmitted but
+                // never placed from waking the renderer forever.
+                if placement_count == 0 {
+                    continue;
+                }
+
+                // The base pixel data hasn't arrived yet (e.g. an image
+                // restored from a snapshot); nothing can be displayed.
+                if data_pending {
+                    continue;
+                }
+
+                // A zero total duration means every frame is gapless and
+                // no frame can ever be displayed, so the animation can
+                // never advance. This also guards the gapless-skip loop
+                // below from never terminating.
+                if anim.duration_ms() == 0 {
+                    continue;
+                }
+
+                // A finite loop budget (a=a v=N) that ran out on an
+                // earlier tick froze playback on the last frame for good.
+                if anim.max_loops > 0 && anim.current_loop >= anim.max_loops {
+                    continue;
+                }
+
+                let shown_at: u64 = 'shown_at: {
+                    // First tick since playback started (or since the
+                    // current frame changed through another path, e.g.
+                    // a=a c=N): the frame is considered shown as of now,
+                    // and its gap starts counting from here.
+                    let at = match anim.frame_shown_at_ms {
+                        Some(at) => at,
+                        None => break 'shown_at now_ms,
+                    };
+
+                    // A timestamp from the future means the caller's clock
+                    // restarted; re-anchor rather than stalling until the
+                    // old timestamp comes around again.
+                    if at > now_ms {
+                        break 'shown_at now_ms;
+                    }
+
+                    at
+                };
+                anim.frame_shown_at_ms = Some(shown_at);
+
+                // The current frame is replaced once its gap has elapsed.
+                // We advance at most one displayed frame per tick with no
+                // catch-up, exactly like Kitty: if ticks lag behind the
+                // gaps, the animation slows down rather than skipping.
+                let mut next_at: u64 =
+                    shown_at.saturating_add(anim.gap_at(anim.current_index) as u64);
+                if now_ms >= next_at {
+                    'advance: {
+                        // Walk forward to the next displayable frame. This is
+                        // a loop only because gapless (gap=0) frames are never
+                        // displayed and are stepped over; the durationMs gate
+                        // above guarantees a displayable frame exists.
+                        let count: u32 = anim.frame_count();
+                        let mut idx = anim.current_index;
+                        loop {
+                            let next = (idx + 1) % count;
+                            if next == 0 {
+                                // Wrapping past the last frame back to the
+                                // root. A loading-state (a=a s=2) animation
+                                // refuses the wrap: it parks on the last frame
+                                // awaiting more frames from the client.
+                                if anim.state == animation::State::Loading {
+                                    break 'advance;
+                                }
+
+                                // Each wrap completes a loop; a finite budget
+                                // that just ran out parks on the last frame.
+                                anim.current_loop += 1;
+                                if anim.max_loops > 0 && anim.current_loop >= anim.max_loops {
+                                    break 'advance;
+                                }
+                            }
+                            idx = next;
+                            if anim.gap_at(idx) != 0 {
+                                break;
+                            }
+                        }
+
+                        // Show the chosen frame: restart its gap timer and
+                        // stamp a fresh generation so consumers (the renderer
+                        // texture cache, the C API) pick up the new pixels.
+                        anim.current_index = idx;
+                        anim.frame_shown_at_ms = Some(now_ms);
+                        // self.markImageContentChanged(io, img); — deferred
+                        // below, see the collect-ids-first PORT NOTE.
+                        content_changed = true;
+                        next_at = now_ms.saturating_add(anim.gap_at(idx) as u64);
+                    }
+                }
+
+                // Schedule the next tick. A parked animation left next_at
+                // in the past and so never schedules one; it is woken by
+                // its trigger instead (a new frame arriving, or an a=a
+                // command changing the state).
+                if next_at > now_ms {
+                    delay = Some(next_at - now_ms);
+                }
+            }
+            if content_changed {
+                self.mark_image_content_changed(id);
+            }
+            if let Some(d) = delay {
+                min_delay = Some(match min_delay {
+                    Some(m) => core::cmp::min(m, d),
+                    None => d,
+                });
+            }
+        }
+
+        min_delay
+    }
+
     /// Clear placements intersecting the active screen, then reclaim every
     /// image with no remaining placement. Unlike protocol d=A, a terminal
     /// clear also reclaims images that were already unplaced.
@@ -1239,9 +1782,15 @@ impl ImageStorage {
                     }
                 }
 
-                // We don't support animation frames yet so they are successfully
-                // deleted!
-                command::DeleteAction::AnimationFrames(_) => {}
+                // .animation_frames => |v| self.deleteAnimationFrame(
+                //     io,
+                //     alloc,
+                //     t.screens.active,
+                //     v,
+                // ),
+                command::DeleteAction::AnimationFrames(v) => {
+                    self.delete_animation_frame(alloc, t.screens.active, v)
+                }
             }
         }
 
@@ -1371,6 +1920,136 @@ impl ImageStorage {
         }
     }
 
+    /// Delete an animation frame (d=f/F). Deletes never produce
+    /// responses, so all failures are only logged. Kitty behaviors
+    /// implemented here: on an image without extra frames a lowercase
+    /// delete is a no-op while an uppercase delete removes the entire
+    /// image, placements included; the frame number is clamped to the
+    /// last frame and zero selects the root frame; deleting the root
+    /// frame promotes frame 2 to be the new root.
+    fn delete_animation_frame(
+        &mut self,
+        alloc: Allocator,
+        s: *mut Screen,
+        v: command::DeleteAnimationFrames,
+    ) {
+        let _ = &alloc;
+        if v.image_id == 0 && v.image_number == 0 {
+            // log.warn("delete animation frames requires image id or number", .{});
+            return;
+        }
+        // const img = self.imagePtrByIdOrNumber(v.image_id, v.image_number) orelse { ... };
+        let img_id = match self.image_ptr_by_id_or_number(v.image_id, v.image_number) {
+            Some(img) => img.id,
+            None => {
+                // log.warn(
+                //     "delete animation frames for unknown image id={} number={}",
+                //     .{ v.image_id, v.image_number },
+                // );
+                return;
+            }
+        };
+
+        // const anim: *animation.Animation = anim: {
+        //     if (img.animation) |anim| {
+        //         if (anim.frames.items.len > 0) break :anim anim;
+        //     }
+        //     ...
+        // };
+        let has_extra_frames = {
+            let img = self.images.get(&img_id).unwrap();
+            img.animation
+                .as_ref()
+                .is_some_and(|anim| !anim.frames.is_empty())
+        };
+        if !has_extra_frames {
+            // The image is not (or no longer) an animation. The
+            // uppercase delete removes the entire image, even when it
+            // still has placements.
+            if !v.delete {
+                return;
+            }
+            self.remove_placements_by_image_id(s, img_id);
+            // const entry = self.images.getEntry(img.id).?;
+            // self.total_bytes -= entry.value_ptr.storageSize();
+            let size = self.images.get(&img_id).unwrap().storage_size();
+            self.total_bytes -= size;
+            // entry.value_ptr.deinit(alloc); — dropping the removed Image
+            // frees its data and animation.
+            self.images.remove(&img_id);
+            return;
+        }
+
+        // Clamp the frame number: zero selects the root frame and
+        // values past the end select the last frame.
+        let count: u32 = {
+            let img = self.images.get(&img_id).unwrap();
+            img.animation.as_ref().unwrap().frame_count()
+        };
+        let mut number: u32 = core::cmp::min(v.frame, count);
+        if number == 0 {
+            number = 1;
+        }
+
+        if number == 1 {
+            // Deleting the root frame promotes frame 2 to root. The
+            // promoted frame's bytes stay reserved; only the old root
+            // data is freed.
+            let data_len = self.images.get(&img_id).unwrap().data.len();
+            self.release_animation_bytes(data_len);
+            let img = self.images.get_mut(&img_id).unwrap();
+            // img.data.deinit(alloc); — the assignment below drops the old
+            // root payload.
+            // const promoted = anim.frames.orderedRemove(0);
+            let promoted = img.animation.as_mut().unwrap().frames.remove(0);
+            img.data = graphics_image::Data::Complete(promoted.data);
+            img.animation.as_mut().unwrap().root_gap_ms = promoted.gap_ms;
+        } else {
+            // const removed = anim.frames.orderedRemove(number - 2);
+            let removed = {
+                let img = self.images.get_mut(&img_id).unwrap();
+                img.animation
+                    .as_mut()
+                    .unwrap()
+                    .frames
+                    .remove((number - 2) as usize)
+            };
+            self.release_animation_bytes(removed.data.len());
+            // alloc.free(removed.data); — `removed` drops here.
+        }
+
+        // Fix up the current frame.
+        let removed_idx: u32 = if number == 1 { 0 } else { number - 2 };
+        enum Mark {
+            ContentChanged,
+            Mutated,
+        }
+        let mark: Mark = {
+            let img = self.images.get_mut(&img_id).unwrap();
+            let anim = img.animation.as_mut().unwrap();
+            // const remaining: u32 = @intCast(anim.frames.items.len);
+            let remaining: u32 = u32::try_from(anim.frames.len()).unwrap();
+            if anim.current_index > remaining {
+                anim.current_index = remaining;
+                anim.frame_shown_at_ms = None;
+                // self.markImageContentChanged(io, img); return;
+                Mark::ContentChanged
+            } else if removed_idx == anim.current_index {
+                anim.frame_shown_at_ms = None;
+                Mark::ContentChanged
+            } else {
+                if removed_idx < anim.current_index {
+                    anim.current_index -= 1;
+                }
+                Mark::Mutated
+            }
+        };
+        match mark {
+            Mark::ContentChanged => self.mark_image_content_changed(img_id),
+            Mark::Mutated => self.mark_mutated(),
+        }
+    }
+
     /// Delete an image if it is unused.
     fn delete_if_unused(&mut self, alloc: Allocator, image_id: u32) {
         // const entry = self.images.getEntry(image_id) orelse return;
@@ -1384,8 +2063,10 @@ impl ImageStorage {
             return;
         }
 
-        self.total_bytes -= entry.data.len();
-        // entry.value_ptr.deinit(alloc); — dropping the removed Image frees data.
+        // self.total_bytes -= entry.value_ptr.storageSize();
+        self.total_bytes -= entry.storage_size();
+        // entry.value_ptr.deinit(alloc); — dropping the removed Image frees
+        // its data and animation.
         self.images.remove(&image_id);
     }
 
@@ -1507,13 +2188,15 @@ impl ImageStorage {
             }
 
             // const entry = self.images.getEntry(c.id).?;
-            let image_len = self.images.get(&c.id).unwrap().data.len();
+            // const image_len = entry.value_ptr.storageSize();
+            let image_len = self.images.get(&c.id).unwrap().storage_size();
             // log.info("evicting image id={} bytes={}", .{ c.id, image_len });
 
             evicted += image_len;
             self.total_bytes -= image_len;
 
-            // entry.value_ptr.deinit(alloc); — dropping the removed Image frees data.
+            // entry.value_ptr.deinit(alloc); — dropping the removed Image frees
+            // its data and animation.
             self.images.remove(&c.id);
         }
 
@@ -1522,6 +2205,100 @@ impl ImageStorage {
             self.mark_mutated();
         }
         true
+    }
+}
+
+/// How the row operation behind a scrollMarginsBegin/end pair moves
+/// tracked pins, which determines how much repositioning work the
+/// placements need.
+//
+// PORT NOTE: nested `pub const ScrollOp` on `ImageStorage` upstream; hoisted
+// to module level (the `Candidate` precedent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollOp {
+    /// The operation shifts the entire active window down (it
+    /// creates scrollback), so every placement anchored in the
+    /// active area changes active position and must be restored.
+    WindowShift,
+
+    /// The operation moves rows in place within the scrolling
+    /// region: pins anchored outside the region rows keep their
+    /// active position without help, so only placements anchored
+    /// inside the region rows need handling. This is the common
+    /// case (e.g. a status bar image beside a scrolling pane
+    /// costs almost nothing per scroll).
+    InPlace,
+}
+
+/// State returned by scrollMarginsBegin: the final active-area
+/// position every surviving placement pin must be restored to once
+/// the scrolled rows have settled. Every begin must be paired with
+/// exactly one end() call after the scroll's row operations
+/// complete.
+//
+// PORT NOTE (hazard #1, phase-5 plan): the guard holds a raw `*mut Screen`
+// AND raw `*mut Pin`s while the caller's `&mut Terminal` row operations run
+// between begin and end — both are dereferenced ONLY inside `end`
+// (`rust-mut-args-strongly-protected`). The pins are pool-allocated tracked
+// pins whose addresses are stable until `untrack_pin` (they are NOT interior
+// to the placements map), and the begin/end window performs no storage
+// mutation, so no pin recorded here is untracked in between (the upstream
+// implicit contract, written down). The exactly-once `end()` contract is
+// enforced by ownership: `end(self)` consumes the guard and `Drop` performs
+// the restore, so early-error paths (`?`) mirror the Zig `defer ... end()`.
+// Proven on `.port/phase-5/mirihar-scroll-margins/` (with a Miri-caught
+// foil).
+#[must_use = "every scrollMarginsBegin must be paired with exactly one end() after the scroll's row operations complete"]
+pub struct ScrollMargins {
+    screen: *mut Screen,
+    // restores: std.ArrayListUnmanaged(Restore) = .empty,
+    restores: Vec<Restore>,
+}
+
+// const Restore = struct { pin: *PageList.Pin, x: size.CellCountInt, y: u32 };
+struct Restore {
+    pin: *mut PageList::Pin,
+    x: size::CellCountInt,
+    y: u32,
+}
+
+impl ScrollMargins {
+    /// Reposition every recorded placement pin to its post-scroll
+    /// position and release the state. Must be called exactly
+    /// once, after the scroll's row operations complete.
+    //
+    // PORT NOTE: consuming `self`; the body lives in `Drop` so that Zig's
+    // `defer state.end()` on error paths is mirrored by the guard simply
+    // dropping.
+    pub fn end(self) {}
+}
+
+impl Drop for ScrollMargins {
+    fn drop(&mut self) {
+        for restore in &self.restores {
+            // restore.pin.* = self.screen.pages.pin(.{ .active = .{
+            //     .x = restore.x,
+            //     .y = restore.y,
+            // } }) orelse continue;
+            //
+            // SAFETY(raw-page-aliasing/graphics_storage): `screen` is the
+            // screen owning every recorded tracked pin (scroll_margins_begin's
+            // contract); the shared `pages` projection for the lookup ends
+            // before the raw pin write, and the write targets a pool-owned
+            // tracked pin with no live reference to it (the caller's row
+            // operations have completed by the time the guard drops).
+            let new_pin = match unsafe {
+                (*self.screen).pages.pin(point::Point::Active(point::Coordinate {
+                    x: restore.x,
+                    y: restore.y,
+                }))
+            } {
+                Some(p) => p,
+                None => continue,
+            };
+            unsafe { *restore.pin = new_pin };
+        }
+        // self.restores.deinit(self.screen.alloc); — the owning Vec drops.
     }
 }
 
@@ -1917,6 +2694,75 @@ impl Placement {
         }
         // NOTE: Above `divCeil`s can only fail if the cell size is 0,
         //       in such a case it seems safe to return 0 for this.
+    }
+
+    /// Permanently clip `count` rows off the top of this placement,
+    /// which currently spans `span` grid rows, by shrinking the
+    /// source rectangle (the requested source rect is materialized
+    /// into explicit values in the process). Used when a scroll
+    /// within margins pushes the placement past the top margin.
+    /// Requires 0 < count < span. Returns false if no visible
+    /// source pixels would remain, in which case the placement is
+    /// unmodified and should be deleted.
+    fn clip_top(&mut self, image: &Image, t: &Terminal, count: u32, span: u32) -> bool {
+        assert(count > 0 && count < span);
+        let src = self.source_rect(image);
+        let crop: u32 = if self.rows > 0 {
+            // Scaled placement: each grid row shows an equal
+            // fraction of the source.
+            // @intCast(@as(u64, src.height) * count / span)
+            u32::try_from(src.height as u64 * count as u64 / span as u64).unwrap()
+        } else {
+            // Native size: each grid row shows one cell height of
+            // source pixels (kitty does the same).
+            Self::saturating_mul(t.height_px / t.rows as u32, count)
+        };
+        if crop >= src.height {
+            return false;
+        }
+        self.source_x = src.x;
+        self.source_y = src.y + crop;
+        self.source_width = src.width;
+        self.source_height = src.height - crop;
+        if self.rows > 0 {
+            self.rows -= count;
+        }
+        true
+    }
+
+    /// clipTop, but clipping `count` rows off the bottom.
+    fn clip_bottom(&mut self, image: &Image, t: &Terminal, count: u32, span: u32) -> bool {
+        assert(count > 0 && count < span);
+        let src = self.source_rect(image);
+        // An empty source can never be clipped smaller. This also
+        // guarantees we never store an explicit zero source height,
+        // which would be reinterpreted as "full image".
+        if src.height == 0 {
+            return false;
+        }
+        if self.rows > 0 {
+            // const crop: u32 = @intCast(@as(u64, src.height) * count / span);
+            let crop: u32 = u32::try_from(src.height as u64 * count as u64 / span as u64).unwrap();
+            if crop >= src.height {
+                return false;
+            }
+            self.source_height = src.height - crop;
+            self.rows -= count;
+        } else {
+            // The remaining rows can show this many source pixels,
+            // with the first cell losing cellOffset pixels to the
+            // placement's y offset.
+            let visible = Self::saturating_mul(t.height_px / t.rows as u32, span - count);
+            let offset = self.cell_offset(t).y;
+            if visible <= offset {
+                return false;
+            }
+            self.source_height = core::cmp::min(src.height, visible - offset);
+        }
+        self.source_x = src.x;
+        self.source_y = src.y;
+        self.source_width = src.width;
+        true
     }
 
     /// Returns a selection of the entire rectangle this placement
@@ -6036,6 +6882,1114 @@ mod tests {
             };
             assert_eq!(expected, s.placeholder_target(1, 0).unwrap().key);
         }
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+
+    /// Test helper: the reference reads
+    /// `t.screens.active.pages.pointFromPin(.active, p.location.pin.*)` for a
+    /// placement fetched with `storage.placements.get(...)`.
+    fn external_placement_coord(t: &Terminal, image_id: u32, id: u32) -> Option<point::Coordinate> {
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let p = storage
+            .placements
+            .get(&PlacementKey {
+                image_id,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id,
+                },
+            })
+            .unwrap();
+        let pin = match p.location {
+            Location::Pin(pin) => pin,
+            Location::Virtual | Location::Relative(_) => unreachable!(),
+        };
+        // SAFETY: `pin` is a live tracked pin owned by the pagelist.
+        unsafe {
+            (*t.screens.active)
+                .pages
+                .point_from_pin(point::Tag::Active, *pin)
+        }
+        .map(|pt| pt.coord())
+    }
+
+    /// Test helper: fetch the external placement (copy) for assertions on its
+    /// source rectangle / rows / columns fields.
+    fn external_placement(t: &Terminal, image_id: u32, id: u32) -> Placement {
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let p = storage
+            .placements
+            .get(&PlacementKey {
+                image_id,
+                placement_id: PlacementId {
+                    tag: PlacementIdTag::External,
+                    id,
+                },
+            })
+            .unwrap();
+        Placement {
+            location: Location::Virtual, // location is asserted via the coord helper
+            ..*p
+        }
+    }
+
+    // test "storage: scroll margins placement inside region scrolls and clips at top"
+    #[test]
+    fn scroll_margins_placement_inside_region_scrolls_and_clips_at_top() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
+        t.width_px = 100;
+        t.height_px = 60;
+
+        // 2-row image (10x10px cells) inside the region (rows 1-4).
+        // const storage: *ImageStorage = &t.screens.active.kitty_images;
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 2 }).unwrap();
+        {
+            let storage = unsafe { &mut (*t.screens.active).kitty_images };
+            storage
+                .add_image(
+                    alloc,
+                    t.screens.active,
+                    Image {
+                        id: 1,
+                        width: 10,
+                        height: 20,
+                        ..Image::default()
+                    },
+                )
+                .unwrap();
+            storage
+                .add_placement(
+                    alloc,
+                    t.screens.active,
+                    1,
+                    1,
+                    Placement::with_location(Location::Pin(pin)),
+                )
+                .unwrap();
+        }
+        t.set_top_and_bottom_margin(2, 5);
+        t.set_cursor_pos(5, 1);
+
+        // Entirely inside: moves up with the content.
+        t.index().unwrap();
+        {
+            assert_eq!(
+                point::Coordinate { x: 0, y: 1 },
+                external_placement_coord(&t, 1, 1).unwrap()
+            );
+        }
+
+        // Would extend above the top margin: anchored at the top margin
+        // with the top cell row clipped off the source.
+        t.index().unwrap();
+        {
+            assert_eq!(
+                point::Coordinate { x: 0, y: 1 },
+                external_placement_coord(&t, 1, 1).unwrap()
+            );
+            let p = external_placement(&t, 1, 1);
+            assert_eq!(10u32, p.source_y);
+            assert_eq!(10u32, p.source_height);
+        }
+
+        // Fully clipped: deleted.
+        t.index().unwrap();
+        {
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            assert_eq!(0usize, storage.placements.len());
+            // The image itself is retained.
+            assert_eq!(1usize, storage.images.len());
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: scroll margins placement straddling region does not move"
+    #[test]
+    fn scroll_margins_placement_straddling_region_does_not_move() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
+        t.width_px = 100;
+        t.height_px = 60;
+
+        // 3-row image anchored at the top of a 2-row region: not entirely
+        // within the region, so region scrolls must not move it. This
+        // exercises the scrollback-creating path (region top at row 0).
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap();
+        {
+            let storage = unsafe { &mut (*t.screens.active).kitty_images };
+            storage
+                .add_image(
+                    alloc,
+                    t.screens.active,
+                    Image {
+                        id: 1,
+                        width: 10,
+                        height: 30,
+                        ..Image::default()
+                    },
+                )
+                .unwrap();
+            storage
+                .add_placement(
+                    alloc,
+                    t.screens.active,
+                    1,
+                    1,
+                    Placement::with_location(Location::Pin(pin)),
+                )
+                .unwrap();
+        }
+        t.set_top_and_bottom_margin(1, 2);
+        t.set_cursor_pos(2, 1);
+
+        t.index().unwrap();
+        assert_eq!(
+            point::Coordinate { x: 0, y: 0 },
+            external_placement_coord(&t, 1, 1).unwrap()
+        );
+        let p = external_placement(&t, 1, 1);
+        assert_eq!(0u32, p.source_y);
+        assert_eq!(0u32, p.source_height);
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: scroll margins placement below region does not move"
+    #[test]
+    fn scroll_margins_placement_below_region_does_not_move() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
+        t.width_px = 100;
+        t.height_px = 60;
+
+        // A "status bar" image below the bottom margin must stay put while
+        // the region above it scrolls (scrollback-creating path).
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 5 }).unwrap();
+        {
+            let storage = unsafe { &mut (*t.screens.active).kitty_images };
+            storage
+                .add_image(
+                    alloc,
+                    t.screens.active,
+                    Image {
+                        id: 1,
+                        width: 10,
+                        height: 10,
+                        ..Image::default()
+                    },
+                )
+                .unwrap();
+            storage
+                .add_placement(
+                    alloc,
+                    t.screens.active,
+                    1,
+                    1,
+                    Placement::with_location(Location::Pin(pin)),
+                )
+                .unwrap();
+        }
+        t.set_top_and_bottom_margin(1, 4);
+        t.set_cursor_pos(4, 1);
+
+        t.index().unwrap();
+        t.index().unwrap();
+        assert_eq!(
+            point::Coordinate { x: 0, y: 5 },
+            external_placement_coord(&t, 1, 1).unwrap()
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: scroll margins reverse index clips at bottom"
+    #[test]
+    fn scroll_margins_reverse_index_clips_at_bottom() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
+        t.width_px = 100;
+        t.height_px = 60;
+
+        // 2-row image at the bottom of the region (rows 1-4).
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 3 }).unwrap();
+        {
+            let storage = unsafe { &mut (*t.screens.active).kitty_images };
+            storage
+                .add_image(
+                    alloc,
+                    t.screens.active,
+                    Image {
+                        id: 1,
+                        width: 10,
+                        height: 20,
+                        ..Image::default()
+                    },
+                )
+                .unwrap();
+            storage
+                .add_placement(
+                    alloc,
+                    t.screens.active,
+                    1,
+                    1,
+                    Placement::with_location(Location::Pin(pin)),
+                )
+                .unwrap();
+        }
+        t.set_top_and_bottom_margin(2, 5);
+        t.set_cursor_pos(2, 1);
+
+        // Moves down, with the bottom cell row clipped off the source.
+        t.reverse_index();
+        {
+            assert_eq!(
+                point::Coordinate { x: 0, y: 4 },
+                external_placement_coord(&t, 1, 1).unwrap()
+            );
+            let p = external_placement(&t, 1, 1);
+            assert_eq!(0u32, p.source_y);
+            assert_eq!(10u32, p.source_height);
+        }
+
+        // Fully clipped: deleted.
+        t.reverse_index();
+        assert_eq!(
+            0usize,
+            unsafe { &(*t.screens.active).kitty_images }.placements.len()
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: scroll margins scaled placement clips proportionally"
+    #[test]
+    fn scroll_margins_scaled_placement_clips_proportionally() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
+        t.width_px = 100;
+        t.height_px = 60;
+
+        // A 40px-tall image scaled into 2 rows, inside a 2-row region.
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 1 }).unwrap();
+        {
+            let storage = unsafe { &mut (*t.screens.active).kitty_images };
+            storage
+                .add_image(
+                    alloc,
+                    t.screens.active,
+                    Image {
+                        id: 1,
+                        width: 10,
+                        height: 40,
+                        ..Image::default()
+                    },
+                )
+                .unwrap();
+            storage
+                .add_placement(
+                    alloc,
+                    t.screens.active,
+                    1,
+                    1,
+                    Placement {
+                        columns: 1,
+                        rows: 2,
+                        ..Placement::with_location(Location::Pin(pin))
+                    },
+                )
+                .unwrap();
+        }
+        t.set_top_and_bottom_margin(2, 3);
+        t.set_cursor_pos(3, 1);
+
+        t.index().unwrap();
+        assert_eq!(
+            point::Coordinate { x: 0, y: 1 },
+            external_placement_coord(&t, 1, 1).unwrap()
+        );
+        let p = external_placement(&t, 1, 1);
+        assert_eq!(20u32, p.source_y);
+        assert_eq!(20u32, p.source_height);
+        assert_eq!(1u32, p.rows);
+        assert_eq!(1u32, p.columns);
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: scroll margins left/right margins respect columns"
+    #[test]
+    fn scroll_margins_left_right_margins_respect_columns() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
+        t.width_px = 100;
+        t.height_px = 60;
+
+        // One placement outside the left/right margin columns, one inside.
+        let pin1 = track_pin(&mut t, point::Coordinate { x: 0, y: 2 }).unwrap();
+        let pin2 = track_pin(&mut t, point::Coordinate { x: 2, y: 2 }).unwrap();
+        {
+            let storage = unsafe { &mut (*t.screens.active).kitty_images };
+            storage
+                .add_image(
+                    alloc,
+                    t.screens.active,
+                    Image {
+                        id: 1,
+                        width: 10,
+                        height: 10,
+                        ..Image::default()
+                    },
+                )
+                .unwrap();
+            storage
+                .add_placement(
+                    alloc,
+                    t.screens.active,
+                    1,
+                    1,
+                    Placement::with_location(Location::Pin(pin1)),
+                )
+                .unwrap();
+            storage
+                .add_placement(
+                    alloc,
+                    t.screens.active,
+                    1,
+                    2,
+                    Placement::with_location(Location::Pin(pin2)),
+                )
+                .unwrap();
+        }
+
+        t.modes
+            .set(crate::modes::Mode::EnableLeftAndRightMargin, true);
+        t.set_left_and_right_margin(2, 8);
+
+        t.scroll_up(1).unwrap();
+
+        // Outside the margin columns: stays.
+        assert_eq!(
+            point::Coordinate { x: 0, y: 2 },
+            external_placement_coord(&t, 1, 1).unwrap()
+        );
+
+        // Inside: moves up.
+        assert_eq!(
+            point::Coordinate { x: 2, y: 1 },
+            external_placement_coord(&t, 1, 2).unwrap()
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: scroll margins insert/delete lines do not move placements"
+    #[test]
+    fn scroll_margins_insert_delete_lines_do_not_move_placements() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
+        t.width_px = 100;
+        t.height_px = 60;
+
+        // Kitty does not scroll images for IL/DL, only for IND/RI/SU/SD.
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 2 }).unwrap();
+        {
+            let storage = unsafe { &mut (*t.screens.active).kitty_images };
+            storage
+                .add_image(
+                    alloc,
+                    t.screens.active,
+                    Image {
+                        id: 1,
+                        width: 10,
+                        height: 10,
+                        ..Image::default()
+                    },
+                )
+                .unwrap();
+            storage
+                .add_placement(
+                    alloc,
+                    t.screens.active,
+                    1,
+                    1,
+                    Placement::with_location(Location::Pin(pin)),
+                )
+                .unwrap();
+        }
+        t.set_top_and_bottom_margin(2, 5);
+        t.set_cursor_pos(2, 1);
+
+        t.delete_lines(1);
+        assert_eq!(
+            point::Coordinate { x: 0, y: 2 },
+            external_placement_coord(&t, 1, 1).unwrap()
+        );
+
+        t.insert_lines(1);
+        assert_eq!(
+            point::Coordinate { x: 0, y: 2 },
+            external_placement_coord(&t, 1, 1).unwrap()
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: scroll without margins moves placement into scrollback"
+    #[test]
+    fn scroll_without_margins_moves_placement_into_scrollback() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
+        t.width_px = 100;
+        t.height_px = 60;
+
+        // No margins: the placement follows its anchored row into the
+        // scrollback via pin tracking (kitty's marginless behavior).
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap();
+        {
+            let storage = unsafe { &mut (*t.screens.active).kitty_images };
+            storage
+                .add_image(
+                    alloc,
+                    t.screens.active,
+                    Image {
+                        id: 1,
+                        width: 10,
+                        height: 20,
+                        ..Image::default()
+                    },
+                )
+                .unwrap();
+            storage
+                .add_placement(
+                    alloc,
+                    t.screens.active,
+                    1,
+                    1,
+                    Placement::with_location(Location::Pin(pin)),
+                )
+                .unwrap();
+        }
+        t.set_cursor_pos(6, 1);
+
+        t.index().unwrap();
+        // try testing.expect(t.screens.active.pages.pointFromPin(.active, ...) == null);
+        assert!(external_placement_coord(&t, 1, 1).is_none());
+        // const pt = t.screens.active.pages.pointFromPin(.screen, p.location.pin.*).?;
+        {
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            let p = storage
+                .placements
+                .get(&PlacementKey {
+                    image_id: 1,
+                    placement_id: PlacementId {
+                        tag: PlacementIdTag::External,
+                        id: 1,
+                    },
+                })
+                .unwrap();
+            let pin = match p.location {
+                Location::Pin(pin) => pin,
+                Location::Virtual | Location::Relative(_) => unreachable!(),
+            };
+            // SAFETY: `pin` is a live tracked pin owned by the pagelist.
+            let pt = unsafe {
+                (*t.screens.active)
+                    .pages
+                    .point_from_pin(point::Tag::Screen, *pin)
+            }
+            .unwrap();
+            assert_eq!(point::Coordinate { x: 0, y: 0 }, pt.coord());
+        }
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: scroll margins large scroll deletes inside placement"
+    #[test]
+    fn scroll_margins_large_scroll_deletes_inside_placement() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
+        t.width_px = 100;
+        t.height_px = 60;
+
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 2 }).unwrap();
+        {
+            let storage = unsafe { &mut (*t.screens.active).kitty_images };
+            storage
+                .add_image(
+                    alloc,
+                    t.screens.active,
+                    Image {
+                        id: 1,
+                        width: 10,
+                        height: 10,
+                        ..Image::default()
+                    },
+                )
+                .unwrap();
+            storage
+                .add_placement(
+                    alloc,
+                    t.screens.active,
+                    1,
+                    1,
+                    Placement::with_location(Location::Pin(pin)),
+                )
+                .unwrap();
+        }
+        t.set_top_and_bottom_margin(2, 5);
+
+        t.scroll_up(10).unwrap();
+        assert_eq!(
+            0usize,
+            unsafe { &(*t.screens.active).kitty_images }.placements.len()
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: scroll margins straddling placement pin inside region restored"
+    #[test]
+    fn scroll_margins_straddling_placement_pin_inside_region_restored() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
+        t.width_px = 100;
+        t.height_px = 60;
+
+        // 2-row image anchored on the bottom margin row, extending below
+        // the region: not entirely inside, so it must not move even though
+        // the region scroll moves every tracked pin within the region rows.
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 4 }).unwrap();
+        {
+            let storage = unsafe { &mut (*t.screens.active).kitty_images };
+            storage
+                .add_image(
+                    alloc,
+                    t.screens.active,
+                    Image {
+                        id: 1,
+                        width: 10,
+                        height: 20,
+                        ..Image::default()
+                    },
+                )
+                .unwrap();
+            storage
+                .add_placement(
+                    alloc,
+                    t.screens.active,
+                    1,
+                    1,
+                    Placement::with_location(Location::Pin(pin)),
+                )
+                .unwrap();
+        }
+        t.set_top_and_bottom_margin(2, 5);
+        t.set_cursor_pos(5, 1);
+
+        t.index().unwrap();
+        assert_eq!(
+            point::Coordinate { x: 0, y: 4 },
+            external_placement_coord(&t, 1, 1).unwrap()
+        );
+        let p = external_placement(&t, 1, 1);
+        assert_eq!(0u32, p.source_y);
+        assert_eq!(0u32, p.source_height);
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: scroll margins multi-line scroll up with scrollback"
+    #[test]
+    fn scroll_margins_multi_line_scroll_up_with_scrollback() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 6)).unwrap();
+        t.width_px = 100;
+        t.height_px = 60;
+
+        // 1-row image inside a region whose top is the screen top, so the
+        // scroll pushes text into the scrollback (window shift) while the
+        // image moves within the region.
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 2 }).unwrap();
+        {
+            let storage = unsafe { &mut (*t.screens.active).kitty_images };
+            storage
+                .add_image(
+                    alloc,
+                    t.screens.active,
+                    Image {
+                        id: 1,
+                        width: 10,
+                        height: 10,
+                        ..Image::default()
+                    },
+                )
+                .unwrap();
+            storage
+                .add_placement(
+                    alloc,
+                    t.screens.active,
+                    1,
+                    1,
+                    Placement::with_location(Location::Pin(pin)),
+                )
+                .unwrap();
+        }
+        t.set_top_and_bottom_margin(1, 4);
+
+        t.scroll_up(2).unwrap();
+        {
+            assert_eq!(
+                point::Coordinate { x: 0, y: 0 },
+                external_placement_coord(&t, 1, 1).unwrap()
+            );
+        }
+
+        // Another two rows scrolls it out of the region: deleted.
+        t.scroll_up(2).unwrap();
+        assert_eq!(
+            0usize,
+            unsafe { &(*t.screens.active).kitty_images }.placements.len()
+        );
+
+        t.deinit(alloc);
+    }
+
+    // test "storage: animation tick advances and schedules"
+    #[test]
+    fn animation_tick_advances_and_schedules() {
+        use crate::kitty::graphics_animation::{Animation, Frame, State};
+
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 10)).unwrap();
+        t.width_px = 100;
+        t.height_px = 100;
+
+        let mut s: ImageStorage = ImageStorage::default();
+
+        // A running 1x1 RGBA image whose animation has one extra frame.
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                width: 1,
+                height: 1,
+                format: command::Format::Rgba,
+                data: Data::Complete(vec![255, 0, 0, 255]),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        // const img = s.images.getPtr(1).?;
+        // const anim = try alloc.create(animation.Animation);
+        // anim.* = .{ .state = .running };
+        // img.animation = anim;
+        // try anim.frames.append(alloc, .{ .data = ..., .gap_ms = 40 });
+        {
+            let img = s.images.get_mut(&1).unwrap();
+            img.animation = Some(Box::new(Animation {
+                state: State::Running,
+                ..Animation::default()
+            }));
+            img.animation.as_mut().unwrap().frames.push(Frame {
+                data: vec![0, 0, 255, 255],
+                gap_ms: 40,
+            });
+        }
+
+        // Without a placement the animation doesn't advance (our
+        // approximation of Kitty's visibility gate).
+        assert!(s.animation_tick(0).is_none());
+        assert_eq!(
+            0u32,
+            s.images
+                .get(&1)
+                .unwrap()
+                .animation
+                .as_ref()
+                .unwrap()
+                .current_index
+        );
+
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            0,
+            Placement::with_location(Location::Pin(pin)),
+        )
+        .unwrap();
+        let gen1 = s.images.get(&1).unwrap().generation;
+        s.dirty = false;
+
+        // First tick: the gapless root frame is due immediately and is
+        // skipped over to frame 2, which is due again in its 40ms gap.
+        assert_eq!(Some(40u64), s.animation_tick(0));
+        assert_eq!(
+            1u32,
+            s.images
+                .get(&1)
+                .unwrap()
+                .animation
+                .as_ref()
+                .unwrap()
+                .current_index
+        );
+        assert!(s.images.get(&1).unwrap().generation > gen1);
+        assert!(s.dirty);
+
+        // Nothing due yet: no advance, and the delay counts down.
+        let gen2 = s.images.get(&1).unwrap().generation;
+        assert_eq!(Some(30u64), s.animation_tick(10));
+        assert_eq!(gen2, s.images.get(&1).unwrap().generation);
+
+        // Wrapping is fine with an infinite loop budget: the gapless
+        // root is skipped and frame 2 is shown again.
+        assert_eq!(Some(40u64), s.animation_tick(40));
+        {
+            let anim = s.images.get(&1).unwrap().animation.as_ref().unwrap();
+            assert_eq!(1u32, anim.current_index);
+            assert_eq!(1u32, anim.current_loop);
+        }
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: animation tick loading state parks on last frame"
+    #[test]
+    fn animation_tick_loading_state_parks_on_last_frame() {
+        use crate::kitty::graphics_animation::{Animation, Frame, State};
+
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 10)).unwrap();
+        t.width_px = 100;
+        t.height_px = 100;
+
+        let mut s: ImageStorage = ImageStorage::default();
+
+        // A placed 1x1 RGBA image in the loading state (a=a s=2) whose
+        // animation has one extra frame.
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                width: 1,
+                height: 1,
+                format: command::Format::Rgba,
+                data: Data::Complete(vec![255, 0, 0, 255]),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        {
+            let img = s.images.get_mut(&1).unwrap();
+            img.animation = Some(Box::new(Animation {
+                state: State::Loading,
+                ..Animation::default()
+            }));
+            img.animation.as_mut().unwrap().frames.push(Frame {
+                data: vec![0, 0, 255, 255],
+                gap_ms: 40,
+            });
+        }
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            0,
+            Placement::with_location(Location::Pin(pin)),
+        )
+        .unwrap();
+
+        // Reach the last frame, then park: no wakeup is scheduled while
+        // waiting for more frames and the loop counter stays untouched.
+        assert_eq!(Some(40u64), s.animation_tick(0));
+        assert_eq!(
+            1u32,
+            s.images
+                .get(&1)
+                .unwrap()
+                .animation
+                .as_ref()
+                .unwrap()
+                .current_index
+        );
+        assert!(s.animation_tick(100).is_none());
+        {
+            let anim = s.images.get(&1).unwrap().animation.as_ref().unwrap();
+            assert_eq!(1u32, anim.current_index);
+            assert_eq!(0u32, anim.current_loop);
+        }
+
+        // A new frame arriving un-parks playback.
+        s.images
+            .get_mut(&1)
+            .unwrap()
+            .animation
+            .as_mut()
+            .unwrap()
+            .frames
+            .push(Frame {
+                data: vec![0, 255, 0, 255],
+                gap_ms: 25,
+            });
+        assert_eq!(Some(25u64), s.animation_tick(150));
+        assert_eq!(
+            2u32,
+            s.images
+                .get(&1)
+                .unwrap()
+                .animation
+                .as_ref()
+                .unwrap()
+                .current_index
+        );
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: animation tick exhausts loop budget"
+    #[test]
+    fn animation_tick_exhausts_loop_budget() {
+        use crate::kitty::graphics_animation::{Animation, Frame, State};
+
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 10)).unwrap();
+        t.width_px = 100;
+        t.height_px = 100;
+
+        let mut s: ImageStorage = ImageStorage::default();
+
+        // A placed, running 1x1 RGBA image with a gapped root frame, one
+        // extra frame, and a one-loop budget (a=a v=2).
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                width: 1,
+                height: 1,
+                format: command::Format::Rgba,
+                data: Data::Complete(vec![255, 0, 0, 255]),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        {
+            let img = s.images.get_mut(&1).unwrap();
+            img.animation = Some(Box::new(Animation {
+                state: State::Running,
+                root_gap_ms: 10,
+                max_loops: 1,
+                ..Animation::default()
+            }));
+            img.animation.as_mut().unwrap().frames.push(Frame {
+                data: vec![0, 0, 255, 255],
+                gap_ms: 40,
+            });
+        }
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            0,
+            Placement::with_location(Location::Pin(pin)),
+        )
+        .unwrap();
+
+        // Root shows for 10ms, frame 2 for 40ms, then the wrap exhausts
+        // the budget and playback freezes on the last frame for good.
+        assert_eq!(Some(10u64), s.animation_tick(0));
+        assert_eq!(
+            0u32,
+            s.images
+                .get(&1)
+                .unwrap()
+                .animation
+                .as_ref()
+                .unwrap()
+                .current_index
+        );
+        assert_eq!(Some(40u64), s.animation_tick(10));
+        assert_eq!(
+            1u32,
+            s.images
+                .get(&1)
+                .unwrap()
+                .animation
+                .as_ref()
+                .unwrap()
+                .current_index
+        );
+        assert!(s.animation_tick(50).is_none());
+        assert_eq!(
+            1u32,
+            s.images
+                .get(&1)
+                .unwrap()
+                .animation
+                .as_ref()
+                .unwrap()
+                .current_index
+        );
+        assert!(s.animation_tick(500).is_none());
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: animation tick ignores ineligible animations"
+    #[test]
+    fn animation_tick_ignores_ineligible_animations() {
+        use crate::kitty::graphics_animation::{Animation, Frame, State};
+
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 10)).unwrap();
+        t.width_px = 100;
+        t.height_px = 100;
+
+        let mut s: ImageStorage = ImageStorage::default();
+
+        // A placed 1x1 RGBA image with one extra frame, in the default
+        // stopped state.
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                width: 1,
+                height: 1,
+                format: command::Format::Rgba,
+                data: Data::Complete(vec![255, 0, 0, 255]),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        {
+            let img = s.images.get_mut(&1).unwrap();
+            img.animation = Some(Box::new(Animation::default()));
+            img.animation.as_mut().unwrap().frames.push(Frame {
+                data: vec![0, 0, 255, 255],
+                gap_ms: 40,
+            });
+        }
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            0,
+            Placement::with_location(Location::Pin(pin)),
+        )
+        .unwrap();
+
+        // Stopped (the default) never advances.
+        assert!(s.animation_tick(0).is_none());
+
+        // An all-gapless animation can never advance either.
+        {
+            let anim = s
+                .images
+                .get_mut(&1)
+                .unwrap()
+                .animation
+                .as_mut()
+                .unwrap();
+            anim.state = State::Running;
+            anim.frames[0].gap_ms = 0;
+        }
+        assert!(s.animation_tick(0).is_none());
+        assert_eq!(
+            0u32,
+            s.images
+                .get(&1)
+                .unwrap()
+                .animation
+                .as_ref()
+                .unwrap()
+                .current_index
+        );
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // test "storage: animation tick re-anchors a restarted clock"
+    #[test]
+    fn animation_tick_re_anchors_a_restarted_clock() {
+        use crate::kitty::graphics_animation::{Animation, Frame, State};
+
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(10, 10)).unwrap();
+        t.width_px = 100;
+        t.height_px = 100;
+
+        let mut s: ImageStorage = ImageStorage::default();
+
+        // A placed, running 1x1 RGBA image displaying its extra frame,
+        // with a shown-at timestamp far ahead of the tick clock.
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 1,
+                width: 1,
+                height: 1,
+                format: command::Format::Rgba,
+                data: Data::Complete(vec![255, 0, 0, 255]),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        {
+            let img = s.images.get_mut(&1).unwrap();
+            img.animation = Some(Box::new(Animation {
+                state: State::Running,
+                current_index: 1,
+                frame_shown_at_ms: Some(1000),
+                ..Animation::default()
+            }));
+            img.animation.as_mut().unwrap().frames.push(Frame {
+                data: vec![0, 0, 255, 255],
+                gap_ms: 40,
+            });
+        }
+        let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap();
+        s.add_placement(
+            alloc,
+            t.screens.active,
+            1,
+            0,
+            Placement::with_location(Location::Pin(pin)),
+        )
+        .unwrap();
+
+        // A timestamp in the future relative to now means the caller's
+        // clock restarted; the animation must not stall until the old
+        // timestamp comes around again.
+        assert_eq!(Some(40u64), s.animation_tick(5));
+        assert_eq!(
+            Some(5u64),
+            s.images
+                .get(&1)
+                .unwrap()
+                .animation
+                .as_ref()
+                .unwrap()
+                .frame_shown_at_ms
+        );
 
         s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
