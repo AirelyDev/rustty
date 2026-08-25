@@ -6,9 +6,9 @@ R3 forbids any build-time dependency on it).
 ## Pinned baseline
 
 ```
-commit  12967b68f7d46bdbfb2cfffb6768332fb9db68c0   (short: 12967b68f / 12967b6)
-date    2026-08-17
-subject libghostty: option to retain continuations on snapshot decode (#13878)
+commit  683d8db643b95cf229bfb5fe9fab9ae677920343   (short: 683d8db64 / 683d8db)
+date    2026-08-25
+subject renderer: release GPU resources for hidden surfaces (macOS) (#14017)
 ```
 
 There is **one** sync point. The oracle working tree is checked out (detached) at this commit, and
@@ -18,7 +18,7 @@ it is the SHA referenced by `.port/PORT_RULES.md` (R12 main-parity tracking) and
 Verify with:
 
 ```sh
-git -C ../ghostty rev-parse HEAD          # 12967b68f7d46bdbfb2cfffb6768332fb9db68c0
+git -C ../ghostty rev-parse HEAD          # 683d8db643b95cf229bfb5fe9fab9ae677920343
 git -C ../ghostty status --porcelain      # empty
 ```
 
@@ -35,6 +35,7 @@ at an empty tree and every gate finds zero reference sentences, i.e. vacuous gre
 |---|---|---|---|
 | 2026-07-31 | `4749c4e93` (2026-06-20) | `6ad1fe7d8` (2026-07-29) | `P3-W10 T3`, Phase 3 upstream resync |
 | 2026-08-17 | `6ad1fe7d8` (2026-07-29) | `12967b68f` (2026-08-17) | Phase 4 upstream resync (advance-first by explicit user direction; before/after gate states in `.port/phase-4/w0/`) |
+| 2026-08-25 | `12967b68f` (2026-08-17) | `683d8db64` (2026-08-25) | Phase 5 upstream resync (advance-first, same doctrine; before/after gate states in `.port/phase-5/w0/`) |
 
 **Phase-4 note on ordering.** Unlike `P3-W10`, this advance happened at the *start* of the
 resync (explicit user direction: update the oracle, then port the whole range). The
@@ -86,10 +87,10 @@ before/after reports, the per-crate delta table, and the per-file attribution of
 
 ## Upstream beyond this pin
 
-At the time of the Phase-4 advance (2026-08-17) the pin IS `origin/main` — there is no
-beyond-pin gap. The absorbed range was `6ad1fe7d8..12967b68f` (543 commits, 359 non-merge,
-381 files, +72,554/−8,106); its artifacts live in `.port/phase-4/`. Any future upstream
-movement is the seed of the next resync.
+At the time of the Phase-5 advance (2026-08-25) the pin IS `origin/main` — there is no
+beyond-pin gap. Phase 5 absorbs `12967b68f..683d8db64` (245 commits, 169 non-merge, 155
+files, +25,534/−3,360; artifacts in `.port/phase-5/`); Phase 4 absorbed `6ad1fe7d8..12967b68f`
+(`.port/phase-4/`). Any future upstream movement is the seed of the next resync.
 
 ```sh
 git -C ../ghostty fetch origin main          # once

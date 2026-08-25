@@ -1,0 +1,223 @@
+G3b [apprt]: SKIPPED — PORT STATUS is not done (57 oracle file(s) unexamined)
+G3b [apprt-api]: SKIPPED — PORT STATUS is not done (5 oracle file(s) unexamined)
+G3b [args]: distinctive ref comments=186 missing=0 review=1
+    REVIEW (ratio 0.79): returns true if this type can track diagnostics.
+G3b [bench]: distinctive ref comments=137 missing=0 review=0
+G3b [bin]: SKIPPED — PORT STATUS is not done (7 oracle file(s) unexamined)
+G3b [build-config]: distinctive ref comments=27 missing=0 review=0
+G3b [cfg-fmt]: SKIPPED — PORT STATUS is not done (2 oracle file(s) unexamined)
+G3b [cli]: distinctive ref comments=602 missing=0 review=2
+    REVIEW (ratio 0.68): this should be returned by actions that want to print the help text.
+    REVIEW (ratio 0.72): var buf: [std.compress.flate.max_window_len]u8 = undefined;
+G3b [config]: distinctive ref comments=2851 missing=13 review=10
+    REVIEW (ratio 0.64): 3. "application support" directory (macos only)
+    REVIEW (ratio 0.68): accept. set this to `unlimited` to remove the limit, allowing writes
+    REVIEW (ratio 0.71): load the configuration according to the default rules:
+    REVIEW (ratio 0.64): options for copy on select behavior.
+    REVIEW (ratio 0.73): see "clipboard-codepoint-map" for documentation.
+    REVIEW (ratio 0.69): see `font-synthetic-style` for documentation.
+    REVIEW (ratio 0.75): see macos-dock-drop-behavior
+    REVIEW (ratio 0.74): see window-show-tab-bar
+    REVIEW (ratio 0.67): this can be changed at runtime and applies to writes that begin
+    REVIEW (ratio 0.63): valid values for confirm-close-surface
+    MISSING ref comment: allocate per write. a future improvement will attempt to spool large
+    MISSING ref comment: bounded only by available memory. a value of `0` rejects every non-empty
+    MISSING ref comment: data beyond the limit fails the entire write with an `efbig` status,
+    MISSING ref comment: discards the transaction, and leaves the clipboard untouched. later
+    MISSING ref comment: of an escape sequence hardcoded into rustty for now.
+    MISSING ref comment: running in the terminal via the kitty clipboard protocol (osc 5522).
+    MISSING ref comment: the data is buffered in memory while the write is in progress, so
+    MISSING ref comment: the default is 64 mib, the minimum a conforming implementation must
+    MISSING ref comment: the maximum size in bytes of a single clipboard write by a program
+    MISSING ref comment: this doesn't apply to osc 52, which is limited by the maximum length
+    MISSING ref comment: this limit bounds how much memory a program can make rustty
+    MISSING ref comment: write-related packets are ignored until a new write begins.
+    MISSING ref comment: write. to reject clipboard writes entirely, use `clipboard-write = deny`
+G3b [core]: distinctive ref comments=1249 missing=89 review=6
+    REVIEW (ratio 0.66): osc 52 writes don't travel through this function; they go
+    REVIEW (ratio 0.63): so the temporary content array stays on the stack.
+    REVIEW (ratio 0.69): the apprt can run its confirmation flow.
+    REVIEW (ratio 0.65): the payload for completing a clipboard request with
+    REVIEW (ratio 0.7): true if any clipboard confirmation prompt was already answered
+    REVIEW (ratio 0.74): unsafepaste or unauthorizedpaste error, depending on the type of
+    MISSING ref comment: (never partially decoded), while a missing-padding tail is
+    MISSING ref comment: - for osc 52 and kitty clipboard protocol reads and writes no
+    MISSING ref comment: a denied paste simply doesn't happen.
+    MISSING ref comment: a denied write simply doesn't happen.
+    MISSING ref comment: a paste event discloses no clipboard data, so unsafe-text
+    MISSING ref comment: a read denied by policy answers eperm so clients degrade
+    MISSING ref comment: a reply, so a denied read is answered with empty contents.
+    MISSING ref comment: a write denied by policy answers eperm so clients degrade
+    MISSING ref comment: allowed. unsafe data is defined as data that contains
+    MISSING ref comment: apply the committed representations carried by the
+    MISSING ref comment: are only what its confirmation prompt displayed. an
+    MISSING ref comment: by the io thread. this takes ownership of the request state.
+    MISSING ref comment: by the user, skipping further prompts:
+    MISSING ref comment: characters outside the base64 alphabet is discarded entirely
+    MISSING ref comment: clipboard protocol requests carrying a password).
+    MISSING ref comment: clipboard request. the request state remains alive in that case so
+    MISSING ref comment: complete a kitty clipboard protocol read with the clipboard
+    MISSING ref comment: confirmation does not apply. if mode 5522 is reset, the empty
+    MISSING ref comment: consuming the request state; the apprt keeps it alive
+    MISSING ref comment: contents so there is no meaningful unavailable state; treat
+    MISSING ref comment: data types is exempt from prompting entirely; see
+    MISSING ref comment: decode with the simd decoder, strict per the kitty clipboard
+    MISSING ref comment: deny an in-flight clipboard request. this consumes the request: for
+    MISSING ref comment: deny policy, but the policy may have changed mid-transaction.
+    MISSING ref comment: empty commit clears the clipboard, which the apprt
+G3b [crash]: distinctive ref comments=167 missing=0 review=2
+    REVIEW (ratio 0.75): linux). on darwin the thread names itself in initthread.
+    REVIEW (ratio 0.76): naming the thread from here only works on some platforms (e.g.
+G3b [datastruct]: distinctive ref comments=478 missing=0 review=0
+G3b [extra]: distinctive ref comments=20 missing=0 review=2
+    REVIEW (ratio 0.67): generates the syntax file at comptime.
+    REVIEW (ratio 0.72): this results leading or tailing spaces being necessary to move onto the next match.
+G3b [font]: SKIPPED — PORT STATUS is not done (50 oracle file(s) unexamined)
+G3b [global]: distinctive ref comments=106 missing=0 review=2
+    REVIEW (ratio 0.64): asserts that `self.io_impl` has been initialized.
+    REVIEW (ratio 0.78): returns the global state action.
+G3b [input]: SKIPPED — PORT STATUS is not done (13 oracle file(s) unexamined)
+G3b [inspector]: distinctive ref comments=202 missing=0 review=0
+G3b [lib]: distinctive ref comments=82 missing=0 review=0
+G3b [os]: distinctive ref comments=666 missing=2 review=2
+    REVIEW (ratio 0.75): first check the env var. on windows we treat `localappdata` as a
+    REVIEW (ratio 0.66): not great, but xev timer can't fail atm
+    MISSING ref comment: don't check the raw handles after close: descriptor numbers can be
+    MISSING ref comment: reused immediately, so a valid number does not imply that we leaked it.
+G3b [render-types]: distinctive ref comments=149 missing=0 review=0
+G3b [renderer]: SKIPPED — PORT STATUS is not done (35 oracle file(s) unexamined)
+G3b [simd]: distinctive ref comments=177 missing=74 review=0
+    MISSING ref comment: (padding is not part of the alphabet).
+    MISSING ref comment: (which resets its aklomp streaming decoder on eof); this keeps
+    MISSING ref comment: a feed that ends exactly at terminal padding resets the stream:
+    MISSING ref comment: a stream that ends in a partial group is missing its padding.
+    MISSING ref comment: a streaming strict base64 decoder for one logical payload split
+    MISSING ref comment: across multiple chunks at arbitrary byte boundaries (e.g. the kitty
+    MISSING ref comment: all four of its characters have arrived.
+    MISSING ref comment: bulk-decode all complete groups with the strict single-shot
+    MISSING ref comment: bytes, and carry the remainder for the next feed.
+    MISSING ref comment: can never carry a decodable value.
+    MISSING ref comment: carry the trailing partial group, validated eagerly so
+    MISSING ref comment: characters make the decoded length fall short of the exact
+    MISSING ref comment: chunks must be valid rfc 4648 standard-alphabet base64.
+    MISSING ref comment: clients that pad each chunk independently working.
+    MISSING ref comment: clipboard protocol's wdata packets): the concatenation of the fed
+    MISSING ref comment: complete a carried partial group first.
+    MISSING ref comment: data after terminal padding within one feed is rejected, even
+    MISSING ref comment: data in the same feed is an error. a feed that ends exactly at
+    MISSING ref comment: decode one complete four character group, the only place
+    MISSING ref comment: decode strict rfc 4648 standard-alphabet base64: characters outside
+    MISSING ref comment: decode the complete groups of input (with any carried bytes
+    MISSING ref comment: decode, which also enforces that padding only appears as a
+    MISSING ref comment: decoding a stream split at every possible boundary, including
+    MISSING ref comment: elsewhere is rejected by the underlying decode.
+    MISSING ref comment: error (the stream was not correctly padded). the decoder is
+G3b [synthetic]: distinctive ref comments=101 missing=0 review=0
+G3b [terminfo]: distinctive ref comments=99 missing=0 review=0
+G3b [termio]: distinctive ref comments=1219 missing=63 review=5
+    REVIEW (ratio 0.75): child. empirically chosen through measurements on an m4 max.
+    REVIEW (ratio 0.65): or if due to race conditions it doesn't exist or any various other
+    REVIEW (ratio 0.72): password is allocated and must be freed.
+    REVIEW (ratio 0.7): reasons. we don't want to crash the entire process if this fails so we
+    REVIEW (ratio 0.68): sets the fd to non-blocking mode. returns false on failure.
+    MISSING ref comment: (osc 5522) write transaction; exceeding it aborts with efbig.
+    MISSING ref comment: ...so the follow-up data read is still granted, exactly once.
+    MISSING ref comment: a listing request must not burn the one-time paste password...
+    MISSING ref comment: a new write silently replaces any in-flight transaction.
+    MISSING ref comment: a wdata packet without a mime type commits the transaction.
+    MISSING ref comment: a write denied by policy can never succeed, so fail the
+    MISSING ref comment: accumulate one wdata chunk, or commit the transaction when the
+    MISSING ref comment: aliases without a transaction are silently ignored. once a
+    MISSING ref comment: an invalid base64 payload stream aborts the transaction.
+    MISSING ref comment: an undecodable alias payload aborts the transaction.
+    MISSING ref comment: an undecodable payload is dropped without any response,
+    MISSING ref comment: answer the write transaction with its final status and drop it.
+    MISSING ref comment: begin a kitty clipboard write transaction (type=write).
+    MISSING ref comment: burn the grant before the follow-up data read.
+    MISSING ref comment: carrying the password skip the permission prompt.
+    MISSING ref comment: chunk carries no mime type.
+    MISSING ref comment: commit the transaction: resolve the final contents and forward
+    MISSING ref comment: data or alias packet aborts an in-flight transaction.
+    MISSING ref comment: data over the write limit aborts the transaction and is
+    MISSING ref comment: data without a transaction is silently ignored, matching
+    MISSING ref comment: decode and validate the metadata. malformed structure drops
+    MISSING ref comment: drop any in-flight write transaction without responding.
+    MISSING ref comment: dropped and simply never served, which is how the protocol
+    MISSING ref comment: everything about the request, including the request struct
+    MISSING ref comment: failing to spool matches kitty's eio for a failed buffer write.
+G3b [unicode]: distinctive ref comments=124 missing=0 review=0
+G3b [util]: distinctive ref comments=146 missing=0 review=0
+G3b [vt]: distinctive ref comments=13792 missing=1217 review=220
+    REVIEW (ratio 0.74): (markmutated sets both); dirty set without a generation change
+    REVIEW (ratio 0.79): `page_serial`. consequently, every previously captured pointer-plus-serial
+    REVIEW (ratio 0.71): `page` metadata. a resident page can access the mapping directly since
+    REVIEW (ratio 0.79): a caller may pass our current tracked selection back to us by value, so
+    REVIEW (ratio 0.63): a cursor style or hyperlink id is an index into a set stored in the
+    REVIEW (ratio 0.62): a group of raw values for the vectorized operations.
+    REVIEW (ratio 0.66): a limit smaller than the remaining rows in the page exercises
+    REVIEW (ratio 0.68): a virtual placement (u=1) cannot also be a relative placement.
+    REVIEW (ratio 0.76): abort the state; other c0 bytes are ignored by it.
+    REVIEW (ratio 0.65): adding image 3 exceeds the limit and evicts image 1 (oldest),
+    MISSING ref comment: "a/0 a/1 a/2 a/3 a/4 a/5 .": extras are dropped but the listing
+    MISSING ref comment: "anywhere" c1 transitions. see dcs_passthrough below for more.
+    MISSING ref comment: "hello" without its final padding byte: every packet decodes,
+    MISSING ref comment: "some data" encoded as one stream, split at non-group
+    MISSING ref comment: '#' is wide and carries the vs16 grapheme.
+    MISSING ref comment: 'z' is one of the keys parser.finishvalue parses as an
+    MISSING ref comment: (0xff0000ff) is opaque red. bit-cast from the little-endian
+    MISSING ref comment: (and for the root frame) it is the image's own data.
+    MISSING ref comment: (e.g. tmux control mode pane content): without this, a
+    MISSING ref comment: (frame numbers, states) are silently ignored during execution,
+    MISSING ref comment: (here via ed 22, kitty's scroll_complete) pushes the active area onto
+    MISSING ref comment: (image values are copied around freely; copies share this
+    MISSING ref comment: (or any value past the next frame number) creates a new frame.
+    MISSING ref comment: (osc 52 with a "?" payload, or a kitty clipboard (osc 5522)
+    MISSING ref comment: (r=1,z=50), the current frame (c=2), the state (s=3, running),
+    MISSING ref comment: (which parses as a transmit action) must still continue the
+    MISSING ref comment: - bracketed (mode 2004 on): the program receives the data as one
+    MISSING ref comment: - unbracketed: the same rule as `issafe`.
+    MISSING ref comment: 0 (unaddressable); our storage keys everything by one public
+    MISSING ref comment: 0xc3 0x9c) and rustty doesn't support 8-bit c1 controls
+    MISSING ref comment: 0xc3 0x9c), and rustty doesn't honor 8-bit c1 controls in
+    MISSING ref comment: 1 is reused as soon as it is free.
+    MISSING ref comment: 1-row image inside a region whose top is the screen top, so the
+    MISSING ref comment: 1x1 image: any offset pushes the rect out of bounds.
+    MISSING ref comment: 2-row image (10x10px cells) inside the region (rows 1-4).
+G3b [vt-c]: distinctive ref comments=667 missing=78 review=8
+    REVIEW (ratio 0.64): a null value reverts to the built-in default.
+    REVIEW (ratio 0.7): c function pointer type for replying to a clipboard read.
+    REVIEW (ratio 0.71): c function pointer type for replying to a clipboard write.
+    REVIEW (ratio 0.79): c function pointer type for the size callback. used by xtwinops queries
+    REVIEW (ratio 0.7): its reply function before the callback returns.
+    REVIEW (ratio 0.76): most replies carry one representation, so keep that path
+    REVIEW (ratio 0.69): no trampoline is installed until a callback is set, so the
+    REVIEW (ratio 0.62): the caller owns the returned slice and must free it with `alloc`.
+    MISSING ref comment: (terminal.paste.source); the location rides alongside in
+    MISSING ref comment: a c callback, so the "nothing can be written" check is ours.
+    MISSING ref comment: a failing reader is an i/o error.
+    MISSING ref comment: a full osc 5522 write transaction: begin, chunked data for two
+    MISSING ref comment: a paste carries a handful of representations, so keep the common
+    MISSING ref comment: a paste of clipboard contents into the terminal. sized struct.
+    MISSING ref comment: a size smaller than the struct is rejected.
+    MISSING ref comment: a synchronous request to read clipboard contents. the embedder answers
+    MISSING ref comment: allocation-free. on oom the request goes unanswered and the
+    MISSING ref comment: and its result maps to the done response.
+    MISSING ref comment: and vt-driven mode 2048 enable reports. returns true and fills out_size
+    MISSING ref comment: at a virtual placement has no resolvable position here: its
+    MISSING ref comment: bracketed paste mode frames the text through the real mode path.
+    MISSING ref comment: by calling `reply` with the request before the callback returns.
+    MISSING ref comment: can be negative for relative placements with negative offsets.
+    MISSING ref comment: capture state for the terminal_paste tests: every pty write and the
+    MISSING ref comment: chain, offset by the accumulated chain offsets. a chain rooted
+    MISSING ref comment: clearing the callback uninstalls the handler effect.
+    MISSING ref comment: clipboard reads that follow a paste event.
+    MISSING ref comment: commit isn't granted and asks to remember, so the next one
+    MISSING ref comment: data; the image generation changes whenever the current
+    MISSING ref comment: denied replies with an empty clipboard.
+    MISSING ref comment: different abi version than any this struct has had.
+    MISSING ref comment: every field is required; a smaller size is a caller from a
+    MISSING ref comment: for animated images this is the current animation frame's
+
+G3b SCOPE: 7 crate(s) SKIPPED (PORT STATUS not done) = 169 oracle file(s) unexamined: apprt, apprt-api, bin, cfg-fmt, font, input, renderer
+  The verdict below covers the EXAMINED crates only. Use --strict or --crate <name> to include a skipped crate.
+RED: dropped reference comment(s) — see MISSING above (R1 violation)

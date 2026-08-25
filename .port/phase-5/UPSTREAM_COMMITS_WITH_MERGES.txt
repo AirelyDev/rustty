@@ -1,0 +1,245 @@
+683d8db64 renderer: release GPU resources for hidden surfaces (macOS) (#14017)
+c4e16970a renderer: release GPU resources for hidden surfaces (macOS)
+9c3ec931d terminal: treat high bytes in DCS strings as payload data (#14016)
+b260da24f cli: update list-themes preview sample to valid Zig 0.16 syntax (#14012)
+4e817e79a terminal: treat high bytes in DCS strings as payload data
+557253d8f terminal: update Kitty clipboard base64 handling to spec (#14015)
+82ccf12ca nix: update nixpkgs-unstable (#13678)
+bc2f7d7d2 terminal: update Kitty clipboard base64 handling to spec
+bb00a5c98 Update VOUCHED list (#14013)
+d9857eaba cli: update list-themes preview sample to valid Zig 0.16 syntax
+48a9e29f7 nix: update nixpkgs-unstable
+8144ef4e7 terminal: optimize OSC string reading with SIMD (#14011)
+8c5bc3d29 terminal: optimize OSC string reading with SIMD
+046a45a5f terminal: fully reset row metadata when recycling row storage (#14010)
+b31fbc846 terminal: fully reset row metadata when recycling row storage
+6d2b43652 macos: replace legacy aspectRatio with scaledToFit in clipboard preview (#14006)
+1c739350c macOS: add test cases for ScriptKeyEventCommand (#14008)
+719def70f macOS: update default behaviour of KeyboardLayout.character(for:modifiers:) (#14009)
+f1b9efed8 macOS: update default behaviour of KeyboardLayout.character(for:modifiers:)
+d7f5ba3b4 macOS: add test cases for ScriptKeyEventCommand
+a2212a5b1 macos: replace legacy aspectRatio with scaledToFit in clipboard preview
+8867c37c5 terminal: update Kitty clipboard text input validation to spec (#14005)
+4888c0a02 terminal: reject oversized Kitty clipboard writes (#14004)
+e8d8945b5 terminal: update Kitty clipboard text input validation to spec
+70f006575 terminal: reject oversized Kitty clipboard writes
+600a86dcf terminal: make Kitty clipboard write limit configurable (#14002)
+75606a690 terminal: exempt Kitty clipboard listing reads from permission prompts (#14001)
+5350d4a5f terminal: make Kitty clipboard write limit configurable
+13b9857a2 macos: restore paste semantics for dropped text (#13999)
+4f4da7657 macos: answer ENOSYS for Kitty clipboard writes to primary (#14000)
+928c7f0e7 terminal: exempt Kitty clipboard listing reads from permission prompts
+1334cc213 macos: answer ENOSYS for Kitty clipboard writes to primary
+550151882 macos: restore paste semantics for dropped text
+89d17b378 macos: implement Kitty clipboard protocol writes (#13998)
+25c61e852 macos: implement Kitty clipboard protocol writes
+7c49e723a terminal: fix stale cursor style/hyperlink state after scroll clear (#13997)
+9313d580c terminal: fix stale cursor style/hyperlink state after scroll clear
+c8554f28e macOS: enable mode 5522 paste events (#13995)
+1dcf4eb2d renderer/image: Fuse copying data and converting pixel format (#13987)
+c2c0db68a macOS: enable mode 5522 paste events
+53d1b28ad docs: reformatting for help book support (#13994)
+88dc6f972 docs: reformatting for help book support
+75d657788 macOS: Kitty clipboard read support (#13993)
+9f2aa93e8 libghostty: Kitty clipboard write permission prompts and grants (#13992)
+1bc188739 typos
+7ae9b1113 libghostty: Kitty clipboard write permission prompts and grants
+df14efaf3 macos: preview images in the clipboard read confirmation dialog
+c1f0ef73a macos: serve copied files as text/uri-list in Kitty clipboard reads
+af9470b19 macos: Kitty clipboard reads support pw/name session grants
+8c7a34d4c macos: Kitty clipboard reads serve all clipboard content types
+0ce9054bf macos: implement Kitty clipboard protocol reads (OSC 5522)
+a53771af0 libghostty: gate mode 5522 reports on clipboard read callback (#13990)
+94b6dae42 libghostty: gate mode 5522 reports on clipboard read callback
+7a9bca6a6 macOS: fix responsiveness for repeated new tab action (#13985)
+f9206be82 macOS: fix swiftlint warnings (#13986)
+874735a9a ci: update actions/upload-artifact pinned tag comment (#13989)
+2303bcf08 ci: update actions/upload-artifact pinned tag comment
+b17abd96d refactor(image): Restrict prepForUpload to Image.Pending
+1d24eecb2 macOS: fix responsiveness for repeated new tab action
+6cf7e0cc5 macOS: fix swiftlint warnings
+169213cd2 renderer/image: Fuse copy to owned data and pixel format conversion in prepImage
+6a508fd5e macos: translate physical menu shortcuts (#13888)
+e77b2309f libghostty: paste reads clipboard contents on demand, streams to pty (#13983)
+da27e6c90 libghostty: paste reads clipboard contents on demand, streams to pty
+a36dc245b Sync CODEOWNERS vouch list (#13981)
+9f0e1719d i18n: update bg_BG translations (#13802)
+e42406067 libghostty: centralize pasting to `ghostty_terminal_paste`, enable mode 5522 (#13978)
+5834a0e3d Update VOUCHED list (#13977)
+da0093671 Update VOUCHED list (#13975)
+60a1ae2df libghostty: add ghostty_terminal_paste C API with paste events example
+dda8e6f31 sys: add secure random override option with a platform default
+876032316 terminal: add stream handler paste operation and enable mode 5522 in libghostty
+a5bb22e23 terminal: add shared paste core with Kitty clipboard paste events
+da5ddcb08 terminal: Kitty drag and drop protocol drop-only core logic and state machine (#13973)
+db2f8be59 terminal/kitty: dnd docs
+af8d28a94 terminal/kitty: drag and drop stream handler
+50f69b883 terminal/kitty: drag and drop drop state machine
+38746b8c1 terminal/kitty: drag and drop response encoding
+7c845e8af terminal/kitty: drag and drop command decoding
+3b9c4e0dd libghostty: implement Kitty clipboard protocol read/write (#13963)
+4f49dc2b8 libghostty: implement Kitty clipboard protocol reads via clipboard_read effect
+5851d9861 gtk: avoid physical fallback for XKB modifiers (#13967)
+d03cd1f53 Update VOUCHED list (#13970)
+2021d2add Update VOUCHED list (#13969)
+ef01d5fda gtk: avoid physical fallback for XKB modifiers
+6959fd46c libghostty: implement Kitty clipboard protocol write only
+36676c572 libghostty: clipboard_read effect, enables OSC52 reads (#13965)
+e03475c0c libghostty: clipboard_read effect, enables OSC52 reads
+ca9e5b130 terminal/osc: kitty notification parsing feedback
+073bffcff osc 99: eliminate unnecessary inline switch branches
+07f33ad91 osc 99 & 5522: share metadata parsing code
+aa4ec3508 osc 99: address review feedback
+9a8e7ae18 core: add alias for Kitty desktop notification OSC struct
+301b69df4 osc: save terminator from OSC 99 in case we need to send a response
+202e639d9 osc: clean up comments in OSC 99
+93bf7d810 osc: address review comments on OSC 99 (Kitty desktop notifications)
+c67a1db99 osc: parse the Kitty desktop notification protocol (OSC 99)
+819b241de terminal: Kitty Clipboard core logic (no apprt hookups yet) (#13962)
+c8634f3fc terminal: reload cell pointers when print grows a page (#13960)
+a8c3ab191 simd: fix scalar base64 empty input handling causing a crash
+128ec7cd0 terminal: rename paste_events mode to kitty_paste_events
+74a133ea1 Update VOUCHED list (#13961)
+bcf44b40e terminal: dispatch OSC 5522 as a kitty_clipboard stream action, unhandled
+07c6fc21b terminal: add kitty clipboard paste events mode (5522), disabled for now
+f2d4b32be terminal: expose kitty clipboard protocol (OSC 5522) for stream dispatch
+6f007e767 terminal: add kitty clipboard protocol (OSC 5522) session password grants
+7a940ec02 terminal: add kitty clipboard protocol (OSC 5522) write transactions
+33cda4dc5 terminal: reload cell pointers when print grows a page
+e28acd928 terminal: add kitty clipboard protocol (OSC 5522) response encoding
+25b1170d4 terminal: add kitty clipboard protocol (OSC 5522) command parsing
+a88ad03e6 kitty graphics: animation support (#13943)
+5984d6f73 terminal: add isTextMime helper for plain text MIME type names
+4be9d782e terminal: avoid Kitty image reset test if no kitty images
+dff13b41c pkg/{afl++,wuffs}: fix builds for CI
+322d7ae78 terminal/kitty: switch to wuffs for pixel work
+f3e98fb72 terminal/kitty: X handling properly since 0.45 fix
+aee7bf347 renderer: drive kitty graphics animation
+73903f76a terminal/c: image data returns the current animation frame
+d2ffeb5ba terminal/kitty: execute animation commands
+d8b920e50 terminal/kitty: animation frame storage, composition, and playback
+4b915e3bc terminal/kitty: complete animation command parsing
+d6171332c update mirror, support git+https dependencies (#13957)
+ffad4c6ec update mirror, support git+https dependencies
+fa7fe3b3a po/zh_TW: add missing translations (#13690)
+442046f8e terminal/kitty: preserve image limits across full reset (#13951)
+bcbc93a6b terminal/kitty: preserve image limits across full reset
+99d7b5fd5 macOS: clean up GlassViewModel (#13944)
+ac9a2c4cd pkg/wuffs: build without libc (#13942)
+311d38376 Update VOUCHED list (#13948)
+10d732688 macOS: clean up GlassViewModel
+619555d1c pkg/wuffs: build without libc
+42a161aad pkg/wuffs: fix gray+alpha to RGBA swizzle failing for all inputs (#13941)
+86db30785 pkg/wuffs: fix gray+alpha to RGBA swizzle failing for all inputs
+08450e21e kitty graphics: support relative placements (#13939)
+9490f7134 renderer: position relative kitty image placements
+33ca9e5dd terminal/kitty: create relative placements from put commands
+f5b3efe45 terminal/c: resolve relative placement viewport positions
+cd5f9eef0 terminal/kitty: add relative placement storage
+a32a100d4 terminal/kitty: centralize placeholder placement lookup
+d30a9c424 terminal: clear cursor pin garbage flag on screen reset
+16b39f45a fix up recent Valgrind errors (#13938)
+04d6954eb os: remove flaky TempDir handle checks (#13937)
+c5f4f00ed fix up recent Valgrind errors
+1ffdd7415 os: remove flaky TempDir handle checks
+1ffa77c90 terminal/kitty: scroll and clip image placements within margins (#13935)
+90bce0d2d terminal/kitty: scroll and clip image placements within margins
+e6605009b terminal/kitty: prevent auto-assigned image ID collisions (#13934)
+6b23c584c terminal/kitty: prevent auto-assigned image ID collisions
+b6cbaf54e terminal/kitty: fix various validation behaviors to match Kitty (#13933)
+242723223 terminal/kitty: fix various validation behaviors to match Kitty
+48c7006b9 terminal/kitty: accept empty graphics delete ranges (#13932)
+f7d29b19e terminal/kitty: accept empty graphics delete ranges
+af150144e terminal: clear progress bar on full reset (#13901)
+956a687d6 macOS: refine liquid glass styles (#13928)
+aea03011d termio: release initial input resources (#13931)
+0de91eee3 font: render glyf directly into output bitmap (#13929)
+9566a1a87 termio: release initial input resources
+6f02d9aad font: render glyf directly into output bitmap
+fd17869d1 macOS: rework for #10943
+b7ee3ab6b Revert "terminal: only clear the progress bar on full reset if there is one"
+f0eaaea6f po/zh_TW: refine translations for reset, copy, and placeholder strings
+9ae02a326 terminal: transfer selection text into string maps (#13923)
+fc5ac17a6 i18n: complete Dutch (nl) translation for v1.4 (#13853)
+f1948d505 terminal: transfer selection text into string maps
+9154efcbd macos: avoid temporary path component allocation (#13921)
+a436a9edc macos: avoid temporary path component allocation
+50d3ac8ed shell-integration: avoid owning temporary commands (#13919)
+49e503fd4 surface: parse text bindings with stack fallback (#13918)
+8e8d76b63 shell-integration: avoid owning temporary commands
+a9f7f6d21 surface: parse text bindings with stack fallback
+a4edca2a9 surface: keep clipboard content list on stack (#13916)
+4d646bae0 macOS: group settings menu in a separate group (#13906)
+5a8921ecb surface: keep clipboard content list on stack
+3e7230bf5 i18n: update pt_BR translations (#13819)
+959c0daea i18n: update revision date
+f5ad3a0a4 macos: use AppKit for shortcut translation
+e8a7097f6 i18: use "aplicativo" instead of "aplicação" for "application"
+5a55a345a Update po/pt_BR.po
+430202099 Update po/pt_BR.po
+9581f7dd4 Update po/pt_BR.po
+65621664e Update po/pt_BR.po
+ae7080e6c Update po/pt_BR.po
+d9ffbbf17 chore(vt): expose snapshot api (#13912)
+043abc7b6 macOS: group settings menu in a separate group
+f6990690f Revert "macOS: hide settings menu icon on macOS 27 (#13664)"
+b5716a871 po/zh_TW: refine two translations per review feedback
+4c6215bb8 terminal: clear tabstop bit on unset instead of toggling (#13900)
+79e78e6c0 Merge branch 'ghostty-org:main' into l10n-tw
+b56c6d88f terminal: only clear the progress bar on full reset if there is one
+eeab85b96 terminal: clear progress bar on full reset
+bed20eb36 terminal: clear tabstop bit on unset instead of toggling
+7f62fe70a terminal/kitty: preserve data on unmatched delete (#13898)
+fe12e30b3 terminal/kitty: preserve chunked response identifiers (#13897)
+72b6cd712 terminal/kitty: validate graphics query image data (#13896)
+306a16903 terminal/kitty: preserve data on unmatched delete
+86d94f150 terminal/kitty: preserve chunked response identifiers
+cfc5a9650 terminal/kitty: validate graphics query image data
+2ced1e5c8 terminal/kitty: fix various graphics deletion mismatches with spec (#13895)
+f8b40a023 terminal/kitty: fix various graphics deletion mismatches with spec
+55dac8fc4 terminal/kitty: abort incomplete graphics loads (#13893)
+e5747cf0b terminal/kitty: abort incomplete graphics loads
+364f8e9ac terminal/kitty: graphics `S` value is exact byte, not max (#13892)
+abd77067d terminal/kitty: graphics `S` value is exact byte, not max
+7e5dfa09e terminal/kitty: constrain placement offsets to cell bounds (#13891)
+c5a3c7e2e terminal/kitty: constrain placement offsets to cell bounds
+9848cb15f terminal/kitty: intersect source rectangles before sizing (#13890)
+409e682c8 terminal/kitty: reject conflicting image identifiers (#13889)
+52190a5d8 terminal/kitty: intersect source rectangles before sizing
+83145c0a3 terminal/kitty: reject conflicting image identifiers
+9886f4817 macos: enforce keyboard layout actor isolation
+d4d72f320 terminal/kitty: place cursor after tall images properly (#13887)
+761696c34 macos: simplify menu shortcut identity
+afb61e1b6 terminal/kitty: place cursor after tall images properly
+569ff3307 macos: translate physical menu shortcuts
+0a16db3c6 fix(lib-vt): report size when mode 2048 is enabled (#13885)
+5b9a77f20 terminal: document mode 2048 size reports
+07af4612b terminal: report size when mode 2048 is enabled
+d2f08cb0b Apply suggestions from code review
+f4f9991d2 chore(vt): expose snapshot api
+bde2047a6 Apply suggestions from code review
+132f154e5 Update po/pt_BR.po
+3bdbad7d8 Update po/pt_BR.po
+03cb485f6 Update po/pt_BR.po
+e820ef48b Update po/pt_BR.po
+e49392671 Update po/pt_BR.po
+ed13a09a5 Update po/pt_BR.po
+cdefb6809 Update po/pt_BR.po
+be892fc6c Update po/pt_BR.po
+17a66279b Update po/pt_BR.po
+0149ef5f7 Update po/pt_BR.po
+58c4796c1 Update po/pt_BR.po
+1b8da6b40 Update po/pt_BR.po
+31a10a7b5 Update po/pt_BR.po
+1225632d1 Update po/pt_BR.po
+6fe197d86 Update po/pt_BR.po
+d6871cd92 Update po/pt_BR.po
+6c29a0a28 Update po/pt_BR.po
+1c34e0df8 Update po/pt_BR.po
+123dc0ccb Update po/pt_BR.po
+6ab3ef947 Update po/pt_BR.po
+8a0a9faf8 i18n: use "Redefinir" for reset actions in pt_BR
+08df9f6e2 po/zh_TW: remove trailing blank line at EOF
+08c80d253 po/zh_TW: add missing translations
+bfc200c85 i18n: update bg_BG translations
+ece96a14c i18n: update pt_BR translations
