@@ -58,6 +58,11 @@ pub type ScrollbackLimitBytes = Limit<usize, 50_000_000>;
 /// config type. Its declared default IS the unlimited sentinel.
 pub type ScrollbackLimitLines = Limit<usize, { usize::MAX as u128 }>;
 
+/// `Limit(usize, 64 * 1024 * 1024)` — the `clipboard-write-limit-bytes`
+/// config type (`5350d4a5f`, default raised to the 64 MiB protocol minimum by
+/// `70f006575`).
+pub type ClipboardWriteLimitBytes = Limit<usize, { 64 * 1024 * 1024 }>;
+
 /// The integer capability [`Limit`] needs: its maximum value (the `unlimited`
 /// sentinel), conversion from the `u128` const default, and CLI parsing.
 pub trait LimitInt: Copy + PartialEq + core::fmt::Display {

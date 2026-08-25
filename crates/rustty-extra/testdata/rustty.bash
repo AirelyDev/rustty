@@ -185,6 +185,7 @@ _rustty() {
     config+=" '--focus-follows-mouse '"
     config+=" --clipboard-read="
     config+=" --clipboard-write="
+    config+=" --clipboard-write-limit-bytes="
     config+=" '--clipboard-trim-trailing-spaces '"
     config+=" '--clipboard-paste-protection '"
     config+=" '--clipboard-paste-bracketed-safe '"
@@ -395,6 +396,7 @@ _rustty() {
       --focus-follows-mouse) return ;;
       --clipboard-read) _compreply compgen -W "allow deny ask" -- "$cur"; _add_spaces ;;
       --clipboard-write) _compreply compgen -W "allow deny ask" -- "$cur"; _add_spaces ;;
+      --clipboard-write-limit-bytes) return ;;
       --clipboard-trim-trailing-spaces) return ;;
       --clipboard-paste-protection) return ;;
       --clipboard-paste-bracketed-safe) return ;;

@@ -20,6 +20,12 @@ const fn std_base64_standard_alphabet_chars() -> [u8; 64] {
     *b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 }
 
+/// Whether c is one of the 64 standard base64 alphabet characters
+/// (padding is not part of the alphabet).
+pub fn is_alphabet_char(c: u8) -> bool {
+    scalar_decoder.char_to_index[c as usize] != Base64Decoder::INVALID_CHAR
+}
+
 /// Decode error mirroring Zig's `error{InvalidCharacter, InvalidPadding, NoSpaceLeft}`.
 // PARITY: `NoSpaceLeft` is part of the reference's error set (R1: every error
 // case preserved) even though the decode paths below never construct it.

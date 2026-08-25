@@ -147,6 +147,7 @@ _config() {
     "--focus-follows-mouse" \
     "--clipboard-read=-:::(allow deny ask)" \
     "--clipboard-write=-:::(allow deny ask)" \
+    "--clipboard-write-limit-bytes=-:::( )" \
     "--clipboard-trim-trailing-spaces" \
     "--clipboard-paste-protection" \
     "--clipboard-paste-bracketed-safe" \

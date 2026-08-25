@@ -19,8 +19,9 @@ use wuffs_sys::{
     wuffs_base__pixel_swizzler, wuffs_base__pixel_swizzler__prepare,
     wuffs_base__pixel_swizzler__swizzle_interleaved_from_slice, wuffs_base__slice_u8,
     WUFFS_BASE__PIXEL_FORMAT__BGR, WUFFS_BASE__PIXEL_FORMAT__BGRA_PREMUL,
-    WUFFS_BASE__PIXEL_FORMAT__RGB, WUFFS_BASE__PIXEL_FORMAT__RGBA_PREMUL,
-    WUFFS_BASE__PIXEL_FORMAT__Y, WUFFS_BASE__PIXEL_FORMAT__YA_PREMUL,
+    WUFFS_BASE__PIXEL_FORMAT__RGB, WUFFS_BASE__PIXEL_FORMAT__RGBA_NONPREMUL,
+    WUFFS_BASE__PIXEL_FORMAT__RGBA_PREMUL, WUFFS_BASE__PIXEL_FORMAT__Y,
+    WUFFS_BASE__PIXEL_FORMAT__YA_NONPREMUL,
 };
 
 // const log = std.log.scoped(.wuffs_swizzler);
@@ -44,15 +45,23 @@ pub fn gToRgba<A: Allocator + Copy>(alloc: A, src: &[u8]) -> Result<RawBuf<A>, E
 }
 
 // pub fn gaToRgba(alloc: Allocator, src: []const u8) Error![]u8 {
-//     return swizzle(alloc, src, c.WUFFS_BASE__PIXEL_FORMAT__YA_PREMUL, c.WUFFS_BASE__PIXEL_FORMAT__RGBA_PREMUL);
+//     // Wuffs doesn't support YA_PREMUL as a swizzle source. The nonpremul
+//     // pair produces the same bytes (r=g=b=y, a=a, no alpha math), which
+//     // is what we want: alpha semantics are preserved as-is, matching the
+//     // other conversions here.
+//     return swizzle(alloc, src, c.WUFFS_BASE__PIXEL_FORMAT__YA_NONPREMUL, c.WUFFS_BASE__PIXEL_FORMAT__RGBA_NONPREMUL);
 // }
 #[allow(non_snake_case)]
 pub fn gaToRgba<A: Allocator + Copy>(alloc: A, src: &[u8]) -> Result<RawBuf<A>, Error> {
+    // Wuffs doesn't support YA_PREMUL as a swizzle source. The nonpremul
+    // pair produces the same bytes (r=g=b=y, a=a, no alpha math), which
+    // is what we want: alpha semantics are preserved as-is, matching the
+    // other conversions here.
     swizzle(
         alloc,
         src,
-        WUFFS_BASE__PIXEL_FORMAT__YA_PREMUL,
-        WUFFS_BASE__PIXEL_FORMAT__RGBA_PREMUL,
+        WUFFS_BASE__PIXEL_FORMAT__YA_NONPREMUL,
+        WUFFS_BASE__PIXEL_FORMAT__RGBA_NONPREMUL,
     )
 }
 
@@ -93,6 +102,112 @@ pub fn bgraToRgba<A: Allocator + Copy>(alloc: A, src: &[u8]) -> Result<RawBuf<A>
         WUFFS_BASE__PIXEL_FORMAT__BGRA_PREMUL,
         WUFFS_BASE__PIXEL_FORMAT__RGBA_PREMUL,
     )
+}
+
+// pub fn rgbaSrcOver(dst: []u8, src: []const u8) void {
+//
+// PORT NOTE: the reference mutates `dst: []u8` in place — `&mut [u8]` (the
+// unique-borrow analog; no allocator is involved, unlike the `swizzle` path).
+/// Composite `src` over `dst` in place. Both are straight
+/// (non-premultiplied) alpha RGBA of the same length. A transparent
+/// destination pixel takes the source pixel exactly; wuffs composites
+/// everything else in 16-bit integer space.
+// PARITY: `% 4 == 0` kept verbatim (see the `swizzle` PARITY note below).
+#[allow(non_snake_case)]
+#[allow(clippy::manual_is_multiple_of)]
+pub fn rgbaSrcOver(dst: &mut [u8], src: &[u8]) {
+    //     assert(dst.len == src.len);
+    //     assert(dst.len % 4 == 0);
+    assert!(dst.len() == src.len());
+    assert!(dst.len() % 4 == 0);
+
+    //     var swizzler: c.wuffs_base__pixel_swizzler = undefined;
+    // SAFETY: `undefined` -> a zeroed POD; `prepare` fully initializes it before
+    // `swizzle_interleaved_from_slice` reads it (the `swizzle` precedent below).
+    let mut swizzler: wuffs_base__pixel_swizzler = unsafe { core::mem::zeroed() };
+    //     const status = c.wuffs_base__pixel_swizzler__prepare(
+    //         &swizzler,
+    //         c.wuffs_base__make_pixel_format(c.WUFFS_BASE__PIXEL_FORMAT__RGBA_NONPREMUL),
+    //         c.wuffs_base__empty_slice_u8(),
+    //         c.wuffs_base__make_pixel_format(c.WUFFS_BASE__PIXEL_FORMAT__RGBA_NONPREMUL),
+    //         c.wuffs_base__empty_slice_u8(),
+    //         c.WUFFS_BASE__PIXEL_BLEND__SRC_OVER,
+    //     );
+    //
+    // PORT NOTE: `make_pixel_format` / `empty_slice_u8` are `static inline`s,
+    // constructed by hand; `WUFFS_BASE__PIXEL_BLEND__SRC_OVER` is
+    // `#define ((wuffs_base__pixel_blend)1)` (a function-style cast macro bindgen
+    // can't bind) — the literal `1` — the same three PORT NOTEs `swizzle` below
+    // already documents for its `SRC` (`0`) prepare call.
+    //
+    // SAFETY: `swizzler` is valid (zeroed) receiver storage; both formats are
+    // valid direct RGBA_NONPREMUL; the empty palette slices carry no pointer to
+    // dereference.
+    let status = unsafe {
+        wuffs_base__pixel_swizzler__prepare(
+            &mut swizzler,
+            wuffs_base__pixel_format {
+                repr: WUFFS_BASE__PIXEL_FORMAT__RGBA_NONPREMUL,
+            },
+            wuffs_base__slice_u8 {
+                ptr: core::ptr::null_mut(),
+                len: 0,
+            },
+            wuffs_base__pixel_format {
+                repr: WUFFS_BASE__PIXEL_FORMAT__RGBA_NONPREMUL,
+            },
+            wuffs_base__slice_u8 {
+                ptr: core::ptr::null_mut(),
+                len: 0,
+            },
+            1, // c.WUFFS_BASE__PIXEL_BLEND__SRC_OVER
+        )
+    };
+    //     // This format pair and blend mode is a supported swizzle, so
+    //     // preparation can only fail on a programming error.
+    //     assert(c.wuffs_base__status__is_ok(&status));
+    //
+    // PORT NOTE: `status__is_ok` is a `static inline` — a Wuffs status is OK iff
+    // its `repr` string pointer is NULL (read directly, the error.rs `check`
+    // precedent).
+    // This format pair and blend mode is a supported swizzle, so
+    // preparation can only fail on a programming error.
+    assert!(status.repr.is_null());
+
+    //     _ = c.wuffs_base__pixel_swizzler__swizzle_interleaved_from_slice(
+    //         &swizzler,
+    //         c.wuffs_base__make_slice_u8(dst.ptr, dst.len),
+    //         c.wuffs_base__empty_slice_u8(),
+    //         c.wuffs_base__make_slice_u8(@constCast(src.ptr), src.len),
+    //     );
+    // }
+    //
+    // PORT NOTE: `@constCast(src.ptr)` — the C struct field is a plain
+    // `uint8_t*`; the swizzler treats the SOURCE slice read-only (the
+    // `src_slice` PORT NOTE in `swizzle` below).
+    //
+    // SAFETY: `swizzler` was `prepare`d immediately above (sequential, no
+    // overlapping borrow — no SB/TB hazard); `dst`/`src` are live slices of
+    // equal length (asserted). The C call writes at most `dst.len` bytes
+    // through the dst pointer and only reads through the src pointer — the
+    // ASan-proven contract `swizzle` below documents.
+    let _ = unsafe {
+        wuffs_base__pixel_swizzler__swizzle_interleaved_from_slice(
+            &swizzler,
+            wuffs_base__slice_u8 {
+                ptr: dst.as_mut_ptr(),
+                len: dst.len(),
+            },
+            wuffs_base__slice_u8 {
+                ptr: core::ptr::null_mut(),
+                len: 0,
+            },
+            wuffs_base__slice_u8 {
+                ptr: src.as_ptr() as *mut u8,
+                len: src.len(),
+            },
+        )
+    };
 }
 
 // fn swizzle(
@@ -269,10 +384,71 @@ mod tests {
     use super::*;
     use allocator_api2::alloc::Global;
 
-    // The oracle (swizzle.zig) has no test{} blocks; these KATs are new,
-    // derived by reading the vendored `wuffs-v0.4.c` swizzle_xxxx__y /
-    // swizzle_bgrw__bgr / swizzle_bgrw__rgb / swizzle_swap_rgbx_bgrx bodies
-    // directly (see the workstream spec) rather than guessed.
+    // The oracle (swizzle.zig) has two test{} blocks — "gaToRgba" and
+    // "rgbaSrcOver" (`86db30785`/`322d7ae78`), ported below. The other KATs
+    // are rustty-only (carried from the pre-test-block port), derived by
+    // reading the vendored `wuffs-v0.4.c` swizzle_xxxx__y / swizzle_bgrw__bgr
+    // / swizzle_bgrw__rgb / swizzle_swap_rgbx_bgrx bodies directly (see the
+    // workstream spec) rather than guessed.
+
+    // test "gaToRgba" {
+    #[test]
+    fn ga_to_rgba() {
+        //     const rgba = try gaToRgba(std.testing.allocator, &.{ 7, 100, 8, 200 });
+        //     defer std.testing.allocator.free(rgba);
+        //
+        // PORT NOTE: the reference `defer free` is `RawBuf`'s `Drop`.
+        let rgba = gaToRgba(Global, &[7, 100, 8, 200]).unwrap();
+
+        //     try std.testing.expectEqualSlices(u8, &.{
+        //         7, 7, 7, 100,
+        //         8, 8, 8, 200,
+        //     }, rgba);
+        // }
+        assert_eq!(
+            &[
+                7, 7, 7, 100, //
+                8, 8, 8, 200, //
+            ],
+            rgba.as_slice()
+        );
+    }
+
+    // test "rgbaSrcOver" {
+    #[test]
+    fn rgba_src_over() {
+        // 50% white over opaque black, opaque over anything, transparent
+        // source over anything, and anything over a transparent
+        // destination (exact source passthrough).
+        //     var dst = [_]u8{ ... };
+        let mut dst = [
+            0u8, 0, 0, 255, //
+            10, 20, 30, 40, //
+            10, 20, 30, 40, //
+            0, 0, 0, 0, //
+        ];
+        //     rgbaSrcOver(&dst, &.{ ... });
+        rgbaSrcOver(
+            &mut dst,
+            &[
+                255, 255, 255, 128, //
+                100, 110, 120, 255, //
+                100, 110, 120, 0, //
+                200, 100, 50, 128, //
+            ],
+        );
+        //     try std.testing.expectEqualSlices(u8, &.{ ... }, &dst);
+        // }
+        assert_eq!(
+            &[
+                128, 128, 128, 255, //
+                100, 110, 120, 255, //
+                10, 20, 30, 40, //
+                200, 100, 50, 128, //
+            ],
+            &dst
+        );
+    }
 
     /// gToRgba: gray replicated into R/G/B, A forced to 255 (opaque).
     #[test]
@@ -327,20 +503,12 @@ mod tests {
         let _ = rgbToRgba(Global, &src);
     }
 
-    /// KEY FINDING (see workstream spec): `gaToRgba` swizzles FROM
-    /// `WUFFS_BASE__PIXEL_FORMAT__YA_PREMUL` — but `wuffs_base__pixel_swizzler__prepare`'s
-    /// src-format switch in the vendored C (wuffs-v0.4.c) has a case for
-    /// `YA_NONPREMUL` but NOT `YA_PREMUL` (distinct repr values: 0x21000088 vs
-    /// 0x22000088). `prepare` therefore ALWAYS returns a non-OK status for this
-    /// src format, so `gaToRgba` is UNCONDITIONALLY `Err(Error::WuffsError)` for
-    /// every input — ported AS-IS (R1 fidelity), not "fixed" to route through
-    /// `YA_NONPREMUL`, even though that looks like an upstream ghostty dead-code
-    /// path / bug. Do not silently "fix" this.
-    #[test]
-    fn ga_to_rgba_always_unsupported() {
-        for src in [&[][..], &[0x11, 0xFF][..], &[0x00, 0x00, 0x80, 0x80][..]] {
-            let result = gaToRgba(Global, src);
-            assert_eq!(result.map(|_| ()), Err(Error::WuffsError));
-        }
-    }
+    // RETIRED TEST (`ga_to_rgba_always_unsupported`, R5): the pre-`86db30785`
+    // KEY FINDING test asserted `gaToRgba` was UNCONDITIONALLY
+    // `Err(Error::WuffsError)` (the old `YA_PREMUL` source has no case in
+    // `prepare`'s src-format switch — an upstream bug this port documented
+    // as-is). Upstream FIXED it (`86db30785`: route through the
+    // `YA_NONPREMUL` -> `RGBA_NONPREMUL` pair, verified present in the
+    // vendored alpha.9 `prepare__ya_nonpremul`), so that test is REPLACED by
+    // the oracle's own `gaToRgba` expectation above — fixing, not weakening.
 }

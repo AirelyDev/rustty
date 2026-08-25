@@ -147,6 +147,7 @@ syn keyword rusttyConfigKeyword
 	\ focus-follows-mouse
 	\ clipboard-read
 	\ clipboard-write
+	\ clipboard-write-limit-bytes
 	\ clipboard-trim-trailing-spaces
 	\ clipboard-paste-protection
 	\ clipboard-paste-bracketed-safe

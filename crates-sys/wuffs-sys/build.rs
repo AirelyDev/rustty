@@ -31,6 +31,14 @@
 //!      linkage; the vendored `release/c` include dir is re-exported via
 //!      `DEP_WUFFS_INCLUDE` for downstream crates.
 
+//! Reference `pkg/wuffs/include/{stdlib.h,string.h}` (`619555d1c`
+//! build-without-libc) are mirrored at `include/` but NOT placed on any
+//! include path: they exist so the reference's translate-c can parse wuffs
+//! without libc headers (wasm32-freestanding / no Apple SDK), while `cc` here
+//! always compiles against the real system libc. Wiring them up (plus the
+//! main.zig weak `calloc`/`free` stubs — see rustty-wuffs lib.rs) becomes live
+//! only if a wasm32/freestanding lane ever links wuffs.
+
 use std::env;
 use std::path::PathBuf;
 
@@ -72,7 +80,7 @@ fn main() {
     let source = c_dir.join("wuffs-v0.4.c");
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
     let mut build = cc::Build::new();
     build
@@ -90,10 +98,17 @@ fn main() {
         build.define(def, None);
     }
 
-    // The reference disables ubsan on MSVC (Zig's ubsan runtime cannot be
-    // bundled on Windows, leaving __ubsan_handle_* unresolved):
-    //   if (target.result.abi == .msvc) { -fno-sanitize=undefined; ... }
-    if target_env == "msvc" {
+    // The reference (build.zig, `dff13b41c` end state) disables ubsan on ALL
+    // Windows ABIs — was msvc-only:
+    //   // Disable ubsan on Windows to avoid undefined __ubsan_handle_*
+    //   // references: Zig's ubsan runtime can't be bundled on Windows
+    //   // (its /exclude-symbols directives break the MSVC linker), so
+    //   // these handlers would go unresolved. This affects both the
+    //   // MSVC and GNU ABIs.
+    //   if (windows) { -fno-sanitize=undefined; -fno-sanitize-trap=undefined; }
+    // (`cc` never enables Zig's ubsan, so this mirrors the condition, not a
+    // live hazard.)
+    if target_os == "windows" {
         build
             .flag_if_supported("-fno-sanitize=undefined")
             .flag_if_supported("-fno-sanitize-trap=undefined");
@@ -124,7 +139,7 @@ fn main() {
     for def in MODULE_DEFINES {
         shim.define(def, None);
     }
-    if target_env == "msvc" {
+    if target_os == "windows" {
         shim.flag_if_supported("-fno-sanitize=undefined")
             .flag_if_supported("-fno-sanitize-trap=undefined");
     }

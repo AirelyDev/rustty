@@ -301,6 +301,7 @@ pub unsafe fn get(config: &Config, k: Key, ptr_raw: *mut std::ffi::c_void) -> bo
         Key::ClipboardRead => g_enum!(clipboard_read),
         Key::ClipboardTrimTrailingSpaces => g_bool!(clipboard_trim_trailing_spaces),
         Key::ClipboardWrite => g_enum!(clipboard_write),
+        Key::ClipboardWriteLimitBytes => false,
         Key::Command => false,
         Key::CommandPaletteEntry => g_cval!(command_palette_entry),
         Key::ConfigDefaultFiles => g_bool!(config_default_files),

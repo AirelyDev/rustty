@@ -305,6 +305,95 @@ pub fn crypto_random_bytes(buf: &mut [u8]) {
     }
 }
 
+/// The platform has no CSPRNG source.
+///
+/// PORT NOTE (`dda8e6f31`): the reference spells this `error.EntropyUnavailable`
+/// (`std.Io.RandomSecureError`); rustty-vt's `sys::RandomSecureError` is the
+/// terminal-side enum and maps 1:1 onto this os-side half.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntropyUnavailable;
+
+// PORT NOTE (`dda8e6f31`, PORTS ghostty src/lib/TinyIo.zig `randomSecure` +
+// its test): TinyIo itself is a NON-PORT (`.port/phase-4/NON_PORTS.md` — rustty
+// has no `std.Io` model), but its `randomSecure` vtable entry is the PLATFORM
+// ENTROPY DEFAULT behind rustty-vt's `sys::random_secure` override hook (the
+// kitty clipboard OTP source), so that one entry is ported here os-side, next
+// to the `crypto_random_bytes` CSPRNG glue this crate already wraps. The
+// `_: ?*anyopaque` userdata parameter is the Zig vtable calling convention
+// (TinyIo is stateless) and drops out.
+//
+// fn randomSecure(_: ?*anyopaque, buffer: []u8) Io.RandomSecureError!void {
+pub fn random_secure(buffer: &mut [u8]) -> Result<(), EntropyUnavailable> {
+    // if (buffer.len == 0) return;
+    if buffer.is_empty() {
+        return Ok(());
+    }
+
+    // The same sources as `std.Io.Threaded.randomSecure` minus
+    // cancelation and the /dev/urandom fallback: arc4random_buf where
+    // libc provides it (all the BSDs and Darwin, glibc 2.36+), otherwise
+    // the getrandom syscall on Linux. Anything else has no entropy.
+    //
+    // PORT NOTE: the reference's `builtin.link_libc and
+    // @TypeOf(posix.system.arc4random_buf) != void` comptime probe becomes a
+    // target cfg. rustty's build matrix reaches the arc4random_buf arm on
+    // Darwin (the `crypto_random_bytes` precedent above); the glibc-2.36+ case
+    // collapses into the Linux getrandom arm below, because the Rust `libc`
+    // floor cannot assume the symbol exists and getrandom is the same source
+    // glibc's arc4random_buf draws from.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        // posix.system.arc4random_buf(buffer.ptr, buffer.len);
+        // return;
+        //
+        // SAFETY: `buffer` is a live, writable allocation of `buffer.len()`
+        // bytes, the `arc4random_buf` contract; it never fails.
+        unsafe { libc::arc4random_buf(buffer.as_mut_ptr().cast(), buffer.len()) };
+        return Ok(());
+    }
+
+    // if (builtin.os.tag == .linux) {
+    #[cfg(target_os = "linux")]
+    {
+        // const linux = std.os.linux;
+        // var i: usize = 0;
+        let mut i: usize = 0;
+        // while (i < buffer.len) {
+        while i < buffer.len() {
+            // const rc = linux.getrandom(buffer[i..].ptr, buffer.len - i, 0);
+            //
+            // SAFETY: `buffer[i..]` is a live, writable region of
+            // `buffer.len() - i` bytes, the `getrandom` contract; the kernel
+            // writes at most that many bytes.
+            let rc =
+                unsafe { libc::getrandom(buffer[i..].as_mut_ptr().cast(), buffer.len() - i, 0) };
+            // switch (linux.errno(rc)) {
+            //     .SUCCESS => i += rc,
+            //     .INTR => continue,
+            //     else => return error.EntropyUnavailable,
+            // }
+            if rc >= 0 {
+                i += rc as usize;
+            } else {
+                match std::io::Error::last_os_error().raw_os_error() {
+                    Some(libc::EINTR) => continue,
+                    _ => return Err(EntropyUnavailable),
+                }
+            }
+        }
+        // return;
+        return Ok(());
+    }
+
+    // return error.EntropyUnavailable;
+    //
+    // PORT NOTE: reached on the targets where TinyIo is `!supported`
+    // (`TinyIo.zig:35-38`: windows/wasi/freestanding — there its whole vtable
+    // is `std.Io.failing`, so `randomSecure` fails the same way).
+    #[allow(unreachable_code)]
+    Err(EntropyUnavailable)
+}
+
 #[cfg(not(windows))]
 fn trim_end_str(s: &str, byte: u8) -> &str {
     s.trim_end_matches(byte as char)
@@ -404,5 +493,38 @@ mod tests {
             randomBasename(&mut small),
             Err(RandomBasenameError::BufferTooSmall)
         ));
+    }
+
+    // PORTS: ghostty src/lib/TinyIo.zig `test "randomSecure fills with fresh
+    // entropy"` (`dda8e6f31`).
+    //
+    // PORT NOTE: `if (comptime !supported) return error.SkipZigTest;` — TinyIo
+    // is `!supported` on windows/wasi/freestanding (`TinyIo.zig:35-38`), so the
+    // skip becomes the `cfg` gate. The reference draws through the vtable
+    // (`tio.io()` / `test_io.randomSecure`); rustty has no `std.Io`, so the
+    // calls go to the ported entry directly.
+    // test "randomSecure fills with fresh entropy" {
+    #[test]
+    #[cfg(not(any(windows, target_family = "wasm")))]
+    #[cfg_attr(miri, ignore)] // real-OS CSPRNG syscall (arc4random_buf/getrandom)
+    fn random_secure_fills_with_fresh_entropy() {
+        // var a: [32]u8 = @splat(0);
+        // var b: [32]u8 = @splat(0);
+        let mut a = [0u8; 32];
+        let mut b = [0u8; 32];
+        // try test_io.randomSecure(&a);
+        // try test_io.randomSecure(&b);
+        random_secure(&mut a).unwrap();
+        random_secure(&mut b).unwrap();
+
+        // Non-zero and non-repeating. A zero fill is what `random` does
+        // without a source, which would make every one-time password the
+        // same; identical draws would mean the same thing.
+        assert!(!a.iter().all(|&x| x == 0));
+        assert!(!b.iter().all(|&x| x == 0));
+        assert_ne!(a, b);
+
+        // Zero-length is a no-op.
+        random_secure(&mut a[0..0]).unwrap();
     }
 }

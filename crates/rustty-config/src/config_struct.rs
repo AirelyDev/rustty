@@ -246,6 +246,7 @@ pub enum Key {
     FocusFollowsMouse,
     ClipboardRead,
     ClipboardWrite,
+    ClipboardWriteLimitBytes,
     ClipboardTrimTrailingSpaces,
     ClipboardPasteProtection,
     ClipboardPasteBracketedSafe,
@@ -377,6 +378,7 @@ impl Key {
             b"clipboard-read" => Some(Key::ClipboardRead),
             b"clipboard-trim-trailing-spaces" => Some(Key::ClipboardTrimTrailingSpaces),
             b"clipboard-write" => Some(Key::ClipboardWrite),
+            b"clipboard-write-limit-bytes" => Some(Key::ClipboardWriteLimitBytes),
             b"command" => Some(Key::Command),
             b"command-palette-entry" => Some(Key::CommandPaletteEntry),
             b"config-default-files" => Some(Key::ConfigDefaultFiles),
@@ -716,6 +718,7 @@ pub fn value_type(key: Key) -> std::any::TypeId {
         Key::FocusFollowsMouse => TypeId::of::<bool>(),
         Key::ClipboardRead => TypeId::of::<ClipboardAccess>(),
         Key::ClipboardWrite => TypeId::of::<ClipboardAccess>(),
+        Key::ClipboardWriteLimitBytes => TypeId::of::<ClipboardWriteLimitBytes>(),
         Key::ClipboardTrimTrailingSpaces => TypeId::of::<bool>(),
         Key::ClipboardPasteProtection => TypeId::of::<bool>(),
         Key::ClipboardPasteBracketedSafe => TypeId::of::<bool>(),
@@ -3417,6 +3420,32 @@ pub struct Config {
     pub clipboard_read: ClipboardAccess,
     // @"clipboard-write": ClipboardAccess = .allow,
     pub clipboard_write: ClipboardAccess,
+    // @"clipboard-write-limit-bytes": Limit(usize, 64 * 1024 * 1024) = .default,
+    /// The maximum size in bytes of a single clipboard write by a program
+    /// running in the terminal via the Kitty clipboard protocol (OSC 5522).
+    /// This doesn't apply to OSC 52, which is limited by the maximum length
+    /// of an escape sequence hardcoded into Rustty for now.
+    ///
+    /// Data beyond the limit fails the entire write with an `EFBIG` status,
+    /// discards the transaction, and leaves the clipboard untouched. Later
+    /// write-related packets are ignored until a new write begins.
+    ///
+    /// The data is buffered in memory while the write is in progress, so
+    /// this limit bounds how much memory a program can make Rustty
+    /// allocate per write. A future improvement will attempt to spool large
+    /// writes to disk.
+    ///
+    /// The default is 64 MiB, the minimum a conforming implementation must
+    /// accept. Set this to `unlimited` to remove the limit, allowing writes
+    /// bounded only by available memory. A value of `0` rejects every non-empty
+    /// write. To reject clipboard writes entirely, use `clipboard-write = deny`
+    /// instead.
+    ///
+    /// This can be changed at runtime and applies to writes that begin
+    /// after the change.
+    ///
+    /// Available since: 1.4.0
+    pub clipboard_write_limit_bytes: ClipboardWriteLimitBytes,
     // @"clipboard-trim-trailing-spaces": bool = true,
     /// Trims trailing whitespace on data that is copied to the clipboard. This does
     /// not affect data sent to the clipboard via `clipboard-write`. This only
@@ -5107,6 +5136,7 @@ impl Default for Config {
             focus_follows_mouse: false,
             clipboard_read: ClipboardAccess::Ask,
             clipboard_write: ClipboardAccess::Allow,
+            clipboard_write_limit_bytes: ClipboardWriteLimitBytes::default_value(),
             clipboard_trim_trailing_spaces: true,
             clipboard_paste_protection: true,
             clipboard_paste_bracketed_safe: true,
@@ -7728,6 +7758,7 @@ impl Config {
             Key::FocusFollowsMouse => c!(focus_follows_mouse),
             Key::ClipboardRead => c!(clipboard_read),
             Key::ClipboardWrite => c!(clipboard_write),
+            Key::ClipboardWriteLimitBytes => c!(clipboard_write_limit_bytes),
             Key::ClipboardTrimTrailingSpaces => c!(clipboard_trim_trailing_spaces),
             Key::ClipboardPasteProtection => c!(clipboard_paste_protection),
             Key::ClipboardPasteBracketedSafe => c!(clipboard_paste_bracketed_safe),
@@ -8021,6 +8052,7 @@ impl Config {
         cv!(focus_follows_mouse);
         cv!(clipboard_read);
         cv!(clipboard_write);
+        cv!(clipboard_write_limit_bytes);
         cv!(clipboard_trim_trailing_spaces);
         cv!(clipboard_paste_protection);
         cv!(clipboard_paste_bracketed_safe);
@@ -8287,6 +8319,10 @@ pub(crate) const CONFIG_FIELDS: &[(&[u8], Key)] = &[
     (b"focus-follows-mouse", Key::FocusFollowsMouse),
     (b"clipboard-read", Key::ClipboardRead),
     (b"clipboard-write", Key::ClipboardWrite),
+    (
+        b"clipboard-write-limit-bytes",
+        Key::ClipboardWriteLimitBytes,
+    ),
     (
         b"clipboard-trim-trailing-spaces",
         Key::ClipboardTrimTrailingSpaces,
@@ -8848,6 +8884,8 @@ impl Config {
             b"clipboard-read" => f_enum!(clipboard_read),
             // @"clipboard-write": ClipboardAccess (bare enum)
             b"clipboard-write" => f_enum!(clipboard_write),
+            // @"clipboard-write-limit-bytes": Limit(usize, 64 * 1024 * 1024)
+            b"clipboard-write-limit-bytes" => f_entry!(clipboard_write_limit_bytes),
             // @"clipboard-trim-trailing-spaces": bool
             b"clipboard-trim-trailing-spaces" => f_display!(clipboard_trim_trailing_spaces),
             // @"clipboard-paste-protection": bool
@@ -10244,6 +10282,10 @@ impl Target for Config {
             b"clipboard-read" => field_enum!(clipboard_read, ClipboardAccess::string_to_enum),
             // @"clipboard-write": ClipboardAccess (bare enum)
             b"clipboard-write" => field_enum!(clipboard_write, ClipboardAccess::string_to_enum),
+            // @"clipboard-write-limit-bytes": Limit(usize, 64 * 1024 * 1024)
+            b"clipboard-write-limit-bytes" => {
+                field_parsecli_value!(clipboard_write_limit_bytes, ClipboardWriteLimitBytes)
+            }
             // @"clipboard-trim-trailing-spaces": bool
             b"clipboard-trim-trailing-spaces" => field_bool!(clipboard_trim_trailing_spaces),
             // @"clipboard-paste-protection": bool
@@ -10638,6 +10680,7 @@ mod parse_tests {
         b"clipboard-read",
         b"clipboard-trim-trailing-spaces",
         b"clipboard-write",
+        b"clipboard-write-limit-bytes",
         b"command",
         b"command-palette-entry",
         b"config-default-files",
@@ -10819,7 +10862,10 @@ mod parse_tests {
     fn config_field_names_count_is_contract() {
         // 206 -> 208: Phase-4 w8-config (oracle range `6ad1fe7d8..12967b68f`)
         // added `drag-handle` (`c6e7e9e4e`) and `link-osc8` (`77537c806`).
-        assert_eq!(CONFIG_FIELD_NAMES.len(), 208);
+        // 208 -> 209: Phase-5 p5-sys-config (oracle range `12967b68f..683d8db64`)
+        // added `clipboard-write-limit-bytes` (`5350d4a5f`, default raised by
+        // `70f006575`).
+        assert_eq!(CONFIG_FIELD_NAMES.len(), 209);
     }
 
     /// Area G OQ-6: until `P3-W9 T3`, these three `204` assertions guarded rustty
@@ -10859,6 +10905,10 @@ mod parse_tests {
     ///  * Phase-4 w8-config (oracle range `6ad1fe7d8..12967b68f`, new pin
     ///    `12967b68f`): `drag-handle` (`c6e7e9e4e`) and `link-osc8` (`77537c806`)
     ///    landed on both sides, moving the public count 206 -> **208**.
+    ///  * Phase-5 p5-sys-config (oracle range `12967b68f..683d8db64`, new pin
+    ///    `683d8db64`): `clipboard-write-limit-bytes` (`5350d4a5f`, default
+    ///    raised to 64 MiB by `70f006575`) landed on both sides, moving the
+    ///    public count 208 -> **209**.
     const FIELD_COUNT_ORACLE_RECONCILIATION: () = ();
 
     // Every non-`_` Config field dispatches to a real parse arm. We use the
@@ -11299,6 +11349,7 @@ mod clone_changed_tests {
         Key::FocusFollowsMouse,
         Key::ClipboardRead,
         Key::ClipboardWrite,
+        Key::ClipboardWriteLimitBytes,
         Key::ClipboardTrimTrailingSpaces,
         Key::ClipboardPasteProtection,
         Key::ClipboardPasteBracketedSafe,
@@ -11382,7 +11433,7 @@ mod clone_changed_tests {
     // (its `inline for` over the field/`Key` set is a compile error if an arm is
     // missing) with a runtime check over the explicit Rust dispatch tables.
     //
-    // - `ALL_KEYS` enumerates every variant (its length is checked == 208, the
+    // - `ALL_KEYS` enumerates every variant (its length is checked == 209, the
     //   `Key`-count contract, and == `CONFIG_FIELDS`).
     // - Each `Key` maps to exactly one `(name, key)` in `CONFIG_FIELDS` (the
     //   ordered name+key table shared by parse/format/clone).
@@ -11396,8 +11447,8 @@ mod clone_changed_tests {
     //   was deep-copied.
     #[test]
     fn key_exhaustive_parse_format_clone_changed() {
-        // `Key`-count contract: 208 variants, matching `CONFIG_FIELDS` and the
-        // 208 field names. Last reconciled against the ORACLE at `6ad1fe7d8`
+        // `Key`-count contract: 209 variants, matching `CONFIG_FIELDS` and the
+        // 209 field names. Last reconciled against the ORACLE at `6ad1fe7d8`
         // (`P3-W9 T3` step 3) — see `FIELD_COUNT_ORACLE_RECONCILIATION` in
         // `parse_tests` for the set-diff and the two rows still divergent by
         // design.
@@ -11410,8 +11461,11 @@ mod clone_changed_tests {
         //
         // 206 -> 208: Phase-4 w8-config, from the `6ad1fe7d8..12967b68f` oracle
         // range — `drag-handle` (`c6e7e9e4e`) and `link-osc8` (`77537c806`).
-        assert_eq!(ALL_KEYS.len(), 208);
-        assert_eq!(CONFIG_FIELDS.len(), 208);
+        //
+        // 208 -> 209: Phase-5 p5-sys-config, from the `12967b68f..683d8db64`
+        // oracle range — `clipboard-write-limit-bytes` (`5350d4a5f`/`70f006575`).
+        assert_eq!(ALL_KEYS.len(), 209);
+        assert_eq!(CONFIG_FIELDS.len(), 209);
 
         let default = Config::default();
 
@@ -12452,6 +12506,44 @@ mod integration_tests {
         assert_eq!(usize::MAX, round.scrollback_limit_bytes.value);
         assert_eq!(None, round.scrollback_limit_bytes.optional());
         assert_eq!(Some(50_000_000usize), cfg.scrollback_limit_bytes.optional());
+    }
+
+    // test "clipboard write limit" {
+    #[test]
+    fn clipboard_write_limit() {
+        // var cfg = try Config.default(alloc);
+        // defer cfg.deinit();
+        let mut cfg = Config::default_config();
+        // try testing.expectEqual(
+        //     @as(usize, 64 * 1024 * 1024),
+        //     cfg.@"clipboard-write-limit-bytes".value,
+        // );
+        assert_eq!(64 * 1024 * 1024, cfg.clipboard_write_limit_bytes.value);
+
+        // var it: TestIterator = .{ .data = &.{
+        //     "--clipboard-write-limit-bytes=1234",
+        // } };
+        let mut it = TestIterator::new(&[b"--clipboard-write-limit-bytes=1234"]);
+        // try cfg.loadIter(alloc, &it);
+        cfg.load_iter(&mut it).unwrap();
+
+        // try testing.expectEqual(
+        //     @as(usize, 1234),
+        //     cfg.@"clipboard-write-limit-bytes".value,
+        // );
+        assert_eq!(1234usize, cfg.clipboard_write_limit_bytes.value);
+
+        // var unlimited_it: TestIterator = .{ .data = &.{
+        //     "--clipboard-write-limit-bytes=unlimited",
+        // } };
+        let mut unlimited_it = TestIterator::new(&[b"--clipboard-write-limit-bytes=unlimited"]);
+        cfg.load_iter(&mut unlimited_it).unwrap();
+
+        // try testing.expectEqual(
+        //     std.math.maxInt(usize),
+        //     cfg.@"clipboard-write-limit-bytes".value,
+        // );
+        assert_eq!(usize::MAX, cfg.clipboard_write_limit_bytes.value);
     }
 
     // test "compatibility: scrollback-limit renamed to bytes" {

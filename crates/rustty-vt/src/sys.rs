@@ -254,6 +254,90 @@ fn decode_png_wuffs(alloc: &dyn RawAllocator, data: &[u8]) -> Result<Image, Deco
     })
 }
 
+/// Fill a buffer with cryptographically secure random bytes. If null,
+/// the terminal's `std.Io` (`randomSecure`) is used. This is an override
+/// for embedders whose Io has no entropy source (e.g. wasm32-freestanding,
+/// where TinyIo degrades to `std.Io.failing`) or that want to control
+/// the source; when set it is used on every target.
+///
+/// This is used for secrets, so it must be a real CSPRNG. An error
+/// makes the operation that needed the entropy fail; nothing falls back
+/// to weaker randomness.
+// PORT NOTE (`dda8e6f31`): the reference is
+//     pub var random_secure: ?RandomSecureFn = null;
+// mapped through the same `RwLock` idiom as `decode_png` above (the reference
+// relies on Zig's `var` being mutated only at startup). The doc's `TinyIo` is
+// the reference's lib-artifact Io; rustty carries no `std.Io` model
+// (`.port/phase-4/NON_PORTS.md` TinyIo row), so its platform `randomSecure`
+// default is ported os-side (`rustty_os::file::random_secure`) and reached
+// through the [`io_native`] Io below.
+pub static random_secure: RwLock<Option<RandomSecureFn>> = RwLock::new(None);
+
+/// The error type returned by a secure-random fill.
+// PORT NOTE: the reference declares BOTH
+//     pub const RandomSecureError = error{EntropyUnavailable};
+// and returns `std.Io.RandomSecureError` from `randomSecure` — the two error
+// sets coerce because `EntropyUnavailable` is their shared member; here they
+// collapse into this one enum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RandomSecureError {
+    EntropyUnavailable,
+}
+
+/// The function pointer type for a secure-random source.
+// PORT NOTE: the reference is
+//     pub const RandomSecureFn = *const fn ([]u8) RandomSecureError!void;
+pub type RandomSecureFn = fn(&mut [u8]) -> Result<(), RandomSecureError>;
+
+/// The `io: std.Io` parameter of the reference's `randomSecure` (and of its
+/// `kitty/clipboard_grants.zig` `generateOtp` consumer), projected onto the
+/// ONE capability those callers consume: `io.randomSecure`.
+// PORT NOTE (NON_PORTS TinyIo-row re-read, per its reopen trigger): upstream
+// now threads `std.Io` into the terminal package for entropy. What the port
+// genuinely needs is a pluggable entropy source, not blocking IO, so the
+// stand-in stays this narrow — a fill fn, with [`io_failing`] and
+// [`io_native`] as the `std.Io.failing` / real-Io values.
+pub type Io = RandomSecureFn;
+
+/// `std.Io.failing` — an Io with no entropy source: its `randomSecure`
+/// always reports `EntropyUnavailable` (the reference's wasm32-freestanding
+/// degradation named in the `random_secure` doc above).
+pub fn io_failing(_buffer: &mut [u8]) -> Result<(), RandomSecureError> {
+    Err(RandomSecureError::EntropyUnavailable)
+}
+
+/// The platform Io — what `TinyIo` (the reference's lib artifact) and
+/// `std.Io.Threaded` (its application) supply as `randomSecure`: the OS
+/// CSPRNG. The platform sources live os-side; `rustty_os::file::random_secure`
+/// carries `TinyIo.randomSecure` (arc4random_buf on Darwin, getrandom on
+/// Linux, no entropy elsewhere).
+pub fn io_native(buffer: &mut [u8]) -> Result<(), RandomSecureError> {
+    rustty_os::file::random_secure(buffer).map_err(|_| RandomSecureError::EntropyUnavailable)
+}
+
+/// Fill `buffer` with secure random bytes from `random_secure` if set,
+/// otherwise from `io`. Every use of secure entropy in the terminal
+/// package goes through this so the override applies uniformly.
+// pub fn randomSecure(io: std.Io, buffer: []u8) std.Io.RandomSecureError!void {
+//
+// PORT NOTE: the reference fn `randomSecure` and the `random_secure` slot
+// collide under snake_case; the fn carries a `_fill` suffix.
+pub fn random_secure_fill(io: Io, buffer: &mut [u8]) -> Result<(), RandomSecureError> {
+    // if (random_secure) |func| return func(buffer);
+    if let Some(func) = *random_secure.read().unwrap() {
+        return func(buffer);
+    }
+    // return io.randomSecure(buffer);
+    io(buffer)
+}
+
+/// rustty-only test synchronization for the swappable `random_secure` slot:
+/// same contract as `decode_png_test_lock` — every test that installs into the
+/// slot, or depends on which source is installed, holds this lock for its
+/// whole body.
+#[cfg(test)]
+pub static random_secure_test_lock: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,5 +376,59 @@ mod tests {
         assert_eq!(50, img.width);
         assert_eq!(76, img.height);
         assert_eq!(50 * 76 * 4, img.data.len());
+    }
+
+    // test "randomSecure: override is preferred over the Io" {
+    #[test]
+    fn random_secure_override_is_preferred_over_the_io() {
+        let _lock = random_secure_test_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // const S = struct {
+        //     fn fill(buffer: []u8) RandomSecureError!void {
+        //         @memset(buffer, 0xAB);
+        //     }
+        //     fn fail(_: []u8) RandomSecureError!void {
+        //         return error.EntropyUnavailable;
+        //     }
+        // };
+        fn fill(buffer: &mut [u8]) -> Result<(), RandomSecureError> {
+            buffer.fill(0xAB);
+            Ok(())
+        }
+        fn fail(_: &mut [u8]) -> Result<(), RandomSecureError> {
+            Err(RandomSecureError::EntropyUnavailable)
+        }
+
+        // Without the override a failing Io fails.
+        // var buf: [8]u8 = @splat(0);
+        let mut buf = [0u8; 8];
+        assert_eq!(
+            Err(RandomSecureError::EntropyUnavailable),
+            random_secure_fill(io_failing, &mut buf)
+        );
+
+        // With it, the Io is never consulted.
+        // random_secure = &S.fill;
+        // defer random_secure = null;
+        *random_secure.write().unwrap() = Some(fill);
+        random_secure_fill(io_failing, &mut buf).unwrap();
+        // try testing.expect(std.mem.allEqual(u8, &buf, 0xAB));
+        assert!(buf.iter().all(|&b| b == 0xAB));
+
+        // An override failure surfaces as the Io's error.
+        // random_secure = &S.fail;
+        *random_secure.write().unwrap() = Some(fail);
+        // PORT NOTE: the reference's `testing.io` is a real Io with entropy;
+        // `io_native` is its analog. The override short-circuits before the Io
+        // is consulted, so no OS call happens (Miri-safe).
+        assert_eq!(
+            Err(RandomSecureError::EntropyUnavailable),
+            random_secure_fill(io_native, &mut buf)
+        );
+
+        // (the reference's `defer random_secure = null` — restore the slot for
+        // whichever test takes the lock next)
+        *random_secure.write().unwrap() = None;
     }
 }

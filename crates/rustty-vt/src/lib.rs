@@ -112,6 +112,8 @@ pub fn compression_enabled() -> bool {
 pub mod page;
 // pub const parse_table = @import("parse_table.zig");
 pub mod parse_table;
+// pub const paste = @import("paste.zig");
+pub mod paste;
 // pub const search = @import("search.zig");
 pub mod search;
 // pub const snapshot = @import("snapshot/main.zig");
@@ -225,6 +227,18 @@ pub use stream::Stream;
 // design fork, not an unported alias.
 // pub const UnknownSequence = stream_terminal.Handler.UnknownSequence;
 pub use stream_terminal::UnknownSequence;
+// pub const Paste = paste.Request;
+pub use paste::Request as Paste;
+// pub const PasteContents = paste.Contents;
+pub use paste::Contents as PasteContents;
+// pub const PasteSource = paste.Source;
+pub use paste::Source as PasteSource;
+// pub const MimeReader = clipboard.MimeReader;
+// (comment-only: same canonical name at `clipboard::MimeReader`.)
+// pub const PasteError = stream_terminal.Handler.PasteError;
+// PORT NOTE (W3.2 seam): the stream handler's paste operation (`876032316` /
+// `da27e6c90`, the `PasteError` owner) lands with the W3 kitty-clipboard
+// bundle's stream half; until then there is nothing for this alias to name.
 // pub const Cursor = Screen.Cursor;
 // pub const CursorStyle = Screen.CursorStyle;
 // pub const CursorStyleReq = ansi.CursorStyle;

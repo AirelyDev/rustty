@@ -8,9 +8,24 @@
 //   const std = @import("std");
 //   const Terminal = @import("../terminal/Terminal.zig");
 // `std` is used for slice scanning helpers (reproduced inline below) and
-// `Terminal` for `Options.fromTerminal`.
+// `Terminal` for `Options.fromTerminal`. `std.Io.Writer` (`encodeWriter`'s
+// sink) maps to the crate's byte-oriented stand-in, `snapshot::io::Writer`.
 
+use crate::snapshot::io::{WriteFailed, Writer};
 use crate::terminal::Terminal;
+
+/// The bracketed paste (mode 2004) frame written around the data.
+// pub const bracketed_prefix = "\x1b[200~";
+// pub const bracketed_suffix = "\x1b[201~";
+#[allow(non_upper_case_globals)]
+pub const bracketed_prefix: &[u8] = b"\x1b[200~";
+#[allow(non_upper_case_globals)]
+pub const bracketed_suffix: &[u8] = b"\x1b[201~";
+
+/// The maximum number of bytes `encode` adds around the data, so callers
+/// can size a buffer for the full encoded result.
+#[allow(non_upper_case_globals)]
+pub const max_frame_size: usize = bracketed_prefix.len() + bracketed_suffix.len();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Options {
@@ -101,8 +116,8 @@ pub fn encode(data: &[u8], opts: Options) -> Result<[&[u8]; 3], Error> {
     // Bracketed paste mode (mode 2004) wraps pasted data in
     // fenceposts so that the terminal can ignore things like newlines.
     if opts.bracketed {
-        result[0] = b"\x1b[200~";
-        result[2] = b"\x1b[201~";
+        result[0] = bracketed_prefix;
+        result[2] = bracketed_suffix;
         return Ok(result);
     }
 
@@ -171,9 +186,9 @@ pub fn encode_mut(data: &mut [u8], opts: Options) -> [&[u8]; 3] {
     // fenceposts so that the terminal can ignore things like newlines.
     if opts.bracketed {
         // PORT NOTE: in the reference the bracketed branch returns
-        // `.{ "\x1b[200~", data, "\x1b[201~" }`. We reborrow `data` immutably
-        // here because the mutation above is already complete.
-        return [b"\x1b[200~", data, b"\x1b[201~"];
+        // `.{ bracketed_prefix, data, bracketed_suffix }`. We reborrow `data`
+        // immutably here because the mutation above is already complete.
+        return [bracketed_prefix, data, bracketed_suffix];
     }
 
     // Non-bracketed. We have to replace newline with `\r`. This matches
@@ -216,6 +231,65 @@ pub enum Error {
     MutableRequired,
 }
 
+/// Encode the given data for pasting directly into a writer. This is
+/// the same transformation as `encode` (unsafe bytes replaced, bracketed
+/// frame or newline conversion per `opts`) but the data is copied
+/// exactly once: into the writer's buffer, where it is modified in place.
+/// This is the form to use when the data is const and the result is
+/// being assembled into a single buffer anyway.
+///
+/// The data is copied in chunks sized to the writer's buffer, so any
+/// writer works; a writer with less total capacity than the writer
+/// needs to hold at once reports `error.WriteFailed` as usual.
+///
+/// WARNING: The input data is not checked for safety. See `isSafe`
+/// and `isSafeWith` to check if the data is safe to paste.
+// PORT NOTE (writer stand-in mechanics): the reference encodes in place
+// inside the writer's own buffer (`writableSliceGreedy(1)` + `encode` on the
+// writable slice + `advance`), so the data is copied exactly once and chunks
+// are sized to the writer's buffer. The `snapshot::io::Writer` stand-in (the
+// crate's byte-oriented `std.Io.Writer` surface) exposes no writable buffer,
+// so this port stages each chunk through a local buffer, applies the
+// identical in-place transformation there (`encode_mut`, its returned frame
+// ignored just as the reference ignores `encode`'s), and forwards it with
+// `write_all`. Behavior is identical; only the copy count and the chunk
+// boundary (a fixed local buffer rather than the writer's) differ — the same
+// treatment as snapshot/io.rs's "bulk-read bypass" PORT NOTE.
+pub fn encode_writer(
+    writer: &mut dyn Writer,
+    data: &[u8],
+    opts: Options,
+) -> Result<(), WriteFailed> {
+    if opts.bracketed {
+        writer.write_all(bracketed_prefix)?;
+    }
+
+    // The byte transformations are position-independent, so the data
+    // can be copied and encoded chunk by chunk. The frame returned by
+    // encode is ignored since it's written around the whole data here.
+    //
+    // (Zig: `const dest = try writer.writableSliceGreedy(1);` — the staging
+    // chunk below stands in for the writer's writable slice.)
+    let mut chunk = [0u8; 512];
+    let mut remaining = data;
+    while !remaining.is_empty() {
+        // const n = @min(dest.len, remaining.len);
+        let n = chunk.len().min(remaining.len());
+        // @memcpy(dest[0..n], remaining[0..n]);
+        chunk[..n].copy_from_slice(&remaining[..n]);
+        // _ = encode(dest[0..n], opts);
+        let _ = encode_mut(&mut chunk[..n], opts);
+        // writer.advance(n);
+        writer.write_all(&chunk[..n])?;
+        remaining = &remaining[n..];
+    }
+
+    if opts.bracketed {
+        writer.write_all(bracketed_suffix)?;
+    }
+    Ok(())
+}
+
 /// Returns true if the data looks safe to paste. Data is considered
 /// unsafe if it contains any of the following:
 ///
@@ -246,9 +320,28 @@ fn index_of(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
+/// Returns true if the data looks safe to paste given how it will be
+/// encoded. This is the terminal-state-aware counterpart of `isSafe`:
+///
+/// - Bracketed (mode 2004 on): the program receives the data as one
+///   framed unit, so newlines are fine. The data is unsafe only if it
+///   contains the end of the frame (`\x1b[201~`), which would let the
+///   rest of the data escape the frame and inject commands.
+/// - Unbracketed: the same rule as `isSafe`.
+///
+/// Callers wanting the conservative rule regardless of terminal state
+/// should use `isSafe` instead.
+pub fn is_safe_with(data: &[u8], opts: Options) -> bool {
+    if opts.bracketed {
+        return index_of(data, bracketed_suffix).is_none();
+    }
+    is_safe(data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::snapshot::io::FixedWriter;
 
     #[test]
     fn is_safe_test() {
@@ -256,6 +349,138 @@ mod tests {
         assert!(!is_safe(b"hello\n"));
         assert!(!is_safe(b"hello\nworld"));
         assert!(!is_safe(b"he\x1b[201~llo"));
+    }
+
+    // test isSafeWith
+    #[test]
+    fn is_safe_with_test() {
+        // Bracketed: newlines are fine, the frame terminator is not.
+        assert!(is_safe_with(b"hello", Options { bracketed: true }));
+        assert!(is_safe_with(b"hello\nworld", Options { bracketed: true }));
+        assert!(!is_safe_with(b"he\x1b[201~llo", Options { bracketed: true }));
+        assert!(!is_safe_with(b"hello\n\x1b[201~", Options { bracketed: true }));
+
+        // Unbracketed: the conservative rule.
+        assert!(is_safe_with(b"hello", Options { bracketed: false }));
+        assert!(!is_safe_with(b"hello\nworld", Options { bracketed: false }));
+        assert!(!is_safe_with(b"he\x1b[201~llo", Options { bracketed: false }));
+    }
+
+    // test "encodeWriter bracketed"
+    #[test]
+    fn encode_writer_bracketed() {
+        let mut buf = [0u8; 64];
+        // var writer: std.Io.Writer = .fixed(&buf);
+        let mut writer = FixedWriter::new(&mut buf);
+        encode_writer(&mut writer, b"hel\x1blo\nworld", Options { bracketed: true }).unwrap();
+        assert_eq!(b"\x1b[200~hel lo\nworld\x1b[201~".as_slice(), writer.buffered());
+    }
+
+    // test "encodeWriter unbracketed"
+    #[test]
+    fn encode_writer_unbracketed() {
+        let mut buf = [0u8; 64];
+        let mut writer = FixedWriter::new(&mut buf);
+        encode_writer(&mut writer, b"hel\x00lo\r\nworld", Options { bracketed: false }).unwrap();
+        assert_eq!(b"hel lo\r\rworld".as_slice(), writer.buffered());
+    }
+
+    // test "encodeWriter empty"
+    #[test]
+    fn encode_writer_empty() {
+        let mut buf = [0u8; 64];
+        let mut writer = FixedWriter::new(&mut buf);
+        encode_writer(&mut writer, b"", Options { bracketed: true }).unwrap();
+        assert_eq!(b"\x1b[200~\x1b[201~".as_slice(), writer.buffered());
+        // writer = .fixed(&buf);
+        let mut writer = FixedWriter::new(&mut buf);
+        encode_writer(&mut writer, b"", Options { bracketed: false }).unwrap();
+        assert_eq!(b"".as_slice(), writer.buffered());
+    }
+
+    // test "encodeWriter chunks through a small writer buffer"
+    #[test]
+    fn encode_writer_chunks_through_a_small_writer_buffer() {
+        // A writer with a 4-byte staging buffer that drains into a list,
+        // so the data is copied and encoded in several chunks.
+        //
+        // PORT NOTE: the reference Sink is a `std.Io.Writer` whose vtable
+        // `drain(w, data, splat)` appends the writer's buffered bytes plus the
+        // incoming chunks (last one repeated `splat` times) to a list; the
+        // 4-byte staging buffer forces the encode loop through several
+        // `writableSliceGreedy` rounds. The `Writer` stand-in has no vtable
+        // buffer, so the staging + drain pair lives on the Sink itself:
+        // `write_all` routes every byte through the 4-byte staging buffer and
+        // drains it into the list whenever it fills, exercising the same
+        // multi-drain path the reference test forces.
+        struct Sink {
+            // list: std.ArrayList(u8) = .empty,
+            list: Vec<u8>,
+            // (Zig: the writer's 4-byte staging buffer + `end` cursor.)
+            buf: [u8; 4],
+            end: usize,
+        }
+
+        impl Sink {
+            // fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize)
+            //     std.Io.Writer.Error!usize
+            fn drain(&mut self) {
+                // self.list.appendSlice(testing.allocator, w.buffered()) ...; w.end = 0;
+                self.list.extend_from_slice(&self.buf[..self.end]);
+                self.end = 0;
+            }
+
+            // try sink.writer.flush();
+            fn flush(&mut self) {
+                self.drain();
+            }
+        }
+
+        impl Writer for Sink {
+            fn write_all(&mut self, bytes: &[u8]) -> Result<(), WriteFailed> {
+                for &byte in bytes {
+                    if self.end == self.buf.len() {
+                        self.drain();
+                    }
+                    self.buf[self.end] = byte;
+                    self.end += 1;
+                }
+                Ok(())
+            }
+        }
+
+        let mut sink = Sink {
+            list: Vec::new(),
+            buf: [0u8; 4],
+            end: 0,
+        };
+
+        let data = b"line one\nline\x1btwo\nline three\n";
+        encode_writer(&mut sink, data, Options { bracketed: true }).unwrap();
+        sink.flush();
+        assert_eq!(
+            b"\x1b[200~line one\nline two\nline three\n\x1b[201~".as_slice(),
+            sink.list.as_slice(),
+        );
+    }
+
+    // test "encodeWriter too small"
+    #[test]
+    fn encode_writer_too_small() {
+        let mut buf = [0u8; 4];
+        let mut writer = FixedWriter::new(&mut buf);
+        // try testing.expectError(error.WriteFailed, ...);
+        assert_eq!(
+            Err(WriteFailed),
+            encode_writer(&mut writer, b"hello", Options { bracketed: true }),
+        );
+    }
+
+    // test max_frame_size
+    #[test]
+    fn max_frame_size_test() {
+        let result = encode(b"", Options { bracketed: true }).unwrap();
+        assert_eq!(max_frame_size, result[0].len() + result[2].len());
     }
 
     #[test]

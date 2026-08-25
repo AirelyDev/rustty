@@ -4,7 +4,8 @@
 //! submodules). The SAFE `decode` API over the raw `wuffs-sys` FFI leaf.
 //!
 //! PORT STATUS: ported (main/error/png/jpeg/swizzle every line/comment, R1;
-//! swizzle has no reference test{} blocks — new byte-exact KATs added instead).
+//! swizzle carries the reference "gaToRgba"/"rgbaSrcOver" test{} blocks plus
+//! rustty-only byte-exact KATs).
 
 // const std = @import("std");
 use allocator_api2::alloc::Allocator;
@@ -179,6 +180,48 @@ impl<A: Allocator> Drop for Scratch<A> {
         }
     }
 }
+
+// // Wuffs' generated `wuffs_foo__bar__alloc()` convenience functions are the
+// // only code that references libc's calloc/free. We never call them
+// // and linker garbage collection strips them, but that isn't guaranteed.
+// // When libc isn't linked there would be nothing to provide calloc/free if
+// // they survive, so export stubs to satisfy the link. Weak so that any real
+// // definition wins. Hidden keeps them out of the export table where the
+// // format honors it (e.g. wasm).
+// comptime {
+//     if (!builtin.link_libc) {
+//         @export(&callocStub, .{
+//             .name = "calloc",
+//             .linkage = .weak,
+//             .visibility = .hidden,
+//         });
+//         @export(&freeStub, .{
+//             .name = "free",
+//             .linkage = .weak,
+//             .visibility = .hidden,
+//         });
+//     }
+// }
+//
+// fn callocStub(count: usize, size: usize) callconv(.c) ?*anyopaque {
+//     _ = count;
+//     _ = size;
+//     return null;
+// }
+//
+// fn freeStub(ptr: ?*anyopaque) callconv(.c) void {
+//     _ = ptr;
+// }
+//
+// PORT NOTE (`619555d1c` build-without-libc, N-A): the `comptime` block above
+// exists for the reference's no-libc lane (wasm32-freestanding lib-vt);
+// `builtin.link_libc` is false there and the weak stubs satisfy any surviving
+// `calloc`/`free` reference. wuffs-sys compiles the vendored TU with `cc`
+// against the REAL system libc on every rustty target, so the analog of
+// `builtin.link_libc` is unconditionally true and the whole branch is dead —
+// no stubs are emitted, faithfully. (Flag: if a wasm32/freestanding lane ever
+// links wuffs, this block — and the vendored minimal libc headers mirrored at
+// crates-sys/wuffs-sys/include/ — become live; see wuffs-sys build.rs.)
 
 // test {
 //     std.testing.refAllDeclsRecursive(@This());

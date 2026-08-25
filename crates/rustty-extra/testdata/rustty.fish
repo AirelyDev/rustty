@@ -134,6 +134,7 @@ complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l resize-over
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l focus-follows-mouse  -f -d "If true, when there are multiple split panes, the mouse selects the pane that is focused."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l clipboard-read -r -f -a "allow deny ask" -d "Whether to allow programs running in the terminal to read/write to the system clipboard (OSC 52, for googling)."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l clipboard-write -r -f -a "allow deny ask"
+complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l clipboard-write-limit-bytes -r -f -d "The maximum size in bytes of a single clipboard write by a program running in the terminal via the Kitty clipboard protocol (OSC 5522)."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l clipboard-trim-trailing-spaces  -f -d "Trims trailing whitespace on data that is copied to the clipboard."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l clipboard-paste-protection  -f -d "Require confirmation before pasting text that appears unsafe."
 complete -c rustty -n "not __fish_seen_subcommand_from $commands" -l clipboard-paste-bracketed-safe  -f -d "If true, bracketed pastes will be considered safe."
