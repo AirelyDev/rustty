@@ -98,6 +98,16 @@ advance-first, per the doctrine phase-4 and phase-5 used.
 | G-VTFEAT (new) | GREEN, 11 configurations, export sets exact |
 | rustfmt on every file this branch touches | clean |
 
+## Pre-existing condition found and FIXED here
+
+* **`check_symbol_manifest.sh` was RED on main for a stale literal** — it
+  asserted `hdr_count -ne 90` while upstream had grown a 91st `GHOSTTY_API`
+  entrypoint and `audits/CABI_SYMBOLS.tsv` had been updated to match. Header and
+  manifest agreed exactly with each other; only the magic number disagreed. The
+  count arm is now a monotone floor, since the two `comm` set-equality arms
+  above it already catch per-symbol drift and the count only ever provided
+  anti-vacuity. Negative-controlled at landing. (`84f2b7f1`)
+
 ## Pre-existing conditions found, NOT fixed here
 
 Both verified to reproduce on `main` at `29da15fe`, so neither is fallout from
