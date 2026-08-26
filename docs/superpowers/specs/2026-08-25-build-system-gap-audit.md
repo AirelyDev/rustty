@@ -10,6 +10,55 @@ not product source. Companion to
 
 ---
 
+## Status (updated 2026-08-26)
+
+Steps 1 and 2 of the fill order below are **done**, on branch
+`build-system-gaps`. Four new gates now run from `.port/tools/ci.sh`:
+
+| Gate          | Covers                                                    |
+| ------------- | --------------------------------------------------------- |
+| `G-LINT`      | shellcheck, prettier, typos, swiftlint, alejandra, pinact |
+| `G-CCONSUMER` | cmake build/install, both `.pc` files, shared+static link |
+| `G-EXAMPLES`  | all 32 `example/` programs                                |
+| `G-DIST`      | `xtask dist` shape + (opt-in) `distcheck`                 |
+
+**Turning those on found nine real defects**, listed here because their
+existence is the argument for the rest of the fill order — every one of them
+lived in a file that looked fine and had simply never been executed:
+
+1. `cargo fmt --check` — check #1 of ci.sh and a HARD-FAIL — was **red on
+   `main`**: 243 hunks across 73 files on the pinned toolchain.
+2. rustty emitted **no pkg-config files at all**; the oracle emits four.
+3. `librustty_vt_c.a` carried an `_OnigEncodingKOI8` that nothing defined, so
+   static consumers pulling in that object could not link.
+4. CMake's `add_custom_command(OUTPUT …)` meant `cmake --build` **never
+   re-invoked cargo**, installing whatever archive an unrelated cargo run had
+   left in `target/` — a different feature set, and never rebuilt after an edit.
+5. Three `# shellcheck disable=SC2086 — <reason>` directives were **silently
+   inert** (the em-dash makes shellcheck reject the whole directive).
+6. `rustty_vt_add_target()` ran the cross cargo build with **no cross compiler
+   in the environment**, so every `crates-sys/*` package failed.
+7. The zig cross-compiler wrappers did not strip cc-rs's clang-style
+   `--target=`, which zig's parser rejects.
+8. cc-rs archived cross objects with the **host `ar`/`ranlib`**; Apple's ranlib
+   warns rather than errors on ELF members and the members were then dropped —
+   the cross archive had zero zlib and zero gettext objects.
+9. `rustty_vt_add_target()` set `INTERFACE_INCLUDE_DIRECTORIES` from a
+   directory-scope variable invisible inside a CMake function, so it resolved
+   to the **empty string** for every downstream `FetchContent` consumer.
+
+One genuine remaining limitation, documented rather than papered over: the
+cross example's final **executable** link needs GNU gettext's libintl for the
+target (`_libintl_locale_name_canonicalize` is a gnulib internal, not a glibc
+export). The oracle's Linux builds get it from its Nix devShell; zig's bundled
+sysroot has none. `G-EXAMPLES` therefore binds the cross **library** target —
+where all of defects 6–9 lived — and says so.
+
+Steps 3–6 (Nix, release holes, flatpak/snap, cross-target legs) are **not**
+started.
+
+---
+
 ## Verdict
 
 The **artifact-producing** half of the build system is in good shape. What is
