@@ -63,9 +63,12 @@
 #                                    files present, vendored crates-sys C
 #                                    present, .port/ + docs/superpowers/
 #                                    excluded). `xtask distcheck` additionally
-#                                    under RUSTTY_DISTCHECK=1 — a cold full
-#                                    build, so opt-in; skipped is reported by
-#                                    name, never greened.
+#                                    under RUSTTY_DISTCHECK=1, and a build of
+#                                    the lib-vt tarball inside a Debian 13
+#                                    container under RUSTTY_DISTCHECK_DEBIAN=1
+#                                    (the reference's test-debian-13) — both a
+#                                    cold build, so opt-in; skipped is reported
+#                                    by name, never greened.
 #   G-NIX check_nix.sh               `nix flake check` (librustty-vt + its five
 #                                    passthru tests) and `alejandra --check`
 #                                    -> HARD-FAIL where nix exists, BLOCKED
@@ -94,6 +97,11 @@
 #                                    floor, no _ghostty_* leak (R2), and a
 #                                    resolvable module map    -> HARD-FAIL.
 #                                    BLOCKED off macOS.
+#   G-FEATMATRIX check_feature_matrix.sh  the pkg/*-analog crates each build
+#                                    ALONE, and rustty-crash builds with and
+#                                    without `sentry`             -> HARD-FAIL.
+#                                    The reference's test-pkg-linux +
+#                                    test-sentry-linux.
 #   G-THEMES check_theme_corpus.py   the 602 vendored iterm2 theme files match
 #                                    a committed per-file SHA-256 manifest
 #                                    -> HARD-FAIL. res_themes.rs only counts
@@ -447,6 +455,13 @@ GATE_REGISTRY=(
   # export FLOOR, R2 identity (no _ghostty_* leaked), and that the module map's
   # umbrella header resolves. macOS-only; BLOCKED elsewhere.
   "G-XCF|HARD|bash $GATES/check_xcframework.sh"
+  # G-FEATMATRIX (2026-08-26) — the reference's test-pkg-linux (build a pkg/
+  # subproject ALONE) and test-sentry-linux (build both sides of a build
+  # option). Standalone builds are not redundant with `cargo build
+  # --workspace`: Cargo unifies features across a workspace, so a crate that
+  # forgets one of its own still compiles there and breaks for anyone who
+  # depends on it alone.
+  "G-FEATMATRIX|HARD|bash $GATES/check_feature_matrix.sh"
   # G-REL (WS18) — the `--release` test lane. Steps 3/4 above only ever exercise
   # the DEBUG profile, so nothing noticed that release had rotted to 22 failures
   # across 7 targets. Most were tests driving a seam the port deliberately

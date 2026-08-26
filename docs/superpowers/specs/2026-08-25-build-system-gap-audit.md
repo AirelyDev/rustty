@@ -13,7 +13,7 @@ not product source. Companion to
 ## Status (updated 2026-08-26) — COMPLETE
 
 Every step of the fill order below is done, on branch `build-system-gaps`
-Ten new gates run from `.port/tools/ci.sh`:
+Twelve new gates run from `.port/tools/ci.sh`:
 
 | Gate          | Covers                                                                       |
 | ------------- | ---------------------------------------------------------------------------- |
@@ -38,37 +38,34 @@ ships as a flatpak.
 
 ### What remains
 
-Verified afresh against ghostty @683d8db64. Of its 52 `test.yml` jobs, 43 are
-covered; the rest are below.
+Re-derived from a fresh tree diff. Of the oracle's 52 `test.yml` jobs, **49 are
+covered**. What is left:
 
-**Blocked on privileges or hardware this environment lacks** — labelled as such
-in their own headers, never implied green:
+**One thing genuinely blocked** — `snap`. snapcraft is distributed as a snap,
+snapd is absent from the Linux box, and installing it needs root. It was also
+removed from nixpkgs in Sep 2025 ("following removal of LXD"), and is not on
+PyPI for this Python. The manifest carries an UNVERIFIED header naming the
+exact commands. `snap.yml` is therefore not written either: a CI workflow for
+something nobody has built once would be theatre.
 
-- **snap** — snapcraft is itself a snap and snapd is absent; installing it
-  needs root. `snap/snapcraft.yaml` names the exact commands.
-- **`nix/tests.nix`** — NixOS VM tests boot a desktop under QEMU/KVM. The Linux
-  box here is itself a VM and the container has no `/dev/kvm`. Ported, not
-  wired into `checks`, with the three enabling steps written down.
+**One environment limit, not a gap** — the NixOS VM tests run, but not _here_.
+All four evaluate and build, and under KVM the guest kernel boots in ~3s; what
+fails is systemd's backdoor.service inside a rootless container, so the test
+driver never gets a shell. They are wired as their own `vmChecks` flake output
+(not `checks`, which would make `nix flake check` permanently red here for an
+unrelated reason) and G-NIX runs them under `RUSTTY_NIX_VM_TESTS=1`.
 
-**Not done** — each needs infrastructure more than code:
+**Deliberately not ported** — release-tip's `build-macos-debug-{slow,fast}` and
+`sentry-dsym-debug-{slow,fast}`. These publish _debug_ nightly builds for bug
+reports; release-**tag** has the `sentry-dsym` job (secret-gated) and
+release-tip has the three lib-vt artifacts. Adding debug tip builds is a
+release-policy decision, not a porting gap.
 
-- `test/fuzz-libghostty` + its CI job — a C-API-level fuzz harness. G5
-  (`run_fuzz_smoke.sh`) covers the Rust level only.
-- `test-pkg-linux` / `test-debian-13` — distro package smoke tests.
-- `test-sentry-linux` — crash-reporting smoke.
-- `snap.yml` + `build-snap` / `trigger-snap` — gated on snap itself.
-- release-tip's `build-macos-debug-{slow,fast}` and the three `sentry-dsym*`
-  variants (release-**tag** has `sentry-dsym`, secret-gated).
-- Small files with no analog yet: `flatpak/exceptions.json`, `test/README.md`,
-  `test/ucs-detect.sh`, and a `check-apple-libghostty-vt.nu` analog
-  (xcframework Apple-slice verification).
-
-**Correctly absent** — no analog, deliberately dropped: the zig-cache machinery
-(`zigCacheHash.nix`, `check-zig-cache.sh`, `fetch-zig-cache.sh`,
-`update-mirror.nu`, `flatpak/zig-packages.json`), the three `example/zig-*`
-programs, the five `vouch-*.yml` governance workflows, and `test.yml` /
-`nix.yml` as separate files — rustty's equivalent is `ci.sh` plus the gate
-suite, by design.
+**Correctly absent** — no analog: the zig-cache machinery (`zigCacheHash.nix`,
+`check-zig-cache.sh`, `fetch-zig-cache.sh`, `update-mirror.nu`,
+`flatpak/zig-packages.json`), the three `example/zig-*` programs, the five
+`vouch-*.yml` governance workflows, and `test.yml` / `nix.yml` as separate
+files — rustty's equivalent is `ci.sh` plus the gate suite, by design.
 
 ### The defects this work found
 
