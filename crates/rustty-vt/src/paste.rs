@@ -153,7 +153,6 @@ pub struct Context<'a> {
     // is the crate-wide global-allocator treatment (see snapshot/io.rs
     // `AllocatingWriter`): the buffered read allocates infallibly from the
     // global allocator, so the port carries no field.
-
     /// Receives the encoded text in chunks, or the event. Must be
     /// buffered (the encoder works in its buffer) and is not flushed
     /// by `paste`; the caller flushes once it returns.
@@ -258,12 +257,11 @@ pub fn paste(mut ctx: Context<'_>, req: Request<'_>) -> Result<bool, Error> {
     // const index: usize = for (0..req.contents.len()) |i| {
     //     if (clipboard.isTextMime(req.contents.mime(i))) break i;
     // } else return false;
-    let index: usize = match
-        (0..req.contents.len()).find(|&i| clipboard::is_text_mime(req.contents.mime(i)))
-    {
-        Some(i) => i,
-        None => return Ok(false),
-    };
+    let index: usize =
+        match (0..req.contents.len()).find(|&i| clipboard::is_text_mime(req.contents.mime(i))) {
+            Some(i) => i,
+            None => return Ok(false),
+        };
 
     let opts: input_paste::Options = input_paste::Options::from_terminal(ctx.terminal);
 
@@ -281,11 +279,13 @@ pub fn paste(mut ctx: Context<'_>, req: Request<'_>) -> Result<bool, Error> {
             //     error.WriteFailed => return error.OutOfMemory,
             //     error.ReadFailed => |e| return e,
             // };
-            v.read.read(v.mimes[index], &mut aw).map_err(|err| match err {
-                // An allocating writer only fails to allocate.
-                clipboard::MimeReaderError::WriteFailed => Error::OutOfMemory,
-                clipboard::MimeReaderError::ReadFailed => Error::ReadFailed,
-            })?;
+            v.read
+                .read(v.mimes[index], &mut aw)
+                .map_err(|err| match err {
+                    // An allocating writer only fails to allocate.
+                    clipboard::MimeReaderError::WriteFailed => Error::OutOfMemory,
+                    clipboard::MimeReaderError::ReadFailed => Error::ReadFailed,
+                })?;
             // break :text aw.writer.buffered();
             aw.written()
         }
@@ -355,9 +355,7 @@ fn paste_kitty_event(
     // (errdefer: revoke the grant when the event was never sent.)
     if event.encode(ctx.writer).is_err() {
         // errdefer _ = kitty.grants.use(ctx.alloc, &otp, .read);
-        let _ = kitty
-            .grants
-            .use_(&otp, kitty_clipboard::Direction::Read);
+        let _ = kitty.grants.use_(&otp, kitty_clipboard::Direction::Read);
         return Err(Error::WriteFailed);
     }
     Ok(())

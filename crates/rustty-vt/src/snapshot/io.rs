@@ -334,7 +334,11 @@ pub struct LimitedReader<'i, 'b> {
 
 impl<'i, 'b> LimitedReader<'i, 'b> {
     #[allow(dead_code)]
-    pub fn new(inner: &'i mut dyn Reader, limit: Limit, buf: &'b mut [u8]) -> LimitedReader<'i, 'b> {
+    pub fn new(
+        inner: &'i mut dyn Reader,
+        limit: Limit,
+        buf: &'b mut [u8],
+    ) -> LimitedReader<'i, 'b> {
         LimitedReader {
             inner,
             buf,
@@ -383,7 +387,9 @@ impl Reader for LimitedReader<'_, '_> {
             }
         };
 
-        let n = self.inner.stream_to(&mut self.buf[self.end..self.end + cap])?;
+        let n = self
+            .inner
+            .stream_to(&mut self.buf[self.end..self.end + cap])?;
         self.end += n;
         if let Limit::Limited(r) = self.remaining {
             self.remaining = Limit::Limited(r - n as u64);

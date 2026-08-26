@@ -4940,10 +4940,7 @@ where
         // });
         let text = unsafe { &mut *self.io.terminal.screens.active }.selection_string(
             alloc,
-            terminal::screen::SelectionString {
-                sel,
-                trim: false,
-            },
+            terminal::screen::SelectionString { sel, trim: false },
         )?;
         // errdefer alloc.free(text);
         // (the owned `text` drops on any early error return.)
@@ -5175,10 +5172,7 @@ where
         // });
         let result = unsafe { &mut *self.io.terminal.screens.active }.selection_string(
             alloc,
-            terminal::screen::SelectionString {
-                sel,
-                trim: false,
-            },
+            terminal::screen::SelectionString { sel, trim: false },
         );
         // (the deferred mutex unlock)
         unsafe { (*self.renderer_state.mutex).unlock() };

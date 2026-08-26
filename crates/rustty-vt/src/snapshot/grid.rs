@@ -257,8 +257,8 @@ use crate::style as terminal_style;
 /// runtime Kitty graphics support is compiled out.
 const KITTY_VIRTUAL_PLACEHOLDER: u32 = 0x10EEEE;
 
-use terminal_page::Cell as TerminalCell;
 use terminal_hyperlink::Id as TerminalHyperlinkId;
+use terminal_page::Cell as TerminalCell;
 use terminal_page::Page as TerminalPage;
 use terminal_page::Row as TerminalRow;
 #[cfg(test)]
@@ -1026,9 +1026,8 @@ pub fn decode(
                 // SAFETY: the narrow decoder touches only these cells and the
                 // reader — no interleaved page access — so the short-lived
                 // exclusive slice is sound.
-                let cell_slice: &mut [TerminalCell] = unsafe {
-                    core::slice::from_raw_parts_mut(cells as *mut TerminalCell, count)
-                };
+                let cell_slice: &mut [TerminalCell] =
+                    unsafe { core::slice::from_raw_parts_mut(cells as *mut TerminalCell, count) };
                 decode_narrow_cells(width, reader, cell_slice)?;
             }
             EncodedWidth::Four => {
@@ -1160,8 +1159,9 @@ fn widen_cells(width: EncodedWidth, bytes: &[u8], cells: &mut [TerminalCell]) {
                 widen_step(width, bytes, cells, start);
             } else {
                 while i < cells.len() {
-                    cells[i] =
-                        TerminalCell::from_bits(width.extend(widen_value(width, &bytes[i * size..])));
+                    cells[i] = TerminalCell::from_bits(
+                        width.extend(widen_value(width, &bytes[i * size..])),
+                    );
                     i += 1;
                 }
             }
@@ -1276,7 +1276,10 @@ fn widen_raw(width: EncodedWidth, bytes: &[u8]) -> u64 {
 
 /// `io.readInt(reader, width.Int())` for the streaming fallback.
 #[inline]
-fn read_transported(width: EncodedWidth, reader: &mut dyn io::Reader) -> Result<u64, io::ReadError> {
+fn read_transported(
+    width: EncodedWidth,
+    reader: &mut dyn io::Reader,
+) -> Result<u64, io::ReadError> {
     Ok(match width {
         EncodedWidth::One => reader.take_byte()? as u64,
         EncodedWidth::Two => io::read_int::<u16>(reader)? as u64,
@@ -1424,10 +1427,7 @@ fn apply_cell(
             page.hyperlink_set.context.set_page(page_ptr);
             // SAFETY: releasing the reference taken above; the table still
             // holds its own reference, so the entry stays live.
-            unsafe {
-                page.hyperlink_set
-                    .release(page.memory_ptr(), link_native)
-            };
+            unsafe { page.hyperlink_set.release(page.memory_ptr(), link_native) };
         }
     }
 }
@@ -1475,7 +1475,10 @@ fn normalize_wide(row: *const TerminalRow, cells: *mut [TerminalCell], x: usize)
 }
 
 /// Decode the grapheme suffix section into already decoded cells.
-fn decode_graphemes(page: &mut TerminalPage, reader: &mut dyn io::Reader) -> Result<(), DecodeError> {
+fn decode_graphemes(
+    page: &mut TerminalPage,
+    reader: &mut dyn io::Reader,
+) -> Result<(), DecodeError> {
     let entries = io::read_int::<u32>(reader)?;
     for _ in 0..entries {
         // The staged and borrowed payload paths have every header buffered.
@@ -1990,10 +1993,7 @@ mod tests {
         for case in cases {
             let case_word: u64 = case.cell.bits();
             assert_eq!(case.width, EncodedWidth::select(case_word));
-            assert_eq!(
-                case_word,
-                case.width.extend(case.width.truncate(case_word)),
-            );
+            assert_eq!(case_word, case.width.extend(case.width.truncate(case_word)),);
         }
     }
 
@@ -2093,7 +2093,13 @@ mod tests {
         let mut read_buffer = [0u8; 1];
         let mut limited =
             io::LimitedReader::new(&mut fixture_reader, io::Limit::Unlimited, &mut read_buffer);
-        decode(&mut destination, &mut limited, &style_remap, &hyperlink_remap).unwrap();
+        decode(
+            &mut destination,
+            &mut limited,
+            &style_remap,
+            &hyperlink_remap,
+        )
+        .unwrap();
         destination.verify_integrity().unwrap();
 
         let decoded_wide = destination.get_row_and_cell(0, 0);
@@ -2222,7 +2228,13 @@ mod tests {
 
         let buffered = writer.buffered().to_vec();
         let mut reader = io::FixedReader::new(&buffered);
-        decode(&mut destination, &mut reader, &style_remap, &hyperlink_remap).unwrap();
+        decode(
+            &mut destination,
+            &mut reader,
+            &style_remap,
+            &hyperlink_remap,
+        )
+        .unwrap();
         destination.verify_integrity().unwrap();
 
         unsafe {
@@ -2755,7 +2767,13 @@ mod tests {
         style_remap.put(style_id, native_style);
 
         let mut reader = io::FixedReader::new(&bytes);
-        decode(&mut destination, &mut reader, &style_remap, &hyperlink_remap).unwrap();
+        decode(
+            &mut destination,
+            &mut reader,
+            &style_remap,
+            &hyperlink_remap,
+        )
+        .unwrap();
         destination.verify_integrity().unwrap();
 
         unsafe {

@@ -34,8 +34,7 @@ use core::ffi::{c_int, c_void};
 
 use rustty_apprt::embedded::{
     ClipboardComplete, ClipboardConfirm, ClipboardContent, EnvVar, Options, PlatformC,
-    PlatformCIOS, PlatformCMacOS, PlatformTag,
-    SurfaceOptions,
+    PlatformCIOS, PlatformCMacOS, PlatformTag, SurfaceOptions,
 };
 use rustty_apprt_api::action::{
     ActionC, ActionCValue, ActionKey, TargetC, TargetCValue, TargetKey,

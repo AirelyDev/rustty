@@ -1309,10 +1309,7 @@ fn pagelist_increaseCapacity_graphemes_projects_capacity_from_page_density() {
         assert_eq!(original_cap * 32, page.capacity.grapheme_bytes);
 
         // All cell and grapheme content is preserved by the growth.
-        assert_eq!(
-            (s.rows as usize) * (s.cols as usize),
-            page.grapheme_count(),
-        );
+        assert_eq!((s.rows as usize) * (s.cols as usize), page.grapheme_count(),);
         for y in 0..s.rows as usize {
             for x in 0..s.cols as usize {
                 let rac = page.get_row_and_cell(x, y);
@@ -16634,7 +16631,10 @@ fn pagelist_builder_transfers_mixed_width_pages() {
     let screen_top = result.get_top_left(point::Tag::Screen);
     assert_eq!(2, unsafe { super::Node::cols(screen_top.node) });
     assert_eq!('A' as u32, unsafe {
-        (*(*super::Node::page(screen_top.node)).get_row_and_cell(0, 0).cell).codepoint()
+        (*(*super::Node::page(screen_top.node))
+            .get_row_and_cell(0, 0)
+            .cell)
+            .codepoint()
     });
 
     // The active area is calculated backward from the newest page, so it
@@ -16881,7 +16881,10 @@ fn pagelist_page_allocation_finalizes_pages_and_preserves_live_state() {
     assert_eq!(old_last, result.pages.last);
     assert_eq!(old_first, unsafe { (*(*result.pages.first).next).next });
     assert_eq!('A' as u32, unsafe {
-        (*(*super::Node::page(result.pages.first)).get_row_and_cell(0, 0).cell).codepoint()
+        (*(*super::Node::page(result.pages.first))
+            .get_row_and_cell(0, 0)
+            .cell)
+            .codepoint()
     });
     assert_eq!('B' as u32, unsafe {
         (*(*super::Node::page((*result.pages.first).next))

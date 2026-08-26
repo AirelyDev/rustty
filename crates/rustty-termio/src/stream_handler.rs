@@ -1409,11 +1409,7 @@ impl<M: AppMailbox> StreamHandler<M> {
     // }
     // (the `error{OutOfMemory}` collapses — `grant` is infallible under the
     // global allocator.)
-    pub fn kittyClipboardGrant(
-        &mut self,
-        pw: &[u8],
-        dir: rustty_vt::kitty::clipboard::Direction,
-    ) {
+    pub fn kittyClipboardGrant(&mut self, pw: &[u8], dir: rustty_vt::kitty::clipboard::Direction) {
         self.kitty_clipboard_grants.grant(pw, dir, false);
     }
 
@@ -1763,9 +1759,7 @@ impl<M: AppMailbox> StreamHandler<M> {
             (
                 pw.to_vec(),
                 match committed.loc {
-                    rustty_vt::clipboard::Location::Primary => {
-                        rustty_apprt_api::Clipboard::Primary
-                    }
+                    rustty_vt::clipboard::Location::Primary => rustty_apprt_api::Clipboard::Primary,
                     _ => rustty_apprt_api::Clipboard::Standard,
                 },
                 committed

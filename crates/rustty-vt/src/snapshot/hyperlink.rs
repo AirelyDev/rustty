@@ -203,9 +203,7 @@ fn decode_alloc(len: usize) -> Result<Vec<u8>, DecodeError> {
 /// Decode one allocator-owned hyperlink entry.
 ///
 /// The caller owns the returned value and must call `Hyperlink.deinit`.
-pub fn decode(
-    reader: &mut dyn io::Reader,
-) -> Result<terminal_hyperlink::Hyperlink, DecodeError> {
+pub fn decode(reader: &mut dyn io::Reader) -> Result<terminal_hyperlink::Hyperlink, DecodeError> {
     let kind_raw = reader.take_byte()?;
     let kind = Kind::from_int(kind_raw).ok_or(DecodeError::InvalidKind)?;
 

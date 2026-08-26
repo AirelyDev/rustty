@@ -195,8 +195,8 @@ pub use codec::EncodeError;
 // pub const DecodeError = codec.DecodeError;
 pub use codec::DecodeError;
 // pub const DecodeExactError = codec.DecodeExactError;
-pub use codec::DecodeExactError;
 pub use codec::Continuation;
+pub use codec::DecodeExactError;
 pub use codec::DecodeOptions;
 pub use codec::EncodeOptions;
 // pub const Decoded = codec.Decoded;
@@ -224,9 +224,9 @@ pub use codec::decode_exact;
 // `*std.Io.Writer`, which ARE public Zig std types): the C-API tier
 // (rustty-vt-c Bundle S) implements them over the `RusttyReader` /
 // `RusttyWriter` callback pairs.
-pub mod io;
 #[cfg(test)]
 pub(crate) mod fixture;
+pub mod io;
 
 // test { @import("std").testing.refAllDecls(@This()); }
 // PORT NOTE: no analogue needed — Rust compiles and lints every declared

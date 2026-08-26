@@ -199,14 +199,8 @@ pub fn encode(
     writer: &mut dyn io::Writer,
 ) -> Result<(), io::WriteFailed> {
     let mut encoded = [0u8; LEN];
-    encode_color_buf(
-        (&mut encoded[0..4]).try_into().unwrap(),
-        value.fg_color,
-    );
-    encode_color_buf(
-        (&mut encoded[4..8]).try_into().unwrap(),
-        value.bg_color,
-    );
+    encode_color_buf((&mut encoded[0..4]).try_into().unwrap(), value.fg_color);
+    encode_color_buf((&mut encoded[4..8]).try_into().unwrap(), value.bg_color);
     encode_color_buf(
         (&mut encoded[8..12]).try_into().unwrap(),
         value.underline_color,

@@ -404,11 +404,19 @@ static DECLS: &[TypeDecl] = {
         struct_decl!(
             "RusttyClipboardWriteReply",
             crate::terminal::ClipboardWriteReply,
-            fields!(crate::terminal::ClipboardWriteReply, [
-                ("size", usize, size, usize_ty()),
-                ("result", rustty_vt::clipboard::WriteStatus, result, n("RusttyClipboardWriteResult")),
-                ("remember", bool, remember, n("bool")),
-            ])
+            fields!(
+                crate::terminal::ClipboardWriteReply,
+                [
+                    ("size", usize, size, usize_ty()),
+                    (
+                        "result",
+                        rustty_vt::clipboard::WriteStatus,
+                        result,
+                        n("RusttyClipboardWriteResult")
+                    ),
+                    ("remember", bool, remember, n("bool")),
+                ]
+            )
         ),
         // .initStruct("GhosttyCodepoints", Codepoints),
         struct_decl!(
@@ -767,22 +775,25 @@ static DECLS: &[TypeDecl] = {
         struct_decl!(
             "RusttyRenderStateCursor",
             crate::render::Cursor,
-            fields!(crate::render::Cursor, [
-                ("size", usize, size, usize_ty()),
-                ("viewport_has_value", bool, viewport_has_value, n("bool")),
-                ("viewport_x", u16, viewport_x, n("u16")),
-                ("viewport_y", u16, viewport_y, n("u16")),
-                ("wide_tail", bool, wide_tail, n("bool")),
-                ("visible", bool, visible, n("bool")),
-                ("blinking", bool, blinking, n("bool")),
-                ("password_input", bool, password_input, n("bool")),
-                (
-                    "visual_style",
-                    crate::render::CursorVisualStyle,
-                    visual_style,
-                    n("RusttyRenderStateCursorVisualStyle")
-                ),
-            ])
+            fields!(
+                crate::render::Cursor,
+                [
+                    ("size", usize, size, usize_ty()),
+                    ("viewport_has_value", bool, viewport_has_value, n("bool")),
+                    ("viewport_x", u16, viewport_x, n("u16")),
+                    ("viewport_y", u16, viewport_y, n("u16")),
+                    ("wide_tail", bool, wide_tail, n("bool")),
+                    ("visible", bool, visible, n("bool")),
+                    ("blinking", bool, blinking, n("bool")),
+                    ("password_input", bool, password_input, n("bool")),
+                    (
+                        "visual_style",
+                        crate::render::CursorVisualStyle,
+                        visual_style,
+                        n("RusttyRenderStateCursorVisualStyle")
+                    ),
+                ]
+            )
         ),
         // .initStruct("GhosttyRenderStateRowSelection", render.RowSelection),
         struct_decl!(
@@ -1146,16 +1157,19 @@ static DECLS: &[TypeDecl] = {
         struct_decl!(
             "RusttyTerminalModeConfig",
             crate::terminal::ModeConfig,
-            fields!(crate::terminal::ModeConfig, [
-                // fieldTypeOverride("GhosttyTerminalModeConfig", "mode") -> "GhosttyMode"
-                (
-                    "mode",
-                    rustty_vt::modes::ModeTagBacking,
-                    mode,
-                    n("RusttyMode")
-                ),
-                ("value", bool, value, n("bool")),
-            ])
+            fields!(
+                crate::terminal::ModeConfig,
+                [
+                    // fieldTypeOverride("GhosttyTerminalModeConfig", "mode") -> "GhosttyMode"
+                    (
+                        "mode",
+                        rustty_vt::modes::ModeTagBacking,
+                        mode,
+                        n("RusttyMode")
+                    ),
+                    ("value", bool, value, n("bool")),
+                ]
+            )
         ),
         // .initStruct("GhosttyTerminalProgressReport", terminal.ProgressReport),
         struct_decl!(
@@ -1323,10 +1337,13 @@ static DECLS: &[TypeDecl] = {
         struct_decl!(
             "RusttyTerminalUnknownStringSequence",
             crate::terminal::UnknownStringSequence,
-            fields!(crate::terminal::UnknownStringSequence, [
-                ("truncated", bool, truncated, n("bool")),
-                ("content", LibString, content, n("RusttyString")),
-            ])
+            fields!(
+                crate::terminal::UnknownStringSequence,
+                [
+                    ("truncated", bool, truncated, n("bool")),
+                    ("content", LibString, content, n("RusttyString")),
+                ]
+            )
         ),
         // .initUnion(
         //     "GhosttyTerminalUnknownSequenceValue",
@@ -3231,11 +3248,8 @@ mod tests {
 
         // const cursor_fields = manifest_types.get("GhosttyRenderStateCursor").?.object
         //     .get("fields").?.object;
-        let cursor_fields = get(
-            get(types, "RusttyRenderStateCursor").as_object(),
-            "fields",
-        )
-        .as_object();
+        let cursor_fields =
+            get(get(types, "RusttyRenderStateCursor").as_object(), "fields").as_object();
         // try std.testing.expect(cursor_fields.contains("size")); ...
         assert!(contains(cursor_fields, "size"));
         assert!(contains(cursor_fields, "viewport_has_value"));
@@ -3490,7 +3504,10 @@ mod tests {
         assert_eq!(24i64, get(osc_values, "KITTY_DND_PROTOCOL").as_int());
         assert_eq!(25i64, get(osc_values, "CONTEXT_SIGNAL").as_int());
         // try std.testing.expectEqual(@as(i64, 26), osc_values.get("KITTY_DESKTOP_NOTIFICATION").?.integer);
-        assert_eq!(26i64, get(osc_values, "KITTY_DESKTOP_NOTIFICATION").as_int());
+        assert_eq!(
+            26i64,
+            get(osc_values, "KITTY_DESKTOP_NOTIFICATION").as_int()
+        );
         // try std.testing.expect(osc_values.contains("TYPE_MAX_VALUE"));
         assert!(contains(osc_values, "TYPE_MAX_VALUE"));
         // try std.testing.expect(!osc_values.contains("MAX_VALUE"));

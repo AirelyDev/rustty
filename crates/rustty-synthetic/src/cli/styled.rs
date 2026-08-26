@@ -344,21 +344,27 @@ impl Styled {
             }
 
             // Latin-1 Supplement and Latin Extended-A/B (narrow).
-            1 => rand.int_range_at_most_biased::<U21>(U21(0xC0), U21(0x24F)).0 as u32,
+            1 => {
+                rand.int_range_at_most_biased::<U21>(U21(0xC0), U21(0x24F))
+                    .0 as u32
+            }
 
             // Kana or CJK ideographs (wide).
             2 => {
                 if rand.boolean() {
-                    rand.int_range_at_most_biased::<U21>(U21(0x3041), U21(0x30FE)).0 as u32
+                    rand.int_range_at_most_biased::<U21>(U21(0x3041), U21(0x30FE))
+                        .0 as u32
                 } else {
-                    rand.int_range_at_most_biased::<U21>(U21(0x4E00), U21(0x9FFF)).0 as u32
+                    rand.int_range_at_most_biased::<U21>(U21(0x4E00), U21(0x9FFF))
+                        .0 as u32
                 }
             }
 
             // Emoji (wide).
-            3 => rand
-                .int_range_at_most_biased::<U21>(U21(0x1F600), U21(0x1F64F))
-                .0 as u32,
+            3 => {
+                rand.int_range_at_most_biased::<U21>(U21(0x1F600), U21(0x1F64F))
+                    .0 as u32
+            }
 
             // else => unreachable,
             _ => unreachable!(),
@@ -371,7 +377,9 @@ impl Styled {
         // multi-codepoint grapheme cluster.
         if self.opts.grapheme_rate > 0.0 && rand.float_f64() < self.opts.grapheme_rate {
             // const mark = rand.intRangeAtMostBiased(u21, 0x300, 0x36F);
-            let mark = rand.int_range_at_most_biased::<U21>(U21(0x300), U21(0x36F)).0 as u32;
+            let mark = rand
+                .int_range_at_most_biased::<U21>(U21(0x300), U21(0x36F))
+                .0 as u32;
             write_codepoint(writer, mark)?;
         }
         Ok(())

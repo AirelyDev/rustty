@@ -705,7 +705,9 @@ impl Control {
                 image_number: t.image_number,
                 placement_id: t.placement_id,
             },
-            Control::TransmitAndDisplay { transmission: t, .. } => Identifiers {
+            Control::TransmitAndDisplay {
+                transmission: t, ..
+            } => Identifiers {
                 image_id: t.image_id,
                 image_number: t.image_number,
                 placement_id: t.placement_id,
@@ -1459,9 +1461,9 @@ impl AnimationControl {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Delete {
-    pub image_id: u32,      // i
-    pub image_number: u32,  // I
-    pub placement_id: u32,  // p
+    pub image_id: u32,     // i
+    pub image_number: u32, // I
+    pub placement_id: u32, // p
     pub action: DeleteAction,
 }
 
@@ -2604,7 +2606,10 @@ mod tests {
     fn animation_frame_composition_value_above_one_alpha_blends() {
         let command = Parser::parse_string(b"a=f,i=31,X=2").unwrap();
 
-        assert!(matches!(command.control, Control::TransmitAnimationFrame(_)));
+        assert!(matches!(
+            command.control,
+            Control::TransmitAnimationFrame(_)
+        ));
         let v = match command.control {
             Control::TransmitAnimationFrame(v) => v,
             _ => unreachable!(),
@@ -2695,10 +2700,7 @@ mod tests {
         // A distinct-byte pattern pins each lane: 0x11223344 → r=0x11 g=0x22
         // b=0x33 a=0x44.
         let bg = Background::from_int(0x11223344);
-        assert_eq!(
-            (0x11, 0x22, 0x33, 0x44),
-            (bg.r, bg.g, bg.b, bg.a),
-        );
+        assert_eq!((0x11, 0x22, 0x33, 0x44), (bg.r, bg.g, bg.b, bg.a),);
         assert_eq!(0x11223344, bg.to_int());
 
         // Parsed through the real KV path.

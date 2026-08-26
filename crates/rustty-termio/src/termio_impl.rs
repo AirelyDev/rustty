@@ -1744,11 +1744,7 @@ impl<M: AppMailbox> Termio<M> {
     // PORT NOTE: same raw shared-state seam as `colorSchemeReport` (guard-less
     // renderer lock; the `error{OutOfMemory}` collapses — `grant` is
     // infallible under the global allocator).
-    pub fn kittyClipboardGrant(
-        &mut self,
-        pw: &[u8],
-        dir: rustty_vt::kitty::clipboard::Direction,
-    ) {
+    pub fn kittyClipboardGrant(&mut self, pw: &[u8], dir: rustty_vt::kitty::clipboard::Direction) {
         // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
         unsafe { (*(*self.renderer_state).mutex).lock() };
         self.terminal_stream.handler.kittyClipboardGrant(pw, dir);

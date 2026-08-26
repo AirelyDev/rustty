@@ -124,8 +124,8 @@ use terminal_hyperlink::Id as TerminalHyperlinkId;
 use terminal_hyperlink::PageEntry as TerminalHyperlinkPageEntry;
 use terminal_page::Capacity as TerminalPageCapacity;
 use terminal_page::Page as TerminalPage;
-use terminal_style::Style as TerminalStyle;
 use terminal_style::Id as TerminalStyleId;
+use terminal_style::Style as TerminalStyle;
 
 /// const PayloadEncodeError = hyperlink.EncodeError || grid.EncodeError;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -442,8 +442,12 @@ impl<'s> Decoder<'s> {
             // The complete payload is already buffered, e.g. borrowed from
             // an in-memory snapshot. Parse it in place with no staging
             // copy; `finish` still enforces the CRC and exact exhaustion.
-            decode_payload_body(self.record_reader.payload_reader(), destination, self.header)
-                .map_err(DecodeError::from)?;
+            decode_payload_body(
+                self.record_reader.payload_reader(),
+                destination,
+                self.header,
+            )
+            .map_err(DecodeError::from)?;
         } else if remaining <= Self::MAX_STAGED_PAYLOAD {
             // Stage the payload with one bulk read. The whole payload passes
             // through the checksum hasher as one update and the payload
@@ -465,8 +469,12 @@ impl<'s> Decoder<'s> {
             // A payload this large is either hostile or a page far beyond
             // native capacities. Decode it through the streaming payload
             // reader so its declared length cannot force an allocation.
-            decode_payload_body(self.record_reader.payload_reader(), destination, self.header)
-                .map_err(DecodeError::from)?;
+            decode_payload_body(
+                self.record_reader.payload_reader(),
+                destination,
+                self.header,
+            )
+            .map_err(DecodeError::from)?;
         }
         self.record_reader.finish()?;
 
@@ -476,7 +484,9 @@ impl<'s> Decoder<'s> {
         // page policy: full integrity verification only when slow runtime
         // safety is enabled.
         if options::SLOW_RUNTIME_SAFETY {
-            destination.verify_integrity().map_err(DecodeError::Integrity)?;
+            destination
+                .verify_integrity()
+                .map_err(DecodeError::Integrity)?;
         }
         Ok(())
     }
@@ -523,8 +533,7 @@ fn encode_payload(
 fn decode_payload(reader: &mut dyn io::Reader) -> Result<TerminalPage, PayloadDecodeError> {
     let header = Header::decode(reader)?;
     let capacity = header.page_capacity()?;
-    let mut page =
-        TerminalPage::init(capacity).map_err(|_| PayloadDecodeError::OutOfMemory)?;
+    let mut page = TerminalPage::init(capacity).map_err(|_| PayloadDecodeError::OutOfMemory)?;
     // errdefer page.deinit();
     if let Err(err) = decode_payload_body(reader, &mut page, header) {
         page.deinit();
@@ -584,10 +593,7 @@ fn decode_payload_body_inner(
                 reader.toss(style_entry_len);
                 entry
             } else {
-                (
-                    io::read_int::<u16>(reader)?,
-                    style::decode_or_null(reader)?,
-                )
+                (io::read_int::<u16>(reader)?, style::decode_or_null(reader)?)
             }
         };
 
@@ -1035,10 +1041,12 @@ mod tests {
         release_page_hyperlink(&mut page, dead_hyperlink);
 
         unsafe { page.hyperlink_set.use_id(page.memory_ptr(), hyperlink_a) };
-        page.set_hyperlink(first.row, first.cell, hyperlink_a).unwrap();
+        page.set_hyperlink(first.row, first.cell, hyperlink_a)
+            .unwrap();
         page.set_hyperlink(second.row, second.cell, hyperlink_b)
             .unwrap();
-        page.set_hyperlink(third.row, third.cell, hyperlink_a).unwrap();
+        page.set_hyperlink(third.row, third.cell, hyperlink_a)
+            .unwrap();
 
         // Cover graphemes, wide-cell pairs, colors, protection, and semantic
         // metadata in one compact two-row page.
@@ -1077,7 +1085,8 @@ mod tests {
             (*spacer_head.cell).set_wide(terminal_page::Wide::SpacerHead);
             (*spacer_head.row).set_wrap(true);
             (*spacer_head.row).set_wrap_continuation(true);
-            (*spacer_head.row).set_semantic_prompt(terminal_page::SemanticPrompt::PromptContinuation);
+            (*spacer_head.row)
+                .set_semantic_prompt(terminal_page::SemanticPrompt::PromptContinuation);
         }
 
         let header = Header {
@@ -1825,7 +1834,9 @@ mod tests {
                 } else {
                     space.min(self.bytes_before_failure)
                 };
-                let n = self.source.stream_to(&mut self.buf[self.end..self.end + cap])?;
+                let n = self
+                    .source
+                    .stream_to(&mut self.buf[self.end..self.end + cap])?;
                 if !self.failed {
                     self.bytes_before_failure -= n;
                 }
@@ -2285,10 +2296,7 @@ mod tests {
         let test_header_fixture = test_header_fixture();
         for len in 0..Header::LEN {
             let mut reader = io::FixedReader::new(&test_header_fixture[..len]);
-            assert_eq!(
-                Err(io::ReadError::EndOfStream),
-                Header::decode(&mut reader),
-            );
+            assert_eq!(Err(io::ReadError::EndOfStream), Header::decode(&mut reader),);
         }
     }
 
@@ -2339,6 +2347,9 @@ mod tests {
 
         // A truncated payload is detected before `finish`.
         let mut truncated_source = io::FixedReader::new(&encoded.written()[..record_len - 1]);
-        assert_eq!(Err(DiscardError::EndOfStream), discard(&mut truncated_source));
+        assert_eq!(
+            Err(DiscardError::EndOfStream),
+            discard(&mut truncated_source)
+        );
     }
 }

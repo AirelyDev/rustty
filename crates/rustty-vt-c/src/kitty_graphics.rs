@@ -2159,7 +2159,11 @@ mod tests {
             // var number: u32 = 0;
             let mut number: u32 = 0;
             assert_eq!(Result::Success, unsafe {
-                image_get(img, ImageData::Number, &mut number as *mut u32 as *mut c_void)
+                image_get(
+                    img,
+                    ImageData::Number,
+                    &mut number as *mut u32 as *mut c_void,
+                )
             });
             // try testing.expectEqual(@as(u32, 7), number);
             assert_eq!(7u32, number);
@@ -2204,10 +2208,9 @@ mod tests {
                 )
             });
             // try testing.expectEqualSlices(u8, pixels, data_ptr[0..data_len]);
-            assert_eq!(
-                expected.as_slice(),
-                unsafe { core::slice::from_raw_parts(data_ptr, data_len) }
-            );
+            assert_eq!(expected.as_slice(), unsafe {
+                core::slice::from_raw_parts(data_ptr, data_len)
+            });
 
             unsafe { terminal_c::free(t) };
         });

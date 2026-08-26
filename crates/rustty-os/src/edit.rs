@@ -237,7 +237,8 @@ mod tests {
         // Spaces and shell-special characters in the path are escaped by the
         // ShellEscapeWriter; the editor token is not.
         let e = env(&[("EDITOR", "vim")]);
-        let r = getConfigEditCommandEnviron(&e, b"/tmp/my config (1)", &Options::default()).unwrap();
+        let r =
+            getConfigEditCommandEnviron(&e, b"/tmp/my config (1)", &Options::default()).unwrap();
         assert_eq!(b"vim /tmp/my\\ config\\ \\(1\\)".as_slice(), cmd(&r));
     }
 }

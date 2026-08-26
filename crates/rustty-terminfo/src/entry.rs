@@ -573,7 +573,10 @@ mod wyhash {
             self.b ^= self.state[0];
             mum(&mut self.a, &mut self.b);
             // return mix(self.a ^ secret[0] ^ self.total_len, self.b ^ secret[1]);
-            mix(self.a ^ SECRET[0] ^ (self.total_len as u64), self.b ^ SECRET[1])
+            mix(
+                self.a ^ SECRET[0] ^ (self.total_len as u64),
+                self.b ^ SECRET[1],
+            )
         }
     }
 

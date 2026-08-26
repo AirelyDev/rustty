@@ -3324,13 +3324,7 @@ mod quicklook_word_tests {
         // readTextLocked → dumpTextLocked reads the selection text; the vt-level
         // `selection_string` is that same read (the non-null `Text` the host gets).
         let text = s
-            .selection_string(
-                Global,
-                SelectionString {
-                    sel,
-                    trim: true,
-                },
-            )
+            .selection_string(Global, SelectionString { sel, trim: true })
             .unwrap();
         assert_eq!(text.as_slice(), b"world");
 

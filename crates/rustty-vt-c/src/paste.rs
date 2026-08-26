@@ -192,17 +192,20 @@ pub unsafe fn terminal_paste(
     // it — no `*mut`-intending-writes is ever minted from the `&`-derived
     // pointer.
     let result = unsafe {
-        (*terminal_).stream.handler.paste(terminal_paste_pkg::Request {
-            source,
-            contents: terminal_paste_pkg::Contents::Reader(terminal_paste_pkg::Reader {
-                mimes: &mimes,
-                read: clipboard::MimeReader {
-                    ctx: req_ as *mut Request as *mut c_void,
-                    read_fn: read_trampoline,
-                },
-            }),
-            allow_unsafe: req.allow_unsafe,
-        })
+        (*terminal_)
+            .stream
+            .handler
+            .paste(terminal_paste_pkg::Request {
+                source,
+                contents: terminal_paste_pkg::Contents::Reader(terminal_paste_pkg::Reader {
+                    mimes: &mimes,
+                    read: clipboard::MimeReader {
+                        ctx: req_ as *mut Request as *mut c_void,
+                        read_fn: read_trampoline,
+                    },
+                }),
+                allow_unsafe: req.allow_unsafe,
+            })
     };
     let written = match result {
         Ok(written) => written,
@@ -211,9 +214,9 @@ pub unsafe fn terminal_paste(
                 PasteError::UnsafePaste => Result::Rejected,
                 PasteError::NoWritePty => Result::InvalidValue,
                 PasteError::OutOfMemory => Result::OutOfMemory,
-                PasteError::ReadFailed
-                | PasteError::EntropyUnavailable
-                | PasteError::Canceled => Result::IoError,
+                PasteError::ReadFailed | PasteError::EntropyUnavailable | PasteError::Canceled => {
+                    Result::IoError
+                }
             }
         }
     };
@@ -735,8 +738,7 @@ mod tests {
                     while offset < data.len() {
                         // const n = @min(3, data.len - offset);
                         let n = std::cmp::min(3, data.len() - offset);
-                        if !(writer.write.unwrap())(writer.userdata, data[offset..].as_ptr(), n)
-                        {
+                        if !(writer.write.unwrap())(writer.userdata, data[offset..].as_ptr(), n) {
                             return false;
                         }
                         offset += n;
@@ -876,10 +878,8 @@ mod tests {
 
             // Plain text, NULL out_written pointer is fine. The text is read
             // once, the image never.
-            let mut contents = s::Contents::init(&[
-                (b"image/png", b"\x89PNG"),
-                (b"text/plain", b"hel\x1blo"),
-            ]);
+            let mut contents =
+                s::Contents::init(&[(b"image/png", b"\x89PNG"), (b"text/plain", b"hel\x1blo")]);
             let req = contents.request();
             assert_eq!(Result::Success, unsafe {
                 terminal_paste(t, &req, std::ptr::null_mut())
@@ -979,10 +979,8 @@ mod tests {
 
             // Without a clipboard_read callback the paste stays text.
             let mut written: bool = false;
-            let mut contents = s::Contents::init(&[
-                (b"text/plain", b"secret"),
-                (b"image/png", b"\x89PNG"),
-            ]);
+            let mut contents =
+                s::Contents::init(&[(b"text/plain", b"secret"), (b"image/png", b"\x89PNG")]);
             let mut req = contents.request();
             // req.location = .primary;
             req.location = 2;
@@ -1015,20 +1013,22 @@ mod tests {
             assert!(written);
             assert_eq!(1, unsafe { s::WRITE_COUNT });
             assert_eq!(3, mem_count(s::written_slice(), b"\x1b]5522;"));
-            assert!(s::written_slice()
-                .starts_with(b"\x1b]5522;type=read:status=OK:loc=primary:pw="));
-            assert!(mem_index_of_pos(s::written_slice(), 0, b"secret").is_none());
             assert!(
-                mem_index_of_pos(s::written_slice(), 0, b";dGV4dC9wbGFpbiBpbWFnZS9wbmcK\x1b\\")
-                    .is_some()
+                s::written_slice().starts_with(b"\x1b]5522;type=read:status=OK:loc=primary:pw=")
             );
+            assert!(mem_index_of_pos(s::written_slice(), 0, b"secret").is_none());
+            assert!(mem_index_of_pos(
+                s::written_slice(),
+                0,
+                b";dGV4dC9wbGFpbiBpbWFnZS9wbmcK\x1b\\"
+            )
+            .is_some());
             assert_eq!(0, contents.reads[0]);
             assert_eq!(0, contents.reads[1]);
 
             // The program's read with the event password is granted once.
             let ok_prefix: &[u8] = b"\x1b]5522;type=read:status=OK:loc=primary:pw=";
-            let pw_end =
-                mem_index_of_pos(s::written_slice(), ok_prefix.len(), b"\x1b\\").unwrap();
+            let pw_end = mem_index_of_pos(s::written_slice(), ok_prefix.len(), b"\x1b\\").unwrap();
             // const read = try std.fmt.bufPrint(&read_buf, "\x1b]5522;type=read:pw={s}:name=UGFzdGUgZXZlbnQ=;dGV4dC9wbGFpbg==\x1b\\", .{ ... });
             let pw = s::written_slice()[ok_prefix.len()..pw_end].to_vec();
             let mut read: Vec<u8> = Vec::new();

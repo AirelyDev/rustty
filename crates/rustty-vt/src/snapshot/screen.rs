@@ -241,8 +241,8 @@ use crate::pagelist::grow::IncreaseCapacityError;
 use crate::pagelist::{self, Node, Pin};
 use crate::point;
 use crate::screen::{
-    CharsetState, Cursor as ScreenCursor, CursorStyle, Screen as TerminalScreen,
-    SemanticClick, SemanticPrompt as ScreenSemanticPrompt,
+    CharsetState, Cursor as ScreenCursor, CursorStyle, Screen as TerminalScreen, SemanticClick,
+    SemanticPrompt as ScreenSemanticPrompt,
 };
 use crate::screen_set::Key as TerminalScreenKey;
 use crate::style as terminal_style;
@@ -405,8 +405,8 @@ pub fn encode<W: io::Writer + ?Sized>(
     let mut node = first;
     while !node.is_null() {
         // SAFETY: `node` is live (see above); encode does not mutate the list.
-        let mut preserved = unsafe { Node::page_preserving_state(node) }
-            .map_err(|_| EncodeError::OutOfMemory)?;
+        let mut preserved =
+            unsafe { Node::page_preserving_state(node) }.map_err(|_| EncodeError::OutOfMemory)?;
         // defer preserved.deinit();
         // SAFETY: `preserved.page()` is a live page for the preserved scope.
         let result = page::encode(unsafe { &*preserved.page() }, destination);
@@ -658,7 +658,7 @@ pub fn decode(
                     y: y as u32,
                 }))
                 .unwrap(); // orelse unreachable
-            // SAFETY: `row_pin.node` is a live node of `pages`.
+                           // SAFETY: `row_pin.node` is a live node of `pages`.
             let node_cols = unsafe { Node::cols(row_pin.node) };
             let x = header.cursor_x.min(node_cols - 1);
             let pin: *mut Pin = match pages.track_pin(Pin {
@@ -1692,12 +1692,14 @@ mod tests {
             single_shift: Some(terminal_charsets::Slots::G2),
             ..CharsetState::default()
         };
-        result
-            .charsets
-            .set(terminal_charsets::Slots::G0, terminal_charsets::Charset::Utf8);
-        result
-            .charsets
-            .set(terminal_charsets::Slots::G1, terminal_charsets::Charset::Ascii);
+        result.charsets.set(
+            terminal_charsets::Slots::G0,
+            terminal_charsets::Charset::Utf8,
+        );
+        result.charsets.set(
+            terminal_charsets::Slots::G1,
+            terminal_charsets::Charset::Ascii,
+        );
         result.charsets.set(
             terminal_charsets::Slots::G2,
             terminal_charsets::Charset::British,
@@ -1785,9 +1787,7 @@ mod tests {
                     },
                 ],
             },
-            semantic_click: SemanticClick::Cl(
-                terminal_osc::semantic_prompt::Click::SmartVertical,
-            ),
+            semantic_click: SemanticClick::Cl(terminal_osc::semantic_prompt::Click::SmartVertical),
             saved_cursor_present: true,
         }
     }
@@ -2455,9 +2455,8 @@ mod tests {
             let mut probe =
                 TerminalScreen::init(Allocator, screen_options(80, 1, Some(0))).unwrap();
             // SAFETY: the top-left node is live within the probe screen.
-            let rows = unsafe {
-                Node::capacity(probe.pages.get_top_left(point::Tag::Screen).node).rows
-            };
+            let rows =
+                unsafe { Node::capacity(probe.pages.get_top_left(point::Tag::Screen).node).rows };
             probe.deinit();
             rows
         };
@@ -2572,11 +2571,9 @@ mod tests {
             );
             assert_eq!(
                 'C' as u32,
-                (*(*Node::page(
-                    (*restored.pages.get_top_left(point::Tag::Screen).node).next
-                ))
-                .get_row_and_cell(0, 0)
-                .cell)
+                (*(*Node::page((*restored.pages.get_top_left(point::Tag::Screen).node).next))
+                    .get_row_and_cell(0, 0)
+                    .cell)
                     .codepoint(),
             );
         }
@@ -2645,8 +2642,7 @@ mod tests {
         let written = stream.destination().written().to_vec();
         stream.deinit();
         let mut source = io::FixedReader::new(&written);
-        let mut decoded =
-            decode(&mut source, Allocator, screen_options(8, 2, Some(0))).unwrap();
+        let mut decoded = decode(&mut source, Allocator, screen_options(8, 2, Some(0))).unwrap();
         // defer decoded.deinit();
         let restored_cell = decoded
             .screen
@@ -2731,7 +2727,10 @@ mod tests {
 
             assert_eq!(case.expected_x, decoded.screen.cursor.x);
             assert_eq!(case.expected_y, decoded.screen.cursor.y);
-            assert_eq!(case.expected_pending_wrap, decoded.screen.cursor.pending_wrap);
+            assert_eq!(
+                case.expected_pending_wrap,
+                decoded.screen.cursor.pending_wrap
+            );
             decoded.screen.assert_integrity();
             decoded.deinit();
         }
@@ -2773,8 +2772,7 @@ mod tests {
         let written = stream.destination().written().to_vec();
         stream.deinit();
         let mut source = io::FixedReader::new(&written);
-        let mut decoded =
-            decode(&mut source, Allocator, screen_options(8, 1, Some(0))).unwrap();
+        let mut decoded = decode(&mut source, Allocator, screen_options(8, 1, Some(0))).unwrap();
         // defer decoded.deinit();
 
         // SAFETY: the cursor pin's node is live within the decoded screen.
@@ -2828,8 +2826,7 @@ mod tests {
         let written = stream.destination().written().to_vec();
         stream.deinit();
         let mut source = io::FixedReader::new(&written);
-        let mut decoded =
-            decode(&mut source, Allocator, screen_options(2, 2, Some(0))).unwrap();
+        let mut decoded = decode(&mut source, Allocator, screen_options(2, 2, Some(0))).unwrap();
         // defer decoded.deinit();
 
         let saved = decoded.screen.saved_cursor.as_ref().unwrap();
@@ -2857,8 +2854,7 @@ mod tests {
         // PageList, cursor pin, or cursor-owned state.
         for fixture_len in 0..written.len() {
             let mut source = io::FixedReader::new(&written[0..fixture_len]);
-            if let Ok(mut restored) =
-                decode(&mut source, Allocator, screen_options(2, 2, Some(0)))
+            if let Ok(mut restored) = decode(&mut source, Allocator, screen_options(2, 2, Some(0)))
             {
                 restored.deinit();
                 panic!("truncated sequence decoded");
@@ -2905,12 +2901,8 @@ mod tests {
         let mut empty_source = io::FixedReader::new(&empty_written);
         assert_eq!(
             Err(DecodeError::InvalidPageCount),
-            decode(
-                &mut empty_source,
-                Allocator,
-                screen_options(2, 2, Some(0)),
-            )
-            .map(|mut d| d.deinit()),
+            decode(&mut empty_source, Allocator, screen_options(2, 2, Some(0)),)
+                .map(|mut d| d.deinit()),
         );
 
         screen.deinit();

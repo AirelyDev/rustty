@@ -169,7 +169,10 @@ pub struct WasmPagePool<Item: WasmPageItem, A> {
 impl<Item: WasmPageItem, A> WasmPagePool<Item, A> {
     pub const ITEM_SIZE: usize = core::mem::size_of::<Item>();
 
-    pub fn init_capacity(allocator: A, preheat: usize) -> Result<WasmPagePool<Item, A>, OutOfMemory> {
+    pub fn init_capacity(
+        allocator: A,
+        preheat: usize,
+    ) -> Result<WasmPagePool<Item, A>, OutOfMemory> {
         // Preheating is intentionally a no-op: item creation is a
         // cheap memory.grow or free-list pop. And we want to avoid
         // the preallocation mem cost.

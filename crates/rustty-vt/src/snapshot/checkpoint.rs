@@ -147,7 +147,10 @@ mod tests {
             record::Header::LEN,
             finish_offset - ready_offset - "history".len(),
         );
-        assert_eq!(record::Header::LEN, snapshot.written().len() - finish_offset);
+        assert_eq!(
+            record::Header::LEN,
+            snapshot.written().len() - finish_offset
+        );
 
         let mut source = io::FixedReader::new(snapshot.written());
         source.discard_all(ready_offset).unwrap();

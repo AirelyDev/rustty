@@ -357,13 +357,22 @@ mod tests {
         // Bracketed: newlines are fine, the frame terminator is not.
         assert!(is_safe_with(b"hello", Options { bracketed: true }));
         assert!(is_safe_with(b"hello\nworld", Options { bracketed: true }));
-        assert!(!is_safe_with(b"he\x1b[201~llo", Options { bracketed: true }));
-        assert!(!is_safe_with(b"hello\n\x1b[201~", Options { bracketed: true }));
+        assert!(!is_safe_with(
+            b"he\x1b[201~llo",
+            Options { bracketed: true }
+        ));
+        assert!(!is_safe_with(
+            b"hello\n\x1b[201~",
+            Options { bracketed: true }
+        ));
 
         // Unbracketed: the conservative rule.
         assert!(is_safe_with(b"hello", Options { bracketed: false }));
         assert!(!is_safe_with(b"hello\nworld", Options { bracketed: false }));
-        assert!(!is_safe_with(b"he\x1b[201~llo", Options { bracketed: false }));
+        assert!(!is_safe_with(
+            b"he\x1b[201~llo",
+            Options { bracketed: false }
+        ));
     }
 
     // test "encodeWriter bracketed"
@@ -372,8 +381,16 @@ mod tests {
         let mut buf = [0u8; 64];
         // var writer: std.Io.Writer = .fixed(&buf);
         let mut writer = FixedWriter::new(&mut buf);
-        encode_writer(&mut writer, b"hel\x1blo\nworld", Options { bracketed: true }).unwrap();
-        assert_eq!(b"\x1b[200~hel lo\nworld\x1b[201~".as_slice(), writer.buffered());
+        encode_writer(
+            &mut writer,
+            b"hel\x1blo\nworld",
+            Options { bracketed: true },
+        )
+        .unwrap();
+        assert_eq!(
+            b"\x1b[200~hel lo\nworld\x1b[201~".as_slice(),
+            writer.buffered()
+        );
     }
 
     // test "encodeWriter unbracketed"
@@ -381,7 +398,12 @@ mod tests {
     fn encode_writer_unbracketed() {
         let mut buf = [0u8; 64];
         let mut writer = FixedWriter::new(&mut buf);
-        encode_writer(&mut writer, b"hel\x00lo\r\nworld", Options { bracketed: false }).unwrap();
+        encode_writer(
+            &mut writer,
+            b"hel\x00lo\r\nworld",
+            Options { bracketed: false },
+        )
+        .unwrap();
         assert_eq!(b"hel lo\r\rworld".as_slice(), writer.buffered());
     }
 

@@ -1033,9 +1033,7 @@ mod tests {
                 ..Default::default()
             },
             Options {
-                prune: Some(Duration {
-                    duration: NS_PER_S,
-                }),
+                prune: Some(Duration { duration: NS_PER_S }),
                 ..Default::default()
             },
         ];

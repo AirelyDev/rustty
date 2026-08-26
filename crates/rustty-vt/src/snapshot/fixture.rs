@@ -177,8 +177,10 @@ pub fn expect_equal(
     let difference = {
         let shared_len = expected.len().min(actual.len());
         let mut result = shared_len;
-        for (index, (expected_byte, actual_byte)) in
-            expected[..shared_len].iter().zip(&actual[..shared_len]).enumerate()
+        for (index, (expected_byte, actual_byte)) in expected[..shared_len]
+            .iter()
+            .zip(&actual[..shared_len])
+            .enumerate()
         {
             if expected_byte != actual_byte {
                 result = index;
@@ -316,7 +318,13 @@ fn format_snapshot(bytes: &[u8], writer: &mut String) {
         // A partial header cannot provide a safe payload boundary, so preserve
         // the remaining bytes as one explicitly incomplete section.
         if bytes.len() - offset < record::Header::LEN {
-            write_section("trailing partial record", bytes, offset, bytes.len(), writer);
+            write_section(
+                "trailing partial record",
+                bytes,
+                offset,
+                bytes.len(),
+                writer,
+            );
             return;
         }
 

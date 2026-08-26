@@ -59,11 +59,11 @@ use allocator_api2::alloc::Global as Allocator;
 use rustty_config as configpkg;
 // PORT NOTE: `std.heap.MemoryPool` — the rustty-zigstd faithful port (Zig-std
 // infra tier; `write_pool` below).
-use rustty_zigstd::memory_pool::MemoryPool;
 use rustty_os::pty as ptypkg;
 use rustty_os::pty::Pty;
 use rustty_renderer::size::{GridSize, ScreenSize};
 use rustty_vt::terminal::Terminal;
+use rustty_zigstd::memory_pool::MemoryPool;
 use std::ffi::{CStr, CString};
 
 // [ADV-FIX F3] the pty.slave File is wrapped NON-owningly so `Command` (which
@@ -1605,7 +1605,6 @@ pub struct ThreadData {
     // `ThreadData`; Rust cannot nest a type in a struct's namespace, so it is
     // hoisted to the module-level `Write` below — the `WriteReq` hoist
     // precedent.)
-
     /// Process start time and boolean of whether its already exited.
     pub start: std::time::Instant,
     // exited: bool = false,

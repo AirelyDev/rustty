@@ -2739,14 +2739,18 @@ fn render_invalid_selector_warns_through_the_scoped_log_sink() {
         assert_eq!(Result::Success, unsafe { update(state, terminal) });
 
         let mut it: RowIterator = std::ptr::null_mut();
-        assert_eq!(Result::Success, unsafe { row_iterator_new(Some(alloc), &mut it) });
+        assert_eq!(Result::Success, unsafe {
+            row_iterator_new(Some(alloc), &mut it)
+        });
         assert_eq!(Result::Success, unsafe {
             get(state, Data::RowIterator, &mut it as *mut _ as *mut c_void)
         });
         assert!(unsafe { row_iterator_next(it) });
 
         let mut cells: RowCells = std::ptr::null_mut();
-        assert_eq!(Result::Success, unsafe { row_cells_new(Some(alloc), &mut cells) });
+        assert_eq!(Result::Success, unsafe {
+            row_cells_new(Some(alloc), &mut cells)
+        });
         assert_eq!(Result::Success, unsafe {
             row_get(it, RowData::Cells, &mut cells as *mut _ as *mut c_void)
         });

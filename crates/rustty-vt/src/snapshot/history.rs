@@ -868,10 +868,7 @@ mod tests {
                 Err(DecodeError::EndOfStream),
                 decode(&mut truncated_source, TerminalScreenKey::Primary, truncated),
             );
-            assert_eq!(
-                truncated_screen_page_count,
-                truncated.pages.total_pages(),
-            );
+            assert_eq!(truncated_screen_page_count, truncated.pages.total_pages(),);
             assert_eq!(
                 truncated_screen_first,
                 truncated.pages.get_top_left(point::Tag::Screen).node,
@@ -926,8 +923,7 @@ mod tests {
     // test "HISTORY encodes and restores an empty sequence"
     #[test]
     fn history_encodes_and_restores_an_empty_sequence() {
-        let mut terminal_screen =
-            TerminalScreen::init(Allocator, screen_options(2, 2)).unwrap();
+        let mut terminal_screen = TerminalScreen::init(Allocator, screen_options(2, 2)).unwrap();
 
         let mut destination = io::AllocatingWriter::new();
         let mut stream = record::Writer::init(&mut destination);
@@ -938,10 +934,7 @@ mod tests {
         let header = Header::decode(history_record.payload_reader()).unwrap();
         history_record.finish().unwrap();
         assert_eq!(0u32, header.page_count);
-        assert_eq!(
-            Err(io::ReadError::EndOfStream),
-            inspect_source.take_byte(),
-        );
+        assert_eq!(Err(io::ReadError::EndOfStream), inspect_source.take_byte(),);
 
         let mut decode_source = io::FixedReader::new(stream.destination().written());
         let initial_first = terminal_screen
@@ -970,8 +963,7 @@ mod tests {
     // test "HISTORY rejects invalid routing and incomplete sequences"
     #[test]
     fn history_rejects_invalid_routing_and_incomplete_sequences() {
-        let mut terminal_screen =
-            TerminalScreen::init(Allocator, screen_options(2, 2)).unwrap();
+        let mut terminal_screen = TerminalScreen::init(Allocator, screen_options(2, 2)).unwrap();
 
         // Routing and sequence length still determine which native screen is
         // mutated and where the following record begins, so they remain strict.

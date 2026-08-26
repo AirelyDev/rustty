@@ -127,7 +127,10 @@ fn dnd_register_and_unregister() {
     }
 
     // Machine ID declaration is accepted and ignored.
-    assert!(h.command(b"t=a:x=1", Some(b"1:deadbeef")).unwrap().is_none());
+    assert!(h
+        .command(b"t=a:x=1", Some(b"1:deadbeef"))
+        .unwrap()
+        .is_none());
     h.expect_output(b"");
     assert!(h.state.is_some());
 
@@ -336,14 +339,20 @@ fn dnd_client_acceptance_recorded() {
         h.command(b"t=m:o=1", Some(b"text/plain")).unwrap().unwrap()
     );
     h.expect_output(b"");
-    assert_eq!(dnd::Operation::Copy, h.registered().client_accepted().unwrap());
+    assert_eq!(
+        dnd::Operation::Copy,
+        h.registered().client_accepted().unwrap()
+    );
 
     // Rejection.
     assert_eq!(
         dnd::Event::Acceptance,
         h.command(b"t=m:o=0", Some(b"")).unwrap().unwrap()
     );
-    assert_eq!(dnd::Operation::None, h.registered().client_accepted().unwrap());
+    assert_eq!(
+        dnd::Operation::None,
+        h.registered().client_accepted().unwrap()
+    );
 }
 
 #[test]
@@ -354,14 +363,20 @@ fn dnd_chunked_client_acceptance() {
 
     // Chunked accept: continuation metadata is ignored, the acceptance
     // is pending until the final chunk.
-    assert!(h.command(b"t=m:o=2:m=1", Some(b"text/pl")).unwrap().is_none());
+    assert!(h
+        .command(b"t=m:o=2:m=1", Some(b"text/pl"))
+        .unwrap()
+        .is_none());
     assert!(h.registered().client_accepted().is_none());
     assert!(h.command(b"t=m:m=1", Some(b"ain text")).unwrap().is_none());
     assert_eq!(
         dnd::Event::Acceptance,
         h.command(b"t=m:m=0", Some(b"/html")).unwrap().unwrap()
     );
-    assert_eq!(dnd::Operation::Move, h.registered().client_accepted().unwrap());
+    assert_eq!(
+        dnd::Operation::Move,
+        h.registered().client_accepted().unwrap()
+    );
 
     // The accumulated list was converted to NUL-separated entries.
     assert_eq!(
@@ -374,7 +389,9 @@ fn dnd_chunked_client_acceptance() {
 fn dnd_drop_and_data_serving_round_trip() {
     let mut h = Harness::init();
 
-    let _ = h.command(b"t=a", Some(b"text/plain text/uri-list")).unwrap();
+    let _ = h
+        .command(b"t=a", Some(b"text/plain text/uri-list"))
+        .unwrap();
 
     let ev = dnd::MoveEvent {
         cell_x: 4,
@@ -665,7 +682,10 @@ fn dnd_chunked_registration_reuses_first_chunk_metadata() {
     // Registration split over two chunks: the first chunk allocates
     // the state and seeds chunk reassembly, so the continuation (which
     // carries a different type) is still treated as the registration.
-    assert!(h.command(b"t=a:i=4:m=1", Some(b"text/pla")).unwrap().is_none());
+    assert!(h
+        .command(b"t=a:i=4:m=1", Some(b"text/pla"))
+        .unwrap()
+        .is_none());
     assert!(h.state.is_some());
     assert_eq!(
         dnd::Event::Registration,
@@ -728,7 +748,9 @@ fn dnd_kitten_0_47_conversation_replay() {
 
     // Startup: register with MIME list and machine ID, then the test
     // harness reset (unregister both directions, re-register).
-    let _ = h.command(b"t=a:m=0", Some(b"text/uri-list text/plain")).unwrap();
+    let _ = h
+        .command(b"t=a:m=0", Some(b"text/uri-list text/plain"))
+        .unwrap();
     let _ = h
         .command(
             b"t=a:x=1:m=0",
@@ -738,7 +760,9 @@ fn dnd_kitten_0_47_conversation_replay() {
     let _ = h.command(b"t=A", None).unwrap();
     assert!(h.state.is_none());
     let _ = h.command(b"t=o:x=2", None).unwrap();
-    let _ = h.command(b"t=a:m=0", Some(b"text/uri-list text/plain")).unwrap();
+    let _ = h
+        .command(b"t=a:m=0", Some(b"text/uri-list text/plain"))
+        .unwrap();
     let _ = h
         .command(
             b"t=a:x=1:m=0",
@@ -772,7 +796,10 @@ fn dnd_kitten_0_47_conversation_replay() {
     // The kitten accepts as a copy of text/plain.
     let _ = h.command(b"t=m:o=1:m=0", Some(b"text/plain")).unwrap();
     h.expect_output(b"");
-    assert_eq!(dnd::Operation::Copy, h.registered().client_accepted().unwrap());
+    assert_eq!(
+        dnd::Operation::Copy,
+        h.registered().client_accepted().unwrap()
+    );
 
     {
         let Harness { state, output } = &mut h;
@@ -793,9 +820,7 @@ fn dnd_kitten_0_47_conversation_replay() {
 
     // The kitten requests the data and concludes with a copy.
     let _ = h.command(b"t=r:x=1", None).unwrap();
-    h.expect_output(
-        b"\x1b]72;t=r:x=1:m=0;aGVsbG8gZnJvbSBnaG9zdHR5Cg==\x1b\\\x1b]72;t=r:x=1\x1b\\",
-    );
+    h.expect_output(b"\x1b]72;t=r:x=1:m=0;aGVsbG8gZnJvbSBnaG9zdHR5Cg==\x1b\\\x1b]72;t=r:x=1\x1b\\");
     let _ = h.command(b"t=r:o=1", None).unwrap();
     h.expect_output(b"");
     assert!(h.registered().drop.items.is_none());

@@ -80,7 +80,10 @@ impl FlagStack {
     // bounds check lives here.
     pub fn new(idx: u8, flags: [Flags; Self::LEN]) -> FlagStack {
         assert!((idx as usize) < Self::LEN);
-        FlagStack { flags, idx: u3(idx) }
+        FlagStack {
+            flags,
+            idx: u3(idx),
+        }
     }
 
     /// `stack.idx` (Zig direct field access; see `new`).

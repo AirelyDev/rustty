@@ -753,10 +753,8 @@ impl ImageStorage {
                 // if (x < t.scrolling_region.left or
                 //     @min(x + grid.cols - 1, @as(i64, t.cols) - 1) > t.scrolling_region.right) break :inside;
                 if x < unsafe { (*t).scrolling_region.left } as i64
-                    || core::cmp::min(
-                        x + grid.cols as i64 - 1,
-                        unsafe { (*t).cols } as i64 - 1,
-                    ) > unsafe { (*t).scrolling_region.right } as i64
+                    || core::cmp::min(x + grid.cols as i64 - 1, unsafe { (*t).cols } as i64 - 1)
+                        > unsafe { (*t).scrolling_region.right } as i64
                 {
                     break 'inside;
                 }
@@ -1149,10 +1147,7 @@ impl ImageStorage {
                 },
             };
             let p = self.placements.get(&key)?;
-            return Some(PlaceholderTarget {
-                key,
-                placement: *p,
-            });
+            return Some(PlaceholderTarget { key, placement: *p });
         }
 
         let mut best: Option<PlacementKey> = None;
@@ -2289,10 +2284,12 @@ impl Drop for ScrollMargins {
             // tracked pin with no live reference to it (the caller's row
             // operations have completed by the time the guard drops).
             let new_pin = match unsafe {
-                (*self.screen).pages.pin(point::Point::Active(point::Coordinate {
-                    x: restore.x,
-                    y: restore.y,
-                }))
+                (*self.screen)
+                    .pages
+                    .pin(point::Point::Active(point::Coordinate {
+                        x: restore.x,
+                        y: restore.y,
+                    }))
             } {
                 Some(p) => p,
                 None => continue,
@@ -6241,7 +6238,13 @@ mod tests {
         {
             let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap();
             unsafe { &mut (*sp).kitty_images }
-                .add_placement(alloc, sp, 1, 1, Placement::with_location(Location::Pin(pin)))
+                .add_placement(
+                    alloc,
+                    sp,
+                    1,
+                    1,
+                    Placement::with_location(Location::Pin(pin)),
+                )
                 .unwrap();
         }
         t.scroll_up(1).unwrap();
@@ -6279,7 +6282,13 @@ mod tests {
         {
             let pin = track_pin(&mut t, point::Coordinate { x: 0, y: 0 }).unwrap();
             unsafe { &mut (*sp).kitty_images }
-                .add_placement(alloc, sp, 2, 1, Placement::with_location(Location::Pin(pin)))
+                .add_placement(
+                    alloc,
+                    sp,
+                    2,
+                    1,
+                    Placement::with_location(Location::Pin(pin)),
+                )
                 .unwrap();
         }
         unsafe { &mut (*sp).kitty_images }
@@ -6888,7 +6897,6 @@ mod tests {
         t.deinit(alloc);
     }
 
-
     /// Test helper: the reference reads
     /// `t.screens.active.pages.pointFromPin(.active, p.location.pin.*)` for a
     /// placement fetched with `storage.placements.get(...)`.
@@ -7161,7 +7169,9 @@ mod tests {
         t.reverse_index();
         assert_eq!(
             0usize,
-            unsafe { &(*t.screens.active).kitty_images }.placements.len()
+            unsafe { &(*t.screens.active).kitty_images }
+                .placements
+                .len()
         );
 
         t.deinit(alloc);
@@ -7448,7 +7458,9 @@ mod tests {
         t.scroll_up(10).unwrap();
         assert_eq!(
             0usize,
-            unsafe { &(*t.screens.active).kitty_images }.placements.len()
+            unsafe { &(*t.screens.active).kitty_images }
+                .placements
+                .len()
         );
 
         t.deinit(alloc);
@@ -7555,7 +7567,9 @@ mod tests {
         t.scroll_up(2).unwrap();
         assert_eq!(
             0usize,
-            unsafe { &(*t.screens.active).kitty_images }.placements.len()
+            unsafe { &(*t.screens.active).kitty_images }
+                .placements
+                .len()
         );
 
         t.deinit(alloc);
@@ -7901,13 +7915,7 @@ mod tests {
 
         // An all-gapless animation can never advance either.
         {
-            let anim = s
-                .images
-                .get_mut(&1)
-                .unwrap()
-                .animation
-                .as_mut()
-                .unwrap();
+            let anim = s.images.get_mut(&1).unwrap().animation.as_mut().unwrap();
             anim.state = State::Running;
             anim.frames[0].gap_ms = 0;
         }

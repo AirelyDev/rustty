@@ -2169,10 +2169,8 @@ mod tests {
     // oldest-first, NUL-terminated (`toOwnedSliceSentinel(0)`).
     #[test]
     fn format_events_tab_separated_oldest_first() {
-        let mut s = stream_with_events(&[
-            (1, Kind::Print, b"'A' (U+41)"),
-            (2, Kind::Csi, b"1;49 h"),
-        ]);
+        let mut s =
+            stream_with_events(&[(1, Kind::Print, b"'A' (U+41)"), (2, Kind::Csi, b"1;49 h")]);
         let out = s.formatEvents(Allocator);
         assert_eq!(
             out,
@@ -2227,35 +2225,36 @@ mod tests {
 
         // A SurfaceData whose non-seam fields are inert (nothing in
         // copyEvents/exportEvents touches them).
-        let data = |clip: crate::widgets::surface::RtSetClipboardFn,
-                    export: crate::widgets::surface::RtExportTerminalIOFn| SurfaceData {
-            renderer_state: core::ptr::null_mut(),
-            alloc: Allocator,
-            size: rustty_renderer::size::Size {
-                screen: rustty_renderer::size::ScreenSize {
-                    width: 0,
-                    height: 0,
+        let data =
+            |clip: crate::widgets::surface::RtSetClipboardFn,
+             export: crate::widgets::surface::RtExportTerminalIOFn| SurfaceData {
+                renderer_state: core::ptr::null_mut(),
+                alloc: Allocator,
+                size: rustty_renderer::size::Size {
+                    screen: rustty_renderer::size::ScreenSize {
+                        width: 0,
+                        height: 0,
+                    },
+                    cell: rustty_renderer::size::CellSize {
+                        width: 1,
+                        height: 1,
+                    },
+                    padding: rustty_renderer::size::Padding {
+                        top: 0,
+                        bottom: 0,
+                        right: 0,
+                        left: 0,
+                    },
                 },
-                cell: rustty_renderer::size::CellSize {
-                    width: 1,
-                    height: 1,
-                },
-                padding: rustty_renderer::size::Padding {
-                    top: 0,
-                    bottom: 0,
-                    right: 0,
-                    left: 0,
-                },
-            },
-            font_size_points: 0.0,
-            font_size_pixels: 0.0,
-            mouse_click_state: [rustty_vt::input::mouse::ButtonState::Release;
-                rustty_vt::input::mouse::Button::MAX as usize],
-            selection_gesture: core::ptr::null(),
-            surface: core::ptr::null_mut(),
-            rt_set_clipboard: clip,
-            rt_export_terminal_io: export,
-        };
+                font_size_points: 0.0,
+                font_size_pixels: 0.0,
+                mouse_click_state: [rustty_vt::input::mouse::ButtonState::Release;
+                    rustty_vt::input::mouse::Button::MAX as usize],
+                selection_gesture: core::ptr::null(),
+                surface: core::ptr::null_mut(),
+                rt_set_clipboard: clip,
+                rt_export_terminal_io: export,
+            };
 
         let s = stream_with_events(&[(7, Kind::Osc, b"change_window_title ")]);
         let expected: &[u8] = b"Seq\tKind\tDescription\n7\tosc\tchange_window_title \n";

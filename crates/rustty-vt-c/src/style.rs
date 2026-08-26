@@ -84,9 +84,7 @@ impl Color {
             // SAFETY: the internal and C tag values line up 1:1 (const-asserted
             // below), and `c.tag()` only yields declared variants.
             tag: unsafe {
-                std::mem::transmute::<std::os::raw::c_int, ColorTag>(
-                    c.tag() as std::os::raw::c_int,
-                )
+                std::mem::transmute::<std::os::raw::c_int, ColorTag>(c.tag() as std::os::raw::c_int)
             },
             value: ColorValue { _padding: value },
         }
@@ -209,7 +207,11 @@ impl Style {
             let mut lanes = [0u8; 8];
             let mut i = 0;
             while i < 8 {
-                lanes[i] = if flag_bits & masks[i] == masks[i] { 1 } else { 0 };
+                lanes[i] = if flag_bits & masks[i] == masks[i] {
+                    1
+                } else {
+                    0
+                };
                 i += 1;
             }
             u64::from_ne_bytes(lanes)

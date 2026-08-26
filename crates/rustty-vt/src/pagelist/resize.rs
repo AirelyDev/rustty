@@ -1700,8 +1700,7 @@ impl ReflowCursor {
         // tags the content bits are a color, so we skip the check for
         // those (the tag is part of BulkRunMask, making tags uniform
         // per run).
-        let check_placeholder =
-            KITTY_GRAPHICS && first.content_tag() == ContentTag::Codepoint;
+        let check_placeholder = KITTY_GRAPHICS && first.content_tag() == ContentTag::Codepoint;
         let placeholder_pattern: pagepkg::Backing = if !KITTY_GRAPHICS {
             // Never used without kitty graphics (check_placeholder
             // is comptime-false), but it must still compile and the
@@ -1722,8 +1721,7 @@ impl ReflowCursor {
                 if !BulkRunMask::eql(cells, len, narrow_pattern) {
                     break;
                 }
-                if check_placeholder && PlaceholderMask::eql_any(cells, len, placeholder_pattern)
-                {
+                if check_placeholder && PlaceholderMask::eql_any(cells, len, placeholder_pattern) {
                     break;
                 }
                 len += BULK_GROUP_LEN;
@@ -1732,9 +1730,7 @@ impl ReflowCursor {
             while len < cells.len() {
                 let cell = cells[len];
                 if BulkRunMask::eql_scalar(cell, narrow_pattern) {
-                    if check_placeholder
-                        && PlaceholderMask::eql_scalar(cell, placeholder_pattern)
-                    {
+                    if check_placeholder && PlaceholderMask::eql_scalar(cell, placeholder_pattern) {
                         break 'outer;
                     }
                     len += 1;
@@ -1804,9 +1800,7 @@ impl ReflowCursor {
                 // by falling back to the slow path, which grows capacity.
                 // No state has been modified yet at this point.
                 let base = unsafe { (*self.page).memory_ptr() };
-                let id = match unsafe {
-                    (*self.page).styles.add_with_id(base, style, style_id)
-                } {
+                let id = match unsafe { (*self.page).styles.add_with_id(base, style, style_id) } {
                     Ok(v) => v,
                     Err(_) => return false,
                 }
@@ -2132,10 +2126,7 @@ impl ReflowCursor {
                             // before the first dupe no longer applies. Re-establish
                             // it against the current page before duping again.
                             while !self.hyperlink_strings_fit(&src_link) {
-                                self.increase_capacity(
-                                    list,
-                                    Some(IncreaseCapacity::StringBytes),
-                                )?;
+                                self.increase_capacity(list, Some(IncreaseCapacity::StringBytes))?;
                             }
 
                             // We need to recreate the link into the new page.

@@ -400,8 +400,7 @@ pub struct ClipboardWriteReply {
 ///
 /// C: GhosttyClipboardWriteReplyFn -> RusttyClipboardWriteReplyFn (R2)
 // pub const ClipboardWriteReplyFn = *const fn (*const ClipboardWrite, *const ClipboardWriteReply) callconv(lib.calling_conv) void;
-pub type ClipboardWriteReplyFn =
-    extern "C" fn(*const ClipboardWrite, *const ClipboardWriteReply);
+pub type ClipboardWriteReplyFn = extern "C" fn(*const ClipboardWrite, *const ClipboardWriteReply);
 
 /// The reply to a clipboard read request.
 ///
@@ -1096,10 +1095,7 @@ impl Effects {
         let mimes: Vec<LibString> = read.mimes.iter().map(|m| LibString::init(m)).collect();
 
         // const ctx: ClipboardReadCtx = .{ .read = read, .wrapper = wrapper };
-        let ctx = ClipboardReadCtx {
-            read,
-            wrapper,
-        };
+        let ctx = ClipboardReadCtx { read, wrapper };
         let request = ClipboardRead {
             size: std::mem::size_of::<ClipboardRead>(),
             location: read.location,
@@ -1192,11 +1188,13 @@ impl Effects {
             .collect();
 
         // read.reply(.{ .success = .{ .contents = contents, .available = available, .remember = reply.remember } });
-        read.reply(clipboard::ReadResult::Success(clipboard::ReadResultSuccess {
-            contents: &contents,
-            available: &available,
-            remember: unsafe { (*reply).remember },
-        }));
+        read.reply(clipboard::ReadResult::Success(
+            clipboard::ReadResultSuccess {
+                contents: &contents,
+                available: &available,
+                remember: unsafe { (*reply).remember },
+            },
+        ));
     }
 
     // fn desktopNotificationTrampoline(handler: *Handler, notification: Action.ShowDesktopNotification) void {
@@ -2082,7 +2080,9 @@ pub unsafe fn continuation_alloc_io(
     unsafe { continuation_write_io(terminal_, &mut aw) }.map_err(|err| match err {
         ContinuationWriteError::InvalidValue => ContinuationAllocError::InvalidValue,
         ContinuationWriteError::WriteFailed => ContinuationAllocError::OutOfMemory,
-        ContinuationWriteError::ContinuationDisabled => ContinuationAllocError::ContinuationDisabled,
+        ContinuationWriteError::ContinuationDisabled => {
+            ContinuationAllocError::ContinuationDisabled
+        }
         ContinuationWriteError::ContinuationUnavailable => {
             ContinuationAllocError::ContinuationUnavailable
         }
@@ -3941,9 +3941,7 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
         }
 
         // .vt_ground => out.* = wrapper.stream.ground(),
-        TerminalData::VtGround => unsafe {
-            *(out as *mut bool) = (*terminal_).stream.ground()
-        },
+        TerminalData::VtGround => unsafe { *(out as *mut bool) = (*terminal_).stream.ground() },
 
         // .mode => {
         //     const mode = out.toMode() orelse return .invalid_value;
@@ -4937,10 +4935,9 @@ mod tests {
             let (new_result, invalid) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, new_result);
             test_enable_continuation(invalid);
-            assert_eq!(
-                Err(RestoreContinuationError::InvalidContinuation),
-                unsafe { restore_continuation(invalid, b"A") }
-            );
+            assert_eq!(Err(RestoreContinuationError::InvalidContinuation), unsafe {
+                restore_continuation(invalid, b"A")
+            });
             unsafe { free(invalid) };
             unsafe { free(restored) };
             unsafe { free(source) };
@@ -6033,13 +6030,21 @@ mod tests {
 
             let mut ground = false;
             assert_eq!(Result::Success, unsafe {
-                get(t, TerminalData::VtGround, &mut ground as *mut bool as *mut c_void)
+                get(
+                    t,
+                    TerminalData::VtGround,
+                    &mut ground as *mut bool as *mut c_void,
+                )
             });
             assert!(ground);
 
             vtw(t, &[0xF0]);
             assert_eq!(Result::Success, unsafe {
-                get(t, TerminalData::VtGround, &mut ground as *mut bool as *mut c_void)
+                get(
+                    t,
+                    TerminalData::VtGround,
+                    &mut ground as *mut bool as *mut c_void,
+                )
             });
             assert!(!ground);
 
@@ -8279,7 +8284,11 @@ mod tests {
             assert!(unsafe { (*t).stream.handler.unknown_sequence }.is_none());
 
             assert_eq!(Result::Success, unsafe {
-                set(t, Option_::UnknownSequence, unknown_sequence as *const c_void)
+                set(
+                    t,
+                    Option_::UnknownSequence,
+                    unknown_sequence as *const c_void,
+                )
             });
             // try testing.expect(t.?.stream.handler.unknown_sequence != null);
             assert!(unsafe { (*t).stream.handler.unknown_sequence }.is_some());
@@ -8330,7 +8339,11 @@ mod tests {
 
             // A NULL limit disables capture even after reinstalling the callback.
             assert_eq!(Result::Success, unsafe {
-                set(t, Option_::UnknownSequence, unknown_sequence as *const c_void)
+                set(
+                    t,
+                    Option_::UnknownSequence,
+                    unknown_sequence as *const c_void,
+                )
             });
             assert_eq!(Result::Success, unsafe {
                 set(t, Option_::UnknownMaxBytes, std::ptr::null())
@@ -8630,11 +8643,7 @@ mod tests {
             }
         }
 
-        extern "C" fn clipboard_write(
-            _: Terminal,
-            _: *mut c_void,
-            request: *const ClipboardWrite,
-        ) {
+        extern "C" fn clipboard_write(_: Terminal, _: *mut c_void, request: *const ClipboardWrite) {
             unsafe {
                 WRITE_COUNT += 1;
                 LAST_LOCATION = (*request).location;
@@ -8805,7 +8814,10 @@ mod tests {
             unsafe { RESPONSES = Vec::new() };
             // name="app" without a password: forwarded for prompts, not
             // rememberable.
-            vtw(t, b"\x1B]5522;type=read:id=r2:name=YXBw;dGV4dC9wbGFpbg==\x1B\\");
+            vtw(
+                t,
+                b"\x1B]5522;type=read:id=r2:name=YXBw;dGV4dC9wbGFpbg==\x1B\\",
+            );
             assert_eq!(1, unsafe { R_COUNT });
             assert_eq!(1, unsafe { R_LAST_MIMES_LEN });
             assert!(unsafe { R_LAST_MIME_IS_TEXT });
@@ -8852,11 +8864,7 @@ mod tests {
             }
         }
 
-        extern "C" fn clipboard_write(
-            _: Terminal,
-            _: *mut c_void,
-            request: *const ClipboardWrite,
-        ) {
+        extern "C" fn clipboard_write(_: Terminal, _: *mut c_void, request: *const ClipboardWrite) {
             unsafe {
                 WRITE_COUNT += 1;
                 ((*request).reply)(
