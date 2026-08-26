@@ -88,6 +88,14 @@ TARGETS=(
   "x86_64-pc-windows-msvc||1"
   # FreeBSD: DEFERRALS.md's "the platform's explicit ledger row".
   "x86_64-unknown-freebsd||1"
+  # The reference's build-ghostty-windows-gnu. A different C ABI and linker
+  # from the MSVC arm above, which is why it is a separate leg there too.
+  "x86_64-pc-windows-gnu||1"
+  # The reference's build-libghostty-vt-android. Needs the NDK's clang, so it
+  # reports skipped on any host without it — which is the honest outcome
+  # rather than the silence of not listing the target at all. This gate's
+  # header named android before the target existed; now it is real.
+  "aarch64-linux-android||1"
 )
 
 echo "=== G-XTARGET :: cross-target builds of rustty-vt-c ==="

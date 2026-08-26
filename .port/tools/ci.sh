@@ -79,6 +79,16 @@
 #                                    Skips by name where the rustup std or a
 #                                    cross C toolchain is absent; BLOCKED if
 #                                    every target is unavailable.
+#   G-I18N check_translations.sh     msgcmp every po/*.po against the .pot
+#                                    -> HARD-FAIL. BLOCKED without gettext.
+#   G-BLUEPRINT check_blueprints.sh  all .blp templates compile and are
+#                                    formatted                     -> HARD-FAIL
+#                                    BLOCKED without blueprint-compiler.
+#   G-VALGRIND check_valgrind.sh     FFI-crate test binaries under memcheck
+#                                    with valgrind.supp            -> HARD-FAIL
+#                                    BLOCKED without valgrind (all of macOS).
+#                                    Closes check_leaks.sh's "deferred to Linux
+#                                    CI" FFI-leak note.
 #   G-THEMES check_theme_corpus.py   the 602 vendored iterm2 theme files match
 #                                    a committed per-file SHA-256 manifest
 #                                    -> HARD-FAIL. res_themes.rs only counts
@@ -407,6 +417,23 @@ GATE_REGISTRY=(
   # std is missing, or that the host C compiler cannot target, are reported
   # skipped BY NAME; all-skipped exits 3 BLOCKED.
   "G-XTARGET|HARD|bash $GATES/check_cross_targets.sh"
+  # G-I18N (2026-08-26) — msgcmp every po/*.po against the .pot (the reference's
+  # `translations` job). The i18n_msgid_coverage TEST checks the msgid set
+  # against the sources; nothing looked at the 32 catalogues until now. The
+  # reference's other arm (regenerate the .pot and diff) is deliberately NOT
+  # ported yet — regeneration is known-lossy here — see the gate's header.
+  "G-I18N|HARD|bash $GATES/check_translations.sh"
+  # G-BLUEPRINT (2026-08-26) — the reference's `blueprint-compiler` job. rustty
+  # ported nix/build-support/check-blueprints.sh during the Nix work and wired
+  # it to nothing; this runs it. Compiles all 19 .blp templates and checks they
+  # are formatted, against a COPY so the gate is read-only. BLOCKED where
+  # blueprint-compiler is absent (every macOS host).
+  "G-BLUEPRINT|HARD|bash $GATES/check_blueprints.sh"
+  # G-VALGRIND (2026-08-26) — the reference's `valgrind` job, and the closure of
+  # a deferral check_leaks.sh names in its own header: FFI *leak* detection is
+  # impossible on arm64 macOS (no LSan, no valgrind), so the crates that cross
+  # into C have had no leak coverage anywhere. BLOCKED where valgrind is absent.
+  "G-VALGRIND|HARD|bash $GATES/check_valgrind.sh"
   # G-REL (WS18) — the `--release` test lane. Steps 3/4 above only ever exercise
   # the DEBUG profile, so nothing noticed that release had rotted to 22 failures
   # across 7 targets. Most were tests driving a seam the port deliberately

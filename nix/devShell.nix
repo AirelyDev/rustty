@@ -41,6 +41,7 @@
   wraptest,
   zip,
   llvmPackages_latest,
+  rustPlatform,
   rust-cbindgen,
   glib,
   gtk4,
@@ -101,6 +102,16 @@ in
         # For builds
         rust-cbindgen
         cmake
+        # bindgen (crates-sys/{oniguruma,libxml2,wuffs,...}-sys) needs BOTH
+        # libclang to dlopen AND the libc include paths to parse vendored
+        # headers. Setting LIBCLANG_PATH by hand covers only the first: with it
+        # alone, `cargo test -p rustty-oniguruma` worked but
+        # `cargo test -p rustty-wuffs` still died with
+        #   fatal error: 'stdlib.h' file not found
+        # bindgenHook is nixpkgs' canonical answer and sets both (it is what
+        # nix/package.nix uses). mkShell runs setup hooks, so it belongs here
+        # rather than as hand-maintained environment variables.
+        rustPlatform.bindgenHook
         doxygen
         jq
         llvmPackages_latest.llvm

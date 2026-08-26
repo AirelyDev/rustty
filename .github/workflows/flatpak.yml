@@ -1,0 +1,94 @@
+# PORTS: ghostty .github/workflows/flatpak.yml (the publish pipeline) and
+# test.yml's `build-flatpak` job (the per-push smoke build), merged into one
+# workflow with two triggers.
+#
+# TWO DIFFERENCES FROM THE REFERENCE, both because rustty's source story is
+# different:
+#
+# 1. NO ARTIFACT PLUMBING. The reference's flatpak.yml is workflow_dispatch-only
+#    and takes a `source-run-id` / `source-artifact-id` pair, because its
+#    manifest consumes a tarball produced by a separate `build-dist` job. The
+#    rustty manifest consumes the tarball `xtask dist` writes, so this workflow
+#    just builds it — one step, no cross-workflow artifact handoff.
+#
+# 2. NO GENERATED DEPENDENCY MANIFEST. See flatpak/io.airely.rustty.yml: the
+#    tarball already ships `vendor/` plus a `.cargo/config.toml` redirecting
+#    crates.io to it, so the build is offline by construction and there is no
+#    `cargo-sources.json` to regenerate or keep in sync.
+#
+# VERIFIED LOCALLY before this workflow existed: built, installed and run on
+# aarch64-linux with the same commands (see the manifest's header). This makes
+# it keep happening.
+name: Flatpak
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "flatpak/**"
+      - "dist/linux/**"
+      - "crates/**"
+      - "crates-sys/**"
+      - "xtask/**"
+      - "Cargo.lock"
+      - ".github/workflows/flatpak.yml"
+  pull_request:
+    paths:
+      - "flatpak/**"
+      - "dist/linux/**"
+      - ".github/workflows/flatpak.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: "Flatpak (${{ matrix.arch }})"
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+    container:
+      # The flathub-infra image ships flatpak-builder plus the GNOME runtimes.
+      # gnome-48 matches the `runtime-version: "50"` the manifest pins closely
+      # enough that the runtime is fetched, not rebuilt; bump both together.
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
+      options: --privileged
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      # The manifest's source. This is also what makes the flatpak build
+      # offline: the tarball carries vendor/ + .cargo/config.toml.
+      - name: Build the vendored source tarball
+        run: cargo run -q -p xtask -- dist
+
+      - name: Build the Flatpak
+        run: |
+          flatpak-builder --force-clean --user --disable-rofiles-fuse \
+            --install-deps-from=flathub \
+            --repo=flatpak/repo flatpak/builddir \
+            flatpak/io.airely.rustty.yml
+
+      # Building is not the same as producing something that runs. Install from
+      # the local repo and execute it — the same check performed by hand when
+      # the manifest was first verified.
+      - name: Install and run it
+        run: |
+          flatpak remote-add --user --no-gpg-verify rustty-local flatpak/repo
+          flatpak install --user -y rustty-local io.airely.rustty
+          flatpak run io.airely.rustty +version | tee /tmp/version.txt
+          grep -q "Rustty" /tmp/version.txt
+
+      - name: Upload the bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flatpak-${{ matrix.arch }}
+          path: flatpak/repo
+          retention-days: 7
