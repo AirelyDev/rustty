@@ -322,9 +322,10 @@ impl ImageStorage {
         self.total_limit != 0
     }
 
-    /// Record a content mutation: marks the storage dirty and assigns a fresh
-    /// generation stamp. Must be called by anything that changes the set of
-    /// images or placements (or image contents).
+    /// Record a content mutation: marks the storage dirty and assigns a
+    /// fresh generation stamp. Must be called by anything that changes
+    /// the set of images or placements (or image contents), including
+    /// the animation command handlers in graphics_exec.zig.
     ///
     /// Do NOT call this for geometry-only events (scrolling, resizing, screen
     /// switches); those must set only the dirty flag directly. Bumping the

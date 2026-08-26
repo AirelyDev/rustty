@@ -1,0 +1,94 @@
+G3b [apprt]: SKIPPED — PORT STATUS is not done (57 oracle file(s) unexamined)
+G3b [apprt-api]: SKIPPED — PORT STATUS is not done (5 oracle file(s) unexamined)
+G3b [args]: distinctive ref comments=186 missing=0 review=1
+    REVIEW (ratio 0.79): returns true if this type can track diagnostics.
+G3b [bench]: distinctive ref comments=137 missing=0 review=0
+G3b [bin]: SKIPPED — PORT STATUS is not done (7 oracle file(s) unexamined)
+G3b [build-config]: distinctive ref comments=27 missing=0 review=0
+G3b [cfg-fmt]: SKIPPED — PORT STATUS is not done (2 oracle file(s) unexamined)
+G3b [cli]: distinctive ref comments=602 missing=0 review=2
+    REVIEW (ratio 0.68): this should be returned by actions that want to print the help text.
+    REVIEW (ratio 0.72): var buf: [std.compress.flate.max_window_len]u8 = undefined;
+G3b [config]: distinctive ref comments=2851 missing=0 review=8
+    REVIEW (ratio 0.64): 3. "application support" directory (macos only)
+    REVIEW (ratio 0.71): load the configuration according to the default rules:
+    REVIEW (ratio 0.64): options for copy on select behavior.
+    REVIEW (ratio 0.73): see "clipboard-codepoint-map" for documentation.
+    REVIEW (ratio 0.69): see `font-synthetic-style` for documentation.
+    REVIEW (ratio 0.75): see macos-dock-drop-behavior
+    REVIEW (ratio 0.74): see window-show-tab-bar
+    REVIEW (ratio 0.63): valid values for confirm-close-surface
+G3b [core]: distinctive ref comments=1249 missing=0 review=0
+G3b [crash]: distinctive ref comments=167 missing=0 review=2
+    REVIEW (ratio 0.75): linux). on darwin the thread names itself in initthread.
+    REVIEW (ratio 0.76): naming the thread from here only works on some platforms (e.g.
+G3b [datastruct]: distinctive ref comments=478 missing=0 review=0
+G3b [extra]: distinctive ref comments=20 missing=0 review=2
+    REVIEW (ratio 0.67): generates the syntax file at comptime.
+    REVIEW (ratio 0.72): this results leading or tailing spaces being necessary to move onto the next match.
+G3b [font]: SKIPPED — PORT STATUS is not done (50 oracle file(s) unexamined)
+G3b [global]: distinctive ref comments=106 missing=0 review=2
+    REVIEW (ratio 0.64): asserts that `self.io_impl` has been initialized.
+    REVIEW (ratio 0.78): returns the global state action.
+G3b [input]: SKIPPED — PORT STATUS is not done (13 oracle file(s) unexamined)
+G3b [inspector]: distinctive ref comments=202 missing=0 review=0
+G3b [lib]: distinctive ref comments=82 missing=0 review=0
+G3b [os]: distinctive ref comments=666 missing=0 review=2
+    REVIEW (ratio 0.75): first check the env var. on windows we treat `localappdata` as a
+    REVIEW (ratio 0.66): not great, but xev timer can't fail atm
+G3b [render-types]: distinctive ref comments=149 missing=0 review=0
+G3b [renderer]: SKIPPED — PORT STATUS is not done (35 oracle file(s) unexamined)
+G3b [simd]: distinctive ref comments=177 missing=0 review=0
+G3b [synthetic]: distinctive ref comments=101 missing=0 review=0
+G3b [terminfo]: distinctive ref comments=99 missing=0 review=0
+G3b [termio]: distinctive ref comments=1219 missing=1 review=5
+    REVIEW (ratio 0.75): child. empirically chosen through measurements on an m4 max.
+    REVIEW (ratio 0.65): or if due to race conditions it doesn't exist or any various other
+    REVIEW (ratio 0.72): password is allocated and must be freed.
+    REVIEW (ratio 0.7): reasons. we don't want to crash the entire process if this fails so we
+    REVIEW (ratio 0.68): sets the fd to non-blocking mode. returns false on failure.
+    MISSING ref comment: the arena must be copied in last so it tracks every
+G3b [unicode]: distinctive ref comments=124 missing=0 review=0
+G3b [util]: distinctive ref comments=146 missing=0 review=0
+G3b [vt]: distinctive ref comments=13792 missing=174 review=107
+    REVIEW (ratio 0.74): (markmutated sets both); dirty set without a generation change
+    REVIEW (ratio 0.79): `page_serial`. consequently, every previously captured pointer-plus-serial
+    REVIEW (ratio 0.71): `page` metadata. a resident page can access the mapping directly since
+    REVIEW (ratio 0.79): a caller may pass our current tracked selection back to us by value, so
+    REVIEW (ratio 0.63): a cursor style or hyperlink id is an index into a set stored in the
+    REVIEW (ratio 0.62): a group of raw values for the vectorized operations.
+    REVIEW (ratio 0.66): a limit smaller than the remaining rows in the page exercises
+    REVIEW (ratio 0.62): appendgrapheme can grow the cursor
+    REVIEW (ratio 0.68): asserts that the row has no managed memory: releasing that is
+    REVIEW (ratio 0.68): backing int of the packed struct
+    MISSING ref comment: '#' is wide and carries the vs16 grapheme.
+    MISSING ref comment: (here via ed 22, kitty's scroll_complete) pushes the active area onto
+    MISSING ref comment: a full reset (not just clearing cells) so no metadata from the
+    MISSING ref comment: a full reset (ris) removes any active progress bar.
+    MISSING ref comment: a later page while the cursor pin is still on an earlier one,
+    MISSING ref comment: a narrow emoji, then zwj, then a second emoji. the zwj attaches
+    MISSING ref comment: a partially successful grow can replace the page even when the
+    MISSING ref comment: a pointer comparison alone isn't enough: pages are
+    MISSING ref comment: a print, so rep has something to repeat
+    MISSING ref comment: a soft-wrapped line across rows 0 and 1: row 0 gets wrap=true.
+    MISSING ref comment: a soft-wrapped line across rows 0-1 and a prompt mark on row 0.
+    MISSING ref comment: a soft-wrapped line across rows 0-2 so that row 1 has both wrap
+    MISSING ref comment: a trailing blank row has no text, so shrinking rows trims it,
+    MISSING ref comment: after the first frame command the base data is ff0000ff.
+    MISSING ref comment: all row metadata reset, as if the row was never used. this
+    MISSING ref comment: all ten active rows are non-empty, so this moves the active area
+    MISSING ref comment: always reloaded, so read the cell through the cursor.
+    MISSING ref comment: and must not read as a prompt (e.g. for prompt navigation).
+    MISSING ref comment: animation tests frequently start from a 1x1 rgb red image with
+    MISSING ref comment: appears at the region bottom reuses the deleted row's storage
+    MISSING ref comment: are separate hard lines. a stale wrap flag on the recycled row
+    MISSING ref comment: area, re-exposing the same row storage via the grow() fast path.
+    MISSING ref comment: as well so this test is meaningful with runtime safety off: every
+    MISSING ref comment: b print, which attaches the cursor hyperlink
+    MISSING ref comment: because the page memory was never used (pool buffers are
+G3b [vt-c]: distinctive ref comments=667 missing=0 review=1
+    REVIEW (ratio 0.62): the caller owns the returned slice and must free it with `alloc`.
+
+G3b SCOPE: 7 crate(s) SKIPPED (PORT STATUS not done) = 169 oracle file(s) unexamined: apprt, apprt-api, bin, cfg-fmt, font, input, renderer
+  The verdict below covers the EXAMINED crates only. Use --strict or --crate <name> to include a skipped crate.
+RED: dropped reference comment(s) — see MISSING above (R1 violation)

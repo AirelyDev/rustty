@@ -2944,7 +2944,12 @@ impl ClipboardReadState {
                 .unwrap_or(b""),
         };
 
-        // self.respond(data) catch |err| { ...; return; };
+        // self.respond(data) catch |err| {
+        //     // Leave replied unset so clipboardRead falls back to the
+        //     // empty reply.
+        //     log.warn("error replying to clipboard read err={}", .{err});
+        //     return;
+        // };
         // self.replied = true;
         // (the ported respond cannot fail; see `respond`.)
         state.respond(data);

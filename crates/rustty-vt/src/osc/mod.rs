@@ -227,8 +227,8 @@ impl Command {
     // conemu_guimacro, conemu_run_process, conemu_output_environment_variable,
     // conemu_xterm_emulation, conemu_comment, kitty_text_sizing,
     // kitty_clipboard_protocol, kitty_dnd_protocol, context_signal,
-    // kitty_desktop_notification). NOTE: Order matters, see LibEnum
-    // documentation.
+    // kitty_desktop_notification).
+    // NOTE: Order matters, see LibEnum documentation.
 
     // comptime {
     //     assert(@sizeOf(Command) == switch (@sizeOf(usize)) {

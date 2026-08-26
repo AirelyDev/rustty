@@ -7679,6 +7679,17 @@ mod tests {
                 let page: *const Page = crate::pagelist::Node::page(s.pages.pages.first);
                 core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len()).to_vec()
             };
+            // if (std.valgrind.runningOnValgrind() > 0) {
+            //     // This assertion deliberately compares the complete raw page,
+            //     // including semantically irrelevant struct padding.
+            //     std.valgrind.memcheck.makeMemDefined(before_page);
+            //     std.valgrind.memcheck.makeMemDefined(
+            //         s.pages.pages.first.?.page().memory,
+            //     );
+            // }
+            // (the Valgrind makeMemDefined calls have no Rust analogue — we
+            // never run under Valgrind; the assertion below is that same
+            // complete-raw-page compare, padding included.)
             assert!(
                 before_page == after_page,
                 "page memory changed after a failed resize"

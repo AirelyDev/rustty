@@ -52,6 +52,12 @@ residuals). A3 re-pinned GREEN. G-BENCH/G-THEMES/G7/D11 GREEN. G3b finale sweep 
 `w0/g3b-finale-at-12967b68f.txt`. The absorbed range's execution record is
 `docs/superpowers/plans/2026-08-17-phase4-upstream-resync.md` + the `phase-4 *` commit series.
 
+**PHASE-5 FINALE (2026-08-25): re-greened.** G1b GREEN (295 dropped tests closed by their
+waves). A5 all arms GREEN (195 exports, 613 discriminants). A3/A4/D11/D11r GREEN;
+menu-shortcut parity 51 actions byte-identical. Both platforms: macOS workspace 5,343 tests
++ xcodebuild RusttyTests 356/0; Linux (`rvm`) full lane 0 FAILED. G3b finale sweep recorded
+beside the advance evidence in `.port/phase-5/w0/`.
+
 The previous pin, `4749c4e93`, was a **stale baseline**: work from beyond it had been ported by
 WS5–WS8 and tracked in an ad-hoc "beyond-pin series" table (BL-1…BL-7) that existed only because the
 pin had not moved. That table is **gone**. Its contents were either absorbed by the advance (the

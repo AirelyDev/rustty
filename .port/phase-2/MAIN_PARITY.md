@@ -20,6 +20,14 @@ Updating/fetching the reference checkout ports nothing. Every verdict below is a
 > PARTIAL rows ported (no deferrals). This ledger remains a Phase-2 provenance artifact and speaks
 > for nothing beyond `53bd14fec`.
 
+> **PHASE-5 CLOSURE (2026-08-25).** The range `12967b68f..683d8db64` (245 commits, 169
+> non-merge, 155 files, +25,534/−3,360) was absorbed wholesale by **Phase 5** — record:
+> `docs/superpowers/plans/2026-08-25-phase5-upstream-resync.md` + `.port/phase-5/`
+> (assessments, w0 gate evidence, wf-*.js). 212 ABSENT / 4 PARTIAL / 18 N-A area-rows, all
+> ABSENT and PARTIAL ported (no deferrals): the OSC 5522 kitty clipboard protocol, OSC 72
+> DnD, graphics animation + spec-conformance, OSC 99 notifications, paste core, C-API and
+> embed-ABI advances, macOS/renderer/GTK halves.
+
 > **SCOPE WARNING (`P3-W10 T2`, 2026-07-31).** This ledger was triaged at `53bd14fec` (2026-07-10) and
 > scoped to `src/` + `include/` only. It therefore **cannot speak** for the `53bd14fec..6ad1fe7d8`
 > range, nor for `pkg/`, `po/`, or `macos/` in any range. It is a Phase-2 artifact kept for provenance;

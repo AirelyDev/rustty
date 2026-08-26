@@ -1525,7 +1525,13 @@ impl<M: AppMailbox> StreamHandler<M> {
         let granted = self.kittyClipboardReadGranted(pw, mimes.len());
 
         // const req = try alloc.create(apprt.ClipboardRequest.KittyRead);
-        // ...dupes... req.* = .{ .arena = arena, ... };
+        // ...dupes... req.* = .{
+        //     // The arena must be copied in last so it tracks every
+        //     // allocation above.
+        //     .arena = arena,
+        //     ... };
+        // (no arena in the port: the Box and its owned Vecs carry every
+        // allocation, so there is no copy-order hazard.)
         let req = Box::new(rustty_apprt_api::KittyRead {
             location: match meta.loc {
                 rustty_vt::clipboard::Location::Primary => rustty_apprt_api::Clipboard::Primary,
@@ -1785,7 +1791,12 @@ impl<M: AppMailbox> StreamHandler<M> {
 
         // Everything about the request, including the request struct itself,
         // lives in a single arena that crosses to the surface thread ...
-        // (PORT NOTE: owned Box — see apprt::KittyRead.)
+        // req.* = .{
+        //     // The arena must be copied in last so it tracks every
+        //     // allocation above.
+        //     .arena = arena,
+        //     ... };
+        // (PORT NOTE: owned Box — see apprt::KittyRead; no copy-order hazard.)
         let req = Box::new(rustty_apprt_api::KittyWrite {
             location,
             contents,

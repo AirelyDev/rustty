@@ -3288,6 +3288,10 @@ mod tests {
         t.deinit(alloc);
     }
 
+    // Animation tests frequently start from a 1x1 RGB red image with
+    // id=1 ("/wAA" is FF0000). Composition converts images to RGBA, so
+    // after the first frame command the base data is FF0000FF.
+
     // test "kittygfx animation: new frame with default gap responds with frame number"
     #[test]
     fn kittygfx_animation_new_frame_with_default_gap_responds_with_frame_number() {
