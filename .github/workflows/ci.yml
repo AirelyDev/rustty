@@ -107,6 +107,21 @@ jobs:
           rustup target add x86_64-pc-windows-msvc || true
           rustup target add x86_64-unknown-freebsd || true
 
+      # G-BLUEPRINT and G-VALGRIND are Linux-only lanes: blueprint-compiler is
+      # a GTK tool with no macOS package, and valgrind has no working
+      # arm64-Darwin port. Both gates report BLOCKED (never green) on macOS.
+      # G-I18N needs the gettext tools on both legs.
+      - name: Install gate tooling (G-BLUEPRINT / G-VALGRIND / G-I18N)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y blueprint-compiler valgrind libc6-dbg gettext
+          else
+            brew install gettext
+          fi
+
       - name: Set up Python 3 (gate scripts + harness)
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
