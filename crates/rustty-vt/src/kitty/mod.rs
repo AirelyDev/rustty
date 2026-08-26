@@ -13,8 +13,30 @@
 // PORT NOTE: the reference imports `key` privately (`const key = ...`); we keep
 // the module `pub` so its types are reachable, matching the existing skeleton.
 pub mod key;
+// pub const clipboard = @import("kitty/clipboard.zig");
+// PORT NOTE (B5): `clipboard.zig` privately imports its four sibling files
+// (`clipboard_command.zig`, `clipboard_grants.zig`, `clipboard_response.zig`,
+// `clipboard_write.zig`); like the `graphics` aggregate below, those
+// submodules are declared here so they are reachable, with `clipboard`
+// re-exporting the reference's public surface.
+pub mod clipboard;
+pub mod clipboard_command;
+pub mod clipboard_grants;
+pub mod clipboard_response;
+pub mod clipboard_write;
 // pub const color = @import("kitty/color.zig");
 pub mod color;
+// pub const dnd = @import("kitty/dnd.zig");
+// PORT NOTE: `dnd.zig` privately imports its submodules; Rust's module tree
+// requires them declared here (matching the flat `graphics_*` layout below).
+// `dnd_test.zig` is included via dnd.zig's `test` block upstream; here it is
+// the test-only sibling module `dnd_test`.
+pub mod dnd;
+pub mod dnd_command;
+pub mod dnd_drop;
+pub mod dnd_response;
+#[cfg(test)]
+mod dnd_test;
 // pub const graphics = if (build_options.kitty_graphics) @import("kitty/graphics.zig") else struct {};
 // PORT NOTE: Zig conditionally aliases `graphics` to the module or an empty
 // `struct {}` based on the comptime `build_options.kitty_graphics` flag. Rust
@@ -60,7 +82,10 @@ mod tests {
         let _ = core::any::type_name::<super::KeyFlags>();
         let _ = core::any::type_name::<super::KeyFlagStack>();
         let _ = core::any::type_name::<super::KeySetMode>();
+        let _ = core::any::type_name::<super::clipboard::WriteState>();
         let _ = core::any::type_name::<super::color::Kind>();
+        let _ = core::any::type_name::<super::dnd::State>();
+        let _ = core::any::type_name::<super::dnd::Event>();
         // `graphics` aggregator is reachable (gated at call sites by
         // `crate::options::KITTY_GRAPHICS`, matching `build_options.kitty_graphics`).
         let _ = core::mem::size_of::<super::graphics::Command>();

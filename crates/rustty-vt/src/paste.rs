@@ -18,8 +18,9 @@
 //!
 //! PORTS: ghostty src/terminal/paste.zig (a5bb22e23 end state per da27e6c90)
 //!
-//! PORT STATUS: done, minus the kitty paste-event leaf — the W3
-//! kitty-clipboard seam (see `KittyClipboard` / `paste_kitty_event`).
+//! PORT STATUS: done (the W3 kitty-clipboard seams are filled:
+//! `KittyClipboard`, the mode-5522 conjunct, and `paste_kitty_event` ride
+//! `kitty/clipboard*.rs`).
 
 // PORT NOTE: the reference imports are
 //   const std = @import("std");
@@ -28,14 +29,15 @@
 //   const kitty_clipboard = @import("kitty/clipboard.zig");
 //   const input_paste = @import("../input/paste.zig");
 //   const Terminal = @import("Terminal.zig");
-// `kitty/clipboard.zig` (OSC 5522 session state: `Grants`, `generateOtp`,
-// `PasteEvent`, `max_listing_mimes`) is the W3 kitty-clipboard bundle and has
-// no Rust counterpart yet; its uses below are the W3 seam. `*std.Io.Writer`
-// maps to the crate's byte-oriented stand-in, `snapshot::io::Writer`, and
-// `std.Io.Writer.Allocating` to `snapshot::io::AllocatingWriter`.
+// `*std.Io.Writer` maps to the crate's byte-oriented stand-in,
+// `snapshot::io::Writer`, and `std.Io.Writer.Allocating` to
+// `snapshot::io::AllocatingWriter`; `std.Io` (the entropy capability) maps to
+// the sys.rs `Io` stand-in (see its NON_PORTS TinyIo re-read note).
 use crate::clipboard;
 use crate::input::paste as input_paste;
+use crate::kitty::clipboard as kitty_clipboard;
 use crate::snapshot::io::{AllocatingWriter, Writer};
+use crate::sys;
 use crate::terminal::Terminal;
 
 /// Why a paste happened. Only clipboard pastes may become paste
@@ -164,31 +166,27 @@ pub struct Context<'a> {
     /// program's follow-up read can be answered, since otherwise the
     /// read would be refused and the user's paste would vanish. With
     /// null, `paste` always writes text.
-    pub kitty_clipboard: Option<KittyClipboard>,
+    pub kitty_clipboard: Option<KittyClipboard<'a>>,
 }
 
 /// Kitty clipboard protocol session state for a paste event.
-///
-// PORT NOTE (W3 seam): the reference nests this as `Context.KittyClipboard`
-// with the fields
-//     pub const KittyClipboard = struct {
-//         /// Session grants. A paste event records its one-time password
-//         /// here so the program's follow-up read is served without a
-//         /// prompt.
-//         grants: *kitty_clipboard.Grants,
-//
-//         /// Secure entropy for one-time passwords. See generateOtp for
-//         /// why there is no fallback when this has none.
-//         io: std.Io,
-//     };
-// Both field types belong to the W3 kitty-clipboard bundle
-// (`kitty/clipboard*.rs`: `Grants`, `generateOtp`) and the sys
-// `randomSecure` entropy seam. Until W3 lands them this type is
-// uninhabited: `Context.kitty_clipboard` can only be `None`, so `paste`
-// always writes text — exactly the reference's documented null behavior —
-// and the event path below is provably unreachable.
-#[derive(Clone, Copy)]
-pub enum KittyClipboard {}
+// PORT NOTE: the reference nests this as `Context.KittyClipboard`; Rust
+// structs cannot nest type declarations, so it is flattened to module scope.
+// The reference `grants: *kitty_clipboard.Grants` is a mutable borrow here
+// (the grant/revoke calls mutate it), and `io: std.Io` is the sys.rs `Io`
+// entropy stand-in.
+pub struct KittyClipboard<'a> {
+    /// Session grants. A paste event records its one-time password
+    /// here so the program's follow-up read is served without a
+    /// prompt.
+    // grants: *kitty_clipboard.Grants,
+    pub grants: &'a mut kitty_clipboard::Grants,
+
+    /// Secure entropy for one-time passwords. See generateOtp for
+    /// why there is no fallback when this has none.
+    // io: std.Io,
+    pub io: sys::Io,
+}
 
 // pub const Error = Allocator.Error ||
 //     std.Io.RandomSecureError ||
@@ -201,11 +199,13 @@ pub enum Error {
     OutOfMemory,
 
     /// `std.Io.RandomSecureError` — `error.EntropyUnavailable`. Produced by
-    /// the paste-event one-time-password mint (`generateOtp`, W3 seam).
+    /// the paste-event one-time-password mint (`generateOtp`).
     EntropyUnavailable,
 
     /// `std.Io.RandomSecureError` — the `std.Io.Cancelable` member,
-    /// `error.Canceled` (W3 seam, same producer).
+    /// `error.Canceled`. Carried for reference-error-set parity; the sys.rs
+    /// entropy stand-in (`RandomSecureError`) has no cancellation member, so
+    /// this variant is never produced today.
     Canceled,
 
     /// `clipboard.MimeReader.Error` — `error.ReadFailed`.
@@ -239,17 +239,16 @@ pub fn paste(mut ctx: Context<'_>, req: Request<'_>) -> Result<bool, Error> {
     // If the source is a clipboard and mode 5522 is enabled and
     // the caller can handle kitty events, then do a kitty event.
     //
-    // PORT NOTE (W3 seam): the reference condition is
-    //     if (req.source == .clipboard and
-    //         ctx.terminal.modes.get(.kitty_paste_events))
-    // Mode 5522 (`kitty_paste_events`, with its `.disabled` build predicate)
-    // lands with the W3 kitty-clipboard bundle's stream/modes half. Until
-    // then `KittyClipboard` is uninhabited, so the `if let` below can never
-    // match and the missing mode gate is unobservable; W3 restores the
-    // `modes.get` conjunct when it adds the mode.
-    if matches!(req.source, Source::Clipboard(_)) {
+    // if (req.source == .clipboard and
+    //     ctx.terminal.modes.get(.kitty_paste_events))
+    if matches!(req.source, Source::Clipboard(_))
+        && ctx.terminal.modes.get(crate::modes::Mode::KittyPasteEvents)
+    {
         // if (ctx.kitty_clipboard) |kitty| { ... }
-        if let Some(kitty) = ctx.kitty_clipboard {
+        // PORT NOTE: `take()` because the Rust `KittyClipboard` carries a
+        // `&mut Grants` (the reference's `*Grants`), which cannot be copied
+        // out of the borrowed `ctx`.
+        if let Some(kitty) = ctx.kitty_clipboard.take() {
             paste_kitty_event(&mut ctx, kitty, &req)?;
             return Ok(true);
         }
@@ -304,48 +303,64 @@ pub fn paste(mut ctx: Context<'_>, req: Request<'_>) -> Result<bool, Error> {
     Ok(true)
 }
 
-// PORT NOTE (W3 seam): the reference body is transcribed below; every symbol
-// it needs (`generateOtp`, `max_listing_mimes`, `Grants.grant`/`use`,
-// `PasteEvent.encode`) is the W3 kitty-clipboard bundle. `KittyClipboard` is
-// uninhabited until then, so this leaf is statically unreachable (`match` on
-// the never-like value), not a runtime panic.
-//
 // fn pasteKittyEvent(
 //     ctx: Context,
 //     kitty: Context.KittyClipboard,
 //     req: Request,
 // ) Error!void {
-//     const otp = try kitty_clipboard.generateOtp(kitty.io);
-//
-//     // Every representation is listed, never read. The listing is
-//     // bounded; a clipboard with more types than that is not a thing.
-//     var mimes_buf: [kitty_clipboard.max_listing_mimes][]const u8 = undefined;
-//     const mimes_len = @min(req.contents.len(), mimes_buf.len);
-//     for (mimes_buf[0..mimes_len], 0..) |*mime, i| mime.* = req.contents.mime(i);
-//
-//     // The grant is recorded before the event can reach the program,
-//     // and revoked if the event fails to be written so a failure never
-//     // leaves a grant for an event that was never sent. Using a
-//     // one-time grant consumes it, which is the revocation.
-//     try kitty.grants.grant(ctx.alloc, &otp, .read, true);
-//     errdefer _ = kitty.grants.use(ctx.alloc, &otp, .read);
-//
-//     try (kitty_clipboard.PasteEvent{
-//         // The protocol only distinguishes the clipboard from the
-//         // primary selection, so both non-standard locations report as
-//         // primary. Only a clipboard paste gets here; see `paste`.
-//         .primary = req.source.clipboard != .standard,
-//         .pw = &otp,
-//         .available = mimes_buf[0..mimes_len],
-//     }).encode(ctx.writer);
-// }
 fn paste_kitty_event(
     ctx: &mut Context<'_>,
-    kitty: KittyClipboard,
+    kitty: KittyClipboard<'_>,
     req: &Request<'_>,
 ) -> Result<(), Error> {
-    let _ = (ctx, req);
-    match kitty {}
+    // const otp = try kitty_clipboard.generateOtp(kitty.io);
+    let otp = kitty_clipboard::generate_otp(kitty.io).map_err(|err| match err {
+        sys::RandomSecureError::EntropyUnavailable => Error::EntropyUnavailable,
+    })?;
+
+    // Every representation is listed, never read. The listing is
+    // bounded; a clipboard with more types than that is not a thing.
+    // var mimes_buf: [kitty_clipboard.max_listing_mimes][]const u8 = undefined;
+    let mut mimes_buf: [&[u8]; kitty_clipboard::max_listing_mimes] =
+        [b""; kitty_clipboard::max_listing_mimes];
+    // const mimes_len = @min(req.contents.len(), mimes_buf.len);
+    let mimes_len = req.contents.len().min(mimes_buf.len());
+    // for (mimes_buf[0..mimes_len], 0..) |*mime, i| mime.* = req.contents.mime(i);
+    for (i, mime) in mimes_buf[0..mimes_len].iter_mut().enumerate() {
+        *mime = req.contents.mime(i);
+    }
+
+    // The grant is recorded before the event can reach the program,
+    // and revoked if the event fails to be written so a failure never
+    // leaves a grant for an event that was never sent. Using a
+    // one-time grant consumes it, which is the revocation.
+    // try kitty.grants.grant(ctx.alloc, &otp, .read, true);
+    kitty
+        .grants
+        .grant(&otp, kitty_clipboard::Direction::Read, true);
+
+    let event = kitty_clipboard::PasteEvent {
+        // The protocol only distinguishes the clipboard from the
+        // primary selection, so both non-standard locations report as
+        // primary. Only a clipboard paste gets here; see `paste`.
+        // .primary = req.source.clipboard != .standard,
+        primary: match req.source {
+            Source::Clipboard(loc) => loc != clipboard::Location::Standard,
+            // (Zig `req.source.clipboard` would safety-panic here too.)
+            Source::Text => unreachable!("only a clipboard paste gets here; see paste"),
+        },
+        ..kitty_clipboard::PasteEvent::new(&otp, &mimes_buf[0..mimes_len])
+    };
+    // try (...).encode(ctx.writer);
+    // (errdefer: revoke the grant when the event was never sent.)
+    if event.encode(ctx.writer).is_err() {
+        // errdefer _ = kitty.grants.use(ctx.alloc, &otp, .read);
+        let _ = kitty
+            .grants
+            .use_(&otp, kitty_clipboard::Direction::Read);
+        return Err(Error::WriteFailed);
+    }
+    Ok(())
 }
 
 // test {
@@ -355,5 +370,6 @@ fn paste_kitty_event(
 // }
 // PORT NOTE: the reference's only test is a `refAllDecls` compile-coverage
 // touch — covered in Rust by compilation itself. The end-to-end behavior
-// tests live in `stream_terminal.zig`'s paste handler and land with its W3.2
-// stream half.
+// tests live in `stream_terminal.zig`'s paste handler and land with the
+// Dispatch stage (which owns stream_terminal.rs); this module's handler and
+// effect types stay `pub` for it.

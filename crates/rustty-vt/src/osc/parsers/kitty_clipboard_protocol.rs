@@ -94,6 +94,10 @@ pub enum Status {
     Data,
     Done,
     Ebusy,
+    // PORT NOTE (`5350d4a5f` survivor): EFBIG is the oversized-write status the
+    // configurable clipboard-write limit replies with (reject semantics per
+    // `70f006575`; the truncation engine was reverted in-range and never ported).
+    Efbig,
     Einval,
     Eio,
     Enosys,
@@ -110,6 +114,7 @@ impl Status {
             b"DATA" => Some(Status::Data),
             b"DONE" => Some(Status::Done),
             b"EBUSY" => Some(Status::Ebusy),
+            b"EFBIG" => Some(Status::Efbig),
             b"EINVAL" => Some(Status::Einval),
             b"EIO" => Some(Status::Eio),
             b"ENOSYS" => Some(Status::Enosys),

@@ -206,7 +206,8 @@
 //! bit 39  report_color_scheme
 //! bit 40  report_visibility
 //! bit 41  in_band_size_reports
-//! bits 42-63  reserved, zero
+//! bit 42  kitty_paste_events
+//! bits 43-63  reserved, zero
 //! ```
 //!
 //! This is the packed field order of native `ModePacked`. Its layout is
@@ -549,7 +550,7 @@ impl Header {
         writer.write_byte(self.mouse_shape as u8)?;
         writer.write_byte(self.password_input as u8)?;
 
-        // Runtime, saved, and reset mode sets. ModePacked occupies 42 bits;
+        // Runtime, saved, and reset mode sets. ModePacked occupies 43 bits;
         // its eight-byte wire slots zero-extend the native packed value.
         let mode_values = [self.current_modes, self.saved_modes, self.default_modes];
         for value in mode_values {
@@ -1591,8 +1592,8 @@ mod tests {
     // test "TERMINAL mode bit layout"
     #[test]
     fn terminal_mode_bit_layout() {
-        // try std.testing.expectEqual(@as(usize, 42), @bitSizeOf(ModePacked));
-        assert_eq!(42usize, terminal_modes::ModePacked::BITS);
+        // try std.testing.expectEqual(@as(usize, 43), @bitSizeOf(ModePacked));
+        assert_eq!(43usize, terminal_modes::ModePacked::BITS);
 
         let mut first = terminal_modes::ModePacked(0);
         first.set_mode(terminal_modes::Mode::DisableKeyboard, true);
@@ -1602,9 +1603,13 @@ mod tests {
         visibility.set_mode(terminal_modes::Mode::ReportVisibility, true);
         assert_eq!(1u64 << 40, visibility.0);
 
+        let mut size_reports = terminal_modes::ModePacked(0);
+        size_reports.set_mode(terminal_modes::Mode::InBandSizeReports, true);
+        assert_eq!(1u64 << 41, size_reports.0);
+
         let mut last = terminal_modes::ModePacked(0);
-        last.set_mode(terminal_modes::Mode::InBandSizeReports, true);
-        assert_eq!(1u64 << 41, last.0);
+        last.set_mode(terminal_modes::Mode::KittyPasteEvents, true);
+        assert_eq!(1u64 << 42, last.0);
     }
 
     // test "TERMINAL header golden encoding and decoding"

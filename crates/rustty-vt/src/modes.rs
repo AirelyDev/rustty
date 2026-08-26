@@ -319,6 +319,7 @@ pub enum Mode {
     ReportColorScheme = 2031,
     ReportVisibility = 2033,
     InBandSizeReports = 2048,
+    KittyPasteEvents = 5522,
 }
 
 impl Mode {
@@ -532,6 +533,13 @@ const fn e_not_default_configurable(mut entry: ModeEntry) -> ModeEntry {
     entry
 }
 
+// PORT NOTE: mirrors the reference's per-entry `.disabled = <predicate>`
+// override (the `kitty_paste_events` entry is the only user).
+const fn e_disabled_if(mut entry: ModeEntry, disabled: bool) -> ModeEntry {
+    entry.disabled = disabled;
+    entry
+}
+
 /// The full list of available entries. For documentation see how
 /// they're used within Ghostty or google their values. It is not
 /// valuable to redocument them all here.
@@ -597,7 +605,34 @@ const ENTRIES: &[ModeEntry] = &[
     e("report_color_scheme", 2031),
     e_not_default_configurable(e("report_visibility", 2033)),
     e("in_band_size_reports", 2048),
+    // Kitty clipboard protocol paste events. When set, a user-initiated
+    // paste sends an unsolicited OSC 5522 targets listing with a
+    // one-time password instead of pasting the text.
+    // See https://sw.kovidgoyal.net/kitty/clipboard/
+    // .{
+    //     .name = "kitty_paste_events",
+    //     .value = 5522,
+    //     // The macOS app and libghostty-vt can both serve the follow-up
+    //     // Kitty clipboard read that a paste event grants.
+    //     .disabled = build_options.artifact != .lib and builtin.os.tag != .macos,
+    // },
+    e_disabled_if(
+        e("kitty_paste_events", 5522),
+        KITTY_PASTE_EVENTS_DISABLED,
+    ),
 ];
+
+// The macOS app and libghostty-vt can both serve the follow-up
+// Kitty clipboard read that a paste event grants.
+// PORT NOTE (R8, cfg not folded): the reference predicate is
+// `build_options.artifact != .lib and builtin.os.tag != .macos`. `artifact`
+// maps to `options::ARTIFACT` (the crate's comptime artifact, `.lib` kept for
+// the lib-artifact seam — see sys.rs `decode_png`) and `builtin.os.tag` to
+// `cfg!(target_os)`; both halves are carried, never collapsed to a constant.
+const KITTY_PASTE_EVENTS_DISABLED: bool = !matches!(
+    crate::options::ARTIFACT,
+    crate::build_options::Artifact::Lib
+) && !cfg!(target_os = "macos");
 
 // PORT NOTE: the Mode variant for each `ENTRIES` index, in the same order. This
 // pairs the bit-indexed `ENTRIES` table with the generated `Mode` enum (the
@@ -646,6 +681,7 @@ const MODE_BY_INDEX: &[Mode] = &[
     Mode::ReportColorScheme,
     Mode::ReportVisibility,
     Mode::InBandSizeReports,
+    Mode::KittyPasteEvents,
 ];
 
 #[cfg(test)]
