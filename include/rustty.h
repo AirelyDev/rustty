@@ -102,6 +102,18 @@ typedef struct {
  */
 typedef void *Opaque;
 
+/**
+ * Borrowed string/bytes view (`{ptr, len}`) — the sibling-crate
+ * `rustty_lib::String`, referenced by the paste/MimeReader surface (Bundle P)
+ * under its crate-local alias `LibString`. With `parse_deps = false` cbindgen
+ * cannot see the definition (the `Opaque` precedent above), so it is pinned by
+ * hand with the exact `#[repr(C)]` layout. C: RusttyString (rustty-lib String)
+ */
+typedef struct {
+    const uint8_t *ptr;
+    uintptr_t len;
+} LibString;
+
 /** Opaque PageList node back-pointer (used only behind a pointer). */
 typedef struct Node Node;
 
@@ -364,6 +376,10 @@ typedef enum {
      * Output type: `bool` (oracle bdb566068).
      */
     TERMINAL_DATA_TERMINAL_DATA_CURSOR_AT_PROMPT = 39,
+    /**
+     * Output type: `usize` (oracle 5350d4a5f/70f006575).
+     */
+    TERMINAL_DATA_TERMINAL_DATA_CLIPBOARD_WRITE_MAX_BYTES = 40,
 } TerminalData;
 
 /**
@@ -456,6 +472,42 @@ typedef struct {
 typedef int ReportState;
 
 /**
+ * C: GhosttyTerminal -> RusttyTerminal (R2)
+ */
+typedef TerminalWrapper *Terminal;
+
+/**
+ * C: GhosttyWriter -> RusttyWriter (R2)
+ */
+typedef struct {
+    bool (*write)(void*, const uint8_t*, uintptr_t);
+    void *userdata;
+} Writer;
+
+/**
+ * C: GhosttyMimeReader -> RusttyMimeReader (R2)
+ */
+typedef struct {
+    bool (*read)(void*, LibString, Writer);
+    void *userdata;
+} MimeReader;
+
+/**
+ * A paste of clipboard contents into the terminal. Sized struct.
+ *
+ * C: GhosttyPaste -> RusttyPaste (R2)
+ */
+typedef struct {
+    uintptr_t size;
+    int location;
+    int source;
+    const LibString *mimes;
+    uintptr_t mimes_len;
+    MimeReader reader;
+    bool allow_unsafe;
+} Request;
+
+/**
  * C: RusttyMouseEncoderSize (R2)
  */
 typedef struct {
@@ -479,11 +531,6 @@ typedef KeyEventWrapper *Event;
  * C: RusttyKeyEncoder (R2)
  */
 typedef KeyEncoderWrapper *Encoder;
-
-/**
- * C: GhosttyTerminal -> RusttyTerminal (R2)
- */
-typedef TerminalWrapper *Terminal;
 
 /**
  * C: GhosttyCell -> RusttyCell (R2)
@@ -704,14 +751,6 @@ typedef struct {
      */
     const CSelection *selection;
 } TerminalOptions;
-
-/**
- * C: GhosttyWriter -> RusttyWriter (R2)
- */
-typedef struct {
-    bool (*write)(void*, const uint8_t*, uintptr_t);
-    void *userdata;
-} Writer;
 
 /**
  * C: GhosttySnapshotDecoder, an opaque nullable decoder handle.
@@ -1109,6 +1148,17 @@ int rustty_paste_encode(uint8_t *data,
                         uint8_t *out,
                         uintptr_t out_len,
                         uintptr_t *out_written);
+
+/**
+ * C: rustty_terminal_paste
+ *
+ * # Safety
+ * `terminal`, if non-null, must be a `rustty_terminal_new` handle; `req`, if
+ * non-null, must point to a readable `RusttyPaste` whose `mimes`/`reader`
+ * describe valid memory; `out_written`, if non-null, must be a valid,
+ * writable pointer to `bool`.
+ */
+int rustty_terminal_paste(Terminal terminal, const Request *req, bool *out_written);
 
 /**
  * C: rustty_unicode_codepoint_width

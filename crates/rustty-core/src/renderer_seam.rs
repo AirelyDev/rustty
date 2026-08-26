@@ -2221,7 +2221,7 @@ mod compression_tests {
             &self,
             _clipboard_type: apprt::Clipboard,
             _state: apprt::ClipboardRequest,
-        ) -> Result<bool, apprt::ApprtError> {
+        ) -> Result<apprt::ClipboardReadResult, apprt::ApprtError> {
             unimplemented!("test runtime: not driven by the compression tests")
         }
 

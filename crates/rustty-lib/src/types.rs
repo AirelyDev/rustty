@@ -4,6 +4,9 @@
 /// PORT NOTE: Zig's `String.init` accepts `anytype` and switches on `[]u8`
 /// or `[]const u8`. In Rust we model both as a byte slice; the borrow is
 /// captured via a raw pointer + length, matching the extern layout.
+/// (e03475c0c added an `else => @compileError("invalid type")` arm to that
+/// switch; Rust's static `&[u8]` parameter type rejects every other type at
+/// compile time already, so the arm is satisfied by the type system.)
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct String {

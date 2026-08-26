@@ -79,18 +79,55 @@ typedef enum {
 typedef enum {
   RUSTTY_CLIPBOARD_STANDARD,
   RUSTTY_CLIPBOARD_SELECTION,
+  RUSTTY_CLIPBOARD_PRIMARY,
 } rustty_clipboard_e;
 
+// One representation of clipboard contents. The data is binary-safe with
+// an explicit length; it is not necessarily null-terminated.
 typedef struct {
   const char *mime;
   const char *data;
+  size_t len;
 } rustty_clipboard_content_s;
+
+// The payload for completing a clipboard read request. See
+// rustty_surface_complete_clipboard_request.
+typedef struct {
+  const rustty_clipboard_content_s *contents;
+  size_t contents_len;
+  const char *const *available;
+  size_t available_len;
+  bool confirmed;
+  bool remember;
+} rustty_clipboard_complete_s;
+
+// The payload of a clipboard read confirmation request: the would-be
+// completion contents plus the information shown in the permission
+// prompt. See rustty_runtime_confirm_read_clipboard_cb.
+typedef struct {
+  const rustty_clipboard_content_s *contents;
+  size_t contents_len;
+  const char *const *available;
+  size_t available_len;
+  const char *name;
+  bool can_remember;
+} rustty_clipboard_confirm_s;
 
 typedef enum {
   RUSTTY_CLIPBOARD_REQUEST_PASTE,
   RUSTTY_CLIPBOARD_REQUEST_OSC_52_READ,
   RUSTTY_CLIPBOARD_REQUEST_OSC_52_WRITE,
+  RUSTTY_CLIPBOARD_REQUEST_KITTY_READ,
+  RUSTTY_CLIPBOARD_REQUEST_KITTY_WRITE,
+  RUSTTY_CLIPBOARD_REQUEST_LIST,
 } rustty_clipboard_request_e;
+
+// apprt.ClipboardReadResult
+typedef enum {
+  RUSTTY_CLIPBOARD_READ_STARTED,
+  RUSTTY_CLIPBOARD_READ_UNAVAILABLE,
+  RUSTTY_CLIPBOARD_READ_UNSUPPORTED,
+} rustty_clipboard_read_result_e;
 
 typedef enum {
   RUSTTY_MOUSE_RELEASE,
@@ -1027,12 +1064,16 @@ typedef struct {
 } rustty_action_s;
 
 typedef void (*rustty_runtime_wakeup_cb)(void*);
-typedef bool (*rustty_runtime_read_clipboard_cb)(void*,
-                                                  rustty_clipboard_e,
-                                                  void*);
+typedef rustty_clipboard_read_result_e (*rustty_runtime_read_clipboard_cb)(
+    void*,
+    rustty_clipboard_e,
+    void*,
+    const char* const*,
+    size_t,
+    bool);
 typedef void (*rustty_runtime_confirm_read_clipboard_cb)(
     void*,
-    const char*,
+    const rustty_clipboard_confirm_s*,
     void*,
     rustty_clipboard_request_e);
 typedef void (*rustty_runtime_write_clipboard_cb)(void*,
@@ -1182,10 +1223,12 @@ RUSTTY_API void rustty_surface_split_resize(rustty_surface_t,
                                                  uint16_t);
 RUSTTY_API void rustty_surface_split_equalize(rustty_surface_t);
 RUSTTY_API bool rustty_surface_binding_action(rustty_surface_t, const char*, uintptr_t);
-RUSTTY_API void rustty_surface_complete_clipboard_request(rustty_surface_t,
-                                                               const char*,
-                                                               void*,
-                                                               bool);
+RUSTTY_API void rustty_surface_complete_clipboard_request(
+    rustty_surface_t,
+    const rustty_clipboard_complete_s*,
+    void*);
+RUSTTY_API void rustty_surface_deny_clipboard_request(rustty_surface_t,
+                                                           void*);
 RUSTTY_API bool rustty_surface_has_selection(rustty_surface_t);
 RUSTTY_API bool rustty_surface_read_selection(rustty_surface_t, rustty_text_s*);
 RUSTTY_API bool rustty_surface_read_text(rustty_surface_t,

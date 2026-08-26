@@ -234,8 +234,12 @@ pub struct TerminalWrapper {
 
 /// C callback state for terminal effects. Most trampolines are always
 /// installed on the stream handler; they check these fields and no-op when
-/// the corresponding callback is null. The unknown-sequence trampoline is
-/// installed dynamically to preserve its null fast path.
+/// the corresponding callback is null. The unknown-sequence and
+/// clipboard trampolines are installed dynamically to preserve their
+/// null fast paths (for clipboard_write, a null Zig-level effect makes
+/// Kitty clipboard writes fail up front instead of spooling a
+/// transaction that can never commit; for clipboard_read it keeps
+/// reads denied).
 // PORT NOTE (internal, NOT C-ABI): mirrors the reference `Effects` struct field
 // for field. The fn-ptr typedefs and `CDeviceAttributes` ARE part of the C ABI
 // (named below). `da_features_buf` is the scratch buffer the device-attributes
@@ -252,6 +256,7 @@ pub struct Effects {
     pub pwd_changed: Option<PwdChangedFn>,
     pub size_cb: Option<SizeFn>,
     pub clipboard_write: Option<ClipboardWriteFn>,
+    pub clipboard_read: Option<ClipboardReadFn>,
     pub desktop_notification: Option<DesktopNotificationFn>,
     pub progress_report: Option<ProgressReportFn>,
     pub unknown_sequence: Option<UnknownSequenceFn>,
@@ -283,6 +288,7 @@ impl Default for Effects {
             pwd_changed: None,
             size_cb: None,
             clipboard_write: None,
+            clipboard_read: None,
             desktop_notification: None,
             progress_report: None,
             unknown_sequence: None,
@@ -327,9 +333,10 @@ pub type TitleChangedFn = extern "C" fn(Terminal, *mut c_void);
 // pub const PwdChangedFn = *const fn (Terminal, ?*anyopaque) callconv(lib.calling_conv) void;
 pub type PwdChangedFn = extern "C" fn(Terminal, *mut c_void);
 
-/// C function pointer type for the size callback.
-/// Returns true and fills out_size if size is available,
-/// or returns false to silently ignore the query.
+/// C function pointer type for the size callback. Used by XTWINOPS queries
+/// and VT-driven mode 2048 enable reports. Returns true and fills out_size
+/// if size is available, or false to suppress the XTWINOPS response or
+/// mode 2048 report.
 // pub const SizeFn = *const fn (Terminal, ?*anyopaque, *size_report.Size) callconv(lib.calling_conv) bool;
 pub type SizeFn = extern "C" fn(Terminal, *mut c_void, *mut size_report::Size) -> bool;
 
@@ -351,9 +358,12 @@ pub struct ClipboardContent {
 }
 
 /// A protocol-neutral request to replace or clear clipboard contents.
+/// The embedder answers by calling `reply` with the request before the
+/// callback returns.
 ///
 /// C: GhosttyClipboardWrite -> RusttyClipboardWrite (R2)
-// pub const ClipboardWrite = extern struct { size, location, contents, contents_len };
+// pub const ClipboardWrite = extern struct { size, location, contents,
+//     contents_len, name, granted, can_remember, ctx, reply };
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ClipboardWrite {
@@ -362,17 +372,100 @@ pub struct ClipboardWrite {
     /// Null when `contents_len` is 0 (an empty write clears the destination).
     pub contents: *const ClipboardContent,
     pub contents_len: usize,
+    pub name: LibString,
+    pub granted: bool,
+    pub can_remember: bool,
+    /// Terminal-owned reply state; opaque to the embedder.
+    // PORT NOTE (R9 callback-ctx): points at a STACK `ClipboardWriteCtx`
+    // inside the write trampoline's frame; valid only for the duration of
+    // the C callback (LIFETIMES.tsv: borrowed-during-call). Never retained,
+    // never written through.
+    pub ctx: *const c_void,
+    pub reply: ClipboardWriteReplyFn,
 }
 
+/// The reply to a clipboard write request.
+///
+/// C: GhosttyClipboardWriteReply -> RusttyClipboardWriteReply (R2)
+// pub const ClipboardWriteReply = extern struct { size, result, remember };
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ClipboardWriteReply {
+    pub size: usize,
+    pub result: clipboard::WriteStatus,
+    pub remember: bool,
+}
+
+/// C function pointer type for replying to a clipboard write.
+///
+/// C: GhosttyClipboardWriteReplyFn -> RusttyClipboardWriteReplyFn (R2)
+// pub const ClipboardWriteReplyFn = *const fn (*const ClipboardWrite, *const ClipboardWriteReply) callconv(lib.calling_conv) void;
+pub type ClipboardWriteReplyFn =
+    extern "C" fn(*const ClipboardWrite, *const ClipboardWriteReply);
+
+/// The reply to a clipboard read request.
+///
+/// C: GhosttyClipboardReadReply -> RusttyClipboardReadReply (R2)
+// pub const ClipboardReadReply = extern struct { size, result, contents,
+//     contents_len, available, available_len, remember };
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ClipboardReadReply {
+    pub size: usize,
+    pub result: clipboard::ReadStatus,
+    pub contents: *const ClipboardContent,
+    pub contents_len: usize,
+    pub available: *const LibString,
+    pub available_len: usize,
+    pub remember: bool,
+}
+
+/// A synchronous request to read clipboard contents. The embedder answers
+/// by calling `reply` with the request before the callback returns.
+///
+/// C: GhosttyClipboardRead -> RusttyClipboardRead (R2)
+// pub const ClipboardRead = extern struct { size, location, mimes, mimes_len,
+//     list, name, granted, can_remember, ctx, reply };
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ClipboardRead {
+    pub size: usize,
+    pub location: clipboard::Location,
+    pub mimes: *const LibString,
+    pub mimes_len: usize,
+    pub list: bool,
+    pub name: LibString,
+    pub granted: bool,
+    pub can_remember: bool,
+    /// Terminal-owned reply state; opaque to the embedder.
+    // PORT NOTE (R9 callback-ctx): points at a STACK `ClipboardReadCtx`
+    // inside the read trampoline's frame; valid only for the duration of
+    // the C callback (LIFETIMES.tsv: borrowed-during-call).
+    pub ctx: *const c_void,
+    pub reply: ClipboardReadReplyFn,
+}
+
+/// C function pointer type for replying to a clipboard read.
+///
+/// C: GhosttyClipboardReadReplyFn -> RusttyClipboardReadReplyFn (R2)
+// pub const ClipboardReadReplyFn = *const fn (*const ClipboardRead, *const ClipboardReadReply) callconv(lib.calling_conv) void;
+pub type ClipboardReadReplyFn = extern "C" fn(*const ClipboardRead, *const ClipboardReadReply);
+
 /// C function pointer type for the clipboard_write callback. The request
-/// and its contents are borrowed and only valid for the callback duration.
-// pub const ClipboardWriteFn = *const fn (Terminal, ?*anyopaque, *const ClipboardWrite) callconv(lib.calling_conv) clipboard.Write.Status;
-// PORT NOTE (W6 seam, 7ae9b1113): the vt-side `Write` became reply-based; the
-// C callback still returns the status (`GhosttyClipboardWriteResult` maps
-// `Write.Status`), which the trampoline forwards through `write.reply`. The
-// head's full C-API effects rework (read effect, grants, remember) is W6.
-pub type ClipboardWriteFn =
-    extern "C" fn(Terminal, *mut c_void, *const ClipboardWrite) -> clipboard::WriteStatus;
+/// is borrowed for the callback duration and must be answered through
+/// its reply function before the callback returns.
+// pub const ClipboardWriteFn = *const fn (Terminal, ?*anyopaque, *const ClipboardWrite) callconv(lib.calling_conv) void;
+//
+// PORT NOTE (6959fd46c/7ae9b1113 end state): the callback no longer RETURNS a
+// status — the write is answered through `request.reply` (an ABI BREAK of the
+// pre-range typedef; header + typedef + trampoline + example land as one unit).
+pub type ClipboardWriteFn = extern "C" fn(Terminal, *mut c_void, *const ClipboardWrite);
+
+/// C function pointer type for the clipboard_read callback. The request
+/// is borrowed for the callback duration and must be answered through
+/// its reply function before the callback returns.
+// pub const ClipboardReadFn = *const fn (Terminal, ?*anyopaque, *const ClipboardRead) callconv(lib.calling_conv) void;
+pub type ClipboardReadFn = extern "C" fn(Terminal, *mut c_void, *const ClipboardRead);
 
 /// A request to show a desktop notification (OSC 9 / OSC 777).
 ///
@@ -624,6 +717,39 @@ fn wrapper_from_handler(handler: *mut Handler<'static>) -> *mut TerminalWrapper 
     std::ptr::with_exposed_provenance_mut::<TerminalWrapper>(wrapper_addr)
 }
 
+// /// Opaque context behind ClipboardWrite.ctx for the reply trampoline.
+// const ClipboardWriteCtx = struct {
+//     write: clipboard.Write,
+// };
+//
+// PORT NOTE (R9 callback-ctx): the reference nests this in `Effects`; a Rust
+// `impl` cannot hold a struct declaration, so it sits at module scope.
+// Stack-lifetime: `ClipboardWrite.ctx` points at this inside the trampoline
+// frame and the C callback must call `reply` before returning (documented
+// contract). Only ever read back as `*const`.
+struct ClipboardWriteCtx<'a> {
+    write: clipboard::Write<'a>,
+}
+
+// /// Opaque context behind ClipboardRead.ctx for the reply trampoline.
+// const ClipboardReadCtx = struct {
+//     read: clipboard.Read,
+//     wrapper: *TerminalWrapper,
+// };
+//
+// PORT NOTE (R9 callback-ctx): stack-lifetime, like `ClipboardWriteCtx` above
+// (and module-scoped for the same reason). `wrapper` is carried so the reply
+// trampoline can allocate through `ctx.wrapper.terminal.gpa()` (rustty: the
+// infallible `Vec`, so the field is a parity carry); it is a raw pointer,
+// never re-borrowed as `&mut` (the wrapper's stream-handler call chain is
+// live on the same wrapper — the interleaved-alias shape of the
+// `shaper-hook-sb-clean-interleave` memory).
+struct ClipboardReadCtx<'a> {
+    read: clipboard::Read<'a>,
+    #[allow(dead_code)]
+    wrapper: *mut TerminalWrapper,
+}
+
 impl Effects {
     // fn writePtyTrampoline(handler: *Handler, data: [:0]const u8) void {
     //     const stream_ptr: *Stream = @fieldParentPtr("handler", handler);
@@ -824,22 +950,18 @@ impl Effects {
     }
 
     // fn clipboardWriteTrampoline(handler: *Handler, write: clipboard.Write) void {
-    //     const stream_ptr: *Stream = @fieldParentPtr("handler", handler);
-    //     const wrapper: *TerminalWrapper = @fieldParentPtr("stream", stream_ptr);
+    //     const wrapper = TerminalWrapper.fromHandler(handler);
     //     const func = wrapper.effects.clipboard_write orelse
     //         return write.reply(.unsupported);
     //     ...stack-first (<=4) content conversion, gpa fallback...
-    //     ... = func(@ptrCast(wrapper), wrapper.effects.userdata, &request);
+    //     const ctx: ClipboardWriteCtx = .{ .write = write };
+    //     const request: ClipboardWrite = .{ ..., .ctx = &ctx, .reply = &clipboardWriteReplyTrampoline };
+    //     func(@ptrCast(wrapper), wrapper.effects.userdata, &request);
     // }
-    // PORT NOTE (W6 seam, 7ae9b1113 end state): the vt `Write` is reply-based;
-    // the C callback's returned status is forwarded through `write.reply` so
-    // OSC 52 / OSC 1337 keep their exact pre-range C behavior. The head's
-    // richer C reply surface (remember/grants) lands with W6's C-API effects.
     pub(crate) fn clipboard_write_trampoline(
         handler: &mut Handler<'static>,
         write: clipboard::Write<'_>,
     ) {
-        use clipboard::WriteStatus;
         let wrapper = wrapper_from_handler(handler);
         let func = match unsafe { (*wrapper).effects.clipboard_write } {
             Some(f) => f,
@@ -849,9 +971,10 @@ impl Effects {
 
         // Most protocols currently produce one representation, so keep that
         // path allocation-free while supporting arbitrary multi-MIME writes.
-        // PORT NOTE: the reference's `gpa().alloc(...) catch return .io_error`
-        // OOM arm has no rustty analog — a `Vec` aborts on OOM (DG5 abort
-        // policy), so the past-4 path is an infallible `Vec`.
+        // PORT NOTE: the reference's `gpa().alloc(...) catch return
+        // write.reply(.io_error)` OOM arm has no rustty analog — a `Vec`
+        // aborts on OOM (DG5 abort policy), so the past-4 path is an
+        // infallible `Vec`.
         let to_c = |content: &clipboard::Content<'_>| ClipboardContent {
             mime: LibString {
                 ptr: content.mime.as_ptr(),
@@ -884,6 +1007,8 @@ impl Effects {
             &heap_contents
         };
 
+        // const ctx: ClipboardWriteCtx = .{ .write = write };
+        let ctx = ClipboardWriteCtx { write };
         let request = ClipboardWrite {
             size: std::mem::size_of::<ClipboardWrite>(),
             location: write.location,
@@ -893,21 +1018,185 @@ impl Effects {
                 contents.as_ptr()
             },
             contents_len: contents.len(),
+            name: LibString::init(write.name),
+            granted: write.granted,
+            can_remember: write.can_remember,
+            ctx: &ctx as *const ClipboardWriteCtx<'_> as *const c_void,
+            reply: Self::clipboard_write_reply_trampoline,
         };
-        let status = func(wrapper, userdata, &request);
-        // Map the C status back onto the reply result (an out-of-range
-        // C value is well-defined by the open status type; reply it as
-        // io_error rather than inventing a success).
-        write.reply(match status {
-            WriteStatus::Success => {
-                clipboard::WriteResult::Success(clipboard::WriteResultSuccess::default())
-            }
-            WriteStatus::Denied => clipboard::WriteResult::Denied,
-            WriteStatus::Unsupported => clipboard::WriteResult::Unsupported,
-            WriteStatus::Busy => clipboard::WriteResult::Busy,
-            WriteStatus::InvalidData => clipboard::WriteResult::InvalidData,
-            _ => clipboard::WriteResult::IoError,
-        });
+        func(wrapper, userdata, &request);
+    }
+
+    // fn clipboardWriteReplyTrampoline(
+    //     request: *const ClipboardWrite,
+    //     reply: *const ClipboardWriteReply,
+    // ) callconv(lib.calling_conv) void { ... }
+    //
+    // # Safety (extern "C", DG5 abort-on-unwind): `request` is the borrowed
+    // request whose `ctx` points at the live stack `ClipboardWriteCtx` (the C
+    // callback contract: reply before returning); `reply` is borrowed for this
+    // call only.
+    extern "C" fn clipboard_write_reply_trampoline(
+        request: *const ClipboardWrite,
+        reply: *const ClipboardWriteReply,
+    ) {
+        use clipboard::WriteStatus;
+        // const ctx: *const ClipboardWriteCtx = @ptrCast(@alignCast(request.ctx));
+        // SAFETY: `request.ctx` is the trampoline frame's `ClipboardWriteCtx`,
+        // still live because the callback has not returned (contract above).
+        // Read-only access through `*const` — never a `&mut`.
+        let ctx: *const ClipboardWriteCtx<'_> =
+            unsafe { (*request).ctx as *const ClipboardWriteCtx<'_> };
+        // const write = ctx.write;
+        let write = unsafe { (*ctx).write };
+        // switch (reply.result) { ... }
+        //
+        // (`.unsupported, _ =>` — an out-of-range C value is well-defined by
+        // the open status type and maps to unsupported, like the reference's
+        // catch-all arm.)
+        match unsafe { (*reply).result } {
+            WriteStatus::Success => write.reply(clipboard::WriteResult::Success(
+                clipboard::WriteResultSuccess {
+                    remember: unsafe { (*reply).remember },
+                },
+            )),
+            WriteStatus::Denied => write.reply(clipboard::WriteResult::Denied),
+            WriteStatus::Busy => write.reply(clipboard::WriteResult::Busy),
+            WriteStatus::InvalidData => write.reply(clipboard::WriteResult::InvalidData),
+            WriteStatus::IoError => write.reply(clipboard::WriteResult::IoError),
+            _ => write.reply(clipboard::WriteResult::Unsupported),
+        }
+    }
+
+    // fn clipboardReadTrampoline(handler: *Handler, read: clipboard.Read) void {
+    //     const wrapper = TerminalWrapper.fromHandler(handler);
+    //     const func = wrapper.effects.clipboard_read orelse return;
+    //     ...stackFallback(128) mime conversion...
+    //     const ctx: ClipboardReadCtx = .{ .read = read, .wrapper = wrapper };
+    //     const request: ClipboardRead = .{ ..., .ctx = &ctx, .reply = &clipboardReadReplyTrampoline };
+    //     func(@ptrCast(wrapper), wrapper.effects.userdata, &request);
+    // }
+    pub(crate) fn clipboard_read_trampoline(
+        handler: &mut Handler<'static>,
+        read: clipboard::Read<'_>,
+    ) {
+        let wrapper = wrapper_from_handler(handler);
+        let Some(func) = (unsafe { (*wrapper).effects.clipboard_read }) else {
+            return;
+        };
+        let userdata = unsafe { (*wrapper).effects.userdata };
+
+        // Requests carry a handful of MIME types, so keep the common case
+        // allocation-free. On OOM the request goes unanswered and the
+        // handler replies with an empty clipboard.
+        // PERF(port): `std.heap.stackFallback(128, gpa)` — the stack-first
+        // allocation is ported as a plain `Vec` (which also makes the
+        // reference's `log.warn` OOM arm unreachable: a `Vec` aborts on OOM,
+        // DG5).
+        let mimes: Vec<LibString> = read.mimes.iter().map(|m| LibString::init(m)).collect();
+
+        // const ctx: ClipboardReadCtx = .{ .read = read, .wrapper = wrapper };
+        let ctx = ClipboardReadCtx {
+            read,
+            wrapper,
+        };
+        let request = ClipboardRead {
+            size: std::mem::size_of::<ClipboardRead>(),
+            location: read.location,
+            mimes: if mimes.is_empty() {
+                std::ptr::null()
+            } else {
+                mimes.as_ptr()
+            },
+            mimes_len: mimes.len(),
+            list: read.list,
+            name: LibString::init(read.name),
+            granted: read.granted,
+            can_remember: read.can_remember,
+            ctx: &ctx as *const ClipboardReadCtx<'_> as *const c_void,
+            reply: Self::clipboard_read_reply_trampoline,
+        };
+        func(wrapper, userdata, &request);
+    }
+
+    // fn clipboardReadReplyTrampoline(
+    //     request: *const ClipboardRead,
+    //     reply: *const ClipboardReadReply,
+    // ) callconv(lib.calling_conv) void { ... }
+    //
+    // # Safety (extern "C", DG5): `request.ctx` is the live stack
+    // `ClipboardReadCtx`; `reply` and everything it points to are borrowed for
+    // this call only.
+    extern "C" fn clipboard_read_reply_trampoline(
+        request: *const ClipboardRead,
+        reply: *const ClipboardReadReply,
+    ) {
+        use clipboard::ReadStatus;
+        // const ctx: *const ClipboardReadCtx = @ptrCast(@alignCast(request.ctx));
+        // SAFETY: see `clipboard_write_reply_trampoline` — the ctx is the
+        // trampoline frame's stack value, live until the callback returns.
+        let ctx: *const ClipboardReadCtx<'_> =
+            unsafe { (*request).ctx as *const ClipboardReadCtx<'_> };
+        // const read = ctx.read;
+        let read = unsafe { (*ctx).read };
+        // switch (reply.result) {
+        //     .success => {},
+        //     .denied => return read.reply(.denied), ...
+        //     .unsupported, _ => return read.reply(.unsupported),
+        // }
+        match unsafe { (*reply).result } {
+            ReadStatus::Success => {}
+            ReadStatus::Denied => return read.reply(clipboard::ReadResult::Denied),
+            ReadStatus::Busy => return read.reply(clipboard::ReadResult::Busy),
+            ReadStatus::IoError => return read.reply(clipboard::ReadResult::IoError),
+            _ => return read.reply(clipboard::ReadResult::Unsupported),
+        }
+
+        // const c_contents: []const ClipboardContent = if (reply.contents) |ptr| ptr[0..reply.contents_len] else &.{};
+        // SAFETY: the reply arrays are borrowed C memory, valid for this call
+        // (caller contract).
+        let c_contents: &[ClipboardContent] = if unsafe { (*reply).contents }.is_null() {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts((*reply).contents, (*reply).contents_len) }
+        };
+        // const c_available: []const lib.String = if (reply.available) |ptr| ptr[0..reply.available_len] else &.{};
+        let c_available: &[LibString] = if unsafe { (*reply).available }.is_null() {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts((*reply).available, (*reply).available_len) }
+        };
+
+        // Most replies carry one representation, so keep that path
+        // allocation-free while supporting arbitrary multi-MIME replies.
+        // On OOM we don't reply and the handler answers with an empty
+        // clipboard.
+        // PERF(port): `std.heap.stackFallback(256, ctx.wrapper.terminal.gpa())`
+        // — ported as plain `Vec`s (whose OOM aborts, DG5, so the reference's
+        // `log.warn`-and-return arms are unreachable). The gpa reached through
+        // `ctx.wrapper` is rustty's Global allocator; no wrapper deref is
+        // needed, and none is performed (no alias interleaving with the live
+        // handler call chain).
+        // SAFETY: each `LibString`/`ClipboardContent` names borrowed C memory
+        // valid for this call.
+        let contents: Vec<clipboard::Content<'_>> = c_contents
+            .iter()
+            .map(|c_content| clipboard::Content {
+                mime: unsafe { std::slice::from_raw_parts(c_content.mime.ptr, c_content.mime.len) },
+                data: unsafe { std::slice::from_raw_parts(c_content.data.ptr, c_content.data.len) },
+            })
+            .collect();
+        let available: Vec<&[u8]> = c_available
+            .iter()
+            .map(|c_mime| unsafe { std::slice::from_raw_parts(c_mime.ptr, c_mime.len) })
+            .collect();
+
+        // read.reply(.{ .success = .{ .contents = contents, .available = available, .remember = reply.remember } });
+        read.reply(clipboard::ReadResult::Success(clipboard::ReadResultSuccess {
+            contents: &contents,
+            available: &available,
+            remember: unsafe { (*reply).remember },
+        }));
     }
 
     // fn desktopNotificationTrampoline(handler: *Handler, notification: Action.ShowDesktopNotification) void {
@@ -1362,24 +1651,23 @@ unsafe fn wrap(
 
     // handler.effects = .{ .write_pty = &Effects.writePtyTrampoline, ... };
     handler.effects = rustty_vt::stream_terminal::Effects {
-        // PORT NOTE (W6 seam): the head wires `clipboard_read` through the
-        // c/terminal read-effect surface (e03475c0c/4f49dc2b8) and sets
-        // `.drag_and_drop = null` (af8d28a94); the read effect lands with
-        // W6's C-API effects.
-        clipboard_read: None,
-        drag_and_drop: None,
         write_pty: Some(Effects::write_pty_trampoline),
         bell: Some(Effects::bell_trampoline),
         color_scheme: Some(Effects::color_scheme_trampoline),
+        desktop_notification: Some(Effects::desktop_notification_trampoline),
+        // .drag_and_drop = null,
+        drag_and_drop: None,
         device_attributes: Some(Effects::device_attributes_trampoline),
         enquiry: Some(Effects::enquiry_trampoline),
         xtversion: Some(Effects::xtversion_trampoline),
         title_changed: Some(Effects::title_changed_trampoline),
         pwd_changed: Some(Effects::pwd_changed_trampoline),
-        size: Some(Effects::size_trampoline),
-        clipboard_write: Some(Effects::clipboard_write_trampoline),
-        desktop_notification: Some(Effects::desktop_notification_trampoline),
         progress_report: Some(Effects::progress_report_trampoline),
+        size: Some(Effects::size_trampoline),
+
+        // Installed dynamically when the callback is set; see Effects.
+        clipboard_write: None,
+        clipboard_read: None,
     };
 
     // wrapper.* = .{
@@ -2186,6 +2474,10 @@ pub enum Option_ {
     UnknownMaxBytes = 36,
     /// Input type: `*const lib.String` (oracle 74efadb44).
     TerminfoName = 37,
+    /// Input type: `ClipboardReadFn` (oracle e03475c0c).
+    ClipboardRead = 38,
+    /// Input type: `*const usize` (oracle 5350d4a5f/70f006575).
+    ClipboardWriteMaxBytes = 39,
     // /// Input type expected for setting the option.
     // pub fn InType(comptime self: Option) type {
     //     return switch (self) {
@@ -2200,6 +2492,7 @@ pub enum Option_ {
     //         .pwd_changed => ?Effects.PwdChangedFn,
     //         .size_cb => ?Effects.SizeFn,
     //         .clipboard_write => ?Effects.ClipboardWriteFn,
+    //         .clipboard_read => ?Effects.ClipboardReadFn,
     //         .unknown_sequence => ?Effects.UnknownSequenceFn,
     //         .title, .pwd, .terminfo_name => ?*const lib.String,
     //         .color_foreground, .color_background, .color_cursor => ?*const color.RGB.C,
@@ -2217,6 +2510,7 @@ pub enum Option_ {
     //         .scrollback_max_lines,
     //         .continuation_max_bytes,
     //         .unknown_max_bytes,
+    //         .clipboard_write_max_bytes,
     //         => ?*const usize,
     //         .selection => ?*const selection_c.CSelection,
     //         .default_cursor_style => ?*const TerminalCursorStyle,
@@ -2331,10 +2625,43 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             (*terminal_).effects.size_cb =
                 std::mem::transmute::<*const c_void, Option<SizeFn>>(value);
         },
-        // .clipboard_write => wrapper.effects.clipboard_write = value,
+        // .clipboard_write => {
+        //     wrapper.effects.clipboard_write = value;
+        //     wrapper.stream.handler.effects.clipboard_write = if (value != null)
+        //         &Effects.clipboardWriteTrampoline
+        //     else
+        //         null;
+        // },
         Option_::ClipboardWrite => unsafe {
             (*terminal_).effects.clipboard_write =
                 std::mem::transmute::<*const c_void, Option<ClipboardWriteFn>>(value);
+            // The trampoline is installed dynamically to preserve the
+            // handler's null fast path (a null Zig-level effect makes Kitty
+            // clipboard writes fail up front instead of spooling a
+            // transaction that can never commit; see Effects).
+            (*terminal_).stream.handler.effects.clipboard_write = if !value.is_null() {
+                Some(Effects::clipboard_write_trampoline)
+            } else {
+                None
+            };
+        },
+        // .clipboard_read => {
+        //     wrapper.effects.clipboard_read = value;
+        //     wrapper.stream.handler.effects.clipboard_read = if (value != null)
+        //         &Effects.clipboardReadTrampoline
+        //     else
+        //         null;
+        // },
+        Option_::ClipboardRead => unsafe {
+            (*terminal_).effects.clipboard_read =
+                std::mem::transmute::<*const c_void, Option<ClipboardReadFn>>(value);
+            // Installed dynamically to keep the handler's null fast path
+            // (reads stay denied without a callback; see Effects).
+            (*terminal_).stream.handler.effects.clipboard_read = if !value.is_null() {
+                Some(Effects::clipboard_read_trampoline)
+            } else {
+                None
+            };
         },
 
         // .unknown_sequence => {
@@ -2902,6 +3229,20 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             unsafe { (*terminal_).stream.handler.apc_handler.unknown_max_bytes = v };
         }
 
+        // .clipboard_write_max_bytes => wrapper.stream.handler.kitty_clipboard_write_max_bytes =
+        //     if (value) |ptr| ptr.* else kitty_clipboard.max_write_size,
+        Option_::ClipboardWriteMaxBytes => {
+            let ptr = value as *const usize;
+            let v = if !ptr.is_null() {
+                // SAFETY: `value` points to a readable `usize` (caller contract).
+                unsafe { *ptr }
+            } else {
+                rustty_vt::kitty::clipboard::max_write_size
+            };
+            // SAFETY: raw place write off the handle (no wrapper-level `&mut`).
+            unsafe { (*terminal_).stream.handler.kitty_clipboard_write_max_bytes = v };
+        }
+
         // .mode, .mode_default => {
         //     const config = (value orelse return .invalid_value).*;
         //     const mode = config.toMode() orelse return .invalid_value;
@@ -3312,6 +3653,8 @@ pub enum TerminalData {
     VtGround = 38,
     /// Output type: `bool` (oracle bdb566068).
     CursorAtPrompt = 39,
+    /// Output type: `usize` (oracle 5350d4a5f/70f006575).
+    ClipboardWriteMaxBytes = 40,
     // /// Output type expected for querying the data of the given kind.
     // pub fn OutType(comptime self: TerminalData) type {
     //     return switch (self) {
@@ -3335,6 +3678,7 @@ pub enum TerminalData {
     //         .scrollback_max_bytes,
     //         .scrollback_max_lines,
     //         .continuation_max_bytes,
+    //         .clipboard_write_max_bytes,
     //         => usize,
     //         .width_px, .height_px => u32,
     //         .color_foreground,
@@ -3384,7 +3728,7 @@ const _: () = assert!(std::mem::size_of::<TerminalData>() == std::mem::size_of::
 // Bundle M reopened the holes at 36/38; Bundle S closed them again
 // (`continuation_max_bytes` = 36, `vt_ground` = 38) — the list is empty but
 // the MECHANISM stays.
-const TERMINAL_DATA_MAX: c_int = 39;
+const TERMINAL_DATA_MAX: c_int = 40;
 const TERMINAL_DATA_HOLES: &[c_int] = &[];
 
 impl TerminalData {
@@ -3625,6 +3969,11 @@ unsafe fn get_typed(terminal_: Terminal, data: TerminalData, out: *mut c_void) -
             // (the rust-mut-args-strongly-protected shape).
             unsafe { *(out as *mut bool) = (*t).cursor_is_at_prompt() };
         }
+
+        // .clipboard_write_max_bytes => out.* = wrapper.stream.handler.kitty_clipboard_write_max_bytes,
+        TerminalData::ClipboardWriteMaxBytes => unsafe {
+            *(out as *mut usize) = (*terminal_).stream.handler.kitty_clipboard_write_max_bytes
+        },
 
         // .scrollbar => out.* = t.screens.active.pages.scrollbar().cval(),
         TerminalData::Scrollbar => unsafe {
@@ -7997,7 +8346,8 @@ mod tests {
         });
     }
 
-    // test "set clipboard_write callback" (oracle 634ef7198)
+    // test "set clipboard_write callback" (oracle 634ef7198; 7ae9b1113 end
+    // state: reply-based, with name/granted/can_remember)
     #[test]
     fn set_clipboard_write_callback() {
         static mut COUNT: usize = 0;
@@ -8009,11 +8359,14 @@ mod tests {
         static mut LAST_CONTENTS_LEN: usize = 0;
         static mut LAST_MIMES: Vec<Vec<u8>> = Vec::new();
         static mut LAST_DATA: Vec<Vec<u8>> = Vec::new();
+        static mut LAST_NAME_LEN: usize = 0;
+        static mut LAST_GRANTED: bool = true;
+        static mut LAST_CAN_REMEMBER: bool = true;
         static mut NEXT_RESULT: clipboard::WriteStatus = clipboard::WriteStatus::Success;
         static mut REPLY_RESULT: Option<clipboard::WriteResult> = None;
 
-        // Captures the trampoline's reply for the direct-invoke checks below
-        // (7ae9b1113: the vt-side write is reply-based).
+        // const Reply = struct { var last: ?clipboard.Write.Result = null; ... };
+        // Captures the trampoline's reply for the direct-invoke checks below.
         fn capture_reply(_: *mut c_void, result: clipboard::WriteResult) {
             unsafe { REPLY_RESULT = Some(result) };
         }
@@ -8022,7 +8375,7 @@ mod tests {
             terminal_: Terminal,
             ud: *mut c_void,
             request: *const ClipboardWrite,
-        ) -> clipboard::WriteStatus {
+        ) {
             unsafe {
                 COUNT += 1;
                 LAST_TERMINAL = terminal_;
@@ -8031,6 +8384,9 @@ mod tests {
                 LAST_LOCATION = (*request).location;
                 LAST_CONTENTS_NULL = (*request).contents.is_null();
                 LAST_CONTENTS_LEN = (*request).contents_len;
+                LAST_NAME_LEN = (*request).name.len;
+                LAST_GRANTED = (*request).granted;
+                LAST_CAN_REMEMBER = (*request).can_remember;
                 let mut mimes: Vec<Vec<u8>> = Vec::new();
                 let mut data: Vec<Vec<u8>> = Vec::new();
                 if !(*request).contents.is_null() {
@@ -8043,7 +8399,16 @@ mod tests {
                 }
                 LAST_MIMES = mimes;
                 LAST_DATA = data;
-                NEXT_RESULT
+
+                // request.reply(request, &.{ .size = ..., .result = next_result, .remember = false });
+                ((*request).reply)(
+                    request,
+                    &ClipboardWriteReply {
+                        size: std::mem::size_of::<ClipboardWriteReply>(),
+                        result: NEXT_RESULT,
+                        remember: false,
+                    },
+                );
             }
         }
 
@@ -8089,6 +8454,11 @@ mod tests {
                 (&*std::ptr::addr_of!(LAST_DATA))[0].as_slice()
             });
 
+            // OSC 52 carries no program identity or password grant state.
+            assert_eq!(0, unsafe { LAST_NAME_LEN });
+            assert!(!unsafe { LAST_GRANTED });
+            assert!(!unsafe { LAST_CAN_REMEMBER });
+
             // OSC 52 destinations are normalized rather than exposed as wire bytes.
             for (selector, expected) in [
                 (b's', clipboard::Location::Selection),
@@ -8127,9 +8497,12 @@ mod tests {
                 (&*std::ptr::addr_of!(LAST_DATA))[0].as_slice()
             });
 
-            // Every representation is converted, and callback results propagate
-            // through the C trampoline for protocols that can acknowledge writes.
-            // (Direct invoke of the installed trampoline, mirroring the oracle.)
+            // Every representation is converted, and callback replies propagate
+            // back through the C trampoline for protocols that can acknowledge
+            // writes.
+            // (Direct invoke of the INSTALLED handler effect — the dynamic
+            // trampoline — mirroring the oracle's
+            // `handler.effects.clipboard_write.?(handler, ...)`.)
             let internal_contents = [
                 clipboard::Content {
                     mime: b"text/plain",
@@ -8153,19 +8526,32 @@ mod tests {
                 },
             ];
             unsafe { NEXT_RESULT = clipboard::WriteStatus::Busy };
-            Effects::clipboard_write_trampoline(
-                unsafe { &mut (*t).stream.handler },
+            // const handler = &t.?.stream.handler;
+            // handler.effects.clipboard_write.?(handler, .{ ... });
+            //
+            // SB: take the handler address ONCE via a raw place projection;
+            // the `.reply_ctx = handler` pointer and the `&mut` argument must
+            // not be two separate overlapping retags.
+            let installed = unsafe { (*t).stream.handler.effects.clipboard_write }.unwrap();
+            let handler_ptr: *mut Handler<'static> =
+                unsafe { std::ptr::addr_of_mut!((*t).stream.handler) };
+            installed(
+                unsafe { &mut *handler_ptr },
                 clipboard::Write {
                     location: clipboard::Location::Primary,
                     contents: &internal_contents,
-                    name: b"",
-                    granted: false,
-                    can_remember: false,
-                    reply_ctx: std::ptr::null_mut(),
+                    name: b"app",
+                    granted: true,
+                    can_remember: true,
+                    reply_ctx: handler_ptr as *mut c_void,
                     reply_fn: capture_reply,
                 },
             );
+            // try testing.expect(Reply.last.? == .busy);
             assert_eq!(Some(clipboard::WriteResult::Busy), unsafe { REPLY_RESULT });
+            assert_eq!(3, unsafe { LAST_NAME_LEN });
+            assert!(unsafe { LAST_GRANTED });
+            assert!(unsafe { LAST_CAN_REMEMBER });
             assert_eq!(7, unsafe { COUNT });
             assert_eq!(5, unsafe { LAST_CONTENTS_LEN });
             assert_eq!(b"application/octet-stream".as_slice(), unsafe {
@@ -8181,10 +8567,13 @@ mod tests {
                 (&*std::ptr::addr_of!(LAST_DATA))[4].as_slice()
             });
 
-            // Removing the callback takes effect immediately.
+            // Removing the callback takes effect immediately and uninstalls
+            // the trampoline.
             assert_eq!(Result::Success, unsafe {
                 set(t, Option_::ClipboardWrite, std::ptr::null())
             });
+            // try testing.expect(t.?.stream.handler.effects.clipboard_write == null);
+            assert!(unsafe { (*t).stream.handler.effects.clipboard_write }.is_none());
             vtw(t, b"\x1B]52;c;eA==\x1B\\");
             assert_eq!(7, unsafe { COUNT });
 
@@ -8207,33 +8596,609 @@ mod tests {
             // OSC 52 without a callback should not crash
             vtw(t, b"\x1B]52;c;aGVsbG8=\x1B\\");
 
-            static mut REPLY_RESULT: Option<clipboard::WriteResult> = None;
-            fn capture_reply(_: *mut c_void, result: clipboard::WriteResult) {
-                unsafe { REPLY_RESULT = Some(result) };
-            }
-            unsafe { REPLY_RESULT = None };
+            // No trampoline is installed until a callback is set, so the
+            // stream skips clipboard work (and never spools a Kitty clipboard
+            // transaction it can't deliver).
+            // try testing.expect(t.?.stream.handler.effects.clipboard_write == null);
+            assert!(unsafe { (*t).stream.handler.effects.clipboard_write }.is_none());
 
-            let contents = [clipboard::Content {
-                mime: b"text/plain",
-                data: b"hello",
-            }];
-            Effects::clipboard_write_trampoline(
-                unsafe { &mut (*t).stream.handler },
-                clipboard::Write {
-                    location: clipboard::Location::Standard,
-                    contents: &contents,
-                    name: b"",
-                    granted: false,
-                    can_remember: false,
-                    reply_ctx: std::ptr::null_mut(),
-                    reply_fn: capture_reply,
-                },
+            unsafe { free(t) };
+        });
+    }
+
+    // test "kitty clipboard write via C effects" (oracle 6959fd46c/4f49dc2b8/
+    // 7ae9b1113 end state)
+    #[test]
+    fn kitty_clipboard_write_via_c_effects() {
+        // const S = struct { var responses: [512]u8 = undefined; ... };
+        // PORT NOTE: the fixed `[512]u8` capture buffers become `Vec`s (the
+        // crate's test-capture convention); every assertion is carried.
+        static mut RESPONSES: Vec<u8> = Vec::new();
+        static mut WRITE_COUNT: usize = 0;
+        static mut LAST_LOCATION: clipboard::Location = clipboard::Location::Standard;
+        static mut LAST_CONTENTS_LEN: usize = 0;
+        static mut LAST_MIMES: Vec<Vec<u8>> = Vec::new();
+        static mut LAST_DATA: Vec<Vec<u8>> = Vec::new();
+        static mut LAST_GRANTED: bool = true;
+        static mut LAST_CAN_REMEMBER: bool = true;
+        static mut NEXT_REMEMBER: bool = false;
+
+        extern "C" fn write_pty(_: Terminal, _: *mut c_void, ptr: *const u8, len: usize) {
+            unsafe {
+                (*std::ptr::addr_of_mut!(RESPONSES))
+                    .extend_from_slice(std::slice::from_raw_parts(ptr, len));
+            }
+        }
+
+        extern "C" fn clipboard_write(
+            _: Terminal,
+            _: *mut c_void,
+            request: *const ClipboardWrite,
+        ) {
+            unsafe {
+                WRITE_COUNT += 1;
+                LAST_LOCATION = (*request).location;
+                LAST_CONTENTS_LEN = (*request).contents_len;
+                let mut mimes: Vec<Vec<u8>> = Vec::new();
+                let mut data: Vec<Vec<u8>> = Vec::new();
+                if !(*request).contents.is_null() {
+                    let contents =
+                        std::slice::from_raw_parts((*request).contents, (*request).contents_len);
+                    for c in contents {
+                        mimes.push(std::slice::from_raw_parts(c.mime.ptr, c.mime.len).to_vec());
+                        data.push(std::slice::from_raw_parts(c.data.ptr, c.data.len).to_vec());
+                    }
+                }
+                LAST_MIMES = mimes;
+                LAST_DATA = data;
+                LAST_GRANTED = (*request).granted;
+                LAST_CAN_REMEMBER = (*request).can_remember;
+                ((*request).reply)(
+                    request,
+                    &ClipboardWriteReply {
+                        size: std::mem::size_of::<ClipboardWriteReply>(),
+                        result: clipboard::WriteStatus::Success,
+                        remember: NEXT_REMEMBER,
+                    },
+                );
+            }
+        }
+
+        // const R = struct { ... fn clipboardRead(...) ... };
+        static mut R_COUNT: usize = 0;
+        static mut R_LAST_MIMES_LEN: usize = 0;
+        static mut R_LAST_MIME_IS_TEXT: bool = false;
+        static mut R_LAST_LIST: bool = true;
+        static mut R_LAST_NAME_LEN: usize = 0;
+        static mut R_LAST_GRANTED: bool = true;
+        static mut R_LAST_CAN_REMEMBER: bool = true;
+
+        extern "C" fn clipboard_read(_: Terminal, _: *mut c_void, request: *const ClipboardRead) {
+            unsafe {
+                R_COUNT += 1;
+                R_LAST_MIMES_LEN = (*request).mimes_len;
+                R_LAST_MIME_IS_TEXT = (*request).mimes_len > 0 && {
+                    let m = *(*request).mimes;
+                    std::slice::from_raw_parts(m.ptr, m.len) == b"text/plain"
+                };
+                R_LAST_LIST = (*request).list;
+                R_LAST_NAME_LEN = (*request).name.len;
+                R_LAST_GRANTED = (*request).granted;
+                R_LAST_CAN_REMEMBER = (*request).can_remember;
+
+                let mime: &[u8] = b"text/plain";
+                let data: &[u8] = b"hello";
+                let contents = [ClipboardContent {
+                    mime: LibString::init(mime),
+                    data: LibString::init(data),
+                }];
+                ((*request).reply)(
+                    request,
+                    &ClipboardReadReply {
+                        size: std::mem::size_of::<ClipboardReadReply>(),
+                        result: clipboard::ReadStatus::Success,
+                        contents: contents.as_ptr(),
+                        contents_len: contents.len(),
+                        available: std::ptr::null(),
+                        available_len: 0,
+                        remember: false,
+                    },
+                );
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            unsafe {
+                RESPONSES = Vec::new();
+                WRITE_COUNT = 0;
+                LAST_MIMES = Vec::new();
+                LAST_DATA = Vec::new();
+                LAST_GRANTED = true;
+                LAST_CAN_REMEMBER = true;
+                NEXT_REMEMBER = false;
+                R_COUNT = 0;
+            }
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ClipboardWrite, clipboard_write as *const c_void)
+            });
+
+            // A full OSC 5522 write transaction: begin, chunked data for two
+            // representations, commit. Only the commit invokes the callback,
+            // and its result maps to the DONE response.
+            let seqs: [&[u8]; 5] = [
+                b"\x1B]5522;type=write:id=c1\x1B\\",
+                b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;R2hvc3Q=\x1B\\", // "Ghost"
+                b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;dHk=\x1B\\",     // "ty"
+                b"\x1B]5522;type=wdata:mime=dGV4dC9odG1s;PGI+aGk8L2I+\x1B\\", // "<b>hi</b>"
+                b"\x1B]5522;type=wdata\x1B\\",
+            ];
+            for seq in seqs {
+                vtw(t, seq);
+            }
+
+            assert_eq!(1, unsafe { WRITE_COUNT });
+            assert_eq!(clipboard::Location::Standard, unsafe { LAST_LOCATION });
+            assert_eq!(2, unsafe { LAST_CONTENTS_LEN });
+            assert_eq!(b"text/plain".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_MIMES))[0].as_slice()
+            });
+            assert_eq!(b"Ghostty".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_DATA))[0].as_slice()
+            });
+            assert_eq!(b"text/html".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_MIMES))[1].as_slice()
+            });
+            assert_eq!(b"<b>hi</b>".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_DATA))[1].as_slice()
+            });
+            assert_eq!(
+                b"\x1B]5522;type=write:status=DONE:id=c1\x1B\\".as_slice(),
+                unsafe { (&*std::ptr::addr_of!(RESPONSES)).as_slice() }
             );
-            assert_eq!(Some(clipboard::WriteResult::Unsupported), unsafe {
-                REPLY_RESULT
+            assert!(!unsafe { LAST_GRANTED });
+            assert!(!unsafe { LAST_CAN_REMEMBER });
+
+            // Password grants round-trip through the C reply: the first pw'd
+            // commit isn't granted and asks to remember, so the next one
+            // arrives granted.
+            unsafe {
+                RESPONSES = Vec::new();
+                NEXT_REMEMBER = true;
+            }
+            let grant_seqs: [&[u8]; 4] = [
+                b"\x1B]5522;type=write:id=g1:pw=c2VjcmV0:name=YXBw\x1B\\",
+                b"\x1B]5522;type=wdata\x1B\\",
+                b"\x1B]5522;type=write:id=g2:pw=c2VjcmV0:name=YXBw\x1B\\",
+                b"\x1B]5522;type=wdata\x1B\\",
+            ];
+            for seq in grant_seqs {
+                vtw(t, seq);
+            }
+            assert_eq!(3, unsafe { WRITE_COUNT });
+            assert!(unsafe { LAST_GRANTED });
+            assert!(unsafe { LAST_CAN_REMEMBER });
+            assert_eq!(
+                b"\x1B]5522;type=write:status=DONE:id=g1\x1B\\\x1B]5522;type=write:status=DONE:id=g2\x1B\\".as_slice(),
+                unsafe { (&*std::ptr::addr_of!(RESPONSES)).as_slice() }
+            );
+            unsafe { NEXT_REMEMBER = false };
+
+            // Without a read callback reads are denied.
+            unsafe { RESPONSES = Vec::new() };
+            vtw(t, b"\x1B]5522;type=read:id=r1;dGV4dC9wbGFpbg==\x1B\\");
+            assert_eq!(3, unsafe { WRITE_COUNT });
+            assert_eq!(
+                b"\x1B]5522;type=read:status=EPERM:id=r1\x1B\\".as_slice(),
+                unsafe { (&*std::ptr::addr_of!(RESPONSES)).as_slice() }
+            );
+
+            // With a read callback the request is served through it.
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ClipboardRead, clipboard_read as *const c_void)
+            });
+            unsafe { RESPONSES = Vec::new() };
+            // name="app" without a password: forwarded for prompts, not
+            // rememberable.
+            vtw(t, b"\x1B]5522;type=read:id=r2:name=YXBw;dGV4dC9wbGFpbg==\x1B\\");
+            assert_eq!(1, unsafe { R_COUNT });
+            assert_eq!(1, unsafe { R_LAST_MIMES_LEN });
+            assert!(unsafe { R_LAST_MIME_IS_TEXT });
+            assert!(!unsafe { R_LAST_LIST });
+            assert_eq!(3, unsafe { R_LAST_NAME_LEN });
+            assert!(!unsafe { R_LAST_GRANTED });
+            assert!(!unsafe { R_LAST_CAN_REMEMBER });
+            assert_eq!(
+                b"\x1B]5522;type=read:status=OK:id=r2\x1B\\\x1B]5522;type=read:status=DATA:id=r2:mime=dGV4dC9wbGFpbg==;aGVsbG8=\x1B\\\x1B]5522;type=read:status=DONE:id=r2\x1B\\".as_slice(),
+                unsafe { (&*std::ptr::addr_of!(RESPONSES)).as_slice() }
+            );
+
+            // Without a clipboard callback the transaction fails up front.
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ClipboardWrite, std::ptr::null())
+            });
+            unsafe { RESPONSES = Vec::new() };
+            vtw(t, b"\x1B]5522;type=write:id=c2\x1B\\");
+            assert_eq!(
+                b"\x1B]5522;type=write:status=ENOSYS:id=c2\x1B\\".as_slice(),
+                unsafe { (&*std::ptr::addr_of!(RESPONSES)).as_slice() }
+            );
+
+            unsafe {
+                RESPONSES = Vec::new();
+                LAST_MIMES = Vec::new();
+                LAST_DATA = Vec::new();
+                free(t);
+            }
+        });
+    }
+
+    // test "set clipboard write max bytes" (oracle 5350d4a5f/70f006575 end
+    // state: reject-not-truncate + configurable limit)
+    #[test]
+    fn set_clipboard_write_max_bytes() {
+        static mut RESPONSES: Vec<u8> = Vec::new();
+        static mut WRITE_COUNT: usize = 0;
+
+        extern "C" fn write_pty(_: Terminal, _: *mut c_void, ptr: *const u8, len: usize) {
+            unsafe {
+                (*std::ptr::addr_of_mut!(RESPONSES))
+                    .extend_from_slice(std::slice::from_raw_parts(ptr, len));
+            }
+        }
+
+        extern "C" fn clipboard_write(
+            _: Terminal,
+            _: *mut c_void,
+            request: *const ClipboardWrite,
+        ) {
+            unsafe {
+                WRITE_COUNT += 1;
+                ((*request).reply)(
+                    request,
+                    &ClipboardWriteReply {
+                        size: std::mem::size_of::<ClipboardWriteReply>(),
+                        result: clipboard::WriteStatus::Success,
+                        remember: false,
+                    },
+                );
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            unsafe {
+                RESPONSES = Vec::new();
+                WRITE_COUNT = 0;
+            }
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ClipboardWrite, clipboard_write as *const c_void)
+            });
+
+            // The built-in default reads back.
+            let mut max: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ClipboardWriteMaxBytes,
+                    &mut max as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(rustty_vt::kitty::clipboard::max_write_size, max);
+
+            // Set a tiny limit; an oversized text write fails with EFBIG and
+            // never reaches the callback.
+            let limit: usize = 4;
+            assert_eq!(Result::Success, unsafe {
+                set(
+                    t,
+                    Option_::ClipboardWriteMaxBytes,
+                    &limit as *const usize as *const c_void,
+                )
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ClipboardWriteMaxBytes,
+                    &mut max as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(limit, max);
+
+            let seqs: [&[u8]; 4] = [
+                b"\x1B]5522;type=write:id=c1\x1B\\",
+                b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;SGVsbA==\x1B\\", // "Hell"
+                b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;bw==\x1B\\",     // "o"
+                b"\x1B]5522;type=wdata\x1B\\",
+            ];
+            for seq in seqs {
+                vtw(t, seq);
+            }
+            assert_eq!(0, unsafe { WRITE_COUNT });
+            assert_eq!(
+                b"\x1B]5522;type=write:status=EFBIG:id=c1\x1B\\".as_slice(),
+                unsafe { (&*std::ptr::addr_of!(RESPONSES)).as_slice() }
+            );
+
+            // A NULL value reverts to the built-in default.
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ClipboardWriteMaxBytes, std::ptr::null())
+            });
+            assert_eq!(Result::Success, unsafe {
+                get(
+                    t,
+                    TerminalData::ClipboardWriteMaxBytes,
+                    &mut max as *mut usize as *mut c_void,
+                )
+            });
+            assert_eq!(rustty_vt::kitty::clipboard::max_write_size, max);
+
+            unsafe {
+                RESPONSES = Vec::new();
+                free(t);
+            }
+        });
+    }
+
+    // test "set clipboard_read callback" (oracle e03475c0c)
+    #[test]
+    fn set_clipboard_read_callback() {
+        static mut LAST_DATA: Option<Vec<u8>> = None;
+        static mut COUNT: usize = 0;
+        static mut LAST_SIZE: usize = 0;
+        static mut LAST_LOCATION: clipboard::Location = clipboard::Location::Standard;
+        static mut LAST_MIMES_LEN: usize = 0;
+        static mut LAST_MIME_IS_TEXT: bool = false;
+        static mut LAST_LIST: bool = true;
+        static mut LAST_NAME_LEN: usize = 1;
+        static mut LAST_GRANTED: bool = true;
+        static mut LAST_CAN_REMEMBER: bool = true;
+        static mut RESULT: clipboard::ReadStatus = clipboard::ReadStatus::Success;
+
+        extern "C" fn write_pty(_: Terminal, _: *mut c_void, ptr: *const u8, len: usize) {
+            unsafe {
+                LAST_DATA = Some(std::slice::from_raw_parts(ptr, len).to_vec());
+            }
+        }
+
+        extern "C" fn clipboard_read(_: Terminal, _: *mut c_void, request: *const ClipboardRead) {
+            unsafe {
+                COUNT += 1;
+                LAST_SIZE = (*request).size;
+                LAST_LOCATION = (*request).location;
+                LAST_MIMES_LEN = (*request).mimes_len;
+                LAST_MIME_IS_TEXT = (*request).mimes_len > 0 && {
+                    let m = *(*request).mimes;
+                    std::slice::from_raw_parts(m.ptr, m.len) == b"text/plain"
+                };
+                LAST_LIST = (*request).list;
+                LAST_NAME_LEN = (*request).name.len;
+                LAST_GRANTED = (*request).granted;
+                LAST_CAN_REMEMBER = (*request).can_remember;
+
+                let mime: &[u8] = b"text/plain";
+                let data: &[u8] = b"hello";
+                let contents = [ClipboardContent {
+                    mime: LibString::init(mime),
+                    data: LibString::init(data),
+                }];
+                ((*request).reply)(
+                    request,
+                    &ClipboardReadReply {
+                        size: std::mem::size_of::<ClipboardReadReply>(),
+                        result: RESULT,
+                        contents: contents.as_ptr(),
+                        contents_len: contents.len(),
+                        available: std::ptr::null(),
+                        available_len: 0,
+                        remember: false,
+                    },
+                );
+            }
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            unsafe {
+                LAST_DATA = None;
+                COUNT = 0;
+                RESULT = clipboard::ReadStatus::Success;
+            }
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+
+            // Without a callback the handler effect is unset and reads are silent.
+            assert!(unsafe { (*t).stream.handler.effects.clipboard_read }.is_none());
+            vtw(t, b"\x1B]52;c;?\x1B\\");
+            assert!(unsafe { (&*std::ptr::addr_of!(LAST_DATA)).is_none() });
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ClipboardRead, clipboard_read as *const c_void)
+            });
+            assert!(unsafe { (*t).stream.handler.effects.clipboard_read }.is_some());
+
+            vtw(t, b"\x1B]52;p;?\x07");
+            assert_eq!(1, unsafe { COUNT });
+            assert_eq!(std::mem::size_of::<ClipboardRead>(), unsafe { LAST_SIZE });
+            assert_eq!(clipboard::Location::Primary, unsafe { LAST_LOCATION });
+            assert_eq!(1, unsafe { LAST_MIMES_LEN });
+            assert!(unsafe { LAST_MIME_IS_TEXT });
+            assert!(!unsafe { LAST_LIST });
+            assert_eq!(0, unsafe { LAST_NAME_LEN });
+            assert!(!unsafe { LAST_GRANTED });
+            assert!(!unsafe { LAST_CAN_REMEMBER });
+            assert_eq!(b"\x1B]52;p;aGVsbG8=\x07".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_DATA)).as_deref().unwrap()
+            });
+
+            // Denied replies with an empty clipboard.
+            unsafe { RESULT = clipboard::ReadStatus::Denied };
+            vtw(t, b"\x1B]52;c;?\x1B\\");
+            assert_eq!(2, unsafe { COUNT });
+            assert_eq!(b"\x1B]52;c;\x1B\\".as_slice(), unsafe {
+                (&*std::ptr::addr_of!(LAST_DATA)).as_deref().unwrap()
+            });
+
+            // Clearing the callback uninstalls the handler effect.
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::ClipboardRead, std::ptr::null())
+            });
+            assert!(unsafe { (*t).stream.handler.effects.clipboard_read }.is_none());
+
+            unsafe {
+                LAST_DATA = None;
+                free(t);
+            }
+        });
+    }
+
+    // test "mode 2048 enable and disable use C callbacks" (oracle 07af4612b)
+    #[test]
+    fn mode_2048_enable_and_disable_use_c_callbacks() {
+        static mut DATA: [u8; 128] = [0; 128];
+        static mut LEN: usize = 0;
+        static mut CALLS: usize = 0;
+
+        extern "C" fn write_pty(_: Terminal, _: *mut c_void, ptr: *const u8, length: usize) {
+            unsafe {
+                let dst = std::ptr::addr_of_mut!(DATA) as *mut u8;
+                std::ptr::copy_nonoverlapping(ptr, dst, length);
+                LEN = length;
+                CALLS += 1;
+            }
+        }
+
+        extern "C" fn size_cb(
+            _: Terminal,
+            _: *mut c_void,
+            out_size: *mut size_report::Size,
+        ) -> bool {
+            unsafe {
+                *out_size = size_report::Size {
+                    rows: 24,
+                    columns: 80,
+                    cell_width: 8,
+                    cell_height: 16,
+                };
+            }
+            true
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            unsafe {
+                LEN = 0;
+                CALLS = 0;
+            }
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::SizeCb, size_cb as *const c_void)
+            });
+
+            vtw(t, b"\x1B[?2048h");
+            vtw(t, b"\x1B[?2048h");
+
+            assert_eq!(2, unsafe { CALLS });
+            assert_eq!(b"\x1B[48;24;80;384;640t".as_slice(), unsafe {
+                &(&*std::ptr::addr_of!(DATA))[..LEN]
+            });
+            vtw(t, b"\x1B[?2048l");
+
+            assert_eq!(2, unsafe { CALLS });
+            // try testing.expect(!t.?.terminal.modes.get(.in_band_size_reports));
+            assert!(!unsafe {
+                (*(*t).terminal)
+                    .modes
+                    .get(rustty_vt::modes::Mode::InBandSizeReports)
             });
 
             unsafe { free(t) };
+        });
+    }
+
+    // test "mode 2048 enable tolerates missing C callbacks" (oracle 07af4612b)
+    #[test]
+    fn mode_2048_enable_tolerates_missing_c_callbacks() {
+        static mut WRITES: usize = 0;
+        static mut SIZES: usize = 0;
+
+        extern "C" fn write_pty(_: Terminal, _: *mut c_void, _: *const u8, _: usize) {
+            unsafe { WRITES += 1 };
+        }
+
+        extern "C" fn size_cb(
+            _: Terminal,
+            _: *mut c_void,
+            out_size: *mut size_report::Size,
+        ) -> bool {
+            unsafe {
+                SIZES += 1;
+                *out_size = size_report::Size {
+                    rows: 24,
+                    columns: 80,
+                    cell_width: 8,
+                    cell_height: 16,
+                };
+            }
+            true
+        }
+
+        with_test_allocator(|alloc| {
+            let (new_result, t) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, new_result);
+            unsafe {
+                WRITES = 0;
+                SIZES = 0;
+            }
+
+            assert_eq!(Result::Success, unsafe {
+                set(t, Option_::WritePty, write_pty as *const c_void)
+            });
+
+            vtw(t, b"\x1B[?2048h");
+
+            assert_eq!(0, unsafe { WRITES });
+            assert!(unsafe {
+                (*(*t).terminal)
+                    .modes
+                    .get(rustty_vt::modes::Mode::InBandSizeReports)
+            });
+
+            // var no_write: Terminal = null;
+            let (no_write_result, no_write) = new_t(alloc, 80, 24);
+            assert_eq!(Result::Success, no_write_result);
+            assert_eq!(Result::Success, unsafe {
+                set(no_write, Option_::SizeCb, size_cb as *const c_void)
+            });
+            vtw(no_write, b"\x1B[?2048h");
+            assert_eq!(1, unsafe { SIZES });
+            assert!(unsafe {
+                (*(*no_write).terminal)
+                    .modes
+                    .get(rustty_vt::modes::Mode::InBandSizeReports)
+            });
+
+            unsafe {
+                free(no_write);
+                free(t);
+            }
         });
     }
 

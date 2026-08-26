@@ -256,7 +256,12 @@ fn c_fn_names(src: &str) -> std::collections::BTreeSet<String> {
         while j < b.len() && (b[j] == b' ' || b[j] == b'\t' || b[j] == b'\n') {
             j += 1;
         }
-        if is_boundary && j < b.len() && b[j] == b'(' {
+        // `name (` is a prototype only when the paren does NOT open a
+        // function-pointer declarator: `typedef rustty_clipboard_read_result_e
+        // (*rustty_runtime_read_clipboard_cb)(...)` (Bundle E2) puts a RETURN
+        // TYPE in this position, and treating it as a declared function made
+        // the umbrella/tail cross-check misreport a typedef as an export.
+        if is_boundary && j < b.len() && b[j] == b'(' && !(j + 1 < b.len() && b[j + 1] == b'*') {
             out.insert(src[start..end].to_string());
         }
         i = end.max(start + 1);

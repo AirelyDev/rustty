@@ -40,13 +40,17 @@ void on_title_changed(RusttyTerminal terminal, void* userdata) {
 //! [effects-title-changed]
 
 //! [effects-clipboard-write]
-RusttyClipboardWriteResult on_clipboard_write(
+void on_clipboard_write(
     RusttyTerminal terminal,
     void* userdata,
     const RusttyClipboardWrite* write) {
   (void)terminal;
   (void)userdata;
 
+  // The write is synchronous: a real embedder would ask the user for
+  // permission here (unless write->granted) and the VT stream waits until
+  // this callback returns. The replied result is sent to the program
+  // (OSC 5522) through the write_pty callback.
   printf("  clipboard write (location=%d, contents=%zu)\n",
          (int)write->location, write->contents_len);
   if (write->contents_len == 0) {
@@ -66,9 +70,54 @@ RusttyClipboardWriteResult on_clipboard_write(
     printf("\n");
   }
 
-  return RUSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS;
+  RusttyClipboardWriteReply reply = {
+      .size = sizeof(reply),
+      .result = RUSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS,
+      .remember = false,
+  };
+  write->reply(write, &reply);
 }
 //! [effects-clipboard-write]
+
+//! [effects-clipboard-read]
+void on_clipboard_read(
+    RusttyTerminal terminal,
+    void* userdata,
+    const RusttyClipboardRead* read) {
+  (void)terminal;
+  (void)userdata;
+
+  // The read is synchronous: a real embedder would ask the user for
+  // permission here (unless read->granted) and the VT stream waits until
+  // this callback returns. The reply is sent to the program through the
+  // write_pty callback.
+  printf("  clipboard read (location=%d, mimes=%zu)\n",
+         (int)read->location, read->mimes_len);
+  for (size_t i = 0; i < read->mimes_len; i++) {
+    printf("    ");
+    fwrite(read->mimes[i].ptr, 1, read->mimes[i].len, stdout);
+    printf("\n");
+  }
+
+  // Reply with every requested representation we have. This example only
+  // has text.
+  const char* text = "Hello from the clipboard";
+  RusttyClipboardContent content = {
+      .mime = {.ptr = (const uint8_t*)"text/plain", .len = 10},
+      .data = {.ptr = (const uint8_t*)text, .len = strlen(text)},
+  };
+  RusttyClipboardReadReply reply = {
+      .size = sizeof(reply),
+      .result = RUSTTY_CLIPBOARD_READ_RESULT_SUCCESS,
+      .contents = &content,
+      .contents_len = 1,
+      .available = NULL,
+      .available_len = 0,
+      .remember = false,
+  };
+  read->reply(read, &reply);
+}
+//! [effects-clipboard-read]
 
 //! [effects-desktop-notification]
 void on_desktop_notification(
@@ -168,6 +217,8 @@ int main() {
       (const void *)on_title_changed);
   rustty_terminal_set(terminal, RUSTTY_TERMINAL_OPT_CLIPBOARD_WRITE,
       (const void *)on_clipboard_write);
+  rustty_terminal_set(terminal, RUSTTY_TERMINAL_OPT_CLIPBOARD_READ,
+      (const void *)on_clipboard_read);
   rustty_terminal_set(terminal, RUSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION,
       (const void *)on_desktop_notification);
   rustty_terminal_set(terminal, RUSTTY_TERMINAL_OPT_PROGRESS_REPORT,
@@ -208,7 +259,13 @@ int main() {
   rustty_terminal_vt_write(terminal, (const uint8_t*)clipboard_seq,
                             strlen(clipboard_seq));
 
-  // 5. Desktop notification (OSC 777 ; notify ; <title> ; <body> BEL).
+  // 5. Clipboard read (OSC 52 ; c ; ? ST)
+  printf("Sending clipboard read:\n");
+  const char* clipboard_read_seq = "\x1B]52;c;?\x1B\\";
+  rustty_terminal_vt_write(terminal, (const uint8_t*)clipboard_read_seq,
+                            strlen(clipboard_read_seq));
+
+  // 6. Desktop notification (OSC 777 ; notify ; <title> ; <body> BEL).
   //    OSC 9 is the title-less form.
   printf("Sending desktop notifications:\n");
   const char* osc9 = "\x1B]9;Build complete\x1B\\";
@@ -216,7 +273,7 @@ int main() {
   const char* osc777 = "\x1B]777;notify;Rustty;Needs attention\x07";
   rustty_terminal_vt_write(terminal, (const uint8_t*)osc777, strlen(osc777));
 
-  // 6. Progress report (OSC 9 ; 4 ; <state> ; <percent> ST). The second one
+  // 7. Progress report (OSC 9 ; 4 ; <state> ; <percent> ST). The second one
   //    omits the percentage, which the callback sees as -1.
   printf("Sending progress reports:\n");
   const char* progress_set = "\x1B]9;4;1;42\x1B\\";
@@ -226,13 +283,13 @@ int main() {
   rustty_terminal_vt_write(terminal, (const uint8_t*)progress_indeterminate,
                             strlen(progress_indeterminate));
 
-  // 7. Unsupported APC sequence
+  // 8. Unsupported APC sequence
   printf("Sending unknown APC:\n");
   const char* unknown_apc = "\x1B_private-command;payload\x1B\\";
   rustty_terminal_vt_write(terminal, (const uint8_t*)unknown_apc,
                             strlen(unknown_apc));
 
-  // 8. Another bell to show the counter increments
+  // 9. Another bell to show the counter increments
   printf("Sending another BEL:\n");
   rustty_terminal_vt_write(terminal, &bel, 1);
 

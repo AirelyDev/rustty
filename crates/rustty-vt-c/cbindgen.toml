@@ -146,6 +146,18 @@ typedef struct {
  */
 typedef void *Opaque;
 
+/**
+ * Borrowed string/bytes view (`{ptr, len}`) — the sibling-crate
+ * `rustty_lib::String`, referenced by the paste/MimeReader surface (Bundle P)
+ * under its crate-local alias `LibString`. With `parse_deps = false` cbindgen
+ * cannot see the definition (the `Opaque` precedent above), so it is pinned by
+ * hand with the exact `#[repr(C)]` layout. C: RusttyString (rustty-lib String)
+ */
+typedef struct {
+    const uint8_t *ptr;
+    uintptr_t len;
+} LibString;
+
 /** Opaque PageList node back-pointer (used only behind a pointer). */
 typedef struct Node Node;
 

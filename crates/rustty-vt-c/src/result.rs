@@ -20,6 +20,7 @@ pub enum Result {
     NoValue = -4,
     IoError = -5,
     LimitExceeded = -6,
+    Rejected = -7,
 }
 
 impl Result {

@@ -312,7 +312,19 @@ pub fn io_failing(_buffer: &mut [u8]) -> Result<(), RandomSecureError> {
 /// carries `TinyIo.randomSecure` (arc4random_buf on Darwin, getrandom on
 /// Linux, no entropy elsewhere).
 pub fn io_native(buffer: &mut [u8]) -> Result<(), RandomSecureError> {
-    rustty_os::file::random_secure(buffer).map_err(|_| RandomSecureError::EntropyUnavailable)
+    // On wasm32-freestanding the reference's lib artifact has no TinyIo — it
+    // degrades to `std.Io.failing` (see the `random_secure` doc above), whose
+    // `randomSecure` reports `EntropyUnavailable`. `rustty_os::file` is
+    // compiled out on wasm32 for the same reason, so the native Io IS the
+    // failing Io there.
+    #[cfg(target_arch = "wasm32")]
+    {
+        io_failing(buffer)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        rustty_os::file::random_secure(buffer).map_err(|_| RandomSecureError::EntropyUnavailable)
+    }
 }
 
 /// Fill `buffer` with secure random bytes from `random_secure` if set,

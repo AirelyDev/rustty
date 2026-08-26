@@ -18,7 +18,8 @@
 use crate::action::{Action, Target};
 use crate::ipc;
 use crate::structs::{
-    Clipboard, ClipboardContent, ClipboardRequest, ContentScale, CursorPos, SurfaceSize,
+    Clipboard, ClipboardContent, ClipboardReadResult, ClipboardRequest, ContentScale, CursorPos,
+    SurfaceSize,
 };
 
 /// The error returned by [`App::perform_action`].
@@ -232,18 +233,19 @@ pub trait Surface: Sized {
     fn supports_clipboard(&self, clipboard_type: Clipboard) -> bool;
 
     /// Start a clipboard read request. Returns whether the request STARTED
-    /// (the backend may decline, e.g. no read-clipboard callback).
+    /// (the backend may decline, e.g. no servable contents or an unreadable
+    /// clipboard).
     //
     // PORT NOTE: `pub fn clipboardRequest(self: *Surface, clipboard_type:
-    // apprt.Clipboard, state: apprt.ClipboardRequest) !bool` — embedded.zig:672.
-    // [ADV-FIX 1] the `bool` is load-bearing at Surface.zig:5822
-    // `startClipboardRequest` (the performable-keybind pass-through) — do NOT
-    // collapse it into the error.
+    // apprt.Clipboard, state: apprt.ClipboardRequest) !apprt.ClipboardReadResult`
+    // — embedded.zig (0ce9054bf end state; was `!bool`). [ADV-FIX 1] the
+    // result is load-bearing at Surface.zig `startClipboardRequest` (the
+    // performable-keybind pass-through) — do NOT collapse it into the error.
     fn clipboard_request(
         &self,
         clipboard_type: Clipboard,
         state: ClipboardRequest,
-    ) -> Result<bool, ApprtError>;
+    ) -> Result<ClipboardReadResult, ApprtError>;
 
     /// Write the given contents to the clipboard, optionally confirming with
     /// the user first.

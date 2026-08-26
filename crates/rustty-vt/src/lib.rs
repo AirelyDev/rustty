@@ -236,9 +236,9 @@ pub use paste::Source as PasteSource;
 // pub const MimeReader = clipboard.MimeReader;
 // (comment-only: same canonical name at `clipboard::MimeReader`.)
 // pub const PasteError = stream_terminal.Handler.PasteError;
-// PORT NOTE (W3.2 seam): the stream handler's paste operation (`876032316` /
-// `da27e6c90`, the `PasteError` owner) lands with the W3 kitty-clipboard
-// bundle's stream half; until then there is nothing for this alias to name.
+// (W3.2 landed the stream handler's paste operation; the seam note that
+// deferred this alias is resolved.)
+pub use stream_terminal::PasteError;
 // pub const Cursor = Screen.Cursor;
 // pub const CursorStyle = Screen.CursorStyle;
 // pub const CursorStyleReq = ansi.CursorStyle;

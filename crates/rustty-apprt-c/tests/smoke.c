@@ -61,19 +61,28 @@ static bool cb_action(App *app, TargetC target, ActionC action) {
     return false;
 }
 
-static bool cb_read_clipboard(void *userdata, int req_type, ClipboardRequest *state) {
+static int cb_read_clipboard(void *userdata,
+                             int req_type,
+                             ClipboardRequest *state,
+                             const char *const *mimes,
+                             uintptr_t mimes_len,
+                             bool list) {
     (void)userdata;
     (void)req_type;
     (void)state;
-    return false;
+    (void)mimes;
+    (void)mimes_len;
+    (void)list;
+    /* GHOSTTY_CLIPBOARD_READ_UNSUPPORTED — the request is never started. */
+    return 2;
 }
 
 static void cb_confirm_read_clipboard(void *userdata,
-                                      const char *str,
+                                      const ClipboardConfirm *confirm,
                                       ClipboardRequest *state,
                                       ClipboardRequestType req_type) {
     (void)userdata;
-    (void)str;
+    (void)confirm;
     (void)state;
     (void)req_type;
 }

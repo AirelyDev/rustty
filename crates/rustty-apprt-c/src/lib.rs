@@ -66,7 +66,8 @@ use libc::{c_char, c_int};
 // `PlatformC`/`PlatformCMacOS` build the zeroed platform union for the default
 // `ghostty_surface_config_new`.
 use rustty_apprt::embedded::{
-    self, App, Inspector, KeyTarget, Options, PlatformC, PlatformCMacOS, Surface, SurfaceOptions,
+    self, App, ClipboardComplete, Inspector, KeyTarget, Options, PlatformC, PlatformCMacOS,
+    Surface, SurfaceOptions,
 };
 // The `apprt_api::App` TRAIT (`perform_action`) the embedded `App` implements —
 // imported under a distinct name so it does not shadow the concrete `App` above.
@@ -2322,30 +2323,56 @@ pub unsafe extern "C" fn rustty_surface_binding_action(
 /// This can only be called once for a given request. Once it is called
 /// with a request the request pointer will be invalidated.
 ///
+/// To deny a request use rustty_surface_deny_clipboard_request
+/// instead.
+// export fn ghostty_surface_complete_clipboard_request(
+//     surface: *Surface,
+//     complete: *const ClipboardComplete,
+//     state: *anyopaque,
+// ) void {
+//     const ptr: *CoreSurface... ptr.completeClipboardRequest(complete, state);
+// }
+///
 /// # Safety
-/// `ptr` must be a valid pointer returned by [`rustty_surface_new`]; `str` must be a
-/// valid NUL-terminated C string; `state` must be the request pointer handed to the
-/// host by the read callback (it is invalidated by this call).
+/// `ptr` must be a valid pointer returned by [`rustty_surface_new`]; `complete`
+/// must point to a readable `rustty_clipboard_complete_s` (its arrays borrowed
+/// for this call); `state` must be the request pointer handed to the host by
+/// the read callback (it is invalidated by this call).
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_complete_clipboard_request(
     ptr: *mut Surface,
-    str: *const c_char,
+    complete: *const ClipboardComplete,
     state: *mut ClipboardRequest,
-    confirmed: bool,
 ) {
-    // ptr.completeClipboardRequest(
-    //     std.mem.sliceTo(str, 0),
-    //     state,
-    //     confirmed,
-    // );
-    //
-    // PORT NOTE: `str: [*:0]const u8` + `std.mem.sliceTo(str, 0)` → a borrowed `&CStr`
-    // (`CStr::from_ptr`): the backend `completeClipboardRequest` slices it
-    // (`.to_bytes()`) for core and re-hands `.as_ptr()` to the host
-    // `confirm_read_clipboard` callback (the NUL sentinel is load-bearing, E3).
-    // SAFETY: `ptr`/`str`/`state` validity is the caller's contract.
+    // ptr.completeClipboardRequest(complete, state);
+    // SAFETY: `ptr`/`complete`/`state` validity is the caller's contract.
     unsafe {
-        (*ptr).completeClipboardRequest(CStr::from_ptr(str), state, confirmed);
+        (*ptr).completeClipboardRequest(complete, state);
+    }
+}
+
+/// C: rustty_surface_deny_clipboard_request
+///
+/// Deny a clipboard read request started via the read callback. Like a
+/// completion this can only be called once for a given request and
+/// invalidates the request pointer.
+// export fn ghostty_surface_deny_clipboard_request(surface, state) void {
+//     ptr.denyClipboardRequest(state);
+// }
+///
+/// # Safety
+/// `ptr` must be a valid pointer returned by [`rustty_surface_new`]; `state`
+/// must be the request pointer handed to the host by the read callback (it is
+/// invalidated by this call).
+#[no_mangle]
+pub unsafe extern "C" fn rustty_surface_deny_clipboard_request(
+    ptr: *mut Surface,
+    state: *mut ClipboardRequest,
+) {
+    // ptr.denyClipboardRequest(state);
+    // SAFETY: `ptr`/`state` validity is the caller's contract.
+    unsafe {
+        (*ptr).denyClipboardRequest(state);
     }
 }
 

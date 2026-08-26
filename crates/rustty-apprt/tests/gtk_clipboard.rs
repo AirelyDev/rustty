@@ -112,13 +112,15 @@ fn clipboard_copy_roundtrips_and_paste_gate() {
         "set_clipboard(text/plain) must round-trip through the GDK clipboard"
     );
 
-    // ---- Paste gate: with text on the clipboard, a Paste request starts (Ok(true)). ----
+    // ---- Paste gate: with text on the clipboard, a Paste request starts
+    // (Ok(.started); Bundle E2 turned the bool into ClipboardReadResult). ----
     let started = surface
         .clipboard_request(Clipboard::Standard, ClipboardRequest::Paste)
         .expect("clipboard_request must not error");
-    assert!(
+    assert_eq!(
         started,
-        "clipboard_request(Paste) must return Ok(true) when the clipboard has text"
+        rustty_apprt_api::ClipboardReadResult::Started,
+        "clipboard_request(Paste) must return Ok(.started) when the clipboard has text"
     );
     for _ in 0..10 {
         ctx.iteration(true);

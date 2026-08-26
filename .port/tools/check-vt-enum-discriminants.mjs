@@ -55,7 +55,9 @@ const UNMAPPED = {
   RusttyModeReportState:
     "open enum: crates/rustty-vt-c/src/modes.rs:26 `pub struct ReportState(pub c_int)`",
   RusttyClipboardWriteResult:
-    "open enum: crates/rustty-vt/src/clipboard.rs:56 `pub struct WriteResult(pub i32)`",
+    "open enum: crates/rustty-vt/src/clipboard.rs `pub struct WriteStatus(pub i32)`",
+  RusttyClipboardReadResult:
+    "open enum: crates/rustty-vt/src/clipboard.rs `pub struct ReadStatus(pub i32)` (e03475c0c; same class as WriteStatus)",
 };
 
 // Curated enums the header deliberately exposes as a PREFIX of the Rust enum.

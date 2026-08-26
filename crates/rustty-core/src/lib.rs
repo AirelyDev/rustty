@@ -201,7 +201,7 @@ mod type_core_prototype {
             &self,
             _clipboard_type: apprt::Clipboard,
             _state: apprt::ClipboardRequest,
-        ) -> Result<bool, apprt::ApprtError> {
+        ) -> Result<apprt::ClipboardReadResult, apprt::ApprtError> {
             unimplemented!("dummy backend: not driven by the prototype test")
         }
 

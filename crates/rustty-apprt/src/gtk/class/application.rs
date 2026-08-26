@@ -5143,7 +5143,7 @@ mod tests {
             &self,
             _clipboard_type: apprt::Clipboard,
             _state: apprt::ClipboardRequest,
-        ) -> Result<bool, apprt::ApprtError> {
+        ) -> Result<apprt::ClipboardReadResult, apprt::ApprtError> {
             unimplemented!("test double: not exercised")
         }
         fn set_clipboard(

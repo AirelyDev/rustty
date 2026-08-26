@@ -359,11 +359,34 @@ typedef struct {
     ActionCValue value;
 } ActionC;
 
-/* ---- embedded.ClipboardContent (ghostty_clipboard_content_s, #[repr(C)]) ---- */
+/* ---- embedded.ClipboardContent (ghostty_clipboard_content_s, #[repr(C)]) ----
+ * One representation of clipboard contents. The data is binary-safe with an
+ * explicit length; it is not necessarily null-terminated (8c7a34d4c). */
 typedef struct {
     const char *mime;
-    const char *data;
+    const uint8_t *data;
+    uintptr_t len;
 } ClipboardContent;
+
+/* ---- embedded.ClipboardComplete (ghostty_clipboard_complete_s, #[repr(C)]) ---- */
+typedef struct {
+    const ClipboardContent *contents;
+    uintptr_t contents_len;
+    const char *const *available;
+    uintptr_t available_len;
+    bool confirmed;
+    bool remember;
+} ClipboardComplete;
+
+/* ---- embedded.ClipboardConfirm (ghostty_clipboard_confirm_s, #[repr(C)]) ---- */
+typedef struct {
+    const ClipboardContent *contents;
+    uintptr_t contents_len;
+    const char *const *available;
+    uintptr_t available_len;
+    const char *name;
+    bool can_remember;
+} ClipboardConfirm;
 
 /* ---- embedded.EnvVar (#[repr(C)]) ---- */
 typedef struct {
@@ -387,9 +410,14 @@ typedef struct {
     bool supports_selection_clipboard;
     void (*wakeup)(void *userdata);
     bool (*action)(App *app, TargetC target, ActionC action);
-    bool (*read_clipboard)(void *userdata, int req_type, ClipboardRequest *state);
+    int (*read_clipboard)(void *userdata,
+                          int req_type,
+                          ClipboardRequest *state,
+                          const char *const *mimes,
+                          uintptr_t mimes_len,
+                          bool list);
     void (*confirm_read_clipboard)(void *userdata,
-                                   const char *str,
+                                   const ClipboardConfirm *confirm,
                                    ClipboardRequest *state,
                                    ClipboardRequestType req_type);
     void (*write_clipboard)(void *userdata,
@@ -1237,16 +1265,33 @@ bool rustty_surface_binding_action(Surface *ptr,
  * This can only be called once for a given request. Once it is called
  * with a request the request pointer will be invalidated.
  *
+ * To deny a request use rustty_surface_deny_clipboard_request
+ * instead.
+ *
  * # Safety
- * `ptr` must be a valid pointer returned by [`rustty_surface_new`]; `str` must be a
- * valid NUL-terminated C string; `state` must be the request pointer handed to the
- * host by the read callback (it is invalidated by this call).
+ * `ptr` must be a valid pointer returned by [`rustty_surface_new`]; `complete`
+ * must point to a readable `rustty_clipboard_complete_s` (its arrays borrowed
+ * for this call); `state` must be the request pointer handed to the host by
+ * the read callback (it is invalidated by this call).
  */
 RUSTTY_API
 void rustty_surface_complete_clipboard_request(Surface *ptr,
-                                               const char *str,
-                                               ClipboardRequest *state,
-                                               bool confirmed);
+                                               const ClipboardComplete *complete,
+                                               ClipboardRequest *state);
+
+/**
+ * C: rustty_surface_deny_clipboard_request
+ *
+ * Deny a clipboard read request started via the read callback. Like a
+ * completion this can only be called once for a given request and
+ * invalidates the request pointer.
+ *
+ * # Safety
+ * `ptr` must be a valid pointer returned by [`rustty_surface_new`]; `state`
+ * must be the request pointer handed to the host by the read callback (it is
+ * invalidated by this call).
+ */
+RUSTTY_API void rustty_surface_deny_clipboard_request(Surface *ptr, ClipboardRequest *state);
 
 /**
  * C: rustty_surface_inspector

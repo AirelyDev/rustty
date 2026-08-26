@@ -540,13 +540,16 @@ unsafe fn image_get_typed(image_: ImageHandle, data: ImageData, out: *mut c_void
         ImageData::Format => unsafe { *(out as *mut ImageFormat) = image.format },
         // .compression => out.* = image.compression,
         ImageData::Compression => unsafe { *(out as *mut ImageCompression) = image.compression },
-        // .data_ptr => out.* = (image.data.bytes() orelse return .no_value).ptr,
-        ImageData::DataPtr => match image.data.bytes() {
+        // For animated images this is the current animation frame's
+        // data; the image generation changes whenever the current
+        // frame does, so generation-keyed caches stay coherent.
+        // .data_ptr => out.* = (image.renderData().bytes() orelse return .no_value).ptr,
+        ImageData::DataPtr => match image.render_data().bytes() {
             Some(bytes) => unsafe { *(out as *mut *const u8) = bytes.as_ptr() },
             None => return Result::NoValue,
         },
-        // .data_len => out.* = image.data.len(),
-        ImageData::DataLen => unsafe { *(out as *mut usize) = image.data.len() },
+        // .data_len => out.* = image.renderData().len(),
+        ImageData::DataLen => unsafe { *(out as *mut usize) = image.render_data().len() },
         // .generation => out.* = image.generation,
         ImageData::Generation => unsafe { *(out as *mut u64) = image.generation },
     }
@@ -1137,11 +1140,9 @@ pub unsafe fn placement_viewport_pos(
 //     const iter = iter_ orelse return .invalid_value;
 //     const entry = iter.entry orelse return .invalid_value;
 //     const p = entry.value_ptr;
-//     const x = @min(p.source_x, image.width);
-//     const y = @min(p.source_y, image.height);
-//     const w = @min(if (p.source_width > 0) p.source_width else image.width, image.width - x);
-//     const h = @min(if (p.source_height > 0) p.source_height else image.height, image.height - y);
-//     out_x.* = x; out_y.* = y; out_width.* = w; out_height.* = h;
+//     const source = p.sourceRect(image.*);
+//     out_x.* = source.x; out_y.* = source.y;
+//     out_width.* = source.width; out_height.* = source.height;
 //     return .success;
 // }
 /// # Safety
@@ -1177,32 +1178,16 @@ pub unsafe fn placement_source_rect(
     let image = unsafe { &*image_ };
     let p = unsafe { &*entry.1 };
 
-    // Apply "0 = full image dimension" convention, then clamp to image bounds.
-    // const x = @min(p.source_x, image.width);
-    let x = p.source_x.min(image.width);
-    // const y = @min(p.source_y, image.height);
-    let y = p.source_y.min(image.height);
-    // const w = @min(if (p.source_width > 0) p.source_width else image.width, image.width - x);
-    let w = (if p.source_width > 0 {
-        p.source_width
-    } else {
-        image.width
-    })
-    .min(image.width - x);
-    // const h = @min(if (p.source_height > 0) p.source_height else image.height, image.height - y);
-    let h = (if p.source_height > 0 {
-        p.source_height
-    } else {
-        image.height
-    })
-    .min(image.height - y);
+    // const source = p.sourceRect(image.*);
+    let source = p.source_rect(image);
 
-    // out_x.* = x; out_y.* = y; out_width.* = w; out_height.* = h;
+    // out_x.* = source.x; out_y.* = source.y;
+    // out_width.* = source.width; out_height.* = source.height;
     unsafe {
-        *out_x = x;
-        *out_y = y;
-        *out_width = w;
-        *out_height = h;
+        *out_x = source.x;
+        *out_y = source.y;
+        *out_width = source.width;
+        *out_height = source.height;
     }
 
     // return .success;
@@ -1328,28 +1313,15 @@ pub unsafe fn placement_render_info(
         (*out_).viewport_visible = vp.visible;
     }
 
-    // const x = @min(p.source_x, image.width);
-    let x = p.source_x.min(image.width);
-    // const y = @min(p.source_y, image.height);
-    let y = p.source_y.min(image.height);
-    // out.source_x = x; out.source_y = y;
-    // out.source_width = @min(if (p.source_width > 0) p.source_width else image.width, image.width - x);
-    // out.source_height = @min(if (p.source_height > 0) p.source_height else image.height, image.height - y);
+    // const source = p.sourceRect(image.*);
+    let source = p.source_rect(image);
+    // out.source_x = source.x; out.source_y = source.y;
+    // out.source_width = source.width; out.source_height = source.height;
     unsafe {
-        (*out_).source_x = x;
-        (*out_).source_y = y;
-        (*out_).source_width = (if p.source_width > 0 {
-            p.source_width
-        } else {
-            image.width
-        })
-        .min(image.width - x);
-        (*out_).source_height = (if p.source_height > 0 {
-            p.source_height
-        } else {
-            image.height
-        })
-        .min(image.height - y);
+        (*out_).source_x = source.x;
+        (*out_).source_y = source.y;
+        (*out_).source_width = source.width;
+        (*out_).source_height = source.height;
     }
 
     // return .success;
@@ -1382,18 +1354,53 @@ unsafe fn compute_viewport_pos(
 
     // Virtual placements use unicode placeholders and don't have a
     // screen position — they are rendered inline by the text layout.
-    // const pin = switch (p.location) { .pin => |pin| pin, .virtual => return ... };
-    let pin = match p.location {
-        Location::Pin(pin) => pin,
-        // PORT NOTE (P5-W2 seam): upstream `cd5f9eef0` resolves relative
-        // placements through `resolveChain` in this C half; that half lands
-        // with the C-API wave (W6). Until then a relative placement is
-        // reported not-visible here, like virtual.
-        Location::Virtual | Location::Relative(_) => {
+    // Relative placements are anchored at the root of their parent
+    // chain, offset by the accumulated chain offsets. A chain rooted
+    // at a virtual placement has no resolvable position here: its
+    // origin is the parent's placeholder cells, which only a renderer
+    // scanning the screen can locate.
+    // const origin: struct { pin: *const PageList.Pin, col_offset: i32 = 0, row_offset: i32 = 0 } =
+    //     switch (p.location) { .pin => ..., .virtual => ..., .relative => |rel| ... };
+    //
+    // PORT NOTE: the reference's anonymous origin struct is a tuple
+    // `(pin, col_offset, row_offset)` here (Rust has no anonymous structs).
+    let (pin, col_offset, row_offset): (_, i32, i32) = match p.location {
+        Location::Pin(pin) => (pin, 0, 0),
+        Location::Virtual => {
             return ViewportPos {
                 col: 0,
                 row: 0,
                 visible: false,
+            }
+        }
+        Location::Relative(rel) => {
+            // const storage = &t.screens.active.kitty_images;
+            // SAFETY: `t` is the live terminal; `screens.active` is its live
+            // active screen. Shared borrow only — the placement ITERATOR holds
+            // `entry.value_ptr` into the same storage map, so no `&mut` may be
+            // formed here (raw-ptr discipline, hazard §5.7).
+            let storage = unsafe { &(*(*t).screens.active).kitty_images };
+            // const chain = storage.resolveChain(rel) orelse return ...;
+            let Some(chain) = storage.resolve_chain(rel) else {
+                return ViewportPos {
+                    col: 0,
+                    row: 0,
+                    visible: false,
+                };
+            };
+            match chain.root.location {
+                Location::Pin(root_pin) => {
+                    (root_pin, chain.horizontal_offset, chain.vertical_offset)
+                }
+                Location::Virtual => {
+                    return ViewportPos {
+                        col: 0,
+                        row: 0,
+                        visible: false,
+                    }
+                }
+                // .relative => unreachable, // resolveChain roots are never relative
+                Location::Relative(_) => unreachable!("resolveChain roots are never relative"),
             }
         }
     };
@@ -1440,23 +1447,35 @@ unsafe fn compute_viewport_pos(
 
     // Subtracting viewport origin from the pin gives us viewport-
     // relative coordinates. The row can be negative when the
-    // placement has partially scrolled above the viewport.
-    // const vp_row: i32 = @as(i32, @intCast(pin_screen.screen.y)) - @as(i32, @intCast(vp_screen.screen.y));
-    let vp_row: i32 = pin_screen.coord().y as i32 - vp_screen.coord().y as i32;
-    // const vp_col: i32 = @intCast(pin_screen.screen.x);
-    let vp_col: i32 = pin_screen.coord().x as i32;
+    // placement has partially scrolled above the viewport, and both
+    // can be negative for relative placements with negative offsets.
+    // const vp_row: i32 = (@as(i32, @intCast(pin_screen.screen.y)) -
+    //     @as(i32, @intCast(vp_screen.screen.y))) +| origin.row_offset;
+    // R7: `+|` -> `saturating_add`.
+    let vp_row: i32 =
+        (pin_screen.coord().y as i32 - vp_screen.coord().y as i32).saturating_add(row_offset);
+    // const vp_col: i32 = @as(i32, @intCast(pin_screen.screen.x)) +| origin.col_offset;
+    let vp_col: i32 = (pin_screen.coord().x as i32).saturating_add(col_offset);
 
-    // A placement is invisible if its bottom edge (row + height)
-    // is above the viewport, or its top edge is at or below the
-    // viewport's last row.
+    // A placement is invisible if its bottom edge (row + height) is
+    // above the viewport, or its top edge is at or below the viewport's
+    // last row. The same applies horizontally: a pin's column is always
+    // in bounds, but a relative placement's offsets can push it fully
+    // off either side.
     // const grid_size = p.gridSize(image.*, t);
     let grid_size = p.grid_size(image, unsafe { &*t });
     // const bottom_row = @as(i64, vp_row) + @as(i64, grid_size.rows);
     // R7: `grid_size.rows` is `u32`, so the old `@intCast` to `i32` trapped on
     // rows > i32::MAX; the END STATE widens the sum to `i64` instead.
     let bottom_row = vp_row as i64 + grid_size.rows as i64;
-    // const visible = bottom_row > 0 and vp_row < @as(i32, t.rows);
-    let visible = bottom_row > 0 && vp_row < unsafe { (*t).rows } as i32;
+    // const right_col = @as(i64, vp_col) + @as(i64, grid_size.cols);
+    let right_col = vp_col as i64 + grid_size.cols as i64;
+    // const visible = bottom_row > 0 and vp_row < @as(i32, t.rows) and
+    //     right_col > 0 and vp_col < @as(i32, t.cols);
+    let visible = bottom_row > 0
+        && vp_row < unsafe { (*t).rows } as i32
+        && right_col > 0
+        && vp_col < unsafe { (*t).cols } as i32;
 
     // return .{ .col = vp_col, .row = vp_row, .visible = visible };
     ViewportPos {
@@ -2969,6 +2988,16 @@ mod tests {
             assert_eq!(3, y);
             assert_eq!(1, w);
             assert_eq!(1, h);
+
+            // var pixel_width: u32 = undefined;
+            // var pixel_height: u32 = undefined;
+            let mut pixel_width: u32 = 0;
+            let mut pixel_height: u32 = 0;
+            assert_eq!(Result::Success, unsafe {
+                placement_pixel_size(iter, img, t, &mut pixel_width, &mut pixel_height)
+            });
+            assert_eq!(1, pixel_width);
+            assert_eq!(1, pixel_height);
 
             unsafe { placement_iterator_free(iter) };
             unsafe { terminal_c::free(t) };

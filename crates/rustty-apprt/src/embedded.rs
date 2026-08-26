@@ -94,8 +94,8 @@ use dcimgui_sys::ImGuiContext;
 use rustty_apprt_api::action::{Action, ActionC, Target, TargetC};
 use rustty_apprt_api::ipc;
 use rustty_apprt_api::structs::{
-    Clipboard, ClipboardRequest, ClipboardRequestType, ColorScheme, ContentScale, CursorPos,
-    SurfaceSize,
+    Clipboard, ClipboardReadResult, ClipboardRequest, ClipboardRequestType, ColorScheme,
+    ContentScale, CursorPos, SurfaceSize,
 };
 use rustty_apprt_api::surface::should_inherit_working_directory;
 use rustty_apprt_api::{
@@ -218,19 +218,54 @@ pub struct Options {
     // action: *const fn (*App, apprt.Target.C, apprt.Action.C) callconv(.c) bool,
     pub action: extern "C" fn(*mut App, TargetC, ActionC) -> bool,
 
-    /// Read the clipboard value. Returns true if the clipboard request
-    /// was started and complete_clipboard_request may be called with the
-    /// given state pointer. Returns false if the clipboard request couldn't
-    /// be started (such as when no text is available for a paste request).
-    // read_clipboard: *const fn (SurfaceUD, c_int, *apprt.ClipboardRequest) callconv(.c) bool,
-    pub read_clipboard: extern "C" fn(*mut c_void, c_int, *mut ClipboardRequest) -> bool,
+    /// Read the clipboard value. The result only reports facts about
+    /// the clipboard: whether the request was started (in which case
+    /// complete_clipboard_request or deny_clipboard_request must
+    /// eventually be called with the given state pointer), whether the
+    /// clipboard has no servable contents, or whether the clipboard
+    /// can't be read at all. How each non-started state is answered is
+    /// up to the core.
+    ///
+    /// The MIME types are exactly the representations the caller wants
+    /// served; the embedder should read only those. Text-like types
+    /// are always requested as the canonical "text/plain". The final
+    /// bool asks for the listing of all MIME types available on the
+    /// clipboard to be delivered with the completion.
+    // read_clipboard: *const fn (
+    //     SurfaceUD,
+    //     c_int,
+    //     *apprt.ClipboardRequest,
+    //     [*]const [*:0]const u8,
+    //     usize,
+    //     bool,
+    // ) callconv(.c) apprt.ClipboardReadResult,
+    //
+    // PORT NOTE (D11, closed-enum inbound): the reference returns the CLOSED
+    // `apprt.ClipboardReadResult` enum(c_int) straight across the C ABI. A
+    // `#[repr(C)]` Rust return would materialize an out-of-range host value
+    // as UB before any check, so the callback returns the raw `c_int` and
+    // `clipboard_request` is the narrowing point.
+    pub read_clipboard: extern "C" fn(
+        *mut c_void,
+        c_int,
+        *mut ClipboardRequest,
+        *const *const c_char,
+        usize,
+        bool,
+    ) -> c_int,
 
     /// This may be called after a read clipboard call to request
-    /// confirmation that the clipboard value is safe to read. The embedder
-    /// must call complete_clipboard_request with the given request.
-    // confirm_read_clipboard: *const fn (SurfaceUD, [*:0]const u8, *apprt.ClipboardRequest, apprt.ClipboardRequestType) callconv(.c) void,
-    pub confirm_read_clipboard:
-        extern "C" fn(*mut c_void, *const c_char, *mut ClipboardRequest, ClipboardRequestType),
+    /// confirmation that the clipboard value is safe to read. The
+    /// embedder must call complete_clipboard_request (usually with
+    /// the confirmation's contents, which are only borrowed for
+    /// this call) or deny_clipboard_request with the given request.
+    // confirm_read_clipboard: *const fn (SurfaceUD, *const CAPI.ClipboardConfirm, *apprt.ClipboardRequest, apprt.ClipboardRequestType) callconv(.c) void,
+    pub confirm_read_clipboard: extern "C" fn(
+        *mut c_void,
+        *const ClipboardConfirm,
+        *mut ClipboardRequest,
+        ClipboardRequestType,
+    ),
 
     /// Write the clipboard value.
     // write_clipboard: *const fn (SurfaceUD, c_int, [*]const CAPI.ClipboardContent, usize, bool) callconv(.c) void,
@@ -1346,42 +1381,77 @@ impl Surface {
         }
     }
 
-    // pub fn completeClipboardRequest(
+    // fn completeClipboardRequest(
     //     self: *Surface,
-    //     str: [:0]const u8,
+    //     complete: *const CAPI.ClipboardComplete,
     //     state: *apprt.ClipboardRequest,
-    //     confirmed: bool,
     // ) void { ... }
     //
     // PORT NOTE (ADV-FIX 9 pub-widening): the reference is a file-private `fn`, but
     // the apprt-c `rustty_surface_complete_clipboard_request` wrapper (E9) reaches
-    // it across the crate boundary, so it is `pub` here. `str: [:0]const u8` → a
-    // borrowed `&CStr`: the NUL sentinel is LOAD-BEARING — `str.ptr` is handed to
-    // the host `confirm_read_clipboard` callback as `[*:0]const u8`, while the `[]`
-    // view (`.to_bytes()`, sans sentinel) goes to core. `state` stays a raw
+    // it across the crate boundary, so it is `pub` here. `state` stays a raw
     // `*mut ClipboardRequest` (the heap request from [`Surface::clipboard_request`],
     // Box-allocated there).
-    pub fn completeClipboardRequest(
+    //
+    // PORT NOTE (W7 seam, 8c7a34d4c/25c61e852): the C-ABI shape — the
+    // `ClipboardComplete` payload — is the Bundle-E2 end state and is live.
+    // The head's CORE completion (`CompleteClipboard` with contents/available/
+    // remember, `completeClipboardPasteEvent`, the kitty arms) rides the W7
+    // surface half; until then the payload narrows onto the pre-range core
+    // call exactly as the head's core does for the request types that exist:
+    // `clipboardTextContent(complete.contents) orelse ""` + `complete.confirmed`.
+    ///
+    /// # Safety
+    /// `complete` must point to a readable `ClipboardComplete` (its arrays
+    /// borrowed for this call); `state` must be the live request pointer.
+    pub unsafe fn completeClipboardRequest(
         &mut self,
-        str: &CStr,
+        complete: *const ClipboardComplete,
         state: *mut ClipboardRequest,
-        confirmed: bool,
     ) {
         // const alloc = self.app.core_app.alloc;
         // (PORT NOTE: `state` is a Rust `Box` from `clipboard_request`; it is reclaimed +
         // freed via `Box::from_raw` below — no core-app `alloc` handle is needed.)
 
+        // Convert the C representations to the core types. Everything
+        // remains borrowed from the caller for the duration of the call.
+        // const raw_contents: []const CAPI.ClipboardContent =
+        //     if (complete.contents) |v| v[0..complete.contents_len] else &.{};
+        // SAFETY: the completion arrays are borrowed C memory, valid for this
+        // call (caller contract).
+        let raw_contents: &[ClipboardContent] = if unsafe { (*complete).contents }.is_null() {
+            &[]
+        } else {
+            unsafe {
+                std::slice::from_raw_parts((*complete).contents, (*complete).contents_len)
+            }
+        };
+
+        // fn clipboardTextContent(contents) ?[]const u8 — the first
+        // representation with a text MIME type (Surface.zig; W7-seam
+        // projection of the head's core completion, see the fn PORT NOTE).
+        let mut data: &[u8] = b"";
+        for raw in raw_contents {
+            // content.mime = std.mem.sliceTo(raw.mime, 0); content.data = raw.data[0..raw.len];
+            // SAFETY: `mime` is a NUL-terminated C string; `data`/`len`
+            // describe readable C memory (caller contract).
+            let mime = unsafe { CStr::from_ptr(raw.mime) }.to_bytes();
+            if rustty_vt::clipboard::is_text_mime(mime) {
+                data = if raw.data.is_null() {
+                    b""
+                } else {
+                    unsafe { std::slice::from_raw_parts(raw.data, raw.len) }
+                };
+                break;
+            }
+        }
+
         // Attempt to complete the request, but we may request
         // confirmation.
-        // self.core_surface.completeClipboardRequest(state.*, str, confirmed) catch |err| switch (err) {
-        //
-        // PORT NOTE: the Zig `catch |err| switch (err)` is rendered as a `match` on
-        // the `Result` — the `Ok(())` arm is the reference's no-error path (falls
-        // through to `alloc.destroy` below).
         match self.core_surface.completeClipboardRequest(
             unsafe { *state },
-            str.to_bytes(),
-            confirmed,
+            data,
+            unsafe { (*complete).confirmed },
         ) {
             Ok(()) => {}
 
@@ -1389,13 +1459,15 @@ impl Surface {
             // error.UnauthorizedPaste,
             // => { ... return; },
             Err(CoreSurfaceError::UnsafePaste | CoreSurfaceError::UnauthorizedPaste) => {
-                // self.app.opts.confirm_read_clipboard(
-                //     self.userdata,
-                //     str.ptr,
-                //     state,
-                //     state.*,
-                // );
-                //
+                // Session grant information for the permission prompt,
+                // carried only by Kitty clipboard protocol requests.
+                // const name, const can_remember = switch (state.*) {
+                //     inline .kitty_read, .kitty_write => |kitty| .{ ... },
+                //     else => .{ null, false },
+                // };
+                // (W7 seam: only the `else` arm's request types exist today.)
+                let (name, can_remember): (*const c_char, bool) = (std::ptr::null(), false);
+
                 // PORT NOTE: the reference's 4th arg `state.*` (an
                 // `apprt.ClipboardRequest`) IMPLICITLY coerces to the callback's
                 // `apprt.ClipboardRequestType` param (Zig tagged-union → tag enum).
@@ -1405,10 +1477,24 @@ impl Surface {
                     ClipboardRequest::Osc52Read(_) => ClipboardRequestType::Osc52Read,
                     ClipboardRequest::Osc52Write(_) => ClipboardRequestType::Osc52Write,
                 };
+                // self.app.opts.confirm_read_clipboard(
+                //     self.userdata,
+                //     &.{ .contents = complete.contents, ..., .name = name, .can_remember = can_remember },
+                //     state,
+                //     state.*,
+                // );
+                let confirm = ClipboardConfirm {
+                    contents: unsafe { (*complete).contents },
+                    contents_len: unsafe { (*complete).contents_len },
+                    available: unsafe { (*complete).available },
+                    available_len: unsafe { (*complete).available_len },
+                    name,
+                    can_remember,
+                };
                 unsafe {
                     ((*self.app).opts.confirm_read_clipboard)(
                         self.userdata,
-                        str.as_ptr(),
+                        &confirm,
                         state,
                         state_type,
                     );
@@ -1428,6 +1514,28 @@ impl Surface {
         // preserves the clipboard request.
         // alloc.destroy(state);
         //
+        // (PORT NOTE: reclaim + drop the `Box` allocated in [`Surface::clipboard_request`].)
+        unsafe { drop(Box::from_raw(state)) };
+    }
+
+    // fn denyClipboardRequest(
+    //     self: *Surface,
+    //     state: *apprt.ClipboardRequest,
+    // ) void {
+    //     self.core_surface.denyClipboardRequest(state.*);
+    //     self.app.core_app.alloc.destroy(state);
+    // }
+    //
+    // PORT NOTE (ADV-FIX 9 pub-widening): file-private in the reference;
+    // reached by the apprt-c `rustty_surface_deny_clipboard_request` wrapper.
+    ///
+    /// # Safety
+    /// `state` must be the live request pointer handed to the host by the
+    /// read callback (it is invalidated by this call).
+    pub unsafe fn denyClipboardRequest(&mut self, state: *mut ClipboardRequest) {
+        // self.core_surface.denyClipboardRequest(state.*);
+        self.core_surface.denyClipboardRequest(unsafe { *state });
+        // self.app.core_app.alloc.destroy(state);
         // (PORT NOTE: reclaim + drop the `Box` allocated in [`Surface::clipboard_request`].)
         unsafe { drop(Box::from_raw(state)) };
     }
@@ -2963,12 +3071,45 @@ impl ApprtSurface for Surface {
         }
     }
 
-    // pub fn clipboardRequest(self: *Surface, clipboard_type, state) !bool { ... }
+    // pub fn clipboardRequest(self: *Surface, clipboard_type, state) !apprt.ClipboardReadResult { ... }
+    //
+    // PORT NOTE (W7 seam, 0ce9054bf end state): the head's `.kitty_write`
+    // fast path, `.list`/`.kitty_read` mime arms, and
+    // `completeKittyClipboardWrite` ride the W7 apprt/surface half (the
+    // ClipboardRequest union variants do not exist yet). The C-ABI shape —
+    // mimes + list parameters and the ClipboardReadResult return — is the
+    // Bundle-E2 end state and is live here.
     fn clipboard_request(
         &self,
         clipboard_type: Clipboard,
         state: ClipboardRequest,
-    ) -> Result<bool, ApprtError> {
+    ) -> Result<ClipboardReadResult, ApprtError> {
+        // The representations the read wants served. Text-only
+        // requesters ask for the canonical text type; Kitty clipboard
+        // reads ask for exactly what the program requested, with
+        // text-like aliases normalized so the embedder never has to
+        // know about them.
+        // const mimes: []const [*:0]const u8 = switch (state) {
+        //     .paste, .osc_52_read => &.{"text/plain"},
+        //     ...
+        // };
+        let mimes: &[*const c_char] = match state {
+            ClipboardRequest::Paste | ClipboardRequest::Osc52Read(_) => {
+                &[c"text/plain".as_ptr()]
+            }
+
+            // No clipboard write code paths travel through this function
+            // .osc_52_write => unreachable,
+            ClipboardRequest::Osc52Write(_) => unreachable!(),
+        };
+        // const list = switch (state) {
+        //     .list => true,
+        //     .kitty_read => |kitty| kitty.list,
+        //     else => false,
+        // };
+        // (W7 seam: only the `else` arm's request types exist today.)
+        let list = false;
+
         // We need to allocate to get a pointer to store our clipboard request
         // so that it is stable until the read_clipboard callback and call
         // complete_clipboard_request. This sucks but clipboard requests aren't
@@ -2979,27 +3120,42 @@ impl ApprtSurface for Surface {
         // state_ptr.* = state;
         let state_ptr: *mut ClipboardRequest = Box::into_raw(Box::new(state));
 
-        // const started = self.app.opts.read_clipboard(
+        // const result = self.app.opts.read_clipboard(
         //     self.userdata,
         //     @intCast(@intFromEnum(clipboard_type)),
         //     state_ptr,
+        //     mimes.ptr,
+        //     mimes.len,
+        //     list,
         // );
-        let started = unsafe {
-            ((*self.app).opts.read_clipboard)(self.userdata, clipboard_type as c_int, state_ptr)
+        //
+        // PORT NOTE (D11 narrowing): the callback returns the raw `c_int`;
+        // an out-of-range host value (where the reference's closed enum
+        // would trap in a safety-checked build) is narrowed to `.unsupported`
+        // — fail closed, the request is not considered started.
+        let raw = unsafe {
+            ((*self.app).opts.read_clipboard)(
+                self.userdata,
+                clipboard_type as c_int,
+                state_ptr,
+                mimes.as_ptr(),
+                mimes.len(),
+                list,
+            )
         };
-        // if (!started) {
-        //     alloc.destroy(state_ptr);
-        //     return false;
-        // }
-        if !started {
-            unsafe { drop(Box::from_raw(state_ptr)) };
-            return Ok(false);
-        }
+        let result =
+            ClipboardReadResult::from_c_int(raw).unwrap_or(ClipboardReadResult::Unsupported);
 
-        // return true;
-        // (On success `state_ptr` is intentionally leaked to the host — it owns the
-        // request until `complete_clipboard_request` frees it, E9.)
-        Ok(true)
+        // Only a started request completes later and keeps the state.
+        // if (result != .started) alloc.destroy(state_ptr);
+        // return result;
+        if result != ClipboardReadResult::Started {
+            unsafe { drop(Box::from_raw(state_ptr)) };
+        }
+        // (On start `state_ptr` is intentionally leaked to the host — it owns
+        // the request until `complete_clipboard_request` /
+        // `deny_clipboard_request` frees it, E9.)
+        Ok(result)
     }
 
     // pub fn setClipboard(self: *const Surface, clipboard_type, contents, confirm) !void { ... }
@@ -3013,18 +3169,21 @@ impl ApprtSurface for Surface {
         // const array = try alloc.alloc(CAPI.ClipboardContent, contents.len);
         // defer alloc.free(array);
         // for (contents, 0..) |content, i| {
-        //     array[i] = .{ .mime = content.mime, .data = content.data };
+        //     array[i] = .{ .mime = content.mime, .data = content.data.ptr, .len = content.data.len };
         // }
         //
-        // PORT NOTE: `apprt.ClipboardContent.mime`/`.data` are `[:0]const u8`
-        // (NUL-terminated byte slices → `&[u8]` with a guaranteed trailing NUL); the
-        // CAPI `ClipboardContent` wants `[*:0]const u8` → `.as_ptr()`. The heap
-        // `alloc.alloc`/`defer free` pair is an owned `Vec` (dropped at scope end).
+        // PORT NOTE: `apprt.ClipboardContent.mime` is `[:0]const u8`
+        // (a NUL-terminated byte slice → `&[u8]` with a guaranteed trailing
+        // NUL); the CAPI `ClipboardContent` wants `[*:0]const u8` →
+        // `.as_ptr()`. `data` crosses binary-safe as pointer + explicit `len`
+        // (8c7a34d4c). The heap `alloc.alloc`/`defer free` pair is an owned
+        // `Vec` (dropped at scope end).
         let array: Vec<ClipboardContent> = contents
             .iter()
             .map(|content| ClipboardContent {
                 mime: content.mime.as_ptr().cast(),
-                data: content.data.as_ptr().cast(),
+                data: content.data.as_ptr(),
+                len: content.data.len(),
             })
             .collect();
 
@@ -3113,12 +3272,62 @@ impl ApprtSurface for Surface {
 /// — references it, so it must live in this crate (`rustty-apprt-c` deps
 /// `rustty-apprt`, not the reverse). E5/apprt-c hand-pins / re-exports this exact
 /// extern struct for the generated header (ADV-FIX 9 pub-widening).
+// rustty_clipboard_content_s
+//
+// One representation of clipboard contents. The data is binary-safe
+// and its length is explicit; it is not sentinel-terminated.
+// (8c7a34d4c: `data` loses its NUL sentinel and gains an explicit `len` —
+// a LAYOUT change; the rustty-embed.h struct, the @embed-abi KAT, and this
+// definition move together.)
 #[repr(C)]
 pub struct ClipboardContent {
     // mime: [*:0]const u8,
     pub mime: *const c_char,
-    // data: [*:0]const u8,
-    pub data: *const c_char,
+    // data: [*]const u8,
+    pub data: *const u8,
+    // len: usize,
+    pub len: usize,
+}
+
+// rustty_clipboard_complete_s
+//
+// The payload for completing a clipboard read request. See
+// Surface.CompleteClipboard for the field documentation.
+// const ClipboardComplete = extern struct { contents, contents_len,
+//     available, available_len, confirmed, remember };
+#[repr(C)]
+pub struct ClipboardComplete {
+    pub contents: *const ClipboardContent,
+    pub contents_len: usize,
+    pub available: *const *const c_char,
+    pub available_len: usize,
+    pub confirmed: bool,
+    pub remember: bool,
+}
+
+// rustty_clipboard_confirm_s
+//
+// The payload of a clipboard read confirmation request: the
+// would-be completion contents plus the information shown in the
+// permission prompt. All memory is borrowed for the duration of
+// the confirm_read_clipboard callback.
+// const ClipboardConfirm = extern struct { contents, contents_len,
+//     available, available_len, name, can_remember };
+#[repr(C)]
+pub struct ClipboardConfirm {
+    pub contents: *const ClipboardContent,
+    pub contents_len: usize,
+    pub available: *const *const c_char,
+    pub available_len: usize,
+
+    /// The human friendly name of the requesting program for the
+    /// prompt, null when the protocol doesn't carry one.
+    pub name: *const c_char,
+
+    /// True when the user's decision may be remembered as a
+    /// session grant, reported back through the completion's
+    /// remember field.
+    pub can_remember: bool,
 }
 
 #[cfg(test)]

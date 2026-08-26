@@ -38,6 +38,14 @@ pub struct Image {
 pub type DecodePngFn =
     extern "C" fn(*mut std::ffi::c_void, *const CAllocator, *const u8, usize, *mut Image) -> bool;
 
+/// C: GhosttySysRandomSecureFn -> RusttySysRandomSecureFn (R2)
+// pub const RandomSecureFn = *const fn (
+//     ?*anyopaque,
+//     [*]u8,
+//     usize,
+// ) callconv(lib.calling_conv) bool;
+pub type RandomSecureFn = extern "C" fn(*mut std::ffi::c_void, *mut u8, usize) -> bool;
+
 /// C: GhosttySysLogLevel -> RusttySysLogLevel (R2)
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,13 +116,15 @@ pub enum Option_ {
     Userdata = 0,
     DecodePng = 1,
     Log = 2,
+    RandomSecure = 3,
 }
 
 // pub fn InType(comptime self: Option) type { ... }
 // PORT NOTE: the per-tag input type for `setTyped`:
-//   .userdata    => ?*const anyopaque
-//   .decode_png  => ?DecodePngFn
-//   .log         => ?LogFn
+//   .userdata      => ?*const anyopaque
+//   .decode_png    => ?DecodePngFn
+//   .log           => ?LogFn
+//   .random_secure => ?RandomSecureFn
 // Rust has no comptime type-returning fn; each `set` arm casts `value`
 // accordingly (preserving the same tag/type correspondence).
 
@@ -128,6 +138,7 @@ struct Global {
     userdata: *mut std::ffi::c_void,
     decode_png: core::option::Option<DecodePngFn>,
     log: core::option::Option<LogFn>,
+    random_secure: core::option::Option<RandomSecureFn>,
 }
 
 // PORT NOTE: raw `*mut c_void`/`extern "C" fn` are not `Send` by default; the
@@ -142,6 +153,7 @@ static GLOBAL: Mutex<Global> = Mutex::new(Global {
     userdata: std::ptr::null_mut(),
     decode_png: None,
     log: None,
+    random_secure: None,
 });
 
 /// PORT NOTE (`590d669c4` seam): views the seam's `RawAllocator` — the
@@ -274,6 +286,25 @@ fn decode_png_wrapper(
     })
 }
 
+/// Zig-compatible wrapper that calls through to the stored C callback.
+// fn randomSecureWrapper(buffer: []u8) terminal_sys.RandomSecureError!void {
+//     const func = global.random_secure orelse return error.EntropyUnavailable;
+//     if (!func(global.userdata, buffer.ptr, buffer.len)) return error.EntropyUnavailable;
+// }
+fn random_secure_wrapper(buffer: &mut [u8]) -> core::result::Result<(), terminal_sys::RandomSecureError> {
+    let g = GLOBAL.lock().unwrap();
+    let func = match g.random_secure {
+        Some(f) => f,
+        None => return Err(terminal_sys::RandomSecureError::EntropyUnavailable),
+    };
+    let userdata = g.userdata;
+    drop(g);
+    if !func(userdata, buffer.as_mut_ptr(), buffer.len()) {
+        return Err(terminal_sys::RandomSecureError::EntropyUnavailable);
+    }
+    Ok(())
+}
+
 /// PORT NOTE: `pub fn set(option: Option, value: ?*const anyopaque)
 /// callconv(...) Result`. The C calling convention is the `extern "C"` wrapper
 /// in `lib.rs` (`rustty_sys_set`).
@@ -329,6 +360,26 @@ unsafe fn set_typed(option: Option_, value: *const std::ffi::c_void) -> Result {
             } else {
                 // SAFETY: `value` is a `LogFn` fn-pointer (caller contract).
                 Some(unsafe { std::mem::transmute::<*const std::ffi::c_void, LogFn>(value) })
+            };
+        }
+        // .random_secure => {
+        //     global.random_secure = value;
+        //     terminal_sys.random_secure = if (value != null) &randomSecureWrapper else null;
+        // },
+        Option_::RandomSecure => {
+            g.random_secure = if value.is_null() {
+                None
+            } else {
+                // SAFETY: `value` is a `RandomSecureFn` fn-pointer (caller
+                // contract).
+                Some(unsafe {
+                    std::mem::transmute::<*const std::ffi::c_void, RandomSecureFn>(value)
+                })
+            };
+            *terminal_sys::random_secure.write().unwrap() = if value.is_null() {
+                None
+            } else {
+                Some(random_secure_wrapper as terminal_sys::RandomSecureFn)
             };
         }
     }

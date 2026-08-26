@@ -89,6 +89,46 @@ pub enum ClipboardRequestType {
     Paste,
     Osc52Read,
     Osc52Write,
+    KittyRead,
+    KittyWrite,
+    List,
+}
+
+/// The result of starting a clipboard read request. This only reports
+/// facts about the clipboard; how each state is answered on the wire
+/// (if at all) is up to the protocol handling of the requester.
+///
+/// If this is changed, you must also update ghostty.h
+// pub const ClipboardReadResult = enum(c_int) { started = 0, unavailable = 1, unsupported = 2 };
+// (rustty: the header is include/rustty-embed.h — `rustty_clipboard_read_result_e`.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(i32)]
+pub enum ClipboardReadResult {
+    /// The request was started and will be completed asynchronously
+    /// via the core surface completeClipboardRequest API.
+    Started = 0,
+
+    /// The clipboard exists but has no contents the apprt can serve
+    /// (e.g. no text-like data). The request was not started.
+    Unavailable = 1,
+
+    /// The clipboard itself can't be read (e.g. a primary selection on
+    /// a platform without one). The request was not started.
+    Unsupported = 2,
+}
+
+impl ClipboardReadResult {
+    /// Narrow an inbound C integer, mirroring the D11 closed-enum boundary
+    /// policy (the reference reads the enum by value and a safety-checked
+    /// build traps on an out-of-range value; rustty narrows explicitly).
+    pub fn from_c_int(v: i32) -> Option<ClipboardReadResult> {
+        match v {
+            0 => Some(ClipboardReadResult::Started),
+            1 => Some(ClipboardReadResult::Unavailable),
+            2 => Some(ClipboardReadResult::Unsupported),
+            _ => None,
+        }
+    }
 }
 
 /// Clipboard request. This is used to request clipboard contents and must
@@ -109,10 +149,13 @@ pub enum ClipboardRequest {
     Osc52Write(Clipboard),
     // PORT NOTE (W7 seam, 0ce9054bf/25c61e852 end state): the head grows
     // `kitty_read: *KittyRead`, `kitty_write: *KittyWrite`, and
-    // `list: Clipboard` variants (and the matching ClipboardRequestType
-    // tags). Those land with the W7 apprt/macOS surface half; the request
-    // STATE types below are already ported because the termio stream handler
-    // (this phase) builds and sends them.
+    // `list: Clipboard` variants, and `paste` becomes payload-carrying
+    // (`paste: Clipboard`, c2c0db68a). Those UNION variants land with the
+    // W7 apprt/macOS surface half (their exhaustive matches span core
+    // Surface + gtk); the matching ClipboardRequestType TAGS and
+    // `ClipboardReadResult` are C-ABI surface (rustty-embed.h) and landed
+    // with W6 Bundle E2. The request STATE types below are already ported
+    // because the termio stream handler (this phase) builds and sends them.
 }
 
 /// State for one in-flight Kitty clipboard protocol read. This is

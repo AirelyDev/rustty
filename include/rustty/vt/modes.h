@@ -94,6 +94,7 @@ extern "C" {
 #define RUSTTY_MODE_COLOR_SCHEME_REPORT (rustty_mode_new(2031, false)) /**< Report color scheme */
 #define RUSTTY_MODE_VISIBILITY_REPORT (rustty_mode_new(2033, false)) /**< Report terminal visibility */
 #define RUSTTY_MODE_IN_BAND_RESIZE   (rustty_mode_new(2048, false)) /**< In-band size reports */
+#define RUSTTY_MODE_PASTE_EVENTS     (rustty_mode_new(5522, false)) /**< Kitty clipboard protocol paste events */
 /** @} */
 
 /**

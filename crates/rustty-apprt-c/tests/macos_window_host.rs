@@ -166,12 +166,20 @@ extern "C" fn cb_wakeup(_ud: *mut c_void) {}
 extern "C" fn cb_action(_app: *mut App, _t: TargetC, _a: ActionC) -> bool {
     true
 }
-extern "C" fn cb_read_clipboard(_ud: *mut c_void, _t: c_int, _r: *mut ClipboardRequest) -> bool {
-    false
+extern "C" fn cb_read_clipboard(
+    _ud: *mut c_void,
+    _t: c_int,
+    _r: *mut ClipboardRequest,
+    _mimes: *const *const c_char,
+    _mimes_len: usize,
+    _list: bool,
+) -> c_int {
+    // GHOSTTY_CLIPBOARD_READ_UNSUPPORTED — the request is never started.
+    2
 }
 extern "C" fn cb_confirm_read_clipboard(
     _ud: *mut c_void,
-    _s: *const c_char,
+    _s: *const rustty_apprt::embedded::ClipboardConfirm,
     _r: *mut ClipboardRequest,
     _t: ClipboardRequestType,
 ) {

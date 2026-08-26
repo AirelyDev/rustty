@@ -22,6 +22,7 @@
 // const std = @import("std");
 // const assert = std.debug.assert;
 // const lib = @import("../lib.zig");
+use rustty_lib::String as LibString;
 use rustty_vt::snapshot::io as vt_io;
 use std::ffi::c_void;
 
@@ -91,6 +92,45 @@ impl Default for Writer {
     fn default() -> Writer {
         Writer {
             write: None,
+            userdata: std::ptr::null_mut(),
+        }
+    }
+}
+
+/// C: GhosttyMimeReaderFn -> RusttyMimeReaderFn (R2)
+// pub const MimeReaderFn = *const fn (
+//     userdata: ?*anyopaque,
+//     mime: lib.String,
+//     writer: Writer,
+// ) callconv(lib.calling_conv) bool;
+pub type MimeReaderFn = extern "C" fn(*mut c_void, LibString, Writer) -> bool;
+
+/// C: GhosttyMimeReader -> RusttyMimeReader (R2)
+// pub const MimeReader = extern struct {
+//     read: ?MimeReaderFn = null,
+//     userdata: ?*anyopaque = null,
+//     pub fn valid(self: MimeReader) bool { return self.read != null; }
+// };
+// PORT NOTE (cbindgen): inline fn-pointer type — see `Reader`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MimeReader {
+    pub read: Option<extern "C" fn(*mut c_void, LibString, Writer) -> bool>,
+    pub userdata: *mut c_void,
+}
+
+impl MimeReader {
+    // pub fn valid(self: MimeReader) bool { return self.read != null; }
+    pub fn valid(&self) -> bool {
+        self.read.is_some()
+    }
+}
+
+impl Default for MimeReader {
+    // `= null` field defaults on the reference extern struct.
+    fn default() -> MimeReader {
+        MimeReader {
+            read: None,
             userdata: std::ptr::null_mut(),
         }
     }
@@ -618,6 +658,11 @@ mod tests {
         );
 
         assert_eq!(0, std::mem::offset_of!(Writer, write));
+        assert_eq!(0, std::mem::offset_of!(MimeReader, read));
+        assert_eq!(
+            std::mem::size_of::<Option<MimeReaderFn>>(),
+            std::mem::offset_of!(MimeReader, userdata)
+        );
         assert_eq!(
             std::mem::size_of::<Option<WriterFn>>(),
             std::mem::offset_of!(Writer, userdata)

@@ -58,8 +58,8 @@ use libadwaita::prelude::BinExt;
 use libadwaita::subclass::prelude::*;
 
 use rustty_apprt_api::{
-    ApprtError, Clipboard, ClipboardContent, ClipboardRequest, ContentScale, CursorPos,
-    NewSurfaceContext, SurfaceSize,
+    ApprtError, Clipboard, ClipboardContent, ClipboardReadResult, ClipboardRequest, ContentScale,
+    CursorPos, NewSurfaceContext, SurfaceSize,
 };
 use rustty_config::command::Command;
 use rustty_config::value_types::{ClipboardAccess, ShellIntegration, WorkingDirectory};
@@ -2139,7 +2139,13 @@ impl Surface {
         &self,
         clipboard_type: Clipboard,
         state: ClipboardRequest,
-    ) -> Result<bool, ApprtError> {
+    ) -> Result<ClipboardReadResult, ApprtError> {
+        // The GTK apprt doesn't support the Kitty clipboard protocol
+        // yet.
+        // if (state == .kitty_read or state == .kitty_write or state == .list) return .unsupported;
+        // (W7 seam: the kitty/list ClipboardRequest variants do not exist yet;
+        // this arm becomes live when they land.)
+
         // Get our requested clipboard (`surface.zig:3861-3864`).
         let clipboard = self.clipboard_for(clipboard_type);
 
@@ -2151,7 +2157,8 @@ impl Surface {
             && !clipboard.formats().contains_type(String::static_type())
         {
             eprintln!("debug(gtk): clipboard has no text format, not starting paste request");
-            return Ok(false);
+            // return .unavailable;
+            return Ok(ClipboardReadResult::Unavailable);
         }
 
         // Important: we ref `self` (clone the GObject — a cheap refcount bump) into
@@ -2201,8 +2208,8 @@ impl Surface {
             }
         });
 
-        // Return true (request started) (`surface.zig:3896`).
-        Ok(true)
+        // return .started;
+        Ok(ClipboardReadResult::Started)
     }
 
     /// PORTS: `surface.zig:1726-1738` `setClipboard` → delegates to `Clipboard.set`

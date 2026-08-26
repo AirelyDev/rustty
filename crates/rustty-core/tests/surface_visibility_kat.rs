@@ -120,7 +120,7 @@ impl apprt::Surface for TestRtSurface {
         &self,
         _clipboard_type: apprt::Clipboard,
         _state: apprt::ClipboardRequest,
-    ) -> Result<bool, apprt::ApprtError> {
+    ) -> Result<apprt::ClipboardReadResult, apprt::ApprtError> {
         unimplemented!("V21 KAT: not driven")
     }
     fn set_clipboard(

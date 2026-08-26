@@ -44,8 +44,8 @@ use crate::terminal::Terminal;
 /// events, which is why only they carry a location: it's meaningless
 /// for text insertion.
 ///
-/// C: RusttyPasteSource (R2), flattened next to the location since C has
-/// no tagged unions.
+/// The C form (`rustty_paste_source_e`, declared by the vt-c `paste::Source`)
+/// is flattened next to the location since C has no tagged unions.
 // pub const Source = union(enum) { clipboard: clipboard.Location, text };
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {

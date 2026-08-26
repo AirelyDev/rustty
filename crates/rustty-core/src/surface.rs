@@ -12910,7 +12910,16 @@ where
         }
 
         // return try self.rt_surface.clipboardRequest(loc, req);
-        Ok(unsafe { &*self.rt_surface }.clipboard_request(loc, req)?)
+        //
+        // PORT NOTE (W7 seam, 0ce9054bf): the apprt seam now reports
+        // `apprt.ClipboardReadResult` (Bundle E2's C-ABI end state); the
+        // head's `startClipboardRequest` returns it upward (with the paste
+        // -event `effective_req` logic) — that half rides W7. Until then the
+        // pre-range bool contract is preserved: started <=> `.started`.
+        Ok(
+            unsafe { &*self.rt_surface }.clipboard_request(loc, req)?
+                == apprt::ClipboardReadResult::Started,
+        )
     }
 
     // fn completeClipboardPaste(
@@ -13062,6 +13071,38 @@ where
         }
 
         Ok(())
+    }
+
+    /// Deny an in-flight clipboard request. This consumes the request: for
+    /// request types whose protocol expects an answer, the denial reply is
+    /// written to the pty.
+    // pub fn denyClipboardRequest(self: *Surface, req: apprt.ClipboardRequest) void {
+    //
+    // PORT NOTE (W7 seam, 0ce9054bf): the head's `.list`/`.kitty_read`/
+    // `.kitty_write` arms (the kitty ones answer EPERM via
+    // `kittyClipboardStatus` and `destroy` the request) ride the W7 surface
+    // half — those ClipboardRequest variants do not exist yet. The arms for
+    // the request types that DO exist are the end state.
+    pub fn denyClipboardRequest(&mut self, req: apprt::ClipboardRequest) {
+        // switch (req) {
+        match req {
+            // A denied paste simply doesn't happen.
+            // .paste, .list => {},
+            apprt::ClipboardRequest::Paste => {}
+
+            // OSC 52 has no error responses, but the client is waiting on
+            // a reply, so a denied read is answered with empty contents.
+            // .osc_52_read => |clipboard| self.completeClipboardReadOSC52("", clipboard, true) catch |err| { ... },
+            apprt::ClipboardRequest::Osc52Read(clipboard) => {
+                if let Err(_err) = self.completeClipboardReadOSC52(b"", clipboard, true) {
+                    // log.warn("error replying to OSC 52 clipboard read err={}", .{err});
+                }
+            }
+
+            // A denied write simply doesn't happen.
+            // .osc_52_write => {},
+            apprt::ClipboardRequest::Osc52Write(_) => {}
+        }
     }
 
     // fn completeClipboardReadOSC52(

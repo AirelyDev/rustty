@@ -33,7 +33,8 @@
 use core::ffi::{c_int, c_void};
 
 use rustty_apprt::embedded::{
-    ClipboardContent, EnvVar, Options, PlatformC, PlatformCIOS, PlatformCMacOS, PlatformTag,
+    ClipboardComplete, ClipboardConfirm, ClipboardContent, EnvVar, Options, PlatformC,
+    PlatformCIOS, PlatformCMacOS, PlatformTag,
     SurfaceOptions,
 };
 use rustty_apprt_api::action::{
@@ -106,10 +107,35 @@ const _: () = assert!(core::mem::size_of::<PlatformCIOS>() == PTR);
 const _: () = assert!(core::mem::size_of::<EnvVar>() == 16);
 const _: () = assert!(core::mem::align_of::<EnvVar>() == 8);
 
-// ── ghostty_clipboard_content_s (ghostty.h:76-79) ── {const char* mime, data} → 16.
-// @embed-abi rustty_clipboard_content_s 16
-const _: () = assert!(core::mem::size_of::<ClipboardContent>() == 16);
+// ── ghostty_clipboard_content_s ── {const char* mime; const uint8_t* data;
+// size_t len} → 24 (8c7a34d4c: binary-safe data, the E2 LAYOUT change).
+// @embed-abi rustty_clipboard_content_s 24
+const _: () = assert!(core::mem::size_of::<ClipboardContent>() == 24);
 const _: () = assert!(core::mem::align_of::<ClipboardContent>() == 8);
+// @embed-abi-field rustty_clipboard_content_s mime 0
+const _: () = assert!(core::mem::offset_of!(ClipboardContent, mime) == 0);
+// @embed-abi-field rustty_clipboard_content_s data 8
+const _: () = assert!(core::mem::offset_of!(ClipboardContent, data) == 8);
+// @embed-abi-field rustty_clipboard_content_s len 16
+const _: () = assert!(core::mem::offset_of!(ClipboardContent, len) == 16);
+
+// ── ghostty_clipboard_complete_s ── {ptr, size_t, ptr, size_t, bool, bool} → 40.
+// @embed-abi rustty_clipboard_complete_s 40
+const _: () = assert!(core::mem::size_of::<ClipboardComplete>() == 40);
+const _: () = assert!(core::mem::align_of::<ClipboardComplete>() == 8);
+// @embed-abi-field rustty_clipboard_complete_s confirmed 32
+const _: () = assert!(core::mem::offset_of!(ClipboardComplete, confirmed) == 32);
+// @embed-abi-field rustty_clipboard_complete_s remember 33
+const _: () = assert!(core::mem::offset_of!(ClipboardComplete, remember) == 33);
+
+// ── ghostty_clipboard_confirm_s ── {ptr, size_t, ptr, size_t, const char*, bool} → 48.
+// @embed-abi rustty_clipboard_confirm_s 48
+const _: () = assert!(core::mem::size_of::<ClipboardConfirm>() == 48);
+const _: () = assert!(core::mem::align_of::<ClipboardConfirm>() == 8);
+// @embed-abi-field rustty_clipboard_confirm_s name 32
+const _: () = assert!(core::mem::offset_of!(ClipboardConfirm, name) == 32);
+// @embed-abi-field rustty_clipboard_confirm_s can_remember 40
+const _: () = assert!(core::mem::offset_of!(ClipboardConfirm, can_remember) == 40);
 
 // ── ghostty_text_s (ghostty.h:408-415) ──
 // double tl_px_x@0(8); double tl_px_y@8(8); uint32_t offset_start@16(4);
@@ -386,8 +412,18 @@ fn struct_sizes_and_aligns() {
     assert_eq!(core::mem::size_of::<EnvVar>(), 16, "ghostty_env_var_s size");
     assert_eq!(
         core::mem::size_of::<ClipboardContent>(),
-        16,
+        24,
         "ghostty_clipboard_content_s size"
+    );
+    assert_eq!(
+        core::mem::size_of::<ClipboardComplete>(),
+        40,
+        "ghostty_clipboard_complete_s size"
+    );
+    assert_eq!(
+        core::mem::size_of::<ClipboardConfirm>(),
+        48,
+        "ghostty_clipboard_confirm_s size"
     );
     assert_eq!(
         core::mem::size_of::<rustty_apprt_c::capi::Text>(),
@@ -545,6 +581,37 @@ fn pinned_enum_ordinals() {
         ClipboardRequestType::Osc52Write as u8,
         2,
         "GHOSTTY_CLIPBOARD_REQUEST_OSC_52_WRITE"
+    );
+    assert_eq!(
+        ClipboardRequestType::KittyRead as u8,
+        3,
+        "GHOSTTY_CLIPBOARD_REQUEST_KITTY_READ"
+    );
+    assert_eq!(
+        ClipboardRequestType::KittyWrite as u8,
+        4,
+        "GHOSTTY_CLIPBOARD_REQUEST_KITTY_WRITE"
+    );
+    assert_eq!(
+        ClipboardRequestType::List as u8,
+        5,
+        "GHOSTTY_CLIPBOARD_REQUEST_LIST"
+    );
+    // ghostty_clipboard_read_result_e.
+    assert_eq!(
+        rustty_apprt_api::ClipboardReadResult::Started as c_int,
+        0,
+        "GHOSTTY_CLIPBOARD_READ_STARTED"
+    );
+    assert_eq!(
+        rustty_apprt_api::ClipboardReadResult::Unavailable as c_int,
+        1,
+        "GHOSTTY_CLIPBOARD_READ_UNAVAILABLE"
+    );
+    assert_eq!(
+        rustty_apprt_api::ClipboardReadResult::Unsupported as c_int,
+        2,
+        "GHOSTTY_CLIPBOARD_READ_UNSUPPORTED"
     );
     // ghostty_target_tag_e.
     assert_eq!(TargetKey::App as c_int, 0, "GHOSTTY_TARGET_APP");

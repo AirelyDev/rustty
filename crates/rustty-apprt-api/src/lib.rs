@@ -70,7 +70,7 @@ pub use surface::{
 };
 
 pub use structs::{
-    Clipboard, ClipboardContent, ClipboardContentOwned, ClipboardRequest, ClipboardRequestType,
-    ColorScheme, ContentScale, KittyRead, KittyWrite,
+    Clipboard, ClipboardContent, ClipboardContentOwned, ClipboardReadResult, ClipboardRequest,
+    ClipboardRequestType, ColorScheme, ContentScale, KittyRead, KittyWrite,
     CursorPos, IMEPos, Selection, SurfaceSize,
 };

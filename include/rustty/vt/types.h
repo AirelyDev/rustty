@@ -100,6 +100,12 @@ typedef enum RUSTTY_ENUM_TYPED {
     RUSTTY_IO_ERROR = -5,
     /** Operation failed because encoded input exceeded a configured limit */
     RUSTTY_LIMIT_EXCEEDED = -6,
+    /**
+     * Operation was rejected by a safety check (e.g. pasted text that could
+     * inject commands). Nothing was done. Confirm with the user and retry
+     * with the operation's allow flag set.
+     */
+    RUSTTY_REJECTED = -7,
     RUSTTY_RESULT_MAX_VALUE = RUSTTY_ENUM_MAX_VALUE,
 } RusttyResult;
 

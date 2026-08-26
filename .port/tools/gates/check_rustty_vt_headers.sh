@@ -220,7 +220,10 @@ if [ -n "$missing" ]; then echo "  MISMATCH — declared+cbindgen but NOT export
 # exact failure class this arm documents.
 # P4-W5 combined re-float (S +17, W net -7): measured 194 on 2026-08-25 with
 # every bundle landed; floor pinned to the measurement.
-VT_BOTH_FLOOR=194
+# P5-W6 Bundle P (+1): `rustty_terminal_paste` (oracle 60a1ae2df) — measured
+# 195 on 2026-08-25 with the phase-5 C-API bundles landed; floor re-pinned to
+# the measurement (arm (d) tracks the oracle side, which also reads 195).
+VT_BOTH_FLOOR=195
 both_n=$(wc -l < "$T/vt_both.txt" | tr -d ' ')
 if [ "$both_n" -lt "$VT_BOTH_FLOOR" ]; then
   echo "  VACUOUS SHRINK — the (vt.h ∩ cbindgen) intersection is $both_n, below the"

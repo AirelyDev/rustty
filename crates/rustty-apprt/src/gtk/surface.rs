@@ -31,8 +31,8 @@ use glib::prelude::*;
 use gtk4::subclass::prelude::*;
 
 use rustty_apprt_api::{
-    ApprtError, Clipboard, ClipboardContent, ClipboardRequest, ContentScale, CursorPos,
-    Surface as ApprtSurface, SurfaceSize,
+    ApprtError, Clipboard, ClipboardContent, ClipboardReadResult, ClipboardRequest, ContentScale,
+    CursorPos, Surface as ApprtSurface, SurfaceSize,
 };
 
 use super::app::App;
@@ -227,7 +227,7 @@ impl ApprtSurface for Surface {
         &self,
         clipboard_type: Clipboard,
         state: ClipboardRequest,
-    ) -> Result<bool, ApprtError> {
+    ) -> Result<ClipboardReadResult, ApprtError> {
         // PORTS: `Surface.zig:73-82`.
         match self.gobj() {
             Some(s) => s.clipboard_request(clipboard_type, state),

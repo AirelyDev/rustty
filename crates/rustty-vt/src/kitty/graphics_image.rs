@@ -1152,6 +1152,17 @@ impl<'a> RenderData<'a> {
             RenderData::Pending(_) => None,
         }
     }
+
+    /// Bytes reserved against the storage limit (the borrowed mirror of
+    /// [`Data::len`]; the reference's `renderData()` returns `Data`, whose
+    /// `len()` the C API's `.data_len` arm reads — 73903f76a).
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        match self {
+            RenderData::Complete(data) => data.len(),
+            RenderData::Pending(expected_len) => *expected_len,
+        }
+    }
 }
 
 impl Image {

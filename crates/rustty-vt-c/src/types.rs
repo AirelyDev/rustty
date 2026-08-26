@@ -353,6 +353,37 @@ static DECLS: &[TypeDecl] = {
                 ]
             )
         ),
+        // .initStruct("GhosttyClipboardRead", terminal.ClipboardRead),
+        struct_decl!(
+            "RusttyClipboardRead",
+            crate::terminal::ClipboardRead,
+            fields!(crate::terminal::ClipboardRead, [
+                ("size", usize, size, usize_ty()),
+                ("location", rustty_vt::clipboard::Location, location, n("RusttyClipboardLocation")),
+                ("mimes", *const LibString, mimes, Ty::Pointer("RusttyString", true, true)),
+                ("mimes_len", usize, mimes_len, usize_ty()),
+                ("list", bool, list, n("bool")),
+                ("name", LibString, name, n("RusttyString")),
+                ("granted", bool, granted, n("bool")),
+                ("can_remember", bool, can_remember, n("bool")),
+                ("ctx", *const std::ffi::c_void, ctx, Ty::Pointer("opaque", true, false)),
+                ("reply", crate::terminal::ClipboardReadReplyFn, reply, Ty::Pointer("function", true, false)),
+            ])
+        ),
+        // .initStruct("GhosttyClipboardReadReply", terminal.ClipboardReadReply),
+        struct_decl!(
+            "RusttyClipboardReadReply",
+            crate::terminal::ClipboardReadReply,
+            fields!(crate::terminal::ClipboardReadReply, [
+                ("size", usize, size, usize_ty()),
+                ("result", rustty_vt::clipboard::ReadStatus, result, n("RusttyClipboardReadResult")),
+                ("contents", *const crate::terminal::ClipboardContent, contents, Ty::Pointer("RusttyClipboardContent", true, true)),
+                ("contents_len", usize, contents_len, usize_ty()),
+                ("available", *const LibString, available, Ty::Pointer("RusttyString", true, true)),
+                ("available_len", usize, available_len, usize_ty()),
+                ("remember", bool, remember, n("bool")),
+            ])
+        ),
         // .initStruct("GhosttyClipboardWrite", terminal.ClipboardWrite),
         struct_decl!(
             "RusttyClipboardWrite",
@@ -362,6 +393,21 @@ static DECLS: &[TypeDecl] = {
                 ("location", rustty_vt::clipboard::Location, location, n("RusttyClipboardLocation")),
                 ("contents", *const crate::terminal::ClipboardContent, contents, Ty::Pointer("RusttyClipboardContent", true, true)),
                 ("contents_len", usize, contents_len, usize_ty()),
+                ("name", LibString, name, n("RusttyString")),
+                ("granted", bool, granted, n("bool")),
+                ("can_remember", bool, can_remember, n("bool")),
+                ("ctx", *const std::ffi::c_void, ctx, Ty::Pointer("opaque", true, false)),
+                ("reply", crate::terminal::ClipboardWriteReplyFn, reply, Ty::Pointer("function", true, false)),
+            ])
+        ),
+        // .initStruct("GhosttyClipboardWriteReply", terminal.ClipboardWriteReply),
+        struct_decl!(
+            "RusttyClipboardWriteReply",
+            crate::terminal::ClipboardWriteReply,
+            fields!(crate::terminal::ClipboardWriteReply, [
+                ("size", usize, size, usize_ty()),
+                ("result", rustty_vt::clipboard::WriteStatus, result, n("RusttyClipboardWriteResult")),
+                ("remember", bool, remember, n("bool")),
             ])
         ),
         // .initStruct("GhosttyCodepoints", Codepoints),
@@ -555,6 +601,17 @@ static DECLS: &[TypeDecl] = {
                 ]
             )
         ),
+        // .initStruct("GhosttyMimeReader", io.MimeReader),
+        struct_decl!(
+            "RusttyMimeReader",
+            crate::io::MimeReader,
+            fields!(crate::io::MimeReader, [
+                // read: ?MimeReaderFn -> optional fn pointer -> nullable
+                ("read", crate::io::MimeReaderFn, read, Ty::Pointer("function", true, true)),
+                // userdata: ?*anyopaque -> optional pointer -> nullable
+                ("userdata", *mut std::ffi::c_void, userdata, Ty::Pointer("opaque", false, true)),
+            ])
+        ),
         // .initStruct("GhosttyMouseEncoderSize", mouse_encode.Size),
         struct_decl!(
             "RusttyMouseEncoderSize",
@@ -582,6 +639,23 @@ static DECLS: &[TypeDecl] = {
                 MousePosition,
                 [("x", f32, x, n("f32")), ("y", f32, y, n("f32")),]
             )
+        ),
+        // .initStruct("GhosttyPaste", paste.Request),
+        struct_decl!(
+            "RusttyPaste",
+            crate::paste::Request,
+            fields!(crate::paste::Request, [
+                ("size", usize, size, usize_ty()),
+                // D11: `location`/`source` are held as raw `c_int`s in the Rust
+                // struct (inbound C memory); the manifest reports the C-facing
+                // enum names, exactly like the reference field types.
+                ("location", rustty_vt::clipboard::Location, location, n("RusttyClipboardLocation")),
+                ("source", crate::paste::Source, source, n("RusttyPasteSource")),
+                ("mimes", *const LibString, mimes, Ty::Pointer("RusttyString", true, true)),
+                ("mimes_len", usize, mimes_len, usize_ty()),
+                ("reader", crate::io::MimeReader, reader, n("RusttyMimeReader")),
+                ("allow_unsafe", bool, allow_unsafe, n("bool")),
+            ])
         ),
         // .initTaggedStruct("GhosttyPoint", point.Point.C, "tag", "value", .generated),
         TypeDecl::Struct {
@@ -1434,6 +1508,23 @@ static DECLS: &[TypeDecl] = {
                 ]
             )
         ),
+        // .initEnum("GhosttyClipboardReadResult", clipboard.Read.Status, "GHOSTTY_CLIPBOARD_READ_RESULT_"),
+        // PORT NOTE (e03475c0c): the reference type is `clipboard.Read.Status`
+        // (flattened to `ReadStatus` — an open newtype, hence const rows).
+        enum_decl!(
+            "RusttyClipboardReadResult",
+            "RUSTTY_CLIPBOARD_READ_RESULT_",
+            enum_const_values!(
+                rustty_vt::clipboard::ReadStatus,
+                [
+                    ("success", Success),
+                    ("denied", Denied),
+                    ("unsupported", Unsupported),
+                    ("busy", Busy),
+                    ("io_error", IoError),
+                ]
+            )
+        ),
         // .initEnum("GhosttyClipboardWriteResult", clipboard.Write.Status, "GHOSTTY_CLIPBOARD_WRITE_RESULT_"),
         // PORT NOTE (7ae9b1113): the reference type is now `clipboard.Write.Status`
         // (flattened to `WriteStatus`); the C name is unchanged.
@@ -1767,6 +1858,15 @@ static DECLS: &[TypeDecl] = {
                     ("context_signal", ContextSignal),
                     ("kitty_desktop_notification", KittyDesktopNotification),
                 ]
+            )
+        ),
+        // .initEnum("GhosttyPasteSource", paste.Source, "GHOSTTY_PASTE_SOURCE_"),
+        enum_decl!(
+            "RusttyPasteSource",
+            "RUSTTY_PASTE_SOURCE_",
+            enum_values!(
+                crate::paste::Source,
+                [("clipboard", Clipboard), ("text", Text),]
             )
         ),
         // .initEnum("GhosttyPointTag", point.Tag, "GHOSTTY_POINT_TAG_"),
