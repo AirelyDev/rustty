@@ -21,8 +21,8 @@
 #
 # Usage: .port/tools/build-vt-wasm.sh [extra cargo args...]
 set -e
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-root=$(CDPATH= cd -- "$here/../.." && pwd)
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+root=$(CDPATH='' cd -- "$here/../.." && pwd)
 
 # (a) build with the table exported. `cargo rustc` passes the trailing flags
 # only to rustty-vt-c's own compilation; `--export-table` affects the final

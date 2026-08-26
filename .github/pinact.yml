@@ -2,3 +2,10 @@ version: 3
 ignore_actions:
   - name: "DeterminateSystems/nix-installer-action"
     ref: "main"
+  # dtolnay/rust-toolchain selects the toolchain THROUGH the ref: `@stable`,
+  # `@nightly`, `@1.93.1`. Those are branches, not tags, so pinact reports
+  # "action can't be pinned" — and rewriting the ref to a commit SHA would
+  # silently change which toolchain the action installs. Same shape as the
+  # nix-installer-action@main entry above.
+  - name: "dtolnay/rust-toolchain"
+    ref: "stable"

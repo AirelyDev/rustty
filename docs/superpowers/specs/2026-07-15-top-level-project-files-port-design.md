@@ -74,15 +74,16 @@ Batch 5's `xtask dist` is referenced by Batch 5's release workflows).
 Pure documentation and config; no external deps; no code.
 
 **Top-level prose docs** (create at repo root):
-| Source | Dest | Approach |
-|---|---|---|
-| `AGENTS.md` | `AGENTS.md` | Rewrite command table to Cargo/xtask; rustty dir+crate structure; drop the "sad dumb AI" issue/PR gag or keep rebranded (minimal). |
-| `README.md` | `README.md` | Rustty-as-full-fidelity-port framing; keep the roadmap-table structure but reflect port status; `libghostty`→`librustty`; links → rustty.sh / rustty repo; keep About/Download/Docs/Crash-Reports sections rebranded. |
-| `HACKING.md` | `HACKING.md` | Build-steps table → `cargo build` / `cargo test` / `cargo run -p rustty` / xtask; logging (`RUSTTY_LOG`); linting (rustfmt/clippy + prettier/shellcheck/swiftlint/alejandra via the Nix devShell from Batch 4); Miri/ASan note; translations pointer → Batch 5; drop the zig-cache-hash section (crane eliminates it). |
-| `CONTRIBUTING.md` | `CONTRIBUTING.md` | Keep "understand your code" + AI-policy pointers; **minimal governance** (trim vouch/denounce/Discord to a short pointer at upstream ghostty governance, since rustty is a solo port); keep issue/PR-are-actionable structure rebranded. |
-| `AI_POLICY.md` | `AI_POLICY.md` | Rebrand; near-verbatim (policy is portable). |
-| `PACKAGING.md` | `PACKAGING.md` | Zig-version section → Rust toolchain (`rust-toolchain.toml`); build-for-packages recipe → `cargo build --release` + xtask install; tarball URLs → rustty release infra (Batch 5) with minisign-key placeholder. |
-| `CODEOWNERS` | `CODEOWNERS` | **Minimal rewrite**: a crate-subsystem map (font/renderer/terminal/shell/macos → crate paths) owned by the single maintainer; trim the BDFL/maintainer-model preamble to reflect a solo port. |
+
+| Source            | Dest              | Approach                                                                                                                                                                                                                                                                                                               |
+| ----------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENTS.md`       | `AGENTS.md`       | Rewrite command table to Cargo/xtask; rustty dir+crate structure; drop the "sad dumb AI" issue/PR gag or keep rebranded (minimal).                                                                                                                                                                                     |
+| `README.md`       | `README.md`       | Rustty-as-full-fidelity-port framing; keep the roadmap-table structure but reflect port status; `libghostty`→`librustty`; links → rustty.sh / rustty repo; keep About/Download/Docs/Crash-Reports sections rebranded.                                                                                                  |
+| `HACKING.md`      | `HACKING.md`      | Build-steps table → `cargo build` / `cargo test` / `cargo run -p rustty` / xtask; logging (`RUSTTY_LOG`); linting (rustfmt/clippy + prettier/shellcheck/swiftlint/alejandra via the Nix devShell from Batch 4); Miri/ASan note; translations pointer → Batch 5; drop the zig-cache-hash section (crane eliminates it). |
+| `CONTRIBUTING.md` | `CONTRIBUTING.md` | Keep "understand your code" + AI-policy pointers; **minimal governance** (trim vouch/denounce/Discord to a short pointer at upstream ghostty governance, since rustty is a solo port); keep issue/PR-are-actionable structure rebranded.                                                                               |
+| `AI_POLICY.md`    | `AI_POLICY.md`    | Rebrand; near-verbatim (policy is portable).                                                                                                                                                                                                                                                                           |
+| `PACKAGING.md`    | `PACKAGING.md`    | Zig-version section → Rust toolchain (`rust-toolchain.toml`); build-for-packages recipe → `cargo build --release` + xtask install; tarball URLs → rustty release infra (Batch 5) with minisign-key placeholder.                                                                                                        |
+| `CODEOWNERS`      | `CODEOWNERS`      | **Minimal rewrite**: a crate-subsystem map (font/renderer/terminal/shell/macos → crate paths) owned by the single maintainer; trim the BDFL/maintainer-model preamble to reflect a solo port.                                                                                                                          |
 
 **Dotfiles** (copy + light rebrand):
 `.clang-format`, `.editorconfig`, `.shellcheckrc`, `.prettierignore`
@@ -92,15 +93,16 @@ Pure documentation and config; no external deps; no code.
 `.gitattributes` already exist — leave.
 
 **Nested AGENTS.md:**
-| Source | Dest |
-|---|---|
-| `example/AGENTS.md` | `example/AGENTS.md` — adapt: new-example flow uses `build.sh`+cargo (per the established `c-vt-*` pattern), not `build.zig.zon`; Doxygen `@snippet` conventions kept. |
-| `src/benchmark/AGENTS.md` | `crates/rustty-bench/AGENTS.md` — methodology verbatim; commands → `cargo run -p rustty-bench` / `rustty-synthetic`; `hyperfine`, fixed seeds, no-parallel. |
-| `src/inspector/AGENTS.md` | `crates/rustty-inspector/AGENTS.md` — dcimgui refs → the `dcimgui-sys` crate; "no unit tests" framing kept. |
-| `src/terminal/apc/glyph/AGENTS.md` | `crates/rustty-vt/src/apc/glyph/AGENTS.md` — near-verbatim (Rio spec pointer + local-summary rule). |
-| `src/terminal/c/AGENTS.md` | `crates/rustty-vt-c/AGENTS.md` — rewrite the 4-step `@export` chain to the cbindgen reality (`rustty-vt-c` module → cbindgen → `include/rustty/vt/`); ABI principles kept. |
-| — | Fix `macos/AGENTS.md`: the stale `zig build -Demit-macos-app=false` line → `cargo run -p xtask -- xcframework` (rebuild the lib artifact), then `macos/build.nu`/xcodebuild builds the app; note `dist/RusttyKit.xcframework` path (ghostty used `macos/GhosttyKit.xcframework`). |
-| `test/fuzz-libghostty/AGENTS.md` | **No target** (no rustty fuzz harness). Note as future; not ported. |
+
+| Source                             | Dest                                                                                                                                                                                                                                                                              |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `example/AGENTS.md`                | `example/AGENTS.md` — adapt: new-example flow uses `build.sh`+cargo (per the established `c-vt-*` pattern), not `build.zig.zon`; Doxygen `@snippet` conventions kept.                                                                                                             |
+| `src/benchmark/AGENTS.md`          | `crates/rustty-bench/AGENTS.md` — methodology verbatim; commands → `cargo run -p rustty-bench` / `rustty-synthetic`; `hyperfine`, fixed seeds, no-parallel.                                                                                                                       |
+| `src/inspector/AGENTS.md`          | `crates/rustty-inspector/AGENTS.md` — dcimgui refs → the `dcimgui-sys` crate; "no unit tests" framing kept.                                                                                                                                                                       |
+| `src/terminal/apc/glyph/AGENTS.md` | `crates/rustty-vt/src/apc/glyph/AGENTS.md` — near-verbatim (Rio spec pointer + local-summary rule).                                                                                                                                                                               |
+| `src/terminal/c/AGENTS.md`         | `crates/rustty-vt-c/AGENTS.md` — rewrite the 4-step `@export` chain to the cbindgen reality (`rustty-vt-c` module → cbindgen → `include/rustty/vt/`); ABI principles kept.                                                                                                        |
+| —                                  | Fix `macos/AGENTS.md`: the stale `zig build -Demit-macos-app=false` line → `cargo run -p xtask -- xcframework` (rebuild the lib artifact), then `macos/build.nu`/xcodebuild builds the app; note `dist/RusttyKit.xcframework` path (ghostty used `macos/GhosttyKit.xcframework`). |
+| `test/fuzz-libghostty/AGENTS.md`   | **No target** (no rustty fuzz harness). Note as future; not ported.                                                                                                                                                                                                               |
 
 **Mapped nested READMEs** (target must exist; skip unclear):
 `src/cli/README.md`→`crates/rustty-cli/README.md`;
@@ -117,17 +119,17 @@ Already present (leave): `crates/rustty-extra/shell-integration/README.md`,
 
 Unblocks C/CMake consumers of the VT lib and the deferred `c-vt-cmake*` examples.
 
-| Source | Dest | Approach |
-|---|---|---|
-| `Doxyfile` | `Doxyfile` | `PROJECT_NAME="librustty"`; `INPUT=include/rustty`; output path rebranded; CSS from `dist/doxygen/`. |
-| `DoxygenLayout.xml` | `DoxygenLayout.xml` | Copy (nav layout). |
-| `dist/doxygen/*` | `dist/doxygen/*` | Copy + rebrand (favicon/header/footer/css/js). |
-| `CMakeLists.txt` | `CMakeLists.txt` | Rewrite the Zig-delegation as **cargo-delegation**: `project(rustty-vt …)`, shell out to `cargo build -p rustty-vt-c --release [--features simd]`, expose `rustty-vt`/`rustty-vt-static` IMPORTED targets over `target/release/librustty_vt_c.{dylib,a}` + cbindgen headers `include/rustty/`, install rules, FetchContent + find_package, and a `rustty_vt_add_target()` cross-compile helper (cargo `--target`). |
-| `dist/cmake/GhosttyZigCompiler.cmake` | `dist/cmake/RusttyCargoCompiler.cmake` | The cargo-invocation helper (analog of the zig-compiler cmake). |
-| `dist/cmake/ghostty-vt-config.cmake.in` | `dist/cmake/rustty-vt-config.cmake.in` | find_package config template. |
-| `dist/cmake/README.md` | `dist/cmake/README.md` | Rebrand + cargo delegation. |
-| `Makefile` | `Makefile` | Trivial: `clean`→`cargo clean` + rm `dist/RusttyKit.xcframework`; keep an `init` hint. Drop the `glad` target (OpenGL loader) unless/until the GL renderer needs it. |
-| `example/c-vt-cmake*` (3 dirs) | `example/c-vt-cmake{,-static,-cross}/` | Port the 3 CMake examples (symbol-swap + rustty CMake wiring), enabled by the CMakeLists above. |
+| Source                                  | Dest                                   | Approach                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Doxyfile`                              | `Doxyfile`                             | `PROJECT_NAME="librustty"`; `INPUT=include/rustty`; output path rebranded; CSS from `dist/doxygen/`.                                                                                                                                                                                                                                                                                                               |
+| `DoxygenLayout.xml`                     | `DoxygenLayout.xml`                    | Copy (nav layout).                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `dist/doxygen/*`                        | `dist/doxygen/*`                       | Copy + rebrand (favicon/header/footer/css/js).                                                                                                                                                                                                                                                                                                                                                                     |
+| `CMakeLists.txt`                        | `CMakeLists.txt`                       | Rewrite the Zig-delegation as **cargo-delegation**: `project(rustty-vt …)`, shell out to `cargo build -p rustty-vt-c --release [--features simd]`, expose `rustty-vt`/`rustty-vt-static` IMPORTED targets over `target/release/librustty_vt_c.{dylib,a}` + cbindgen headers `include/rustty/`, install rules, FetchContent + find_package, and a `rustty_vt_add_target()` cross-compile helper (cargo `--target`). |
+| `dist/cmake/GhosttyZigCompiler.cmake`   | `dist/cmake/RusttyCargoCompiler.cmake` | The cargo-invocation helper (analog of the zig-compiler cmake).                                                                                                                                                                                                                                                                                                                                                    |
+| `dist/cmake/ghostty-vt-config.cmake.in` | `dist/cmake/rustty-vt-config.cmake.in` | find_package config template.                                                                                                                                                                                                                                                                                                                                                                                      |
+| `dist/cmake/README.md`                  | `dist/cmake/README.md`                 | Rebrand + cargo delegation.                                                                                                                                                                                                                                                                                                                                                                                        |
+| `Makefile`                              | `Makefile`                             | Trivial: `clean`→`cargo clean` + rm `dist/RusttyKit.xcframework`; keep an `init` hint. Drop the `glad` target (OpenGL loader) unless/until the GL renderer needs it.                                                                                                                                                                                                                                               |
+| `example/c-vt-cmake*` (3 dirs)          | `example/c-vt-cmake{,-static,-cross}/` | Port the 3 CMake examples (symbol-swap + rustty CMake wiring), enabled by the CMakeLists above.                                                                                                                                                                                                                                                                                                                    |
 
 ---
 
@@ -157,13 +159,14 @@ No drift-prone hash file → **`build.zig.zon.{json,nix,txt}` and
 `nix/zigCacheHash.nix` + `check-zig-cache.sh` have NO analog and are dropped.**
 
 Files (from-scratch, NOT a line-port):
+
 - `flake.nix` — inputs: `nixpkgs`, `crane`, `fenix`/`rust-overlay` (pin
   `rust-toolchain.toml`'s channel + rustfmt/clippy/miri), `flake-utils`.
   Outputs mirror ghostty:
   - `packages.rustty-{debug,releasesafe,releasefast}` (cargo profile map)
   - `packages.librustty-vt-{native,no-simd,…}` (toggle the `simd` cargo feature)
   - `devShells.default` — toolchain + `cbindgen cmake pkg-config prettier
-    alejandra shellcheck swiftlint gettext doxygen`
+alejandra shellcheck swiftlint gettext doxygen`
   - `overlays.default` (consumed by the VMs); `checks` (fmt/clippy/test)
 - `default.nix` / `shell.nix` — flake-compat shims.
 - `.envrc` — `use flake`.
@@ -186,6 +189,7 @@ same as ghostty. Nix covers CLI + C lib + future GTK app + dev shell.
 ### Batch 5 — `.github/` + dot-dirs + gap-fill engineering
 
 **`.github/` — port + rebrand (to cargo/xtask/nix), keep, or drop:**
+
 - KEEP: existing `ci.yml` (the real gate mirroring `.port/tools/ci.sh`).
 - PORT+REBRAND: `release-tag.yml`, `release-tip.yml`, `publish-tag.yml`
   (→ `xtask dist` + minisign-placeholder), `nix.yml` (→ crane flake checks),
@@ -200,6 +204,7 @@ same as ghostty. Nix covers CLI + C lib + future GTK app + dev shell.
   PR template.
 
 **Other dot-dirs:**
+
 - `.agents/` — `commands/review-branch`, `skills/writing-commit-messages/`:
   portable; adapt (cargo/rustty references).
 - `.claude/` — reconcile with rustty's existing `.claude/`; adapt ghostty

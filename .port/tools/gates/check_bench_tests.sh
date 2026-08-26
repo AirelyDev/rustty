@@ -80,7 +80,8 @@ rc=0
 for profile in "" "--release"; do
   label="cargo test -p rustty-bench --lib ${profile:-(debug)}"
   echo "=== G-BENCH: $label ==="
-  # shellcheck disable=SC2086 — $profile is an intentional empty-or-one-flag word.
+  # $profile is an intentional empty-or-one-flag word.
+  # shellcheck disable=SC2086
   out="$(cargo test -p rustty-bench --lib $profile 2>&1)"
   crc=$?
   echo "$out" | tail -3

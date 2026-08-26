@@ -37,6 +37,7 @@
 **Oracle:** `.../src/ThreadPool.zig` (827 LOC). Structure: `run_queue: Node.Queue`, packed atomic `Sync` (idle:u14/spawned:u14/state:enum), `Config`, `init`/`deinit`, `Task{node,callback}`, `Batch{head,tail,push,from}`, `schedule`, the `Node.Queue`/`Node.List`/`Node.Stack` intrusive lock-free queues, `join`/`register`/`unregister`/`wait`/`notify`, the worker `run` loop with work-stealing.
 
 **Interfaces:**
+
 - Produces: `ThreadPool` (`init(Config) -> ThreadPool`, `deinit(&mut)`, `shutdown(&mut)`, `schedule(&self, Batch)`), `Task { node: Node, callback: fn(*mut Task) }`, `Batch { from(*mut Task) -> Batch, push(&mut, Batch) }`. Consumed by Task 5 (File) + Task 3/5 epoll blocking ops.
 
 - [ ] **Step 1: Read the oracle fully.** Read `ThreadPool.zig` end-to-end (all 827 lines) — it's a copy of kprotty's Zap work-stealing pool. Note the atomics: `run_queue` is a Vyukov-style intrusive MPSC `Node.Queue` (a swap-based unbounded queue); `Sync` is a `packed struct` in an `Atomic(u32)` mutated via CAS loops; per-thread `Node.Buffer` (bounded work-stealing deque) + `Node.Stack`. Preserve every comment.
@@ -51,6 +52,7 @@
 **Oracle:** `stream.zig` (the `Stream(xev, T, options)` generic — already ported, just Linux-gate it), the epoll backend's thread-pool integration in libxev's `src/backend/epoll.zig` (the `thread_pool`/`thread_schedule` path).
 
 **Interfaces:**
+
 - Consumes: `ThreadPool` (Task 1).
 - Produces: `xev::Stream`/`WriteQueue`/`WriteRequest` compiled on Linux; `epoll::Loop` with a live `thread_pool` field; blocking `Close`/pread/pwrite that schedule onto the pool (no longer return `ThreadPoolRequired` when a pool is present).
 
@@ -66,6 +68,7 @@
 **Oracle:** `.../src/watcher/tcp.zig` (935 LOC, 6 tests). `xev.TCP` = a socket over `Stream(xev, TCP, .{.close,.read,.write})` + `Operation::{Accept,Connect,Send,Recv,Shutdown}`. Methods: `init`/`initFd`/`bind`/`listen`/`accept`/`connect`/`read`/`write`/`shutdown`/`close`.
 
 **Interfaces:**
+
 - Consumes: `Stream` (Task 2), `net::Address` (Task 2), the epoll/io_uring `Accept/Connect/Send/Recv/Shutdown` ops (already present on both backends).
 - Produces: `xev::TCP`.
 
@@ -78,6 +81,7 @@
 **Oracle:** `.../src/watcher/udp.zig` (1003 LOC, 6 tests) + libxev's epoll `SendMsg`/`RecvMsg` (msghdr recvmsg/sendmsg). `xev.UDP` = a datagram socket using `Operation::{SendMsg,RecvMsg}` + `msghdr`.
 
 **Interfaces:**
+
 - Consumes: `net::Address` (Task 2), the io_uring SendMsg/RecvMsg (present), the NEW epoll SendMsg/RecvMsg (this task).
 - Produces: `xev::UDP`.
 
@@ -91,6 +95,7 @@
 **Oracle:** `.../src/watcher/file.zig` (848 LOC, 8 tests). `xev.File` = a regular-fd watcher over `Stream(xev, File, .{.close,.read,.write})`; on the epoll backend `pread`/`pwrite`/`close` are BLOCKING and route through the `ThreadPool` (io_uring does them natively).
 
 **Interfaces:**
+
 - Consumes: `Stream` (Task 2), `ThreadPool` (Task 1), the epoll pool-routing (Task 2).
 - Produces: `xev::File`.
 

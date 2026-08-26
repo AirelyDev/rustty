@@ -43,7 +43,7 @@ set -uo pipefail
 
 GATES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUSTTY_ROOT="$(cd "$GATES_DIR/../../.." && pwd)"
-cd "$RUSTTY_ROOT"
+cd "$RUSTTY_ROOT" || exit 1
 
 # Crates whose tests cross into C (depend on a crates-sys/* crate) -> ASan, not Miri.
 # rustty-wuffs wraps wuffs-sys C FFI (H5: it was absent from this list while its

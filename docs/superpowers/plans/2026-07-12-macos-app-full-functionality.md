@@ -18,8 +18,8 @@
 
 ## Global Constraints
 
-- **R1** fidelity: every ported body matches ghostty behavior line-for-line; vendored data (shell-integration, themes, terminfo) is byte-identical to ghostty's, carrying the `xterm-ghostty`/`ghostty` **data identity** the reused Swift app expects (the *symbols* are ghostty_* per Branch A; the *product* is rustty).
-- **R2** identity: the app is **"Rustty"** everywhere user-visible (menu bar, Dock, window title, About, bundle name/id `io.airely.rustty`); the `GhosttyKit` module name and `ghostty_*` C-ABI symbols are KEPT (Branch A link contract). Resource *content* keeps ghostty's internal names where the protocol requires (`TERM=xterm-ghostty`, `share/ghostty/`, OSC identifiers) — document each such kept-name.
+- **R1** fidelity: every ported body matches ghostty behavior line-for-line; vendored data (shell-integration, themes, terminfo) is byte-identical to ghostty's, carrying the `xterm-ghostty`/`ghostty` **data identity** the reused Swift app expects (the _symbols_ are ghostty_* per Branch A; the _product_ is rustty).
+- **R2** identity: the app is **"Rustty"** everywhere user-visible (menu bar, Dock, window title, About, bundle name/id `io.airely.rustty`); the `GhosttyKit` module name and `ghostty_*` C-ABI symbols are KEPT (Branch A link contract). Resource _content_ keeps ghostty's internal names where the protocol requires (`TERM=xterm-ghostty`, `share/ghostty/`, OSC identifiers) — document each such kept-name.
 - **R3** self-contained: no build/runtime dependency on `/Users/gael/projects/ghostty`; vendor its data into rustty's tree. Same C libs (full zlib, full gettext), no pure-Rust substitution.
 - **R5** never weaken a gate/test; a real failure (e.g. the present KAT) is fixed or precisely blocked, never hidden by re-`#[ignore]`.
 - **panic=abort** shipped profile: recoverable failures return sentinels; asserts abort like Zig traps; no unwind across `extern "C"`.
@@ -40,10 +40,12 @@
 ### Task 0.1: Resolve the present-half KAT (IOSurface not delivered in the harness)
 
 **Files:**
+
 - Investigate: `crates/rustty-renderer/src/metal/metal_impl.rs` (`present` :786 Some-arm, `set_display_callback` :505, `draw_frame`/`present_last_target`), `crates/rustty-apprt-c/tests/macos_window_host.rs:329-372` (`hosts_view_layer_and_presents_live_frame`, `HostedSurface::pump_bounded`, `layer_has_contents`).
 - Modify: whichever of the above the root cause identifies.
 
 **Interfaces:**
+
 - Consumes: the attached `layer: Some(IOSurfaceLayer)` from W-ATTACH.
 - Produces: `layer_has_contents()` true after `pump_bounded()` — an IOSurface is set on the hosted layer.
 
@@ -54,6 +56,7 @@
 ### Task 0.2: Live resize + content-scale + present-error propagation
 
 **Files:**
+
 - Verify/modify: `crates/rustty-renderer/src/metal/metal_impl.rs` (`surface_size` :720 Some-arm reads `layer.bounds * contentsScale`), `crates/rustty-apprt-c/src/lib.rs` (`rustty_surface_set_size`, `rustty_surface_set_content_scale`).
 - Test: extend `crates/rustty-apprt-c/tests/macos_window_host.rs` with a resize KAT.
 
@@ -68,11 +71,13 @@
 ### Task 1.1: Vendor + emit shell-integration (bash/zsh/fish/elvish/nushell)
 
 **Files:**
+
 - Create: `crates/rustty-extra/shell-integration/` (vendored copy of `ghostty/src/shell-integration/{bash,zsh,fish,elvish,nushell}` + README, byte-identical) OR a dedicated `assets/` dir — follow how rustty already vendors C sources.
 - Modify: `xtask/src/res_terminfo.rs` `gen_ghostty_root` (or a new `xtask/src/res_shell_integration.rs`) to copy the vendored tree into `zig-out/share/ghostty/shell-integration/` (excluding `.md`).
 - Modify: `zig-out/share/ghostty/DEFERRALS.md` → mark RESOLVED.
 
 **Interfaces:**
+
 - Produces: `share/ghostty/shell-integration/{bash,zsh,fish,elvish,nushell}/…` populated — OSC7 cwd, prompt marking, cursor-shape restore, sudo wrap, title updates work (INTEGRATION_PARITY §2.1).
 
 - [ ] **Step 1:** Vendor `ghostty/src/shell-integration/` verbatim into rustty's tree (R3 self-contained; the scripts carry ghostty's `xterm-ghostty`/OSC identifiers the terminal emits — a KEPT data identity, document in a header comment: "vendored ghostty shell-integration; protocol identifiers kept, product is rustty").
@@ -82,10 +87,12 @@
 ### Task 1.2: Vendor + emit the themes corpus
 
 **Files:**
+
 - Create: `crates/rustty-extra/themes/` (vendored ghostty theme corpus — the iTerm2-Color-Schemes-derived `.conf` theme files ghostty ships).
 - Modify: the `resources` xtask to copy them into `zig-out/share/ghostty/themes/`.
 
 **Interfaces:**
+
 - Produces: `share/ghostty/themes/*` populated — the `list_themes` fuzzy picker (already ported in rustty-cli) and the `theme` config setting resolve to the full set (INTEGRATION_PARITY §2.2).
 
 - [ ] **Step 1:** Locate ghostty's shipped themes (its build copies the iTerm2 corpus to `share/ghostty/themes`); vendor them into rustty. Verify the count matches ghostty's.
@@ -95,6 +102,7 @@
 ### Task 1.3: man pages, bat syntax, terminfo source/termcap
 
 **Files:**
+
 - Modify: `xtask/src/res_misc.rs` (`gen_misc`), `xtask/src/res_terminfo.rs`.
 
 - [ ] **Step 1: man pages** — ghostty ships generated man pages (`share/man/man{1,5}/ghostty.*`). rustty-helpgen produces help; wire man-page generation (or vendor the ghostty man sources + `mandoc`) into `share/man/`. If rustty's man generation isn't ported, port it faithfully from ghostty's `build` man step. Verify `man -M zig-out/share/man ghostty` renders.
@@ -108,9 +116,11 @@
 ### Task 2.1: quicklook_word (objc-free — do first)
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c/src/lib.rs:2705` (`rustty_surface_quicklook_word`, currently the P2 crash-guard sentinel).
 
 **Interfaces:**
+
 - Consumes: the ported `renderer_state.mutex` + `selectWord` + `readTextLocked` (all landed).
 - Produces: the real quicklook word body — Swift's Look-Up word gesture (`SurfaceView_AppKit.swift:1512`) returns the word text instead of falling back.
 
@@ -120,6 +130,7 @@
 ### Task 2.2: quicklook_font (CoreText / objc)
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c/src/lib.rs:2634` (`rustty_surface_quicklook_font`).
 
 - [ ] **Step 1:** Read ghostty `embedded.zig` `ghostty_surface_quicklook_font` (:2179 — `copyWithAttributes` returns a `+1` CTFontRef the host releases, invariant I16). Port faithfully using objc2/core-foundation `CFRetained` with matching ownership. Main-thread-affine (I5), `!Send`.
@@ -128,9 +139,11 @@
 ### Task 2.3: The full ImGui inspector
 
 **Files:**
+
 - Modify: `crates/rustty-core/src/surface.rs:2857,2891` (`activateInspector`/`deactivateInspector`), `crates/rustty-apprt/src/embedded.rs:1833+` (Inspector struct + `ghostty_inspector_*`), `crates/rustty-apprt-c/src/lib.rs` (`inspector_metal_init/render/shutdown`, :2396/2399/2425), `crates/rustty-inspector/src/*` (the 13 widget seams), `crates/rustty-renderer/src/generic.rs:4600` (inspector `overlayFeatures`).
 
 **Interfaces:**
+
 - Consumes: dcimgui-sys (FFI leaf, done) + a ported `ImGui_ImplMetal` backend.
 - Produces: cmd-opt-i opens a working terminal inspector rendered via ImGui+Metal.
 
@@ -141,6 +154,7 @@
 ### Task 2.4: The remaining Darwin exports + on-feature seams
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c/src/lib.rs` (`set_display_id` :done; audit the rest), `crates/rustty-apprt/src/embedded.rs` on-feature callback seams (the enumerated `embedded.rs:1262,1282,1659,1781,1873,1900,1944,2000,2075,2100,2120,2136,2153,2189,2213`), `crates/rustty-xev/src/thread_pool.rs:77,85,92,100` + `xev/src/lib.rs:344`.
 
 - [ ] **Step 1:** Triage each of the ~40 remaining `unimplemented!()`/`todo!()` in the macOS-path crates against `MACOS_APP_GAPS.md`'s reachability classification: for each, determine ALWAYS/ON-FEATURE/NEVER. Produce `.port/phase-2/MACOS_SEAM_TRIAGE.md` listing every one with its verdict + the ghostty reference body.
@@ -154,9 +168,11 @@
 ### Task 3.1: Full deflate-capable zlib + full gettext (drop system/Homebrew links)
 
 **Files:**
+
 - Modify: `crates-sys/zlib-sys/build.rs` (build FULL zlib incl. `deflate.o`), `crates-sys/gettext-sys/build.rs` (build full libintl incl. `dgettext`/`bindtextdomain`/`textdomain`, not just the localename slice), `macos/build-rustty.sh` (drop `-lz`/`-lintl` once self-contained).
 
 **Interfaces:**
+
 - Produces: the combined `libGhosttyKit.a` defines `deflate`/`dgettext`/… → the app links WITHOUT system `-lz` or Homebrew `-lintl` (INTEGRATION_PARITY §2.3).
 
 - [ ] **Step 1:** zlib-sys currently builds inflate-only (`nm libz.a` has no `deflate.o`). Reconfigure its `build.rs` to compile the full zlib (add the deflate sources); `nm` the rebuilt `libz.a` shows `_deflate`.
@@ -166,6 +182,7 @@
 ### Task 3.2: Enable i18n (dgettext + locale catalog)
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c` or wherever `rustty_translate` lives (the identity-return stub), the i18n binding (rustty-os/global), `xtask/src/res_misc.rs` (`share/locale` currently a `.placeholder` stub).
 
 - [ ] **Step 1:** With full gettext linked (3.1), un-stub `rustty_translate` → actually call `dgettext(domain, msgid)` (ghostty `internal_os.i18n._`), and `bindtextdomain` to the app's `share/locale`. Port ghostty's i18n init.
@@ -178,6 +195,7 @@
 ### Task 4.1: Explicit archive dependency set (not glob) + ranlib normalization
 
 **Files:**
+
 - Modify: `xtask/src/main.rs` `xcframework()`.
 
 - [ ] **Step 1:** Replace the filesystem-glob archive discovery with an explicit set derived from `cargo build -p rustty-apprt-c --message-format=json` (parse the `compiler-artifact`/`build-script-executed` records for the `.a` link deps) — INTEGRATION_PARITY §2.4. Avoids missed-nested / stale-duplicate archives.
@@ -186,6 +204,7 @@
 ### Task 4.2: Universal binary (add x86_64 slice)
 
 **Files:**
+
 - Modify: `xtask/src/main.rs` `xcframework()`, `macos/build-rustty.sh`.
 
 - [ ] **Step 1:** Add the `x86_64-apple-darwin` target build + `lipo -create` the per-arch archives into a universal one, and stage the slice as `macos-arm64_x86_64` (matching ghostty's `GhosttyKit.xcframework/macos-arm64_x86_64`). Requires `rustup target add x86_64-apple-darwin`.
@@ -194,6 +213,7 @@
 ### Task 4.3: Code signing + entitlements + notarization path
 
 **Files:**
+
 - Modify: `macos/build-rustty.sh` (a signed-build variant), document in `macos/MILESTONE.md`.
 
 - [ ] **Step 1:** The current build disables signing (`CODE_SIGNING_ALLOWED=NO`). Add a signed variant: with a Developer ID (or ad-hoc `-` for local), sign the app + framework, using the rustty entitlements (P5 rebrand supplies the rustty app-group ids). Verify `codesign --verify --deep --strict` passes.
@@ -206,6 +226,7 @@
 ### Task 5.1: Verify + complete the visible rename
 
 **Files:**
+
 - Verify/modify: `macos/Ghostty-Info.plist`, `macos/*.entitlements`, `macos/Ghostty.xcodeproj/project.pbxproj` (PRODUCT_NAME), `macos/Sources/**` (user-facing display strings only), `macos/build-rustty.sh`, `macos/REBRAND.md`.
 
 - [ ] **Step 1:** The p2p3 rebrand agent's work landed — VERIFY it's complete: build the app and confirm the **menu bar, Dock, window title, and About panel all read "Rustty"** (screenshot). Fill any gap the agent missed (grep `macos/Sources` for user-facing `"Ghostty"` display strings — About window, app-name constants, notification titles — and rename the DISPLAY ones; leave `GhosttyKit`, `ghostty_*`, URL schemes, and bundle-path references alone).
@@ -214,6 +235,7 @@
 ### Task 5.2: Sparkle auto-updater config
 
 **Files:**
+
 - Modify: `macos/Ghostty-Info.plist` (SUFeedURL / SUEnableAutomaticChecks).
 
 - [ ] **Step 1:** The app bundles Sparkle. Either point `SUFeedURL` at a rustty appcast (if distribution is planned) or disable auto-checks (`SUEnableAutomaticChecks = false`) for now so it doesn't phone ghostty's feed. Document the choice. Commit `"macos: Sparkle updater — rustty appcast or disabled (no ghostty feed) (P5.2)"`.
@@ -251,9 +273,11 @@ P3.1 (self-contained lib) before P3.2 (i18n needs full gettext).
 P2 (features): 2.1/2.2 (quicklook) parallel + small; 2.3 (inspector) is its own sub-workflow (largest); 2.4 (seam triage+ports) parallel.
 P6 (polish) any time; 6.3 (shakedown) LAST, after all else.
 ```
+
 Parallelizable as workflows: P1 resources (4 agents), P2.4 seam ports (per-feature), P4 packaging (3 agents), P5 rebrand. P0 and P2.3 (inspector) are focused/serial. P3.1 is delicate -sys work (verify `nm` at each step).
 
 ## Self-review notes
+
 - Every gap source item mapped: MACOS_APP_GAPS §3 HIGH quicklook→P2.1/2.2, inspector→P2.3, on-feature seams→P2.4; MEDIUM/LOW render→P0, stale doc→P6.2, off-platform→P2.4 triage. INTEGRATION_PARITY §2.1 shell-integration→P1.1, §2.2 themes→P1.2, §2.3 self-contained→P3.1, §2.4 archive-glob→P4.1, §2.5 ranlib→P4.1, §2.6 iOS host_view→P6.1, §2.7 i18n→P3.2, §2.8 terminfo source→P1.3, §2.9 non-darwin cfg→P6.1. Verify-KAT blocker→P0.1. Resources man/bat→P1.3. Universal/signing/notarize→P4.2/4.3. Sparkle→P5.2. Rebrand→P5.1. Every one of the 50 macOS-path `unimplemented!()` is triaged in P2.4 Step 1.
 - No placeholders: each task names exact files:line, the ghostty reference to port from, and a concrete verification (nm/cargo test/screenshot/plutil).
 - "Functional like the source, rustty branding": R1/R3 keep behavior + data identity faithful (protocol names like `xterm-ghostty`/`share/ghostty`/OSC kept and documented); R2 makes only the user-visible product "Rustty".

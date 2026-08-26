@@ -12,7 +12,7 @@
 
 - Product-name casing: `Ghostty`→`Rustty` (capital, product prose), `ghostty_`→`rustty_`, `GHOSTTY_`→`RUSTTY_`, `<ghostty/…>`→`<rustty/…>`; genuine oracle-path refs (`src/…`, upstream filenames) stay lowercase `ghostty` ([[rename-casing-fidelity]]).
 - Scope: VT family ONLY (`ghostty/vt.h` + `ghostty/vt/*.h`, 30 headers). NOT the embedding `ghostty.h` (covered by `rustty-embed.h`). NOT the c-vt example programs (separate Phase-B plan).
-- Mismatch policy: fix rustty to match ghostty by default; a genuine intentional divergence → header reflects it + PORT NOTE + flag to the human. Every rustty *code* change ships a native test.
+- Mismatch policy: fix rustty to match ghostty by default; a genuine intentional divergence → header reflects it + PORT NOTE + flag to the human. Every rustty _code_ change ships a native test.
 - Canonical public header = `include/rustty/vt.h`. cbindgen `include/rustty.h` = internal verification ground-truth only.
 - Native `cargo build --workspace` + native tests stay green throughout.
 
@@ -21,11 +21,13 @@
 ### Task 1: Foundation artifacts + ABI baseline
 
 **Files:**
+
 - Build outputs: `target/release/librustty_vt_c.{dylib,a}`
 - Regenerated: `include/rustty.h` (cbindgen)
 - Create: `.port/tools/gates/_vt_header_baseline.txt` (exported-symbol snapshot, git-ignored scratch is fine; or commit for provenance)
 
 **Interfaces:**
+
 - Produces: the built cdylib/staticlib, a current cbindgen `rustty.h`, and a sorted list of exported `rustty_*` symbols consumed by Task 3's check (b).
 
 - [ ] **Step 1: Build the C-ABI artifacts**
@@ -55,9 +57,11 @@ git commit -m "vt-headers: foundation — current cbindgen rustty.h + exported-s
 ### Task 2: Token-rename the VT header family
 
 **Files:**
+
 - Create: `include/rustty/vt.h` + `include/rustty/vt/*.h` (29 subheaders, incl. `vt/key/*.h`, `vt/mouse/*.h`) — from ghostty's `include/ghostty/vt.h` + `include/ghostty/vt/*.h`.
 
 **Interfaces:**
+
 - Consumes: nothing (mechanical translation of the oracle headers).
 - Produces: the curated header family that `#include <rustty/vt.h>` pulls transitively; Task 3 verifies it.
 
@@ -78,6 +82,7 @@ mkdir -p include/rustty/vt/key include/rustty/vt/mouse
       "$G/$rel" > "include/rustty/$rel"
 done
 ```
+
 Expected: `include/rustty/vt.h` + 29 subheaders created.
 
 - [ ] **Step 2: Audit residual `ghostty` (only genuine oracle-path/prose refs may remain)**
@@ -100,6 +105,7 @@ grep -rn 'ghostty\.org' . 2>/dev/null | grep -vE '/target/|/\.git/|/\.claude/|fi
 sed -i '' 's|https://ghostty\.org|https://rustty.sh|g' include/rustty/vt.h
 sed -i '' "s|on Ghostty's website, at https://ghostty\.org/docs/config|on Rustty's website, at https://rustty.sh/docs/config|" crates/rustty-config/src/config-template
 ```
+
 Verify: `grep -rn 'ghostty\.org' . | grep -vE '/target/|/\.git/|/\.claude/|files\.ghostty\.org'` → empty; `deps.files.ghostty.org` count unchanged.
 
 - [ ] **Step 3: Verify the family compiles (gate check a, pre-gate smoke)**
@@ -113,6 +119,7 @@ CC="$(xcrun --find clang 2>/dev/null || echo /usr/bin/clang)"
 printf '#include <rustty/vt.h>\nint main(void){return 0;}\n' > "${TMPDIR:-/tmp}/vt_probe.c"
 "$CC" -fsyntax-only -Iinclude "${TMPDIR:-/tmp}/vt_probe.c" && echo "SYNTAX OK"
 ```
+
 Expected: `SYNTAX OK`, no warnings/errors. If a subheader references a macro/type not yet renamed, fix the sed output and re-run.
 
 - [ ] **Step 4: Commit the header family**
@@ -127,15 +134,18 @@ git commit -m "vt-headers: token-rename ghostty/vt.h family -> include/rustty/vt
 ### Task 3: The ABI-fidelity gate
 
 **Files:**
+
 - Create: `.port/tools/gates/check_rustty_vt_headers.sh`
 
 **Interfaces:**
+
 - Consumes: `include/rustty/vt*.h` (Task 2), `target/release/librustty_vt_c.dylib` + `include/rustty.h` (Task 1), `rustty_type_json()`.
 - Produces: a pass/fail gate + a printed mismatch report (declared-but-not-exported symbols; struct size/offset diffs), consumed by Task 4.
 
 - [ ] **Step 1: Write the gate script**
 
 Create `.port/tools/gates/check_rustty_vt_headers.sh`:
+
 ```sh
 #!/bin/sh
 # ABI-fidelity gate for the curated rustty/vt.h family (spec:
@@ -168,6 +178,7 @@ node .port/tools/check-vt-struct-layouts.mjs
 echo "  OK"
 echo "VT-HEADERS: GREEN"
 ```
+
 Make executable: `chmod +x .port/tools/gates/check_rustty_vt_headers.sh`.
 
 - [ ] **Step 2: Write the struct-layout cross-checker (check c)**
@@ -195,10 +206,12 @@ git commit -m "vt-headers: ABI-fidelity gate (compile / symbols vs cbindgen / st
 ### Task 4: Triage + fix every mismatch (policy A) — iterate to green
 
 **Files:**
+
 - Modify (per mismatch): the relevant `crates/rustty-vt-c/src/*.rs` (or the upstream crate defining the type/enum) AND/OR `include/rustty/vt/*.h` (only for a deliberate divergence).
 - Test (per code fix): the crate's own `#[cfg(test)]` module or `tests/`.
 
 **Interfaces:**
+
 - Consumes: `.port/tools/gates/_vt_mismatch_report.txt` (Task 3).
 - Produces: a green gate. Each mismatch → one focused commit.
 
@@ -207,6 +220,7 @@ Method — for EACH mismatch the gate reports, in order:
 - [ ] **Step 1: Classify the mismatch**
 
 Compare the curated header's declaration against ghostty's original header AND rustty's actual ABI:
+
 - **rustty bug** (rustty's export/layout/enum differs from ghostty's, no deliberate reason) → Step 2.
 - **intentional divergence** (a documented faithful-but-safe choice, or a genuinely-absent ghostty feature) → Step 4.
 
@@ -233,6 +247,7 @@ Repeat Steps 1–4 until `.port/tools/gates/check_rustty_vt_headers.sh` prints `
 ### Task 5: Wire the gate + finalize
 
 **Files:**
+
 - Modify: `.port/tools/gates/README.md` (register the new gate)
 - Modify: `.port/phase-2/EXAMPLES_PORT.md` (note the header foundation is done; Phase B unblocked)
 
@@ -272,6 +287,6 @@ wasm32, was fixed during the wasm-examples work.)
 
 **Spec coverage:** Component 1 (header family) → Task 2. Component 2 (gate, checks a/b/c) → Task 3 + the layout checker. Mismatch policy A → Task 4. cbindgen-as-ground-truth → Task 3 check (b). Enum-value verification → folded into Task 4 (discriminant mismatches surface via check c's static_assert on enum-typed fields + Phase-B parity). Testing/gate registration → Task 5. Foundation build → Task 1. All spec sections mapped.
 
-**Placeholder scan:** Task 4 is intentionally iterative (the mismatch set is discovered by running the gate), but each *step* is concrete (classify → fix Rust → native test → commit) with a worked precedent (the `resolve_ty` fix). No "TBD"/"handle edge cases"/vague steps.
+**Placeholder scan:** Task 4 is intentionally iterative (the mismatch set is discovered by running the gate), but each _step_ is concrete (classify → fix Rust → native test → commit) with a worked precedent (the `resolve_ty` fix). No "TBD"/"handle edge cases"/vague steps.
 
 **Type consistency:** the gate script names (`check_rustty_vt_headers.sh`, `check-vt-struct-layouts.mjs`, `_vt_mismatch_report.txt`) are used consistently across Tasks 3–5; header paths (`include/rustty/vt.h`) consistent Tasks 2–5.

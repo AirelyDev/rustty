@@ -28,11 +28,12 @@ widgets pending), macos-swift-app (reuse pending C-ABI glue).
 **Key reconciliation (corrects the synthesis roadmap's over-scoping):** the "runtime-thread / D6"
 workstream is **already done and proven**. `crates/rustty-termio/tests/live_shell.rs` runs a real
 `/bin/sh` whose output round-trips into the `Screen` through the real Exec + rustty-xev kqueue loop
-+ ReadThread + `Termio::processOutput`. `termio/{thread,exec,termio_impl}.rs` carry **no live
-seams** on the posix/macOS path. D6's only true remainders are (a) the **renderer `Thread` event
-loop**, which is inseparable from the GPU present path, and (b) a small **`cf_release_thread`
-rewire** (a local placeholder `xev` module — `crates/rustty-os/src/cf_release_thread.rs:339…373`
-— that predates rustty-xev existing). Both are absorbed into Sub-project #1.
+
+- ReadThread + `Termio::processOutput`. `termio/{thread,exec,termio_impl}.rs` carry **no live
+  seams** on the posix/macOS path. D6's only true remainders are (a) the **renderer `Thread` event
+  loop**, which is inseparable from the GPU present path, and (b) a small **`cf_release_thread`
+  rewire** (a local placeholder `xev` module — `crates/rustty-os/src/cf_release_thread.rs:339…373`
+  — that predates rustty-xev existing). Both are absorbed into Sub-project #1.
 
 ## 3. Locked product decisions (forks)
 
@@ -49,7 +50,7 @@ fill**, never as a front-loaded blocking phase.
 ### 3.2 C-ABI symbol identity — `ghostty_*` aliases, `rustty_*` canonical
 
 librustty exports `rustty_*` as the real, documented ABI (`include/rustty.h`) — satisfying R2 —
-**plus** a *generated* thin alias layer adding `ghostty_* → rustty_*` symbols and a `ghostty.h`
+**plus** a _generated_ thin alias layer adding `ghostty_* → rustty_*` symbols and a `ghostty.h`
 compat view over the identical struct/enum layouts. Rationale: the reused Swift app (~150 files,
 ~163 hard-coded `ghostty_` symbols) stays **byte-identical to upstream**, so re-syncing ghostty's
 ongoing Swift development is a plain copy; 100% of the adaptation lives in one generated file in
@@ -67,7 +68,7 @@ Each numbered item is its own **spec → plan → implement** cycle. D6 is done,
 2. **macOS Swift-app reuse** — `ghostty_*` alias layer + config cbindgen header + umbrella
    modulemap + xtask packaging librustty into a signed `.xcframework` + identity rebrand
    (io.airely.rustty). Delivers: a launchable rustty.app. **iOS** widens the Darwin gate off this.
-3. *Parallel fill (off critical path, low-risk):* **ledger hygiene** (§7) → **TUI-CLI**
+3. _Parallel fill (off critical path, low-risk):_ **ledger hygiene** (§7) → **TUI-CLI**
    (boo/list_colors/list_keybinds/list_themes over a Rust vaxis+zf substrate) → **unused
    generators** (synthetic/bench/src-extra) → **Linux fontconfig** (GTK prereq).
 4. **GTK/Linux** frontend (~23k Zig LOC) + OpenGL renderer backend + a from-scratch gtk4-rs/adwaita
@@ -100,7 +101,7 @@ layer-attach/present lines in `Metal.zig`/`generic.zig`, plus the renderer `Thre
 - **A. IOSurfaceLayer + dep.** Add `objc2-quartz-core` (CAMetalLayer/CALayer; not yet in lock). Port
   `src/renderer/metal/IOSurfaceLayer.zig` (183 LOC) → `crates/rustty-renderer/src/metal/iosurface_layer.rs`:
   the `CALayer` subclass (`allocateClassPair`), `init`/`release`, `setSurface` (main-thread
-  `dispatch`), `setSurfaceSync`, `setDisplayCallback`. *The present primitive.*
+  `dispatch`), `setSurfaceSync`, `setDisplayCallback`. _The present primitive._
 - **B. Metal.zig on-screen delta.** `crates/rustty-renderer/src/metal/metal_impl.rs:334,384`
   (`init`/`loop_enter`): add the `layer` field, NSView attach (`wantsLayer`/`addSublayer`/
   `clipsToBounds`), `surfaceSize` from `layer.bounds`, `present`/`presentLastTarget`.
@@ -115,7 +116,7 @@ layer-attach/present lines in `Metal.zig`/`generic.zig`, plus the renderer `Thre
 - **E. Real Renderer in core.** Replace `crates/rustty-core/src/renderer_seam.rs`'s `Renderer`
   placeholder (`surfaceInit`/`init`/`finalizeSurfaceInit`/`threadEnter`/`drawFrame`/`deinit`,
   currently `unimplemented!()`) with the real `rustty_renderer::Renderer`; wire `Surface::draw →
-  drawFrame`. Preserve acyclicity (R4) — core already deps renderer; no new edge.
+drawFrame`. Preserve acyclicity (R4) — core already deps renderer; no new edge.
 - **F. apprt-c macOS host leaves.** `crates/rustty-apprt-c/src/lib.rs` + `crates/rustty-apprt/src/embedded.rs`
   macOS `#[cfg(target_os="macos")]` leaves needed to host a window: the NSView/CAMetalLayer host
   handshake from the C-ABI (the embedded `Surface` receives the host layer), window blur
@@ -126,13 +127,13 @@ layer-attach/present lines in `Metal.zig`/`generic.zig`, plus the renderer `Thre
 
 ### 5.3 Internal chunking (each independently testable, its own gate-green commit)
 
-| chunk | deliverable | test / proof |
-|---|---|---|
-| **W0** | `objc2-quartz-core` dep + `cf_release_thread` rewire + `IOSurfaceLayer` port | unit: layer sets an IOSurface as `contents`; `cf_release_thread` runs on the real xev loop |
-| **W1** | Metal on-screen delta (B) + generic R5 present (C, present half) | `Metal::init` binds a `CAMetalLayer` to a test `NSView`; `generic` presents ONE real frame of terminal state on-screen — **FIRST PIXELS** |
-| **W2** | renderer `Thread` loop over rustty-xev (D) + CVDisplayLink (C, vsync half) | the render thread draws on vsync; a bounded-pump integration test (live_shell.rs pattern) ticks the render loop and observes a present |
-| **W3** | swap `renderer_seam` → real Renderer/Thread in core (E) | core `Surface::draw` drives a live `drawFrame`; workspace build + acyclic gate green |
-| **W4** | apprt-c macOS host handshake + blur/display_id/scale (F) | a Rust integration harness opens an `NSWindow`, hosts the layer, and shows a live terminal frame — no Swift app yet |
+| chunk  | deliverable                                                                  | test / proof                                                                                                                              |
+| ------ | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| **W0** | `objc2-quartz-core` dep + `cf_release_thread` rewire + `IOSurfaceLayer` port | unit: layer sets an IOSurface as `contents`; `cf_release_thread` runs on the real xev loop                                                |
+| **W1** | Metal on-screen delta (B) + generic R5 present (C, present half)             | `Metal::init` binds a `CAMetalLayer` to a test `NSView`; `generic` presents ONE real frame of terminal state on-screen — **FIRST PIXELS** |
+| **W2** | renderer `Thread` loop over rustty-xev (D) + CVDisplayLink (C, vsync half)   | the render thread draws on vsync; a bounded-pump integration test (live_shell.rs pattern) ticks the render loop and observes a present    |
+| **W3** | swap `renderer_seam` → real Renderer/Thread in core (E)                      | core `Surface::draw` drives a live `drawFrame`; workspace build + acyclic gate green                                                      |
+| **W4** | apprt-c macOS host handshake + blur/display_id/scale (F)                     | a Rust integration harness opens an `NSWindow`, hosts the layer, and shows a live terminal frame — no Swift app yet                       |
 
 ### 5.4 Testing strategy
 

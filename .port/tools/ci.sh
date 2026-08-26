@@ -33,6 +33,15 @@
 #                                    ghostty's props/symbols_uucode "tables match
 #                                    uucode" tests whose live oracle R3 forbids
 #                                    in-crate. 0 diffs required.)
+#   G-LINT check_lints.sh            the non-Rust linters: shellcheck,
+#                                    prettier, typos, swiftlint, alejandra,
+#                                    pinact                          -> HARD-FAIL
+#                                    (the reference runs each as its own
+#                                    test.yml job via `nix develop -c <tool>`;
+#                                    rustty runs them from one gate so this
+#                                    file stays the single source of truth.
+#                                    A tool that is absent reports `skipped`
+#                                    BY NAME; all-skipped exits 3 BLOCKED.)
 #   G-THEMES check_theme_corpus.py   the 602 vendored iterm2 theme files match
 #                                    a committed per-file SHA-256 manifest
 #                                    -> HARD-FAIL. res_themes.rs only counts
@@ -146,7 +155,7 @@
 set -uo pipefail   # NOTE: no `-e` — run every check, aggregate failures.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || exit 1
 GATES="$ROOT/.port/tools/gates"
 PY="${PYTHON:-python3}"
 # Metrics file G8b emits and G8 then consumes (WS10 T3). Under $TMPDIR so a CI
@@ -310,6 +319,16 @@ GATE_REGISTRY=(
   "G7|HARD|bash $GATES/check_acyclic.sh"
   "G4|HARD|bash $GATES/run_differential.sh"
   "G4-uni|HARD|bash $ROOT/.port/phase-0/harness/unicode/run_unicode_diff.sh"
+  # G-LINT (2026-08-25) — the non-Rust linter lane: shellcheck, prettier,
+  # typos, swiftlint, alejandra, pinact. The reference runs each as its own
+  # `test.yml` job through `nix develop -c <tool>`; rustty's configs for all
+  # six (.shellcheckrc, .prettierignore, typos.toml, .swiftlint.yml,
+  # .github/pinact.yml) were checked in during the top-level-files port but
+  # NOTHING EVER RAN THEM, so they were decoration. HARD: every lane is green
+  # as of this commit. A linter that is not installed reports `skipped` by
+  # name (and the gate exits 3 BLOCKED if EVERY lane is skipped) rather than
+  # contributing a vacuous green — see the gate's header.
+  "G-LINT|HARD|bash $GATES/check_lints.sh"
   # G-REL (WS18) — the `--release` test lane. Steps 3/4 above only ever exercise
   # the DEBUG profile, so nothing noticed that release had rotted to 22 failures
   # across 7 targets. Most were tests driving a seam the port deliberately
@@ -759,7 +778,8 @@ for phase in HARD PROGRESS; do
   for entry in "${GATE_REGISTRY[@]}"; do
     IFS='|' read -r gid gkind grun <<< "$entry"
     [ "$gkind" = "$phase" ] || continue
-    # shellcheck disable=SC2086 — grun is an intentional word-split command line.
+    # grun is an intentional word-split command line.
+    # shellcheck disable=SC2086
     run_gate "$gid" "$gkind" $grun
   done
 done

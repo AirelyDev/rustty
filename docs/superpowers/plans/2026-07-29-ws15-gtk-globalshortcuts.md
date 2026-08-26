@@ -18,7 +18,7 @@
 - Ledger discipline: strike the DEFERRALS.md L6 GlobalShortcuts entry (lines 3982–4022) in the same PR.
 - Commit style: `subsystem: summary (WS15 T<n>)`. Branch per WS; merge to main only with both platforms green.
 - Zig byte-slices → `Vec<u8>`/`&[u8]`, never lossy `String` (memory: zig-byteslice-to-rust-rawbytes). The portal payload fields are D-Bus `s` (UTF-8 by protocol), so `String` is correct there; the one lossy conversion (`Action::format` output → `String`) is explicitly a UTF-8-by-construction formatter output.
-- When porting oracle doc prose, strip snark/gag editorializing (memory: strip-ghostty-gag-prose). **This applies hard here:** `global_shortcuts.zig:340-360` contains a long editorializing rant about XDG portals ("really, really poorly-designed pieces of hot garbage", "even _TCP_ had figured out decades ago", "When in Rome…"). Port the *technical content* (why the request object path must be constructed and subscribed to BEFORE the method call — a server may emit `Response` before the client subscribes) and drop the editorializing.
+- When porting oracle doc prose, strip snark/gag editorializing (memory: strip-ghostty-gag-prose). **This applies hard here:** `global_shortcuts.zig:340-360` contains a long editorializing rant about XDG portals ("really, really poorly-designed pieces of hot garbage", "even _TCP_ had figured out decades ago", "When in Rome…"). Port the _technical content_ (why the request object path must be constructed and subscribed to BEFORE the method call — a server may emit `Response` before the client subscribes) and drop the editorializing.
 
 ## Platform scope
 
@@ -28,18 +28,18 @@ This is a **Linux-only** workstream. Every file touched is inside `crates/rustty
 
 All build/test/run commands in this plan run **on the VM**, via `ssh rvm 'cd ~/projects/rustty && …'`. The VM repo tracks `origin` = `git@github.com:AirelyDev/rustty.git`; the working copy on macOS is where edits are authored and committed, then `git push` / `ssh rvm 'git pull'` moves them across. Verified VM facts (probed 2026-07-29):
 
-| Fact | Value |
-|---|---|
-| OS | Fedora release 44 (Forty Four), aarch64 |
-| Desktop | GNOME Shell 50.0, session type **wayland**, seat0/tty2, `Active=yes` |
-| Portal frontend | `xdg-desktop-portal` 1.21.1-1.fc44 (`org.freedesktop.portal.Desktop` running) |
-| Portal backend | `xdg-desktop-portal-gnome` 50.0-1.fc44, exposes `org.freedesktop.impl.portal.GlobalShortcuts` |
+| Fact             | Value                                                                                                                                                                                        |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OS               | Fedora release 44 (Forty Four), aarch64                                                                                                                                                      |
+| Desktop          | GNOME Shell 50.0, session type **wayland**, seat0/tty2, `Active=yes`                                                                                                                         |
+| Portal frontend  | `xdg-desktop-portal` 1.21.1-1.fc44 (`org.freedesktop.portal.Desktop` running)                                                                                                                |
+| Portal backend   | `xdg-desktop-portal-gnome` 50.0-1.fc44, exposes `org.freedesktop.impl.portal.GlobalShortcuts`                                                                                                |
 | Portal interface | `org.freedesktop.portal.GlobalShortcuts` **version = 2**, methods `CreateSession`/`BindShortcuts`/`ListShortcuts`/`ConfigureShortcuts`, signals `Activated`/`Deactivated`/`ShortcutsChanged` |
-| Reference app | `/usr/bin/ghostty` — **Ghostty 1.3.1-2.fc44** (a live oracle for the portal traffic) |
-| D-Bus tooling | `dbus-monitor`, `gdbus`, `busctl` all present |
-| Config path | `~/.config/rustty/config.rustty` exists (template); `XDG_CONFIG_HOME` is honored, so tests use an isolated config dir |
-| App id | debug builds use `com.mitchellh.ghostty-debug` — distinct from the installed ghostty's `com.mitchellh.ghostty`, so both can run without single-instance collision |
-| sudo | **requires a password** — no task in this plan may need root. Nothing here does. |
+| Reference app    | `/usr/bin/ghostty` — **Ghostty 1.3.1-2.fc44** (a live oracle for the portal traffic)                                                                                                         |
+| D-Bus tooling    | `dbus-monitor`, `gdbus`, `busctl` all present                                                                                                                                                |
+| Config path      | `~/.config/rustty/config.rustty` exists (template); `XDG_CONFIG_HOME` is honored, so tests use an isolated config dir                                                                        |
+| App id           | debug builds use `com.mitchellh.ghostty-debug` — distinct from the installed ghostty's `com.mitchellh.ghostty`, so both can run without single-instance collision                            |
+| sudo             | **requires a password** — no task in this plan may need root. Nothing here does.                                                                                                             |
 
 **No portal install/enable step is needed** — the backend is present, activated and at version 2. (If a future re-run finds it missing: `sudo dnf install -y xdg-desktop-portal xdg-desktop-portal-gnome && systemctl --user restart xdg-desktop-portal xdg-desktop-portal-gnome`. Requires an interactive sudo password on this VM.)
 
@@ -68,10 +68,12 @@ export GDK_BACKEND=wayland
 ### Task 1: Branch, sync the VM, and record the oracle's live portal traffic
 
 **Files:**
+
 - Create (on the VM, scratch only): `/tmp/ws15/oracle-traffic.log`, `/tmp/ws15/oracle-cfg/rustty-oracle/config`
 - Modify: none
 
 **Interfaces:**
+
 - Produces: the empirically-confirmed answers three later tasks depend on — (a) does GNOME 50 pop a permission dialog for `BindShortcuts`, (b) what the exact `CreateSession`/`BindShortcuts` payloads look like on this box, (c) whether `Activated` fires from a real key press. Recorded in the Task 1 commit message so no later task has to guess.
 
 - [x] **Step 1: Create the branch on macOS and sync the VM**
@@ -162,10 +164,12 @@ git push
 ### Task 2: The trigger→action map (headless, pure)
 
 **Files:**
+
 - Modify: `crates/rustty-apprt/Cargo.toml` (add `rustty-cfg-fmt`)
 - Modify: `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs` (add free functions + test module)
 
 **Interfaces:**
+
 - Consumes: `rustty_config::Config::keybind.set` → `rustty_input::binding::Set::iter_bindings() -> impl Iterator<Item = (&Trigger, &Value)>`; `Value::{Leader, Leaf, LeafChained}`; `Leaf::generic()/LeafChained::generic() -> GenericLeaf { flags: Flags, actions }`; `GenericLeaf::actions_slice() -> &[Action]`; `Flags::global: bool`; `crate::gtk::key::xdg_shortcut_from_trigger(Trigger) -> Option<String>`; `rustty_input::binding::Action::format<W: rustty_cfg_fmt::Writer>(&self, &mut W)`.
 - Produces:
   - `pub(crate) fn build_shortcut_map(config: &rustty_config::Config) -> Vec<(String, rustty_input::binding::Action)>` — insertion-ordered, key = XDG shortcut id.
@@ -384,9 +388,11 @@ git push
 ### Task 3: Request tokens and the request object path (headless, pure)
 
 **Files:**
+
 - Modify: `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs`
 
 **Interfaces:**
+
 - Consumes: `rustty_os::file::crypto_random_bytes(&mut [u8])`.
 - Produces:
   - `pub(crate) fn generate_token() -> String` — `rustty_<7 hex chars>`.
@@ -524,9 +530,11 @@ git push
 ### Task 4: The `CreateSession` / `BindShortcuts` payloads and response parsing (headless, pure)
 
 **Files:**
+
 - Modify: `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs`
 
 **Interfaces:**
+
 - Consumes: `build_shortcut_map`, `action_description` (Task 2); `glib::{Variant, VariantDict, VariantTy}`, `glib::variant::ObjectPath`.
 - Produces:
   - `pub(crate) fn create_session_payload(request_token: &str, session_token: &str) -> glib::Variant` — type `(a{sv})`.
@@ -752,9 +760,11 @@ git push
 ### Task 5: Portal session state, the real `refresh`/`close`, and activation dispatch
 
 **Files:**
+
 - Modify: `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs`
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 2–4; `gio::{DBusConnection, SignalSubscriptionId, DBusCallFlags, Cancellable}`.
 - Produces:
   - `imp::GlobalShortcuts` fields `map: RefCell<Vec<(String, Action)>>`, `handle: RefCell<Option<String>>`, `response_subscription: RefCell<Option<gio::SignalSubscriptionId>>`, `activate_subscription: RefCell<Option<gio::SignalSubscriptionId>>`.
@@ -1046,9 +1056,11 @@ git push
 ### Task 6: The live D-Bus round-trip — `request` and `Method::on_response`
 
 **Files:**
+
 - Modify: `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs`
 
 **Interfaces:**
+
 - Consumes: `Method`, `create_session_payload`, `bind_shortcuts_payload`, `session_handle_from_results`, `request_object_path`, `generate_token`, `dispatch_activation` (Tasks 3–5); `gio::DBusConnection::{signal_subscribe, signal_unsubscribe, call, unique_name}`, `gio::DBusSignalFlags::{NONE, MATCH_ARG0_PATH}`.
 - Produces: a complete `GlobalShortcuts::request(&self, method: Method)` and `GlobalShortcuts::on_response(&self, method: Method, results: &glib::Variant)`. No new public surface; this task is verified live in Task 8 (a bus round-trip cannot be unit-tested headlessly, which is stated explicitly there).
 
@@ -1308,9 +1320,11 @@ git push
 ### Task 7: Dispatch the triggered action — `perform_all_action_thunk`
 
 **Files:**
+
 - Modify: `crates/rustty-apprt/src/gtk/class/application.rs` (imp field ~line 274, `bind_core_app` ~line 2358, `global_shortcut_trigger` line 778, test module)
 
 **Interfaces:**
+
 - Consumes: `rustty_core::app::App::<A>::performAllAction(&mut self, rt_app: &A, action: rustty_input::binding::Action) -> Result<(), rustty_core::app::Error>`; `ActionBoxed(pub rustty_input::binding::Action)`.
 - Produces: `imp::Application::perform_all_action_thunk: RefCell<Option<Box<dyn Fn(rustty_input::binding::Action)>>>`, installed by `Application::bind_core_app::<A>()`; `imp::Application::global_shortcut_trigger` now invokes it. Test-only counter `global_shortcut_trigger_count: Cell<u64>` (same precedent as the existing `tick_count`).
 
@@ -1487,9 +1501,11 @@ git push
 ### Task 8: Live portal round-trip on the VM's real GNOME session
 
 **Files:**
+
 - Create: `.port/tools/gates/ws15_globalshortcuts_portal_gate.sh`
 
 **Interfaces:**
+
 - Consumes: the built `target/debug/rustty` binary on the VM; the `debug(gtk):` log lines emitted by Tasks 5–6 (`global shortcuts session_handle=`, `global shortcuts request successful method=`, `global shortcuts bound results=`, `global shortcut activated=`).
 - Produces: an executable gate script that exits 0 only when the full round-trip AND an activation dispatch are observed.
 
@@ -1680,6 +1696,7 @@ git push
 **Files:** none (verification only)
 
 **Interfaces:**
+
 - Consumes: the complete WS15 tree.
 - Produces: the roadmap's standing both-platform green result.
 
@@ -1730,9 +1747,11 @@ git push
 ### Task 10: Strike the DEFERRALS L6 entry
 
 **Files:**
+
 - Modify: `.port/phase-2/DEFERRALS.md:3982-4022`
 
 **Interfaces:**
+
 - Consumes: the landed WS15 implementation.
 - Produces: a truthful ledger — the entry is struck in the established style (`~~heading~~` + a `**RESOLVED (WS15)**` paragraph), not deleted.
 
@@ -1916,7 +1935,7 @@ Deltas from the plan as written, all forced by facts the plan could not know:
 
 5. **The display-gated `--ignored` suite cannot be run as one process.** It
    fails wholesale with `gtk4::init(): Attempted to initialize GTK from two
-   different threads`, and `--test-threads=1` does not help. This is
+different threads`, and `--test-threads=1` does not help. This is
    PRE-EXISTING — verified identical on `origin/main` (2 passed / 19 failed).
    Display KATs must be run one `--filter` at a time; done that way the new
    `application_global_shortcut_trigger_performs_action` passes.

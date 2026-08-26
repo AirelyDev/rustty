@@ -43,7 +43,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - name: Checkout (rustty only — ghostty is NOT a dependency, R3)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Rust toolchain (pinned via rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@stable
@@ -67,7 +67,7 @@ jobs:
       # pin the script's BLOCKED message names). Harness tooling only, R3:
       # no rustty crate depends on zig or uucode.
       - name: Install zig 0.15.2 (pinned — G4-uni uucode oracle)
-        uses: mlugg/setup-zig@v2
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.15.2
 
@@ -89,7 +89,7 @@ jobs:
           echo "LIBGL_ALWAYS_SOFTWARE=1" >> "$GITHUB_ENV"
 
       - name: Cache cargo registry + target
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cargo/registry
@@ -100,9 +100,36 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Set up Python 3 (gate scripts + harness)
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
+
+      # G-LINT (check_lints.sh) is the non-Rust linter lane. Each tool it
+      # cannot find reports `skipped` BY NAME instead of silently passing, so
+      # without these installs the lane would be honest but nearly empty.
+      # Installed here rather than in ci.sh for the same reason the Rust
+      # toolchain is: this workflow sets up the environment, ci.sh owns the
+      # check sequence. Once the Nix flake lands (Batch 4) this whole step
+      # collapses into `nix develop`.
+      #
+      # prettier comes from npx (pinned inside the gate), so only Node is
+      # needed. alejandra is deliberately absent until there are .nix files.
+      - name: Install linters (G-LINT lane)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew install typos-cli pinact shellcheck swiftlint
+          else
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+            # typos + pinact ship prebuilt binaries; the apt archives do not
+            # carry either. Install from the release tarballs.
+            curl -fsSL https://github.com/crate-ci/typos/releases/download/v1.49.0/typos-v1.49.0-x86_64-unknown-linux-musl.tar.gz \
+              | sudo tar -xz -C /usr/local/bin ./typos
+            curl -fsSL https://github.com/suzuki-shunsuke/pinact/releases/download/v4.1.1/pinact_linux_amd64.tar.gz \
+              | sudo tar -xz -C /usr/local/bin pinact
+          fi
 
       - name: Show tool versions
         run: |
@@ -140,4 +167,11 @@ jobs:
       # the policy note step above). Gate exit contract: 0 = pass, 3 = BLOCKED
       # (warning), any other non-zero = red. See .port/tools/CI.md.
       - name: Run rustty CI (.port/tools/ci.sh)
+        # GITHUB_TOKEN is for G-LINT's pinact lane only: pinact resolves action
+        # refs against the GitHub API and rate-limits into a false red without
+        # one, so check_lints.sh skips that lane when the variable is unset.
+        # Passed via `env:` rather than written into $GITHUB_ENV so the secret
+        # never appears in an interpolated shell command.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash .port/tools/ci.sh

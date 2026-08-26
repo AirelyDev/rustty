@@ -60,4 +60,4 @@ mutate "$G/flatpak.rs" \
 
 # Restore any stragglers.
 find "$G" -name '*.bak' -print -exec sh -c 'mv "$1" "${1%.bak}"' _ {} \;
-echo done
+echo "done"

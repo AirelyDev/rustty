@@ -13,12 +13,12 @@ Each fixture is consumed by `include_bytes!` — raw bytes, never a text encodin
 
 ## Provenance
 
-| fixture | font | glyph | size/DPI | atlas format | `Constraint` | `constraint_width` | source strike | target |
-|---|---|---|---|---|---|---|---|---|
-| `stb_resize_terminus_i_gray_16x17.bin` | `rustty_font::embedded::TERMINUS_TTF` | 77 (`i`) | 12 pt @ 96×96 | `Grayscale` | `size: Stretch`, `align_*: Center`, else `Constraint::none` | 2 | 8×16 (mono strike) | **16×17** |
-| `stb_resize_terminus_i_gray_8x17.bin` | same | 77 (`i`) | 12 pt @ 96×96 | `Grayscale` | same | 1 | 8×16 (mono strike) | **8×17** |
-| `stb_resize_emoji_bgra_16x15.bin` | `rustty_font::embedded::EMOJI` (NotoColorEmoji) | `glyph_index(U+1F600)` | 12 pt @ 96×96 | `Bgra` | `size: Cover`, `align_*: Center`, else `Constraint::none` | 2 | 136×128 (8-bit BGRA strike) | **16×15** |
-| `stb_resize_emoji_bgra_8x7.bin` | same | same | 12 pt @ 96×96 | `Bgra` | same | 1 | 136×128 (8-bit BGRA strike) | **8×7** |
+| fixture                                | font                                            | glyph                  | size/DPI      | atlas format | `Constraint`                                                | `constraint_width` | source strike               | target    |
+| -------------------------------------- | ----------------------------------------------- | ---------------------- | ------------- | ------------ | ----------------------------------------------------------- | ------------------ | --------------------------- | --------- |
+| `stb_resize_terminus_i_gray_16x17.bin` | `rustty_font::embedded::TERMINUS_TTF`           | 77 (`i`)               | 12 pt @ 96×96 | `Grayscale`  | `size: Stretch`, `align_*: Center`, else `Constraint::none` | 2                  | 8×16 (mono strike)          | **16×17** |
+| `stb_resize_terminus_i_gray_8x17.bin`  | same                                            | 77 (`i`)               | 12 pt @ 96×96 | `Grayscale`  | same                                                        | 1                  | 8×16 (mono strike)          | **8×17**  |
+| `stb_resize_emoji_bgra_16x15.bin`      | `rustty_font::embedded::EMOJI` (NotoColorEmoji) | `glyph_index(U+1F600)` | 12 pt @ 96×96 | `Bgra`       | `size: Cover`, `align_*: Center`, else `Constraint::none`   | 2                  | 136×128 (8-bit BGRA strike) | **16×15** |
+| `stb_resize_emoji_bgra_8x7.bin`        | same                                            | same                   | 12 pt @ 96×96 | `Bgra`       | same                                                        | 1                  | 136×128 (8-bit BGRA strike) | **8×7**   |
 
 Generated on macOS aarch64, Apple clang 21.0.0, at WS11 (branch
 `agent-a6d625666fc339642`, worktree of `main` @ `297afcf`). The `Face::render_glyph`
@@ -49,18 +49,18 @@ Consequence, stated plainly: the grayscale fixtures are **weak discriminators**.
 binary input the resampler's fractional output rounds back to 0/1, so a wrong resampler
 only shows up where the rounding flips. Measured against these exact fixtures:
 
-| fixture | vs nearest neighbour | vs bilinear |
-|---|---|---|
-| gray 16×17 | 11/272 (4.0 %), max delta 255 | 2/272 (0.7 %), max delta 255 |
-| gray 8×17 | 5/136 (3.7 %), max delta 255 | **0/136 — INDISTINGUISHABLE** |
+| fixture    | vs nearest neighbour          | vs bilinear                   |
+| ---------- | ----------------------------- | ----------------------------- |
+| gray 16×17 | 11/272 (4.0 %), max delta 255 | 2/272 (0.7 %), max delta 255  |
+| gray 8×17  | 5/136 (3.7 %), max delta 255  | **0/136 — INDISTINGUISHABLE** |
 
 The BGRA fixtures are the strong discriminators (a genuine 8-bit source, and a large
 downsample through `num_channels = 4`). Measured against those exact fixtures:
 
-| fixture | vs nearest neighbour | vs bilinear |
-|---|---|---|
+| fixture    | vs nearest neighbour            | vs bilinear                     |
+| ---------- | ------------------------------- | ------------------------------- |
 | BGRA 16×15 | 596/960 (62.1 %), max delta 213 | 577/960 (60.1 %), max delta 114 |
-| BGRA 8×7 | 185/224 (82.6 %), max delta 217 | 187/224 (83.5 %), max delta 121 |
+| BGRA 8×7   | 185/224 (82.6 %), max delta 217 | 187/224 (83.5 %), max delta 121 |
 
 Do not "simplify" the KAT set down to the grayscale pair — that would throw away all
 of the bilinear discrimination.
@@ -113,11 +113,9 @@ bash .port/tools/stb-resize-oracle/run.sh \
   --expect crates/rustty-font-shaper/src/testdata/stb_resize_emoji_bgra_16x15.bin
 ```
 
-   Each must print `fixture ... vs consensus: 0/<n> differ, maxdelta=0  [EXACT]` and
-   `0/<n> differ` for ghostty `Debug`/`ReleaseSafe`/`ReleaseSmall`. If the exact
-   comparison fails, the fixture is wrong (or the pipeline feeds stb different
-   arguments than the harness) — **do not relax the comparison**, find the difference.
-4. Remove the temporary dumps and confirm the KATs are green.
-5. Re-run the falsification: apply a nearest-neighbour substitution at the resize call
-   site; the `stb_resize_kat_*` tests must FAIL while the four `bitmap_glyph*` tests
-   still pass.
+Each must print `fixture ... vs consensus: 0/<n> differ, maxdelta=0  [EXACT]` and
+`0/<n> differ` for ghostty `Debug`/`ReleaseSafe`/`ReleaseSmall`. If the exact
+comparison fails, the fixture is wrong (or the pipeline feeds stb different
+arguments than the harness) — **do not relax the comparison**, find the difference. 4. Remove the temporary dumps and confirm the KATs are green. 5. Re-run the falsification: apply a nearest-neighbour substitution at the resize call
+site; the `stb_resize_kat_*` tests must FAIL while the four `bitmap_glyph*` tests
+still pass.

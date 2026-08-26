@@ -31,18 +31,18 @@ The local ghostty checkout `/Users/gael/projects/ghostty` has its working tree p
 
 The 10 BL-5 oracle commits (from `.port/phase-2/MAIN_PARITY.md` rows):
 
-| hash | subject | family |
-|---|---|---|
-| `20a1bfa5f` | fix: pass RGB color inputs by pointer | A (RGB-by-pointer) |
-| `2970e9a2a` | lib-vt: many more color utility APIs | B (color utilities) |
-| `f00e90694` | lib-vt: add color scheme report encoder | C (color-scheme report) |
-| `14c829883` | terminal: report OSC color queries in lib-vt | D (OSC/Kitty queries) |
-| `fc5a72772` | lib-vt: add unicode codepoint width API | E (unicode width) |
-| `65e61282a` | lib-vt: add unicode grapheme width API | E (unicode width) |
-| `3a2e28329` | lib-vt: add scroll-to-row viewport scrolling | F (scroll-to-row) |
-| `0a410f18e` | terminal: clipboard_set effect for OSC 52 writes | G (clipboard, superseded) |
-| `634ef7198` | terminal: make clipboard writes protocol neutral | G (clipboard, final) |
-| `f245cdc66` | lib-vt: expose selection gesture to Zig | H (already covered — verify) |
+| hash        | subject                                          | family                       |
+| ----------- | ------------------------------------------------ | ---------------------------- |
+| `20a1bfa5f` | fix: pass RGB color inputs by pointer            | A (RGB-by-pointer)           |
+| `2970e9a2a` | lib-vt: many more color utility APIs             | B (color utilities)          |
+| `f00e90694` | lib-vt: add color scheme report encoder          | C (color-scheme report)      |
+| `14c829883` | terminal: report OSC color queries in lib-vt     | D (OSC/Kitty queries)        |
+| `fc5a72772` | lib-vt: add unicode codepoint width API          | E (unicode width)            |
+| `65e61282a` | lib-vt: add unicode grapheme width API           | E (unicode width)            |
+| `3a2e28329` | lib-vt: add scroll-to-row viewport scrolling     | F (scroll-to-row)            |
+| `0a410f18e` | terminal: clipboard_set effect for OSC 52 writes | G (clipboard, superseded)    |
+| `634ef7198` | terminal: make clipboard writes protocol neutral | G (clipboard, final)         |
+| `f245cdc66` | lib-vt: expose selection gesture to Zig          | H (already covered — verify) |
 
 **Export gap (verified by comm-diff of `origin/main:src/lib_vt.zig` exports vs the 169 live `rustty_*` exports):** 13 new exports —
 `rustty_color_{parse,parse_x11,parse_palette_entry,palette_default,palette_generate,luminance,perceived_luminance,contrast,x11_names,x11_name_count}`, `rustty_color_scheme_report_encode`, `rustty_unicode_{codepoint_width,grapheme_width}` — plus one signature change (`rustty_color_rgb_get` takes `*const` RGB now) and one new terminal option (`clipboard_write = 26`). The BL-1 exports (`terminal_compress`, `render_state_begin/end_update`, …) are WS7 — do NOT add them here.
@@ -118,12 +118,14 @@ Expected: green (this is the pre-WS5 baseline).
 `rustty_color_rgb_get` currently takes `RgbC` **by value**; upstream changed it (and all RGB inputs) to `const*` for wasm/FFI friendliness. Only `rgb_get` exists in rustty today; all NEW color functions (Task 5) are authored pointer-style from the start.
 
 **Files:**
+
 - Modify: `crates/rustty-vt-c/src/color.rs` (fn `rgb_get`, ~line 70)
 - Modify: `crates/rustty-vt-c/src/lib.rs` (wrapper `rustty_color_rgb_get`, ~line 119)
 - Modify: `include/rustty/vt/color.h`
 - Test: `crates/rustty-vt-c/src/color.rs` (`mod tests`)
 
 **Interfaces:**
+
 - Produces: `pub unsafe fn rgb_get(c: *const RgbC, r: *mut u8, g: *mut u8, b: *mut u8)` (module), `rustty_color_rgb_get(color: *const RgbC, r: *mut u8, g: *mut u8, b: *mut u8)` (export).
 
 - [ ] **Step 1: Read the oracle commit**
@@ -237,11 +239,13 @@ git add -A && git commit -m "vt-c: pass RGB color inputs by pointer — rustty_c
 Port the `src/terminal/color.zig` and `src/terminal/x11_color.zig` hunks: `RGB::parse` gains whitespace trim + bare `rgb`/`rrggbb` hex forms + X11-name doc; new `PaletteEntry` + `parse_palette_entry`; `x11_color` gains an ordered `Entry`/`ENTRIES` table (rgb.txt file order, null-terminated-capable names).
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/color.rs`
 - Modify: `crates/rustty-vt/src/x11_color.rs`
 - Test: same files (`mod tests`)
 
 **Interfaces:**
+
 - Produces: `color::PaletteEntry { pub index: u8, pub color: RGB }`; `color::parse_palette_entry(value: &[u8]) -> Result<PaletteEntry, ParsePaletteEntryError>` with `pub enum ParsePaletteEntryError { InvalidFormat, Overflow }`; `x11_color::Entry { pub name: &'static str, pub color: RGB }` and `x11_color::entries() -> &'static [Entry]` (rgb.txt order). `RGB::parse` semantics change: trims ASCII space/tab, accepts bare 3/6-digit hex AFTER the X11-name lookup fails.
 
 - [ ] **Step 1: Read the oracle hunks**
@@ -394,6 +398,7 @@ fn trim_space_tab(s: &[u8]) -> &[u8] {
 ```
 
 Then apply the `RGB::parse` hunk in place (the existing rustty `parse` mirrors the OLD Zig body line-by-line — apply the diff mechanically):
+
 1. First line: `let input = trim of value over " \t"`; use `input` everywhere `value` was used.
 2. After the X11-map lookup fails, add the bare-hex arm before the `rgb:`-prefix check:
 
@@ -474,9 +479,11 @@ git commit -m "vt: color parse trim+bare-hex, parse_palette_entry, ordered x11 e
 Upstream moved config color/palette parsing onto the shared terminal helpers (−80 lines in `Config.zig`) so CLI/config and the C ABI stay in lockstep.
 
 **Files:**
+
 - Modify: `crates/rustty-config/src/` — the `Color`/`Palette` config-value parse impls (find with `grep -rn "fn parse" crates/rustty-config/src | grep -i -E "color|palette"` and by reading the oracle hunk `git -C /Users/gael/projects/ghostty show 2970e9a2a -- src/config/Config.zig`)
 
 **Interfaces:**
+
 - Consumes: `rustty_vt::color::{RGB, parse_palette_entry, ParsePaletteEntryError}` from Task 3.
 
 - [ ] **Step 1: Read the oracle hunk** and locate the rustty analogs (the config `Color.parseCLI`/`Palette.parseCLI` ports).
@@ -507,10 +514,12 @@ git commit -m "config: delegate color/palette parsing to shared vt color helpers
 Port the full `origin/main:src/terminal/c/color.zig` (already read during research — 10 functions + 2 C types + a static X11 table + ~25 tests).
 
 **Files:**
+
 - Modify: `crates/rustty-vt-c/src/color.rs`
 - Test: same file, `mod tests`
 
 **Interfaces:**
+
 - Produces (module fns, all `pub unsafe fn`, wrapped in Task 6):
   - `pub struct PaletteMask { pub bits: [u64; 4] }` (`#[repr(C)]`) with `fn to_zig(&self) -> color::PaletteMask`
   - `pub struct X11Entry { pub name: *const c_char, pub color: RgbC }` (`#[repr(C)]`; `name` null ⇒ end of table)
@@ -880,12 +889,14 @@ git commit -m "vt-c: color utility module — parse/parse_x11/palette/luminance/
 ### Task 6: Family B — color exports + types registry + headers + gate
 
 **Files:**
+
 - Modify: `crates/rustty-vt-c/src/lib.rs` (10 new wrappers)
 - Modify: `crates/rustty-vt-c/src/types.rs` (register `PaletteMask`, `X11Entry`)
 - Modify: `include/rustty/vt/color.h`, `include/rustty/vt/sgr.h`
 - Regen: `include/rustty.h`
 
 **Interfaces:**
+
 - Produces the 10 exported symbols `rustty_color_parse`, `rustty_color_parse_x11`, `rustty_color_parse_palette_entry`, `rustty_color_palette_default`, `rustty_color_palette_generate`, `rustty_color_luminance`, `rustty_color_perceived_luminance`, `rustty_color_contrast`, `rustty_color_x11_names`, `rustty_color_x11_name_count`.
 
 - [ ] **Step 1: Add the wrappers to lib.rs** (next to the existing `rustty_color_rgb_get`), each 1:1 with the oracle `lib_vt.zig` `@export` line, `Result`-returning ones through `.to_c_int()`:
@@ -1041,12 +1052,14 @@ git commit -m "vt-c: export the 10 color utility APIs + type registry + color.h/
 ### Task 7: Family C engine — color-scheme report encoder (`f00e90694` engine half)
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/device_status.rs`
 - Modify: `crates/rustty-vt/src/stream_terminal.rs` (~line 806: replace the hand-inlined `b"\x1B[?997;1n"` arm with the encoder)
 - Modify: `crates/rustty-termio/src/termio_impl.rs` (~line 1662: same delegation, per the commit's `Termio.zig` hunk)
 - Test: `crates/rustty-vt/src/device_status.rs` `mod tests`
 
 **Interfaces:**
+
 - Produces: `device_status::encode_color_scheme_report(out: &mut Vec<u8>, scheme: ColorScheme)` — writer-style append (match the crate's existing encode_* conventions: check `modes::report_encode` / `focus::encode` in rustty-vt for the established writer analog and mirror it) and `device_status::MAX_COLOR_SCHEME_REPORT_ENCODE_SIZE: usize = 9`.
 
 - [ ] **Step 1: Read the oracle**
@@ -1109,6 +1122,7 @@ git commit -m "vt: color scheme report encoder + delegate stream/termio DSR 996 
 ### Task 8: Family C — vt-c color_scheme module + export + header + example
 
 **Files:**
+
 - Create: `crates/rustty-vt-c/src/color_scheme.rs`
 - Modify: `crates/rustty-vt-c/src/lib.rs` (`pub mod color_scheme;` + wrapper + `ref_all_decls`)
 - Create: `include/rustty/vt/color_scheme.h`
@@ -1116,6 +1130,7 @@ git commit -m "vt: color scheme report encoder + delegate stream/termio DSR 996 
 - Create: `example/c-vt-color-scheme/` (README.md, build.sh or the build files matching sibling rustty examples — copy the shape of `example/c-vt-effects/`, NOT the oracle's zig build files)
 
 **Interfaces:**
+
 - Produces: `pub unsafe fn report_encode(scheme: ColorScheme, out: *mut u8, out_len: usize, out_written: *mut usize) -> Result` and export `rustty_color_scheme_report_encode(scheme: c_int-compatible RusttyColorScheme, buf: *mut c_char, buf_len: usize, out_written: *mut usize) -> c_int`.
 
 - [ ] **Step 1: Read the oracle module**
@@ -1293,6 +1308,7 @@ git commit -m "vt-c: color scheme report encoder — rustty_color_scheme_report_
 ### Task 9: Family D engine — OSC/Kitty color-query reporting (`14c829883`)
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/color.rs` (`encode_rgb8`, `encode_rgb16`)
 - Modify: `crates/rustty-vt/src/terminal.rs` (`color_for_xterm`, `color_for_kitty`)
 - Modify: `crates/rustty-vt/src/kitty/color.rs` (`Kind::has_terminal_query_color`)
@@ -1301,6 +1317,7 @@ git commit -m "vt-c: color scheme report encoder — rustty_color_scheme_report_
 - Test: each modified file's `mod tests`
 
 **Interfaces:**
+
 - Produces: `RGB::encode_rgb8(&self, out: &mut Vec<u8>)`, `RGB::encode_rgb16(&self, out: &mut Vec<u8>)`; `Terminal::color_for_xterm(&self, target: osc::parsers::color::Target) -> Option<RGB>`; `Terminal::color_for_kitty(&self, key: kitty::color::Kind) -> Option<RGB>`; `kitty::color::Kind::has_terminal_query_color(&self) -> bool`.
 
 - [ ] **Step 1: Read the full oracle commit** (`git -C /Users/gael/projects/ghostty show 14c829883`) — the hunks were captured during plan research: Terminal helpers, RGB encoders, kitty `hasTerminalQueryColor`, the osc.zig reset fix, and the ~189-line stream_terminal reporting rework (including `colorOperation` gaining `terminator` and dropping the unused `op` param).
@@ -1371,6 +1388,7 @@ pub fn encode_rgb16(&self, out: &mut Vec<u8>) {
 `osc/mod.rs` — in the parser reset path, add the `color_operation` arm releasing `requests` alongside the existing `kitty_color_protocol` arm (find the reset `match` mirroring `osc.zig:405`).
 
 `stream_terminal.rs` — rework `color_operation` handling:
+
 1. The arm passes `&value.requests` + `value.terminator` (drop `op`).
 2. In the query loop: `if self.effects.write_pty.is_none() { continue; }` → `let c = self.terminal.color_for_xterm(target) else continue;` → append `write_xterm_color_report`.
 3. Add the private helper:
@@ -1425,6 +1443,7 @@ git commit -m "vt: report OSC 4/10/11/12 + kitty OSC 21 color queries via write_
 `14c829883` added ~40 lines of C API tests (`src/terminal/c/terminal.zig`) proving the query replies flow through a C `write_pty` callback. No new export is involved — this is coverage.
 
 **Files:**
+
 - Modify: `crates/rustty-vt-c/src/terminal.rs` (`mod tests`)
 
 - [ ] **Step 1: Read the oracle tests**: `git -C /Users/gael/projects/ghostty show 14c829883 -- src/terminal/c/terminal.zig`
@@ -1442,10 +1461,12 @@ git commit -m "vt-c: C-level KATs for OSC/kitty color query reporting (WS5 T10)"
 ### Task 11: Family E — unicode codepoint width (`fc5a72772`)
 
 **Files:**
+
 - Modify: `crates/rustty-unicode/src/lib.rs`
 - Test: same file
 
 **Interfaces:**
+
 - Produces: `rustty_unicode::codepoint_width(cp: u32) -> u8` (0/1/2; total over u32 — values > 0x10FFFF handled by the CALLER in vt-c per the oracle split: the module fn takes a valid `u21`-range value). Mirror the oracle exactly: engine fn `codepoint_width(cp: u32) -> u8` asserting/assuming `cp <= 0x10FFFF` is NOT what the oracle does — Zig's is `fn codepointWidth(cp: u21) u2 { return table.get(cp).width; }` with the `> 0x10FFFF → 1` guard living in `c/unicode.zig`. Keep that split: engine fn takes `u32` but documents the ≤ 0x10FFFF contract and indexes the table (the existing `table.get` analog in `rustty-unicode` — grep `props_table`/`lut` for the getter the print path uses).
 
 - [ ] **Step 1: Read the oracle**: `git -C /Users/gael/projects/ghostty show fc5a72772`
@@ -1496,11 +1517,13 @@ git commit -m "unicode: codepoint_width — the print-path width table as a publ
 ### Task 12: Family E — grapheme width kernel + print-path sharing (`65e61282a`)
 
 **Files:**
+
 - Modify: `crates/rustty-unicode/src/grapheme.rs` (kernel + measure fn)
 - Modify: `crates/rustty-vt/src/terminal.rs` (print path uses the shared kernel)
 - Test: both files
 
 **Interfaces:**
+
 - Produces: `pub enum GraphemeWidthEffect { Ignore, NoChange, Wide, Narrow }`; `pub fn grapheme_width_effect(prev: u32, cp: u32) -> GraphemeWidthEffect` (inline kernel); `pub struct GraphemeWidth { pub len: usize, pub width: u8 }`; `pub fn grapheme_width(cps: &[u32]) -> GraphemeWidth` (u32 input, invalid-codepoint guards per the oracle's `check_invalid` branch — rustty's `grapheme_break` already takes `u32`).
 
 - [ ] **Step 1: Read the oracle**: `git -C /Users/gael/projects/ghostty show 65e61282a` (kernel, measure fn, Terminal.zig print refactor, and the width-parity test helper are captured in this plan's research; the full `grapheme.zig` test block must be read from the commit).
@@ -1645,6 +1668,7 @@ git commit -m "unicode+vt: grapheme width kernel shared by print path + grapheme
 ### Task 13: Family E — vt-c unicode module + exports + header
 
 **Files:**
+
 - Create: `crates/rustty-vt-c/src/unicode.rs`
 - Modify: `crates/rustty-vt-c/src/lib.rs` (`pub mod unicode;` + 2 wrappers + ref_all_decls)
 - Modify: `crates/rustty-vt-c/Cargo.toml` (add `rustty-unicode = { workspace = true }` if not already a transitive-direct dep — check first; R4 acyclic is safe: rustty-unicode is below vt)
@@ -1652,6 +1676,7 @@ git commit -m "unicode+vt: grapheme width kernel shared by print path + grapheme
 - Modify: `include/rustty/vt.h`
 
 **Interfaces:**
+
 - Produces exports: `rustty_unicode_codepoint_width(cp: u32) -> u8`, `rustty_unicode_grapheme_width(cps: *const u32, len: usize, width: *mut u8) -> usize`.
 
 - [ ] **Step 1: Failing tests** — port `origin/main:src/terminal/c/unicode.zig`'s 8 tests (full source captured in research) into the new module:
@@ -1824,11 +1849,13 @@ git commit -m "vt-c: unicode codepoint/grapheme width exports + unicode.h (WS5 T
 ### Task 14: Family F engine — ScrollViewport::Row (`3a2e28329` engine half)
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/terminal.rs` (`ScrollViewport` at ~line 318 + `scroll_viewport`)
 - Modify: `crates/rustty-vt/src/pagelist/` scrollbar doc comment (the PageList.zig doc hunk)
 - Test: `crates/rustty-vt/src/terminal.rs`
 
 **Interfaces:**
+
 - Produces: `ScrollViewport::Row(usize)` variant; `Terminal::scroll_viewport` maps it to the PageList `Scroll::Row` (already existing at `pagelist/scroll.rs:91` per MAIN_PARITY).
 
 - [ ] **Step 1: Read the oracle hunks** (captured in research: Terminal.zig adds `row: usize` + Tag entry + `.row => |row| .{ .row = row }` mapping; PageList.zig is doc-only).
@@ -1864,6 +1891,7 @@ git commit -m "vt: ScrollViewport::Row absolute-row viewport scrolling (WS5 T14)
 ### Task 15: Family F — vt-c scroll row tag + header
 
 **Files:**
+
 - Modify: `crates/rustty-vt-c/src/terminal.rs` (C ScrollViewport tag enum + value union + mapping in `scroll_viewport`)
 - Modify: `include/rustty/vt/terminal.h` (RUSTTY_SCROLL_VIEWPORT_ROW + `size_t row;` union member + SCROLLBAR doc correction)
 - Test: `crates/rustty-vt-c/src/terminal.rs`
@@ -1893,12 +1921,14 @@ git commit -m "vt-c: RUSTTY_SCROLL_VIEWPORT_ROW absolute-row scrolling tag (WS5 
 Port directly to the final protocol-neutral shape (`clipboard_write` effect with decoded MIME contents); record a PORT NOTE that the intermediate `clipboard_set(kind, base64)` form (`0a410f18e`) is subsumed.
 
 **Files:**
+
 - Create: `crates/rustty-vt/src/clipboard.rs`
 - Modify: `crates/rustty-vt/src/lib.rs` (`pub mod clipboard;`)
 - Modify: `crates/rustty-vt/src/stream_terminal.rs` (Effects field + `clipboard_contents` arm + decode)
 - Test: `crates/rustty-vt/src/stream_terminal.rs`
 
 **Interfaces:**
+
 - Produces: `clipboard::Location` (`#[repr(i32)]`: Standard=0, Selection=1, Primary=2), `clipboard::Content<'a> { pub mime: &'a [u8], pub data: &'a [u8] }`, `clipboard::Write<'a> { pub location: Location, pub contents: &'a [Content<'a>] }`, `clipboard::WriteResult` (`#[repr(i32)]`: Success=0, Denied=1, Unsupported=2, Busy=3, InvalidData=4, IoError=5); `Effects.clipboard_write: Option<fn(&mut Handler<'a>, clipboard::Write) -> clipboard::WriteResult>`.
 
 - [ ] **Step 1: Read both commits** and the final files:
@@ -1999,8 +2029,8 @@ fn clipboard_contents(&mut self, kind: u8, data: &[u8]) {
 }
 ```
 
-  FIDELITY CHECK before finalizing: the Zig `clipboardContents` is `!void` and the caller `try`s it — determine what the rustty OSC-dispatch arm does with handler errors today (the existing arms are infallible or log) and match the least-lossy behavior; document the decision in a PORT NOTE. The decode error path in Zig propagates `error.InvalidCharacter` up `nextSlice` — check how rustty's `next_slice` surface handles handler errors (it likely doesn't — the stream tests in the oracle only exercise VALID base64, so a silent-return PORT NOTE divergence is acceptable ONLY if flagged; prefer matching whatever the existing kitty/OSC error plumbing does).
-  4. **Borrow-check note:** `func(self, ...)` passes `&mut Handler` while `contents` borrows the locally-decoded Vec — this is fine (the Vec is a local, not a field). Do NOT stash raw pointers; keep everything as reborrowed slices (SB-clean by construction — no Miri-hostile aliasing introduced; memory: shaper-hook-sb-clean-interleave does not apply because no long-lived alias exists).
+FIDELITY CHECK before finalizing: the Zig `clipboardContents` is `!void` and the caller `try`s it — determine what the rustty OSC-dispatch arm does with handler errors today (the existing arms are infallible or log) and match the least-lossy behavior; document the decision in a PORT NOTE. The decode error path in Zig propagates `error.InvalidCharacter` up `nextSlice` — check how rustty's `next_slice` surface handles handler errors (it likely doesn't — the stream tests in the oracle only exercise VALID base64, so a silent-return PORT NOTE divergence is acceptable ONLY if flagged; prefer matching whatever the existing kitty/OSC error plumbing does). 4. **Borrow-check note:** `func(self, ...)` passes `&mut Handler` while `contents` borrows the locally-decoded Vec — this is fine (the Vec is a local, not a field). Do NOT stash raw pointers; keep everything as reborrowed slices (SB-clean by construction — no Miri-hostile aliasing introduced; memory: shaper-hook-sb-clean-interleave does not apply because no long-lived alias exists).
+
 - [ ] **Step 5: Run** `cargo test -p rustty-vt --lib stream_terminal::` → PASS.
 - [ ] **Step 6: Commit**
 
@@ -2014,6 +2044,7 @@ git commit -m "vt: protocol-neutral clipboard_write effect for OSC 52 (WS5 T16)"
 ### Task 17: Family G — vt-c clipboard C surface + Option 26 + trampoline
 
 **Files:**
+
 - Modify: `crates/rustty-vt-c/src/terminal.rs`
 - Modify: `crates/rustty-vt-c/src/types.rs` (register `ClipboardContent`, `ClipboardWrite` + json-parses asserts)
 - Modify: `include/rustty/vt/terminal.h` (the `634ef7198` + `0a410f18e` header hunks, renamed: `RusttyClipboardLocation`, `RusttyClipboardContent`, `RusttyClipboardWrite`, `RusttyClipboardWriteResult`, `RusttyTerminalClipboardWriteFn`, `RUSTTY_TERMINAL_OPT_CLIPBOARD_WRITE` row + option doc)
@@ -2022,6 +2053,7 @@ git commit -m "vt: protocol-neutral clipboard_write effect for OSC 52 (WS5 T16)"
 - Test: `crates/rustty-vt-c/src/terminal.rs`
 
 **Interfaces:**
+
 - Produces (C surface, mirroring the Zig captured in research):
 
 ```rust
@@ -2101,9 +2133,8 @@ pub(crate) fn clipboard_write_trampoline(
 }
 ```
 
-  (Adapt: `wrapper_from_handler` = the file's existing recovery helper name; `LibString` field names; `Terminal` cast form — copy exactly what `bell_trampoline`/`write_pty_trampoline` do. Zig's gpa-alloc fallback becomes a plain `Vec` — PORT NOTE: the Zig `catch return .io_error` OOM arm has no Rust analog because `Vec` aborts on OOM, consistent with DG5 abort policy.)
-  5. Install `clipboard_write: Some(Effects::clipboard_write_trampoline)` in the always-installed effects block where the other 9 trampolines are wired.
-  6. Register both structs in `types.rs` (rows `RusttyClipboardContent`, `RusttyClipboardWrite` in the oracle's positions) and extend the json-parses test with the `contains` + field asserts from the `634ef7198` types.zig hunk (size/location/contents/contents_len; mime/data).
+(Adapt: `wrapper_from_handler` = the file's existing recovery helper name; `LibString` field names; `Terminal` cast form — copy exactly what `bell_trampoline`/`write_pty_trampoline` do. Zig's gpa-alloc fallback becomes a plain `Vec` — PORT NOTE: the Zig `catch return .io_error` OOM arm has no Rust analog because `Vec` aborts on OOM, consistent with DG5 abort policy.) 5. Install `clipboard_write: Some(Effects::clipboard_write_trampoline)` in the always-installed effects block where the other 9 trampolines are wired. 6. Register both structs in `types.rs` (rows `RusttyClipboardContent`, `RusttyClipboardWrite` in the oracle's positions) and extend the json-parses test with the `contains` + field asserts from the `634ef7198` types.zig hunk (size/location/contents/contents_len; mime/data).
+
 - [ ] **Step 3: Run** `cargo test -p rustty-vt-c --lib` → PASS (new test + all existing terminal tests).
 - [ ] **Step 4: Headers + example.** Apply the terminal.h hunks from `634ef7198` (types + option row + option doc + `@snippet` reference) with R2 renaming; update `example/c-vt-effects/src/main.c`/README with the renamed oracle snippet. Regen + gate + example build:
 

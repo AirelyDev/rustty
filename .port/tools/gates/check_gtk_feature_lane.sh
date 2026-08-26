@@ -128,6 +128,7 @@ else
 fi
 
 # ---- the anti-vacuity arm ------------------------------------------------
+# shellcheck disable=SC2120  # callers may pass extra cargo flags or none.
 list_tests() { cargo test -p rustty-apprt "$@" -- --list 2>/dev/null | grep -c ': test$'; }
 
 with_list="$(cargo test -p rustty-apprt --features "$FEATURES" -- --list 2>/dev/null)"

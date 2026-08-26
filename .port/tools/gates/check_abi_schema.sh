@@ -23,7 +23,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || exit 1
 
 SCHEMA="crates/rustty-vt-c/types.schema.json"
 VERIFIER="crates/rustty-vt-c/types-schema-verify.py"

@@ -31,16 +31,23 @@
   const log = [];
   const say = (m) => {
     log.push(m);
-    const el = typeof document !== "undefined" && document.getElementById("log");
+    const el =
+      typeof document !== "undefined" && document.getElementById("log");
     if (el) el.textContent += m + "\n";
   };
 
   // ---------------------------------------------------------------- wasm module
   const mod = await WebAssembly.compileStreaming(fetch(WASM_URL));
   const imports = WebAssembly.Module.imports(mod);
-  const badModules = imports.filter((i) => i.module !== "env").map((i) => i.module);
-  const wasiImports = imports.filter((i) => /wasi/i.test(i.module) || /wasi/i.test(i.name)).length;
-  say(`wasm imports: ${imports.length} (${[...new Set(imports.map((i) => i.module))].join(",")})`);
+  const badModules = imports
+    .filter((i) => i.module !== "env")
+    .map((i) => i.module);
+  const wasiImports = imports.filter(
+    (i) => /wasi/i.test(i.module) || /wasi/i.test(i.name),
+  ).length;
+  say(
+    `wasm imports: ${imports.length} (${[...new Set(imports.map((i) => i.module))].join(",")})`,
+  );
 
   const { makeWebCanvasEnv } = await import("/example/wasm-webgl/glue.mjs");
   let inst;
@@ -109,7 +116,8 @@
     // Region is `repr(C) { x, y, width, height }` — four u32.
     const r = u32().subarray(reg >>> 2, (reg >>> 2) + 4);
     const rect = { x: r[0], y: r[1], w: r[2], h: r[3] };
-    if (!(rect.w > 0 && rect.h > 0)) throw new Error(`bad region ${JSON.stringify(rect)}`);
+    if (!(rect.w > 0 && rect.h > 0))
+      throw new Error(`bad region ${JSON.stringify(rect)}`);
 
     const buf = ex.malloc(bmp.length);
     if (buf === 0) throw new Error("malloc returned null");
@@ -128,8 +136,10 @@
   ex.free(lenPtr);
   const atlasBytes = u8().slice(dataPtr, dataPtr + dataLen);
   const atlasSize = ex.rustty_wasm_atlas_size(atlas);
-  if (atlasSize !== ATLAS_SIZE) throw new Error(`atlas size ${atlasSize} != ${ATLAS_SIZE}`);
-  if (dataLen !== ATLAS_SIZE * ATLAS_SIZE) throw new Error(`atlas data len ${dataLen}`);
+  if (atlasSize !== ATLAS_SIZE)
+    throw new Error(`atlas size ${atlasSize} != ${ATLAS_SIZE}`);
+  if (dataLen !== ATLAS_SIZE * ATLAS_SIZE)
+    throw new Error(`atlas data len ${dataLen}`);
 
   // THE EXPECTATION: ink counted on the CPU, in the atlas the module holds.
   const expect = rects.map((r) => {
@@ -223,7 +233,10 @@ void main() { o = vec4(0.0, 0.0, 0.0, 1.0); }`;
     };
     const prog = gl.createProgram();
     gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS));
-    gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, mutate === "black" ? FS_BLACK : FS_GOOD));
+    gl.attachShader(
+      prog,
+      sh(gl.FRAGMENT_SHADER, mutate === "black" ? FS_BLACK : FS_GOOD),
+    );
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
       throw new Error("program link failed: " + gl.getProgramInfoLog(prog));
@@ -322,9 +335,15 @@ void main() { o = vec4(0.0, 0.0, 0.0, 1.0); }`;
   const black = render("black");
   const good = render(null);
 
-  say(`good   (WebGL readback): [${good.counts.join(", ")}]  glError=${good.glError}`);
-  say(`NC1 offset: [${offset.counts.join(", ")}] -> ${matches(offset.counts) ? "MATCHES (BAD)" : "FAILS (good)"}`);
-  say(`NC2 black:  [${black.counts.join(", ")}] -> ${matches(black.counts) ? "MATCHES (BAD)" : "FAILS (good)"}`);
+  say(
+    `good   (WebGL readback): [${good.counts.join(", ")}]  glError=${good.glError}`,
+  );
+  say(
+    `NC1 offset: [${offset.counts.join(", ")}] -> ${matches(offset.counts) ? "MATCHES (BAD)" : "FAILS (good)"}`,
+  );
+  say(
+    `NC2 black:  [${black.counts.join(", ")}] -> ${matches(black.counts) ? "MATCHES (BAD)" : "FAILS (good)"}`,
+  );
 
   // Exercise the ported `atlas_debug_canvas` (the reference's own readback path)
   // and, on the page, show it. A zero handle means the JS bridge failed.
@@ -343,7 +362,10 @@ void main() { o = vec4(0.0, 0.0, 0.0, 1.0); }`;
   // wrong destination byte, a wrong `ImageData` stride, or a dropped
   // `putImageData` all show up here as a count that no longer equals `totalInk`.
   let debugCanvasInk = null;
-  const dbg = typeof document !== "undefined" ? document.querySelector("#atlas canvas") : null;
+  const dbg =
+    typeof document !== "undefined"
+      ? document.querySelector("#atlas canvas")
+      : null;
   if (dbg) {
     const scratch = document.createElement("canvas");
     scratch.width = dbg.width;
@@ -352,10 +374,14 @@ void main() { o = vec4(0.0, 0.0, 0.0, 1.0); }`;
     sctx.drawImage(dbg, 0, 0);
     const dd = sctx.getImageData(0, 0, scratch.width, scratch.height).data;
     debugCanvasInk = 0;
-    for (let i = 0; i < dd.length; i += 4) if (dd[i + 3] > INK) debugCanvasInk++;
-    say(`atlas_debug_canvas ink (alpha) = ${debugCanvasInk} (atlas ink ${totalInk})`);
+    for (let i = 0; i < dd.length; i += 4)
+      if (dd[i + 3] > INK) debugCanvasInk++;
+    say(
+      `atlas_debug_canvas ink (alpha) = ${debugCanvasInk} (atlas ink ${totalInk})`,
+    );
   }
-  const p5_debug_canvas_agrees = debugCanvasInk === null ? null : debugCanvasInk === totalInk;
+  const p5_debug_canvas_agrees =
+    debugCanvasInk === null ? null : debugCanvasInk === totalInk;
 
   ex.atlas_free(atlas);
 

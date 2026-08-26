@@ -42,12 +42,12 @@ end-to-end R3 toolchain (copied C -> `cc` compile -> `bindgen` FFI ->
 
 - Build template — copied verbatim from `ghostty/pkg/libintl/` (the reference's
   macOS libintl build), kept at the top of `vendor/`:
-  - `config.h`       — gettext's macOS `config.h` (generated on a Mac by the
-                       reference; includes the reference's manual `xlocale.h`
-                       addition at the end). Drives `-DHAVE_CONFIG_H`.
-  - `libintl.h`      — the public libintl header.
-  - `libgnuintl.h`   — `#include "libintl.h"`.
-  - `wrapper.h`      — declaration-only header for `bindgen`.
+  - `config.h` — gettext's macOS `config.h` (generated on a Mac by the
+    reference; includes the reference's manual `xlocale.h`
+    addition at the end). Drives `-DHAVE_CONFIG_H`.
+  - `libintl.h` — the public libintl header.
+  - `libgnuintl.h` — `#include "libintl.h"`.
+  - `wrapper.h` — declaration-only header for `bindgen`.
 - Upstream sources — copied verbatim from
   `gettext-0.24/gettext-runtime/intl/`, preserving the upstream directory shape:
   - `vendor/intl/*.c`, `vendor/intl/*.h`

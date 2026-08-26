@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Port the whole of upstream backlog series **BL-4** (`.port/phase-2/MAIN_PARITY.md` §2) — the stream/terminal/termio performance family: SIMD ESC/ASCII inlining, bulk CSI parse + direct final dispatch, printed-run batching, bulk APC slice dispatch, scroll-region optimizations, render-state lock-hold reduction, the two-stage pty read pipeline, once-per-value logging, and the four benchmark-corpus commits that instrument all of it — **and, before any of that, build a perf gate that can actually fail**, because today the repo's perf gate (G8) is both unarmed *and* silently comparing against the oracle's **Debug** numbers. WS10 also closes the one ledger row orphaned into BL-4 (`Screen::cursor_scroll_region_up`, `DEFERRALS.md:5011`/O3) and fixes a **correctness** divergence that happens to live in a perf file (`rustty-simd/src/vt.rs` scalar UTF-8 decode). The standing goal — "hold or extend the 14/14 wins" — is re-expressed as a falsifiable, same-session **paired** fence against the pinned oracle binary, with a demonstrated FAIL arm.
+**Goal:** Port the whole of upstream backlog series **BL-4** (`.port/phase-2/MAIN_PARITY.md` §2) — the stream/terminal/termio performance family: SIMD ESC/ASCII inlining, bulk CSI parse + direct final dispatch, printed-run batching, bulk APC slice dispatch, scroll-region optimizations, render-state lock-hold reduction, the two-stage pty read pipeline, once-per-value logging, and the four benchmark-corpus commits that instrument all of it — **and, before any of that, build a perf gate that can actually fail**, because today the repo's perf gate (G8) is both unarmed _and_ silently comparing against the oracle's **Debug** numbers. WS10 also closes the one ledger row orphaned into BL-4 (`Screen::cursor_scroll_region_up`, `DEFERRALS.md:5011`/O3) and fixes a **correctness** divergence that happens to live in a perf file (`rustty-simd/src/vt.rs` scalar UTF-8 decode). The standing goal — "hold or extend the 14/14 wins" — is re-expressed as a falsifiable, same-session **paired** fence against the pinned oracle binary, with a demonstrated FAIL arm.
 
 **Architecture:** WS10 is six sequential layers, and the order is load-bearing.
 
-- **Layer 0 — measurement substrate (T1–T4).** Nothing downstream is verifiable until the perf gate is real. T1 re-baselines the 14-config suite; T2 fixes the G8 baseline-index bug that collapses ReleaseFast onto Debug rows; T3 lands the paired A/B harness `.port/tools/perf/ws10_suite.py`, arms G8, and proves the FAIL arm on a *real* pessimized binary; T4 puts `rustty-bench` into a gate for the first time (`B-compression.md` §4.5: "`rustty-bench` is in NO gate").
+- **Layer 0 — measurement substrate (T1–T4).** Nothing downstream is verifiable until the perf gate is real. T1 re-baselines the 14-config suite; T2 fixes the G8 baseline-index bug that collapses ReleaseFast onto Debug rows; T3 lands the paired A/B harness `.port/tools/perf/ws10_suite.py`, arms G8, and proves the FAIL arm on a _real_ pessimized binary; T4 puts `rustty-bench` into a gate for the first time (`B-compression.md` §4.5: "`rustty-bench` is in NO gate").
 - **Layer 1 — correctness and independent smalls (T5–T9).** `cb4c49fbf` is a behavioural divergence, not a perf change, and it is currently **untestable in-repo** because the scalar decoder is dead code on every non-wasm target; it goes first, with the oracle's own differential fuzz test as the negative control. Then the four self-contained items that touch nothing else: tabstop realloc, once-per-value logging, macOS QoS on the read thread, renderer link no-alloc.
-- **Layer 2 — bench corpus (T10–T12).** Instrumentation before optimization. `terminal-stream` currently measures a *print-only* handler over 4 KiB reads; every "terminal-stream improved" claim made against the current bench is measuring less work than upstream's. Swap the handler and the chunk size, add `HyperlinkMap`, add `--loops` to `ScreenClone`, **before** touching the hot paths those benches watch.
+- **Layer 2 — bench corpus (T10–T12).** Instrumentation before optimization. `terminal-stream` currently measures a _print-only_ handler over 4 KiB reads; every "terminal-stream improved" claim made against the current bench is measuring less work than upstream's. Swap the handler and the chunk size, add `HyperlinkMap`, add `--loops` to `ScreenClone`, **before** touching the hot paths those benches watch.
 - **Layer 3 — the stream fast-path family (T13–T17).** `253e4f9c3` → `300f42c7a` → `1a88f3622` → `083d9709b` → `47e26df60`+`cb2d78587`+`f2a7652ab` → `f6f79acce`+`8c523ed03`+`ApcParser`. `D-terminal-subsystems.md` §6 is explicit: "Do not cherry-pick: the fast paths interlock." Each commit is one task-step with its own oracle tests and its own suite re-measure.
 - **Layer 4 — terminal/render (T18–T19).** `77190bd02` scroll-region optimizations (which is where O3 lives) and `446f80f4e` render-state lock-hold reduction (the largest single commit in the series: +1348/−209 across 9 files including the vt C header).
 - **Layer 5 — pty pipeline + closeout (T20–T22).** `2f0e6659d` + `bb0ac4c72` last, because it is the only HIGH-risk item: its documented invariant ("buffer contents need no locking, only ring metadata is guarded") is precisely a Stacked-Borrows violation in Rust and needs raw-pointer slot handoff plus a dedicated Miri harness. Then the final paired re-measure, the ledger sweep, and the ROADMAP row repair.
@@ -17,7 +17,7 @@
 
 ## Global Constraints (inherited from `2026-07-23-rustty-completion-ROADMAP.md`)
 
-- **R1 full fidelity — but WS10 is the first workstream whose ENTIRE scope is beyond the pin.** Every BL-4 commit postdates `4749c4e93`. The fidelity target for each hunk is therefore the *named upstream commit*, read with `git -C ../ghostty show <hash>`, not the pinned working tree. Do not advance `.port/ORACLE_SYNC.md`'s pin; record each ported commit in `.port/phase-2/MAIN_PARITY.md` §3 as the existing beyond-pin series (BL-2/3/5/6/7) did.
+- **R1 full fidelity — but WS10 is the first workstream whose ENTIRE scope is beyond the pin.** Every BL-4 commit postdates `4749c4e93`. The fidelity target for each hunk is therefore the _named upstream commit_, read with `git -C ../ghostty show <hash>`, not the pinned working tree. Do not advance `.port/ORACLE_SYNC.md`'s pin; record each ported commit in `.port/phase-2/MAIN_PARITY.md` §3 as the existing beyond-pin series (BL-2/3/5/6/7) did.
 - **Oracle protocol: NEVER `git checkout` in `../ghostty`.** Four other lanes depend on its working tree staying at the pin. Read beyond-pin state with `git -C ../ghostty show`. If a whole tree is needed (T22's optional oracle rebuild), use `git -C ../ghostty worktree add`, never a checkout.
 - R2 product identity: rustty naming with per-token casing preservation. R3: no build-time dependency on the oracle. R4/R5: acyclic crate graph; gates are invariant — never weakened to pass. R5: no macOS/Linux behavioural divergence introduced except where the oracle itself is `comptime`-gated (the `setQosClass` hunk is macOS-only in the oracle too).
 - DG5: C-ABI panic policy is ABORT. T19 (`446f80f4e`) touches `include/rustty/vt/render.h` and the vt C render surface, so the **A4 ABI gate** (`check_embed_h_abi.sh`) and `check_rustty_vt_headers.sh` are in scope and must stay green.
@@ -27,7 +27,7 @@
 - `&mut Page`/`&mut Row`/`&mut [Cell]` arguments re-read across `assert_integrity` are Stacked-Borrows UB — use raw-pointer args (memory: `rust-mut-args-strongly-protected`). This binds T18 (scroll region) and T20 (pipeline) hardest.
 - Rustty-side performance divergences from the oracle are marked with the established `// PERF(port):` comment convention (43 existing sites, e.g. `crates/rustty-vt/src/parser.rs:592`, `crates/rustty-vt/src/style.rs:120`). **WS10 must not silently delete an existing `PERF(port)` divergence to make an upstream hunk land** — see PREMISE CORRECTION §5.
 - Ledger discipline: strike/repair `.port/phase-2/DEFERRALS.md`, `MAIN_PARITY.md`, and `VERIFICATION_DEBT.md` rows in the same PR (T22). No new deferrals: anything this hardware cannot verify is filed as **verification debt with a runnable recipe**, not deferred work.
-- Commit style: `subsystem: summary (WS10 T<n>)`. Branch `ws10-perf-series`; merge to main only with the full gate set green *and* the paired oracle fence green.
+- Commit style: `subsystem: summary (WS10 T<n>)`. Branch `ws10-perf-series`; merge to main only with the full gate set green _and_ the paired oracle fence green.
 
 ---
 
@@ -74,7 +74,7 @@ since 2026-06-21:
 So: **all WS10 fences are against that binary**, and every number in this plan and in
 `PERF_LOG.md` is comparable to it and to nothing else. The `origin/main` oracle
 comparison is filed as verification debt (**V6**, T22) with a runnable recipe and its
-*expected* outcome pre-stated, so that whoever runs it does not read a 2.8×-faster
+_expected_ outcome pre-stated, so that whoever runs it does not read a 2.8×-faster
 oracle as a rustty regression.
 
 Note this binary is **untracked** (`.gitignore`: "Reference-oracle BUILD outputs under
@@ -90,22 +90,22 @@ Measured at plan-authoring time on this host with `rustty-bench` built from `mai
 back-to-back per config, single-process `time.monotonic()`, stdout/stderr to
 `DEVNULL` — i.e. the `run_benchmarks.py` methodology:
 
-| bench | zig ms | rust ms | Δ | recorded rust (`PERF_LOG.md`, r5-SHIP @ `a3a2b23`) | rust drift |
-|---|--:|--:|--:|--:|--:|
-| terminal-parser | 265.5 ‡ | 105.8 ‡ | **−60.2%** | 92.5 | **+14.4%** |
-| terminal-stream | 553.9 ‡ | 363.0 ‡ | **−34.5%** | 343.3 | +5.7% |
-| screen-clone.clone | 54.9 ‡ | 25.1 ‡ | **−54.3%** | 20.9 | **+20.1%** |
-| screen-clone.render | 16.1 | 14.7 | −8.9% | 13.8 | +6.5% |
-| grapheme-break.table | 256.3 | 218.4 | −14.8% | 211.4 | +3.3% |
-| is-symbol.table | 240.4 | 201.4 | −16.2% | 200.5 | +0.4% |
-| screen-clone.noop | 6.0 | 5.2 | −12.1% | 4.6 | +13.0% |
-| osc-parser | 58.0 | 50.3 | −13.2% | 49.4 | +1.8% |
-| codepoint-width.table | 233.1 | 209.1 | −10.3% | 207.9 | +0.6% |
-| is-symbol.uucode | 228.3 | 207.2 | −9.2% | 206.1 | +0.5% |
-| codepoint-width.wcwidth | 260.1 | 238.2 | −8.4% | 237.6 | +0.3% |
-| grapheme-break.noop | 231.4 | 214.2 | −7.5% | 211.8 | +1.1% |
-| codepoint-width.simd | 502.0 | 460.5 | −8.3% | 466.4 | −1.3% |
-| codepoint-width.noop | 4.0 | 3.7 | −8.7% | 3.0 | +23% (3.7 ms — floor noise) |
+| bench                   |  zig ms | rust ms |          Δ | recorded rust (`PERF_LOG.md`, r5-SHIP @ `a3a2b23`) |                  rust drift |
+| ----------------------- | ------: | ------: | ---------: | -------------------------------------------------: | --------------------------: |
+| terminal-parser         | 265.5 ‡ | 105.8 ‡ | **−60.2%** |                                               92.5 |                  **+14.4%** |
+| terminal-stream         | 553.9 ‡ | 363.0 ‡ | **−34.5%** |                                              343.3 |                       +5.7% |
+| screen-clone.clone      |  54.9 ‡ |  25.1 ‡ | **−54.3%** |                                               20.9 |                  **+20.1%** |
+| screen-clone.render     |    16.1 |    14.7 |      −8.9% |                                               13.8 |                       +6.5% |
+| grapheme-break.table    |   256.3 |   218.4 |     −14.8% |                                              211.4 |                       +3.3% |
+| is-symbol.table         |   240.4 |   201.4 |     −16.2% |                                              200.5 |                       +0.4% |
+| screen-clone.noop       |     6.0 |     5.2 |     −12.1% |                                                4.6 |                      +13.0% |
+| osc-parser              |    58.0 |    50.3 |     −13.2% |                                               49.4 |                       +1.8% |
+| codepoint-width.table   |   233.1 |   209.1 |     −10.3% |                                              207.9 |                       +0.6% |
+| is-symbol.uucode        |   228.3 |   207.2 |      −9.2% |                                              206.1 |                       +0.5% |
+| codepoint-width.wcwidth |   260.1 |   238.2 |      −8.4% |                                              237.6 |                       +0.3% |
+| grapheme-break.noop     |   231.4 |   214.2 |      −7.5% |                                              211.8 |                       +1.1% |
+| codepoint-width.simd    |   502.0 |   460.5 |      −8.3% |                                              466.4 |                       −1.3% |
+| codepoint-width.noop    |     4.0 |     3.7 |      −8.7% |                                                3.0 | +23% (3.7 ms — floor noise) |
 
 ‡ = second-pass figure at N=9; the first pass had zig-side `max/min` spreads of 1.224
 (terminal-parser) and 1.540 (terminal-stream) under contention and is discarded for
@@ -130,7 +130,7 @@ What makes them still worth recording:
 - **The direction is unambiguous: 14/14 wins, with the thinnest margin at −7.5%**,
   which is ~5× that config's measured spread.
 
-What is *not* safe to conclude: the exact suite delta (−30.2% here vs −21.7% recorded)
+What is _not_ safe to conclude: the exact suite delta (−30.2% here vs −21.7% recorded)
 — it is inflated because the two long benches' zig medians were contention-blown in
 the pass that produced the suite total. **T1 re-measures on a quiet box and records the
 authoritative figure.**
@@ -168,11 +168,11 @@ screen-clone.clone/small  -> ('median_s',              5.4863, 'lower')    # Deb
 The ReleaseFast values are 118.8 MiB/s, 249.8 MiB/s and 0.0493 s respectively. So if
 G8 were armed today it would let `terminal-stream` pass at **1/57th** of the real
 oracle throughput and `screen-clone.clone` pass at **111× the real oracle's time**.
-Arming the gate without fixing the index would produce a *green gate that cannot
-fail*. **T2 fixes this and adds a self-test arm that pins the ReleaseFast row.**
+Arming the gate without fixing the index would produce a _green gate that cannot
+fail_. **T2 fixes this and adds a self-test arm that pins the ReleaseFast row.**
 
 Third, softer, issue: `BASELINE.json` is a **frozen June measurement**. Across four
-independent sessions the *same unchanged* oracle binary measured terminal-parser at
+independent sessions the _same unchanged_ oracle binary measured terminal-parser at
 256.2 (BASELINE.json) / 286.4 (`PERF_COMPARISON.md`) / 263.8 (`PERF_LOG.md` r5) /
 265.5 (this probe) ms — an 11.8% max/min span. A frozen-JSON comparison therefore
 cannot be tightened below ~12% without producing false REDs. That is why the WS10
@@ -205,45 +205,45 @@ definition and that one unreachable call. All 19 existing tests in that module
 to match — has **zero test coverage on macOS/Linux**, and its divergence is live only
 in `wasm32` builds (WS14's target). This makes upstream's own new test
 `test "decode simd matches scalar"` (a 10 000-iteration differential fuzz) both the
-fix's negative control *and* the first coverage that path has ever had. T5.
+fix's negative control _and_ the first coverage that path has ever had. T5.
 
 ### 5. Rustty already carries its own perf divergences in exactly the files BL-4 rewrites — porting upstream's fast paths is a MERGE, not an overlay
 
 `PERF_LOG.md`'s rounds 1–5 landed six accepted rustty-side optimizations, four of them
 in BL-4's blast radius:
 
-| rustty optimization | site | BL-4 commit that rewrites the same code |
-|---|---|---|
-| r5-parser-fastpath (state-equal fast path) | `crates/rustty-vt/src/parser.rs:592` `// PERF(port): state-equal fast path` | `300f42c7a` `csiEntryByte`, `1a88f3622` `csiDispatchFinal` |
-| r5-print-outline (cold grapheme/zero-width/wide arms outlined) | `crates/rustty-vt/src/terminal.rs:884` | `47e26df60` `printSlice` family (+675 lines in `Terminal.zig`) |
-| r5-clone-style-run (same-style run batching, by-pointer set adds) | `crates/rustty-vt/src/page_impl.rs:1423,1441,1467,1622`, `ref_counted_set.rs:528,652,723` | `446f80f4e` (`page.zig` +274, `render.zig` +919) |
-| r5-stream-simd (bench binary built with `simd`) | `crates/rustty-bench/Cargo.toml:45` | `4c5b1d5d5`/`258de36d1` bench changes |
+| rustty optimization                                               | site                                                                                      | BL-4 commit that rewrites the same code                        |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| r5-parser-fastpath (state-equal fast path)                        | `crates/rustty-vt/src/parser.rs:592` `// PERF(port): state-equal fast path`               | `300f42c7a` `csiEntryByte`, `1a88f3622` `csiDispatchFinal`     |
+| r5-print-outline (cold grapheme/zero-width/wide arms outlined)    | `crates/rustty-vt/src/terminal.rs:884`                                                    | `47e26df60` `printSlice` family (+675 lines in `Terminal.zig`) |
+| r5-clone-style-run (same-style run batching, by-pointer set adds) | `crates/rustty-vt/src/page_impl.rs:1423,1441,1467,1622`, `ref_counted_set.rs:528,652,723` | `446f80f4e` (`page.zig` +274, `render.zig` +919)               |
+| r5-stream-simd (bench binary built with `simd`)                   | `crates/rustty-bench/Cargo.toml:45`                                                       | `4c5b1d5d5`/`258de36d1` bench changes                          |
 
-Each of those is worth −6% to −65% *today*. The naive port — paste the upstream hunk,
+Each of those is worth −6% to −65% _today_. The naive port — paste the upstream hunk,
 delete whatever conflicts — can silently drop a rustty win and still look like a
 faithful port. **Rule for every Layer-3/4 task: an existing `PERF(port)` marker in a
 hunk you are rewriting is a stop-and-decide point.** Either the upstream structure
-subsumes it (prove with a measurement), or it must be preserved *inside* the ported
+subsumes it (prove with a measurement), or it must be preserved _inside_ the ported
 structure with its `PERF(port)` note updated to say which upstream commit it now lives
 under. The self fence (below) is what makes "silently dropped" detectable.
 
 ### 6. Four smaller factual corrections to the assessments this plan builds on
 
 - **`300b42f42a` is not a commit.** `D-terminal-subsystems.md` rows 135 and 506 cite
-  `1a88f3622 + 300b42f42a`. `git -C ../ghostty rev-parse 300b42f42a` → *unknown
-  revision*. The real commit is **`300f42c7a`** "terminal: handle CSI entry bytes
+  `1a88f3622 + 300b42f42a`. `git -C ../ghostty rev-parse 300b42f42a` → _unknown
+  revision_. The real commit is **`300f42c7a`** "terminal: handle CSI entry bytes
   inline in consumeUntilGround" (2026-07-06, 1 file, +63/−34), which is what
   `MAIN_PARITY.md:161` names. Use `300f42c7a` everywhere.
 - **`258de36d1` is NOT blocked on area A.** `B-compression.md` §3.4 says the
   `TerminalStream` bench swap needs "`terminal.TerminalStream` (the readonly full
   handler)" from area A. It already exists:
   `crates/rustty-vt/src/stream_terminal.rs:66` `pub type Stream<'a> =
-  stream::Stream<'a, Handler<'a>>` with all dispatch arms filled (the file's
+stream::Stream<'a, Handler<'a>>` with all dispatch arms filled (the file's
   `PORT STATUS: stub` header line is stale — the PORT NOTEs immediately below it
   record the arms landing). T10 is unblocked today.
 - **`7e14347c1` is not just a benchmark commit.** `B-compression.md` presents it as
   "`HyperlinkMap.zig` (+155, NEW) + `cli.zig` + `main.zig` registration". The commit
-  is 7 files / +631/−41 and its *substance* is `src/terminal/hash_map.zig` **+472**
+  is 7 files / +631/−41 and its _substance_ is `src/terminal/hash_map.zig` **+472**
   ("terminal: bound page map probe lengths") plus `page.zig` +37, `Screen.zig` +3,
   `hyperlink.zig` +2. The benchmark exists to measure that change. Porting the
   benchmark without the probe bounding measures nothing. T11 ports both.
@@ -264,7 +264,7 @@ closed, and BL-4 is the perf series — **WS10**. `WS19`'s closeout audit (row O
 it here and rewrote the disposition; WS19 explicitly did **not** port it. WS10 owns it.
 
 Verified state: `grep -rn 'cursor_scroll_region_up\|cursorScrollRegionUp' crates/` →
-**zero hits**. The three *other* Screen `invalidate_node_layout` sites from `0bad91adb`
+**zero hits**. The three _other_ Screen `invalidate_node_layout` sites from `0bad91adb`
 ARE ported (`crates/rustty-vt/src/screen.rs:1536,1618,1651`) and so is the Terminal one
 (`crates/rustty-vt/src/terminal.rs:3004`) — 15 sites total repo-wide. The single
 missing site is the one inside the unported function. WS19 noted the port is "cheaper
@@ -307,10 +307,10 @@ demonstrated FAIL arms**.
 alternately within one process (`zig` block then `rust` block per config, 1 discarded
 warmup each, N=9), takes medians, and asserts per config:
 
-| arm | configs | rule | basis |
-|---|---|---|---|
-| **STRICT** | the 10 large-corpus configs (`terminal-parser`, `terminal-stream`, `codepoint-width.{table,simd,wcwidth}`, `grapheme-break.{noop,table}`, `is-symbol.{table,uucode}`, `osc-parser`) | `rust_median < zig_median`, 0% tolerance | measured intra-session `max/min` spread ≤1.05 on all ten; the thinnest measured margin is grapheme-break.noop at −7.5%, ~5× the spread |
-| **BANDED** | the 4 short/small-corpus configs (`codepoint-width.noop` 3.7 ms, `screen-clone.{noop,clone,render}` 5.2/25.1/14.7 ms) | `rust_median < zig_median * 1.15` | these are process-spawn-floor dominated (`PERF_COMPARISON.md` §"Process-spawn / setup-floor caveat"); measured spreads 1.53 / 1.20 / 1.22 / 1.13 |
+| arm        | configs                                                                                                                                                                             | rule                                     | basis                                                                                                                                            |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **STRICT** | the 10 large-corpus configs (`terminal-parser`, `terminal-stream`, `codepoint-width.{table,simd,wcwidth}`, `grapheme-break.{noop,table}`, `is-symbol.{table,uucode}`, `osc-parser`) | `rust_median < zig_median`, 0% tolerance | measured intra-session `max/min` spread ≤1.05 on all ten; the thinnest measured margin is grapheme-break.noop at −7.5%, ~5× the spread           |
+| **BANDED** | the 4 short/small-corpus configs (`codepoint-width.noop` 3.7 ms, `screen-clone.{noop,clone,render}` 5.2/25.1/14.7 ms)                                                               | `rust_median < zig_median * 1.15`        | these are process-spawn-floor dominated (`PERF_COMPARISON.md` §"Process-spawn / setup-floor caveat"); measured spreads 1.53 / 1.20 / 1.22 / 1.13 |
 
 **Two-strike rule:** a config that fails is automatically re-run once at N=15; only a
 second failure is RED. Recorded in the output either way, so a flake is visible.
@@ -334,11 +334,11 @@ measures entry and candidate **in the same session, alternately**, and requires:
 **Why +5% is defensible here and would not be against a frozen JSON:** the same
 unchanged oracle binary spans 11.8% max/min across four historical sessions
 (PREMISE CORRECTION §3), so any cross-session frozen comparison needs ≥12%. Re-measuring
-the *stored binary* in the same session removes session variance entirely, leaving only
+the _stored binary_ in the same session removes session variance entirely, leaving only
 the ≤1.05 intra-session spread — so +5% is ~5× the residual noise. This is the whole
 reason the fence stores a binary rather than a JSON.
 
-An intentional pessimization that is a *net* win (e.g. upstream's `printSlice` trades a
+An intentional pessimization that is a _net_ win (e.g. upstream's `printSlice` trades a
 slower single-`print` path for a much faster bulk path) is not silently allowed: the
 task must add its config to `ws10_suite.py`'s `ACCEPTED_TRADEOFFS` table with the
 measured before/after and a one-line justification, and that table is printed in the
@@ -374,7 +374,7 @@ gate output. No silent waivers.
   paths are macOS. The two Linux-relevant items in scope — `2f0e6659d`'s POSIX pipeline
   and `896aca499`'s `MADV_DONTNEED` twin — are unmeasured on Linux → **V7**.
 - Nothing about real interactive latency. The suite is throughput over static corpora;
-  `2f0e6659d`'s stated motivation is a *latency* fix (macOS tty output queue capping
+  `2f0e6659d`'s stated motivation is a _latency_ fix (macOS tty output queue capping
   master reads at ~1 KiB). T20 adds its own latency assertion rather than leaning on
   the suite.
 - Nothing about RSS. `BASELINE.json`'s `metrics_unmeasured_TODO` already records that
@@ -386,6 +386,7 @@ gate output. No silent waivers.
 ## Files to create / modify
 
 **New:**
+
 - `.port/tools/perf/ws10_suite.py` — the paired A/B harness + both fences + `--self-test` + metrics emitter (T3).
 - `.port/tools/perf/README.md` — how to run a fence, the idle gate, the two-strike rule, where the untracked oracle binary and corpora live (T3).
 - `.port/tools/gates/check_perf_fence.sh` — the ci.sh-facing wrapper (gate id **G8b**) (T3).
@@ -396,6 +397,7 @@ gate output. No silent waivers.
 - `.port/phase-2/mirihar-ws10-scrollregion/` — Miri harness for `cursor_scroll_region_up`'s raw-pointer row shifts (T18).
 
 **Modified (grouped by task layer):**
+
 - `.port/tools/gates/check_baseline_regression.py` — `(id, optimize)` keying, ReleaseFast preference, 6th self-test arm (T2).
 - `.port/tools/ci.sh` — arm G8 with `--metrics`; register G8b; add `cargo test -p rustty-bench --lib` (T3, T4).
 - `crates/rustty-simd/src/vt.rs` — the `cb4c49fbf` guard + `break`; the two new tests; the differential fuzz test (T5).
@@ -428,9 +430,11 @@ gate output. No silent waivers.
 ### Task 1: Branch, idle-gate the box, re-baseline the suite, and resolve the drift question
 
 **Files:**
+
 - Doc: `.port/phase-2/PERF_LOG.md` (new "# WS10 — re-baseline" section)
 
 **Interfaces:**
+
 - Consumes: the untracked pinned oracle binary + corpora in the shared checkout.
 - Produces: (a) branch `ws10-perf-series`; (b) the authoritative idle 14-config paired
   table; (c) `.perf-bins/rustty-bench-ws10-entry-RF` + its sha256 (Fence 2's anchor);
@@ -550,9 +554,11 @@ git commit -m "perf: WS10 re-baseline — 14-config paired suite vs pinned oracl
 ### Task 2: Fix the G8 baseline-index bug (ReleaseFast rows silently overwritten by Debug)
 
 **Files:**
+
 - Modify: `.port/tools/gates/check_baseline_regression.py`
 
 **Interfaces:**
+
 - Consumes: `.port/phase-0/baseline/BASELINE.json` (28 rows, 14 ids × 2 optimize modes).
 - Produces: a `bench_index` keyed on `(id, optimize)` with a documented ReleaseFast
   preference, plus a self-test arm that pins it.
@@ -626,10 +632,12 @@ git commit -m "gate(G8): key baseline benchmarks by (id, optimize) — Debug row
 ### Task 3: Land the paired A/B harness, arm G8/G8b, and prove the FAIL arm on a real binary
 
 **Files:**
+
 - Create: `.port/tools/perf/ws10_suite.py`, `.port/tools/perf/README.md`, `.port/tools/gates/check_perf_fence.sh`
 - Modify: `.port/tools/ci.sh`, `.port/phase-2/PERF_LOG.md`
 
 **Interfaces:**
+
 - Consumes: the oracle binary, the four corpora, a candidate `rustty-bench`, and
   (for Fence 2) an entry binary.
 - Produces: gate **G8b** (`check_perf_fence.sh`), an emitted METRICS JSON in
@@ -658,7 +666,7 @@ ws10_suite.py --rust PATH [--oracle PATH] [--self PATH] [-n N]
 - Idle gate: `os.getloadavg()[0] > IDLE_MAX` (2.0) ⇒ stamp `"provisional": true`, print
   a loud warning, exit 2 (not 0, not 1 — a distinct "unusable measurement" code).
 - `--emit-metrics` writes `{"benchmarks":[{id, optimize:"ReleaseFast", median_s,
-  throughput_MiB_per_s | clones_per_s, metric, n_reps, reps_s}, …]}` so
+throughput_MiB_per_s | clones_per_s, metric, n_reps, reps_s}, …]}` so
   `check_baseline_regression.py --metrics --strict` consumes it directly.
 - `ACCEPTED_TRADEOFFS: dict[str, str]` printed in every run's output; empty at T3.
 
@@ -667,10 +675,10 @@ ws10_suite.py --rust PATH [--oracle PATH] [--self PATH] [-n N]
 Three synthetic arms, computed in-process from fabricated median tables — no
 subprocesses:
 
-| arm | input | expect |
-|---|---|---|
-| (a) | rust == 0.9 × zig on all 14 | exit 0 |
-| (b) | as (a) but `grapheme-break.noop/utf8` rust = 1.10 × zig | exit 1, output contains `LOST bench grapheme-break.noop/utf8` |
+| arm | input                                                                     | expect                                                                          |
+| --- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| (a) | rust == 0.9 × zig on all 14                                               | exit 0                                                                          |
+| (b) | as (a) but `grapheme-break.noop/utf8` rust = 1.10 × zig                   | exit 1, output contains `LOST bench grapheme-break.noop/utf8`                   |
 | (c) | candidate vs entry, `codepoint-width.table/utf8` candidate = 1.08 × entry | exit 1, output contains `SELF-REGRESS bench codepoint-width.table/utf8 (+8.0%)` |
 
 ```bash
@@ -759,6 +767,7 @@ git commit -m "gate(G8b): paired same-session perf fence + armed G8; live flip p
 ### Task 4: Put `rustty-bench` into a gate for the first time
 
 **Files:**
+
 - Modify: `.port/tools/ci.sh`
 
 **Interfaces:** Consumes nothing new. Produces a test lane for the 16 existing
@@ -809,9 +818,11 @@ git commit -m "gate: add rustty-bench unit-test lane (debug + release) — the c
 ### Task 5: `cb4c49fbf` — scalar UTF-8 decode consumes partial sequences cut off by ESC
 
 **Files:**
+
 - Modify: `crates/rustty-simd/src/vt.rs`
 
 **Interfaces:**
+
 - Consumes: `crate::index_of::indexOf`, the existing highway FFI
   `rustty_simd_decode_utf8_until_control_seq`.
 - Produces: a scalar decoder that agrees with the SIMD kernel on all inputs, and the
@@ -857,7 +868,7 @@ commit message.
 `fn decode_partial_utf_8_before_escape()`, both cases verbatim:
 `b"hi\xc2\x1b[0m"` ⇒ `consumed == 3`, `decoded == 3`, `output[2] == 0xFFFD`;
 `b"\xe0\xa0\x1bX"` ⇒ `consumed == 2`, `decoded == 1`, `output[0] == 0xFFFD`.
-These must run against the **public** entry point (SIMD) *and* against the scalar
+These must run against the **public** entry point (SIMD) _and_ against the scalar
 function directly — two assertions per case — because the whole point of the commit is
 that the two must agree. Expected before the fix: the SIMD assertions PASS, the scalar
 assertions FAIL.
@@ -888,7 +899,7 @@ bash .port/tools/build-vt-wasm.sh 2>&1 | tail -5
 node .port/tools/wasm-vt-roundtrip.mjs 2>&1 | tail -5
 ```
 
-Expected: unchanged results. This is the target whose *behaviour* just changed, so a
+Expected: unchanged results. This is the target whose _behaviour_ just changed, so a
 green wasm round-trip is the R5 no-divergence evidence.
 
 - [ ] **Step 6: Commit**
@@ -906,6 +917,7 @@ divergence, not a perf item.
 ### Task 6: `5caf20e3e` — do not reallocate exactly-sized tabstop storage
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/tabstops.rs`
 
 - [ ] **Step 1: Failing test first.** Add `fn tabstops_resize_to_exact_capacity_keeps_buffer()`
@@ -923,6 +935,7 @@ divergence, not a perf item.
 ### Task 7: `b5053153f` — log unsupported input once per distinct value
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/stream.rs`
 
 - [ ] **Step 1: Confirm the gap.** `grep -n "log_unsupported_once" crates/rustty-vt/src/stream.rs`
@@ -947,10 +960,11 @@ divergence, not a perf item.
 ### Task 8: `2f0e6659d`'s separable QoS hunk — `setQosClass` on the termio read thread (macOS)
 
 **Files:**
+
 - Modify: `crates/rustty-termio/src/exec.rs`
 
 `E-os-termio-platform.md` row **E4** measured this at **15% throughput on an M4 Max**
-and calls it separable from the pipeline — it applies to the *current* single read
+and calls it separable from the pipeline — it applies to the _current_ single read
 thread. Landing it here de-risks T20 by removing one variable.
 
 - [ ] **Step 1: Confirm.** `grep -rn "setQosClass" crates/rustty-termio/` → 0 hits.
@@ -959,13 +973,13 @@ thread. Landing it here de-risks T20 by removing one variable.
       Only caller today: `crates/rustty-core/src/renderer_seam.rs:986`.
 - [ ] **Step 2: Port.** Call `rustty_os::macos::setQosClass(QosClass::UserInitiated)`
       at the top of `ReadThread::threadMainPosix` (`exec.rs:3323`), `#[cfg(target_os =
-      "macos")]`, matching the oracle's `comptime` gate and its error handling (the
+"macos")]`, matching the oracle's `comptime` gate and its error handling (the
       oracle logs and continues; do the same — `SetQosClassError::ThreadIncompatible`
       must not kill the read thread).
 - [ ] **Step 3: Test.** Add `fn readthread_sets_user_initiated_qos()`
       (`#[cfg(target_os = "macos")]`): spawn the read thread against a pty pair and
-      assert from *inside* it, via a hand-rolled `extern "C" { fn
-      pthread_get_qos_class_np(...) }` (no new `libc` surface needed — `libc` is already
+      assert from _inside_ it, via a hand-rolled `extern "C" { fn
+pthread_get_qos_class_np(...) }` (no new `libc` surface needed — `libc` is already
       a `rustty-termio` dependency at `Cargo.toml:79`, so use `libc`'s binding if it
       exposes one, else the local `extern` per the `mem.rs` convention), that the class
       is `QOS_CLASS_USER_INITIATED`. Expected: FAIL before Step 2.
@@ -979,6 +993,7 @@ thread. Landing it here de-risks T20 by removing one variable.
 ### Task 9: `9c9cf3e82` — renderer avoids allocating when there are no active links
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/src/link.rs`
 
 - [ ] **Step 1: Read the oracle hunk** (`git -C ../ghostty show 9c9cf3e82`, 1 file,
@@ -1002,6 +1017,7 @@ thread. Landing it here de-risks T20 by removing one variable.
 ### Task 10: `258de36d1` + `4c5b1d5d5` — `terminal-stream` bench uses the full handler and 64 KiB reads
 
 **Files:**
+
 - Modify: `crates/rustty-bench/src/terminal_stream.rs`, `crates/rustty-vt/src/stream_terminal.rs` (stale header line only)
 
 **This task makes the suite measure more work, so it will move the
@@ -1011,8 +1027,8 @@ as an `ACCEPTED_TRADEOFFS` entry with the explanation "the bench now measures th
 work as upstream's", not as a regression.
 
 - [ ] **Step 1: Confirm the premise correction.** `grep -n "pub type Stream"
-      crates/rustty-vt/src/stream_terminal.rs` → `:66 pub type Stream<'a> =
-      stream::Stream<'a, Handler<'a>>`. So the full handler exists and
+crates/rustty-vt/src/stream_terminal.rs` → `:66 pub type Stream<'a> =
+stream::Stream<'a, Handler<'a>>`. So the full handler exists and
       `B-compression.md` §3.4's "blocked on area A" is stale. Also confirm the current
       bench state: `terminal_stream.rs:262` defines a local print-only `Handler`,
       `:31` imports `rustty_vt::stream::Stream`, `:223` uses `let mut buf = [0u8; 4096]`.
@@ -1032,7 +1048,7 @@ work as upstream's", not as a regression.
       is the vacuous-verification trap here).
 - [ ] **Step 6: Record + fence.** Add `ACCEPTED_TRADEOFFS["terminal-stream/ascii"]` with
       before/after and the justification. Re-run the ORACLE fence: the oracle binary is
-      the **pinned** one whose own `TerminalStream.zig` is *also* the pre-swap
+      the **pinned** one whose own `TerminalStream.zig` is _also_ the pre-swap
       print-only form, so **after this task rustty measures more work than the oracle
       binary does on this config** and the comparison is no longer apples-to-apples.
       **State this explicitly in `PERF_LOG.md` and move `terminal-stream/ascii` from
@@ -1045,6 +1061,7 @@ work as upstream's", not as a regression.
 ### Task 11: `7e14347c1` — bounded page-map probe lengths + the `HyperlinkMap` benchmark
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/hash_map.rs`, `page.rs`/`page_impl.rs`, `hyperlink.rs`, `screen.rs`
 - Create: `crates/rustty-bench/src/hyperlink_map.rs`
 - Modify: `crates/rustty-bench/src/{cli.rs,lib.rs}`
@@ -1163,7 +1180,7 @@ non-existent `300b42f42a` that `D-terminal-subsystems.md` cites.**
 **Files:** Modify `crates/rustty-simd/cbits/simd/vt.cpp`
 
 - [ ] **Step 1** `grep -n "WidenAsciiStore\|DecodeNonAsciiUntilControlSeq"
-      crates/rustty-simd/cbits/simd/vt.cpp` → 0 hits. Read
+crates/rustty-simd/cbits/simd/vt.cpp` → 0 hits. Read
       `git -C ../ghostty show 083d9709b` (1 file, +125/−36).
 - [ ] **Step 2** Port `WidenAsciiStore` (byte→u32 widening via `PromoteTo` on quarter
       vectors) **including the `HWY_TARGET == HWY_SCALAR` arm** — without it, wasm and
@@ -1171,7 +1188,7 @@ non-existent `300b42f42a` that `D-terminal-subsystems.md` cites.**
       `DecodeNonAsciiUntilControlSeq(d, input, count, base, …)` as the non-ASCII
       continuation.
 - [ ] **Step 3** T5's `decode_simd_matches_scalar` is the guard, and it is now doing real
-      work: it compares the *changed* SIMD kernel against the *fixed* scalar reference
+      work: it compares the _changed_ SIMD kernel against the _fixed_ scalar reference
       over 10 000 inputs. Run it first; it must pass. Then run the whole
       `rustty-simd` lib suite and `decode_tight_buffer_no_overread`
       (`vt.rs:218`) **under AddressSanitizer** — the new widening store is exactly the
@@ -1179,7 +1196,7 @@ non-existent `300b42f42a` that `D-terminal-subsystems.md` cites.**
       `bash .port/tools/gates/sanitizers.sh` (and `check_sanitizer_canary.sh` to prove
       ASan is actually armed, not silently no-op).
 - [ ] **Step 4** wasm: `bash .port/tools/build-vt-wasm.sh` + `node
-      .port/tools/wasm-vt-roundtrip.mjs` — the `HWY_SCALAR` arm's proof.
+.port/tools/wasm-vt-roundtrip.mjs` — the `HWY_SCALAR` arm's proof.
 - [ ] **Step 5** Fences; the expected movers are `terminal-parser` and
       `terminal-stream`.
 - [ ] **Step 6** Commit `simd/vt: decode ASCII inline in the SIMD scan for ESC (WS10 T15)`
@@ -1193,7 +1210,7 @@ non-existent `300b42f42a` that `D-terminal-subsystems.md` cites.**
 The largest Layer-3 item: `47e26df60` alone is +675 lines in `Terminal.zig`.
 
 - [ ] **Step 1** Confirm the gaps: `grep -n "print_slice\|PrintSlice"
-      crates/rustty-vt/src/{stream.rs,terminal.rs}` → 0 hits;
+crates/rustty-vt/src/{stream.rs,terminal.rs}` → 0 hits;
       `grep -n "fn lanes" crates/rustty-simd/src/lib.rs` → 0 hits (the file is 54 lines).
 - [ ] **Step 2** Port `f2a7652ab`'s `simd/main.zig` hunk first: `pub fn lanes<T>()`
       (= 2× native vector width), which the printable-run scan needs.
@@ -1226,7 +1243,7 @@ The largest Layer-3 item: `47e26df60` alone is +675 lines in `Terminal.zig`.
       `MIRI_EXCEPTIONS.md` with the reason — never blanket-ignore the whole module.
 - [ ] **Step 8** Verify: full `cargo test -p rustty-vt --lib` (count before/after);
       `cargo test -p rustty-termio --lib`; T13/T14's differential tests still green.
-- [ ] **Step 9** Fences. This is the task most likely to produce a *net* win with a
+- [ ] **Step 9** Fences. This is the task most likely to produce a _net_ win with a
       local loss (single-`print` may slow while bulk speeds up); any such trade goes in
       `ACCEPTED_TRADEOFFS` with numbers.
 - [ ] **Step 10** Commits, one per upstream commit:
@@ -1243,7 +1260,7 @@ The largest Layer-3 item: `47e26df60` alone is +675 lines in `Terminal.zig`.
 
 - [ ] **Step 1** Confirm gaps: `grep -rn "apc_put_slice\|feed_slice" crates/rustty-vt/src/`
       → 0 hits; `crates/rustty-vt/src/apc/mod.rs:103` has `pub fn feed(&mut self, alloc:
-      Allocator, byte: u8)` and no slice form.
+Allocator, byte: u8)` and no slice form.
 - [ ] **Step 2 — the union-payload borrow hazard.** `D-terminal-subsystems.md` §4.6
       flags `apc.Handler.feedSlice` as "borrow of a union payload while reassigning the
       union" — legal in Zig, UB-adjacent in Rust. Port `feed_slice` so the payload is
@@ -1291,7 +1308,7 @@ This is the task that discharges the orphaned ledger row (PREMISE CORRECTION §7
 Stacked-Borrows risk in area A**, so the Miri harness is not optional.
 
 - [ ] **Step 1** Confirm: `grep -rn 'cursor_scroll_region_up\|cursorScrollRegionUp'
-      crates/` → **0 hits**. Confirm the 15 existing `invalidate_node_layout` sites
+crates/` → **0 hits**. Confirm the 15 existing `invalidate_node_layout` sites
       (4 in `screen.rs`/`terminal.rs` from `0bad91adb`, 11 in `pagelist/`) so the 16th
       is attributable.
 - [ ] **Step 2 — pre-port LIFETIMES.tsv step.** Per the adopted `LIFETIMES.tsv` ledger
@@ -1317,7 +1334,7 @@ Stacked-Borrows risk in area A**, so the Miri harness is not optional.
       inside `cursor_scroll_region_up`, and its test
       `screen_cursor_scroll_region_up_renews_page_generation` — the exact test name
       `DEFERRALS.md:4981` names as missing. Verify `grep -rn invalidate_node_layout
-      crates/ | wc -l` → 16.
+crates/ | wc -l` → 16.
 - [ ] **Step 6 — Miri.** Build `.port/phase-2/mirihar-ws10-scrollregion/` as an isolated
       non-FFI harness (the `mirihar-chunk3b` precedent: prove SB on a standalone
       harness, do not hand-reason it) driving the multi-page and selection-spanning
@@ -1398,7 +1415,7 @@ violation in Rust.
       commit-by-commit, and do NOT port `bed47168c`.** Verify the ordering yourself:
       `git -C ../ghostty log --oneline --ancestry-path bed47168c..60121a039 | tail -3`.
 - [ ] **Step 2** Confirm the gap: `grep -rn "io-gather\|bridge_threshold\|batch_ready"
-      crates/` → 0 hits. Current shape: `exec.rs:3323` `ReadThread::threadMainPosix`,
+crates/` → 0 hits. Current shape: `exec.rs:3323` `ReadThread::threadMainPosix`,
       `let mut buf = [0u8; 1024];` at `:3411`, one `'tight:` loop + one 2-fd `poll` at
       `:3413-3510`.
 - [ ] **Step 3 — design the slot handoff BEFORE writing it.** The oracle's `Pipeline` is
@@ -1406,8 +1423,8 @@ violation in Rust.
       `bridging`/`done`, two condvars (`batch_ready`, `slot_free`), an idle self-pipe,
       and the constants `bridge_spin_max = 16`, `bridge_poll_timeout_ms = 1`,
       `bridge_threshold = 1024`, `gather_budget_ns = 3_000_000`. The "buffer contents
-      need no locking" invariant means the gather thread writes slot *i* while the parse
-      thread reads slot *j* — two live aliases into one allocation. Design: the ring
+      need no locking" invariant means the gather thread writes slot _i_ while the parse
+      thread reads slot _j_ — two live aliases into one allocation. Design: the ring
       buffer is a single heap allocation owned by neither thread; each side receives a
       `*mut u8` + len for its slot only, derived per-handoff from the base pointer
       (never a `&mut [u8]` that outlives the handoff), with slot ownership transferred
@@ -1427,18 +1444,16 @@ violation in Rust.
       (+110/−7, "don't bridge pty reads while the parser is idle") on top, as a second
       commit.
 - [ ] **Step 6 — the two guarding tests E1 says do not exist.** The existing
-      `readthread_pty_bytes_land_in_screen` (`exec.rs:4925`) passes with *either*
-      shape, so it is not a guard. Add:
-      - `fn readthread_pipeline_sustains_saturated_producer()` — a writer blasting
-        ≥8 MiB into the pty master must be fully drained into the screen with no lost or
-        reordered bytes; assert total bytes and a checksum, and assert the throughput
-        exceeds the pre-pipeline shape's (measure both by keeping the old loop behind a
-        `#[cfg(test)]` switch for the duration of the task, then remove it).
-      - `fn readthread_pipeline_keeps_interactive_latency()` — a single sub-1 KiB write
-        must land in the screen within a bounded time (assert against
-        `gather_budget_ns` × a safety factor, and state the factor). This is the
-        *latency* property `2f0e6659d` exists for, and the throughput suite cannot see
-        it.
+      `readthread_pty_bytes_land_in_screen` (`exec.rs:4925`) passes with _either_
+      shape, so it is not a guard. Add: - `fn readthread_pipeline_sustains_saturated_producer()` — a writer blasting
+      ≥8 MiB into the pty master must be fully drained into the screen with no lost or
+      reordered bytes; assert total bytes and a checksum, and assert the throughput
+      exceeds the pre-pipeline shape's (measure both by keeping the old loop behind a
+      `#[cfg(test)]` switch for the duration of the task, then remove it). - `fn readthread_pipeline_keeps_interactive_latency()` — a single sub-1 KiB write
+      must land in the screen within a bounded time (assert against
+      `gather_budget_ns` × a safety factor, and state the factor). This is the
+      _latency_ property `2f0e6659d` exists for, and the throughput suite cannot see
+      it.
       Both must FAIL against the pre-pipeline shape — run them before Step 5 to prove it.
 - [ ] **Step 7 — `threadMainPosix`'s two new early returns.** E1's §"return early in two
       new places" warning: verify the quit-pipe `QuitFdCloser` Drop guard
@@ -1467,10 +1482,10 @@ violation in Rust.
       the number that goes into the ROADMAP; a contended run here undoes the whole plan.
 - [ ] **Step 2** `cargo build -p rustty-bench --profile release-fast`; then
       `python3 .port/tools/perf/ws10_suite.py --rust target/release-fast/rustty-bench
-      --self .perf-bins/rustty-bench-ws10-entry-RF -n 9
-      --emit-metrics .port/phase-2/perf-ws10/final.json`, and
+--self .perf-bins/rustty-bench-ws10-entry-RF -n 9
+--emit-metrics .port/phase-2/perf-ws10/final.json`, and
       `python3 .port/tools/gates/check_baseline_regression.py --metrics
-      .port/phase-2/perf-ws10/final.json --strict`.
+.port/phase-2/perf-ws10/final.json --strict`.
 - [ ] **Step 3** Write the WS10 final table: per config, T1 entry median → final median,
       the oracle median, the verdict per fence arm, and the `INCOMPARABLE` set
       (`terminal-stream/ascii` after T10) with its reason. State the win count honestly
@@ -1509,25 +1524,23 @@ violation in Rust.
       Then `grep -n "BL-4" .port/phase-2/DEFERRALS.md` and repair every remaining
       reference — a closed backlog must not still be named as a future owner anywhere.
 - [ ] **Step 3 — `VERIFICATION_DEBT.md`.** Add two rows in the established V-numbered
-      format (next free is **V6**):
-      - **V6 — the `origin/main` oracle cannot be built on this host.** Evidence:
-        `origin/main:build.zig.zon` `.minimum_zig_version = "0.16.0"` vs
-        `zig version` → `0.15.2`. Consequence: the `quirks_memset`-accelerated oracle
-        (~2.8× faster on `+terminal-stream`) is unmeasurable, so every WS10 fence is
-        against the pinned binary. **Recipe:** install Zig 0.16.0; `git -C ../ghostty
-        worktree add /tmp/oracle-main origin/main` (**a worktree, never a checkout** —
-        four lanes depend on the pinned tree); `zig build -Doptimize=ReleaseFast` in the
-        worktree; `python3 .port/tools/perf/ws10_suite.py --oracle
-        /tmp/oracle-main/zig-out/bin/ghostty-bench --rust target/release-fast/rustty-bench`.
-        **Pre-stated expected outcome:** `terminal-stream`'s oracle median drops toward
-        ~195 ms and rustty likely LOSES that config. **That is the oracle getting
-        faster, not rustty regressing** — do not treat it as a WS10 regression.
-      - **V7 — no Linux perf measurement.** The oracle bench binary is macOS arm64 and
-        no Linux oracle exists here. Unmeasured on Linux: `2f0e6659d`'s POSIX pipeline
-        (which E1 notes "is POSIX and runs on Linux too") and the `MADV_DONTNEED` twin
-        of BL-2's `madvise`. Recipe: build both binaries on the Fedora VM (`ssh rvm`),
-        regenerate the corpora with `rustty-synthetic`/`ghostty-gen` there, run the
-        fence.
+      format (next free is **V6**): - **V6 — the `origin/main` oracle cannot be built on this host.** Evidence:
+      `origin/main:build.zig.zon` `.minimum_zig_version = "0.16.0"` vs
+      `zig version` → `0.15.2`. Consequence: the `quirks_memset`-accelerated oracle
+      (~2.8× faster on `+terminal-stream`) is unmeasurable, so every WS10 fence is
+      against the pinned binary. **Recipe:** install Zig 0.16.0; `git -C ../ghostty
+worktree add /tmp/oracle-main origin/main` (**a worktree, never a checkout** —
+      four lanes depend on the pinned tree); `zig build -Doptimize=ReleaseFast` in the
+      worktree; `python3 .port/tools/perf/ws10_suite.py --oracle
+/tmp/oracle-main/zig-out/bin/ghostty-bench --rust target/release-fast/rustty-bench`.
+      **Pre-stated expected outcome:** `terminal-stream`'s oracle median drops toward
+      ~195 ms and rustty likely LOSES that config. **That is the oracle getting
+      faster, not rustty regressing** — do not treat it as a WS10 regression. - **V7 — no Linux perf measurement.** The oracle bench binary is macOS arm64 and
+      no Linux oracle exists here. Unmeasured on Linux: `2f0e6659d`'s POSIX pipeline
+      (which E1 notes "is POSIX and runs on Linux too") and the `MADV_DONTNEED` twin
+      of BL-2's `madvise`. Recipe: build both binaries on the Fedora VM (`ssh rvm`),
+      regenerate the corpora with `rustty-synthetic`/`ghostty-gen` there, run the
+      fence.
 - [ ] **Step 4 — assessment repairs.** These are the source documents the next reader
       will trust, so fix them in place with a dated note: `D-terminal-subsystems.md`
       rows 135/506 (`300b42f42a` → `300f42c7a`); `B-compression.md` §3.4 (the

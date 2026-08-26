@@ -32,7 +32,7 @@ cross-compiles C dependencies transparently:
 - Cargo must be able to build librustty-vt's `-sys` C dependencies for the
   target. Point Cargo's target C toolchain at `zig cc` via environment (e.g.
   `CC_<target>=zig cc -target <zig-triple>` and the matching `CARGO_TARGET_
-  <TARGET>_LINKER`), or use [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild).
+<TARGET>_LINKER`), or use [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild).
 
 The CMake configuration (target derivation, cross compiler, imported targets)
 is complete; the toolchain setup above is environment-specific.

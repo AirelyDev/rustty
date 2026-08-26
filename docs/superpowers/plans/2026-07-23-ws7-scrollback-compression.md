@@ -4,11 +4,11 @@
 
 **Goal:** Port the upstream ghostty BL-1 stack (~35 commits) — a standalone LZ4 block codec, a compressed `Page` representation, retained-mapping memory reclamation, PageList compression scheduling, page-generation stamps, and the search-integrity fixes built on them — into `rustty-vt` and its consumers, with no regression on the 14-benchmark perf suite.
 
-**Architecture:** Three new leaf modules in `rustty-vt` (`compress/lz4.rs`, `compress/page.rs`, `mem.rs`) sit **below** `pagelist`. `PageList::Node` gains an `owned: Owned` tag and its `data` field becomes a two-state enum (`Resident(Page)` / `Compressed(CompressedPage)`); every existing `(*node).data` access is routed through raw-pointer `Node` accessors first, so the representation change is a one-line switch afterwards. Compression is *policy* owned by `PageList` (`compress(mode)`), scheduling is owned by the renderer thread, and the `Terminal`/lib-vt C API expose the activity token + step function to embedders. Generation stamps (`node.serial`, `page_serial_epoch`, `renew_generation`, `node_is_valid`) make cached search state safe against page replacement.
+**Architecture:** Three new leaf modules in `rustty-vt` (`compress/lz4.rs`, `compress/page.rs`, `mem.rs`) sit **below** `pagelist`. `PageList::Node` gains an `owned: Owned` tag and its `data` field becomes a two-state enum (`Resident(Page)` / `Compressed(CompressedPage)`); every existing `(*node).data` access is routed through raw-pointer `Node` accessors first, so the representation change is a one-line switch afterwards. Compression is _policy_ owned by `PageList` (`compress(mode)`), scheduling is owned by the renderer thread, and the `Terminal`/lib-vt C API expose the activity token + step function to embedders. Generation stamps (`node.serial`, `page_serial_epoch`, `renew_generation`, `node_is_valid`) make cached search state safe against page replacement.
 
 **Tech Stack:** Rust 1.93.1 (pinned), `rustty-vt` (no new crate deps), hand-rolled `extern "C"` `madvise` (matching the existing hand-rolled `mmap`/`munmap` in `page.rs`), `cargo +nightly miri` for the aliasing lanes, `.port/phase-0/baseline/run_benchmarks.py` for the perf gate.
 
-**KEY RESEARCH FINDING — no `lz4-sys` crate is needed.** Ghostty does **not** vendor the reference C LZ4 library for this feature. `src/terminal/compress/lz4.zig` is a **891-line allocation-free pure-Zig implementation** of the raw LZ4 *block* format (not the frame format), written specifically so it keeps building for `wasm32-freestanding` with no libc and no `src/simd`/Highway dependency. It is therefore ported as **pure Rust** into `crates/rustty-vt/src/compress/lz4.rs`. **Do not create `crates-sys/lz4-sys`. Do not add an `lz4`/`lz4_flex` cargo dependency.** The only new OS interaction in this workstream is `madvise`, which follows the existing `page.rs` `extern "C"` convention (no `libc` crate).
+**KEY RESEARCH FINDING — no `lz4-sys` crate is needed.** Ghostty does **not** vendor the reference C LZ4 library for this feature. `src/terminal/compress/lz4.zig` is a **891-line allocation-free pure-Zig implementation** of the raw LZ4 _block_ format (not the frame format), written specifically so it keeps building for `wasm32-freestanding` with no libc and no `src/simd`/Highway dependency. It is therefore ported as **pure Rust** into `crates/rustty-vt/src/compress/lz4.rs`. **Do not create `crates-sys/lz4-sys`. Do not add an `lz4`/`lz4_flex` cargo dependency.** The only new OS interaction in this workstream is `madvise`, which follows the existing `page.rs` `extern "C"` convention (no `libc` crate).
 
 ---
 
@@ -35,7 +35,7 @@ WS7-specific constraints, binding on every task:
   ```
   Then read every oracle file cited in this plan as `git -C /Users/gael/projects/ghostty show origin/main:<path>` and every cited commit as `git -C /Users/gael/projects/ghostty show <hash>`. **Never check out `origin/main`** — the working checkout stays on the pin. Every file path in this plan prefixed `oracle@main:` means "read via `show origin/main:`". Every path prefixed `oracle@pin:` means the pinned tree is authoritative.
 - **`cfg(test)` mirrors Zig `builtin.is_test`.** `mem::decommit` must simulate a successful reclaim by zeroing under `cfg(test)` (the testing allocator's ranges can share an OS mapping with unrelated allocations, so real `madvise` is unsafe there). This is the oracle's own behavior, not a test shortcut.
-- **Existing vt Miri lane is RED** (memory: `search-screen-sb-ub-finding`) — 9 pre-existing SB-UB tests in the search subsystem. WS7 must not *add* to that set; Phase E's Miri gate is scoped by an explicit allow-list of the 9 known-red test names recorded in `.port/phase-2/MIRI_EXCEPTIONS.md`. Fixing them is WS8's business, not WS7's.
+- **Existing vt Miri lane is RED** (memory: `search-screen-sb-ub-finding`) — 9 pre-existing SB-UB tests in the search subsystem. WS7 must not _add_ to that set; Phase E's Miri gate is scoped by an explicit allow-list of the 9 known-red test names recorded in `.port/phase-2/MIRI_EXCEPTIONS.md`. Fixing them is WS8's business, not WS7's.
 
 ---
 
@@ -43,13 +43,13 @@ WS7-specific constraints, binding on every task:
 
 Five phases in a single file. **Execution order is A → B → C → D → E.**
 
-| Phase | Scope | Tasks | Separately executable? |
-|---|---|---|---|
-| **A** | LZ4 block codec + differential suite (`compress/lz4.rs`) | A1–A6 | **YES** — pure leaf module, zero callers, lands and merges on its own. |
-| **B** | Retained-mapping reclamation (`mem.rs`), compressed `Page` repr, `Node` ownership + storage enum, PageList compression policy | B1–B10 | **NO** — requires Phase A. Internally B1–B4 (mem + repr + accessor retarget) can land as one commit series before B5–B10 (policy). |
-| **C** | Generation stamps (`renew_generation`, `page_serial_epoch`, `node_is_valid`) + search integrity | C1–C8 | **NO** — requires Phase B's `serial`/`Storage` surface. |
-| **D** | Consumer surface: `Terminal` API, config option, renderer-thread scheduling + state handoff, lib-vt C API, inspector, bench actions | D1–D8 | **PARTIALLY** — requires Phase B. D4 (renderer state handoff) and D8 (bench actions) are independent of the rest of D and may be executed out of order. |
-| **E** | Gates: both-platform build, Miri lanes, perf non-regression, ledgers, merge | E1–E6 | **NO** — terminal phase. |
+| Phase | Scope                                                                                                                               | Tasks  | Separately executable?                                                                                                                                  |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A** | LZ4 block codec + differential suite (`compress/lz4.rs`)                                                                            | A1–A6  | **YES** — pure leaf module, zero callers, lands and merges on its own.                                                                                  |
+| **B** | Retained-mapping reclamation (`mem.rs`), compressed `Page` repr, `Node` ownership + storage enum, PageList compression policy       | B1–B10 | **NO** — requires Phase A. Internally B1–B4 (mem + repr + accessor retarget) can land as one commit series before B5–B10 (policy).                      |
+| **C** | Generation stamps (`renew_generation`, `page_serial_epoch`, `node_is_valid`) + search integrity                                     | C1–C8  | **NO** — requires Phase B's `serial`/`Storage` surface.                                                                                                 |
+| **D** | Consumer surface: `Terminal` API, config option, renderer-thread scheduling + state handoff, lib-vt C API, inspector, bench actions | D1–D8  | **PARTIALLY** — requires Phase B. D4 (renderer state handoff) and D8 (bench actions) are independent of the rest of D and may be executed out of order. |
+| **E** | Gates: both-platform build, Miri lanes, perf non-regression, ledgers, merge                                                         | E1–E6  | **NO** — terminal phase.                                                                                                                                |
 
 Each phase ends with `cargo test -p rustty-vt --lib` green and a commit. Phases B–E additionally end with `cargo check --workspace --all-targets` AND `cargo build --workspace` green on **both** macOS and `rvm`. The `--all-targets` check is the load-bearing half: `cargo build --workspace` compiles neither examples nor test targets.
 
@@ -66,35 +66,35 @@ git checkout -b ws7-scrollback-compression
 
 **New files**
 
-| Path | Responsibility |
-|---|---|
-| `crates/rustty-vt/src/compress.rs` | Namespace module. Re-exports `lz4` and `CompressedPage`. Ports `oracle@main:src/terminal/compress.zig`. |
-| `crates/rustty-vt/src/compress/lz4.rs` | Allocation-free raw LZ4 **block** codec: `compress_bound`, `compress`, `decompress`, `HashTable`, `CompressError`, `DecompressError`. Ports `oracle@main:src/terminal/compress/lz4.zig`. |
-| `crates/rustty-vt/src/compress/lz4_differential.rs` | `#[cfg(test)]` differential property suite: round-trip identity, independent format walker, wrong-size rejection, corruption/truncation decoding. Ports `oracle@main:src/terminal/compress/lz4_differential.zig`. |
-| `crates/rustty-vt/src/compress/page.rs` | `CompressedPage` — full `Page` metadata + exact encoded block, retaining the source's virtual mapping. Ports `oracle@main:src/terminal/compress/Page.zig`. |
-| `crates/rustty-vt/src/mem.rs` | `DecommitMode`, `can_reclaim`, `decommit`, `recommit` — retained-mapping physical reclamation via hand-rolled `extern "C"` `madvise`. Ports `oracle@main:src/terminal/mem.zig`. |
-| `crates/rustty-vt/src/pagelist/compress.rs` | `impl PageList` compression cluster: `CompressionScratch`, `IncrementalCompressionState`, `CompressionIterator`, `compress`, `compress_page`, `memory_stats`. Ports the compression sections of `oracle@main:src/terminal/PageList.zig`. |
-| `crates/rustty-bench/src/page_compression.rs` | `+page-compression` bench action (modes `compress`/`decompress`/`store`/`report`). Ports `oracle@main:src/benchmark/PageCompression.zig`. |
-| `crates/rustty-bench/src/scrollback_compression.rs` | `+scrollback-compression` bench action. Ports `oracle@main:src/benchmark/ScrollbackCompression.zig`. |
-| `.port/phase-2/mirihar-compress/` | Isolated non-FFI Miri harness proving the compress/restore seam is SB-clean (established pattern: `.port/phase-2/mirihar-chunk3b`). |
+| Path                                                | Responsibility                                                                                                                                                                                                                           |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crates/rustty-vt/src/compress.rs`                  | Namespace module. Re-exports `lz4` and `CompressedPage`. Ports `oracle@main:src/terminal/compress.zig`.                                                                                                                                  |
+| `crates/rustty-vt/src/compress/lz4.rs`              | Allocation-free raw LZ4 **block** codec: `compress_bound`, `compress`, `decompress`, `HashTable`, `CompressError`, `DecompressError`. Ports `oracle@main:src/terminal/compress/lz4.zig`.                                                 |
+| `crates/rustty-vt/src/compress/lz4_differential.rs` | `#[cfg(test)]` differential property suite: round-trip identity, independent format walker, wrong-size rejection, corruption/truncation decoding. Ports `oracle@main:src/terminal/compress/lz4_differential.zig`.                        |
+| `crates/rustty-vt/src/compress/page.rs`             | `CompressedPage` — full `Page` metadata + exact encoded block, retaining the source's virtual mapping. Ports `oracle@main:src/terminal/compress/Page.zig`.                                                                               |
+| `crates/rustty-vt/src/mem.rs`                       | `DecommitMode`, `can_reclaim`, `decommit`, `recommit` — retained-mapping physical reclamation via hand-rolled `extern "C"` `madvise`. Ports `oracle@main:src/terminal/mem.zig`.                                                          |
+| `crates/rustty-vt/src/pagelist/compress.rs`         | `impl PageList` compression cluster: `CompressionScratch`, `IncrementalCompressionState`, `CompressionIterator`, `compress`, `compress_page`, `memory_stats`. Ports the compression sections of `oracle@main:src/terminal/PageList.zig`. |
+| `crates/rustty-bench/src/page_compression.rs`       | `+page-compression` bench action (modes `compress`/`decompress`/`store`/`report`). Ports `oracle@main:src/benchmark/PageCompression.zig`.                                                                                                |
+| `crates/rustty-bench/src/scrollback_compression.rs` | `+scrollback-compression` bench action. Ports `oracle@main:src/benchmark/ScrollbackCompression.zig`.                                                                                                                                     |
+| `.port/phase-2/mirihar-compress/`                   | Isolated non-FFI Miri harness proving the compress/restore seam is SB-clean (established pattern: `.port/phase-2/mirihar-chunk3b`).                                                                                                      |
 
 **Modified files**
 
-| Path | Change |
-|---|---|
-| `crates/rustty-vt/src/lib.rs` | `pub mod compress; pub mod mem;` + `pub const COMPRESSION_ENABLED: bool` (ports `oracle@main:src/terminal/main.zig:80`). |
-| `crates/rustty-vt/src/page_impl.rs` | Add `Page::shallow_copy()` (metadata-only clone that aliases the same mapping). |
-| `crates/rustty-vt/src/pagelist/mod.rs` | `Node.owned`, `Node.data: NodeData`, `Node` raw-pointer accessors, `PreservedPage`, `page_serial_min` → `page_serial_epoch`, `page_compression` field, `renew_generation`, `node_is_valid`, `destroy_node_ext` ownership switch. |
-| `crates/rustty-vt/src/pagelist/{access,erase,grow,iter,pin,resize,scroll}.rs` | Mechanical retarget of `(*node).data` → `Node::page(node)` / `Node::page_assume_resident(node)` / `Node::metadata(node)`. |
-| `crates/rustty-vt/src/{screen.rs,terminal.rs,render.rs,selection.rs,formatter.rs}` | Same mechanical retarget; `Terminal::compression_activity` / `Terminal::compress`. |
-| `crates/rustty-vt/src/search/{pagelist,sliding_window,viewport,screen,active,thread}.rs` | `PreservedPage`-based formatting; `AppendResult`; `Meta.rows`; generation validation. |
-| `crates/rustty-vt-c/src/terminal.rs`, `include/rustty/vt/terminal.h` | `rustty_terminal_compression_activity`, `rustty_terminal_compress` + ABI enums. |
-| `crates/rustty-config/src/config_struct.rs` | `scrollback_compression: bool = true`; `scrollback_limit` default 10 MB → 50 MB. |
-| `crates/rustty-renderer/src/{config.rs,thread.rs,state.rs}` | `RendererConfig::scrollback_compression`; `Compression` scheduling struct; `lock_demand`/`unlock_demand`/`yield_to_demand`. |
-| `crates/rustty-termio/src/exec.rs` | `yield_to_demand` call between parse batches. |
-| `crates/rustty-inspector/src/widgets/pagelist.rs`, `page.rs` | Compression memory columns. |
-| `crates/rustty-bench/src/{cli.rs,lib.rs,main_bench.rs}` | Register the two new actions. |
-| `.port/phase-2/MAIN_PARITY.md` | Strike the BL-1 rows. |
+| Path                                                                                     | Change                                                                                                                                                                                                                           |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crates/rustty-vt/src/lib.rs`                                                            | `pub mod compress; pub mod mem;` + `pub const COMPRESSION_ENABLED: bool` (ports `oracle@main:src/terminal/main.zig:80`).                                                                                                         |
+| `crates/rustty-vt/src/page_impl.rs`                                                      | Add `Page::shallow_copy()` (metadata-only clone that aliases the same mapping).                                                                                                                                                  |
+| `crates/rustty-vt/src/pagelist/mod.rs`                                                   | `Node.owned`, `Node.data: NodeData`, `Node` raw-pointer accessors, `PreservedPage`, `page_serial_min` → `page_serial_epoch`, `page_compression` field, `renew_generation`, `node_is_valid`, `destroy_node_ext` ownership switch. |
+| `crates/rustty-vt/src/pagelist/{access,erase,grow,iter,pin,resize,scroll}.rs`            | Mechanical retarget of `(*node).data` → `Node::page(node)` / `Node::page_assume_resident(node)` / `Node::metadata(node)`.                                                                                                        |
+| `crates/rustty-vt/src/{screen.rs,terminal.rs,render.rs,selection.rs,formatter.rs}`       | Same mechanical retarget; `Terminal::compression_activity` / `Terminal::compress`.                                                                                                                                               |
+| `crates/rustty-vt/src/search/{pagelist,sliding_window,viewport,screen,active,thread}.rs` | `PreservedPage`-based formatting; `AppendResult`; `Meta.rows`; generation validation.                                                                                                                                            |
+| `crates/rustty-vt-c/src/terminal.rs`, `include/rustty/vt/terminal.h`                     | `rustty_terminal_compression_activity`, `rustty_terminal_compress` + ABI enums.                                                                                                                                                  |
+| `crates/rustty-config/src/config_struct.rs`                                              | `scrollback_compression: bool = true`; `scrollback_limit` default 10 MB → 50 MB.                                                                                                                                                 |
+| `crates/rustty-renderer/src/{config.rs,thread.rs,state.rs}`                              | `RendererConfig::scrollback_compression`; `Compression` scheduling struct; `lock_demand`/`unlock_demand`/`yield_to_demand`.                                                                                                      |
+| `crates/rustty-termio/src/exec.rs`                                                       | `yield_to_demand` call between parse batches.                                                                                                                                                                                    |
+| `crates/rustty-inspector/src/widgets/pagelist.rs`, `page.rs`                             | Compression memory columns.                                                                                                                                                                                                      |
+| `crates/rustty-bench/src/{cli.rs,lib.rs,main_bench.rs}`                                  | Register the two new actions.                                                                                                                                                                                                    |
+| `.port/phase-2/MAIN_PARITY.md`                                                           | Strike the BL-1 rows.                                                                                                                                                                                                            |
 
 ---
 
@@ -109,11 +109,13 @@ git checkout -b ws7-scrollback-compression
 ### Task A1: Codec module scaffold + `compress_bound`
 
 **Files:**
+
 - Create: `crates/rustty-vt/src/compress.rs`
 - Create: `crates/rustty-vt/src/compress/lz4.rs`
 - Modify: `crates/rustty-vt/src/lib.rs`
 
 **Interfaces:**
+
 - Produces: `rustty_vt::compress::lz4::{MAX_INPUT_SIZE, HashTable, CompressError, DecompressError, compress_bound}`.
   - `pub const MAX_INPUT_SIZE: usize = 0x7E00_0000;`
   - `pub type HashTable = [u32; 1 << 12];`
@@ -322,9 +324,11 @@ git commit -m "vt/compress: LZ4 block codec scaffold + compressBound (WS7 A1)"
 ### Task A2: LZ4 decoder
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/compress/lz4.rs`
 
 **Interfaces:**
+
 - Consumes: A1's constants and error enums.
 - Produces: `pub fn decompress(input: &[u8], output: &mut [u8]) -> Result<usize, DecompressError>`; private helpers `read_u16/read_u32/read_u64`, `copy_u16_within`, `copy_u64_within`, `copy_u128_within`, `decode_length`, `copy_match`.
 
@@ -731,9 +735,11 @@ git commit -m "vt/compress: LZ4 block decoder with bounded wide copies (WS7 A2)"
 ### Task A3: LZ4 sequence emitters
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/compress/lz4.rs`
 
 **Interfaces:**
+
 - Consumes: A1 constants, A2 `read_u16`.
 - Produces: private `emit_sequence`, `emit_last_literals`, `encoded_length_bytes`, `write_length`, `write_u16_at`.
 
@@ -924,9 +930,11 @@ git commit -m "vt/compress: LZ4 sequence emitters and length encoding (WS7 A3)"
 ### Task A4: LZ4 compressor
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/compress/lz4.rs`
 
 **Interfaces:**
+
 - Consumes: A1–A3.
 - Produces: `pub fn compress(input: &[u8], output: &mut [u8], table: &mut HashTable) -> Result<usize, CompressError>`; private `hash_sequence`, `remember_position`, `candidate_position`, `advance_search`, `match_begin`, `match_end_position`.
 
@@ -1277,12 +1285,14 @@ git commit -m "vt/compress: LZ4 fast compressor with two-slot hash table (WS7 A4
 ### Task A5: LZ4 differential property suite
 
 **Files:**
+
 - Create: `crates/rustty-vt/src/compress/lz4_differential.rs`
 - Modify: `crates/rustty-vt/src/compress.rs`
 
 **Oracle:** `oracle@main:src/terminal/compress/lz4_differential.zig` (493 lines, added by `9a4bd2120`). Read it in full before writing this task: it defines (1) an **independent format walker** that re-parses an encoded block without using the decoder, (2) the standard-format restriction checks (final five bytes literal; final match begins ≥12 bytes before the end), (3) wrong-size output rejection, and (4) corruption/truncation decoding.
 
 **Interfaces:**
+
 - Consumes: `super::lz4::{compress, decompress, compress_bound, HashTable, CompressError, DecompressError}`.
 - Produces: nothing public — `#[cfg(test)]` only.
 - The exhaustive variant is gated on an environment variable, mirroring the oracle's `GHOSTTY_LZ4_SLOW`: **`RUSTTY_LZ4_SLOW=1`** (R2 casing rule: `GHOSTTY_` → `RUSTTY_`).
@@ -1603,6 +1613,7 @@ No production code changes are expected. If `lz4_differential_walker_agrees_and_
 cargo test -p rustty-vt --lib lz4_ --release
 RUSTTY_LZ4_SLOW=1 cargo test -p rustty-vt --lib lz4_differential_exhaustive_gate --release
 ```
+
 Expected: PASS for both; the exhaustive run takes minutes, not hours.
 
 - [ ] **Step 5: Commit**
@@ -1617,9 +1628,11 @@ git commit -m "vt/compress: LZ4 differential property suite (RUSTTY_LZ4_SLOW) (W
 ### Task A6: Phase A gate — wasm build + Miri + commit
 
 **Files:**
+
 - Test only. No production changes expected.
 
 **Interfaces:**
+
 - Consumes: everything from A1–A5.
 - Produces: the recorded evidence that the codec is target-portable and SB-clean, which Phase B depends on.
 
@@ -1631,6 +1644,7 @@ git commit -m "vt/compress: LZ4 differential property suite (RUSTTY_LZ4_SLOW) (W
 cd /Users/gael/projects/rustty
 cargo build -p rustty-vt --target wasm32-unknown-unknown
 ```
+
 Expected: `Finished` with no errors. The codec must not reference `std::env` outside `#[cfg(test)]`, must not use `std::time`, and must not use any `mmap`-adjacent code (it does not).
 
 - [ ] **Step 2: Run the codec Miri lane**
@@ -1638,6 +1652,7 @@ Expected: `Finished` with no errors. The codec must not reference `std::env` out
 ```bash
 bash .port/tools/miri-run.sh rustty-vt lz4_ 4 20 10
 ```
+
 Expected: every `compress::lz4::tests::lz4_*` and `compress::lz4_differential::lz4_differential_*` test reports `ok`. **Zero `UB`, zero `TIMEOUT`.** If `lz4_round_trips_compressible_page_sized_inputs` TIMEOUTs (400 KiB under Miri is slow), reduce nothing — instead record it in `.port/phase-2/MIRI_EXCEPTIONS.md` with the reason "byte-loop over 400 KiB; covered natively" and re-run the remaining filter. Any actual `UB` line is a hard stop.
 
 - [ ] **Step 3: Run the both-platform build gate**
@@ -1646,6 +1661,7 @@ Expected: every `compress::lz4::tests::lz4_*` and `compress::lz4_differential::l
 cargo build --workspace
 ssh rvm 'cd ~/projects/rustty && cargo build --workspace'
 ```
+
 Expected: both `Finished`.
 
 - [ ] **Step 4: Record the phase result**
@@ -1669,20 +1685,20 @@ git commit -m "vt/compress: phase A gate — wasm32 build + Miri lane green (WS7
 
 **Oracle commits, in upstream order:**
 
-| # | hash | subject | rustty task |
-|---|---|---|---|
-| 1 | `16e4b5e98` | terminal: track page ownership explicitly on pagelist nodes | B4 |
-| 2 | `f6fd4cb08` | terminal: generalize page memory reclamation | B1 |
-| 3 | `ebc3ffd22` | terminal: add compressed page representation | B2, B3 |
-| 4 | `421fe8dab` | terminal: integrate compressed pages into PageList | B5, B6 |
-| 5 | `9156ada16` | terminal: add cold-history compression pass | B7 |
-| 6 | `70e788f06` | terminal: add incremental scrollback compression | B8, B9 |
-| 7 | `e7969ed43` | terminal: make PageList compression self-contained | B3 (`clone_buf`), B8 |
-| 8 | `f8c217e55` | terminal: track pending scrollback compression | B8 |
-| 9 | `181254d36` | terminal: debounce compression by page activity | B8 |
-| 10 | `95685afd2` | terminal: compress offscreen scrollback history | B8 |
+| #   | hash        | subject                                                     | rustty task          |
+| --- | ----------- | ----------------------------------------------------------- | -------------------- |
+| 1   | `16e4b5e98` | terminal: track page ownership explicitly on pagelist nodes | B4                   |
+| 2   | `f6fd4cb08` | terminal: generalize page memory reclamation                | B1                   |
+| 3   | `ebc3ffd22` | terminal: add compressed page representation                | B2, B3               |
+| 4   | `421fe8dab` | terminal: integrate compressed pages into PageList          | B5, B6               |
+| 5   | `9156ada16` | terminal: add cold-history compression pass                 | B7                   |
+| 6   | `70e788f06` | terminal: add incremental scrollback compression            | B8, B9               |
+| 7   | `e7969ed43` | terminal: make PageList compression self-contained          | B3 (`clone_buf`), B8 |
+| 8   | `f8c217e55` | terminal: track pending scrollback compression              | B8                   |
+| 9   | `181254d36` | terminal: debounce compression by page activity             | B8                   |
+| 10  | `95685afd2` | terminal: compress offscreen scrollback history             | B8                   |
 
-Read each with `git -C /Users/gael/projects/ghostty show <hash>`. The **final** state of `oracle@main:src/terminal/PageList.zig` is the parity target for B5–B9 — port the end state, using the individual commits only to understand *why* a piece exists.
+Read each with `git -C /Users/gael/projects/ghostty show <hash>`. The **final** state of `oracle@main:src/terminal/PageList.zig` is the parity target for B5–B9 — port the end state, using the individual commits only to understand _why_ a piece exists.
 
 **Boundary with WS8/BL-2:** upstream `896aca499` ("return free-listed page memory to the OS") is BL-2, owned by WS8. It uses the same `mem.decommit(.zero, ...)` primitive this phase introduces. WS7 lands `mem.rs` and calls `decommit(.zero, ...)` from `destroy_node_ext` **only where `oracle@main:PageList.zig` `destroyNodeExt` does** (which already includes the BL-2 behavior in the final file). Do not port BL-2's benchmark/tests here; note in the commit message that BL-2's production hunk is subsumed and tell WS8 in `MAIN_PARITY.md` (Task E4).
 
@@ -1691,12 +1707,14 @@ Read each with `git -C /Users/gael/projects/ghostty show <hash>`. The **final** 
 ### Task B1: Retained-mapping reclamation (`mem.rs`)
 
 **Files:**
+
 - Create: `crates/rustty-vt/src/mem.rs`
 - Modify: `crates/rustty-vt/src/lib.rs`
 
 **Oracle:** `oracle@main:src/terminal/mem.zig` (222 lines, from `f6fd4cb08`).
 
 **Interfaces:**
+
 - Produces:
   - `pub enum DecommitMode { Zero, Strict }`
   - `pub fn can_reclaim(mode: DecommitMode) -> bool`
@@ -2045,9 +2063,11 @@ git commit -m "vt: generalize page memory reclamation via retained-mapping madvi
 ### Task B2: `Page::shallow_copy`
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/page_impl.rs` (next to `clone_buf`, ~line 804)
 
 **Interfaces:**
+
 - Produces: `pub fn shallow_copy(&self) -> Page` — a metadata-only copy that **aliases the same `memory_ptr`/`memory_len`** and is never `owned`.
 - Consumed by: B3 (`CompressedPage::init`, `restore`), B6 (`Node::restore`).
 
@@ -2143,12 +2163,14 @@ git commit -m "vt/page: shallow_copy for alias-preserving page metadata copies (
 ### Task B3: Compressed page representation
 
 **Files:**
+
 - Create: `crates/rustty-vt/src/compress/page.rs`
 - Modify: `crates/rustty-vt/src/compress.rs`
 
 **Oracle:** `oracle@main:src/terminal/compress/Page.zig` (398 lines: `ebc3ffd22` + `421fe8dab` + `e7969ed43`). Port the **final** file including `cloneBuf`.
 
 **Interfaces:**
+
 - Produces:
   - `pub struct CompressedPage { pub page: Page, pub encoded: Vec<u8> }`
   - `pub fn required_scratch(raw_len: usize) -> Result<usize, lz4::CompressError>`
@@ -2162,12 +2184,12 @@ git commit -m "vt/page: shallow_copy for alias-preserving page metadata copies (
 
 Create `crates/rustty-vt/src/compress/page.rs` with a `#[cfg(test)] mod tests` porting the oracle's four tests. Names:
 
-| oracle test | rustty test fn |
-|---|---|
-| `"compressed Page retained mapping round trip"` | `compressed_page_retained_mapping_round_trip` |
-| `"compressed Page requires the maximum useful scratch"` | `compressed_page_requires_the_maximum_useful_scratch` |
+| oracle test                                                  | rustty test fn                                             |
+| ------------------------------------------------------------ | ---------------------------------------------------------- |
+| `"compressed Page retained mapping round trip"`              | `compressed_page_retained_mapping_round_trip`              |
+| `"compressed Page requires the maximum useful scratch"`      | `compressed_page_requires_the_maximum_useful_scratch`      |
 | `"compressed Page rejects a representation without savings"` | `compressed_page_rejects_a_representation_without_savings` |
-| `"compressed Page can retry after malformed encoded data"` | `compressed_page_can_retry_after_malformed_encoded_data` |
+| `"compressed Page can retry after malformed encoded data"`   | `compressed_page_can_retry_after_malformed_encoded_data`   |
 
 The round-trip test is the load-bearing one; write it exactly:
 
@@ -2536,12 +2558,14 @@ git commit -m "vt/compress: compressed page representation retaining its mapping
 ### Task B4: Explicit page ownership on pagelist nodes
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/pagelist/mod.rs` (`Node`, `create_page`/`init_pages` sites, `destroy_node_ext:1484-1512`)
 - Modify: `crates/rustty-vt/src/pagelist/grow.rs`, `resize.rs`, `access.rs` (every node-construction site)
 
 **Oracle:** `16e4b5e98` "terminal: track page ownership explicitly on pagelist nodes" (209 insertions / 72 deletions, `PageList.zig` only).
 
 **Interfaces:**
+
 - Produces: `pub enum Owned { Pool, Heap }` and `Node.owned: Owned` (no `Default` — every construction site must decide explicitly, exactly as the oracle requires).
 - Consumed by: B6 (`destroy_node_ext` restore/free), B9 (`memory_stats`).
 
@@ -2619,6 +2643,7 @@ pub struct Node {
 ```
 
 Then:
+
 1. `grep -rn 'Node {' crates/rustty-vt/src/pagelist/` and add `owned: Owned::Pool` or `owned: Owned::Heap` at every construction. The rule is: the site that called `pool.pages.create()` sets `Pool`; the site that called the direct page-allocator path (`alloc_non_standard_page` / `free_non_standard_page`) sets `Heap`.
 2. Rewrite `destroy_node_ext` (`pagelist/mod.rs:1484`) to switch on `owned` instead of on the length:
 
@@ -2682,6 +2707,7 @@ git commit -m "vt/pagelist: track page ownership explicitly on nodes (WS7 B4, or
 ### Task B5: Node access indirection (mechanical retarget)
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/pagelist/mod.rs` (add accessors)
 - Modify: every file with a `(*node).data` / `node.data` access — 612 non-test sites across
   `crates/rustty-vt/src/pagelist/{access,erase,grow,iter,mod,pin,resize,scroll}.rs`,
@@ -2690,6 +2716,7 @@ git commit -m "vt/pagelist: track page ownership explicitly on nodes (WS7 B4, or
   plus `crates/rustty-vt-c/src/{grid_ref.rs,grid_ref_tracked.rs}` and `crates/rustty-inspector/src/widgets/{page,pagelist}.rs`.
 
 **Interfaces:**
+
 - Produces (all on `Node`, all raw-self per the port's aliasing discipline):
 
 ```rust
@@ -2729,6 +2756,7 @@ No new test. The gate for this task is that the **existing** suite passes with z
 ```bash
 cargo test -p rustty-vt --lib 2>&1 | tail -3 > /tmp/ws7-b5-before.txt
 ```
+
 Record the baseline (`N passed; 0 failed`) before touching anything.
 
 - [ ] **Step 2: Add the accessors (still over a plain `Page` field)**
@@ -2800,12 +2828,12 @@ pub struct Node {
 
 Then `cargo check --workspace --all-targets` and fix every error, choosing per site using **exactly** the oracle's choice at the corresponding line in `oracle@main:src/terminal/PageList.zig` / `Screen.zig` / `Terminal.zig`:
 
-| Call-site shape | Replacement |
-|---|---|
-| Reads/writes page **contents** (cells, rows, styles, graphemes, memory) | `Node::page(node)` |
-| Already holds a live pointer INTO the page mapping (hot loops in `iter.rs`, `render.rs`, `screen.rs` row walks) | `Node::page_assume_resident(node)` |
-| Only reads `size.rows` / `size.cols` / `capacity` | `Node::rows(node)` / `Node::cols(node)` / `Node::capacity(node)` |
-| Diagnostics that may skip a non-resident page | `Node::page_if_resident(node)` |
+| Call-site shape                                                                                                 | Replacement                                                      |
+| --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Reads/writes page **contents** (cells, rows, styles, graphemes, memory)                                         | `Node::page(node)`                                               |
+| Already holds a live pointer INTO the page mapping (hot loops in `iter.rs`, `render.rs`, `screen.rs` row walks) | `Node::page_assume_resident(node)`                               |
+| Only reads `size.rows` / `size.cols` / `capacity`                                                               | `Node::rows(node)` / `Node::cols(node)` / `Node::capacity(node)` |
+| Diagnostics that may skip a non-resident page                                                                   | `Node::page_if_resident(node)`                                   |
 
 **Decision rule when the oracle is ambiguous:** default to `Node::page`. `page_assume_resident` is an optimization that is only correct where the caller has independently established residency; using it wrongly is UB after B6. The oracle uses it in exactly the places `421fe8dab` introduced it — diff that commit for the list.
 
@@ -2817,6 +2845,7 @@ cargo test -p rustty-vt-c --lib 2>&1 | tail -3
 cargo check --workspace --all-targets
 cargo build --workspace
 ```
+
 Expected: the `rustty-vt` count is **identical** to `/tmp/ws7-b5-before.txt`. Not "similar" — identical.
 
 - [ ] **Step 5: Commit**
@@ -2831,11 +2860,13 @@ git commit -m "vt/pagelist: route page access through Node accessors (WS7 B5, no
 ### Task B6: Two-state node storage + restore + `PreservedPage`
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/pagelist/mod.rs`
 
 **Oracle:** `421fe8dab` "terminal: integrate compressed pages into PageList" — specifically the `Node` block in `oracle@main:src/terminal/PageList.zig:46-292`.
 
 **Interfaces:**
+
 - Produces:
   - `pub enum NodeData { Resident(Page), Compressed(CompressedPage) }` (the new type of `Node.data`)
   - `pub enum Storage { Resident, Compressed }`
@@ -3138,6 +3169,7 @@ Also update `destroy_node_ext` from B4 to begin with `let page = Node::restore(n
 cargo test -p rustty-vt --lib
 cargo build --workspace
 ```
+
 Expected: PASS, count = B5 baseline + 2.
 
 - [ ] **Step 5: Commit**
@@ -3152,12 +3184,14 @@ git commit -m "vt/pagelist: two-state node storage with retained-mapping restore
 ### Task B7: `compress_page` primitive + full pass
 
 **Files:**
+
 - Create: `crates/rustty-vt/src/pagelist/compress.rs`
 - Modify: `crates/rustty-vt/src/pagelist/mod.rs` (`pub mod compress;`)
 
 **Oracle:** `9156ada16` "terminal: add cold-history compression pass" plus the final `CompressionScratch`, `CompressionIterator`, `compress_page`, `compress_full` sections of `oracle@main:src/terminal/PageList.zig:3940-4300`.
 
 **Interfaces:**
+
 - Produces:
   - `enum CompressionScratch { Pooled(*mut u8), Allocated { ptr: *mut u8, len: usize } }` with `init(pool, required, raw_len)`, `bytes(&mut self) -> &mut [u8]`, `deinit(self, pool)`
   - `struct CompressionIterator { current, active, viewport_first, viewport_last }` with `init(&PageList)`, `next() -> Option<*mut Node>`, `done() -> bool`
@@ -3255,6 +3289,7 @@ Expected: FAIL — `no method named compress_page found for struct PageList`
 - [ ] **Step 3: Write minimal implementation**
 
 Create `crates/rustty-vt/src/pagelist/compress.rs` porting, in order:
+
 1. `CompressionScratch` — `oracle@main:PageList.zig:3940-3990`. Pooled scratch borrows a page-pool item (`pool.pages.create()` + `mem::recommit`); oversized scratch allocates directly from the page-backing allocator. `deinit` decommits (`DecommitMode::Zero`) the pooled item before returning it.
 2. `CompressionIterator` — `oracle@main:PageList.zig:4066-4110`. Iterates complete historical pages that do not intersect the viewport, never restoring anything (it uses only `Node::metadata`-level information and the list links).
 3. `compress_page` — `oracle@main:PageList.zig:4290-4370`. The exact order is load-bearing and must be reproduced:
@@ -3352,6 +3387,7 @@ git commit -m "vt/pagelist: cold-history compression pass and compressPage primi
 ### Task B8: Incremental compression scheduling
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/pagelist/compress.rs`
 - Modify: `crates/rustty-vt/src/pagelist/mod.rs` (new `page_compression` field; `mark_activity` calls)
 - Modify: `crates/rustty-vt/src/pagelist/{grow,resize,scroll,erase}.rs` (mutation sites that call `mark_activity` / `reset`)
@@ -3359,6 +3395,7 @@ git commit -m "vt/pagelist: cold-history compression pass and compressPage primi
 **Oracle:** the final `IncrementalCompressionState`, `IncrementalCompressionResult`, `compress`, `compress_incremental` in `oracle@main:src/terminal/PageList.zig:3991-4275`, plus the `page_compression.markActivity()` / `page_compression.reset()` call sites at `:903-907, :1228-1232, :2833, :3236, :3312, :3533, :3840`.
 
 **Interfaces:**
+
 - Produces:
   - `pub struct IncrementalCompressionState { flags: { did_compress, verifying }, activity_serial: u64 /* 48 bits used */, last_serial: Option<u64>, next_serial: u64 }` with `mark_activity()` and `reset()`
   - `pub enum CompressionMode { Incremental, Drain, Full }`
@@ -3458,6 +3495,7 @@ Expected: FAIL — `cannot find type CompressionMode in this scope`
 - [ ] **Step 3: Write minimal implementation**
 
 Port, verbatim in structure, from `oracle@main:src/terminal/PageList.zig`:
+
 - `IncrementalCompressionState` (`:3991-4051`) — including the doc comments explaining why the cursor is a **serial**, not a node pointer, and why `next_serial` exists.
 - `IncrementalCompressionResult` (`:4053-4065`).
 - `INCREMENTAL_COMPRESSION_MAX_INSPECTED = 8` (`:4177`).
@@ -3472,13 +3510,16 @@ Add the field to `PageList` in `mod.rs`:
     /// on `IncrementalCompressionState`.
     pub page_compression: IncrementalCompressionState,
 ```
+
 initialized `IncrementalCompressionState::default()` in `init` and `clone`.
 
 Then add the `mark_activity` / `reset` calls at every mutation site the oracle marks. Find them with:
+
 ```bash
 git -C /Users/gael/projects/ghostty show origin/main:src/terminal/PageList.zig \
   | grep -n 'page_compression\.'
 ```
+
 and map each Zig line to the corresponding rustty function by name (`reset` → `PageList::reset`, `resize` → `pagelist/resize.rs`, `eraseHistory` → `pagelist/erase.rs`, `grow`/`adjustCapacity`/`compact` → `pagelist/grow.rs`, `scrollClear` → `pagelist/scroll.rs`). **Every one of the 8 sites must be ported** — a missing `mark_activity` means the renderer stops scheduling compression after that operation, which no test in this suite would catch.
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -3486,6 +3527,7 @@ and map each Zig line to the corresponding rustty function by name (`reset` → 
 ```bash
 cargo test -p rustty-vt --lib pagelist
 ```
+
 Expected: PASS — 4 new tests plus the full existing suite.
 
 - [ ] **Step 5: Commit**
@@ -3500,11 +3542,13 @@ git commit -m "vt/pagelist: incremental scrollback compression with activity deb
 ### Task B9: `memory_stats`
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/pagelist/compress.rs`
 
 **Oracle:** `oracle@main:src/terminal/PageList.zig:6111-6180` (`MemoryStats`, `memoryStats`).
 
 **Interfaces:**
+
 - Produces:
   - `#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)] pub struct MemoryStats { pub resident_pages, pub compressed_pages, pub raw_bytes, pub resident_raw_bytes, pub decommitted_raw_bytes, pub resident_backing_bytes, pub encoded_bytes: usize }`
   - `impl MemoryStats { pub fn estimated_resident_bytes(&self) -> usize; pub fn estimated_savings(&self) -> usize }`
@@ -3577,6 +3621,7 @@ git commit -m "vt/pagelist: metadata-only memory stats for compressed pages (WS7
 cargo test -p rustty-vt --lib
 cargo test -p rustty-vt --lib --release
 ```
+
 Expected: PASS both. The release run matters: `std_size()` differs between the `cfg(test)` debug geometry and release, so the compression break-even math is exercised at both page sizes.
 
 - [ ] **Step 2: Both-platform build**
@@ -3586,6 +3631,7 @@ cargo check --workspace --all-targets
 cargo build --workspace
 ssh rvm 'cd ~/projects/rustty && cargo check --workspace --all-targets && cargo build --workspace'
 ```
+
 Expected: all `Finished`. The Linux leg is the one that exercises the `MADV_DONTNEED` arm of `mem::decommit`.
 
 `--all-targets` is NOT optional and is the reason this step is spelled with
@@ -3600,6 +3646,7 @@ how three residual sites (`rustty-vt/examples/rss_probe.rs`, and BOTH
 ```bash
 ssh rvm 'cd ~/projects/rustty && cargo test -p rustty-vt --lib pagelist_compress --release'
 ```
+
 Expected: PASS. (Still the `cfg(test)` simulated path — the real `madvise` arms are exercised by the D8 bench in Phase E.)
 
 - [ ] **Step 4: Acyclic gate**
@@ -3607,6 +3654,7 @@ Expected: PASS. (Still the `cfg(test)` simulated path — the real `madvise` arm
 ```bash
 bash .port/tools/gates/check_acyclic.sh
 ```
+
 Expected: PASS — `rustty-vt` gained no new crate edges (`compress` and `mem` are internal modules).
 
 - [ ] **Step 5: Commit**
@@ -3623,31 +3671,31 @@ git commit --allow-empty -m "vt: phase B gate — compression integrated, both p
 
 **Requires Phase B** (`Node::storage`, `Node::page_preserving_state`, `page_compression`).
 
-This is upstream PR **#13282** ("update page serial to be treated as a generation marker (correctness)", merge `53bd14fec`) plus the four search fixes from #13275 that depend on it. The problem it solves: a cached `(node pointer, serial)` pair could survive a page *replacement* — the pointer is reused from the pool and the serial is stale-but-plausible — so search results, selections, and flattened highlights could point at rows that no longer mean what they meant.
+This is upstream PR **#13282** ("update page serial to be treated as a generation marker (correctness)", merge `53bd14fec`) plus the four search fixes from #13275 that depend on it. The problem it solves: a cached `(node pointer, serial)` pair could survive a page _replacement_ — the pointer is reused from the pool and the serial is stale-but-plausible — so search results, selections, and flattened highlights could point at rows that no longer mean what they meant.
 
-rustty already has `Node.serial` and `PageList.page_serial` / `page_serial_min` (ported at the pin). This phase (a) renames the floor to *epoch* with the oracle's exact semantics, (b) adds `renew_generation` at every layout-changing site, (c) adds `node_is_valid`, and (d) ports the seven search/render consumers.
+rustty already has `Node.serial` and `PageList.page_serial` / `page_serial_min` (ported at the pin). This phase (a) renames the floor to _epoch_ with the oracle's exact semantics, (b) adds `renew_generation` at every layout-changing site, (c) adds `node_is_valid`, and (d) ports the seven search/render consumers.
 
 **Oracle commits, in upstream order:**
 
-| # | hash | subject | task |
-|---|---|---|---|
-| 1 | `d239f9805` | terminal/search: drop pruned selections | C6 |
-| 2 | `5d8eb78b7` | terminal/search: reset pins while feeding | C6 |
-| 3 | `86e1f7b8b` | terminal/search: reject replaced result pages | C6 |
-| 4 | `73ac36fa5` | terminal/search: discard destroyed screen state | C6 |
-| 5 | `f1a5fab45` | terminal: keep page serial floor conservative | C3 |
-| 6 | `a804e3ac7` | terminal: invalidate partially erased page refs | C3 |
-| 7 | `91a63e528` | terminal: invalidate split source page refs | C3 |
-| 8 | `83aada205` | terminal/search: preserve serial order in reverse matches | C5 |
-| 9 | `c243d89bd` | terminal/search: include generations in viewport fingerprints | C7 |
-| 10 | `a89c6133c` | terminal/search: validate history before reload | C7 |
-| 11 | `d0a26d146` | terminal: reschedule compression after page replacement | C4 |
-| 12 | `dd956f37c` | terminal: renew generations for shifted rows | C2 |
-| 13 | `f6d9a582e` | terminal: rename page serial floor as epoch | C1 |
-| 14 | `0bad91adb` | terminal: renew generations for direct row shifts | C2 |
-| 15 | `89eca063e` | terminal/search: avoid pruning history on reload | C7 |
-| 16 | `c9ad708ef` | terminal: validate flattened highlight generations | C7 |
-| 17 | `0d015b2fc` | terminal: preserve compressed pages during search | C5 |
+| #   | hash        | subject                                                       | task |
+| --- | ----------- | ------------------------------------------------------------- | ---- |
+| 1   | `d239f9805` | terminal/search: drop pruned selections                       | C6   |
+| 2   | `5d8eb78b7` | terminal/search: reset pins while feeding                     | C6   |
+| 3   | `86e1f7b8b` | terminal/search: reject replaced result pages                 | C6   |
+| 4   | `73ac36fa5` | terminal/search: discard destroyed screen state               | C6   |
+| 5   | `f1a5fab45` | terminal: keep page serial floor conservative                 | C3   |
+| 6   | `a804e3ac7` | terminal: invalidate partially erased page refs               | C3   |
+| 7   | `91a63e528` | terminal: invalidate split source page refs                   | C3   |
+| 8   | `83aada205` | terminal/search: preserve serial order in reverse matches     | C5   |
+| 9   | `c243d89bd` | terminal/search: include generations in viewport fingerprints | C7   |
+| 10  | `a89c6133c` | terminal/search: validate history before reload               | C7   |
+| 11  | `d0a26d146` | terminal: reschedule compression after page replacement       | C4   |
+| 12  | `dd956f37c` | terminal: renew generations for shifted rows                  | C2   |
+| 13  | `f6d9a582e` | terminal: rename page serial floor as epoch                   | C1   |
+| 14  | `0bad91adb` | terminal: renew generations for direct row shifts             | C2   |
+| 15  | `89eca063e` | terminal/search: avoid pruning history on reload              | C7   |
+| 16  | `c9ad708ef` | terminal: validate flattened highlight generations            | C7   |
+| 17  | `0d015b2fc` | terminal: preserve compressed pages during search             | C5   |
 
 **Binding rule for this whole phase:** port each commit's **test hunks** along with its production hunk (MAIN_PARITY doctrine, verbatim: "ALSO port the test hunks from the same commit"). The oracle test names are listed per task; each becomes a rustty test named `<subject>_<zig name in snake_case>`.
 
@@ -3656,16 +3704,18 @@ rustty already has `Node.serial` and `PageList.page_serial` / `page_serial_min` 
 ### Task C1: Rename the serial floor to an epoch
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/pagelist/mod.rs` (`page_serial_min` at `:552`, `:932`, `:1138`, `:1257`)
 - Modify: `crates/rustty-vt/src/search/screen.rs` (`:565-566`)
 
 **Oracle:** `f6d9a582e` (137-line `PageList.zig` diff + 16 lines in `search/screen.zig`). The final field doc is `oracle@main:src/terminal/PageList.zig:382-392`.
 
 **Interfaces:**
+
 - Produces: `PageList.page_serial_epoch: u64` (replacing `page_serial_min`), with the oracle's semantics:
   - Only `reset` advances it.
   - A generation **below** the epoch is definitely invalid → O(1) rejection.
-  - A generation **at or above** the epoch is only *potentially* valid and must still be verified against the live list.
+  - A generation **at or above** the epoch is only _potentially_ valid and must still be verified against the live list.
   - Generations are **not monotonic in list order**: replacement and split operations can put a fresh generation before older live pages. (This is the whole reason the field is an epoch and not a minimum.)
 - Consumed by: C2's `node_is_valid`, C3, C7.
 
@@ -3750,6 +3800,7 @@ git commit -m "vt/pagelist: rename page serial floor as epoch (WS7 C1, oracle f6
 ### Task C2: `renew_generation` + `node_is_valid`
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/pagelist/mod.rs` (new methods; `:3122-3165` and `:5023-5041` in the oracle)
 - Modify: `crates/rustty-vt/src/pagelist/erase.rs` (`erase_row`, `erase_row_bounded`, trailing-row truncation)
 - Modify: `crates/rustty-vt/src/screen.rs`, `crates/rustty-vt/src/terminal.rs` (direct row-shift paths)
@@ -3757,7 +3808,9 @@ git commit -m "vt/pagelist: rename page serial floor as epoch (WS7 C1, oracle f6
 **Oracle:** `dd956f37c` (62 lines, PageList only) and `0bad91adb` (PageList 4, Screen 51, Terminal 45). Final form: `oracle@main:src/terminal/PageList.zig:3122-3165` (`renewGeneration`) and `:5023-5041` (`nodeIsValid`).
 
 **Interfaces:**
+
 - Produces:
+
 ```rust
 impl PageList {
     /// Give a live node a new generation before changing its coordinate layout.
@@ -3785,6 +3838,7 @@ impl PageList {
     pub fn node_is_valid(&self, target: *const Node, serial: u64) -> bool;
 }
 ```
+
 - Consumed by: C3, C4, C5, C6, C7.
 
 **Where `renew_generation` must be called** (from `dd956f37c` + `0bad91adb`): every place that shifts rows within a live page or truncates trailing rows without replacing the page — `PageList::erase_row`, `PageList::erase_row_bounded`, the trailing-row truncation in `erase_rows`, `Screen::cursor_scroll_region_up` and its siblings, and the `Terminal` scroll-region paths the oracle touches. Diff both commits and port site-for-site.
@@ -3896,17 +3950,20 @@ git commit -m "vt/pagelist: renew page generations for shifted rows + nodeIsVali
 ### Task C3: Invalidate split / partially-erased page refs; keep the floor conservative
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/pagelist/{mod,erase,grow,resize}.rs`
 - Modify: `crates/rustty-vt/src/search/screen.rs` (the two `select after ...` tests)
 
 **Oracle:** `91a63e528` (35 lines), `a804e3ac7` (78 lines PageList + 33 search/screen), `f1a5fab45` (183 lines PageList — the biggest of the three).
 
 **What each does:**
-- `91a63e528`: splitting a page leaves the *source* node holding rows that moved. Call `renew_generation` on the source so any cached reference to it is rejected.
+
+- `91a63e528`: splitting a page leaves the _source_ node holding rows that moved. Call `renew_generation` on the source so any cached reference to it is rejected.
 - `a804e3ac7`: a partial erase shifts rows within a page without replacing it. Same treatment, plus it must **restart the compression continuation** (the cursor's serial no longer exists).
-- `f1a5fab45`: bounded pruning previously advanced the serial floor to the first live node's serial. That is wrong once generations are non-monotonic — a fresh generation can sit *before* older live pages, so advancing the floor would invalidate live references. Keep the floor conservative: only `reset` moves it.
+- `f1a5fab45`: bounded pruning previously advanced the serial floor to the first live node's serial. That is wrong once generations are non-monotonic — a fresh generation can sit _before_ older live pages, so advancing the floor would invalidate live references. Keep the floor conservative: only `reset` moves it.
 
 **Interfaces:**
+
 - Consumes: `renew_generation`, `node_is_valid`, `page_compression.reset()`.
 - Produces: no new public API — this is behavior on existing methods.
 
@@ -3957,6 +4014,7 @@ fn pagelist_bounded_pruning_after_split_invalidation_preserves_live_serials() {
 ```
 
 In `search/screen.rs` tests:
+
 - `search_screen_select_after_history_page_split_ignores_moved_results` (from `91a63e528`)
 - `search_screen_select_after_partial_history_page_erase_ignores_shifted_results` (from `a804e3ac7`)
 
@@ -3986,15 +4044,17 @@ git commit -m "vt/pagelist: invalidate split/partially-erased page refs; conserv
 ### Task C4: Reschedule compression after page replacement
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/pagelist/{grow,resize}.rs` (every page-replacement site)
 
 **Oracle:** `d0a26d146` (30 lines, PageList only).
 
 **Interfaces:**
+
 - Consumes: `page_compression.reset()`, `page_compression.mark_activity()`.
 - Produces: no new API.
 
-**Why:** replacing a node (e.g. `increase_capacity`) destroys the node the incremental cursor's `last_serial` names. Without a `reset()` + `mark_activity()`, the incremental pass silently restarts from the beginning *without* the scheduler knowing there is work — so compression stalls until the next unrelated mutation.
+**Why:** replacing a node (e.g. `increase_capacity`) destroys the node the incremental cursor's `last_serial` names. Without a `reset()` + `mark_activity()`, the incremental pass silently restarts from the beginning _without_ the scheduler knowing there is work — so compression stalls until the next unrelated mutation.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -4053,6 +4113,7 @@ git commit -m "vt/pagelist: reschedule compression after page replacement (WS7 C
 ### Task C5: Search reads compressed history without decompressing it
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/search/sliding_window.rs` (`Meta`, `append`, `flatten`)
 - Modify: `crates/rustty-vt/src/search/pagelist.rs` (`PageListSearch::feed`)
 - Modify: `crates/rustty-vt/src/search/viewport.rs`, `active.rs` (call-site updates)
@@ -4060,7 +4121,9 @@ git commit -m "vt/pagelist: reschedule compression after page replacement (WS7 C
 **Oracle:** `0d015b2fc` "terminal: preserve compressed pages during search" (153 insertions) and `83aada205` "terminal/search: preserve serial order in reverse matches" (11 lines, `sliding_window.zig`).
 
 **Interfaces:**
+
 - Produces:
+
 ```rust
 /// Information copied from a page while appending it to the window.
 ///
@@ -4078,6 +4141,7 @@ impl SlidingWindow {
     pub fn append(&mut self, node: *mut Node) -> Result<AppendResult, OutOfMemory>;
 }
 ```
+
 - `SlidingWindow::Meta` gains `pub rows: size::CellCountInt` — a **copy** of the page's row count taken while the preserved page is alive, so `flatten` never dereferences a node after the terminal lock is released.
 - `PageListSearch::feed` becomes `rem -= self.window.append(node)?.content_len;`.
 - `83aada205`: in the reverse-match path, `flatten` must use a snapshotted `cross_page_end_rows` (captured while walking `Meta`) instead of `nodes[0].rows()`.
@@ -4177,6 +4241,7 @@ Expected: FAIL — the final `Storage::Compressed` assertions fail, because `app
 - [ ] **Step 3: Write minimal implementation**
 
 Port `0d015b2fc` + `83aada205`:
+
 1. `SlidingWindow::append` obtains the page with `Node::page_preserving_state(node)`, formats through it, copies `rows` and `last_row_wrapped` into the returned `AppendResult` and the stored `Meta`, then `deinit()`s the preserved page.
 2. `Meta` gains `rows`; the two `meta.node.rows()` sites in `flatten` become `meta.rows`.
 3. Snapshot `cross_page_end_rows` while traversing `Meta` and use it in the reverse cross-page fixup instead of `nodes[0].rows()`.
@@ -4199,23 +4264,25 @@ git commit -m "vt/search: read compressed history through preserved page snapsho
 ### Task C6: Search rejects destroyed / replaced / pruned state
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/search/{thread,screen,pagelist}.rs`
 - Modify: `crates/rustty-vt/src/pagelist/mod.rs` (`86e1f7b8b` adds 18 lines to `PageList.zig`)
 
 **Oracle:** `d239f9805` (39), `5d8eb78b7` (31), `86e1f7b8b` (18 PageList + 69 search/screen), `73ac36fa5` (100 search/Thread + 7 search/pagelist + 23 search/screen).
 
 **Interfaces:**
+
 - Consumes: `PageList::node_is_valid`.
 - Produces: no new public API in `rustty-vt`'s exported surface; each fix is a guard on an existing search path.
 
 **Oracle tests to port (names → rustty test fns in `search/screen.rs` / `search/pagelist.rs`):**
 
-| oracle test | rustty test fn |
-|---|---|
+| oracle test                                                                   | rustty test fn                                                              |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | `"select after partial history erase drops a pruned selection"` (`d239f9805`) | `search_screen_select_after_partial_history_erase_drops_a_pruned_selection` |
-| `"feed keeps its tracked pin within a shorter page"` (`5d8eb78b7`) | `search_pagelist_feed_keeps_its_tracked_pin_within_a_shorter_page` |
-| `"select after history compaction ignores replaced results"` (`86e1f7b8b`) | `search_screen_select_after_history_compaction_ignores_replaced_results` |
-| `"select after active screen removal"` (`73ac36fa5`) | `search_screen_select_after_active_screen_removal` |
+| `"feed keeps its tracked pin within a shorter page"` (`5d8eb78b7`)            | `search_pagelist_feed_keeps_its_tracked_pin_within_a_shorter_page`          |
+| `"select after history compaction ignores replaced results"` (`86e1f7b8b`)    | `search_screen_select_after_history_compaction_ignores_replaced_results`    |
+| `"select after active screen removal"` (`73ac36fa5`)                          | `search_screen_select_after_active_screen_removal`                          |
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -4229,6 +4296,7 @@ Expected: FAIL — 4 tests, each with a stale/out-of-range coordinate assertion.
 - [ ] **Step 3: Write minimal implementation**
 
 Port the four production hunks:
+
 - `d239f9805`: drop a selection whose result pages were pruned.
 - `5d8eb78b7`: reset the feed's tracked pin when the page it lands on shrank.
 - `86e1f7b8b`: reject a result whose page was replaced — this is where `PageList::node_is_valid` gets its first real caller; the 18-line `PageList.zig` hunk is a helper this needs.
@@ -4251,22 +4319,24 @@ git commit -m "vt/search: reject destroyed, replaced and pruned result state (WS
 ### Task C7: Generation-aware fingerprints, reload, and highlight flattening
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/search/viewport.rs` (`c243d89bd`)
 - Modify: `crates/rustty-vt/src/search/screen.rs` (`a89c6133c`, `89eca063e`)
 - Modify: `crates/rustty-vt/src/render.rs` (`c9ad708ef` — 125-line `render.zig` diff)
 
 **Oracle tests to port:**
 
-| oracle test | rustty test fn |
-|---|---|
-| `"fingerprint detects node generation changes"` (`c243d89bd`) | `search_viewport_fingerprint_detects_node_generation_changes` |
+| oracle test                                                                             | rustty test fn                                                                        |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `"fingerprint detects node generation changes"` (`c243d89bd`)                           | `search_viewport_fingerprint_detects_node_generation_changes`                         |
 | `"reload after partial history page erase drops shifted selection first"` (`a89c6133c`) | `search_screen_reload_after_partial_history_page_erase_drops_shifted_selection_first` |
-| `"reload defers pruning unselected history results"` (`89eca063e`) | `search_screen_reload_defers_pruning_unselected_history_results` |
-| `"flattened highlights require matching page serial"` (`c9ad708ef`) | `render_flattened_highlights_require_matching_page_serial` |
+| `"reload defers pruning unselected history results"` (`89eca063e`)                      | `search_screen_reload_defers_pruning_unselected_history_results`                      |
+| `"flattened highlights require matching page serial"` (`c9ad708ef`)                     | `render_flattened_highlights_require_matching_page_serial`                            |
 
 **Interfaces:**
+
 - `c243d89bd`: the viewport fingerprint must include each node's **generation**, not just its pointer and row count. Add the serial to the fingerprint tuple; `viewport.rs` already stores per-node fingerprint entries.
-- `a89c6133c` / `89eca063e`: reload must validate the history *before* pruning, and must **defer** pruning results that are merely unselected (pruning them on reload loses results a user could still reach).
+- `a89c6133c` / `89eca063e`: reload must validate the history _before_ pruning, and must **defer** pruning results that are merely unselected (pruning them on reload loses results a user could still reach).
 - `c9ad708ef`: `render::Flattened` gains a per-chunk serial check — a flattened highlight whose chunk serial no longer matches its node is dropped rather than drawn at a stale coordinate.
 
 - [ ] **Step 1: Write the failing tests**
@@ -4304,6 +4374,7 @@ git commit -m "vt: generation-aware search fingerprints, reload and highlight fl
 cargo test -p rustty-vt --lib
 cargo test -p rustty-vt --lib --release
 ```
+
 Expected: PASS both.
 
 - [ ] **Step 2: Both-platform build**
@@ -4318,6 +4389,7 @@ ssh rvm 'cd ~/projects/rustty && cargo build --workspace'
 ```bash
 bash .port/tools/miri-run.sh rustty-vt search 6 45 15
 ```
+
 Expected: the UB set is **exactly** the 9 pre-existing `search/screen` tests recorded in `.port/phase-2/MIRI_EXCEPTIONS.md` (memory: `search-screen-sb-ub-finding`). **Any new UB name is a WS7 regression and a hard stop** — fix it here, do not add it to the exceptions file.
 
 - [ ] **Step 4: Commit**
@@ -4341,12 +4413,15 @@ git commit --allow-empty -m "vt: phase C gate — generation stamps + search int
 ### Task D1: `Terminal` compression API
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/terminal.rs`
 
 **Oracle:** `oracle@main:src/terminal/Terminal.zig:2541-2605` (final form of `f8c217e55` + `181254d36` + `172f15da3`).
 
 **Interfaces:**
+
 - Produces:
+
 ```rust
 /// The amount of compression work performed by `compress` before returning.
 ///
@@ -4392,6 +4467,7 @@ impl Terminal {
     pub fn compress(&mut self, mode: TerminalCompressionMode) -> TerminalCompressionResult;
 }
 ```
+
 - `compression_activity` reads `self.screens.get(Primary).pages.page_compression.activity_serial` and composes `Terminal`'s reserved high 16 bits exactly as `oracle@main:Terminal.zig:2555-2560` does (read those six lines — the composition is not guessable).
 - Consumed by: D3 (renderer scheduling), D5 (C API).
 
@@ -4468,12 +4544,14 @@ git commit -m "vt/terminal: compression activity token and compress scheduling A
 ### Task D2: `scrollback-compression` config option
 
 **Files:**
+
 - Modify: `crates/rustty-config/src/config_struct.rs` (field at `:2317`, default at `:4941`, `Key` at `:7449`, `cv!` at `:7736`, formatter at `:8497`)
 - Modify: `crates/rustty-config/src/config-template/` (if the template enumerates options — grep for `scrollback-limit` there)
 
 **Oracle:** `0fb89f4ff` "terminal: configure scrollback compression" — `Config.zig` hunk only (the `renderer/Thread.zig` hunk is D3).
 
 **Interfaces:**
+
 - Produces: `Config.scrollback_compression: bool` (default `true`), `Key::ScrollbackCompression`, and the `scrollback-limit` default raised from `10_000_000` to `50_000_000`.
 - Doc comment: port the oracle's verbatim (with R2 renaming `Ghostty`→`Rustty`), including the "70% to 90% reduction", "virtual memory does not decrease", and "already-compressed pages remain compressed" paragraphs, and the amended `scrollback-limit` doc.
 
@@ -4517,6 +4595,7 @@ Add the field, default, `Key` variant, comparison macro entry and formatter entr
 ```bash
 cargo test -p rustty-config --lib
 ```
+
 Expected: PASS. **Note:** raising the `scrollback-limit` default will break any test that asserts `10_000_000`; those assertions must be updated to `50_000_000` (the oracle did the same), not the default reverted.
 
 - [ ] **Step 5: Commit**
@@ -4531,6 +4610,7 @@ git commit -m "config: scrollback-compression option; raise scrollback-limit def
 ### Task D3: Renderer-thread compression scheduling
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/src/config.rs` (`RendererConfig` trait + `DerivedConfig`)
 - Modify: `crates/rustty-config/src/config_struct.rs` (the `impl RendererConfig for Config` block — memory: `renderer-config-accessor-trait-acyclic`)
 - Modify: `crates/rustty-renderer/src/thread.rs`
@@ -4538,6 +4618,7 @@ git commit -m "config: scrollback-compression option; raise scrollback-limit def
 **Oracle:** `461562ca4` (renderer/Thread.zig +157), `0fb89f4ff` (Thread.zig +20), `181254d36` (Thread.zig 253-line rewrite — this is the final shape), `25e624569` (Thread.zig +8), `95685afd2` (Thread.zig -1). Read the **final** `oracle@main:src/renderer/Thread.zig` `Compression` struct at `:758-870` plus its call sites at `:77-78, :119-124, :189-192, :207-208, :513-518, :567-569`.
 
 **Interfaces:**
+
 - `RendererConfig` gains `fn scrollback_compression(&self) -> bool;` (the accessor-trait pattern — the renderer must never name a config type).
 - `DerivedConfig` gains `pub scrollback_compression: bool`.
 - New private struct in `thread.rs`:
@@ -4569,6 +4650,7 @@ impl Compression {
     fn step(&mut self, thread: *mut Thread) -> Option<u64>;
 }
 ```
+
 - `Thread` gains `compression: Compression`, gated on `rustty_vt::compression_enabled()` at `init`/`deinit`/`wake` exactly where the oracle writes `if (comptime terminalpkg.compression_enabled)`.
 - `change_config` must clear `self.compression.activity = None` when the option transitions **disabled → enabled**, so a fresh idle pass starts (oracle `:513-518`).
 - `25e624569`: the render wake path must not starve compression — port the 8-line guard verbatim.
@@ -4620,6 +4702,7 @@ Port the `Compression` struct and every call site from the final `oracle@main:sr
 cargo test -p rustty-renderer --lib
 cargo build --workspace
 ```
+
 Expected: PASS / `Finished`.
 
 - [ ] **Step 5: Commit**
@@ -4634,6 +4717,7 @@ git commit -m "renderer: schedule idle scrollback compression, debounced by acti
 ### Task D4: Renderer state mutex handoff
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/src/state.rs`
 - Modify: `crates/rustty-renderer/src/generic.rs`
 - Modify: `crates/rustty-termio/src/exec.rs`
@@ -4643,7 +4727,9 @@ git commit -m "renderer: schedule idle scrollback compression, debounced by acti
 **Independently executable** — this fix is about mutex fairness under heavy pty output; it is bundled into BL-1 because compression made the starvation visible, but it has no compression dependency.
 
 **Interfaces:**
+
 - Produces on `renderer::State`:
+
 ```rust
     /// The number of threads currently waiting to acquire `mutex` via
     /// `lock_demand`. Not protected by the mutex; read by hot lock/unlock loops
@@ -4654,7 +4740,9 @@ git commit -m "renderer: schedule idle scrollback compression, debounced by acti
     /// `unlock_demand` after a demanding waiter releases the mutex.
     handoff_gen: AtomicU32,
 ```
+
 and:
+
 ```rust
     /// Acquire `mutex` while signaling demand for it. Must be released with
     /// `unlock_demand`.
@@ -4668,6 +4756,7 @@ and:
     /// and released the mutex (or `HANDOFF_TIMEOUT` passes).
     pub fn yield_to_demand(&self);
 ```
+
 - `const HANDOFF_TIMEOUT: Duration = Duration::from_millis(1);`
 - All atomics use `Ordering::Relaxed` **on purpose**: they are a scheduling hint, not a synchronization boundary; the mutex still protects the terminal state. Port that comment verbatim.
 - PORT NOTE: Zig uses `std.Thread.Futex.wake/timedWait`. rustty has no futex wrapper in `rustty-os`; use `std::sync::{Condvar, Mutex}` **or** `rustty_zigstd`'s existing futex shim if one exists (grep `Futex` in `crates/rustty-zigstd/src/`). Whichever is chosen, the observable contract is the one documented above; record the choice in a PORT NOTE.
@@ -4757,6 +4846,7 @@ invariant before shipping.
 ### Task D5: lib-vt C API
 
 **Files:**
+
 - Modify: `crates/rustty-vt-c/src/terminal.rs`
 - Modify: `include/rustty/vt/terminal.h`, `include/rustty/vt.h`
 - Modify: `.port/tools/gates/` A4 ABI gate fixture (whatever file records the frozen export list — grep `rustty_terminal_` there)
@@ -4785,6 +4875,7 @@ pub extern "C" fn rustty_terminal_compress(
     out_result: *mut CompressionResult,
 ) -> Result;
 ```
+
 Both return `Result::InvalidValue` for a null terminal, a null out-pointer, or a `mode` outside the enum (the oracle uses `std.meta.intToEnum`; rustty uses an explicit `match`). DG5 applies: no panic may cross the ABI — wrap the body in the crate's existing abort-on-unwind helper (grep `cwrap` in `crates/rustty-vt-c/src/cwrap.rs`).
 
 - [ ] **Step 1: Write the failing test**
@@ -4911,6 +5002,7 @@ Port the C-API functions plus the header declarations. Header text: port `oracle
 cargo test -p rustty-vt-c --lib
 bash .port/tools/gates/a4-abi-gate.sh   # exact name: grep for the A4 gate script under .port/tools/gates/
 ```
+
 Expected: PASS. The A4 gate will flag the two new exports as unfrozen; add them to the gate's frozen list in the same commit (that is the gate's designed workflow — it is not a weakening).
 
 - [ ] **Step 5: Commit**
@@ -4925,12 +5017,14 @@ git commit -m "vt-c: expose compression activity and scheduling through lib-vt (
 ### Task D6: Inspector compression memory view
 
 **Files:**
+
 - Modify: `crates/rustty-inspector/src/widgets/pagelist.rs`
 - Modify: `crates/rustty-inspector/src/widgets/page.rs`
 
 **Oracle:** `70e788f06`'s inspector hunks (`widgets/page.zig` +19, `widgets/pagelist.zig` +129) and `6d5dda40d` "inspector: clarify page compression memory" (`widgets/pagelist.zig`, 136 insertions / 85 deletions — a rewrite of the memory section; port the **final** file).
 
 **Interfaces:**
+
 - Consumes: `PageList::memory_stats()`, `MemoryStats::{estimated_resident_bytes, estimated_savings}`, `Node::storage`, `Node::page_preserving_state`.
 - Produces: no new API. The pagelist widget gains resident/compressed page counts, raw vs. resident vs. encoded bytes, and the estimated-savings line; the page widget must render a compressed page **without restoring it** (use `page_preserving_state`).
 
@@ -4971,6 +5065,7 @@ Port the final `oracle@main:src/inspector/widgets/pagelist.zig` memory section a
 cargo test -p rustty-inspector --lib
 cargo build --workspace
 ```
+
 Then, on macOS, launch `Rustty.app`, open the inspector (cmd-opt-i), generate scrollback, idle for a few seconds, and confirm the PageList panel shows a non-zero compressed page count and a positive estimated saving. Record the observation in the commit message.
 
 - [ ] **Step 5: Commit**
@@ -4985,11 +5080,13 @@ git commit -m "inspector: clarify page compression memory in the pagelist widget
 ### Task D7: `c-vt-compression` example
 
 **Files:**
+
 - Create: `examples/c-vt-compression/README.md`, `examples/c-vt-compression/main.c`, and whatever build glue the sibling C examples use (mirror `examples/` — grep for the existing `c-vt-*` example layout; `.port/phase-2/EXAMPLES_PORT.md` documents the convention).
 
 **Oracle:** `172f15da3`'s `example/c-vt-compression/` (README 17, build.zig 32, build.zig.zon 14, `src/main.c` 72).
 
 **Interfaces:**
+
 - Consumes: `rustty_terminal_compression_activity`, `rustty_terminal_compress` from D5.
 - Produces: a runnable C program demonstrating the incremental contract (poll activity, step until `Complete`).
 
@@ -5016,6 +5113,7 @@ Port `oracle@main:example/c-vt-compression/src/main.c` and `README.md` with R2 r
 # using the same command the sibling c-vt examples document in
 # .port/phase-2/EXAMPLES_PORT.md
 ```
+
 Expected: the program prints a decreasing resident-memory / increasing compressed-page count and exits 0.
 
 - [ ] **Step 5: Commit**
@@ -5030,6 +5128,7 @@ git commit -m "example: c-vt-compression demonstrating the incremental contract 
 ### Task D8: Compression benchmarks
 
 **Files:**
+
 - Create: `crates/rustty-bench/src/page_compression.rs`
 - Create: `crates/rustty-bench/src/scrollback_compression.rs`
 - Modify: `crates/rustty-bench/src/{lib.rs,cli.rs,main_bench.rs}`
@@ -5039,6 +5138,7 @@ git commit -m "example: c-vt-compression demonstrating the incremental contract 
 **Independently executable** once Phase B is in.
 
 **Interfaces:**
+
 - `+page-compression` with `--mode=compress|decompress|store|report` and `--data=<corpus>`; `report` prints the ratio.
 - `+scrollback-compression` measures the PageList transitions around the codec rather than the codec itself.
 - Both register through `Action::from_name` in `crates/rustty-bench/src/cli.rs` exactly like the existing eight actions (see `.port/phase-2/PERF_COMPARISON_PLAN.md` §1 for the CLI contract these must honor: `+`-prefixed subcommand, `--data=`, `--mode=`, print nothing on success).
@@ -5072,9 +5172,11 @@ cargo build -p rustty-bench --release
 ./target/release/rustty-bench +scrollback-compression \
   --data=.port/phase-0/baseline/corpora/ascii.bin
 ```
+
 Expected: `report` prints a ratio; the others exit 0 silently. **Record the ratio and the compress/decompress throughputs in `.port/phase-2/PERF_LOG.md`** — Phase E compares against them and the oracle's own numbers.
 
 Note: this is the first execution path that exercises the **real** `madvise` arms of `mem::decommit` (release build ⇒ `cfg!(test)` is false). Run it on **both** platforms:
+
 ```bash
 ssh rvm 'cd ~/projects/rustty && cargo build -p rustty-bench --release && ./target/release/rustty-bench +scrollback-compression --data=.port/phase-0/baseline/corpora/ascii.bin'
 ```
@@ -5100,6 +5202,7 @@ git commit -m "bench: page-compression and scrollback-compression actions (WS7 D
 cd /Users/gael/projects/rustty
 cargo build --workspace
 ```
+
 Expected: `Finished`.
 
 - [ ] **Step 2: Linux VM**
@@ -5107,6 +5210,7 @@ Expected: `Finished`.
 ```bash
 ssh rvm 'cd ~/projects/rustty && git fetch && git checkout ws7-scrollback-compression && git pull && cargo build --workspace'
 ```
+
 Expected: `Finished`. This leg is the one that compiles the `MADV_DONTNEED` arm and the non-Darwin `recommit` no-op.
 
 - [ ] **Step 3: wasm target**
@@ -5114,6 +5218,7 @@ Expected: `Finished`. This leg is the one that compiles the `MADV_DONTNEED` arm 
 ```bash
 cargo build -p rustty-vt --target wasm32-unknown-unknown
 ```
+
 Expected: `Finished` — the codec must stay portable (oracle `AGENTS.md` requirement). `mem::can_reclaim` returns `false` on wasm, so compression is simply disabled there.
 
 - [ ] **Step 4: Acyclic + ABI gates**
@@ -5122,6 +5227,7 @@ Expected: `Finished` — the codec must stay portable (oracle `AGENTS.md` requir
 bash .port/tools/gates/check_acyclic.sh
 bash .port/tools/ci.sh
 ```
+
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -5135,9 +5241,10 @@ git commit --allow-empty -m "vt: WS7 both-platform + wasm build gate green (WS7 
 ### Task E2: Miri lane on the (de)compression seams
 
 **Files:**
+
 - Create: `.port/phase-2/mirihar-compress/` (isolated non-FFI Miri harness, following `.port/phase-2/mirihar-chunk3b`)
 
-**Why an isolated harness and not only the in-tree lane** (memory: `shaper-hook-sb-clean-interleave`): the compress/restore seam holds a raw `*mut Page` derived from `Node.data` while it *writes* `Node.data`. That is exactly the long-lived-raw-alias-plus-interleaved-`&mut` shape that must be **proven** on a minimal harness rather than hand-reasoned, because a full `PageList` test drags in enough machinery that a Miri failure is hard to localize.
+**Why an isolated harness and not only the in-tree lane** (memory: `shaper-hook-sb-clean-interleave`): the compress/restore seam holds a raw `*mut Page` derived from `Node.data` while it _writes_ `Node.data`. That is exactly the long-lived-raw-alias-plus-interleaved-`&mut` shape that must be **proven** on a minimal harness rather than hand-reasoned, because a full `PageList` test drags in enough machinery that a Miri failure is hard to localize.
 
 - [ ] **Step 1: Build the isolated harness**
 
@@ -5148,13 +5255,14 @@ Create `.port/phase-2/mirihar-compress/` as a standalone cargo project (copy the
 3. `Node::restore(node, Preserve)` writing `node.data` while `compressed` was borrowed from it.
 4. `compress_page`'s full sequence: `Node::page` → `CompressedPage::init(page as *const Page, ..)` → `mem::decommit` → `node.data = ...`.
 
-Interleaving **3** is the sharpest: the current B6 body takes `let compressed: &CompressedPage = match &*data {...}` and then does `core::ptr::write(data, ...)` while that shared reference is conceptually live. If Miri flags it, the fix is to *copy out* the two things needed (`memory_base`/`memory_len`, and the decoded `Page`) and drop the borrow **before** the write — e.g. by reading through `core::ptr::addr_of!` and `core::ptr::read`/`write` rather than through a `&`.
+Interleaving **3** is the sharpest: the current B6 body takes `let compressed: &CompressedPage = match &*data {...}` and then does `core::ptr::write(data, ...)` while that shared reference is conceptually live. If Miri flags it, the fix is to _copy out_ the two things needed (`memory_base`/`memory_len`, and the decoded `Page`) and drop the borrow **before** the write — e.g. by reading through `core::ptr::addr_of!` and `core::ptr::read`/`write` rather than through a `&`.
 
 - [ ] **Step 2: Run the harness**
 
 ```bash
 cd .port/phase-2/mirihar-compress && cargo +nightly miri test
 ```
+
 Expected: PASS with zero UB. If interleaving 3 reports UB, fix `Node::restore` in `crates/rustty-vt/src/pagelist/mod.rs` per the note above, re-run the harness, then re-run the vt lane.
 
 - [ ] **Step 3: Run the in-tree compression lane**
@@ -5164,6 +5272,7 @@ bash .port/tools/miri-run.sh rustty-vt compress 6 45 15
 bash .port/tools/miri-run.sh rustty-vt pagelist_compress 6 45 15
 bash .port/tools/miri-run.sh rustty-vt lz4_ 4 20 10
 ```
+
 Expected: zero `UB`. TIMEOUTs on the 400 KiB corpora are acceptable and go in `MIRI_EXCEPTIONS.md` with a reason; UB is not.
 
 - [ ] **Step 4: Confirm the search lane did not regress**
@@ -5171,6 +5280,7 @@ Expected: zero `UB`. TIMEOUTs on the 400 KiB corpora are acceptable and go in `M
 ```bash
 bash .port/tools/miri-run.sh rustty-vt search 6 45 15
 ```
+
 Expected: the UB set is **exactly** the 9 pre-existing `search/screen` names. Any new name is a WS7 regression.
 
 - [ ] **Step 5: Commit**
@@ -5185,6 +5295,7 @@ git commit -m "vt: Miri harness + lanes over the compress/restore aliasing seams
 ### Task E3: Perf non-regression gate
 
 **Files:**
+
 - Modify: `.port/phase-2/PERF_LOG.md`
 
 **Baseline:** the 14 documented wins in `.port/phase-2/PERF_COMPARISON.md` (Apple M4 Pro, `Mac16,7`). The harness is bench-generic and drives the binary from `sys.argv[1]` (see `.port/phase-2/PERF_COMPARISON_PLAN.md` §0–§1).
@@ -5206,6 +5317,7 @@ python3 .port/phase-0/baseline/run_benchmarks.py \
   /Users/gael/projects/rustty/target/release/rustty-bench \
   > /tmp/ws7-perf-after.json
 ```
+
 Do **not** regenerate the corpora — reuse the exact bytes in `.port/phase-0/baseline/corpora/`.
 
 - [ ] **Step 3: Compare against the recorded medians**
@@ -5213,6 +5325,7 @@ Do **not** regenerate the corpora — reuse the exact bytes in `.port/phase-0/ba
 Compare each of the 14 configs' median against the Rust medians recorded in `.port/phase-2/PERF_COMPARISON.md`.
 
 **Gate:** no config may regress by more than **3%** (the documented run-to-run noise band), and the suite total must not regress at all. If any config regresses beyond that band, re-run to rule out noise; if it holds:
+
 - For `+terminal-parser` / `+screen-clone`: the cause is almost certainly `Node::page`'s new match. Confirm by checking whether the hot call site should be `Node::page_assume_resident` (B5's decision table) — an active-area write path always holds a resident page.
 - Do **not** weaken the gate. Do **not** disable compression to pass it.
 
@@ -5232,6 +5345,7 @@ git commit -m "perf: WS7 compression non-regression run — 14/14 within noise (
 ### Task E4: Strike the BL-1 ledger rows
 
 **Files:**
+
 - Modify: `.port/phase-2/MAIN_PARITY.md`
 - Modify: `.port/phase-2/DEFERRALS.md`, `.port/phase-2/VERIFICATION_DEBT.md` (only if they carry BL-1 entries — grep first)
 - Modify: `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md` (tick WS7 in the plan-authoring checklist)
@@ -5244,6 +5358,7 @@ git commit -m "perf: WS7 compression non-regression run — 14/14 within noise (
    `16e4b5e98`, `c62c15984`, `ebc3ffd22`, `f6fd4cb08`, `421fe8dab`, `9156ada16`, `70e788f06`, `e7969ed43`, `0d015b2fc`, `f8c217e55`, `461562ca4`, `b9bb50c83`, `181254d36`, `95685afd2`, `0fb89f4ff`, `6d5dda40d`, `172f15da3`, `25e624569`, `d34b54e9b`, `9a4bd2120`, `d239f9805`, `5d8eb78b7`, `86e1f7b8b`, `73ac36fa5`, `f1a5fab45`, `a804e3ac7`, `91a63e528`, `83aada205`, `c243d89bd`, `a89c6133c`, `d0a26d146`, `dd956f37c`, `f6d9a582e`, `0bad91adb`, `89eca063e`, `c9ad708ef`
 
    (that list is 36 entries — the merge rows `7e02af879` and `53bd14fec` stay `n/a-merge`, and `4f53b846b` stays `n/a`).
+
 3. **Note the BL-2 overlap for WS8:** add a line to the `896aca499` row saying its production behavior (pool-item `decommit(.zero, ...)` on free) landed with WS7 B4/B6 via `mem.rs`, and that WS8 owns only its benchmark/test hunks.
 
 - [ ] **Step 1: Grep for every BL-1 mention**
@@ -5263,6 +5378,7 @@ In `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md`, add `- [x] 
 ```bash
 grep -rn 'missing BL-1' .port/phase-2/MAIN_PARITY.md
 ```
+
 Expected: **no output**.
 
 - [ ] **Step 5: Commit**
@@ -5301,6 +5417,7 @@ Scroll to the top of the scrollback and search (the search UI) for a string only
 ```bash
 ssh rvm 'cd ~/projects/rustty && cargo build --release'
 ```
+
 and run the GTK app on the VM's session; confirm the same via the GTK inspector.
 
 Record both observations in the commit message.
@@ -5321,6 +5438,7 @@ git commit --allow-empty -m "vt: WS7 live verification — compression active in
 cargo test --workspace 2>&1 | tail -30
 ssh rvm 'cd ~/projects/rustty && cargo test --workspace 2>&1 | tail -30'
 ```
+
 Expected: zero failures on both.
 
 - [ ] **Step 2: Request review**
@@ -5357,29 +5475,31 @@ Run after the plan is written; findings below are already fixed inline.
 
 **1. Spec coverage.** Every element of the WS7 brief maps to a task:
 
-| Brief requirement | Task |
-|---|---|
-| LZ4 codec | A1–A5 |
-| Compressed `Page` representation | B3 |
-| Generation stamps | C1, C2 |
-| Search-integrity integration | C5, C6, C7 |
-| MAIN_PARITY BL-1 commit hashes extracted | Phase B / Phase C commit tables (36 hashes) |
-| Oracle `origin/main` read protocol stated | Global Constraints ("Oracle read protocol"), every `oracle@main:` path |
-| `Backing::alloc/free` convention followed for new OS interaction | B1 (`extern "C" madvise`, no `libc` crate) |
-| lz4-sys question answered | Headline finding + Global Constraints: **not needed** |
-| Miri harnesses planned | E2 (`.port/phase-2/mirihar-compress`) + lanes in A6, B10, C8, E2 |
-| Perf non-regression check | E3 (`run_benchmarks.py`, 14 configs, 3% band) + D8 (compression benches) |
-| Phases with explicit boundaries + order | "Phase Structure & Execution Order" table |
-| Which phases are separately executable | Same table: A yes; D4/D8 yes; B/C/E no |
-| Both-platform build gate | A6 S3, B10 S2, C8 S2, D4 S4, E1 |
-| Branch/merge flow per roadmap | Branch created before A1; E6 |
+| Brief requirement                                                | Task                                                                     |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| LZ4 codec                                                        | A1–A5                                                                    |
+| Compressed `Page` representation                                 | B3                                                                       |
+| Generation stamps                                                | C1, C2                                                                   |
+| Search-integrity integration                                     | C5, C6, C7                                                               |
+| MAIN_PARITY BL-1 commit hashes extracted                         | Phase B / Phase C commit tables (36 hashes)                              |
+| Oracle `origin/main` read protocol stated                        | Global Constraints ("Oracle read protocol"), every `oracle@main:` path   |
+| `Backing::alloc/free` convention followed for new OS interaction | B1 (`extern "C" madvise`, no `libc` crate)                               |
+| lz4-sys question answered                                        | Headline finding + Global Constraints: **not needed**                    |
+| Miri harnesses planned                                           | E2 (`.port/phase-2/mirihar-compress`) + lanes in A6, B10, C8, E2         |
+| Perf non-regression check                                        | E3 (`run_benchmarks.py`, 14 configs, 3% band) + D8 (compression benches) |
+| Phases with explicit boundaries + order                          | "Phase Structure & Execution Order" table                                |
+| Which phases are separately executable                           | Same table: A yes; D4/D8 yes; B/C/E no                                   |
+| Both-platform build gate                                         | A6 S3, B10 S2, C8 S2, D4 S4, E1                                          |
+| Branch/merge flow per roadmap                                    | Branch created before A1; E6                                             |
 
 **2. Placeholder scan.** Three residual soft spots, each with a stated resolution rather than a TODO:
+
 - D3's second test and D6's live check depend on harnesses whose exact shape must be read from the existing files. Each names the file to grep and states what to do if the harness is absent (fall back to the named alternative gate) — not "write an appropriate test".
 - C3, C6, C7 say "port the commit's test hunks verbatim" **and** give the exact oracle test names and the target rustty test-fn names, so the implementer has an unambiguous, enumerable checklist rather than prose.
 - B7/B8 give signature skeletons with per-function oracle **line ranges** rather than inlined 300-line bodies. This is deliberate: reproducing the oracle's `compress_page` failure ordering by transcription is more reliable than by paraphrase, and the ordering is spelled out step-by-step in B7 Step 3.
 
 **3. Type consistency** (checked across phases):
+
 - `CompressedPage` — introduced B3, used B6/B7, test-constructed in B6's tests. Consistent.
 - `required_scratch` — B3 free function in `compress::page`, re-exported from `compress`; called as `crate::compress::required_scratch` in B6/B7. Consistent.
 - `Node::page` / `page_if_resident` / `page_assume_resident` / `metadata` / `rows` / `cols` / `capacity` — declared B5, bodies replaced B6, used B7/B9/C/D. Same names throughout.
@@ -5391,4 +5511,4 @@ Run after the plan is written; findings below are already fixed inline.
 - `MemoryStats` field names are identical between B9's definition and C5's `memory_stats()` equality assertion.
 - `AppendResult { content_len, last_row_wrapped }` — C5 only. Consistent.
 
-**Gap found and fixed during review:** B4's `destroy_node_ext` originally kept the length-based pool/heap inference in its `total_size` accounting; corrected to switch on `Owned` for both the free path *and* the byte accounting, with an explicit Step 3 instruction to audit every `page_size +=` site. Without that, `memory_stats` (B9) and `PageList::page_size` would disagree for compacted heap pages.
+**Gap found and fixed during review:** B4's `destroy_node_ext` originally kept the length-based pool/heap inference in its `total_size` accounting; corrected to switch on `Owned` for both the free path _and_ the byte accounting, with an explicit Step 3 instruction to audit every `page_size +=` site. Without that, `memory_stats` (B9) and `PageList::page_size` would disagree for compacted heap pages.

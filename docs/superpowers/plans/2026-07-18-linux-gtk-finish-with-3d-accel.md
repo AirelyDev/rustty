@@ -23,27 +23,29 @@
 
 The full Linux stack L0–L5 is on `main`. Milestones, each controller-verified by running the binary/tests:
 
-| Tier | Scope | Status |
-|---|---|---|
-| **L0** | Compile-gating (apprt-c objc2) | ✅ |
-| **L1** | `rustty-xev` epoll + io_uring + hand-authored `Dynamic` selector | ✅ live shell on io_uring (58 tests) |
-| **L2** | `rustty-os` Linux | ✅ |
-| **L3** | Fontconfig discovery (`fontconfig-sys` 2.14.2 + `libxml2-sys` 2.11.5, both PINNED not host) | ✅ real font resolution (80 tests) |
-| **L4** | OpenGL renderer (`generic/linux_impl.rs`, copy-adapted from the Metal `macos_impl`) | ✅ golden test + GL-ATTACH (60 tests) |
-| **L5** | Native GTK4/libadwaita apprt backend | ✅ **through "a live terminal in the window"** |
+| Tier   | Scope                                                                                       | Status                                         |
+| ------ | ------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| **L0** | Compile-gating (apprt-c objc2)                                                              | ✅                                             |
+| **L1** | `rustty-xev` epoll + io_uring + hand-authored `Dynamic` selector                            | ✅ live shell on io_uring (58 tests)           |
+| **L2** | `rustty-os` Linux                                                                           | ✅                                             |
+| **L3** | Fontconfig discovery (`fontconfig-sys` 2.14.2 + `libxml2-sys` 2.11.5, both PINNED not host) | ✅ real font resolution (80 tests)             |
+| **L4** | OpenGL renderer (`generic/linux_impl.rs`, copy-adapted from the Metal `macos_impl`)         | ✅ golden test + GL-ATTACH (60 tests)          |
+| **L5** | Native GTK4/libadwaita apprt backend                                                        | ✅ **through "a live terminal in the window"** |
 
 **What actually works today (verified on the OLD VM under `LIBGL_ALWAYS_SOFTWARE=1` llvmpipe):**
+
 - `rustty` opens a real 850×650 GTK window (`io.airely.rustty-debug`, R2 identity), stays alive.
 - The window **hosts a live terminal**: `TabView → TabPage → Tab → Surface`, `Surface::core()` becomes `Some`, a frame draws into GDK's `GLArea` framebuffer (GL-ATTACH), and the shell round-trips (`echo rustty-window-live` reaches the core `Screen`). Proven by the headed KATs `gtk_first_light.rs` and `gtk_window_live.rs` (both PASS).
 - Teardown is memory-sound: self-referential `Surface` is heap-boxed-never-moved with an `AtomicPtr<CoreSurface>` (faithful to the Zig `?*CoreSurface`); render thread is joined before the core is cleared; the `Subprocess` argv double-free was fixed on both halves.
 
-**What is NOT yet verified (the whole reason for this handoff):** that glyphs are **visibly rendered on real GPU hardware**. The old VM's virgl has no desktop-GL core profile, so the only GL path there was llvmpipe (software). first_light proves the *pipeline* runs and the FBO readback is non-zero; it does **not** prove a human sees a correct terminal on a hardware GLArea. **That is §4.**
+**What is NOT yet verified (the whole reason for this handoff):** that glyphs are **visibly rendered on real GPU hardware**. The old VM's virgl has no desktop-GL core profile, so the only GL path there was llvmpipe (software). first_light proves the _pipeline_ runs and the FBO readback is non-zero; it does **not** prove a human sees a correct terminal on a hardware GLArea. **That is §4.**
 
 ---
 
 ## 2. The 3D-acceleration constraint (context — should NOT apply on the new VM)
 
 On the old VM:
+
 - virgl (the QEMU/virtio-gpu Mesa driver) exposes **no desktop GL core profile** — only GLES + a GL compat profile too old for the renderer's GL 4.3 core requirement.
 - The only way to get GL 4.3+ core was `LIBGL_ALWAYS_SOFTWARE=1` → llvmpipe → GL 4.5 core (CPU rasterization, slow, but correct API surface).
 - Even **upstream ghostty would not run** there: it errored with <https://ghostty.org/docs/help/gtk-opengl-context>. So the old VM could never be the place final GTK rendering was signed off.
@@ -55,15 +57,18 @@ On the old VM:
 ## 3. New-VM environment setup
 
 **Repo layout:**
+
 - Main checkout: `/home/gael/projects/rustty` (branch `main` @ `9bc62e5`).
 - The port branch `linux-port/gtk-apprt` points at the same commit (now vestigial — `main` is the source of truth; you can delete it once pushed). A worktree may still exist at `/home/gael/projects/rustty-gtk`; on a fresh VM it likely won't — just work in the main checkout.
 - Reference: clone/copy ghostty to `/home/gael/projects/ghostty` and check out `4749c4e9`. The port cites `src/apprt/gtk/**:line` throughout; you need it present for parity work.
 
 **Critical env:**
-- **`export TMPDIR=/home/gael/tmp`** (make the dir). The system `/tmp` is a small tmpfs; builds overflow it and GCC prints `Disk quota exceeded`, which *masquerades as a build break*. This bit the old VM repeatedly. Set `TMPDIR` before any `cargo build`.
+
+- **`export TMPDIR=/home/gael/tmp`** (make the dir). The system `/tmp` is a small tmpfs; builds overflow it and GCC prints `Disk quota exceeded`, which _masquerades as a build break_. This bit the old VM repeatedly. Set `TMPDIR` before any `cargo build`.
 - Do NOT set a fresh `CARGO_TARGET_DIR` (breaks incremental caching the workflows rely on).
 
 **System deps (Fedora-family; adapt for the new VM's distro):**
+
 - Toolchain: `clang-devel` (bindgen for the `-sys` crates), a C/C++ compiler, `pkg-config`.
 - GTK stack: `gtk4-devel`, `libadwaita-devel` (need adw ≥ 1.5 / gtk ≥ 4.14 — the port pins that baseline and deleted all older version-conditional branches, AD-3), `gtk4-layer-shell-devel` (for the Wayland quick-terminal, T28).
 - Blueprint: `blueprint-compiler` (the `.blp` → `.ui` asset pipeline in `build.rs`).
@@ -71,6 +76,7 @@ On the old VM:
 - fontconfig/libxml2 are **vendored and pinned** inside `crates-sys/` — do NOT rely on host versions (host 2.12/2.17 diverges; the port needs fontconfig 2.14.2 + libxml2 2.11.5). The two-error-atom gotcha (`FontConfigFailed` vs `FontconfigFailed` kept deliberately distinct) is load-bearing — don't "fix" it.
 
 **Build & smoke-test:**
+
 ```bash
 export TMPDIR=/home/gael/tmp && mkdir -p "$TMPDIR"
 cd /home/gael/projects/rustty
@@ -80,6 +86,7 @@ cargo build -p rustty-apprt --features gtk    # the GTK backend specifically
 ```
 
 **Run (the payoff):**
+
 ```bash
 # On real hardware, NO software fallback:
 target/debug/rustty
@@ -87,6 +94,7 @@ target/debug/rustty
 ```
 
 **GTK display tests** need exactly one main thread — run them individually, never batched:
+
 ```bash
 cargo test -p rustty-apprt --features gtk -- --ignored --exact gtk_first_light::<name>
 # batching --include-ignored ABORTS (GTK asserts single main thread).
@@ -115,20 +123,22 @@ The L5 plan (`docs/superpowers/plans/2026-07-17-L5-gtk-apprt.md`) defines Tasks 
 **A. L5 T23 — the dialog family (off the normal render path, but reachable).**
 Reference: `class/{dialog,close_confirmation,clipboard_confirmation,config_errors,title,debug_warning}.zig`.
 Fills these still-`unimplemented!()` leaves:
+
 - `window.rs:1395` + `window.rs:1420` — `on_close_request` / `tabViewClosePage` → `CloseConfirmationDialog`.
 - `split_tree.rs:682` — `surfaceCloseRequest` → `CloseConfirmationDialog`.
 - `tab.rs:242` — `promptTabTitle` → `TitleDialog`.
-Collapse version conditionals to the adw ≥ 1.5 baseline (AD-3).
+  Collapse version conditionals to the adw ≥ 1.5 baseline (AD-3).
 
 **B. L5 T24 — overlays + media.** `ResizeOverlay`, `SearchOverlay`, `KeyStateOverlay`, `ChildExited`, `media` (AudioBell). These are the template subclasses the `Surface` template `ensure_type`s; today they're inhabited placeholders.
 
 **C. Interactive surface handlers (completion of L5.2 T16/T17) — PRIORITIZE per §4 step 5.**
 `surface.rs` still has ~11 `unimplemented!()` template-callbacks that fire on user interaction, NOT on the render path (which is why first_light is green):
+
 - `url_mouse_enter`/`url_mouse_leave` (2506/2510), `notify_mouse_hover_url` (2558), `notify_mouse_hidden` (2562), `notify_mouse_shape` (2564) — mouse/URL hover + cursor shape.
 - `context_menu_closed` (2520), `child_exited_close` (2516).
 - `search_stop`/`search_changed`/`search_next_match`/`search_previous_match` (2612–2624) — search overlay (couples with T24's `SearchOverlay`).
 - `Surface::drop` (2194) — teardown.
-Port from `surface.zig`'s corresponding signal handlers. **§4 step 5 tells you which actually panic under real interaction** — fill those first. (`application.rs:3124–3185` are `#[cfg(test)]` test doubles — NOT production, ignore.)
+  Port from `surface.zig`'s corresponding signal handlers. **§4 step 5 tells you which actually panic under real interaction** — fill those first. (`application.rs:3124–3185` are `#[cfg(test)]` test doubles — NOT production, ignore.)
 
 **D. L5 T25 — `CommandPalette` + `Command`.** Reference `class/command_palette.zig`, `class/command.zig`.
 
@@ -141,7 +151,9 @@ Port from `surface.zig`'s corresponding signal handlers. **§4 step 5 tells you 
 **H. L3 T9 — gate bookkeeping.** Update the gate scripts / `DEFERRALS.md` / test-count checks (`.port/tools/gates/`, `.port/phase-2/DEFERRALS.md`) so CI accounting matches the landed Linux tiers.
 
 ### How to orchestrate (the user's standing request)
+
 Use **dynamic Workflows** to parallelize. The proven pattern for this port (see `/home/gael/tmp/l5-window-chrome.js` for a real example that shipped T20–T22):
+
 - `pipeline(tasks, implement, review, fix)` — each task flows implement → adversarial-review → bounded fix loop (max 2 rounds), no barrier between tasks.
 - Per-agent schemas force structured `{status, base, commit, tests, concerns[]}` / `{approved, critical[], ...}` returns.
 - **Model:** the user directed **Fable 5** for agent work "until usage runs out." In workflow scripts, **omit `opts.model`** so agents inherit the session model; do not hardcode `model:'opus'` in new scripts. If Fable usage is exhausted, fall back to the session default.

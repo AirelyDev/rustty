@@ -127,7 +127,7 @@ cargo build \
   -p rustty
 ```
 
-   This produces the release binary at `target/release/rustty`.
+This produces the release binary at `target/release/rustty`.
 
 3. Finally, install the binary and the runtime resource tree into your
    packaging root. Use the `DESTDIR` and `PREFIX` conventions common to
@@ -155,18 +155,18 @@ cargo run -p xtask -- resources --target-os linux --prefix "$PREFIX"
 cp -R zig-out/share "$DESTDIR$PREFIX/share"
 ```
 
-   Flags for special Linux packaging arms: `--flatpak` (flatpak D-Bus
-   activation, icons capped at 512x512, no systemd unit), `--debug` (the
-   `-debug` app id), and `--system-package` (the systemd user unit is staged
-   under `zig-out/lib/systemd/user` — copy `zig-out/lib` into
-   `$DESTDIR$PREFIX/lib` as well in that case, since system packages install
-   systemd user units under `lib`, not `share`).
+Flags for special Linux packaging arms: `--flatpak` (flatpak D-Bus
+activation, icons capped at 512x512, no systemd unit), `--debug` (the
+`-debug` app id), and `--system-package` (the systemd user unit is staged
+under `zig-out/lib/systemd/user` — copy `zig-out/lib` into
+`$DESTDIR$PREFIX/lib` as well in that case, since system packages install
+systemd user units under `lib`, not `share`).
 
-   This installs Rustty into `/tmp/rustty` with the prefix `/usr` (i.e. the
-   binary ends up at `/tmp/rustty/usr/bin/rustty`). This style is common for
-   system packages which separate a build and install step, since the install
-   step can then be done with a `mv` or `cp` command (from `/tmp/rustty` to
-   wherever the package manager expects it).
+This installs Rustty into `/tmp/rustty` with the prefix `/usr` (i.e. the
+binary ends up at `/tmp/rustty/usr/bin/rustty`). This style is common for
+system packages which separate a build and install step, since the install
+step can then be done with a `mv` or `cp` command (from `/tmp/rustty` to
+wherever the package manager expects it).
 
 > [!NOTE]
 >
@@ -220,4 +220,4 @@ maintainers migrating from other terminal emulators:
   packages to specify a specific architecture, libc, etc. Run
   `rustc --print target-list` to get a full list of available targets, and
   ensure the corresponding `rust-std` component is installed (`rustup target
-  add <triple>`).
+add <triple>`).

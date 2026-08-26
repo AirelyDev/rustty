@@ -20,6 +20,7 @@
 ## STRUCTURE CORRECTION (2026-07-16, discovered at execution — GOVERNS over any conflicting task text below)
 
 The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, `net.rs`, `async.rs`, `timer.rs`, `process.rs`, `stream.rs`) `#[cfg(target_os = "macos")]` and concretized `loop.rs`'s callback ABI to `crate::kqueue::{Loop, Completion, Result}`. Therefore:
+
 - **Do NOT modify `async.rs`/`timer.rs`/`process.rs`/`stream.rs`** — they are macOS-only; editing them violates R5. Any task text saying "modify async.rs to add the epoll/io_uring arm" is SUPERSEDED: implement the Linux watcher surface **inside the self-contained `epoll.rs`/`io_uring.rs`** (each is a whole backend, parallel to `kqueue.rs` + its macOS helpers).
 - **`linux/` module** (`linux.rs` + `linux/*.rs`) holds the Linux-shared primitives BOTH backends use: `timerfd.rs`, `eventfd.rs`, and the shared plain ABI enums (`RunMode`/`CallbackAction`/`CompletionState`/`Options` — pure, byte-faithful twins of `loop.rs`'s; each backend's `Callback` fn-ptr type references its OWN `Loop`/`Completion`/`Result`).
 - `epoll.rs` and `io_uring.rs` are self-contained: own `Loop`/`Completion`/`Operation`/`Result`/`Callback` + their `Async`/`Timer`/`Process`/`Stream` watcher surfaces over the `linux/` primitives.
@@ -27,30 +28,32 @@ The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, 
 
 ## File structure
 
-| File | Responsibility |
-|---|---|
-| `crates/rustty-xev/src/epoll.rs` (**create**) | epoll `Loop`/`Completion`/`Operation`/`Result`/`submit`/`tick`; port of libxev `backend/epoll.zig` (2061 loc). Mirrors `kqueue.rs` structure. |
-| `crates/rustty-xev/src/io_uring.rs` (**create**) | io_uring `Loop`/`Completion`/`Operation`/`Result` + SQ/CQ ring engine; port of `backend/io_uring.zig` (1787 loc) + a small `IoUring` ring binding (libc syscalls). |
-| `crates/rustty-xev/src/linux/timerfd.rs` (**create**) | `timerfd`-backed timer primitive; port of libxev `linux/timerfd.zig` (89 loc). |
-| `crates/rustty-xev/src/linux/eventfd.rs` (**create**) | `eventfd` wakeup primitive both backends' `Async` wrap (create/notify/drain). |
-| `crates/rustty-xev/src/linux.rs` (**modify from stub**) | `mod timerfd; mod eventfd;` + the shared plain ABI enums (`RunMode`/`CallbackAction`/`CompletionState`/`Options`) both Linux backends use. |
-| `crates/rustty-xev/src/dynamic.rs` (**create**) | hand-authored `Dynamic` union layer (`Loop`/`Completion`/`Async`/`Timer`/`Process`/`Stream`/`WriteQueue`/`WriteRequest`/error sets) over `{IoUring, Epoll}` + the global `backend` selector + `detect`/`prefer`. Port of `dynamic.zig` (524 loc) WITHOUT comptime metaprogramming (concrete 2-variant). |
-| `async.rs`/`timer.rs`/`process.rs`/`stream.rs`/`loop.rs`/`common.rs`/`net.rs` (**UNTOUCHED**) | macOS-only (R5). Linux watcher surfaces live INSIDE `epoll.rs`/`io_uring.rs`, not here. |
-| `crates/rustty-xev/src/backend.rs` (**modify**) | `candidates()`/`default()`/`Api` Linux arms (`[io_uring, epoll]`, default `io_uring`). |
-| `crates/rustty-xev/src/lib.rs` (**modify**) | per-target re-export: Linux → `dynamic::*`; macOS → kqueue flat (unchanged). |
-| `crates/rustty-termio/tests/live_shell.rs` (**modify**) | widen the KAT gate from `#[cfg(target_os="macos")]` to `#[cfg(unix)]`. |
-| `.port/phase-2/DEFERRALS.md` + `check_test_counts.py` (**modify**) | record io_uring/epoll/dynamic counts; note deferred watcher variants (file/tcp/udp still off). |
+| File                                                                                          | Responsibility                                                                                                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crates/rustty-xev/src/epoll.rs` (**create**)                                                 | epoll `Loop`/`Completion`/`Operation`/`Result`/`submit`/`tick`; port of libxev `backend/epoll.zig` (2061 loc). Mirrors `kqueue.rs` structure.                                                                                                                                                           |
+| `crates/rustty-xev/src/io_uring.rs` (**create**)                                              | io_uring `Loop`/`Completion`/`Operation`/`Result` + SQ/CQ ring engine; port of `backend/io_uring.zig` (1787 loc) + a small `IoUring` ring binding (libc syscalls).                                                                                                                                      |
+| `crates/rustty-xev/src/linux/timerfd.rs` (**create**)                                         | `timerfd`-backed timer primitive; port of libxev `linux/timerfd.zig` (89 loc).                                                                                                                                                                                                                          |
+| `crates/rustty-xev/src/linux/eventfd.rs` (**create**)                                         | `eventfd` wakeup primitive both backends' `Async` wrap (create/notify/drain).                                                                                                                                                                                                                           |
+| `crates/rustty-xev/src/linux.rs` (**modify from stub**)                                       | `mod timerfd; mod eventfd;` + the shared plain ABI enums (`RunMode`/`CallbackAction`/`CompletionState`/`Options`) both Linux backends use.                                                                                                                                                              |
+| `crates/rustty-xev/src/dynamic.rs` (**create**)                                               | hand-authored `Dynamic` union layer (`Loop`/`Completion`/`Async`/`Timer`/`Process`/`Stream`/`WriteQueue`/`WriteRequest`/error sets) over `{IoUring, Epoll}` + the global `backend` selector + `detect`/`prefer`. Port of `dynamic.zig` (524 loc) WITHOUT comptime metaprogramming (concrete 2-variant). |
+| `async.rs`/`timer.rs`/`process.rs`/`stream.rs`/`loop.rs`/`common.rs`/`net.rs` (**UNTOUCHED**) | macOS-only (R5). Linux watcher surfaces live INSIDE `epoll.rs`/`io_uring.rs`, not here.                                                                                                                                                                                                                 |
+| `crates/rustty-xev/src/backend.rs` (**modify**)                                               | `candidates()`/`default()`/`Api` Linux arms (`[io_uring, epoll]`, default `io_uring`).                                                                                                                                                                                                                  |
+| `crates/rustty-xev/src/lib.rs` (**modify**)                                                   | per-target re-export: Linux → `dynamic::*`; macOS → kqueue flat (unchanged).                                                                                                                                                                                                                            |
+| `crates/rustty-termio/tests/live_shell.rs` (**modify**)                                       | widen the KAT gate from `#[cfg(target_os="macos")]` to `#[cfg(unix)]`.                                                                                                                                                                                                                                  |
+| `.port/phase-2/DEFERRALS.md` + `check_test_counts.py` (**modify**)                            | record io_uring/epoll/dynamic counts; note deferred watcher variants (file/tcp/udp still off).                                                                                                                                                                                                          |
 
 ---
 
 ### Task 1: Linux backend enum + gated module skeleton
 
 **Files:**
+
 - Modify: `crates/rustty-xev/src/backend.rs` (add Linux `candidates`/`default`/`Api` arms)
 - Modify: `crates/rustty-xev/src/lib.rs:35–205` (add `#[cfg(target_os="linux")] mod epoll; mod io_uring; mod dynamic; mod linux;` skeletons)
 - Create: `crates/rustty-xev/src/epoll.rs`, `io_uring.rs`, `dynamic.rs`, `linux/timerfd.rs` (empty stub bodies that compile)
 
 **Interfaces:**
+
 - Consumes: existing `Backend` enum (`backend.rs`).
 - Produces: `Backend::{IoUring, Epoll}` variants; `Backend::default() == IoUring` on Linux; `Backend::candidates() == &[IoUring, Epoll]` on Linux (ref `backend.zig:19–41`). Empty `epoll`/`io_uring`/`dynamic` modules gated `#[cfg(target_os="linux")]`.
 
@@ -75,11 +78,13 @@ The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, 
 **Scope (per STRUCTURE CORRECTION):** the standalone `linux/` primitives both backends build on. NO loop yet — so tests are standalone (fd-level), and the loop-driven `epoll: timerfd`/async-wakeup tests move to Task 3.
 
 **Files:**
+
 - Create: `crates/rustty-xev/src/linux/timerfd.rs` (port `linux/timerfd.zig`, 89 loc)
 - Create: `crates/rustty-xev/src/linux/eventfd.rs` (the eventfd wakeup primitive)
 - Modify: `crates/rustty-xev/src/linux.rs` (from stub → `mod timerfd; mod eventfd;` + the shared plain ABI enums `RunMode`/`CallbackAction`/`CompletionState`/`Options`, byte-faithful twins of `loop.rs`'s pure enums — do NOT import from the macOS-gated `loop.rs`)
 
 **Interfaces:**
+
 - Consumes: `libc::{timerfd_create, timerfd_settime, timerfd_gettime, eventfd, read, write, close, CLOCK_MONOTONIC, TFD_*, EFD_*}`.
 - Produces:
   - `linux::timerfd::Timerfd { fd: RawFd }` — `init() -> io::Result<Self>` (`CLOCK_MONOTONIC`, `TFD_NONBLOCK|TFD_CLOEXEC`), `set(next_ms)`, `get()`, `deinit()`; `Copy` (wraps a raw fd).
@@ -98,9 +103,11 @@ The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, 
 ### Task 3: epoll `Loop` core — timers, stop, cancellation
 
 **Files:**
+
 - Modify: `crates/rustty-xev/src/epoll.rs` (from stub → the `Loop`/`Completion`/`Operation`/`Result`, `submit`/`tick`/`run`, `epoll_create1` + `epoll_ctl`/`epoll_wait`, the timer heap wiring, the internal eventfd wakeup, the `Timer` watcher)
 
 **Interfaces:**
+
 - Consumes: `heap.rs` (the shared pairing heap, reused as-is), `queue.rs` (intrusive FIFO), `linux::timerfd::Timerfd` + `linux::eventfd::Eventfd` (Task 2 primitives), the `linux::{RunMode, CallbackAction, CompletionState, Options}` twinned ABI enums (NOT the macOS-gated `loop.rs`). This backend is SELF-CONTAINED: define `epoll::Callback` (fn-ptr referencing `epoll::{Loop, Completion, Result}`) locally.
 - Produces: `epoll::Loop` with the [ADV-FIX F1] public surface `{init, deinit, stop, stopped, add, submit, run, tick, now, update_now, timer, timer_reset}` (the loop's internal wakeup is an `Eventfd` registered in the epoll set, per `epoll.zig:37–41,78`); `epoll::Completion` (hand-written `Default`, `const _: () = assert!(size_of::<Completion>()==<ref>)` tripwire from `epoll.zig:1380` "Completion size"); `epoll::Operation`/`Result` (the tag set epoll uses, ref `epoll.zig`); the `epoll::Timer` watcher over `Timerfd`; `unsafe impl Send for Loop` (thread-affinity note, [ADV-FIX F2]).
 
@@ -117,10 +124,12 @@ The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, 
 **Scope (per STRUCTURE CORRECTION):** everything lands in the self-contained `epoll.rs` (and a new Linux net type) — do NOT modify the macOS-gated `process.rs`/`stream.rs`/`net.rs`.
 
 **Files:**
+
 - Modify: `crates/rustty-xev/src/epoll.rs` (add the `Operation` socket/proc/stream variants + their `perform` arms: accept/connect/send/recv/close/read/write/poll/proc; the `Process`/`Stream`/`WriteQueue`/`WriteRequest` watcher surfaces; extend the deferred-in-T3 match arms). Re-measure the `size_of::<Completion>()` tripwire after adding these fields (carry-forward from T3 review). Fix the T3 timeout cast at the (former) L606 site: replace `saturating_sub(..) as i32` with a checked/`i32::try_from`-clamped conversion so a >24.8-day timer can't wrap negative (carry-forward from T3 review).
 - Create: `crates/rustty-xev/src/linux/net.rs` (the `sockaddr`/`Address` subset epoll's connect/sendto/recvfrom need — `net.rs` is macOS-gated, so twin the exact subset here; add `mod net;` to `linux.rs`). Ref the crate's macOS `net.rs` for the shape + `std.net.Address` subset epoll uses.
 
 **Interfaces:**
+
 - Consumes: `epoll::Loop` (Task 3), `queue.rs` (`WriteQueue` = intrusive FIFO of `WriteRequest`), `linux::net::Address`.
 - Produces (all in `epoll.rs`): `epoll::Process { pid }` (`init`/`deinit`/`wait`), `epoll::Stream { fd }` (`init_fd`/`deinit`/`read`/`write`/`close`/`poll`/`queue_write`), `epoll::WriteQueue`/`WriteRequest` (hand-written `Default`), and the socket-op `Operation` variants.
 
@@ -137,9 +146,11 @@ The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, 
 ### Task 5: io_uring ring binding + `Loop` core
 
 **Files:**
+
 - Modify: `crates/rustty-xev/src/io_uring.rs` (a minimal `IoUring` ring over libc syscalls, then `Loop`/`Completion`/`Operation`/`Result`/`submit`/`tick`)
 
 **Interfaces:**
+
 - Consumes: `libc::{syscall, mmap, munmap}` + the `__NR_io_uring_setup`/`__NR_io_uring_enter` numbers, `heap.rs`, `queue.rs`, `loop.rs`.
 - Produces: `io_uring::IoUring` (`init(entries) -> Result<Self,Error>`, `get_sqe`, `submit`, `copy_cqes`, `deinit`) — a faithful subset of Zig's `std.os.linux.IoUring` used by `io_uring.zig:32,68`; `io_uring::Loop` with the same [ADV-FIX F1] public surface; `io_uring::Completion` (`Default`, size-assert from `io_uring.zig:1117`); `unsafe impl Send`.
 
@@ -158,9 +169,11 @@ The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, 
 **Scope (per STRUCTURE CORRECTION):** everything lands in the self-contained `io_uring.rs` — do NOT modify the macOS-gated `async.rs`/`timer.rs`/`process.rs`/`stream.rs`. Mirror how `epoll.rs` (Tasks 3–4) carries its own watcher surfaces. Reuse the io_uring ABI structs HAND-DECLARED in `io_uring.rs` by Task 5 (libc does NOT provide `io_uring_params`/`sqe`/`cqe`/`IORING_*`), the `linux::{timerfd,eventfd}` primitives, `linux::net::Address` (added in T4), and the `linux::` twinned ABI enums.
 
 **Files:**
+
 - Modify: `crates/rustty-xev/src/io_uring.rs` (timer + socket + proc + stream `Operation`/`start`/`perform` arms; the `Async`/`Timer`/`Process`/`Stream`/`WriteQueue`/`WriteRequest` watcher surfaces). Re-measure the `size_of::<Completion>()` tripwire after adding fields.
 
 **Interfaces:**
+
 - Consumes: `io_uring::Loop`/`IoUring` (Task 5), `queue.rs`, `linux::{timerfd, eventfd, net}`.
 - Produces (all in `io_uring.rs`): io_uring `Async` (eventfd), `Timer` (`IORING_OP_TIMEOUT`/`TIMEOUT_REMOVE`), `Process`, `Stream`/`WriteQueue`/`WriteRequest` — the same surface `epoll.rs` exposes, so Task 7's `Dynamic` can union the two.
 
@@ -177,11 +190,14 @@ The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, 
 ### Task 7: `dynamic.rs` — the hand-authored 2-backend union selector
 
 **Files:**
+
 - Modify: `crates/rustty-xev/src/dynamic.rs` (the full `Dynamic` layer)
 
 **Interfaces:**
+
 - Consumes: `epoll::*` (Tasks 2–4), `io_uring::*` (Tasks 5–6), `backend.rs`.
 - Produces (the Linux public surface `lib.rs` re-exports): all under `#[cfg(target_os="linux")]`. Concrete hand-authored analogues of `dynamic.zig` (NO comptime `@Type`; a fixed 2-variant enum per type):
+
   ```rust
   pub static BACKEND: AtomicU8 = AtomicU8::new(Backend::Epoll as u8); // last candidate default (dynamic.zig:91)
   pub fn detect() -> Result<(), Error>;   // io_uring.available() ? IoUring : Epoll (dynamic.zig:96)
@@ -203,6 +219,7 @@ The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, 
   pub struct WriteQueue { … } pub struct WriteRequest { … }  // Default REQUIRED
   pub type Error = …; pub enum NotifyError { … }  // Debug+Clone+Copy+PartialEq+Eq REQUIRED — merged ErrorSet (dynamic.zig:512)
   ```
+
   Every method dispatches `match self.backend { LoopUnion::IoUring(l)=>l.method(), LoopUnion::Epoll(l)=>l.method() }`, reading `BACKEND` for constructors (`Loop::init`, `Completion::init`) exactly as `dynamic.zig`'s `switch (backend)`.
 
 - [ ] **Step 1: Write the failing tests** — port the 5 `dynamic.zig` tests: `refAllDecls` (as a `dynamic_ref_all_decls` compile-touch), `completion is zero-able` (:202 → `dynamic_completion_zero_able`), `detect` (:207), `prefer` (:218), `loop basics` (:229 → `dynamic_loop_basics`).
@@ -216,11 +233,13 @@ The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, 
 ### Task 8: `lib.rs` per-target re-export + gate wiring
 
 **Files:**
+
 - Modify: `crates/rustty-xev/src/lib.rs:156–205` (Linux re-export block), `backend.rs`
 - Modify: `.port/tools/check_test_counts.py` (or its manifest) — add epoll/io_uring/dynamic count rows
 - Modify: `.port/phase-2/DEFERRALS.md` (record: `file/tcp/udp` watchers still deferred on Linux too; ThreadPool body still deferred; any skip-stub)
 
 **Interfaces:**
+
 - Consumes: `dynamic::*` (Task 7), `epoll`/`io_uring` (as `dynamic`'s internals).
 - Produces: on Linux, `pub use dynamic::{Loop, Completion, Async, Timer, Process, Stream, WriteQueue, WriteRequest, Error, NotifyError, …}` under the SAME names the macOS block exports — so `rustty_xev::Loop` etc. resolve to `Dynamic` on Linux, flat kqueue on macOS. `Backend`/`RunMode`/`CallbackAction` stay shared.
 
@@ -247,10 +266,12 @@ The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, 
 ### Task 9: downstream un-defer — termio live shell on Linux
 
 **Files:**
+
 - Modify: `crates/rustty-termio/tests/live_shell.rs:1` (`#[cfg(target_os="macos")]` → `#[cfg(unix)]`)
 - Modify: any termio/core site that `#[cfg(target_os="macos")]`-gated an xev-dependent path that should be `#[cfg(unix)]` (grep `xev` + `cfg(target_os = "macos")` in termio/core; the mailbox/exec/thread wiring is already target-neutral via `xev_seam`).
 
 **Interfaces:**
+
 - Consumes: the Linux `rustty_xev::*` Dynamic surface (Task 8) through `termio::xev_seam` (`pub use rustty_xev::*`).
 - Produces: a live PTY shell on Linux — the existing `live_shell.rs` KAT (spawn `/bin/sh -c 'echo …'`, pump `run(NoWait)` under a deadline+tick cap, assert the echo round-trips into the `Screen`) passing on Linux.
 
@@ -265,12 +286,14 @@ The kqueue lane gated **all** watcher/ABI helper files (`loop.rs`, `common.rs`, 
 ---
 
 ## Deferred (out of L1 scope, documented)
+
 - `watcher/file.zig`/`tcp.zig`/`udp.zig` — unused by ghostty (deferred on macOS too); keep deferred on Linux.
 - `ThreadPool` body — type surface only; ghostty passes no pool.
 - `io_uring` advanced ops beyond what the shell path exercises (multishot, registered buffers) — port only if a reference decl forces it.
 - `renderer.Thread` event loop — GPU+xev blocked; that's L4/L5, not L1.
 
 ## Self-review notes (spec coverage)
+
 - epoll 12 tests → Tasks 3–4. io_uring 13 → Tasks 5–6. dynamic 5 → Task 7. ✓
 - The `Dynamic` "no comptime" divergence → Task 7 (hand-authored concrete enums). ✓
 - Trait-surface bounds ([ADV-FIX F3]) → Task 8 `surface_parity.rs` compile-gate. ✓

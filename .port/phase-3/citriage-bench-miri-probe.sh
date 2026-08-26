@@ -6,7 +6,7 @@
 # and classifies it, so the exception set is MEASURED rather than guessed.
 # macOS has no `timeout`; `perl -e 'alarm N; exec @ARGV'` is the stand-in.
 set -uo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit 1
 CRATE="${1:-rustty-bench}"
 LIST="${2:-/tmp/bench_tests.txt}"
 while read -r t; do

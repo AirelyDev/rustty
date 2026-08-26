@@ -29,14 +29,14 @@ Cargo builds, so simply run `cargo build` **without any `--release` flag**.
 There are many more build steps than just `cargo build`, some of which are listed
 here:
 
-| Command                                       | Description                                                                                                            |
-| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `cargo run -p rustty`                         | Runs Rustty                                                                                                           |
-| `.port/tools/gates/check_leaks.sh`            | Runs the memory-safety gate (Miri/ASan) to [check for memory leaks](#checking-for-memory-leaks)                       |
-| `cargo test`                                  | Runs unit tests (accepts `-p <crate>` to scope to a crate, and a trailing `<filter>` to only run matching tests)      |
-| `cargo run -p xtask -- update-translations`   | Updates Rustty's translation strings (see the [Contributor's Guide on Localizing Rustty](po/README_CONTRIBUTORS.md))  |
-| `cargo run -p xtask -- dist`                  | Builds a source tarball                                                                                               |
-| `cargo run -p xtask -- distcheck`             | Builds and validates a source tarball                                                                                 |
+| Command                                     | Description                                                                                                          |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `cargo run -p rustty`                       | Runs Rustty                                                                                                          |
+| `.port/tools/gates/check_leaks.sh`          | Runs the memory-safety gate (Miri/ASan) to [check for memory leaks](#checking-for-memory-leaks)                      |
+| `cargo test`                                | Runs unit tests (accepts `-p <crate>` to scope to a crate, and a trailing `<filter>` to only run matching tests)     |
+| `cargo run -p xtask -- update-translations` | Updates Rustty's translation strings (see the [Contributor's Guide on Localizing Rustty](po/README_CONTRIBUTORS.md)) |
+| `cargo run -p xtask -- dist`                | Builds a source tarball                                                                                              |
+| `cargo run -p xtask -- distcheck`           | Builds and validates a source tarball                                                                                |
 
 In addition, all Rust code should be formatted with `cargo fmt` and linted with
 `cargo clippy` before you commit (see [Linting](#linting)).
@@ -50,24 +50,24 @@ tree, the macOS xcframework, source tarballs). `CMake`, `Doxygen`, the
 `Makefile`, `macos/build.nu`, and the Nix flake are consumers or packagers
 layered on top of those two.
 
-| Method | Command | Produces | Lands in | Use it for |
-| ------ | ------- | -------- | -------- | ---------- |
-| **cargo** | `cargo build [--release]` | all workspace crates | `target/{debug,release}/` | day-to-day development |
-| | `cargo run -p rustty` | the `rustty` binary | `target/<profile>/rustty` | running Rustty locally |
-| | `cargo test [-p <crate>]` | — | — | tests (memory-safety gate: [Checking for Memory Leaks](#checking-for-memory-leaks)) |
-| | `cargo build -p rustty-vt-c --release [--features simd]` | the VT C library | `target/release/librustty_vt_c.{a,dylib}` | the headless `librustty-vt` C library |
-| **xtask** | `cargo run -p xtask -- header-gen` | `include/rustty.h` (+ `rustty/vt/*`) via cbindgen | `include/` | regenerating the VT C headers |
-| | `… -- header-gen-apprt` | `include/rustty-apprt.h` | `include/` | the embedding-API header |
-| | `… -- xcframework` | `RusttyKit.xcframework` (SIMD-on) | `dist/RusttyKit.xcframework` | the macOS Swift-app library |
-| | `… -- resources` | terminfo, shell-integration, themes, man pages, completions, locale | `zig-out/share/` | the macOS Copy-Resources tree |
-| | `… -- dist` | the source tarball | `dist/rustty-<version>.tar.gz` | packaging / release source |
-| | `… -- distcheck` | (extracts + builds the tarball) | — | validating the tarball is self-contained |
-| **CMake** | `cmake -B build && cmake --build build` | `librustty_vt_c` for C/CMake consumers | `target/<profile>/` | C/CMake projects consuming the VT library (FetchContent / `find_package(rustty-vt)`) |
-| | `cmake --install build --prefix P` | library + headers + pkg-config config | `P/{lib,include,lib/cmake/rustty-vt}` | installing the VT library to a prefix |
-| **Doxygen** | `doxygen Doxyfile` | the C-API docs (HTML + man pages) | `doc/librustty/`, `doc/man/` | the `librustty` C-API reference |
-| **Makefile** | `make clean` | removes `target`, the xcframework, `build-cmake`, `doc` | — | quick cleanup |
-| **macOS app** | `cargo run -p xtask -- xcframework` then `macos/build.nu` | `Rustty.app` (two-phase: library → Swift app via xcodebuild) | `macos/build/<config>/Rustty.app` | the macOS GUI app |
-| **Nix** | `nix build .#librustty-vt` / `.#rustty`; `nix develop` | C library / GTK app / dev shell / VMs | the Nix store | reproducible builds, Linux packaging, dev shell |
+| Method        | Command                                                   | Produces                                                            | Lands in                                  | Use it for                                                                           |
+| ------------- | --------------------------------------------------------- | ------------------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------ |
+| **cargo**     | `cargo build [--release]`                                 | all workspace crates                                                | `target/{debug,release}/`                 | day-to-day development                                                               |
+|               | `cargo run -p rustty`                                     | the `rustty` binary                                                 | `target/<profile>/rustty`                 | running Rustty locally                                                               |
+|               | `cargo test [-p <crate>]`                                 | —                                                                   | —                                         | tests (memory-safety gate: [Checking for Memory Leaks](#checking-for-memory-leaks))  |
+|               | `cargo build -p rustty-vt-c --release [--features simd]`  | the VT C library                                                    | `target/release/librustty_vt_c.{a,dylib}` | the headless `librustty-vt` C library                                                |
+| **xtask**     | `cargo run -p xtask -- header-gen`                        | `include/rustty.h` (+ `rustty/vt/*`) via cbindgen                   | `include/`                                | regenerating the VT C headers                                                        |
+|               | `… -- header-gen-apprt`                                   | `include/rustty-apprt.h`                                            | `include/`                                | the embedding-API header                                                             |
+|               | `… -- xcframework`                                        | `RusttyKit.xcframework` (SIMD-on)                                   | `dist/RusttyKit.xcframework`              | the macOS Swift-app library                                                          |
+|               | `… -- resources`                                          | terminfo, shell-integration, themes, man pages, completions, locale | `zig-out/share/`                          | the macOS Copy-Resources tree                                                        |
+|               | `… -- dist`                                               | the source tarball                                                  | `dist/rustty-<version>.tar.gz`            | packaging / release source                                                           |
+|               | `… -- distcheck`                                          | (extracts + builds the tarball)                                     | —                                         | validating the tarball is self-contained                                             |
+| **CMake**     | `cmake -B build && cmake --build build`                   | `librustty_vt_c` for C/CMake consumers                              | `target/<profile>/`                       | C/CMake projects consuming the VT library (FetchContent / `find_package(rustty-vt)`) |
+|               | `cmake --install build --prefix P`                        | library + headers + pkg-config config                               | `P/{lib,include,lib/cmake/rustty-vt}`     | installing the VT library to a prefix                                                |
+| **Doxygen**   | `doxygen Doxyfile`                                        | the C-API docs (HTML + man pages)                                   | `doc/librustty/`, `doc/man/`              | the `librustty` C-API reference                                                      |
+| **Makefile**  | `make clean`                                              | removes `target`, the xcframework, `build-cmake`, `doc`             | —                                         | quick cleanup                                                                        |
+| **macOS app** | `cargo run -p xtask -- xcframework` then `macos/build.nu` | `Rustty.app` (two-phase: library → Swift app via xcodebuild)        | `macos/build/<config>/Rustty.app`         | the macOS GUI app                                                                    |
+| **Nix**       | `nix build .#librustty-vt` / `.#rustty`; `nix develop`    | C library / GTK app / dev shell / VMs                               | the Nix store                             | reproducible builds, Linux packaging, dev shell                                      |
 
 ### Where the artifacts live
 

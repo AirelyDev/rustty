@@ -127,7 +127,8 @@ case "$accel" in
 esac
 
 case "$(printf '%s' "$renderer" | tr '[:upper:]' '[:lower:]')" in
-  *llvmpipe*|*softpipe*|*swrast*|*"software rasterizer"*|*"kms swrast"*)
+  # NOTE: `*swrast*` already subsumes "kms swrast", so it is not listed again.
+  *llvmpipe*|*softpipe*|*swrast*|*"software rasterizer"*)
     echo "  FAIL renderer is a software rasterizer: $renderer"; fails=1 ;;
   *)
     echo "  ok   renderer is not a known software rasterizer" ;;

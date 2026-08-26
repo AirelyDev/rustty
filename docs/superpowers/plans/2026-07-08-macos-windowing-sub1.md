@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **Port-domain adaptation (read first):** this is a full-fidelity Zig→Rust port under R1. For a port task, the "implementation" is the *faithful translation of a specific reference body* — so each task's production step is stated as "port `ghostty <path>:<lines>` per R1 (verbatim comments, byte-faithful Zig-slice→`&[u8]`/`Vec<u8>`/`CString`)", and the task's executable contract is its **Test KAT + Gates**, which are given in full. Each chunk (W0–W4) is executed as its own dynamic workflow (design→adversary→fold→port→verify) — the design phase resolves any remaining method-level signature detail against the reference and this plan's Canonical Interfaces.
+> **Port-domain adaptation (read first):** this is a full-fidelity Zig→Rust port under R1. For a port task, the "implementation" is the _faithful translation of a specific reference body_ — so each task's production step is stated as "port `ghostty <path>:<lines>` per R1 (verbatim comments, byte-faithful Zig-slice→`&[u8]`/`Vec<u8>`/`CString`)", and the task's executable contract is its **Test KAT + Gates**, which are given in full. Each chunk (W0–W4) is executed as its own dynamic workflow (design→adversary→fold→port→verify) — the design phase resolves any remaining method-level signature detail against the reference and this plan's Canonical Interfaces.
 
 **Goal:** Turn the proven offscreen Metal renderer into a live on-screen macOS window — first pixels, then a Rust harness showing a live terminal frame — by filling the deferred windowing surface (IOSurfaceLayer present, CVDisplayLink, the core-resident render `Thread` event loop, the real `Renderer` swap, and the apprt-c macOS host handshake).
 
@@ -26,6 +26,7 @@
 The parallel chunk-authors drifted on a few signatures; these are the reconciled contracts. Where a task's `Consumes`/`Produces` differs, **this section wins**.
 
 ### IOSurfaceLayer (produced by W0.T3, in `crates/rustty-renderer/src/metal/iosurface_layer.rs`)
+
 ```rust
 pub struct IOSurfaceLayer { layer: objc2::rc::Retained<IOSurfaceLayerClass> }
 pub struct Error; // ObjCFailed analogue (reference `error.ObjCFailed`)
@@ -40,10 +41,13 @@ impl IOSurfaceLayer {
     pub fn as_ca_layer(&self) -> &objc2_quartz_core::CALayer;
 }
 ```
+
 Names are **snake_case** (`set_surface`/`set_surface_sync`/`set_display_callback`). The field is the subclass type; consumers take `&CALayer` via `as_ca_layer()`.
 
 ### rustty_renderer::Renderer windowed lifecycle (produced by **W1 — see the added task W1-0 below**)
+
 The monomorphic offscreen `Renderer` gains its windowed-lifecycle methods here (they are **apprt-free** — generic over the surface type `S` where a surface is touched, exactly as the `renderer_seam` placeholder signatures show):
+
 ```rust
 impl Renderer {
     pub fn init(alloc: allocator_api2::alloc::Global, options: Options) -> Result<Renderer, Error>; // generic.rs:1795 seam FILLED
@@ -59,9 +63,11 @@ impl Renderer {
     pub fn set_macos_display_id(&mut self, id: u32);                       // W2-T2
 }
 ```
+
 `rustty_renderer::Options` is extended (W1-0) with the **non-apprt** windowed fields only; the 3 apprt-typed fields (`surface_mailbox`/`rt_surface`/`thread`) stay in `renderer_seam::Options<A>` in core and are consumed there — never named by rustty-renderer.
 
 ### renderer_seam::Thread<A> (filled by W3-E2, **stays in core**, struct already defined at `renderer_seam.rs:229-337`)
+
 ```rust
 // A = rustty_apprt_api::App; struct + ALL fields already exist — DO NOT redefine or move.
 impl<A: apprt::App + 'static> Thread<A> {
@@ -104,30 +110,35 @@ The detailed per-task specs follow. Remember: the **Canonical Interfaces** secti
 
 **Chunk culminating test:** crates/rustty-renderer/src/metal/iosurface_layer.rs::tests::iosurface_layer_sets_surface_as_contents (macOS, offscreen Metal device) — IOSurfaceLayer::init() builds the CALayer subclass, setSurfaceSync(&target.surface) sets a real IOSurface-backed Target surface as `contents`, and layer.contents() returns it (Some + pointer identity); PLUS crates/rustty-os/tests/cf_release_live.rs::cf_release_thread_releases_on_real_xev_loop — a real Thread::init() spawns threadMain on the live rustty-xev kqueue loop, a Release message + wakeup.notify() drains and CFReleases a CFString (+1), stop.notify() ends run(UntilDone), join succeeds, and the CFString retain count drops by 1.
 
-
 ### Task W0.T1: Add objc2-quartz-core dep + wire rustty-xev into rustty-os
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/Cargo.toml` — add a new objc2-quartz-core entry inside the existing [target.'cfg(target_os = "macos")'.dependencies] block (after the objc2-core-foundation stanza, ~line 205); no [workspace.dependencies] entry is needed because the objc2-* crates are pinned inline with literal versions (matching objc2=0.6/objc2-metal=0.3), not via workspace.dependencies
 - Modify: `crates/rustty-os/Cargo.toml` — in [target.'cfg(target_os = "macos")'.dependencies] (~line 60, after objc2-core-foundation) add `rustty-xev = { workspace = true }`; and extend the existing `objc2-core-foundation = "0.3"` line to `objc2-core-foundation = { version = "0.3", features = ["CFBase", "CFString"] }` so the cf_release live KAT can build a CFString + read its retain count
 - Modify: `crates/rustty-renderer/src/metal.rs` — add `pub mod iosurface_layer;` to the mod list (after `pub mod gpu_abi;` ~line 37, keep alphabetical-ish grouping) so T3's file is compiled
 - Test: `crates/rustty-renderer/src/metal/iosurface_layer.rs`
 
 **Consumes:**
+
 - objc2-quartz-core 0.3.1 (objc2 dep req >=0.6.1,<0.8 — compatible with the locked objc2 0.6.4); optional framework deps objc2-core-foundation/objc2-core-graphics/objc2-metal are already resolvable in Cargo.lock
 - rustty-xev = { path = "crates/rustty-xev" } already declared in [workspace.dependencies] (workspace Cargo.toml)
 
 **Produces:**
+
 - objc2_quartz_core::CALayer (+ kCAGravityTopLeft, CALayerContentsGravity, CAMetalLayer) available to rustty-renderer
 - rustty_xev::{Loop, Async, Completion, Error, NotifyError, MachPortError, CallbackAction, RunMode} available to rustty-os (macOS only)
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/renderer/metal/IOSurfaceLayer.zig:1-19` — the imports establishing the objc/macos/CALayer surface that objc2-quartz-core replaces
 
 **FFI / xev mapping:**
-- `@import("objc").getClass("CALayer")` → `objc2_quartz_core::CALayer (typed class; feature gate to VERIFY: no `CALayer` cargo feature exists in objc2-quartz-core 0.3.1 — CALayer + kCAGravityTopLeft compile under the `CoreAnimation` umbrella feature, so enable `CoreAnimation` + `CAMetalLayer`)`
+
+- `@import("objc").getClass("CALayer")` → `objc2_quartz_core::CALayer (typed class; feature gate to VERIFY: no `CALayer`cargo feature exists in objc2-quartz-core 0.3.1 — CALayer + kCAGravityTopLeft compile under the`CoreAnimation`umbrella feature, so enable`CoreAnimation`+`CAMetalLayer`)`
 
 **Test KAT:**
+
 ```rust
 // crates/rustty-renderer/src/metal/iosurface_layer.rs (bottom of file)
 // Smoke test proving the objc2-quartz-core dep + feature set are in-lock and
@@ -150,6 +161,7 @@ mod dep_smoke {
 **Port notes:** objc2-quartz-core is the ONE unverified add in the GPU_RD_BLUEPRINT §2 objc2 lock (metal/io-surface/core-graphics already verified). The blueprint (§147-148) mandates it for the IOSurfaceLayer subclass. Feature gaps are the W0 spike per spec §5.4: run `cargo build -p rustty-renderer` and confirm the exact feature that gates CALayer + kCAGravityTopLeft (the 0.3.1 index shows NO `CALayer`/`CAGravity` feature — they fall under `CoreAnimation`; `CAMetalLayer` is a separate feature needed by W1 and is harmless to enable now). The rustty-os -> rustty-xev edge is acyclic (rustty-xev deps only rustty-global #8, below rustty-os #10); gate it under [target.macos] because rustty_xev::Loop/Async are #[cfg(target_os="macos")].
 
 **Gates:**
+
 - `cargo build -p rustty-renderer`
 - `cargo build -p rustty-os`
 - `cargo tree -p rustty-renderer -i objc2-quartz-core`
@@ -160,11 +172,13 @@ mod dep_smoke {
 ### Task W0.T2: Rewire cf_release_thread.rs onto the REAL rustty-xev Loop/Async
 
 **Files:**
+
 - Create: `crates/rustty-os/tests/cf_release_live.rs`
 - Modify: `crates/rustty-os/src/cf_release_thread.rs` — Replace the module doc's DEFERRED-SEAM note (lines 1-32) to state the seam is now satisfied by the real rustty-xev; replace `use xev_seam as xev;` (line 55) with `use rustty_xev as xev;`; DELETE the entire local `mod xev_seam { ... }` placeholder (the unimplemented!() Loop/Async/Completion/Error/AsyncWaitError/CallbackAction/RunMode, ~lines 330-373 per spec, actual ~lines 288-376); gate the `Thread` struct + its impl + wakeupCallback/stopCallback + log helpers under `#[cfg(target_os="macos")]` (keep Message/Mailbox cross-platform); make fields `pub wakeup`, `pub stop`, `pub mailbox`; change the callback ABI + threadMain_ to raw `*mut Thread` (see produces)
 - Test: `crates/rustty-os/tests/cf_release_live.rs`
 
 **Consumes:**
+
 - rustty_xev::Loop::init() -> Result<Loop, rustty_xev::Error>
 - rustty_xev::Loop::{deinit(&mut self), run(&mut self, RunMode)->Result<(),Error>, stop(&mut self), stopped(&self)->bool}
 - rustty_xev::Async::{init()->Result<Async,Error>, deinit(&mut self), notify(&self)->Result<(),NotifyError>, wait::<UD,CB>(self, *mut Loop, *mut Completion, *mut UD, CB)} (Async is Copy)
@@ -173,16 +187,18 @@ mod dep_smoke {
 - crate::macos::pthread_setname_np (crates/rustty-os/src/macos.rs:121)
 
 **Produces:**
+
 - #[cfg(target_os="macos")] pub struct Thread { pub loop_: xev::Loop, pub wakeup: xev::Async, wakeup_c: xev::Completion, pub stop: xev::Async, stop_c: xev::Completion, pub mailbox: Box<Mailbox>, flags: Flags }
 - pub fn Thread::init() -> Result<Thread, xev::Error>
-- pub fn Thread::deinit(mut self)  // consumes: stop.deinit(); wakeup.deinit(); loop_.deinit(); mailbox.destroy()
-- pub fn Thread::threadMain(&mut self)  // public entrypoint; delegates to unsafe fn threadMain_(self_: *mut Thread)
+- pub fn Thread::deinit(mut self) // consumes: stop.deinit(); wakeup.deinit(); loop_.deinit(); mailbox.destroy()
+- pub fn Thread::threadMain(&mut self) // public entrypoint; delegates to unsafe fn threadMain_(self_: *mut Thread)
 - pub enum Message { Release { refs: Vec<*mut std::ffi::c_void> } } (cross-platform)
 - pub type Mailbox = BlockingQueue<Message, 64> (cross-platform)
 - fn wakeupCallback(self_: *mut Thread, _l: *mut xev::Loop, _c: *mut xev::Completion, r: Result<(), xev::MachPortError>) -> xev::CallbackAction
 - fn stopCallback(self_: *mut Thread, _l: *mut xev::Loop, _c: *mut xev::Completion, r: Result<(), xev::MachPortError>) -> xev::CallbackAction
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/os/cf_release_thread.zig:61-89` — Thread.init — xev.Loop.init(.{}) + two xev.Async.init() + Mailbox.create (with errdefers)
 - `src/os/cf_release_thread.zig:91-103` — deinit — stop.deinit/wakeup.deinit/loop.deinit + mailbox.destroy
 - `src/os/cf_release_thread.zig:101-139` — threadMain — errored child call + abrupt-exit drain (flags.drain=true; loop.run(.until_done))
@@ -190,6 +206,7 @@ mod dep_smoke {
 - `src/os/cf_release_thread.zig:142-183` — drainMailbox (drain-flag fast path + Release arm CFRelease(ref) + free) + wakeupCallback (.rearm) + stopCallback (loop.stop(); .disarm)
 
 **FFI / xev mapping:**
+
 - `var loop = try xev.Loop.init(.{});` → `let loop_ = xev::Loop::init()?;  // rustty_xev kqueue Loop::init() (kqueue.rs:320)`
 - `var wakeup_h = try xev.Async.init(); var stop_h = try xev.Async.init();` → `let wakeup = xev::Async::init()?; let stop = xev::Async::init()?;  // async.rs:122 (mach-port allocate + insert send right)`
 - `self.wakeup.wait(&self.loop, &self.wakeup_c, Thread, self, wakeupCallback);` → `unsafe { (*self_).wakeup.wait(&raw mut (*self_).loop_, &raw mut (*self_).wakeup_c, self_, wakeupCallback) };  // async.rs:216 unsafe wait<UD=Thread,CB=fn-item ZST>; self_: *mut Thread`
@@ -202,6 +219,7 @@ mod dep_smoke {
 - `producer: thread.wakeup.notify() / thread.stop.notify()` → `thread.wakeup.notify()?  / thread.stop.notify()?  // async.rs:363 notify(&self)->Result<(),NotifyError>; used by the W1 renderer + the live KAT`
 
 **Test KAT:**
+
 ```rust
 // crates/rustty-os/tests/cf_release_live.rs
 //! W0 live-loop KAT (imitates rustty-termio/tests/live_shell.rs): the cf_release
@@ -262,9 +280,10 @@ fn cf_release_thread_releases_on_real_xev_loop() {
 }
 ```
 
-**Port notes:** R5 un-defer: this replaces the deferred xev seam with the live backend — no cf_release_thread.zig logic was ever stubbed (only the xev *dependency* was), so R1 fidelity is unchanged; every ported comment/errdefer marker stays. threadMain_ must take raw `*mut Thread` (not &mut self) to pass `&raw mut (*self_).loop_`/`&raw mut (*self_).wakeup_c` as loop-held raw pointers alongside the self userdata WITHOUT a `&mut self` + interior-raw-ptr aliasing violation across loop ticks — this mirrors rustty-termio/src/thread.rs:735 threadMain_ and its wakeupCallback/stopCallback (thread.rs:1119/1149) which use the IDENTICAL ABI (cb_: *mut UD, r: Result<(),xev::MachPortError>). SB/TB: Async is Copy (mach port u32) so wakeup/stop copy out cheaply and are Send; Loop is NOT Copy and stays owned by Thread. The Box<Mailbox> heap address is stable across a Thread move (Box moves the pointer) — the KAT keeps Thread on the test thread so only the u32 Async handles cross threads. Whole Thread is macOS-gated because rustty_xev::Loop/Async are #[cfg(target_os="macos")]; Message/Mailbox stay cross-platform (no xev), and on non-macOS keep the file-local CFRelease shim so the module still type-checks (nothing consumes Thread off-Darwin). Fields wakeup/stop/mailbox become pub to match Zig package-visibility (the W1 renderer + this KAT are the producers that push+notify). Add crates/rustty-os/tests/cf_release_live.rs to .port/phase-2/MIRI_EXCEPTIONS.md (real mach/kqueue syscalls + fork-free thread spawn; ASan-eligible per R6).
+**Port notes:** R5 un-defer: this replaces the deferred xev seam with the live backend — no cf_release_thread.zig logic was ever stubbed (only the xev _dependency_ was), so R1 fidelity is unchanged; every ported comment/errdefer marker stays. threadMain_ must take raw `*mut Thread` (not &mut self) to pass `&raw mut (*self_).loop_`/`&raw mut (*self_).wakeup_c` as loop-held raw pointers alongside the self userdata WITHOUT a `&mut self` + interior-raw-ptr aliasing violation across loop ticks — this mirrors rustty-termio/src/thread.rs:735 threadMain_ and its wakeupCallback/stopCallback (thread.rs:1119/1149) which use the IDENTICAL ABI (cb_: *mut UD, r: Result<(),xev::MachPortError>). SB/TB: Async is Copy (mach port u32) so wakeup/stop copy out cheaply and are Send; Loop is NOT Copy and stays owned by Thread. The Box<Mailbox> heap address is stable across a Thread move (Box moves the pointer) — the KAT keeps Thread on the test thread so only the u32 Async handles cross threads. Whole Thread is macOS-gated because rustty_xev::Loop/Async are #[cfg(target_os="macos")]; Message/Mailbox stay cross-platform (no xev), and on non-macOS keep the file-local CFRelease shim so the module still type-checks (nothing consumes Thread off-Darwin). Fields wakeup/stop/mailbox become pub to match Zig package-visibility (the W1 renderer + this KAT are the producers that push+notify). Add crates/rustty-os/tests/cf_release_live.rs to .port/phase-2/MIRI_EXCEPTIONS.md (real mach/kqueue syscalls + fork-free thread spawn; ASan-eligible per R6).
 
 **Gates:**
+
 - `cargo build -p rustty-os`
 - `cargo test -p rustty-os --test cf_release_live -- --nocapture`
 - `cargo test -p rustty-os --lib`
@@ -276,10 +295,12 @@ fn cf_release_thread_releases_on_real_xev_loop() {
 ### Task W0.T3: Port IOSurfaceLayer.zig -> metal/iosurface_layer.rs (CALayer subclass present primitive)
 
 **Files:**
+
 - Create: `crates/rustty-renderer/src/metal/iosurface_layer.rs`
 - Test: `crates/rustty-renderer/src/metal/iosurface_layer.rs`
 
 **Consumes:**
+
 - objc2::{define_class, msg_send, rc::{Retained, Allocated}, runtime::AnyObject, MainThreadMarker, DefinedClass}
 - objc2_quartz_core::{CALayer, CALayerContentsGravity, kCAGravityTopLeft}
 - objc2_io_surface::IOSurfaceRef (retain(&self)->CFRetained<IOSurfaceRef>, width(&self)->usize, height(&self)->usize)
@@ -288,17 +309,19 @@ fn cf_release_thread_releases_on_real_xev_loop() {
 - from Target (crates/rustty-renderer/src/metal/target.rs): Target { pub surface: CFRetained<IOSurfaceRef>, .. }; Metal::init_offscreen / Metal::init_target(w,h)->Result<Target,_> for the KAT
 
 **Produces:**
-- pub type DisplayCallback = Option<unsafe extern "C-unwind" fn(*mut std::ffi::c_void)>  // ref: ?*align(8) const fn(?*anyopaque) void
+
+- pub type DisplayCallback = Option<unsafe extern "C-unwind" fn(*mut std::ffi::c_void)> // ref: ?*align(8) const fn(?*anyopaque) void
 - objc2 define_class subclass: pub struct IOSurfaceLayerClass (super = CALayer, name = "IOSurfaceLayer", #[ivars = Ivars]) with `display`/`actionForKey:` overrides; struct Ivars { display_cb: Cell<*const c_void>, display_ctx: Cell<*mut c_void> }
 - pub struct IOSurfaceLayer { pub layer: Retained<IOSurfaceLayerClass> }
-- pub fn IOSurfaceLayer::init() -> Result<IOSurfaceLayer, Error>  // Error::ObjCFailed
-- pub fn IOSurfaceLayer::release(self)  // ARC drop of the Retained
-- pub fn IOSurfaceLayer::setSurface(&self, surface: &IOSurfaceRef)  // main-thread dispatch
+- pub fn IOSurfaceLayer::init() -> Result<IOSurfaceLayer, Error> // Error::ObjCFailed
+- pub fn IOSurfaceLayer::release(self) // ARC drop of the Retained
+- pub fn IOSurfaceLayer::setSurface(&self, surface: &IOSurfaceRef) // main-thread dispatch
 - pub fn IOSurfaceLayer::setSurfaceSync(&self, surface: &IOSurfaceRef)
 - pub fn IOSurfaceLayer::setDisplayCallback(&self, display_cb: DisplayCallback, display_ctx: *mut c_void)
 - pub enum Error { ObjCFailed }
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/renderer/metal/IOSurfaceLayer.zig:1-19` — module doc + Subclass singleton + `layer: objc.Object` field
 - `src/renderer/metal/IOSurfaceLayer.zig:21-46` — init ([CALayer layer].retain(); contentsGravity=kCAGravityTopLeft; ivars display_cb/display_ctx=null) + release
 - `src/renderer/metal/IOSurfaceLayer.zig:49-99` — setSurface (surface.retain(); build SetSurfaceBlock; NSThread.isMainThread ? run : dispatch_async(getMain())) + setSurfaceSync (setProperty contents)
@@ -306,6 +329,7 @@ fn cf_release_thread_releases_on_real_xev_loop() {
 - `src/renderer/metal/IOSurfaceLayer.zig:121-183` — DisplayCallback type + setDisplayCallback (setInstanceVariable) + getSubclass (allocateClassPair CALayer; addIvar x2; replaceMethod display + actionForKey: returning NSNull; registerClassPair)
 
 **FFI / xev mapping:**
+
 - `objc.allocateClassPair(CALayer, "IOSurfaceLayer") + registerClassPair (getSubclass singleton, lines 138-183)` → `objc2::define_class!( #[unsafe(super(CALayer))] #[name = "IOSurfaceLayer"] #[ivars = Ivars] pub struct IOSurfaceLayerClass; impl ... ) — objc2 registers the pair ONCE at first `IOSurfaceLayerClass::class()`, subsuming the `var Subclass: ?objc.Class` singleton`
 - `subclass.addIvar("display_cb"); subclass.addIvar("display_ctx")` → `struct Ivars { display_cb: std::cell::Cell<*const c_void>, display_ctx: std::cell::Cell<*mut c_void> } via #[ivars = Ivars]`
 - `subclass.replaceMethod("display", fn(target,sel){ cb = getInstanceVariable(display_cb); if cb: cb(getInstanceVariable(display_ctx)) })` → `#[unsafe(method(display))] fn display(&self) { let bits = self.ivars().display_cb.get(); let cb: DisplayCallback = unsafe { core::mem::transmute(bits) }; if let Some(cb) = cb { unsafe { cb(self.ivars().display_ctx.get()) } } }`
@@ -322,6 +346,7 @@ fn cf_release_thread_releases_on_real_xev_loop() {
 - `self.layer.setInstanceVariable("display_cb"/"display_ctx", ...)  (setDisplayCallback)` → `self.layer.ivars().display_cb.set(display_cb.map_or(core::ptr::null(), |f| f as *const c_void)); self.layer.ivars().display_ctx.set(display_ctx);`
 
 **Test KAT:**
+
 ```rust
 // crates/rustty-renderer/src/metal/iosurface_layer.rs (bottom of file)
 #[cfg(all(test, target_os = "macos"))]
@@ -390,6 +415,7 @@ mod tests {
 **Port notes:** R1 fidelity: every reference comment (the autorelease/retain rationale at init line 22-25, the block-copy retain note line 62-64, the wrong-size discard jank explanation line 100-105, the disable-animations actionForKey: comment line 163) ports verbatim. Key behavior-preserving maps: (1) `[CALayer layer].retain()` -> `alloc().set_ivars(..).init()` yields the same +1-owned subclass instance (the reference's +layer autorelease + explicit retain nets +1; alloc+init nets +1 with no pool), and the ivars default to null at construction, matching the reference's explicit post-init null-set (lines 37-38). (2) The two ObjC ivars become a typed `Ivars { Cell<*const c_void>, Cell<*mut c_void> }` — Cell gives interior mutability so setDisplayCallback takes &self (reference receiver *IOSurfaceLayer, but only writes ivars). The DisplayCallback fn-pointer is stored as raw bits (transmute round-trip) since objc2 ivars can't hold an Option<fn>. (3) surface retain/release: the reference retains before dispatch and releases in the callback (defer); the port moves an owned CFRetained<IOSurfaceRef> clone into the dispatch closure so it drops (CFRelease) exactly when the callback returns. The Retained<IOSurfaceLayerClass> is cloned (retain) into the closure to match the reference's note that dispatch_async auto-retains the self.layer id when the block is copied. (4) release()->ARC Drop. SB/TB: no long-lived &mut crosses the dispatch boundary; the closure captures owned values only (CFRetained + Retained), so no aliasing of `self`. define_class is the blueprint-mandated (§147-148) objc2 form of runtime allocateClassPair — same registered ObjC class, singleton-once. Miri-excluded (objc runtime + Metal); ASan-eligible (R6).
 
 **Gates:**
+
 - `cargo build -p rustty-renderer`
 - `cargo test -p rustty-renderer metal::iosurface_layer -- --nocapture`
 - `cargo clippy -p rustty-renderer --all-targets`
@@ -407,31 +433,36 @@ mod tests {
 
 **Chunk culminating test:** generic::tests::golden_presents_frame_on_screen (W1-6): draws one golden-state terminal frame ("Ab" + block cursor) into an IOSurface-backed Target, asserts the cursor pixels are genuinely red (reusing the offscreen golden gate), then builds an on-screen Metal via Metal::init over a bare NSView and presents that exact IOSurface — asserting the CALayer attached to the view now hosts the drawn surface as its contents. This is FIRST PIXELS: init view-attach + present setSurface proven end-to-end against real terminal pixels.
 
-
 ### Task W1-1: Add layer:Option<IOSurfaceLayer> field to Metal + import W0 leaf; set None in init_offscreen
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/src/metal/metal_impl.rs` — 59-64 (add `use super::iosurface_layer::{self, IOSurfaceLayer};`), 97-138 (struct Metal: replace the M-1 DEFERRED comment block with the real `layer: Option<IOSurfaceLayer>` field), 240-249 (init_offscreen tail: add `layer: None,` to the returned struct literal), 660-680 (Drop: update the M-1 note — layer releases via IOSurfaceLayer Drop)
 - Test: `crates/rustty-renderer/src/metal/metal_impl.rs`
 
 **Consumes:**
+
 - crate::metal::iosurface_layer::IOSurfaceLayer (W0 produce)
 - IOSurfaceLayer::init() -> Result<IOSurfaceLayer, iosurface_layer::Error>
 - IOSurfaceLayer Drop releases the retained CALayer
 
 **Produces:**
+
 - Metal.layer: Option<IOSurfaceLayer> (None == offscreen divergence, Some == on-screen; consumed by W1-2/W1-3 present + surface_size)
 - Metal::init_offscreen still returns a valid `layer: None` Metal (all Chunk-2/3/4 golden call sites keep compiling unchanged)
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/renderer/Metal.zig:41` — `layer: IOSurfaceLayer,` — the non-optional field on the Zig struct (rustty makes it Option<> to keep the sanctioned offscreen path)
 - `src/renderer/Metal.zig:157-160` — deinit: self.layer.release() — maps to IOSurfaceLayer Drop
 
 **FFI / xev mapping:**
+
 - `layer: IOSurfaceLayer (struct field)` → `pub layer: Option<IOSurfaceLayer>`
 - `self.layer.release() (deinit)` → `<IOSurfaceLayer as Drop>::drop (ARC via Retained<CALayer>)`
 
 **Test KAT:**
+
 ```rust
 #[cfg(target_os = "macos")]
 #[test]
@@ -452,6 +483,7 @@ fn offscreen_metal_has_no_layer() {
 **Port notes:** SANCTIONED DIVERGENCE (R1-documented): ghostty's `layer: IOSurfaceLayer` is non-optional because ghostty always has a host view. rustty added the offscreen golden path (init_offscreen, no view) BEFORE the windowing tier, so the minimal faithful encoding is `Option<IOSurfaceLayer>`: None == offscreen (present no-op, surface_size==offscreen_size), Some == on-screen. The verbatim Zig field decl stays in a doc-comment above the field. No byte-fidelity concern (pure struct shape). Drop order immaterial under ARC.
 
 **Gates:**
+
 - `cargo build -p rustty-renderer`
 - `cargo test -p rustty-renderer --lib metal::`
 - `cargo clippy -p rustty-renderer --all-targets -- -D warnings`
@@ -464,10 +496,12 @@ fn offscreen_metal_has_no_layer() {
 ### Task W1-2: Implement Metal::init (on-screen constructor, M-4 view attach)
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/src/metal/metal_impl.rs` — 254-337 (replace the `pub fn init(/* alloc, opts */) -> Result<Metal,Error> { unimplemented!(...) }` seam at 332-337 with the real on-screen ctor; keep the verbatim Zig body comment 259-331)
 - Test: `crates/rustty-renderer/src/metal/metal_impl.rs`
 
 **Consumes:**
+
 - choose_device() -> Result<Retained<ProtocolObject<dyn MTLDevice>>, Error> (metal_impl.rs:150)
 - query_max_texture_size(&device) -> u32 (metal_impl.rs)
 - device.newCommandQueue()/hasUnifiedMemory() (objc2-metal)
@@ -477,12 +511,15 @@ fn offscreen_metal_has_no_layer() {
 - Metal.layer field (W1-1)
 
 **Produces:**
-- pub fn init(view: &objc2::runtime::AnyObject, scale_factor: f64, blending: AlphaBlending) -> Result<Metal, Error>  // view is the host NSView/UIView, type-erased exactly like ghostty's `info.view: objc.Object`; returns a Metal with layer: Some(..) attached to `view`
+
+- pub fn init(view: &objc2::runtime::AnyObject, scale_factor: f64, blending: AlphaBlending) -> Result<Metal, Error> // view is the host NSView/UIView, type-erased exactly like ghostty's `info.view: objc.Object`; returns a Metal with layer: Some(..) attached to `view`
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/renderer/Metal.zig:64-156` — pub fn init(alloc, opts): chooseDevice+newCommandQueue+metadata, ViewInfo extraction (view + scaleFactor from opts.rt_surface), IOSurfaceLayer.init, setProperty(layer)/setProperty(wantsLayer)/setProperty(clipsToBounds), contentsScale, needsDisplayOnBoundsChange
 
 **FFI / xev mapping:**
+
 - `info.view.setProperty("layer", layer.layer.value)` → `unsafe { let l: *const objc2_quartz_core::CALayer = &*layer.layer; let _: () = objc2::msg_send![view, setLayer: l]; }  // setProperty is KVC setValue:forKey:@"layer" → real setter setLayer:`
 - `info.view.setProperty("wantsLayer", true)` → `unsafe { let _: () = objc2::msg_send![view, setWantsLayer: true]; }`
 - `info.view.setProperty("clipsToBounds", true)` → `unsafe { let _: () = objc2::msg_send![view, setClipsToBounds: true]; }`
@@ -492,6 +529,7 @@ fn offscreen_metal_has_no_layer() {
 - `queue = device.msgSend(newCommandQueue)` → `let queue = device.newCommandQueue().ok_or(Error::NoMetalDevice)?;`
 
 **Test KAT:**
+
 ```rust
 #[cfg(target_os = "macos")]
 #[test]
@@ -520,6 +558,7 @@ fn init_binds_layer_to_nsview() {
 **Port notes:** The Zig `info: ViewInfo` is extracted from `opts.rt_surface` (embedded apprt) — that full Options threading is a W3/renderer_seam concern, so W1 exposes init with the two already-extracted values as concrete params (view + scale_factor), exactly as init_offscreen took blending/width/height directly rather than Options. `view` stays TYPE-ERASED (&AnyObject) — byte-faithful to ghostty's `info.view: objc.Object` — so the renderer crate needs NO objc2-app-kit dep. Order is load-bearing: setLayer BEFORE setWantsLayer (Zig comment: assign layer to make the view layer-hosting BEFORE wantsLayer). No SB/TB concern (msg_send over &AnyObject, no Rust aliasing). errdefer device/queue/layer release → ARC via Retained Drop on the `?` early returns.
 
 **Gates:**
+
 - `cargo build -p rustty-renderer`
 - `cargo test -p rustty-renderer --lib metal::metal_impl::tests::init_binds_layer_to_nsview`
 - `cargo clippy -p rustty-renderer --all-targets -- -D warnings`
@@ -531,10 +570,12 @@ fn init_binds_layer_to_nsview() {
 ### Task W1-3: Implement surface_size (on-screen), present/presentLastTarget, and loop_enter
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/src/metal/metal_impl.rs` — 372-388 (loop_enter: replace unimplemented! with setDisplayCallback + displayCallback trampoline), 580-604 (surface_size: add the layer.bounds*contentsScale branch when layer==Some), 636-650 (present: replace no-op with layer.setSurface[Sync]), 652-657 (present_last_target: keep no-op, R1 comment)
 - Test: `crates/rustty-renderer/src/metal/metal_impl.rs`
 
 **Consumes:**
+
 - Metal.layer: Option<IOSurfaceLayer> (W1-1)
 - IOSurfaceLayer.set_surface_sync(&self, surface: &objc2_io_surface::IOSurfaceRef) (W0)
 - IOSurfaceLayer.set_surface(&self, surface: &objc2_io_surface::IOSurfaceRef) -> Result<(), iosurface_layer::Error> (W0)
@@ -544,18 +585,21 @@ fn init_binds_layer_to_nsview() {
 - self.max_texture_size, self.offscreen_size, SurfaceSize (metal_impl.rs:79)
 
 **Produces:**
-- pub fn present(&mut self, target: &Target, sync: bool) -> Result<(), Error>  // Some(layer): sync→set_surface_sync, async→set_surface; None: no-op (offscreen)
-- pub fn present_last_target(&self) -> Result<(), Error>  // no-op (Metal), unchanged
-- pub fn surface_size(&self) -> Result<SurfaceSize, Error>  // Some(layer): (bounds.size*contentsScale).min(max_texture_size); None: offscreen_size.min(max_texture_size)
-- pub fn loop_enter(&mut self)  // installs displayCallback on the layer
+
+- pub fn present(&mut self, target: &Target, sync: bool) -> Result<(), Error> // Some(layer): sync→set_surface_sync, async→set_surface; None: no-op (offscreen)
+- pub fn present_last_target(&self) -> Result<(), Error> // no-op (Metal), unchanged
+- pub fn surface_size(&self) -> Result<SurfaceSize, Error> // Some(layer): (bounds.size*contentsScale).min(max_texture_size); None: offscreen_size.min(max_texture_size)
+- pub fn loop_enter(&mut self) // installs displayCallback on the layer
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/renderer/Metal.zig:216-232` — surfaceSize: bounds = layer.getProperty(Rect,"bounds"); scale = getProperty(f64,"contentsScale"); width=@min(@intFromFloat(bounds.size.width*scale), max_texture_size), height likewise
 - `src/renderer/Metal.zig:253-259` — present: if sync self.layer.setSurfaceSync(target.surface) else try self.layer.setSurface(target.surface)
 - `src/renderer/Metal.zig:261-263` — presentLastTarget: `_ = self;` noop for Metal
 - `src/renderer/Metal.zig:164-175` — loopEnter: renderer=@fieldParentPtr("api",self); self.layer.setDisplayCallback(&displayCallback, renderer); displayCallback(renderer) => renderer.drawFrame(true) catch log.warn
 
 **FFI / xev mapping:**
+
 - `self.layer.setSurfaceSync(target.surface)` → `layer.set_surface_sync(&target.surface)`
 - `try self.layer.setSurface(target.surface)` → `layer.set_surface(&target.surface).map_err(|_| Error::NoMetalDevice)?`
 - `self.layer.layer.getProperty(Rect,"bounds")` → `let b = layer.layer.bounds(); // objc2_core_foundation::CGRect`
@@ -564,6 +608,7 @@ fn init_binds_layer_to_nsview() {
 - `fn displayCallback(renderer:*Renderer) { renderer.drawFrame(true) catch log.warn }` → `unsafe extern "C" fn display_callback_trampoline(ctx: *mut c_void) { /* cast to *mut Renderer; (*r).draw_frame(true); log on Err */ }  // Renderer is the monomorphic GenericRenderer — trampoline is authored where Renderer is in scope; see port_notes`
 
 **Test KAT:**
+
 ```rust
 #[cfg(target_os = "macos")]
 #[test]
@@ -600,6 +645,7 @@ fn onscreen_surface_size_and_present_from_layer() {
 **Port notes:** surface_size: reuse the existing clamp (`.min(self.max_texture_size)`) for BOTH branches — Zig applies @min on each axis. The layer branch uses objc2_core_foundation::CGRect (objc2-quartz-core bounds return type) — bounds.size.width/height are CGFloat(f64); `@intFromFloat` → `as u32` truncation (byte-faithful: trunc-toward-zero). present error mapping: Zig `try setSurface` error set folds into `!void`; here the W0 iosurface_layer::Error maps to metal_impl::Error (the drawFrame error set that generic.rs already threads). loopEnter/displayCallback: ghostty recovers `renderer` via `@fieldParentPtr("api", self)` — in the monomorphic rustty port `Renderer` owns `api: Metal` (generic.rs), so the trampoline must live where GenericRenderer is nameable. PORT DECISION: `loop_enter` stays a thin method that stores the `*mut c_void` ctx via `layer.set_display_callback`; the concrete `display_callback_trampoline` (casts ctx→*mut Renderer, calls draw_frame(true), logs on Err — Zig's `catch log.warn`) is authored in generic.rs alongside metal_buffer_completed (same container_of/raw-*mut discipline, NEVER &mut) and passed in. If W1 scopes loop_enter narrowly, leave it `unimplemented!()` and land the trampoline in W2 (render-thread) — flag in DEFERRALS.md. The present raw-ptr path (`&mut api.present` through `*mut Renderer` in metal_buffer_completed) is the proven-clean SB/TB structure (.port/phase-2/mirihar-chunk3b).
 
 **Gates:**
+
 - `cargo build -p rustty-renderer`
 - `cargo test -p rustty-renderer --lib metal::metal_impl::tests::onscreen_surface_size_and_present_from_layer`
 - `cargo clippy -p rustty-renderer --all-targets -- -D warnings`
@@ -611,27 +657,33 @@ fn onscreen_surface_size_and_present_from_layer() {
 ### Task W1-4: Frame.complete async addCompletedHandler present half
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/src/metal/frame.rs` — 185-199 (replace the `unimplemented!("windowing-host: async addCompletedHandler present")` at 198 with the block2::RcBlock install; the R5 shape comment 186-197 becomes the implementation), 26 (module doc: drop the '(unimplemented!)' note on the async path)
 - Test: `crates/rustty-renderer/src/metal/frame.rs`
 
 **Consumes:**
+
 - Frame.block: CompletionContext { renderer: *mut (), target: *mut Target, sync: bool } (frame.rs:50)
 - Frame.on_completed: CompletionFn = unsafe fn(&CompletionContext, &ProtocolObject<dyn MTLCommandBuffer>) (frame.rs:60)
 - self.buffer: Retained<ProtocolObject<dyn MTLCommandBuffer>> with addCompletedHandler (objc2-metal) + commit (frame.rs:201)
 - block2::RcBlock (block2 0.6)
 
 **Produces:**
+
 - Frame::complete(&mut self, sync: bool) — async branch now installs the completion handler instead of unimplemented!(); sync branch unchanged (commit + waitUntilCompleted + direct on_completed call)
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/renderer/metal/Frame.zig:104-133` — complete: if(!sync) self.buffer.msgSend(void, addCompletedHandler:, .{&self.block}); commit; if(sync){ waitUntilCompleted; block.sync=true; CompletionBlock.invoke(&block, .{buffer.value}) }
 - `src/renderer/metal/Frame.zig:58-90` — CompletionBlock over Context{renderer,target,sync} + bufferCompleted body (status→present→frameCompleted) — the fn the block dispatches to; = rustty CompletionFn/on_completed
 
 **FFI / xev mapping:**
+
 - `self.buffer.msgSend(void, objc.sel("addCompletedHandler:"), .{&self.block})` → `let handler: block2::RcBlock<dyn Fn(core::ptr::NonNull<ProtocolObject<dyn MTLCommandBuffer>>)> = block2::RcBlock::new(move |buf| { unsafe { (on_completed)(&ctx, buf.as_ref()); } }); unsafe { self.buffer.addCompletedHandler(block2::RcBlock::as_ptr(&handler)); }`
-- `CompletionBlock.init copies Context by value into the block` → `the RcBlock captures a `ctx: CompletionContext` COPY (raw ptrs are Copy) + `on_completed` fn-ptr by move — matches Zig's by-value Context copy so it stays valid until Metal fires the handler`
+- `CompletionBlock.init copies Context by value into the block` → `the RcBlock captures a `ctx: CompletionContext`COPY (raw ptrs are Copy) +`on_completed` fn-ptr by move — matches Zig's by-value Context copy so it stays valid until Metal fires the handler`
 
 **Test KAT:**
+
 ```rust
 #[cfg(target_os = "macos")]
 #[test]
@@ -666,6 +718,7 @@ fn frame_complete_async_installs_handler_and_commits() {
 **Port notes:** CompletionContext must be Copy (all fields — two raw ptrs + bool — are Copy) so the RcBlock owns a by-value copy, mirroring Zig's `CompletionBlock.init(.{...})` which copies the Context struct into the block (so the async body does NOT borrow `self.block`, which would dangle after `complete` returns). block2 copies the RcBlock when addCompletedHandler retains it and the objc runtime deallocs the copy on completion (Zig comment at Frame.zig:106-108 preserved). SB/TB: the block body derefs raw `*mut Renderer`/`*mut Target` from the copied ctx — NEVER &mut; identical container_of discipline to the sync path. The block2 shape is ALREADY spelled verbatim in the frame.rs:186-197 comment — un-defer it verbatim. If the async-fire assertion proves flaky on CI (handler timing), downgrade to asserting `complete(false)` returns without panic and defer the fire-observation to W2's render-thread integration test.
 
 **Gates:**
+
 - `cargo build -p rustty-renderer`
 - `cargo test -p rustty-renderer --lib metal::frame::`
 - `cargo clippy -p rustty-renderer --all-targets -- -D warnings`
@@ -677,26 +730,32 @@ fn frame_complete_async_installs_handler_and_commits() {
 ### Task W1-5: generic.rs: restore R1 present-failure error log at metal_buffer_completed (present half of unit C)
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/src/generic.rs` — 4618-4632 (metal_buffer_completed: replace `let _ = unsafe { (*renderer).api.present(&*ctx.target, ctx.sync) };` with the verbatim `if let Err(err) = … { log::error!(…) }` now that present can fail on the layer path; the R1 comment 4620-4627 becomes the live code)
 - Test: `crates/rustty-renderer/src/generic.rs`
 
 **Consumes:**
+
 - Metal::present(&mut self, target: &Target, sync: bool) -> Result<(), Error> (W1-3)
 - CompletionContext { renderer: *mut (), target: *mut Target, sync: bool } (frame.rs)
 - Renderer (monomorphic GenericRenderer<Metal>) with pub api: Metal + frame_completed(&mut self, Health) (generic.rs)
 - crate::Health
 
 **Produces:**
+
 - metal_buffer_completed(ctx: &CompletionContext, buffer: &ProtocolObject<dyn MTLCommandBuffer>) — the present-error branch now logs on Err (Frame.zig:82-88 restored verbatim); still calls frame_completed(health) unconditionally
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/renderer/metal/Frame.zig:79-90` — if (health == .healthy) { block.renderer.api.present(block.target.*, block.sync) catch |err| log.err("Failed to present render target: err={}", .{err}); } block.renderer.frameCompleted(health);
 
 **FFI / xev mapping:**
+
 - `block.renderer.api.present(block.target.*, block.sync) catch |err| log.err(...)` → `if let Err(err) = unsafe { (*renderer).api.present(&*ctx.target, ctx.sync) } { log::error!("Failed to present render target: err={err:?}"); }`
 - `block.renderer.frameCompleted(health)` → `unsafe { (*renderer).frame_completed(health) };  // unchanged`
 
 **Test KAT:**
+
 ```rust
 // Present-path coverage lands via the culminating on-screen KAT (W1-6), which
 // drives metal_buffer_completed → api.present against a REAL layer. Here a focused
@@ -722,6 +781,7 @@ fn buffer_completed_offscreen_still_healthy() {
 **Port notes:** This is the ONLY generic.rs change W1 needs for the PRESENT half: the two R5 seams the spec cites at generic.rs:1795/1841 are Renderer::init / Renderer::deinit (the swap_chain/display_link construct+teardown) — those are the VSYNC/renderer_seam concern (W2/W3), NOT the present half, and the culminating KAT explicitly REUSES the field-by-field golden harness (golden_renderer) which bypasses Renderer::init. So init/deinit STAY unimplemented!() in W1 (document this scoping in DEFERRALS.md so a completeness critic doesn't read the spec's '1795/1841' literally). The live present path already flows Frame.complete→on_completed(metal_buffer_completed)→api.present; W1-3 made present real, so the only edit is restoring the R1 error log (previously a comment because offscreen present was infallible). No log facade wiring change — `log` crate is the established facade.
 
 **Gates:**
+
 - `cargo build -p rustty-renderer`
 - `cargo test -p rustty-renderer --lib generic::`
 - `cargo clippy -p rustty-renderer --all-targets -- -D warnings`
@@ -734,10 +794,12 @@ fn buffer_completed_offscreen_still_healthy() {
 ### Task W1-6: CULMINATING KAT — on-screen present of one golden-state frame (FIRST PIXELS)
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/src/generic.rs` — ~5960 (add the on-screen present test INSIDE the existing `#[cfg(test)] mod` beside golden_renders_cursor_fg_bg, so it can call golden_renderer + Renderer internals + Metal::init + px_at)
 - Test: `crates/rustty-renderer/src/generic.rs`
 
 **Consumes:**
+
 - golden_renderer(cols, rows) -> Option<Renderer> (generic.rs test mod:5679)
 - px_at(&[u8], w, x, y) -> (u8,u8,u8,u8) (generic.rs test mod:5826)
 - Metal::init(&AnyObject, f64, AlphaBlending) -> Result<Metal, Error> (W1-2)
@@ -747,17 +809,21 @@ fn buffer_completed_offscreen_still_healthy() {
 - IOSurfaceLayer.layer.contents() (objc2-quartz-core, via W0)
 
 **Produces:**
+
 - #[test] fn golden_presents_frame_on_screen() — proves Metal::init binds a layer to an NSView AND the golden-state frame's IOSurface is presented as the layer's contents, with the readback pixels matching the offscreen golden asserts (cursor red / bg dark+opaque / fg glyph bright)
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/renderer/Metal.zig:253-259` — present(target, sync) — the setSurface primitive the KAT exercises on-screen
 - `src/renderer/generic.zig:1429-1490` — drawFrame → Frame.complete(sync) → bufferCompleted → api.present: the exact present pipeline the KAT drives via draw_frame(true)
 
 **FFI / xev mapping:**
+
 - `self.layer.setSurfaceSync(target.surface) (present sync)` → `onscreen.present(&drawn_target, true) → layer.set_surface_sync(&target.surface) → CALayer.setContents(surface)`
 - `layer contents readback for assertion` → `onscreen.layer.as_ref().unwrap().layer.contents() -> Option<Retained<AnyObject>>`
 
 **Test KAT:**
+
 ```rust
 #[cfg(target_os = "macos")]
 #[test]
@@ -807,6 +873,7 @@ fn golden_presents_frame_on_screen() {
 **Port notes:** Placed in the existing generic.rs #[cfg(test)] module so it can reach the private golden_renderer/px_at helpers + Renderer.swap_chain internals — an external tests/ file cannot construct Renderer (many fields are pub(crate)). Reuses the offscreen golden gate EXACTLY (same px_at cursor-red assert) so pixel parity is inherited, then adds the on-screen delta: present the drawn surface and assert it became the layer contents. This deliberately draws with the OFFSCREEN api (golden_renderer pins offscreen_size, avoiding draw_frame's surface_size resize when a layer's bounds differ) and presents through a SEPARATE on-screen Metal — the cleanest faithful proof of the setSurface primitive without coupling to layer-bounds sizing. The tighter variant (inject onscreen layer into r.api and let draw_frame→metal_buffer_completed→api.present drive it) additionally requires sizing layer.bounds==size.screen; W1-3's onscreen_surface_size_and_present_from_layer already covers surface_size, and W1-5's unit covers the metal_buffer_completed present branch, so this KAT keeps the two-phase form for robustness. SB/TB: no &mut aliasing — present takes &Target from r.swap_chain (shared) while r is not mutably borrowed across the call.
 
 **Gates:**
+
 - `cargo build -p rustty-renderer`
 - `cargo test -p rustty-renderer --lib generic::tests::golden_presents_frame_on_screen`
 - `cargo test -p rustty-renderer --lib  # full suite incl. offscreen golden stays green`
@@ -824,27 +891,32 @@ fn golden_presents_frame_on_screen() {
 ### Task W1-7: Renderer windowed lifecycle — fill `Renderer::{init,deinit}` (generic.rs:1793/1840) + `surface_init`/`finalize_surface_init` + Options handshake
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/src/generic.rs:1793` — fill `pub fn init(alloc, options) -> Result<Renderer, Error>` (the windowed sibling of the existing `init_offscreen`)
 - Modify: `crates/rustty-renderer/src/generic.rs:1840` — fill `pub fn deinit(&mut self)` with the verbatim reference body (the `//` block at :1808-1839)
 - Modify: `crates/rustty-renderer/src/generic.rs` — add `pub fn surface_init<S>(rt_surface: *mut S) -> Result<(), Error>` and `pub fn finalize_surface_init<S>(&mut self, rt_surface: *mut S) -> Result<(), Error>` (the apprt-free-generic surface handshake; the layer/NSView attach delegates to `Metal::init`/`Metal` from W1-2)
 - Test: `crates/rustty-renderer/src/generic.rs` (inline `#[cfg(all(test, target_os="macos"))]` construct+deinit KAT)
 
 **Consumes (see Canonical Interfaces):**
+
 - `Metal::init(...)` on-screen constructor + `layer` field (W1-2), `IOSurfaceLayer` (W0.T3)
 - the existing `Renderer::init_offscreen` body (shaders/`font.Shaper`/uniforms/`prepBackgroundImage`) — generalize, do not duplicate
 
 **Produces (Canonical Interfaces → rustty_renderer::Renderer windowed lifecycle):**
+
 - `pub fn init(alloc: Global, options: Options) -> Result<Renderer, Error>` — generic.rs:1793 seam FILLED
 - `pub fn deinit(&mut self)` — generic.rs:1840 seam FILLED
 - `pub fn surface_init<S>(rt_surface: *mut S) -> Result<(), Error>`
 - `pub fn finalize_surface_init<S>(&mut self, rt_surface: *mut S) -> Result<(), Error>`
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/renderer/generic.zig` `init` (the full body cited in the seam comment at generic.rs:1785-1792: `GraphicsAPI.init` over a live surface, `font.Shaper.init`, `initShaders`, `updateFontGridUniforms`/`updateScreenSizeUniforms`/`updateBgImageBuffer`/`prepBackgroundImage`) — generalize the shared body with `init_offscreen`.
 - `src/renderer/generic.zig` `deinit` (the verbatim block preserved at generic.rs:1808-1839) — port as-is; the `DisplayLink` teardown arm lands with W2 (guard with the display-link presence).
 - `src/renderer/generic.zig` `surfaceInit`/`finalizeSurfaceInit` — the surface handshake.
 
 **Test KAT:**
+
 ```rust
 // crates/rustty-renderer/src/generic.rs (inline, near the other on-screen tests)
 #[cfg(all(test, target_os = "macos"))]
@@ -875,6 +947,7 @@ mod windowed_lifecycle {
 **Port notes:** The windowed `init` is the sibling of the already-landed `init_offscreen` — factor the shared body (shaders/shaper/uniforms/`prepBackgroundImage`) into a common helper so R1 fidelity is preserved without duplication; the ONLY delta is the graphics-API construction (`Metal::init` windowed, W1-2, vs the offscreen `Target`). `Options` stays the 3 platform-neutral fields — the surface/layer never enters `Options` (apprt cycle); it enters via `surface_init<S>`/`finalize_surface_init<S>` (generic over `S`, so rustty-renderer never names an apprt type). The `deinit` `DisplayLink` teardown arm is guarded until W2 lands the display link. This task is a prerequisite of W3-E1 (core swaps in this real `Renderer`) and is exercised end-to-end by W1-6.
 
 **Gates:**
+
 - `cargo test -p rustty-renderer --features metal windowed_lifecycle`
 - `cargo clippy -p rustty-renderer -- -D warnings`
 - `bash .port/tools/gates/check_acyclic.sh`
@@ -890,10 +963,10 @@ mod windowed_lifecycle {
 
 **Chunk culminating test:** crates/rustty-renderer/src/generic.rs :: macos_impl::tests::vsync_callback_notifies_draw_now — a real CVDisplayLink bound to CGMainDisplayID drives its output callback on a CoreVideo real-time thread; the ported Renderer::display_link_callback notifies a real rustty_xev::Async (draw_now) armed on a real kqueue Loop; a bounded run(NoWait) pump observes the drain (fires>0). Proves the vsync half end-to-end: CV thread → notify → mach port → loop drain. Skips cleanly on a headless host (no display / no Metal).
 
-
 ### Task W2-T1: CoreVideo DisplayLink FFI primitive (port pkg/macos/video/display_link.zig) + wire into the renderer
 
 **Files:**
+
 - Create: `crates/rustty-renderer/src/metal/cvdisplaylink.rs`
 - Modify: `crates/rustty-renderer/Cargo.toml` — insert one line in [dependencies] (after rustty-zigstd, ~line 60): `rustty-xev = { workspace = true }` — the workspace dep is already declared (root Cargo.toml:175 `rustty-xev = { path = "crates/rustty-xev" }`). Add a PORT NOTE comment: renderer→xev is a downward leaf edge (xev deps = {rustty-global, libc} only, no edge back), so check_acyclic.sh stays green.
 - Modify: `crates/rustty-renderer/src/metal.rs` — ~35: add `pub mod cvdisplaylink;` in the alphabetical pub-mod block (after `pub mod buffer;`, before `pub mod frame;`).
@@ -901,10 +974,12 @@ mod windowed_lifecycle {
 - Test: `crates/rustty-renderer/src/metal/cvdisplaylink.rs`
 
 **Consumes:**
+
 - crate::generic::Error (the aggregate renderer error enum, generic.rs:925 — MetalFailed/OutOfMemory/Defunct/ImageDecode); reachable as `crate::generic::Error` via the `#[cfg(target_os="macos")] pub use macos_impl::*` at generic.rs:6634
 - the ZST-callback monomorphization pattern established by rustty_xev Async::wait (async.rs:216-305): a `CB: Fn(...) + 'static` type param asserted zero-sized via `const { assert!(size_of::<CB>()==0) }`, reconstructed in the extern-C trampoline via `NonNull::<CB>::dangling().as_ptr().read()`
 
 **Produces:**
+
 - pub struct DisplayLink (repr(transparent) newtype over core::ptr::NonNull<core::ffi::c_void> — the CVDisplayLinkRef; NOT Copy, NO Drop impl: released manually by Renderer::deinit / tests, exactly like ghostty's manual release())
 - pub fn DisplayLink::create_with_active_cg_displays() -> Result<DisplayLink, crate::generic::Error>
 - pub fn DisplayLink::release(&self)
@@ -915,10 +990,12 @@ mod windowed_lifecycle {
 - pub fn DisplayLink::set_output_callback<UD: 'static, CB: Fn(*mut DisplayLink, Option<*mut UD>) + 'static>(&self, cb: CB, userinfo: *mut UD) -> Result<(), crate::generic::Error>
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `pkg/macos/video/display_link.zig:1-87` — the WHOLE DisplayLink opaque wrapper: Error{InvalidOperation}; createWithActiveCGDisplays (Allocator.Error!*DisplayLink, out-param, kCVReturnSuccess check); release; start/stop (Error!void, kCVReturnSuccess→InvalidOperation); isRunning (!=0); setCurrentCGDisplay(CGDirectDisplayID); setOutputCallback(comptime Userdata, comptime callbackFn: *const fn(*DisplayLink, ?*Userdata) void, userinfo) with the inline callconv(.c) trampoline that throws away inNow/inOutputTime/flagsIn/flagsOut and forwards to callbackFn
 - `pkg/macos/main.zig:16-21` — the @cInclude of CoreGraphics/CoreGraphics.h + CoreVideo/CoreVideo.h that provides c.CVDisplayLink*, c.CVReturn, c.CVTimeStamp, c.CVOptionFlags, c.CGDirectDisplayID, c.kCVReturnSuccess — the C symbols the raw extern block re-declares
 
 **FFI / xev mapping:**
+
 - `c.CVDisplayLinkCreateWithActiveCGDisplays(@ptrCast(&result)) (display_link.zig:13)` → `extern "C" fn CVDisplayLinkCreateWithActiveCGDisplays(out: *mut *mut c_void) -> CVReturn, under #[link(name="CoreVideo", kind="framework")]; !=kCVReturnSuccess or null → Err(Error::OutOfMemory) (Zig error.OutOfMemory)`
 - `c.CVDisplayLinkRelease(@ptrCast(self)) (display_link.zig:22)` → `extern "C" fn CVDisplayLinkRelease(dl: *mut c_void)`
 - `c.CVDisplayLinkStart / c.CVDisplayLinkStop (display_link.zig:26/31)` → `extern "C" fn CVDisplayLinkStart/Stop(dl: *mut c_void) -> CVReturn; !=kCVReturnSuccess → Err(Error::MetalFailed) (Zig error.InvalidOperation)`
@@ -927,6 +1004,7 @@ mod windowed_lifecycle {
 - `c.CVDisplayLinkSetOutputCallback(@ptrCast(self), &struct{fn callback(...) callconv(.c) CVReturn}.callback, userinfo) (display_link.zig:59)` → `extern "C" fn CVDisplayLinkSetOutputCallback(dl: *mut c_void, cb: CVDisplayLinkOutputCallback, userinfo: *mut c_void) -> CVReturn, where CVDisplayLinkOutputCallback = unsafe extern "C" fn(*mut c_void, *const CVTimeStamp, *const CVTimeStamp, CVOptionFlags, *mut CVOptionFlags, *mut c_void) -> CVReturn; a monomorphized `trampoline::<UD,CB>` (the inline Zig struct.callback) discards the 4 timing args, reconstructs the ZST CB via NonNull::dangling().read(), casts dl→*mut DisplayLink + userinfo→Option<*mut UD>, calls cb, returns kCVReturnSuccess`
 
 **Test KAT:**
+
 ```rust
 // crates/rustty-renderer/src/metal/cvdisplaylink.rs — appended #[cfg(test)] module.
 // rustty-only MARGIN smoke test (ghostty's display_link.zig has NO `test{}`, so
@@ -958,9 +1036,10 @@ mod tests {
 }
 ```
 
-**Port notes:** BYTE/TYPE FIDELITY: CVReturn=i32 (int32_t), CVOptionFlags=u64 (uint64_t), CGDirectDisplayID=u32, kCVReturnSuccess=0, CVDisplayLinkIsRunning returns Boolean=u8. CVTimeStamp is declared as an opaque marker `#[repr(C)] pub struct CVTimeStamp { _private: [u8; 0] }` — the callback only ever takes `*const CVTimeStamp` and discards it (faithful to display_link.zig:70-73 `_ = inNow; _ = inOutputTime;`), so its layout is never dereferenced. CVDisplayLinkRef and *DisplayLink are the SAME opaque pointer (ghostty `DisplayLink = opaque{}` casts self↔ref via @ptrCast); modeled as NonNull<c_void> in a repr(transparent) newtype so `Option<DisplayLink>` is a niche-optimized nullable pointer == Zig `?DisplayLink` (?*DisplayLink). ERROR MAPPING (R1 collapse, matching the SwapChain/Target precedent): Zig `Allocator.Error!*DisplayLink` OOM → Error::OutOfMemory; Zig `error{InvalidOperation}` (start/stop/setCurrentCGDisplay/setOutputCallback) → Error::MetalFailed (the CoreVideo-call-failed analogue in the aggregate enum). DEPRECATION SIDESTEP: CVDisplayLink* are deprecated as of macOS 15; a RAW extern "C" block carries NO #[deprecated] attribute (that only comes from objc2-core-video's generated bindings / C headers), so `-D warnings` stays green WITHOUT needing to add/allow(deprecated) objc2-core-video — this is why we bind CoreVideo directly (mirrors ghostty's own @cInclude approach) rather than adding an objc2-core-video dep. FRAMEWORK LINK: `#[link(name = "CoreVideo", kind = "framework")]` on the extern block (no build.rs change; self-contained). SB/TB: set_output_callback stores NO borrow — userinfo is a raw *mut UD handed to CoreVideo and returned untyped to the trampoline; the trampoline reconstructs the ZST CB by value (never touches the caller's stack). The DisplayLink pointer is Send-neutral: the CV callback runs on a CoreVideo-owned real-time thread, but the wrapper itself is only touched from the render thread; only the *mut UD (the Async) is shared cross-thread and that is the caller's soundness obligation (documented at set_output_callback's # Safety).
+**Port notes:** BYTE/TYPE FIDELITY: CVReturn=i32 (int32_t), CVOptionFlags=u64 (uint64_t), CGDirectDisplayID=u32, kCVReturnSuccess=0, CVDisplayLinkIsRunning returns Boolean=u8. CVTimeStamp is declared as an opaque marker `#[repr(C)] pub struct CVTimeStamp { _private: [u8; 0] }` — the callback only ever takes `*const CVTimeStamp` and discards it (faithful to display_link.zig:70-73 `_ = inNow; _ = inOutputTime;`), so its layout is never dereferenced. CVDisplayLinkRef and *DisplayLink are the SAME opaque pointer (ghostty `DisplayLink = opaque{}` casts self↔ref via @ptrCast); modeled as NonNull<c_void> in a repr(transparent) newtype so `Option<DisplayLink>` is a niche-optimized nullable pointer == Zig `?DisplayLink` (?_DisplayLink). ERROR MAPPING (R1 collapse, matching the SwapChain/Target precedent): Zig `Allocator.Error!*DisplayLink` OOM → Error::OutOfMemory; Zig `error{InvalidOperation}` (start/stop/setCurrentCGDisplay/setOutputCallback) → Error::MetalFailed (the CoreVideo-call-failed analogue in the aggregate enum). DEPRECATION SIDESTEP: CVDisplayLink_ are deprecated as of macOS 15; a RAW extern "C" block carries NO #[deprecated] attribute (that only comes from objc2-core-video's generated bindings / C headers), so `-D warnings` stays green WITHOUT needing to add/allow(deprecated) objc2-core-video — this is why we bind CoreVideo directly (mirrors ghostty's own @cInclude approach) rather than adding an objc2-core-video dep. FRAMEWORK LINK: `#[link(name = "CoreVideo", kind = "framework")]` on the extern block (no build.rs change; self-contained). SB/TB: set_output_callback stores NO borrow — userinfo is a raw *mut UD handed to CoreVideo and returned untyped to the trampoline; the trampoline reconstructs the ZST CB by value (never touches the caller's stack). The DisplayLink pointer is Send-neutral: the CV callback runs on a CoreVideo-owned real-time thread, but the wrapper itself is only touched from the render thread; only the *mut UD (the Async) is shared cross-thread and that is the caller's soundness obligation (documented at set_output_callback's # Safety).
 
 **Gates:**
+
 - `cargo build -p rustty-renderer`
 - `cargo test -p rustty-renderer --lib metal::cvdisplaylink`
 - `cargo clippy -p rustty-renderer --all-targets -- -D warnings`
@@ -974,10 +1053,12 @@ mod tests {
 ### Task W2-T2: generic.rs Renderer CVDisplayLink block: loop_enter/loop_exit/thread_enter/thread_exit/display_link_callback/set_macos_display_id/has_vsync
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/src/generic.rs` — Insert a new `impl Renderer { ... }` region inside `mod macos_impl` immediately AFTER mark_dirty (after line 1855), carrying the seven ported methods below. Also add `use rustty_xev as xev;` (or reference rustty_xev::Async fully-qualified) near the macos_impl `use` block. DO NOT touch Renderer::init (1793, deferred draw-path seam) or Renderer::deinit (1840, deferred): the reference display_link CREATION (generic.zig:692-699) and stop+release teardown (generic.zig:807-812) stay preserved as the verbatim comments already at generic.rs:1686-1693 / 1816-1820 and land un-commented in W1/W3, NOT here.
 - Test: `crates/rustty-renderer/src/generic.rs`
 
 **Consumes:**
+
 - From W2-T1: DisplayLink + all its methods (create/release/start/stop/is_running/set_current_cg_display/set_output_callback)
 - self.display_link: Option<DisplayLink> (existing field, generic.rs:1253)
 - self.api: Metal (existing field, generic.rs:1248) — Metal::loop_enter (metal_impl.rs:383, the M-4 IOSurfaceLayer display-callback hook; currently unimplemented!() until W1 lands it)
@@ -985,15 +1066,17 @@ mod tests {
 - crate::generic::Error
 
 **Produces:**
-- pub fn Renderer::loop_enter(&mut self, draw_now: *mut rustty_xev::Async) -> Result<(), Error>   // R4 substitute for ghostty's `thr: *renderer.Thread` — takes the Async handle directly so the renderer never names the render Thread; W3's core Thread calls `renderer.loop_enter(&raw mut thread.draw_now)`
+
+- pub fn Renderer::loop_enter(&mut self, draw_now: *mut rustty_xev::Async) -> Result<(), Error> // R4 substitute for ghostty's `thr: *renderer.Thread` — takes the Async handle directly so the renderer never names the render Thread; W3's core Thread calls `renderer.loop_enter(&raw mut thread.draw_now)`
 - pub fn Renderer::loop_exit(&mut self)
-- pub fn Renderer::thread_enter(&self, surface: *mut core::ffi::c_void) -> Result<(), Error>   // Metal declares no threadEnter → no-op forwarder; surface opaque (renderer is apprt-generic)
-- pub fn Renderer::thread_exit(&self)   // Metal declares no threadExit → no-op
-- pub fn Renderer::display_link_callback(_display_link: *mut DisplayLink, ud: Option<*mut rustty_xev::Async>)   // widened to pub (dead-code-exempt) so loop_enter installs it AND the KAT drives it
+- pub fn Renderer::thread_enter(&self, surface: *mut core::ffi::c_void) -> Result<(), Error> // Metal declares no threadEnter → no-op forwarder; surface opaque (renderer is apprt-generic)
+- pub fn Renderer::thread_exit(&self) // Metal declares no threadExit → no-op
+- pub fn Renderer::display_link_callback(_display_link: *mut DisplayLink, ud: Option<*mut rustty_xev::Async>) // widened to pub (dead-code-exempt) so loop_enter installs it AND the KAT drives it
 - pub fn Renderer::set_macos_display_id(&mut self, id: u32) -> Result<(), Error>
 - pub fn Renderer::has_vsync(&self) -> bool
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/renderer/generic.zig:896-933` — loopEnter (api.loopEnter() hook → if DisplayLink==void return → self.display_link orelse return → setOutputCallback(xev.Async, &displayLinkCallback, &thr.draw_now) → start() catch {}) and loopExit (api loopExit hook — Metal declares none → omit → display_link orelse return → stop() catch {})
 - `src/renderer/generic.zig:880-894` — threadEnter(self, surface: *apprt.Surface) / threadExit(self): pure `if (@hasDecl(GraphicsAPI, "threadEnter")) try self.api.threadEnter(surface)` forwarders — Metal declares NEITHER, so both monomorphize to no-ops (the chunk's 'Metal api threadEnter/threadExit hooks, offscreen no-op'). NOTE the display-link start/stop is in loopEnter/loopExit + setFocus/setVisible, NOT in threadEnter/threadExit.
 - `src/renderer/generic.zig:986-994` — displayLinkCallback(_: *macos.video.DisplayLink, ud: ?*xev.Async): `const draw_now = ud orelse return; draw_now.notify() catch |err| log.err("error notifying draw_now err={}", .{err});`
@@ -1001,6 +1084,7 @@ mod tests {
 - `src/renderer/Metal.zig:164-182` — Metal.loopEnter (the only backend that declares it) — the api hook loop_enter forwards to; its body installs the IOSurfaceLayer display callback (the W1 M-4 present seam, metal_impl.rs:383 unimplemented!()). W2 forwards to it faithfully; the W2 KAT never calls Renderer::loop_enter so the deferred hook is not exercised here.
 
 **FFI / xev mapping:**
+
 - `try display_link.setOutputCallback(xev.Async, &displayLinkCallback, &thr.draw_now) (generic.zig:910)` → `display_link.set_output_callback::<rustty_xev::Async, _>(Renderer::display_link_callback, draw_now)?   // draw_now: *mut rustty_xev::Async is the parameter (core's Thread.draw_now, passed IN)`
 - `draw_now.notify() catch |err| log.err(...) (generic.zig:991)` → `if let Err(_err) = unsafe { (*draw_now).notify() } { /* R1: `log.err("error notifying draw_now err={}", .{err})` preserved as a comment — renderer has no logging facade wired yet (generic.rs:2253-2254 convention); error swallowed */ }`
 - `display_link.setCurrentCGDisplay(id) catch |err| log.warn(...) (generic.zig:1006)` → `if let Err(_err) = dl.set_current_cg_display(id) { /* log.warn(...) preserved as comment */ }  // preceded by the preserved `// log.info("updating display link display id={}", .{id})``
@@ -1008,6 +1092,7 @@ mod tests {
 - `self.api.loopEnter() (generic.zig:900) / self.api.threadEnter(surface) (884)` → `self.api.loop_enter()  (metal_impl.rs:383) ; thread_enter body is `let _ = surface; Ok(())` (Metal declares no threadEnter — the @hasDecl probe is false)`
 
 **Test KAT:**
+
 ```rust
 // crates/rustty-renderer/src/generic.rs — added inside `#[cfg(target_os="macos")] mod macos_impl { mod tests { ... } }` (the module at generic.rs:5439; super::* already imports Renderer + DisplayLink re-export). rustty-only MARGIN test (no ghostty test{} for this block).
 #[test]
@@ -1058,6 +1143,7 @@ fn renderer_has_vsync_reflects_display_link() {
 **Port notes:** R4 CORE CONSTRAINT (the whole reason this chunk exists): rustty-renderer MUST NOT dep rustty-apprt-api ('only apprt/config/core depend on renderer'). The render `Thread` is apprt-generic (surface:*apprt.Surface, app_mailbox:App.Mailbox) so it lives fully in core (crate::renderer_seam::Thread<A>) and is filled in W3 — DO NOT create/port any Thread type here, DO NOT touch crates/rustty-renderer/src/thread.rs beyond DerivedConfig. The ONE ghostty coupling that names the Thread — `loopEnter(thr: *renderer.Thread)` passing `&thr.draw_now` — is broken by making loop_enter take `draw_now: *mut rustty_xev::Async` directly; W3's core Thread supplies `&raw mut self.draw_now`. FAITHFULNESS NUANCE: the chunk brief says 'threadEnter/threadExit … on-screen start/stop the display link'; per the ACTUAL reference (generic.zig:880-894) threadEnter/threadExit are pure api no-op forwarders and the display-link start/stop lives in loopEnter/loopExit (896-933) + setFocus/setVisible (1029-1065). We port to the reference (R1): threadEnter/threadExit = no-ops; loop_enter installs+starts, loop_exit stops. setFocus/setVisible link start/stop are OUT of W2 scope (the focus/visibility chunk) — noted so they aren't dropped. surface param of thread_enter is typed `*mut core::ffi::c_void` (opaque) since Metal never reads it and the renderer can't name apprt.Surface. LOGGING: renderer has no logging facade wired (generic.rs:2253-2254), so every `log.err/info/warn` in this block is preserved as an R1 comment with the error swallowed (`catch |err| log.x(...)` → `if let Err(_err) = ... { /* log.x(...) */ }`). SB/TB: display_link_callback takes `ud: Option<*mut rustty_xev::Async>` and does `unsafe { (*draw_now).notify() }` — notify(&self) only reads the Copy `port: u32`, no &mut, no aliasing; it runs on the CoreVideo real-time thread while the render thread owns the Renderer, and only the raw Async pointer crosses threads (the mach port kernel object serializes). loop_enter/loop_exit take `&mut self` but only read self.display_link (Option<DisplayLink>) + call self.api.loop_enter() — no whole-struct reborrow while a raw self-alias is live (the W2 mirihar aliasing gate).
 
 **Gates:**
+
 - `cargo build -p rustty-renderer`
 - `cargo test -p rustty-renderer generic::macos_impl::tests::renderer_has_vsync_reflects_display_link`
 - `cargo clippy -p rustty-renderer --all-targets -- -D warnings`
@@ -1071,27 +1157,33 @@ fn renderer_has_vsync_reflects_display_link() {
 ### Task W2-T3: Culminating vsync KAT: CVDisplayLink callback notifies a real xev::Async (drain observed)
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/src/generic.rs` — Add the `vsync_callback_notifies_draw_now` #[test] inside `mod macos_impl::tests` (the module at 5439), adjacent to renderer_has_vsync_reflects_display_link (W2-T2). Imports are test-local (`use rustty_xev::{...}`, `use crate::metal::cvdisplaylink::DisplayLink`).
 - Test: `crates/rustty-renderer/src/generic.rs`
 
 **Consumes:**
+
 - From W2-T1: DisplayLink::{create_with_active_cg_displays, set_current_cg_display, set_output_callback, start, is_running, stop, release}
 - From W2-T2: Renderer::display_link_callback (the ported CV callback under test)
 - rustty_xev public API: Async::{init, wait (unsafe, ZST cb), notify, deinit}, Loop::{init, run(RunMode::NoWait), deinit}, Completion::default(), RunMode::NoWait, CallbackAction::Rearm — the async.rs:422-462 `async_` test pattern + the live_shell.rs:316-332 bounded-pump pattern
 - CGMainDisplayID (declared test-locally under #[link(name="CoreGraphics", kind="framework")]) — no objc2-core-graphics dep needed for W2
 
 **Produces:**
+
 - (test-only) the chunk culminating proof — no new public API
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/renderer/generic.zig:986-994` — displayLinkCallback under test: the CV-thread callback that notifies draw_now (the exact machinery this KAT exercises end-to-end)
 - `src/renderer/generic.zig:897-916` — loopEnter's setOutputCallback(xev.Async, &displayLinkCallback, &thr.draw_now) + start() — the wiring the KAT reproduces by hand (set_output_callback(display_link_callback, &mut draw_now) + start)
 
 **FFI / xev mapping:**
-- `xev.Async wait/notify + loop.run (the Zig `test "async"`, async.zig)` → `rustty_xev: `draw_now.wait(&mut loop_, &mut c_wait, &mut fires, cb)` (unsafe; cb is a non-capturing ZST closure → passes wait's const size_of==0 assert), CV thread → `Renderer::display_link_callback` → `draw_now.notify()`, drained by `loop_.run(RunMode::NoWait)`; teardown `stop(); release(); draw_now.deinit(); loop_.deinit()``
+
+- `xev.Async wait/notify + loop.run (the Zig `test "async"`, async.zig)` → `rustty_xev: `draw_now.wait(&mut loop_, &mut c_wait, &mut fires, cb)`(unsafe; cb is a non-capturing ZST closure → passes wait's const size_of==0 assert), CV thread →`Renderer::display_link_callback`→`draw_now.notify()`, drained by `loop_.run(RunMode::NoWait)`; teardown `stop(); release(); draw_now.deinit(); loop_.deinit()``
 - `CVDisplayLinkSetCurrentCGDisplay(main display) (bind to main display)` → `display_link.set_current_cg_display(CGMainDisplayID())`
 
 **Test KAT:**
+
 ```rust
 // crates/rustty-renderer/src/generic.rs — inside `#[cfg(target_os="macos")] mod macos_impl { mod tests { ... } }` (module at 5439; super::* gives Renderer). rustty-only MARGIN KAT (NOT a mapped ghostty test{} — the CVDisplayLink block has no unit tests; like metal.rs's smoke tests + termio's live_shell.rs, it is an FFI/integration proof, so the per-file Zig test-count map is unaffected). macOS-only via the macos_impl cfg gate.
 #[test]
@@ -1194,6 +1286,7 @@ fn vsync_callback_notifies_draw_now() {
 **Port notes:** WHAT THIS PROVES (the W2 culmination): the vsync half end-to-end — a real CoreVideo real-time thread fires the PORTED Renderer::display_link_callback, which notifies a real rustty_xev::Async whose wait watcher, armed on a real kqueue Loop, drains on the pumping thread. This is the exact cross-thread hop ghostty relies on (CV thread → draw_now → render Thread loop), minus the render Thread (W3). NOT a golden/pixel test — the chunk brief's 'reuse the offscreen golden gate where pixels are involved' does not apply (this callback carries no pixels). DETERMINISM (live_shell.rs §5): NEVER loop.run(UntilDone) — the CV thread fires indefinitely; a bounded run(NoWait) pump + tick cap + 3s deadline terminates on success OR timeout. ORDERING/TEARDOWN is load-bearing: stop()+release() the link BEFORE draw_now/loop deinit so the CV thread cannot fire notify() into a freed mach port. SB/TB ALIASING: during the pump the main thread touches only loop_/fires; the CV thread touches only draw_now (via the raw *mut, read-only notify) — no concurrent &mut on any object; draw_now is Copy (port:u32) so wait's by-value copy and the CV thread's raw read observe the same mach port with no data race. Real mach/kqueue/CoreVideo syscalls ⇒ Miri-excluded (record in .port/phase-2/MIRI_EXCEPTIONS.md, 'rustty-renderer W2 CVDisplayLink'); the render-thread aliasing is separately proven on the mirihar harness (.port/phase-2/mirihar-chunk3b, a renderthread_naive=UB / renderthread_shipped=CLEAN pair) before shipping, per design §5.5/§6.
 
 **Gates:**
+
 - `cargo test -p rustty-renderer generic::macos_impl::tests::vsync_callback_notifies_draw_now -- --nocapture`
 - `cargo test -p rustty-renderer`
 - `cargo clippy -p rustty-renderer --all-targets -- -D warnings`
@@ -1213,15 +1306,16 @@ fn vsync_callback_notifies_draw_now() {
 
 **Chunk culminating test:** crates/rustty-core/tests/render_thread_live.rs (macOS-gated, live_shell.rs pattern): heap-pin a Thread<A=TestApp> wrapping a real offscreen rustty_renderer::Renderer, `armLoop(&raw mut thread)` then bounded-pump `thread.loop_.run(RunMode::NoWait)` (tick cap + wall-clock deadline), and assert the renderer's IOSurface `Target` readback equals the committed offscreen golden for the seeded terminal state (proving the initial wakeup→wakeupCallback→renderCallback→updateFrame→drawFrame chain drove a live present through the core Thread loop); the same test also calls `seam_renderer.drawFrame(true)` directly (the Surface::draw path) and asserts Ok + golden. Gate: `cargo build --workspace --all-targets` + `.port/tools/gates/check_acyclic.sh` green.
 
-
 ### Task W3-E1: Swap renderer_seam::Renderer placeholder → real rustty_renderer::Renderer (newtype forwarders) + RendererError alias; confirm surface.rs callsites
 
 **Files:**
+
 - Modify: `crates/rustty-core/src/renderer_seam.rs` — 61-169 (RendererError struct 67-76 + PORT NOTE 78-86 + `pub struct Renderer;` and its 6 unimplemented!() methods 88-169); Options<A>.init<A> mapping consumed from 180-213
 - Modify: `crates/rustty-core/src/surface.rs` — NO edits expected — verify-only: init 1679/1810-1831/2286, deinit 2559-2575/2596-2598, draw 2762-2768 already call the seam method names; recompile against the real error/return types
 - Test: `crates/rustty-core/src/renderer_seam.rs (add #[cfg(test)] mod tests: forwarder shape/deinit no-panic on a headless offscreen renderer)`
 
 **Consumes:**
+
 - rustty_renderer::Renderer (real monomorphic GenericRenderer(Metal), crates/rustty-renderer/src/generic.rs:1138)
 - rustty_renderer::Renderer::init(alloc: allocator_api2::alloc::Global, options: rustty_renderer::Options) -> Result<rustty_renderer::Renderer, rustty_renderer::Error> (generic.rs:1793; init body FILLED by W1)
 - rustty_renderer::Renderer::deinit(&mut self) (generic.rs:1840; FILLED by W1)
@@ -1232,20 +1326,24 @@ fn vsync_callback_notifies_draw_now() {
 - crate::renderer_seam::Options<A> { config: DerivedConfig, font_grid, size, surface_mailbox: SurfaceMailbox<A>, rt_surface: *mut A::Surface, thread: *mut Thread<A> } (renderer_seam.rs:180-213)
 
 **Produces:**
+
 - pub struct Renderer(pub rustty_renderer::Renderer); (same-module newtype; the Thread<A> body reaches the real renderer via `(*ptr).0`)
 - pub type RendererError = rustty_renderer::Error; (replaces the unit placeholder struct — keeps surface.rs `Result<(), crate::renderer_seam::RendererError>` and InitError::Renderer(RendererError) resolving)
 - impl Renderer { pub fn surfaceInit<S>(rt_surface: *mut S) -> Result<(), RendererError>; pub fn init<A: apprt::App + 'static>(alloc: Global, options: Options<A>) -> Result<Renderer, RendererError>; pub fn finalizeSurfaceInit<S>(&mut self, rt_surface: *mut S) -> Result<(), RendererError>; pub fn threadEnter<S>(&self, rt_surface: *mut S) -> Result<(), RendererError>; pub fn drawFrame(&mut self, sync: bool) -> Result<(), RendererError>; pub fn deinit(&mut self); }
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/renderer/generic.zig:864 surfaceInit, 658 init, 873 finalizeSurfaceInit, 881 threadEnter, 1430 drawFrame, 800 deinit` — the 6 Renderer entry points the seam wrapper forwards; camelCase names preserved verbatim (R1/R2, #![allow(non_snake_case)] already at renderer_seam.rs:40)
 - `src/renderer.zig:38` — `pub const Renderer = switch(build_config.renderer){.metal=>GenericRenderer(Metal),...}` — the monomorphic Metal leaf is the wrapped type
 - `src/Surface.zig:493 surfaceInit, 551 Renderer.init(alloc,.{...}), 712 finalizeSurfaceInit, 801 threadEnter, 884 draw's drawFrame(true)` — the callsites in surface.rs (already ported to the seam names) that must recompile
 
 **FFI / xev mapping:**
+
 - `try Renderer.init(alloc, .{.config=..,.font_grid=..,.size=..,.surface_mailbox=..,.rt_surface=..,.thread=..})` → `Renderer(rustty_renderer::Renderer::init(alloc, rustty_renderer::Options{ config: options.config, font_grid: options.font_grid, size: options.size, /* W1 type-erased */ surface_mailbox: options.surface_mailbox.into(), rt_surface: options.rt_surface.cast(), thread: options.thread.cast() })?)`
 - `self.renderer.drawFrame(sync)` → `self.0.draw_frame(sync)`
 
 **Test KAT:**
+
 ```rust
 #[cfg(test)]
 mod tests {
@@ -1281,6 +1379,7 @@ mod tests {
 **Port notes:** RendererError becomes `pub type RendererError = rustty_renderer::Error` (was a unit struct with Display 'renderer placeholder') — surface.rs's `Surface::draw -> Result<(), crate::renderer_seam::RendererError>` (2762) and `InitError::Renderer(RendererError)` keep resolving; the `?` in Surface::draw now propagates the real error. The seam `Renderer` is a same-module newtype `Renderer(pub rustty_renderer::Renderer)` (NOT a bare re-export) because surface.rs stores it by value as `renderer: Renderer` (surface.rs:325) and calls apprt-typed generic methods (`surfaceInit<S>`, `init<A>`, `threadEnter<S>`) the non-generic real renderer cannot carry without cycling (rustty-apprt-api→rustty-renderer edge). The Thread<A> body (same module, W3-E2) reaches the inner real renderer via `(*self.renderer).0`. rt_surface/thread type-erasure (`*mut A::Surface`/`*mut Thread<A>` → the renderer's opaque `*mut ()`) is a W1 deliverable (spec unit C 'routed through the renderer-local mailbox trait'); E1 only forwards. ADV-FIX 3: `alloc` stays on the wrapper's init. errdefer parity: the reference frees a partially-built DerivedConfig on init error — the seam's init<A> is a thin forward, so DerivedConfig ownership/free stays with the real renderer's own errdefer (W1); the seam does not double-free. No new crate edge (core→renderer exists) — R4 green.
 
 **Gates:**
+
 - `cargo build -p rustty-core --all-targets`
 - `cargo test -p rustty-core --lib renderer_seam`
 - `cargo clippy -p rustty-core --all-targets -- -D warnings`
@@ -1293,10 +1392,12 @@ mod tests {
 ### Task W3-E2a: Fill Thread<A>::{init, deinit} over rustty-xev (handle setup/teardown; NON-consuming deinit)
 
 **Files:**
+
 - Modify: `crates/rustty-core/src/renderer_seam.rs` — 353-386 (Thread<A>::init 366-376 body + deinit 384-386 body); struct+fields 229-337 UNCHANGED
 - Test: `crates/rustty-core/src/renderer_seam.rs (#[cfg(test)] mod tests: init constructs all xev handles + deinit tears them down without leak, macOS-gated)`
 
 **Consumes:**
+
 - rustty_xev::Loop::init() -> Result<Loop, Error> ; Loop::deinit(&mut self)
 - rustty_xev::Async::init() -> Result<Async, Error> ; Async::deinit(&mut self)
 - rustty_xev::Timer::init() -> Result<Timer, Error> ; Timer::deinit(&self)
@@ -1307,15 +1408,18 @@ mod tests {
 - crate::renderer_seam::{Renderer, State, Flags} ; struct Thread<A> fields (renderer_seam.rs:236-312)
 
 **Produces:**
+
 - pub fn init(alloc: Global, config: &rustty_config::Config, surface: *mut A::Surface, renderer_impl: *mut Renderer, state: *mut State, app_mailbox: crate::app::Mailbox<A>) -> Result<Thread<A>, xev::Error> — EXACT signature already declared at renderer_seam.rs:366-373 and called at surface.rs:1857-1864 (MUST match)
 - pub fn deinit(&mut self) — NON-consuming (renderer_seam.rs:384; Surface::deinit calls it on the still-owned field at surface.rs:2596, after stop.notify()+join)
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/renderer/Thread.zig:125-181` — init: xev.Loop.init + Async.init(wakeup/stop/draw_now) + Timer.init(render_h/draw_h/cursor_h) with LIFO errdefer, Mailbox.create, DerivedConfig.init(config); returns the struct literal
 - `src/renderer/Thread.zig:183-196` — deinit: stop/wakeup/render_h/draw_h/draw_now/cursor_h.deinit + loop.deinit + mailbox.destroy(alloc) — the alloc field collapses (Box ownership); the Mailbox Box is dropped here
 - `src/renderer/Thread.zig:19-20, 35` — DRAW_INTERVAL=8 / CURSOR_BLINK_INTERVAL=600 module consts; Mailbox = BlockingQueue(Message,64) — the real rustty_renderer::thread::Mailbox
 
 **FFI / xev mapping:**
+
 - `var loop = try xev.Loop.init(.{}); errdefer loop.deinit();` → `let mut loop_ = xev::Loop::init()?; // errdefer → explicit .deinit() on each later `?` arm (LIFO), termio Thread::init precedent`
 - `var wakeup_h = try xev.Async.init(); (also stop, draw_now)` → `let wakeup = xev::Async::init()?; let stop = xev::Async::init()?; let draw_now = xev::Async::init()?;`
 - `var render_h = try xev.Timer.init(); (also draw_h, cursor_timer)` → `let render_h = xev::Timer::init()?; let draw_h = xev::Timer::init()?; let cursor_h = xev::Timer::init()?;`
@@ -1323,6 +1427,7 @@ mod tests {
 - `self.stop.deinit(); ...; self.loop.deinit(); self.mailbox.destroy(self.alloc);` → `self.stop.deinit(); self.wakeup.deinit(); self.render_h.deinit(); self.draw_h.deinit(); self.draw_now.deinit(); self.cursor_h.deinit(); self.loop_.deinit(); unsafe { drop(Box::from_raw(self.mailbox)); }`
 
 **Test KAT:**
+
 ```rust
 #[cfg(test)]
 mod init_deinit_tests {
@@ -1373,6 +1478,7 @@ mod init_deinit_tests {
 **Port notes:** init MUST match the canonical signature already wired at surface.rs:1857 and declared at renderer_seam.rs:366 — do not change arg order/types. The reference `alloc` field ('Allocator used for some state', Thread.zig:38) COLLAPSES: the Mailbox is a `Box::into_raw` pointer freed in deinit (termio thread.rs precedent), so the Thread struct has no `alloc` field (confirmed: renderer_seam.rs:229-312 has none). LIFO errdefer on `?`: each `xev::*::init()?` failure must explicitly `.deinit()` the already-built handles + `drop(Box::from_raw(mailbox))` (Rust has no `errdefer`); mirror Thread.zig:135-163 order. deinit is `&mut self` NON-consuming (the mailbox Box is freed here via `Box::from_raw`, matching `mailbox.destroy(alloc)`); it is only safe after the render thread is joined (Surface::deinit does stop.notify()+join at surface.rs:2559-2569 BEFORE calling renderer_thread.deinit() at :2596). Completions (wakeup_c/stop_c/render_c/draw_c/draw_now_c/cursor_c/cursor_c_cancel) take Default (`= .{}`) — inhabited, unarmed. DerivedConfig here is `rustty_renderer::thread::DerivedConfig` (custom_shader_animation), NOT the renderer.Renderer.DerivedConfig (renderer_seam.rs:305-309 note).
 
 **Gates:**
+
 - `cargo build -p rustty-core --all-targets`
 - `cargo test -p rustty-core --lib renderer_seam::init_deinit_tests`
 - `cargo clippy -p rustty-core --all-targets -- -D warnings`
@@ -1384,11 +1490,13 @@ mod init_deinit_tests {
 ### Task W3-E2b: Fill Thread<A>::threadMain + armLoop + all xev callbacks + drainMailbox/syncDrawTimer/drawFrame helpers; culminating bounded-pump + Surface::draw KAT
 
 **Files:**
+
 - Create: `crates/rustty-core/tests/render_thread_live.rs (macOS-gated integration KAT — the chunk culmination)`
 - Modify: `crates/rustty-core/src/renderer_seam.rs` — 388-395 (threadMain body) + ADD private items after 396: armLoop, threadMain_ (errors inner), drawFrame helper, syncDrawTimer, drainMailbox, and the ZST fn-item callbacks wakeupCallback/drawNowCallback/drawCallback/renderCallback/cursorTimerCallback/cursorCancelCallback/stopCallback + cursorBlinkInterval + consts DRAW_INTERVAL/CURSOR_BLINK_INTERVAL + MUST_DRAW_FROM_APP_THREAD
 - Test: `crates/rustty-core/tests/render_thread_live.rs`
 
 **Consumes:**
+
 - From W3-E2a: Thread<A>::{init,deinit}
 - From W3-E1: (*self.renderer).0 : &mut rustty_renderer::Renderer — .update_frame(&state::State, bool)->Result<(),VtOutOfMemory> (generic.rs:3861), .draw_frame(bool)->Result<(),Error> (4818), .has_animations()->bool (4654), .set_screen_size(Size) (1924), .set_font_grid(*mut SharedGrid) (1866), .change_config(DerivedConfig)->Result<(),Error> (1957); + W1-added .has_vsync()/.set_visible(bool)/.set_focus(bool)/.set_macos_display_id(u32)/.thread_enter(*mut S)/.thread_exit()
 - rustty_xev unsafe fn Async::wait<UD,CB>(self, *mut Loop, *mut Completion, *mut UD, CB) where CB: Fn(*mut UD,*mut Loop,*mut Completion,Result<(),WaitError>)->CallbackAction (async.rs:217)
@@ -1398,12 +1506,14 @@ mod init_deinit_tests {
 - rustty_renderer::thread::Mailbox::pop()->Option<rustty_renderer::message::Message> and its variants (visible/focus/reset_cursor_blink/font_grid/resize/change_config/inspector/macos_display_id/crash/search_*)
 
 **Produces:**
+
 - pub unsafe fn threadMain(self_: *mut Thread<A>) — RAW-ptr entry (matches the spawn at surface.rs:2311 `(*arg.0).threadMain()`; the RendererThreadArg Send-wrapper is already wired at surface.rs:1489/2303)
 - unsafe fn armLoop<A>(self_: *mut Thread<A>) -> Result<(), xev::NotifyError> — factored arming (wait handlers + initial wakeup.notify + cursor_h.run + syncDrawTimer); the bounded-pump KAT calls this then run(NoWait) instead of the blocking run(UntilDone)
 - private: fn wakeupCallback<A>/drawNowCallback<A>/drawCallback<A>/renderCallback<A>/cursorTimerCallback<A>/cursorCancelCallback<A>/stopCallback<A> as ZST fn items matching the xev trampoline sig; methods drainMailbox/syncDrawTimer/drawFrame(now) on *mut Thread<A>
 - const DRAW_INTERVAL: u64 = 8; const CURSOR_BLINK_INTERVAL: u64 = 600; const MUST_DRAW_FROM_APP_THREAD: bool = false;
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/renderer/Thread.zig:199-263` — threadMain + threadMain_: pthread name (darwin), crash.sentry.thread_state (deferred seam), setQosClass, threadEnter/threadExit, wait(wakeup/stop/draw_now), wakeup.notify initial, cursor_h.run, syncDrawTimer, loop.run(.until_done). armLoop = 238-257 (arming minus the final run).
 - `src/renderer/Thread.zig:295-334` — syncDrawTimer: hasAnimations/custom_shader_animation branch → draw_active + draw_h.run(DRAW_INTERVAL, drawCallback); the `if draw_c.state()==.active return` guard
 - `src/renderer/Thread.zig:336-517` — drainMailbox (autoreleasepool on darwin) — every message arm (visible/focus/reset_cursor_blink/font_grid/resize/change_config/search_*/inspector/macos_display_id/crash) verbatim; changeConfig; drawFrame(now) helper with must_draw_from_app_thread branch (app_mailbox.push .redraw_surface) vs renderer.drawFrame(false)
@@ -1411,6 +1521,7 @@ mod init_deinit_tests {
 - `src/Surface.zig:884` — draw(): try self.renderer.drawFrame(true) — the Surface::draw path exercised by the KAT (surface.rs:2766)
 
 **FFI / xev mapping:**
+
 - `self.wakeup.wait(&self.loop, &self.wakeup_c, Thread, self, wakeupCallback);` → `unsafe { (*self_).wakeup.wait(&raw mut (*self_).loop_, &raw mut (*self_).wakeup_c, self_, wakeupCallback::<A>) }; // UD=Thread<A>, CB=ZST fn item`
 - `self.stop.wait(...,stopCallback); self.draw_now.wait(...,drawNowCallback);` → `unsafe { (*self_).stop.wait(&raw mut (*self_).loop_, &raw mut (*self_).stop_c, self_, stopCallback::<A>) }; // draw_now analogous with drawNowCallback::<A>`
 - `try self.wakeup.notify(); (initial render kick)` → `unsafe { (*self_).wakeup.notify() }?; // NotifyError`
@@ -1422,6 +1533,7 @@ mod init_deinit_tests {
 - `_ = try self.loop.run(.until_done); / self_.?.loop.stop();` → `unsafe { (*self_).loop_.run(xev::RunMode::UntilDone) }?; / unsafe { (*t).loop_.stop() };`
 
 **Test KAT:**
+
 ```rust
 //! Chunk W3 culmination — the core Thread<A> render loop drives a live drawFrame
 //! through the real (offscreen) renderer; the same present the Surface::draw path
@@ -1509,6 +1621,7 @@ fn core_thread_loop_and_surface_draw_present_the_golden() {
 **Port notes:** threadMain is `pub unsafe fn threadMain(self_: *mut Thread<A>)` — RAW-ptr receiver (NOT &mut self): the construct-then-spawn is already wired via RendererThreadArg(*mut Thread<A>) at surface.rs:1489 and the spawn closure calls `(*arg.0).threadMain()` at surface.rs:2311; the render thread is the SOLE user of *thread between spawn and the Surface::deinit stop.notify()+join (surface.rs:2559-2569). SB/TB: NEVER take `&mut *self_` on the whole Thread while completions are armed — every callback/helper takes `*mut Thread<A>` and touches fields through `&raw mut (*self_).field` (the rust-mut-args-strongly-protected discipline; the loop holds the inline Completions raw across ticks, a &mut reborrow would retag+UB). xev callbacks are generic ZST fn items `fn wakeupCallback<A: apprt::App + 'static>(t: *mut Thread<A>, _: *mut Loop, _: *mut Completion, r: Result<(),WaitError>) -> CallbackAction` — matching the trampoline sig (async.rs:224 / timer.rs:82); UD=Thread<A>. cursorCancelCallback uses UD=() with null userdata (Thread.zig:668 `?*void`). armLoop is a rustty-only factoring of threadMain_'s arming prologue (Thread.zig:238-257) so the bounded-pump KAT can drive the loop deterministically without the blocking `run(.until_done)`; threadMain_ = armLoop(self_) then `loop_.run(UntilDone)`. must_draw_from_app_thread → `const MUST_DRAW_FROM_APP_THREAD: bool = false` (module const, port-noted as the macOS direct-draw value; BOTH reference branches preserved for R1 — the app_mailbox.push(Message::RedrawSurface(surface)) branch compiles via app.rs:896/952 but is dead under false). drawFrame(now) helper reads `(*self.renderer).0.has_vsync()` (W1) — offscreen returns false so drawFrame draws. renderer method calls route through `(*self.renderer).0` (the real renderer, same module). crash.sentry.thread_state (Thread.zig:218-222 reading renderer.surface_mailbox.surface) is a DEFERRED seam — port the faithful comment but the set/clear routes through the existing crash::sentry no-op (core already has clearThreadState); the surface_mailbox.surface access stays behind the renderer-local SurfaceMailbox seam. setQosClass (Thread.zig:265-293, darwin macos.setQosClass) — port via the rustty-os macos QoS shim if landed, else a no-op with a verbatim-comment DEFERRED note (0 tests, R1-safe). cursorBlinkInterval's valgrind branch (Thread.zig:713) → rustty has no std.valgrind; port as `fn cursorBlinkInterval()->u64 { CURSOR_BLINK_INTERVAL }` with a port note that the valgrind-slowdown branch is dropped (the reference hack, not observable behavior). autoreleasepool in drainMailbox (Thread.zig:342) → an objc2 AutoreleasePool RAII guard on macos, else nothing. The KAT spawns NO OS thread (armLoop + NoWait pump on the test thread) so teardown needs no join — but it still exercises the exact threadMain callback graph.
 
 **Gates:**
+
 - `cargo build --workspace --all-targets`
 - `cargo test -p rustty-core --test render_thread_live`
 - `cargo clippy -p rustty-core --all-targets -- -D warnings`
@@ -1530,30 +1643,35 @@ fn core_thread_loop_and_surface_draw_present_the_golden() {
 
 **Chunk culminating test:** crates/rustty-apprt-c/tests/macos_window_host.rs::hosts_nswindow_layer_and_presents_live_frame — opens an NSWindow + contentView, drives rustty_app_new → rustty_surface_new with platform.macos.nsview = contentView, bounded-pumps rustty_app_tick until the contentView hosts a CAMetalLayer whose contents (the presented IOSurface) is non-null, reads that IOSurface back BGRA and structurally asserts the terminal frame against the golden gate, then calls rustty_surface_set_display_id(CGMainDisplayID()) and rustty_set_window_background_blur(app, nswindow) panic-free.
 
-
 ### Task W4-1: Deps + config blur-radius accessor promotion (enabler)
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c/Cargo.toml` — [dependencies] after ~L48 (rustty-config) and [dev-dependencies] (new section): add live objc2 + the two renderer/datastruct forward edges for the display_id push, and the macOS windowing dev-deps for the harness
 - Modify: `crates/rustty-config/src/value_types.rs` — 2326 (fn background_blur_cval signature line)
 - Test: `crates/rustty-config/src/c_get.rs`
 
 **Consumes:**
+
 - rustty_config::value_types::BackgroundBlur (re-export of rustty_render_types::BackgroundBlur)
 
 **Produces:**
+
 - pub fn rustty_config::value_types::background_blur_cval(v: BackgroundBlur) -> i16
 - Cargo edges: rustty-apprt-c -> { objc2 0.6 (dep), rustty-renderer (dep), rustty-datastruct (dep) }; dev-deps rustty-apprt-c -> { objc2-app-kit 0.3, objc2-quartz-core 0.3, objc2-foundation 0.3, objc2-core-graphics 0.3, rustty-xev }
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/apprt/embedded.zig:2183` — config.@"background-blur".cval() — the BackgroundBlur.cval() method the blur leaf calls; its rustty analogue background_blur_cval must be pub so apprt-c (a separate crate) can reach it
 - `src/config/Config.zig:BackgroundBlur.cval` — i16 radius mapping (false=0,true=20,radius=>|v|,glass=>-1/-2) — already ported verbatim at value_types.rs:2326, only visibility changes
 
 **FFI / xev mapping:**
+
 - `objc.msgSend / CGS extern (dep availability)` → `objc2 = { version = "0.6" } added to rustty-apprt-c [dependencies] (msg_send! windowNumber for W4-2)`
 - `renderer Thread.Mailbox / xev.Async (dep availability)` → `rustty-renderer + rustty-datastruct added to [dependencies] (Message::MacosDisplayId + Timeout for W4-3); objc2-app-kit/objc2-quartz-core/objc2-core-graphics/rustty-xev added to [dev-dependencies] (W4-4 harness)`
 
 **Test KAT:**
+
 ```rust
 // No new test file. The existing c_get.rs golden (`c_get_background_blur`,
 // rustty-config/src/c_get.rs:570) already exercises background_blur_cval via the
@@ -1569,6 +1687,7 @@ fn core_thread_loop_and_surface_draw_present_the_golden() {
 **Port notes:** R1: promoting background_blur_cval from pub(crate) to pub is the minimal-visibility change that preserves the reference's `BackgroundBlur.cval()` as a public method reachable across the crate boundary; the body + its distinctive reference-provenance comments stay CONFIG-local (value_types.rs), exactly as the Chunk-3a hoist note prescribes (the enum lives in rustty-render-types, the value methods stay config-local). R4/acyclic: rustty-apprt-c is the top sink of the graph; adding rustty-renderer/rustty-datastruct/objc2 as forward edges to crates far below it keeps check_acyclic.sh GREEN (same precedent as the existing rustty-vt/rustty-core/rustty-config forward edges in apprt-c). objc2-quartz-core is ADDED to the lock here (dev-dep) per the design; W0 already added it to rustty-renderer. Dev-deps only compile for the macOS harness test binary, so non-macOS builds are unaffected.
 
 **Gates:**
+
 - `cargo build -p rustty-apprt-c`
 - `cargo test -p rustty-config background_blur`
 - `cargo clippy -p rustty-config -p rustty-apprt-c --all-targets -- -D warnings`
@@ -1579,28 +1698,34 @@ fn core_thread_loop_and_surface_draw_present_the_golden() {
 ### Task W4-2: Fill rustty_set_window_background_blur (objc2 windowNumber + private CGS blur)
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c/src/lib.rs` — 2172-2191 (replace the #[cfg(target_os="macos")] unimplemented!() block with the real body) and 2194-2204 (turn the preserved CGS extern-decl comment into a live extern "C" block)
 - Test: `crates/rustty-apprt-c/tests/macos_window_host.rs`
 
 **Consumes:**
+
 - rustty_apprt::embedded::App with pub field config: UnsafeCell<rustty_config::Config>
 - rustty_config::Config { pub background_opacity: f64, pub background_blur: rustty_config::value_types::BackgroundBlur }
 - pub fn rustty_config::value_types::background_blur_cval(BackgroundBlur) -> i16 (from W4-1)
 - objc2::runtime::AnyObject, objc2::msg_send!
 
 **Produces:**
+
 - #[no_mangle] pub unsafe extern "C" fn rustty_set_window_background_blur(app: *mut App, window: *mut c_void) — realized macOS body (non-macOS arm stays the no-op)
 - extern "C" { fn CGSSetWindowBackgroundBlurRadius(connection: *mut c_void, window: usize, radius: c_int) -> i32; fn CGSDefaultConnectionForThread() -> *mut c_void; }
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/apprt/embedded.zig:2101-2126` — export fn ghostty_set_window_background_blur: reads &app.config, early-returns when background-opacity>=1.0, objc.Object.fromId(window).msgSend(usize, sel("windowNumber")), CGSSetWindowBackgroundBlurRadius(CGSDefaultConnectionForThread(), windowNumber, @intCast(config.background-blur.cval()))
 - `src/apprt/embedded.zig:2128-2130` — extern "c" fn CGSSetWindowBackgroundBlurRadius(*anyopaque, usize, c_int) i32; extern "c" fn CGSDefaultConnectionForThread() *anyopaque; — the private CoreGraphics symbols, now declared live
 
 **FFI / xev mapping:**
+
 - `objc.Object.fromId(window).msgSend(usize, objc.sel("windowNumber"), .{})` → `let nswindow: *mut objc2::runtime::AnyObject = window.cast(); let window_number: isize = unsafe { objc2::msg_send![nswindow, windowNumber] }; (NSWindow.windowNumber returns NSInteger=isize; cast to usize for the CGS arg, matching the reference @intCast to usize)`
 - `CGSSetWindowBackgroundBlurRadius(CGSDefaultConnectionForThread(), n, @intCast(cval))` → `unsafe { CGSSetWindowBackgroundBlurRadius(CGSDefaultConnectionForThread(), window_number as usize, background_blur_cval(config.background_blur) as core::ffi::c_int) } — private CGS symbols via a live extern "C" block (no crate provides them; faithful to the reference extern decls)`
 
 **Test KAT:**
+
 ```rust
 // In crates/rustty-apprt-c/tests/macos_window_host.rs (shared harness file,
 // W4-4). Focused blur KAT: a real NSWindow + a live App with transparent config
@@ -1630,9 +1755,10 @@ fn set_window_background_blur_is_panic_free_on_transparent_config() {
 }
 ```
 
-**Port notes:** R1 byte-fidelity: the body is the reference translated 1:1 — `const config = &app.config` => `let config = unsafe { &*(*app).config.get() }` (App.config is an UnsafeCell<Config> per the E6 field note; the C host holds a single-threaded *mut App so the shared read is sound), the `background-opacity >= 1.0` early return, the windowNumber msgSend, and the CGS call with the `@intCast(cval)` widening. The reference @export is UNCONDITIONAL (only the BODY is comptime-gated); rustty already mirrors this — the fn exists on all targets, the #[cfg(not(macos))] arm is the no-op early return, the #[cfg(macos)] arm gets the real body. The two private CGS externs move from preserved comment to a live `extern "C"` block placed exactly where the reference declares them (right after the fn); update the preceding PORT NOTE to record that they are now realized (they were deferred precisely 'until the objc/CGS leaf is realized' — that is now). No objc2-app-kit needed for the leaf itself: msg_send! on a raw AnyObject* is enough (objc2 dep only). SB/TB: `window` is a foreign NSWindow pointer never dereferenced as a Rust reference — only handed to msg_send!/CGS; no aliasing obligation. Miri-excluded (foreign objc/CGS calls) per MIRI_EXCEPTIONS.md; ASan-covered on the FFI gate.
+**Port notes:** R1 byte-fidelity: the body is the reference translated 1:1 — `const config = &app.config` => `let config = unsafe { &*(*app).config.get() }` (App.config is an UnsafeCell<Config> per the E6 field note; the C host holds a single-threaded _mut App so the shared read is sound), the `background-opacity >= 1.0` early return, the windowNumber msgSend, and the CGS call with the `@intCast(cval)` widening. The reference @export is UNCONDITIONAL (only the BODY is comptime-gated); rustty already mirrors this — the fn exists on all targets, the #[cfg(not(macos))] arm is the no-op early return, the #[cfg(macos)] arm gets the real body. The two private CGS externs move from preserved comment to a live `extern "C"` block placed exactly where the reference declares them (right after the fn); update the preceding PORT NOTE to record that they are now realized (they were deferred precisely 'until the objc/CGS leaf is realized' — that is now). No objc2-app-kit needed for the leaf itself: msg_send! on a raw AnyObject_ is enough (objc2 dep only). SB/TB: `window` is a foreign NSWindow pointer never dereferenced as a Rust reference — only handed to msg_send!/CGS; no aliasing obligation. Miri-excluded (foreign objc/CGS calls) per MIRI_EXCEPTIONS.md; ASan-covered on the FFI gate.
 
 **Gates:**
+
 - `cargo build -p rustty-apprt-c`
 - `cargo test -p rustty-apprt-c --test macos_window_host set_window_background_blur`
 - `cargo clippy -p rustty-apprt-c --all-targets -- -D warnings`
@@ -1644,10 +1770,12 @@ fn set_window_background_blur_is_panic_free_on_transparent_config() {
 ### Task W4-3: Fill rustty_surface_set_display_id (renderer-thread mailbox push + xev wakeup)
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c/src/lib.rs` — 2236-2248 (replace the let _ = (ptr, display_id); + unimplemented!() body with the real mailbox push + wakeup.notify)
 - Test: `crates/rustty-apprt-c/tests/macos_window_host.rs`
 
 **Consumes:**
+
 - rustty_apprt::embedded::Surface with pub field core_surface: rustty_core::Surface<rustty_apprt::embedded::App>
 - rustty_core::Surface.renderer_thread: rustty_core::renderer_seam::Thread<A> with pub mailbox: *mut rustty_renderer::thread::Mailbox and pub wakeup: rustty_xev::Async (produced live by W2/W3)
 - rustty_renderer::thread::Mailbox = rustty_datastruct::BlockingQueue<rustty_renderer::Message, 64>
@@ -1657,18 +1785,22 @@ fn set_window_background_blur_is_panic_free_on_transparent_config() {
 - rustty_xev::Async::notify(&self) -> Result<(), rustty_xev::NotifyError>
 
 **Produces:**
+
 - #[cfg(target_os="macos")] #[no_mangle] pub unsafe extern "C" fn rustty_surface_set_display_id(ptr: *mut Surface, display_id: u32) — realized body
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/apprt/embedded.zig:2134-2141` — Darwin export ghostty_surface_set_display_id: const surface = &ptr.core_surface; _ = surface.renderer_thread.mailbox.push(.{ .macos_display_id = display_id }, .{ .forever = {} }); surface.renderer_thread.wakeup.notify() catch {};
 - `src/renderer/Thread.zig:485-487` — drainMailbox handles .macos_display_id => self.renderer.setMacOSDisplayID(v) — the consumer side proving the message variant + mailbox is the correct transport (lands live in W2/W3)
 - `src/renderer/message.zig:68` — macos_display_id: u32 — the Message union variant, ported as rustty_renderer::Message::MacosDisplayId(u32) (message.rs:118)
 
 **FFI / xev mapping:**
+
 - `surface.renderer_thread.mailbox.push(.{ .macos_display_id = display_id }, .{ .forever = {} })` → `let _ = unsafe { &*surface.renderer_thread.mailbox }.push(rustty_renderer::Message::MacosDisplayId(display_id), rustty_datastruct::blocking_queue::Timeout::Forever); — mailbox is a *mut Mailbox (Box pointee), deref to &Mailbox then BlockingQueue::push; the Size return is discarded exactly as the reference `_ =``
-- `surface.renderer_thread.wakeup.notify() catch {}` → `let _ = surface.renderer_thread.wakeup.notify(); — rustty_xev::Async::notify returns Result<(),NotifyError>; the reference `catch {}` swallows the error, so `let _ =` is the faithful mapping`
+- `surface.renderer_thread.wakeup.notify() catch {}` → `let _ = surface.renderer_thread.wakeup.notify(); — rustty_xev::Async::notify returns Result<(),NotifyError>; the reference `catch {}`swallows the error, so`let _ =` is the faithful mapping`
 
 **Test KAT:**
+
 ```rust
 // In crates/rustty-apprt-c/tests/macos_window_host.rs. Requires a LIVE surface
 // (real renderer_thread mailbox/wakeup from W2/W3), so it reuses the hosted
@@ -1696,6 +1828,7 @@ fn set_display_id_pushes_to_render_thread_panic_free() {
 **Port notes:** R1: verbatim body — the `_ =` on push (discard Size) and `let _ =` on notify (the reference `catch {}`) are the faithful mappings; update the preceding PORT NOTE to record the leaf is now realized (it was deferred 'until a live surface + render thread exist' — W2/W3 provide exactly that). The renderer_thread fields are ALREADY REAL in renderer_seam.rs (pub wakeup: xev::Async :240, pub mailbox: *mut thread::Mailbox :298) — only Thread::init/threadMain were leaves, and W2/W3 fill those, so by W4 the mailbox pointer is a valid live BlockingQueue and wakeup is an armed Async. R5: this is the R5 'deferred = unimplemented!() + verbatim body' leaf being promoted to live now that its consumed seams exist. SB/TB: the mailbox is a Box pointee OUTSIDE the Surface struct's Stacked-Borrows coverage (the design's pid-only/Box-owned render-thread discipline), so pushing through `&*mailbox` while the render thread also holds a raw alias is the sanctioned construct-then-spawn pattern — no `&mut *self` whole-struct reborrow. Miri-excluded (crosses into the live xev render loop / foreign wakeup); the raw-pointer aliasing is proven on the mirihar harness before shipping (renderthread_shipped=CLEAN).
 
 **Gates:**
+
 - `cargo build -p rustty-apprt-c`
 - `cargo test -p rustty-apprt-c --test macos_window_host set_display_id`
 - `cargo clippy -p rustty-apprt-c --all-targets -- -D warnings`
@@ -1708,11 +1841,13 @@ fn set_display_id_pushes_to_render_thread_panic_free() {
 ### Task W4-4: Culminating macOS windowing integration harness (NSWindow host + live frame + golden readback + display_id + blur E2E)
 
 **Files:**
+
 - Create: `crates/rustty-apprt-c/tests/macos_window_host.rs`
 - Modify: `crates/rustty-apprt-c/Cargo.toml` — [dev-dependencies] finalized (objc2-app-kit, objc2-quartz-core, objc2-foundation, objc2-core-graphics, rustty-xev) + the tests entry is auto-discovered
 - Test: `crates/rustty-apprt-c/tests/macos_window_host.rs`
 
 **Consumes:**
+
 - rustty_apprt_c::{rustty_app_new, rustty_app_tick, rustty_app_free, rustty_surface_new, rustty_surface_free, rustty_surface_set_content_scale, rustty_surface_set_size, rustty_surface_set_display_id, rustty_set_window_background_blur}
 - rustty_apprt::embedded::{Options, SurfaceOptions, PlatformC, PlatformCMacOS, PlatformTag::MacOS=1}
 - rustty_apprt::embedded::Surface.platform: Platform::MacOS(MacOS{ nsview: *mut c_void }) (Platform::init handshake, LIVE from E2)
@@ -1722,20 +1857,24 @@ fn set_display_id_pushes_to_render_thread_panic_free() {
 - objc2_app_kit::{NSWindow, NSView, NSBackingStoreType, NSWindowStyleMask}, objc2_quartz_core::CAMetalLayer/CALayer, objc2_core_graphics::CGMainDisplayID, objc2::MainThreadMarker
 
 **Produces:**
+
 - crates/rustty-apprt-c/tests/macos_window_host.rs with the chunk-culminating test hosts_nswindow_layer_and_presents_live_frame plus the focused W4-2/W4-3 sub-KATs, and shared helpers: fn make_nswindow(MainThreadMarker)->*mut AnyObject, struct HostedSurface { app, surface, window } with ::spawn(MainThreadMarker)->Option<Self> and ::pump_bounded(&self), fn read_layer_iosurface_bgra(layer)->Option<Vec<u8>>, extern "C" test callbacks (wakeup/action/clipboard)
 
 **Reference (port per R1 — verbatim comments, byte-faithful):**
+
 - `src/apprt/embedded.zig:242-252 (newSurface), 343-405 (Platform/PlatformTag/MacOS.nsview + Platform.init NSViewMustBeSet), 460-479 (Surface.init content_scale from scale_factor)` — the host handshake the harness drives: newSurface allocs+inits, Platform.init unwraps the C nsview, Surface.init seeds content_scale — all LIVE in rustty; the harness is the first C-ABI caller to hand a real NSView
 - `src/renderer/Metal.zig:95-150` — the renderer-side layer handshake: reads surface.rt_surface.platform.macos.nsview, IOSurfaceLayer.init(), makes the view layer-hosting (setProperty("layer", layer); setProperty("wantsLayer", true)), clipsToBounds, contentsScale=scaleFactor, needsDisplayOnBoundsChange — this is what the harness proves ran (view.layer() is the CAMetalLayer)
 - `src/renderer/generic.zig:5866-5913 (rustty generic.rs golden_renders_cursor_fg_bg) + Target.read_bgra (target.rs:212)` — the offscreen golden gate reused: render a deterministic terminal state, read the IOSurface back BGRA (rows tight), structurally assert cursor cell red-dominant + black bg — the harness applies the same structural asserts to the ON-SCREEN presented IOSurface
 
 **FFI / xev mapping:**
+
 - `NSWindow alloc/initWithContentRect:styleMask:backing:defer: + contentView (test host, no reference — replaces the Swift AppKit app)` → `let window = unsafe { NSWindow::initWithContentRect_styleMask_backing_defer(NSWindow::alloc(mtm), NSRect::new(NSPoint::new(0.,0.), NSSize::new(200.,120.)), NSWindowStyleMask::Titled, NSBackingStoreType::Buffered, false) }; let view = window.contentView().unwrap(); — objc2-app-kit; MainThreadMarker gates AppKit construction`
 - `view.layer() read-back to confirm the CAMetalLayer host handshake` → `let layer: Option<Retained<CALayer>> = unsafe { view.layer() }; downcast to objc2_quartz_core::CAMetalLayer; then CALayer::contents() -> the presented IOSurface (an id) whose bytes are read via objc2-io-surface lock/base_address (mirrors Target::read_bgra)`
 - `rustty-xev bounded pump (live_shell.rs RunMode::NoWait discipline)` → `pump_bounded: loop { unsafe { rustty_app_tick(app) }; if layer_has_contents() { break; } if ticks>CAP || Instant::now()>deadline { break; } } — never blocks; the render thread (rustty_xev Loop) presents on its own vsync/wakeup, the main thread just ticks the app loop and polls the layer`
 - `CGMainDisplayID()` → `unsafe { objc2_core_graphics::CGMainDisplayID() } -> u32 handed to rustty_surface_set_display_id`
 
 **Test KAT:**
+
 ```rust
 #![cfg(target_os = "macos")]
 #![allow(non_snake_case)] // PARITY: reference C-ABI identifiers verbatim.
@@ -1851,6 +1990,7 @@ fn hosts_nswindow_layer_and_presents_live_frame() {
 **Port notes:** This is unit F's proof and the sub-project #1 culmination (design §5.3 W4 row). It is NOT a byte-fidelity port of any single reference fn — it is the integration harness the design mandates ('a Rust integration harness opens an NSWindow, hosts the layer, and shows a live terminal frame — no Swift app yet'), modeled structurally on live_shell.rs (bounded RunMode::NoWait pump + tick cap + wall-clock deadline + explicit teardown, never run(UntilDone)) and reusing the offscreen golden gate's structural readback asserts (generic.rs golden_renders_cursor_fg_bg + Target::read_bgra). MAIN-THREAD affinity: NSWindow/NSView construction requires the AppKit main thread; the KAT gates on MainThreadMarker::new() and SKIPS when None (the Metal-skip precedent) — cargo runs the process's first test on the main thread, and this is the SOLE test in its own integration binary, so it lands on main. Metal-device skip: surface_new returns null on a headless host => skip cleanly. OWNERSHIP: the NSWindow/NSView are Rust-owned (Retained), isolating the C-ABI host handshake from the eventual Swift app (design risk mitigation §6 Med). The nsview pointer handed across platform.macos.nsview must outlive the surface (window kept in HostedSurface). The three unimplemented!() helper stubs in the KAT (Options assembly + layer/IOSurface readback) are spelled out against objc2-app-kit/objc2-quartz-core/objc2-io-surface at implementation time — their SHAPE is fixed here; read_presented_bgra mirrors Target::read_bgra (IOSurfaceLockOptions::ReadOnly, base_address, w*4 bytes/row * height). check_test_counts.py: this file adds tests to the macOS-gated count (0 on non-macOS — no regression). Miri-excluded; ASan-covered on the FFI gate; recorded in MIRI_EXCEPTIONS.md.
 
 **Gates:**
+
 - `cargo build -p rustty-apprt-c`
 - `cargo test -p rustty-apprt-c --test macos_window_host`
 - `cargo clippy -p rustty-apprt-c --all-targets -- -D warnings`

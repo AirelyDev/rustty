@@ -33,16 +33,16 @@ FIXED and record the fix.
 
 ## FIXED (2026-08-11): `RGB::parse` panicked on a non-char-boundary byte index (P1, DoS)
 
-| | |
-|---|---|
-| Files | `osc4-rgb-parse-char-boundary`, `osc21-kitty-color-lossy-char-boundary` |
+|            |                                                                                         |
+| ---------- | --------------------------------------------------------------------------------------- |
+| Files      | `osc4-rgb-parse-char-boundary`, `osc21-kitty-color-lossy-char-boundary`                 |
 | Crash site | `crates/rustty-vt/src/color.rs` — `RGB::parse`, the `input.len()` 3/6 and `#`-form arms |
-| Oracle | `ghostty/src/terminal/color.zig:657` `pub fn parse(value: []const u8)` |
-| Found by | `cargo fuzz run fuzz_osc` (this crate), 2026-08-11 |
+| Oracle     | `ghostty/src/terminal/color.zig:657` `pub fn parse(value: []const u8)`                  |
+| Found by   | `cargo fuzz run fuzz_osc` (this crate), 2026-08-11                                      |
 
 `RGB::parse` takes `&str` and then indexes it with **byte** ranges
 (`&input[0..2]`, `&input[2..4]`, `&input[1..3]`, …) chosen from `input.len()`,
-which is a *byte* length. Any multi-byte UTF-8 scalar in the spec puts one of
+which is a _byte_ length. Any multi-byte UTF-8 scalar in the spec puts one of
 those byte indices inside a character, and `str`'s `Index<Range>` panics.
 
 The oracle's `parse` takes `[]const u8` and slices **bytes**, which can never
@@ -51,7 +51,7 @@ trap: the sliced bytes simply fail `fromHex`/`parseInt` and the function returns
 
 Reachable from untrusted terminal input on every color-spec OSC — `OSC 4`,
 `OSC 10/11/12`, `OSC 104`, and kitty `OSC 21` — so a remote/`cat`-able byte
-sequence aborts the VT thread. Confirmed with plain, *valid* UTF-8; the strict
+sequence aborts the VT thread. Confirmed with plain, _valid_ UTF-8; the strict
 `str_from_bytes` guard in `osc/parsers/color.rs:526` does **not** prevent it:
 
 ```
@@ -85,15 +85,15 @@ anyway.
 
 Proving tests:
 
-| Test | Guards |
-|---|---|
-| `tests/fuzz_corpus_replay.rs::replay_fixed_fuzz_findings_osc` | both reproducer files, end-to-end through `fuzz_harness::fuzz_osc` |
-| `color.rs::parse_byte_slices_never_panics_on_a_non_char_boundary` | every length arm of `parse` (3/6/`#`4/7/10/13/`rgb:`/`rgbi:`), valid multi-byte AND raw invalid UTF-8 |
-| `color.rs::parse_palette_entry_non_ascii_spec_is_invalid_format_not_a_panic` | the `parsePaletteEntry` entry point |
-| `osc/parsers/color.rs::{osc_4,osc_10}_non_ascii_spec_stops_the_list_instead_of_panicking`, `osc_parser_non_ascii_color_spec_is_not_a_crash` | the OSC 4 / 10-19 / 104 routes, incl. the real `osc::Parser` byte loop |
-| `osc/parsers/kitty_color.rs::osc_21_{invalid_utf8,non_ascii}_value_is_skipped_not_a_crash` | the kitty OSC 21 route (the lossy-decode route) |
-| `rustty-config value_types.rs::color_parse_cli_non_ascii_is_invalid_value_not_a_panic` | the config/CLI `Color::parse_cli` delegation |
-| `rustty-vt-c color.rs::parse_invalid` | the C-ABI `rustty_color_rgb_parse` surface |
+| Test                                                                                                                                        | Guards                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `tests/fuzz_corpus_replay.rs::replay_fixed_fuzz_findings_osc`                                                                               | both reproducer files, end-to-end through `fuzz_harness::fuzz_osc`                                    |
+| `color.rs::parse_byte_slices_never_panics_on_a_non_char_boundary`                                                                           | every length arm of `parse` (3/6/`#`4/7/10/13/`rgb:`/`rgbi:`), valid multi-byte AND raw invalid UTF-8 |
+| `color.rs::parse_palette_entry_non_ascii_spec_is_invalid_format_not_a_panic`                                                                | the `parsePaletteEntry` entry point                                                                   |
+| `osc/parsers/color.rs::{osc_4,osc_10}_non_ascii_spec_stops_the_list_instead_of_panicking`, `osc_parser_non_ascii_color_spec_is_not_a_crash` | the OSC 4 / 10-19 / 104 routes, incl. the real `osc::Parser` byte loop                                |
+| `osc/parsers/kitty_color.rs::osc_21_{invalid_utf8,non_ascii}_value_is_skipped_not_a_crash`                                                  | the kitty OSC 21 route (the lossy-decode route)                                                       |
+| `rustty-config value_types.rs::color_parse_cli_non_ascii_is_invalid_value_not_a_panic`                                                      | the config/CLI `Color::parse_cli` delegation                                                          |
+| `rustty-vt-c color.rs::parse_invalid`                                                                                                       | the C-ABI `rustty_color_rgb_parse` surface                                                            |
 
 Non-vacuity was proved by reverting the non-test code to its pre-fix shape and
 re-running the replay: it failed with

@@ -5,7 +5,6 @@
 # and force zig's own `-target wasm32-wasi`. Used only for wasm32-wasip1 via
 # CC_wasm32_wasip1 (native builds untouched).
 set -- "$@"
-new_args=""
 i=0
 for a do
   case "$a" in

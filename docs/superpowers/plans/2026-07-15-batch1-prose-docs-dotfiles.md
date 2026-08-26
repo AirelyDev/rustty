@@ -38,10 +38,12 @@
 ### Task 1: Top-level `AGENTS.md`
 
 **Files:**
+
 - Create: `AGENTS.md`
 - Reference: `/Users/gael/projects/ghostty/AGENTS.md`
 
 **Interfaces:**
+
 - Produces: the canonical agent-guidance file other tools read. Later tasks' nested AGENTS.md defer to its command vocabulary.
 
 - [ ] **Step 1: Read the oracle** `/Users/gael/projects/ghostty/AGENTS.md` (39 lines).
@@ -61,6 +63,7 @@
 ### Task 2: `README.md`
 
 **Files:**
+
 - Create: `README.md`
 - Reference: `/Users/gael/projects/ghostty/README.md` (226 lines)
 
@@ -84,6 +87,7 @@
 ### Task 3: `HACKING.md`
 
 **Files:**
+
 - Create: `HACKING.md`
 - Reference: `/Users/gael/projects/ghostty/HACKING.md` (495 lines)
 
@@ -112,6 +116,7 @@
 ### Task 4: `CONTRIBUTING.md` + `AI_POLICY.md`
 
 **Files:**
+
 - Create: `CONTRIBUTING.md`, `AI_POLICY.md`
 - Reference: `/Users/gael/projects/ghostty/CONTRIBUTING.md` (195), `AI_POLICY.md` (65)
 
@@ -131,6 +136,7 @@
 ### Task 5: `PACKAGING.md`
 
 **Files:**
+
 - Create: `PACKAGING.md`
 - Reference: `/Users/gael/projects/ghostty/PACKAGING.md` (124)
 
@@ -151,6 +157,7 @@
 ### Task 6: `CODEOWNERS` (minimal rewrite)
 
 **Files:**
+
 - Create: `CODEOWNERS`
 - Reference: `/Users/gael/projects/ghostty/CODEOWNERS` (201)
 
@@ -173,6 +180,7 @@
 ### Task 7: Dotfiles
 
 **Files:**
+
 - Create: `.clang-format`, `.editorconfig`, `.shellcheckrc`, `.prettierignore`, `.swiftlint.yml`, `typos.toml`, `.mailmap`, `valgrind.supp`
 - Reference: the same-named files under `/Users/gael/projects/ghostty/`
 - Leave untouched: `.gitignore`, `.gitattributes` (already rustty-correct)
@@ -194,6 +202,7 @@
 ### Task 8: Nested `AGENTS.md` (6 files) + `macos/AGENTS.md` fix
 
 **Files:**
+
 - Create: `example/AGENTS.md`, `crates/rustty-bench/AGENTS.md`, `crates/rustty-inspector/AGENTS.md`, `crates/rustty-vt/src/apc/glyph/AGENTS.md`, `crates/rustty-vt-c/AGENTS.md`
 - Modify: `macos/AGENTS.md`
 - Reference: the counterpart ghostty `AGENTS.md` files (see spec Batch-1 table for the source→dest map)
@@ -217,6 +226,7 @@
 ### Task 9: Mapped nested READMEs
 
 **Files:**
+
 - Create: `crates/rustty-cli/README.md`, `crates-sys/README.md`, plus font READMEs where a target exists (`crates/rustty-font/res/README.md` and/or the sprite-draw analog)
 - Reference: `src/cli/README.md`, `pkg/README.md`, `src/font/res/README.md`, `src/font/sprite/draw/README.md` under the oracle
 - Already present (leave): `crates/rustty-extra/shell-integration/README.md`, `crates/rustty-extra/themes/README.md`

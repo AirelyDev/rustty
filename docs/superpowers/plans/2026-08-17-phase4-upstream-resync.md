@@ -4,7 +4,7 @@
 
 **Goal:** Absorb the complete upstream range `6ad1fe7d8..12967b68f` (543 commits, 359 non-merge, 381 files, +72,554/−8,106) into rustty with **zero deferrals**, ending with G1b and G3b GREEN again at the new pin and every live bug found by the assessments fixed.
 
-**Architecture:** Ten workstreams in five layers. **`P4-W0` is the live-bug hotfix wave** — the assessments found 8+ bugs *shipping in rustty today* (one security: unconditional CSI 21 t title echo; one UAF: display-callback on freed renderer ctx; two data bugs: kitty range-delete wipes all placements, OSC color reset pins default; plus VS15 underflow, hyperlink-reflow crash, CircBuf shrink corruption, frame-counter perf bug) — all S/M, all independent, all land first with fail-first tests. **`P4-W1` is foundations** (datastruct/lib/os leaves everything else consumes). **`P4-W2`–`P4-W4` are the vt mass** (terminal core → kitty/formatter/input/modes → the 16k-line snapshot subsystem). **`P4-W5` is the C-API surface** (7 atomic bundles, sequenced after their vt-side halves). **`P4-W6`–`P4-W8` are platform/UI/config tiers** (largely parallel with W3–W5). **`P4-W9` is the finale** (gates green, ledgers, census).
+**Architecture:** Ten workstreams in five layers. **`P4-W0` is the live-bug hotfix wave** — the assessments found 8+ bugs _shipping in rustty today_ (one security: unconditional CSI 21 t title echo; one UAF: display-callback on freed renderer ctx; two data bugs: kitty range-delete wipes all placements, OSC color reset pins default; plus VS15 underflow, hyperlink-reflow crash, CircBuf shrink corruption, frame-counter perf bug) — all S/M, all independent, all land first with fail-first tests. **`P4-W1` is foundations** (datastruct/lib/os leaves everything else consumes). **`P4-W2`–`P4-W4` are the vt mass** (terminal core → kitty/formatter/input/modes → the 16k-line snapshot subsystem). **`P4-W5` is the C-API surface** (7 atomic bundles, sequenced after their vt-side halves). **`P4-W6`–`P4-W8` are platform/UI/config tiers** (largely parallel with W3–W5). **`P4-W9` is the finale** (gates green, ledgers, census).
 
 **Tech Stack:** Rust 1.93.1 (pinned); Python 3 for gates; cargo +nightly miri for SB/TB lanes; clang from Xcode for ABI probes; xcodebuild for the macOS Swift tests; Fedora aarch64 VM over `ssh rvm` for GTK; oracle at `/Users/gael/projects/ghostty`, working tree AT the pin `12967b68f` (advanced 2026-08-17, evidence in `.port/phase-4/w0/`).
 
@@ -59,38 +59,54 @@ P4-W1  foundations: lib enum values, limited_allocator, wasm_page_pool,
 One workflow run, 8 parallel implementer agents + verify. Every fix: fail-first test proven RED, fix, GREEN, commit per fix. Assessment citations in brackets.
 
 ### Task 1: CSI 21 t title-report security fix — `38e891e6c` [A §Terminal/stream]
+
 **Files:** Modify `crates/rustty-vt/src/stream_terminal.rs:1431` region; config option + C-API option follow in W5-M/W8 (port the vt-side end state: title report **gated off** unless the option is enabled; the option default is off upstream).
+
 - [ ] Fail-first test: title query with `write_pty` set echoes the title today (the exposure). Port upstream's amended test asserting NO response without opt-in.
 - [ ] Port the end-state gate; wire the existing option plumbing shape (bool on Terminal like upstream's, set from config in W8's row — default off NOW).
 - [ ] Commit `vt: gate CSI 21 t title report behind opt-in (38e891e6c) (P4-W0 T1)`.
 
 ### Task 2: VS15 cursor underflow crash — `33d34cf5c` [A]
+
 **Files:** `crates/rustty-vt/src/terminal.rs:2208` region.
+
 - [ ] Fail-first: VS15 on a wide base under cursor at column 0 → debug panic today.
 - [ ] Port fix + upstream test; commit.
 
 ### Task 3: hyperlink reflow capacity crash — `d5c7e54ae` [A A-2]
+
 **Files:** `crates/rustty-vt/src/pagelist/resize.rs:1652` region.
+
 - [ ] Fail-first per upstream's repro (ghostty #13522); port the split capacity check + test; commit.
 
 ### Task 4: OSC capture cap + grapheme cap DoS — `727b8a02f` [A + RECONCILIATION O1]
+
 **Files:** `crates/rustty-vt/src/osc/mod.rs` (8 MiB `max_allocating_bytes` cap + tests), `crates/rustty-vt/src/terminal.rs`/page grapheme path (`grapheme_max_len = 64` cap). D's two parser call sites follow the API shape.
+
 - [ ] Fail-first both halves; port; commit.
 
 ### Task 5: kitty range-delete wipes all placements — `d866fa455` [D]
+
 **Files:** `crates/rustty-vt/src/kitty/graphics_storage.rs:673` (`||` → the upstream `&&` semantics) + the amended assertions of the EXISTING test (gate-invisible class).
+
 - [ ] Fail-first; port; commit.
 
 ### Task 6: OSC color reset pins default — `7cd2f65f5` [D]
+
 **Files:** `crates/rustty-vt/src/color.rs:687` (reset → `None`, not copy of current default) + stream_terminal regression test half.
+
 - [ ] Fail-first; port; commit.
 
 ### Task 7: renderer frame-counter reset + IOSurface callback UAF — `9e6e2ea96`, `4b4a5b241` [E]
+
 **Files:** `crates/rustty-renderer/src/...` frame-counter reset (one line + test); IOSurfaceLayer release/Drop clears the display callback (R9 callback-ctx UAF).
+
 - [ ] Fail-first where testable (frame counter unit test; UAF gets a Drop-clears-callback assertion); port both; commit.
 
 ### Task 8: CircBuf shrink corruption + keyboard.sequence_set reorder + hotkeys deinit leak + SKILL.md typo — [G, E P4-E17(c), F fd47b15cd, RECONCILIATION O15]
+
 **Files:** `crates/rustty-datastruct/src/circ_buf.rs` (+3 dropped zig tests, 24 vs 21 measured); `crates/rustty-core/src/surface.rs:~6743` (assign `sequence_set` AFTER fallible `encodeKey`); `crates/rustty-apprt/src/.../hotkeys.rs:265` (deinit, not clear); `.agents/skills/writing-commit-messages/SKILL.md` double negative.
+
 - [ ] Fail-first each; port; one commit per fix.
 
 **W0 finale:** `cargo test --workspace --no-fail-fast` green; push nothing (local main commits fine).
@@ -100,21 +116,27 @@ One workflow run, 8 parallel implementer agents + verify. Every fix: fail-first 
 # `P4-W1` — Foundations
 
 ### Task 1: `e77c2612e` lib enum stable values FIRST [C bundle T precondition]
+
 `crates/rustty-lib/src/enum.rs:98` still has old value semantics. Port the stable-value semantics + tests. Everything in bundle T depends on this.
 
 ### Task 2: `src/datastruct/limited_allocator.zig` (+115) and `src/datastruct/wasm_page_pool.zig` [C #9/#49, G, D dependency]
+
 New crates/rustty-datastruct modules with full tests. WasmPagePool feeds PageList raw-ptr pages — R9 SAFETY tags + LIFETIMES rows. LimitedAllocator unblocks D's `433b16bcb` (apc glyf caps) and kitty png caps.
 
 ### Task 3: `src/lib/TinyIo.zig` (1,522) + `src/crc32c.zig` (slicing-by-16 + interleaved streams end state `36d8e3f77`+`eb09bf829`) [B]
+
 Full ports with every upstream test. TinyIo's module export rider (`82df79ec8` one-liner, O5) rides here.
 
 ### Task 4: `src/terminal/fraction.zig` + `src/fastprint.zig` [A A-4, D coupling]
+
 fraction.parse REJECTS exponent/hex-float syntax `f64::parse` accepts — port exactly; D's `946422dbc` call sites follow in W3.
 
 ### Task 5: `src/os/stderr.zig` + `src/os/edit.zig` [E]
+
 POSIX raw-write stderr seam (joint E/C decision recorded: port the POSIX arm); `edit.getConfigEditCommand` (VISUAL/EDITOR + `default_editor`) — App.Message.OpenConfig payload consumers land in W6/W7.
 
 ### Task 6: deletions available now + simd scalar-utf8 rewrite [G]
+
 Delete `crates/rustty-datastruct/src/lru.rs` (zero callers, verified) + its `pub mod`; port the scalar UTF-8 decoder rewrite in `crates/rustty-simd/src/vt.rs` (existing differential test is the regression check).
 
 **W1 finale:** workspace build + tests green; commit per task.
@@ -124,15 +146,19 @@ Delete `crates/rustty-datastruct/src/lru.rs` (zero callers, verified) + its `pub
 # `P4-W2` — Terminal core (assessment A; the vt spine)
 
 ### Task 1: stream-continuation bundle [A A-3 — atomic with D's apc half + C's io surface later]
+
 NEW `src/terminal/stream_continuation.zig` (606 lines) + ground-state/APC-exit rework (`68beeeb3f`,`70e41e96d`,`a69a591af`,`d7bb4b863`,`afb351f83`,`b53728241`). `ApcEnd{terminated}` signature ripples: port the vt+apc halves together (D's apc drop=4 tests land here), termio `.unknown` arm in W6, C API in W5-S. All 16 new stream.zig tests + 8 stream_continuation tests + 2 apc Glossary tests. Inspector's `68beeeb3f` init-API slice (F) must land in the same build or `cargo build` breaks — sequence in one commit series.
 
 ### Task 2: PageList Builder/allocatePage end state [A A-1 — snapshot enabler]
+
 `fc1bd06a1`+`35db32078`+`457c5a0a6` end state (`allocatePage`, `Builder`, `cancel`→`deinit`). 7 upstream tests. `PageAllocation` holds `*mut PageList` — LIFETIMES rows + raw-ptr shape. Plus `b61fd5fbb` RefCountedSet iterator (raw `[*]Item` — SAFETY tag) + `d44baa914` main.zig re-exports.
 
 ### Task 3: reflow end-state chain [A A-2 — biggest single mass, top Miri hazard]
+
 `d5c7e54ae`(done W0)+`4a88cc594`+`c5ca2db1b`+`c249b9de3`+`179161c08`+`46276d046`+`0fb3565c7`+`d4e446c48`+`ec5b36961`+`88ed6bebf` as ONE end-state port of PageList reflow/bulk-copy (bulkRunLength/copyRun final shape; eql_any Mask extension; src-page-memory-recycling). 12 upstream tests; do NOT double-port the moved "Pin row movement clamps across mixed-width pages" test. Isolated Miri harness `.port/phase-4/mirihar-reflow-recycle` for the 46276d046 aliasing before merging; run vt Miri lane after.
 
 ### Task 4: terminal behavior/perf tail [A §Terminal/stream + §render-state]
+
 `bfd40c84b` (CSI 2 K wrap state), `f973bd53b` (overline printAttributes + amended dcs test w/ D), `c992658b2` (base64 — rustty-simd ready), `74efadb44` (XTGETTCAP source side — **run `check_acyclic.sh` first**, new terminal→terminfo edge; coordinate W6 terminfo Task), `4371871bc` signature half (infallible `setLimit`, atomic with W3 kitty), `51a4311ef` inlining cleanup, `5b70f208b`, `ac4dc1205`, `c092b2bcf` (w/ D modes), `946422dbc` call sites (fraction from W1), `3d9b2b483` native arms (grapheme capacity projection, bitmap search_start, printSlice check-hoist), `e3056658d`/`74a233b54`/`0d37f2d34` core-side render-state work, `0e8b7bea6` packed-cell layout core half, `1fdbb8c91` `build_options.glyph_protocol` gate sites + `src/terminal/build_options.zig` Features machinery (O4).
 
 **W2 finale:** full vt test suite + vt Miri lane; G1b `stream` RED row goes green; commit series.
@@ -142,18 +168,23 @@ NEW `src/terminal/stream_continuation.zig` (606 lines) + ground-state/APC-exit r
 # `P4-W3` — Kitty, formatter, input, modes (assessment D)
 
 ### Task 1: kitty end-state bundle [D clusters 1–2 + E renderer side + A setLimit]
+
 Port `graphics_{storage,exec,image}.zig` END STATE as one unit (~2,100 lines, ~23 new tests): pin-lifecycle + pending payloads + security hardening (TOCTOU open-first via `fcntl(F_GETPATH)`/`/proc/self/fd`; `/tmpX` prefix-boundary; shm range validation; png LimitedAllocator cap from W1; saturating geometry per R7). `s: *Screen` params as raw pointers (follow `delete()`'s existing shape) + Miri harness for sweep paths. Keep collect-keys-first for remove-while-iterating. `af2faa311` before `ec04900ab` within the series. E's renderer isPending gating + Termio try-drop ride at the end. G1b kitty drop=11 → green.
 
 ### Task 2: formatter end-state bundle [D cluster 3 + A A-4]
+
 Pin-map RLE redesign (PinMap in formatter.zig + StringMap Vec<Pin>→PinMap.Map), tabstops-before-screen + cursor-home (`e523cf810`), pending-wrap cursor restore (`997a2aff2` — **also delete** the first-pass extra.screen emission or output doubles), html trailing-newline, buffer-assembled VT/CSS emission. G1b formatter drop=2 → green.
 
 ### Task 3: input bundle [D cluster 5 + F Swift flag]
+
 Release-fallback guard (`key_encode.rs:281`, drop=3), `8cfbaf545`+`b67f8ef51` un-escape + round-trip pair (`👻Rustty`), three new Binding.Action variants (prompt_window_title, set_window_title, move_tab_to_new_window — C-ABI halves in W5-E/W7), `f4309055f` Swift `0x7F` half recorded for W7.
 
 ### Task 4: modes DECECM + configurable defaults [D cluster 6]
+
 `get_report` 117/permanently-reset arm (drop=1), `cfc19e805` setDefault/default_configurable — feeds W5-M `GHOSTTY_TERMINAL_OPT_MODE_DEFAULT`.
 
 ### Task 5: color/dcs/hyperlink/KV tail [D cluster 7]
+
 `f719af00c` dense KV table (replaces HashMap<u8,u32>, arena removal), hyperlink zero-len free guards (snapshot decode relies on them), remaining dcs/color rows.
 
 **W3 finale:** vt tests + Miri; G1b apc/kitty/formatter/modes/input_key_encode rows green.
@@ -165,10 +196,15 @@ Release-fallback guard (`key_encode.rs:281`, drop=3), `8cfbaf545`+`b67f8ef51` un
 Port `src/terminal/snapshot/*` bottom-up along its module DAG, END STATE only (no BLAKE3, decode-vs-decodeExact, Decoder=init/ready/next), as `crates/rustty-vt/src/snapshot/`:
 
 ### Task 1: codec scaffold [B C1] — framing, envelope, checkpoint, continuation, io, record, main + `snapshot.ksy` + AGENTS.md (rename-faithful), hex goldens bit-for-bit.
+
 ### Task 2: page/style/hyperlink records [B C2] — transactional rollback releases style/hyperlink refs (carry every release-on-error test); decode-into-Page is the search-SB shape → raw-ptr discipline + LIFETIMES rows + Miri harness `.port/phase-4/mirihar-snapshot-decode`.
+
 ### Task 3: grid codec end state [B C3] — 8-byte cells, blank elision, variable width, vectorized enc/dec, grapheme suffix batching; final goldens only.
+
 ### Task 4: screen/terminal/history + robustness + kitty hunks [B C4] + fixture.zig test infra.
+
 ### Task 5: benchmarks + synthetic [B C8 + G riders]: TerminalSnapshot/TerminalFormatter/TerminalResize benches, synthetic Styled, bench action registrations (G-BENCH both-directions parity gate must stay green — it will name the new actions).
+
 ### Task 6: G1b lane [R5 tighten-only]: add `snapshot` module rows (and `stream_continuation` from W2) to `check_test_counts.py`'s module list with a negative control (comment out one rust test → RED).
 
 **W4 finale:** snapshot tests green incl. goldens; Miri lane on the new modules; G3b vt missing count drops by the snapshot share (~600+ of 921).
@@ -178,12 +214,19 @@ Port `src/terminal/snapshot/*` bottom-up along its module DAG, END STATE only (n
 # `P4-W5` — C-API surface (assessment C; 7 atomic bundles, in order)
 
 ### Task 1: Bundle T — ABI type metadata [C]: types.zig registry 45→135, types.schema.json + verify script (register in ci.sh as a PROGRESS gate so it is read), packed.zig GhosttyPackedCell (couples W2's cell layout), types.h C++/underlying-type fixes, self-contained device/point headers, sgr.zig CUnion field_renames (O3), Doxyfile rider (O12).
+
 ### Task 2: Bundle R — render fast-path rework end state: chunked updates, dirty-row iteration (`render_state_clean`/`_next_dirty` — raw-ptr iterator seam), structured cursor read, **REMOVE `rustty_render_state_colors_get`**.
+
 ### Task 3: Bundle M — mode defaults (**REMOVES `mode_get`/`mode_set`**), title_report option (W0 T1's C half), XTGETTCAP `terminfo_name` (bounds-checked memcpy, 960c2cca5 class), unknown-sequence C API, cursor_at_prompt (A's `cursorIsAtPrompt`), `-Dvt-features` C guards.
+
 ### Task 4: Bundle K — kitty C surface [rides W3 T1].
+
 ### Task 5: Bundle S — snapshot/io/streaming C API: snapshot.h (525) + io.h (107) + c/snapshot.zig (1,533) + c/io.zig, 15 new exports, `terminal_continuation_*`, `vt_write_until_ground`, `formatter_format` streaming writer, example/c-vt-snapshot. Decoder-aliasing SB discipline.
+
 ### Task 6: Bundle W — wasm allocator break, ATOMIC: wasm_page_pool + allocator/wasm + c_abi + wasm.h rewrite + DELETE convenience.rs & the 12 stale per-type exports + rewrite the 3 wasm examples + port test/wasm-alloc.mjs + wasm release log gating; sweep rustty-wasm crate + `ws14_webgl_browser_gate.sh` in the same series.
+
 ### Task 7: Bundle E — embed header enums (positional, oracle order) + A3 sha re-pin; delete `rustty-lib/string.rs` after `new_window.rs` → `strip_prefix` (with W6).
+
 ### Task 8: A5 arms [R5 tighten]: re-run arm (d) (expect the 22 missing exports gone), ADD reverse arm (d′) failing on **stale** rustty exports the oracle removed (negative control: keep colors_get → RED), re-float the intersection floor upward.
 
 **W5 finale:** `check_rustty_vt_headers.sh` fully green incl. new arms; layout/enum arms green; examples build; G3b vt-c 187 → 0.
@@ -193,6 +236,7 @@ Port `src/terminal/snapshot/*` bottom-up along its module DAG, END STATE only (n
 # `P4-W6` — os / termio / cli / app (assessment E)
 
 Tasks (each = its assessment cluster, with the coupling notes binding):
+
 1. **ssh-terminfo cache bundle** (4 commits, interlocked signatures; G1b cli_ssh_cache_diskcache → green).
 2. **Desktop-notification truncation end state** with F's apprt Message ctor (+4 apprt_api_surface tests → G1b green); delete the old termio truncation site.
 3. **Renderer cell-storage rewrite** + delete `array_list_collection.rs` (same commit); G1b renderer_cell → green.

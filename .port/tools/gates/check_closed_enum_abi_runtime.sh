@@ -143,7 +143,8 @@ int main(void) {
 }
 CEOF
 
-# shellcheck disable=SC2086 — SDK expands to zero or two words on purpose.
+# SDK expands to zero or two words on purpose.
+# shellcheck disable=SC2086
 "$CC" ${SDK:+-isysroot "$SDK"} -std=c11 -Wall -Wextra \
   -I"$root/include" -L"$root/target/release" -lrustty_vt_c \
   "$T/d11r.c" -o "$T/d11r"
