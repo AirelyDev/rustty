@@ -2925,6 +2925,29 @@ E5). NOTE the reference gate is `isDarwin()` (macOS OR iOS); rustty uses `target
 > compiled by nothing in this repo. The macOS arm is unchanged and fully green
 > (`cargo test -p rustty-apprt-c`: 14 passed incl. the C-ABI smoke + the six Darwin
 > export KATs). iOS codegen is verification debt.
+>
+> > **⚠️ REASON RESTATED — unimplemented-leaf gap-close, 2026-08-26.** The first
+> > sentence above is now FALSE and must not be quoted as a scope decision:
+> > `aarch64-apple-ios` is a **tier-2 rustup target**, it is installed on this box,
+> > and `rustty-xev` is type-checked against it by `G-XEV-IOS`. What actually blocks
+> > `rustty-apprt-c` is narrower and worth naming precisely, because "no target
+> > installed" invites the wrong fix: the crate pulls the vendored-C `-sys` chain
+> > (harfbuzz, freetype, …), and cross-compiling those to iOS needs an iOS sysroot
+> > this host does not have. `RUSTTY_SYS_CHECK_ONLY=1` — the escape hatch
+> > `w2f001_windows_check_gate.sh` uses — does not rescue it either; the build
+> > scripts still fail to link. So the six Darwin exports' iOS arm remains
+> > verification debt, but for a **toolchain-plumbing** reason, not a
+> > missing-rustup-target one. The honest follow-up is an iOS sysroot + vendored-C
+> > cross lane, not `rustup target add`.
+> >
+> > This matters because the same sweep that corrected THIS row in 2026-07-31
+> > **missed `rustty-xev`**, where the identical `target_os = "macos"`-vs-`isDarwin()`
+> > narrowing was not merely codegen debt but a live defect: `backend.rs` answered
+> > `Backend::Kqueue` on iOS while `lib.rs` handed out `no_backend_seam`'s
+> > `unimplemented!()` placeholders. See
+> > `.port/gap-close/UNIMPLEMENTED_LEAF_CENSUS.md`. When auditing an `isDarwin()`
+> > narrowing, check EVERY crate that gates on it — a per-crate correction is how
+> > this one survived.
 
 **Gate deltas (E10):** NO new `rustty-apprt-c` Cargo dep — E10's `App`/`Surface`/
 `Inspector`/`Text` are all already imported (E6/E7/E9). `apprt_embedded` MAP row

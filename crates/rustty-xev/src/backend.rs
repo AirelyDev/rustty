@@ -45,7 +45,12 @@ pub enum Backend {
 // unsupported target.
 impl Default for Backend {
     fn default() -> Backend {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "visionos",
+            target_os = "freebsd"
+        ))]
         {
             Backend::Kqueue
         }
@@ -78,6 +83,7 @@ impl Default for Backend {
         #[cfg(not(any(
             target_os = "macos",
             target_os = "ios",
+            target_os = "visionos",
             target_os = "freebsd",
             target_os = "linux",
             target_os = "windows",
@@ -98,7 +104,12 @@ impl Backend {
     // epoll]`; the out-of-scope-by-platform targets (iocp/wasi_poll) return their
     // single arm — the enum names every backend even where no body is built.
     pub fn candidates() -> &'static [Backend] {
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "visionos",
+            target_os = "freebsd"
+        ))]
         {
             &[Backend::Kqueue]
         }
@@ -128,6 +139,7 @@ impl Backend {
         #[cfg(not(any(
             target_os = "macos",
             target_os = "ios",
+            target_os = "visionos",
             target_os = "freebsd",
             target_os = "linux",
             target_os = "windows",
@@ -151,6 +163,8 @@ mod tests {
     fn backend_default_and_candidates() {
         // On macOS the sole live arm: default is kqueue and the candidate list is
         // the single element that comptime-elides the Dynamic layer (§0).
+        // GATE-OK(darwin-set): host-test arm, not a backend-selection gate --
+        // this asserts what the MACOS HOST sees when `cargo test` runs here.
         #[cfg(target_os = "macos")]
         {
             assert_eq!(Backend::default(), Backend::Kqueue);
@@ -159,6 +173,7 @@ mod tests {
         }
         // Off-macOS the enum still round-trips (iocp/wasi_poll have no body: out of
         // scope by platform).
+        // GATE-OK(darwin-set): host-test arm, as above.
         #[cfg(not(target_os = "macos"))]
         {
             let _ = Backend::default();

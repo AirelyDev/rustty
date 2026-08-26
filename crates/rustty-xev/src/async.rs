@@ -37,11 +37,11 @@
 // attribute is crate-module-wide because Rust has no per-arm inner attribute.)
 #![allow(deprecated)]
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 use crate::darwin;
 #[cfg(target_os = "freebsd")]
 use crate::kqueue::{fd_t, Completion, Loop, Operation, ReadBuffer, Result};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 use crate::kqueue::{Completion, Loop, MachPortError, Operation, ReadBuffer, Result};
 use crate::looppkg::CallbackAction;
 use crate::{Error, NotifyError};
@@ -103,7 +103,7 @@ use core::ptr::NonNull;
 
 /// PORT NOTE: `pub const WaitError = xev.Sys.MachPortError;`.
 /// The error that can come in the wait callback.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 pub type WaitError = MachPortError;
 
 /// PORT NOTE (W2D): `AsyncEventFd`'s `pub const WaitError = xev.ReadError;`
@@ -129,14 +129,14 @@ pub type WaitError = crate::kqueue::ReadError;
 // `mach_port_set_attributes`, `mach_port_destroy`). This port relocates those to
 // `darwin.rs` (chunk C2) — the shared darwin/syscall home — so `init`/`deinit`
 // name `darwin::mach_port_set_attributes`/`darwin::mach_port_destroy` below.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 #[derive(Clone, Copy)]
 pub struct Async {
     /// The mach port
     pub(crate) port: darwin::mach_port_name_t,
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 impl Async {
     /// Create a new async. An async can be assigned to exactly one loop
     /// to be woken up. The completion must be allocated in advance.

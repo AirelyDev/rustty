@@ -558,6 +558,19 @@ GATE_REGISTRY=(
   # skip cannot silently swallow the native build. Exits 3 BLOCKED (a warning,
   # never a pass) when the windows rust-std is not installed.
   "G-WINCHK|HARD|bash $GATES/w2f001_windows_check_gate.sh"
+  # G-XEV-IOS (wired 2026-08-26, unimplemented-leaf gap-close) — the rustty-xev
+  # Darwin-gate parity gate. libxev maps `.ios`/`.visionos` onto kqueue exactly
+  # as it maps `.macos`, but the port gated its kqueue family on macos+freebsd
+  # while `backend.rs` already answered `Backend::Kqueue` for iOS: an iOS build
+  # got the `no_backend_seam` placeholders, so every Loop/Async/Timer/Process/
+  # Stream entry point was an `unimplemented!()` panic on a target the reference
+  # ships (libghostty iOS). Nothing caught it because nothing built the crate for
+  # iOS — this gate does. Type-check only, never links or runs on iOS; visionos
+  # is tier-3 (no rustup std) and stays codegen debt. Exits 3 BLOCKED (a warning,
+  # never a pass) when the aarch64-apple-ios rust-std is not installed. Its FAIL
+  # arm is proven reachable by `--self-test`, which reintroduces the exact bug
+  # and requires the in-crate seam fence to fire.
+  "G-XEV-IOS|HARD|bash $GATES/xev_ios_kqueue_gate.sh"
   # G-WINPROTO-DEFAULT (wired 2026-08-11, W2D §E/WI-14; the script predates this
   # and had never been on any roster) — the DEFAULT GUI dependency graph, pinned
   # per target. It was F-007's Linux/macOS predicate (both winproto arms on Linux,
