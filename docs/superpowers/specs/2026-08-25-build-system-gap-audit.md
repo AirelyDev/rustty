@@ -358,7 +358,7 @@ The first pass walked the oracle's **CI job list** and closed it to 49/52. This
 pass walked two axes it never touched:
 
 - **Build _options_** — `src/build/Config.zig`'s 19 semantic `-D` flags, versus
-  rustty's cargo-feature / target-derived seams. A ported *option* that no
+  rustty's cargo-feature / target-derived seams. A ported _option_ that no
   longer flips anything is invisible to a job-list diff.
 - **Per-file byte fidelity** — `git ls-files --eol` across the whole tree,
   versus the oracle's per-directory `.gitattributes` guards.
@@ -376,11 +376,11 @@ enables `rustty-termio/flatpak`, and nothing could make
 
 Four call sites are therefore dead **inside the Flatpak**:
 
-| Site                                    | What is lost                                       |
-| --------------------------------------- | -------------------------------------------------- |
-| `crates/rustty-apprt/src/gtk/flatpak.rs:24,81` | portal / DBus host integration                |
-| `crates/rustty-termio/src/exec.rs:1991`  | `flatpak-spawn --host` — commands run **sandboxed** |
-| `crates/rustty-os/src/passwd.rs:86`      | host passwd lookup                                  |
+| Site                                           | What is lost                                        |
+| ---------------------------------------------- | --------------------------------------------------- |
+| `crates/rustty-apprt/src/gtk/flatpak.rs:24,81` | portal / DBus host integration                      |
+| `crates/rustty-termio/src/exec.rs:1991`        | `flatpak-spawn --host` — commands run **sandboxed** |
+| `crates/rustty-os/src/passwd.rs:86`            | host passwd lookup                                  |
 
 The oracle passes `-Dflatpak=true` in its manifest precisely to turn these on.
 
@@ -442,7 +442,7 @@ then re-add `02-crlf` with its true bytes.
 ### G4 — The deep fuzz corpora exist only in the oracle
 
 `crates/rustty-vt/fuzz/corpus/` is **gitignored**: 11,730 files locally, zero
-tracked. The oracle *commits* all 4,001 of its seeds, splitting them into
+tracked. The oracle _commits_ all 4,001 of its seeds, splitting them into
 hand-written `*-initial` and afl-cmin-deduped `*-cmin` tiers with a
 `.gitattributes` marking the latter `linguist-generated`.
 
@@ -531,7 +531,7 @@ staleness a clean target prevents.
 
 ### G12 — Still no `required` / `skip` aggregator
 
-Carried forward from §C. The first pass recommended adopting it *before* the
+Carried forward from §C. The first pass recommended adopting it _before_ the
 matrix grows. G5 and G6 grow the matrix; this is the moment.
 
 ### Re-classified as correctly absent
@@ -600,20 +600,20 @@ and one by building an artifact that no gate had ever built:
 
 ### Disposition
 
-| §G   | Resolution                                                                                                                             |
-| ---- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| G1   | `flatpak` feature; welded to `rustty-termio/flatpak` so the type-swap and the runtime guard cannot diverge. Manifests pass it.          |
-| G2   | `snap` feature; snapcraft.yaml passes it.                                                                                              |
-| G3   | Path rules + `--renormalize`; blob now byte-identical to the oracle. **G-EOL** guards it, RED-flip proven.                              |
-| G4   | All six tiers mirrored in-tree (4,001 files, 11 MB → 915 KB packed). `replay_port_full_corpus` runs with no oracle.                     |
-| G5   | `windows` job: vt + vt-c tests, lib build, `test_dll_init.c`, GNU-ABI build.                                                            |
-| G6   | `macos-app` job: xcframework, resources, `xcodebuild`, `RusttyTests`.                                                                   |
-| G7   | **G-XTASK**, six arms; the linux/flatpak pair is differential.                                                                          |
-| G8   | `xtask/docker/{debian,lib-c-docs}/` + **G-DOXYGEN**.                                                                                    |
-| G9   | `PROJECT_LOGO` restored; `HTML_TIMESTAMP` deliberately NOT restored (see below).                                                        |
-| G10  | `make clean` gains `zig-out/`, both xcframeworks, staged headers, `macos/build`, `macos/DerivedData`.                                   |
-| G11  | `/result*`, `/.nixos-test-history`, `vgcore.*`; `GhosttyKit` → `RusttyKit`; `*.txt text eol=lf`.                                        |
-| G12  | `required` aggregator; treats `skipped` as failure.                                                                                    |
+| §G  | Resolution                                                                                                                     |
+| --- | ------------------------------------------------------------------------------------------------------------------------------ |
+| G1  | `flatpak` feature; welded to `rustty-termio/flatpak` so the type-swap and the runtime guard cannot diverge. Manifests pass it. |
+| G2  | `snap` feature; snapcraft.yaml passes it.                                                                                      |
+| G3  | Path rules + `--renormalize`; blob now byte-identical to the oracle. **G-EOL** guards it, RED-flip proven.                     |
+| G4  | All six tiers mirrored in-tree (4,001 files, 11 MB → 915 KB packed). `replay_port_full_corpus` runs with no oracle.            |
+| G5  | `windows` job: vt + vt-c tests, lib build, `test_dll_init.c`, GNU-ABI build.                                                   |
+| G6  | `macos-app` job: xcframework, resources, `xcodebuild`, `RusttyTests`.                                                          |
+| G7  | **G-XTASK**, six arms; the linux/flatpak pair is differential.                                                                 |
+| G8  | `xtask/docker/{debian,lib-c-docs}/` + **G-DOXYGEN**.                                                                           |
+| G9  | `PROJECT_LOGO` restored; `HTML_TIMESTAMP` deliberately NOT restored (see below).                                               |
+| G10 | `make clean` gains `zig-out/`, both xcframeworks, staged headers, `macos/build`, `macos/DerivedData`.                          |
+| G11 | `/result*`, `/.nixos-test-history`, `vgcore.*`; `GhosttyKit` → `RusttyKit`; `*.txt text eol=lf`.                               |
+| G12 | `required` aggregator; treats `skipped` as failure.                                                                            |
 
 ### Two judgement calls worth recording
 
@@ -633,13 +633,13 @@ matches the reference, and name the file and line".
 
 ### Verified where, and what is not
 
-| Verified here                                                       | How                                       |
-| ------------------------------------------------------------------- | ----------------------------------------- |
-| G-EOL, G-XTASK (all 6 arms), G-DOXYGEN, G-FEATMATRIX                | run on macOS; each RED-flip self-tested   |
-| macOS app build + 25 `RusttyTests`                                  | `xcodebuild` on this host                 |
-| `--features flatpak` compiles AND links                             | aarch64-linux VM                          |
-| `--features snap`; default build unaffected                         | macOS                                     |
-| 4,001-file corpus replay, with and without the oracle               | `cargo test -p rustty-vt`                 |
+| Verified here                                         | How                                     |
+| ----------------------------------------------------- | --------------------------------------- |
+| G-EOL, G-XTASK (all 6 arms), G-DOXYGEN, G-FEATMATRIX  | run on macOS; each RED-flip self-tested |
+| macOS app build + 25 `RusttyTests`                    | `xcodebuild` on this host               |
+| `--features flatpak` compiles AND links               | aarch64-linux VM                        |
+| `--features snap`; default build unaffected           | macOS                                   |
+| 4,001-file corpus replay, with and without the oracle | `cargo test -p rustty-vt`               |
 
 **Not verified here — the `windows` job.** No Windows host exists. Its steps are
 standard and the code type-checks for the target (`G-WINCHK`), but its first
