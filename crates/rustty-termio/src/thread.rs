@@ -946,6 +946,24 @@ impl Thread {
                 }
                 // .jump_to_prompt => |v| try io.jumpToPrompt(v),
                 Message::JumpToPrompt(v) => unsafe { (*io).jumpToPrompt(v) }?,
+                // .kitty_clipboard_grant_read => |v| {
+                //     defer v.alloc.free(v.pw);
+                //     try io.kittyClipboardGrant(v.pw, .read);
+                // },
+                // (the `defer free` is the owned `pw` Vec dropping at arm end.)
+                Message::KittyClipboardGrantRead(v) => unsafe {
+                    (*io).kittyClipboardGrant(
+                        &v.pw,
+                        rustty_vt::kitty::clipboard::Direction::Read,
+                    )
+                },
+                // .kitty_clipboard_grant_write => |v| { ... .write ... },
+                Message::KittyClipboardGrantWrite(v) => unsafe {
+                    (*io).kittyClipboardGrant(
+                        &v.pw,
+                        rustty_vt::kitty::clipboard::Direction::Write,
+                    )
+                },
                 // .start_synchronized_output => self.startSynchronizedOutput(cb),
                 Message::StartSynchronizedOutput => Self::startSynchronizedOutput(self_, cb),
                 // .linefeed_mode => |v| self.flags.linefeed_mode = v,

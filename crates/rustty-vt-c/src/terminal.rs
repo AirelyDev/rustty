@@ -366,9 +366,13 @@ pub struct ClipboardWrite {
 
 /// C function pointer type for the clipboard_write callback. The request
 /// and its contents are borrowed and only valid for the callback duration.
-// pub const ClipboardWriteFn = *const fn (Terminal, ?*anyopaque, *const ClipboardWrite) callconv(lib.calling_conv) clipboard.WriteResult;
+// pub const ClipboardWriteFn = *const fn (Terminal, ?*anyopaque, *const ClipboardWrite) callconv(lib.calling_conv) clipboard.Write.Status;
+// PORT NOTE (W6 seam, 7ae9b1113): the vt-side `Write` became reply-based; the
+// C callback still returns the status (`GhosttyClipboardWriteResult` maps
+// `Write.Status`), which the trampoline forwards through `write.reply`. The
+// head's full C-API effects rework (read effect, grants, remember) is W6.
 pub type ClipboardWriteFn =
-    extern "C" fn(Terminal, *mut c_void, *const ClipboardWrite) -> clipboard::WriteResult;
+    extern "C" fn(Terminal, *mut c_void, *const ClipboardWrite) -> clipboard::WriteStatus;
 
 /// A request to show a desktop notification (OSC 9 / OSC 777).
 ///
@@ -819,22 +823,27 @@ impl Effects {
         None
     }
 
-    // fn clipboardWriteTrampoline(handler: *Handler, write: clipboard.Write) clipboard.WriteResult {
+    // fn clipboardWriteTrampoline(handler: *Handler, write: clipboard.Write) void {
     //     const stream_ptr: *Stream = @fieldParentPtr("handler", handler);
     //     const wrapper: *TerminalWrapper = @fieldParentPtr("stream", stream_ptr);
-    //     const func = wrapper.effects.clipboard_write orelse return .unsupported;
+    //     const func = wrapper.effects.clipboard_write orelse
+    //         return write.reply(.unsupported);
     //     ...stack-first (<=4) content conversion, gpa fallback...
-    //     return func(@ptrCast(wrapper), wrapper.effects.userdata, &request);
+    //     ... = func(@ptrCast(wrapper), wrapper.effects.userdata, &request);
     // }
+    // PORT NOTE (W6 seam, 7ae9b1113 end state): the vt `Write` is reply-based;
+    // the C callback's returned status is forwarded through `write.reply` so
+    // OSC 52 / OSC 1337 keep their exact pre-range C behavior. The head's
+    // richer C reply surface (remember/grants) lands with W6's C-API effects.
     pub(crate) fn clipboard_write_trampoline(
         handler: &mut Handler<'static>,
         write: clipboard::Write<'_>,
-    ) -> clipboard::WriteResult {
-        use clipboard::WriteResult;
+    ) {
+        use clipboard::WriteStatus;
         let wrapper = wrapper_from_handler(handler);
         let func = match unsafe { (*wrapper).effects.clipboard_write } {
             Some(f) => f,
-            None => return WriteResult::Unsupported,
+            None => return write.reply(clipboard::WriteResult::Unsupported),
         };
         let userdata = unsafe { (*wrapper).effects.userdata };
 
@@ -885,7 +894,20 @@ impl Effects {
             },
             contents_len: contents.len(),
         };
-        func(wrapper, userdata, &request)
+        let status = func(wrapper, userdata, &request);
+        // Map the C status back onto the reply result (an out-of-range
+        // C value is well-defined by the open status type; reply it as
+        // io_error rather than inventing a success).
+        write.reply(match status {
+            WriteStatus::Success => {
+                clipboard::WriteResult::Success(clipboard::WriteResultSuccess::default())
+            }
+            WriteStatus::Denied => clipboard::WriteResult::Denied,
+            WriteStatus::Unsupported => clipboard::WriteResult::Unsupported,
+            WriteStatus::Busy => clipboard::WriteResult::Busy,
+            WriteStatus::InvalidData => clipboard::WriteResult::InvalidData,
+            _ => clipboard::WriteResult::IoError,
+        });
     }
 
     // fn desktopNotificationTrampoline(handler: *Handler, notification: Action.ShowDesktopNotification) void {
@@ -1340,6 +1362,12 @@ unsafe fn wrap(
 
     // handler.effects = .{ .write_pty = &Effects.writePtyTrampoline, ... };
     handler.effects = rustty_vt::stream_terminal::Effects {
+        // PORT NOTE (W6 seam): the head wires `clipboard_read` through the
+        // c/terminal read-effect surface (e03475c0c/4f49dc2b8) and sets
+        // `.drag_and_drop = null` (af8d28a94); the read effect lands with
+        // W6's C-API effects.
+        clipboard_read: None,
+        drag_and_drop: None,
         write_pty: Some(Effects::write_pty_trampoline),
         bell: Some(Effects::bell_trampoline),
         color_scheme: Some(Effects::color_scheme_trampoline),
@@ -7981,13 +8009,20 @@ mod tests {
         static mut LAST_CONTENTS_LEN: usize = 0;
         static mut LAST_MIMES: Vec<Vec<u8>> = Vec::new();
         static mut LAST_DATA: Vec<Vec<u8>> = Vec::new();
-        static mut NEXT_RESULT: clipboard::WriteResult = clipboard::WriteResult::Success;
+        static mut NEXT_RESULT: clipboard::WriteStatus = clipboard::WriteStatus::Success;
+        static mut REPLY_RESULT: Option<clipboard::WriteResult> = None;
+
+        // Captures the trampoline's reply for the direct-invoke checks below
+        // (7ae9b1113: the vt-side write is reply-based).
+        fn capture_reply(_: *mut c_void, result: clipboard::WriteResult) {
+            unsafe { REPLY_RESULT = Some(result) };
+        }
 
         extern "C" fn clipboard_write(
             terminal_: Terminal,
             ud: *mut c_void,
             request: *const ClipboardWrite,
-        ) -> clipboard::WriteResult {
+        ) -> clipboard::WriteStatus {
             unsafe {
                 COUNT += 1;
                 LAST_TERMINAL = terminal_;
@@ -8019,7 +8054,8 @@ mod tests {
                 COUNT = 0;
                 LAST_TERMINAL = std::ptr::null_mut();
                 LAST_USERDATA = std::ptr::null_mut();
-                NEXT_RESULT = clipboard::WriteResult::Denied;
+                NEXT_RESULT = clipboard::WriteStatus::Denied;
+                REPLY_RESULT = None;
             }
 
             let mut sentinel: u8 = 88;
@@ -8116,15 +8152,20 @@ mod tests {
                     data: b"\x89PNG",
                 },
             ];
-            unsafe { NEXT_RESULT = clipboard::WriteResult::Busy };
-            let write_result = Effects::clipboard_write_trampoline(
+            unsafe { NEXT_RESULT = clipboard::WriteStatus::Busy };
+            Effects::clipboard_write_trampoline(
                 unsafe { &mut (*t).stream.handler },
                 clipboard::Write {
                     location: clipboard::Location::Primary,
                     contents: &internal_contents,
+                    name: b"",
+                    granted: false,
+                    can_remember: false,
+                    reply_ctx: std::ptr::null_mut(),
+                    reply_fn: capture_reply,
                 },
             );
-            assert_eq!(clipboard::WriteResult::Busy, write_result);
+            assert_eq!(Some(clipboard::WriteResult::Busy), unsafe { REPLY_RESULT });
             assert_eq!(7, unsafe { COUNT });
             assert_eq!(5, unsafe { LAST_CONTENTS_LEN });
             assert_eq!(b"application/octet-stream".as_slice(), unsafe {
@@ -8166,18 +8207,31 @@ mod tests {
             // OSC 52 without a callback should not crash
             vtw(t, b"\x1B]52;c;aGVsbG8=\x1B\\");
 
+            static mut REPLY_RESULT: Option<clipboard::WriteResult> = None;
+            fn capture_reply(_: *mut c_void, result: clipboard::WriteResult) {
+                unsafe { REPLY_RESULT = Some(result) };
+            }
+            unsafe { REPLY_RESULT = None };
+
             let contents = [clipboard::Content {
                 mime: b"text/plain",
                 data: b"hello",
             }];
-            let result = Effects::clipboard_write_trampoline(
+            Effects::clipboard_write_trampoline(
                 unsafe { &mut (*t).stream.handler },
                 clipboard::Write {
                     location: clipboard::Location::Standard,
                     contents: &contents,
+                    name: b"",
+                    granted: false,
+                    can_remember: false,
+                    reply_ctx: std::ptr::null_mut(),
+                    reply_fn: capture_reply,
                 },
             );
-            assert_eq!(clipboard::WriteResult::Unsupported, result);
+            assert_eq!(Some(clipboard::WriteResult::Unsupported), unsafe {
+                REPLY_RESULT
+            });
 
             unsafe { free(t) };
         });

@@ -131,6 +131,19 @@ impl Grants {
         // for (self.entries.items, 0..) |*entry, idx| { ... }
         self.entries.iter().position(|entry| entry.pw == pw)
     }
+
+    /// The number of recorded grants.
+    // PORT NOTE (rustty-only accessor): the reference tests and consumers read
+    // `grants.entries.items.len` directly (Zig has no field privacy); the
+    // ported `entries` Vec is private, so this is the sanctioned equivalent.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether no grants are recorded (`entries.items.len == 0`).
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 /// The length of a one-time password generated for paste events.

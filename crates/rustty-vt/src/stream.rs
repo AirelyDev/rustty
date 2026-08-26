@@ -238,11 +238,17 @@ pub struct StartHyperlink<'a> {
 }
 
 /// `Action.ClipboardContents`
-// pub const ClipboardContents = struct { kind: u8, data: []const u8 };
+// pub const ClipboardContents = struct {
+//     kind: u8,
+//     data: []const u8,
+//     terminator: osc.Terminator,
+// };
+// (e03475c0c: the terminator rides so an OSC 52 read response can echo it.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClipboardContents<'a> {
     pub kind: u8,
     pub data: &'a [u8],
+    pub terminator: osc::Terminator,
 }
 
 /// `Action.ApcEnd`
@@ -687,6 +693,19 @@ pub trait Handler {
 
     /// `semantic_prompt` (OSC 133)
     fn semantic_prompt(&mut self, _v: SemanticPrompt) {}
+
+    /// `kitty_clipboard` (OSC 5522, the Kitty clipboard protocol)
+    // .kitty_clipboard_protocol => |v| { self.handler.vt(.kitty_clipboard, v); }
+    // PORT NOTE (Action.KittyClipboard = osc.Command.KittyClipboardProtocol):
+    // the action value is the parser's owned command payload, handed to the
+    // handler by value like the reference's union payload move.
+    fn kitty_clipboard(&mut self, _v: osc::KittyClipboardProtocol) {}
+
+    /// `kitty_dnd` (OSC 72, the Kitty drag and drop protocol)
+    // .kitty_dnd_protocol => |v| { self.handler.vt(.kitty_dnd, v); }
+    // PORT NOTE (Action.KittyDnd = osc.Command.KittyDndProtocol): see
+    // `kitty_clipboard` above.
+    fn kitty_dnd(&mut self, _v: osc::KittyDndProtocol) {}
 }
 
 /// Returns a type that can process a stream of tty control characters.
@@ -3520,9 +3539,16 @@ impl<'a, H: Handler> Stream<'a, H> {
             }
 
             // .clipboard_contents => |clip| { ... }
-            osc::Command::ClipboardContents { kind, data } => {
-                self.handler
-                    .clipboard_contents(ClipboardContents { kind, data: &data });
+            osc::Command::ClipboardContents {
+                kind,
+                data,
+                terminator,
+            } => {
+                self.handler.clipboard_contents(ClipboardContents {
+                    kind,
+                    data: &data,
+                    terminator,
+                });
             }
 
             // .report_pwd => |v| { ... }
@@ -3599,6 +3625,20 @@ impl<'a, H: Handler> Stream<'a, H> {
             // .conemu_xterm_emulation, .conemu_output_environment_variable,
             // .conemu_run_process, .kitty_text_sizing, .kitty_clipboard_protocol,
             // .kitty_desktop_notification, .context_signal => { ... }
+            // .kitty_clipboard_protocol => |v| {
+            //     self.handler.vt(.kitty_clipboard, v);
+            // },
+            osc::Command::KittyClipboardProtocol(v) => {
+                self.handler.kitty_clipboard(v);
+            }
+
+            // .kitty_dnd_protocol => |v| {
+            //     self.handler.vt(.kitty_dnd, v);
+            // },
+            osc::Command::KittyDndProtocol(v) => {
+                self.handler.kitty_dnd(v);
+            }
+
             osc::Command::ConemuSleep { .. }
             | osc::Command::ConemuShowMessageBox(_)
             | osc::Command::ConemuChangeTabTitle(_)
@@ -3609,8 +3649,6 @@ impl<'a, H: Handler> Stream<'a, H> {
             | osc::Command::ConemuOutputEnvironmentVariable(_)
             | osc::Command::ConemuRunProcess(_)
             | osc::Command::KittyTextSizing(_)
-            | osc::Command::KittyClipboardProtocol(_)
-            | osc::Command::KittyDndProtocol(_)
             | osc::Command::KittyDesktopNotification(_)
             | osc::Command::ContextSignal(_) => {
                 // log.debug("unimplemented OSC callback: {}", .{cmd});
@@ -5594,12 +5632,8 @@ mod tests {
         struct H {
             data: Vec<u8>,
             kind: u8,
-            // PORT NOTE (W3 seam): the reference handler also records
-            // `terminator: ?osc.Terminator = null` from
-            // `value.terminator` and asserts `osc.Terminator.st` below —
-            // the `terminator` field on the `clipboard_contents` action
-            // lands with `e03475c0c` (B-1/W3). Carry the field + assert
-            // when W3 ports that commit.
+            // terminator: ?osc.Terminator = null,
+            terminator: Option<osc::Terminator>,
             count: usize,
         }
         impl Handler for H {
@@ -5607,7 +5641,8 @@ mod tests {
             fn clipboard_contents(&mut self, v: ClipboardContents) {
                 self.count += 1;
                 self.kind = v.kind;
-                // self.terminator = value.terminator;  (W3 seam, see above)
+                // self.terminator = value.terminator;
+                self.terminator = Some(v.terminator);
                 // self.data.appendSlice(testing.allocator, value.data) catch @panic("OOM");
                 self.data.extend_from_slice(v.data);
             }
@@ -5631,6 +5666,7 @@ mod tests {
             handler: H {
                 data: Vec::new(),
                 kind: 0,
+                terminator: None,
                 count: 0,
             },
             allocator: Some(testing_allocator()),
@@ -5648,7 +5684,7 @@ mod tests {
         assert_eq!(1usize, s.handler.count);
         assert_eq!(b'c', s.handler.kind);
         // try testing.expectEqual(osc.Terminator.st, s.handler.terminator.?);
-        // (W3 seam — see the handler PORT NOTE above.)
+        assert_eq!(osc::Terminator::St, s.handler.terminator.unwrap());
         assert_eq!(
             &input[prefix.len()..prefix.len() + payload_len],
             s.handler.data.as_slice()
@@ -5684,15 +5720,16 @@ mod tests {
             //     "clip kind={c} term={s} data={s}\n",
             //     .{ value.kind, @tagName(value.terminator), value.data },
             // ),
-            // PORT NOTE (W3 seam): ` term={s}` (`@tagName(value.terminator)`)
-            // is omitted until `e03475c0c` (B-1/W3) lands the `terminator`
-            // field on the clipboard_contents action; both the per-byte and
-            // bulk streams journal identically without it, preserving the
-            // equality property this test checks.
             fn clipboard_contents(&mut self, v: ClipboardContents) {
                 let mut msg: Vec<u8> = Vec::new();
                 msg.extend_from_slice(b"clip kind=");
                 msg.push(v.kind);
+                msg.extend_from_slice(b" term=");
+                // @tagName(value.terminator)
+                msg.extend_from_slice(match v.terminator {
+                    osc::Terminator::St => b"st".as_slice(),
+                    osc::Terminator::Bel => b"bel".as_slice(),
+                });
                 msg.extend_from_slice(b" data=");
                 msg.extend_from_slice(v.data);
                 msg.push(b'\n');
@@ -5702,12 +5739,19 @@ mod tests {
             //     "kitty meta={s} payload={?s}\n",
             //     .{ value.metadata, value.payload },
             // ),
-            // PORT NOTE (W3 seam): the `kitty_clipboard` stream action does
-            // not exist yet (B-1/W3, the `6959fd46c` dispatch chain); rustty
-            // still routes `Command::KittyClipboardProtocol` to the ignored
-            // `osc_dispatch` arm, so BOTH the per-byte and bulk paths journal
-            // nothing for the 5522 case below — the equality property is
-            // preserved. Add the journal arm when W3 lands the dispatch.
+            // (`{?s}` prints the literal "null" for a null payload.)
+            fn kitty_clipboard(&mut self, v: osc::KittyClipboardProtocol) {
+                let mut msg: Vec<u8> = Vec::new();
+                msg.extend_from_slice(b"kitty meta=");
+                msg.extend_from_slice(&v.metadata);
+                msg.extend_from_slice(b" payload=");
+                match &v.payload {
+                    Some(p) => msg.extend_from_slice(p),
+                    None => msg.extend_from_slice(b"null"),
+                }
+                msg.push(b'\n');
+                self.record(&msg);
+            }
             //
             // .window_title => self.record("title {s}\n", .{value.title}),
             fn window_title(&mut self, v: WindowTitle) {

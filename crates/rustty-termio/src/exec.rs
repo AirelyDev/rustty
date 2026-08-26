@@ -6270,6 +6270,11 @@ mod tests {
                 enquiry_response: derived.enquiry_response.clone(),
                 osc_color_report_format: derived.osc_color_report_format,
                 clipboard_write: derived.clipboard_write,
+                clipboard_write_limit: derived.clipboard_write_limit,
+                // (reference field defaults: `kitty_clipboard_grants = .{}`,
+                // `kitty_clipboard_write = null`.)
+                kitty_clipboard_grants: rustty_vt::kitty::clipboard::Grants::default(),
+                kitty_clipboard_write: None,
                 apc: rustty_vt::apc::Handler::default(),
                 dcs: rustty_vt::dcs::Handler::default(),
                 tmux_viewer: None,

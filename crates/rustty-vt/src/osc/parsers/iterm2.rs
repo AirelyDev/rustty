@@ -201,6 +201,9 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 // PORT NOTE (fidelity): reference assigns `value` ([:0]u8) to
                 // `data` ([:0]const u8) directly — RAW bytes, not lossy.
                 data: value,
+                // (Zig field default `terminator: Terminator = .st` — OSC 1337
+                // Copy never carries a read response, so the default rides.)
+                terminator: crate::osc::Terminator::St,
             };
             Some(&mut parser.command)
         }
@@ -468,7 +471,7 @@ mod tests {
         let cmd = p.end(Some(b'\x1b')).unwrap().clone();
         assert!(matches!(cmd, Command::ClipboardContents { .. }));
         match cmd {
-            Command::ClipboardContents { kind, data } => {
+            Command::ClipboardContents { kind, data, .. } => {
                 assert_eq!(b'c', kind);
                 assert_eq!(b"YWJjMTIz", data.as_slice());
             }

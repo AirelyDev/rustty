@@ -1383,10 +1383,22 @@ fn encode_metadata_osc(md: &mut Metadata, osc: &OscCommand) {
             md.put(b"options_unvalidated", dupe_z(&sp.options_unvalidated));
         }
 
-        // clipboard_contents: struct { kind: u8, data: [:0]const u8 }
-        OscCommand::ClipboardContents { kind, data } => {
+        // clipboard_contents: struct { kind: u8, data: [:0]const u8,
+        //     terminator: Terminator = .st }
+        // (e03475c0c added the terminator field; the reference `encodeMetadata`
+        // reflects over EVERY struct field in declaration order, and enums
+        // render as `@tagName` — so terminator IS inspected metadata.)
+        OscCommand::ClipboardContents {
+            kind,
+            data,
+            terminator,
+        } => {
             md.put(b"kind", single_int(*kind as i64));
             md.put(b"data", dupe_z(data));
+            md.put(
+                b"terminator",
+                dupe_z(terminator_tag(*terminator).as_bytes()),
+            );
         }
 
         // report_pwd: struct { value: [:0]const u8 }
@@ -2047,14 +2059,20 @@ mod tests {
 
     #[test]
     fn metadata_struct_payload_per_field() {
-        // clipboard_contents: struct { kind: u8, data: [:0]const u8 }
+        // clipboard_contents: struct { kind: u8, data: [:0]const u8,
+        //     terminator: Terminator = .st }
         let md = osc_md(&C::ClipboardContents {
             kind: b'c',
             data: b"xyz".to_vec(),
+            terminator: rustty_vt::osc::Terminator::St,
         });
         assert_eq!(
             md,
-            vec![("kind".into(), "99".into()), ("data".into(), "xyz".into())]
+            vec![
+                ("kind".into(), "99".into()),
+                ("data".into(), "xyz".into()),
+                ("terminator".into(), "st".into()),
+            ]
         );
     }
 

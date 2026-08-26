@@ -62,13 +62,16 @@ pub enum Command {
     /// Semantic prompt command: https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/semantic-prompts.md
     SemanticPrompt(SemanticPrompt),
 
-    /// Set or get clipboard contents. If data is null, then the current
-    /// clipboard contents are sent to the pty. If data is set, this
-    /// contents is set on the clipboard.
+    /// Set or get clipboard contents. If data is "?", then the current
+    /// clipboard contents are sent to the pty. Otherwise, the contents
+    /// are set on the clipboard.
     ClipboardContents {
         kind: u8,
         /// PORT NOTE (fidelity): reference `data: [:0]const u8` — raw bytes.
         data: Vec<u8>,
+        // terminator: Terminator = .st,
+        // (e03475c0c: captured so the OSC 52 read response can echo it.)
+        terminator: Terminator,
     },
 
     /// OSC 7. Reports the current working directory of the shell. This is
@@ -1529,7 +1532,7 @@ mod capture_tests {
             // try testing.expect(cmd == .clipboard_contents);
             assert!(matches!(cmd, Command::ClipboardContents { .. }));
             match &cmd {
-                Command::ClipboardContents { kind, data } => {
+                Command::ClipboardContents { kind, data, .. } => {
                     // try testing.expectEqual(@as(u8, 'c'), cmd.clipboard_contents.kind);
                     assert_eq!(b'c', *kind);
                     // try testing.expectEqualStrings("aGVsbG8=", cmd.clipboard_contents.data);

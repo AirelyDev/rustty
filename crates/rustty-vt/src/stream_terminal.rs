@@ -46,6 +46,7 @@
 // const Terminal = @import("Terminal.zig");
 use crate::ansi;
 use crate::clipboard;
+use crate::paste as paste_pkg;
 use crate::color;
 use crate::csi;
 use crate::device_attributes;
@@ -133,6 +134,27 @@ pub struct Handler<'a> {
     /// The DCS command handler maintains state for DCS queries.
     // dcs_handler: dcs.Handler = .{},
     pub dcs_handler: crate::dcs::Handler,
+
+    /// The in-flight Kitty clipboard protocol (OSC 5522) write
+    /// transaction, if any. Null means no transaction is active.
+    /// Heap-allocated since transactions are rare and short-lived.
+    // kitty_clipboard_write: ?*kitty_clipboard.WriteState = null,
+    // PORT NOTE: `?*` (manual create/destroy) -> `Option<Box<_>>`; the abort
+    // and finish paths become `take()` + drop.
+    pub kitty_clipboard_write: Option<Box<kitty::clipboard::WriteState>>,
+
+    /// Kitty clipboard protocol (OSC 5522) session password grants,
+    /// recorded when a clipboard_read or clipboard_write reply asks to
+    /// remember the user's decision.
+    // kitty_clipboard_grants: kitty_clipboard.Grants = .{},
+    pub kitty_clipboard_grants: kitty::clipboard::Grants,
+
+    /// Maximum total decoded bytes accumulated by one Kitty clipboard
+    /// protocol (OSC 5522) write transaction, captured when the
+    /// transaction begins. Data beyond the limit fails the transaction
+    /// with EFBIG.
+    // kitty_clipboard_write_max_bytes: usize = kitty_clipboard.max_write_size,
+    pub kitty_clipboard_write_max_bytes: usize,
 
     /// Called for sequence identifiers not supported by this library.
     /// Currently, only APC is reported. Content is borrowed and only valid
@@ -234,20 +256,48 @@ pub struct Effects<'a> {
     // bell: ?*const fn (*Handler) void
     pub bell: Option<fn(&mut Handler<'a>)>,
 
-    /// Called when the running program writes to a clipboard. The write
-    /// has a normalized destination and one or more decoded MIME
-    /// representations. All request, MIME, and data memory is borrowed
-    /// and only valid for the duration of the callback.
+    /// Called when the running program writes to a clipboard.
+    // clipboard_write: ?*const fn (*Handler, clipboard.Write) void
+    // PORT NOTE (7ae9b1113): the pre-range `-> WriteResult` return became the
+    // reply-based `clipboard.Write.reply` carried on the request.
+    pub clipboard_write: Option<fn(&mut Handler<'a>, clipboard::Write)>,
+
+    /// Called when the running program requests clipboard contents
+    /// (OSC 52 with a "?" payload, or a Kitty clipboard (OSC 5522)
+    /// read). Answering one lets the program read the user's
+    /// clipboard, so the embedder is expected to mediate consent.
     ///
-    /// A write with no contents clears the destination. A content entry
-    /// with empty data is a distinct empty representation.
+    /// Reads are synchronous: the callback must answer through
+    /// `read.reply` before it returns, so an embedder that needs to
+    /// ask the user must block (e.g. run a modal prompt) while the
+    /// stream waits. Returning without a reply, or replying with any
+    /// failure, answers the program with an empty clipboard (OSC 52)
+    /// or the matching protocol status (OSC 5522) so it doesn't hang.
+    /// If this is null, OSC 52 reads are ignored and OSC 5522 reads
+    /// are refused with EPERM.
     ///
-    /// Clipboard read requests (OSC 52 with a "?" payload) are never
-    /// forwarded: answering one would let any program running in the
-    /// terminal silently read the user's clipboard, and a VT state
-    /// library has no way to mediate that with user consent.
-    // clipboard_write: ?*const fn (*Handler, clipboard.Write) clipboard.WriteResult
-    pub clipboard_write: Option<fn(&mut Handler<'a>, clipboard::Write) -> clipboard::WriteResult>,
+    /// OSC 5522 requests carry the program's MIME list, name, and
+    /// password grant state; a reply that sets `remember` records a
+    /// session grant so later requests with the same password arrive
+    /// with `granted` set. Kitty itself serves a request for only the
+    /// targets listing (`list` with no `mimes`) without prompting.
+    ///
+    /// Installing this also enables Kitty paste events (mode 5522):
+    /// `paste` sends the program an event instead of the text, and
+    /// the program's follow-up read arrives here with `granted` set
+    /// since the user already pasted. See `paste`.
+    // clipboard_read: ?*const fn (*Handler, clipboard.Read) void
+    pub clipboard_read: Option<fn(&mut Handler<'a>, clipboard::Read)>,
+
+    /// Called when drag and drop protocol state changes in a way the
+    /// embedder may need to act on: the running program registering
+    /// or unregistering to accept drops, answering a drag, or
+    /// concluding a drop. The event says what changed; the details
+    /// are read from `handler.terminal.kitty_dnd` (Kitty's OSC 72 is
+    /// the only drag and drop protocol today). Native drag events
+    /// flow the other way, by calling `kitty.dnd.State` directly.
+    // drag_and_drop: ?*const fn (*Handler, kitty_dnd.Event) void
+    pub drag_and_drop: Option<fn(&mut Handler<'a>, kitty::dnd::Event)>,
 
     /// Called when the running program requests a desktop notification
     /// via OSC 9 or OSC 777. The title and body are borrowed and only
@@ -280,9 +330,10 @@ pub struct Effects<'a> {
     // enquiry: ?*const fn (*Handler) []const u8
     pub enquiry: Option<fn(&mut Handler<'a>) -> &'a [u8]>,
 
-    /// Called in response to XTWINOPS size queries (CSI 14/16/18 t).
-    /// Returns the current terminal geometry used for encoding.
-    /// Return null to silently ignore the query.
+    /// Called for XTWINOPS size queries (CSI 14/16/18 t) and when VT input
+    /// enables in-band size reports (mode 2048). Returns the current
+    /// terminal geometry used for encoding. Return null to suppress the
+    /// XTWINOPS response or mode 2048 report.
     // size: ?*const fn (*Handler) ?size_report.Size
     pub size: Option<fn(&mut Handler<'a>) -> Option<size_report::Size>>,
 
@@ -317,10 +368,12 @@ impl<'a> Effects<'a> {
     // pub const readonly: Effects = .{ ... all null ... };
     pub const READONLY: Effects<'a> = Effects {
         bell: None,
+        clipboard_read: None,
         clipboard_write: None,
         color_scheme: None,
         desktop_notification: None,
         device_attributes: None,
+        drag_and_drop: None,
         enquiry: None,
         progress_report: None,
         size: None,
@@ -421,6 +474,46 @@ pub(crate) fn clipboard_contents_tw_end(
     CLIPBOARD_CONTENTS_TW.with(|tw| tw.borrow_mut().end(mode))
 }
 
+// PORT NOTE: a fault-injection seam for the Kitty clipboard (OSC 5522) write
+// transaction allocation in `kitty_clipboard_write_begin`. The reference test
+// "kitty clipboard allocation failure is ignored" swaps `t.screens.active.alloc`
+// for `testing.failing_allocator` so `alloc.create(WriteState)` fails; rustty's
+// `Box::new` cannot fail, so this tripwire sits exactly where that `try` can.
+// Same `#[cfg(test)] thread_local!` idiom as `CLIPBOARD_CONTENTS_TW` above.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum KittyClipboardFp {
+    CreateWriteState,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static KITTY_CLIPBOARD_TW: core::cell::RefCell<
+        rustty_util::tripwire::Module<KittyClipboardFp, crate::pagelist::OutOfMemory>,
+    > = core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+#[cfg(test)]
+#[inline]
+fn kitty_clipboard_tw_check(point: KittyClipboardFp) -> Result<(), crate::pagelist::OutOfMemory> {
+    KITTY_CLIPBOARD_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
+#[cfg(test)]
+pub(crate) fn kitty_clipboard_tw_error_always(point: KittyClipboardFp) {
+    KITTY_CLIPBOARD_TW.with(|tw| {
+        tw.borrow_mut()
+            .errorAlways(point, crate::pagelist::OutOfMemory)
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn kitty_clipboard_tw_end(
+    mode: rustty_util::tripwire::ResetMode,
+) -> Result<(), rustty_util::tripwire::UntrippedError> {
+    KITTY_CLIPBOARD_TW.with(|tw| tw.borrow_mut().end(mode))
+}
+
 impl<'a> Handler<'a> {
     // pub fn init(terminal: *Terminal) Handler {
     //     return .{ .terminal = terminal };
@@ -436,6 +529,12 @@ impl<'a> Handler<'a> {
             apc_handler: ApcHandler::default(),
             // dcs_handler: .{} (the reference field default)
             dcs_handler: crate::dcs::Handler::default(),
+            // kitty_clipboard_write: ... = null (the reference field default)
+            kitty_clipboard_write: None,
+            // kitty_clipboard_grants: .{} (the reference field default)
+            kitty_clipboard_grants: kitty::clipboard::Grants::default(),
+            // ... = kitty_clipboard.max_write_size (the reference field default)
+            kitty_clipboard_write_max_bytes: kitty::clipboard::max_write_size,
             // unknown_sequence: ... = null (the reference field default)
             unknown_sequence: None,
             // terminfo_name: ... = null (the reference field default)
@@ -609,6 +708,753 @@ impl<'a> Handler<'a> {
             return;
         };
         func(self, data);
+    }
+
+    /// Paste into the terminal, applying the terminal's current state
+    /// as necessary to owner mode 5522, bracketed paste, unsafe paste, etc.
+    /// Returns true if anything was written to the pty.
+    ///
+    /// The output streams to write_pty in chunks of `paste_chunk_size`.
+    /// The contents are read at most once and only the pasted text
+    /// representation is ever read, buffered whole while it is checked
+    /// and encoded; see `terminal.paste`.
+    // pub fn paste(self: *Handler, req: Paste) PasteError!bool {
+    //
+    // PORT NOTE (SB discipline): the reference `PtyWriter` holds `*Handler`
+    // and drains through `handler.writePty` DURING the paste call, while the
+    // paste context also holds `&grants` into the same Handler — mirroring
+    // that would interleave a raw Handler deref with a live field borrow
+    // (the `shaper-hook-sb-clean-interleave` hazard). The port's `PtyChunker`
+    // therefore queues the identical chunk sequence and the handler delivers
+    // it through `write_pty` immediately after the paste call returns —
+    // the observable call sequence (count, sizes, order, delivery on error
+    // too: "a partial paste has its frame closed") is unchanged, and no raw
+    // Handler alias exists while the grants borrow is live.
+    pub fn paste(&mut self, req: Paste<'_>) -> Result<bool, PasteError> {
+        // if (self.effects.write_pty == null) return error.NoWritePty;
+        if self.effects.write_pty.is_none() {
+            return Err(PasteError::NoWritePty);
+        }
+
+        // var buf: [paste_chunk_size]u8 = undefined;
+        // var pty: PtyWriter = .init(self, &buf);
+        let mut pty = PtyChunker::new();
+
+        // SAFETY: `self.terminal` aliases the Terminal that created this
+        // Handler (see `term()`); the shared borrow lives only for the paste
+        // call and does not overlap a `&mut Terminal`.
+        let terminal: &Terminal = unsafe { &*self.terminal };
+        let io = terminal.io;
+
+        let result = paste_pkg::paste(
+            paste_pkg::Context {
+                terminal,
+                // Paste events need the program's follow-up Kitty
+                // clipboard read served.
+                // .kitty_clipboard = if (self.effects.clipboard_read != null) .{
+                //     .grants = &self.kitty_clipboard_grants,
+                //     .io = self.terminal.io(),
+                // } else null,
+                kitty_clipboard: if self.effects.clipboard_read.is_some() {
+                    Some(paste_pkg::KittyClipboard {
+                        grants: &mut self.kitty_clipboard_grants,
+                        io,
+                    })
+                } else {
+                    None
+                },
+                writer: &mut pty,
+            },
+            req,
+        );
+
+        // Delivered on error too: a partial paste has its frame closed
+        // and the program must see that.
+        // defer pty.writer.flush() catch unreachable;
+        pty.flush();
+        for chunk in &pty.chunks {
+            let Some(func) = self.effects.write_pty else {
+                break;
+            };
+            func(self, chunk);
+        }
+
+        // ... catch |err| switch (err) {
+        //     // The pty writer never fails.
+        //     error.WriteFailed => unreachable,
+        //     error.ReadFailed, error.OutOfMemory, error.UnsafePaste,
+        //     error.EntropyUnavailable, error.Canceled, => |e| e,
+        // };
+        result.map_err(|err| match err {
+            paste_pkg::Error::WriteFailed => unreachable!("the pty writer never fails"),
+            paste_pkg::Error::ReadFailed => PasteError::ReadFailed,
+            paste_pkg::Error::OutOfMemory => PasteError::OutOfMemory,
+            paste_pkg::Error::UnsafePaste => PasteError::UnsafePaste,
+            paste_pkg::Error::EntropyUnavailable => PasteError::EntropyUnavailable,
+            paste_pkg::Error::Canceled => PasteError::Canceled,
+        })
+    }
+
+    // fn clipboardContents(
+    //     self: *Handler,
+    //     kind: u8,
+    //     data: []const u8,
+    //     terminator: osc.Terminator,
+    // ) !void
+    //
+    // PORT NOTE: the reference is `!void` and its dispatch arm swallows the
+    // error ("Clipboard operations are external effects, not terminal
+    // state."); rustty's arm is infallible — the fallible decode-scratch
+    // allocation is ported over the `CLIPBOARD_CONTENTS_TW` seam (see its
+    // module note), and every failure returns without invoking the effect,
+    // exactly what the reference's `try` + graceful dispatch catch does.
+    fn do_clipboard_contents(&mut self, kind: u8, data: &[u8], terminator: osc::Terminator) {
+        // const location: clipboard.Location = switch (kind) { ... };
+        let location = match kind {
+            b's' => clipboard::Location::Selection,
+            b'p' => clipboard::Location::Primary,
+            _ => clipboard::Location::Standard,
+        };
+
+        // OSC 52 uses a "?" payload to request the clipboard contents.
+        if data.len() == 1 && data[0] == b'?' {
+            self.do_clipboard_read(location, terminator);
+            return;
+        }
+
+        // const func = self.effects.clipboard_write orelse return;
+        let Some(func) = self.effects.clipboard_write else {
+            return;
+        };
+
+        // OSC 52 uses an empty payload to clear the selected clipboard.
+        if data.is_empty() {
+            func(
+                self,
+                clipboard::Write {
+                    location,
+                    contents: &[],
+                    name: b"",
+                    granted: false,
+                    can_remember: false,
+                    reply_ctx: core::ptr::null_mut(),
+                    reply_fn: ignore_write_reply,
+                },
+            );
+            return;
+        }
+
+        // Decode the base64 payload with the SIMD decoder (the same one
+        // used for Kitty clipboard payloads) rather than the scalar std
+        // implementation; clipboard payloads can be megabytes. The
+        // Kitty clipboard spec governs OSC 52 base64 handling too: a
+        // request with characters outside the base64 alphabet is
+        // discarded entirely (never partially decoded), while a
+        // missing-padding tail is tolerated since OSC 52 has no way
+        // to report errors to the client.
+        // const alloc = self.terminal.gpa();
+        // const buf = try alloc.alloc(u8, simd.base64.maxLen(data));
+        // defer alloc.free(buf);
+        let alloc = self.term().gpa();
+        let max_len = rustty_simd::base64::max_len(data);
+        let mut buf: allocator_api2::vec::Vec<u8, _> = allocator_api2::vec::Vec::new_in(alloc);
+        #[cfg(test)]
+        if clipboard_contents_tw_check(ClipboardContentsFp::DecodeScratch).is_err() {
+            return;
+        }
+        if buf.try_reserve_exact(max_len).is_err() {
+            return;
+        }
+        // The capacity above is already reserved, so this never allocates.
+        buf.resize(max_len, 0);
+        // const decoded = simd.base64.decodeStrict(data, buf, .optional) catch {
+        //     log.warn("OSC 52 clipboard write is not valid base64, ignoring", .{});
+        //     return;
+        // };
+        let Ok(decoded) = rustty_simd::base64::decode_strict(
+            data,
+            &mut buf,
+            rustty_simd::base64::Padding::Optional,
+        ) else {
+            // log.warn("OSC 52 clipboard write is not valid base64, ignoring", .{});
+            return;
+        };
+
+        // const contents = [_]clipboard.Content{.{ .mime = "text/plain", .data = decoded }};
+        let contents = [clipboard::Content {
+            mime: b"text/plain",
+            data: decoded,
+        }];
+        func(
+            self,
+            clipboard::Write {
+                location,
+                contents: &contents,
+                name: b"",
+                granted: false,
+                can_remember: false,
+                reply_ctx: core::ptr::null_mut(),
+                reply_fn: ignore_write_reply,
+            },
+        );
+    }
+
+    // fn clipboardRead(
+    //     self: *Handler,
+    //     location: clipboard.Location,
+    //     terminator: osc.Terminator,
+    // ) void
+    fn do_clipboard_read(&mut self, location: clipboard::Location, terminator: osc::Terminator) {
+        // const func = self.effects.clipboard_read orelse return;
+        let Some(func) = self.effects.clipboard_read else {
+            return;
+        };
+
+        // var state: ClipboardReadState = .{ ... };
+        let mut state = ClipboardReadState {
+            location,
+            terminator,
+            replied: false,
+            response: Vec::new(),
+        };
+        func(
+            self,
+            clipboard::Read {
+                location,
+                mimes: &[b"text/plain"],
+                list: false,
+                name: b"",
+                granted: false,
+                can_remember: false,
+                reply_ctx: (&mut state) as *mut ClipboardReadState as *mut core::ffi::c_void,
+                reply_fn: ClipboardReadState::reply,
+            },
+        );
+
+        // The program is waiting on us, so a callback that returned
+        // without a (successful) reply gets an empty clipboard rather
+        // than silence.
+        // if (!state.replied) state.respond("") catch ...;
+        if !state.replied {
+            state.respond(b"");
+        }
+        // PORT NOTE (SB discipline): the reference reply state carries
+        // `handler: *Handler` and writes the pty from INSIDE the effect
+        // callback; the port's reply only ENCODES into the stack state (no
+        // Handler alias while the callback's `&mut Handler` is live) and the
+        // handler delivers the bytes here, immediately after the callback —
+        // the observable pty write sequence is unchanged.
+        let response = core::mem::take(&mut state.response);
+        if !response.is_empty() {
+            self.write_pty(&response);
+        }
+    }
+
+    /// Handle one Kitty clipboard protocol (OSC 5522) packet.
+    // fn kittyClipboard(self: *Handler, v: Action.Value(.kitty_clipboard))
+    //     error{OutOfMemory}!void
+    fn do_kitty_clipboard(&mut self, v: &osc::KittyClipboardProtocol) {
+        // Decode and validate the metadata.
+        // var arena: std.heap.ArenaAllocator = .init(self.terminal.gpa());
+        // defer arena.deinit();
+        // (PORT NOTE: the arena scopes the Metadata allocations; the Rust
+        // Metadata owns its Vecs and frees on drop.)
+        use crate::osc::parsers::kitty_clipboard_protocol::Operation;
+        let meta = match kitty::clipboard::Metadata::parse(&v.metadata) {
+            Ok(Some(meta)) => meta,
+            Ok(None) => return,
+            Err(kitty::clipboard::ParseError::OutOfMemory) => return,
+            Err(kitty::clipboard::ParseError::InvalidValue) => {
+                // const state = self.kitty_clipboard_write orelse return;
+                // switch (kitty_clipboard.Metadata.operation(v.metadata) orelse return) {
+                //     .wdata, .walias => self.kittyClipboardFinish(state, .EINVAL, v.terminator),
+                //     .read, .write => {},
+                // }
+                if self.kitty_clipboard_write.is_none() {
+                    return;
+                }
+                match kitty::clipboard::Metadata::operation(&v.metadata) {
+                    Some(Operation::Wdata) | Some(Operation::Walias) => {
+                        if let Some(state) = self.kitty_clipboard_write.take() {
+                            self.kitty_clipboard_finish(
+                                &state,
+                                kitty::clipboard::Status::Einval,
+                                v.terminator,
+                            );
+                        }
+                    }
+                    Some(Operation::Read) | Some(Operation::Write) | None => {}
+                }
+                return;
+            }
+        };
+
+        // const payload = v.payload orelse "";
+        let payload: &[u8] = v.payload.as_deref().unwrap_or(b"");
+        match meta.op {
+            Operation::Read => self.kitty_clipboard_read(&meta, payload, v.terminator),
+            Operation::Write => self.kitty_clipboard_write_begin(&meta, v.terminator),
+            Operation::Wdata => self.kitty_clipboard_data(&meta, payload, v.terminator),
+            Operation::Walias => self.kitty_clipboard_alias(&meta, payload, v.terminator),
+        }
+    }
+
+    // fn kittyClipboardRead(self, meta, payload, terminator) error{OutOfMemory}!void
+    fn kitty_clipboard_read(
+        &mut self,
+        meta: &kitty::clipboard::Metadata,
+        payload: &[u8],
+        terminator: osc::Terminator,
+    ) {
+        // The payload is the requested MIME list. Kitty drops a read
+        // request with an undecodable payload without any response.
+        let decoded = match kitty::clipboard::Payload::init(payload) {
+            Ok(decoded) => decoded,
+            Err(_) => return,
+        };
+        if !decoded.is_valid_utf8() {
+            return;
+        }
+
+        // Without a clipboard_read effect nothing can serve the read.
+        // EPERM is the protocol's denial so clients degrade gracefully.
+        let Some(func) = self.effects.clipboard_read else {
+            self.kitty_clipboard_respond(&kitty::clipboard::Response {
+                id: &meta.id,
+                terminator,
+                ..kitty::clipboard::Response::new(
+                    crate::osc::parsers::kitty_clipboard_protocol::Operation::Read,
+                    kitty::clipboard::Status::Eperm,
+                )
+            });
+            return;
+        };
+
+        // The targets type ('.') asks for the listing of available
+        // types rather than data. Requested types beyond the cap are
+        // dropped and simply never served, which is how the protocol
+        // reports an unavailable type anyway.
+        // var mimes_buf: [kitty_clipboard.max_read_mimes][]const u8 = undefined;
+        let mut mimes_buf: [&[u8]; kitty::clipboard::max_read_mimes] =
+            [b""; kitty::clipboard::max_read_mimes];
+        let (mimes, list): (&[&[u8]], bool) = {
+            let mut targets = false;
+            let mut len: usize = 0;
+            let mut it = decoded.mime_iterator();
+            while let Some(mime) = it.next() {
+                if mime == kitty::clipboard::targets_mime {
+                    targets = true;
+                    continue;
+                }
+                if len == mimes_buf.len() {
+                    continue;
+                }
+                mimes_buf[len] = mime;
+                len += 1;
+            }
+            (&mimes_buf[0..len], targets)
+        };
+
+        // Per the spec a password without a name is no password. A
+        // stored grant for it lets the embedder skip its prompt. A
+        // prompt-exempt request never consults the grants: the
+        // embedder serves it without a prompt anyway, and consuming a
+        // one-time paste password on a listing would burn the grant
+        // before the follow-up data read.
+        let pw: &[u8] = if !meta.name.is_empty() { &meta.pw } else { b"" };
+        let granted = !kitty::clipboard::read_prompt_exempt(mimes.len())
+            && self
+                .kitty_clipboard_grants
+                .use_(pw, kitty::clipboard::Direction::Read);
+
+        // var state: KittyClipboardReadState = .{ ... };
+        let mut state = KittyClipboardReadState {
+            primary: meta.loc == clipboard::Location::Primary,
+            id: meta.id.clone(),
+            pw: pw.to_vec(),
+            mimes: mimes.iter().map(|m| m.to_vec()).collect(),
+            list,
+            terminator,
+            write_pty_some: self.effects.write_pty.is_some(),
+            replied: false,
+            remember: false,
+            response: Vec::new(),
+        };
+        func(
+            self,
+            clipboard::Read {
+                location: meta.loc,
+                mimes,
+                list,
+                name: &meta.name,
+                granted,
+                can_remember: !pw.is_empty(),
+                reply_ctx: (&mut state) as *mut KittyClipboardReadState as *mut core::ffi::c_void,
+                reply_fn: KittyClipboardReadState::reply,
+            },
+        );
+
+        // The program is waiting on us, so a callback that returned
+        // without a reply is answered as a denial rather than silence.
+        // if (!state.replied) state.respondStatus(.EPERM);
+        if !state.replied {
+            state.respond_status(kitty::clipboard::Status::Eperm);
+        }
+
+        // PORT NOTE (SB discipline): the reference reply state carries
+        // `handler: *Handler` and grants/writes from INSIDE the effect
+        // callback; the port's reply only records into the stack state and
+        // the handler applies the grant + pty write here, immediately after
+        // the callback — the observable sequence is unchanged (see
+        // `do_clipboard_read`).
+        if state.remember && !state.pw.is_empty() {
+            // self.handler.kitty_clipboard_grants.grant(..., self.pw, .read, false)
+            self.kitty_clipboard_grants
+                .grant(&state.pw, kitty::clipboard::Direction::Read, false);
+        }
+        let response = core::mem::take(&mut state.response);
+        if !response.is_empty() {
+            self.write_pty(&response);
+        }
+    }
+
+    // fn kittyClipboardWriteBegin(self, meta, terminator) error{OutOfMemory}!void
+    fn kitty_clipboard_write_begin(
+        &mut self,
+        meta: &kitty::clipboard::Metadata,
+        terminator: osc::Terminator,
+    ) {
+        // A new write silently replaces any in-flight transaction.
+        self.kitty_clipboard_abort();
+
+        // Without a clipboard_write effect a commit can never succeed,
+        // so fail the transaction up front instead of spooling data
+        // we'd only throw away. Later wdata packets are ignored.
+        if self.effects.clipboard_write.is_none() {
+            self.kitty_clipboard_respond(&kitty::clipboard::Response {
+                id: &meta.id,
+                terminator,
+                ..kitty::clipboard::Response::new(
+                    crate::osc::parsers::kitty_clipboard_protocol::Operation::Write,
+                    kitty::clipboard::Status::Enosys,
+                )
+            });
+            return;
+        }
+
+        // Setup our write state
+        // const alloc = self.terminal.gpa();
+        // const state = try alloc.create(kitty_clipboard.WriteState);
+        // errdefer alloc.destroy(state);
+        // state.* = try .init(alloc, meta, .{ .max_size = ... });
+        //
+        // PORT NOTE: the `try alloc.create` OOM (whose failure the dispatch
+        // arm swallows) is ported over the `KITTY_CLIPBOARD_TW` seam — on
+        // injected failure we return without creating the transaction, which
+        // is exactly the reference's propagated-OOM end state.
+        #[cfg(test)]
+        if kitty_clipboard_tw_check(KittyClipboardFp::CreateWriteState).is_err() {
+            return;
+        }
+        let state = Box::new(kitty::clipboard::WriteState::init(
+            meta,
+            kitty::clipboard::WriteOptions {
+                max_size: self.kitty_clipboard_write_max_bytes,
+            },
+        ));
+        self.kitty_clipboard_write = Some(state);
+    }
+
+    // fn kittyClipboardData(self, meta, payload, terminator) error{OutOfMemory}!void
+    fn kitty_clipboard_data(
+        &mut self,
+        meta: &kitty::clipboard::Metadata,
+        payload: &[u8],
+        terminator: osc::Terminator,
+    ) {
+        // Data without a transaction is silently ignored.
+        // const state = self.kitty_clipboard_write orelse return;
+        // PORT NOTE: the Box is taken out of the slot while it is operated on
+        // (and put back on success) so the failure paths can respond through
+        // `&mut self` without aliasing the stored transaction.
+        let Some(mut state) = self.kitty_clipboard_write.take() else {
+            return;
+        };
+
+        // A wdata packet without a MIME type commits the transaction.
+        if meta.mime.is_empty() {
+            return self.kitty_clipboard_commit(state, terminator);
+        }
+
+        match state.data(meta, payload) {
+            Ok(()) => self.kitty_clipboard_write = Some(state),
+
+            // Failing to spool matches kitty's EIO for a failed buffer
+            // write.
+            // (error.OutOfMemory: the reference re-raises after finishing;
+            // rustty's spool allocation is infallible, carried for parity.)
+            Err(kitty::clipboard::DataError::OutOfMemory) => {
+                self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Eio, terminator);
+            }
+
+            // Data over the write limit aborts the transaction and is
+            // reported to the client.
+            Err(kitty::clipboard::DataError::TooLarge) => {
+                self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Efbig, terminator);
+            }
+
+            // An invalid base64 payload stream aborts the transaction.
+            Err(kitty::clipboard::DataError::Invalid) => {
+                self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Einval, terminator);
+            }
+        }
+    }
+
+    // fn kittyClipboardAlias(self, meta, payload, terminator) error{OutOfMemory}!void
+    fn kitty_clipboard_alias(
+        &mut self,
+        meta: &kitty::clipboard::Metadata,
+        payload: &[u8],
+        terminator: osc::Terminator,
+    ) {
+        // Aliases without a transaction are silently ignored. Once a
+        // transaction exists, a missing target MIME type is invalid and
+        // aborts the transaction.
+        let Some(mut state) = self.kitty_clipboard_write.take() else {
+            return;
+        };
+        if meta.mime.is_empty() {
+            return self.kitty_clipboard_finish(
+                &state,
+                kitty::clipboard::Status::Einval,
+                terminator,
+            );
+        }
+
+        match state.alias(meta, payload) {
+            Ok(()) => self.kitty_clipboard_write = Some(state),
+
+            Err(kitty::clipboard::AliasError::OutOfMemory) => {
+                self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Eio, terminator);
+            }
+
+            // An undecodable alias payload aborts the transaction.
+            Err(kitty::clipboard::AliasError::Invalid) => {
+                self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Einval, terminator);
+            }
+        }
+    }
+
+    // fn kittyClipboardCommit(self, state, terminator) error{OutOfMemory}!void
+    fn kitty_clipboard_commit(
+        &mut self,
+        mut state: Box<kitty::clipboard::WriteState>,
+        terminator: osc::Terminator,
+    ) {
+        // const committed = state.commit(alloc) catch |err| switch (err) { ... };
+        // defer committed.deinit(alloc);
+        //
+        // PORT NOTE: `commit` borrows the transaction, so the reply capture is
+        // recorded first and the effect invoked while `committed` is live;
+        // the grant + response ride after (see the SB discipline note on
+        // `kitty_clipboard_read`).
+        let mut reply_state = KittyClipboardWriteReplyState {
+            status: None,
+            remember: false,
+        };
+        let pw_owned: Vec<u8> = {
+            let committed = match state.commit() {
+                Ok(committed) => committed,
+                Err(kitty::clipboard::CommitError::OutOfMemory) => {
+                    self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Eio, terminator);
+                    return;
+                }
+
+                // The last MIME type's payload stream was not correctly
+                // padded, which aborts the transaction.
+                Err(kitty::clipboard::CommitError::Invalid) => {
+                    self.kitty_clipboard_finish(
+                        &state,
+                        kitty::clipboard::Status::Einval,
+                        terminator,
+                    );
+                    return;
+                }
+            };
+
+            // The effect can't be null here (checked when the transaction
+            // began) but if an embedder cleared it mid-transaction that's
+            // ENOSYS.
+            let Some(func) = self.effects.clipboard_write else {
+                drop(committed);
+                self.kitty_clipboard_finish(&state, kitty::clipboard::Status::Enosys, terminator);
+                return;
+            };
+
+            // Per the spec a password without a name is no password. A
+            // stored grant for it lets the embedder skip its prompt.
+            let pw: &[u8] = if !committed.name.is_empty() {
+                committed.pw
+            } else {
+                b""
+            };
+            let granted = self
+                .kitty_clipboard_grants
+                .use_(pw, kitty::clipboard::Direction::Write);
+
+            func(
+                self,
+                clipboard::Write {
+                    location: committed.loc,
+                    contents: &committed.contents,
+                    name: committed.name,
+                    granted,
+                    can_remember: !pw.is_empty(),
+                    reply_ctx: (&mut reply_state) as *mut KittyClipboardWriteReplyState
+                        as *mut core::ffi::c_void,
+                    reply_fn: KittyClipboardWriteReplyState::reply,
+                },
+            );
+
+            pw.to_vec()
+        };
+
+        // Remembering is only offered when the request carried a usable
+        // password. (Recorded by the reply; applied here — see the SB
+        // discipline note on `kitty_clipboard_read`.)
+        if reply_state.remember && !pw_owned.is_empty() {
+            self.kitty_clipboard_grants
+                .grant(&pw_owned, kitty::clipboard::Direction::Write, false);
+        }
+
+        // The program is waiting on the commit status, so a callback
+        // that returned without a reply is answered as a denial rather
+        // than silence.
+        self.kitty_clipboard_finish(
+            &state,
+            reply_state.status.unwrap_or(kitty::clipboard::Status::Eperm),
+            terminator,
+        );
+    }
+
+    /// Answer a write transaction with its final status and drop it.
+    /// The id echoed is the one from the transaction's opening write
+    /// packet, matching kitty.
+    // fn kittyClipboardFinish(self, state: *const WriteState, status, terminator) void
+    //
+    // PORT NOTE: callers hand the taken-out transaction by reference; the
+    // reference's trailing `kittyClipboardAbort` (destroy + null) is the drop
+    // of that Box at the caller plus the abort of any stored one.
+    fn kitty_clipboard_finish(
+        &mut self,
+        state: &kitty::clipboard::WriteState,
+        status: kitty::clipboard::Status,
+        terminator: osc::Terminator,
+    ) {
+        self.kitty_clipboard_respond(&kitty::clipboard::Response {
+            id: &state.id,
+            terminator,
+            ..kitty::clipboard::Response::new(
+                crate::osc::parsers::kitty_clipboard_protocol::Operation::Write,
+                status,
+            )
+        });
+        self.kitty_clipboard_abort();
+    }
+
+    /// Drop any in-flight write transaction without responding.
+    // fn kittyClipboardAbort(self: *Handler) void {
+    //     if (self.kitty_clipboard_write) |state| {
+    //         state.deinit(alloc); alloc.destroy(state);
+    //         self.kitty_clipboard_write = null;
+    //     }
+    // }
+    fn kitty_clipboard_abort(&mut self) {
+        // PORT NOTE: dropping the Box is the deinit + destroy.
+        self.kitty_clipboard_write = None;
+    }
+
+    /// Encode and write a single response packet. Unlike kitty, which
+    /// always terminates responses with ST, we echo the terminator of
+    /// the request being answered, matching our other OSC responses.
+    // fn kittyClipboardRespond(self: *Handler, response: *const kitty_clipboard.Response) void
+    fn kitty_clipboard_respond(&mut self, response: &kitty::clipboard::Response) {
+        if self.effects.write_pty.is_none() {
+            return;
+        }
+
+        // Our responses carry at most a status and the echoed id so
+        // they virtually always fit on the stack.
+        // var stack = std.heap.stackFallback(1024, self.terminal.gpa());
+        // PORT NOTE (R10): stackFallback is a Zig allocation idiom; the port
+        // encodes into an owned buffer (PERF(port): stackFallback).
+        let mut aw = crate::snapshot::io::AllocatingWriter::new();
+        if response.encode(&mut aw).is_err() {
+            return;
+        }
+        let resp = aw.written().to_vec();
+        self.write_pty(&resp);
+    }
+
+    /// Handle an OSC 72 drag and drop command.
+    // fn kittyDnd(self: *Handler, v: Action.KittyDnd)
+    //     (Allocator.Error || std.Io.Writer.Error)!void
+    fn do_kitty_dnd(&mut self, v: &osc::KittyDndProtocol) -> std::io::Result<()> {
+        // Responses are usually small (queries, errors) but data
+        // serving can produce many chunks, so fall back to the heap.
+        // var stack = std.heap.stackFallback(512, self.terminal.gpa());
+        // PORT NOTE (R10): PERF(port): stackFallback — owned Vec buffer.
+        let mut aw: Vec<u8> = Vec::new();
+
+        // The state is allocated on registration and owned by the
+        // terminal, so it uses the terminal's allocator, not the
+        // response's.
+        let event = {
+            // SAFETY: `self.terminal` aliases the Terminal that created this
+            // Handler (see `term()`); the `&mut` on its `kitty_dnd` slot lives
+            // only for this call and does not overlap another Terminal borrow.
+            let slot = unsafe { &mut (*self.terminal).kitty_dnd };
+            kitty::dnd::handle_command(slot, &mut aw, v)?
+        };
+
+        if !aw.is_empty() {
+            self.write_pty(&aw);
+        }
+
+        if let Some(ev) = event {
+            let Some(func) = self.effects.drag_and_drop else {
+                return Ok(());
+            };
+            func(self, ev);
+        }
+        Ok(())
+    }
+
+    // fn reportMode2048(self: *Handler) void {
+    //     const get_size = self.effects.size orelse return;
+    //     const current = get_size(self) orelse return;
+    //     var buf: [128]u8 = undefined;
+    //     var writer: std.Io.Writer = .fixed(buf[0 .. buf.len - 1]);
+    //     size_report.encode(&writer, .mode_2048, current) catch return;
+    //     buf[writer.end] = 0;
+    //     self.writePty(buf[0..writer.end :0]);
+    // }
+    fn report_mode_2048(&mut self) {
+        let Some(get_size) = self.effects.size else {
+            return;
+        };
+        let Some(current) = get_size(self) else {
+            return;
+        };
+
+        // PORT NOTE: the reference reserves the final byte for the Zig
+        // sentinel; rustty's `write_pty` takes a plain `&[u8]` (the resize
+        // report precedent), so the encoded bytes are written directly.
+        let mut buf = String::new();
+        if size_report::encode(&mut buf, size_report::Style::Mode2048, current).is_err() {
+            return;
+        }
+        self.write_pty(buf.as_bytes());
     }
 
     // fn dcsHook(self: *Handler, value: Action.Value(.dcs_hook)) !void {
@@ -902,13 +1748,19 @@ impl<'a> Handler<'a> {
 
             // .synchronized_output,
             // .linefeed,
-            // .in_band_size_reports,
             // .focus_event,
             // => {},
-            modes::Mode::SynchronizedOutput
-            | modes::Mode::Linefeed
-            | modes::Mode::InBandSizeReports
-            | modes::Mode::FocusEvent => {}
+            modes::Mode::SynchronizedOutput | modes::Mode::Linefeed | modes::Mode::FocusEvent => {}
+
+            // Enabling mode 2048 reports already-committed pixel geometry.
+            // Waiting for the next resize leaves late-enabling clients without
+            // the dimensions they need for their first image frame.
+            // .in_band_size_reports => if (enabled) self.reportMode2048(),
+            modes::Mode::InBandSizeReports => {
+                if enabled {
+                    self.report_mode_2048();
+                }
+            }
 
             // .report_visibility => if (enabled) self.sendVisibilityReport(),
             modes::Mode::ReportVisibility => {
@@ -1731,14 +2583,22 @@ impl<'a> Handler<'a> {
     }
 
     // fn requestMode(self: *Handler, mode: modes.Mode) void {
-    //     const report = self.terminal.modes.getReport(.fromMode(mode));
+    //     var report = self.terminal.modes.getReport(.fromMode(mode));
+    //     ...
     //     self.sendModeReport(report);
     // }
     fn do_request_mode(&mut self, mode: modes::Mode) {
-        let report = self
+        let mut report = self
             .term()
             .modes
             .get_report(modes::ModeTag::from_mode(mode));
+
+        // Kitty paste events (mode 5522) can't work without a clipboard
+        // read effect, so if that isn't set mark it as unrecognized.
+        if mode == modes::Mode::KittyPasteEvents && self.effects.clipboard_read.is_none() {
+            report.state = modes::State::NotRecognized;
+        }
+
         self.send_mode_report(report);
     }
 
@@ -1945,12 +2805,389 @@ impl<'a> Handler<'a> {
 // state-mutating arms landed in vt-12b-7a and the response/query arms in
 // vt-12b-7b. The APC end + kitty/glyph arms remain stubbed (font-blocked,
 // deferred past vt-12; see DEFERRALS.md).
+/// A paste request; see `paste`.
+// pub const Paste = paste_pkg.Request;
+pub type Paste<'a> = paste_pkg::Request<'a>;
+
+// pub const PasteError = Allocator.Error || std.Io.RandomSecureError || error{...};
+// PORT NOTE: nested `Handler.PasteError`; flattened to module scope (the
+// `UnknownSequence` precedent). `Allocator.Error` -> `OutOfMemory`;
+// `std.Io.RandomSecureError` -> `EntropyUnavailable`/`Canceled` (see
+// `paste::Error` for the member mapping).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PasteError {
+    /// `Allocator.Error` — `error.OutOfMemory`.
+    OutOfMemory,
+
+    /// `std.Io.RandomSecureError` — `error.EntropyUnavailable`.
+    EntropyUnavailable,
+
+    /// `std.Io.RandomSecureError` — `error.Canceled` (parity member; the
+    /// sys.rs entropy stand-in never produces it).
+    Canceled,
+
+    /// The data could inject commands and allow_unsafe was false.
+    /// Nothing was written.
+    UnsafePaste,
+
+    /// The contents reader failed. Nothing was written.
+    ReadFailed,
+
+    /// No write_pty effect is set, so nothing can be written.
+    NoWritePty,
+}
+
+/// The size of the chunks a paste streams to write_pty in.
+// pub const paste_chunk_size = 4096;
+// PORT NOTE: nested `Handler.paste_chunk_size`; module scope (the
+// `MAX_TERMINFO_NAME_BYTES` precedent).
+pub const PASTE_CHUNK_SIZE: usize = 4096;
+
+/// A writer that delivers everything through the write_pty effect:
+/// the buffer as it fills, and data that doesn't fit it directly.
+/// Never fails, since the effect can't.
+// const PtyWriter = struct { handler: *Handler, writer: std.Io.Writer, ... };
+//
+// PORT NOTE (SB discipline): the reference PtyWriter drains straight through
+// `handler.writePty`; the port queues the identical `paste_chunk_size` chunk
+// sequence and the handler delivers it right after the paste call returns —
+// see the PORT NOTE on `Handler::paste`.
+struct PtyChunker {
+    buf: [u8; PASTE_CHUNK_SIZE],
+    end: usize,
+    chunks: Vec<Vec<u8>>,
+}
+
+impl PtyChunker {
+    fn new() -> PtyChunker {
+        PtyChunker {
+            buf: [0u8; PASTE_CHUNK_SIZE],
+            end: 0,
+            chunks: Vec::new(),
+        }
+    }
+
+    /// The reference `pty.writer.flush()`: everything still buffered becomes
+    /// the final (partial) chunk.
+    fn flush(&mut self) {
+        if self.end > 0 {
+            self.chunks.push(self.buf[..self.end].to_vec());
+            self.end = 0;
+        }
+    }
+}
+
+impl crate::snapshot::io::Writer for PtyChunker {
+    // fn drain(w: *std.Io.Writer, data: []const []const u8, splat: usize) ...
+    // (the buffered bytes go first to keep the order; full buffers become
+    // whole `paste_chunk_size` chunks, exactly the reference drain cadence.)
+    fn write_all(&mut self, mut bytes: &[u8]) -> Result<(), crate::snapshot::io::WriteFailed> {
+        while !bytes.is_empty() {
+            let n = (PASTE_CHUNK_SIZE - self.end).min(bytes.len());
+            self.buf[self.end..self.end + n].copy_from_slice(&bytes[..n]);
+            self.end += n;
+            bytes = &bytes[n..];
+            if self.end == PASTE_CHUNK_SIZE {
+                self.chunks.push(self.buf.to_vec());
+                self.end = 0;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Reply target for clipboard writes on protocols without a write
+/// acknowledgement (OSC 52, OSC 1337 Copy): the reply is accepted
+/// and discarded.
+// fn ignoreWriteReply(_: *anyopaque, _: clipboard.Write.Result) void {}
+fn ignore_write_reply(_: *mut core::ffi::c_void, _: clipboard::WriteResult) {}
+
+/// Reply state for one synchronous clipboard read. This lives on the
+/// do_clipboard_read stack frame, so it is only valid during the callback.
+// const ClipboardReadState = struct { handler, location, terminator, replied };
+//
+// PORT NOTE (SB discipline): the reference carries `handler: *Handler` and
+// writes the pty from inside `reply`; the port's reply only encodes the
+// response into this stack state — see the PORT NOTE in `do_clipboard_read`.
+struct ClipboardReadState {
+    location: clipboard::Location,
+    terminator: osc::Terminator,
+    replied: bool,
+    /// The encoded response, delivered by the handler after the callback.
+    response: Vec<u8>,
+}
+
+impl ClipboardReadState {
+    // fn reply(ctx: *anyopaque, result: clipboard.Read.Result) void {
+    fn reply(ctx: *mut core::ffi::c_void, result: clipboard::ReadResult<'_>) {
+        // const self: *ClipboardReadState = @ptrCast(@alignCast(ctx));
+        // SAFETY: `ctx` is the `&mut ClipboardReadState` the caller passed as
+        // `reply_ctx`, valid for the duration of the effect callback; no other
+        // reference to the state exists while the callback runs.
+        let state = unsafe { &mut *(ctx as *mut ClipboardReadState) };
+        if state.replied {
+            // log.warn("clipboard read replied more than once, ignoring", .{});
+            return;
+        }
+
+        // OSC 52 carries a single text value.
+        let data: &[u8] = match &result {
+            clipboard::ReadResult::Denied
+            | clipboard::ReadResult::Unsupported
+            | clipboard::ReadResult::Busy
+            | clipboard::ReadResult::IoError => b"",
+            clipboard::ReadResult::Success(s) => s
+                .contents
+                .iter()
+                .find(|c| clipboard::is_text_mime(c.mime))
+                .map(|c| c.data)
+                .unwrap_or(b""),
+        };
+
+        // self.respond(data) catch |err| { ...; return; };
+        // self.replied = true;
+        // (the ported respond cannot fail; see `respond`.)
+        state.respond(data);
+        state.replied = true;
+    }
+
+    // fn respond(self: *ClipboardReadState, data: []const u8)
+    //     error{ OutOfMemory, WriteFailed }!void
+    //
+    // PORT NOTE (R10): the reference encodes over stackFallback(256) +
+    // Allocating writer; the port encodes into the owned response buffer
+    // (PERF(port): stackFallback). Infallible by construction.
+    fn respond(&mut self, data: &[u8]) {
+        use crate::snapshot::io::Writer as _;
+        let kind: u8 = match self.location {
+            clipboard::Location::Selection => b's',
+            clipboard::Location::Primary => b'p',
+            // .standard, _ => 'c',
+            clipboard::Location::Standard => b'c',
+        };
+        let mut aw = crate::snapshot::io::AllocatingWriter::new();
+        // try aw.writer.print("\x1b]52;{c};", .{kind});
+        aw.write_all(b"\x1b]52;").unwrap();
+        aw.write_byte(kind).unwrap();
+        aw.write_all(b";").unwrap();
+        // try std.base64.standard.Encoder.encodeWriter(&aw.writer, data);
+        crate::kitty::clipboard_response::b64_encode_writer(&mut aw, data).unwrap();
+        // try aw.writer.writeAll(self.terminator.string());
+        aw.write_all(self.terminator.string()).unwrap();
+        self.response = aw.written().to_vec();
+    }
+}
+
+/// Reply state for one synchronous Kitty clipboard read. This lives
+/// on the kitty_clipboard_read stack frame, so it is only valid during
+/// the callback.
+// const KittyClipboardReadState = struct { handler, primary, id, pw, mimes,
+//     list, terminator, replied };
+//
+// PORT NOTE (SB discipline): no `handler: *Handler` — the reply encodes the
+// response and records the grant intent into this stack state; the handler
+// applies both right after the callback (see `kitty_clipboard_read`). The
+// borrowed `id`/`pw`/`mimes` slices become owned copies for the same reason.
+struct KittyClipboardReadState {
+    primary: bool,
+    id: Vec<u8>,
+
+    /// The effective password, empty when the request had none.
+    pw: Vec<u8>,
+
+    /// The requested types; only these are served from a reply.
+    mimes: Vec<Vec<u8>>,
+    list: bool,
+    terminator: osc::Terminator,
+
+    /// Whether the handler has a write_pty effect (the respond gate the
+    /// reference reads through `handler.effects`).
+    write_pty_some: bool,
+    replied: bool,
+
+    /// Grant intent recorded by a success reply with `remember` set.
+    remember: bool,
+
+    /// The encoded response, delivered by the handler after the callback.
+    response: Vec<u8>,
+}
+
+impl KittyClipboardReadState {
+    // fn reply(ctx: *anyopaque, result: clipboard.Read.Result) void {
+    fn reply(ctx: *mut core::ffi::c_void, result: clipboard::ReadResult<'_>) {
+        // SAFETY: `ctx` is the `&mut KittyClipboardReadState` the caller
+        // passed as `reply_ctx`, valid for the duration of the effect
+        // callback; no other reference to the state exists while it runs.
+        let state = unsafe { &mut *(ctx as *mut KittyClipboardReadState) };
+        if state.replied {
+            // log.warn("clipboard read replied more than once, ignoring", .{});
+            return;
+        }
+        state.replied = true;
+
+        let success = match result {
+            clipboard::ReadResult::Denied => {
+                return state.respond_status(kitty::clipboard::Status::Eperm);
+            }
+            clipboard::ReadResult::Unsupported => {
+                return state.respond_status(kitty::clipboard::Status::Enosys);
+            }
+            clipboard::ReadResult::Busy => {
+                return state.respond_status(kitty::clipboard::Status::Ebusy);
+            }
+            clipboard::ReadResult::IoError => {
+                return state.respond_status(kitty::clipboard::Status::Eio);
+            }
+            clipboard::ReadResult::Success(s) => s,
+        };
+
+        // Remembering is only offered when the request carried a
+        // usable password. (Recorded here; the handler records the
+        // grant after the callback returns.)
+        if success.remember && !state.pw.is_empty() {
+            state.remember = true;
+        }
+
+        // self.respondSuccess(&success) catch |err| { ...; self.respondStatus(.EIO); };
+        // (the ported respond_success cannot fail; see its note.)
+        state.respond_success(&success);
+    }
+
+    /// Answer with a single status packet.
+    // fn respondStatus(self, status: kitty_clipboard.Status) void
+    fn respond_status(&mut self, status: kitty::clipboard::Status) {
+        // (handler.kittyClipboardRespond's write_pty gate.)
+        if !self.write_pty_some {
+            return;
+        }
+        let mut aw = crate::snapshot::io::AllocatingWriter::new();
+        if (kitty::clipboard::Response {
+            id: &self.id,
+            terminator: self.terminator,
+            ..kitty::clipboard::Response::new(
+                crate::osc::parsers::kitty_clipboard_protocol::Operation::Read,
+                status,
+            )
+        })
+        .encode(&mut aw)
+        .is_err()
+        {
+            return;
+        }
+        self.response = aw.written().to_vec();
+    }
+
+    /// Answer with the full success sequence (OK, listing, DATA
+    /// chunks, DONE), serving only the requested representations
+    /// in request order.
+    // fn respondSuccess(self, success: *const clipboard.Read.Result.Success)
+    //     error{ OutOfMemory, WriteFailed }!void
+    fn respond_success(&mut self, success: &clipboard::ReadResultSuccess<'_>) {
+        // if (handler.effects.write_pty == null) return;
+        if !self.write_pty_some {
+            return;
+        }
+
+        // var served_buf: [kitty_clipboard.max_read_mimes]clipboard.Content = undefined;
+        let mut served_buf: [clipboard::Content; kitty::clipboard::max_read_mimes] =
+            [clipboard::Content {
+                mime: b"",
+                data: b"",
+            }; kitty::clipboard::max_read_mimes];
+        let mut served_len: usize = 0;
+        for mime in &self.mimes {
+            for content in success.contents {
+                if content.mime != &mime[..] {
+                    continue;
+                }
+                served_buf[served_len] = *content;
+                served_len += 1;
+                break;
+            }
+        }
+
+        // Status packets fit on the stack; DATA packets carry the
+        // clipboard contents and fall back to the heap.
+        // var stack = std.heap.stackFallback(1024, handler.terminal.gpa());
+        // PORT NOTE (R10): PERF(port): stackFallback — owned buffer.
+        let mut aw = crate::snapshot::io::AllocatingWriter::new();
+        if (kitty::clipboard::ReadSuccess {
+            primary: self.primary,
+            id: &self.id,
+            list: self.list,
+            available: success.available,
+            contents: &served_buf[0..served_len],
+            terminator: self.terminator,
+            ..kitty::clipboard::ReadSuccess::default()
+        })
+        .encode(&mut aw)
+        .is_err()
+        {
+            return;
+        }
+        self.response = aw.written().to_vec();
+    }
+}
+
+/// Reply state for one synchronous Kitty clipboard write. This lives
+/// on the kitty_clipboard_commit stack frame, so it is only valid
+/// during the callback.
+// const KittyClipboardWriteReplyState = struct { handler, pw, status };
+//
+// PORT NOTE (SB discipline): no `handler: *Handler`; the grant intent is
+// recorded and applied by the handler after the callback (see
+// `kitty_clipboard_commit`).
+struct KittyClipboardWriteReplyState {
+    /// The replied commit status, mapped 1:1 from the reply result;
+    /// null until the callback replies.
+    status: Option<kitty::clipboard::Status>,
+
+    /// Grant intent recorded by a success reply with `remember` set.
+    remember: bool,
+}
+
+impl KittyClipboardWriteReplyState {
+    // fn reply(ctx: *anyopaque, result: clipboard.Write.Result) void {
+    fn reply(ctx: *mut core::ffi::c_void, result: clipboard::WriteResult) {
+        // SAFETY: `ctx` is the `&mut KittyClipboardWriteReplyState` the caller
+        // passed as `reply_ctx`, valid for the duration of the effect
+        // callback; no other reference to the state exists while it runs.
+        let state = unsafe { &mut *(ctx as *mut KittyClipboardWriteReplyState) };
+        if state.status.is_some() {
+            // log.warn("clipboard write replied more than once, ignoring", .{});
+            return;
+        }
+        state.status = Some(match result {
+            clipboard::WriteResult::Denied => kitty::clipboard::Status::Eperm,
+            clipboard::WriteResult::Unsupported => kitty::clipboard::Status::Enosys,
+            clipboard::WriteResult::Busy => kitty::clipboard::Status::Ebusy,
+            clipboard::WriteResult::InvalidData => kitty::clipboard::Status::Einval,
+            clipboard::WriteResult::IoError => kitty::clipboard::Status::Eio,
+            clipboard::WriteResult::Success(success) => {
+                // Remembering is only offered when the request carried a
+                // usable password. (Recorded here; the handler applies the
+                // grant after the callback returns.)
+                if success.remember {
+                    state.remember = true;
+                }
+                kitty::clipboard::Status::Done
+            }
+        });
+    }
+}
+
 impl<'a> stream::Handler for Handler<'a> {
     // pub fn deinit(self: *Handler) void {
+    //     self.kittyClipboardAbort();
+    //     self.kitty_clipboard_grants.deinit(self.terminal.gpa());
     //     self.apc_handler.deinit();
     //     self.dcs_handler.deinit();
     // }
     fn deinit(&mut self) {
+        self.kitty_clipboard_abort();
+        // PORT NOTE: `Grants.deinit(alloc)` frees the entries; replacing with
+        // the empty default drops them.
+        self.kitty_clipboard_grants = kitty::clipboard::Grants::default();
         self.apc_handler.deinit();
         self.dcs_handler.deinit();
     }
@@ -2217,12 +3454,37 @@ impl<'a> stream::Handler for Handler<'a> {
         self.term().reverse_index();
     }
 
-    // .full_reset => self.terminal.fullReset(),
+    // .full_reset => {
+    //     self.terminal.fullReset();
+    //
+    //     // Full reset clears grants
+    //     self.kitty_clipboard_grants.deinit(self.terminal.gpa());
+    //     self.kitty_clipboard_grants = .{};
+    //
+    //     // Clear the progress bar
+    //     self.progressReport(.{ .state = .remove });
+    // },
     //
     // PORT NOTE (oracle c594031d5): `Terminal::full_reset` now performs the
     // cursor-default restore itself (`setCursorStyle(.default)`).
     fn full_reset(&mut self) {
         self.term().full_reset();
+
+        // Full reset clears grants
+        self.kitty_clipboard_grants = kitty::clipboard::Grants::default();
+
+        // Clear the progress bar (eeab85b96; the b56c6d88f "only if there is
+        // one" guard was reverted in-range by b7ee3ab6b — end state is the
+        // unconditional remove).
+        if let Some(func) = self.effects.progress_report {
+            func(
+                self,
+                osc::ProgressReport {
+                    state: osc::ProgressReportState::Remove,
+                    progress: None,
+                },
+            );
+        }
     }
 
     // .set_mode => try self.setMode(value.mode, true),
@@ -2543,84 +3805,37 @@ impl<'a> stream::Handler for Handler<'a> {
     //
     //   Only the decoded scratch data uses the terminal allocator here. Swap in
     //   an allocator that always fails, then restore it before terminal teardown.
+    // .clipboard_contents => self.clipboardContents(
+    //     value.kind,
+    //     value.data,
+    //     value.terminator,
+    // ) catch |err| {
+    //     // Clipboard operations are external effects, not terminal state.
+    //     log.warn("error handling clipboard operation err={}", .{err});
+    // },
     fn clipboard_contents(&mut self, v: stream::ClipboardContents) {
-        let kind = v.kind;
-        let data = v.data;
+        self.do_clipboard_contents(v.kind, v.data, v.terminator);
+    }
 
-        let Some(func) = self.effects.clipboard_write else {
-            return;
-        };
+    // .kitty_clipboard => self.kittyClipboard(value) catch |err| {
+    //     // Clipboard operations are external effects, not terminal
+    //     // state; a failed transaction was already answered.
+    //     log.warn("error handling kitty clipboard err={}", .{err});
+    // },
+    fn kitty_clipboard(&mut self, v: osc::KittyClipboardProtocol) {
+        self.do_kitty_clipboard(&v);
+    }
 
-        // Read requests are deliberately not forwarded; see the effect docs.
-        // if (data.len == 1 and data[0] == '?') return;
-        if data.len() == 1 && data[0] == b'?' {
-            return;
+    // .kitty_dnd => self.kittyDnd(value) catch |err| {
+    //     // Drag and drop is a self-contained subsystem: an OOM
+    //     // updating its state or a failure writing a response
+    //     // degrades it without corrupting terminal state, so we log.
+    //     log.warn("error handling kitty dnd err={}", .{err});
+    // },
+    fn kitty_dnd(&mut self, v: osc::KittyDndProtocol) {
+        if self.do_kitty_dnd(&v).is_err() {
+            // log.warn("error handling kitty dnd err={}", .{err});
         }
-
-        // const location: clipboard.Location = switch (kind) { ... };
-        let location = match kind {
-            b's' => clipboard::Location::Selection,
-            b'p' => clipboard::Location::Primary,
-            _ => clipboard::Location::Standard,
-        };
-
-        // OSC 52 uses an empty payload to clear the selected clipboard.
-        // if (data.len == 0) { _ = func(self, .{ .location, .contents = &.{} }); return; }
-        if data.is_empty() {
-            let _ = func(
-                self,
-                clipboard::Write {
-                    location,
-                    contents: &[],
-                },
-            );
-            return;
-        }
-
-        // Decode the base64 payload with the SIMD decoder (the same one
-        // used for Kitty graphics payloads) rather than the scalar std
-        // implementation; clipboard payloads can be megabytes.
-        // const alloc = self.terminal.gpa();
-        // const buf = try alloc.alloc(u8, simd.base64.maxLen(data));
-        // defer alloc.free(buf);
-        // const decoded = try simd.base64.decode(data, buf);
-        //
-        // PORT NOTE: `try alloc.alloc(u8, ...)` is a FALLIBLE allocation whose
-        // failure the dispatch arm swallows. `Vec::with_capacity` would abort
-        // instead, so we reserve through the terminal allocator with
-        // `try_reserve_exact` (same shape as `dcs::Allocating::init_capacity`)
-        // and bail out on `OutOfMemory` without invoking the effect. A decode
-        // error likewise returns without invoking the effect (the reference
-        // `try` propagates to the dispatch arm's graceful catch).
-        let alloc = self.term().gpa();
-        let max_len = rustty_simd::base64::max_len(data);
-        let mut buf: allocator_api2::vec::Vec<u8, _> = allocator_api2::vec::Vec::new_in(alloc);
-        #[cfg(test)]
-        if clipboard_contents_tw_check(ClipboardContentsFp::DecodeScratch).is_err() {
-            return;
-        }
-        if buf.try_reserve_exact(max_len).is_err() {
-            return;
-        }
-        // The capacity above is already reserved, so this never allocates.
-        buf.resize(max_len, 0);
-        let Ok(decoded) = rustty_simd::base64::decode(data, &mut buf) else {
-            return;
-        };
-
-        // const contents = [_]clipboard.Content{.{ .mime = "text/plain", .data = decoded }};
-        // _ = func(self, .{ .location, .contents = &contents });
-        let contents = [clipboard::Content {
-            mime: b"text/plain",
-            data: decoded,
-        }];
-        let _ = func(
-            self,
-            clipboard::Write {
-                location,
-                contents: &contents,
-            },
-        );
     }
 
     // .mouse_shape => self.terminal.mouse_shape = value,
@@ -4784,7 +5999,9 @@ mod tests {
     thread_local! {
         static CLIP_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
         static CLIP_RESULT: core::cell::Cell<clipboard::WriteResult> =
-            const { core::cell::Cell::new(clipboard::WriteResult::Success) };
+            const { core::cell::Cell::new(clipboard::WriteResult::Success(
+                clipboard::WriteResultSuccess { remember: false },
+            )) };
         static CLIP_LOCATION: core::cell::Cell<clipboard::Location> =
             const { core::cell::Cell::new(clipboard::Location::Standard) };
         static CLIP_CONTENTS_LEN: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
@@ -4798,7 +6015,9 @@ mod tests {
         CLIP_CONTENTS_LEN.with(|c| c.set(0));
     }
 
-    fn cap_clipboard_write(_: &mut Handler, write: clipboard::Write) -> clipboard::WriteResult {
+    // fn clipboardWrite(_: *Handler, write: clipboard.Write) void { ...
+    //     write.reply(result); }
+    fn cap_clipboard_write(_: &mut Handler, write: clipboard::Write) {
         clip_clear_capture();
         CLIP_COUNT.with(|c| c.set(c.get() + 1));
         CLIP_LOCATION.with(|c| c.set(write.location));
@@ -4807,7 +6026,7 @@ mod tests {
             CLIP_MIME.with(|c| *c.borrow_mut() = Some(write.contents[0].mime.to_vec()));
             CLIP_DATA.with(|c| *c.borrow_mut() = Some(write.contents[0].data.to_vec()));
         }
-        CLIP_RESULT.with(|c| c.get())
+        write.reply(CLIP_RESULT.with(|c| c.get()));
     }
 
     // test "clipboard_write effect callback" (oracle 634ef7198)
@@ -4867,6 +6086,13 @@ mod tests {
                 clipboard::Location::Standard,
                 b"a\x00b",
             ),
+            // Missing padding is tolerated for OSC 52 since it has no way
+            // to report errors to the client, matching kitty.
+            (
+                b"\x1B]52;c;dW5wYWRkZWQ\x1B\\",
+                clipboard::Location::Standard,
+                b"unpadded",
+            ),
         ];
 
         for (i, (sequence, location, data)) in cases.iter().enumerate() {
@@ -4895,9 +6121,14 @@ mod tests {
         assert!(CLIP_MIME.with(|c| c.borrow().is_none()));
         assert!(CLIP_DATA.with(|c| c.borrow().is_none()));
 
-        // Reads and malformed base64 are ignored.
+        // Reads and malformed base64 are ignored. The whole request is
+        // discarded on invalid characters (including whitespace) rather
+        // than decoding around them, per the Kitty clipboard spec that
+        // governs OSC 52 base64 handling.
         s.next_slice(b"\x1B]52;c;?\x1B\\");
         s.next_slice(b"\x1B]52;c;***\x1B\\");
+        s.next_slice(b"\x1B]52;c;SGVs!!!bG8=\x1B\\");
+        s.next_slice(b"\x1B]52;c;aGVs bG8=\x1B\\");
         assert_eq!(cases.len() + 1, CLIP_COUNT.with(|c| c.get()));
 
         // OSC 1337 Copy shares the normalized clipboard write path.
@@ -4934,8 +6165,8 @@ mod tests {
             CLIP_DATA.with(|c| c.borrow().clone()).unwrap().as_slice()
         );
 
-        // Callback results are intentionally ignored for protocols without a
-        // write acknowledgement. The denied result above did not stop later writes.
+        // Reply results are intentionally ignored for protocols without a
+        // write acknowledgement. The denied reply above did not stop later writes.
         assert_eq!(
             clipboard::WriteResult::Denied,
             CLIP_RESULT.with(|c| c.get())
@@ -4963,7 +6194,11 @@ mod tests {
         let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
 
         CLIP_COUNT.with(|c| c.set(0));
-        CLIP_RESULT.with(|c| c.set(clipboard::WriteResult::Success));
+        CLIP_RESULT.with(|c| {
+            c.set(clipboard::WriteResult::Success(
+                clipboard::WriteResultSuccess::default(),
+            ))
+        });
         clip_clear_capture();
 
         {
@@ -5836,9 +7071,12 @@ mod tests {
         fn desktop_notification(_: &mut Handler, _: stream::ShowDesktopNotification) {
             NOTIFICATION_COUNT.with(|c| c.set(c.get() + 1));
         }
-        fn clipboard_write(_: &mut Handler, _: clipboard::Write) -> clipboard::WriteResult {
+        fn clipboard_write(_: &mut Handler, write: clipboard::Write) {
             CLIPBOARD_COUNT.with(|c| c.set(c.get() + 1));
-            clipboard::WriteResult::Success
+            // write.reply(.{ .success = .{} });
+            write.reply(clipboard::WriteResult::Success(
+                clipboard::WriteResultSuccess::default(),
+            ));
         }
         fn reset() {
             BELL_COUNT.with(|c| c.set(0));
@@ -5974,5 +7212,2575 @@ mod tests {
         restored.deinit();
         restored_terminal.deinit(Global);
         source_terminal.deinit(Global);
+    }
+
+    // ==== Phase-5 dispatch tier: Kitty clipboard (OSC 5522), Kitty dnd
+    // ==== (OSC 72), paste, clipboard_read, and mode-2048 tests.
+
+    /// Shared capture state for the Kitty clipboard (OSC 5522) tests below:
+    /// records every pty response and the most recent clipboard write.
+    // const KittyClipboardCapture = struct { ... };
+    // PORT NOTE: the reference hangs `var`s on a file-scope struct; the
+    // callbacks are bare `fn` pointers here, so the capture lives in a
+    // thread-local cell (the module's established idiom). The reference's
+    // fixed `[8][64]u8`-style capture buffers become owned Vecs.
+    #[derive(Default)]
+    struct KittyCap {
+        responses: Vec<u8>,
+
+        // Write capture. A None write_result returns without replying.
+        write_count: usize,
+        write_result: Option<clipboard::WriteResult>,
+        write_reply_twice: bool,
+        last_location: Option<clipboard::Location>,
+        last_contents: Vec<(Vec<u8>, Vec<u8>)>,
+        last_write_name: Vec<u8>,
+        last_write_granted: bool,
+        last_write_can_remember: bool,
+
+        // Read capture. A None read_result returns without replying.
+        read_count: usize,
+        read_result: Option<KcReadResult>,
+        read_reply_twice: bool,
+        last_read_location: Option<clipboard::Location>,
+        last_read_mimes: Vec<Vec<u8>>,
+        last_read_list: bool,
+        last_read_name: Vec<u8>,
+        last_read_granted: bool,
+        last_read_can_remember: bool,
+    }
+
+    /// Owned analog of `clipboard.Read.Result` for the thread-local capture
+    /// (the real result's memory is only valid during the reply call).
+    #[derive(Clone)]
+    enum KcReadResult {
+        Denied,
+        Unsupported,
+        Busy,
+        IoError,
+        Success {
+            contents: Vec<(Vec<u8>, Vec<u8>)>,
+            available: Vec<Vec<u8>>,
+            remember: bool,
+        },
+    }
+
+    impl KcReadResult {
+        /// Build the borrowed reply and deliver it.
+        fn reply_with(&self, read: &clipboard::Read) {
+            match self {
+                KcReadResult::Denied => read.reply(clipboard::ReadResult::Denied),
+                KcReadResult::Unsupported => read.reply(clipboard::ReadResult::Unsupported),
+                KcReadResult::Busy => read.reply(clipboard::ReadResult::Busy),
+                KcReadResult::IoError => read.reply(clipboard::ReadResult::IoError),
+                KcReadResult::Success {
+                    contents,
+                    available,
+                    remember,
+                } => {
+                    let contents_b: Vec<clipboard::Content> = contents
+                        .iter()
+                        .map(|(mime, data)| clipboard::Content { mime, data })
+                        .collect();
+                    let available_b: Vec<&[u8]> =
+                        available.iter().map(|a| a.as_slice()).collect();
+                    read.reply(clipboard::ReadResult::Success(
+                        clipboard::ReadResultSuccess {
+                            contents: &contents_b,
+                            available: &available_b,
+                            remember: *remember,
+                        },
+                    ));
+                }
+            }
+        }
+    }
+
+    thread_local! {
+        static KC: core::cell::RefCell<KittyCap> =
+            core::cell::RefCell::new(KittyCap::default());
+    }
+
+    // fn reset() void { ... }
+    fn kc_reset() {
+        KC.with(|c| {
+            *c.borrow_mut() = KittyCap {
+                write_result: Some(clipboard::WriteResult::Success(
+                    clipboard::WriteResultSuccess::default(),
+                )),
+                ..KittyCap::default()
+            };
+        });
+    }
+
+    // fn writePty(_: *Handler, data: []const u8) void { ... }
+    fn kc_write_pty(_: &mut Handler, data: &[u8]) {
+        KC.with(|c| c.borrow_mut().responses.extend_from_slice(data));
+    }
+
+    // fn clipboardWrite(_: *Handler, write: clipboard.Write) void { ... }
+    fn kc_clipboard_write(_: &mut Handler, write: clipboard::Write) {
+        let (result, twice) = KC.with(|c| {
+            let mut cap = c.borrow_mut();
+            cap.write_count += 1;
+            cap.last_location = Some(write.location);
+            cap.last_contents = write
+                .contents
+                .iter()
+                .map(|content| (content.mime.to_vec(), content.data.to_vec()))
+                .collect();
+            cap.last_write_name = write.name.to_vec();
+            cap.last_write_granted = write.granted;
+            cap.last_write_can_remember = write.can_remember;
+            (cap.write_result, cap.write_reply_twice)
+        });
+        if let Some(r) = result {
+            write.reply(r);
+        }
+        if twice {
+            write.reply(clipboard::WriteResult::IoError);
+        }
+    }
+
+    // fn clipboardRead(_: *Handler, read: clipboard.Read) void { ... }
+    fn kc_clipboard_read(_: &mut Handler, read: clipboard::Read) {
+        let (result, twice) = KC.with(|c| {
+            let mut cap = c.borrow_mut();
+            cap.read_count += 1;
+            cap.last_read_location = Some(read.location);
+            cap.last_read_mimes = read.mimes.iter().map(|m| m.to_vec()).collect();
+            cap.last_read_list = read.list;
+            cap.last_read_name = read.name.to_vec();
+            cap.last_read_granted = read.granted;
+            cap.last_read_can_remember = read.can_remember;
+            (cap.read_result.clone(), cap.read_reply_twice)
+        });
+        if let Some(r) = &result {
+            r.reply_with(&read);
+        }
+        if twice {
+            read.reply(clipboard::ReadResult::Denied);
+        }
+    }
+
+    fn kc_responses() -> Vec<u8> {
+        KC.with(|c| c.borrow().responses.clone())
+    }
+
+    fn kc_responses_len() -> usize {
+        KC.with(|c| c.borrow().responses.len())
+    }
+
+    fn kc<T>(f: impl FnOnce(&KittyCap) -> T) -> T {
+        KC.with(|c| f(&c.borrow()))
+    }
+
+    fn kc_mut(f: impl FnOnce(&mut KittyCap)) {
+        KC.with(|c| f(&mut c.borrow_mut()));
+    }
+
+    // test "kitty clipboard write transaction round trip"
+    #[test]
+    fn kitty_clipboard_write_transaction_round_trip() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+
+        // Begin a write, stream two MIME types (one chunked), alias the
+        // plain text, and commit. Only the commit produces a response.
+        s.next_slice(b"\x1B]5522;type=write:id=42\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;R2hvc3Q=\x1B\\"); // "Ghost"
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;dHk=\x1B\\"); // "ty"
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9odG1s;PGI+aGk8L2I+\x1B\\"); // "<b>hi</b>"
+        // Alias "TEXT UTF8_STRING" -> text/plain.
+        s.next_slice(b"\x1B]5522;type=walias:mime=dGV4dC9wbGFpbg==;VEVYVCBVVEY4X1NUUklORw==\x1B\\");
+        assert_eq!(0, kc(|c| c.write_count));
+        assert_eq!(0, kc_responses_len());
+
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert_eq!(1, kc(|c| c.write_count));
+        assert_eq!(Some(clipboard::Location::Standard), kc(|c| c.last_location));
+        assert_eq!(4, kc(|c| c.last_contents.len()));
+        // PORT NOTE (R2): the aliased text payload decodes to "Ghostty" in the
+        // reference; the bytes are protocol data, carried verbatim.
+        kc(|c| {
+            assert_eq!(b"text/plain".as_slice(), c.last_contents[0].0.as_slice());
+            assert_eq!(b"Ghostty".as_slice(), c.last_contents[0].1.as_slice());
+            assert_eq!(b"text/html".as_slice(), c.last_contents[1].0.as_slice());
+            assert_eq!(b"<b>hi</b>".as_slice(), c.last_contents[1].1.as_slice());
+            assert_eq!(b"TEXT".as_slice(), c.last_contents[2].0.as_slice());
+            assert_eq!(b"Ghostty".as_slice(), c.last_contents[2].1.as_slice());
+            assert_eq!(b"UTF8_STRING".as_slice(), c.last_contents[3].0.as_slice());
+            assert_eq!(b"Ghostty".as_slice(), c.last_contents[3].1.as_slice());
+        });
+        assert_eq!(
+            b"\x1B]5522;type=write:status=DONE:id=42\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+
+        // A commit with no transaction in flight is silently ignored.
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert_eq!(1, kc(|c| c.write_count));
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard write result maps to response status"
+    #[test]
+    fn kitty_clipboard_write_result_maps_to_response_status() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+
+        let cases: &[(Option<clipboard::WriteResult>, &[u8])] = &[
+            (
+                Some(clipboard::WriteResult::Success(
+                    clipboard::WriteResultSuccess::default(),
+                )),
+                b"\x1B]5522;type=write:status=DONE\x1B\\",
+            ),
+            (
+                Some(clipboard::WriteResult::Denied),
+                b"\x1B]5522;type=write:status=EPERM\x1B\\",
+            ),
+            (
+                Some(clipboard::WriteResult::Unsupported),
+                b"\x1B]5522;type=write:status=ENOSYS\x1B\\",
+            ),
+            (
+                Some(clipboard::WriteResult::Busy),
+                b"\x1B]5522;type=write:status=EBUSY\x1B\\",
+            ),
+            (
+                Some(clipboard::WriteResult::InvalidData),
+                b"\x1B]5522;type=write:status=EINVAL\x1B\\",
+            ),
+            (
+                Some(clipboard::WriteResult::IoError),
+                b"\x1B]5522;type=write:status=EIO\x1B\\",
+            ),
+            // No reply at all is a denial rather than silence.
+            (None, b"\x1B]5522;type=write:status=EPERM\x1B\\"),
+        ];
+
+        for (result, response) in cases {
+            kc_reset();
+            kc_mut(|c| c.write_result = *result);
+
+            // An immediately-committed write with no data is a clear.
+            s.next_slice(b"\x1B]5522;type=write\x1B\\");
+            s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+            assert_eq!(1, kc(|c| c.write_count));
+            assert_eq!(0, kc(|c| c.last_contents.len()));
+            assert_eq!(*response, kc_responses().as_slice());
+        }
+
+        // A second reply is ignored.
+        kc_reset();
+        kc_mut(|c| c.write_reply_twice = true);
+        s.next_slice(b"\x1B]5522;type=write\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert_eq!(
+            b"\x1B]5522;type=write:status=DONE\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+
+        // The response echoes the request terminator, unlike kitty which
+        // always uses ST.
+        kc_reset();
+        s.next_slice(b"\x1B]5522;type=write:loc=primary\x07");
+        s.next_slice(b"\x1B]5522;type=wdata\x07");
+        assert_eq!(Some(clipboard::Location::Primary), kc(|c| c.last_location));
+        assert_eq!(
+            b"\x1B]5522;type=write:status=DONE\x07".as_slice(),
+            kc_responses().as_slice(),
+        );
+
+        // A system without a primary selection answers a loc=primary write
+        // with ENOSYS, echoing the id.
+        kc_reset();
+        kc_mut(|c| c.write_result = Some(clipboard::WriteResult::Unsupported));
+        s.next_slice(b"\x1B]5522;type=write:loc=primary:id=p1\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert_eq!(Some(clipboard::Location::Primary), kc(|c| c.last_location));
+        assert_eq!(
+            b"\x1B]5522;type=write:status=ENOSYS:id=p1\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard write without clipboard effect responds ENOSYS"
+    #[test]
+    fn kitty_clipboard_write_without_clipboard_effect_responds_enosys() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+
+        // The transaction fails as soon as it begins; the rest of it is
+        // ignored without further responses.
+        s.next_slice(b"\x1B]5522;type=write:id=x\x1B\\");
+        assert_eq!(
+            b"\x1B]5522;type=write:status=ENOSYS:id=x\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;R2hvc3Q=\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert_eq!(
+            b"\x1B]5522;type=write:status=ENOSYS:id=x\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard read without effect is denied with EPERM"
+    #[test]
+    fn kitty_clipboard_read_without_effect_is_denied_with_eperm() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+
+        // The denial never includes loc (only OK responses do) and echoes
+        // the sanitized id.
+        s.next_slice(b"\x1B]5522;type=read:loc=primary:id=*4 2*;dGV4dC9wbGFpbg==\x1B\\");
+        assert_eq!(
+            b"\x1B]5522;type=read:status=EPERM:id=42\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+
+        // A missing payload is an empty MIME list, still answered.
+        kc_reset();
+        s.next_slice(b"\x1B]5522;type=read\x07");
+        assert_eq!(
+            b"\x1B]5522;type=read:status=EPERM\x07".as_slice(),
+            kc_responses().as_slice(),
+        );
+
+        // An undecodable payload is dropped without a response.
+        kc_reset();
+        s.next_slice(b"\x1B]5522;type=read;!!!\x1B\\");
+        assert_eq!(0, kc_responses_len());
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard read round trip"
+    #[test]
+    fn kitty_clipboard_read_round_trip() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_read = Some(kc_clipboard_read);
+
+        kc_mut(|c| {
+            c.read_result = Some(KcReadResult::Success {
+                contents: vec![
+                    // Unrequested representations are never served, and the
+                    // served ones follow request order, not reply order.
+                    (b"image/png".to_vec(), b"\x89PNG".to_vec()),
+                    (b"text/html".to_vec(), b"<b>hi</b>".to_vec()),
+                    (b"text/plain".to_vec(), b"Ghostty".to_vec()),
+                ],
+                available: vec![b"text/plain".to_vec(), b"text/html".to_vec()],
+                remember: false,
+            });
+        });
+
+        // Request the targets listing plus two types from the primary
+        // selection: ". text/plain text/html".
+        s.next_slice(b"\x1B]5522;type=read:loc=primary:id=r1;LiB0ZXh0L3BsYWluIHRleHQvaHRtbA==\x1B\\");
+        assert_eq!(1, kc(|c| c.read_count));
+        assert_eq!(
+            Some(clipboard::Location::Primary),
+            kc(|c| c.last_read_location)
+        );
+        assert_eq!(2, kc(|c| c.last_read_mimes.len()));
+        kc(|c| {
+            assert_eq!(b"text/plain".as_slice(), c.last_read_mimes[0].as_slice());
+            assert_eq!(b"text/html".as_slice(), c.last_read_mimes[1].as_slice());
+        });
+        assert!(kc(|c| c.last_read_list));
+        assert_eq!(0, kc(|c| c.last_read_name.len()));
+        assert!(!kc(|c| c.last_read_granted));
+        assert!(!kc(|c| c.last_read_can_remember));
+        let mut expected: Vec<u8> = Vec::new();
+        expected.extend_from_slice(b"\x1B]5522;type=read:status=OK:loc=primary:id=r1\x1B\\");
+        expected.extend_from_slice(
+            b"\x1B]5522;type=read:status=DATA:id=r1:mime=Lg==;dGV4dC9wbGFpbiB0ZXh0L2h0bWwK\x1B\\",
+        );
+        expected.extend_from_slice(
+            b"\x1B]5522;type=read:status=DATA:id=r1:mime=dGV4dC9wbGFpbg==;R2hvc3R0eQ==\x1B\\",
+        );
+        expected.extend_from_slice(
+            b"\x1B]5522;type=read:status=DATA:id=r1:mime=dGV4dC9odG1s;PGI+aGk8L2I+\x1B\\",
+        );
+        expected.extend_from_slice(b"\x1B]5522;type=read:status=DONE:id=r1\x1B\\");
+        assert_eq!(expected, kc_responses());
+
+        // Without the listing request `available` is ignored. The response
+        // echoes the request terminator.
+        kc_mut(|c| c.responses.clear());
+        s.next_slice(b"\x1B]5522;type=read:id=r2;dGV4dC9wbGFpbg==\x07");
+        assert_eq!(
+            Some(clipboard::Location::Standard),
+            kc(|c| c.last_read_location)
+        );
+        assert_eq!(1, kc(|c| c.last_read_mimes.len()));
+        assert!(!kc(|c| c.last_read_list));
+        let mut expected: Vec<u8> = Vec::new();
+        expected.extend_from_slice(b"\x1B]5522;type=read:status=OK:id=r2\x07");
+        expected.extend_from_slice(
+            b"\x1B]5522;type=read:status=DATA:id=r2:mime=dGV4dC9wbGFpbg==;R2hvc3R0eQ==\x07",
+        );
+        expected.extend_from_slice(b"\x1B]5522;type=read:status=DONE:id=r2\x07");
+        assert_eq!(expected, kc_responses());
+
+        // A listing-only request carries no types.
+        kc_mut(|c| c.responses.clear());
+        s.next_slice(b"\x1B]5522;type=read;Lg==\x1B\\");
+        assert_eq!(0, kc(|c| c.last_read_mimes.len()));
+        assert!(kc(|c| c.last_read_list));
+        let mut expected: Vec<u8> = Vec::new();
+        expected.extend_from_slice(b"\x1B]5522;type=read:status=OK\x1B\\");
+        expected.extend_from_slice(
+            b"\x1B]5522;type=read:status=DATA:mime=Lg==;dGV4dC9wbGFpbiB0ZXh0L2h0bWwK\x1B\\",
+        );
+        expected.extend_from_slice(b"\x1B]5522;type=read:status=DONE\x1B\\");
+        assert_eq!(expected, kc_responses());
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard read result maps to response status"
+    #[test]
+    fn kitty_clipboard_read_result_maps_to_response_status() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_read = Some(kc_clipboard_read);
+
+        let mut ok_done: Vec<u8> = Vec::new();
+        ok_done.extend_from_slice(b"\x1B]5522;type=read:status=OK:id=x\x1B\\");
+        ok_done.extend_from_slice(b"\x1B]5522;type=read:status=DONE:id=x\x1B\\");
+
+        let cases: &[(Option<KcReadResult>, &[u8])] = &[
+            (
+                Some(KcReadResult::Denied),
+                b"\x1B]5522;type=read:status=EPERM:id=x\x1B\\",
+            ),
+            (
+                Some(KcReadResult::Unsupported),
+                b"\x1B]5522;type=read:status=ENOSYS:id=x\x1B\\",
+            ),
+            (
+                Some(KcReadResult::Busy),
+                b"\x1B]5522;type=read:status=EBUSY:id=x\x1B\\",
+            ),
+            (
+                Some(KcReadResult::IoError),
+                b"\x1B]5522;type=read:status=EIO:id=x\x1B\\",
+            ),
+            // No reply at all is a denial rather than silence.
+            (None, b"\x1B]5522;type=read:status=EPERM:id=x\x1B\\"),
+            // A success with nothing to serve is still OK then DONE.
+            (
+                Some(KcReadResult::Success {
+                    contents: Vec::new(),
+                    available: Vec::new(),
+                    remember: false,
+                }),
+                ok_done.as_slice(),
+            ),
+        ];
+
+        for (result, response) in cases {
+            kc_reset();
+            kc_mut(|c| c.read_result = result.clone());
+            s.next_slice(b"\x1B]5522;type=read:id=x;dGV4dC9wbGFpbg==\x1B\\");
+            assert_eq!(1, kc(|c| c.read_count));
+            assert_eq!(*response, kc_responses().as_slice());
+        }
+
+        // A second reply is ignored.
+        kc_reset();
+        kc_mut(|c| {
+            c.read_result = Some(KcReadResult::Success {
+                contents: vec![(b"text/plain".to_vec(), b"hello".to_vec())],
+                available: Vec::new(),
+                remember: false,
+            });
+            c.read_reply_twice = true;
+        });
+        s.next_slice(b"\x1B]5522;type=read;dGV4dC9wbGFpbg==\x1B\\");
+        let mut expected: Vec<u8> = Vec::new();
+        expected.extend_from_slice(b"\x1B]5522;type=read:status=OK\x1B\\");
+        expected.extend_from_slice(
+            b"\x1B]5522;type=read:status=DATA:mime=dGV4dC9wbGFpbg==;aGVsbG8=\x1B\\",
+        );
+        expected.extend_from_slice(b"\x1B]5522;type=read:status=DONE\x1B\\");
+        assert_eq!(expected, kc_responses());
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard read caps requested types"
+    #[test]
+    fn kitty_clipboard_read_caps_requested_types() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_read = Some(kc_clipboard_read);
+
+        // "a/0 a/1 a/2 a/3 a/4 a/5 .": extras are dropped but the listing
+        // request after them still counts.
+        kc_mut(|c| {
+            c.read_result = Some(KcReadResult::Success {
+                contents: Vec::new(),
+                available: Vec::new(),
+                remember: false,
+            });
+        });
+        s.next_slice(b"\x1B]5522;type=read;YS8wIGEvMSBhLzIgYS8zIGEvNCBhLzUgLg==\x1B\\");
+        assert_eq!(1, kc(|c| c.read_count));
+        assert_eq!(
+            kitty::clipboard::max_read_mimes,
+            kc(|c| c.last_read_mimes.len())
+        );
+        kc(|c| {
+            assert_eq!(b"a/0".as_slice(), c.last_read_mimes[0].as_slice());
+            assert_eq!(
+                b"a/3".as_slice(),
+                c.last_read_mimes[kitty::clipboard::max_read_mimes - 1].as_slice()
+            );
+        });
+        assert!(kc(|c| c.last_read_list));
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard read password grants"
+    #[test]
+    fn kitty_clipboard_read_password_grants() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_read = Some(kc_clipboard_read);
+
+        let success_remember = KcReadResult::Success {
+            contents: Vec::new(),
+            available: Vec::new(),
+            remember: true,
+        };
+        let success_plain = KcReadResult::Success {
+            contents: Vec::new(),
+            available: Vec::new(),
+            remember: false,
+        };
+
+        // Every read requests a data type ("text/plain"): a request with
+        // no data types never consults the grants at all.
+        //
+        // pw="secret", name="app": the first request isn't granted but the
+        // reply may ask to remember it.
+        kc_mut(|c| c.read_result = Some(success_remember.clone()));
+        s.next_slice(b"\x1B]5522;type=read:pw=c2VjcmV0:name=YXBw;dGV4dC9wbGFpbg==\x1B\\");
+        assert_eq!(1, kc(|c| c.read_count));
+        kc(|c| assert_eq!(b"app".as_slice(), c.last_read_name.as_slice()));
+        assert!(!kc(|c| c.last_read_granted));
+        assert!(kc(|c| c.last_read_can_remember));
+
+        // The same password is now granted; a different one is not.
+        kc_mut(|c| c.read_result = Some(success_plain.clone()));
+        s.next_slice(b"\x1B]5522;type=read:pw=c2VjcmV0:name=YXBw;dGV4dC9wbGFpbg==\x1B\\");
+        assert!(kc(|c| c.last_read_granted));
+        s.next_slice(b"\x1B]5522;type=read:pw=b3RoZXI=:name=YXBw;dGV4dC9wbGFpbg==\x1B\\");
+        assert!(!kc(|c| c.last_read_granted));
+        assert!(kc(|c| c.last_read_can_remember));
+
+        // A password without a name doesn't count: it is neither granted
+        // nor rememberable, even if the reply asks.
+        kc_mut(|c| c.read_result = Some(success_remember.clone()));
+        s.next_slice(b"\x1B]5522;type=read:pw=c2VjcmV0;dGV4dC9wbGFpbg==\x1B\\");
+        assert_eq!(0, kc(|c| c.last_read_name.len()));
+        assert!(!kc(|c| c.last_read_granted));
+        assert!(!kc(|c| c.last_read_can_remember));
+        s.next_slice(b"\x1B]5522;type=read:pw=b3RoZXI=;dGV4dC9wbGFpbg==\x1B\\");
+        assert!(!kc(|c| c.last_read_can_remember));
+        kc_mut(|c| c.read_result = Some(success_plain.clone()));
+        s.next_slice(b"\x1B]5522;type=read:pw=b3RoZXI=:name=YXBw;dGV4dC9wbGFpbg==\x1B\\");
+        assert!(!kc(|c| c.last_read_granted));
+
+        // A grant is advisory: the request is still forwarded and the
+        // embedder may deny it.
+        kc_mut(|c| {
+            c.responses.clear();
+            c.read_result = Some(KcReadResult::Denied);
+        });
+        s.next_slice(b"\x1B]5522;type=read:id=d:pw=c2VjcmV0:name=YXBw;dGV4dC9wbGFpbg==\x1B\\");
+        assert!(kc(|c| c.last_read_granted));
+        assert_eq!(
+            b"\x1B]5522;type=read:status=EPERM:id=d\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+
+        // Grants are freed with the stream (the testing allocator catches
+        // the leak otherwise).
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard read targets-only never consumes a one-time grant"
+    #[test]
+    fn kitty_clipboard_read_targets_only_never_consumes_a_one_time_grant() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_read = Some(kc_clipboard_read);
+
+        // A one-time read grant, as minted for a paste event.
+        s.handler
+            .kitty_clipboard_grants
+            .grant(b"otp", kitty::clipboard::Direction::Read, true);
+
+        // A targets-only read (payload ".") is prompt-exempt so it never
+        // consults, and must not burn, the one-time password.
+        kc_mut(|c| {
+            c.read_result = Some(KcReadResult::Success {
+                contents: Vec::new(),
+                available: Vec::new(),
+                remember: false,
+            });
+        });
+        s.next_slice(b"\x1B]5522;type=read:pw=b3Rw:name=YXBw;Lg==\x1B\\");
+        assert_eq!(1, kc(|c| c.read_count));
+        assert!(kc(|c| c.last_read_list));
+        assert_eq!(0, kc(|c| c.last_read_mimes.len()));
+        assert!(!kc(|c| c.last_read_granted));
+
+        // The follow-up data read still consumes the grant, exactly once.
+        s.next_slice(b"\x1B]5522;type=read:pw=b3Rw:name=YXBw;dGV4dC9wbGFpbg==\x1B\\");
+        assert!(kc(|c| c.last_read_granted));
+        s.next_slice(b"\x1B]5522;type=read:pw=b3Rw:name=YXBw;dGV4dC9wbGFpbg==\x1B\\");
+        assert!(!kc(|c| c.last_read_granted));
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard write password grants"
+    #[test]
+    fn kitty_clipboard_write_password_grants() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+        s.handler.effects.clipboard_read = Some(kc_clipboard_read);
+
+        // pw="secret", name="app": the first commit isn't granted but the
+        // reply may ask to remember it.
+        kc_mut(|c| {
+            c.write_result = Some(clipboard::WriteResult::Success(
+                clipboard::WriteResultSuccess { remember: true },
+            ));
+        });
+        s.next_slice(b"\x1B]5522;type=write:pw=c2VjcmV0:name=YXBw\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert_eq!(1, kc(|c| c.write_count));
+        kc(|c| assert_eq!(b"app".as_slice(), c.last_write_name.as_slice()));
+        assert!(!kc(|c| c.last_write_granted));
+        assert!(kc(|c| c.last_write_can_remember));
+
+        // The same password is now granted; a different one is not.
+        kc_mut(|c| {
+            c.write_result = Some(clipboard::WriteResult::Success(
+                clipboard::WriteResultSuccess::default(),
+            ));
+        });
+        s.next_slice(b"\x1B]5522;type=write:pw=c2VjcmV0:name=YXBw\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert!(kc(|c| c.last_write_granted));
+        s.next_slice(b"\x1B]5522;type=write:pw=b3RoZXI=:name=YXBw\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert!(!kc(|c| c.last_write_granted));
+        assert!(kc(|c| c.last_write_can_remember));
+
+        // Directions are independent: a write grant doesn't satisfy reads.
+        kc_mut(|c| {
+            c.read_result = Some(KcReadResult::Success {
+                contents: Vec::new(),
+                available: Vec::new(),
+                remember: false,
+            });
+        });
+        s.next_slice(b"\x1B]5522;type=read:pw=c2VjcmV0:name=YXBw\x1B\\");
+        assert!(!kc(|c| c.last_read_granted));
+
+        // A password without a name doesn't count: it is neither granted
+        // nor rememberable, even if the reply asks.
+        kc_mut(|c| {
+            c.write_result = Some(clipboard::WriteResult::Success(
+                clipboard::WriteResultSuccess { remember: true },
+            ));
+        });
+        s.next_slice(b"\x1B]5522;type=write:pw=c2VjcmV0\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert_eq!(0, kc(|c| c.last_write_name.len()));
+        assert!(!kc(|c| c.last_write_granted));
+        assert!(!kc(|c| c.last_write_can_remember));
+
+        // A grant is advisory: the request is still forwarded and the
+        // embedder may deny it.
+        kc_mut(|c| {
+            c.responses.clear();
+            c.write_result = Some(clipboard::WriteResult::Denied);
+        });
+        s.next_slice(b"\x1B]5522;type=write:id=d:pw=c2VjcmV0:name=YXBw\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert!(kc(|c| c.last_write_granted));
+        assert_eq!(
+            b"\x1B]5522;type=write:status=EPERM:id=d\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+
+        // Grants are freed with the stream (the testing allocator catches
+        // the leak otherwise).
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard malformed packets are silently dropped"
+    #[test]
+    fn kitty_clipboard_malformed_packets_are_silently_dropped() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(kc_write_pty);
+            s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+
+            // Missing type, unknown type, bare metadata record, invalid mime
+            // base64, and orphaned transaction packets all drop silently.
+            s.next_slice(b"\x1B]5522;loc=primary\x1B\\");
+            s.next_slice(b"\x1B]5522;type=bobr\x1B\\");
+            s.next_slice(b"\x1B]5522;type=read:bare\x1B\\");
+            s.next_slice(b"\x1B]5522;type=wdata:mime=!!!;R2hvc3Q=\x1B\\");
+            s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;R2hvc3Q=\x1B\\");
+            s.next_slice(b"\x1B]5522;type=walias:mime=dGV4dC9wbGFpbg==;VEVYVA==\x1B\\");
+            assert_eq!(0, kc(|c| c.write_count));
+            assert_eq!(0, kc_responses_len());
+            assert!(!s.handler.semantic_failure);
+
+            // The terminal is still functional afterwards.
+            s.next_slice(b"ok");
+            s.deinit();
+        }
+        let str = t.plain_string(Global).unwrap();
+        assert_eq!(b"ok".as_slice(), str.as_slice());
+
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard new write replaces in-flight transaction"
+    #[test]
+    fn kitty_clipboard_new_write_replaces_in_flight_transaction() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+
+        s.next_slice(b"\x1B]5522;type=write:id=old\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;b2xk\x1B\\"); // "old"
+        s.next_slice(b"\x1B]5522;type=write:id=new\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;bmV3\x1B\\"); // "new"
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+
+        assert_eq!(1, kc(|c| c.write_count));
+        assert_eq!(1, kc(|c| c.last_contents.len()));
+        kc(|c| assert_eq!(b"new".as_slice(), c.last_contents[0].1.as_slice()));
+        assert_eq!(
+            b"\x1B]5522;type=write:status=DONE:id=new\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard invalid write packets abort with EINVAL"
+    #[test]
+    fn kitty_clipboard_invalid_write_packets_abort_with_einval() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+
+        let invalid_packets: &[&[u8]] = &[
+            // Alias payload decodes to a non-UTF-8 byte.
+            b"\x1B]5522;type=walias:mime=dGV4dC9wbGFpbg==;/w==\x1B\\",
+            // Alias has no target MIME type.
+            b"\x1B]5522;type=walias;VEVYVA==\x1B\\",
+            // Alias target MIME decodes to non-UTF-8 bytes.
+            b"\x1B]5522;type=walias:mime=//4=;VEVYVA==\x1B\\",
+            // Write data MIME decodes to non-UTF-8 bytes.
+            b"\x1B]5522;type=wdata:mime=//4=;R2hvc3Q=\x1B\\",
+        ];
+
+        for packet in invalid_packets {
+            kc_mut(|c| c.responses.clear());
+            s.next_slice(b"\x1B]5522;type=write:id=w\x1B\\");
+            s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;R2hvc3Q=\x1B\\");
+            s.next_slice(packet);
+            assert_eq!(
+                b"\x1B]5522;type=write:status=EINVAL:id=w\x1B\\".as_slice(),
+                kc_responses().as_slice(),
+            );
+            assert!(!s.handler.semantic_failure);
+
+            // The transaction is gone: a commit does nothing further.
+            s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+            assert_eq!(0, kc(|c| c.write_count));
+            assert_eq!(
+                b"\x1B]5522;type=write:status=EINVAL:id=w\x1B\\".as_slice(),
+                kc_responses().as_slice(),
+            );
+        }
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard invalid read text does not abort a write"
+    #[test]
+    fn kitty_clipboard_invalid_read_text_does_not_abort_a_write() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+        kc_mut(|c| {
+            c.read_result = Some(KcReadResult::Success {
+                contents: Vec::new(),
+                available: Vec::new(),
+                remember: false,
+            });
+        });
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_read = Some(kc_clipboard_read);
+        s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+
+        s.next_slice(b"\x1B]5522;type=write:id=w\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;R2hvc3Q=\x1B\\");
+
+        // The read payload decodes to a non-UTF-8 byte. It is dropped without
+        // invoking the clipboard effect or disturbing the write transaction.
+        s.next_slice(b"\x1B]5522;type=read;/w==\x1B\\");
+        assert_eq!(0, kc(|c| c.read_count));
+        assert_eq!(0, kc_responses_len());
+
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert_eq!(1, kc(|c| c.write_count));
+        assert_eq!(
+            b"\x1B]5522;type=write:status=DONE:id=w\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard oversized text write aborts with EFBIG"
+    #[test]
+    fn kitty_clipboard_oversized_text_write_aborts_with_efbig() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+
+        // Shrink the limit so the test doesn't have to stream the
+        // default 64MiB.
+        s.handler.kitty_clipboard_write_max_bytes = 4;
+
+        s.next_slice(b"\x1B]5522;type=write:id=w\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;SGVsbA==\x1B\\"); // "Hell"
+        assert_eq!(0, kc_responses_len());
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;bw==\x1B\\"); // "o"
+        assert_eq!(
+            b"\x1B]5522;type=write:status=EFBIG:id=w\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+        assert!(!s.handler.semantic_failure);
+
+        // The transaction is gone: later data and the commit do nothing.
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;IQ==\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert_eq!(0, kc(|c| c.write_count));
+        assert_eq!(
+            b"\x1B]5522;type=write:status=EFBIG:id=w\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard invalid wdata chunk aborts with EINVAL"
+    #[test]
+    fn kitty_clipboard_invalid_wdata_chunk_aborts_with_einval() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+
+        s.next_slice(b"\x1B]5522;type=write:id=w\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;SGVsbG8=\x1B\\"); // "Hello"
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;!!!bad!!!\x1B\\");
+        assert_eq!(
+            b"\x1B]5522;type=write:status=EINVAL:id=w\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+        assert!(!s.handler.semantic_failure);
+
+        // The transaction is gone: later data and the commit do nothing.
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;V29ybGQ=\x1B\\"); // "World"
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert_eq!(0, kc(|c| c.write_count));
+        assert_eq!(
+            b"\x1B]5522;type=write:status=EINVAL:id=w\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard wdata chunks split one base64 stream"
+    #[test]
+    fn kitty_clipboard_wdata_chunks_split_one_base64_stream() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+
+        // "some data" encoded as one stream, split at non-group
+        // boundaries across packets.
+        s.next_slice(b"\x1B]5522;type=write\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;c29\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;tZSBk\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;YXRh\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+
+        assert_eq!(1, kc(|c| c.write_count));
+        kc(|c| assert_eq!(b"some data".as_slice(), c.last_contents[0].1.as_slice()));
+        assert_eq!(
+            b"\x1B]5522;type=write:status=DONE\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard unpadded wdata stream aborts at commit"
+    #[test]
+    fn kitty_clipboard_unpadded_wdata_stream_aborts_at_commit() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+
+        // "Hello" without its final padding byte: every packet decodes,
+        // but the stream ends mid-group so the commit reports EINVAL.
+        s.next_slice(b"\x1B]5522;type=write:id=w\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;SGVsbG8\x1B\\");
+        assert_eq!(0, kc_responses_len());
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert_eq!(0, kc(|c| c.write_count));
+        assert_eq!(
+            b"\x1B]5522;type=write:status=EINVAL:id=w\x1B\\".as_slice(),
+            kc_responses().as_slice(),
+        );
+        assert!(!s.handler.semantic_failure);
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard in-flight transaction is freed on deinit"
+    #[test]
+    fn kitty_clipboard_in_flight_transaction_is_freed_on_deinit() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+
+        // Never committed: stream deinit must free the transaction (the
+        // testing allocator catches the leak otherwise; the ported Box
+        // frees on drop and `deinit` clears it explicitly).
+        s.next_slice(b"\x1B]5522;type=write\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;R2hvc3Q=\x1B\\");
+        assert_eq!(0, kc(|c| c.write_count));
+        assert!(s.handler.kitty_clipboard_write.is_some());
+        s.deinit();
+        assert!(s.handler.kitty_clipboard_write.is_none());
+
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard allocation failure is ignored"
+    //
+    // PORT NOTE: the reference swaps `t.screens.active.alloc` for
+    // `testing.failing_allocator`; rustty's allocator seam is the zero-sized
+    // Global, so the `KITTY_CLIPBOARD_TW` fail point sits exactly where the
+    // reference's `try alloc.create(WriteState)` is (see its module note).
+    #[test]
+    fn kitty_clipboard_allocation_failure_is_ignored() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(kc_write_pty);
+        s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+
+        // Only transaction state uses the terminal allocator here. Swap in
+        // an allocator that always fails, then restore it before teardown.
+        {
+            kitty_clipboard_tw_error_always(KittyClipboardFp::CreateWriteState);
+            s.next_slice(b"\x1B]5522;type=write\x1B\\");
+            kitty_clipboard_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
+        }
+
+        // Clipboard writes are external effects, best-effort like OSC 52;
+        // the failed transaction never started and is not a semantic
+        // failure.
+        assert!(!s.handler.semantic_failure);
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;R2hvc3Q=\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert_eq!(0, kc(|c| c.write_count));
+        assert_eq!(0, kc_responses_len());
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty clipboard without write_pty still commits writes"
+    #[test]
+    fn kitty_clipboard_without_write_pty_still_commits_writes() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        kc_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.clipboard_write = Some(kc_clipboard_write);
+
+        s.next_slice(b"\x1B]5522;type=write\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;R2hvc3Q=\x1B\\");
+        s.next_slice(b"\x1B]5522;type=wdata\x1B\\");
+        assert_eq!(1, kc(|c| c.write_count));
+        kc(|c| assert_eq!(b"Ghost".as_slice(), c.last_contents[0].1.as_slice()));
+
+        // Reads are dropped without a way to respond.
+        s.next_slice(b"\x1B]5522;type=read\x1B\\");
+        assert_eq!(0, kc_responses_len());
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // Capture state for the clipboard_read (OSC 52) effect test. Mirrors the
+    // reference's per-test `S` struct through the thread-local idiom.
+    thread_local! {
+        static CR_WRITTEN: core::cell::RefCell<Vec<u8>> =
+            const { core::cell::RefCell::new(Vec::new()) };
+        static CR_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+        static CR_LOCATION: core::cell::Cell<Option<clipboard::Location>> =
+            const { core::cell::Cell::new(None) };
+        static CR_MIMES: core::cell::RefCell<Vec<Vec<u8>>> =
+            const { core::cell::RefCell::new(Vec::new()) };
+        static CR_LIST: core::cell::Cell<bool> = const { core::cell::Cell::new(true) };
+        static CR_NAME: core::cell::RefCell<Vec<u8>> =
+            const { core::cell::RefCell::new(Vec::new()) };
+        static CR_GRANTED: core::cell::Cell<bool> = const { core::cell::Cell::new(true) };
+        static CR_CAN_REMEMBER: core::cell::Cell<bool> = const { core::cell::Cell::new(true) };
+        static CR_RESULT: core::cell::RefCell<Option<KcReadResult>> =
+            const { core::cell::RefCell::new(None) };
+        static CR_REPLY_TWICE: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    }
+
+    fn cr_write_pty(_: &mut Handler, data: &[u8]) {
+        CR_WRITTEN.with(|c| c.borrow_mut().extend_from_slice(data));
+    }
+
+    fn cr_clipboard_read(_: &mut Handler, read: clipboard::Read) {
+        CR_COUNT.with(|c| c.set(c.get() + 1));
+        CR_LOCATION.with(|c| c.set(Some(read.location)));
+        CR_MIMES.with(|c| *c.borrow_mut() = read.mimes.iter().map(|m| m.to_vec()).collect());
+        CR_LIST.with(|c| c.set(read.list));
+        CR_NAME.with(|c| *c.borrow_mut() = read.name.to_vec());
+        CR_GRANTED.with(|c| c.set(read.granted));
+        CR_CAN_REMEMBER.with(|c| c.set(read.can_remember));
+        let result = CR_RESULT.with(|c| c.borrow().clone());
+        if let Some(r) = &result {
+            r.reply_with(&read);
+        }
+        if CR_REPLY_TWICE.with(|c| c.get()) {
+            read.reply(clipboard::ReadResult::Success(
+                clipboard::ReadResultSuccess {
+                    contents: &[clipboard::Content {
+                        mime: b"text/plain",
+                        data: b"again",
+                    }],
+                    ..clipboard::ReadResultSuccess::default()
+                },
+            ));
+        }
+    }
+
+    fn cr_written() -> Vec<u8> {
+        CR_WRITTEN.with(|c| c.borrow().clone())
+    }
+
+    // test "clipboard_read effect callback"
+    #[test]
+    fn clipboard_read_effect_callback() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        CR_WRITTEN.with(|c| c.borrow_mut().clear());
+        CR_COUNT.with(|c| c.set(0));
+        CR_RESULT.with(|c| {
+            *c.borrow_mut() = Some(KcReadResult::Success {
+                contents: vec![(b"text/plain".to_vec(), b"hello".to_vec())],
+                available: Vec::new(),
+                remember: false,
+            })
+        });
+        CR_REPLY_TWICE.with(|c| c.set(false));
+
+        // A null callback (the default readonly effects) silently ignores reads.
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(cr_write_pty);
+            s.next_slice(b"\x1B]52;c;?\x1B\\");
+            assert_eq!(0, cr_written().len());
+            s.deinit();
+        }
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(cr_write_pty);
+        s.handler.effects.clipboard_read = Some(cr_clipboard_read);
+
+        // Success echoes the normalized selector and request terminator.
+        s.next_slice(b"\x1B]52;c;?\x1B\\");
+        assert_eq!(1, CR_COUNT.with(|c| c.get()));
+        assert_eq!(
+            Some(clipboard::Location::Standard),
+            CR_LOCATION.with(|c| c.get())
+        );
+        assert_eq!(1, CR_MIMES.with(|c| c.borrow().len()));
+        CR_MIMES.with(|c| assert_eq!(b"text/plain".as_slice(), c.borrow()[0].as_slice()));
+        assert!(!CR_LIST.with(|c| c.get()));
+        assert_eq!(0, CR_NAME.with(|c| c.borrow().len()));
+        assert!(!CR_GRANTED.with(|c| c.get()));
+        assert!(!CR_CAN_REMEMBER.with(|c| c.get()));
+        assert_eq!(b"\x1B]52;c;aGVsbG8=\x1B\\".as_slice(), cr_written().as_slice());
+
+        CR_WRITTEN.with(|c| c.borrow_mut().clear());
+        s.next_slice(b"\x1B]52;p;?\x07");
+        assert_eq!(
+            Some(clipboard::Location::Primary),
+            CR_LOCATION.with(|c| c.get())
+        );
+        assert_eq!(b"\x1B]52;p;aGVsbG8=\x07".as_slice(), cr_written().as_slice());
+
+        // Only the first text representation is used.
+        CR_WRITTEN.with(|c| c.borrow_mut().clear());
+        CR_RESULT.with(|c| {
+            *c.borrow_mut() = Some(KcReadResult::Success {
+                contents: vec![
+                    (b"image/png".to_vec(), b"\x89PNG".to_vec()),
+                    (b"UTF8_STRING".to_vec(), b"hi".to_vec()),
+                ],
+                available: Vec::new(),
+                // OSC 52 has no session passwords, so remember is ignored.
+                remember: true,
+            })
+        });
+        s.next_slice(b"\x1B]52;s;?\x1B\\");
+        assert_eq!(
+            Some(clipboard::Location::Selection),
+            CR_LOCATION.with(|c| c.get())
+        );
+        assert_eq!(b"\x1B]52;s;aGk=\x1B\\".as_slice(), cr_written().as_slice());
+
+        // Every failure, no text, and no reply all answer with an empty
+        // clipboard.
+        let failure_results: &[Option<KcReadResult>] = &[
+            Some(KcReadResult::Denied),
+            Some(KcReadResult::Unsupported),
+            Some(KcReadResult::Busy),
+            Some(KcReadResult::IoError),
+            Some(KcReadResult::Success {
+                contents: Vec::new(),
+                available: Vec::new(),
+                remember: false,
+            }),
+            None,
+        ];
+        for result in failure_results {
+            CR_WRITTEN.with(|c| c.borrow_mut().clear());
+            CR_RESULT.with(|c| *c.borrow_mut() = result.clone());
+            s.next_slice(b"\x1B]52;c;?\x1B\\");
+            assert_eq!(b"\x1B]52;c;\x1B\\".as_slice(), cr_written().as_slice());
+        }
+
+        // A second reply is ignored.
+        CR_WRITTEN.with(|c| c.borrow_mut().clear());
+        CR_RESULT.with(|c| {
+            *c.borrow_mut() = Some(KcReadResult::Success {
+                contents: vec![(b"text/plain".to_vec(), b"hello".to_vec())],
+                available: Vec::new(),
+                remember: false,
+            })
+        });
+        CR_REPLY_TWICE.with(|c| c.set(true));
+        s.next_slice(b"\x1B]52;c;?\x1B\\");
+        assert_eq!(b"\x1B]52;c;aGVsbG8=\x1B\\".as_slice(), cr_written().as_slice());
+
+        CR_REPLY_TWICE.with(|c| c.set(false));
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "mode 2048 enable reports current geometry and disable is silent"
+    #[test]
+    fn mode_2048_enable_reports_current_geometry_and_disable_is_silent() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        fn get_size(_: &mut Handler) -> Option<size_report::Size> {
+            Some(size_report::Size {
+                rows: 24,
+                columns: 80,
+                cell_width: 8,
+                cell_height: 16,
+            })
+        }
+        calls_reset();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(count_write_pty);
+        s.handler.effects.size = Some(get_size);
+
+        s.next_slice(b"\x1b[?2048h");
+        s.next_slice(b"\x1b[?2048h");
+
+        assert_eq!(2, calls_get());
+        assert_eq!(
+            b"\x1b[48;24;80;384;640t".as_slice(),
+            cap_take().unwrap().as_slice()
+        );
+
+        s.next_slice(b"\x1b[?2048l");
+        assert_eq!(2, calls_get());
+        assert!(!unsafe { &*s.handler.terminal }
+            .modes
+            .get(modespkg::Mode::InBandSizeReports));
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "mode 2048 enable tolerates missing effects"
+    #[test]
+    fn mode_2048_enable_tolerates_missing_effects() {
+        fn get_size(_: &mut Handler) -> Option<size_report::Size> {
+            Some(size_report::Size {
+                rows: 24,
+                columns: 80,
+                cell_width: 8,
+                cell_height: 16,
+            })
+        }
+        calls_reset();
+
+        let mut no_size_terminal = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut no_size_stream = no_size_terminal.vt_stream();
+            no_size_stream.handler.effects.write_pty = Some(count_write_pty);
+
+            no_size_stream.next_slice(b"\x1b[?2048h");
+            assert!(unsafe { &*no_size_stream.handler.terminal }
+                .modes
+                .get(modespkg::Mode::InBandSizeReports));
+            assert_eq!(0, calls_get());
+            no_size_stream.deinit();
+        }
+        no_size_terminal.deinit(Global);
+
+        let mut no_write_terminal = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut no_write_stream = no_write_terminal.vt_stream();
+            no_write_stream.handler.effects.size = Some(get_size);
+
+            no_write_stream.next_slice(b"\x1b[?2048h");
+            assert!(unsafe { &*no_write_stream.handler.terminal }
+                .modes
+                .get(modespkg::Mode::InBandSizeReports));
+            assert_eq!(0, calls_get());
+            no_write_stream.deinit();
+        }
+        no_write_terminal.deinit(Global);
+    }
+
+    // Capture for the kitty dnd tests: every pty write.
+    thread_local! {
+        static DND_PTY: core::cell::RefCell<Vec<u8>> =
+            const { core::cell::RefCell::new(Vec::new()) };
+        static DND_EVENTS: core::cell::RefCell<Vec<kitty::dnd::Event>> =
+            const { core::cell::RefCell::new(Vec::new()) };
+        static DND_MIMES: core::cell::RefCell<Vec<u8>> =
+            const { core::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn dnd_write_pty(_: &mut Handler, data: &[u8]) {
+        DND_PTY.with(|c| c.borrow_mut().extend_from_slice(data));
+    }
+
+    fn dnd_pty() -> Vec<u8> {
+        DND_PTY.with(|c| c.borrow().clone())
+    }
+
+    // test "kitty dnd: query response"
+    #[test]
+    fn kitty_dnd_query_response() {
+        DND_PTY.with(|c| c.borrow_mut().clear());
+
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        let mut s = t.vt_stream();
+        s.handler.effects.write_pty = Some(dnd_write_pty);
+
+        s.next_slice(b"\x1B]72;t=q:i=3\x1B\\");
+        assert_eq!(b"\x1b]72;t=q:i=3\x1b\\".as_slice(), dnd_pty().as_slice());
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty dnd: register, drop, and serve data"
+    #[test]
+    fn kitty_dnd_register_drop_and_serve_data() {
+        DND_PTY.with(|c| c.borrow_mut().clear());
+
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+
+        let mut s = Stream::init(stream::Options {
+            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
+                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
+            )),
+            handler: Handler::init(ptr),
+            continuation_max_bytes: None,
+        });
+        s.handler.effects.write_pty = Some(dnd_write_pty);
+
+        // Client registers to accept drops.
+        s.next_slice(b"\x1B]72;t=a;text/plain text/uri-list\x1B\\");
+        assert_eq!(0, dnd_pty().len());
+        assert!(unsafe { (*ptr).kitty_dnd.is_some() });
+
+        // A native drop arrives; the embedder feeds it to the terminal
+        // state and delivers the produced event bytes itself.
+        {
+            let mut aw: Vec<u8> = Vec::new();
+            unsafe { (*ptr).kitty_dnd.as_mut() }
+                .unwrap()
+                .drag_drop(
+                    &mut aw,
+                    kitty::dnd::MoveEvent {
+                        cell_x: 2,
+                        cell_y: 1,
+                        pixel_x: 20,
+                        pixel_y: 18,
+                        operations: kitty::dnd::Operations {
+                            copy: true,
+                            r#move: false,
+                        },
+                    },
+                    &[kitty::dnd::Item {
+                        mime: b"text/plain".to_vec(),
+                        data: b"hello".to_vec(),
+                    }],
+                )
+                .unwrap();
+            assert_eq!(
+                b"\x1b]72;t=M:x=2:y=1:X=20:Y=18:o=1:m=0;text/plain \x1b\\".as_slice(),
+                aw.as_slice(),
+            );
+        }
+
+        // The client requests the data and concludes.
+        s.next_slice(b"\x1B]72;t=r:x=1\x1B\\");
+        let mut expected: Vec<u8> = Vec::new();
+        expected.extend_from_slice(b"\x1b]72;t=r:x=1:m=0;aGVsbG8=\x1b\\");
+        expected.extend_from_slice(b"\x1b]72;t=r:x=1\x1b\\");
+        assert_eq!(expected, dnd_pty());
+        DND_PTY.with(|c| c.borrow_mut().clear());
+
+        s.next_slice(b"\x1B]72;t=r\x1B\\");
+        assert_eq!(0, dnd_pty().len());
+        assert!(unsafe { (*ptr).kitty_dnd.as_ref() }
+            .unwrap()
+            .drop
+            .items
+            .is_none());
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty dnd: state updates work without write_pty effect"
+    #[test]
+    fn kitty_dnd_state_updates_work_without_write_pty_effect() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+
+        let mut s = Stream::init(stream::Options {
+            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
+                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
+            )),
+            handler: Handler::init(ptr),
+            continuation_max_bytes: None,
+        });
+
+        // Queries produce no output (nowhere to write) but registration
+        // state still updates.
+        s.next_slice(b"\x1B]72;t=q\x1B\\");
+        s.next_slice(b"\x1B]72;t=a\x1B\\");
+        assert!(unsafe { (*ptr).kitty_dnd.is_some() });
+
+        // The terminal remains functional.
+        s.next_slice(b"ok");
+        let str = unsafe { (*ptr).plain_string(Global) }.unwrap();
+        assert_eq!(b"ok".as_slice(), str.as_slice());
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty dnd: registration survives terminal reset"
+    #[test]
+    fn kitty_dnd_registration_survives_terminal_reset() {
+        DND_PTY.with(|c| c.borrow_mut().clear());
+
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+
+        let mut s = Stream::init(stream::Options {
+            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
+                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
+            )),
+            handler: Handler::init(ptr),
+            continuation_max_bytes: None,
+        });
+        s.handler.effects.write_pty = Some(dnd_write_pty);
+
+        // Start a chunked command, then reset mid-chunk.
+        s.next_slice(b"\x1B]72;t=a:i=5\x1B\\");
+        s.next_slice(b"\x1B]72;t=m:o=1:m=1;text/pl\x1B\\");
+        s.next_slice(b"\x1Bc");
+
+        // Registration survives (matching kitty), chunking was interrupted
+        // so a new command is not treated as a continuation.
+        assert!(unsafe { (*ptr).kitty_dnd.is_some() });
+        assert!(!unsafe { (*ptr).kitty_dnd.as_ref() }.unwrap().chunking.active);
+        s.next_slice(b"\x1B]72;t=q\x1B\\");
+        assert_eq!(b"\x1b]72;t=q\x1b\\".as_slice(), dnd_pty().as_slice());
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "kitty dnd: effect reports registration, acceptance, and conclusion"
+    #[test]
+    fn kitty_dnd_effect_reports_registration_acceptance_and_conclusion() {
+        DND_EVENTS.with(|c| c.borrow_mut().clear());
+        DND_MIMES.with(|c| c.borrow_mut().clear());
+
+        fn drag_and_drop(handler: &mut Handler, ev: kitty::dnd::Event) {
+            DND_EVENTS.with(|c| c.borrow_mut().push(ev));
+            // Registration details are read from the terminal state.
+            if ev == kitty::dnd::Event::Registration {
+                DND_MIMES.with(|c| {
+                    let mut mimes = c.borrow_mut();
+                    mimes.clear();
+                    // const state = handler.terminal.kitty_dnd orelse return;
+                    // SAFETY: the handler aliases the terminal (see `term()`);
+                    // the shared read is short-lived inside the callback.
+                    let Some(state) = (unsafe { (*handler.terminal).kitty_dnd.as_ref() }) else {
+                        return;
+                    };
+                    let mut it = state.registered_mimes();
+                    while let Some(m) = it.next() {
+                        mimes.extend_from_slice(m);
+                        mimes.push(b',');
+                    }
+                });
+            }
+        }
+
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+
+        let mut s = Stream::init(stream::Options {
+            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
+                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
+            )),
+            handler: Handler::init(ptr),
+            continuation_max_bytes: None,
+        });
+        s.handler.effects.drag_and_drop = Some(drag_and_drop);
+
+        // Registration with a MIME list, read back from the state.
+        s.next_slice(b"\x1B]72;t=a;image/png text/plain\x1B\\");
+        assert_eq!(1, DND_EVENTS.with(|c| c.borrow().len()));
+        assert_eq!(
+            kitty::dnd::Event::Registration,
+            DND_EVENTS.with(|c| c.borrow()[0])
+        );
+        DND_MIMES.with(|c| assert_eq!(b"image/png,text/plain,".as_slice(), c.borrow().as_slice()));
+
+        // A native drag and the client's answer.
+        {
+            let mut aw: Vec<u8> = Vec::new();
+            unsafe { (*ptr).kitty_dnd.as_mut() }
+                .unwrap()
+                .drag_drop(
+                    &mut aw,
+                    kitty::dnd::MoveEvent {
+                        cell_x: 0,
+                        cell_y: 0,
+                        pixel_x: 0,
+                        pixel_y: 0,
+                        operations: kitty::dnd::Operations {
+                            copy: true,
+                            r#move: false,
+                        },
+                    },
+                    &[kitty::dnd::Item {
+                        mime: b"text/plain".to_vec(),
+                        data: b"x".to_vec(),
+                    }],
+                )
+                .unwrap();
+        }
+        s.next_slice(b"\x1B]72;t=m:o=2;text/plain\x1B\\");
+        assert_eq!(2, DND_EVENTS.with(|c| c.borrow().len()));
+        assert_eq!(
+            kitty::dnd::Event::Acceptance,
+            DND_EVENTS.with(|c| c.borrow()[1])
+        );
+
+        // Conclusion carries the performed operation.
+        s.next_slice(b"\x1B]72;t=r:o=2\x1B\\");
+        assert_eq!(3, DND_EVENTS.with(|c| c.borrow().len()));
+        assert_eq!(
+            kitty::dnd::Event::ConcludedMove,
+            DND_EVENTS.with(|c| c.borrow()[2])
+        );
+
+        // Unregistration reports with the state gone.
+        s.next_slice(b"\x1B]72;t=A\x1B\\");
+        assert_eq!(4, DND_EVENTS.with(|c| c.borrow().len()));
+        assert_eq!(
+            kitty::dnd::Event::Registration,
+            DND_EVENTS.with(|c| c.borrow()[3])
+        );
+        assert!(unsafe { (*ptr).kitty_dnd.is_none() });
+        DND_MIMES.with(|c| assert_eq!(0, c.borrow().len()));
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    /// Capture state for the Handler.paste tests below: every pty write and
+    /// the clipboard reads the program makes afterwards.
+    // const PasteCapture = struct { ... };
+    #[derive(Default)]
+    struct PasteCap {
+        written: Vec<u8>,
+        write_count: usize,
+        read_count: usize,
+        read_granted_count: usize,
+        last_read_granted: bool,
+        last_read_name: Vec<u8>,
+    }
+
+    thread_local! {
+        static PASTE_CAP: core::cell::RefCell<PasteCap> =
+            core::cell::RefCell::new(PasteCap::default());
+    }
+
+    fn pc_reset() {
+        PASTE_CAP.with(|c| *c.borrow_mut() = PasteCap::default());
+    }
+
+    fn pc<T>(f: impl FnOnce(&PasteCap) -> T) -> T {
+        PASTE_CAP.with(|c| f(&c.borrow()))
+    }
+
+    fn pc_written() -> Vec<u8> {
+        pc(|c| c.written.clone())
+    }
+
+    // fn writePty(_: *Handler, data: []const u8) void { ... }
+    fn pc_write_pty(_: &mut Handler, data: &[u8]) {
+        PASTE_CAP.with(|c| {
+            let mut cap = c.borrow_mut();
+            cap.written.extend_from_slice(data);
+            cap.write_count += 1;
+        });
+    }
+
+    // fn clipboardRead(_: *Handler, read: clipboard.Read) void { ... }
+    fn pc_clipboard_read(_: &mut Handler, read: clipboard::Read) {
+        PASTE_CAP.with(|c| {
+            let mut cap = c.borrow_mut();
+            cap.read_count += 1;
+            cap.last_read_granted = read.granted;
+            if read.granted {
+                cap.read_granted_count += 1;
+            }
+            cap.last_read_name = read.name.to_vec();
+        });
+        read.reply(clipboard::ReadResult::Success(
+            clipboard::ReadResultSuccess {
+                contents: &[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"Ghostty",
+                }],
+                ..clipboard::ReadResultSuccess::default()
+            },
+        ));
+    }
+
+    // test "paste: no write_pty effect is an error"
+    #[test]
+    fn paste_no_write_pty_effect_is_an_error() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+
+        let mut handler = Handler::init(ptr);
+        assert_eq!(
+            Err(PasteError::NoWritePty),
+            handler.paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"hello",
+                }]),
+                allow_unsafe: false,
+            })
+        );
+        use crate::stream::Handler as _;
+        handler.deinit();
+        t.deinit(Global);
+    }
+
+    // test "paste: plain text converts newlines and strips unsafe bytes"
+    #[test]
+    fn paste_plain_text_converts_newlines_and_strips_unsafe_bytes() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+        pc_reset();
+
+        let mut handler = Handler::init(ptr);
+        handler.effects.write_pty = Some(pc_write_pty);
+
+        // Newlines are unsafe unbracketed; the embedder confirmed.
+        assert!(handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"hel\x1blo\nwor\x00ld",
+                }]),
+                allow_unsafe: true,
+            })
+            .unwrap());
+        assert_eq!(b"hel lo\rwor ld".as_slice(), pc_written().as_slice());
+        assert_eq!(1, pc(|c| c.write_count));
+
+        // The first text representation is used; others are ignored.
+        pc_reset();
+        assert!(handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[
+                    clipboard::Content {
+                        mime: b"image/png",
+                        data: b"\x89PNG",
+                    },
+                    clipboard::Content {
+                        mime: b"UTF8_STRING",
+                        data: b"hi",
+                    },
+                    clipboard::Content {
+                        mime: b"text/plain",
+                        data: b"ignored",
+                    },
+                ]),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        assert_eq!(b"hi".as_slice(), pc_written().as_slice());
+        assert_eq!(1, pc(|c| c.write_count));
+
+        use crate::stream::Handler as _;
+        handler.deinit();
+        t.deinit(Global);
+    }
+
+    // test "paste: unsafe text is refused unless allowed"
+    #[test]
+    fn paste_unsafe_text_is_refused_unless_allowed() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+        pc_reset();
+
+        let mut handler = Handler::init(ptr);
+        handler.effects.write_pty = Some(pc_write_pty);
+
+        assert_eq!(
+            Err(PasteError::UnsafePaste),
+            handler.paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"rm -rf /\n",
+                }]),
+                allow_unsafe: false,
+            })
+        );
+        assert_eq!(0, pc(|c| c.write_count));
+
+        assert!(handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"rm -rf /\n",
+                }]),
+                allow_unsafe: true,
+            })
+            .unwrap());
+        assert_eq!(b"rm -rf /\r".as_slice(), pc_written().as_slice());
+
+        use crate::stream::Handler as _;
+        handler.deinit();
+        t.deinit(Global);
+    }
+
+    // test "paste: bracketed paste frames the text"
+    #[test]
+    fn paste_bracketed_paste_frames_the_text() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+        pc_reset();
+
+        let mut handler = Handler::init(ptr);
+        handler.effects.write_pty = Some(pc_write_pty);
+        unsafe { (*ptr).modes.set(modespkg::Mode::BracketedPaste, true) };
+
+        // Newlines are safe inside the frame and are preserved.
+        assert!(handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"hello\nworld",
+                }]),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        assert_eq!(
+            b"\x1b[200~hello\nworld\x1b[201~".as_slice(),
+            pc_written().as_slice()
+        );
+        assert_eq!(1, pc(|c| c.write_count));
+
+        // The frame terminator is not.
+        pc_reset();
+        assert_eq!(
+            Err(PasteError::UnsafePaste),
+            handler.paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"he\x1b[201~llo",
+                }]),
+                allow_unsafe: false,
+            })
+        );
+        assert_eq!(0, pc(|c| c.write_count));
+
+        // Allowed, the stripper still defuses it: ESC becomes a space.
+        assert!(handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"he\x1b[201~llo",
+                }]),
+                allow_unsafe: true,
+            })
+            .unwrap());
+        assert_eq!(
+            b"\x1b[200~he [201~llo\x1b[201~".as_slice(),
+            pc_written().as_slice()
+        );
+
+        use crate::stream::Handler as _;
+        handler.deinit();
+        t.deinit(Global);
+    }
+
+    // test "paste: no text representation writes nothing"
+    #[test]
+    fn paste_no_text_representation_writes_nothing() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+        pc_reset();
+
+        let mut handler = Handler::init(ptr);
+        handler.effects.write_pty = Some(pc_write_pty);
+
+        assert!(!handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"image/png",
+                    data: b"\x89PNG",
+                }]),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        assert!(!handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[]),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        assert!(!handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"",
+                }]),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        assert_eq!(0, pc(|c| c.write_count));
+
+        use crate::stream::Handler as _;
+        handler.deinit();
+        t.deinit(Global);
+    }
+
+    // test "paste: large text streams to the pty in chunks"
+    #[test]
+    fn paste_large_text_streams_to_the_pty_in_chunks() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+        pc_reset();
+
+        let mut handler = Handler::init(ptr);
+        handler.effects.write_pty = Some(pc_write_pty);
+        unsafe { (*ptr).modes.set(modespkg::Mode::BracketedPaste, true) };
+
+        // Two full chunks and a partial one with the frame, never the
+        // whole thing at once.
+        let data = vec![b'x'; 10_000];
+        assert!(handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: &data,
+                }]),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        let total = data.len() + b"\x1b[200~\x1b[201~".len();
+        assert_eq!(total.div_ceil(PASTE_CHUNK_SIZE), pc(|c| c.write_count));
+        assert_eq!(total, pc(|c| c.written.len()));
+        assert!(pc_written().starts_with(b"\x1b[200~xxx"));
+        assert!(pc_written().ends_with(b"xxx\x1b[201~"));
+
+        use crate::stream::Handler as _;
+        handler.deinit();
+        t.deinit(Global);
+    }
+
+    /// A paste contents reader for the tests: serves fixed data per MIME
+    /// type in pieces, counting the reads of each representation.
+    // const PasteReader = struct { ... };
+    struct PasteReader {
+        mimes: &'static [&'static [u8]],
+        data: &'static [&'static [u8]],
+        piece: usize,
+        reads: [usize; 4],
+        /// Fail after this many bytes of a read.
+        fail_after: Option<usize>,
+    }
+
+    impl PasteReader {
+        fn new(mimes: &'static [&'static [u8]], data: &'static [&'static [u8]]) -> PasteReader {
+            PasteReader {
+                mimes,
+                data,
+                // piece: usize = 3 (the reference field default)
+                piece: 3,
+                reads: [0; 4],
+                fail_after: None,
+            }
+        }
+
+        // fn contents(self: *PasteReader) paste_pkg.Contents { ... }
+        fn contents(&mut self) -> paste_pkg::Contents<'static> {
+            paste_pkg::Contents::Reader(paste_pkg::Reader {
+                mimes: self.mimes,
+                read: clipboard::MimeReader {
+                    ctx: self as *mut PasteReader as *mut core::ffi::c_void,
+                    read_fn: PasteReader::read,
+                },
+            })
+        }
+
+        // fn read(ctx: ?*anyopaque, mime: []const u8, sink: *std.Io.Writer)
+        //     clipboard.MimeReader.Error!void { ... }
+        fn read(
+            ctx: *mut core::ffi::c_void,
+            mime: &[u8],
+            sink: &mut dyn crate::snapshot::io::Writer,
+        ) -> Result<(), clipboard::MimeReaderError> {
+            // SAFETY: `ctx` is the `&mut PasteReader` `contents` captured; the
+            // reader is only used during the paste call and no other reference
+            // to it is live then.
+            let this = unsafe { &mut *(ctx as *mut PasteReader) };
+            let index = match this.mimes.iter().position(|m| *m == mime) {
+                Some(i) => i,
+                None => return Err(clipboard::MimeReaderError::ReadFailed),
+            };
+            this.reads[index] += 1;
+            let data = this.data[index];
+            let mut offset: usize = 0;
+            while offset < data.len() {
+                if let Some(limit) = this.fail_after {
+                    if offset >= limit {
+                        return Err(clipboard::MimeReaderError::ReadFailed);
+                    }
+                }
+                let n = this.piece.min(data.len() - offset);
+                sink.write_all(&data[offset..offset + n])
+                    .map_err(|_| clipboard::MimeReaderError::WriteFailed)?;
+                offset += n;
+            }
+            Ok(())
+        }
+    }
+
+    // test "paste: reader contents are read on demand"
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION: sys::io_native OTP entropy reaches the real \
+                  OS RNG (`arc4random_buf`), which Miri does not support; the \
+                  paste/grant aliasing is Miri-verified by the sibling 5522 \
+                  tests that use the sys override / io_failing"
+    )]
+    fn paste_reader_contents_are_read_on_demand() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+        pc_reset();
+
+        let mut handler = Handler::init(ptr);
+        handler.effects.write_pty = Some(pc_write_pty);
+        handler.effects.clipboard_read = Some(pc_clipboard_read);
+
+        // Unsafe text is refused from one read with nothing written; the
+        // image is never read.
+        let mut reader = PasteReader::new(
+            &[b"image/png", b"text/plain"],
+            &[b"\x89PNG", b"echo hi\nrm -rf /\n"],
+        );
+        assert_eq!(
+            Err(PasteError::UnsafePaste),
+            handler.paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: reader.contents(),
+                allow_unsafe: false,
+            })
+        );
+        assert_eq!(0, pc(|c| c.write_count));
+        assert_eq!(0, reader.reads[0]);
+        assert_eq!(1, reader.reads[1]);
+
+        // Allowed, the text is read once, encoded.
+        reader.reads = [0; 4];
+        assert!(handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: reader.contents(),
+                allow_unsafe: true,
+            })
+            .unwrap());
+        assert_eq!(b"echo hi\rrm -rf /\r".as_slice(), pc_written().as_slice());
+        assert_eq!(0, reader.reads[0]);
+        assert_eq!(1, reader.reads[1]);
+
+        // Safe text is read once too: buffered for the check, then written.
+        pc_reset();
+        let mut reader = PasteReader::new(&[b"text/plain"], &[b"hello world"]);
+        assert!(handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: reader.contents(),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        assert_eq!(b"hello world".as_slice(), pc_written().as_slice());
+        assert_eq!(1, reader.reads[0]);
+
+        // Empty text is nothing to paste, found on the one read.
+        pc_reset();
+        let mut reader = PasteReader::new(&[b"text/plain"], &[b""]);
+        assert!(!handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: reader.contents(),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        assert_eq!(0, pc(|c| c.write_count));
+        assert_eq!(1, reader.reads[0]);
+
+        // A paste event lists the types and reads nothing at all.
+        pc_reset();
+        unsafe { (*ptr).modes.set(modespkg::Mode::KittyPasteEvents, true) };
+        let mut reader = PasteReader::new(
+            &[b"text/plain", b"image/png"],
+            &[b"secret", b"\x89PNG"],
+        );
+        assert!(handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: reader.contents(),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        let written = pc_written();
+        assert!(written
+            .windows(b";dGV4dC9wbGFpbiBpbWFnZS9wbmcK\x1b\\".len())
+            .any(|w| w == b";dGV4dC9wbGFpbiBpbWFnZS9wbmcK\x1b\\"));
+        assert!(!written.windows(b"secret".len()).any(|w| w == b"secret"));
+        assert_eq!(0, reader.reads[0]);
+        assert_eq!(0, reader.reads[1]);
+
+        use crate::stream::Handler as _;
+        handler.deinit();
+        t.deinit(Global);
+    }
+
+    // test "paste: reader failure writes nothing"
+    #[test]
+    fn paste_reader_failure_writes_nothing() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+        pc_reset();
+
+        let mut handler = Handler::init(ptr);
+        handler.effects.write_pty = Some(pc_write_pty);
+        unsafe { (*ptr).modes.set(modespkg::Mode::BracketedPaste, true) };
+
+        // The read is buffered whole before anything is written, so a
+        // mid-read failure discards the buffer, checked or not.
+        let mut reader = PasteReader::new(&[b"text/plain"], &[b"hello world"]);
+        reader.fail_after = Some(6);
+        assert_eq!(
+            Err(PasteError::ReadFailed),
+            handler.paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: reader.contents(),
+                allow_unsafe: false,
+            })
+        );
+        assert_eq!(0, pc(|c| c.write_count));
+
+        assert_eq!(
+            Err(PasteError::ReadFailed),
+            handler.paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: reader.contents(),
+                allow_unsafe: true,
+            })
+        );
+        assert_eq!(0, pc(|c| c.write_count));
+
+        use crate::stream::Handler as _;
+        handler.deinit();
+        t.deinit(Global);
+    }
+
+    // test "paste: mode 5522 sends an event the program can read with"
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION: sys::io_native OTP entropy reaches the real \
+                  OS RNG (`arc4random_buf`), which Miri does not support; the \
+                  paste/grant aliasing is Miri-verified by the sibling 5522 \
+                  tests that use the sys override / io_failing"
+    )]
+    fn paste_mode_5522_sends_an_event_the_program_can_read_with() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+        pc_reset();
+
+        let mut handler = Handler::init(ptr);
+        handler.effects.write_pty = Some(pc_write_pty);
+        handler.effects.clipboard_read = Some(pc_clipboard_read);
+        let mut s = Stream::init(stream::Options {
+            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
+                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
+            )),
+            handler,
+            continuation_max_bytes: None,
+        });
+        unsafe { (*ptr).modes.set(modespkg::Mode::KittyPasteEvents, true) };
+        unsafe { (*ptr).modes.set(modespkg::Mode::BracketedPaste, true) };
+
+        // Every representation is listed, the data is never written, and
+        // the one-time password rides on every packet.
+        assert!(s
+            .handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[
+                    clipboard::Content {
+                        mime: b"text/plain",
+                        data: b"secret",
+                    },
+                    clipboard::Content {
+                        mime: b"image/png",
+                        data: b"",
+                    },
+                ]),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        assert_eq!(1, pc(|c| c.write_count));
+        let written = pc_written();
+        assert_eq!(
+            3,
+            written
+                .windows(b"\x1b]5522;".len())
+                .filter(|w| *w == b"\x1b]5522;")
+                .count()
+        );
+        assert!(!written.windows(b"secret".len()).any(|w| w == b"secret"));
+        assert!(!written
+            .windows(b"\x1b[200~".len())
+            .any(|w| w == b"\x1b[200~"));
+
+        // OK packet: parse the (base64) password out.
+        let ok_prefix = b"\x1b]5522;type=read:status=OK:pw=";
+        assert!(written.starts_with(ok_prefix));
+        let pw_end = ok_prefix.len()
+            + written[ok_prefix.len()..]
+                .windows(2)
+                .position(|w| w == b"\x1b\\")
+                .unwrap();
+        // Copied out since the capture buffer is reused below.
+        let pw_b64: Vec<u8> = written[ok_prefix.len()..pw_end].to_vec();
+        // std.base64.standard.Encoder.calcSize(kitty_clipboard.otp_len)
+        assert_eq!(kitty::clipboard::otp_len.div_ceil(3) * 4, pw_b64.len());
+
+        // Listing packet: base64 of "text/plain image/png\n".
+        let mut expected: Vec<u8> = Vec::new();
+        expected.extend_from_slice(b"\x1b]5522;type=read:status=OK:pw=");
+        expected.extend_from_slice(&pw_b64);
+        expected.extend_from_slice(b"\x1b\\");
+        expected.extend_from_slice(b"\x1b]5522;type=read:status=DATA:mime=Lg==:pw=");
+        expected.extend_from_slice(&pw_b64);
+        expected.extend_from_slice(b";dGV4dC9wbGFpbiBpbWFnZS9wbmcK\x1b\\");
+        expected.extend_from_slice(b"\x1b]5522;type=read:status=DONE:pw=");
+        expected.extend_from_slice(&pw_b64);
+        expected.extend_from_slice(b"\x1b\\");
+        assert_eq!(expected, written);
+
+        // The program reads with the password and the name "Paste event":
+        // the read arrives granted, exactly once.
+        let mut read: Vec<u8> = Vec::new();
+        read.extend_from_slice(b"\x1b]5522;type=read:pw=");
+        read.extend_from_slice(&pw_b64);
+        read.extend_from_slice(b":name=UGFzdGUgZXZlbnQ=;dGV4dC9wbGFpbg==\x1b\\");
+        pc_reset();
+        s.next_slice(&read);
+        assert_eq!(1, pc(|c| c.read_count));
+        assert!(pc(|c| c.last_read_granted));
+        pc(|c| assert_eq!(b"Paste event".as_slice(), c.last_read_name.as_slice()));
+        let mut expected: Vec<u8> = Vec::new();
+        expected.extend_from_slice(b"\x1b]5522;type=read:status=OK\x1b\\");
+        expected.extend_from_slice(
+            b"\x1b]5522;type=read:status=DATA:mime=dGV4dC9wbGFpbg==;R2hvc3R0eQ==\x1b\\",
+        );
+        expected.extend_from_slice(b"\x1b]5522;type=read:status=DONE\x1b\\");
+        assert_eq!(expected, pc_written());
+
+        // The password was one-time: a second read is not granted.
+        pc_reset();
+        s.next_slice(&read);
+        assert_eq!(1, pc(|c| c.read_count));
+        assert!(!pc(|c| c.last_read_granted));
+        assert_eq!(0, pc(|c| c.read_granted_count));
+
+        // Every event mints a fresh password.
+        pc_reset();
+        assert!(s
+            .handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"secret",
+                }]),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        let written = pc_written();
+        assert!(!written.windows(pw_b64.len()).any(|w| w == pw_b64.as_slice()));
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "paste: mode 5522 reports the selection as primary"
+    #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION: sys::io_native OTP entropy reaches the real \
+                  OS RNG (`arc4random_buf`), which Miri does not support; the \
+                  paste/grant aliasing is Miri-verified by the sibling 5522 \
+                  tests that use the sys override / io_failing"
+    )]
+    fn paste_mode_5522_reports_the_selection_as_primary() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+        pc_reset();
+
+        let mut handler = Handler::init(ptr);
+        handler.effects.write_pty = Some(pc_write_pty);
+        handler.effects.clipboard_read = Some(pc_clipboard_read);
+        unsafe { (*ptr).modes.set(modespkg::Mode::KittyPasteEvents, true) };
+
+        for location in [clipboard::Location::Primary, clipboard::Location::Selection] {
+            pc_reset();
+            assert!(handler
+                .paste(Paste {
+                    source: paste_pkg::Source::Clipboard(location),
+                    contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                        mime: b"text/plain",
+                        data: b"x",
+                    }]),
+                    allow_unsafe: false,
+                })
+                .unwrap());
+            let written = pc_written();
+            assert!(written.starts_with(b"\x1b]5522;type=read:status=OK:loc=primary:pw="));
+            // Only on the OK packet.
+            assert_eq!(
+                1,
+                written
+                    .windows(b"loc=primary".len())
+                    .filter(|w| *w == b"loc=primary")
+                    .count()
+            );
+        }
+
+        pc_reset();
+        assert!(handler
+            .paste(Paste {
+                source: paste_pkg::Source::Clipboard(clipboard::Location::Standard),
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"x",
+                }]),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        let written = pc_written();
+        assert!(!written.windows(b"loc=".len()).any(|w| w == b"loc="));
+
+        use crate::stream::Handler as _;
+        handler.deinit();
+        t.deinit(Global);
+    }
+
+    // test "paste: mode 5522 without clipboard_read pastes text"
+    #[test]
+    fn paste_mode_5522_without_clipboard_read_pastes_text() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+        pc_reset();
+
+        let mut handler = Handler::init(ptr);
+        handler.effects.write_pty = Some(pc_write_pty);
+        unsafe { (*ptr).modes.set(modespkg::Mode::KittyPasteEvents, true) };
+
+        assert!(handler
+            .paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"hello",
+                }]),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        assert_eq!(b"hello".as_slice(), pc_written().as_slice());
+        assert_eq!(0, handler.kitty_clipboard_grants.len());
+
+        use crate::stream::Handler as _;
+        handler.deinit();
+        t.deinit(Global);
+    }
+
+    // test "paste: text source never becomes an event"
+    #[test]
+    fn paste_text_source_never_becomes_an_event() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+        pc_reset();
+
+        let mut handler = Handler::init(ptr);
+        handler.effects.write_pty = Some(pc_write_pty);
+        handler.effects.clipboard_read = Some(pc_clipboard_read);
+        unsafe { (*ptr).modes.set(modespkg::Mode::KittyPasteEvents, true) };
+
+        assert!(handler
+            .paste(Paste {
+                source: paste_pkg::Source::Text,
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"committed",
+                }]),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        assert_eq!(b"committed".as_slice(), pc_written().as_slice());
+        assert_eq!(0, handler.kitty_clipboard_grants.len());
+
+        use crate::stream::Handler as _;
+        handler.deinit();
+        t.deinit(Global);
+    }
+
+    // test "paste: mode 5522 without entropy fails and records no grant"
+    #[test]
+    fn paste_mode_5522_without_entropy_fails_and_records_no_grant() {
+        // var t: Terminal = try .init(std.Io.failing, testing.allocator, ...);
+        // PORT NOTE: rustty's Terminal stores its Io stand-in as a field (see
+        // `Terminal.io`); `std.Io.failing` maps to `sys::io_failing`. The
+        // `random_secure` override slot is shared process state, so hold the
+        // sys test lock like every entropy-dependent test.
+        let _lock = crate::sys::random_secure_test_lock.lock().unwrap();
+
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        t.io = crate::sys::io_failing;
+        let ptr: *mut Terminal = &mut t;
+        pc_reset();
+
+        let mut handler = Handler::init(ptr);
+        handler.effects.write_pty = Some(pc_write_pty);
+        handler.effects.clipboard_read = Some(pc_clipboard_read);
+        unsafe { (*ptr).modes.set(modespkg::Mode::KittyPasteEvents, true) };
+
+        assert_eq!(
+            Err(PasteError::EntropyUnavailable),
+            handler.paste(Paste {
+                source: paste_pkg::Source::default(),
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"secret",
+                }]),
+                allow_unsafe: false,
+            })
+        );
+        assert_eq!(0, pc(|c| c.write_count));
+        assert_eq!(0, handler.kitty_clipboard_grants.len());
+
+        // Text pastes need no entropy and still work.
+        assert!(handler
+            .paste(Paste {
+                source: paste_pkg::Source::Text,
+                contents: paste_pkg::Contents::Memory(&[clipboard::Content {
+                    mime: b"text/plain",
+                    data: b"hello",
+                }]),
+                allow_unsafe: false,
+            })
+            .unwrap());
+        assert_eq!(b"hello".as_slice(), pc_written().as_slice());
+
+        use crate::stream::Handler as _;
+        handler.deinit();
+        t.deinit(Global);
+    }
+
+    // test "paste: mode 5522 DECRQM requires clipboard read effect"
+    #[test]
+    fn paste_mode_5522_decrqm_requires_clipboard_read_effect() {
+        // if (comptime build_options.artifact != .lib) return error.SkipZigTest;
+        // PORT NOTE (R8): the reference runs this only in the lib artifact
+        // (where the kitty_paste_events mode entry is unconditionally
+        // enabled); the same comptime gate is carried here.
+        if !matches!(
+            crate::options::ARTIFACT,
+            crate::build_options::Artifact::Lib
+        ) {
+            // On non-lib artifacts the mode entry's enablement is
+            // platform-dependent; the reference skips.
+            return;
+        }
+
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+        pc_reset();
+
+        let mut handler = Handler::init(ptr);
+        handler.effects.write_pty = Some(pc_write_pty);
+        let mut s = Stream::init(stream::Options {
+            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
+                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
+            )),
+            handler,
+            continuation_max_bytes: None,
+        });
+
+        // A paste event is unusable if its follow-up read can't be served, so
+        // the mode isn't advertised without a clipboard read effect.
+        s.next_slice(b"\x1B[?5522$p");
+        assert_eq!(b"\x1B[?5522;0$y".as_slice(), pc_written().as_slice());
+
+        pc_reset();
+        s.next_slice(b"\x1B[?5522h");
+        assert!(unsafe { (*ptr).modes.get(modespkg::Mode::KittyPasteEvents) });
+        s.next_slice(b"\x1B[?5522$p");
+        assert_eq!(b"\x1B[?5522;0$y".as_slice(), pc_written().as_slice());
+
+        // Installing the effect makes the current mode state reportable.
+        pc_reset();
+        s.handler.effects.clipboard_read = Some(pc_clipboard_read);
+        s.next_slice(b"\x1B[?5522$p");
+        assert_eq!(b"\x1B[?5522;1$y".as_slice(), pc_written().as_slice());
+
+        pc_reset();
+        s.next_slice(b"\x1B[?5522l");
+        assert!(!unsafe { (*ptr).modes.get(modespkg::Mode::KittyPasteEvents) });
+        s.next_slice(b"\x1B[?5522$p");
+        assert_eq!(b"\x1B[?5522;2$y".as_slice(), pc_written().as_slice());
+
+        // Removing the effect stops advertising the capability again.
+        pc_reset();
+        s.handler.effects.clipboard_read = None;
+        s.next_slice(b"\x1B[?5522$p");
+        assert_eq!(b"\x1B[?5522;0$y".as_slice(), pc_written().as_slice());
+
+        s.deinit();
+        t.deinit(Global);
+    }
+
+    // test "full reset drops kitty clipboard grants"
+    #[test]
+    fn full_reset_drops_kitty_clipboard_grants() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        let ptr: *mut Terminal = &mut t;
+        pc_reset();
+
+        let mut handler = Handler::init(ptr);
+        handler.effects.write_pty = Some(pc_write_pty);
+        handler.effects.clipboard_read = Some(pc_clipboard_read);
+        let mut s = Stream::init(stream::Options {
+            allocator: Some(rustty_lib::allocator::ZigAllocatorRef::new(
+                &crate::terminal::GLOBAL_ZIG_ALLOCATOR,
+            )),
+            handler,
+            continuation_max_bytes: None,
+        });
+
+        s.handler
+            .kitty_clipboard_grants
+            .grant(b"pw", kitty::clipboard::Direction::Read, false);
+        assert_eq!(1, s.handler.kitty_clipboard_grants.len());
+
+        s.next_slice(b"\x1Bc");
+        assert_eq!(0, s.handler.kitty_clipboard_grants.len());
+
+        // A read with the old password is no longer granted, and the
+        // handler keeps working (grants can be recorded again).
+        pc_reset();
+        s.next_slice(b"\x1b]5522;type=read:pw=cHc=:name=YXBw;dGV4dC9wbGFpbg==\x1b\\");
+        assert_eq!(1, pc(|c| c.read_count));
+        assert!(!pc(|c| c.last_read_granted));
+        s.handler
+            .kitty_clipboard_grants
+            .grant(b"pw", kitty::clipboard::Direction::Read, false);
+        assert_eq!(1, s.handler.kitty_clipboard_grants.len());
+
+        s.deinit();
+        t.deinit(Global);
     }
 }

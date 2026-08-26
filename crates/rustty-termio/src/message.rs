@@ -117,6 +117,14 @@ pub enum Message<'a> {
     /// The surface gained or lost focus.
     Focused(bool),
 
+    /// Record a Kitty clipboard protocol session grant for a password
+    /// so future requests carrying it skip the permission prompt, for
+    /// reads and writes respectively.
+    // kitty_clipboard_grant_read: KittyClipboardGrant,
+    // kitty_clipboard_grant_write: KittyClipboardGrant,
+    KittyClipboardGrantRead(KittyClipboardGrant),
+    KittyClipboardGrantWrite(KittyClipboardGrant),
+
     /// Write where the data fits in the union.
     //
     // PORT NOTE: reference `write_small: WriteReq.Small`.
@@ -162,6 +170,15 @@ impl Message<'_> {
     // owned values (`ChangeConfig`'s `Box<DerivedConfig>`; `Alloc<u8>`'s
     // `Box<[u8]>`), so dropping the `Message` performs exactly these frees —
     // no explicit method is needed.
+}
+
+/// The payload of the KittyClipboardGrant* messages.
+// pub const KittyClipboardGrant = struct { alloc: Allocator, pw: []const u8 };
+// PORT NOTE: the reference's `alloc` + manually-freed `pw` collapse to an
+// owned `Vec` (freed on drop, including through `Message`'s drop-deinit).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KittyClipboardGrant {
+    pub pw: Vec<u8>,
 }
 
 /// The types of size reports that we support.

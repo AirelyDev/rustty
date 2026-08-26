@@ -371,9 +371,7 @@ fn golden_kitty_graphics_response() {
             image_number: 2,
             placement_id: 7,
             message: b"OK".to_vec(),
-            // PORT NOTE: tier-2b (d2ffeba end state) added `frame` to Response;
-            // default 0 = not an animation-frame response, leaving the golden
-            // bytes unchanged.
+            // (tier-2b `4b915e3bc`: the animation-frame echo, absent here.)
             ..KittyResponse::default()
         }),
         b"\x1b_Gi=31,I=2,p=7;OK\x1b\\",

@@ -310,6 +310,8 @@ pub struct DerivedConfig {
     pub background: Color,
     pub osc_color_report_format: OSCColorReportFormat,
     pub clipboard_write: ClipboardAccess,
+    // clipboard_write_limit: usize,
+    pub clipboard_write_limit: usize,
     // PORT NOTE: `enquiry_response: []const u8` -> owned `Vec<u8>` (R1 raw
     // bytes; arena-`dupe`d in the reference).
     pub enquiry_response: Vec<u8>,
@@ -361,6 +363,8 @@ impl DerivedConfig {
             background: config.background,
             osc_color_report_format: config.osc_color_report_format,
             clipboard_write: config.clipboard_write,
+            // .clipboard_write_limit = config.@"clipboard-write-limit-bytes".value,
+            clipboard_write_limit: config.clipboard_write_limit_bytes.value,
             enquiry_response: config.enquiry_response.clone(),
             conditional_state: config._conditional_state,
             // This has to be last so that we copy AFTER the arena allocations
@@ -644,6 +648,8 @@ impl<M: AppMailbox> Termio<M> {
         // StreamHandler field PORT NOTE.)
         let handler_osc = opts.config.osc_color_report_format;
         let handler_clipboard_write = opts.config.clipboard_write;
+        // .clipboard_write_limit = opts.config.clipboard_write_limit,
+        let handler_clipboard_write_limit = opts.config.clipboard_write_limit;
         let handler_enquiry_response = opts.config.enquiry_response.clone();
 
         // (PORT NOTE: `opts.surface_mailbox`/`opts.renderer_wakeup`/`opts.renderer_state`
@@ -713,6 +719,12 @@ impl<M: AppMailbox> Termio<M> {
             osc_color_report_format: handler_osc,
             // .clipboard_write = opts.config.clipboard_write,
             clipboard_write: handler_clipboard_write,
+            // .clipboard_write_limit = opts.config.clipboard_write_limit,
+            clipboard_write_limit: handler_clipboard_write_limit,
+            // (reference field defaults: `kitty_clipboard_grants = .{}`,
+            // `kitty_clipboard_write = null`.)
+            kitty_clipboard_grants: rustty_vt::kitty::clipboard::Grants::default(),
+            kitty_clipboard_write: None,
             // .enquiry_response = opts.config.enquiry_response,
             enquiry_response: handler_enquiry_response,
             // (reference field defaults for the handler fields not in the literal:
@@ -1715,6 +1727,32 @@ impl<M: AppMailbox> Termio<M> {
             // self.mailbox.notify();
             unsafe { (*io).mailbox.notify() };
         }
+    }
+
+    /// Record a Kitty clipboard protocol session grant so future requests
+    /// carrying the password skip the permission prompt.
+    // pub fn kittyClipboardGrant(
+    //     self: *Termio,
+    //     pw: []const u8,
+    //     dir: terminalpkg.kitty.clipboard.Grants.Direction,
+    // ) error{OutOfMemory}!void {
+    //     self.renderer_state.mutex.lockUncancelable(global.io());
+    //     defer self.renderer_state.mutex.unlock(global.io());
+    //     try self.terminal_stream.handler.kittyClipboardGrant(pw, dir);
+    // }
+    //
+    // PORT NOTE: same raw shared-state seam as `colorSchemeReport` (guard-less
+    // renderer lock; the `error{OutOfMemory}` collapses — `grant` is
+    // infallible under the global allocator).
+    pub fn kittyClipboardGrant(
+        &mut self,
+        pw: &[u8],
+        dir: rustty_vt::kitty::clipboard::Direction,
+    ) {
+        // SAFETY: guard-less shared renderer-state lock (see `changeConfig`).
+        unsafe { (*(*self.renderer_state).mutex).lock() };
+        self.terminal_stream.handler.kittyClipboardGrant(pw, dir);
+        unsafe { (*(*self.renderer_state).mutex).unlock() };
     }
 
     /// Sends a DSR response for the current color scheme to the pty.

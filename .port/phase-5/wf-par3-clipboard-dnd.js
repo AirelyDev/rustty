@@ -10,7 +10,7 @@ const PATCHDIR = '/Users/gael/.claude/jobs/b740b914/tmp'
 
 const COMMON = `
 Phase-5 porter for the rustty port. ISOLATED worktree of ${REPO}; FIRST: git log --oneline -1
-— if not 4e7dce65 or newer, git reset --hard main. Oracle AT pin 683d8db64: ${REF}; range
+— if not cafab6f1 or newer, git reset --hard main. Oracle AT pin 683d8db64: ${REF}; range
 12967b68f..683d8db64.
 
 READ FIRST: assessments A (clusters B5/B6/B7) + B (cluster B-1) + E (bundle KC) in
@@ -72,10 +72,9 @@ leave handler/effect types pub + PORT-NOTE seams) and DO NOT touch clipboard* fi
 phase('Dispatch')
 const dispatch = (clip && dnd) ? await agent(COMMON + `
 YOUR TASK (PATCHNAME p5-dispatch): the unified dispatch stage — you are the SINGLE OWNER of
-stream_terminal.rs/Surface/termio for this tier. FIRST apply both sibling patches:
-git apply --3way ${clip.patch_path} && git apply --3way ${dnd.patch_path}
-(same base; resolve trivial overlaps — they own disjoint files).
-Then port the END STATE of: (1) stream_terminal.rs clipboard + DnD dispatch (the G1b
+stream_terminal.rs/Surface/termio for this tier. Both sibling bundles (clipboard VT side +
+DnD VT side) are ALREADY LANDED on main (cafab6f1) — your worktree has them; do NOT apply
+any patches. Port the END STATE of: (1) stream_terminal.rs clipboard + DnD dispatch (the G1b
 stream_terminal drop=38 — the assessment attributes the bulk to 4f49dc2b8/af8d28a94/
 bc2f7d7d2/e8d8945b5/928c7f0e7/5350d4a5f-survivors/70f006575 — and parser drop=1), incl.
 the e03475c0c osc terminator capture the osc99 wave PORT-NOTE'd ('W3 seam' in stream.rs

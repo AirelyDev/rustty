@@ -405,6 +405,13 @@ const fn gen_table() -> Table {
         single(&mut result, 0x19, source, source, Action::Ignore);
         range(&mut result, 0, 0x17, source, source, Action::Ignore);
         range(&mut result, 0x1C, 0x1F, source, source, Action::Ignore);
+
+        // High bytes are ignored payload data, overriding the
+        // "anywhere" C1 transitions. See dcs_passthrough below for more.
+        // In dcs_ignore the additional concern is that a UTF-8 payload in
+        // an ignored DCS could otherwise begin a live sequence mid-string
+        // (e.g. 0x9B => csi_entry).
+        range(&mut result, 0x80, 0xFF, source, source, Action::Ignore);
     }
 
     // dcs_param
@@ -461,6 +468,21 @@ const fn gen_table() -> Table {
         range(&mut result, 0x1C, 0x1F, source, source, Action::Put);
         range(&mut result, 0x20, 0x7E, source, source, Action::Put);
         single(&mut result, 0x7F, source, source, Action::Ignore);
+
+        // High bytes are payload data, overriding the "anywhere" C1
+        // transitions, matching how osc_string handles them below.
+        // Ghostty is UTF-8 only, and DCS payloads carry UTF-8 text
+        // (e.g. tmux control mode pane content): without this, a
+        // UTF-8 continuation byte in the C1 range terminates or
+        // corrupts the string and 0xA0-0xFF are silently dropped.
+        //
+        // This includes 0x9C (8-bit ST) on purpose: a raw 0x9C is
+        // indistinguishable from a UTF-8 continuation byte ("Ü" is
+        // 0xC3 0x9C), and Ghostty doesn't honor 8-bit C1 controls in
+        // the ground state either (they go through UTF-8 decoding).
+        // DCS strings terminate via 7-bit ST (ESC \) and abort via
+        // CAN/SUB, which are unaffected here.
+        range(&mut result, 0x80, 0xFF, source, source, Action::Put);
     }
 
     // csi_param
@@ -703,5 +725,49 @@ mod tests {
         let _ = &TABLE;
         assert_eq!(TABLE.len(), MAX_U8 + 1);
         assert_eq!(TABLE[0].len(), MAX_STATE);
+    }
+
+    // test "dcs_passthrough: high bytes are payload data"
+    #[test]
+    fn dcs_passthrough_high_bytes_are_payload_data() {
+        // Bytes 0x80-0xFF within a DCS string are payload data, not C1
+        // controls. This includes 0x9C (8-bit ST): a raw 0x9C is
+        // indistinguishable from a UTF-8 continuation byte (e.g. "Ü" is
+        // 0xC3 0x9C) and Ghostty doesn't support 8-bit C1 controls
+        // anywhere else.
+        for c in 0x80..0x100usize {
+            let entry = TABLE[c][State::DcsPassthrough as usize];
+            assert_eq!(State::DcsPassthrough, entry.state);
+            assert_eq!(Action::Put, entry.action);
+        }
+    }
+
+    // test "dcs_ignore: high bytes are ignored payload data"
+    #[test]
+    fn dcs_ignore_high_bytes_are_ignored_payload_data() {
+        // Same as dcs_passthrough: a UTF-8 payload inside an ignored DCS
+        // must not trigger "anywhere" C1 transitions (e.g. 0x9B beginning
+        // a CSI mid-string).
+        for c in 0x80..0x100usize {
+            let entry = TABLE[c][State::DcsIgnore as usize];
+            assert_eq!(State::DcsIgnore, entry.state);
+            assert_eq!(Action::Ignore, entry.action);
+        }
+    }
+
+    // test "dcs_passthrough: ESC, CAN, and SUB still exit"
+    #[test]
+    fn dcs_passthrough_esc_can_and_sub_still_exit() {
+        // 7-bit ST (ESC \) is the DCS terminator and CAN/SUB abort, so
+        // these must continue to leave dcs_passthrough. dcs_unhook is
+        // emitted by the parser on any transition out of dcs_passthrough.
+        let esc = TABLE[0x1B][State::DcsPassthrough as usize];
+        assert_eq!(State::Escape, esc.state);
+
+        let can = TABLE[0x18][State::DcsPassthrough as usize];
+        assert_eq!(State::Ground, can.state);
+
+        let sub = TABLE[0x1A][State::DcsPassthrough as usize];
+        assert_eq!(State::Ground, sub.state);
     }
 }

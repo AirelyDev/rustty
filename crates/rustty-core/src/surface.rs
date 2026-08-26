@@ -3296,6 +3296,23 @@ where
                 )?;
             }
 
+            // .kitty_clipboard_read => |req| try self.kittyClipboardRead(req),
+            // .kitty_clipboard_write => |req| try self.kittyClipboardWrite(req),
+            //
+            // PORT NOTE (W7 seam, 0ce9054bf/25c61e852/8c7a34d4c/af9470b19/
+            // c2c0db68a): the surface-side Kitty clipboard handlers
+            // (`kittyClipboardRead/Write/Status`, `completeKittyClipboardRead`,
+            // the pasteboard serve/permission flow) are the apprt/macOS half —
+            // W7. Until they land the request is DROPPED here (the Box frees
+            // its owned state), which fails closed: the client receives no
+            // reply, exactly the pre-port parse-and-discard posture.
+            Message::KittyClipboardRead(req) => {
+                drop(req);
+            }
+            Message::KittyClipboardWrite(req) => {
+                drop(req);
+            }
+
             // .clipboard_read => |clipboard| {
             Message::ClipboardRead(clipboard) => {
                 // if (self.config.clipboard_read == .deny) {
@@ -5394,58 +5411,36 @@ where
             return Ok(());
         }
 
-        // const dec = std.base64.standard.Decoder;
-        //
-        // PORT NOTE: `zig_base64` (file scope below) is the minimal faithful
-        // port of the Zig std.base64 standard codec's Decoder surface (the
-        // rustty-os file.rs `b64_encoder` precedent).
-
-        // Build buffer
-        // const size = dec.calcSizeForSlice(data) catch |err| switch (err) {
-        let size = match zig_base64::calc_size_for_slice(data) {
-            Ok(v) => v,
-            Err(err) => match err {
-                // error.InvalidPadding => {
-                zig_base64::Error::InvalidPadding => {
-                    // log.info("application sent invalid base64 data for OSC 52", .{});
-                    return Ok(());
-                }
-
-                // Should not be reachable but don't want to risk it.
-                // else => return,
-                _ => return Ok(()),
-            },
-        };
-        // var buf = try self.alloc.allocSentinel(u8, size, 0);
-        //
-        // (`allocSentinel` — `size` bytes plus the NUL sentinel slot; the
-        // OOM-only `try` collapses.)
-        let mut buf: Vec<u8> = vec![0u8; size + 1];
+        // Decode with the SIMD decoder, strict per the Kitty clipboard
+        // spec that also governs OSC 52 base64 handling: a request with
+        // characters outside the base64 alphabet is discarded entirely
+        // (never partially decoded), while a missing-padding tail is
+        // tolerated since OSC 52 has no way to report errors.
+        // var buf = try self.alloc.allocSentinel(u8, simd.base64.maxLen(data), 0);
         // defer self.alloc.free(buf);
-        // (the owned `buf` drops on every exit below.)
-        // buf[buf.len] = 0;
         //
-        // (`buf.len` is `size` — the sentinel-slot write.)
-        buf[size] = 0;
-
-        // Decode
-        // dec.decode(buf, data) catch |err| switch (err) {
-        match zig_base64::decode(&mut buf[0..size], data) {
-            Ok(()) => {}
-
-            // Ignore this. It is possible to actually have valid data and
-            // get this error, so we allow it.
-            // error.InvalidPadding => {},
-            Err(zig_base64::Error::InvalidPadding) => {}
-
-            // else => {
+        // (bc2f7d7d2: the std.base64 Decoder + `zig_base64` calc/decode pair is
+        // replaced by the strict SIMD decode; `allocSentinel` — the max_len
+        // bytes plus the NUL sentinel slot, and the OOM-only `try` collapses.)
+        let max_len = rustty_simd::base64::max_len(data);
+        let mut buf: Vec<u8> = vec![0u8; max_len + 1];
+        // const decoded = simd.base64.decodeStrict(data, buf, .optional) catch {
+        //     log.info("application sent invalid base64 data for OSC 52", .{});
+        //     return;
+        // };
+        let decoded_len = match rustty_simd::base64::decode_strict(
+            data,
+            &mut buf[0..max_len],
+            rustty_simd::base64::Padding::Optional,
+        ) {
+            Ok(decoded) => decoded.len(),
             Err(_) => {
                 // log.info("application sent invalid base64 data for OSC 52", .{});
                 return Ok(());
             }
-        }
-        // assert(buf[buf.len] == 0);
-        debug_assert!(buf[size] == 0);
+        };
+        // buf[decoded.len] = 0;
+        buf[decoded_len] = 0;
 
         // When clipboard-write is "ask" a prompt is displayed to the user asking
         // them to confirm the clipboard access. Each app runtime handles this
@@ -5454,7 +5449,7 @@ where
         let confirm = self.config.clipboard_write == configpkg::value_types::ClipboardAccess::Ask;
         // self.rt_surface.setClipboard(loc, &.{.{
         //     .mime = "text/plain",
-        //     .data = buf,
+        //     .data = buf[0..decoded.len :0],
         // }}, confirm) catch |err| {
         //     log.err("error setting clipboard string err={}", .{err});
         //     return;
@@ -5463,7 +5458,7 @@ where
             loc,
             &[apprt::ClipboardContent {
                 mime: b"text/plain".as_slice(),
-                data: &buf[0..size],
+                data: &buf[0..decoded_len],
             }],
             confirm,
         ) {
@@ -12828,6 +12823,13 @@ where
     // ) !void {
     //
     // (`data: [:0]const u8` -> raw bytes `&[u8]`, never a lossy String — R3.)
+    // PORT NOTE (W7 seam, 928c7f0e7/0ce9054bf): the head grows `.kitty` read/
+    // write arms here (apprt.ClipboardRequest.KittyRead/KittyWrite), whose
+    // `ask`-policy check is `... and !kitty.granted and
+    // !terminal.kitty.clipboard.readPromptExempt(kitty.mimes.len)` — the
+    // listing-read prompt exemption. Those arms land with the W7 apprt/macOS
+    // half; the vt-side `read_prompt_exempt` they call is already ported
+    // (`rustty_vt::kitty::clipboard::read_prompt_exempt`).
     pub fn completeClipboardRequest(
         &mut self,
         req: apprt::ClipboardRequest,
@@ -13802,194 +13804,22 @@ fn copy_options(opts: &terminal::formatter::Options) -> terminal::formatter::Opt
     }
 }
 
-/// PORTS: the Zig `std.base64` STANDARD codec's `Decoder` surface used by
-/// `clipboardWrite` (`calcSizeForSlice` + `decode`) AND its `Encoder` surface
+/// PORTS: the Zig `std.base64` STANDARD codec's `Encoder` surface
 /// (`calcSize` + `encode`) used by `completeClipboardReadOSC52` (the OSC 52
 /// reply) — semantics reproduced bit-for-bit from lib/std/base64.zig
-/// (Zig 0.15.2), including the error split the reference branches on
-/// (`InvalidPadding` vs `InvalidCharacter`). The Zig decoder's 16-/4-char and
-/// the encoder's 128-/32-bit `readInt` SIMD-ish fast loops are accelerative
-/// only (they read a lookahead byte / the final 4-char group always falls
-/// through to the scalar tail); the scalar tails below ARE the semantic core,
-/// ported verbatim (the rustty-os file.rs `b64_encoder` precedent).
+/// (Zig 0.15.2). The encoder's 128-/32-bit `readInt` SIMD-ish fast loops are
+/// accelerative only; the scalar tails below ARE the semantic core, ported
+/// verbatim (the rustty-os file.rs `b64_encoder` precedent).
+///
+/// PORT NOTE (bc2f7d7d2): the `Decoder` surface (`calcSizeForSlice` +
+/// `decode`) that `clipboardWrite` consumed is GONE with the oracle — the
+/// OSC 52 write path now decodes through `simd.base64.decodeStrict`.
 mod zig_base64 {
-    // pub const Error = error{ InvalidCharacter, InvalidPadding, NoSpaceLeft };
-    //
-    // (`NoSpaceLeft` is encoder-only — unused by the decoder surface here.)
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum Error {
-        InvalidCharacter,
-        InvalidPadding,
-    }
-
     // pub const standard_alphabet_chars = "ABC...xyz0123456789+/".*;
     const ALPHABET_CHARS: &[u8; 64] =
         b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     // .pad_char = '=',
     const PAD_CHAR: u8 = b'=';
-    // const invalid_char: u8 = 0xff;
-    const INVALID_CHAR: u8 = 0xff;
-
-    /// `char_to_index`: e.g. 'A' => 0; `invalid_char` for any value not in
-    /// the 64 alphabet chars (the `Base64Decoder.init` table build).
-    const CHAR_TO_INDEX: [u8; 256] = build_char_to_index();
-
-    const fn build_char_to_index() -> [u8; 256] {
-        let mut table = [INVALID_CHAR; 256];
-        let mut i = 0;
-        while i < 64 {
-            table[ALPHABET_CHARS[i] as usize] = i as u8;
-            i += 1;
-        }
-        table
-    }
-
-    /// Return the maximum possible decoded size for a given input length - The actual length may be less if the input includes padding.
-    /// `InvalidPadding` is returned if the input length is not valid.
-    // pub fn calcSizeUpperBound(decoder: *const Base64Decoder, source_len: usize) Error!usize {
-    //
-    // PARITY: clippy suggests `.is_multiple_of(4)` for the `% 4 != 0` test,
-    // but rewriting would diverge from the reference expression; kept as-is
-    // for fidelity (the rustty-os `manual_div_ceil` precedent).
-    #[allow(clippy::manual_is_multiple_of)]
-    pub const fn calc_size_upper_bound(source_len: usize) -> Result<usize, Error> {
-        // var result = source_len / 4 * 3;
-        let result = source_len / 4 * 3;
-        // const leftover = source_len % 4;
-        let leftover = source_len % 4;
-        // if (decoder.pad_char != null) {
-        //     if (leftover % 4 != 0) return error.InvalidPadding;
-        // } else { ... }
-        //
-        // (the standard codec HAS a pad char — the no-pad arm is dead for
-        // this codec and elided.)
-        if leftover % 4 != 0 {
-            return Err(Error::InvalidPadding);
-        }
-        // return result;
-        Ok(result)
-    }
-
-    /// Return the exact decoded size for a slice.
-    /// `InvalidPadding` is returned if the input length is not valid.
-    // pub fn calcSizeForSlice(decoder: *const Base64Decoder, source: []const u8) Error!usize {
-    pub fn calc_size_for_slice(source: &[u8]) -> Result<usize, Error> {
-        // const source_len = source.len;
-        let source_len = source.len();
-        // var result = try decoder.calcSizeUpperBound(source_len);
-        let mut result = calc_size_upper_bound(source_len)?;
-        // if (decoder.pad_char) |pad_char| {
-        //     if (source_len >= 1 and source[source_len - 1] == pad_char) result -= 1;
-        //     if (source_len >= 2 and source[source_len - 2] == pad_char) result -= 1;
-        // }
-        if source_len >= 1 && source[source_len - 1] == PAD_CHAR {
-            result -= 1;
-        }
-        if source_len >= 2 && source[source_len - 2] == PAD_CHAR {
-            result -= 1;
-        }
-        // return result;
-        Ok(result)
-    }
-
-    /// dest.len must be what you get from ::calcSize.
-    /// Invalid characters result in `error.InvalidCharacter`.
-    /// Invalid padding results in `error.InvalidPadding`.
-    // pub fn decode(decoder: *const Base64Decoder, dest: []u8, source: []const u8) Error!void {
-    //
-    // PARITY: `% 4 != 0` kept verbatim over clippy's `.is_multiple_of(4)`
-    // (see `calc_size_upper_bound`).
-    #[allow(clippy::manual_is_multiple_of)]
-    pub fn decode(dest: &mut [u8], source: &[u8]) -> Result<(), Error> {
-        // if (decoder.pad_char != null and source.len % 4 != 0) return error.InvalidPadding;
-        if source.len() % 4 != 0 {
-            return Err(Error::InvalidPadding);
-        }
-        // var dest_idx: usize = 0;
-        let mut dest_idx: usize = 0;
-        // var acc: u12 = 0;
-        //
-        // (`u12` emulated as the low 12 bits of a `u16` — the shift below
-        // masks exactly as the Zig `u12` truncating `<<` does.)
-        let mut acc: u16 = 0;
-        // var acc_len: u4 = 0;
-        let mut acc_len: u32 = 0;
-        // var leftover_idx: ?usize = null;
-        let mut leftover_idx: Option<usize> = None;
-        // (the two `fast_char_to_index` fast loops are elided — accelerative
-        // only, see the module doc; this is the reference's scalar tail over
-        // `remaining`, applied to the whole source.)
-        // for (remaining, fast_src_idx..) |c, src_idx| {
-        for (src_idx, &c) in source.iter().enumerate() {
-            // const d = decoder.char_to_index[c];
-            let d = CHAR_TO_INDEX[c as usize];
-            // if (d == invalid_char) {
-            if d == INVALID_CHAR {
-                // if (decoder.pad_char == null or c != decoder.pad_char.?) return error.InvalidCharacter;
-                if c != PAD_CHAR {
-                    return Err(Error::InvalidCharacter);
-                }
-                // leftover_idx = src_idx;
-                leftover_idx = Some(src_idx);
-                // break;
-                break;
-            }
-            // acc = (acc << 6) + d;
-            acc = ((acc << 6) & 0xfff) + u16::from(d);
-            // acc_len += 6;
-            acc_len += 6;
-            // if (acc_len >= 8) {
-            if acc_len >= 8 {
-                // acc_len -= 8;
-                acc_len -= 8;
-                // dest[dest_idx] = @as(u8, @truncate(acc >> acc_len));
-                dest[dest_idx] = (acc >> acc_len) as u8;
-                // dest_idx += 1;
-                dest_idx += 1;
-            }
-        }
-        // if (acc_len > 4 or (acc & (@as(u12, 1) << acc_len) - 1) != 0) {
-        //     return error.InvalidPadding;
-        // }
-        if acc_len > 4 || (acc & ((1u16 << acc_len) - 1)) != 0 {
-            return Err(Error::InvalidPadding);
-        }
-        // if (leftover_idx == null) return;
-        let leftover_start = match leftover_idx {
-            Some(v) => v,
-            None => return Ok(()),
-        };
-        // const leftover = source[leftover_idx.?..];
-        let leftover = &source[leftover_start..];
-        // if (decoder.pad_char) |pad_char| {
-        //
-        // (the standard codec's pad char is '=' — the arm is always taken.)
-        {
-            // const padding_len = acc_len / 2;
-            let padding_len = (acc_len / 2) as usize;
-            // var padding_chars: usize = 0;
-            let mut padding_chars: usize = 0;
-            // for (leftover) |c| {
-            for &c in leftover {
-                // if (c != pad_char) {
-                if c != PAD_CHAR {
-                    // return if (c == Base64Decoder.invalid_char) error.InvalidCharacter else error.InvalidPadding;
-                    return Err(if c == INVALID_CHAR {
-                        Error::InvalidCharacter
-                    } else {
-                        Error::InvalidPadding
-                    });
-                }
-                // padding_chars += 1;
-                padding_chars += 1;
-            }
-            // if (padding_chars != padding_len) return error.InvalidPadding;
-            if padding_chars != padding_len {
-                return Err(Error::InvalidPadding);
-            }
-        }
-        Ok(())
-    }
 
     // ---- Base64Encoder (std.base64.standard.Encoder) ----
 

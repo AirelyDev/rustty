@@ -35,6 +35,9 @@ workspace = true
 # has no self-default either; consumers thread the knob — so `cargo test -p
 # rustty-vt` keeps its scalar-arm coverage and `--features simd` its SIMD arm.
 rustty-vt = { workspace = true, features = ["oniguruma", "simd", "wuffs"] }
+# bc2f7d7d2: Surface.zig gains `const simd = @import("simd/main.zig")` for the
+# OSC 52 strict base64 decode in `clipboardWrite`.
+rustty-simd = { workspace = true }
 rustty-config = { workspace = true }
 rustty-renderer = { workspace = true }
 rustty-font = { workspace = true }

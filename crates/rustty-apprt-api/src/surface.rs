@@ -124,6 +124,21 @@ pub enum Message<'a> {
     /// Read the clipboard and write to the pty.
     ClipboardRead(Clipboard),
 
+    /// A Kitty clipboard protocol (OSC 5522) read request. The receiver
+    /// takes ownership of the request state and must eventually destroy
+    /// it.
+    // kitty_clipboard_read: *apprt.ClipboardRequest.KittyRead,
+    // PORT NOTE: `*KittyRead` (arena-owned, destroy on the receiver) ->
+    // `Box<KittyRead>` moved by value — ownership makes double-free
+    // unrepresentable (assessment E hazard #1).
+    KittyClipboardRead(Box<crate::structs::KittyRead>),
+
+    /// A committed Kitty clipboard protocol (OSC 5522) write
+    /// transaction. The receiver takes ownership of the request state
+    /// and must eventually destroy it.
+    // kitty_clipboard_write: *apprt.ClipboardRequest.KittyWrite,
+    KittyClipboardWrite(Box<crate::structs::KittyWrite>),
+
     /// Write the clipboard contents.
     ClipboardWrite {
         clipboard_type: Clipboard,

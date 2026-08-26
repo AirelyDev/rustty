@@ -282,6 +282,18 @@ MAP = {
     # (the control-mode multiplexer driving per-pane Terminals). This completes
     # Ghostty terminal/ in rustty-vt.
     "tmux":              ([f"{GH}/tmux/control.zig", f"{GH}/tmux/layout.zig", f"{GH}/tmux/output.zig", f"{GH}/tmux/viewer.zig"], [f"{RS}/tmux/control.rs", f"{RS}/tmux/layout.rs", f"{RS}/tmux/output.rs", f"{RS}/tmux/viewer.rs"], 0),
+    # Phase-5 blind-spot closures (assessment B §5; "derived-gate green can be
+    # bookkeeping"): files the gate previously could not see. terminal/paste.zig's
+    # only zig test is an anonymous refAllDecls aggregator (0 behavioral — the
+    # behavior is the stream_terminal `paste:` suite); clipboard.zig carries
+    # `test isTextMime` (5984d6f73); sys.zig carries the randomSecure-override
+    # test (dda8e6f31); src/simd/*.zig carries the base64 strict+Streaming suite
+    # (bc2f7d7d2/a8c3ab191, incl. the scalar-lane crash regression) in the
+    # rustty-simd crate.
+    "terminal_paste":     ([f"{GH}/paste.zig"], [f"{RS}/paste.rs"], 0),
+    "terminal_clipboard": ([f"{GH}/clipboard.zig"], [f"{RS}/clipboard.rs"], 0),
+    "terminal_sys":       ([f"{GH}/sys.zig"], [f"{RS}/sys.rs"], 0),
+    "simd":               (glob.glob(f"{GH_ROOT}/src/simd/*.zig"), [f"{RS_ROOT}/crates/rustty-simd/src/*.rs"], 0),
     # Stage A.2 — rustty-font pure-parsing slice (GH base = src/font, not src/terminal).
     # NOTE: zig_count() matches `test "name"`; sfnt.zig also has one unquoted
     # `test FixedPoint {` (caught by Rust's 3rd #[test] — rust >= zig holds).

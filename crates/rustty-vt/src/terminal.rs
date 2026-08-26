@@ -298,7 +298,7 @@ unsafe fn print_slice_store_pairs(
 // general-purpose allocator (the global allocator). We back the OSC parser with
 // a process-static `GlobalZigAllocator` (a stateless ZST) so the returned
 // `ZigAllocatorRef` is `'static` and coerces to the stream's lifetime.
-static GLOBAL_ZIG_ALLOCATOR: rustty_lib::allocator::GlobalZigAllocator =
+pub(crate) static GLOBAL_ZIG_ALLOCATOR: rustty_lib::allocator::GlobalZigAllocator =
     rustty_lib::allocator::GlobalZigAllocator;
 
 // const log = std.log.scoped(.terminal);
@@ -775,6 +775,26 @@ pub struct Terminal {
     // glyph_glossary: glyph.Glossary = .empty,
     pub glyph_glossary: glyph::Glossary,
 
+    /// Kitty drag and drop protocol (OSC 72) state. Allocated when a client
+    /// registers to accept drops (t=a) and freed when it unregisters (t=A),
+    /// so a terminal that never runs a drag and drop aware program pays
+    /// nothing for it. Non-null means a client currently accepts drops.
+    // kitty_dnd: ?*kitty.dnd.State = null,
+    // PORT NOTE (af8d28a94): `?*State` (heap create/destroy) maps to
+    // `Option<Box<State>>` — `kitty::dnd::handle_command` allocates into and
+    // frees from this slot.
+    pub kitty_dnd: Option<Box<kitty::dnd::State>>,
+
+    /// The I/O implementation we should use for this terminal.
+    // PORT NOTE (io-stand-in, W1 sys.rs decision): the reference threads
+    // `io: std.Io` through `Terminal.init` onto `Screen.io` and exposes it via
+    // `Terminal.io()`. The port's `sys::Io` is the entropy-only projection
+    // (see sys.rs NON_PORTS TinyIo re-read note), so the field lives here on
+    // the Terminal (rustty's Screen carries no io) and defaults to
+    // `sys::io_native`; tests that construct with `std.Io.failing` set it to
+    // `sys::io_failing` after init.
+    pub io: crate::sys::Io,
+
     /// These are just a packed set of flags we may set on the terminal.
     pub flags: Flags,
 }
@@ -958,6 +978,8 @@ impl Terminal {
             },
             mouse_shape: mouse::Shape::Text,
             glyph_glossary: glyph::Glossary::empty(),
+            kitty_dnd: None,
+            io: crate::sys::io_native,
             flags: Flags::default(),
         };
         result.set_cursor_style(ansi::CursorStyle::Default);
@@ -980,6 +1002,9 @@ impl Terminal {
         // PORT NOTE: the real `glyph::Glossary::deinit` drops the alloc param (its
         // entries free on drop); the reference passes `alloc`.
         self.glyph_glossary.deinit();
+        // if (self.kitty_dnd) |dnd| dnd.destroy(alloc);
+        // PORT NOTE: dropping the Box frees the state and everything it holds.
+        self.kitty_dnd = None;
         // self.* = undefined;
     }
 
@@ -1088,6 +1113,15 @@ impl Terminal {
         if self.cursor.is_default {
             self.set_cursor_style(ansi::CursorStyle::Default);
         }
+    }
+
+    /// The I/O implementation we should use for this terminal.
+    // pub fn io(self: *Terminal) std.Io {
+    //     return self.screens.active.io;
+    // }
+    // PORT NOTE: see the `io` field — rustty stores it on the Terminal.
+    pub fn io(&self) -> crate::sys::Io {
+        self.io
     }
 
     /// The general allocator we should use for this terminal.
@@ -6775,6 +6809,12 @@ impl Terminal {
         // PORT NOTE: the real `glyph::Glossary::clear_and_free` drops the alloc
         // param (the reference passes `self.gpa()`); entries free on drop.
         self.glyph_glossary.clear_and_free();
+        // A reset only interrupts an in-progress chunked OSC 72 command;
+        // drag and drop registration survives, matching kitty.
+        // if (self.kitty_dnd) |dnd| dnd.chunking = .{};
+        if let Some(dnd) = self.kitty_dnd.as_mut() {
+            dnd.chunking = Default::default();
+        }
         self.status_display = ansi::StatusDisplay::Main;
         // self.scrolling_region = .{
         //     .top = 0,

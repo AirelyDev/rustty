@@ -1377,6 +1377,7 @@ dependencies = [
  "rustty-oniguruma",
  "rustty-os",
  "rustty-renderer",
+ "rustty-simd",
  "rustty-termio",
  "rustty-unicode",
  "rustty-util",

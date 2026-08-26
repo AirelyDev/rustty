@@ -1,11 +1,13 @@
 //! PORTS: ghostty src/terminal/osc/parsers/clipboard_operation.zig
 //!
-//! PORT STATUS: ported — full parse logic + tests (vt-6).
+//! PORT STATUS: ported — full parse logic + tests (vt-6; e03475c0c terminator
+//! capture for OSC 52 read responses).
 
-use crate::osc::{Command, Parser};
+use crate::osc::{Command, Parser, Terminator};
 
 /// Parse OSC 52
-pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Command> {
+// pub fn parse(parser: *Parser, terminator_ch: ?u8) ?*Command {
+pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'a mut Command> {
     // assert(parser.state == .@"52");
     debug_assert!(parser.state == crate::osc::State::S52);
     let cap = if let Some(c) = parser.capture.as_mut() {
@@ -29,6 +31,8 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
             // data[1 .. data.len() - 1 :0]
             // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
             data: data[1..data.len() - 1].to_vec(),
+            // .terminator = .init(terminator_ch),
+            terminator: Terminator::init(terminator_ch),
         };
     } else {
         if data.len() < 2 {
@@ -44,6 +48,8 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
             // data[2 .. data.len() - 1 :0]
             // PORT NOTE (fidelity): reference `[:0]const u8` RAW bytes.
             data: data[2..data.len() - 1].to_vec(),
+            // .terminator = .init(terminator_ch),
+            terminator: Terminator::init(terminator_ch),
         };
     }
     Some(&mut parser.command)
@@ -51,7 +57,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
 
 #[cfg(test)]
 mod tests {
-    use crate::osc::Parser;
+    use crate::osc::{Parser, Terminator};
 
     #[test]
     fn osc_52_get_set_clipboard() {
@@ -65,9 +71,37 @@ mod tests {
         let cmd = p.end(None).unwrap().clone();
         assert!(matches!(cmd, crate::osc::Command::ClipboardContents { .. }));
         match cmd {
-            crate::osc::Command::ClipboardContents { kind, data } => {
+            crate::osc::Command::ClipboardContents {
+                kind,
+                data,
+                terminator,
+            } => {
                 assert!(kind == b's');
                 assert_eq!(b"?", data.as_slice());
+                // try testing.expectEqual(.st, cmd.clipboard_contents.terminator);
+                assert_eq!(Terminator::St, terminator);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    // test "OSC 52: get clipboard with BEL terminator"
+    #[test]
+    fn osc_52_get_clipboard_with_bel_terminator() {
+        let mut p: Parser = Parser::init(None);
+
+        let input = "52;c;?";
+        for ch in input.bytes() {
+            p.next(ch);
+        }
+
+        // const cmd = p.end(0x07).?.*;
+        let cmd = p.end(Some(0x07)).unwrap().clone();
+        assert!(matches!(cmd, crate::osc::Command::ClipboardContents { .. }));
+        match cmd {
+            crate::osc::Command::ClipboardContents { terminator, .. } => {
+                // try testing.expectEqual(.bel, cmd.clipboard_contents.terminator);
+                assert_eq!(Terminator::Bel, terminator);
             }
             _ => unreachable!(),
         }
@@ -85,7 +119,7 @@ mod tests {
         let cmd = p.end(None).unwrap().clone();
         assert!(matches!(cmd, crate::osc::Command::ClipboardContents { .. }));
         match cmd {
-            crate::osc::Command::ClipboardContents { kind, data } => {
+            crate::osc::Command::ClipboardContents { kind, data, .. } => {
                 assert!(kind == b'c');
                 assert_eq!(b"?", data.as_slice());
             }
@@ -109,7 +143,7 @@ mod tests {
         let cmd = p.end(None).unwrap().clone();
         assert!(matches!(cmd, crate::osc::Command::ClipboardContents { .. }));
         match cmd {
-            crate::osc::Command::ClipboardContents { kind, data } => {
+            crate::osc::Command::ClipboardContents { kind, data, .. } => {
                 assert!(kind == b's');
                 assert_eq!(b"?", data.as_slice());
             }
@@ -129,7 +163,7 @@ mod tests {
         let cmd = p.end(None).unwrap().clone();
         assert!(matches!(cmd, crate::osc::Command::ClipboardContents { .. }));
         match cmd {
-            crate::osc::Command::ClipboardContents { kind, data } => {
+            crate::osc::Command::ClipboardContents { kind, data, .. } => {
                 assert!(kind == b'c');
                 assert_eq!(b"", data.as_slice());
             }

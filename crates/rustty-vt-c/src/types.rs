@@ -1434,12 +1434,14 @@ static DECLS: &[TypeDecl] = {
                 ]
             )
         ),
-        // .initEnum("GhosttyClipboardWriteResult", clipboard.WriteResult, "GHOSTTY_CLIPBOARD_WRITE_RESULT_"),
+        // .initEnum("GhosttyClipboardWriteResult", clipboard.Write.Status, "GHOSTTY_CLIPBOARD_WRITE_RESULT_"),
+        // PORT NOTE (7ae9b1113): the reference type is now `clipboard.Write.Status`
+        // (flattened to `WriteStatus`); the C name is unchanged.
         enum_decl!(
             "RusttyClipboardWriteResult",
             "RUSTTY_CLIPBOARD_WRITE_RESULT_",
             enum_const_values!(
-                rustty_vt::clipboard::WriteResult,
+                rustty_vt::clipboard::WriteStatus,
                 [
                     ("success", Success),
                     ("denied", Denied),
