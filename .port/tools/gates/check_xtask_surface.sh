@@ -33,8 +33,12 @@
 #    The patch FUNCTION has unit tests; this covers the subcommand plumbing
 #    (argv, read, write) that they do not reach.
 # 6. `xcframework` (the app bundle) under RUSTTY_XTASK_XCFRAMEWORK=1 — a
-#    multi-arch build of rustty-apprt-c, too slow for every run. ci.yml sets it
-#    on the macOS leg; otherwise it is reported skipped BY NAME.
+#    multi-arch build of rustty-apprt-c, too slow for every run, and reported
+#    skipped BY NAME when off. CI does not set it: the `macos-app` job in
+#    ci.yml builds the bundle outright as the first step of building the app,
+#    which is stronger coverage than this arm, so setting it here would pay for
+#    the same multi-arch build twice. Set it locally to check the bundle
+#    without going through Xcode.
 #
 # Exit contract (`.port/tools/CI.md`): 0 = pass, 1 = red, 3 = BLOCKED.
 set -uo pipefail
