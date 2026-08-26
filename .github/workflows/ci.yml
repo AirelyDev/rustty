@@ -181,4 +181,8 @@ jobs:
         # never appears in an interpolated shell command.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # G-DIST's distcheck arm extracts the source tarball and builds it
+          # cold. Worth having, not worth paying for twice — the Ubuntu leg
+          # runs it, macOS gets the shape checks only and says so by name.
+          RUSTTY_DISTCHECK: ${{ runner.os == 'Linux' && '1' || '0' }}
         run: bash .port/tools/ci.sh

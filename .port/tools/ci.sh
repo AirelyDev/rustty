@@ -57,6 +57,15 @@
 #                                    build-examples-* jobs. wasm-* belong to
 #                                    the opt-in --webgl lane and are reported
 #                                    skipped by name.
+#   G-DIST check_dist.sh             `xtask dist` builds and the tarball has
+#                                    the right shape                -> HARD-FAIL
+#                                    (single rustty-<v>/ prefix, build-critical
+#                                    files present, vendored crates-sys C
+#                                    present, .port/ + docs/superpowers/
+#                                    excluded). `xtask distcheck` additionally
+#                                    under RUSTTY_DISTCHECK=1 — a cold full
+#                                    build, so opt-in; skipped is reported by
+#                                    name, never greened.
 #   G-THEMES check_theme_corpus.py   the 602 vendored iterm2 theme files match
 #                                    a committed per-file SHA-256 manifest
 #                                    -> HARD-FAIL. res_themes.rs only counts
@@ -362,6 +371,16 @@ GATE_REGISTRY=(
   # run today. The 5 wasm examples belong to ci.sh's opt-in --webgl lane and
   # are reported skipped BY NAME, never counted as green.
   "G-EXAMPLES|HARD|bash $GATES/check_examples.sh"
+  # G-DIST (2026-08-25) — the source-tarball lane (the reference's build-dist /
+  # build-dist-lib-vt). `xtask dist` was invoked from nothing but the release
+  # workflows, so a broken tarball would first have surfaced DURING a release.
+  # Builds it and asserts its shape (single versioned prefix, the files a
+  # from-scratch build needs, >1000 vendored crates-sys files, and no .port/ or
+  # docs/superpowers/ leakage). `xtask distcheck` — extract and BUILD the
+  # tarball — is a cold full-workspace build and runs only under
+  # RUSTTY_DISTCHECK=1 (set by ci.yml on the Ubuntu leg); otherwise the gate
+  # reports it skipped BY NAME rather than implying it ran.
+  "G-DIST|HARD|bash $GATES/check_dist.sh"
   # G-REL (WS18) — the `--release` test lane. Steps 3/4 above only ever exercise
   # the DEBUG profile, so nothing noticed that release had rotted to 22 failures
   # across 7 targets. Most were tests driving a seam the port deliberately
