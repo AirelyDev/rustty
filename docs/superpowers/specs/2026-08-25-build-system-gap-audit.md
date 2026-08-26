@@ -12,15 +12,24 @@ not product source. Companion to
 
 ## Status (updated 2026-08-26)
 
-Steps 1 and 2 of the fill order below are **done**, on branch
-`build-system-gaps`. Four new gates now run from `.port/tools/ci.sh`:
+Steps 1, 2 and **Nix Phase A** of the fill order below are **done**, on branch
+`build-system-gaps`. Five new gates now run from `.port/tools/ci.sh`:
 
-| Gate          | Covers                                                    |
-| ------------- | --------------------------------------------------------- |
-| `G-LINT`      | shellcheck, prettier, typos, swiftlint, alejandra, pinact |
-| `G-CCONSUMER` | cmake build/install, both `.pc` files, shared+static link |
-| `G-EXAMPLES`  | all 32 `example/` programs                                |
-| `G-DIST`      | `xtask dist` shape + (opt-in) `distcheck`                 |
+| Gate          | Covers                                                                |
+| ------------- | --------------------------------------------------------------------- |
+| `G-LINT`      | shellcheck, prettier, typos, swiftlint, alejandra, pinact             |
+| `G-CCONSUMER` | cmake build/install, both `.pc` files, shared+static link             |
+| `G-EXAMPLES`  | all 32 `example/` programs, incl. the cross one                       |
+| `G-DIST`      | `xtask dist` shape + (opt-in) `distcheck`                             |
+| `G-NIX`       | `nix flake check` (6 checks) + `alejandra --check`; BLOCKED w/o `nix` |
+
+**Nix Phase A is verified, not merely authored.** On an aarch64-linux host
+`nix build .#librustty-vt` succeeds, `nix flake check` reports _all checks
+passed_ over all six checks (the library, symbol sanity, both `.pc` files, and
+a C consumer compiled+linked+run against **both** the shared and static
+libraries), and `nix develop` yields exactly the `rust-toolchain.toml` pin
+(rustc 1.93.1) plus all six G-LINT linters. `nix/vm/*` and `nix/tests.nix`
+remain Phase B, gated on the GTK app.
 
 **Turning those on found nine real defects**, listed here because their
 existence is the argument for the rest of the fill order — every one of them
@@ -47,15 +56,38 @@ lived in a file that looked fine and had simply never been executed:
    directory-scope variable invisible inside a CMake function, so it resolved
    to the **empty string** for every downstream `FetchContent` consumer.
 
-One genuine remaining limitation, documented rather than papered over: the
-cross example's final **executable** link needs GNU gettext's libintl for the
-target (`_libintl_locale_name_canonicalize` is a gnulib internal, not a glibc
-export). The oracle's Linux builds get it from its Nix devShell; zig's bundled
-sysroot has none. `G-EXAMPLES` therefore binds the cross **library** target —
-where all of defects 6–9 lived — and says so.
+Three more found once Nix Phase A could run:
 
-Steps 3–6 (Nix, release holes, flatpak/snap, cross-target legs) are **not**
-started.
+10. `crates/rustty-os/src/i18n.rs` declared
+    `_libintl_locale_name_canonicalize` `extern` on **every non-macOS target**,
+    claiming "the symbol is provided by the system libintl". It is not — it is
+    a gnulib internal that only GNU gettext's own build exports, and rustty
+    vendors libintl on Apple only (mirroring the oracle). Every non-macOS
+    static link was therefore broken; the cdylib merely dead-stripped it. Same
+    Zig-lazy-vs-Rust-eager shape as defect 3. **This is what made the cross
+    example's executable link fail** — it was never a zig-sysroot limitation,
+    and with it fixed `example/c-vt-cmake-cross` now produces a real aarch64
+    Linux ELF from macOS.
+11. `crates/rustty-bench`'s `+terminal-snapshot` sat behind a `snapshot-codec`
+    feature nothing ever enabled, with an `unimplemented!()` CLI leaf. The
+    codec it waited for had **already landed** — but the module had drifted six
+    compile errors from the API that shipped, invisibly, _because_ the feature
+    was never built. Un-gated; G-BENCH's floor 24 → 27.
+12. `G-LINT` was scanning `.claude/worktrees/` — agent-created worktrees that
+    are whole extra checkouts of this repo, re-reporting findings from whatever
+    commit they are parked on.
+
+Steps 4–6 (release-pipeline holes, flatpak/snap, Nix Phase B + cross-target CI
+legs) are **not** started.
+
+### A note on where defects hide
+
+Ten of the twelve were found by _running_ something that had never been run,
+and two of those needed a **hermetic** environment specifically: the macOS host
+lane could not see defect 10 because a Homebrew `gettext` was lying around to
+satisfy the link. That is the argument for keeping `G-NIX` even though it
+overlaps `G-CCONSUMER` — it is the same install checked without ambient system
+libraries.
 
 ---
 
