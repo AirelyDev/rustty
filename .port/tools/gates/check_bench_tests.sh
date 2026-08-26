@@ -35,9 +35,12 @@ RUSTTY_ROOT="$(cd "$SELF_DIR/../../.." && pwd)"
 # Raise this deliberately when a task adds tests it wants protected.
 # Raised 15 -> 24 (phase-4 wbench): terminal-formatter (+4 upstream test{}s)
 # and terminal-resize (+1) landed; measured 24 passed in both profiles.
-# (terminal-snapshot's 3 test{}s are cfg-gated on `snapshot-codec` until
-# wsnap-3 lands the codec drivers — raise again when that un-gates.)
-MIN_TESTS=24
+# Raised 24 -> 27 (2026-08-26): the `snapshot-codec` feature gate is gone.
+# terminal_snapshot.rs was written against the codec API as DOCUMENTED and had
+# drifted six compile errors away from the API that actually landed, which the
+# gate could not see precisely BECAUSE the feature was never enabled. The
+# module now compiles unconditionally and contributes its 3 test{}s.
+MIN_TESTS=27
 
 # ---- self-test -------------------------------------------------------------
 # Proves the count arm can actually go RED, on fabricated libtest output rather

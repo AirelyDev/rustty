@@ -41,10 +41,6 @@ pub mod terminal_parser;
 // pub const TerminalResize = @import("TerminalResize.zig");
 pub mod terminal_resize;
 // pub const TerminalSnapshot = @import("TerminalSnapshot.zig");
-//
-// PORT NOTE (phase-4 wbench): cfg-gated until the snapshot codec drivers land
-// (wsnap-3) — see the module's own PORT NOTE.
-#[cfg(feature = "snapshot-codec")]
 pub mod terminal_snapshot;
 // pub const IsSymbol = @import("IsSymbol.zig");
 pub mod is_symbol;
@@ -125,7 +121,6 @@ mod tests {
         // pub const TerminalResize = @import("TerminalResize.zig");
         let _ = core::any::type_name::<crate::terminal_resize::TerminalResize>();
         // pub const TerminalSnapshot = @import("TerminalSnapshot.zig");
-        #[cfg(feature = "snapshot-codec")]
         let _ = core::any::type_name::<crate::terminal_snapshot::TerminalSnapshot>();
         // pub const IsSymbol = @import("IsSymbol.zig");
         let _ = core::any::type_name::<crate::is_symbol::IsSymbol>();

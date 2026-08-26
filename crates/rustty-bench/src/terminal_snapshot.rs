@@ -43,17 +43,29 @@
 //!   'rustty-bench +terminal-snapshot --mode=decode --loops=20 --data=/tmp/ascii.vt'
 //! ```
 //!
-//! PORT NOTE (phase-4 wbench, cfg-gated for wsnap-3): this module ports
+//! PORT NOTE (phase-4 wbench): this module ports
 //! `benchmark/TerminalSnapshot.zig` (0b5e12453 + the e37865bed decode-ready
-//! hunk) against the snapshot codec drivers (`snapshot::{encode, decode,
-//! Decoder}` and `Decoded`) DOCUMENTED in
-//! `crates/rustty-vt/src/snapshot/codec.rs` but not yet landed — they arrive
-//! with `snapshot/{screen,terminal}.rs` (the wsnap-3 stage). Until then the
-//! module compiles only under the `snapshot-codec` feature (never enabled in
-//! CI); the wsnap-3 orchestrator un-gates it on merge by deleting the feature
-//! and the `#[cfg]`s naming it, binding the exact driver spellings (including
-//! the reference `global.io()` argument, whose Rust seam is area C's TinyIo
-//! analogue) at that point.
+//! hunk).
+//!
+//! It was written against the snapshot codec drivers as DOCUMENTED in
+//! `crates/rustty-vt/src/snapshot/codec.rs` before they landed, and lived
+//! behind a `snapshot-codec` feature that CI never enabled, with the
+//! `+terminal-snapshot` CLI action falling through to an `unimplemented!()`
+//! leaf. `snapshot/{screen,terminal}.rs` and the drivers have since landed
+//! (the wsnap-3 stage), but the module had drifted from the API that actually
+//! shipped — six compile errors — so the gate was never lifted and the drift
+//! was invisible. The gate is now gone and the call sites match the landed
+//! signatures:
+//!
+//!   * `encode(&mut dyn io::Writer, &Terminal, EncodeOptions)` — no allocator
+//!     parameter (`record::Writer` uses the global allocator), and the sink is
+//!     the type-erased writer, so the reusable buffer is an
+//!     `io::AllocatingWriter` (the port's `std.Io.Writer.Allocating`) rather
+//!     than a bare `Vec<u8>`.
+//!   * `decode(&mut dyn io::Reader, Allocator, &DecodeOptions)` — reader
+//!     first, options by reference.
+//!   * `Decoder::ready(Allocator, &DecodeOptions)` — options by reference.
+//!   * `FixedReader` lives in `snapshot::io`, not at `snapshot::`.
 // const TerminalSnapshot = @This();
 
 // const std = @import("std");
@@ -89,9 +101,14 @@ pub struct TerminalSnapshot {
     /// Reused across encode steps so buffer growth is a one-time setup cost.
     // encoded: std.Io.Writer.Allocating,
     //
-    // PORT NOTE: `std.Io.Writer.Allocating` -> `Vec<u8>` (`written()` is the
-    // slice, `shrinkRetainingCapacity(0)` is `clear()`; both keep capacity).
-    encoded: Vec<u8>,
+    // PORT NOTE: `std.Io.Writer.Allocating` -> `snapshot::io::AllocatingWriter`,
+    // the port's own analog of that type — `written()` is the slice and
+    // `shrink_retaining_capacity(0)` is `shrinkRetainingCapacity(0)`, both
+    // keeping capacity, so the reference's "growth is a one-time cost" property
+    // holds. This was a bare `Vec<u8>` while the module was written against the
+    // codec API as DOCUMENTED; the landed `snapshot::encode` takes
+    // `&mut dyn io::Writer`, and AllocatingWriter is its allocating impl.
+    encoded: snapshot::io::AllocatingWriter,
 }
 
 // pub const Options = struct {
@@ -218,7 +235,7 @@ impl TerminalSnapshot {
             alloc,
             opts,
             terminal: None,
-            encoded: Vec::new(),
+            encoded: snapshot::io::AllocatingWriter::new(),
         }))
     }
 
@@ -332,12 +349,11 @@ impl TerminalSnapshot {
         // Decode restores the same bytes every step. Encode mode also uses
         // this buffer, in which case this is its one-time growth.
         // self.encoded.shrinkRetainingCapacity(0);
-        self.encoded.clear();
+        self.encoded.shrink_retaining_capacity(0);
         // try snapshot.encode(self.alloc, &self.encoded.writer, terminal, .{
         //     .continuation = .ground,
         // });
         snapshot::encode(
-            self.alloc,
             &mut self.encoded,
             terminal,
             snapshot::EncodeOptions {
@@ -355,7 +371,7 @@ impl TerminalSnapshot {
         }
         self_.terminal = None;
         // self.encoded.shrinkRetainingCapacity(0);
-        self_.encoded.clear();
+        self_.encoded.shrink_retaining_capacity(0);
     }
 
     // fn stepNoop(ptr: *anyopaque) Benchmark.Error!void {
@@ -363,7 +379,7 @@ impl TerminalSnapshot {
         let self_ = unsafe { &mut *(ptr as *mut TerminalSnapshot) };
         for _ in 0..self_.opts.loops {
             // std.mem.doNotOptimizeAway(self.encoded.written());
-            black_box(self_.encoded.as_slice());
+            black_box(self_.encoded.written());
         }
         Ok(())
     }
@@ -379,7 +395,7 @@ impl TerminalSnapshot {
         let (terminal, encoded) = (self_.terminal.as_mut().unwrap(), &mut self_.encoded);
         for _ in 0..self_.opts.loops {
             // self.encoded.shrinkRetainingCapacity(0);
-            encoded.clear();
+            encoded.shrink_retaining_capacity(0);
             // snapshot.encode(self.alloc, &self.encoded.writer, terminal, .{
             //     .continuation = .ground,
             // }) catch |err| {
@@ -387,8 +403,7 @@ impl TerminalSnapshot {
             //     return error.BenchmarkFailed;
             // };
             if let Err(err) = snapshot::encode(
-                self_.alloc,
-                encoded,
+                &mut *encoded,
                 terminal,
                 snapshot::EncodeOptions {
                     continuation: snapshot::Continuation::Ground,
@@ -398,7 +413,7 @@ impl TerminalSnapshot {
                 return Err(Error::BenchmarkFailed);
             }
             // std.mem.doNotOptimizeAway(self.encoded.written());
-            black_box(encoded.as_slice());
+            black_box(encoded.written());
         }
         Ok(())
     }
@@ -407,10 +422,10 @@ impl TerminalSnapshot {
     unsafe fn step_decode(ptr: *mut c_void) -> Result<(), Error> {
         let self_ = unsafe { &mut *(ptr as *mut TerminalSnapshot) };
         // const bytes = self.encoded.written();
-        let bytes: &[u8] = &self_.encoded;
+        let bytes: &[u8] = self_.encoded.written();
         for _ in 0..self_.opts.loops {
             // var reader: std.Io.Reader = .fixed(bytes);
-            let mut reader = snapshot::FixedReader::new(bytes);
+            let mut reader = snapshot::io::FixedReader::new(bytes);
             // var decoded = snapshot.decode(self.alloc, global.io(), &reader, .{
             //     .max_continuation_bytes = 1024 * 1024,
             // }) catch |err| {
@@ -418,9 +433,9 @@ impl TerminalSnapshot {
             //     return error.BenchmarkFailed;
             // };
             let mut decoded = match snapshot::decode(
-                self_.alloc,
                 &mut reader,
-                snapshot::DecodeOptions {
+                self_.alloc,
+                &snapshot::DecodeOptions {
                     max_continuation_bytes: 1024 * 1024,
                 },
             ) {
@@ -445,10 +460,10 @@ impl TerminalSnapshot {
     unsafe fn step_decode_ready(ptr: *mut c_void) -> Result<(), Error> {
         let self_ = unsafe { &mut *(ptr as *mut TerminalSnapshot) };
         // const bytes = self.encoded.written();
-        let bytes: &[u8] = &self_.encoded;
+        let bytes: &[u8] = self_.encoded.written();
         for _ in 0..self_.opts.loops {
             // var reader: std.Io.Reader = .fixed(bytes);
-            let mut reader = snapshot::FixedReader::new(bytes);
+            let mut reader = snapshot::io::FixedReader::new(bytes);
             // var decoder: snapshot.Decoder = .init(&reader);
             let mut decoder = snapshot::Decoder::init(&mut reader);
             // var decoded = decoder.ready(self.alloc, global.io(), .{
@@ -459,7 +474,7 @@ impl TerminalSnapshot {
             // };
             let mut decoded = match decoder.ready(
                 self_.alloc,
-                snapshot::DecodeOptions {
+                &snapshot::DecodeOptions {
                     max_continuation_bytes: 1024 * 1024,
                 },
             ) {
@@ -483,7 +498,7 @@ impl TerminalSnapshot {
     unsafe fn step_report(ptr: *mut c_void) -> Result<(), Error> {
         let self_ = unsafe { &mut *(ptr as *mut TerminalSnapshot) };
         // const bytes = self.encoded.written();
-        let bytes: &[u8] = &self_.encoded;
+        let bytes: &[u8] = self_.encoded.written();
 
         // var payload_totals = std.enums.EnumArray(snapshot.record.Tag, u64).initFill(0);
         // var record_counts = std.enums.EnumArray(snapshot.record.Tag, u64).initFill(0);

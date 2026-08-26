@@ -14,7 +14,6 @@ use crate::scrollback_compression::ScrollbackCompression;
 use crate::terminal_formatter::TerminalFormatter;
 use crate::terminal_parser::TerminalParser;
 use crate::terminal_resize::TerminalResize;
-#[cfg(feature = "snapshot-codec")]
 use crate::terminal_snapshot::TerminalSnapshot;
 use crate::terminal_stream::TerminalStream;
 use allocator_api2::alloc::Global as Allocator;
@@ -39,10 +38,6 @@ pub enum Action {
     // @"terminal-resize",
     TerminalResize,
     // @"terminal-snapshot",
-    //
-    // PORT NOTE (phase-4 wbench): the action exists unconditionally (the CLI
-    // token set matches the oracle's); only its IMPLEMENTATION module is
-    // cfg-gated on `snapshot-codec` until wsnap-3 lands the codec drivers.
     TerminalSnapshot,
     // @"terminal-stream",
     TerminalStream,
@@ -271,16 +266,7 @@ pub fn main_action(alloc: Allocator, action: Action, args: Args) -> Result<(), E
         Action::TerminalFormatter => main_action_impl::<TerminalFormatter>(alloc, args),
         Action::TerminalParser => main_action_impl::<TerminalParser>(alloc, args),
         Action::TerminalResize => main_action_impl::<TerminalResize>(alloc, args),
-        #[cfg(feature = "snapshot-codec")]
         Action::TerminalSnapshot => main_action_impl::<TerminalSnapshot>(alloc, args),
-        // PORT NOTE (phase-4 wbench, placeholder-leaf doctrine): a LOUD leaf,
-        // never a silent no-op — the wsnap-3 orchestrator deletes this arm
-        // (and the feature) when the snapshot codec drivers land.
-        #[cfg(not(feature = "snapshot-codec"))]
-        Action::TerminalSnapshot => unimplemented!(
-            "terminal-snapshot benchmark awaits the snapshot codec drivers \
-             (wsnap-3); build with `--features snapshot-codec` once they land"
-        ),
         Action::TerminalStream => main_action_impl::<TerminalStream>(alloc, args),
         Action::IsSymbol => main_action_impl::<IsSymbol>(alloc, args),
         Action::OscParser => main_action_impl::<OscParser>(alloc, args),
