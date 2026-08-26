@@ -83,7 +83,16 @@ set(_RUSTTY_FEATURE_FLAGS "")
 if(RUSTTY_VT_SIMD)
     list(APPEND _RUSTTY_FEATURE_FLAGS --features simd)
 else()
-    list(APPEND _RUSTTY_FEATURE_FLAGS --no-default-features)
+    # `--no-default-features` alone is NO LONGER the `-Dsimd=false` analog.
+    # Since the `-Dvt-features` work landed, rustty-vt-c's `default` carries
+    # both `simd` AND the nine VT feature gates, so dropping defaults dropped
+    # the entire C API surface: example/c-vt-cmake-static (which sets
+    # RUSTTY_VT_SIMD=OFF) failed to link on _rustty_formatter_terminal_new,
+    # _rustty_formatter_format_alloc and _rustty_formatter_free.
+    #
+    # `vt-features-default` is the aggregate of the nine, so this says exactly
+    # "every VT feature, SIMD off" without restating the list here.
+    list(APPEND _RUSTTY_FEATURE_FLAGS --no-default-features --features vt-features-default)
 endif()
 
 # Map CMake build types to Cargo profiles. The result is stored in

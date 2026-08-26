@@ -99,21 +99,19 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      # G-XTARGET builds rustty-vt-c for non-host targets. The rustup stds have
+      # to be present or the gate skips them by name.
+      - name: Install cross targets (G-XTARGET lane)
+        run: |
+          rustup target add wasm32-unknown-unknown wasm32-wasip1
+          rustup target add x86_64-pc-windows-msvc || true
+          rustup target add x86_64-unknown-freebsd || true
+
       - name: Set up Python 3 (gate scripts + harness)
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
-      # G-LINT (check_lints.sh) is the non-Rust linter lane. Each tool it
-      # cannot find reports `skipped` BY NAME instead of silently passing, so
-      # without these installs the lane would be honest but nearly empty.
-      # Installed here rather than in ci.sh for the same reason the Rust
-      # toolchain is: this workflow sets up the environment, ci.sh owns the
-      # check sequence. Once the Nix flake lands (Batch 4) this whole step
-      # collapses into `nix develop`.
-      #
-      # prettier comes from npx (pinned inside the gate), so only Node is
-      # needed. alejandra is deliberately absent until there are .nix files.
       # G-CCONSUMER (check_c_consumer.sh) drives cmake + pkg-config + cc. All
       # three are present on GitHub's runners except pkg-config on macOS, which
       # ships no pkgconf by default; without it the gate reports BLOCKED.
@@ -134,6 +132,16 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
+      # G-LINT (check_lints.sh) is the non-Rust linter lane. Each tool it
+      # cannot find reports `skipped` BY NAME instead of silently passing, so
+      # without these installs the lane would be honest but nearly empty.
+      # Installed here rather than in ci.sh for the same reason the Rust
+      # toolchain is: this workflow sets up the environment, ci.sh owns the
+      # check sequence.
+      #
+      # prettier comes from npx (pinned inside the gate), so only Node is
+      # needed. alejandra comes from the Nix step above on Linux; on macOS the
+      # gate reports it skipped by name.
       - name: Install linters (G-LINT lane)
         shell: bash
         run: |

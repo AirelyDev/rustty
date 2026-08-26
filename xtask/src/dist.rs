@@ -282,6 +282,166 @@ pub fn distcheck() -> Result<PathBuf, String> {
     Ok(tarball)
 }
 
+/// Slice a staged workspace down to `rustty-vt-c`'s closure.
+///
+/// A Cargo workspace cannot be partially built: every path in `members` must
+/// exist. So rather than deleting crates and leaving dangling members, this
+/// computes the closure from `cargo metadata`, REWRITES the `members` list to
+/// it, and removes the directories that fall out. The `dist/cmake` +
+/// `CMakeLists` + `include` trio stays because the C-consumer story is what
+/// this tarball is for.
+fn prune_to_lib_vt(root: &Path, tree: &Path) -> Result<(), String> {
+    // The closure is computed from `cargo metadata`, NOT from `cargo tree`.
+    //
+    // `cargo tree` reports the FEATURE-RESOLVED graph, and a workspace needs
+    // the manifest of every path dependency a member DECLARES — including
+    // optional ones no feature turns on. rustty-vt's optional `dcimgui-sys`
+    // (its `imgui` feature) is exactly that: absent from every `cargo tree`
+    // spelling tried here, yet cargo refuses to load the workspace without it:
+    //
+    //   failed to load manifest for dependency `dcimgui-sys`
+    //
+    // `cargo tree` also names crates.io packages that merely END in `-sys`
+    // (clang-sys), which a name-shape filter would wrongly treat as workspace
+    // members. metadata gives the member set and the declared deps exactly.
+    let output = Command::new("cargo")
+        .current_dir(root)
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .output()
+        .map_err(|e| format!("spawn cargo metadata: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cargo metadata exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let meta: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| format!("parse cargo metadata: {e}"))?;
+    let packages = meta["packages"]
+        .as_array()
+        .ok_or("cargo metadata: `packages` is not an array")?;
+
+    // name -> the path deps it declares (workspace members only).
+    let mut member_names: Vec<String> = Vec::new();
+    let mut deps_of: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for pkg in packages {
+        let Some(name) = pkg["name"].as_str() else {
+            continue;
+        };
+        member_names.push(name.to_string());
+        let mut deps = Vec::new();
+        if let Some(list) = pkg["dependencies"].as_array() {
+            for d in list {
+                // A `path` field is what makes it an in-workspace dependency;
+                // `kind` null = normal, "build" = build-dep. Dev-deps are
+                // skipped: they pull in test-only crates a source tarball for
+                // C consumers does not need.
+                if d["path"].is_null() {
+                    continue;
+                }
+                match d["kind"].as_str() {
+                    None | Some("build") => {}
+                    _ => continue,
+                }
+                if let Some(dn) = d["name"].as_str() {
+                    deps.push(dn.to_string());
+                }
+            }
+        }
+        deps_of.insert(name.to_string(), deps);
+    }
+
+    // Transitive closure from rustty-vt-c.
+    let mut keep: Vec<String> = Vec::new();
+    let mut queue = vec!["rustty-vt-c".to_string()];
+    while let Some(n) = queue.pop() {
+        if keep.contains(&n) {
+            continue;
+        }
+        if !member_names.contains(&n) {
+            continue; // a crates.io dep; `cargo vendor` handles it
+        }
+        keep.push(n.clone());
+        if let Some(ds) = deps_of.get(&n) {
+            for d in ds {
+                queue.push(d.clone());
+            }
+        }
+    }
+    // Rewrite [workspace] members.
+    let manifest_path = tree.join("Cargo.toml");
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("read staged Cargo.toml: {e}"))?;
+    let start = manifest
+        .find("members = [")
+        .ok_or("staged Cargo.toml has no `members = [`")?;
+    // Find the CLOSING bracket by scanning lines, not by `find(']')`: the
+    // members list is full of trailing `# 11  <- crown jewel`-style comments,
+    // and one of them contains a `]`. Taking the first bracket sliced the
+    // manifest mid-comment and produced a TOML parse error out of cargo
+    // vendor, three steps downstream.
+    let end = {
+        let mut idx = start;
+        let mut found = None;
+        for line in manifest[start..].split_inclusive('\n') {
+            let trimmed = line.trim_start();
+            if idx != start && (trimmed.starts_with(']') || trimmed.starts_with("] ")) {
+                found = Some(idx + line.find(']').unwrap() + 1);
+                break;
+            }
+            idx += line.len();
+        }
+        found.ok_or("staged Cargo.toml `members` list is unterminated")?
+    };
+    let mut members = String::from("members = [\n");
+    for k in &keep {
+        let dir = member_dir(root, k)?;
+        members.push_str(&format!("    \"{dir}\",\n"));
+    }
+    members.push(']');
+    let manifest = format!("{}{}{}", &manifest[..start], members, &manifest[end..]);
+    std::fs::write(&manifest_path, manifest)
+        .map_err(|e| format!("write staged Cargo.toml: {e}"))?;
+
+    // Remove the crate directories that are no longer members.
+    for (subdir, prefix) in [("crates", "rustty-"), ("crates-sys", "")] {
+        let dir = tree.join(subdir);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let _ = prefix;
+            if !keep.contains(&name) {
+                std::fs::remove_dir_all(entry.path())
+                    .map_err(|e| format!("prune {subdir}/{name}: {e}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Workspace-relative directory of a member, derived from its manifest path
+/// rather than guessed from its name.
+fn member_dir(root: &Path, name: &str) -> Result<String, String> {
+    for sub in ["crates", "crates-sys", "."] {
+        let candidate = root.join(sub).join(name);
+        if candidate.join("Cargo.toml").is_file() {
+            return Ok(if sub == "." {
+                name.to_string()
+            } else {
+                format!("{sub}/{name}")
+            });
+        }
+    }
+    Err(format!("cannot locate workspace member `{name}`"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,164 +517,4 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&extract);
     }
-}
-
-/// Slice a staged workspace down to `rustty-vt-c`'s closure.
-///
-/// A Cargo workspace cannot be partially built: every path in `members` must
-/// exist. So rather than deleting crates and leaving dangling members, this
-/// computes the closure with `cargo tree`, REWRITES the `members` list to it,
-/// and removes the directories that fall out. The `dist/cmake` + `CMakeLists`
-/// + `include` trio stays because the C consumer story is what this tarball is
-/// for.
-fn prune_to_lib_vt(root: &Path, tree: &Path) -> Result<(), String> {
-    // The closure is computed from `cargo metadata`, NOT from `cargo tree`.
-    //
-    // `cargo tree` reports the FEATURE-RESOLVED graph, and a workspace needs
-    // the manifest of every path dependency a member DECLARES — including
-    // optional ones no feature turns on. rustty-vt's optional `dcimgui-sys`
-    // (its `imgui` feature) is exactly that: absent from every `cargo tree`
-    // spelling tried here, yet cargo refuses to load the workspace without it:
-    //
-    //   failed to load manifest for dependency `dcimgui-sys`
-    //
-    // `cargo tree` also names crates.io packages that merely END in `-sys`
-    // (clang-sys), which a name-shape filter would wrongly treat as workspace
-    // members. metadata gives the member set and the declared deps exactly.
-    let output = Command::new("cargo")
-        .current_dir(root)
-        .args(["metadata", "--no-deps", "--format-version", "1"])
-        .output()
-        .map_err(|e| format!("spawn cargo metadata: {e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "cargo metadata exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    let meta: serde_json::Value =
-        serde_json::from_slice(&output.stdout).map_err(|e| format!("parse cargo metadata: {e}"))?;
-    let packages = meta["packages"]
-        .as_array()
-        .ok_or("cargo metadata: `packages` is not an array")?;
-
-    // name -> the path deps it declares (workspace members only).
-    let mut member_names: Vec<String> = Vec::new();
-    let mut deps_of: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
-    for pkg in packages {
-        let Some(name) = pkg["name"].as_str() else {
-            continue;
-        };
-        member_names.push(name.to_string());
-        let mut deps = Vec::new();
-        if let Some(list) = pkg["dependencies"].as_array() {
-            for d in list {
-                // A `path` field is what makes it an in-workspace dependency;
-                // `kind` null = normal, "build" = build-dep. Dev-deps are
-                // skipped: they pull in test-only crates a source tarball for
-                // C consumers does not need.
-                if d["path"].is_null() {
-                    continue;
-                }
-                match d["kind"].as_str() {
-                    None | Some("build") => {}
-                    _ => continue,
-                }
-                if let Some(dn) = d["name"].as_str() {
-                    deps.push(dn.to_string());
-                }
-            }
-        }
-        deps_of.insert(name.to_string(), deps);
-    }
-
-    // Transitive closure from rustty-vt-c.
-    let mut keep: Vec<String> = Vec::new();
-    let mut queue = vec!["rustty-vt-c".to_string()];
-    while let Some(n) = queue.pop() {
-        if keep.iter().any(|k| *k == n) {
-            continue;
-        }
-        if !member_names.iter().any(|m| *m == n) {
-            continue; // a crates.io dep; `cargo vendor` handles it
-        }
-        keep.push(n.clone());
-        if let Some(ds) = deps_of.get(&n) {
-            for d in ds {
-                queue.push(d.clone());
-            }
-        }
-    }
-    // Rewrite [workspace] members.
-    let manifest_path = tree.join("Cargo.toml");
-    let manifest = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("read staged Cargo.toml: {e}"))?;
-    let start = manifest
-        .find("members = [")
-        .ok_or("staged Cargo.toml has no `members = [`")?;
-    // Find the CLOSING bracket by scanning lines, not by `find(']')`: the
-    // members list is full of trailing `# 11  <- crown jewel`-style comments,
-    // and one of them contains a `]`. Taking the first bracket sliced the
-    // manifest mid-comment and produced a TOML parse error out of cargo
-    // vendor, three steps downstream.
-    let end = {
-        let mut idx = start;
-        let mut found = None;
-        for line in manifest[start..].split_inclusive('\n') {
-            let trimmed = line.trim_start();
-            if idx != start && (trimmed.starts_with(']') || trimmed.starts_with("] ")) {
-                found = Some(idx + line.find(']').unwrap() + 1);
-                break;
-            }
-            idx += line.len();
-        }
-        found.ok_or("staged Cargo.toml `members` list is unterminated")?
-    };
-    let mut members = String::from("members = [\n");
-    for k in &keep {
-        let dir = member_dir(root, k)?;
-        members.push_str(&format!("    \"{dir}\",\n"));
-    }
-    members.push(']');
-    let manifest = format!("{}{}{}", &manifest[..start], members, &manifest[end..]);
-    std::fs::write(&manifest_path, manifest)
-        .map_err(|e| format!("write staged Cargo.toml: {e}"))?;
-
-    // Remove the crate directories that are no longer members.
-    for (subdir, prefix) in [("crates", "rustty-"), ("crates-sys", "")] {
-        let dir = tree.join(subdir);
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !entry.path().is_dir() {
-                continue;
-            }
-            let _ = prefix;
-            if !keep.iter().any(|k| *k == name) {
-                std::fs::remove_dir_all(entry.path())
-                    .map_err(|e| format!("prune {subdir}/{name}: {e}"))?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Workspace-relative directory of a member, derived from its manifest path
-/// rather than guessed from its name.
-fn member_dir(root: &Path, name: &str) -> Result<String, String> {
-    for sub in ["crates", "crates-sys", "."] {
-        let candidate = root.join(sub).join(name);
-        if candidate.join("Cargo.toml").is_file() {
-            return Ok(if sub == "." {
-                name.to_string()
-            } else {
-                format!("{sub}/{name}")
-            });
-        }
-    }
-    Err(format!("cannot locate workspace member `{name}`"))
 }

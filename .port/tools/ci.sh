@@ -72,6 +72,13 @@
 #                                    (exit 3) where it does not. The hermetic
 #                                    counterpart to G-CCONSUMER: same install,
 #                                    no ambient system libraries.
+#   G-XTARGET check_cross_targets.sh cross-target builds of rustty-vt-c
+#                                    (wasm32-unknown-unknown, wasm32-wasip1,
+#                                    x86_64-pc-windows-msvc,
+#                                    x86_64-unknown-freebsd) -> HARD-FAIL.
+#                                    Skips by name where the rustup std or a
+#                                    cross C toolchain is absent; BLOCKED if
+#                                    every target is unavailable.
 #   G-THEMES check_theme_corpus.py   the 602 vendored iterm2 theme files match
 #                                    a committed per-file SHA-256 manifest
 #                                    -> HARD-FAIL. res_themes.rs only counts
@@ -393,6 +400,13 @@ GATE_REGISTRY=(
   # .pc files, and a C consumer linked BOTH ways). BLOCKED, never green, where
   # nix is absent — which is every macOS leg here.
   "G-NIX|HARD|bash $GATES/check_nix.sh"
+  # G-XTARGET (2026-08-26) — cross-target BUILDS of rustty-vt-c (the
+  # reference's build-libghostty-vt-{wasm,windows,...} legs). G-WINCHK is
+  # `cargo check`-level and never runs the crates-sys C compiles for the
+  # target, which is exactly where cross breakage lives. Targets whose rustup
+  # std is missing, or that the host C compiler cannot target, are reported
+  # skipped BY NAME; all-skipped exits 3 BLOCKED.
+  "G-XTARGET|HARD|bash $GATES/check_cross_targets.sh"
   # G-REL (WS18) — the `--release` test lane. Steps 3/4 above only ever exercise
   # the DEBUG profile, so nothing noticed that release had rotted to 22 failures
   # across 7 targets. Most were tests driving a seam the port deliberately
