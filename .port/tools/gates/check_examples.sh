@@ -11,7 +11,7 @@
 # what makes that sentence true. It globs, so adding an example needs no edit
 # here either.
 #
-# THREE FAMILIES, discovered not listed:
+# FOUR FAMILIES, discovered not listed:
 #   example/*/build.sh          compile the C/C++ sources against the published
 #                               artifacts and RUN the result. 24 of them.
 #   example/c-vt-cmake*/        CMakeLists-driven; they demonstrate the
@@ -19,6 +19,9 @@
 #                               so they are configured + built through cmake.
 #                               The -cross one needs a non-host Rust target
 #                               installed and reports skipped without it.
+#   swift-vt-xcframework/       SwiftPM against dist/rustty-vt.xcframework;
+#                               macOS-only, and it rebuilds the framework first
+#                               so a stale one cannot produce a false green.
 #   example/wasm-*/             browser lanes; covered by ci.sh's opt-in
 #                               `--webgl` lane, not here. Listed as skipped so
 #                               the omission is visible.
@@ -44,7 +47,7 @@ bad()  { echo "  FAIL    $1"; RAN=$((RAN+1)); FAILED=1; FAILED_NAMES="$FAILED_NA
 skip() { echo "  skipped $1 ($2)"; SKIPPED="$SKIPPED $1"; }
 
 # --- family 1: build.sh examples --------------------------------------------
-echo "=== G-EXAMPLES 1/3 :: example/*/build.sh (compile + run) ==="
+echo "=== G-EXAMPLES 1/4 :: example/*/build.sh (compile + run) ==="
 found_sh=0
 for f in "$ROOT"/example/*/build.sh; do
   [ -f "$f" ] || continue
@@ -64,7 +67,7 @@ if [ "$found_sh" -eq 0 ]; then
 fi
 
 # --- family 2: CMake examples ------------------------------------------------
-echo "=== G-EXAMPLES 2/3 :: example/c-vt-cmake* (cmake configure + build) ==="
+echo "=== G-EXAMPLES 2/4 :: example/c-vt-cmake* (cmake configure + build) ==="
 if ! command -v cmake >/dev/null 2>&1; then
   skip "c-vt-cmake*" "cmake not installed"
 else
@@ -130,8 +133,41 @@ else
   done
 fi
 
-# --- family 3: wasm examples -------------------------------------------------
-echo "=== G-EXAMPLES 3/3 :: example/wasm-* ==="
+# --- family 3: the SwiftPM example -------------------------------------------
+#
+# PORTS: the reference's `build-examples-swift` job. Needs the VT XCFramework,
+# which `xtask xcframework-vt` builds — and that needs Xcode, so this lane is
+# macOS-only and reports skipped elsewhere BY NAME rather than vanishing.
+echo "=== G-EXAMPLES 3/4 :: example/swift-vt-xcframework ==="
+swiftdir="$ROOT/example/swift-vt-xcframework"
+if [ ! -f "$swiftdir/Package.swift" ]; then
+  skip "swift-vt-xcframework" "not present"
+elif [ "$(uname -s)" != "Darwin" ]; then
+  skip "swift-vt-xcframework" "macOS-only (SwiftPM + xcodebuild)"
+elif ! command -v swift >/dev/null 2>&1; then
+  skip "swift-vt-xcframework" "swift not installed"
+elif ! command -v xcodebuild >/dev/null 2>&1; then
+  skip "swift-vt-xcframework" "xcodebuild not installed"
+else
+  # Rebuild the framework unconditionally, for the reason WS19 T16 gave for the
+  # example build.sh scripts: a stale dist/rustty-vt.xcframework would let this
+  # lane link an XCFramework built from different sources and report green.
+  if ! (cd "$ROOT" && cargo run -q -p xtask -- xcframework-vt) > "$WORK/xcf-vt.log" 2>&1; then
+    tail -20 "$WORK/xcf-vt.log" | sed 's/^/          /'
+    bad "swift-vt-xcframework (xtask xcframework-vt failed)"
+  elif ! (cd "$swiftdir" && swift build) > "$WORK/swift.log" 2>&1; then
+    tail -20 "$WORK/swift.log" | sed 's/^/          /'
+    bad "swift-vt-xcframework (swift build)"
+  elif ! (cd "$swiftdir" && swift run) > "$WORK/swift-run.log" 2>&1; then
+    tail -20 "$WORK/swift-run.log" | sed 's/^/          /'
+    bad "swift-vt-xcframework (swift run)"
+  else
+    ok "swift-vt-xcframework -> $(grep -m1 'Hello from' "$WORK/swift-run.log" || echo 'ran')"
+  fi
+fi
+
+# --- family 4: wasm examples -------------------------------------------------
+echo "=== G-EXAMPLES 4/4 :: example/wasm-* ==="
 for d in "$ROOT"/example/wasm-*/; do
   [ -d "$d" ] || continue
   skip "$(basename "$d")" "browser lane — run 'bash .port/tools/ci.sh --webgl'"

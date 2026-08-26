@@ -70,7 +70,14 @@ macos/DerivedData/
 # NOT all of dist/ — dist/cmake, dist/doxygen (and dist/linux|windows|macos)
 # are checked-in source assets.
 /dist/RusttyKit.xcframework/
+/dist/rustty-vt.xcframework/
+# The staged header dirs are per-module (xcframework-headers-RusttyKit,
+# -RusttyVt); the bare name is the pre-parameterization spelling, kept so an
+# older working tree does not resurface it as untracked.
 /dist/xcframework-headers/
+/dist/xcframework-headers-*/
+# SwiftPM build output for example/swift-vt-xcframework.
+example/swift-vt-xcframework/.build/
 # Source tarball produced by `cargo run -p xtask -- dist`
 /dist/rustty-*.tar.gz
 

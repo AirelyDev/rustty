@@ -16,7 +16,7 @@ mod release;
 
 mod archives;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 mod main_build_data;
@@ -67,6 +67,11 @@ SUBCOMMANDS:
     header-gen         Generate include/rustty.h from rustty-vt-c via cbindgen (R2)
     header-gen-apprt   Generate include/rustty-apprt.h from rustty-apprt-c via cbindgen (R2)
     xcframework        Package rustty-apprt-c into dist/RusttyKit.xcframework (macOS Swift-app tier)
+    xcframework-vt     Package rustty-vt-c into dist/rustty-vt.xcframework (the VT library for
+                       Swift consumers; module RusttyVt). Port of ghostty's
+                       ghostty-vt.xcframework — the artifact release-tip.yml's
+                       build-lib-vt-xcframework job ships and example/swift-vt-xcframework
+                       consumes.
     resources [--target-os <os>] [--prefix <prefix>] [--flatpak] [--debug] [--system-package]
                        Generate zig-out/share/{terminfo,<app>,vim,nvim,fish,zsh,bash-completion,man,locale,bat} for the macOS Copy-Resources phase (<app> = rustty by default, ghostty under identity-oracle).
                        --target-os (linux|macos|freebsd|windows|…, default: host) selects the
@@ -130,6 +135,16 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("xtask: xcframework failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("xcframework-vt") => match xcframework_vt() {
+            Ok(out) => {
+                println!("wrote {}", out.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("xtask: xcframework-vt failed: {e}");
                 ExitCode::FAILURE
             }
         },
@@ -343,7 +358,100 @@ fn header_gen_apprt() -> Result<PathBuf, String> {
 /// that appear when the host toolchain defaults to the running OS (e.g. 26.x).
 const MACOS_DEPLOYMENT_TARGET: &str = "13.0";
 
+/// What distinguishes one xcframework from another.
+///
+/// The pipeline (build a staticlib, fold in the vendored C archives cargo
+/// declared, normalize with ranlib, libtool-combine, stage headers,
+/// `xcodebuild -create-xcframework`) is IDENTICAL for both frameworks rustty
+/// ships. Only these five things differ, so they are parameters rather than a
+/// second copy of 180 lines.
+struct XcframeworkSpec {
+    /// Cargo package to build (`-p`).
+    krate: &'static str,
+    /// Combined-archive basename, also the libtool output stem.
+    lib_stem: &'static str,
+    /// Clang module name a Swift consumer imports.
+    module: &'static str,
+    /// Output bundle name under `dist/`.
+    bundle: &'static str,
+    /// How the public headers are staged for the clang module map.
+    headers: HeaderLayout,
+}
+
+/// The two shapes rustty's public headers take.
+enum HeaderLayout {
+    /// A single umbrella header copied to `<headers>/<dst>`; the module's
+    /// `umbrella header` is that file. This is the embedding API, whose
+    /// `include/rustty-embed.h` already includes everything.
+    SingleFile {
+        src: &'static str,
+        dst: &'static str,
+    },
+    /// A whole include subtree copied verbatim, with `umbrella` naming the
+    /// entry point RELATIVE to the headers root. The VT library's public
+    /// surface is `include/rustty/vt.h` plus `include/rustty/vt/*.h`, and C
+    /// consumers spell it `#include <rustty/vt.h>` — so the tree has to keep
+    /// its `rustty/` prefix rather than being flattened.
+    Tree {
+        src: &'static str,
+        umbrella: &'static str,
+    },
+}
+
+/// The embedding framework the macOS Swift app links (`import RusttyKit`).
+const XCF_KIT: XcframeworkSpec = XcframeworkSpec {
+    krate: "rustty-apprt-c",
+    lib_stem: "libRusttyKit",
+    module: "RusttyKit",
+    bundle: "RusttyKit.xcframework",
+    headers: HeaderLayout::SingleFile {
+        src: "include/rustty-embed.h",
+        dst: "rustty.h",
+    },
+};
+
+/// PORTS: ghostty's `ghostty-vt.xcframework` (GhosttyXCFramework.zig's lib-vt
+/// arm, shipped by release-tip.yml's `build-lib-vt-xcframework` job and
+/// consumed by example/swift-vt-xcframework). rustty built the embedding
+/// framework only, so neither the release artifact nor a Swift consumer of the
+/// VT library had anything to point at.
+const XCF_VT: XcframeworkSpec = XcframeworkSpec {
+    krate: "rustty-vt-c",
+    lib_stem: "librustty-vt",
+    module: "RusttyVt",
+    bundle: "rustty-vt.xcframework",
+    headers: HeaderLayout::Tree {
+        src: "include/rustty",
+        umbrella: "rustty/vt.h",
+    },
+};
+
+/// Copy a directory tree verbatim. `std::fs` has no recursive copy and the
+/// header trees are small and shallow, so a plain recursion is enough.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst).map_err(|e| format!("mkdir {}: {e}", dst.display()))?;
+    for entry in std::fs::read_dir(src).map_err(|e| format!("read_dir {}: {e}", src.display()))? {
+        let entry = entry.map_err(|e| format!("read_dir entry in {}: {e}", src.display()))?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        if from.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else {
+            std::fs::copy(&from, &to).map_err(|e| format!("copy {}: {e}", from.display()))?;
+        }
+    }
+    Ok(())
+}
+
 fn xcframework() -> Result<PathBuf, String> {
+    build_xcframework(&XCF_KIT)
+}
+
+fn xcframework_vt() -> Result<PathBuf, String> {
+    build_xcframework(&XCF_VT)
+}
+
+fn build_xcframework(spec: &XcframeworkSpec) -> Result<PathBuf, String> {
     let root = workspace_root();
     let target = "aarch64-apple-darwin";
 
@@ -364,7 +472,7 @@ fn xcframework() -> Result<PathBuf, String> {
         &root,
         &[
             "-p",
-            "rustty-apprt-c",
+            spec.krate,
             "--profile",
             "xcframework",
             // SIMD on for the shipped product library, matching upstream
@@ -395,7 +503,12 @@ fn xcframework() -> Result<PathBuf, String> {
     let parsed = archives::parse_artifacts(&json)?;
     let rust_lib = match parsed.staticlibs.as_slice() {
         [one] => one.clone(),
-        [] => return Err("cargo reported no staticlib artifact for rustty-apprt-c".to_string()),
+        [] => {
+            return Err(format!(
+                "cargo reported no staticlib artifact for {}",
+                spec.krate
+            ))
+        }
         many => {
             return Err(format!(
                 "cargo reported {} staticlib artifacts; expected exactly one: {many:?}",
@@ -428,12 +541,12 @@ fn xcframework() -> Result<PathBuf, String> {
     let _ = std::fs::remove_dir_all(&norm_dir);
     let mut normalized: Vec<PathBuf> = Vec::with_capacity(archives_list.len());
     for (i, a) in archives_list.iter().enumerate() {
-        let dst = norm_dir.join(format!("{i}-libRusttyKit.a"));
+        let dst = norm_dir.join(format!("{i}-{}.a", spec.lib_stem));
         archives::normalize_archive(a, &dst)?;
         normalized.push(dst);
     }
 
-    let lib = root.join(format!("target/{target}/xcframework/libRusttyKit.a"));
+    let lib = root.join(format!("target/{target}/xcframework/{}.a", spec.lib_stem));
     let _ = std::fs::remove_file(&lib);
     let mut lt = Command::new("libtool");
     lt.arg("-static").arg("-o").arg(&lib);
@@ -454,30 +567,54 @@ fn xcframework() -> Result<PathBuf, String> {
         return Err(format!("combined lib not found at {}", lib.display()));
     }
 
-    // 2. Stage the headers dir: the rustty embedding umbrella staged as
-    // rustty.h + the RusttyKit module map.
+    // 2. Stage the headers dir + the clang module map.
     let dist = root.join("dist");
-    let headers = dist.join("xcframework-headers");
+    let headers = dist.join(format!("xcframework-headers-{}", spec.module));
     let _ = std::fs::remove_dir_all(&headers);
     std::fs::create_dir_all(&headers).map_err(|e| format!("mkdir headers: {e}"))?;
-    let src_h = root.join("include/rustty-embed.h");
-    if !src_h.exists() {
-        return Err(format!(
-            "embedding umbrella header missing: {}",
-            src_h.display()
-        ));
-    }
-    std::fs::copy(&src_h, headers.join("rustty.h")).map_err(|e| format!("copy rustty.h: {e}"))?;
-    // Umbrella module map — same shape as upstream GhosttyKit.xcframework.
+    let umbrella = match &spec.headers {
+        HeaderLayout::SingleFile { src, dst } => {
+            let src_h = root.join(src);
+            if !src_h.exists() {
+                return Err(format!("umbrella header missing: {}", src_h.display()));
+            }
+            std::fs::copy(&src_h, headers.join(dst))
+                .map_err(|e| format!("copy {dst}: {e}"))?;
+            (*dst).to_string()
+        }
+        HeaderLayout::Tree { src, umbrella } => {
+            let src_dir = root.join(src);
+            if !src_dir.is_dir() {
+                return Err(format!("header tree missing: {}", src_dir.display()));
+            }
+            // Keep the `rustty/` prefix: consumers spell it
+            // `#include <rustty/vt.h>`, so the tree is copied UNDER a directory
+            // of the same name rather than flattened into the headers root.
+            let leaf = src_dir
+                .file_name()
+                .ok_or_else(|| format!("header tree has no basename: {src}"))?;
+            copy_dir_recursive(&src_dir, &headers.join(leaf))?;
+            if !headers.join(umbrella).exists() {
+                return Err(format!(
+                    "umbrella header {umbrella} not found after staging {src}"
+                ));
+            }
+            (*umbrella).to_string()
+        }
+    };
+    // Umbrella module map — same shape as upstream's XCFrameworks.
     std::fs::write(
         headers.join("module.modulemap"),
-        "// RusttyKit module for the rustty macOS Swift app (canonical rustty_* ABI).\n\
-         module RusttyKit {\n    umbrella header \"rustty.h\"\n    export *\n}\n",
+        format!(
+            "// {module} module for rustty (canonical rustty_* ABI).\n\
+             module {module} {{\n    umbrella header \"{umbrella}\"\n    export *\n}}\n",
+            module = spec.module,
+        ),
     )
     .map_err(|e| format!("write modulemap: {e}"))?;
 
     // 3. xcodebuild -create-xcframework.
-    let out = dist.join("RusttyKit.xcframework");
+    let out = dist.join(spec.bundle);
     let _ = std::fs::remove_dir_all(&out);
     let status = Command::new("xcodebuild")
         .args(["-create-xcframework", "-library"])
