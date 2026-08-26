@@ -102,14 +102,19 @@ missing is almost entirely the **distribution and verification** half:
 | `xtask` (dist, resources, headers, xcframework, translations, release-info, wasm patch) | **done** — replaces `src/build/`'s 34 Zig steps                                                                              |
 | CMake consumer path + Doxygen + Makefile + `dist/{cmake,doxygen,linux,windows,macos}`   | **done** — 1:1 with the oracle                                                                                               |
 | macOS app + Sparkle appcast + release/publish workflows                                 | **mostly done** — see §D for the holes                                                                                       |
-| **Nix** (flake, devShell, packages, 16 VMs, NixOS tests)                                | **absent** — 0 of ~38 files                                                                                                  |
+| **Nix** (flake, devShell, packages, 16 VMs, NixOS tests)                                | **Phase A done** — flake + devShell + librustty-vt, verified; VMs and `tests.nix` still absent (Phase B)                     |
 | **Flatpak / Snap manifests**                                                            | **absent** — 0 of 7 files (the `dist/linux` inputs they consume _are_ ported)                                                |
-| **CI breadth**                                                                          | **1 job** (2-OS matrix) vs. the oracle's **~52**                                                                             |
-| **Lint enforcement**                                                                    | configs checked in, **nothing runs them**                                                                                    |
+| **CI breadth**                                                                          | **1 job** (2-OS matrix) + 5 new gates, vs. the oracle's **~52** jobs                                                         |
+| **Lint enforcement**                                                                    | **done** — all six run as `G-LINT`                                                                                           |
 
-Put bluntly: rustty can _build_ everything ghostty builds, but almost nothing
-outside `cargo` + the parity gates is _verified_ on every push, and rustty
-cannot be _installed_ by a Nix, Flatpak, or Snap user.
+> The two rows above marked done were **absent** when this audit was written;
+> the rest of the document describes the state at that time. See the Status
+> section for what has since changed.
+
+Put bluntly: rustty can _build_ everything ghostty builds, but much of what is
+outside `cargo` + the parity gates is still not _verified_ on every push, and
+rustty cannot yet be _installed_ by a Flatpak or Snap user (a Nix user can now
+get the C library and the dev shell, but not the app).
 
 ---
 
