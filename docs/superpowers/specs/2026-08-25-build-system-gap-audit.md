@@ -558,3 +558,97 @@ matrix grows. G5 and G6 grow the matrix; this is the moment.
 4. **G7** — wire `xtask resources` into a gate; the machinery already works.
 5. **G5/G6** — the two real CI legs. Adopt **G12** in the same change.
 6. **G4/G8** — deliberate calls, not defects.
+
+---
+
+## H. §G resolution (2026-08-26)
+
+All twelve addressed. Three new gates (`G-EOL`, `G-XTASK`, `G-DOXYGEN`) and two
+new CI legs (`windows`, `macos-app`) behind a `required` aggregator.
+
+**Acting on §G found four more defects, every one of them invisible until
+something ran.** Three were found by turning a feature ON for the first time,
+and one by building an artifact that no gate had ever built:
+
+1. **The macOS app did not build at all.** `xtask xcframework` wrote the
+   embedding bundle to `dist/RusttyKit.xcframework`; `Rustty.xcodeproj`
+   references it as `path = RusttyKit.xcframework`, resolved relative to
+   `macos/`. A stale copy sat there — 69 lines short, missing
+   `RUSTTY_CLIPBOARD_PRIMARY`, `RUSTTY_ACTION_EXPORT_TERMINAL_IO`,
+   `rustty_surface_deny_clipboard_request` and more — and the Swift sources
+   failed with 18 "cannot find X in scope" errors. The reference emits to
+   `macos/GhosttyKit.xcframework` (`GhosttyXCFramework.zig:41`) and cleans
+   exactly that path; rustty's divergence to `dist/` is what broke it.
+   `XcframeworkSpec` gained an `out_dir` and the app bundle now lands where the
+   project reads it. **BUILD SUCCEEDED**, and the 25 `RusttyTests` cases run
+   green — the first time either has happened outside a release.
+
+2. **`--features flatpak` had never compiled.** `os/flatpak.rs` aliased
+   `EnvMap` to a lossy `HashMap<String, String>` while `Exec`'s is
+   `HashMap<Vec<u8>, Vec<u8>>`. Zig's `std.process.EnvMap` holds `[]const u8`,
+   so the byte-map is the faithful type ([[zig-byteslice-to-rust-rawbytes]]).
+
+3. **...and then it had never linked.** `G_VARIANT_TYPE` was declared as an
+   `extern "C"` function. It is a glib MACRO expanding to
+   `g_variant_type_checked_`; no such symbol exists, so every build carrying
+   the module failed with `undefined reference to 'G_VARIANT_TYPE'`. The
+   reference gets the expansion free from `@cImport`. Verified linking on
+   aarch64-linux.
+
+4. **`rustty-os` never declared the GIO link** the flatpak path needs —
+   `SharedDeps.zig:663-685` does it under the same `-Dflatpak` condition.
+
+### Disposition
+
+| §G   | Resolution                                                                                                                             |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| G1   | `flatpak` feature; welded to `rustty-termio/flatpak` so the type-swap and the runtime guard cannot diverge. Manifests pass it.          |
+| G2   | `snap` feature; snapcraft.yaml passes it.                                                                                              |
+| G3   | Path rules + `--renormalize`; blob now byte-identical to the oracle. **G-EOL** guards it, RED-flip proven.                              |
+| G4   | All six tiers mirrored in-tree (4,001 files, 11 MB → 915 KB packed). `replay_port_full_corpus` runs with no oracle.                     |
+| G5   | `windows` job: vt + vt-c tests, lib build, `test_dll_init.c`, GNU-ABI build.                                                            |
+| G6   | `macos-app` job: xcframework, resources, `xcodebuild`, `RusttyTests`.                                                                   |
+| G7   | **G-XTASK**, six arms; the linux/flatpak pair is differential.                                                                          |
+| G8   | `xtask/docker/{debian,lib-c-docs}/` + **G-DOXYGEN**.                                                                                    |
+| G9   | `PROJECT_LOGO` restored; `HTML_TIMESTAMP` deliberately NOT restored (see below).                                                        |
+| G10  | `make clean` gains `zig-out/`, both xcframeworks, staged headers, `macos/build`, `macos/DerivedData`.                                   |
+| G11  | `/result*`, `/.nixos-test-history`, `vgcore.*`; `GhosttyKit` → `RusttyKit`; `*.txt text eol=lf`.                                        |
+| G12  | `required` aggregator; treats `skipped` as failure.                                                                                    |
+
+### Two judgement calls worth recording
+
+**G9 resolved by NOT restoring the tag.** `HTML_TIMESTAMP` was renamed to
+`TIMESTAMP` in doxygen 1.14, so the reference's spelling warns as obsolete on a
+current doxygen while the new one warns as unknown on the 1.9.8 Ubuntu ships.
+No spelling is clean on both, and `NO` has been the default since 1.8.16 —
+verified empirically, a generated page carries no "Generated on" line. The
+reasoning is recorded in the Doxyfile; `G-DOXYGEN` provides the guarantee.
+
+**G-DOXYGEN uses a warning BASELINE, not zero.** The only warnings the headers
+produce come from `rgb:<red>/<green>/<blue>`, text byte-identical to the
+reference's `include/ghostty/vt/color.h`. Demanding zero would force a
+faithfully-ported comment to diverge from its source, so warnings are filtered
+through `doxygen_warnings.baseline`, whose admission rule is "only if the text
+matches the reference, and name the file and line".
+
+### Verified where, and what is not
+
+| Verified here                                                       | How                                       |
+| ------------------------------------------------------------------- | ----------------------------------------- |
+| G-EOL, G-XTASK (all 6 arms), G-DOXYGEN, G-FEATMATRIX                | run on macOS; each RED-flip self-tested   |
+| macOS app build + 25 `RusttyTests`                                  | `xcodebuild` on this host                 |
+| `--features flatpak` compiles AND links                             | aarch64-linux VM                          |
+| `--features snap`; default build unaffected                         | macOS                                     |
+| 4,001-file corpus replay, with and without the oracle               | `cargo test -p rustty-vt`                 |
+
+**Not verified here — the `windows` job.** No Windows host exists. Its steps are
+standard and the code type-checks for the target (`G-WINCHK`), but its first
+GitHub run is its first real execution. Local cross-verification via
+`x86_64-pc-windows-gnu` was attempted and blocked for an unrelated reason worth
+recording: Homebrew's mingw is **GCC 16**, and the vendored highway guards
+`evex512` on `HWY_COMPILER_GCC_ACTUAL >= 1400` with **no upper bound**, while
+GCC 16 removed that target attribute. That is an upstream-highway forward-compat
+bug, not a rustty or Windows one — it will bite any toolchain that reaches GCC
+16, including a future Linux CI image. Filed here rather than patched: editing a
+vendored tree is a separate decision, and `crates-sys/*/vendor/**` was just
+marked `-text` specifically to keep those bytes faithful.

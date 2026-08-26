@@ -225,8 +225,8 @@ fn port_corpus_matches_oracle_bytes() {
     let port_root = port_corpus_root();
     let mut compared = 0usize;
     for (dir, _, _) in TIERS {
-        for entry in fs::read_dir(port_root.join(dir))
-            .unwrap_or_else(|e| panic!("read_dir({dir}): {e}"))
+        for entry in
+            fs::read_dir(port_root.join(dir)).unwrap_or_else(|e| panic!("read_dir({dir}): {e}"))
         {
             let path = entry.expect("dir entry").path();
             if !path.is_file() {

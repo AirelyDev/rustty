@@ -164,9 +164,13 @@ jobs:
           set -euxo pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update
-            sudo apt-get install -y blueprint-compiler valgrind libc6-dbg gettext
+            # doxygen: G-DOXYGEN. graphviz: the Doxyfile's diagram support.
+            # libglib2.0-dev: G-FEATMATRIX's `flatpak` arm links gio-2.0,
+            # exactly as SharedDeps.zig:683 does.
+            sudo apt-get install -y blueprint-compiler valgrind libc6-dbg gettext \
+              doxygen graphviz libglib2.0-dev
           else
-            brew install gettext
+            brew install gettext doxygen
           fi
 
       - name: Set up Python 3 (gate scripts + harness)

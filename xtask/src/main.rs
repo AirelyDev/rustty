@@ -66,7 +66,9 @@ USAGE:
 SUBCOMMANDS:
     header-gen         Generate include/rustty.h from rustty-vt-c via cbindgen (R2)
     header-gen-apprt   Generate include/rustty-apprt.h from rustty-apprt-c via cbindgen (R2)
-    xcframework        Package rustty-apprt-c into dist/RusttyKit.xcframework (macOS Swift-app tier)
+    xcframework        Package rustty-apprt-c into macos/RusttyKit.xcframework (macOS Swift-app tier;
+                       the path Rustty.xcodeproj links, matching the reference's
+                       GhosttyXCFramework out_path)
     xcframework-vt     Package rustty-vt-c into dist/rustty-vt.xcframework (the VT library for
                        Swift consumers; module RusttyVt). Port of ghostty's
                        ghostty-vt.xcframework — the artifact release-tip.yml's
@@ -387,7 +389,28 @@ struct XcframeworkSpec {
     lib_stem: &'static str,
     /// Clang module name a Swift consumer imports.
     module: &'static str,
-    /// Output bundle name under `dist/`.
+    /// Directory the bundle is written into, relative to the workspace root.
+    ///
+    /// NOT always `dist/`. The reference emits the EMBEDDING framework to
+    /// `macos/GhosttyKit.xcframework` (`GhosttyXCFramework.zig:41`
+    /// `.out_path = "macos/GhosttyKit.xcframework"`, and its `Makefile` clean
+    /// removes exactly that path), because that is where the Xcode project
+    /// looks for it: `Rustty.xcodeproj` references it as
+    /// `path = RusttyKit.xcframework`, resolved relative to `macos/`.
+    ///
+    /// rustty emitted BOTH bundles to `dist/`, so `xtask xcframework` wrote a
+    /// current bundle to a directory the Xcode project does not read while a
+    /// stale copy sat in `macos/`. The app had not been buildable since
+    /// whenever that copy was made — the header there was 69 lines short and
+    /// missing `RUSTTY_CLIPBOARD_PRIMARY`, `RUSTTY_ACTION_EXPORT_TERMINAL_IO`
+    /// and `rustty_surface_deny_clipboard_request` among others. Nothing
+    /// noticed because `xcodebuild` ran from nowhere except the release
+    /// workflows.
+    ///
+    /// The VT bundle stays in `dist/`: it is a distributable artifact
+    /// (release-tip's `build-lib-vt-xcframework`), not an Xcode-project input.
+    out_dir: &'static str,
+    /// Output bundle name.
     bundle: &'static str,
     /// How the public headers are staged for the clang module map.
     headers: HeaderLayout,
@@ -418,6 +441,9 @@ const XCF_KIT: XcframeworkSpec = XcframeworkSpec {
     krate: "rustty-apprt-c",
     lib_stem: "libRusttyKit",
     module: "RusttyKit",
+    // The Xcode project references this as `path = RusttyKit.xcframework`,
+    // resolved relative to `macos/` — same as the reference.
+    out_dir: "macos",
     bundle: "RusttyKit.xcframework",
     headers: HeaderLayout::SingleFile {
         src: "include/rustty-embed.h",
@@ -434,6 +460,10 @@ const XCF_VT: XcframeworkSpec = XcframeworkSpec {
     krate: "rustty-vt-c",
     lib_stem: "librustty-vt",
     module: "RusttyVt",
+    // Stays under `dist/`: unlike the embedding framework this is a
+    // distributable artifact (release-tip's `build-lib-vt-xcframework`), not an
+    // input to the Xcode project.
+    out_dir: "dist",
     bundle: "rustty-vt.xcframework",
     headers: HeaderLayout::Tree {
         src: "include/rustty",
@@ -628,7 +658,15 @@ fn build_xcframework(spec: &XcframeworkSpec) -> Result<PathBuf, String> {
     .map_err(|e| format!("write modulemap: {e}"))?;
 
     // 3. xcodebuild -create-xcframework.
-    let out = dist.join(spec.bundle);
+    //
+    // `spec.out_dir`, not `dist`: the embedding framework belongs in `macos/`
+    // where the Xcode project reads it (the reference's
+    // `GhosttyXCFramework.zig:41` `.out_path = "macos/GhosttyKit.xcframework"`).
+    // The staged headers above stay under `dist/` — they are build scratch,
+    // not an artifact.
+    let out_dir = root.join(spec.out_dir);
+    std::fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir {}: {e}", out_dir.display()))?;
+    let out = out_dir.join(spec.bundle);
     let _ = std::fs::remove_dir_all(&out);
     let status = Command::new("xcodebuild")
         .args(["-create-xcframework", "-library"])

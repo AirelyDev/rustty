@@ -68,9 +68,14 @@ macos/RusttyKit.xcframework/
 macos/build/
 macos/DerivedData/
 
-# regenerable xcframework output (cargo run -p xtask -- xcframework).
+# regenerable xcframework output (cargo run -p xtask -- xcframework-vt).
 # NOT all of dist/ — dist/cmake, dist/doxygen (and dist/linux|windows|macos)
 # are checked-in source assets.
+#
+# The APP bundle is `macos/RusttyKit.xcframework` (ignored above), not this
+# directory: that is where Rustty.xcodeproj links it from, matching the
+# reference's `GhosttyXCFramework.zig` out_path. The stale `dist/` spelling is
+# kept here so an older working tree does not resurface one as untracked.
 /dist/RusttyKit.xcframework/
 /dist/rustty-vt.xcframework/
 # The staged header dirs are per-module (xcframework-headers-RusttyKit,

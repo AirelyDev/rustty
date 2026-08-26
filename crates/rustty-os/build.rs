@@ -60,7 +60,8 @@ fn main() {
     // Without this the feature compiled but failed at link with undefined
     // `_g_bus_get_sync` — which nothing noticed, because nothing ever enabled
     // the feature until the packaging manifests started passing it.
-    if env::var_os("CARGO_FEATURE_FLATPAK").is_some() && matches!(target_os.as_str(), "linux" | "freebsd")
+    if env::var_os("CARGO_FEATURE_FLATPAK").is_some()
+        && matches!(target_os.as_str(), "linux" | "freebsd")
     {
         // `pkg-config` rather than bare `-lgio-2.0`: the reference goes through
         // `linkSystemLibrary`, which consults pkg-config for the include and

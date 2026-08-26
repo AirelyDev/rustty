@@ -241,7 +241,9 @@ else
     tail -20 "$WORK/xcf.log" | sed 's/^/      /'
     bad "xcframework — command failed"
   else
-    bundle="$ROOT/dist/RusttyKit.xcframework"
+    # `macos/`, not `dist/`: that is where Rustty.xcodeproj links it from and
+    # where the reference emits it (GhosttyXCFramework.zig:41).
+    bundle="$ROOT/macos/RusttyKit.xcframework"
     if [ -f "$bundle/Info.plist" ]; then
       ok "xcframework — $bundle built"
     else
