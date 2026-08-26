@@ -97,36 +97,21 @@ else
       extra=(-DRUST_TARGET="$want")
     fi
 
-    # For the cross example, build only the LIBRARY target.
-    #
-    # The final executable link additionally needs GNU gettext's libintl FOR
-    # THE TARGET: crates/rustty-os/src/i18n.rs declares
-    # `_libintl_locale_name_canonicalize` extern on non-macOS, exactly as the
-    # reference's src/os/i18n.zig does, and that symbol is a gnulib internal
-    # exported by GNU libintl — NOT by glibc. The reference's Linux builds
-    # resolve it because its Nix devShell puts gettext on the link line; zig's
-    # bundled Linux sysroot ships no GNU libintl, so the executable link cannot
-    # complete on a plain cross host. That is an environment prerequisite, not
-    # something rustty's build files control.
-    #
-    # The LIBRARY half is rustty's, and it is where every cross defect found so
-    # far lived (the cc-rs compiler/ar/ranlib environment, the clang-style
-    # --target= flag zig rejects, the CMake function-scope include leak, and
-    # the missing non-Windows link interface). That is what this gate binds.
-    build_args=()
-    if [ "$name" = "c-vt-cmake-cross" ]; then
-      build_args=(--target cargo_build_lib_vt_cross)
-    fi
-
     bd="$WORK/build-$name"
     # `${arr[@]+"${arr[@]}"}`, not `"${arr[@]}"`: bash 3.2 (what macOS ships)
     # treats an empty array as unset under `set -u` and aborts.
     if cmake -B "$bd" -S "$d" -DFETCHCONTENT_SOURCE_DIR_RUSTTY="$ROOT" ${extra[@]+"${extra[@]}"} \
          > "$WORK/$name.log" 2>&1 \
-       && cmake --build "$bd" ${build_args[@]+"${build_args[@]}"} >> "$WORK/$name.log" 2>&1; then
-      # Run it when it is a host binary (the cross one is not runnable here).
+       && cmake --build "$bd" >> "$WORK/$name.log" 2>&1; then
+      # Run it when it is a host binary. The cross example produces a real
+      # executable for another OS, so it is built and inspected but not run.
       if [ "$name" = "c-vt-cmake-cross" ]; then
-        ok "$name (library built for $want, not run — cross target)"
+        bin="$(find "$bd" -maxdepth 1 -type f -name 'c_vt_cmake_cross*' 2>/dev/null | head -1)"
+        if [ -n "$bin" ]; then
+          ok "$name -> $(file -b "$bin" 2>/dev/null | cut -c1-60)"
+        else
+          bad "$name (no cross executable produced)"
+        fi
       else
         bin="$(find "$bd" -maxdepth 1 -type f -perm -u+x ! -name '*.cmake' ! -name 'Makefile' 2>/dev/null | head -1)"
         if [ -n "$bin" ] && "$bin" > "$WORK/$name.run.log" 2>&1; then

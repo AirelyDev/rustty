@@ -305,17 +305,50 @@ extern "C" {
 //
 // PORT NOTE: `extern fn _libintl_locale_name_canonicalize(name: [*:0]u8) void;`. On
 // macOS this resolves to the vendored gnulib symbol exposed by `gettext-sys`
-// (R3). On other platforms the symbol is provided by the system libintl; we wrap
-// it behind `gettext_sys_canonicalize` so the macOS path uses the vendored crate.
+// (R3), which builds the vendored libintl on Apple platforms only — matching
+// SharedDeps.zig:580 ("Apple platforms do not include libc libintl so we
+// bundle it").
 #[cfg(target_os = "macos")]
 unsafe fn gettext_sys_canonicalize(name: *mut std::ffi::c_char) {
     unsafe { gettext_sys::locale_name_canonicalize(name) };
 }
 
+// NON-MACOS: a loud leaf, NOT an `extern "C"` declaration.
+//
+// This used to be `extern "C" { #[link_name = "_libintl_locale_name_canonicalize"] … }`
+// on the theory that "the symbol is provided by the system libintl". It is
+// not. `_libintl_locale_name_canonicalize` is the gnulib-internal
+// `gl_locale_name_canonicalize` RENAMED by GNU gettext's own config.h
+// (`#define gl_locale_name_canonicalize _libintl_locale_name_canonicalize`);
+// glibc, which is where a Linux build gets its gettext entry points, does not
+// export it under any name.
+//
+// The declaration therefore left an undefined symbol in every non-macOS build.
+// The cdylib hid it — nothing reachable calls `canonicalizeLocale` off macOS
+// (its only caller is `locale.rs`'s `setLangFromCocoa`, a real
+// `cfg(target_os = "macos")`), so the linker dead-stripped it. The STATIC
+// archive could not: `nix flake check`'s build-with-static, a plain
+// `cc … $(pkg-config --libs --static librustty-vt-static)` on Linux, failed
+// with `undefined reference to '_libintl_locale_name_canonicalize'`, and the
+// cross build of example/c-vt-cmake-cross failed the same way.
+//
+// This is the same Zig-vs-Rust shape as the `OnigEncodingKOI8` fix in
+// crates-sys/oniguruma-sys/build.rs: the reference declares the extern
+// unconditionally too, but Zig compiles a `pub fn` lazily, so with no caller no
+// object ever emits the reference. Rust's codegen is eager.
+//
+// A panic rather than a silent no-op because the reference's behaviour for a
+// hypothetical non-macOS caller is a LINK FAILURE — refusing loudly is the
+// faithful analog, and a no-op would silently return an uncanonicalized locale.
 #[cfg(not(target_os = "macos"))]
-extern "C" {
-    #[link_name = "_libintl_locale_name_canonicalize"]
-    fn gettext_sys_canonicalize(name: *mut std::ffi::c_char);
+unsafe fn gettext_sys_canonicalize(name: *mut std::ffi::c_char) {
+    let _ = name;
+    unimplemented!(
+        "_libintl_locale_name_canonicalize is a gnulib internal exported only by \
+         GNU gettext's own libintl, which rustty vendors on Apple platforms only \
+         (gettext-sys/build.rs, mirroring SharedDeps.zig:580). canonicalizeLocale \
+         has no non-macOS caller; the reference would fail to LINK here."
+    )
 }
 
 #[cfg(test)]
