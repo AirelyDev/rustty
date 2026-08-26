@@ -158,6 +158,16 @@ jobs:
       # a GTK tool with no macOS package, and valgrind has no working
       # arm64-Darwin port. Both gates report BLOCKED (never green) on macOS.
       # G-I18N needs the gettext tools on both legs.
+      #
+      # The GTK dev packages are what make G-GTKFEAT actually RUN. That gate
+      # exists to lint the ~30k lines under `crates/rustty-apprt/src/gtk/**`
+      # that no other lane compiles — and until this line it was BLOCKED on
+      # BOTH legs (macOS has no GTK; this leg installed no GTK headers), so the
+      # gate guarding the largest unlinted subsystem in the tree was running
+      # nowhere. That is the same shape as the first audit's G-LINT finding:
+      # configs checked in, nothing executing them. Verified by what it caught
+      # the first time it ran on a machine with GTK — a dropped twin attribute
+      # in the renderer that had made the lane RED (see the preceding commit).
       - name: Install gate tooling (G-BLUEPRINT / G-VALGRIND / G-I18N)
         shell: bash
         run: |
@@ -168,7 +178,8 @@ jobs:
             # libglib2.0-dev: G-FEATMATRIX's `flatpak` arm links gio-2.0,
             # exactly as SharedDeps.zig:683 does.
             sudo apt-get install -y blueprint-compiler valgrind libc6-dbg gettext \
-              doxygen graphviz libglib2.0-dev
+              doxygen graphviz libglib2.0-dev \
+              libgtk-4-dev libadwaita-1-dev libgtk4-layer-shell-dev
           else
             brew install gettext doxygen
           fi
