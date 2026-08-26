@@ -144,22 +144,38 @@ else()
 endif()
 set(RUSTTY_VT_STATIC_LIBRARY "${RUSTTY_OUT_DIR}/${RUSTTY_VT_STATIC_REALNAME}")
 
-# Custom command: run cargo build -p rustty-vt-c (produces both shared + static)
+# Run cargo build -p rustty-vt-c (produces both shared + static).
 set(_RUSTTY_CARGO_OUTPUTS "${RUSTTY_VT_SHARED_LIBRARY}" "${RUSTTY_VT_STATIC_LIBRARY}")
 if(WIN32)
     list(APPEND _RUSTTY_CARGO_OUTPUTS "${RUSTTY_OUT_DIR}/${RUSTTY_VT_IMPLIB}")
 endif()
 
-add_custom_command(
-    OUTPUT ${_RUSTTY_CARGO_OUTPUTS}
+# A custom TARGET, which always runs, not an add_custom_command(OUTPUT ...),
+# which runs only when its declared outputs are missing.
+#
+# WHY. target/<profile>/librustty_vt_c.a is a single file that EVERY cargo
+# invocation in this workspace overwrites, and its contents depend on the
+# feature set of that invocation. A plain `cargo build --workspace` unifies
+# `rustty-vt/oniguruma` on (another member enables it) and produces a ~115 MB
+# archive carrying 23 oniguruma objects; this file's own
+# `-p rustty-vt-c --features simd` produces a ~99 MB archive with none.
+#
+# With an OUTPUT-keyed command, `cmake --build` saw the file already present,
+# skipped cargo entirely, and installed whichever archive some unrelated cargo
+# run happened to leave behind — a different feature set than the one CMake was
+# configured for, and one that would not be rebuilt after a source edit either.
+# Confirmed by building here, then running `cargo build --workspace`, then
+# `cmake --build` again: no cargo invocation, and the oniguruma objects stayed.
+#
+# cargo is already incremental, so an unconditional invocation costs a fraction
+# of a second when nothing changed. Same reasoning as the WS19 T16 change to
+# the example/*/build.sh scripts, which had the identical staleness bug.
+add_custom_target(cargo_build_lib_vt ALL
     COMMAND "${CARGO_EXECUTABLE}" build -p rustty-vt-c ${_RUSTTY_PROFILE_FLAG} ${_RUSTTY_FEATURE_FLAGS} ${RUSTTY_CARGO_BUILD_FLAGS}
+    BYPRODUCTS ${_RUSTTY_CARGO_OUTPUTS}
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Building librustty-vt via cargo build..."
     USES_TERMINAL
-)
-
-add_custom_target(cargo_build_lib_vt ALL
-    DEPENDS "${RUSTTY_VT_SHARED_LIBRARY}" "${RUSTTY_VT_STATIC_LIBRARY}"
 )
 
 # --- IMPORTED library targets ------------------------------------------------
@@ -275,6 +291,69 @@ install(
         "${CMAKE_CURRENT_BINARY_DIR}/rustty-vt-config.cmake"
         "${CMAKE_CURRENT_BINARY_DIR}/rustty-vt-config-version.cmake"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/rustty-vt"
+)
+
+# --- pkg-config --------------------------------------------------------------
+#
+# PORTS: ghostty src/build/GhosttyLibVt.zig `pkgConfigFiles()` — the shared +
+# static `.pc` pair, installed to share/pkgconfig/ (its `libghostty-vt.pc` and
+# `libghostty-vt-static.pc`). rustty shipped NEITHER until now, so the whole
+# `pkg-config`-consumer story the reference tests in CI had no analog here.
+# The reference emits them from build.zig; rustty has no build.zig, and CMake
+# is already the thing that knows the install prefix and the per-platform link
+# interface, so the pair is generated here.
+#
+# Consumers link the CARGO artifact stem, not the package name: the crate is
+# `rustty-vt-c`, so the file is librustty_vt_c.{a,dylib,so} and the flag is
+# `-lrustty_vt_c`. The .pc NAME stays `librustty-vt` to match the reference's
+# spelling and the CMake package name.
+#
+# Libs.private mirrors the INTERFACE_LINK_LIBRARIES set on rustty-vt-static
+# above — keep the two in sync when either changes.
+#
+# DIVERGENCE FROM THE REFERENCE (deliberate, not an oversight): ghostty builds
+# its vendored C++ deps in no-libcxx mode and its CI asserts that
+# `Libs.private` contains no `-lc++`. rustty's vendored C++ (simdutf, highway)
+# is built by the `cc` crate against the platform's default C++ runtime, so
+# `-lc++` IS required. Asserting the reference's "no libc++" property would be
+# asserting something untrue of this build.
+if(APPLE)
+    # RUSTTY_INTL_LIBRARY was resolved above (find_library, with Homebrew
+    # hints). Emit the FULL path: a bare `-lintl` does not resolve on macOS
+    # without also emitting the -L for the Homebrew gettext prefix, and a .pc
+    # that hands consumers an unresolvable flag is worse than none.
+    set(RUSTTY_VT_PC_LIBS_PRIVATE "-lc++ -framework CoreFoundation -framework Foundation -liconv ${RUSTTY_INTL_LIBRARY} -lobjc -lc -lm")
+elseif(WIN32)
+    set(RUSTTY_VT_PC_LIBS_PRIVATE "-lntdll -lkernel32 -lws2_32 -luserenv -lbcrypt -ladvapi32")
+else()
+    set(RUSTTY_VT_PC_LIBS_PRIVATE "-lstdc++ -lc -lm -lpthread -ldl -lgcc_s")
+endif()
+
+# Every C/C++ dependency is vendored under crates-sys/*/vendor and linked into
+# the archive, so nothing is required from the system's pkg-config graph. The
+# reference populates this when built with `-fsys=simdutf` / `-fsys=highway`;
+# rustty has no system-integration switch yet, so it is empty by construction
+# rather than by omission.
+set(RUSTTY_VT_PC_REQUIRES_PRIVATE "")
+
+set(RUSTTY_VT_PC_LINK_NAME "rustty_vt_c")
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/dist/cmake/librustty-vt.pc.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/librustty-vt.pc"
+    @ONLY
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/dist/cmake/librustty-vt-static.pc.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/librustty-vt-static.pc"
+    @ONLY
+)
+
+install(
+    FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/librustty-vt.pc"
+        "${CMAKE_CURRENT_BINARY_DIR}/librustty-vt-static.pc"
+    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/pkgconfig"
 )
 
 # --- Cross-compilation helper ------------------------------------------------

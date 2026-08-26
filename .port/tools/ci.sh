@@ -42,6 +42,14 @@
 #                                    file stays the single source of truth.
 #                                    A tool that is absent reports `skipped`
 #                                    BY NAME; all-skipped exits 3 BLOCKED.)
+#   G-CCONSUMER check_c_consumer.sh  the C/CMake/pkg-config consumer lane
+#                                    -> HARD-FAIL. cmake configure/build/
+#                                    install, the installed artifact set, both
+#                                    .pc files, and a C smoke program compiled,
+#                                    linked and RUN against pkg-config output
+#                                    twice (shared + static). Merges the
+#                                    reference's build-cmake and
+#                                    test-lib-vt-pkgconfig jobs.
 #   G-THEMES check_theme_corpus.py   the 602 vendored iterm2 theme files match
 #                                    a committed per-file SHA-256 manifest
 #                                    -> HARD-FAIL. res_themes.rs only counts
@@ -329,6 +337,16 @@ GATE_REGISTRY=(
   # name (and the gate exits 3 BLOCKED if EVERY lane is skipped) rather than
   # contributing a vacuous green — see the gate's header.
   "G-LINT|HARD|bash $GATES/check_lints.sh"
+  # G-CCONSUMER (2026-08-25) — the C/CMake/pkg-config consumer lane, the merge
+  # of the reference's `build-cmake` + `test-lib-vt-pkgconfig` jobs. Nothing
+  # here was exercised before: `cargo test` never invokes cmake, so a 400-line
+  # CMakeLists.txt, the package config, the install rules and the (entirely
+  # absent) pkg-config files were unverified. Its first run found three real
+  # defects — no .pc files at all, an unresolvable `OnigEncodingKOI8` in the
+  # static archive, and a CMake custom command that never re-invoked cargo.
+  # HARD: green, and the artifact arm has a demonstrated RED flip (remove a
+  # .pc from the install list -> "the install tree is incomplete").
+  "G-CCONSUMER|HARD|bash $GATES/check_c_consumer.sh"
   # G-REL (WS18) — the `--release` test lane. Steps 3/4 above only ever exercise
   # the DEBUG profile, so nothing noticed that release had rotted to 22 failures
   # across 7 targets. Most were tests driving a seam the port deliberately

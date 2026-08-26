@@ -114,6 +114,13 @@ jobs:
       #
       # prettier comes from npx (pinned inside the gate), so only Node is
       # needed. alejandra is deliberately absent until there are .nix files.
+      # G-CCONSUMER (check_c_consumer.sh) drives cmake + pkg-config + cc. All
+      # three are present on GitHub's runners except pkg-config on macOS, which
+      # ships no pkgconf by default; without it the gate reports BLOCKED.
+      - name: Install pkgconf (G-CCONSUMER lane, macOS)
+        if: runner.os == 'macOS'
+        run: brew install pkgconf
+
       - name: Install linters (G-LINT lane)
         shell: bash
         run: |

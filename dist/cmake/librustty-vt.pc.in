@@ -1,0 +1,17 @@
+# prefix is derived from where THIS file sits (<prefix>/share/pkgconfig), not
+# baked in from CMAKE_INSTALL_PREFIX. `cmake --install --prefix P` overrides
+# the prefix at install time, long after configure_file() ran, so an absolute
+# prefix here would be stale for exactly the workflow HACKING.md documents.
+# ${pcfiledir} is understood by both pkg-config and pkgconf.
+prefix=${pcfiledir}/../..
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+
+Name: librustty-vt
+URL: https://github.com/AirelyDev/rustty
+Description: Rustty VT library
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir}
+Libs: -L${libdir} -l@RUSTTY_VT_PC_LINK_NAME@
+Libs.private: @RUSTTY_VT_PC_LIBS_PRIVATE@
+Requires.private: @RUSTTY_VT_PC_REQUIRES_PRIVATE@
