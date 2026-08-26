@@ -1064,6 +1064,9 @@ impl State {
     //     try self.appendKittyPlacement(alloc, t, image, p, x_pos, y_pos);
     // }
     #[allow(clippy::too_many_arguments)]
+    // PORT NOTE: the explicit trailing `return` is the reference's; the port
+    // mirrors it so the two read line-for-line.
+    #[allow(clippy::needless_return)]
     fn prep_kitty_placement<A: Allocator + Copy>(
         &mut self,
         alloc: A,
