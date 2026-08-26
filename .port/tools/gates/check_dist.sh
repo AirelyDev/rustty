@@ -42,7 +42,7 @@ VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/Cargo.toml" | head -1)"
 TARBALL="$ROOT/dist/rustty-$VERSION.tar.gz"
 PREFIX="rustty-$VERSION"
 
-echo "=== G-DIST 1/4 :: cargo run -p xtask -- dist ==="
+echo "=== G-DIST 1/5 :: cargo run -p xtask -- dist ==="
 rm -f "$TARBALL"
 if ! cargo run -q -p xtask -- dist > /dev/null 2>&1; then
   cargo run -q -p xtask -- dist 2>&1 | tail -20 | sed 's/^/    /'
@@ -51,7 +51,7 @@ fi
 [ -f "$TARBALL" ] || red "xtask dist reported success but $TARBALL does not exist"
 echo "    ok      $(basename "$TARBALL") ($(( $(wc -c < "$TARBALL") / 1024 / 1024 )) MB)"
 
-echo "=== G-DIST 2/4 :: tarball shape ==="
+echo "=== G-DIST 2/5 :: tarball shape ==="
 LIST="$(mktemp)"; trap 'rm -f "$LIST"' EXIT
 tar tzf "$TARBALL" > "$LIST" || red "the tarball is not readable as gzip'd tar"
 
@@ -85,7 +85,7 @@ for d in .port docs/superpowers; do
   echo "    ok      $d/ correctly excluded"
 done
 
-echo "=== G-DIST 3/4 :: xtask dist-lib-vt (the VT-library-only tarball) ==="
+echo "=== G-DIST 3/5 :: xtask dist-lib-vt (the VT-library-only tarball) ==="
 LIBVT="$ROOT/dist/librustty-vt-$VERSION.tar.gz"
 rm -f "$LIBVT"
 if ! cargo run -q -p xtask -- dist-lib-vt > /dev/null 2>&1; then
@@ -116,7 +116,56 @@ fi
 echo "    ok      out-of-closure crates pruned (rustty-apprt absent)"
 rm -f "$LVLIST"
 
-echo "=== G-DIST 4/4 :: distcheck (extract + build) ==="
+echo "=== G-DIST 4/5 :: the tarball builds on another distro ==="
+# PORTS: ghostty's `test-debian-13` job. Building the tarball on the DEV BOX
+# proves it is self-contained; building it on a different distro proves it does
+# not quietly depend on that box's glibc, toolchain or headers. Opt-in because
+# it is a cold build inside a container.
+if [ "${RUSTTY_DISTCHECK_DEBIAN:-0}" != "1" ]; then
+  echo "    skipped debian-13 build (set RUSTTY_DISTCHECK_DEBIAN=1; needs podman/docker)"
+else
+  OCI=""
+  for c in podman docker; do command -v "$c" >/dev/null 2>&1 && OCI="$c" && break; done
+  [ -n "$OCI" ] || red "RUSTTY_DISTCHECK_DEBIAN=1 but neither podman nor docker is installed"
+  # A PREBUILT rust-on-debian image, not `debian:13` + `apt-get install`.
+  #
+  # Two reasons, and the second is the one that forced it. First, installing a
+  # toolchain inside the container is slow and adds a second network
+  # dependency. Second: this project's Linux box has a skewed clock, which made
+  # BOTH the Docker Hub TLS handshake ("certificate ... is not yet valid") and
+  # then apt's OpenPGP verification ("Not live until ...") fail. An image that
+  # already contains the toolchain needs neither.
+  #
+  # Overridable so this is not welded to one registry or one distro.
+  IMAGE="${RUSTTY_DISTCHECK_DEBIAN_IMAGE:-mirror.gcr.io/library/rust:trixie}"
+  echo "    using $OCI + $IMAGE"
+  # RUSTUP_TOOLCHAIN pins to the image's own toolchain so rust-toolchain.toml
+  # does not trigger a download. The point of this arm is "builds against a
+  # DIFFERENT distro's glibc and a different toolchain", not "builds with our
+  # exact pin" — `distcheck` above already covers that.
+  # `:ro,z`, not `:ro`. On an SELinux host (Fedora, RHEL) a bind mount without
+  # a relabel option is denied inside the container — verified: plain `:ro`
+  # gives "Permission denied" reading the tarball, which surfaces three steps
+  # later as an unhelpful "gzip: stdin: unexpected end of file". `z` is the
+  # shared label; `Z` would be private and conflicts with reuse.
+  if ! "$OCI" run --rm -e RUSTUP_TOOLCHAIN=stable -v "$ROOT/dist:/dist:ro,z" "$IMAGE" bash -c '
+        set -eu
+        tmp=$(mktemp -d)
+        tar xzf /dist/librustty-vt-*.tar.gz -C "$tmp"
+        cd "$tmp"/librustty-vt-*
+        cargo build --offline --release -p rustty-vt-c --features simd
+        test -f target/release/librustty_vt_c.a
+        echo "$(cat /etc/debian_version): librustty_vt_c.a built with $(rustc --version)"
+      ' > "$LIST.debian.log" 2>&1; then
+    tail -25 "$LIST.debian.log" | sed 's/^/      /'
+    rm -f "$LIST.debian.log"
+    red "the tarball does not build on $IMAGE"
+  fi
+  tail -1 "$LIST.debian.log" | sed 's/^/    ok      /'
+  rm -f "$LIST.debian.log"
+fi
+
+echo "=== G-DIST 5/5 :: distcheck (extract + build) ==="
 if [ "${RUSTTY_DISTCHECK:-0}" != "1" ]; then
   echo "    skipped distcheck (set RUSTTY_DISTCHECK=1 — it is a cold full-workspace build)"
   echo "G-DIST GREEN (tarball built and shape-checked). Not run: distcheck."

@@ -221,4 +221,12 @@ jobs:
           # cold. Worth having, not worth paying for twice — the Ubuntu leg
           # runs it, macOS gets the shape checks only and says so by name.
           RUSTTY_DISTCHECK: ${{ runner.os == 'Linux' && '1' || '0' }}
+          # G-DIST's other opt-in arm: build the lib-vt tarball inside a
+          # Debian 13 container, proving it does not depend on the runner's
+          # own glibc/toolchain. Linux leg only — it needs a container runtime.
+          RUSTTY_DISTCHECK_DEBIAN: ${{ runner.os == 'Linux' && '1' || '0' }}
+          # G-NIX's VM-test arm. Left OFF: GitHub's standard runners expose no
+          # /dev/kvm, so the NixOS guests would fall back to full emulation and
+          # time out. The gate reports them skipped by name.
+          RUSTTY_NIX_VM_TESTS: "0"
         run: bash .port/tools/ci.sh
