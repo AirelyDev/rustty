@@ -1017,7 +1017,7 @@ impl PageList {
                         for i in prev_size..unsafe { (*prev_page).size.rows } {
                             let row = unsafe { prev_rows.add(i as usize) };
                             unsafe {
-                                (*prev_page).clear_cells(row, 0, (*prev_page).size.cols as usize);
+                                (*prev_page).reset_row(row);
                             }
                         }
                         unsafe {
@@ -1168,6 +1168,16 @@ impl PageList {
                 self.invalidate_node_layout(row_pin.node);
                 invalidated_node = row_pin.node;
             }
+
+            // The row has no text but can still carry metadata (e.g. a
+            // blank prompt continuation line) and background-colored
+            // cells. The retired storage is re-exposed by the grow()
+            // fast path without any clearing, so it must be left in the
+            // default state.
+            unsafe {
+                (*super::Node::page(row_pin.node)).reset_row(row_pin.row_and_cell().row);
+            }
+
             unsafe {
                 (*super::Node::page(row_pin.node)).size.rows -= 1;
             }
@@ -2383,9 +2393,10 @@ impl ReflowCursor {
             }
         }
 
-        // Clear the row from the old page and truncate it.
+        // Reset the row on the old page and truncate it. The retired
+        // storage must be left in the default state (see resetRow).
         unsafe {
-            (*old_page).clear_cells(old_row, 0, (*old_page).size.cols as usize);
+            (*old_page).reset_row(old_row);
             (*old_page).size.rows -= 1;
         }
 

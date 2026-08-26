@@ -192,13 +192,13 @@ impl<A: Allocator> Tabstops<A> {
         let i = entry(col);
         let idx = index(col);
         if i < PREALLOC_COUNT {
-            self.prealloc_stops[i] ^= MASKS[idx];
+            self.prealloc_stops[i] &= !MASKS[idx];
             return;
         }
 
         let dynamic_i = i - PREALLOC_COUNT;
         assert(dynamic_i < self.dynamic_stops.len());
-        self.dynamic_stops[dynamic_i] ^= MASKS[idx];
+        self.dynamic_stops[dynamic_i] &= !MASKS[idx];
     }
 
     /// Get the value of a tabstop at a specific column. The columns are 0-indexed.
@@ -417,6 +417,12 @@ mod tests {
         // try testing.expect(!t.get(4));
         assert!(!t.get(4));
 
+        // Unsetting a column with no tabstop should be a no-op, not a toggle.
+        // t.unset(4);
+        t.unset(4);
+        // try testing.expect(!t.get(4));
+        assert!(!t.get(4));
+
         t.deinit(Global);
     }
 
@@ -485,6 +491,12 @@ mod tests {
         t.set(cap + 4);
         // try testing.expect(t.get(cap + 4));
         assert!(t.get(cap + 4));
+        // try testing.expect(!t.get(cap + 3));
+        assert!(!t.get(cap + 3));
+
+        // Unsetting a column with no tabstop should be a no-op, not a toggle.
+        // t.unset(cap + 3);
+        t.unset(cap + 3);
         // try testing.expect(!t.get(cap + 3));
         assert!(!t.get(cap + 3));
 

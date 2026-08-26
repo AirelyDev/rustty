@@ -351,14 +351,18 @@ mod tests {
     // `StringMap.string` and `Screen::selection_string` describe, so the wording
     // and the code cannot drift apart again (W22-B08-01).
     //
-    // The reference stores a real sentinel byte (`toOwnedSliceSentinel(0)` /
-    // `alloc.dupeZ`) whose `len` EXCLUDES it; the port stores no sentinel at all
-    // and the same `len`. This is only parity-safe because no consumer reads the
-    // sentinel — the regex path passes explicit byte bounds — so the test asserts
-    // BOTH halves: no NUL is stored, and a search over the unsentineled buffer
-    // still matches. It fails if anyone "restores" the sentinel by pushing a 0
-    // (which would also desynchronize `string.len()` from `map.len()` and from
-    // the reference's sentinel-exclusive loop bounds in `SearchIterator::next`).
+    // The reference stores a real sentinel byte (`toOwnedSliceSentinel(0)`)
+    // whose `len` EXCLUDES it; the port stores no sentinel at all and the same
+    // `len`. This is only parity-safe because no consumer reads the sentinel —
+    // the regex path passes explicit byte bounds — so the test asserts BOTH
+    // halves: no NUL is stored, and a search over the unsentineled buffer still
+    // matches. It fails if anyone "restores" the sentinel by pushing a 0 (which
+    // would also desynchronize `string.len()` from `map.len()` and from the
+    // reference's sentinel-exclusive loop bounds in `SearchIterator::next`).
+    //
+    // (f1948d505: the duplicate-copy shape is gone — `selection_string_map`
+    // TRANSFERS the formatter output into the map, so the test additionally
+    // pins that both entry points emit the same bytes.)
     #[test]
     fn string_map_string_is_unsentineled_and_searchable() {
         let alloc = Global;
@@ -396,23 +400,27 @@ mod tests {
                 semantic_prompt_boundary: false,
             })
             .unwrap();
-        let mut map: StringMap = StringMap {
-            string: Vec::new(),
-            map: PinMapMap::EMPTY,
-        };
         let sel_str = s
             .selection_string(
                 alloc,
                 SelectionString {
                     sel: line,
                     trim: false,
-                    map: Some(&mut map),
+                },
+            )
+            .unwrap();
+        let map = s
+            .selection_string_map(
+                alloc,
+                SelectionString {
+                    sel: line,
+                    trim: false,
                 },
             )
             .unwrap();
 
-        // `map.string` is the reference's `dupeZ` of the returned text: the same
-        // bytes, and the same (sentinel-exclusive) length.
+        // `map.string` is the transferred formatter output: the same bytes, and
+        // the same (sentinel-exclusive) length, as the plain-string entry point.
         assert_eq!(sel_str, map.string);
         assert!(!map.string.is_empty());
         // NOT NUL-terminated, and no interior NUL either.
@@ -471,21 +479,20 @@ mod tests {
                 semantic_prompt_boundary: false,
             })
             .unwrap();
-        let mut map: StringMap = StringMap {
-            string: Vec::new(),
-            map: PinMapMap::EMPTY,
-        };
-        let sel_str = s
-            .selection_string(
+        // const map = try s.selectionStringMap(alloc, .{
+        //     .sel = line,
+        //     .trim = false,
+        // });
+        // defer map.deinit(alloc);
+        let map = s
+            .selection_string_map(
                 alloc,
                 SelectionString {
                     sel: line,
                     trim: false,
-                    map: Some(&mut map),
                 },
             )
             .unwrap();
-        drop(sel_str);
 
         // Get our iterator
         let mut it = map.search_iterator(re);
@@ -563,21 +570,20 @@ mod tests {
                 semantic_prompt_boundary: false,
             })
             .unwrap();
-        let mut map: StringMap = StringMap {
-            string: Vec::new(),
-            map: PinMapMap::EMPTY,
-        };
-        let sel_str = s
-            .selection_string(
+        // const map = try s.selectionStringMap(alloc, .{
+        //     .sel = line,
+        //     .trim = false,
+        // });
+        // defer map.deinit(alloc);
+        let map = s
+            .selection_string_map(
                 alloc,
                 SelectionString {
                     sel: line,
                     trim: false,
-                    map: Some(&mut map),
                 },
             )
             .unwrap();
-        drop(sel_str);
 
         // Search for URL match
         let mut it = map.search_iterator(re);
@@ -659,21 +665,20 @@ mod tests {
                 semantic_prompt_boundary: false,
             })
             .unwrap();
-        let mut map: StringMap = StringMap {
-            string: Vec::new(),
-            map: PinMapMap::EMPTY,
-        };
-        let sel_str = s
-            .selection_string(
+        // const map = try s.selectionStringMap(alloc, .{
+        //     .sel = line,
+        //     .trim = false,
+        // });
+        // defer map.deinit(alloc);
+        let map = s
+            .selection_string_map(
                 alloc,
                 SelectionString {
                     sel: line,
                     trim: false,
-                    map: Some(&mut map),
                 },
             )
             .unwrap();
-        drop(sel_str);
 
         // Search for URL match and verify click position is within URL
         let mut it = map.search_iterator(re);

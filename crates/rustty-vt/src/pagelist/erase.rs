@@ -152,11 +152,12 @@ impl PageList {
             }
         }
 
-        // Clear the final row which was rotated from the top of the page.
+        // Reset the final row which was rotated from the top of the page.
+        // A full reset (not just clearing cells) so no metadata from the
+        // erased row is retained by the new blank row.
         unsafe {
-            let cols = super::Node::cols(node) as usize;
             let row = rows.add(super::Node::rows(node) as usize - 1);
-            (*super::Node::page(node)).clear_cells(row, 0, cols);
+            (*super::Node::page(node)).reset_row(row);
         }
 
         Ok(())
@@ -216,8 +217,7 @@ impl PageList {
             // Rotating this bounded region changes its cached row coordinates.
             self.invalidate_node_layout(node);
             unsafe {
-                let cols = super::Node::cols(node) as usize;
-                (*super::Node::page(node)).clear_cells(rows.add(pn.y as usize), 0, cols);
+                (*super::Node::page(node)).reset_row(rows.add(pn.y as usize));
             }
             fastmem::rotateOnce(unsafe {
                 core::slice::from_raw_parts_mut(rows.add(pn.y as usize), limit + 1)
@@ -353,8 +353,7 @@ impl PageList {
                 // Rotating this bounded prefix changes its cached row coordinates.
                 self.invalidate_node_layout(node);
                 unsafe {
-                    let cols = super::Node::cols(node) as usize;
-                    (*super::Node::page(node)).clear_cells(rows, 0, cols);
+                    (*super::Node::page(node)).reset_row(rows);
                 }
                 fastmem::rotateOnce(unsafe {
                     core::slice::from_raw_parts_mut(rows, shifted_limit + 1)
@@ -446,12 +445,11 @@ impl PageList {
             }
         }
 
-        // We reached the end of the page list before the limit, so we clear
+        // We reached the end of the page list before the limit, so we reset
         // the final row since it was rotated down from the top of this page.
         unsafe {
-            let cols = super::Node::cols(node) as usize;
             let row = rows.add(super::Node::rows(node) as usize - 1);
-            (*super::Node::page(node)).clear_cells(row, 0, cols);
+            (*super::Node::page(node)).reset_row(row);
         }
 
         Ok(())
@@ -561,13 +559,14 @@ impl PageList {
                 unsafe { (*dst).set_dirty(true) };
             }
 
-            // Clear our remaining cells that we didn't shift or swapped
-            // in case we grow back into them.
+            // Reset our remaining rows that we didn't shift or swapped.
+            // These are retired into unused page capacity, which the
+            // grow() fast path re-exposes without any clearing, so they
+            // must be left in the default state.
             for i in scroll_amount..unsafe { super::Node::rows(chunk.node) } {
                 let row: *mut Row = unsafe { rows.add(i as usize) };
                 unsafe {
-                    let cols = super::Node::cols(chunk.node) as usize;
-                    (*super::Node::page(chunk.node)).clear_cells(row, 0, cols);
+                    (*super::Node::page(chunk.node)).reset_row(row);
                 }
             }
 

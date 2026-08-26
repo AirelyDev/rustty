@@ -2243,9 +2243,11 @@ impl Terminal {
                                     if std::ptr::eq(new_pin.node, old_pin.node) {
                                         let page: *mut Page =
                                             unsafe { crate::pagelist::Node::page(new_pin.node) };
-                                        unsafe { (*page).move_grapheme(prev_cell, new_rac.cell) };
                                         unsafe {
-                                            (*prev_cell)
+                                            (*page).move_grapheme(old_rac.cell, new_rac.cell)
+                                        };
+                                        unsafe {
+                                            (*old_rac.cell)
                                                 .set_content_tag(pagepkg::ContentTag::Codepoint)
                                         };
                                         unsafe {
@@ -2283,8 +2285,14 @@ impl Terminal {
                                         };
                                         for i in 0..cps_len {
                                             let cp: u21 = unsafe { *cps_ptr.add(i) };
+                                            // appendGrapheme can grow the cursor
+                                            // page, so read the destination from
+                                            // the cursor each time rather than
+                                            // holding a pointer across the call.
+                                            let dst: *mut pagepkg::Cell =
+                                                unsafe { (*self.screens.active).cursor.page_cell };
                                             self.active_mut()
-                                                .append_grapheme(new_rac.cell, cp)
+                                                .append_grapheme(dst, cp)
                                                 .map_err(|_| OutOfMemory)?;
                                         }
                                         let old_page: *mut Page =
@@ -2299,7 +2307,7 @@ impl Terminal {
 
                                 // Point prev.cell to our new previous cell that
                                 // we'll be appending graphemes to
-                                prev_cell = new_rac.cell;
+                                prev_cell = unsafe { (*self.screens.active).cursor.page_cell };
                             } else {
                                 self.print_cell(
                                     0,
@@ -2322,7 +2330,32 @@ impl Terminal {
 
                         // Write our spacer, since prev.cell is now wide
                         self.active_mut().cursor_right(1);
+
+                        // Writing the spacer can grow the page to make room for
+                        // the cursor hyperlink. Growing replaces the page, which
+                        // invalidates `prev.cell`. Record the page identity first
+                        // so the common case where nothing grows stays free.
+                        //
+                        // A pointer comparison alone isn't enough: pages are
+                        // pooled, so a replacement can reuse the same address.
+                        // The serial makes the pair a unique identity.
+                        let spacer_node: *mut crate::pagelist::Node =
+                            unsafe { (*(*self.screens.active).cursor.page_pin).node };
+                        let spacer_serial = unsafe { (*spacer_node).serial };
+
                         self.print_cell(0, pagepkg::Wide::SpacerTail);
+
+                        let active: *mut Screen = self.screens.active;
+                        if !std::ptr::eq(unsafe { (*(*active).cursor.page_pin).node }, spacer_node)
+                            || unsafe { (*(*(*active).cursor.page_pin).node).serial }
+                                != spacer_serial
+                        {
+                            // @branchHint(.unlikely);
+
+                            // The cursor is on the spacer tail we just wrote, so
+                            // the wide cell we append to is the one to its left.
+                            prev_cell = self.active_mut().cursor_cell_left(1);
+                        }
 
                         // Move the cursor again so we're beyond our spacer
                         let active: *mut Screen = self.screens.active;
@@ -2677,8 +2710,13 @@ impl Terminal {
         // overwriting the same hyperlink.
         if unsafe { (*active).cursor.hyperlink_id } > 0 {
             if let Err(_err) = self.active_mut().cursor_set_hyperlink() {
+                // @branchHint(.unlikely);
                 // log.warn("error reallocating for more hyperlink space, ignoring hyperlink err={}", .{err});
-                debug_assert!(!unsafe { (*cell).hyperlink() });
+
+                // A partially successful grow can replace the page even when the
+                // call fails, so `cell` may be stale here. The cursor pointers are
+                // always reloaded, so read the cell through the cursor.
+                debug_assert!(!unsafe { (*(*active).cursor.page_cell).hyperlink() });
             }
         } else if had_hyperlink {
             // If the previous cell had a hyperlink then we need to clear it.
@@ -4682,6 +4720,17 @@ impl Terminal {
                     (self.scrolling_region.right + 1) as usize,
                 );
                 self.active_mut().clear_cells(page, cur_row, sub);
+
+                // With a full-width scroll region the entire row is a
+                // fresh blank row: reset the metadata so nothing (wrap
+                // state, semantic prompt) is retained from the row whose
+                // storage it recycles. With left/right margins the row
+                // keeps content outside the margins so the metadata is
+                // preserved, matching the shift case above.
+                // if (!left_right) cur_row.reset();
+                if !left_right {
+                    unsafe { (*cur_row).reset() };
+                }
             }
 
             // Mark the row as dirty
@@ -4923,6 +4972,17 @@ impl Terminal {
                     (self.scrolling_region.right + 1) as usize,
                 );
                 self.active_mut().clear_cells(page, cur_row, sub);
+
+                // With a full-width scroll region the entire row is a
+                // fresh blank row: reset the metadata so nothing (wrap
+                // state, semantic prompt) is retained from the row whose
+                // storage it recycles. With left/right margins the row
+                // keeps content outside the margins so the metadata is
+                // preserved, matching the shift case above.
+                // if (!left_right) cur_row.reset();
+                if !left_right {
+                    unsafe { (*cur_row).reset() };
+                }
             }
 
             // Mark the row as dirty
@@ -8755,6 +8815,116 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "Terminal: VS16 widening when the spacer tail grows the page"
+    #[test]
+    fn terminal_vs16_widening_when_the_spacer_tail_grows_the_page() {
+        // Regression test for a stale cell pointer in print's grapheme `.wide`
+        // path: writing the spacer tail can grow the page to fit the hyperlink,
+        // which replaces the page and invalidates the pointer to the wide cell.
+        let mut t = Terminal::init(Global, opts(20, 10)).unwrap();
+
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+        t.active_mut()
+            .start_hyperlink(b"http://example.com", None)
+            .unwrap();
+
+        // Fill the page hyperlink map until a single slot is left. The '#' below
+        // takes that slot so the spacer tail is what forces the page to grow.
+        loop {
+            let page: *mut Page =
+                unsafe { crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node) };
+            let map = unsafe { (*page).hyperlink_map.map((*page).memory_ptr()) };
+            if map.max_load() - map.count() == 1 {
+                break;
+            }
+            t.print('x' as u32).unwrap();
+        }
+
+        let x = unsafe { (*t.screens.active).cursor.x };
+        let y = unsafe { (*t.screens.active).cursor.y };
+        t.print('#' as u32).unwrap();
+
+        // Without the fix this crashed appending to a freed page.
+        t.print(0xFE0F).unwrap();
+
+        {
+            // '#' is wide and carries the VS16 grapheme.
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(active_pt(x, y as u32))
+                .unwrap();
+            let cell = list_cell.cell;
+            assert_eq!('#' as u21, unsafe { (*cell).content_codepoint() });
+            assert_eq!(pagepkg::Wide::Wide, unsafe { (*cell).wide() });
+            assert!(unsafe { (*cell).has_grapheme() });
+            assert_eq!(
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }
+                    .unwrap(),
+                &[0xFE0F]
+            );
+        }
+        {
+            let list_cell = t
+                .active_mut()
+                .pages
+                .get_cell(active_pt(x + 1, y as u32))
+                .unwrap();
+            assert_eq!(pagepkg::Wide::SpacerTail, unsafe {
+                (*list_cell.cell).wide()
+            });
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: grapheme transfer when widening wraps to the next line"
+    #[test]
+    fn terminal_grapheme_transfer_when_widening_wraps_to_the_next_line() {
+        // Covers print's grapheme `.wide` path where the previous cell already
+        // holds grapheme data and has to be moved to the wrapped row.
+        let mut t = Terminal::init(Global, opts(3, 5)).unwrap();
+
+        t.modes.set(modespkg::Mode::GraphemeCluster, true);
+        t.cursor_right(2);
+
+        // A narrow emoji, then ZWJ, then a second emoji. The ZWJ attaches
+        // without changing the width, so the cell has grapheme data by the time
+        // the second emoji widens it.
+        t.print(0x263A).unwrap();
+        t.print(0x200D).unwrap();
+        t.print(0x2764).unwrap();
+
+        {
+            // The old cell becomes a spacer head on the wrapped row.
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(2, 0)).unwrap();
+            assert_eq!(pagepkg::Wide::SpacerHead, unsafe {
+                (*list_cell.cell).wide()
+            });
+            assert!(unsafe { (*list_cell.row).wrap() });
+        }
+        {
+            // The grapheme moved with the base codepoint.
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(0, 1)).unwrap();
+            let cell = list_cell.cell;
+            assert_eq!(0x263A as u21, unsafe { (*cell).content_codepoint() });
+            assert_eq!(pagepkg::Wide::Wide, unsafe { (*cell).wide() });
+            assert_eq!(
+                unsafe { (*crate::pagelist::Node::page(list_cell.node)).lookup_grapheme(cell) }
+                    .unwrap(),
+                &[0x200D, 0x2764]
+            );
+        }
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(1, 1)).unwrap();
+            assert_eq!(pagepkg::Wide::SpacerTail, unsafe {
+                (*list_cell.cell).wide()
+            });
+        }
+
+        t.deinit(Global);
+    }
+
     // test "Terminal: VS16 to make wide character with pending wrap"
     #[test]
     fn terminal_vs16_to_make_wide_character_with_pending_wrap() {
@@ -9873,6 +10043,114 @@ mod tests {
                 pagepkg::Wide::SpacerTail
             );
             assert!(unsafe { (*list_cell.cell).hyperlink() });
+        }
+
+        t.deinit(Global);
+    }
+
+    // A cursor style or hyperlink ID is an index into a set stored in the
+    // page memory of the page the cursor pin points at. When scrollClear
+    // (here via ED 22, kitty's scroll_complete) pushes the active area onto
+    // a later page while the cursor pin is still on an earlier one,
+    // cursorReload must migrate the cursor's style and hyperlink references
+    // to the destination page. It previously replaced the pin directly,
+    // leaving the cursor holding an ID that was dead or aliased an unrelated
+    // entry on the new page, and the next print attached a live cell to it.
+    // Found via fuzzing.
+    // test "Terminal: scrollClear across pages keeps cursor hyperlink refs page-local"
+    #[test]
+    fn terminal_scroll_clear_across_pages_keeps_cursor_hyperlink_refs_page_local() {
+        // Minimized from a 774-byte AFL fuzz input. Reading it:
+        //
+        //   A                 print, so REP has something to repeat
+        //   ESC [ 48111 b     REP, filling the page and spilling onto a second
+        //   ESC ] 8 ; ; 0x93  OSC 8; the C1 byte terminates the OSC and makes
+        //                     the URI non-empty, so a hyperlink starts
+        //   ESC [ 11 A        CUU, moving the cursor back onto the first page
+        //   ESC [ 22 J        ED 22, i.e. scroll_complete -> Screen.scrollClear
+        //   B                 print, which attaches the cursor hyperlink
+        //   ESC ] 8 ; ; ESC   OSC 8 with an empty URI, ending the hyperlink
+        //
+        // The grid must be wide enough to fill a page from a single REP, so
+        // this does not reproduce at 80x24.
+        let input = b"A\x1b[48111b\x1b]8;;\x93\x1b[11A\x1b[22JB\x1b]8;;\x1b";
+
+        let mut t = Terminal::init(Global, opts(200, 50)).unwrap();
+
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(input);
+            s.deinit();
+        }
+
+        // With slow runtime safety on, the page integrity checks during the
+        // stream above already catch the bug. Verify the ref counts explicitly
+        // as well so this test is meaningful with runtime safety off: every
+        // cell holding a hyperlink ID owns a reference, so a count below the
+        // number of holding cells means a live cell points at an entry that
+        // was already freed.
+        let mut node_ = t.active_mut().pages.pages.first;
+        while !node_.is_null() {
+            let node = node_;
+            node_ = unsafe { (*node).next };
+
+            let page: *mut Page = unsafe { crate::pagelist::Node::page(node) };
+            let base = unsafe { (*page).memory_ptr() };
+            let cap = unsafe { (*page).hyperlink_set.layout.cap };
+            if cap == 0 {
+                continue;
+            }
+
+            let mut holders = vec![0u32; cap];
+
+            let rows = unsafe { (*page).rows.ptr(base) };
+            for y in 0..(unsafe { (*page).size.rows } as usize) {
+                let row: *mut Row = unsafe { rows.add(y) };
+                if !unsafe { (*row).hyperlink() } {
+                    continue;
+                }
+                let cells = unsafe { (*row).cells().ptr(base) };
+                for x in 0..(unsafe { (*page).size.cols } as usize) {
+                    let cell: *mut pagepkg::Cell = unsafe { cells.add(x) };
+                    if !unsafe { (*cell).hyperlink() } {
+                        continue;
+                    }
+                    let id = match unsafe { (*page).lookup_hyperlink(cell) } {
+                        Some(id) => id,
+                        None => continue,
+                    };
+                    if (id as usize) < cap {
+                        holders[id as usize] += 1;
+                    }
+                }
+            }
+
+            for (id, &held) in holders.iter().enumerate() {
+                if held == 0 {
+                    continue;
+                }
+                let refs = unsafe {
+                    (*page)
+                        .hyperlink_set
+                        .ref_count(base, id as crate::hyperlink::Id)
+                };
+                assert!(refs as u32 >= held);
+            }
+        }
+
+        // If the cursor still has an active hyperlink, its own extra
+        // reference must live on the cursor's page.
+        let cursor_hyperlink_id = unsafe { (*t.screens.active).cursor.hyperlink_id };
+        if cursor_hyperlink_id != 0 {
+            let page: *mut Page =
+                unsafe { crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node) };
+            assert!(
+                unsafe {
+                    (*page)
+                        .hyperlink_set
+                        .ref_count((*page).memory_ptr(), cursor_hyperlink_id)
+                } > 0
+            );
         }
 
         t.deinit(Global);
@@ -21394,6 +21672,193 @@ mod tests {
         assert_eq!(pagepkg::Wide::SpacerHead, unsafe { (*old_rac.cell).wide() });
         assert!(!unsafe { (*old_rac.cell).has_grapheme() });
         assert!(unsafe { (*old_page).lookup_grapheme(old_rac.cell) }.is_none());
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: scroll region linefeed recycled row has default metadata"
+    #[test]
+    fn terminal_scroll_region_linefeed_recycled_row_has_default_metadata() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        // A soft-wrapped line across rows 0-2 so that row 1 has both wrap
+        // flags set. Mark row 1 as a prompt as well (OSC 133 A would).
+        for _ in 0..12 {
+            t.print('A' as u32).unwrap();
+        }
+        unsafe {
+            (*t.active_mut().pages.get_cell(active_pt(0, 1)).unwrap().row)
+                .set_semantic_prompt(pagepkg::SemanticPrompt::Prompt)
+        };
+
+        // DECSTBM rows 2-4, cursor to the region bottom, and linefeed:
+        // row 1 is discarded and its Row storage recycled as the new
+        // blank region-bottom row.
+        t.set_top_and_bottom_margin(2, 4);
+        t.set_cursor_pos(4, 1);
+        t.linefeed().unwrap();
+
+        {
+            let rac = t.active_mut().pages.get_cell(active_pt(0, 3)).unwrap();
+            unsafe {
+                assert!(!(*rac.row).wrap());
+                assert!(!(*rac.row).wrap_continuation());
+                assert_eq!(pagepkg::SemanticPrompt::None, (*rac.row).semantic_prompt());
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: alt screen scroll up recycled row has default metadata"
+    #[test]
+    fn terminal_alt_screen_scroll_up_recycled_row_has_default_metadata() {
+        let mut t = Terminal::init(Global, opts(5, 3)).unwrap();
+
+        t.switch_screen_mode(SwitchScreenMode::M1049, true).unwrap();
+
+        // A soft-wrapped line across rows 0-1 and a prompt mark on row 0.
+        for _ in 0..7 {
+            t.print('A' as u32).unwrap();
+        }
+        unsafe {
+            (*t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap().row)
+                .set_semantic_prompt(pagepkg::SemanticPrompt::Prompt)
+        };
+
+        // Scroll up: with no scrollback, row 0 is discarded and its Row
+        // storage recycled as the new blank bottom row.
+        t.scroll_up(1).unwrap();
+
+        {
+            let rac = t.active_mut().pages.get_cell(active_pt(0, 2)).unwrap();
+            unsafe {
+                assert!(!(*rac.row).wrap());
+                assert!(!(*rac.row).wrap_continuation());
+                assert_eq!(pagepkg::SemanticPrompt::None, (*rac.row).semantic_prompt());
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: insertLines count over region blanks row metadata"
+    #[test]
+    fn terminal_insert_lines_count_over_region_blanks_row_metadata() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        // A soft-wrapped line across rows 0-2 so that row 1 has both wrap
+        // flags set, plus a prompt mark on row 1.
+        for _ in 0..12 {
+            t.print('A' as u32).unwrap();
+        }
+        unsafe {
+            (*t.active_mut().pages.get_cell(active_pt(0, 1)).unwrap().row)
+                .set_semantic_prompt(pagepkg::SemanticPrompt::Prompt)
+        };
+
+        // Insert more lines than remain in the region: every row from the
+        // cursor to the region bottom is blanked in place, with no shifts.
+        t.set_cursor_pos(2, 1);
+        t.insert_lines(10);
+
+        for y in 1..5u32 {
+            let rac = t.active_mut().pages.get_cell(active_pt(0, y)).unwrap();
+            unsafe {
+                assert!(!(*rac.row).wrap());
+                assert!(!(*rac.row).wrap_continuation());
+                assert_eq!(pagepkg::SemanticPrompt::None, (*rac.row).semantic_prompt());
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines count over region blanks row metadata"
+    #[test]
+    fn terminal_delete_lines_count_over_region_blanks_row_metadata() {
+        let mut t = Terminal::init(Global, opts(5, 5)).unwrap();
+
+        for _ in 0..12 {
+            t.print('A' as u32).unwrap();
+        }
+        unsafe {
+            (*t.active_mut().pages.get_cell(active_pt(0, 1)).unwrap().row)
+                .set_semantic_prompt(pagepkg::SemanticPrompt::Prompt)
+        };
+
+        t.set_cursor_pos(2, 1);
+        t.delete_lines(10);
+
+        for y in 1..5u32 {
+            let rac = t.active_mut().pages.get_cell(active_pt(0, y)).unwrap();
+            unsafe {
+                assert!(!(*rac.row).wrap());
+                assert!(!(*rac.row).wrap_continuation());
+                assert_eq!(pagepkg::SemanticPrompt::None, (*rac.row).semantic_prompt());
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: deleteLines blank row does not retain semantic prompt"
+    #[test]
+    fn terminal_delete_lines_blank_row_does_not_retain_semantic_prompt() {
+        let mut t = Terminal::init(Global, opts(5, 3)).unwrap();
+
+        // Mark row 0 as a prompt row, then delete it. The blank row that
+        // appears at the region bottom reuses the deleted row's storage
+        // and must not read as a prompt (e.g. for prompt navigation).
+        t.print('$' as u32).unwrap();
+        unsafe {
+            (*t.active_mut().pages.get_cell(active_pt(0, 0)).unwrap().row)
+                .set_semantic_prompt(pagepkg::SemanticPrompt::Prompt)
+        };
+
+        t.set_cursor_pos(1, 1);
+        t.delete_lines(1);
+
+        {
+            let rac = t.active_mut().pages.get_cell(active_pt(0, 2)).unwrap();
+            unsafe {
+                assert!(!(*rac.row).wrap());
+                assert!(!(*rac.row).wrap_continuation());
+                assert_eq!(pagepkg::SemanticPrompt::None, (*rac.row).semantic_prompt());
+            }
+        }
+
+        t.deinit(Global);
+    }
+
+    // test "Terminal: eraseDisplay complete ignores stale prompt on recycled row"
+    #[test]
+    fn terminal_erase_display_complete_ignores_stale_prompt_on_recycled_row() {
+        let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+
+        // Screen content that must NOT enter the scrollback on a clear.
+        t.print_string(b"hello").unwrap();
+
+        // Mark row 1 as a prompt row and then discard it with a region
+        // scroll, recycling its storage as the blank bottom row.
+        unsafe {
+            (*t.active_mut().pages.get_cell(active_pt(0, 1)).unwrap().row)
+                .set_semantic_prompt(pagepkg::SemanticPrompt::Prompt)
+        };
+        t.set_top_and_bottom_margin(2, 3);
+        t.set_cursor_pos(3, 1);
+        t.linefeed().unwrap();
+        t.set_top_and_bottom_margin(0, 0);
+
+        // ED2: since no prompt is on screen, this must NOT take the
+        // scroll-and-clear path that pushes content into scrollback. A
+        // stale prompt flag on the recycled blank bottom row would.
+        t.erase_display(csi::EraseDisplay::Complete, false);
+
+        assert_eq!(
+            t.active_mut().pages.rows as usize,
+            t.active_mut().pages.total_rows
+        );
 
         t.deinit(Global);
     }

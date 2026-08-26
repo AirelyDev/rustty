@@ -1992,6 +1992,20 @@ impl Page {
         }
     }
 
+    /// Reset the given row to the default state: all cells zeroed and
+    /// all row metadata reset, as if the row was never used. This
+    /// reclaims memory used by graphemes, styles, etc. like clearCells.
+    ///
+    /// This must be used instead of clearCells whenever a row's storage
+    /// is recycled. Clearing the cells alone is not enough because row
+    /// metadata such as the wrap state and semantic prompt remain.
+    // pub inline fn resetRow(self: *Page, row: *Row) void
+    #[inline]
+    pub fn reset_row(&mut self, row: *mut Row) {
+        self.clear_cells(row, 0, self.size.cols as usize);
+        unsafe { (*row).reset() };
+    }
+
     /// Returns the hyperlink ID for the given cell.
     pub fn lookup_hyperlink(&self, cell: *const Cell) -> Option<hyperlink::Id> {
         let base = self.memory_ptr();

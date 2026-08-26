@@ -455,62 +455,28 @@ pub struct Resize {
     pub prompt_redraw: osc::semantic_prompt::Redraw,
 }
 
-pub struct SelectionString<'a> {
+pub struct SelectionString {
     /// The selection to convert to a string.
     pub sel: Selection,
 
     /// If true, trim whitespace around the selection.
     pub trim: bool,
-
-    /// If non-null, a stringmap will be written here. This will use
-    /// the same allocator as the call to selectionString. The string will
-    /// be duplicated here and in the return value so both must be freed.
-    pub map: Option<&'a mut StringMap>,
 }
 
-// const selectionString_tw = tripwire.module(enum {
-//     copy_map,
-// }, selectionString);
-//
-// PORT NOTE: the Zig `tripwire.module(P, E)` is a comptime function returning a
-// type with type-static state. The Rust `rustty_util::tripwire::Module<P, E>` is
-// an INSTANCE holding the same state. To share that state between
-// `selectionString` (which calls `check`) and the `selectionString map
-// allocation failure cleanup` test (which calls `error_always`), we hold the
-// module in a `#[cfg(test)] thread_local!` and route access through the small
-// `cfg(test)` helper below. In non-test builds the helper is a no-op returning
-// `Ok(())`, mirroring the Zig `enabled = builtin.is_test` gate. (Reuses the
-// pagelist `init_tw` tripwire idiom.)
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(crate) enum SelectionStringFp {
-    CopyMap,
-}
-
-#[cfg(test)]
-thread_local! {
-    pub(crate) static SELECTION_STRING_TW:
-        core::cell::RefCell<rustty_util::tripwire::Module<SelectionStringFp, OutOfMemory>> =
-        core::cell::RefCell::new(rustty_util::tripwire::module());
-}
-
-// `try selectionString_tw.check(point)` for the `selectionString` tripwire
-// module. Only compiled in test builds; the call site is `#[cfg(test)]`-gated so
-// production `selectionString` is unchanged, mirroring the Zig
-// `enabled = builtin.is_test` gate where the non-test `check` is a no-op.
-#[cfg(test)]
-#[inline]
-fn selection_string_tw_check(point: SelectionStringFp) -> Result<(), OutOfMemory> {
-    SELECTION_STRING_TW.with(|tw| tw.borrow_mut().check(point))
-}
+// PORT NOTE (f1948d505): the `selectionString_tw` tripwire module (fail point
+// `copy_map`) and its `map: ?*StringMap` duplicate-copy shape were removed
+// upstream along with the `selectionString map allocation failure cleanup`
+// test: `selectionStringMap` now TRANSFERS the formatter output and pin map
+// into the returned `StringMap`, so there is no duplicated string left to
+// leak on allocation failure.
 
 // PORT NOTE: `04810273a`'s rollback test uses `std.testing.FailingAllocator` on
 // `alloc.create(Hyperlink)`. The Rust analogue of that allocation is the
 // `Hyperlink` heap allocation in `start_hyperlink_once`, which IS now fallible
 // and returns `OutOfMemory` exactly like the reference — but Rust has no
 // per-call FailingAllocator to make the global allocator fail on demand, so the
-// injection seam stays a tripwire fail point (same idiom as
-// `SELECTION_STRING_TW` above) placed at that allocation. It simulates what a
+// injection seam stays a tripwire fail point (the pagelist `init_tw`
+// thread-local idiom) placed at that allocation. It simulates what a
 // FailingAllocator does; the error it returns is the one the real allocation
 // path returns.
 #[cfg(test)]
@@ -537,7 +503,7 @@ fn start_hyperlink_tw_check(point: StartHyperlinkFp) -> Result<(), OutOfMemory> 
 //     pages,
 // }, resize);
 //
-// PORT NOTE: same instance-vs-comptime-type idiom as `SELECTION_STRING_TW`
+// PORT NOTE: same instance-vs-comptime-type idiom as `START_HYPERLINK_TW`
 // above. The fail-point NAMES are the reference's verbatim (`saved_cursor_pin`,
 // `pages`) so the parity is free. Upstream's `Screen: resize errors preserve
 // state` test iterates `std.meta.tags(resize_tw.FailPoint)`; the Rust port
@@ -845,6 +811,30 @@ impl Screen {
                 .expect("pin points outside active area");
             debug_assert!(self.cursor.x == pt.coord().x);
             debug_assert!(self.cursor.y as u32 == pt.coord().y);
+
+            // The cursor style and hyperlink if non-zero must reference
+            // real data in the page the pin is in.
+            // const page: *const Page = self.cursor.page_pin.node.page();
+            let page: *mut Page =
+                unsafe { crate::pagelist::Node::page((*self.cursor.page_pin).node) };
+            if self.cursor.style_id != style::DEFAULT_ID {
+                debug_assert!(
+                    unsafe {
+                        (*page)
+                            .styles
+                            .ref_count((*page).memory_ptr(), self.cursor.style_id)
+                    } > 0
+                );
+            }
+            if self.cursor.hyperlink_id != 0 {
+                debug_assert!(
+                    unsafe {
+                        (*page)
+                            .hyperlink_set
+                            .ref_count((*page).memory_ptr(), self.cursor.hyperlink_id)
+                    } > 0
+                );
+            }
         }
     }
 
@@ -1527,12 +1517,33 @@ impl Screen {
         {
             Some(pt) => pt,
             None => {
+                // Our cached row/cell pointers may be invalid (that is often
+                // the reason cursorReload is being called), so refresh them
+                // from the pin first since cursorChangePin below marks the
+                // old cursor row as dirty.
+                let old_rac = unsafe { (*self.cursor.page_pin).row_and_cell() };
+                self.cursor.page_row = old_rac.row;
+                self.cursor.page_cell = old_rac.cell;
+
+                // The cursor style and hyperlink IDs are only valid within the
+                // page that the pin points at, so the pin change must go through
+                // cursorChangePin, which migrates them when the active top-left
+                // is on a different page. Writing the pin directly here would
+                // leave the cursor holding IDs that are dead or alias unrelated
+                // entries on the new page.
                 let pin = self
                     .pages
                     .pin(point::Point::Active(point::Coordinate::default()))
                     .unwrap();
-                unsafe { *self.cursor.page_pin = pin };
-                self.pages.point_from_pin(point::Tag::Active, pin).unwrap()
+                self.cursor.x = 0; // Must be set before cursorChangePin
+                self.cursor.y = 0;
+                self.cursor_change_pin(pin);
+
+                // cursorChangePin can trigger a page capacity adjustment which
+                // moves the pin again, so we re-read it to derive our point.
+                self.pages
+                    .point_from_pin(point::Tag::Active, unsafe { *self.cursor.page_pin })
+                    .unwrap()
             }
         };
 
@@ -1541,20 +1552,6 @@ impl Screen {
         let page_rac = unsafe { (*self.cursor.page_pin).row_and_cell() };
         self.cursor.page_row = page_rac.row;
         self.cursor.page_cell = page_rac.cell;
-
-        // If we have a style, we need to ensure it is in the page because this
-        // method may also be called after a page change.
-        if self.cursor.style_id != style::DEFAULT_ID {
-            if let Err(_err) = self.manual_style_update() {
-                // This failure should not happen because manualStyleUpdate
-                // handles page splitting, overflow, and more. This should only
-                // happen if we're out of RAM. In this case, we'll just degrade
-                // gracefully back to the default style.
-                // log.err("failed to update style on cursor reload err={}", .{err});
-                self.cursor.style = style::Style::default();
-                self.cursor.style_id = 0;
-            }
-        }
 
         self.assert_integrity();
     }
@@ -1584,6 +1581,13 @@ impl Screen {
                 let row = self.cursor.page_row;
                 let cells = unsafe { (*page).get_cells(row) };
                 self.clear_cells(page, row, cells);
+
+                // The row is a fresh blank row now and must not retain
+                // metadata (wrap state, semantic prompt) from the
+                // discarded content.
+                // self.cursor.page_row.reset();
+                unsafe { (*self.cursor.page_row).reset() };
+
                 self.cursor_mark_dirty();
             } else {
                 // The call to `eraseRow` will move the tracked cursor pin up by one
@@ -1904,6 +1908,12 @@ impl Screen {
         let cells = unsafe { (*cur_page).get_cells(row) };
         self.clear_cells(cur_page, row, cells);
 
+        // The recycled storage becomes the new blank cursor row and must
+        // not retain metadata (wrap state, semantic prompt) from the row
+        // whose content was moved to the next page.
+        // cur_rows[self.cursor.page_pin.y].reset();
+        unsafe { (*row).reset() };
+
         // Mark the whole page as dirty.
         //
         // Technically we only need to mark from the cursor row to the
@@ -2043,6 +2053,12 @@ impl Screen {
                 let cells = unsafe { (*page).get_cells(row) };
                 self.clear_cells(page, row, cells);
             }
+
+            // The row becomes the new blank cursor row after the rotation
+            // below and must not retain metadata (wrap state, semantic
+            // prompt) from the discarded content.
+            // row.reset();
+            unsafe { (*row).reset() };
         }
 
         // Rotate the region rows so the now-blank top row moves to the
@@ -2246,6 +2262,10 @@ impl Screen {
                     .hyperlink_set
                     .release(base, self.cursor.hyperlink_id);
             }
+            // Zero the ID, it is invalid now and style changes below may
+            // run integrity checks. We still have self.cursor.hyperlink to
+            // rebuild this later.
+            self.cursor.hyperlink_id = 0;
         }
 
         // Update our pin to the new page
@@ -2267,8 +2287,9 @@ impl Screen {
 
         // On the new page, we need to migrate our hyperlink
         if let Some(link) = self.cursor.hyperlink {
-            // So we don't attempt to free any memory in the replaced page.
-            self.cursor.hyperlink_id = 0;
+            // startHyperlink will try to free old hyperlinks, so set this
+            // to null. We free it ourselves later since we're doing some
+            // ref-counting shenanigans in this function.
             self.cursor.hyperlink = None;
 
             // Re-add
@@ -4202,20 +4223,61 @@ impl Screen {
     // faithful map is an UNSENTINELED `Vec<u8>` (never a lossy `String`) whose
     // `len()` equals the Zig slice's sentinel-EXCLUSIVE `len`. No NUL byte is
     // stored — see the sink note below.
+    // pub fn selectionString(
+    //     self: *Screen,
+    //     alloc: Allocator,
+    //     opts: SelectionString,
+    // ) Allocator.Error![:0]const u8 {
+    //     return self.selectionStringImpl(alloc, opts, null);
+    // }
     pub fn selection_string(
         &mut self,
         alloc: Allocator,
-        opts: SelectionString<'_>,
+        opts: SelectionString,
+    ) -> Result<Vec<u8>, OutOfMemory> {
+        self.selection_string_impl(alloc, opts, None)
+    }
+
+    /// Returns a StringMap associated with a selection. The map contains the
+    /// selection's raw text and a mapping from each byte to its screen location.
+    ///
+    /// The returned map is owned by the caller.
+    // pub fn selectionStringMap(
+    //     self: *Screen,
+    //     alloc: Allocator,
+    //     opts: SelectionString,
+    // ) Allocator.Error!StringMap {
+    pub fn selection_string_map(
+        &mut self,
+        alloc: Allocator,
+        opts: SelectionString,
+    ) -> Result<StringMap, OutOfMemory> {
+        // var pins: PinMap.Map = .empty;
+        // errdefer pins.deinit(alloc);
+        // PORT NOTE: `pins` is an owning value; the early `?` return below drops
+        // it, which IS the faithful errdefer. On success ownership of the pin
+        // map moves into the returned `StringMap`.
+        let mut pins: formatter::PinMapMap = formatter::PinMapMap::EMPTY;
+        Ok(StringMap {
+            string: self.selection_string_impl(alloc, opts, Some(&mut pins))?,
+            map: pins,
+        })
+    }
+
+    fn selection_string_impl(
+        &mut self,
+        alloc: Allocator,
+        opts: SelectionString,
+        pins: Option<&mut formatter::PinMapMap>,
     ) -> Result<Vec<u8>, OutOfMemory> {
         // We'll use this as our buffer to build our string.
         // PORT NOTE: the reference builds a `std.Io.Writer.Allocating` over
         // `alloc` and returns `toOwnedSliceSentinel(0)`. A `Vec<u8>` is the
         // faithful sink (the same convention as `dumpStringAlloc`): its length
         // is the sentinel-EXCLUSIVE length `toOwnedSliceSentinel(0)` reports.
-        // The port stores NO trailing NUL — neither here nor in the `StringMap`
-        // copy below (the reference's `alloc.dupeZ`). That is safe because no
-        // consumer on either side ever reads the sentinel: `StringMap`'s regex
-        // search passes explicit start/end byte bounds into oniguruma, and
+        // The port stores NO trailing NUL. That is safe because no consumer on
+        // either side ever reads the sentinel: `StringMap`'s regex search
+        // passes explicit start/end byte bounds into oniguruma, and
         // `rustty-core`'s `link_at_pin` goes through that same bounded API. See
         // the `StringMap.string` PORT NOTE (`string_map.rs`), which also explains
         // why appending a 0 byte here would BREAK parity rather than restore it.
@@ -4240,49 +4302,19 @@ impl Screen {
         );
         formatter.content = Content::Selection(Some(opts.sel));
 
-        // If we have a string map, we need to set that up.
-        let mut pins: formatter::PinMapMap = formatter::PinMapMap::EMPTY;
-        if opts.map.is_some() {
-            formatter.pin_map = Some(formatter::PinMap {
-                alloc,
-                map: &mut pins,
-            });
+        // if (pins) |map| formatter.pin_map = .{
+        //     .alloc = alloc,
+        //     .map = map,
+        // };
+        if let Some(map) = pins {
+            formatter.pin_map = Some(formatter::PinMap { alloc, map });
         }
 
         // Emit. Since this is an allocating writer, a failed write
         // just becomes an OOM.
         formatter.format(&mut aw).map_err(|_| OutOfMemory)?;
-
-        // Build our final text and if we have a string map set that up.
-        let text = aw;
-        // errdefer alloc.free(text);
-        if let Some(map) = opts.map {
-            let map_string = text.clone();
-            // errdefer alloc.free(map_string);
-            // PORT NOTE: the reference `errdefer alloc.free(map_string)` frees the
-            // duplicated string if `selectionString_tw.check`/`toOwnedSlice` fails.
-            // `map_string` is an owning `Vec` local, so any early `?` return below
-            // drops it automatically — that IS the faithful errdefer.
-            //
-            // try selectionString_tw.check(.copy_map);
-            // PORT NOTE: the `selectionString` tripwire is a fault-injection point
-            // exercised only by the one map-allocation-failure test; the check is
-            // `#[cfg(test)]`-gated (a no-op in production, mirroring the Zig
-            // `enabled = builtin.is_test` gate).
-            #[cfg(test)]
-            selection_string_tw_check(SelectionStringFp::CopyMap)?;
-            *map = StringMap {
-                string: map_string,
-                map: pins,
-            };
-
-            // Ownership of the pin map moved to the string map.
-            // PORT NOTE: the reference re-assigns `pins = .empty` so its
-            // deferred deinit frees nothing; the Rust move above IS that
-            // ownership transfer.
-        }
-
-        Ok(text)
+        // return try aw.toOwnedSliceSentinel(0);
+        Ok(aw)
     }
 
     /// Select the line under the given point. This will select across soft-wrapped
@@ -8985,15 +9017,8 @@ mod tests {
         s.pages.point_from_pin(point::Tag::Active, p).unwrap()
     }
     fn selstr(s: &mut Screen, sel: Selection, trim: bool) -> Vec<u8> {
-        s.selection_string(
-            Allocator,
-            SelectionString {
-                sel,
-                trim,
-                map: None,
-            },
-        )
-        .unwrap()
+        s.selection_string(Allocator, SelectionString { sel, trim })
+            .unwrap()
     }
 
     // test "Screen: selectAll"
@@ -12652,75 +12677,27 @@ mod tests {
     // build at EVERY optimize mode, so the reference's allocation-failure tests
     // inject in `zig build test -Doptimize=ReleaseFast` exactly as in Debug. This
     // crate reproduces that cross-crate by enabling `rustty-util/tripwire-test` as
-    // a DEV-dependency, which is what keeps the two fail-point tests below out of
-    // the release lane's `ignored` bucket. Asserting it directly means the wiring
-    // cannot be silently dropped (a `cargo test --release` run would otherwise
-    // just report the tests as "ignored" and stay green).
+    // a DEV-dependency, which is what keeps the fail-point tests in this module
+    // out of the release lane's `ignored` bucket. Asserting it directly means the
+    // wiring cannot be silently dropped (a `cargo test --release` run would
+    // otherwise just report the tests as "ignored" and stay green).
+    //
+    // (f1948d505 removed the `selectionString_tw` module this guard originally
+    // named; `StartHyperlinkFp` is the same idiom and shares the wiring.)
     #[test]
     fn tripwire_fail_points_enabled_in_test_builds_at_any_profile() {
         assert!(
-            rustty_util::tripwire::Module::<SelectionStringFp, OutOfMemory>::enabled(),
+            rustty_util::tripwire::Module::<StartHyperlinkFp, OutOfMemory>::enabled(),
             "tripwire fail points must be armed in ALL test builds (Zig: \
              `enabled = builtin.is_test`); if this fires in `--release`, the \
              `rustty-util/tripwire-test` dev-dependency feature was lost"
         );
     }
 
-    // test "selectionString map allocation failure cleanup"
-    #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point. `tripwire::Module::enabled()` is the union of `cfg!(test)`,
-    // `cfg!(debug_assertions)` and the `tripwire-test` feature, which this crate
-    // turns on as a DEV-dependency (Cargo.toml) — reproducing Zig's
-    // `builtin.is_test`, true at ANY optimize mode. So this runs in BOTH the debug
-    // and the release test lanes, like the reference test does. No `ignore`.
-    fn selection_string_map_allocation_failure_cleanup() {
-        use rustty_util::tripwire::ResetMode;
-
-        // This test verifies that if toOwnedSlice fails when building
-        // the StringMap, we don't leak the already-allocated map.string.
-        let mut s = clone_clear_init(10, 5, 0);
-
-        s.test_write_string(b"hello").unwrap();
-
-        // Get a selection
-        let sel = Selection::init(
-            s.pages
-                .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
-                .unwrap(),
-            s.pages
-                .pin(point::Point::Active(point::Coordinate { x: 4, y: 0 }))
-                .unwrap(),
-            false,
-        );
-
-        // Trigger allocation failure on toOwnedSlice
-        let mut map: StringMap = StringMap {
-            string: Vec::new(),
-            map: formatter::PinMapMap::EMPTY,
-        };
-        SELECTION_STRING_TW.with(|tw| {
-            tw.borrow_mut()
-                .errorAlways(SelectionStringFp::CopyMap, OutOfMemory)
-        });
-        let result = s.selection_string(
-            Allocator,
-            SelectionString {
-                sel,
-                // PORT NOTE: the reference omits `.trim`, taking the
-                // `SelectionString.trim` field default of `true`.
-                trim: true,
-                map: Some(&mut map),
-            },
-        );
-        assert!(matches!(result, Err(OutOfMemory)));
-        SELECTION_STRING_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
-
-        // If this test passes without memory leaks (when run with testing.allocator),
-        // it means the errdefer properly cleaned up map.string when toOwnedSlice failed.
-
-        s.deinit();
-    }
+    // PORT NOTE (f1948d505): the `test "selectionString map allocation failure
+    // cleanup"` that lived here was DELETED upstream with the tripwire it armed —
+    // `selectionStringMap` now transfers the formatter output into the returned
+    // map, so the duplicate string the test guarded against no longer exists.
 
     // PORT NOTE: these tests were DEFERRED from vt-11 (recorded in
     // DEFERRALS.md) because their fixtures needed Selection / the dirty
@@ -15291,6 +15268,331 @@ mod tests {
             || !unsafe { (*node_before_set).prev }.is_null()
             || !std::ptr::eq(unsafe { (*s.cursor.page_pin).node }, original_node);
         assert!(page_was_split);
+        s.deinit();
+    }
+
+    // The cursor style and hyperlink IDs are only meaningful within the page
+    // the cursor pin points at. scrollClear can move the active area onto a
+    // later page while the cursor pin stays with its content on an earlier
+    // page (now scrollback), so the reset in cursorReload must migrate both
+    // references to the destination page. It previously replaced the pin
+    // directly and then released the old style ID on the new page.
+    // test "Screen scrollClear across pages migrates cursor style and hyperlink"
+    #[test]
+    fn screen_scroll_clear_across_pages_migrates_cursor_style_and_hyperlink() {
+        let mut s = mkscreen(10, 10, usize::MAX);
+
+        // Fill the first page so the active area spans two pages.
+        let first_page_size = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(true) };
+        for _ in 0..(first_page_size - 5) {
+            s.test_write_string(b"\n").unwrap();
+        }
+        unsafe {
+            (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(false)
+        };
+        s.test_write_string(b"1\n2\n3\n4\n5\n6\n7\n8\n9\n10")
+            .unwrap();
+        assert!(!std::ptr::eq(s.pages.pages.first, s.pages.pages.last));
+
+        // Move the cursor to the top of the active area, which is on the
+        // first page, and give it a style and a hyperlink there.
+        s.cursor_absolute(0, 0);
+        assert!(std::ptr::eq(
+            unsafe { (*s.cursor.page_pin).node },
+            s.pages.pages.first
+        ));
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s.start_hyperlink(b"https://example.com/", None).unwrap();
+
+        let old_page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
+        let old_style_id = s.cursor.style_id;
+        let old_hyperlink_id = s.cursor.hyperlink_id;
+        assert!(old_style_id != style::DEFAULT_ID);
+        assert!(old_hyperlink_id != 0);
+
+        // All ten active rows are non-empty, so this moves the active area
+        // fully onto the second page while the cursor pin stays with its
+        // old row, which is now scrollback.
+        s.scroll_clear().unwrap();
+
+        // The cursor was moved to the new active top-left on the second
+        // page with its style and hyperlink references rebuilt there.
+        let new_page: *mut Page = unsafe { crate::pagelist::Node::page((*s.cursor.page_pin).node) };
+        assert!(!std::ptr::eq(new_page, old_page));
+        assert!(s.cursor.style_id != style::DEFAULT_ID);
+        assert!(s.cursor.hyperlink_id != 0);
+        assert!(
+            unsafe {
+                (*new_page)
+                    .styles
+                    .ref_count((*new_page).memory_ptr(), s.cursor.style_id)
+            } > 0
+        );
+        assert!(
+            unsafe {
+                (*new_page)
+                    .hyperlink_set
+                    .ref_count((*new_page).memory_ptr(), s.cursor.hyperlink_id)
+            } > 0
+        );
+
+        // The cursor's references on the old page were released. Nothing
+        // else referenced either entry, so both are dead there now.
+        assert!(
+            unsafe {
+                (*old_page)
+                    .styles
+                    .ref_count((*old_page).memory_ptr(), old_style_id)
+            } == 0
+        );
+        assert!(
+            unsafe {
+                (*old_page)
+                    .hyperlink_set
+                    .ref_count((*old_page).memory_ptr(), old_hyperlink_id)
+            } == 0
+        );
+
+        // Printing attaches the migrated style and hyperlink to a cell.
+        s.test_write_string(b"B").unwrap();
+
+        s.deinit();
+    }
+
+    // test "Screen: cursorScrollRegionUp recycled row has default metadata"
+    #[test]
+    fn screen_cursor_scroll_region_up_recycled_row_has_default_metadata() {
+        let mut s = mkscreen(5, 5, 0);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL\n4MNOP\n5QRST")
+            .unwrap();
+
+        // Simulate the top region row being part of a soft-wrapped,
+        // prompt-marked line. Its Row storage is recycled as the new
+        // blank cursor row and must not retain the metadata.
+        {
+            let rac = s.pages.get_cell(act()).unwrap();
+            unsafe {
+                (*rac.row).set_wrap(true);
+                (*rac.row).set_wrap_continuation(true);
+                (*rac.row).set_semantic_prompt(pagepkg::SemanticPrompt::Prompt);
+            }
+        }
+
+        s.cursor_absolute(1, 2);
+        s.cursor_scroll_region_up(2).unwrap();
+
+        {
+            let rac = s.pages.get_cell(pactive(0, 2)).unwrap();
+            unsafe {
+                assert!(!(*rac.row).wrap());
+                assert!(!(*rac.row).wrap_continuation());
+                assert_eq!(pagepkg::SemanticPrompt::None, (*rac.row).semantic_prompt());
+            }
+        }
+        {
+            let contents = dump(&s, scr());
+            assert_eq!(contents, b"2EFGH\n3IJKL\n\n4MNOP\n5QRST");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: cursorScrollRegionUp cross-page recycled row has default metadata"
+    #[test]
+    fn screen_cursor_scroll_region_up_cross_page_recycled_row_has_default_metadata() {
+        let mut s = mkscreen(10, 5, 10);
+
+        // We need to get the active area to span two pages so that the
+        // scroll region does too, exercising the slow path (eraseRowBounded).
+        let first_page_size = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(true) };
+        for _ in 0..(first_page_size - 3) {
+            s.test_write_string(b"\n").unwrap();
+        }
+        unsafe {
+            (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(false)
+        };
+        s.test_write_string(b"1A\n2B\n3C\n4D\n5E").unwrap();
+
+        // The first row of the last page is the Row storage that ends up
+        // recycled as the blank region-bottom row: the erased row's
+        // storage stays on the first page (receiving this row's content
+        // via clone) while this storage is cleared for the blank row.
+        {
+            let rac = s.pages.get_cell(pactive(0, 3)).unwrap();
+            unsafe {
+                (*rac.row).set_wrap(true);
+                (*rac.row).set_wrap_continuation(true);
+                (*rac.row).set_semantic_prompt(pagepkg::SemanticPrompt::Prompt);
+            }
+        }
+
+        // Region rows 1-3 with the cursor on the region bottom, which is
+        // on the second page while the region top is on the first page.
+        s.cursor_absolute(0, 3);
+        s.cursor_scroll_region_up(2).unwrap();
+
+        {
+            let rac = s.pages.get_cell(pactive(0, 3)).unwrap();
+            unsafe {
+                assert!(!(*rac.row).wrap());
+                assert!(!(*rac.row).wrap_continuation());
+                assert_eq!(pagepkg::SemanticPrompt::None, (*rac.row).semantic_prompt());
+            }
+        }
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"1A\n3C\n4D\n\n5E");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: cursorScrollAbove cross-page recycled row has default metadata"
+    #[test]
+    fn screen_cursor_scroll_above_cross_page_recycled_row_has_default_metadata() {
+        let mut s = mkscreen(10, 5, 10);
+
+        // Get the cursor page and the last page to differ so that
+        // cursorScrollAbove takes the cross-page rotate path.
+        let first_page_size = unsafe { crate::pagelist::Node::capacity(s.pages.pages.first).rows };
+        unsafe { (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(true) };
+        for _ in 0..(first_page_size - 3) {
+            s.test_write_string(b"\n").unwrap();
+        }
+        unsafe {
+            (*crate::pagelist::Node::page(s.pages.pages.first)).pause_integrity_checks(false)
+        };
+        s.test_write_string(b"1A\n2B\n3C\n4D\n5E").unwrap();
+        s.cursor_absolute(0, 1);
+        assert!(std::ptr::eq(
+            unsafe { (*s.cursor.page_pin).node },
+            s.pages.pages.first
+        ));
+        assert!(!unsafe { (*s.pages.pages.first).next }.is_null());
+
+        // The last row of the cursor page is the Row storage that gets
+        // recycled as the new blank row below the cursor after its content
+        // is moved down to the next page.
+        {
+            let rac = s.pages.get_cell(pactive(0, 2)).unwrap();
+            unsafe {
+                (*rac.row).set_wrap(true);
+                (*rac.row).set_wrap_continuation(true);
+                (*rac.row).set_semantic_prompt(pagepkg::SemanticPrompt::Prompt);
+            }
+        }
+
+        s.cursor_scroll_above().unwrap();
+
+        // One row scrolled into history, so the blank row is at active
+        // y=1 (just below the cursor's original row).
+        {
+            let rac = s.pages.get_cell(pactive(0, 1)).unwrap();
+            unsafe {
+                assert!(!(*rac.row).wrap());
+                assert!(!(*rac.row).wrap_continuation());
+                assert_eq!(pagepkg::SemanticPrompt::None, (*rac.row).semantic_prompt());
+            }
+        }
+        {
+            let contents = dump(&s, vp());
+            assert_eq!(contents, b"2B\n\n3C\n4D\n5E");
+        }
+        s.deinit();
+    }
+
+    // test "Screen: cursorDownScroll no scrollback recycled row has default metadata"
+    #[test]
+    fn screen_cursor_down_scroll_no_scrollback_recycled_row_has_default_metadata() {
+        let mut s = mkscreen(5, 3, 0);
+        s.test_write_string(b"1ABCD\n2EFGH\n3IJKL").unwrap();
+
+        {
+            let rac = s.pages.get_cell(act()).unwrap();
+            unsafe {
+                (*rac.row).set_wrap(true);
+                (*rac.row).set_wrap_continuation(true);
+                (*rac.row).set_semantic_prompt(pagepkg::SemanticPrompt::Prompt);
+            }
+        }
+
+        s.cursor_absolute(0, 2);
+        s.cursor_down_scroll().unwrap();
+
+        {
+            let rac = s.pages.get_cell(pactive(0, 2)).unwrap();
+            unsafe {
+                assert!(!(*rac.row).wrap());
+                assert!(!(*rac.row).wrap_continuation());
+                assert_eq!(pagepkg::SemanticPrompt::None, (*rac.row).semantic_prompt());
+            }
+        }
+        s.deinit();
+    }
+
+    // test "Screen: cursorDownScroll single row no scrollback resets metadata"
+    #[test]
+    fn screen_cursor_down_scroll_single_row_no_scrollback_resets_metadata() {
+        let mut s = mkscreen(5, 1, 0);
+        s.test_write_string(b"1ABCD").unwrap();
+
+        {
+            let rac = s.pages.get_cell(act()).unwrap();
+            unsafe {
+                (*rac.row).set_wrap(true);
+                (*rac.row).set_wrap_continuation(true);
+                (*rac.row).set_semantic_prompt(pagepkg::SemanticPrompt::Prompt);
+            }
+        }
+
+        s.cursor_down_scroll().unwrap();
+
+        {
+            let rac = s.pages.get_cell(act()).unwrap();
+            unsafe {
+                assert!(!(*rac.row).wrap());
+                assert!(!(*rac.row).wrap_continuation());
+                assert_eq!(pagepkg::SemanticPrompt::None, (*rac.row).semantic_prompt());
+            }
+        }
+        s.deinit();
+    }
+
+    // test "Screen: selectLine does not join lines across a recycled row"
+    #[test]
+    fn screen_select_line_does_not_join_lines_across_a_recycled_row() {
+        let mut s = mkscreen(6, 5, 0);
+
+        // A soft-wrapped line across rows 0 and 1: row 0 gets wrap=true.
+        s.test_write_string(b"AAAAAAA").unwrap();
+
+        // Scroll a region of rows 0-2 up by one: row 0 is discarded and
+        // its Row storage recycled as the blank row 2.
+        s.cursor_absolute(0, 2);
+        s.cursor_scroll_region_up(2).unwrap();
+
+        // Write unrelated single-line words on the recycled row and below.
+        s.cursor_absolute(0, 2);
+        s.test_write_string(b"world").unwrap();
+        s.cursor_absolute(0, 3);
+        s.test_write_string(b"hello").unwrap();
+
+        // Selecting the line "world" must not extend into "hello": these
+        // are separate hard lines. A stale wrap flag on the recycled row
+        // would join them.
+        {
+            let pin = spin(&s, pactive(0, 2));
+            let sel = s
+                .select_line(SelectLine {
+                    pin,
+                    whitespace: Some(&selection_codepoints::DEFAULT_LINE_WHITESPACE),
+                    semantic_prompt_boundary: true,
+                })
+                .unwrap();
+            let contents = selstr(&mut s, sel, false);
+            assert_eq!(contents, b"world");
+            sel.deinit(&mut s);
+        }
         s.deinit();
     }
 }

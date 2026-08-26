@@ -3329,7 +3329,6 @@ mod quicklook_word_tests {
                 SelectionString {
                     sel,
                     trim: true,
-                    map: None,
                 },
             )
             .unwrap();

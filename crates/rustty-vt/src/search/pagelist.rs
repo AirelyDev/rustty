@@ -590,7 +590,6 @@ mod tests {
                     SelectionString {
                         sel: Selection::init(sel.start, sel.end, false),
                         trim: true,
-                        map: None,
                     },
                 )
                 .unwrap();

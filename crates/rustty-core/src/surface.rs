@@ -4448,7 +4448,6 @@ where
                         terminal::screen::SelectionString {
                             sel: link.selection,
                             trim: false,
-                            map: None,
                         },
                     )?;
                     // break :link .{
@@ -4944,7 +4943,6 @@ where
             terminal::screen::SelectionString {
                 sel,
                 trim: false,
-                map: None,
             },
         )?;
         // errdefer alloc.free(text);
@@ -5180,7 +5178,6 @@ where
             terminal::screen::SelectionString {
                 sel,
                 trim: false,
-                map: None,
             },
         );
         // (the deferred mutex unlock)
@@ -9587,30 +9584,18 @@ where
             None => return Ok(None),
         };
 
-        // var strmap: terminal.StringMap = undefined;
-        //
-        // (Zig `undefined` -> the empty map the `selectionString` `map`
-        // out-param overwrites — the vt string_map test convention.)
-        let mut strmap: terminal::string_map::StringMap = terminal::string_map::StringMap {
-            string: Vec::new(),
-            map: terminal::formatter::PinMapMap::EMPTY,
-        };
-        // self.alloc.free(try screen.selectionString(self.alloc, .{
+        // const strmap = try screen.selectionStringMap(self.alloc, .{
         //     .sel = line,
         //     .trim = false,
-        //     .map = &strmap,
-        // }));
-        //
-        // (the freed return is the immediately-dropped temporary — only the
-        // `strmap` out-param is kept.)
-        drop(unsafe { &mut *screen }.selection_string(
-            self.alloc,
-            terminal::screen::SelectionString {
-                sel: line,
-                trim: false,
-                map: Some(&mut strmap),
-            },
-        )?);
+        // });
+        let mut strmap: terminal::string_map::StringMap = unsafe { &mut *screen }
+            .selection_string_map(
+                self.alloc,
+                terminal::screen::SelectionString {
+                    sel: line,
+                    trim: false,
+                },
+            )?;
         // defer strmap.deinit(self.alloc);
         //
         // PORT NOTE: the owned map frees on drop at every exit below — either
@@ -9751,7 +9736,6 @@ where
                     terminal::screen::SelectionString {
                         sel: link.selection,
                         trim: false,
-                        map: None,
                     },
                 )?;
                 // defer self.alloc.free(str);
@@ -11220,7 +11204,6 @@ where
                                     terminal::screen::SelectionString {
                                         sel: link_info.selection,
                                         trim: self.config.clipboard_trim_trailing_spaces,
-                                        map: None,
                                     },
                                 );
                             match r {

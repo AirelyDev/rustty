@@ -1184,6 +1184,33 @@ impl Row {
         // Ordered on purpose for likelihood.
         self.styled() || self.hyperlink() || self.grapheme()
     }
+
+    /// Reset all row metadata to the default state, preserving only
+    /// the cells offset, and mark the row dirty. This is a single
+    /// 8-byte store.
+    ///
+    /// This must be applied to any row whose storage is recycled as a
+    /// blank row or retired into unused page capacity, in addition to
+    /// clearing its cells (in either order; this doesn't touch cell
+    /// memory). See Page.resetRow, which does both, for details. This
+    /// exists separately for callers that clear the cells in a
+    /// specialized way (e.g. filling with a background-colored blank
+    /// cell rather than zeroing).
+    ///
+    /// Asserts that the row has no managed memory: releasing that is
+    /// the cell-clearing side's job and must happen while the flags
+    /// are still accurate.
+    // pub inline fn reset(self: *Row) void
+    #[inline]
+    pub fn reset(&mut self) {
+        // assert(!self.managedMemory());
+        debug_assert!(!self.managed_memory());
+        // self.* = .{ .cells = self.cells, .dirty = true };
+        let mut new = Row::zeroed();
+        new.set_cells(self.cells());
+        new.set_dirty(true);
+        *self = new;
+    }
 }
 
 impl Default for Row {

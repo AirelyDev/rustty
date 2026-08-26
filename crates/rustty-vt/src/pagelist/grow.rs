@@ -155,15 +155,16 @@ impl PageList {
             }
         }
 
-        // Clear our rows
+        // Reset our rows. They are retired into unused page capacity,
+        // which the grow() fast path re-exposes without any clearing, so
+        // they must be left in the default state.
         {
             let base = unsafe { (*page).memory_ptr() };
             let rows_ptr = unsafe { (*page).rows.ptr(base) };
-            let cols = unsafe { (*page).size.cols };
             for i in (y_start as usize)..(y_end as usize) {
                 let row = unsafe { rows_ptr.add(i) };
                 unsafe {
-                    (*page).clear_cells(row, 0, cols as usize);
+                    (*page).reset_row(row);
                 }
             }
         }
@@ -329,7 +330,12 @@ impl PageList {
 
         let last = self.pages.last;
         if unsafe { super::Node::capacity(last).rows > super::Node::rows(last) } {
-            // Fast path: we have capacity in the last page.
+            // Fast path: we have capacity in the last page. The exposed
+            // row requires no clearing work here: rows in unused page
+            // capacity are always in the default zero state, either
+            // because the page memory was never used (pool buffers are
+            // zeroed) or because whatever retired the row reset it (see
+            // Page.resetRow).
             unsafe { (*super::Node::page(last)).size.rows += 1 };
             unsafe { (*super::Node::page(last)).assert_integrity() };
 

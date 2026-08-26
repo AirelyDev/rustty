@@ -17140,3 +17140,215 @@ fn pagelist_page_allocation_allocation_failure_leaves_list_unchanged() {
     }
     result.deinit();
 }
+
+// ref: test "PageList eraseRow recycled row has default metadata"
+#[test]
+fn pagelist_erase_row_recycled_row_has_default_metadata() {
+    let mut s = PageList::init(Options::new(5, 3)).unwrap();
+
+    // Simulate the top row being part of a soft-wrapped, prompt-marked
+    // line. Erasing it recycles its Row storage as the new blank
+    // bottom row, which must not retain any of this metadata.
+    {
+        let rac = s
+            .get_cell(point::Point::Active(point::Coordinate::default()))
+            .unwrap();
+        unsafe {
+            (*rac.row).set_wrap(true);
+            (*rac.row).set_wrap_continuation(true);
+            (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt);
+        }
+    }
+
+    s.erase_row(point::Point::Active(point::Coordinate::default()))
+        .unwrap();
+
+    {
+        let rac = s
+            .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 2 }))
+            .unwrap();
+        unsafe {
+            assert!(!(*rac.row).wrap());
+            assert!(!(*rac.row).wrap_continuation());
+            assert_eq!(SemanticPrompt::None, (*rac.row).semantic_prompt());
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList eraseRowBounded recycled row has default metadata"
+#[test]
+fn pagelist_erase_row_bounded_recycled_row_has_default_metadata() {
+    // A limit smaller than the remaining rows in the page exercises
+    // the bounded-rotate branch; a larger limit exercises the fallback
+    // branch that clears the final row after a full rotation.
+    for limit in [1usize, 10] {
+        let mut s = PageList::init(Options::new(5, 3)).unwrap();
+
+        {
+            let rac = s
+                .get_cell(point::Point::Active(point::Coordinate::default()))
+                .unwrap();
+            unsafe {
+                (*rac.row).set_wrap(true);
+                (*rac.row).set_wrap_continuation(true);
+                (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt);
+            }
+        }
+
+        s.erase_row_bounded(point::Point::Active(point::Coordinate::default()), limit)
+            .unwrap();
+
+        let recycled_y = core::cmp::min(limit, 2);
+        let rac = s
+            .get_cell(point::Point::Active(point::Coordinate {
+                x: 0,
+                y: recycled_y as u32,
+            }))
+            .unwrap();
+        unsafe {
+            assert!(!(*rac.row).wrap());
+            assert!(!(*rac.row).wrap_continuation());
+            assert_eq!(SemanticPrompt::None, (*rac.row).semantic_prompt());
+        }
+
+        s.deinit();
+    }
+}
+
+// ref: test "PageList eraseActive regrown rows have default metadata"
+#[test]
+fn pagelist_erase_active_regrown_rows_have_default_metadata() {
+    let mut s = PageList::init(Options::new(5, 3)).unwrap();
+
+    // Mark the rows that will be erased. eraseActive retires their
+    // storage into unused page capacity and then regrows the active
+    // area, re-exposing the same Row storage via the grow() fast path.
+    for y in 0..2u32 {
+        let rac = s
+            .get_cell(point::Point::Active(point::Coordinate { x: 0, y }))
+            .unwrap();
+        unsafe {
+            (*rac.row).set_wrap(true);
+            (*rac.row).set_wrap_continuation(true);
+            (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt);
+        }
+    }
+
+    s.erase_active(1);
+
+    for y in 0..3u32 {
+        let rac = s
+            .get_cell(point::Point::Active(point::Coordinate { x: 0, y }))
+            .unwrap();
+        unsafe {
+            assert!(!(*rac.row).wrap());
+            assert!(!(*rac.row).wrap_continuation());
+            assert_eq!(SemanticPrompt::None, (*rac.row).semantic_prompt());
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList split retired rows have default state"
+#[test]
+fn pagelist_split_retired_rows_have_default_state() {
+    let mut s = PageList::init(Options::new(5, 10)).unwrap();
+
+    // Put metadata and a background-colored (non-zero, but text-free)
+    // cell on a row that the split will move to the new page. The
+    // retired Row storage on the source page goes back into unused
+    // capacity that grow() re-exposes without clearing.
+    {
+        let rac = s
+            .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 7 }))
+            .unwrap();
+        unsafe {
+            (*rac.row).set_wrap(true);
+            (*rac.row).set_semantic_prompt(SemanticPrompt::Prompt);
+            let mut c = Cell::zeroed();
+            c.set_content_tag(ContentTag::BgColorPalette);
+            c.set_content_color_palette(42);
+            *rac.cell = c;
+        }
+    }
+
+    let node = s.pages.first;
+    s.split(
+        s.pin(point::Point::Active(point::Coordinate { x: 0, y: 5 }))
+            .unwrap(),
+    )
+    .unwrap();
+
+    // The source page was truncated to 5 rows; peek at the retired
+    // storage beyond size.rows.
+    let page = unsafe { super::Node::page(node) };
+    assert_eq!(5, unsafe { (*page).size.rows });
+    let rows = unsafe { (*page).rows.ptr((*page).memory_ptr()) };
+    for y in 5..10usize {
+        let row = unsafe { *rows.add(y) };
+        assert!(!row.wrap());
+        assert!(!row.wrap_continuation());
+        assert_eq!(SemanticPrompt::None, row.semantic_prompt());
+        let cells = unsafe { row.cells().ptr((*page).memory_ptr()) };
+        for x in 0..(unsafe { (*page).size.cols } as usize) {
+            assert!(unsafe { *cells.add(x) }.is_zero());
+        }
+    }
+
+    s.deinit();
+}
+
+// ref: test "PageList resize trimmed rows have default state"
+#[test]
+fn pagelist_resize_trimmed_rows_have_default_state() {
+    let mut s = PageList::init(Options::new(5, 5)).unwrap();
+
+    // A trailing blank row has no text, so shrinking rows trims it,
+    // but it can still carry metadata (e.g. a blank prompt
+    // continuation line) and background-colored cells. Trimming
+    // retires the storage into unused capacity that grow()
+    // re-exposes without clearing.
+    {
+        let rac = s
+            .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 4 }))
+            .unwrap();
+        unsafe {
+            (*rac.row).set_wrap_continuation(true);
+            (*rac.row).set_semantic_prompt(SemanticPrompt::PromptContinuation);
+            let mut c = Cell::zeroed();
+            c.set_content_tag(ContentTag::BgColorPalette);
+            c.set_content_color_palette(42);
+            *rac.cell = c;
+        }
+    }
+
+    s.resize(Resize {
+        rows: Some(4),
+        reflow: false,
+        ..Resize::default()
+    })
+    .unwrap();
+    s.resize(Resize {
+        rows: Some(5),
+        reflow: false,
+        ..Resize::default()
+    })
+    .unwrap();
+
+    {
+        let rac = s
+            .get_cell(point::Point::Active(point::Coordinate { x: 0, y: 4 }))
+            .unwrap();
+        unsafe {
+            assert!(!(*rac.row).wrap());
+            assert!(!(*rac.row).wrap_continuation());
+            assert_eq!(SemanticPrompt::None, (*rac.row).semantic_prompt());
+            assert!((*rac.cell).is_zero());
+        }
+    }
+
+    s.deinit();
+}

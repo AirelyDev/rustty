@@ -5995,6 +5995,28 @@ mod tests {
             assert_eq!(*progress, PR_PROGRESS.with(|c| c.get()));
         }
 
+        // A full reset (RIS) removes any active progress bar.
+        // s.nextSlice("\x1B]9;4;1;50\x1B\\");
+        s.next_slice(b"\x1B]9;4;1;50\x1B\\");
+        // try testing.expectEqual(@as(usize, cases.len + 1), S.count);
+        assert_eq!(cases.len() + 1, PR_COUNT.with(|c| c.get()));
+        // try testing.expectEqual(osc.Command.ProgressReport.State.set, S.last_state);
+        assert_eq!(
+            osc::ProgressReportState::Set,
+            PR_STATE.with(|c| c.get())
+        );
+        // s.nextSlice("\x1Bc");
+        s.next_slice(b"\x1Bc");
+        // try testing.expectEqual(@as(usize, cases.len + 2), S.count);
+        assert_eq!(cases.len() + 2, PR_COUNT.with(|c| c.get()));
+        // try testing.expectEqual(osc.Command.ProgressReport.State.remove, S.last_state);
+        assert_eq!(
+            osc::ProgressReportState::Remove,
+            PR_STATE.with(|c| c.get())
+        );
+        // try testing.expectEqual(@as(?u8, null), S.last_progress);
+        assert_eq!(None::<u8>, PR_PROGRESS.with(|c| c.get()));
+
         t.deinit(Global);
     }
 
