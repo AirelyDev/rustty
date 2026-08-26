@@ -13,16 +13,19 @@ not product source. Companion to
 ## Status (updated 2026-08-26) — COMPLETE
 
 Every step of the fill order below is done, on branch `build-system-gaps`
-(merged to `main`). Seven new gates run from `.port/tools/ci.sh`:
+Ten new gates run from `.port/tools/ci.sh`:
 
-| Gate          | Covers                                                                |
-| ------------- | --------------------------------------------------------------------- |
-| `G-LINT`      | shellcheck, prettier, typos, swiftlint, alejandra, pinact             |
-| `G-CCONSUMER` | cmake build/install, both `.pc` files, shared+static link             |
-| `G-EXAMPLES`  | all 33 `example/` programs, incl. cross and SwiftPM                   |
-| `G-DIST`      | `xtask dist` + `dist-lib-vt` shape, + (opt-in) `distcheck`            |
-| `G-NIX`       | `nix flake check` (7 checks) + `alejandra --check`; BLOCKED w/o `nix` |
-| `G-XTARGET`   | cross-target builds of `rustty-vt-c` (wasm ×2, windows, freebsd)      |
+| Gate          | Covers                                                                       |
+| ------------- | ---------------------------------------------------------------------------- |
+| `G-LINT`      | shellcheck, prettier, typos, swiftlint, alejandra, pinact                    |
+| `G-CCONSUMER` | cmake build/install, both `.pc` files, shared+static link                    |
+| `G-EXAMPLES`  | all 33 `example/` programs, incl. cross and SwiftPM                          |
+| `G-DIST`      | `xtask dist` + `dist-lib-vt` shape, + (opt-in) `distcheck`                   |
+| `G-NIX`       | `nix flake check` (7 checks) + `alejandra --check`; BLOCKED w/o `nix`        |
+| `G-XTARGET`   | cross-target builds of `rustty-vt-c` (wasm ×2, windows ×2, freebsd, android) |
+| `G-I18N`      | msgcmp all 32 `po/*.po` against the `.pot`                                   |
+| `G-BLUEPRINT` | all 19 `.blp` templates compile and are formatted                            |
+| `G-VALGRIND`  | FFI-crate test binaries under memcheck (489 tests)                           |
 
 **Nix is complete and verified.** `nix build .#librustty-vt`, `nix build
 .#rustty` (the GTK app), `nix flake check` (all 7), `nix develop` (exactly the
@@ -33,21 +36,39 @@ evaluate on aarch64-linux.
 io.airely.rustty +version` → `Rustty 0.1.0`. flatpak-builder needs no root; it
 ships as a flatpak.
 
-### What remains genuinely blocked
+### What remains
 
-Two things, both needing privileges or hardware this environment does not have.
-Neither is a code gap, and both say so in their own headers:
+Verified afresh against ghostty @683d8db64. Of its 52 `test.yml` jobs, 43 are
+covered; the rest are below.
+
+**Blocked on privileges or hardware this environment lacks** — labelled as such
+in their own headers, never implied green:
 
 - **snap** — snapcraft is itself a snap and snapd is absent; installing it
-  needs root. The manifest names the exact commands.
-- **`nix/tests.nix`** — NixOS VM tests boot a desktop under QEMU/KVM. The
-  Linux box here is itself a VM and the container the flake was verified in
-  has no `/dev/kvm`. Ported, not wired into `checks`, with the three steps to
-  enable it written down.
+  needs root. `snap/snapcraft.yaml` names the exact commands.
+- **`nix/tests.nix`** — NixOS VM tests boot a desktop under QEMU/KVM. The Linux
+  box here is itself a VM and the container has no `/dev/kvm`. Ported, not
+  wired into `checks`, with the three enabling steps written down.
 
-Also not done: `test/fuzz-libghostty`. rustty has G5 (`run_fuzz_smoke.sh`) at
-the Rust level; a C-API-level fuzz harness is a genuine remaining gap and is
-listed as such rather than stubbed.
+**Not done** — each needs infrastructure more than code:
+
+- `test/fuzz-libghostty` + its CI job — a C-API-level fuzz harness. G5
+  (`run_fuzz_smoke.sh`) covers the Rust level only.
+- `test-pkg-linux` / `test-debian-13` — distro package smoke tests.
+- `test-sentry-linux` — crash-reporting smoke.
+- `snap.yml` + `build-snap` / `trigger-snap` — gated on snap itself.
+- release-tip's `build-macos-debug-{slow,fast}` and the three `sentry-dsym*`
+  variants (release-**tag** has `sentry-dsym`, secret-gated).
+- Small files with no analog yet: `flatpak/exceptions.json`, `test/README.md`,
+  `test/ucs-detect.sh`, and a `check-apple-libghostty-vt.nu` analog
+  (xcframework Apple-slice verification).
+
+**Correctly absent** — no analog, deliberately dropped: the zig-cache machinery
+(`zigCacheHash.nix`, `check-zig-cache.sh`, `fetch-zig-cache.sh`,
+`update-mirror.nu`, `flatpak/zig-packages.json`), the three `example/zig-*`
+programs, the five `vouch-*.yml` governance workflows, and `test.yml` /
+`nix.yml` as separate files — rustty's equivalent is `ci.sh` plus the gate
+suite, by design.
 
 ### The defects this work found
 
