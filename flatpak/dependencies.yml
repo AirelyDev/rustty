@@ -1,6 +1,6 @@
 # PORTS: ghostty flatpak/dependencies.yml.
 #
-# UNVERIFIED — see the header of io.airely.rustty.yml.
+# Verified as part of the io.airely.rustty.yml build — see its header.
 #
 # The reference's `zig` module is DROPPED: the Rust toolchain comes from the
 # org.freedesktop.Sdk.Extension.rust-stable SDK extension the app manifest

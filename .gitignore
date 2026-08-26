@@ -113,3 +113,17 @@ example/**/build/
 
 # codex-vet remediation ledger: keep the state/designs/scripts, drop caches
 .port/codex-vet/__pycache__/
+
+# flatpak-builder outputs (regenerable):
+#   flatpak run org.flatpak.Builder --force-clean --user \
+#     --repo=flatpak/repo flatpak/builddir flatpak/io.airely.rustty.yml
+/flatpak/builddir/
+/flatpak/repo/
+/flatpak/.flatpak-builder/
+.flatpak-builder/
+
+# snapcraft output
+/*.snap
+/parts/
+/stage/
+/prime/
