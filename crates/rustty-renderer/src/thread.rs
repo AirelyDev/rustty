@@ -1,15 +1,31 @@
 //! Represents the renderer thread logic. The renderer thread is able to
 //! be woken up to render.
 //!
-//! PORTS: ghostty src/renderer/Thread.zig — MINIMAL cross-thread surface ONLY
-//! (integration-tier stage 2): the `Mailbox` type (what termio's
-//! `renderer_mailbox` points at) and the `DerivedConfig` (now the real
-//! single-field struct + `init`). The reference file's event loop (the `Thread`
-//! struct itself, its xev `Loop`/`Async`/`Timer` handles,
-//! `threadMain`/`drainMailbox`/`renderCallback` and the rest of the
-//! render/draw/cursor timer machinery) is NOT ported here — it is deferred with
-//! the D6 xev decision + the GPU renderer tier (0 `test{}` blocks — R1-safe; see
-//! .port/phase-2/DEFERRALS.md).
+//! PORTS: ghostty src/renderer/Thread.zig — the part of it that can live in
+//! THIS crate: the `Mailbox` type (what termio's `renderer_mailbox` points at)
+//! and the `DerivedConfig` (the real single-field struct + `init`).
+//!
+//! WHERE THE REST OF THE FILE IS — read this before concluding anything is
+//! missing. The reference file's event loop (the `Thread` struct itself, its
+//! xev `Loop`/`Async`/`Timer` handles, `threadMain`/`threadMain_`/
+//! `drainMailbox`/`changeConfig`/`drawFrame`/`setQosClass`, the wakeup/
+//! draw-now/render/animation/cursor/stop callbacks, `armAnimationTimer`,
+//! `cursorBlinkInterval`, `CURSOR_BLINK_INTERVAL` and the `Compression`
+//! scheduler) is FULLY PORTED — in `rustty-core`'s `renderer_seam.rs`, not
+//! here. All 17 reference `fn`s plus `Compression`'s six are live there with
+//! ZERO production `unimplemented!()`.
+//!
+//! It lives in core because renderer/Thread.zig imports `configpkg` AND core's
+//! `App.Mailbox`, and BOTH edges cycle from `rustty-renderer` (rustty-config
+//! already deps rustty-renderer — the G7 cycle — and a renderer -> core edge is
+//! upside down). R4 therefore puts the loop at the lowest crate that may name
+//! all three: core.
+//!
+//! (Superseded status, kept because it misled a 2026-08-26 parity audit into
+//! reporting the loop as unported: ~~"NOT ported here — deferred with the D6
+//! xev decision + the GPU renderer tier"~~. D6 Milestones A/B and the R-d GPU
+//! tier W0–W5 have since landed; `.port/phase-2/DEFERRALS.md` carries the
+//! matching RESOLVED row.)
 
 use rustty_datastruct::BlockingQueue;
 

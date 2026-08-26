@@ -1461,11 +1461,21 @@ where
 
                 // .macos_display_id => |v| {
                 //     if (@hasDecl(rendererpkg.Renderer, "setMacOSDisplayID")) {
-                //         try self.renderer.setMacOSDisplayID(v);
+                //         try self.renderer.setMacOSDisplayID(v, &self.draw_now);
                 //     }
                 // },  (@hasDecl TRUE for Metal)
+                //
+                // PORT NOTE (`a177ba90a`): the `&self.draw_now` argument is new —
+                // a display change may now CREATE the display link ("when a
+                // display becomes available it re-adds itself"), and creating it
+                // needs the output-callback userdata this thread owns. `Async` is
+                // a Copy+Send handle, so the R4 seam passes it by value where the
+                // reference passes `*xev.Async`; the READ of the field happens
+                // before the `&mut` call on the renderer, so the two raw-pointer
+                // accesses never overlap.
                 Message::MacosDisplayId(v) => {
-                    unsafe { (*(*self_).renderer).0.set_macos_display_id(v) }?;
+                    let draw_now = unsafe { (*self_).draw_now };
+                    unsafe { (*(*self_).renderer).0.set_macos_display_id(v, draw_now) }?;
                 }
             }
         }

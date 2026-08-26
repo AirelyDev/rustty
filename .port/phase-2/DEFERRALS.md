@@ -1255,20 +1255,38 @@ Owner of the fill: the the R-d GPU/renderer tier [LANDED: windowing W0–W5] GPU
   growth-point precedent). The GraphicsAPI/SwapChain/FrameState/
   CustomShaderState machinery and the rest of generic.zig land WITH the
   Phase-3 port in rustty-renderer — nothing of it lives in core.
-- **DEFERRED (dependency placeholder): `renderer.Thread` run loop** —
-  `renderer_seam::Thread<A>` carries the FAITHFUL renderer/Thread.zig field
-  shape (xev loop/wakeup/stop/render_h/draw_h/draw_now/cursor_h handles +
-  completions from rustty-xev; `surface: *mut A::Surface`; `renderer: *mut
-  Renderer`; `state: *mut renderer::State` (REAL); `mailbox: *mut
-  renderer::thread::Mailbox` (REAL); `app_mailbox: app::Mailbox<A>`;
-  `config: renderer::thread::DerivedConfig` ([ADV-FIX 2] inhabited); `flags`
-  with the reference defaults `visible/focused = true` via manual `Default`)
-  and `init`/`threadMain`/`deinit` as `unimplemented!()` placeholders. The
-  run loop (`threadMain_`, `drainMailbox`, render/draw/cursor callbacks,
-  `DRAW_INTERVAL`/`CURSOR_BLINK_INTERVAL`, `must_draw_from_app_thread`) is
-  the R-d GPU/renderer tier [LANDED: windowing W0–W5] + D6 work that lands WITH the real port (renderer/Thread.zig
-  imports configpkg AND core's App.Mailbox — both edges cycle from
-  rustty-renderer, which is WHY the shape lives core-local).
+- **RESOLVED (2026-08-26, gap-close audit): `renderer.Thread` run loop** —
+  landed in `renderer_seam::Thread<A>`; nothing of it is deferred any more.
+  Verified function-for-function against renderer/Thread.zig: all 17 reference
+  top-level `fn`s (`init`, `deinit`, `threadMain`, `threadMain_`,
+  `setQosClass`, `drainMailbox`, `changeConfig`, `drawFrame`, `wakeupCallback`,
+  `drawNowCallback`, `renderCallback`, `armAnimationTimer`,
+  `animationTimerCallback`, `cursorTimerCallback`, `cursorCancelCallback`,
+  `stopCallback`, `cursorBlinkInterval`) plus the `Compression` scheduler's six
+  (`init`/`deinit`/`wake`/`schedule`/`timerCallback`/`step`), with
+  `CURSOR_BLINK_INTERVAL` and the `A::MUST_DRAW_FROM_APP_THREAD` arm of
+  `drawFrame`. ZERO production `unimplemented!()` in the file (every one of the
+  19 occurrences is either prose in the module header or inside `#[cfg(test)]
+  mod compression_tests`). It stays core-local for the R4 reason below, which
+  has NOT changed.
+  <br>Superseded text, kept because it misled a 2026-08-26 parity audit into
+  reporting the loop as unported (the row still said DEFERRED with
+  `unimplemented!()` placeholders long after D6 Milestones A/B and the R-d GPU
+  tier W0–W5 landed; only inline `[LANDED: ...]` patches had been applied):
+  ~~"DEFERRED (dependency placeholder): `renderer_seam::Thread<A>` carries the
+  FAITHFUL field shape ... and `init`/`threadMain`/`deinit` as
+  `unimplemented!()` placeholders. The run loop (`threadMain_`, `drainMailbox`,
+  render/draw/cursor callbacks, `DRAW_INTERVAL`/`CURSOR_BLINK_INTERVAL`,
+  `must_draw_from_app_thread`) is the R-d GPU/renderer tier + D6 work that
+  lands WITH the real port"~~.
+  <br>The field shape it describes is still accurate and still core-local (xev
+  loop/wakeup/stop/render_h/draw_h/draw_now/cursor_h handles + completions from
+  rustty-xev; `surface: *mut A::Surface`; `renderer: *mut Renderer`; `state:
+  *mut renderer::State`; `mailbox: *mut renderer::thread::Mailbox`;
+  `app_mailbox: app::Mailbox<A>`; `config: renderer::thread::DerivedConfig`;
+  `flags` with the reference defaults `visible/focused = true`), because
+  renderer/Thread.zig imports configpkg AND core's App.Mailbox — both edges
+  cycle from rustty-renderer, which is WHY the loop lives core-local.
 - **Ported live (not deferred): `renderer.Options`** (renderer/Options.zig,
   full field shape + comments) as `renderer_seam::Options<A>`; the blueprint
   sketch's `Options<'_, A>` lifetime is dropped — the reference file has no
