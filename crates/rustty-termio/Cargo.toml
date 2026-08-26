@@ -21,7 +21,14 @@ workspace = true
 # internal_os.FlatpakHostCommand` selects the REAL `os/flatpak.zig` host-command type
 # and the flatpak spawn/wait/kill arms compile. OFF by default, exactly as ghostty's
 # `-Dflatpak` defaults to false.
-flatpak = ["rustty-os/flatpak"]
+#
+# It ALSO flips `rustty-build-config/flatpak`, and that chaining is the point:
+# `Exec.zig`'s type selection and the `build_config.flatpak` runtime guard at
+# `exec.rs`'s spawn site are two halves of ONE `-Dflatpak`. Splitting them into
+# independently-settable cargo features would allow the state the reference
+# cannot express — `build_config.flatpak == true` with the placeholder
+# `FlatpakHostCommand` bound — so the two are welded together here.
+flatpak = ["rustty-os/flatpak", "rustty-build-config/flatpak"]
 # The reference `oniguruma` build option, forwarded to rustty-vt. It is what
 # synthesizes `build_options.tmux_control_mode` (vt `options.rs`), which gates
 # `dcsCommand`'s tmux control-mode arm here. OFF by default (matching a plain

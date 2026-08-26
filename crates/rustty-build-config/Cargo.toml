@@ -26,6 +26,29 @@ workspace = true
 # caveat.
 artifact-lib = []
 
+# `build_config.flatpak` — the port of the reference's `-Dflatpak=true` build
+# option (`src/build/Config.zig:212`), which its own Flatpak manifest passes.
+#
+# This is the OPTION seam, and it is load-bearing: with it off,
+# `build_config::flatpak()` is false and four ported code paths are inert —
+# `apprt/gtk/flatpak.rs`'s portal/DBus integration, `termio/exec.rs`'s
+# `flatpak-spawn --host` (so commands run inside the sandbox instead of on the
+# host), and `os/passwd.rs`'s host lookup. A Flatpak built without it starts,
+# prints `+version`, and quietly does none of that — which is exactly what
+# rustty shipped until this feature existed.
+#
+# Turn it on through `rustty-termio/flatpak` rather than directly: that feature
+# ALSO swaps the real `rustty_os::flatpak::FlatpakHostCommand` in for its
+# placeholder, and the two must never diverge — `flatpak()` returning true while
+# termio holds the empty placeholder struct is strictly worse than both off.
+flatpak = []
+
+# `build_config.snap` — the port of `-Dsnap` (`src/build/Config.zig:218`),
+# passed by the reference's `snapcraft.yaml`. Gates `os/open.rs`'s
+# snap-confinement handling of `xdg-open`. No type-swap partner, so unlike
+# `flatpak` this one is safe to enable on its own.
+snap = []
+
 [dependencies]
 # Version/identity source-of-truth (R2). identity has no deps so this adds no
 # cycle; BREAK #3 keeps build-config a leaf above only util/identity.

@@ -46,6 +46,34 @@ fn main() {
         println!("cargo:rerun-if-changed=cbits/log_shim.c");
     }
 
+    // GIO / GLib for the flatpak host-command path (`src/flatpak.rs`), which
+    // binds `g_bus_get_sync`, `g_dbus_connection_call_with_unix_fd_list_sync`
+    // and friends as plain `extern "C"`. Declaring the libraries is what turns
+    // those declarations into a link.
+    //
+    // PORTS `src/build/SharedDeps.zig:663-685`: `if (self.config.flatpak) {
+    // ... linkSystemLibrary("gio-2.0", dynamic_link_opts) }`, guarded there by
+    // the SAME condition — the `-Dflatpak` build option.
+    //
+    // Linux/FreeBSD only, again matching the reference: `-Dflatpak=true`
+    // targets a Flatpak sandbox, and GIO is not a macOS/Windows system library.
+    // Without this the feature compiled but failed at link with undefined
+    // `_g_bus_get_sync` — which nothing noticed, because nothing ever enabled
+    // the feature until the packaging manifests started passing it.
+    if env::var_os("CARGO_FEATURE_FLATPAK").is_some() && matches!(target_os.as_str(), "linux" | "freebsd")
+    {
+        // `pkg-config` rather than bare `-lgio-2.0`: the reference goes through
+        // `linkSystemLibrary`, which consults pkg-config for the include and
+        // library paths, and distros do not agree on where GLib lives.
+        match pkg_config::Config::new().probe("gio-2.0") {
+            Ok(_) => {}
+            Err(e) => panic!(
+                "the `flatpak` feature needs gio-2.0 (install libglib2.0-dev / glib \
+                 development headers): {e}"
+            ),
+        }
+    }
+
     // i18n / gettext: NOTHING to emit here.
     //
     // `crate::i18n` declares `extern "C" { fn bindtextdomain/textdomain/

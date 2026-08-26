@@ -58,6 +58,34 @@ gtk = ["rustty-apprt/gtk", "rustty-cli/gtk", "dep:allocator-api2"]
 wayland = ["gtk", "rustty-apprt/wayland"]
 x11 = ["gtk", "rustty-apprt/x11"]
 
+# PACKAGING options — the ports of the reference's `-Dflatpak=true` and
+# `-Dsnap`, which its own `flatpak/com.mitchellh.ghostty.yml` and
+# `snap/snapcraft.yaml` pass. These are the features `flatpak/io.airely.rustty.yml`
+# and `snap/snapcraft.yaml` pass here.
+#
+# OFF by default, matching the reference's option defaults: a normal
+# `cargo build -p rustty` is neither a Flatpak nor a Snap build, and turning
+# either on unconditionally would make an ordinary binary route its child
+# processes through `flatpak-spawn --host`.
+#
+# `flatpak` goes through `rustty-apprt/flatpak` -> `rustty-termio/flatpak` so
+# the host-command type and `build_config.flatpak` move together; `snap` reaches
+# `rustty-build-config` directly because it swaps no types.
+#
+# `flatpak` implies `gtk` because the reference does exactly that:
+# `SharedDeps.zig:663` — "When we're targeting flatpak we ALWAYS link GTK so we
+# [can translate the gio headers]" — followed by
+# `linkSystemLibrary("gio-2.0")`. `os/flatpak.zig`'s host-command path is built
+# on GIO/GLib, so a flatpak build without the GTK stack has nothing to resolve
+# those symbols against.
+#
+# That also makes `flatpak` a LINUX/FREEBSD-ONLY option, in rustty exactly as in
+# the reference: `-Dflatpak=true` on macOS would likewise try to link gio-2.0
+# and fail. Unlike `gtk` — which is a deliberate no-op off those targets — this
+# one is not silently portable, so `G-FEATMATRIX` exercises it on Linux only.
+flatpak = ["gtk", "rustty-apprt/flatpak"]
+snap = ["rustty-build-config/snap"]
+
 [dependencies]
 # Entry points fan out only: cli, apprt, core.
 rustty-cli = { workspace = true }

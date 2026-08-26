@@ -10,6 +10,13 @@ not product source. Companion to
 
 ---
 
+> **Second pass, 2026-08-26 (oracle re-synced to `88f57ee66`):** the fill order
+> below is complete and still holds. A fresh audit along axes the first pass did
+> not walk — build _options_ rather than CI jobs, and per-file byte fidelity —
+> found twelve more gaps. They are recorded in **§G** at the end of this
+> document, not folded in above, so the record of what the first pass claimed
+> stays honest.
+
 ## Status (updated 2026-08-26) — COMPLETE
 
 Every step of the fill order below is done, on branch `build-system-gaps`
@@ -342,3 +349,212 @@ Windows/Android/wasm build legs, `test/windows/test_dll_init.c`,
   across 20 job names is the annoying version.
 - Keep the ci.yml ↔ ci.sh lockstep invariant that ci.yml's header declares. Any
   new check should have a local invocation, or the invariant quietly dies.
+
+---
+
+## G. Second-pass findings (2026-08-26, oracle `88f57ee66`)
+
+The first pass walked the oracle's **CI job list** and closed it to 49/52. This
+pass walked two axes it never touched:
+
+- **Build _options_** — `src/build/Config.zig`'s 19 semantic `-D` flags, versus
+  rustty's cargo-feature / target-derived seams. A ported *option* that no
+  longer flips anything is invisible to a job-list diff.
+- **Per-file byte fidelity** — `git ls-files --eol` across the whole tree,
+  versus the oracle's per-directory `.gitattributes` guards.
+
+Both produced findings, and the second produced a live data-corruption bug.
+
+### G1 — `-Dflatpak=true` has no analog: the Flatpak ships with Flatpak support OFF
+
+`crates/rustty-build-config/src/build.rs:113` hardcodes `flatpak: false`, and
+`rustty-build-config` declares no feature that overrides it (its only feature is
+`artifact-lib`). `flatpak/io.airely.rustty.yml:92` builds
+`-p rustty --no-default-features --features "gtk wayland x11"` — it never
+enables `rustty-termio/flatpak`, and nothing could make
+`rustty_build_config::flatpak()` return true anyway.
+
+Four call sites are therefore dead **inside the Flatpak**:
+
+| Site                                    | What is lost                                       |
+| --------------------------------------- | -------------------------------------------------- |
+| `crates/rustty-apprt/src/gtk/flatpak.rs:24,81` | portal / DBus host integration                |
+| `crates/rustty-termio/src/exec.rs:1991`  | `flatpak-spawn --host` — commands run **sandboxed** |
+| `crates/rustty-os/src/passwd.rs:86`      | host passwd lookup                                  |
+
+The oracle passes `-Dflatpak=true` in its manifest precisely to turn these on.
+
+This is the "verified but vacuous" class the first pass warned about: the
+Flatpak was genuinely built, installed and run, but the smoke test is
+`+version`, which touches none of the above. **The Flatpak is real; its Flatpak
+integration is not.**
+
+**Fix:** add a `flatpak` feature to `rustty-build-config` that flips
+`CONFIG.flatpak` and chains `rustty-termio/flatpak`; pass it from the manifest;
+extend `flatpak.yml`'s smoke step past `+version` to something that exercises
+the spawn path.
+
+### G2 — `-Dsnap` likewise
+
+`build.rs:115` hardcodes `snap: false`. `crates/rustty-os/src/open.rs:138`
+gates snap-confined `xdg-open` handling on it. `snap/snapcraft.yaml:91` builds
+the same feature set as the Flatpak. Same shape, same fix; lower priority only
+because the Snap is `UNVERIFIED` anyway.
+
+### G3 — A fuzz seed is corrupted in the committed tree (`.gitattributes`)
+
+`.port/phase-0/corpora/cvt/parser-initial/02-crlf` exists to push CRLF bytes
+through the parser. Proven, not inferred:
+
+```
+oracle blob : 6c69 6e65 310d 0a6c 696e 6532 0d0a ...   line1\r\nline2\r\n...
+rustty blob : 6c69 6e65 310a 6c69 6e65 320a ...        line1\nline2\n...
+```
+
+rustty's `.gitattributes` opens with `* text=auto` and protects fixtures by
+**extension** (`*.vt`, `*.golden`, `*.bin`). The corpus seeds have no extension,
+so `text=auto` detected `02-crlf` as text and normalized the CRLF away at
+`git add`. The oracle guards exactly this with a per-directory rule in
+`test/fuzz-libghostty/.gitattributes`: `corpus/parser-initial/** binary`.
+
+Two things make this nasty:
+
+- **`git status` is clean and the working tree still has CRLF** — the
+  smudge/clean filter round-trips it. The corruption is invisible locally and
+  only exists for anyone who clones.
+- `crates/rustty-vt/tests/fuzz_corpus_replay.rs` replays this seed from the
+  working tree. It tests CRLF on this machine and LF on CI. The test is green
+  in both cases.
+
+A whole-tree sweep (`git ls-files --eol | grep '^i/lf.*w/crlf'`) found **16**
+such files: this seed plus 15 vendored FreeType MSVC project files under
+`crates-sys/freetype-sys/vendor/builds/`, which upstream ships CRLF. Nothing
+builds those, so they are byte-drift rather than breakage — but
+`crates-sys/*/vendor/**` is marked `linguist-vendored` and not `-text`, so
+vendored third-party trees are being line-ending-rewritten as a class.
+
+The mechanism demonstrably works where it was applied: the five
+`.port/phase-0/harness/fixtures/*.vt` files report `i/crlf w/crlf attr/-text`.
+
+**Fix:** `.port/phase-0/corpora/** binary` and `crates-sys/*/vendor/** -text`,
+then re-add `02-crlf` with its true bytes.
+
+### G4 — The deep fuzz corpora exist only in the oracle
+
+`crates/rustty-vt/fuzz/corpus/` is **gitignored**: 11,730 files locally, zero
+tracked. The oracle *commits* all 4,001 of its seeds, splitting them into
+hand-written `*-initial` and afl-cmin-deduped `*-cmin` tiers with a
+`.gitattributes` marking the latter `linguist-generated`.
+
+rustty tracks the 94 `*-initial` seeds (copied to `.port/phase-0/corpora/cvt/`)
+and reaches the 3,907 `*-cmin` cases only when `GHOSTTY_ORACLE` is exported —
+so on CI, and for anyone else who clones, the edge-deduped corpus never
+replays. Defensible as an R3 call; worth making deliberately rather than by
+`.gitignore` default.
+
+### G5 — No Windows CI leg at all
+
+The oracle runs three Windows jobs (`test-windows`,
+`build-libghostty-vt-windows`, `build-ghostty-windows-gnu`). rustty runs none,
+and `windows-latest` is free on GitHub — so unlike `snap`, nothing blocks this.
+
+`G-WINCHK` is `cargo check` from a non-Windows host. `G-XTARGET`'s
+`x86_64-pc-windows-msvc` arm skips off-Windows (no MSVC). **No Windows object
+code is ever produced, linked, or run.** `test/windows/test_dll_init.c` and its
+README are checked in, and the README's own Status section says "Not run by any
+gate."
+
+### G6 — The macOS app is only ever built at release time
+
+`xcodebuild` appears in `release-tip.yml` and `release-tag.yml` and **nowhere
+else** — no gate, no `ci.yml` step. `macos/Rustty.xctestplan` and
+`macos/RusttyUITests/` are never executed by anything. The oracle has four CI
+jobs driving `xcodebuild` (`build-macos`, `build-macos-xcode-27`,
+`build-macos-freetype`, `test-macos`).
+
+This is precisely the failure mode `G-DIST` was created to close — "first
+exercised at release time, which is the worst time to find out" — still open
+for the app bundle, on a host that can run it.
+
+### G7 — `xtask resources` is run by no gate and no workflow
+
+Grepping every `xtask -- <cmd>` invocation across `.port/tools/` and
+`.github/workflows/` yields `dist`, `dist-lib-vt`, `distcheck`, `header-gen`,
+`header-gen-apprt`, `release-info`, `update-translations`, `xcframework-vt`.
+Missing: **`resources`**, `gen`, `xcframework` (the app one — only the `-vt`
+variant is gated), `wasm-patch-growable-table`.
+
+`resources` generates **1,215 files**: man pages, the compiled terminfo
+database, 32 `.mo` catalogues, themes, shell integration, and the Linux
+desktop/dbus/systemd units. Its only callers are the Flatpak and Snap
+manifests. I ran it during this audit — exit 0 on macOS, output correct — so
+this is uncovered rather than broken, but it is 1,215 files of release-critical
+output behind zero gates.
+
+### G8 — `src/build/docker/` is not ported (2 files), and Doxygen never runs
+
+- `src/build/docker/lib-c-docs/{Dockerfile,entrypoint.sh}` — the container that
+  builds and serves the Doxygen C-API docs. rustty has the `Doxyfile` and all
+  of `dist/doxygen/`, and **nothing anywhere runs `doxygen`**.
+- `src/build/docker/debian/Dockerfile` — the pinned Debian dependency set
+  (`blueprint-compiler`, `libonig-dev`, `libbz2-dev`, …). `check_dist.sh`'s
+  debian arm substitutes a prebuilt `rust:trixie` image, so it builds only the
+  lib-vt slice and rustty has no canonical "what a Debian build needs" artifact.
+
+### G9 — Two `Doxyfile` deltas
+
+Diffed modulo naming, everything else is path relocation:
+
+- `PROJECT_LOGO` is **empty**; the oracle sets `images/gnome/64.png`, and
+  rustty ships that exact file.
+- `HTML_TIMESTAMP = NO` was **dropped**, so generated docs embed a build
+  timestamp and stop being reproducible.
+
+### G10 — `Makefile clean` misses `zig-out/`
+
+The oracle's clean removes `zig-out .zig-cache`. rustty's removes
+`dist/RusttyKit.xcframework`, `build-cmake`, `doc` — but not `zig-out/`, which
+is where `xtask resources` writes. The live consequence in this working tree: a
+`zig-out/share/ghostty/` directory and `ghostty.terminfo` / `ghostty.termcap`
+dated 2026-07-14, from before the rename, sitting alongside the current
+`rustty.*` output. Gitignored, so not an R2 violation — but it is exactly the
+staleness a clean target prevents.
+
+### G11 — `.gitignore` / `.gitattributes` drift
+
+- `.gitignore` misses `/result*` and `/.nixos-test-history` (Nix build
+  symlinks) and `vgcore.*` (Valgrind core dumps). All three became relevant
+  when rustty gained the flake and `G-VALGRIND`; the oracle has all three.
+- `macos/GhosttyKit.xcframework/` is a stale **R2-named** ignore entry; the
+  artifact is `RusttyKit`.
+- `.gitattributes` lacks the oracle's `*.txt text eol=lf`.
+
+### G12 — Still no `required` / `skip` aggregator
+
+Carried forward from §C. The first pass recommended adopting it *before* the
+matrix grows. G5 and G6 grow the matrix; this is the moment.
+
+### Re-classified as correctly absent
+
+- **`-Dfont-backend`** — the oracle's `build-macos-freetype` job keeps
+  `coretext_freetype` compiling. rustty's `rustty-font` is a **pure-Rust** port
+  with no FreeType, fontconfig or CoreText dependency at all, so the `Backend`
+  enum carries no build-graph meaning and there is nothing to matrix.
+- **`-Drenderer`** — `metal` is `cfg(target_os = "macos")` and `opengl` is
+  `cfg(any(linux, freebsd))`; the selection is target-derived with no override
+  in the oracle's CI either.
+- **`Makefile`'s `glad` target** — rustty's GL bindings are generated Rust
+  loaded via `gl::load_with`, not a vendored `glad.zip`.
+- **`nix/{zigCacheHash.nix,check-zig-cache.sh,fetch-zig-cache.sh,update-mirror.nu}`**,
+  `flatpak/zig-packages.json`, `example/zig-*`, the five `vouch-*.yml`
+  workflows and their `.github/{VOUCHED.td,issue-unvouched-message}` assets —
+  as recorded in the first pass.
+
+### Suggested order
+
+1. **G3** — a proven corrupted blob; a `.gitattributes` rule plus one re-add.
+2. **G1/G2** — the packages are functionally wrong today.
+3. **G10/G11/G9** — one-liners, minutes each.
+4. **G7** — wire `xtask resources` into a gate; the machinery already works.
+5. **G5/G6** — the two real CI legs. Adopt **G12** in the same change.
+6. **G4/G8** — deliberate calls, not defects.

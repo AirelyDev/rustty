@@ -37,6 +37,16 @@ workspace = true
 # apprt-layer GUI-glue dependency (R3) that only the gtk backend needs.
 gtk = ["dep:glib", "dep:gio", "dep:gdk4", "dep:gtk4", "dep:libadwaita", "rustty-vt/imgui"]
 
+# The reference's `-Dflatpak=true`, forwarded down to termio (which welds it to
+# `rustty-build-config/flatpak`). This crate needs no `cfg` of its own —
+# `src/gtk/flatpak.rs` reads `rustty_build_config::flatpak()` at both its call
+# sites, exactly as the reference reads `build_config.flatpak` — but the edge
+# has to exist here because `rustty` reaches termio through this crate.
+# Implies `gtk` for the reason SharedDeps.zig:663 states ("when we're targeting
+# flatpak we ALWAYS link GTK"): GIO/GLib come in with the GTK stack, and
+# `src/gtk/flatpak.rs` lives inside the gtk module anyway.
+flatpak = ["gtk", "rustty-termio/flatpak"]
+
 # OPT-IN GTK 4.20 API surface — the ghostty-mirrored analog of building against a
 # >= 4.20 header. DEFAULT OFF: the AD-3 baseline (above) pins gtk4 to `v4_14`, so
 # the stock build has NO `gtk::InterfaceColorScheme` and omits the

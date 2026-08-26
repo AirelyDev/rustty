@@ -364,4 +364,28 @@ mod tests {
         );
         assert!(!crate::RUSTC_VERSION.contains("rustc "));
     }
+
+    /// The packaging options are OPTIONS, not constants.
+    ///
+    /// Both were hardcoded `false` with no seam of any kind, so
+    /// `-Dflatpak=true` — which the reference's own Flatpak manifest passes —
+    /// had no rustty equivalent, and the Flatpak shipped with its portal/DBus
+    /// integration, `flatpak-spawn --host` and host passwd lookup all inert.
+    /// Asserting against `cfg!` (rather than a literal) makes this test
+    /// meaningful in BOTH matrix positions: it fails if the feature stops
+    /// driving the value in either direction, which is the only way the old
+    /// bug could return.
+    #[test]
+    fn packaging_options_track_their_features() {
+        assert_eq!(
+            crate::flatpak(),
+            cfg!(feature = "flatpak"),
+            "build_config.flatpak must follow the `flatpak` feature"
+        );
+        assert_eq!(
+            crate::snap(),
+            cfg!(feature = "snap"),
+            "build_config.snap must follow the `snap` feature"
+        );
+    }
 }

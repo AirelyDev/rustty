@@ -5,6 +5,9 @@
 *.rs    text eol=lf
 *.toml  text eol=lf
 *.md    text eol=lf
+# Text data files — LF (the reference carries this rule too; several are read
+# with a plain `\n` split).
+*.txt   text eol=lf
 *.py    text eol=lf
 *.sh    text eol=lf
 *.bash  text eol=lf
@@ -45,6 +48,25 @@ Makefile        text eol=lf
 *.golden    binary
 *.bin       binary
 
+# Fuzz / differential corpus SEEDS carry no extension (`02-crlf`,
+# `19-single-byte`, `id_000000,time_0,...`), so none of the extension rules
+# above can reach them and the `* text=auto` at the top of this file decides
+# instead. That is not hypothetical: it silently rewrote
+# `.port/phase-0/corpora/cvt/parser-initial/02-crlf` — a seed whose ENTIRE
+# PURPOSE is to feed CRLF through the parser — from `line1\r\nline2` to
+# `line1\nline2` at `git add` time. `git status` stayed clean and the working
+# tree kept its CRLF (the clean/smudge filter round-trips), so the damage was
+# invisible locally and existed only for anyone who cloned. Path rules, not
+# extension rules, are the only thing that can guard an extensionless corpus.
+#
+# PORTS the reference's `test/fuzz-libghostty/.gitattributes`, which marks
+# `corpus/parser-initial/** binary` for exactly this reason.
+.port/phase-0/corpora/cvt/**                    binary
+.port/phase-0/harness/fixtures/**               binary
+# Compiled terminfo databases — reference-generated binary goldens, extensionless
+# by convention (`ghostty.compiled`). Named for the same reason as the seeds.
+.port/phase-0/corpora/terminfo/compiled/**      binary
+
 # Generated/large binaries
 *.a         binary
 *.so        binary
@@ -61,7 +83,13 @@ Makefile        text eol=lf
 # repository's language statistics and collapsed by default in diffs. Without
 # these, the ~54 MB of C vendored under crates-sys/*/vendor counts as rustty's
 # own code and every review renders it in full.
-crates-sys/*/vendor/**              linguist-vendored
+# `-text` as well as `linguist-vendored`: these are third-party sources whose
+# bytes should match upstream exactly. Without it, `* text=auto` rewrote the
+# line endings of 15 upstream-CRLF FreeType MSVC project files under
+# `freetype-sys/vendor/builds/`. Nothing builds them, so it was drift rather
+# than breakage — but a vendored tree that git is free to reformat is not a
+# faithful copy of what was vendored.
+crates-sys/*/vendor/**              linguist-vendored -text
 crates/rustty-vaxis/ucd/**          linguist-vendored
 crates/rustty-vt/src/res/**         linguist-vendored
 crates/rustty-extra/themes/**       linguist-vendored
