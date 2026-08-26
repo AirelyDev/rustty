@@ -4,8 +4,9 @@
 # PORTS: ghostty `.github/workflows/test.yml`'s `build-nix` job, plus the
 # `alejandra` job (the flake's own `formatter` output).
 #
-# Runs `nix flake check`, which for rustty builds `librustty-vt` and its five
-# passthru tests:
+# Runs `nix flake check`, which for rustty builds `librustty-vt`, the `rustty`
+# GTK app (on Linux, where nix/package.nix applies — its own installCheckPhase
+# runs `rustty +version`), and librustty-vt's five passthru tests:
 #   sanity-check        the exported symbols are present in BOTH artifacts, and
 #                       (simd builds) the vendored simdutf/highway objects
 #                       really landed in the archive

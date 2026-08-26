@@ -98,16 +98,16 @@ layered on top of those two.
 
 > [!NOTE]
 >
-> The **Nix** flake is live for the headless C library and the dev shell:
-> `nix build .#librustty-vt`, `nix flake check`, and `nix develop` all work
-> (`docs/superpowers/specs/2026-07-15-batch4-nix-flake-design.md`, Phase A).
+> The **Nix** flake is live: `nix build .#librustty-vt`, `nix build .#rustty`
+> (the GTK Linux app, Linux only), `nix flake check` and `nix develop` all work
+> (`docs/superpowers/specs/2026-07-15-batch4-nix-flake-design.md`).
 >
-> Still forward references: `nix build .#rustty` (the **GTK Linux app**), the
-> `nix/vm/*` desktop VMs and `nix/tests.nix` — all three are Phase B and gated
-> on the GTK app building — plus the **flatpak / snap** manifests and their
-> GitHub workflows. Everything under **cargo**, the wired **xtask**
-> subcommands, **CMake**, **Doxygen**, the **Makefile**, and the **macOS app**
-> works today.
+> Still forward references: the `nix/vm/*` desktop VMs and `nix/tests.nix`.
+> The **flatpak / snap** manifests exist but are **unverified** — neither
+> flatpak-builder nor snapcraft was available to build them; each carries a
+> header saying exactly that and how to verify. Everything under **cargo**, the
+> wired **xtask** subcommands, **CMake**, **Doxygen**, the **Makefile**, and
+> the **macOS app** works today.
 
 ## Extra Dependencies
 
@@ -446,9 +446,8 @@ should commit the text:
 
 > [!NOTE]
 >
-> The flake is live, but the `nix/vm/*` definitions are **Phase B** and are not
-> written yet: they boot a desktop and launch the GTK app, so they are gated on
-> `nix build .#rustty`. Treat this section as a forward reference until then.
+> `nix build .#rustty` works now, but the `nix/vm/*` definitions themselves are
+> not written yet. Treat this section as a forward reference until they are.
 
 Several Nix virtual machine definitions are provided by the project for testing
 and developing Rustty against multiple different Linux desktop environments.
@@ -549,11 +548,11 @@ We welcome the contribution of new VM definitions, as long as they meet the foll
 
 > [!NOTE]
 >
-> Like the VM definitions above, `nix/tests.nix` is **Phase B** and gated on the
-> GTK app. Treat this section as a forward reference until then. The checks that
-> DO run today are the headless ones — `nix flake check` builds
-> `librustty-vt`, validates both pkg-config files, and compiles + runs a C
-> consumer against the shared and static libraries.
+> Like the VM definitions above, `nix/tests.nix` is not written yet. Treat this
+> section as a forward reference until it is. What `nix flake check` DOES run
+> today: it builds `librustty-vt` and the `rustty` app, validates both
+> pkg-config files, and compiles + runs a C consumer against the shared and
+> static libraries — seven checks.
 
 Several Nix VM tests are provided by the project for testing Rustty in a "live"
 environment rather than just unit tests.

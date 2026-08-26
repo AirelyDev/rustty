@@ -21,15 +21,23 @@ Steps 1, 2 and **Nix Phase A** of the fill order below are **done**, on branch
 | `G-CCONSUMER` | cmake build/install, both `.pc` files, shared+static link             |
 | `G-EXAMPLES`  | all 32 `example/` programs, incl. the cross one                       |
 | `G-DIST`      | `xtask dist` shape + (opt-in) `distcheck`                             |
-| `G-NIX`       | `nix flake check` (6 checks) + `alejandra --check`; BLOCKED w/o `nix` |
+| `G-NIX`       | `nix flake check` (7 checks) + `alejandra --check`; BLOCKED w/o `nix` |
 
-**Nix Phase A is verified, not merely authored.** On an aarch64-linux host
-`nix build .#librustty-vt` succeeds, `nix flake check` reports _all checks
-passed_ over all six checks (the library, symbol sanity, both `.pc` files, and
-a C consumer compiled+linked+run against **both** the shared and static
-libraries), and `nix develop` yields exactly the `rust-toolchain.toml` pin
-(rustc 1.93.1) plus all six G-LINT linters. `nix/vm/*` and `nix/tests.nix`
-remain Phase B, gated on the GTK app.
+**Nix is verified, not merely authored.** On an aarch64-linux host
+`nix build .#librustty-vt` AND `nix build .#rustty` (the GTK app) both succeed,
+`nix flake check` reports _all checks passed_ over seven checks (the library,
+the app, symbol sanity, both `.pc` files, and a C consumer compiled+linked+run
+against **both** the shared and static libraries), and `nix develop` yields
+exactly the `rust-toolchain.toml` pin (rustc 1.93.1) plus all six G-LINT
+linters.
+
+Phase B's premise — "gated on the GTK apprt going live" — turned out to be
+stale: `cargo build --features gtk` succeeds on Fedora 44 and the binary runs.
+What is still missing from Phase B is `nix/vm/*` and `nix/tests.nix`.
+
+`flatpak/` and `snap/` manifests are authored but **UNVERIFIED** — neither
+flatpak-builder nor snapcraft could be installed without root — and say so in
+their own headers rather than implying otherwise.
 
 **Turning those on found nine real defects**, listed here because their
 existence is the argument for the rest of the fill order — every one of them
@@ -76,9 +84,29 @@ Three more found once Nix Phase A could run:
 12. `G-LINT` was scanning `.claude/worktrees/` — agent-created worktrees that
     are whole extra checkouts of this repo, re-reporting findings from whatever
     commit they are parked on.
+13. **`cargo clippy --workspace --all-targets -- -D warnings` — check #2 of
+    ci.sh and a HARD-FAIL — is RED on `main`**, with 65 warnings. Verified on a
+    pristine `main` worktree, so it predates this branch, exactly like defect 1.
+    NOT fixed here, deliberately: unlike `cargo fmt`, clippy fixes change code,
+    and the largest categories look like deliberate port fidelity rather than
+    mistakes — 9 `mem::drop` on non-`Drop` values (the shape a Zig `defer`
+    port takes), 4 "operation has no effect", 4 manual `div_ceil`, 4
+    same-type casts. Concentrated in `rustty-vt` (26), `rustty-vt-c` (14),
+    `wuffs-sys` (7) and `rustty-core` (6). The right fix is probably targeted
+    `#[allow(...)]` with PORT NOTEs (or a workspace lint table) rather than
+    rewriting ported arithmetic — a judgement call about fidelity that should
+    be made deliberately, not swept in at the end of a build-system branch.
 
-Steps 4–6 (release-pipeline holes, flatpak/snap, Nix Phase B + cross-target CI
-legs) are **not** started.
+### Still open
+
+- **Nix VMs + `nix/tests.nix`** (17 files) — the desktop-environment VMs.
+- **flatpak / snap verification** — the manifests exist; nothing has built them.
+- **Release-pipeline holes** — `sentry-dsym` (needs a DSN),
+  `source-tarball-lib-vt`, `build-lib-vt-wasm`, the macOS debug tip builds, and
+  `update-colorschemes.yml`. The `build-lib-vt-xcframework` artifact itself now
+  exists (`xtask xcframework-vt`); only the upload job is missing.
+- **Cross-target CI legs** — Windows / Android / wasm build jobs, plus
+  `test/windows/test_dll_init.c` and `test/fuzz-libghostty`.
 
 ### A note on where defects hide
 

@@ -578,8 +578,7 @@ fn build_xcframework(spec: &XcframeworkSpec) -> Result<PathBuf, String> {
             if !src_h.exists() {
                 return Err(format!("umbrella header missing: {}", src_h.display()));
             }
-            std::fs::copy(&src_h, headers.join(dst))
-                .map_err(|e| format!("copy {dst}: {e}"))?;
+            std::fs::copy(&src_h, headers.join(dst)).map_err(|e| format!("copy {dst}: {e}"))?;
             (*dst).to_string()
         }
         HeaderLayout::Tree { src, umbrella } => {
