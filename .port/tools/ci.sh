@@ -50,6 +50,13 @@
 #                                    twice (shared + static). Merges the
 #                                    reference's build-cmake and
 #                                    test-lib-vt-pkgconfig jobs.
+#   G-EXAMPLES check_examples.sh     every example/*/build.sh compiles + RUNS,
+#                                    and the c-vt-cmake* examples configure +
+#                                    build through cmake         -> HARD-FAIL.
+#                                    The reference's list-examples +
+#                                    build-examples-* jobs. wasm-* belong to
+#                                    the opt-in --webgl lane and are reported
+#                                    skipped by name.
 #   G-THEMES check_theme_corpus.py   the 602 vendored iterm2 theme files match
 #                                    a committed per-file SHA-256 manifest
 #                                    -> HARD-FAIL. res_themes.rs only counts
@@ -347,6 +354,14 @@ GATE_REGISTRY=(
   # HARD: green, and the artifact arm has a demonstrated RED flip (remove a
   # .pc from the install list -> "the install tree is incomplete").
   "G-CCONSUMER|HARD|bash $GATES/check_c_consumer.sh"
+  # G-EXAMPLES (2026-08-25) — build (and run) every example/ program, the
+  # analog of the reference's list-examples + build-examples-* jobs. 32 example
+  # programs were checked in and none were built by anything.
+  # example/README.md already promised "CI discovers examples by globbing
+  # example/*/build.sh"; this gate is what makes that true. HARD: 27 build and
+  # run today. The 5 wasm examples belong to ci.sh's opt-in --webgl lane and
+  # are reported skipped BY NAME, never counted as green.
+  "G-EXAMPLES|HARD|bash $GATES/check_examples.sh"
   # G-REL (WS18) — the `--release` test lane. Steps 3/4 above only ever exercise
   # the DEBUG profile, so nothing noticed that release had rotted to 22 failures
   # across 7 targets. Most were tests driving a seam the port deliberately

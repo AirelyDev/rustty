@@ -39,12 +39,21 @@ exactly what a downstream embedder has.
 
 The output binary name is derived from the directory, so adding an
 example normally means copying a directory and editing only `src/`.
-The CMake examples (`c-vt-cmake*`) are the deliberate exception: their
-`build.sh` drives `cmake` instead of `clang` directly, because what they
-demonstrate _is_ the CMake integration.
+The CMake examples (`c-vt-cmake*`) are the deliberate exception: they
+ship a `CMakeLists.txt` and no `build.sh` at all, because what they
+demonstrate _is_ the CMake integration. Build them with:
 
-CI discovers examples by globbing `example/*/build.sh`, so a new example
-needs no workflow edit.
+```shell-session
+cd example/c-vt-cmake
+cmake -B build -DFETCHCONTENT_SOURCE_DIR_RUSTTY=../..
+cmake --build build
+```
+
+CI discovers examples by globbing `example/*/build.sh` (and
+`example/c-vt-cmake*/CMakeLists.txt`), so a new example needs no
+workflow edit. The gate that does this is
+`.port/tools/gates/check_examples.sh`, run by `.port/tools/ci.sh` as
+G-EXAMPLES.
 
 See [`AGENTS.md`](AGENTS.md) for the full checklist on adding one,
 including the Doxygen `@snippet` markers that let the headers in

@@ -389,6 +389,16 @@ function(rustty_vt_add_target)
         message(FATAL_ERROR "rustty_vt_add_target: RUST_TARGET is required")
     endif()
 
+    # CMAKE_CURRENT_FUNCTION_LIST_DIR, i.e. the directory of THIS file, and the
+    # only reliable way to reach rustty's own tree from here. A CMake function
+    # body executes in the CALLER's variable scope, so directory-scope
+    # variables set at the top of this file (RUSTTY_INCLUDE_DIR,
+    # RUSTTY_OUT_DIR, ...) are NOT visible when a downstream project calls this
+    # function after FetchContent_MakeAvailable: subdirectory variables do not
+    # propagate upward. INTERFACE_INCLUDE_DIRECTORIES was being set from
+    # ${RUSTTY_INCLUDE_DIR} and therefore resolved to the EMPTY STRING for
+    # every downstream caller, so example/c-vt-cmake-cross failed with
+    # "fatal error: 'rustty/vt.h' file not found". Derive it from _src_dir.
     set(_src_dir "${CMAKE_CURRENT_FUNCTION_LIST_DIR}")
     set(_prefix "${CMAKE_CURRENT_BINARY_DIR}/rustty-${_RVT_NAME}")
 
@@ -427,17 +437,58 @@ function(rustty_vt_add_target)
         set(_shared_lib "${_out}/librustty_vt_c.so")
     endif()
 
-    add_custom_command(
-        OUTPUT "${_static_lib}" "${_shared_lib}"
-        COMMAND "${CARGO_EXECUTABLE}" ${_flags}
+    # Hand cargo the SAME cross C/C++ compiler CMake itself is configured with.
+    #
+    # Without this the cross build is broken on any host that lacks a GNU cross
+    # toolchain, which is the whole situation RusttyCrossCompiler.cmake exists
+    # to avoid: it points CMAKE_C_COMPILER at a `zig cc -target <triple>`
+    # wrapper, but that only covered the DOWNSTREAM project's own C sources.
+    # The cargo invocation below builds ~16 crates-sys/* packages through
+    # cc-rs, which knows nothing about CMake's compiler choice and falls back
+    # to the conventional `<arch>-linux-gnu-gcc`. On macOS with zig installed
+    # and no GNU cross toolchain that is:
+    #
+    #   error occurred in cc-rs: failed to find tool "aarch64-linux-gnu-gcc"
+    #
+    # for rustty-os, zlib-sys, and every other -sys crate — i.e.
+    # example/c-vt-cmake-cross could not build at all.
+    #
+    # cc-rs reads CC_<triple with - replaced by _>; cargo reads
+    # CARGO_TARGET_<TRIPLE UPPERCASED AND UNDERSCORED>_LINKER.
+    set(_cargo_cmd "${CARGO_EXECUTABLE}" ${_flags})
+    if(CMAKE_CROSSCOMPILING AND CMAKE_C_COMPILER)
+        string(REPLACE "-" "_" _t_us "${_RVT_RUST_TARGET}")
+        string(TOUPPER "${_t_us}" _t_up)
+        set(_env
+            "CC_${_t_us}=${CMAKE_C_COMPILER}"
+            "CXX_${_t_us}=${CMAKE_CXX_COMPILER}"
+            "CARGO_TARGET_${_t_up}_LINKER=${CMAKE_C_COMPILER}")
+        # AR/RANLIB too, when rustty_cross_compiler() supplied them: cc-rs
+        # otherwise archives cross objects with the HOST ar/ranlib, which
+        # produces an archive whose members are silently dropped from the final
+        # staticlib. See RusttyCrossCompiler.cmake for the full symptom.
+        if(RUSTTY_CROSS_AR)
+            list(APPEND _env "AR_${_t_us}=${RUSTTY_CROSS_AR}")
+        endif()
+        if(RUSTTY_CROSS_RANLIB)
+            list(APPEND _env "RANLIB_${_t_us}=${RUSTTY_CROSS_RANLIB}")
+        endif()
+        set(_cargo_cmd "${CMAKE_COMMAND}" -E env ${_env} ${_cargo_cmd})
+        unset(_env)
+        unset(_t_us)
+        unset(_t_up)
+    endif()
+
+    # An always-running target, for the same reason as cargo_build_lib_vt
+    # above: an OUTPUT-keyed command would skip cargo whenever the artifact
+    # already existed, however it was produced.
+    set(_build_target "cargo_build_lib_vt_${_RVT_NAME}")
+    add_custom_target(${_build_target} ALL
+        COMMAND ${_cargo_cmd}
+        BYPRODUCTS "${_static_lib}" "${_shared_lib}"
         WORKING_DIRECTORY "${_src_dir}"
         COMMENT "Building librustty-vt for ${_RVT_RUST_TARGET}..."
         USES_TERMINAL
-    )
-
-    set(_build_target "cargo_build_lib_vt_${_RVT_NAME}")
-    add_custom_target(${_build_target} ALL
-        DEPENDS "${_static_lib}" "${_shared_lib}"
     )
 
     # Static target
@@ -445,12 +496,25 @@ function(rustty_vt_add_target)
     add_library(${_static_target} STATIC IMPORTED GLOBAL)
     set_target_properties(${_static_target} PROPERTIES
         IMPORTED_LOCATION "${_static_lib}"
-        INTERFACE_INCLUDE_DIRECTORIES "${RUSTTY_INCLUDE_DIR}"
+        INTERFACE_INCLUDE_DIRECTORIES "${_src_dir}/include"
         INTERFACE_COMPILE_DEFINITIONS "RUSTTY_STATIC"
     )
+    # The Rust-std / vendored-C link interface, per target family. Only the
+    # `windows` arm existed; a Linux or Darwin cross target got an EMPTY
+    # interface, so the final link failed on the whole _Unwind_* family
+    # (library/std/src/sys/personality/gcc.rs) among others. These mirror the
+    # native branches near the top of this file.
     if(_RVT_RUST_TARGET MATCHES "windows")
         set_target_properties(${_static_target} PROPERTIES
             INTERFACE_LINK_LIBRARIES "ntdll;kernel32;ws2_32;userenv;bcrypt;advapi32"
+        )
+    elseif(_RVT_RUST_TARGET MATCHES "darwin|apple")
+        set_target_properties(${_static_target} PROPERTIES
+            INTERFACE_LINK_LIBRARIES "c++;-framework CoreFoundation;-framework Foundation;iconv;intl;objc;c;m"
+        )
+    else()
+        set_target_properties(${_static_target} PROPERTIES
+            INTERFACE_LINK_LIBRARIES "c;m;pthread;dl;gcc_s"
         )
     endif()
     add_dependencies(${_static_target} ${_build_target})
@@ -460,7 +524,7 @@ function(rustty_vt_add_target)
     add_library(${_shared_target} SHARED IMPORTED GLOBAL)
     set_target_properties(${_shared_target} PROPERTIES
         IMPORTED_LOCATION "${_shared_lib}"
-        INTERFACE_INCLUDE_DIRECTORIES "${RUSTTY_INCLUDE_DIR}"
+        INTERFACE_INCLUDE_DIRECTORIES "${_src_dir}/include"
     )
     if(_RVT_RUST_TARGET MATCHES "windows")
         set_target_properties(${_shared_target} PROPERTIES

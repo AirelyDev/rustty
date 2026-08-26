@@ -79,18 +79,64 @@ function(rustty_cross_compiler)
 
     _rustty_zig_triple("${_RCC_RUST_TARGET}" _zig_target)
 
+    # The wrappers must DROP any clang-style `--target=<triple>` argument they
+    # are handed before forwarding to zig.
+    #
+    # WHY. zig's own `-target` takes a zig triple (aarch64-linux-gnu), while
+    # cc-rs — which builds every crates-sys/* package during a cross cargo
+    # build — unconditionally appends the RUST triple in clang spelling
+    # (`--target=aarch64-unknown-linux-gnu`). zig's target parser rejects that
+    # with `unable to parse target query ...: UnknownOperatingSystem`, so the
+    # cross build died on the first vendored C/C++ source. Stripping it leaves
+    # the `-target ${_zig_target}` this function already passes as the single
+    # authority on the target.
+    #
+    # Same workaround, same reason as .port/tools/zig-cc-wasm.sh, which hit
+    # this for wasm32-wasip1.
     if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
         set(_cc "${CMAKE_CURRENT_BINARY_DIR}/zig-cc.cmd")
         set(_cxx "${CMAKE_CURRENT_BINARY_DIR}/zig-cxx.cmd")
-        file(WRITE "${_cc}" "@\"${_RCC_ZIG}\" cc -target ${_zig_target} %*\n")
-        file(WRITE "${_cxx}" "@\"${_RCC_ZIG}\" c++ -target ${_zig_target} %*\n")
+        # cmd.exe has no argv filter; loop the args and skip --target=*.
+        set(_cmd_filter
+"@echo off\r\nsetlocal enabledelayedexpansion\r\nset ARGS=\r\n:loop\r\nif \"%~1\"==\"\" goto run\r\nset A=%~1\r\nif \"!A:~0,9!\"==\"--target=\" (shift & goto loop)\r\nset ARGS=!ARGS! \"%~1\"\r\nshift\r\ngoto loop\r\n:run\r\n")
+        file(WRITE "${_cc}" "${_cmd_filter}\"${_RCC_ZIG}\" cc -target ${_zig_target} %ARGS%\r\n")
+        file(WRITE "${_cxx}" "${_cmd_filter}\"${_RCC_ZIG}\" c++ -target ${_zig_target} %ARGS%\r\n")
     else()
         set(_cc "${CMAKE_CURRENT_BINARY_DIR}/zig-cc")
         set(_cxx "${CMAKE_CURRENT_BINARY_DIR}/zig-c++")
-        file(WRITE "${_cc}" "#!/bin/sh\nexec \"${_RCC_ZIG}\" cc -target ${_zig_target} \"$@\"\n")
-        file(WRITE "${_cxx}" "#!/bin/sh\nexec \"${_RCC_ZIG}\" c++ -target ${_zig_target} \"$@\"\n")
+        # Rotate the positional list: take $1, re-append it unless it is a
+        # --target=, then shift. After $# iterations only the kept arguments
+        # remain, with quoting and embedded spaces intact and no eval.
+        set(_sh_filter
+"#!/bin/sh\nn=$#\ni=0\nwhile [ $i -lt $n ]; do\n  case \"$1\" in --target=*) : ;; *) set -- \"$@\" \"$1\" ;; esac\n  shift\n  i=$((i+1))\ndone\n")
+        file(WRITE "${_cc}" "${_sh_filter}exec \"${_RCC_ZIG}\" cc -target ${_zig_target} \"$@\"\n")
+        file(WRITE "${_cxx}" "${_sh_filter}exec \"${_RCC_ZIG}\" c++ -target ${_zig_target} \"$@\"\n")
         file(CHMOD "${_cc}" "${_cxx}"
             PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
+
+        # ar/ranlib wrappers, exported to the cargo build alongside CC/CXX.
+        #
+        # WHY. cc-rs archives each vendored C/C++ crate's objects with the HOST
+        # ar/ranlib unless told otherwise. Cross-compiling from macOS that is
+        # Apple's ranlib being handed ELF objects, which it does not reject —
+        # it warns:
+        #
+        #   ranlib: warning: archive member '...adler32.o' not a mach-o file
+        #
+        # and produces an archive whose members are then silently DROPPED from
+        # the final staticlib. The visible symptom was a cross librustty_vt_c.a
+        # containing zero zlib and zero gettext objects (`ar t | grep -c` = 0,
+        # against 4 and 5 for the native build) and a downstream link failing
+        # on adler32/deflate/inflate/_libintl_*. zig's LLVM ar/ranlib are
+        # target-agnostic and produce a valid archive.
+        set(_ar "${CMAKE_CURRENT_BINARY_DIR}/zig-ar")
+        set(_ranlib "${CMAKE_CURRENT_BINARY_DIR}/zig-ranlib")
+        file(WRITE "${_ar}" "#!/bin/sh\nexec \"${_RCC_ZIG}\" ar \"$@\"\n")
+        file(WRITE "${_ranlib}" "#!/bin/sh\nexec \"${_RCC_ZIG}\" ranlib \"$@\"\n")
+        file(CHMOD "${_ar}" "${_ranlib}"
+            PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE)
+        set(RUSTTY_CROSS_AR "${_ar}" PARENT_SCOPE)
+        set(RUSTTY_CROSS_RANLIB "${_ranlib}" PARENT_SCOPE)
     endif()
 
     set(CMAKE_C_COMPILER "${_cc}" PARENT_SCOPE)
