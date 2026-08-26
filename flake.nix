@@ -148,24 +148,72 @@
       # `rustty +version`, so building it IS the check.
       // (lib.optionalAttrs (pkgsFor ? rustty) {inherit (pkgsFor) rustty;}));
 
+    # PORTS: the reference's `apps` output — one launcher per desktop-environment
+    # VM. `nix run .#wayland-gnome` boots a NixOS guest with the rustty overlay
+    # applied, so the app under test is the one this flake builds.
+    #
+    # Linux-only: nix/vm/create.nix builds a nixosSystem around
+    # `packages.rustty`, which nix/package.nix declares Linux-only. The
+    # reference exposes these on Darwin too (its nix-darwin users have a Linux
+    # builder); doing that here would mean evaluating a package that does not
+    # exist for the system.
+    apps = forLinuxSystems (pkgs: let
+      runVM = module: let
+        vm = import ./nix/vm/create.nix {
+          inherit (pkgs.stdenv.hostPlatform) system;
+          inherit module nixpkgs;
+          # COMPOSED, not just self.overlays.debug: create.nix builds its own
+          # nixpkgs instance for the guest, and our overlay reaches
+          # `pkgs.rust-bin` (rust-overlay) to honour rust-toolchain.toml. The
+          # reference needs no equivalent — its zig comes from a flake input,
+          # not an overlay — so composing here keeps create.nix's single-overlay
+          # signature identical to the reference's.
+          overlay = lib.composeManyExtensions [
+            (import rust-overlay)
+            self.overlays.debug
+          ];
+        };
+        program = pkgs.writeShellScript "run-rustty-vm" ''
+          SHARED_DIR=$(pwd)
+          export SHARED_DIR
+
+          ${pkgs.lib.getExe vm.config.system.build.vm} "$@"
+        '';
+      in {
+        type = "app";
+        program = "${program}";
+        meta.description = "start a vm from ${toString module}";
+      };
+    in {
+      wayland-cinnamon = runVM ./nix/vm/wayland-cinnamon.nix;
+      wayland-gnome = runVM ./nix/vm/wayland-gnome.nix;
+      wayland-plasma6 = runVM ./nix/vm/wayland-plasma6.nix;
+      x11-cinnamon = runVM ./nix/vm/x11-cinnamon.nix;
+      x11-plasma6 = runVM ./nix/vm/x11-plasma6.nix;
+      x11-xfce = runVM ./nix/vm/x11-xfce.nix;
+    });
+
     formatter = forAllSystems (pkgs: pkgs.alejandra);
 
     overlays = {
       default = self.overlays.releasefast;
-      releasefast = final: prev:
-        {
-          librustty-vt = librusttyVtFor final (mkPkgArgs "releasefast");
-        }
-        // lib.optionalAttrs final.stdenv.hostPlatform.isLinux {
-          rustty = rusttyFor final (mkPkgArgs "releasefast");
-        };
-      debug = final: prev:
-        {
-          librustty-vt = librusttyVtFor final (mkPkgArgs "debug");
-        }
-        // lib.optionalAttrs final.stdenv.hostPlatform.isLinux {
-          rustty = rusttyFor final (mkPkgArgs "debug");
-        };
+      # Unconditional, exactly like the reference's. An earlier version guarded
+      # the `rustty` attribute with
+      # `lib.optionalAttrs final.stdenv.hostPlatform.isLinux` so it would not
+      # exist on Darwin — but reading `final.stdenv` from inside an overlay is
+      # a cycle (stdenv is itself built through the overlay list), and it made
+      # every VM app fail with "infinite recursion encountered". The attribute
+      # therefore EXISTS on Darwin and errors if forced, which is the same
+      # property the reference has; the VM apps that consume this overlay are
+      # Linux-only anyway.
+      releasefast = final: prev: {
+        librustty-vt = librusttyVtFor final (mkPkgArgs "releasefast");
+        rustty = rusttyFor final (mkPkgArgs "releasefast");
+      };
+      debug = final: prev: {
+        librustty-vt = librusttyVtFor final (mkPkgArgs "debug");
+        rustty = rusttyFor final (mkPkgArgs "debug");
+      };
     };
   };
 
