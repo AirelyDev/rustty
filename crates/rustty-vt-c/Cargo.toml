@@ -34,9 +34,22 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 # simd=false. Cargo cannot express a per-target `default`, so that arm of the
 # `orelse` is resolved in `rustty-vt`'s `options::SIMD` instead — see
 # `crates/rustty-vt/src/options.rs` — and a wasm build of THIS crate resolves the
-# option off even though `default = ["simd"]` is active. Verified: `cargo build
+# option off even though `default` names `simd`. Verified: `cargo build
 # -p rustty-vt-c --target wasm32-unknown-unknown --release`.)
-default = ["simd"]
+default = [
+    "simd",
+    # The `-Dvt-features` default set: every feature enabled (`Features{}`).
+    # See the block below and `crates/rustty-vt/Cargo.toml`.
+    "snapshot",
+    "formatter",
+    "selection",
+    "render-state",
+    "input-encode",
+    "color",
+    "grid-introspection",
+    "glyph-protocol",
+    "kitty-graphics",
+]
 # Parity-harness identity profile (R2). Forwards to `rustty-vt`'s feature of
 # the same name (which forwards to `rustty-identity`), flipping the vt LIBRARY
 # version reported by `build_info.rs` to the reference's separate libghostty
@@ -49,9 +62,52 @@ identity-oracle = ["rustty-vt/identity-oracle"]
 # c-vt examples still name it explicitly, and `--no-default-features` is the
 # `-Dsimd=false` analog.
 simd = ["rustty-vt/simd"]
+# ---------------------------------------------------------------------------
+# `-Dvt-features` at the C-ABI level. Each forwards to `rustty-vt`'s feature of
+# the same name (which drives the matching `options::*` const) AND decides
+# whether this crate compiles the corresponding `#[no_mangle]` exports at all —
+# the port of `lib_vt.zig`'s `if (features.X) { @export(...); ... }` blocks,
+# symbol for symbol. Disabling a feature therefore removes its C API surface
+# from the artifact, which is the whole point: "size-conscious embedders (e.g.
+# wasm) can trim the binary".
+#
+# All nine are in `default`, so a plain `cargo build -p rustty-vt-c` is the
+# reference's default all-enabled lib. The reference's
+# `-Dvt-features=-all,+render-state` (its "read-only viewer subset" example) is:
+#
+#     cargo build -p rustty-vt-c --no-default-features --features simd,render-state
+#
+# NOTE `--no-default-features` also drops `simd`, which is a SEPARATE knob
+# (`-Dsimd`), so a trimmed build that still wants the SIMD stream fast path must
+# name it explicitly, as above.
+snapshot = ["rustty-vt/snapshot"]
+formatter = ["rustty-vt/formatter"]
+selection = ["rustty-vt/selection"]
+render-state = ["rustty-vt/render-state"]
+input-encode = ["rustty-vt/input-encode"]
+color = ["rustty-vt/color"]
+grid-introspection = ["rustty-vt/grid-introspection"]
+glyph-protocol = ["rustty-vt/glyph-protocol"]
+kitty-graphics = ["rustty-vt/kitty-graphics"]
+# ---------------------------------------------------------------------------
 
 [dependencies]
-rustty-vt = { workspace = true }
+# `default-features = false`: the nine `-Dvt-features` gates are re-declared as
+# this crate's own features (above) and forwarded explicitly, so a trimmed
+# `--no-default-features` build of THIS crate actually reaches `rustty-vt`
+# instead of being re-enabled by the dependency's defaults.
+#
+# NOTE this is the ONE crate that spells the dependency by path instead of
+# `{ workspace = true }`. Cargo IGNORES a member's `default-features = false`
+# when the `[workspace.dependencies]` entry does not itself specify
+# `default-features` (it warns, and says it may become a hard error) — inherited
+# dependencies can only ADD features, never subtract. Setting
+# `default-features = false` on the workspace entry instead would silently strip
+# the nine features from all 15 crates that inherit it, which is the opposite of
+# the intent: every application-tier consumer must keep the reference's
+# all-enabled default. A direct path dep here is the narrow, local escape, and
+# it is the only crate that ever needs a trimmed build.
+rustty-vt = { path = "../rustty-vt", default-features = false }
 # R4: rustty-unicode is a leaf below rustty-vt (acyclic). Needed for the
 # unicode codepoint/grapheme width C exports (BL-5 fc5a72772 + 65e61282a).
 rustty-unicode = { workspace = true }

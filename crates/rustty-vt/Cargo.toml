@@ -20,6 +20,71 @@ workspace = true
 # reference `build.zig` toggles; the ported `options` module reads them via
 # `cfg!(feature = ...)`. Later vt sub-batches gate on `crate::options::*`.
 [features]
+# ---------------------------------------------------------------------------
+# `-Dvt-features` (reference `terminal/build_options.zig` `Options.Features`,
+# `1fdbb8c91`). "Optional features for lib artifacts. Disabling a feature
+# removes its C API exports and any stream-integrated handling from the build,
+# primarily so size-conscious embedders (e.g. wasm) can trim the binary. The
+# Ghostty application itself always builds with every feature enabled."
+#
+# The nine names below are the accepted `-Dvt-features` tokens (the reference's
+# `eqlName` makes `-` and `_` interchangeable, so the cargo-conventional hyphen
+# spelling is the same token). They are ALL in `default`, which is what makes an
+# additive cargo feature set equivalent to the reference's subtract-from-all
+# model: an ordinary build gets `Features{}`. The reference's
+# `-Dvt-features=-all,+render-state` is `--no-default-features --features
+# render-state`.
+#
+# Each feature drives exactly one `options::*` const (src/options.rs), which the
+# gated code branches on — and, in `rustty-vt-c`, decides whether the matching
+# `#[no_mangle]` C exports exist at all (the `lib_vt.zig` `if (features.X)`
+# blocks). Compiling the const to `false` leaves the guarded Rust code in the
+# crate for the linker to drop, exactly as the reference relies on its comptime
+# `false` branches being dead-code-eliminated.
+#
+# The reference default set: every feature enabled (`Features{}`). Named as
+# `default` so an ordinary build, and the whole workspace, is unchanged.
+default = [
+    "snapshot",
+    "formatter",
+    "selection",
+    "render-state",
+    "input-encode",
+    "color",
+    "grid-introspection",
+    "glyph-protocol",
+    "kitty-graphics",
+]
+# Terminal state serialization; C API `rustty_snapshot_*` (and, with
+# `grid-introspection`, `rustty_tracked_grid_ref_snapshot`).
+snapshot = []
+# Textual export as plain text / VT / HTML; C API `rustty_formatter_*` (and,
+# with `selection`, `rustty_terminal_selection_format_*`).
+formatter = []
+# Text selection + the click/drag gesture state machine; C API
+# `rustty_terminal_select_*`, `rustty_terminal_selection_*`,
+# `rustty_selection_gesture_*`.
+selection = []
+# The render state API (the primary embedder read path); C API
+# `rustty_render_state_*`.
+render-state = []
+# Host input-event encoding; C API `rustty_key_event_*`, `rustty_key_encode_*`,
+# `rustty_mouse_event_*`, `rustty_mouse_encode_*`.
+input-encode = []
+# Color utilities; C API `rustty_color_*`.
+color = []
+# Direct grid introspection; C API `rustty_cell_*`, `rustty_row_*`.
+grid-introspection = []
+# The APC glyph protocol. No C API surface of its own; this gates the stream
+# handling and glossary storage.
+glyph-protocol = []
+# The Kitty graphics protocol; C API `rustty_kitty_graphics_*`. NOTE this
+# feature is necessary but not sufficient: `options::KITTY_GRAPHICS` ANDs it
+# with a target check, because the protocol needs OS timestamps and is always
+# off on wasm32-freestanding regardless of the setting (the reference
+# `Options.kittyGraphics` override).
+kitty-graphics = []
+# ---------------------------------------------------------------------------
 # Whether Oniguruma regex support is available (reference `oniguruma`). Gates
 # Kitty graphics protocol and Tmux control mode. Off by default, matching a build
 # without the optional regex dependency. Wires in the `rustty-oniguruma` safe

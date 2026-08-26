@@ -104,46 +104,61 @@ pub const SLOW_RUNTIME_SAFETY: bool = cfg!(debug_assertions);
 
 // PORT NOTE (`1fdbb8c91` `-Dvt-features`): the feature gates below are the
 // flat bools `Options.add`'s feature loop emits (e.g. `options.snapshot`),
-// resolved from `Options.features` (see `build_options::Features`). Rustty
-// builds the application artifact, which "always builds with every feature
-// enabled" (the Features doc), so each const is the `Features::default()`
-// value. The `-Dvt-features` CARGO-FEATURE plumbing (letting a lib build trim
-// features) lands with the C-API/build tier per the Phase-4 plan (W5 Bundle
-// M / W7 T6); when it does, these consts become `cfg!(feature = ...)`-driven
-// exactly like `SIMD` above.
+// resolved from `Options.features` (see `build_options::Features`).
+//
+// Each is `cfg!(feature = ...)`-driven, exactly like `SIMD` above, over the
+// nine cargo features named for the `-Dvt-features` tokens (hyphen spelling:
+// `render-state`, `input-encode`, `grid-introspection`, `glyph-protocol`,
+// `kitty-graphics`; `eqlName` treats `-` and `_` as interchangeable, and cargo
+// feature names conventionally use `-`).
+//
+// MAPPING THE DEFAULT-ON SET ONTO ADDITIVE CARGO FEATURES. `-Dvt-features`
+// starts from the all-enabled set and SUBTRACTS (`-all,+render-state`); cargo
+// features only ever ADD. The equivalence is the crate's `default` feature
+// list, which names all nine: an ordinary build — every application-tier
+// consumer, every workspace `cargo test` — therefore compiles with the
+// reference's default `Features{}`, and "the Ghostty application itself always
+// builds with every feature enabled" (the `Features` doc) holds by
+// construction. Trimming is `--no-default-features` plus the features to keep,
+// so the reference's `-Dvt-features=-all,+render-state` example is spelled
+// `--no-default-features --features render-state`. Because cargo unifies
+// features across a build graph, a trimmed artifact must be built for the lib
+// crate alone (`-p rustty-vt-c`), which is exactly how the standalone
+// libghostty-vt analog is produced (`.port/tools/build-vt-wasm.sh`).
 
 /// Whether terminal state serialization (the snapshot subsystem) is enabled.
-pub const SNAPSHOT: bool = true;
+pub const SNAPSHOT: bool = cfg!(feature = "snapshot");
 
 /// Whether the textual export formatter is enabled.
-pub const FORMATTER: bool = true;
+pub const FORMATTER: bool = cfg!(feature = "formatter");
 
 /// Whether text selection is enabled.
-pub const SELECTION: bool = true;
+pub const SELECTION: bool = cfg!(feature = "selection");
 
 /// Whether the render state API is enabled.
-pub const RENDER_STATE: bool = true;
+pub const RENDER_STATE: bool = cfg!(feature = "render-state");
 
 /// Whether host input-event encoding is enabled.
-pub const INPUT_ENCODE: bool = true;
+pub const INPUT_ENCODE: bool = cfg!(feature = "input-encode");
 
 /// Whether the color utilities are enabled.
-pub const COLOR: bool = true;
+pub const COLOR: bool = cfg!(feature = "color");
 
 /// Whether direct grid introspection is enabled.
-pub const GRID_INTROSPECTION: bool = true;
+pub const GRID_INTROSPECTION: bool = cfg!(feature = "grid-introspection");
 
 /// Whether the APC glyph protocol is enabled.
 // PORT NOTE: gates the stream handling + glossary storage
 // (`stream_terminal.rs` glyph arm, the two glyph-protocol tests).
-pub const GLYPH_PROTOCOL: bool = true;
+pub const GLYPH_PROTOCOL: bool = cfg!(feature = "glyph-protocol");
 
 /// Whether the Kitty graphics protocol is enabled.
 // PORT NOTE: synthesized by `Options.add`'s feature loop (`1fdbb8c91`): the
 // `kitty_graphics` feature (default true) with the per-field override
 //   `!(target.cpu.arch == .wasm32 and target.os.tag == .freestanding)`
 // — always disabled on wasm32-freestanding (no way to get timestamps there).
-pub const KITTY_GRAPHICS: bool = !(cfg!(target_arch = "wasm32") && cfg!(target_os = "none"));
+pub const KITTY_GRAPHICS: bool =
+    cfg!(feature = "kitty-graphics") && !(cfg!(target_arch = "wasm32") && cfg!(target_os = "none"));
 
 /// Whether Tmux control mode is enabled.
 // PORT NOTE: synthesized by `Options.add`: `opts.addOption(bool,
