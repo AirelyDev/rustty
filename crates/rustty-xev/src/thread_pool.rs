@@ -1026,7 +1026,7 @@ fn futex_wake(atomic: &AtomicU32, n: u32) {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 extern "C" {
     fn __ulock_wait(
         operation: u32,
@@ -1037,12 +1037,15 @@ extern "C" {
     fn __ulock_wake(operation: u32, addr: *mut core::ffi::c_void, wake_value: u64) -> i32;
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 const UL_COMPARE_AND_WAIT: u32 = 1;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 const ULF_WAKE_ALL: u32 = 0x0000_0100;
 
-#[cfg(all(target_os = "macos", not(miri)))]
+#[cfg(all(
+    any(target_os = "macos", target_os = "ios", target_os = "visionos"),
+    not(miri)
+))]
 fn futex_wait(atomic: &AtomicU32, expect: u32) {
     unsafe {
         __ulock_wait(
@@ -1054,7 +1057,10 @@ fn futex_wait(atomic: &AtomicU32, expect: u32) {
     }
 }
 
-#[cfg(all(target_os = "macos", not(miri)))]
+#[cfg(all(
+    any(target_os = "macos", target_os = "ios", target_os = "visionos"),
+    not(miri)
+))]
 fn futex_wake(atomic: &AtomicU32, n: u32) {
     let op = if n > 1 {
         UL_COMPARE_AND_WAIT | ULF_WAKE_ALL
@@ -1159,6 +1165,8 @@ fn futex_wake(atomic: &AtomicU32, n: u32) {
     not(any(
         target_os = "linux",
         target_os = "macos",
+        target_os = "ios",
+        target_os = "visionos",
         target_os = "freebsd",
         windows
     )),
@@ -1184,6 +1192,8 @@ fn futex_wait(atomic: &AtomicU32, expect: u32) {
     not(any(
         target_os = "linux",
         target_os = "macos",
+        target_os = "ios",
+        target_os = "visionos",
         target_os = "freebsd",
         windows
     )),

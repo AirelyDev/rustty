@@ -40,9 +40,9 @@ use core::ptr;
 // PORT NOTE (W2D): the loop `Wakeup` embeds an `Async` only on Darwin
 // (`kqueue.zig:1442` — the `isDarwin()` arm's `mach_port: Async` field); the
 // FreeBSD arm is fieldless, so neither import is reachable there.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 use crate::async_watcher::Async;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 use crate::darwin;
 use crate::heap;
 use crate::looppkg::{noop_callback, Callback, CallbackAction, CompletionState, Options, RunMode};
@@ -79,17 +79,31 @@ const ns_per_s: u64 = 1_000_000_000;
 /// True if this backend is available on this platform.
 //
 // PORT NOTE: the reference `switch (builtin.os.tag)` selects at comptime; this
-// module compiles for the `.macos` AND `.freebsd` arms (W2D), for both of which
-// the answer is the constant `true` (`kqueue.zig:29-36`). The remaining
-// other-OS arm + its comments are preserved verbatim below (it documents the
-// mach-port requirement that gates the OTHER BSDs). On both live targets this
-// function is only referenced by the comptime-elided `Backend`/`dynamic`
-// machinery (§0), so it is `#[allow(dead_code)]`.
+// module compiles for the `.ios`/`.macos`/`.visionos` AND `.freebsd` arms, for
+// all of which the answer is the constant `true` (`kqueue.zig:29-36`). The
+// remaining other-OS arm + its comments are preserved verbatim below (it
+// documents the mach-port requirement that gates the OTHER BSDs). On every live
+// target this function is only referenced by the comptime-elided
+// `Backend`/`dynamic` machinery (§0), so it is `#[allow(dead_code)]`.
 //
-// PORT NOTE (unchanged by W2D, ledgered): the reference's Darwin arm also names
-// `.ios`/`.visionos`; `backend.rs` gates macos+ios+freebsd and this module
-// macos+freebsd. Widening to visionos/ios would compile the mach paths on
-// untested targets — see the DEFERRALS.md FreeBSD row.
+// PORT NOTE (CORRECTED — unimplemented-leaf gap-close, 2026-08-26): this note
+// used to say the module gated `macos+freebsd` while `backend.rs` gated
+// `macos+ios+freebsd`, and that widening to `.ios`/`.visionos` was declined
+// because it "would compile the mach paths on untested targets". That split was
+// a live BUG, not a deferral: on iOS `Backend::default()` returned `Kqueue`
+// while `lib.rs` re-exported the `no_backend_seam` placeholders, so every
+// `Loop`/`Async`/`Timer`/`Process`/`Stream` entry point was an `unimplemented!()`
+// panic on a target the reference runs for real (ghostty ships a libghostty iOS
+// build; libxev's `backend.zig:20` maps `.ios`/`.visionos` onto kqueue and its
+// mach paths are gated `isDarwin()`, which covers both).
+//
+// Every Darwin gate in this crate is now the reference's own set — `macos + ios
+// + visionos` for the `isDarwin()`/`Kevent` arms, plus `freebsd` for the kqueue
+// family. This is no longer codegen-only debt: `aarch64-apple-ios` is a tier-2
+// rustup target and `cargo check -p rustty-xev --target aarch64-apple-ios` is
+// green with the REAL backend compiled (proven by temporarily planting a
+// `compile_error!` in `no_backend_seam` and watching iOS stop selecting it).
+// `visionos` remains tier-3 (no rustup std), so that arm is still codegen debt.
 #[allow(dead_code)]
 pub fn available() -> bool {
     // macOS uses kqueue
@@ -108,7 +122,7 @@ pub fn available() -> bool {
 }
 
 /// PORT NOTE: `pub const NOTE_EXIT_FLAGS` (macOS arm: `NOTE.EXIT | NOTE.EXITSTATUS`).
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 pub const NOTE_EXIT_FLAGS: u32 = libc::NOTE_EXIT | libc::NOTE_EXITSTATUS;
 /// PORT NOTE: `pub const NOTE_EXIT_FLAGS` (`kqueue.zig:45-49`) — the FreeBSD arm is
 /// `.freebsd => std.c.NOTE.EXIT` alone; FreeBSD has no `NOTE_EXITSTATUS` (it puts
@@ -119,7 +133,7 @@ pub const NOTE_EXIT_FLAGS: u32 = libc::NOTE_EXIT;
 /// PORT NOTE: `posix.SOCK.CLOEXEC` (the Zig-emulated close-on-exec flag `posix.accept`
 /// applies via `fcntl` on macOS — `std.c.SOCK.CLOEXEC = 1 << 15`, "Not actually
 /// supported by Darwin, but Zig supplies a shim"). The `accept` op's `flags` default.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 pub const SOCK_CLOEXEC: u32 = 0x8000;
 /// PORT NOTE (W2D): `posix.SOCK.CLOEXEC` on FreeBSD is the REAL header constant
 /// (`std/c.zig`'s `.freebsd => .{ CLOEXEC = 0x10000000 }` == `libc::SOCK_CLOEXEC`).
@@ -149,7 +163,7 @@ fn errno() -> i32 {
 /// This lets us support both Mac and non-Mac platforms.
 //
 // PORT NOTE: `const Kevent = switch (...) { .macos => kevent64_s, ... }` — the macOS arm.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 pub type Kevent = libc::kevent64_s;
 /// PORT NOTE: `const Kevent = switch (...) { .freebsd => std.c.Kevent, ... }`
 /// (`kqueue.zig:1863`). `libc::kevent` on freebsd is
@@ -176,7 +190,7 @@ struct KeventInit {
 //
 // PORT NOTE: `inline fn kevent_init(ev: posix.Kevent) Kevent`. macOS is the
 // widening arm and fills `.ext = {0, 0}`.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 #[inline]
 fn kevent_init(ev: KeventInit) -> Kevent {
     Kevent {
@@ -222,7 +236,7 @@ fn kevent_init(ev: KeventInit) -> Kevent {
 // (u16 on both) need NO accessor and must NOT be routed through these.
 // ---------------------------------------------------------------------------
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 #[inline]
 fn kev_udata(ev: &Kevent) -> u64 {
     ev.udata
@@ -233,7 +247,7 @@ fn kev_udata(ev: &Kevent) -> u64 {
     ev.udata as u64
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 #[inline]
 fn kev_set_udata(ev: &mut Kevent, v: u64) {
     ev.udata = v;
@@ -261,7 +275,7 @@ fn kev_set_udata(ev: &mut Kevent, v: u64) {
 /// # Safety
 /// `changelist[0..changelist_len]` must be readable and `eventlist[0..
 /// eventlist_len]` writable (they may overlap); `timeout` (if Some) valid.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 unsafe fn kevent_syscall(
     kq: i32,
     changelist: *const Kevent,
@@ -1433,7 +1447,7 @@ impl Loop {
                     StartAction::Kevent
                 }
 
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
                 Operation::Machport { .. } => {
                     unsafe { *ev = Completion::kevent(c).unwrap() };
                     StartAction::Kevent
@@ -1546,7 +1560,7 @@ impl Loop {
                     // PORT NOTE (W2D): Darwin-only, mirroring the comptime
                     // `if (isDarwin())` around `thread_perform`'s wakeup call
                     // (`kqueue.zig:965-968`) — see the `task_wakeup` field doc.
-                    #[cfg(target_os = "macos")]
+                    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
                     {
                         (*c).task_wakeup = self.wakeup_state.mach_port;
                     }
@@ -1681,7 +1695,7 @@ impl Loop {
         // holds one (mirihar `wakeup_naive`: UB under SB AND TB). We notify the
         // `Copy` mach-port handle that `Loop::start` copied into this completion,
         // forming no reference to — and performing no access on — `Loop` at all.
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
         unsafe {
             let _ = (*c).task_wakeup.notify();
         };
@@ -1776,7 +1790,7 @@ pub struct Completion {
     /// (in particular a panicking one, since the FreeBSD `Wakeup.wakeup` IS a
     /// `@panic` stub, `kqueue.zig:1506-1509`) would crash every pool task, a
     /// behavior the reference does not have.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     task_wakeup: Async,
 }
 
@@ -1833,7 +1847,7 @@ impl Default for Completion {
             // PORT-ADDED (WS19 T10): same discipline as `task`/`task_loop` —
             // Zig `undefined`, only set when scheduled on the pool.
             task_completions: ptr::null_mut(),
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
             task_wakeup: Async {
                 port: darwin::MACH_PORT_NULL,
             },
@@ -1969,7 +1983,7 @@ impl Completion {
             #[cfg(target_os = "freebsd")]
             Operation::Machport => None,
 
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
             Operation::Machport { port, buffer } => {
                 // We can't use |*v| above because it crahses the Zig
                 // compiler (as of 0.11.0-dev.1413). We can retry another time.
@@ -2226,7 +2240,7 @@ impl Completion {
             // Our machport operation ALWAYS has MACH_RCV set so there
             // is no operation to perform. kqueue automatically reads in
             // the mach message into the read buffer.
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
             Operation::Machport { .. } => Result::Machport(Ok(())),
 
             // PORT NOTE (W2D): the reference's arm is ungated
@@ -2364,7 +2378,7 @@ impl Completion {
                 e => Err(read_err(e)),
             }),
 
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
             Operation::Machport { .. } => Result::Machport(match errno {
                 0 => Ok(()),
                 libc::ECANCELED => Err(MachPortError::Canceled),
@@ -2429,7 +2443,7 @@ impl Completion {
 //
 // PORT NOTE: the `if (builtin.os.tag.isDarwin())` Darwin arm. The non-Darwin
 // `else` arm is ported verbatim below (W2D).
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 struct Wakeup {
     /// The mach port that this kqueue always has a filter for. Writing
     /// an empty message to this port can be used to wake up the loop
@@ -2439,7 +2453,7 @@ struct Wakeup {
     mach_port_buffer: [u8; 32],
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 impl Wakeup {
     fn init() -> core::result::Result<Wakeup, Error> {
         let mach_port = Async::init()?;
@@ -2628,7 +2642,7 @@ pub enum Operation {
         c: *mut Completion,
     },
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     Machport {
         port: darwin::mach_port_name_t,
         buffer: ReadBuffer,
@@ -3138,7 +3152,7 @@ impl Timer {
 // (`thread_perform`'s wakeup call is comptime-Darwin-gated, kqueue.zig:965-968,
 // so there is no handle to cache). That lands FreeBSD ON the upstream `<= 256`
 // ceiling; only the macOS arm carries the documented overshoot above.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
 const COMPLETION_SIZE: usize = 264;
 #[cfg(target_os = "freebsd")]
 const COMPLETION_SIZE: usize = 256;
@@ -4161,7 +4175,7 @@ mod tests {
     // (kqueue.zig:2662) — the reference's own per-test OS guard, ported as the cfg
     // now that this module also compiles for FreeBSD. Zig's runtime skip has no
     // Rust equivalent that also stops the mach symbols being NAMED, so it is a cfg.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "visionos"))]
     #[test]
     #[cfg_attr(
         miri,
