@@ -58,7 +58,7 @@ layered on top of those two.
 |               | `cargo build -p rustty-vt-c --release [--features simd]`  | the VT C library                                                    | `target/release/librustty_vt_c.{a,dylib}` | the headless `librustty-vt` C library                                                |
 | **xtask**     | `cargo run -p xtask -- header-gen`                        | `include/rustty.h` (+ `rustty/vt/*`) via cbindgen                   | `include/`                                | regenerating the VT C headers                                                        |
 |               | `… -- header-gen-apprt`                                   | `include/rustty-apprt.h`                                            | `include/`                                | the embedding-API header                                                             |
-|               | `… -- xcframework`                                        | `RusttyKit.xcframework` (SIMD-on)                                   | `dist/RusttyKit.xcframework`              | the macOS Swift-app library                                                          |
+|               | `… -- xcframework`                                        | `RusttyKit.xcframework` (SIMD-on)                                   | `macos/RusttyKit.xcframework`             | the macOS Swift-app library                                                          |
 |               | `… -- resources`                                          | terminfo, shell-integration, themes, man pages, completions, locale | `zig-out/share/`                          | the macOS Copy-Resources tree                                                        |
 |               | `… -- dist`                                               | the source tarball                                                  | `dist/rustty-<version>.tar.gz`            | packaging / release source                                                           |
 |               | `… -- distcheck`                                          | (extracts + builds the tarball)                                     | —                                         | validating the tarball is self-contained                                             |
@@ -74,14 +74,15 @@ layered on top of those two.
 - **CLI/app binary:** `target/{debug,release}/rustty`
 - **C libraries:** `target/release/librustty_vt_c.{a,dylib}` (VT engine), `librustty_apprt_c.a` (embedding API)
 - **C headers (checked in):** `include/rustty/vt.h` + `include/rustty/vt/*` (curated), `include/rustty.h` + `include/rustty-apprt.h` (cbindgen-generated)
-- **macOS xcframework:** `dist/RusttyKit.xcframework`
+- **macOS xcframework:** `macos/RusttyKit.xcframework` (the path `Rustty.xcodeproj`
+  links, matching the reference's `GhosttyXCFramework` out_path)
 - **macOS app:** `macos/build/<config>/Rustty.app`
 - **Runtime resources:** `zig-out/share/` (terminfo, shell-integration, themes, man, completions, locale)
 - **Source tarball:** `dist/rustty-<version>.tar.gz`
 - **C-API docs:** `doc/librustty/` (HTML), `doc/man/` (man3)
 - **Packaging _source_ assets (checked in):** `dist/{cmake,doxygen,linux,windows,macos}`
 
-`target/`, `zig-out/`, `dist/RusttyKit.xcframework`, `dist/*.tar.gz`, `doc/`, and
+`target/`, `zig-out/`, `macos/RusttyKit.xcframework`, `dist/*.tar.gz`, `doc/`, and
 `build-cmake/` are all git-ignored (regenerable). The
 `dist/{cmake,doxygen,linux,windows,macos}` **source** assets are tracked.
 

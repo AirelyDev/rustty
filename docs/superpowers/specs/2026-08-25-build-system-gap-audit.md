@@ -570,18 +570,35 @@ new CI legs (`windows`, `macos-app`) behind a `required` aggregator.
 something ran.** Three were found by turning a feature ON for the first time,
 and one by building an artifact that no gate had ever built:
 
-1. **The macOS app did not build at all.** `xtask xcframework` wrote the
-   embedding bundle to `dist/RusttyKit.xcframework`; `Rustty.xcodeproj`
-   references it as `path = RusttyKit.xcframework`, resolved relative to
-   `macos/`. A stale copy sat there — 69 lines short, missing
+1. **The macOS app bundle had TWO locations and only one script kept them in
+   sync.** `xtask xcframework` wrote to `dist/RusttyKit.xcframework`;
+   `Rustty.xcodeproj` references `path = RusttyKit.xcframework`, resolved
+   relative to `macos/`. The bridge was a `cp -R dist/... macos/...` inside
+   `macos/build-rustty.sh`.
+
+   **Correction to the first framing of this finding:** the app was NOT
+   unbuildable. `macos/build-rustty.sh` — the documented entry point, and what
+   `release-tip`/`release-tag` invoke — refreshed the copy on every run, so
+   releases were fine. What broke was every OTHER path: a bare `xcodebuild`, an
+   IDE build, or a CI job linked whatever stale copy happened to sit in
+   `macos/`. Here that copy was 69 header lines behind — missing
    `RUSTTY_CLIPBOARD_PRIMARY`, `RUSTTY_ACTION_EXPORT_TERMINAL_IO`,
-   `rustty_surface_deny_clipboard_request` and more — and the Swift sources
-   failed with 18 "cannot find X in scope" errors. The reference emits to
-   `macos/GhosttyKit.xcframework` (`GhosttyXCFramework.zig:41`) and cleans
-   exactly that path; rustty's divergence to `dist/` is what broke it.
-   `XcframeworkSpec` gained an `out_dir` and the app bundle now lands where the
-   project reads it. **BUILD SUCCEEDED**, and the 25 `RusttyTests` cases run
-   green — the first time either has happened outside a release.
+   `rustty_surface_deny_clipboard_request` and more — giving 18 "cannot find X
+   in scope" errors. The reference's CI builds the app with a plain
+   `xcodebuild`, so the new `macos-app` job hit it immediately.
+
+   The reference emits to `macos/GhosttyKit.xcframework`
+   (`GhosttyXCFramework.zig:41`) and cleans exactly that path — one location,
+   no copy. rustty's move to `dist/` was a deliberate rebrand-era decision
+   (`2026-07-15-batch1-prose-docs-dotfiles.md:22`) and is now reverted:
+   `XcframeworkSpec` gained an `out_dir`, the bundle lands where the project
+   reads it, and `build-rustty.sh`'s copy step is gone.
+
+   Verified from a wiped tree: `xtask xcframework` ->
+   `macos/RusttyKit.xcframework`; `macos/build-rustty.sh` -> **BUILD
+   SUCCEEDED**; bare `xcodebuild` -> **BUILD SUCCEEDED**; `xcodebuild test
+-only-testing:RusttyTests` -> **TEST SUCCEEDED**, 25 cases; and the
+   resulting `Rustty.app` runs and prints `Rustty 0.1.0`.
 
 2. **`--features flatpak` had never compiled.** `os/flatpak.rs` aliased
    `EnvMap` to a lossy `HashMap<String, String>` while `Exec`'s is
