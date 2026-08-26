@@ -79,7 +79,11 @@ macos/DerivedData/
 # SwiftPM build output for example/swift-vt-xcframework.
 example/swift-vt-xcframework/.build/
 # Source tarball produced by `cargo run -p xtask -- dist`
+# Source tarballs from `xtask dist` / `xtask dist-lib-vt`. The second pattern
+# is NOT redundant: `librustty-vt-*` does not match `rustty-*`, and without it
+# a 43 MB artifact gets committed.
 /dist/rustty-*.tar.gz
+/dist/librustty-vt-*.tar.gz
 
 # llvm coverage profiling artifacts
 *.profraw
