@@ -128,11 +128,23 @@ else
   [ "$nicons" -ge 6 ] || { echo "      icons: $nicons png(s), expected >= 6 hicolor sizes"; errs=1; }
   # The Exec= line must carry the prefix that was asked for.
   if [ -f "$SHARE/applications/io.airely.rustty.desktop" ] \
-     && ! grep -q '^Exec=' "$SHARE/applications/io.airely.rustty.desktop"; then
-    echo "      desktop file has no Exec= line"; errs=1
+     && ! grep -q "^Exec=/usr/bin/rustty" "$SHARE/applications/io.airely.rustty.desktop"; then
+    echo "      desktop Exec= does not carry the --prefix that was passed:"
+    grep '^Exec=' "$SHARE/applications/io.airely.rustty.desktop" | sed 's/^/        /'
+    errs=1
   fi
+  # These two are the POSITIVE half of the flatpak differential in arm 3: the
+  # plain arm MUST have the systemd wiring and a >512 icon, so arm 3's
+  # "absent" assertions cannot pass vacuously.
+  if ! grep -q '^SystemdService=' "$SHARE/dbus-1/services/io.airely.rustty.service" 2>/dev/null; then
+    echo "      the plain D-Bus service is missing SystemdService="; errs=1
+  fi
+  [ -f "$SHARE/systemd/user/app-io.airely.rustty.service" ] \
+    || { echo "      the plain arm did not install the systemd user unit"; errs=1; }
+  nbig="$(find "$SHARE/icons" \( -path '*1024*' -o -path '*2048*' \) -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
+  [ "$nbig" -ge 1 ] || { echo "      the plain arm emitted no icon above 512 to cap"; errs=1; }
   if [ "$errs" -eq 0 ]; then
-    ok "resources (linux) — desktop + dbus + metainfo + $nicons icons"
+    ok "resources (linux) — desktop + dbus(+systemd) + metainfo + $nicons icons ($nbig above 512)"
   else
     bad "resources (linux) — desktop-app resources incomplete"
   fi
@@ -148,19 +160,26 @@ else
   errs=0
   svc="$SHARE/dbus-1/services/io.airely.rustty.service"
   [ -f "$svc" ] || { echo "      missing the D-Bus service file"; errs=1; }
-  # The flatpak D-Bus service differs from the plain one: this is the swap the
-  # --flatpak flag exists to perform, so assert it rather than just file
-  # presence (which the non-flatpak arm already satisfies).
-  if [ -f "$svc" ] && ! grep -q 'flatpak' "$svc"; then
-    echo "      the --flatpak D-Bus service was not swapped in:"
+  # What --flatpak actually changes (dist/linux/dbus.service.flatpak.in vs
+  # dbus.service.in): the flatpak template DROPS the `SystemdService=` line,
+  # because a flatpak has no systemd user unit to activate. Arm 2 asserts the
+  # plain template HAS it, so this pair is differential — neither arm can pass
+  # by generating nothing.
+  if [ -f "$svc" ] && grep -q '^SystemdService=' "$svc"; then
+    echo "      the --flatpak D-Bus template was not swapped in (SystemdService= still present):"
     sed 's/^/        /' "$svc" | head -5
     errs=1
   fi
-  # Icons capped at 512 — no 1024/2048 under flatpak.
+  # ...and no systemd user unit is installed at all.
+  if [ -e "$SHARE/systemd" ]; then
+    echo "      --flatpak installed a systemd unit tree"; errs=1
+  fi
+  # Icons capped at 512 — no 1024/2048 under flatpak (arm 2 asserts the plain
+  # arm emits at least one, so there is genuinely something to cap).
   big="$(find "$SHARE/icons" \( -path '*1024*' -o -path '*2048*' \) -name '*.png' 2>/dev/null | wc -l | tr -d ' ')"
   [ "$big" -eq 0 ] || { echo "      $big icon(s) above the 512 flatpak cap"; errs=1; }
   if [ "$errs" -eq 0 ]; then
-    ok "resources (flatpak) — D-Bus service swapped, icons capped at 512"
+    ok "resources (flatpak) — D-Bus template swapped, no systemd unit, icons capped at 512"
   else
     bad "resources (flatpak) — the --flatpak arm did not take effect"
   fi

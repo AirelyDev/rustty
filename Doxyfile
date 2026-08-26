@@ -62,10 +62,20 @@ HTML_EXTRA_FILES       = dist/doxygen/favicon.png \
                          crates/rustty-vt-c/types.schema.json
 HTML_COLORSTYLE        = DARK
 HTML_CODE_FOLDING      = NO
-# Reproducibility: without this every generated page embeds its build time, so
-# two runs over identical sources produce different bytes. Carried over from the
-# reference Doxyfile, where it had been dropped in the port.
-HTML_TIMESTAMP         = NO
+# NOT SET, deliberately — and this differs from the reference on purpose.
+#
+# The reference carries `HTML_TIMESTAMP = NO` for reproducibility (without it,
+# every page embeds its build time). That tag was RENAMED to `TIMESTAMP` in
+# doxygen 1.14, so on a current doxygen the reference's spelling produces
+# "Tag 'HTML_TIMESTAMP' ... has become obsolete", while the new spelling
+# produces an unknown-tag warning on the doxygen Ubuntu still ships (1.9.8).
+# There is no spelling that is clean on both.
+#
+# It does not need to be set either way: NO is the default in every version
+# from 1.8.16 onward, verified against the doxygen in use here — a generated
+# page contains no "Generated on ..." line. `G-DOXYGEN`
+# (.port/tools/gates/check_doxygen.sh) is what actually holds the docs to a
+# warning-free build, which is the guarantee this line was reaching for.
 HTML_HEADER            = dist/doxygen/header.html
 LAYOUT_FILE            = DoxygenLayout.xml
 GENERATE_TREEVIEW      = YES
