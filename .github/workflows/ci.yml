@@ -346,10 +346,18 @@ jobs:
           $ErrorActionPreference = "Stop"
           Copy-Item target\release\rustty_apprt_c.dll test\windows\ -Force
           Push-Location test\windows
-          cl /nologo /Fe:test_dll_init.exe test_dll_init.c
-          $out = & .\test_dll_init.exe
+          # `clang`, not `cl`: cl.exe is only on PATH inside a VS developer
+          # shell, and this is exactly the command test/windows/README.md
+          # documents — so CI runs what the README tells a human to run.
+          # The test loads the DLL with LoadLibrary at runtime, so no import
+          # library is needed at link time.
+          clang test_dll_init.c -o test_dll_init.exe
+          # `2>&1`: the program writes its result to STDERR (see the fprintf in
+          # test_dll_init.c), so capturing stdout alone would yield an empty
+          # string and the assertion below would fail on a perfectly good run.
+          $out = & .\test_dll_init.exe 2>&1 | Out-String
           Write-Host $out
-          # Assert, do not merely run: the DLL loading and printing nothing
+          # Assert, do not merely run: a DLL that loads and prints nothing
           # would otherwise pass.
           if ($out -notmatch "rustty_info:") { throw "unexpected output: $out" }
           Pop-Location
