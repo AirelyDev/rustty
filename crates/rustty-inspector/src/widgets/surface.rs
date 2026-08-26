@@ -176,7 +176,8 @@ pub type RtSetClipboardFn =
 
 /// The `rt_app.performAction(..., .export_terminal_io, ...)` seam trampoline
 /// type — see [`SurfaceData::rt_export_terminal_io`].
-pub type RtExportTerminalIOFn = unsafe fn(surface: *mut c_void, contents: &[u8]) -> Result<bool, ()>;
+pub type RtExportTerminalIOFn =
+    unsafe fn(surface: *mut c_void, contents: &[u8]) -> Result<bool, ()>;
 
 /// Surface-level state `Inspector::draw`/`Info::draw`/the three tables need —
 /// see the module doc's R4 acyclic Surface seam note. Every field is a plain

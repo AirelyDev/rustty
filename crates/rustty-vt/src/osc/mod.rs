@@ -705,9 +705,7 @@ impl Capture {
                     // );
                     // R7: `*|` is a saturating multiply; `@max(.., 1)` keeps a
                     // zero-capacity buffer growable.
-                    let new_capacity = self
-                        .max_bytes
-                        .min(w.capacity().saturating_mul(2).max(1));
+                    let new_capacity = self.max_bytes.min(w.capacity().saturating_mul(2).max(1));
                     // w.writer.buffer = w.allocator.realloc(w.writer.buffer, new_capacity)
                     // PORT NOTE: `reserve_exact` grows the Vec's backing to
                     // exactly `new_capacity` (len + additional), mirroring the
@@ -1053,9 +1051,8 @@ impl<'a> Parser<'a> {
                     } else {
                         if w.len() >= w.capacity() {
                             // R7: `*|` saturating multiply, `@max(.., 1)` floor.
-                            let new_capacity = cap
-                                .max_bytes
-                                .min(w.capacity().saturating_mul(2).max(1));
+                            let new_capacity =
+                                cap.max_bytes.min(w.capacity().saturating_mul(2).max(1));
                             w.reserve_exact(new_capacity - w.len());
                         }
                         w.push(c);

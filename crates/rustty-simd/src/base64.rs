@@ -508,7 +508,10 @@ mod tests {
             let mut s = Streaming::default();
             assert_eq!(b"goo".as_slice(), s.feed(b"Z29vZA=", &mut output).unwrap());
             assert_eq!(b"d".as_slice(), s.feed(b"=", &mut output).unwrap());
-            assert_eq!(b"more".as_slice(), s.feed(b"bW9yZQ==", &mut output).unwrap());
+            assert_eq!(
+                b"more".as_slice(),
+                s.feed(b"bW9yZQ==", &mut output).unwrap()
+            );
             s.finish().unwrap();
         }
 

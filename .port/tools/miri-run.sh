@@ -46,8 +46,9 @@ worker() {
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     echo "$(now) START w$id $t" >> "$PROG"
-    local o="$WORK/out/$id.$(echo "$t" | tr '/:' '__')"
-    local s0=$(now) rc
+    local o s0 rc
+    o="$WORK/out/$id.$(echo "$t" | tr '/:' '__')"
+    s0=$(now)
     if [ "$TMO_MIN" -gt 0 ]; then
       ( MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri test -p "$CRATE" -- --exact "$t" --test-threads=1 >"$o" 2>&1 ) &
       local cpid=$!
@@ -72,8 +73,9 @@ for i in $(seq 0 $((NCHUNKS-1))); do [ -f "$WORK/chunk.$i.txt" ] && worker "$i" 
 heartbeat() {
   while :; do
     sleep 60
-    local done ubn running miricpu
-    done=$(grep -c ' DONE ' "$PROG"); ubn=$(grep -c ' res=UB' "$PROG")
+    # `ndone`, not `done`: a bare `done` here parses as the loop keyword.
+    local ndone ubn running miricpu
+    ndone=$(grep -c ' DONE ' "$PROG"); ubn=$(grep -c ' res=UB' "$PROG")
     running=""
     for i in $(seq 0 $((NCHUNKS-1))); do
       local last; last=$(grep " w$i " "$PROG" | tail -1)
@@ -83,7 +85,7 @@ heartbeat() {
       esac
     done
     miricpu=$(ps -A -o %cpu,command | grep -E 'miri|rustty_vt-' | grep -v grep | awk '{s+=$1} END{printf "%.0f", s}')
-    echo "[$(date +%H:%M:%S)] HEARTBEAT done=$done/$TOTAL ub=$ubn elapsed=$(hms $(( $(now)-START_TS ))) miri_cpu=${miricpu}% running: ${running:-<none>}" >> "$PROG"
+    echo "[$(date +%H:%M:%S)] HEARTBEAT done=$ndone/$TOTAL ub=$ubn elapsed=$(hms $(( $(now)-START_TS ))) miri_cpu=${miricpu}% running: ${running:-<none>}" >> "$PROG"
     [ "$(grep -c WORKER_DONE "$PROG")" -ge "$NCHUNKS" ] && break
   done
 }

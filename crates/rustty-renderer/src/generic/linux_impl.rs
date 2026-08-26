@@ -1254,8 +1254,19 @@ impl Renderer {
     /// immediately on Linux — there is no display link to retarget. Kept because
     /// core's `Thread<A>` drains the `.macos_display_id` mailbox message
     /// unconditionally (the reference's own shape); a no-op here.
-    pub fn set_macos_display_id(&self, id: u32) -> Result<(), Error> {
-        let _ = id;
+    ///
+    /// PORT NOTE (`a177ba90a`): the signature tracks the macOS arm's — `&mut
+    /// self` and the `draw_now` handle — even though neither is used here. The
+    /// mailbox drain in `rustty-core`'s `renderer_seam.rs` is SHARED across
+    /// platforms and calls this unconditionally, so the two arms must agree.
+    /// They had diverged: the macOS arm took `(id, draw_now)` while this one
+    /// still took `(id)`, which broke the Linux build outright.
+    pub fn set_macos_display_id(
+        &mut self,
+        id: u32,
+        draw_now: rustty_xev::Async,
+    ) -> Result<(), Error> {
+        let _ = (id, draw_now);
         Ok(())
     }
 

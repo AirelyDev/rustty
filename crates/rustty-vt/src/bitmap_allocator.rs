@@ -943,10 +943,7 @@ mod tests {
         // the skipped-word index arithmetic must still yield the right
         // chunk address.
         let next = unsafe { bm.alloc::<u8, _>(buf.base(), 1) }.unwrap();
-        assert_eq!(
-            first.0 + Alloc::BITMAP_BIT_SIZE,
-            next.as_ptr() as usize,
-        );
+        assert_eq!(first.0 + Alloc::BITMAP_BIT_SIZE, next.as_ptr() as usize,);
 
         // Freeing a chunk in the first word lowers the hint so the freed
         // space is found again.
@@ -983,20 +980,14 @@ mod tests {
         // span words), so it comes from the second word — but the hint
         // must stay at the first word, which still has free bits.
         let big = unsafe { bm.alloc::<u8, _>(buf.base(), 8) }.unwrap();
-        assert_eq!(
-            first + Alloc::BITMAP_BIT_SIZE,
-            big.as_ptr() as usize,
-        );
+        assert_eq!(first + Alloc::BITMAP_BIT_SIZE, big.as_ptr() as usize,);
         assert_eq!(0usize, bm.search_start);
 
         // A 4-chunk run fits the first word's remaining bits exactly; a
         // hint that skipped the partial word would wrongly place this in
         // the second word (or report OutOfMemory once that filled).
         let small = unsafe { bm.alloc::<u8, _>(buf.base(), 4) }.unwrap();
-        assert_eq!(
-            first + Alloc::BITMAP_BIT_SIZE - 4,
-            small.as_ptr() as usize,
-        );
+        assert_eq!(first + Alloc::BITMAP_BIT_SIZE - 4, small.as_ptr() as usize,);
 
         // Now the first word is full and the hint advances past it.
         assert_eq!(1usize, bm.search_start);

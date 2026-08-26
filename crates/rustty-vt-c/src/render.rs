@@ -991,10 +991,10 @@ unsafe fn get_typed(state_: RenderState, data: Data, out: *mut c_void) -> Result
                 unsafe { core::ptr::addr_of_mut!((*state_).state.row_data) };
             // SAFETY: `row_data` is a live `Vec` field of the live wrapper; the
             // autorefs below are transient and die within this statement.
-            it.rows = core::ptr::slice_from_raw_parts_mut(
-                unsafe { (*row_data).as_mut_ptr() },
-                unsafe { (*row_data).len() },
-            );
+            it.rows =
+                core::ptr::slice_from_raw_parts_mut(unsafe { (*row_data).as_mut_ptr() }, unsafe {
+                    (*row_data).len()
+                });
             // SB: raw projections off the wrapper base tag (`addr_of!`), never
             // through an intermediate reference, so they stay valid across the
             // transient borrows other exports create.
@@ -2016,8 +2016,7 @@ unsafe fn row_cells_get_typed_inner(
                     // SAFETY: `cells.palette` is a valid palette pointer
                     // installed by `row_get`; `out` points to a writable `RGB`.
                     unsafe {
-                        *(out as *mut RGB) =
-                            (*cells.palette)[cell.content_color_palette() as usize]
+                        *(out as *mut RGB) = (*cells.palette)[cell.content_color_palette() as usize]
                     };
                 }
 
@@ -2453,7 +2452,12 @@ unsafe fn row_get_dispatch(
 /// # Safety
 /// `iterator_` must be non-null and live; `y` in bounds; `out` must point to
 /// writable storage of the type required by `data`.
-unsafe fn row_get_typed(iterator_: RowIterator, y: usize, data: RowData, out: *mut c_void) -> Result {
+unsafe fn row_get_typed(
+    iterator_: RowIterator,
+    y: usize,
+    data: RowData,
+    out: *mut c_void,
+) -> Result {
     // SAFETY: `iterator_` is a live wrapper (caller contract).
     let it = unsafe { &*iterator_ };
     // SAFETY: `it.rows` is a valid slice pointer installed by `get`; `y` is

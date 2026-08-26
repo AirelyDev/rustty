@@ -184,7 +184,11 @@ impl<T: Clone> CircBuf<T> {
         }
 
         // Fix up our head/tail for the new capacity.
-        self.head = if retained_len == size { 0 } else { retained_len };
+        self.head = if retained_len == size {
+            0
+        } else {
+            retained_len
+        };
         self.tail = 0;
         self.full = retained_len == size;
         Ok(())

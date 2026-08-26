@@ -226,7 +226,7 @@ else
         echo "UNEXPECTED TARBALL LAYOUT for $name (no single top-level directory)" >&2
         rm -rf "$tmpdir"; exit 2
       fi
-      rm -rf "$CACHE/$pkgdir"
+      rm -rf "${CACHE:?}/${pkgdir:?}"
       mv "$top" "$CACHE/$pkgdir"
       rm -rf "$tmpdir"
       echo "   installed by tar extraction (full-tarball layout): $CACHE/$pkgdir"

@@ -497,7 +497,13 @@ mod tests {
         // Directory handle request.
         {
             let r = Request::init(Metadata::parse(b"t=r:Y=2:x=1").unwrap());
-            assert_eq!(Request::Dir { handle: 2, entry: 1 }, r);
+            assert_eq!(
+                Request::Dir {
+                    handle: 2,
+                    entry: 1
+                },
+                r
+            );
         }
     }
 

@@ -281,8 +281,8 @@ mod tests {
 
     use objc2::msg_send;
     use objc2::rc::Retained;
-    use objc2::DefinedClass;
     use objc2::runtime::AnyObject;
+    use objc2::DefinedClass;
     use objc2_io_surface::IOSurfaceRef;
     use rustty_render_types::AlphaBlending;
 
@@ -349,11 +349,19 @@ mod tests {
 
         // Drop must have cleared the stored callback + ctx ivars...
         assert!(
-            host_retained.ivars().display_cb.load(Ordering::SeqCst).is_null(),
+            host_retained
+                .ivars()
+                .display_cb
+                .load(Ordering::SeqCst)
+                .is_null(),
             "Drop must clear the display callback"
         );
         assert!(
-            host_retained.ivars().display_ctx.load(Ordering::SeqCst).is_null(),
+            host_retained
+                .ivars()
+                .display_ctx
+                .load(Ordering::SeqCst)
+                .is_null(),
             "Drop must clear the display context"
         );
         // ...so a later display pass on the host-retained layer is a no-op.

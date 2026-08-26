@@ -36,10 +36,18 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 # `crates/rustty-vt/src/options.rs` — and a wasm build of THIS crate resolves the
 # option off even though `default` names `simd`. Verified: `cargo build
 # -p rustty-vt-c --target wasm32-unknown-unknown --release`.)
-default = [
-    "simd",
-    # The `-Dvt-features` default set: every feature enabled (`Features{}`).
-    # See the block below and `crates/rustty-vt/Cargo.toml`.
+default = ["simd", "vt-features-default"]
+# The `-Dvt-features` default set: every feature enabled (`Features{}`).
+# See the block below and `crates/rustty-vt/Cargo.toml`.
+#
+# Named as an AGGREGATE rather than spelled into `default` so that "all VT
+# features, SIMD off" is expressible without restating the nine. That
+# combination is not hypothetical: CMakeLists.txt's `RUSTTY_VT_SIMD=OFF` path
+# is exactly it, and example/c-vt-cmake-static sets that option. When the nine
+# were inline in `default`, that path passed a bare `--no-default-features` and
+# silently dropped the whole C API surface — the example failed to link on
+# `_rustty_formatter_terminal_new` and friends.
+vt-features-default = [
     "snapshot",
     "formatter",
     "selection",

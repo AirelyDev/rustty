@@ -37,7 +37,7 @@
 # Run:  sh .port/tools/gates/xev_scope_boundary_gate.sh
 set -u
 ROOT=$(cd "$(dirname "$0")/../../.." && pwd)
-cd "$ROOT"
+cd "$ROOT" || exit 1
 
 command -v cargo >/dev/null 2>&1 || {
   echo "BLOCKED: cargo not on PATH." >&2

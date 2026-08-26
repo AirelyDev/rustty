@@ -32,10 +32,12 @@
 ### Task 1: CMakeLists.txt + dist/cmake/ (the cargo-delegation wrapper)
 
 **Files:**
+
 - Create: `CMakeLists.txt`, `dist/cmake/RusttyCargoCompiler.cmake`, `dist/cmake/rustty-vt-config.cmake.in`, `dist/cmake/README.md`
 - Reference: `/Users/gael/projects/ghostty/{CMakeLists.txt,dist/cmake/*}`
 
 **Interfaces:**
+
 - Produces: CMake package `rustty-vt` with IMPORTED targets `rustty-vt` (shared) + `rustty-vt-static`, and function `rustty_vt_add_target(NAME <n> RUST_TARGET <triple> [CARGO_FLAGS ...])`. Task 4 consumes these.
 
 - [ ] **Step 1: Port the header-comment usage doc** — rebrand the 67-line usage block (cargo commands, `rustty-vt`/`rustty-vt-static` targets, FetchContent from `github.com/AirelyDev/rustty`, `find_package(rustty-vt)`, `rustty_vt_add_target`, pointers to `dist/cmake/README.md` + the `c-vt-cmake*` examples).
@@ -46,7 +48,7 @@
   - APPLE: shared `librustty_vt_c.dylib`; static `librustty_vt_c.a`
   - WIN32: shared `rustty_vt_c.dll`, implib `rustty_vt_c.dll.lib`; static `librustty_vt_c.a`
   - else: shared `librustty_vt_c.so`; static `librustty_vt_c.a`
-  All paths flat under `_RUSTTY_OUT_DIR` (no `bin/`/`lib/` split). Header dir = `${CMAKE_CURRENT_SOURCE_DIR}/include` (checked-in `include/rustty/`), no `MAKE_DIRECTORY` needed but harmless to keep.
+    All paths flat under `_RUSTTY_OUT_DIR` (no `bin/`/`lib/` split). Header dir = `${CMAKE_CURRENT_SOURCE_DIR}/include` (checked-in `include/rustty/`), no `MAKE_DIRECTORY` needed but harmless to keep.
 
 - [ ] **Step 4: The build invocation** — `add_custom_command(OUTPUT <shared> <static> COMMAND ${CARGO_EXECUTABLE} build -p rustty-vt-c ${_RUSTTY_PROFILE_FLAG} ${RUSTTY_CARGO_BUILD_FLAGS} WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} USES_TERMINAL)`; `add_custom_target(cargo_build_lib_vt ALL DEPENDS <shared> <static>)`; `ADDITIONAL_CLEAN_FILES` → point at `${CMAKE_CURRENT_SOURCE_DIR}/target` (or omit — cargo clean is separate; prefer omitting to avoid nuking the whole target dir).
 
@@ -71,6 +73,7 @@
 ### Task 2: Doxyfile + DoxygenLayout.xml + dist/doxygen/
 
 **Files:**
+
 - Create: `Doxyfile`, `DoxygenLayout.xml`, `dist/doxygen/{rustty.css,stylesheet.css,favicon.png,mobile-nav.js,header.html,footer.html}`
 - Reference: `/Users/gael/projects/ghostty/{Doxyfile,DoxygenLayout.xml,dist/doxygen/*}`
 
@@ -89,6 +92,7 @@
 ### Task 3: Makefile
 
 **Files:**
+
 - Create: `Makefile`
 - Reference: `/Users/gael/projects/ghostty/Makefile`
 
@@ -101,10 +105,12 @@
 ### Task 4: The 3 c-vt-cmake examples
 
 **Files:**
+
 - Create: `example/c-vt-cmake/{CMakeLists.txt,README.md,src/main.c}`, `example/c-vt-cmake-static/{...}`, `example/c-vt-cmake-cross/{...}`
 - Reference: `/Users/gael/projects/ghostty/example/c-vt-cmake{,-static,-cross}/`
 
 **Interfaces:**
+
 - Consumes: Task 1's CMake package (`rustty-vt` / `rustty-vt-static` / `rustty_vt_add_target`).
 
 - [ ] **Step 1: Port `src/main.c` for all 3** — symbol-swap (`#include <ghostty/vt.h>`→`<rustty/vt.h>`; `Ghostty*`→`Rustty*`; `GHOSTTY_*`→`RUSTTY_*`; `ghostty_*`→`rustty_*`). The static one keeps its " (static)!" string literal difference; cross's is identical to shared. Keep the prose ("CMake-built program") rebranded.

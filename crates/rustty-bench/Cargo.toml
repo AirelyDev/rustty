@@ -30,14 +30,6 @@ path = "src/main_bench.rs"
 # staticlib.
 [features]
 identity-oracle = ["rustty-identity/identity-oracle"]
-# PORT NOTE (phase-4 wbench, wsnap-3 gate): `terminal_snapshot.rs` (the
-# `+terminal-snapshot` benchmark, 0b5e12453 + e37865bed) is written against the
-# snapshot codec drivers (`snapshot::{encode,decode,Decoder}`) DOCUMENTED in
-# crates/rustty-vt/src/snapshot/codec.rs but not yet landed (they arrive with
-# `snapshot/{screen,terminal}.rs` — the wsnap-3 stage). The module is compiled
-# only under this feature; the wsnap-3 orchestrator un-gates it on merge by
-# turning the cfg off (deleting the feature + the `#[cfg]`s naming it).
-snapshot-codec = []
 
 [dependencies]
 # `identity-oracle` (above) flips this crate's string identity; `benchmark.rs`'s

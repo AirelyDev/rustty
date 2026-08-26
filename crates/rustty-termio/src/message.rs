@@ -73,7 +73,9 @@ pub enum Message<'a> {
     // ownership (the reference `alloc.create`s the pointer and the consumer
     // `defer config.alloc.destroy(config.ptr)`s it — precedent: rustty-os
     // cf_release_thread's `Message.Release` alloc collapse).
-    ChangeConfig { ptr: Box<DerivedConfig> },
+    ChangeConfig {
+        ptr: Box<DerivedConfig>,
+    },
 
     /// Activate or deactivate the inspector.
     Inspector(bool),

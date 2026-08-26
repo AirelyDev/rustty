@@ -24,7 +24,12 @@ elif [ "$OS" = "Darwin" ]; then SANS="address thread"
 else SANS="address thread leak"; fi
 
 run_san() {
-  local s="$1" flags="" pre="" td="/tmp/san-gate-$CRATE-$s" log
+  # Two `local`s on purpose: bash expands every word of a `local` command line
+  # before the builtin runs, so a `td=...$s` in the SAME `local` would read the
+  # caller's `s`, not the one being declared here. That happened to be the same
+  # value (the `for s in $SANS` loop below), but only by coincidence.
+  local s="$1" flags="" pre="" log
+  local td="/tmp/san-gate-$CRATE-$s"
   log="/tmp/san-gate-$CRATE-$s.log"
   case "$s" in
     address)   pre="ASAN_OPTIONS=detect_leaks=0" ;;      # macOS ASan has no leak detection

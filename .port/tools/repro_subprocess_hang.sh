@@ -14,6 +14,9 @@ TMO="${2:-40}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOGDIR="$(mktemp -d)"
 
+# `ls -t` is load-bearing: pick the NEWEST of cargo's hash-suffixed binaries.
+# A glob cannot sort by mtime, so the ls|grep pipe stays.
+# shellcheck disable=SC2010
 BIN="$(ls -t "$ROOT"/target/debug/deps/subprocess_drop_repro-* 2>/dev/null | grep -v '\.d$' | head -1)"
 if [ -z "$BIN" ]; then
   echo "FATAL: no subprocess_drop_repro test binary; run: cargo build --tests -p rustty-termio" >&2

@@ -1205,8 +1205,8 @@ fn compose_animation(alloc: Allocator, terminal: &mut Terminal, cmd: &Command) -
         // const y_overlaps = @max(c.top_edge, c.y) < @min(c.top_edge, c.y) + height;
         let x_overlaps = (core::cmp::max(c.left_edge, c.x) as u64)
             < core::cmp::min(c.left_edge, c.x) as u64 + width;
-        let y_overlaps =
-            (core::cmp::max(c.top_edge, c.y) as u64) < core::cmp::min(c.top_edge, c.y) as u64 + height;
+        let y_overlaps = (core::cmp::max(c.top_edge, c.y) as u64)
+            < core::cmp::min(c.top_edge, c.y) as u64 + height;
         if x_overlaps && y_overlaps {
             result.message = b"EINVAL: source and destination rectangles overlap".to_vec();
             return result;
@@ -1318,7 +1318,11 @@ fn frame_data_mut(img: &mut Image, number: u32) -> Option<&mut [u8]> {
 /// Split-borrow two DIFFERENT frames of one image: the source shared, the
 /// destination mutable (the reference just aliases two pointers; the buffers
 /// are distinct heap allocations, so the split borrows are always disjoint).
-fn frame_data_pair(img: &mut Image, src_number: u32, dst_number: u32) -> Option<(&[u8], &mut [u8])> {
+fn frame_data_pair(
+    img: &mut Image,
+    src_number: u32,
+    dst_number: u32,
+) -> Option<(&[u8], &mut [u8])> {
     debug_assert!(src_number != dst_number);
     if src_number == 0 || dst_number == 0 {
         return None;
@@ -1519,11 +1523,11 @@ fn load_and_add_image(
         //     loading.image.metadata.implicit_id = true;
         // }
         if loading.image.number > 0 {
-            loading.image.id =
-                storage.next_image_id_for(crate::kitty::graphics_storage::NextImageIdMode::Explicit);
+            loading.image.id = storage
+                .next_image_id_for(crate::kitty::graphics_storage::NextImageIdMode::Explicit);
         } else {
-            loading.image.id =
-                storage.next_image_id_for(crate::kitty::graphics_storage::NextImageIdMode::Implicit);
+            loading.image.id = storage
+                .next_image_id_for(crate::kitty::graphics_storage::NextImageIdMode::Implicit);
             loading.image.metadata.implicit_id = true;
         }
     }
@@ -2279,13 +2283,17 @@ mod tests {
             let cmd = command::Parser::parse_string(b"a=t,f=24,s=1,v=2,i=1,m=1;AAAA").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
-        assert!(unsafe { &(*t.screens.active).kitty_images }.loading.is_some());
+        assert!(unsafe { &(*t.screens.active).kitty_images }
+            .loading
+            .is_some());
 
         {
             let cmd = command::Parser::parse_string(b"a=d").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
-        assert!(unsafe { &(*t.screens.active).kitty_images }.loading.is_none());
+        assert!(unsafe { &(*t.screens.active).kitty_images }
+            .loading
+            .is_none());
 
         // A fresh chunked upload must start from empty state after the delete.
         {
@@ -2368,7 +2376,9 @@ mod tests {
             let cmd = command::Parser::parse_string(b"a=t,t=d,f=24,i=1,s=1,v=2,m=1;AAAA").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
-        assert!(unsafe { &(*t.screens.active).kitty_images }.loading.is_some());
+        assert!(unsafe { &(*t.screens.active).kitty_images }
+            .loading
+            .is_some());
         assert!(unsafe { &(*t.screens.active).kitty_images }
             .image_by_id(1)
             .is_none());
@@ -2988,13 +2998,15 @@ mod tests {
             Location::Relative(rel) => rel,
             _ => unreachable!(),
         };
-        assert!(rel.parent.eql(crate::kitty::graphics_storage::PlacementKey {
-            image_id: 1,
-            placement_id: crate::kitty::graphics_storage::PlacementId {
-                tag: crate::kitty::graphics_storage::PlacementIdTag::External,
-                id: 1,
-            },
-        }));
+        assert!(rel
+            .parent
+            .eql(crate::kitty::graphics_storage::PlacementKey {
+                image_id: 1,
+                placement_id: crate::kitty::graphics_storage::PlacementId {
+                    tag: crate::kitty::graphics_storage::PlacementIdTag::External,
+                    id: 1,
+                },
+            }));
         assert_eq!(3i32, rel.horizontal_offset);
         assert_eq!(2i32, rel.vertical_offset);
 
@@ -3054,15 +3066,15 @@ mod tests {
         {
             let storage = unsafe { &(*t.screens.active).kitty_images };
             assert_eq!(1usize, storage.placements.len());
-            assert!(storage
-                .placements
-                .contains_key(&crate::kitty::graphics_storage::PlacementKey {
+            assert!(storage.placements.contains_key(
+                &crate::kitty::graphics_storage::PlacementKey {
                     image_id: 1,
                     placement_id: crate::kitty::graphics_storage::PlacementId {
                         tag: crate::kitty::graphics_storage::PlacementIdTag::External,
                         id: 1,
                     },
-                }));
+                }
+            ));
         }
 
         // Deleting the root removes the remaining placement, and the
@@ -3155,13 +3167,15 @@ mod tests {
                 }
             })
             .expect("PlacementNotFound");
-        assert!(rel.parent.eql(crate::kitty::graphics_storage::PlacementKey {
-            image_id: 1,
-            placement_id: crate::kitty::graphics_storage::PlacementId {
-                tag: crate::kitty::graphics_storage::PlacementIdTag::External,
-                id: 3,
-            },
-        }));
+        assert!(rel
+            .parent
+            .eql(crate::kitty::graphics_storage::PlacementKey {
+                image_id: 1,
+                placement_id: crate::kitty::graphics_storage::PlacementId {
+                    tag: crate::kitty::graphics_storage::PlacementIdTag::External,
+                    id: 3,
+                },
+            }));
 
         t.deinit(alloc);
     }
@@ -3385,9 +3399,8 @@ mod tests {
         // New frame: 1x1 RGB white transmitted at x=1 over an opaque red
         // background (Y=4278190335 is 0xff0000ff, R in the MSB).
         {
-            let cmd =
-                command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1,x=1,Y=4278190335;////")
-                    .unwrap();
+            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1,x=1,Y=4278190335;////")
+                .unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
 
@@ -3540,8 +3553,7 @@ mod tests {
         }
 
         {
-            let cmd =
-                command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1,r=2,z=-1;/wAA").unwrap();
+            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=1,v=1,r=2,z=-1;/wAA").unwrap();
             assert!(execute(alloc, &mut t, &cmd).unwrap().ok());
         }
         {
@@ -3646,11 +3658,12 @@ mod tests {
         // chunks repeat a=f per the protocol. No response until the
         // final chunk.
         {
-            let cmd =
-                command::Parser::parse_string(b"a=f,i=1,f=24,s=2,v=1,z=60,m=1;/wAA").unwrap();
+            let cmd = command::Parser::parse_string(b"a=f,i=1,f=24,s=2,v=1,z=60,m=1;/wAA").unwrap();
             assert!(execute(alloc, &mut t, &cmd).is_none());
         }
-        assert!(unsafe { &(*t.screens.active).kitty_images }.loading.is_some());
+        assert!(unsafe { &(*t.screens.active).kitty_images }
+            .loading
+            .is_some());
         {
             let cmd = command::Parser::parse_string(b"a=f,m=0;AAD/").unwrap();
             let resp = execute(alloc, &mut t, &cmd).unwrap();
@@ -3658,7 +3671,9 @@ mod tests {
             assert_eq!(1u32, resp.id);
             assert_eq!(2u32, resp.frame);
         }
-        assert!(unsafe { &(*t.screens.active).kitty_images }.loading.is_none());
+        assert!(unsafe { &(*t.screens.active).kitty_images }
+            .loading
+            .is_none());
 
         let storage = unsafe { &(*t.screens.active).kitty_images };
         let anim = storage
@@ -3794,7 +3809,10 @@ mod tests {
         let cmd = command::Parser::parse_string(b"a=a,i=9,s=3").unwrap();
         let resp = execute(alloc, &mut t, &cmd).unwrap();
         assert!(!resp.ok());
-        assert_eq!(b"ENOENT: image not found".as_slice(), resp.message.as_slice());
+        assert_eq!(
+            b"ENOENT: image not found".as_slice(),
+            resp.message.as_slice()
+        );
 
         t.deinit(alloc);
     }
@@ -3994,7 +4012,9 @@ mod tests {
         }
         assert_eq!(
             1usize,
-            unsafe { &(*t.screens.active).kitty_images }.placements.len()
+            unsafe { &(*t.screens.active).kitty_images }
+                .placements
+                .len()
         );
 
         {

@@ -19,6 +19,7 @@ The inspector is ~90% shared and already ported:
 macOS works because `crates/rustty-apprt/src/embedded.rs` wraps that shared core with a **Metal** backend (`ImGui_ImplMetal_*`, `Backend::Metal`). GTK has no equivalent wrapper. That wrapper — the OpenGL3 backend plus the GTK widget/window glue that owns the per-surface ImGui context — is the entire remaining gap.
 
 The only invariants still "live" for this work are the ones the wrapper owns:
+
 - **INV-11** — per-Surface ImGui context; `ImGui_SetCurrentContext(ctx)` must precede every ImGui call; `Inspector::setup()` mutates the shared IO once (docking + sRGB + no ini/log + embedded font @ 16*2px).
 - **INV-12** — a rendered frame forces a terminal rebuild via `wakeup.notify()` (already inside `Inspector::render`).
 - **R6** — dcimgui calls are `!Send` / context-scoped; set-current-context at the same points the reference does.

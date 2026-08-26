@@ -1786,14 +1786,13 @@ impl<'a> PageFormatter<'a> {
                     // Fast path: styles are interned per-page, so if this
                     // cell's style id matches the id of our current style
                     // then the style is unchanged.
-                    let cell_style_id: u32 = match cell.content_tag() {
-                        pagepkg::ContentTag::Codepoint | pagepkg::ContentTag::CodepointGrapheme => {
-                            cell.style_id() as u32
-                        }
-                        pagepkg::ContentTag::BgColorPalette | pagepkg::ContentTag::BgColorRgb => {
-                            invalid_style_id
-                        }
-                    };
+                    let cell_style_id: u32 =
+                        match cell.content_tag() {
+                            pagepkg::ContentTag::Codepoint
+                            | pagepkg::ContentTag::CodepointGrapheme => cell.style_id() as u32,
+                            pagepkg::ContentTag::BgColorPalette
+                            | pagepkg::ContentTag::BgColorRgb => invalid_style_id,
+                        };
                     if cell_style_id == style_id && cell_style_id != invalid_style_id {
                         break 'style;
                     }
@@ -2170,7 +2169,8 @@ impl<'a> PageFormatter<'a> {
                 // matching writeCell. This is out-of-line to keep the
                 // hot loop for the common single-codepoint case small.
                 if cell.content_tag() == pagepkg::ContentTag::CodepointGrapheme {
-                    cell_bytes += self.write_grapheme_cps(emit, writer, cell, &mut buf, &mut len)?;
+                    cell_bytes +=
+                        self.write_grapheme_cps(emit, writer, cell, &mut buf, &mut len)?;
                 }
             }
 
@@ -2178,10 +2178,7 @@ impl<'a> PageFormatter<'a> {
             if track_points {
                 let map = self.point_map.as_mut().unwrap();
                 map.map.extend(core::iter::repeat_n(
-                    Coordinate {
-                        x,
-                        y: run_y as u32,
-                    },
+                    Coordinate { x, y: run_y as u32 },
                     cell_bytes,
                 ));
             }
@@ -2364,7 +2361,8 @@ impl<'a> PageFormatter<'a> {
                         } else {
                             let mut buf: [u8; 16] = [0; 16];
                             buf[0..2].copy_from_slice(b"&#");
-                            let mut len: usize = 2 + fastprint::print_decimal(&mut buf[2..], codepoint);
+                            let mut len: usize =
+                                2 + fastprint::print_decimal(&mut buf[2..], codepoint);
                             buf[len] = b';';
                             len += 1;
                             writer.write_all(&buf[..len])
@@ -4404,7 +4402,10 @@ mod tests {
         assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         for i in 0..output.len() {
-            assert_eq!(pin(node, i as size::CellCountInt, 0), pin_map.get(i).unwrap());
+            assert_eq!(
+                pin(node, i as size::CellCountInt, 0),
+                pin_map.get(i).unwrap()
+            );
         }
         t.deinit(Global);
     }
@@ -5084,7 +5085,10 @@ mod tests {
         assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         for i in 0..output.len() {
-            assert_eq!(pin(node, i as size::CellCountInt, 0), pin_map.get(i).unwrap());
+            assert_eq!(
+                pin(node, i as size::CellCountInt, 0),
+                pin_map.get(i).unwrap()
+            );
         }
         t.deinit(Global);
     }
@@ -5220,7 +5224,10 @@ mod tests {
         assert_eq!(output.len(), pin_map.count());
         let node = unsafe { (*t.screens.active).pages.pages.first };
         for i in 0..output.len() {
-            assert_eq!(pin(node, i as size::CellCountInt, 0), pin_map.get(i).unwrap());
+            assert_eq!(
+                pin(node, i as size::CellCountInt, 0),
+                pin_map.get(i).unwrap()
+            );
         }
         t.deinit(Global);
     }
@@ -6119,7 +6126,8 @@ mod tests {
         // The closing div behaves as a newline
         assert_eq!((unsafe { &*page }.size.rows - 2) as usize, state.rows);
         assert_eq!(
-            b"<div style=\"font-family: monospace; white-space: pre;\">hello\nworld</div>".as_slice(),
+            b"<div style=\"font-family: monospace; white-space: pre;\">hello\nworld</div>"
+                .as_slice(),
             output,
         );
         t.deinit(Global);

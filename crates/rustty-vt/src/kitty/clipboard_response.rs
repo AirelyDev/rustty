@@ -41,8 +41,7 @@ pub const targets_mime: &[u8] = b".";
 pub const max_listing_mimes: usize = 16;
 
 /// The standard base64 alphabet (`std.base64.standard`).
-const b64_alphabet: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const b64_alphabet: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// `std.base64.standard.Encoder.encodeWriter` — encode `data` with required
 /// padding, streaming into `writer`.

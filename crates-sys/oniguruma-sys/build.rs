@@ -34,8 +34,28 @@ use std::path::PathBuf;
 
 /// Oniguruma translation units compiled into the static library.
 ///
-/// This is the verbatim `files` list from the reference's
-/// pkg/oniguruma/build.zig `buildLib` (`lib.addCSourceFiles`).
+/// This is the `files` list from the reference's pkg/oniguruma/build.zig
+/// `buildLib` (`lib.addCSourceFiles`), plus `src/koi8.c` — see below.
+///
+/// DELIBERATE ADDITION: `src/koi8.c`. The reference compiles `koi8_r.c` but
+/// not `koi8.c`, while its pkg/oniguruma/types.zig exposes BOTH
+/// `Encoding.koi8` (-> `OnigEncodingKOI8`, defined only in koi8.c) and
+/// `Encoding.koi8_r`. It gets away with that because `pub const koi8` is a
+/// lazily-evaluated Zig declaration: nothing in ghostty uses it, so no object
+/// file ever emits the reference and the archive is self-contained anyway.
+///
+/// rustty's `encoding!` macro compiles to a `pub fn`, which DOES emit the
+/// `extern` reference whether or not anything calls it. That made
+/// `librustty_vt_c.a` carry an `_OnigEncodingKOI8` that nothing in the archive
+/// defines, so any static consumer that pulled in the containing object failed
+/// to link — found by the pkg-config static-link check. `nm` over the archive
+/// confirms KOI8 was the ONLY encoding in that state; every other
+/// `OnigEncoding*` is defined by some object in the archive.
+///
+/// Compiling one more vendored translation unit is the fix that keeps the
+/// public API surface faithful (the reference does expose `koi8`) AND makes it
+/// usable. The alternative — deleting `Encoding::koi8` — would diverge from
+/// the reference's API instead.
 const SOURCES: &[&str] = &[
     "src/regerror.c",
     "src/regparse.c",
@@ -77,6 +97,7 @@ const SOURCES: &[&str] = &[
     "src/euc_kr.c",
     "src/big5.c",
     "src/gb18030.c",
+    "src/koi8.c", // NOT in the reference's list — see the SOURCES doc comment.
     "src/koi8_r.c",
     "src/cp1251.c",
     "src/euc_jp_prop.c",

@@ -135,10 +135,7 @@ pub use objc2_foundation::NSOperatingSystemVersion;
 // re-exported here to mirror the reference's public surface.
 pub use objc2_foundation::{NSSearchPathDirectory, NSSearchPathDomainMask};
 
-fn commonDir(
-    directory: NSSearchPathDirectory,
-    sub_path: &str,
-) -> Result<String, AppleApiError> {
+fn commonDir(directory: NSSearchPathDirectory, sub_path: &str) -> Result<String, AppleApiError> {
     // PORT NOTE: `comptime assert(builtin.target.os.tag.isDarwin())`. See the note in
     // `isAtLeastVersion`.
     assert(cfg!(target_os = "macos"));

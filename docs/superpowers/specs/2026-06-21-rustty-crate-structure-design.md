@@ -3,7 +3,7 @@
 **Date:** 2026-06-21
 **Status:** Approved (alignment complete; pending final spec review)
 **Scope:** The Cargo workspace / crate structure for the Zig→Rust port of Ghostty
-(codename *rustty*). Defines Phase-1's workspace; Phase-0 finalizes the exact
+(codename _rustty_). Defines Phase-1's workspace; Phase-0 finalizes the exact
 file-level partition. Governed by the Parity Constitution + `.port/PORT_RULES.md`.
 
 ---
@@ -54,70 +54,79 @@ enumerated set of bottom-up "leak" edges. See `.port/cycle-analysis.md`.
 break (Section 4) lands, under the acyclicity gate, leaves-first.
 
 ### Tier 0 — leaves (FIRM)
-| crate | from `src/` | notes |
-|---|---|---|
-| `rustty-util` | `quirks.zig, math.zig, fastmem.zig, file_type.zig, tripwire.zig` | assert/util leaf (after `quirks→font` break) |
-| `rustty-build-config` | `build_config.zig` | comptime config + backend enums (defined here, not pulled up) |
-| `rustty-identity` | (new) | single source of truth for R2 identity; `identity-oracle` feature |
-| `rustty-datastruct` | `datastruct/` | |
-| `rustty-unicode` | `unicode/` + generated tables | parity-replicated tables |
-| `rustty-simd` | `simd/` | + `simdutf-sys`, `highway-sys` |
-| `rustty-lib` | `lib/` | allocator utilities |
-| `rustty-global` | (split from `global.zig`) | leaf process-state holder (OnceLock-style); high-level wiring moves to `core` |
+
+| crate                 | from `src/`                                                      | notes                                                                         |
+| --------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `rustty-util`         | `quirks.zig, math.zig, fastmem.zig, file_type.zig, tripwire.zig` | assert/util leaf (after `quirks→font` break)                                  |
+| `rustty-build-config` | `build_config.zig`                                               | comptime config + backend enums (defined here, not pulled up)                 |
+| `rustty-identity`     | (new)                                                            | single source of truth for R2 identity; `identity-oracle` feature             |
+| `rustty-datastruct`   | `datastruct/`                                                    |                                                                               |
+| `rustty-unicode`      | `unicode/` + generated tables                                    | parity-replicated tables                                                      |
+| `rustty-simd`         | `simd/`                                                          | + `simdutf-sys`, `highway-sys`                                                |
+| `rustty-lib`          | `lib/`                                                           | allocator utilities                                                           |
+| `rustty-global`       | (split from `global.zig`)                                        | leaf process-state holder (OnceLock-style); high-level wiring moves to `core` |
 
 ### Tier 1 (FIRM)
-| crate | deps |
-|---|---|
-| `rustty-os` | datastruct, util, global, build-config (+ platform `-sys`) |
-| `rustty-render-types` | (extracted `renderer/size.zig`) → vt (terminal/size) |
-| `rustty-crash` | os, util (+ `sentry-sys`/breakpad); global injected |
+
+| crate                 | deps                                                       |
+| --------------------- | ---------------------------------------------------------- |
+| `rustty-os`           | datastruct, util, global, build-config (+ platform `-sys`) |
+| `rustty-render-types` | (extracted `renderer/size.zig`) → vt (terminal/size)       |
+| `rustty-crash`        | os, util (+ `sentry-sys`/breakpad); global injected        |
 
 ### Tier 2 — VT core (FIRM) — **crown jewel**
-| crate | deps |
-|---|---|
-| `rustty-vt` | datastruct, unicode, simd, os, lib, util, render-types. All of `terminal/` + VT input slice (`key, key_encode, mouse, mouse_encode, paste, focus`). Regex/image/URL **and** the few app-mode terminal paths (`search/Thread→global`, `apc/glyph/Glossary→font`) go through runtime-swappable `sys` hooks — no hard oniguruma/png/font/global dep — matching `lib_vt.zig`. (Phase-0 confirms whether any such file is hoisted out instead.) |
-| `rustty-vt-c` | vt. C ABI via **cbindgen** → `include/rustty.h` + `rustty/vt/*`, `rustty_*` symbols; outputs `librustty-vt.{a,so,dylib}`, `rustty-vt.wasm`, `rustty-vt.xcframework`. |
+
+| crate         | deps                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `rustty-vt`   | datastruct, unicode, simd, os, lib, util, render-types. All of `terminal/` + VT input slice (`key, key_encode, mouse, mouse_encode, paste, focus`). Regex/image/URL **and** the few app-mode terminal paths (`search/Thread→global`, `apc/glyph/Glossary→font`) go through runtime-swappable `sys` hooks — no hard oniguruma/png/font/global dep — matching `lib_vt.zig`. (Phase-0 confirms whether any such file is hoisted out instead.) |
+| `rustty-vt-c` | vt. C ABI via **cbindgen** → `include/rustty.h` + `rustty/vt/*`, `rustty_*` symbols; outputs `librustty-vt.{a,so,dylib}`, `rustty-vt.wasm`, `rustty-vt.xcframework`.                                                                                                                                                                                                                                                                       |
 
 ### Tier 3 — extracted bases (TARGET)
-| crate | from | breaks |
-|---|---|---|
-| `rustty-cfg-fmt` | `config/formatter.zig` (+ `config/key.zig`) | config↔input |
-| `rustty-args` | `cli/args.zig` (+ `CommaSplitter`, `diagnostics`) | config↔cli |
-| `rustty-apprt-api` | apprt interface (`action.zig` types, surface target/msg traits) | apprt↔core |
+
+| crate              | from                                                            | breaks       |
+| ------------------ | --------------------------------------------------------------- | ------------ |
+| `rustty-cfg-fmt`   | `config/formatter.zig` (+ `config/key.zig`)                     | config↔input |
+| `rustty-args`      | `cli/args.zig` (+ `CommaSplitter`, `diagnostics`)               | config↔cli   |
+| `rustty-apprt-api` | apprt interface (`action.zig` types, surface target/msg traits) | apprt↔core   |
 
 ### Tier 4 — font/render (TARGET)
-| crate | deps |
-|---|---|
-| `rustty-font` | vt, os, datastruct, util, render-types (+ `freetype-sys, harfbuzz-sys, fontconfig-sys`, CoreText) ; config via DI |
-| `rustty-input` | vt, datastruct, util, cfg-fmt, render-types |
-| `rustty-inspector` | vt, font, util (+ `dcimgui-sys`); core via refs/trait |
-| `rustty-renderer` | vt, os, datastruct, unicode, util, crash, font, render-types (+ opengl/Metal, `glslang-sys, spirv-cross-sys, wuffs-sys, libpng-sys, zlib-sys`); apprt via renderer-surface trait, inspector via hook |
+
+| crate              | deps                                                                                                                                                                                                 |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rustty-font`      | vt, os, datastruct, util, render-types (+ `freetype-sys, harfbuzz-sys, fontconfig-sys`, CoreText) ; config via DI                                                                                    |
+| `rustty-input`     | vt, datastruct, util, cfg-fmt, render-types                                                                                                                                                          |
+| `rustty-inspector` | vt, font, util (+ `dcimgui-sys`); core via refs/trait                                                                                                                                                |
+| `rustty-renderer`  | vt, os, datastruct, unicode, util, crash, font, render-types (+ opengl/Metal, `glslang-sys, spirv-cross-sys, wuffs-sys, libpng-sys, zlib-sys`); apprt via renderer-surface trait, inspector via hook |
 
 ### Tier 5 — config/io (TARGET)
-| crate | deps |
-|---|---|
-| `rustty-config` | datastruct, os, util, vt, font, renderer, input, args, cfg-fmt (+ `oniguruma-sys`, themes) |
-| `rustty-terminfo` | identity (entry name `rustty`) |
-| `rustty-termio` | vt, crash, datastruct, os, util, terminfo; renderer/apprt via trait |
+
+| crate             | deps                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------ |
+| `rustty-config`   | datastruct, os, util, vt, font, renderer, input, args, cfg-fmt (+ `oniguruma-sys`, themes) |
+| `rustty-terminfo` | identity (entry name `rustty`)                                                             |
+| `rustty-termio`   | vt, crash, datastruct, os, util, terminfo; renderer/apprt via trait                        |
 
 ### Tier 6 — core + runtime (TARGET)
-| crate | deps |
-|---|---|
-| `rustty-core` | `Surface.zig, App.zig, Command.zig, surface_mouse.zig` → vt, config, renderer, font, input, termio, os, crash, inspector, apprt-api, global |
+
+| crate          | deps                                                                                                                                           |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rustty-core`  | `Surface.zig, App.zig, Command.zig, surface_mouse.zig` → vt, config, renderer, font, input, termio, os, crash, inspector, apprt-api, global    |
 | `rustty-apprt` | `apprt/` backends (gtk, embedded, macos) → core, apprt-api, vt, font, renderer, inspector, config, input, os (+ gtk-rs/gobject, objc, wayland) |
 
 ### Tier 7 — cli + binary + tools (TARGET)
-| crate | deps |
-|---|---|
-| `rustty-cli` | `cli/` commands → config, vt, font, input, os, terminfo, args, apprt, core, crash |
-| `rustty` (bin) | `main*.zig` entry → cli, apprt, core → produces the **`rustty`** binary |
-| `rustty-synthetic` | `synthetic/` → vt, os (fuzz/test data) |
-| `rustty-bench` | `benchmark/` → vt, simd, unicode |
+
+| crate              | deps                                                                              |
+| ------------------ | --------------------------------------------------------------------------------- |
+| `rustty-cli`       | `cli/` commands → config, vt, font, input, os, terminfo, args, apprt, core, crash |
+| `rustty` (bin)     | `main*.zig` entry → cli, apprt, core → produces the **`rustty`** binary           |
+| `rustty-synthetic` | `synthetic/` → vt, os (fuzz/test data)                                            |
+| `rustty-bench`     | `benchmark/` → vt, simd, unicode                                                  |
 
 ### Supporting
+
 - **`crates-sys/`**: `freetype-sys, harfbuzz-sys, fontconfig-sys, oniguruma-sys,
-  simdutf-sys, highway-sys, glslang-sys, spirv-cross-sys, wuffs-sys, zlib-sys,
-  libpng-sys, sentry-sys, dcimgui-sys` (+ platform binding crates). Each vendors
+simdutf-sys, highway-sys, glslang-sys, spirv-cross-sys, wuffs-sys, zlib-sys,
+libpng-sys, sentry-sys, dcimgui-sys` (+ platform binding crates). Each vendors
   copied C sources + `build.rs` (cc) + bindgen. (R3)
 - **`xtask/`**: replaces `src/build/` orchestration — cbindgen headers, terminfo
   compilation, shell-integration/theme bundling, man pages, i18n, dist tarball,
@@ -131,7 +140,7 @@ Each break is a behavior-preserving structural change (R1: redistributes code +
 adds minimal glue, never alters logic/comments/tests). Full evidence in
 `.port/cycle-analysis.md`.
 
-1. **`global.zig` → `rustty-global`** (leaf state) + wiring in `core`. *Master hub.*
+1. **`global.zig` → `rustty-global`** (leaf state) + wiring in `core`. _Master hub._
 2. `quirks.zig→font` — relocate the one font-quirk.
 3. `build_config→{apprt,font,renderer}` — define backend enums in `build-config`.
 4. `terminal/c` → `rustty-vt-c` crate.

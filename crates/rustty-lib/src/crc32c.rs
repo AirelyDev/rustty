@@ -302,8 +302,11 @@ impl Software {
         let mut words = [0u32; Software::SLICES / 4];
         let mut w = 0;
         while w < Software::SLICES / 4 {
-            words[w] =
-                u32::from_le_bytes(bytes[offset + w * 4..offset + w * 4 + 4].try_into().unwrap());
+            words[w] = u32::from_le_bytes(
+                bytes[offset + w * 4..offset + w * 4 + 4]
+                    .try_into()
+                    .unwrap(),
+            );
             w += 1;
         }
         words[0] ^= crc;

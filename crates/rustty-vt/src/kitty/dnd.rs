@@ -74,9 +74,9 @@ pub use dnd_drop::State;
 pub use dnd_drop::Item;
 pub use dnd_drop::MoveEvent;
 // pub const max_mime_list_bytes = dnd_drop.max_mime_list_bytes;
-pub use dnd_drop::MAX_MIME_LIST_BYTES;
 pub use dnd_drop::handle_command;
 pub use dnd_drop::Event;
+pub use dnd_drop::MAX_MIME_LIST_BYTES;
 
 // test {
 //     _ = dnd_command;

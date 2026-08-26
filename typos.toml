@@ -24,6 +24,23 @@ extend-exclude = [
   "valgrind.supp",
   # Port scaffolding & phase-0 goldens (binary/generated test inputs)
   ".port/phase-0/**",
+  # Ports of ghostty's third-party *dependencies*, not of ghostty's own source.
+  # In the reference these are packages fetched by build.zig.zon and never part
+  # of its source tree, so its typos lane never saw them either. R1 ports their
+  # comments verbatim — upstream's own misspellings included — so spell-checking
+  # them would force a choice between a green lane and comment fidelity.
+  "crates/rustty-xev/**",     # libxev
+  "crates/rustty-z2d/**",     # vancluever/z2d
+  "crates/rustty-zigimg/**",  # zigimg
+  "crates/rustty-vaxis/**",   # libvaxis + the uucode UCD tables
+  "crates/rustty-zf/**",      # natecraddock/zf
+  "crates/rustty-zigstd/**",  # Zig stdlib equivalents
+  # Theme names are third-party data (Grey Green, Havn Daggry, JetBrains
+  # Darcula, …), not prose.
+  "crates/rustty-extra/themes.manifest",
+  "crates/rustty-extra/themes/**",
+  # Snapshot wire-format goldens are hex, not text.
+  "crates/rustty-vt/src/snapshot/testdata/**",
   # Other
   "*.pdf",
   "*.data",
@@ -38,8 +55,11 @@ extend-ignore-re = [
   "kHOM\\d*",
   # Ignore "typos" in sprite font draw fn names
   "draw[0-9A-F]+(_[0-9A-F]+)?\\(",
-  # Ignore test data in the paste input module
+  # Ignore test data in the paste input module. Two spellings: the Rust
+  # literal (`"hel\x…`) and the ported Zig expectation quoted in a comment
+  # (`\x1b[200~hel lo world`), which R1 keeps verbatim.
   "\"hel\\\\x",
+  "200~hel",
   # Ignore long hex-like IDs such as 815E26BA2EF1E00F005C67B1
   "[0-9A-F]{12,}",
   # Ignore base64-encoded strings
@@ -75,6 +95,29 @@ rin = "rin"
 ower = "ower"
 # OpenType table names
 loca = "loca"
+# `mis-` is a live English prefix and the docs use it constantly
+# (mis-attribution, mis-cited, mis-paired, mis-specification, …).
+mis = "mis"
+# Vai is a script/writing system (HB_SCRIPT_VAI).
+Vai = "Vai"
+VAI = "VAI"
+# OpenGL level-of-detail (GL_TEXTURE_LOD_BIAS, MinLod, MaxLod).
+Lod = "Lod"
+LOD = "LOD"
+# `nto` is a real Rust target OS (QNX Neutrino).
+nto = "nto"
+# `pre-empted` is a word.
+empted = "empted"
+# Local identifiers: `propt` = PrintOptions helper (rustty-cli list_themes),
+# `clen` = codepoint length, `ba` = the blue/alpha pixel component, `caf` =
+# the ASCII head of an escaped "café" test string.
+propt = "propt"
+clen = "clen"
+ba = "ba"
+caf = "caf"
+tio = "tio"
+# From `TAG-ASSERTs` in the renderer's tag-assertion comments.
+ASSER = "ASSER"
 
 [type.po]
 extend-glob = ["*.po"]

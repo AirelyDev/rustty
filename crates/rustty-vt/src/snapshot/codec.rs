@@ -946,7 +946,8 @@ impl<'s> Decoder<'s> {
             // slot.* = decoded.screen;
             // decoded.screen = undefined;
             let screen::Decoded {
-                screen: replacement, ..
+                screen: replacement,
+                ..
             } = decoded;
             // SAFETY: `slot` is the live screen owned by the set; `deinit`
             // releases its resources and the write installs the decoded
@@ -1152,8 +1153,7 @@ fn next_page(
             Some(restored) => restored,
             None => break 'destination None,
         };
-        if t.screens.generation(sequence.key) != state.generations[sequence.key as usize].unwrap()
-        {
+        if t.screens.generation(sequence.key) != state.generations[sequence.key as usize].unwrap() {
             break 'destination None;
         }
         Some(restored)
@@ -2134,8 +2134,10 @@ mod tests {
                 .unwrap();
             (*active).kitty_images = images;
         }
-        t.set_attribute(crate::sgr::Attribute::Color256Fg(1)).unwrap();
-        t.print_string("\u{10EEEE}\u{0305}\u{0305}".as_bytes()).unwrap();
+        t.set_attribute(crate::sgr::Attribute::Color256Fg(1))
+            .unwrap();
+        t.print_string("\u{10EEEE}\u{0305}\u{0305}".as_bytes())
+            .unwrap();
         // SAFETY: live active screen owned by `t`; shared reads only.
         let source_cell = unsafe {
             (*t.screens.active)
@@ -2176,7 +2178,10 @@ mod tests {
                 assert!((*restored_cell.row).kitty_virtual_placeholder());
                 assert_eq!(
                     0usize,
-                    (*restored_terminal.screens.active).kitty_images.images.len(),
+                    (*restored_terminal.screens.active)
+                        .kitty_images
+                        .images
+                        .len(),
                 );
                 assert_eq!(
                     0usize,
@@ -2203,7 +2208,10 @@ mod tests {
         nonempty.write_all(b"prefix").unwrap();
         let snapshot_offset = nonempty.written().len();
         encode(&mut nonempty, &t, test_encode_options()).unwrap();
-        assert_eq!(b"prefix".as_slice(), &nonempty.written()[0..snapshot_offset]);
+        assert_eq!(
+            b"prefix".as_slice(),
+            &nonempty.written()[0..snapshot_offset]
+        );
         let appended_written = nonempty.written()[snapshot_offset..].to_vec();
         let mut appended_source = io::FixedReader::new(&appended_written);
         let mut appended = decode(&mut appended_source, Allocator, &test_decode_options()).unwrap();
@@ -2641,10 +2649,7 @@ mod tests {
         // move to its final address before any history has been decoded.
         let mut restored = decoded.to_owned();
         // defer restored.deinit(testing.allocator);
-        assert_eq!(
-            TerminalScreenKey::Alternate,
-            restored.screens.active_key,
-        );
+        assert_eq!(TerminalScreenKey::Alternate, restored.screens.active_key,);
         assert_eq!(
             b"complete snapshot".as_slice(),
             restored.get_title().unwrap(),
@@ -2659,7 +2664,10 @@ mod tests {
         assert_eq!(3usize, unsafe { (*primary).pages.scrollbar().total });
         assert_eq!(
             4u64,
-            decoded.history_rows.get(TerminalScreenKey::Primary).unwrap(),
+            decoded
+                .history_rows
+                .get(TerminalScreenKey::Primary)
+                .unwrap(),
         );
         assert_eq!(
             (unsafe { (*alternate).pages.scrollbar().total } - restored.rows as usize) as u64,
@@ -2766,8 +2774,7 @@ mod tests {
         assert_eq!('A' as u32, test_top_left_codepoint(primary));
         // SAFETY: live nodes/pages of the restored screen; shared reads only.
         unsafe {
-            let newest_history =
-                (*(*primary).pages.get_top_left(point::Tag::Screen).node).next;
+            let newest_history = (*(*primary).pages.get_top_left(point::Tag::Screen).node).next;
             assert_eq!(
                 'B' as u32,
                 (*(*Node::page(newest_history)).get_row_and_cell(0, 0).cell).codepoint(),
@@ -2813,12 +2820,8 @@ mod tests {
             // SAFETY (each deref below): live screens owned by `t`.
             unsafe {
                 screen::encode(&*primary, TerminalScreenKey::Primary, &mut stream_value).unwrap();
-                screen::encode(
-                    &*alternate,
-                    TerminalScreenKey::Alternate,
-                    &mut stream_value,
-                )
-                .unwrap();
+                screen::encode(&*alternate, TerminalScreenKey::Alternate, &mut stream_value)
+                    .unwrap();
             }
             continuation::encode(&Continuation::Ground, &mut stream_value).unwrap();
             checkpoint::encode(checkpoint::Kind::Ready, &mut stream_value).unwrap();
@@ -2843,8 +2846,7 @@ mod tests {
                     &mut stream_value,
                 )
                 .unwrap();
-                history::encode(&*primary, TerminalScreenKey::Primary, &mut stream_value)
-                    .unwrap();
+                history::encode(&*primary, TerminalScreenKey::Primary, &mut stream_value).unwrap();
             }
             checkpoint::encode(checkpoint::Kind::Finish, &mut stream_value).unwrap();
             stream_value.deinit();
@@ -2908,7 +2910,9 @@ mod tests {
             restored
                 .screens
                 .remove(Allocator, TerminalScreenKey::Alternate);
-            restored.switch_screen(TerminalScreenKey::Alternate).unwrap();
+            restored
+                .switch_screen(TerminalScreenKey::Alternate)
+                .unwrap();
 
             let progress = decoder.next(Allocator, restored).unwrap().unwrap();
             assert_eq!(TerminalScreenKey::Alternate, progress.key);
@@ -2963,9 +2967,7 @@ mod tests {
             pages += 1;
         }
         assert_eq!(2usize, pages);
-        assert_eq!(resized_total, unsafe {
-            (*primary).pages.scrollbar().total
-        });
+        assert_eq!(resized_total, unsafe { (*primary).pages.scrollbar().total });
 
         decoded.deinit(Allocator);
         restored.deinit(Allocator);

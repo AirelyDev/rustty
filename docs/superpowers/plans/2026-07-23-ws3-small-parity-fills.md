@@ -22,21 +22,21 @@
 
 ## File Structure
 
-| File | Responsibility |
-|---|---|
-| `crates/rustty-vt/Cargo.toml` | new `wuffs` feature + optional `rustty-wuffs` dep |
-| `crates/rustty-vt/src/sys.rs` | `decode_png_wuffs` body + artifact-keyed default for the `decode_png` global + unit tests |
-| `crates/rustty-vt/src/stream_terminal.rs` | Stream-level kitty-PNG-transmit KAT |
-| `crates/rustty-core/Cargo.toml` | enables `rustty-vt/wuffs` for the application tier |
-| `crates/rustty-build-config/build.rs` | NEW — captures `$RUSTC --version` |
-| `crates/rustty-build-config/src/lib.rs` | `RUSTC_VERSION` const + test |
-| `crates/rustty-xev/src/lib.rs` | cross-platform `backend()` accessor |
-| `crates/rustty-cli/Cargo.toml` | adds `rustty-xev` dep |
-| `crates/rustty-cli/src/version.rs` | replaces the 3 STUB lines with real values |
-| `crates/rustty/tests/cli_smoke.rs` | `+version` KAT asserts the real line content |
-| `crates/rustty-apprt/src/embedded.rs` | `platform_host_view` helper extraction + regression tests |
-| `xtask/src/main.rs` | (contingency only) CFLAGS deployment-target forwarding |
-| `.port/phase-2/DEFERRALS.md`, `.port/phase-2/INTEGRATION_PARITY.md`, `macos/MILESTONE.md` | ledger strikes |
+| File                                                                                      | Responsibility                                                                            |
+| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `crates/rustty-vt/Cargo.toml`                                                             | new `wuffs` feature + optional `rustty-wuffs` dep                                         |
+| `crates/rustty-vt/src/sys.rs`                                                             | `decode_png_wuffs` body + artifact-keyed default for the `decode_png` global + unit tests |
+| `crates/rustty-vt/src/stream_terminal.rs`                                                 | Stream-level kitty-PNG-transmit KAT                                                       |
+| `crates/rustty-core/Cargo.toml`                                                           | enables `rustty-vt/wuffs` for the application tier                                        |
+| `crates/rustty-build-config/build.rs`                                                     | NEW — captures `$RUSTC --version`                                                         |
+| `crates/rustty-build-config/src/lib.rs`                                                   | `RUSTC_VERSION` const + test                                                              |
+| `crates/rustty-xev/src/lib.rs`                                                            | cross-platform `backend()` accessor                                                       |
+| `crates/rustty-cli/Cargo.toml`                                                            | adds `rustty-xev` dep                                                                     |
+| `crates/rustty-cli/src/version.rs`                                                        | replaces the 3 STUB lines with real values                                                |
+| `crates/rustty/tests/cli_smoke.rs`                                                        | `+version` KAT asserts the real line content                                              |
+| `crates/rustty-apprt/src/embedded.rs`                                                     | `platform_host_view` helper extraction + regression tests                                 |
+| `xtask/src/main.rs`                                                                       | (contingency only) CFLAGS deployment-target forwarding                                    |
+| `.port/phase-2/DEFERRALS.md`, `.port/phase-2/INTEGRATION_PARITY.md`, `macos/MILESTONE.md` | ledger strikes                                                                            |
 
 **Pre-verified facts the tasks rely on** (researched 2026-07-23, do not re-derive):
 
@@ -57,10 +57,12 @@
 - [ ] **Step 0.1: Create the WS3 branch off up-to-date main**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 git checkout main && git pull && git checkout -b ws3-small-parity-fills
 ```
+
 Expected: `Switched to a new branch 'ws3-small-parity-fills'`.
 
 ---
@@ -68,11 +70,13 @@ Expected: `Switched to a new branch 'ws3-small-parity-fills'`.
 ## Task 1: rustty-vt `wuffs` feature — the PNG-decode default hook (item A, core)
 
 **Files:**
+
 - Modify: `crates/rustty-vt/Cargo.toml` (features block ~line 30; `[dependencies]` block)
 - Modify: `crates/rustty-vt/src/sys.rs` (whole seam: lines 20-25 header note, 52-58 default, 72-97 commented body)
 - Test: `crates/rustty-vt/src/sys.rs` (new `mod tests`), `crates/rustty-vt/src/stream_terminal.rs` (new KAT in the existing `mod tests`, after `basic_print`)
 
 **Interfaces:**
+
 - Consumes: `rustty_wuffs::png::decode`, `rustty_wuffs::Error`, `rustty_wuffs::ImageData::into_raw` (signatures in "Pre-verified facts").
 - Produces: `rustty-vt` cargo feature `wuffs`; `sys::decode_png` default `Some(decode_png_wuffs)` under that feature (still `None` without it, and for a hypothetical `Artifact::Lib`). Task 2 enables the feature from `rustty-core`.
 
@@ -279,6 +283,7 @@ Also update the module doc header (lines 20-25): replace the "the default value 
 //! `None` only for the `.lib` artifact / featureless builds, exactly as the
 //! reference comptime block reads.
 ```
+
 and change `PORT STATUS: done` stays `done`.
 
 - [ ] **Step 1.6: Run the tests to verify they pass**
@@ -309,24 +314,31 @@ git commit -m "rustty-vt: wuffs decode_png default hook — non-lib PNG parity (
 ## Task 2: Application-tier wiring + ledger strike (item A, finish)
 
 **Files:**
+
 - Modify: `crates/rustty-core/Cargo.toml:25` (the `rustty-vt` dep line + its comment at :22-24)
 - Modify: `.port/phase-2/DEFERRALS.md` (~line 4491, the "### 2. rustty-vt `sys.rs` decode_png" LIFETIMES-AUDIT entry)
 
 **Interfaces:**
+
 - Consumes: the `wuffs` feature from Task 1.
 - Produces: every app-tier consumer (rustty-core → rustty-termio path, rustty-apprt, rustty-apprt-c/xcframework, the `rustty` bin) compiles rustty-vt with the wuffs default installed.
 
 - [ ] **Step 2.1: Enable the feature in `crates/rustty-core/Cargo.toml`**
 
 Change line 25 from:
+
 ```toml
 rustty-vt = { workspace = true, features = ["oniguruma"] }
 ```
+
 to:
+
 ```toml
 rustty-vt = { workspace = true, features = ["oniguruma", "wuffs"] }
 ```
+
 and extend the comment block above it (lines ~22-24) with one line:
+
 ```toml
 # `wuffs` = the sys.zig decodePngWuffs default for the app tier (SharedDeps
 # `.ghostty` terminalOptions analog; the standalone rustty-vt-c stays `.lib`/None).
@@ -343,14 +355,19 @@ Expected: GREEN (rustty-wuffs is a strictly-earlier leaf; no new cycle).
 - [ ] **Step 2.3: Strike the DEFERRALS entry**
 
 In `.port/phase-2/DEFERRALS.md`, find the heading (currently ~line 4491):
+
 ```
 ### 2. rustty-vt `sys.rs` decode_png — non-lib default decoder parity (LOW, fidelity gap)
 ```
+
 Change it to:
+
 ```
 ### 2. rustty-vt `sys.rs` decode_png — non-lib default decoder parity — ✅ RESOLVED (2026-07-23, WS3)
 ```
+
 and append at the end of that entry's paragraph (after the "**Un-defer trigger:** …" sentence):
+
 ```
 **RESOLVED (2026-07-23, `ws3-small-parity-fills`):** `decodePngWuffs` is live in
 sys.rs behind the `wuffs` cargo feature (optional `rustty-wuffs` dep); the
@@ -375,10 +392,12 @@ git commit -m "rustty-core: enable rustty-vt/wuffs for the app tier; strike DEFE
 ## Task 3: `rustty-build-config` rustc-version capture (item B, part 1)
 
 **Files:**
+
 - Create: `crates/rustty-build-config/build.rs`
 - Modify: `crates/rustty-build-config/src/lib.rs` (add `RUSTC_VERSION` near `VERSION_STRING`, ~line 140; add a test)
 
 **Interfaces:**
+
 - Produces: `rustty_build_config::RUSTC_VERSION: &'static str` — e.g. `"1.93.1 (xxxxxxxxx 2026-xx-xx)"` (the `rustc ` prefix stripped, mirroring `builtin.zig_version_string` being a bare version). Task 5 prints it.
 
 - [ ] **Step 3.1: Write the failing test**
@@ -464,10 +483,12 @@ git commit -m "rustty-build-config: capture RUSTC_VERSION via build.rs (WS3-B to
 ## Task 4: `rustty_xev::backend()` cross-platform accessor (item B, part 2)
 
 **Files:**
+
 - Modify: `crates/rustty-xev/src/lib.rs` (directly after `pub use backend::Backend;`, line 73)
 - Test: same file's additions carry `#[cfg(test)]` tests (or append to an existing lib-level tests mod if one exists at file end — keep the new tests self-contained either way)
 
 **Interfaces:**
+
 - Produces: `rustty_xev::backend() -> rustty_xev::Backend` on macOS (const `Kqueue`) and Linux (the Dynamic runtime global). Task 5 consumes it.
 
 - [ ] **Step 4.1: Write the failing test**
@@ -548,12 +569,14 @@ git commit -m "rustty-xev: cross-platform backend() accessor for xev.backend rea
 ## Task 5: `+version` real lines + KAT + ledger strike (item B, finish)
 
 **Files:**
+
 - Modify: `crates/rustty-cli/Cargo.toml` (add `rustty-xev` dep, next to `rustty-build-config` ~line 46)
 - Modify: `crates/rustty-cli/src/version.rs` (drop the 3 STUB consts; real lines)
 - Test: `crates/rustty/tests/cli_smoke.rs` (`version_plus`, line 70)
 - Modify: `.port/phase-2/DEFERRALS.md` (~lines 2602-2617, the C1 `version.zig` PARTIAL bullet)
 
 **Interfaces:**
+
 - Consumes: `rustty_build_config::RUSTC_VERSION` (Task 3), `rustty_xev::backend()` + `rustty_xev::Backend` (Task 4), `rustty_build_config::renderer()` → `rustty_build_config::renderer::Backend::{Metal, Opengl, Webgl}` (pre-existing).
 - Produces: `+version` output lines `  - Rust version  : 1.93.1 (…)`, `  - renderer      : renderer.generic.Renderer(renderer.Metal|renderer.OpenGL)`, `  - libxev        : kqueue|epoll|io_uring`.
 
@@ -685,6 +708,7 @@ fn libxev_backend_tag() -> &'static str {
 4. Replace the three output lines:
 
 Line 124 (`  - Rust version`):
+
 ```rust
     // try stdout.print("  - Zig version   : {s}\n", .{builtin.zig_version_string});
     //   PORT NOTE: the Rust port's toolchain is rustc — the analogous version,
@@ -693,6 +717,7 @@ Line 124 (`  - Rust version`):
 ```
 
 Lines 143-146 (renderer + libxev):
+
 ```rust
     // try stdout.print("  - renderer      : {}\n", .{renderer.Renderer});
     writeln!(stdout, "  - renderer      : {}", renderer_type_name())?;
@@ -709,6 +734,7 @@ Expected: PASS.
 
 Run: `cargo run -q -p rustty -- +version`
 Expected output (macOS) includes:
+
 ```
   - Rust version  : 1.93.1 (…)
   - renderer      : renderer.generic.Renderer(renderer.Metal)
@@ -718,11 +744,14 @@ Expected output (macOS) includes:
 - [ ] **Step 5.6: Strike the DEFERRALS bullet**
 
 In `.port/phase-2/DEFERRALS.md` (~2602-2617), the bullet beginning
+
 ```
 - **`version.zig` is PARTIAL (ADV-FIX 1) — `renderer.Renderer` + `xev.backend`
   STUBBED.**
 ```
+
 Change the bold lead-in to:
+
 ```
 - **`version.zig` is PARTIAL (ADV-FIX 1) — `renderer.Renderer` + `xev.backend`
   STUBBED. ✅ RESOLVED (2026-07-23, WS3-B) for the renderer/libxev/toolchain
@@ -731,6 +760,7 @@ Change the bold lead-in to:
   `version_plus` KAT now ASSERTS their content. Still open: the OSC-8
   commit-hash hyperlink (no `+BUILD` metadata / repo-URL identity constant).**
 ```
+
 (Leave the body text as the historical record.)
 
 - [ ] **Step 5.7: Commit**
@@ -750,10 +780,12 @@ fix; INTEGRATION_PARITY §2.6/§2.9 are stale). This task pins them with tests,
 runs the explicit non-darwin compile the ledger asks for, and updates the ledger.
 
 **Files:**
+
 - Modify: `crates/rustty-apprt/src/embedded.rs` (extract `platform_host_view` helper near the `Platform` defs ~line 745; `host_view` at :2795 delegates; tests at file end)
 - Modify: `.port/phase-2/INTEGRATION_PARITY.md` (§2.6 header ~line 115, §2.9 header ~line 161, and the §6 recommendation items 6 and 9 at ~lines 312/319)
 
 **Interfaces:**
+
 - Produces: `pub(crate) fn platform_host_view(platform: &Platform) -> *mut c_void` in `rustty_apprt::embedded` (same-module helper; the `Surface::host_view` trait method delegates to it).
 
 - [ ] **Step 6.1: Write the failing tests**
@@ -840,10 +872,12 @@ Expected: PASS (2 darwin tests).
 - [ ] **Step 6.5: The explicit non-darwin check (§2.9's asked-for verification)**
 
 Run:
+
 ```bash
 git push -u origin ws3-small-parity-fills
 ssh rvm 'cd ~/projects/rustty && git fetch && git checkout ws3-small-parity-fills && git pull && cargo build -p rustty-apprt && cargo test -p rustty-apprt host_view_tests 2>&1 | tail -5'
 ```
+
 Expected: build succeeds; `non_darwin_returns_null` PASSES.
 
 - [ ] **Step 6.6: Update INTEGRATION_PARITY.md**
@@ -874,26 +908,31 @@ proves the app link emits no warning, and strikes the ledger. (Contingency step
 included for the case where a member still stamps a newer OS.)
 
 **Files:**
+
 - Modify (verification only, contingency edit if needed): `xtask/src/main.rs:303-345`
 - Modify: `macos/MILESTONE.md:55-56` and `:77-79`
 
 - [ ] **Step 7.1: Force a clean restamp of the xcframework profile**
 
 Run:
+
 ```bash
 rm -rf target/aarch64-apple-darwin/xcframework
 cargo run -p xtask -- xcframework 2>&1 | tail -3
 ```
+
 Expected: exits 0; `dist/RusttyKit.xcframework` exists. (This is a full release-profile rebuild of the staticlib tree — several minutes.)
 
 - [ ] **Step 7.2: Assert every object in the combined archive targets 13.0**
 
 Run:
+
 ```bash
 otool -l dist/RusttyKit.xcframework/macos-arm64/libRusttyKit.a 2>/dev/null \
   | grep -B1 -A3 -E "LC_BUILD_VERSION|LC_VERSION_MIN_MACOSX" \
   | grep -E "^\s*(minos|version) " | sort | uniq -c
 ```
+
 Expected: every line is `minos 13.0` (or `version 13.0` for any legacy `LC_VERSION_MIN_MACOSX` member). NO line with a 14.x/15.x/26.x value.
 
 - [ ] **Step 7.3 (CONTINGENCY — only if Step 7.2 shows a newer stamp): forward the floor to every C compile explicitly**
@@ -910,6 +949,7 @@ If some member stamps the running OS, a `cc`-driven build script is not reading 
 ```
 
 Then re-run Steps 7.1-7.2. To find WHICH member was stale (guides the fix):
+
 ```bash
 cd target && mkdir -p /tmp/rk && cd /tmp/rk && ar x /Users/gael/projects/rustty/dist/RusttyKit.xcframework/macos-arm64/libRusttyKit.a && for o in *.o; do v=$(otool -l "$o" | grep -m1 -E "minos|^\s*version " | awk '{print $2}'); [ "$v" != "13.0" ] && echo "$o $v"; done
 ```
@@ -917,15 +957,18 @@ cd target && mkdir -p /tmp/rk && cd /tmp/rk && ar x /Users/gael/projects/rustty/
 - [ ] **Step 7.4: Full app build — the warning is gone**
 
 Run:
+
 ```bash
 bash macos/build-rustty.sh 2>&1 | tee /private/tmp/claude-501/-Users-gael-projects-rustty/4ae4ff76-65a5-423c-8692-da2f6a7506b2/scratchpad/ws3-build-rustty.log | tail -5
 grep -c "was built for newer macOS version" /private/tmp/claude-501/-Users-gael-projects-rustty/4ae4ff76-65a5-423c-8692-da2f6a7506b2/scratchpad/ws3-build-rustty.log || true
 ```
+
 Expected: the build succeeds and the grep count is `0`.
 
 - [ ] **Step 7.5: Strike the MILESTONE ledger**
 
 In `macos/MILESTONE.md`:
+
 - Lines 55-56, change the bullet to:
   `- **Deployment target**: ✅ DONE (WS3, 2026-07-23) — xtask pins MACOSX_DEPLOYMENT_TARGET=13.0 on the xcframework cargo build; clean rebuild verified via otool (all members minos 13.0) and a warning-free build-rustty.sh xcodebuild log.`
 - Line ~78-79 (the "P3 polish" list): remove "the deployment-target warning." from the trailing item (leave the other P3 items intact).
@@ -936,6 +979,7 @@ In `macos/MILESTONE.md`:
 git add macos/MILESTONE.md xtask/src/main.rs
 git commit -m "macos: verify 13.0 deployment-target stamping end-to-end; strike MILESTONE entry (WS3-D)"
 ```
+
 (Omit `xtask/src/main.rs` from the add if Step 7.3 was not needed.)
 
 ---
@@ -945,6 +989,7 @@ git commit -m "macos: verify 13.0 deployment-target stamping end-to-end; strike 
 - [ ] **Step 8.1: macOS full gate**
 
 Run each; all must be green:
+
 ```bash
 cargo build --workspace 2>&1 | tail -2
 cargo test -p rustty-vt --features wuffs 2>&1 | tail -3
@@ -954,11 +999,13 @@ cargo test -p rustty-build-config -p rustty-xev -p rustty-apprt 2>&1 | tail -3
 cargo test -p rustty --test cli_smoke 2>&1 | tail -3
 bash .port/tools/gates/check_acyclic.sh
 ```
+
 Expected: all PASS; acyclic gate GREEN.
 
 - [ ] **Step 8.2: Linux (VM) full gate**
 
 Run:
+
 ```bash
 git push
 ssh rvm 'cd ~/projects/rustty && git checkout ws3-small-parity-fills && git pull && cargo build --workspace 2>&1 | tail -2'
@@ -966,6 +1013,7 @@ ssh rvm 'cd ~/projects/rustty && cargo test -p rustty-vt --features wuffs 2>&1 |
 ssh rvm 'cd ~/projects/rustty && cargo test -p rustty-xev -p rustty-apprt 2>&1 | tail -3'
 ssh rvm 'cd ~/projects/rustty && cargo test -p rustty --test cli_smoke version 2>&1 | tail -3'
 ```
+
 Expected: all PASS — in particular `version_plus` proves the Linux `+version` prints `renderer.generic.Renderer(renderer.OpenGL)` and `epoll`/`io_uring`, and `backend_is_a_linux_candidate` + `non_darwin_returns_null` run for real.
 
 - [ ] **Step 8.3: Self-review sweep**
@@ -975,10 +1023,12 @@ Re-read the four spec items (A-D) against the diff (`git diff main --stat`). Con
 - [ ] **Step 8.4: Merge per roadmap sequencing rule 2**
 
 Use superpowers:finishing-a-development-branch. Default flow:
+
 ```bash
 git checkout main && git merge --no-ff ws3-small-parity-fills -m "WS3: small parity fills — decode_png default, +version real lines, host_view KATs, deployment-target verify"
 git push
 git branch -d ws3-small-parity-fills && git push origin --delete ws3-small-parity-fills
 ssh rvm 'cd ~/projects/rustty && git checkout main && git pull'
 ```
+
 Also tick the `WS3 small parity fills` box in the roadmap's plan-authoring checklist if not already ticked, and mark WS3 done wherever the roadmap tracks execution.

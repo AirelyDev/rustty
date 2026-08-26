@@ -2805,7 +2805,6 @@ pub unsafe extern "C" fn rustty_selection_gesture_event_set(
     unsafe { selection_gesture::event_set(event, opt, value) }.to_c_int()
 }
 
-#[cfg(feature = "selection")]
 // PORT NOTE: range-checked `c_int -> enum` projections for the selection_gesture
 // guards. `EventType`/`EventOption` are contiguous `#[repr(C)]` enums. (`Data`'s
 // projection lives in the module as `selection_gesture::Data::from_c_int`, since

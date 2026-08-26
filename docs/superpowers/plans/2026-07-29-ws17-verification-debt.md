@@ -54,43 +54,45 @@ WS17-specific constraints:
 
 ### Environment facts established during planning (2026-07-29, do not re-derive)
 
-| Fact | Value | How it was established |
-|---|---|---|
-| VM hypervisor | UTM 4.7.5, **Apple Virtualization backend** (`config.plist` → `Backend = Apple`) | `plutil -p ~/Library/Containers/com.utmapp.UTM/Data/Documents/'Fedora Linux.utm'/config.plist`; `ssh rvm systemd-detect-virt` → `apple` |
-| Guest GPU | virtio-gpu, **3D disabled**: `[drm] features: -virgl -edid -resource_blob -host_visible` | `ssh rvm 'journalctl -k -b \| grep virtio_gpu'` |
-| Guest GL driver | `llvmpipe (LLVM 22.1.8, 128 bits)`, Mesa 26.1.4, **`Accelerated: no`**, max core profile 4.6 | `glxinfo -B` on the live GNOME session (see Task 1) |
-| Historical virgl measurement | When this host DID run virgl (2026-07-17, recorded in `crates/rustty-renderer/src/opengl/gl/sys.rs:611-628`): `GL_RENDERER = virgl (ANGLE (Apple, Apple M4 Pro, OpenGL 4.1 Metal - 90.5))`, `GL_VERSION = 2.1`, **max core profile 0.0** — every core-profile request 3.2..4.6 failed `EGL_BAD_MATCH` | in-repo doc comment |
-| Rustty GL floor | `MIN_VERSION_MAJOR.MIN_VERSION_MINOR = 4.3` core (`crates/rustty-renderer/src/opengl/gl/sys.rs`) | source |
-| VM sessions | GNOME/mutter 50 Wayland session live on tty2 (`wayland-0`), GDM active, sway 1.11 installed, `kwin` 6.7.3 available in `updates` (provides `/usr/bin/kwin_wayland`), no KDE installed | `loginctl`, `rpm -qa`, `dnf provides */kwin_wayland` |
-| VM disk | 61 GiB free on `/` | `df -h /` |
-| macOS host disk | **5.5 GiB free** (`/System/Volumes/Data`, 99% full); VM disk image is 37 GiB | `df -h` |
-| Oracle blur protocol | `ext_background_effect` (NOT `org_kde_kwin_blur`) — `ghostty/src/apprt/gtk/winproto/wayland.zig:156`; rustty matches (`Tag::ExtBackgroundEffect`) | source |
-| dnf repo hazard | the `cursor` repo prompts for a GPG key import and breaks non-interactive dnf — always pass `--disablerepo=cursor` | observed during planning |
+| Fact                         | Value                                                                                                                                                                                                                                                                                                 | How it was established                                                                                                                  |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| VM hypervisor                | UTM 4.7.5, **Apple Virtualization backend** (`config.plist` → `Backend = Apple`)                                                                                                                                                                                                                      | `plutil -p ~/Library/Containers/com.utmapp.UTM/Data/Documents/'Fedora Linux.utm'/config.plist`; `ssh rvm systemd-detect-virt` → `apple` |
+| Guest GPU                    | virtio-gpu, **3D disabled**: `[drm] features: -virgl -edid -resource_blob -host_visible`                                                                                                                                                                                                              | `ssh rvm 'journalctl -k -b \| grep virtio_gpu'`                                                                                         |
+| Guest GL driver              | `llvmpipe (LLVM 22.1.8, 128 bits)`, Mesa 26.1.4, **`Accelerated: no`**, max core profile 4.6                                                                                                                                                                                                          | `glxinfo -B` on the live GNOME session (see Task 1)                                                                                     |
+| Historical virgl measurement | When this host DID run virgl (2026-07-17, recorded in `crates/rustty-renderer/src/opengl/gl/sys.rs:611-628`): `GL_RENDERER = virgl (ANGLE (Apple, Apple M4 Pro, OpenGL 4.1 Metal - 90.5))`, `GL_VERSION = 2.1`, **max core profile 0.0** — every core-profile request 3.2..4.6 failed `EGL_BAD_MATCH` | in-repo doc comment                                                                                                                     |
+| Rustty GL floor              | `MIN_VERSION_MAJOR.MIN_VERSION_MINOR = 4.3` core (`crates/rustty-renderer/src/opengl/gl/sys.rs`)                                                                                                                                                                                                      | source                                                                                                                                  |
+| VM sessions                  | GNOME/mutter 50 Wayland session live on tty2 (`wayland-0`), GDM active, sway 1.11 installed, `kwin` 6.7.3 available in `updates` (provides `/usr/bin/kwin_wayland`), no KDE installed                                                                                                                 | `loginctl`, `rpm -qa`, `dnf provides */kwin_wayland`                                                                                    |
+| VM disk                      | 61 GiB free on `/`                                                                                                                                                                                                                                                                                    | `df -h /`                                                                                                                               |
+| macOS host disk              | **5.5 GiB free** (`/System/Volumes/Data`, 99% full); VM disk image is 37 GiB                                                                                                                                                                                                                          | `df -h`                                                                                                                                 |
+| Oracle blur protocol         | `ext_background_effect` (NOT `org_kde_kwin_blur`) — `ghostty/src/apprt/gtk/winproto/wayland.zig:156`; rustty matches (`Tag::ExtBackgroundEffect`)                                                                                                                                                     | source                                                                                                                                  |
+| dnf repo hazard              | the `cursor` repo prompts for a GPG key import and breaks non-interactive dnf — always pass `--disablerepo=cursor`                                                                                                                                                                                    | observed during planning                                                                                                                |
 
 ---
 
 ## File Structure
 
-| File | Created/Modified | Responsibility |
-|---|---|---|
-| `.port/tools/gates/hw_gl_probe.sh` | Create | Turnkey V2 check: exits 0 only on a genuinely accelerated GL ≥ 4.3-core driver. Fixture mode (`RUSTTY_HW_GL_PROBE_FIXTURE`) makes the PASS arm testable on a software-only box. |
-| `.port/tools/gates/fixtures/glxinfo-hw-radeonsi.txt` | Create | Positive-control fixture (synthetic accelerated `glxinfo -B` output). |
-| `.port/tools/gates/fixtures/glxinfo-llvmpipe.txt` | Create | Negative-control fixture (software `glxinfo -B` output). |
-| `crates/rustty-apprt/tests/gtk_wayland_winproto.rs` | Modify (append one test) | New ignored KAT `kde_globals_bind_under_kwin` — asserts the KDE globals really bind under a live KWin, and prints the full globals dump for the ledger. |
-| `.port/phase-2/evidence/ws17/*.txt` / `*.png` | Create | Committed raw evidence (probe outputs, KAT stdout, kwin/mutter logs, lldb transcript, screenshots). |
-| `.port/phase-2/VERIFICATION_DEBT.md` | Modify | Final truthful state: V2/V3/V4/V1b **and V5** each rewritten as discharged-with-evidence or residual-with-exact-reason. (V1 was DELETED by WS19 T14 — discharged 2026-07-23, and this file's header says verified items are deleted, not left marked.) |
-| `docs/manual-test-plan-gtk.md` | Modify (§W rows) | Record the KDE row outcomes with the date and the evidence path. |
-| `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md` | Modify (checklist + wave status) | Mark WS17 authored/executed. |
+| File                                                             | Created/Modified                 | Responsibility                                                                                                                                                                                                                                         |
+| ---------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `.port/tools/gates/hw_gl_probe.sh`                               | Create                           | Turnkey V2 check: exits 0 only on a genuinely accelerated GL ≥ 4.3-core driver. Fixture mode (`RUSTTY_HW_GL_PROBE_FIXTURE`) makes the PASS arm testable on a software-only box.                                                                        |
+| `.port/tools/gates/fixtures/glxinfo-hw-radeonsi.txt`             | Create                           | Positive-control fixture (synthetic accelerated `glxinfo -B` output).                                                                                                                                                                                  |
+| `.port/tools/gates/fixtures/glxinfo-llvmpipe.txt`                | Create                           | Negative-control fixture (software `glxinfo -B` output).                                                                                                                                                                                               |
+| `crates/rustty-apprt/tests/gtk_wayland_winproto.rs`              | Modify (append one test)         | New ignored KAT `kde_globals_bind_under_kwin` — asserts the KDE globals really bind under a live KWin, and prints the full globals dump for the ledger.                                                                                                |
+| `.port/phase-2/evidence/ws17/*.txt` / `*.png`                    | Create                           | Committed raw evidence (probe outputs, KAT stdout, kwin/mutter logs, lldb transcript, screenshots).                                                                                                                                                    |
+| `.port/phase-2/VERIFICATION_DEBT.md`                             | Modify                           | Final truthful state: V2/V3/V4/V1b **and V5** each rewritten as discharged-with-evidence or residual-with-exact-reason. (V1 was DELETED by WS19 T14 — discharged 2026-07-23, and this file's header says verified items are deleted, not left marked.) |
+| `docs/manual-test-plan-gtk.md`                                   | Modify (§W rows)                 | Record the KDE row outcomes with the date and the evidence path.                                                                                                                                                                                       |
+| `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md` | Modify (checklist + wave status) | Mark WS17 authored/executed.                                                                                                                                                                                                                           |
 
 ---
 
 ## Task 1: Branch, evidence scaffolding, and the V2 environment-ceiling proof
 
 **Files:**
+
 - Create: `.port/phase-2/evidence/ws17/README.md`
 - Create: `.port/phase-2/evidence/ws17/v2-vm-gl-ceiling.txt`
 
 **Interfaces:**
+
 - Produces: the branch `ws17-verification-debt`; the evidence directory `.port/phase-2/evidence/ws17/` used by every later task; the file `v2-vm-gl-ceiling.txt` quoted verbatim by Task 12's ledger rewrite.
 
 - [ ] **Step 1: Create the branch**
@@ -122,26 +124,26 @@ Raw, unedited command output captured while discharging `.port/phase-2/VERIFICAT
 Every claim in that ledger dated 2026-07-29 points at a file here. Nothing in this
 directory is hand-written prose about what "would" happen — it is captured output only.
 
-| File | Item | What it is |
-|---|---|---|
-| `v2-vm-gl-ceiling.txt` | V2 | Proof the VM's GL stack is software-only and why virgl cannot lift it |
-| `v2-hw-gl-probe-controls.txt` | V2 | `hw_gl_probe.sh` run on the real box (FAIL) + both fixtures (PASS/FAIL) |
-| `v2-llvmpipe-vs-ghostty.txt` | V2 | Same-box rustty vs distro ghostty throughput/resize smoke (narrowing only) |
-| `v2-virgl-feasibility.md` | V2 | Why enabling virgl on this host is impossible AND pointless |
-| `v3-kwin-install.txt` | V3 | KWin RPM transaction log + `kwin_wayland --help` flags + host-sanity checks |
-| `v3-kwin-globals-kat.txt` | V3 | `kde_globals_bind_under_kwin` stdout under nested KWin |
-| `v3-kwin-control-gnome.txt` | V3 | Same KAT under GNOME/mutter — the negative control |
-| `v3-kwin-visual-*.png` | V3 | Quick-terminal slide / blur / SSD screenshots under KWin |
-| `v3-kwin-visual-notes.txt` | V3 | What each screenshot does and does not prove; fallback outcome if any |
-| `v4-mutter-headless-kat.txt` | V4 | `wayland_set_urgent_dispatches_activation_token` under headless mutter |
-| `v4-mutter-control-nocompositor.txt` | V4 | Same KAT with no compositor — the negative control |
-| `v4-primary-session-decision.md` | V4 | The reasoned decision NOT to run on the primary GNOME session |
-| `v4-crash-postmortem.txt` | V4 | Only present if the VM died during Task 9; `journalctl -b -1` tail |
-| `v1b-restamp-lldb.txt` | V1b | lldb transcript of `rustty_surface_set_content_scale` hits across a live DPI change |
-| `v5-x11-native-session.txt` | **V5 (new, WS19 T14)** | Proof the KDE box ran a NATIVE X11 session (not XWayland): `loginctl show-session $XDG_SESSION_ID -p Type` → `x11`, plus `xdpyinfo` / `$XDG_SESSION_TYPE`. Discharges V5 item 2 on the SAME box V3 requires. |
-| `v5-kwin-x11-residuals.txt` | **V5 (new, WS19 T14)** | The x11 winproto KATs (`gtk_x11_winproto`, `gtk_x11_xkb_init`, `gtk_x11_event_mods`, `gtk_x11_windowid`) under KWin-on-X11 — one binary per run, because GTK is thread-pinned (WS16 `a7fa3b7`, gate G-GTKINIT). Discharges V5 item 3. |
-| `v5-keypress-residual.md` | **V5 (new, WS19 T14)** | The one V5 item V3's box does NOT discharge: a PHYSICAL keypress. State plainly that this VM has no synthetic keyboard-input path, name the exact assertion a human with hardware must make, and do not let it block items 2–3. |
-| `v1b-display-modes.txt` | V1b | Pre/post `system_profiler` display mode — proof the host was restored |
+| File                                 | Item                   | What it is                                                                                                                                                                                                                            |
+| ------------------------------------ | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `v2-vm-gl-ceiling.txt`               | V2                     | Proof the VM's GL stack is software-only and why virgl cannot lift it                                                                                                                                                                 |
+| `v2-hw-gl-probe-controls.txt`        | V2                     | `hw_gl_probe.sh` run on the real box (FAIL) + both fixtures (PASS/FAIL)                                                                                                                                                               |
+| `v2-llvmpipe-vs-ghostty.txt`         | V2                     | Same-box rustty vs distro ghostty throughput/resize smoke (narrowing only)                                                                                                                                                            |
+| `v2-virgl-feasibility.md`            | V2                     | Why enabling virgl on this host is impossible AND pointless                                                                                                                                                                           |
+| `v3-kwin-install.txt`                | V3                     | KWin RPM transaction log + `kwin_wayland --help` flags + host-sanity checks                                                                                                                                                           |
+| `v3-kwin-globals-kat.txt`            | V3                     | `kde_globals_bind_under_kwin` stdout under nested KWin                                                                                                                                                                                |
+| `v3-kwin-control-gnome.txt`          | V3                     | Same KAT under GNOME/mutter — the negative control                                                                                                                                                                                    |
+| `v3-kwin-visual-*.png`               | V3                     | Quick-terminal slide / blur / SSD screenshots under KWin                                                                                                                                                                              |
+| `v3-kwin-visual-notes.txt`           | V3                     | What each screenshot does and does not prove; fallback outcome if any                                                                                                                                                                 |
+| `v4-mutter-headless-kat.txt`         | V4                     | `wayland_set_urgent_dispatches_activation_token` under headless mutter                                                                                                                                                                |
+| `v4-mutter-control-nocompositor.txt` | V4                     | Same KAT with no compositor — the negative control                                                                                                                                                                                    |
+| `v4-primary-session-decision.md`     | V4                     | The reasoned decision NOT to run on the primary GNOME session                                                                                                                                                                         |
+| `v4-crash-postmortem.txt`            | V4                     | Only present if the VM died during Task 9; `journalctl -b -1` tail                                                                                                                                                                    |
+| `v1b-restamp-lldb.txt`               | V1b                    | lldb transcript of `rustty_surface_set_content_scale` hits across a live DPI change                                                                                                                                                   |
+| `v5-x11-native-session.txt`          | **V5 (new, WS19 T14)** | Proof the KDE box ran a NATIVE X11 session (not XWayland): `loginctl show-session $XDG_SESSION_ID -p Type` → `x11`, plus `xdpyinfo` / `$XDG_SESSION_TYPE`. Discharges V5 item 2 on the SAME box V3 requires.                          |
+| `v5-kwin-x11-residuals.txt`          | **V5 (new, WS19 T14)** | The x11 winproto KATs (`gtk_x11_winproto`, `gtk_x11_xkb_init`, `gtk_x11_event_mods`, `gtk_x11_windowid`) under KWin-on-X11 — one binary per run, because GTK is thread-pinned (WS16 `a7fa3b7`, gate G-GTKINIT). Discharges V5 item 3. |
+| `v5-keypress-residual.md`            | **V5 (new, WS19 T14)** | The one V5 item V3's box does NOT discharge: a PHYSICAL keypress. State plainly that this VM has no synthetic keyboard-input path, name the exact assertion a human with hardware must make, and do not let it block items 2–3.       |
+| `v1b-display-modes.txt`              | V1b                    | Pre/post `system_profiler` display mode — proof the host was restored                                                                                                                                                                 |
 ```
 
 - [ ] **Step 3: Capture the VM GL ceiling (read-only, no session isolation needed)**
@@ -159,6 +161,7 @@ grep -E "Device:|Accelerated:|Max core|features:" /Users/gael/projects/rustty/.p
 ```
 
 Expected (matches the planning measurement):
+
 ```
     Device: llvmpipe (LLVM 22.1.8, 128 bits) (0xffffffff)
     Accelerated: no
@@ -196,12 +199,14 @@ git commit -m "ws17: evidence scaffolding + VD:V2 environment GL-ceiling capture
 ## Task 2: The turnkey hardware-GL probe (`hw_gl_probe.sh`) with both controls
 
 **Files:**
+
 - Create: `.port/tools/gates/hw_gl_probe.sh`
 - Create: `.port/tools/gates/fixtures/glxinfo-hw-radeonsi.txt`
 - Create: `.port/tools/gates/fixtures/glxinfo-llvmpipe.txt`
 - Create: `.port/phase-2/evidence/ws17/v2-hw-gl-probe-controls.txt`
 
 **Interfaces:**
+
 - Consumes: nothing from Task 1 except the evidence directory.
 - Produces: `.port/tools/gates/hw_gl_probe.sh` — exit 0 = hardware GL ≥ 4.3 core; exit 1 = software / unaccelerated / below the renderer's version floor. Honors `RUSTTY_HW_GL_PROBE_FIXTURE=<path>` to read a canned `glxinfo -B` dump instead of calling `glxinfo`. Task 12's ledger text cites this script as the V2 re-check recipe.
 
@@ -232,7 +237,7 @@ OpenGL core profile version string: 4.6 (Core Profile) Mesa 26.1.4
 
 - [ ] **Step 2: Write the positive-control fixture**
 
-Create `.port/tools/gates/fixtures/glxinfo-hw-radeonsi.txt` (synthetic but format-exact — this is a *control*, not evidence of any real run; the header says so):
+Create `.port/tools/gates/fixtures/glxinfo-hw-radeonsi.txt` (synthetic but format-exact — this is a _control_, not evidence of any real run; the header says so):
 
 ```
 # SYNTHETIC CONTROL FIXTURE — not a real measurement. It exists solely to prove
@@ -394,13 +399,15 @@ git commit -m "ws17: hw_gl_probe.sh — turnkey non-vacuous hardware-GL gate for
 ## Task 3: V2 narrowing run — rustty vs distro ghostty on the same (software) box
 
 **Files:**
+
 - Create: `.port/phase-2/evidence/ws17/v2-llvmpipe-vs-ghostty.txt`
 
 **Interfaces:**
+
 - Consumes: `.port/phase-2/evidence/ws17/` from Task 1.
 - Produces: measured same-box throughput/resize numbers for rustty vs `ghostty 1.3.1-2.fc44`. This NARROWS V2 (it discharges the "compare side-by-side with ghostty on the same box" half of the recipe for the software path) — it does NOT discharge V2, which is specifically about real GL. Task 12 must word it exactly that way.
 
-**Why this is worth doing:** V2's recipe has four sub-checks; three of them are "compare to ghostty on the same machine". Running that comparison on llvmpipe cannot prove hardware behaviour, but it does prove rustty is not *relatively* worse than the reference on identical hardware — which is the part of the concern that is measurable here. Keep the claim that narrow.
+**Why this is worth doing:** V2's recipe has four sub-checks; three of them are "compare to ghostty on the same machine". Running that comparison on llvmpipe cannot prove hardware behaviour, but it does prove rustty is not _relatively_ worse than the reference on identical hardware — which is the part of the concern that is measurable here. Keep the claim that narrow.
 
 - [ ] **Step 1: Build the GTK release binary on the VM (SIP — long-running, own session)**
 
@@ -479,9 +486,11 @@ git commit -m "ws17: VD:V2 narrowing — same-box rustty vs ghostty 1.3.1 throug
 ## Task 4: V2 — the virgl feasibility verdict (analysis + a DO-NOT-RUN appendix)
 
 **Files:**
+
 - Create: `.port/phase-2/evidence/ws17/v2-virgl-feasibility.md`
 
 **Interfaces:**
+
 - Consumes: `v2-vm-gl-ceiling.txt` (Task 1), `v2-hw-gl-probe-controls.txt` (Task 2).
 - Produces: the reasoned, evidence-cited verdict that Task 12 copies into the ledger.
 
@@ -495,6 +504,7 @@ Create `.port/phase-2/evidence/ws17/v2-virgl-feasibility.md`:
 # VD:V2 — why virgl does not discharge this item on this host (2026-07-29)
 
 ## Measured state
+
 - `systemd-detect-virt` → `apple`; UTM `config.plist` → `Backend = Apple`.
   UTM's Apple Virtualization backend gives Linux guests a plain virtio-gpu with no
   3D: `[drm] features: -virgl -edid -resource_blob -host_visible`
@@ -503,6 +513,7 @@ Create `.port/phase-2/evidence/ws17/v2-virgl-feasibility.md`:
   (`v2-hw-gl-probe-controls.txt`, real-run section).
 
 ## Why switching to UTM's QEMU backend (the only way to get virgl here) is rejected
+
 1. **It would not help.** This host has run virgl before — recorded in
    `crates/rustty-renderer/src/opengl/gl/sys.rs:611-628` (measured 2026-07-17):
    `GL_RENDERER = virgl (ANGLE (Apple, Apple M4 Pro, OpenGL 4.1 Metal - 90.5))`,
@@ -518,6 +529,7 @@ Create `.port/phase-2/evidence/ws17/v2-virgl-feasibility.md`:
    development VM.
 
 ## What WOULD discharge V2
+
 Any Linux box with an amdgpu/intel/nvidia GPU (bare metal, or a QEMU/KVM guest on
 an x86_64 host with virtio-gpu-gl where virgl exposes a real core profile):
 
@@ -543,10 +555,12 @@ git commit -m "ws17: VD:V2 virgl feasibility verdict — Apple VZ has no virgl, 
 ## Task 5: V3 — install KWin on the VM (session-isolated, trapped, leftover-detecting)
 
 **Files:**
+
 - Create (on the VM, not committed): `~/ws17/install-kwin.sh`
 - Create: `.port/phase-2/evidence/ws17/v3-kwin-install.txt`
 
 **Interfaces:**
+
 - Produces: `/usr/bin/kwin_wayland` (KWin 6.7.3) on the VM, with GDM and the default target UNCHANGED. Tasks 6 and 7 consume it.
 
 **Shared-state mutation:** yes — an RPM transaction. Therefore SIP + rollback trap + leftover pre-flight are mandatory.
@@ -663,11 +677,13 @@ git commit -m "ws17: VD:V3 — install KWin 6.7.3 on rvm (nested-only; GDM/defau
 ## Task 6: V3 — the KDE-globals KAT under a nested KWin (with a GNOME negative control)
 
 **Files:**
+
 - Modify: `crates/rustty-apprt/tests/gtk_wayland_winproto.rs` (append one `#[ignore]` test at end of file)
 - Create: `.port/phase-2/evidence/ws17/v3-kwin-globals-kat.txt`
 - Create: `.port/phase-2/evidence/ws17/v3-kwin-control-gnome.txt`
 
 **Interfaces:**
+
 - Consumes: `/usr/bin/kwin_wayland` from Task 5; `rustty_apprt::gtk::winproto::{App, Protocol}` and `rustty_config::Config as CoreConfig`, both already imported at the top of `gtk_wayland_winproto.rs`.
 - Produces: the ignored test `kde_globals_bind_under_kwin` — run with
   `cargo test -p rustty-apprt --features gtk,wayland --test gtk_wayland_winproto -- --ignored --exact kde_globals_bind_under_kwin --nocapture`.
@@ -798,6 +814,7 @@ ssh rvm 'tail -20 ~/ws17/kwin-nested.log; ls /run/user/1000/wayland-kwinkat*'
 
 PASS: `KWIN_UP pid=<n> socket=wayland-kwinkat` and the socket file exists.
 FAIL modes and what to do:
+
 - `ABORT: leftover ...` → `ssh rvm 'rm -f ~/ws17/kwin.pid /run/user/1000/wayland-kwinkat*'`, re-run.
 - `--socket` unrecognized → re-read Task 5 Step 5's flag dump and substitute the offered flag (e.g. `--wayland-display wayland-kwinkat`).
 - `FAIL: kwin socket never appeared` → try the virtual backend instead: replace the launch line with `kwin_wayland --virtual --socket "$SOCK" --width 1600 --height 1000` and re-run. If that also fails, go to Task 8.
@@ -841,9 +858,11 @@ git push
 ## Task 7: V3 — the three visual KDE checks under nested KWin
 
 **Files:**
+
 - Create: `.port/phase-2/evidence/ws17/v3-kwin-visual-quickterm.png`, `v3-kwin-visual-blur.png`, `v3-kwin-visual-ssd.png`, `v3-kwin-visual-notes.txt`
 
 **Interfaces:**
+
 - Consumes: the nested KWin from Task 6 Step 4 (still running on `wayland-kwinkat`), the release binary from Task 3 Step 1.
 - Produces: the three screenshots + the notes file cited by Task 12.
 
@@ -879,7 +898,7 @@ ssh rvm 'export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-kwinkat; 
 scp rvm:~/ws17/qt.png /Users/gael/projects/rustty/.port/phase-2/evidence/ws17/v3-kwin-visual-quickterm.png
 ```
 
-PASS: the drop-down terminal is anchored full-width at the top of the KWin output, and the earlier KAT already proved `has_kde_slide_manager: true` (the slide itself is compositor-side animation — its *presence* is what V3 asserts, and the bound manager plus a working drop-down is that evidence; a still screenshot cannot show an animation and must not be claimed to).
+PASS: the drop-down terminal is anchored full-width at the top of the KWin output, and the earlier KAT already proved `has_kde_slide_manager: true` (the slide itself is compositor-side animation — its _presence_ is what V3 asserts, and the bound manager plus a working drop-down is that evidence; a still screenshot cannot show an animation and must not be claimed to).
 FAIL: nothing drops down → capture `~/ws17/rustty-kwin.log` and record V3.1 as NOT discharged.
 
 - [ ] **Step 3: Blur (`background-opacity` + `background-blur`)**
@@ -953,10 +972,12 @@ git commit -m "ws17: VD:V3 — KWin quick-terminal / blur / SSD visual evidence 
 ## Task 8: V3 fallback — a real Plasma session on a spare VT (only if Tasks 6–7 failed)
 
 **Files:**
+
 - Create (VM, not committed): `~/ws17/plasma-session.sh`
 - Modify: `.port/phase-2/evidence/ws17/v3-kwin-visual-notes.txt` (append the fallback outcome)
 
 **Interfaces:**
+
 - Consumes: Task 5's KWin install.
 - Produces: either the same three visual outcomes on a full Plasma session, or a recorded reason V3 stays residual.
 
@@ -1022,9 +1043,11 @@ git commit -m "ws17: VD:V3 fallback — full Plasma session attempt on rvm, outc
 ## Task 9: V4 — `set_urgent` KAT on a real mutter, via a HEADLESS mutter instance
 
 **Files:**
+
 - Create: `.port/phase-2/evidence/ws17/v4-mutter-headless-kat.txt`, `v4-mutter-control-nocompositor.txt`
 
 **Interfaces:**
+
 - Consumes: the existing ignored test `wayland_set_urgent_dispatches_activation_token` in `crates/rustty-apprt/tests/gtk_wayland_winproto.rs`.
 - Produces: runtime evidence that mutter's `xdg_activation_v1` completes the token round-trip.
 
@@ -1150,13 +1173,15 @@ git commit -m "ws17: VD:V4 — set_urgent KAT on real mutter 50 (headless instan
 ## Task 10: V4 — the primary-GNOME-session run stays deliberately unrun
 
 **Files:**
+
 - Create: `.port/phase-2/evidence/ws17/v4-primary-session-decision.md`
 
 **Interfaces:**
+
 - Consumes: Task 9's result.
 - Produces: the written decision Task 12 cites.
 
-**Decision:** after Task 9 discharges V4 on a real mutter instance, the marginal information from repeating it on the *primary* GNOME session is near-zero (same mutter binary, same `xdg_activation_v1` implementation), while the risk is a third unattributed hard crash of the development VM. WS17 does not run it. This is recorded as an explicit, reasoned residual — not an oversight, and not silently folded into the discharge.
+**Decision:** after Task 9 discharges V4 on a real mutter instance, the marginal information from repeating it on the _primary_ GNOME session is near-zero (same mutter binary, same `xdg_activation_v1` implementation), while the risk is a third unattributed hard crash of the development VM. WS17 does not run it. This is recorded as an explicit, reasoned residual — not an oversight, and not silently folded into the discharge.
 
 - [ ] **Step 1: Write the decision note**
 
@@ -1170,7 +1195,7 @@ started as `mutter --headless --virtual-monitor 1920x1080 --wayland --no-x11
 --wayland-display wayland-mutterkat` (evidence: `v4-mutter-headless-kat.txt`),
 plus the same KAT under KWin 6.7.3 (`v3-kwin-globals-kat.txt`).
 
-The remaining untested configuration is the *primary* GNOME session on tty2 —
+The remaining untested configuration is the _primary_ GNOME session on tty2 —
 the one whose live-compositor KAT activity coincided with two hard, unattributed
 VM deaths (abrupt journal end, no guest OOM or panic). Difference in what it would
 prove: none in protocol terms — same mutter build, same `xdg_activation_v1`
@@ -1194,10 +1219,12 @@ git commit -m "ws17: VD:V4 — record the deliberate non-execution of the primar
 ## Task 11: V1b — prove the macOS cross-DPI runtime re-stamp path fires
 
 **Files:**
+
 - Create: `/tmp/ws17/restamp.lldb`, `/tmp/ws17/restamp-run.sh` (scratch, not committed)
 - Create: `.port/phase-2/evidence/ws17/v1b-restamp-lldb.txt`, `.port/phase-2/evidence/ws17/v1b-display-modes.txt`
 
 **Interfaces:**
+
 - Consumes: the Swift host path `SurfaceView_AppKit.swift:837-871` (`viewDidChangeBackingProperties` → `rustty_surface_set_content_scale` → `Surface::updateContentScale`).
 - Produces: an lldb transcript showing `rustty_surface_set_content_scale` called with `d0/d1 = 2.0` at startup and again with `d0/d1 = 1.0` after a live display-density change — the exact evidence WS6's residual says was never obtained.
 
@@ -1262,7 +1289,7 @@ grep -c "WS17-RESTAMP-HIT" /tmp/ws17/restamp.log; tail -30 /tmp/ws17/restamp.log
 
 - [ ] **Step 5: Second control — prove an ordinary window move does NOT produce a hit**
 
-Move/resize the Rustty window with the mouse for ~5 seconds (resize DOES legitimately hit `set_size`, not `set_content_scale`; a plain *move* on one display must produce no new scale hit), then:
+Move/resize the Rustty window with the mouse for ~5 seconds (resize DOES legitimately hit `set_size`, not `set_content_scale`; a plain _move_ on one display must produce no new scale hit), then:
 
 ```bash
 grep -c "WS17-RESTAMP-HIT" /tmp/ws17/restamp.log
@@ -1290,6 +1317,7 @@ cp /tmp/ws17/restamp.log /Users/gael/projects/rustty/.port/phase-2/evidence/ws17
 ```
 
 PASS (all three required):
+
 1. a new `WS17-RESTAMP-HIT` after the resolution change,
 2. its `register read d0 d1` shows `d0 = 1` and `d1 = 1` (was `2`/`2` at startup),
 3. its `thread backtrace 4` contains `viewDidChangeBackingProperties`.
@@ -1317,7 +1345,7 @@ rm -f /tmp/ws17/lldb.in
 pgrep -fl 'Rustty.app/Contents/MacOS/Rustty' || echo "app stopped"
 ```
 
-**Recovery if the screen becomes unusable after the resolution change:** the 1x modes are *larger*, never smaller, so the UI stays readable; if the display goes black, wait 15 s (macOS reverts an unconfirmed mode automatically), else press Escape, else `sudo pkill -HUP WindowServer` from an SSH session into the Mac. Do not leave the display in the 1x mode — Step 8.1 is not optional.
+**Recovery if the screen becomes unusable after the resolution change:** the 1x modes are _larger_, never smaller, so the UI stays readable; if the display goes black, wait 15 s (macOS reverts an unconfirmed mode automatically), else press Escape, else `sudo pkill -HUP WindowServer` from an SSH session into the Mac. Do not leave the display in the 1x mode — Step 8.1 is not optional.
 
 - [ ] **Step 9: Commit**
 
@@ -1332,10 +1360,12 @@ git commit -m "ws17: V1b residual — lldb evidence that the cross-DPI runtime r
 ## Task 12: Rewrite `VERIFICATION_DEBT.md` truthfully
 
 **Files:**
+
 - Modify: `.port/phase-2/VERIFICATION_DEBT.md`
 - Modify: `docs/manual-test-plan-gtk.md` (§W rows)
 
 **Interfaces:**
+
 - Consumes: every file in `.port/phase-2/evidence/ws17/`.
 - Produces: the final ledger state. Each item is written from the evidence file, not from this plan's expectations. **If an outcome differed from what this plan predicted, the ledger records the actual outcome.**
 
@@ -1346,7 +1376,7 @@ Replace the header status line with:
 ```markdown
 Status snapshot 2026-07-29 @ WS17 (`ws17-verification-debt`). This file tracks
 **verification debt only**: work that is implemented and believed correct, whose
-*confirmation* needs hardware/environments this development environment (macOS M4 Pro
+_confirmation_ needs hardware/environments this development environment (macOS M4 Pro
 single Retina display + Fedora 44 aarch64 UTM/Apple-Virtualization VM, llvmpipe-only,
 GNOME/mutter + sway + KWin) does not have. Implementation deferrals live in
 `DEFERRALS.md`. Raw evidence for every 2026-07-29 claim below is committed under
@@ -1388,6 +1418,7 @@ Replace the whole `## V2.` section with:
 
 ```markdown
 ## V2. Bare-metal GPU rendering/perf sign-off — OPEN (honest residual; this
+
 environment cannot host a hardware GL driver)
 
 **Status 2026-07-29 (WS17).** NOT discharged, and provably not dischargeable here.
@@ -1397,7 +1428,7 @@ Evidence: `evidence/ws17/v2-vm-gl-ceiling.txt`,
 1. The VM runs under UTM's **Apple Virtualization backend** (`config.plist`
    `Backend = Apple`; `systemd-detect-virt` → `apple`), which gives Linux guests a
    virtio-gpu with 3D disabled: `[drm] features: -virgl -edid -resource_blob
-   -host_visible`. Measured driver: `llvmpipe (LLVM 22.1.8, 128 bits)`,
+-host_visible`. Measured driver: `llvmpipe (LLVM 22.1.8, 128 bits)`,
    `Accelerated: no`, Mesa 26.1.4.
 2. Enabling virgl would require re-creating the VM under UTM's QEMU backend. That is
    rejected on two independent grounds: (a) the macOS data volume has ~5.5 GiB free
@@ -1414,10 +1445,11 @@ Evidence: `evidence/ws17/v2-vm-gl-ceiling.txt`,
 
 **Turnkey re-check (run on any Linux box with an amdgpu/intel/nvidia GPU):**
 ```
-.port/tools/gates/hw_gl_probe.sh        # MUST print PASS (exit 0) FIRST, in the
-                                        # same session/DISPLAY as the app run
+
+.port/tools/gates/hw_gl_probe.sh # MUST print PASS (exit 0) FIRST, in the # same session/DISPLAY as the app run
 cargo build --release --features gtk
 RUSTTY_RESOURCES_DIR=$PWD/crates/rustty-extra target/release/rustty
+
 ```
 The probe is the anti-vacuity guard: it fails on llvmpipe/softpipe/swrast, on
 `Accelerated: no`, and on any driver whose max core profile is below 4.3. Its own
@@ -1435,6 +1467,7 @@ If Tasks 6–7 passed, replace the `## V3.` section with (filling the bracketed 
 
 ```markdown
 ## V3. KDE Plasma (KWin) quick-terminal + decorations — DISCHARGED IN PART
+
 [WS17, 2026-07-29]
 
 KWin 6.7.3 was installed on the VM (`kwin` RPM only — GDM and the default target
@@ -1455,8 +1488,9 @@ protocol — blur rides **`ext-background-effect-v1`** (`Tag::ExtBackgroundEffec
 Recorded value under KWin 6.7.3: `has_ext_background_effect: [VALUE FROM DUMP]`.
 
 **Visual checks** (`evidence/ws17/v3-kwin-visual-*.png`, `-notes.txt`):
+
 1. Quick terminal drops down full-width, anchored top, under KWin — CONFIRMED.
-   The slide *animation* is compositor-side and a still capture cannot show it; the
+   The slide _animation_ is compositor-side and a still capture cannot show it; the
    assertion V3 actually makes is the presence of `org_kde_kwin_slide_manager`,
    which the KAT proves.
 2. `background-opacity < 1.0` + `background-blur = true` — [CONFIRMED blurred /
@@ -1465,7 +1499,7 @@ Recorded value under KWin 6.7.3: `has_ext_background_effect: [VALUE FROM DUMP]`.
 3. `window-decoration = server` → KWin (Breeze) titlebar; `= client` → titlebar
    gone — CONFIRMED both directions.
 
-**Remaining:** a full Plasma *shell* session (panels, `kde_output_order_v1`
+**Remaining:** a full Plasma _shell_ session (panels, `kde_output_order_v1`
 populated by plasmashell) was not exercised — bare nested KWin advertises
 `has_kde_output_order: [VALUE FROM DUMP]`. `docs/manual-test-plan-gtk.md` §W rows
 updated accordingly.
@@ -1491,6 +1525,7 @@ plus the three visual checks (quick-terminal drop-down, blur via
 
 ```markdown
 ## V4. `set_urgent` KAT on real mutter — DISCHARGED [WS17, 2026-07-29]
+
 (primary-session run deliberately still not run)
 
 `wayland_set_urgent_dispatches_activation_token` passes against a real mutter 50
@@ -1505,7 +1540,7 @@ Evidence: `evidence/ws17/v4-mutter-headless-kat.txt` (real token request → `do
 acquisition rather than passing (`evidence/ws17/v4-mutter-control-nocompositor.txt`).
 The KAT also passed under KWin 6.7.3 (`evidence/ws17/v3-kwin-globals-kat.txt`).
 
-**Residual (deliberate, reasoned):** the run on the *primary* GNOME session on tty2
+**Residual (deliberate, reasoned):** the run on the _primary_ GNOME session on tty2
 was NOT repeated. Two prior hard VM deaths correlated with live-compositor KAT
 activity on that session, and the delta versus the headless run is only the
 DRM/scanout path, which `set_urgent` does not touch. See
@@ -1549,9 +1584,11 @@ git commit -m "ws17: rewrite VERIFICATION_DEBT — V3/V4/V1b discharged with evi
 ## Task 13: Both-platform build gate, roadmap update, merge
 
 **Files:**
+
 - Modify: `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md`
 
 **Interfaces:**
+
 - Consumes: everything above.
 - Produces: `main` containing WS17.
 

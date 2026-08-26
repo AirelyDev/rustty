@@ -69,6 +69,8 @@ run_check() {
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in ''|'#'*) continue;; esac
     case "$line" in "pair${TAB}"*) continue;; esac   # header
+    # counter_site/n/zig are read only to advance past those TSV columns.
+    # shellcheck disable=SC2034
     IFS="$TAB" read -r pair array_site counter_site n zig test rest <<< "$line"
     [ -n "$pair" ] || continue
     rows=$((rows + 1))
@@ -113,6 +115,8 @@ list_pairs() {
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in ''|'#'*) continue;; esac
     case "$line" in "pair${TAB}"*) continue;; esac
+    # counter_site/n/zig are read only to advance past those TSV columns.
+    # shellcheck disable=SC2034
     IFS="$TAB" read -r pair array_site counter_site n zig test rest <<< "$line"
     [ -n "$pair" ] || continue
     if test_exists "$ROOT" "$test"; then status="ok"; else status="MISSING-TEST"; fi

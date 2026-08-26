@@ -705,7 +705,8 @@ impl PageList {
                         // the u64 products/sums below cannot overflow; asserted
                         // (Zig's plain `*`/`+` on u64 are safety-checked).
                         debug_assert!(used <= u64::from(u32::MAX));
-                        let density = used * u64::from(cap.rows) / u64::from(unsafe { (*page).size.rows });
+                        let density =
+                            used * u64::from(cap.rows) / u64::from(unsafe { (*page).size.rows });
                         let projected_raw = density + density / 4;
 
                         // Bound the jump to 32× the pre-growth capacity. Arbitrary
@@ -748,9 +749,10 @@ impl PageList {
                         grapheme_bytes,
                         size::GraphemeBytesInt,
                         // .grapheme_bytes => page.grapheme_alloc.usedBytes(page.memory),
-                        Some(unsafe {
-                            (*page).grapheme_alloc.used_bytes((*page).memory_ptr())
-                        } as u64)
+                        Some(
+                            unsafe { (*page).grapheme_alloc.used_bytes((*page).memory_ptr()) }
+                                as u64
+                        )
                     )
                 }
                 IncreaseCapacity::HyperlinkBytes => {

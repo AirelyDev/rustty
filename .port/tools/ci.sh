@@ -33,6 +33,52 @@
 #                                    ghostty's props/symbols_uucode "tables match
 #                                    uucode" tests whose live oracle R3 forbids
 #                                    in-crate. 0 diffs required.)
+#   G-LINT check_lints.sh            the non-Rust linters: shellcheck,
+#                                    prettier, typos, swiftlint, alejandra,
+#                                    pinact                          -> HARD-FAIL
+#                                    (the reference runs each as its own
+#                                    test.yml job via `nix develop -c <tool>`;
+#                                    rustty runs them from one gate so this
+#                                    file stays the single source of truth.
+#                                    A tool that is absent reports `skipped`
+#                                    BY NAME; all-skipped exits 3 BLOCKED.)
+#   G-CCONSUMER check_c_consumer.sh  the C/CMake/pkg-config consumer lane
+#                                    -> HARD-FAIL. cmake configure/build/
+#                                    install, the installed artifact set, both
+#                                    .pc files, and a C smoke program compiled,
+#                                    linked and RUN against pkg-config output
+#                                    twice (shared + static). Merges the
+#                                    reference's build-cmake and
+#                                    test-lib-vt-pkgconfig jobs.
+#   G-EXAMPLES check_examples.sh     every example/*/build.sh compiles + RUNS,
+#                                    and the c-vt-cmake* examples configure +
+#                                    build through cmake         -> HARD-FAIL.
+#                                    The reference's list-examples +
+#                                    build-examples-* jobs. wasm-* belong to
+#                                    the opt-in --webgl lane and are reported
+#                                    skipped by name.
+#   G-DIST check_dist.sh             `xtask dist` builds and the tarball has
+#                                    the right shape                -> HARD-FAIL
+#                                    (single rustty-<v>/ prefix, build-critical
+#                                    files present, vendored crates-sys C
+#                                    present, .port/ + docs/superpowers/
+#                                    excluded). `xtask distcheck` additionally
+#                                    under RUSTTY_DISTCHECK=1 — a cold full
+#                                    build, so opt-in; skipped is reported by
+#                                    name, never greened.
+#   G-NIX check_nix.sh               `nix flake check` (librustty-vt + its five
+#                                    passthru tests) and `alejandra --check`
+#                                    -> HARD-FAIL where nix exists, BLOCKED
+#                                    (exit 3) where it does not. The hermetic
+#                                    counterpart to G-CCONSUMER: same install,
+#                                    no ambient system libraries.
+#   G-XTARGET check_cross_targets.sh cross-target builds of rustty-vt-c
+#                                    (wasm32-unknown-unknown, wasm32-wasip1,
+#                                    x86_64-pc-windows-msvc,
+#                                    x86_64-unknown-freebsd) -> HARD-FAIL.
+#                                    Skips by name where the rustup std or a
+#                                    cross C toolchain is absent; BLOCKED if
+#                                    every target is unavailable.
 #   G-THEMES check_theme_corpus.py   the 602 vendored iterm2 theme files match
 #                                    a committed per-file SHA-256 manifest
 #                                    -> HARD-FAIL. res_themes.rs only counts
@@ -146,7 +192,7 @@
 set -uo pipefail   # NOTE: no `-e` — run every check, aggregate failures.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || exit 1
 GATES="$ROOT/.port/tools/gates"
 PY="${PYTHON:-python3}"
 # Metrics file G8b emits and G8 then consumes (WS10 T3). Under $TMPDIR so a CI
@@ -310,6 +356,57 @@ GATE_REGISTRY=(
   "G7|HARD|bash $GATES/check_acyclic.sh"
   "G4|HARD|bash $GATES/run_differential.sh"
   "G4-uni|HARD|bash $ROOT/.port/phase-0/harness/unicode/run_unicode_diff.sh"
+  # G-LINT (2026-08-25) — the non-Rust linter lane: shellcheck, prettier,
+  # typos, swiftlint, alejandra, pinact. The reference runs each as its own
+  # `test.yml` job through `nix develop -c <tool>`; rustty's configs for all
+  # six (.shellcheckrc, .prettierignore, typos.toml, .swiftlint.yml,
+  # .github/pinact.yml) were checked in during the top-level-files port but
+  # NOTHING EVER RAN THEM, so they were decoration. HARD: every lane is green
+  # as of this commit. A linter that is not installed reports `skipped` by
+  # name (and the gate exits 3 BLOCKED if EVERY lane is skipped) rather than
+  # contributing a vacuous green — see the gate's header.
+  "G-LINT|HARD|bash $GATES/check_lints.sh"
+  # G-CCONSUMER (2026-08-25) — the C/CMake/pkg-config consumer lane, the merge
+  # of the reference's `build-cmake` + `test-lib-vt-pkgconfig` jobs. Nothing
+  # here was exercised before: `cargo test` never invokes cmake, so a 400-line
+  # CMakeLists.txt, the package config, the install rules and the (entirely
+  # absent) pkg-config files were unverified. Its first run found three real
+  # defects — no .pc files at all, an unresolvable `OnigEncodingKOI8` in the
+  # static archive, and a CMake custom command that never re-invoked cargo.
+  # HARD: green, and the artifact arm has a demonstrated RED flip (remove a
+  # .pc from the install list -> "the install tree is incomplete").
+  "G-CCONSUMER|HARD|bash $GATES/check_c_consumer.sh"
+  # G-EXAMPLES (2026-08-25) — build (and run) every example/ program, the
+  # analog of the reference's list-examples + build-examples-* jobs. 32 example
+  # programs were checked in and none were built by anything.
+  # example/README.md already promised "CI discovers examples by globbing
+  # example/*/build.sh"; this gate is what makes that true. HARD: 27 build and
+  # run today. The 5 wasm examples belong to ci.sh's opt-in --webgl lane and
+  # are reported skipped BY NAME, never counted as green.
+  "G-EXAMPLES|HARD|bash $GATES/check_examples.sh"
+  # G-DIST (2026-08-25) — the source-tarball lane (the reference's build-dist /
+  # build-dist-lib-vt). `xtask dist` was invoked from nothing but the release
+  # workflows, so a broken tarball would first have surfaced DURING a release.
+  # Builds it and asserts its shape (single versioned prefix, the files a
+  # from-scratch build needs, >1000 vendored crates-sys files, and no .port/ or
+  # docs/superpowers/ leakage). `xtask distcheck` — extract and BUILD the
+  # tarball — is a cold full-workspace build and runs only under
+  # RUSTTY_DISTCHECK=1 (set by ci.yml on the Ubuntu leg); otherwise the gate
+  # reports it skipped BY NAME rather than implying it ran.
+  "G-DIST|HARD|bash $GATES/check_dist.sh"
+  # G-NIX (2026-08-26) — `nix flake check` + alejandra, the reference's
+  # build-nix and alejandra jobs. Builds librustty-vt in a hermetic sandbox
+  # with a pinned toolchain and runs the five passthru tests (symbols, both
+  # .pc files, and a C consumer linked BOTH ways). BLOCKED, never green, where
+  # nix is absent — which is every macOS leg here.
+  "G-NIX|HARD|bash $GATES/check_nix.sh"
+  # G-XTARGET (2026-08-26) — cross-target BUILDS of rustty-vt-c (the
+  # reference's build-libghostty-vt-{wasm,windows,...} legs). G-WINCHK is
+  # `cargo check`-level and never runs the crates-sys C compiles for the
+  # target, which is exactly where cross breakage lives. Targets whose rustup
+  # std is missing, or that the host C compiler cannot target, are reported
+  # skipped BY NAME; all-skipped exits 3 BLOCKED.
+  "G-XTARGET|HARD|bash $GATES/check_cross_targets.sh"
   # G-REL (WS18) — the `--release` test lane. Steps 3/4 above only ever exercise
   # the DEBUG profile, so nothing noticed that release had rotted to 22 failures
   # across 7 targets. Most were tests driving a seam the port deliberately
@@ -778,7 +875,8 @@ for phase in HARD PROGRESS; do
   for entry in "${GATE_REGISTRY[@]}"; do
     IFS='|' read -r gid gkind grun <<< "$entry"
     [ "$gkind" = "$phase" ] || continue
-    # shellcheck disable=SC2086 — grun is an intentional word-split command line.
+    # grun is an intentional word-split command line.
+    # shellcheck disable=SC2086
     run_gate "$gid" "$gkind" $grun
   done
 done

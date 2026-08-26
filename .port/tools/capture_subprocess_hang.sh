@@ -2,6 +2,10 @@
 # Capture the live wedged state of a subprocess_drop_repro hang, then clean up.
 set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# `ls -t` is load-bearing here: cargo leaves several hash-suffixed
+# subprocess_drop_repro-* binaries in deps/ and we want the newest. A glob
+# cannot sort by mtime, so the ls|grep pipe stays.
+# shellcheck disable=SC2010
 BIN="$(ls -t "$ROOT"/target/debug/deps/subprocess_drop_repro-* | grep -v '\.d$' | head -1)"
 echo "binary: $BIN"
 

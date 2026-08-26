@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the FreeType bitmap-strike glyph-resize seam (`stbir_resize_uint8`)
-*provably* at parity with the oracle instead of merely present. The C is already
+_provably_ at parity with the oracle instead of merely present. The C is already
 vendored, already built with `cc`, and already wired on every non-wasm target — see
 **PREMISE CORRECTION** — but **every test that reaches the resize call today resizes
 at scale 1.0**, and at scale 1.0 the resampler is indistinguishable from nearest
@@ -14,7 +14,7 @@ and BGRA, whose expected bytes come from an oracle-derived consensus build, (b) 
 toolchain-matrix gate that compares the vendored header against **ghostty's own
 build recipe at all four Zig optimize modes**, and (c) a machine-checked negative
 control proving the KATs reject a wrong resampler. It then repairs the three stale
-ledger rows that call this work unported, and records the one genuine, *measured*
+ledger rows that call this work unported, and records the one genuine, _measured_
 divergence (Ghostty `ReleaseFast` differs from every other build of the same C by
 ±1 LSB on ≤2 % of bytes, cause identified) as a permanent divergence rather than
 pretending byte-exactness with a moving target.
@@ -54,14 +54,14 @@ dependency of rustty), oracle git repo at `/Users/gael/projects/ghostty` pinned 
   `.port/tools/gates/check_test_counts.py`, `check_rustty_h_abi.sh`.
 - R2 product identity: rustty naming, per-token casing. The vendored C keeps its
   upstream `stbir_*`/`stb_image_resize.h` names verbatim (third-party public-domain
-  source, not ghostty identity); the *artifact* name is already rustty-prefixed
+  source, not ghostty identity); the _artifact_ name is already rustty-prefixed
   (`librustty_stb_image_resize.a`).
 - R3 self-contained: the resampler must stay the SAME C the oracle links, compiled
   from vendored source. **A pure-Rust reimplementation is forbidden** — this plan's
   measurements show why (a wrong resampler moves 70–98 % of output bytes).
 - R4/R5: acyclic graph; gates invariant, never weakened to pass. **R5 specifically:**
   this WS must not change the macOS artifact's behaviour. It adds no production code
-  — only tests, fixtures, a gate, and docs — so R5 holds *by construction*, and
+  — only tests, fixtures, a gate, and docs — so R5 holds _by construction_, and
   Task 8 proves it by an A/B of **behaviour** plus `cargo tree -e features`.
   **Binary hashing is NOT admissible evidence**: a prior lane got three different
   hashes from rebuilds of identical source and correctly abandoned that method.
@@ -94,15 +94,15 @@ dependency of rustty), oracle git repo at `/Users/gael/projects/ghostty` pinned 
 
 **All three claims are false.** Verified at plan-authoring time on `main` @ `4069662`:
 
-| Claim in the row | Reality |
-|---|---|
-| "no Rust analogue yet" | `crates/rustty-font-shaper/src/stb.rs` declares `stbir_resize_uint8` (34 lines, with the oracle's `src/stb/main.zig` cited in its module doc) |
-| "no `-sys`/`cc` build" | `crates/rustty-font-shaper/build.rs` compiles `vendor/stb_impl.c` with `cc::Build`, `wasm32`-skipped; `crates/rustty-font-shaper/Cargo.toml:104-108` documents it and declares `cc = "1"` under `[build-dependencies]` |
-| "the C is not vendored" | `crates/rustty-font-shaper/vendor/stb_image_resize.h` is **byte-identical** to the oracle's (`git -C ../ghostty show HEAD:src/stb/stb_image_resize.h \| md5` = `7381a7070120fd5a36d8fb9e3179dd7c` = our vendored copy; also identical at `origin/main`) |
-| "not wired" | the call site is `crates/rustty-font-shaper/src/face/freetype.rs:806` inside the `FT_GLYPH_FORMAT_BITMAP` arm, argument-for-argument identical to the oracle's `freetype.zig:639-652` (order, `pitch` pass-through, `atlas.format.depth()` as `num_channels`, `== 0 → error.GlyphResizeFailed`) |
+| Claim in the row        | Reality                                                                                                                                                                                                                                                                                         |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "no Rust analogue yet"  | `crates/rustty-font-shaper/src/stb.rs` declares `stbir_resize_uint8` (34 lines, with the oracle's `src/stb/main.zig` cited in its module doc)                                                                                                                                                   |
+| "no `-sys`/`cc` build"  | `crates/rustty-font-shaper/build.rs` compiles `vendor/stb_impl.c` with `cc::Build`, `wasm32`-skipped; `crates/rustty-font-shaper/Cargo.toml:104-108` documents it and declares `cc = "1"` under `[build-dependencies]`                                                                          |
+| "the C is not vendored" | `crates/rustty-font-shaper/vendor/stb_image_resize.h` is **byte-identical** to the oracle's (`git -C ../ghostty show HEAD:src/stb/stb_image_resize.h \| md5` = `7381a7070120fd5a36d8fb9e3179dd7c` = our vendored copy; also identical at `origin/main`)                                         |
+| "not wired"             | the call site is `crates/rustty-font-shaper/src/face/freetype.rs:806` inside the `FT_GLYPH_FORMAT_BITMAP` arm, argument-for-argument identical to the oracle's `freetype.zig:639-652` (order, `pitch` pass-through, `atlas.format.depth()` as `num_channels`, `== 0 → error.GlyphResizeFailed`) |
 
 **Root cause of the staleness:** the row's grep was scoped to `crates/rustty-font/src`,
-but the code landed in the *sibling* crate created by the D1 three-tier split,
+but the code landed in the _sibling_ crate created by the D1 three-tier split,
 `crates/rustty-font-shaper` — the tier that is allowed to hold C-FFI (memory
 `apc-glyf-font-layering-d1`: `rustty-font` is a PURE leaf and may never carry the FFI).
 Timeline: the code landed in commit **`2e82776` "rustty: font-shaper freetype face +
@@ -125,7 +125,7 @@ The wiring is `#[cfg(not(target_arch = "wasm32"))]`, not `#[cfg(not(target_os = 
 `target/debug/build/rustty-font-shaper-*/out/librustty_stb_image_resize.a` shows
 `T _stbir_resize_uint8`), and the same artifact exists on the VM
 (`~/projects/rustty/target/debug/build/rustty-font-shaper-*/out/librustty_stb_image_resize.a`).
-That is *correct* — it mirrors the oracle, whose `Backend` enum includes
+That is _correct_ — it mirrors the oracle, whose `Backend` enum includes
 `coretext_freetype` — but it means "non-macOS path" understates the blast radius and
 raises R5's importance.
 
@@ -142,7 +142,7 @@ test face::freetype::tests::bitmap_glyph_pcf  ... PROBE resize: src 8x16   pitch
 test face::freetype::tests::color_emoji       ... PROBE resize: src 136x128 pitch 544 -> dst 136x128 pitch 544 depth 4
 ```
 
-`render_and_resize` (the test whose *name* suggests it covers this) never enters the
+`render_and_resize` (the test whose _name_ suggests it covers this) never enters the
 bitmap arm at all — Inconsolata is an outline font, so it takes the
 `FT_GLYPH_FORMAT_OUTLINE` branch; its "resize" is a `set_size` re-render, unrelated
 to `stbir_resize_uint8`.
@@ -162,7 +162,7 @@ test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 98 filtered out
 
 ### 3. "Bit-exactness" is not achievable as stated — and the reason is measured, not guessed
 
-The ROADMAP row says "stb-sys cc build for bit-exactness". The vendored C *is*
+The ROADMAP row says "stb-sys cc build for bit-exactness". The vendored C _is_
 byte-identical to the oracle's, but identical C does not imply identical bytes out.
 Measured by compiling **ghostty's own recipe** — its `src/stb/stb.c` (which is what
 `src/build/SharedDeps.zig:414-423` compiles: `addIncludePath("src/stb")` +
@@ -201,35 +201,35 @@ Consequences, each independently checked:
 - **One further ±1 axis: architecture.** aarch64 vs x86_64 (same Apple clang, `-O2`)
   differ 9/512 (`maxdelta=1`) and 3/136 (`maxdelta=1`). So ±1 LSB is inherent to this
   resampler across arch, not a port defect. Fedora aarch64 gcc/clang match macOS
-  aarch64 exactly, so the *platform* axis is clean and only the *arch* and
-  *zig-ReleaseFast* axes carry the ±1.
+  aarch64 exactly, so the _platform_ axis is clean and only the _arch_ and
+  _zig-ReleaseFast_ axes carry the ±1.
 - **Do not "fix" this by pinning flags.** The only flag set that would make rustty
   match `ReleaseFast` is to build the C with `zig cc -O3`, i.e. make the Zig toolchain
   a hard build dependency of the Rust port — directly against the port's premise and
-  R3's spirit. Adding `-ffp-contract=off`/`-ffast-math` to `build.rs` would *create*
+  R3's spirit. Adding `-ffp-contract=off`/`-ffast-math` to `build.rs` would _create_
   divergence (both change output) and, because the seam is live on macOS, would be an
   R5 violation. **Decision (locked in this plan): change no flags.** Task 9 records
   the ReleaseFast ±1 as a permanent divergence with a four-criterion basis.
 
 ### 4. The delta budget that makes the KATs non-vacuous (folded in from `.port/phase-3/assessments/F-ui-tiers.md`)
 
-F-ui-tiers established the standard this plan inherits: *a golden proves nothing
-unless you know in advance how much it would move if the code were wrong.* It applied
+F-ui-tiers established the standard this plan inherits: _a golden proves nothing
+unless you know in advance how much it would move if the code were wrong._ It applied
 that to the 24 upstream PNG regolds — pixel-decoding proved 19 were encoder-only
 churn and pinned the genuinely affected set at 6 files, **~76 px / max-delta 48** —
-and recommended porting `z2d`'s `Path::offset` with its own geometry tests *before*
+and recommended porting `z2d`'s `Path::offset` with its own geometry tests _before_
 letting goldens be the only witness.
 
 Same method, applied here in advance:
 
-| Comparison | bytes differing | max delta | verdict |
-|---|---|---|---|
-| stb vs stb, identity scale (what the 9 existing tests do) | 0 | 0 | **cannot discriminate anything** |
-| stb (rustty `cc`) vs stb (Fedora gcc/clang, all opt levels, zig `-O0`) | 0 | 0 | exact — the KAT asserts equality here |
-| stb aarch64 vs stb x86_64 | 9/512, 3/136 (≤2 %) | 1 | tolerated envelope |
-| stb vs stb (ghostty `ReleaseFast`) | 9/512 (1.8 %) | 1 | tolerated envelope |
-| **stb vs nearest neighbour** | 501/512 (98 %), 124/136 (91 %) | **89 / 192** | must be REJECTED |
-| **stb vs bilinear** | 388/512 (76 %), 95/136 (70 %) | **28 / 14** | must be REJECTED |
+| Comparison                                                             | bytes differing                | max delta    | verdict                               |
+| ---------------------------------------------------------------------- | ------------------------------ | ------------ | ------------------------------------- |
+| stb vs stb, identity scale (what the 9 existing tests do)              | 0                              | 0            | **cannot discriminate anything**      |
+| stb (rustty `cc`) vs stb (Fedora gcc/clang, all opt levels, zig `-O0`) | 0                              | 0            | exact — the KAT asserts equality here |
+| stb aarch64 vs stb x86_64                                              | 9/512, 3/136 (≤2 %)            | 1            | tolerated envelope                    |
+| stb vs stb (ghostty `ReleaseFast`)                                     | 9/512 (1.8 %)                  | 1            | tolerated envelope                    |
+| **stb vs nearest neighbour**                                           | 501/512 (98 %), 124/136 (91 %) | **89 / 192** | must be REJECTED                      |
+| **stb vs bilinear**                                                    | 388/512 (76 %), 95/136 (70 %)  | **28 / 14**  | must be REJECTED                      |
 
 The discrimination gap is ~14× in max delta and ~40× in affected-byte fraction, so an
 "exact, with a ±1-on-≤2 % escape hatch only for the cross-toolchain gate" rule is
@@ -246,7 +246,7 @@ already routed: `.port/phase-3/assessments/G-config-build-i18n.md:539` assigns i
 break R1's pin discipline (WS11 targets the pinned oracle) and the ROADMAP's WS11
 row. It is **not deferred by this plan** — it is owned elsewhere, with its measured
 regold budget (6 files, ~76 px, max-delta 48) already recorded in F-ui-tiers §2b. What
-WS11 *does* take from that assessment is the methodology above, applied to its own
+WS11 _does_ take from that assessment is the methodology above, applied to its own
 seam.
 
 ---
@@ -387,9 +387,11 @@ git commit --allow-empty -m "font-shaper: WS11 branch point — stb resize cover
 ### Task 2: Direct-FFI unit tests for `crate::stb` (the smallest falsifiable step)
 
 **Files:**
+
 - Modify: `crates/rustty-font-shaper/src/stb.rs` (append a `#[cfg(test)] mod tests`)
 
 **Interfaces:**
+
 - Consumes: `crate::stb::stbir_resize_uint8` (unchanged).
 - Produces: tests `stbir_resize_uint8_upsamples_a_known_ramp`,
   `stbir_resize_uint8_rejects_zero_target_size`.
@@ -464,7 +466,7 @@ mod tests {
 cd /Users/gael/projects/rustty && cargo test -p rustty-font-shaper --lib stb:: 2>&1 | tail -8
 ```
 
-Expected: `test result: ok. 2 passed`. These are *characterization* tests over already
+Expected: `test result: ok. 2 passed`. These are _characterization_ tests over already
 correct code, so green-on-first-run is correct; the TDD obligation is discharged by
 Step 3's falsification, not by an initially-red run.
 
@@ -492,6 +494,7 @@ git commit -m "font-shaper/stb: direct-FFI tests for stbir_resize_uint8 (interpo
 ### Task 3: The oracle harness + the D10 toolchain-matrix gate
 
 **Files:**
+
 - Create: `.port/tools/stb-resize-oracle/oracle.c`
 - Create: `.port/tools/stb-resize-oracle/run.sh`
 - Create: `.port/tools/stb-resize-oracle/negative_control.py`
@@ -499,13 +502,14 @@ git commit -m "font-shaper/stb: direct-FFI tests for stbir_resize_uint8 (interpo
 - Modify: `.port/tools/gates/README.md`, `.port/tools/ci.sh`
 
 **Interfaces:**
+
 - Consumes: `crates/rustty-font-shaper/vendor/stb_image_resize.h` (ours) and, read-only
   via `git -C /Users/gael/projects/ghostty show HEAD:src/stb/{stb.c,stb_image.h,stb_image_resize.h}`,
   the oracle's own copies + build recipe.
 - Produces: `exit 0` GREEN / non-zero RED / `exit 3` BLOCKED (missing `zig`, missing
   oracle repo) — never a silent green.
 
-This is the piece that makes the fixtures in Tasks 4–5 *oracle-derived* rather than
+This is the piece that makes the fixtures in Tasks 4–5 _oracle-derived_ rather than
 self-referential.
 
 - [x] **Step 1: Write `oracle.c`**
@@ -542,7 +546,7 @@ It must, for the two cases `16 32` and `8 17`:
 
 1. build our vendored header standalone with the host `cc` at `-O0 -O1 -O2 -O3 -Os`
    and require all five outputs identical (call this the **consensus**);
-2. build the *oracle's* recipe — `git show HEAD:src/stb/{stb.c,stb_image.h,stb_image_resize.h}`
+2. build the _oracle's_ recipe — `git show HEAD:src/stb/{stb.c,stb_image.h,stb_image_resize.h}`
    into a scratch dir, then `zig build-obj -O$MODE -lc -I. -fno-sanitize-c stb.c`
    for `MODE` in `Debug ReleaseFast ReleaseSafe ReleaseSmall`, linked against
    `oracle.c` — and report each mode's delta vs the consensus;
@@ -643,12 +647,14 @@ git commit -m "gates: D10 — vendored stb_image_resize vs ghostty's own build r
 ### Task 4: Grayscale bitmap-strike resize KAT
 
 **Files:**
+
 - Create: `crates/rustty-font-shaper/src/testdata/stb_resize_terminus_i_gray_16x17.bin`
 - Create: `crates/rustty-font-shaper/src/testdata/stb_resize_terminus_i_gray_8x17.bin`
 - Create: `crates/rustty-font-shaper/src/testdata/README.stb-resize.md`
 - Modify: `crates/rustty-font-shaper/src/face/freetype.rs` (`mod tests`)
 
 **Interfaces:**
+
 - Consumes: `Face::render_glyph`, `rustty_font::glyph::{Align, Constraint, ConstraintSize, RenderOptions}`,
   `rustty_font::embedded::TERMINUS_TTF`, `Atlas<Global>` with `Format::Grayscale`.
 - Produces: test `stb_resize_kat_bitmap_strike_grayscale`.
@@ -771,7 +777,7 @@ The bytes must not be "whatever our build printed". Procedure:
 1. Add a temporary `eprintln!` dump (hex) of `actual` to the test, run it, and write
    the two byte streams to the fixture paths.
 2. **Validate, don't trust:** run `.port/tools/stb-resize-oracle/run.sh` restricted to
-   the *same* transform the pipeline performed. The pipeline's input is the densified
+   the _same_ transform the pipeline performed. The pipeline's input is the densified
    FT bitmap, not the harness ramp, so add a mode to `run.sh` that accepts an input
    `.bin` + source dims on the command line, and feed it the pre-resize FT bitmap
    (dump it with a second temporary `eprintln!` next to the resize call). Require:
@@ -792,7 +798,7 @@ source strike dims, the target dims, the generating commit, the exact regenerati
 command, and the **delta budget** (`0` vs the consensus and vs ghostty
 Debug/ReleaseSafe/ReleaseSmall; `≤1 LSB on ≤2 %` vs ghostty `ReleaseFast`; a wrong
 resampler moves 70–98 % of bytes at max delta 14–192). A future regold that exceeds
-the budget means the *code* changed, not the fixture — that is the F-ui-tiers property
+the budget means the _code_ changed, not the fixture — that is the F-ui-tiers property
 this preserves.
 
 - [x] **Step 5: Run — expect green**
@@ -831,19 +837,21 @@ git commit -m "font-shaper/freetype: grayscale bitmap-strike resize KAT (16x17 +
 ### Task 5: BGRA (color-emoji) bitmap-strike resize KAT
 
 **Files:**
+
 - Create: `crates/rustty-font-shaper/src/testdata/stb_resize_emoji_bgra_16x15.bin`
 - Create: `crates/rustty-font-shaper/src/testdata/stb_resize_emoji_bgra_8x7.bin`
 - Modify: `crates/rustty-font-shaper/src/face/freetype.rs` (`mod tests`),
   `crates/rustty-font-shaper/src/testdata/README.stb-resize.md`
 
 **Interfaces:**
+
 - Consumes: `embedded::EMOJI` (NotoColorEmoji, a 136×128 BGRA strike), `Format::Bgra`,
   and — critically — grid metrics from a **different, outline** face.
 - Produces: test `stb_resize_kat_bitmap_strike_bgra`.
 
 **Why this case matters and how to make it non-trivial:** `num_channels = 4` exercises
 a completely different stb code path (interleaved channels, `pitch = w * 4`), and the
-transform is a large *downsample* (136×128 → 16×15), which selects the Mitchell
+transform is a large _downsample_ (136×128 → 16×15), which selects the Mitchell
 downsampling kernel rather than the upsampling one. Measured trap: passing
 `Metrics::calc(emoji_face.get_metrics())` makes the constraint a **no-op** — the emoji
 face's own cell is as large as its strike, so every combination returns 136×128
@@ -942,16 +950,16 @@ Append inside the same `mod tests`:
 ```
 
 - [x] **Step 2: Run to verify it fails** — same expected failure mode as Task 4 Step 2
-  (missing fixture files).
+      (missing fixture files).
 
 - [x] **Step 3: Generate + validate the fixtures** by the identical two-stage procedure
-  as Task 4 Step 3 (dump, then require the D10 harness to reproduce the bytes exactly
-  under every consensus toolchain from the same pre-resize FT bitmap, with
-  `num_channels = 4`).
+      as Task 4 Step 3 (dump, then require the D10 harness to reproduce the bytes exactly
+      under every consensus toolchain from the same pre-resize FT bitmap, with
+      `num_channels = 4`).
 
 - [x] **Step 4: Extend `README.stb-resize.md`** with the two BGRA rows (including the
-  "metrics must come from the primary face" trap, so a regold cannot silently reintroduce
-  the identity case).
+      "metrics must come from the primary face" trap, so a regold cannot silently reintroduce
+      the identity case).
 
 - [x] **Step 5: Run — expect green**
 
@@ -962,8 +970,8 @@ cd /Users/gael/projects/rustty && cargo test -p rustty-font-shaper --lib stb_res
 Expected: `test result: ok. 2 passed`.
 
 - [x] **Step 6: Falsify** — re-apply the nearest-neighbour probe; the BGRA KAT must
-  FAIL. Measured at plan-authoring time (FNV-1a over the extracted bytes, stb vs
-  nearest neighbour) — every scaled case moves, every identity case does not:
+      FAIL. Measured at plan-authoring time (FNV-1a over the extracted bytes, stb vs
+      nearest neighbour) — every scaled case moves, every identity case does not:
 
 ```
                           stb                NN
@@ -973,7 +981,7 @@ cw=2 Cover  16x15 n=960   1a94418d940482df   676eda64207ebd2f   -> differs
 cw=2 Stretch 16x17 n=1088 ce8dc76eb6bf4da4   c3a5874748337831   -> differs
 ```
 
-  Revert the probe and re-confirm green.
+Revert the probe and re-confirm green.
 
 - [x] **Step 7: Commit**
 
@@ -988,15 +996,17 @@ git commit -m "font-shaper/freetype: BGRA bitmap-strike resize KAT (136x128 -> 1
 ### Task 6: Make the negative control machine-checked, not procedural
 
 **Files:**
+
 - Modify: `crates/rustty-font-shaper/src/face/freetype.rs` (`mod tests`)
 
 **Interfaces:**
+
 - Consumes: the two grayscale fixtures from Task 4.
 - Produces: test `stb_resize_kat_rejects_nearest_and_bilinear`.
 
 Tasks 4–6 rely on a human re-applying the NN probe to know the KATs discriminate. That
 evidence evaporates after the commit. This test bakes it in: it computes nearest-neighbour
-and bilinear resamplings *of the same source strike* in the test itself and asserts they
+and bilinear resamplings _of the same source strike_ in the test itself and asserts they
 are **rejected** by the fixture, with the measured delta magnitudes as the assertion —
 so if someone later loosens the KAT to a tolerance, this test fails.
 
@@ -1011,7 +1021,7 @@ Requirements (name and shape fixed; the implementer writes the arithmetic):
   - `nearest != fixture` and `bilinear != fixture` (exact inequality), AND
   - the fraction of differing bytes is `> 0.5` for both, AND
   - `max |delta| >= 10` for both.
-- Assert the tolerated-noise envelope is *disjoint* from those: a byte-vector equal to
+- Assert the tolerated-noise envelope is _disjoint_ from those: a byte-vector equal to
   the fixture with `+1` applied to 2 % of its bytes must satisfy
   `max delta <= 1 && differing fraction <= 0.02` — i.e. the envelope used by the D10
   gate cannot be satisfied by a wrong resampler.
@@ -1051,7 +1061,7 @@ git commit -m "font-shaper/freetype: machine-checked negative control — the re
 **Files:** none modified.
 
 **Platform:** Linux aarch64 (Fedora 44). This is the platform the ROADMAP row names,
-and the only one where the FreeType face is the *default* backend
+and the only one where the FreeType face is the _default_ backend
 (`face/mod.rs:41-44`: macOS default `coretext`, Linux default `fontconfig_freetype`).
 
 **VM SAFETY:** never run a heavy build on `rvm` concurrently with headed compositor
@@ -1124,7 +1134,7 @@ so R5 is a real obligation, not a formality.
 
 **Method note (do not deviate):** **do not hash binaries.** A prior lane obtained three
 different hashes from rebuilds of byte-identical source and correctly switched to an
-A/B of *behaviour* plus a feature-graph diff. Follow that.
+A/B of _behaviour_ plus a feature-graph diff. Follow that.
 
 - [x] **Step 1: Prove no production code changed**
 
@@ -1156,7 +1166,7 @@ in `crates/rustty-font-shaper/Cargo.toml`, re-run the diff, see output, revert.
 
 The CoreText face is macOS's default backend, and the shaper's macOS-facing suites are
 `shaper::coretext_tests` and `face::coretext`. Run the whole crate on both branches and
-diff the *result lines*:
+diff the _result lines_:
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -1191,6 +1201,7 @@ explicit line stating that binary hashing was deliberately NOT used and why), th
 ### Task 9: Ledger truth pass
 
 **Files:**
+
 - Modify: `.port/phase-2/DEFERRALS.md` (the `:3741` entry; the O17 row at `:5416`; a new
   permanent-divergence entry)
 - Modify: `docs/superpowers/plans/2026-07-29-ws19-phase2-closeout.md` (`:123`, `:376`, `:998`)
@@ -1242,13 +1253,14 @@ CORRECTION §3, the identified cause (`ReleaseFast`'s loop vectorizer; `zig cc -
    `.port/phase-3/assessments/F-ui-tiers.md`); ±1 LSB in an anti-aliased glyph bitmap
    is 48× smaller and imperceptible.
 
-Also state what is *guarded*: D10 continuously asserts the envelope, so a future drift
+Also state what is _guarded_: D10 continuously asserts the envelope, so a future drift
 beyond ±1/2 % is RED, and the in-crate KATs assert exact equality on the shipping
 toolchains.
 
 - [x] **Step 4: Correct the three WS19 plan rows**
 
 `docs/superpowers/plans/2026-07-29-ws19-phase2-closeout.md`:
+
 - `:123` (`| O17 stb_image_resize glyph resize | **→ WS11** |`) — annotate that the
   routing was right but the status was wrong (already shipped 2026-06-30; WS11 closed
   the coverage gap instead).
@@ -1540,8 +1552,8 @@ Task 7 Step 4 (`cargo build --workspace` on `rvm`) was recorded above as "delibe
 not run" because a headed compositor session was live at the time. It has now been run,
 and the scope note is retired — WS11 leaves **nothing** unexecuted.
 
-VM safety re-checked before starting (the standing rule is *heavy build concurrently
-with headed compositor WORK*; here the session was idle and nobody was driving it):
+VM safety re-checked before starting (the standing rule is _heavy build concurrently
+with headed compositor WORK_; here the session was idle and nobody was driving it):
 `up 22:43, load average 0.41 0.30 0.28`, 31 GB free.
 
 ```
@@ -1624,7 +1636,7 @@ FAIL-arm proof (`--self-test`, exit 0 = both RED arms demonstrably reachable):
 
 That arm (a) is also the standing proof of the locked no-`build.rs`-flag-change
 decision: `-ffast-math` would make rustty RED against ghostty's own Debug, ReleaseSafe
-**and** ReleaseSmall builds — a flag change would *create* divergence, not remove it.
+**and** ReleaseSmall builds — a flag change would _create_ divergence, not remove it.
 
 ### Step 1b — Linux
 
@@ -1635,7 +1647,7 @@ run of the crate suite green (85/85, all 5 WS11 tests present).
 
 **Not performed by this lane, by explicit instruction** (the finishing lane was scoped
 to `crates/rustty-font-shaper/`, `crates/rustty-font/`, `.port/` and this plan file, and
-told not to merge to `main`). All WS11 *content* is complete and verified; the merge is
+told not to merge to `main`). All WS11 _content_ is complete and verified; the merge is
 a mechanical hand-off of branch `worktree-agent-aa1d41176658c01db` to the orchestrator.
 **This is a lane boundary, not a deferral:** no WS11 check, test, gate, or ledger repair
 is outstanding.

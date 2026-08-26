@@ -107,7 +107,25 @@ def condition_holds(cond, enabled):
 
 
 def cargo_features(manifest):
-    """Return (declared feature names, default list) from a Cargo.toml."""
+    """Return (declared feature names, TRANSITIVELY resolved default set).
+
+    The default set is resolved through the crate's own features, not read as
+    a literal string list. Cargo activates features transitively, so
+
+        default = ["simd", "vt-features-default"]
+        vt-features-default = ["snapshot", "formatter", ...]
+
+    enables `snapshot` exactly as surely as spelling it into `default` would.
+    A literal membership test called that RED — which it was, for nine
+    features, the moment CMakeLists needed a name for "all VT features, SIMD
+    off" (see crates/rustty-vt-c/Cargo.toml). The property this gate exists to
+    protect is "a default build has every feature on"; resolving is what
+    actually checks that property rather than one spelling of it.
+
+    Dependency features (`rustty-vt/snapshot`, `dep:foo`) are not expanded:
+    they name another crate's feature, and this gate only reasons about the
+    manifest in front of it.
+    """
     text = manifest.read_text()
     body = text[text.index("[features]"):]
     nxt = re.search(r"\n\[(?!features)", body)
@@ -115,8 +133,20 @@ def cargo_features(manifest):
         body = body[: nxt.start()]
     body = re.sub(r"(?m)^\s*#.*$", "", body)
     declared = set(re.findall(r"(?m)^([A-Za-z0-9_-]+)\s*=", body))
-    dm = re.search(r"default\s*=\s*\[(.*?)\]", body, re.S)
-    default = set(re.findall(r'"([^"]+)"', dm.group(1))) if dm else set()
+
+    # name -> the features it activates, for every feature in this manifest.
+    edges = {}
+    for m in re.finditer(r"(?m)^([A-Za-z0-9_-]+)\s*=\s*\[(.*?)\]", body, re.S):
+        edges[m.group(1)] = re.findall(r'"([^"]+)"', m.group(2))
+
+    default = set()
+    queue = list(edges.get("default", []))
+    while queue:
+        f = queue.pop()
+        if f in default or "/" in f or f.startswith("dep:"):
+            continue
+        default.add(f)
+        queue.extend(edges.get(f, []))
     return declared, default
 
 

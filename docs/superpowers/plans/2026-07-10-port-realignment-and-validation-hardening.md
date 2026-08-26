@@ -26,12 +26,12 @@
 
 ## Decision gates (user forks — resolve before dependent tasks)
 
-| # | Fork | Recommendation | Blocks |
-|---|------|----------------|--------|
-| DG1 | Ratify PROPOSED R7–R12 into PORT_RULES.md (as-is / amended / dropped per rule) | Ratify all six; they only tighten | Tasks 14–22 |
-| DG2 | Release profile semantics: ghostty's tagged artifacts are ReleaseFast (overflow = UB), dev builds ReleaseSafe (trap). Options: (a) `overflow-checks=true` in release + a `release-fast` bench profile; (b) status quo (silent wrap) | (a) — strictly safer than the mirrored artifact, one line, restores trap-parity for Kitty multiply etc. Record the fork in PORT_RULES | Task 10 |
-| DG3 | G1 `--strict` finale semantics: exact `ported == contract` is unsatisfiable (sanctioned extra tests). Options: (a) `ported >= contract` AND empty MISSING; (b) tag rustty-only tests `// rustty-only` and subtract | (a) now, (b) later if EXTRA noise ever hides a real miss | Task 4 |
-| DG4 | ReleaseSafe-active Zig asserts ported as `debug_assert!` (109 vt sites): (a) add a `release-safe` profile (`debug-assertions = true`) used by the differential harness + CI test lane; (b) flip the 109 sites to `assert!` | (a) — zero code churn, matches the oracle's build mode at the harness boundary | Task 10 |
+| #   | Fork                                                                                                                                                                                                                                | Recommendation                                                                                                                        | Blocks      |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| DG1 | Ratify PROPOSED R7–R12 into PORT_RULES.md (as-is / amended / dropped per rule)                                                                                                                                                      | Ratify all six; they only tighten                                                                                                     | Tasks 14–22 |
+| DG2 | Release profile semantics: ghostty's tagged artifacts are ReleaseFast (overflow = UB), dev builds ReleaseSafe (trap). Options: (a) `overflow-checks=true` in release + a `release-fast` bench profile; (b) status quo (silent wrap) | (a) — strictly safer than the mirrored artifact, one line, restores trap-parity for Kitty multiply etc. Record the fork in PORT_RULES | Task 10     |
+| DG3 | G1 `--strict` finale semantics: exact `ported == contract` is unsatisfiable (sanctioned extra tests). Options: (a) `ported >= contract` AND empty MISSING; (b) tag rustty-only tests `// rustty-only` and subtract                  | (a) now, (b) later if EXTRA noise ever hides a real miss                                                                              | Task 4      |
+| DG4 | ReleaseSafe-active Zig asserts ported as `debug_assert!` (109 vt sites): (a) add a `release-safe` profile (`debug-assertions = true`) used by the differential harness + CI test lane; (b) flip the 109 sites to `assert!`          | (a) — zero code churn, matches the oracle's build mode at the harness boundary                                                        | Task 10     |
 
 ---
 
@@ -40,10 +40,12 @@
 ### Task 1: bench `ref_all_decls` contract test (fixes B2-genuine + H3)
 
 **Files:**
+
 - Modify: `crates/rustty-bench/src/lib.rs` (header lines ~14–26 + new test)
 - Modify: `DEFERRALS.md:3288` (the documented-drop entry)
 
 **Interfaces:**
+
 - Produces: `rustty-bench` test count 8/8 vs contract; G1 bench row GREEN.
 
 - [ ] **Step 1: Read the workspace convention** — `grep -rn "fn ref_all_decls" crates/rustty-crash/src crates/rustty-zf/src | head -3` and open one; the port already has 30 of these (VALIDATION_REPORT H3).
@@ -76,11 +78,13 @@ mod tests {
 ### Task 2: G1/G9 name matcher — generate the port's slug convention (fixes H2 + H4)
 
 **Files:**
+
 - Modify: `.port/tools/gates/_gatelib.py:325-355` (`name_candidates`)
 - Modify: `.port/tools/gates/check_parity_surface.py` (`id_variants` — same flaw)
 - Modify: `crates/rustty-extra/src/...` (rename `get_description_test` → `get_description`, per H4)
 
 **Interfaces:**
+
 - Produces: `name_candidates(name)` additionally yields the composed port slug (non-alnum→split, camel-split, lowercase, `_`-join). All other candidate forms unchanged (tightening-safe: counts still enforced; this only fixes false MISSING).
 
 - [ ] **Step 1: Write failing check** — `python3 -c "import sys; sys.path.insert(0,'.port/tools/gates'); from _gatelib import name_candidates; assert 'dynamic_palette_change_default_preserves_changes' in name_candidates('DynamicPalette: changeDefault preserves changes'), 'composed slug missing'"` → AssertionError (current behavior).
@@ -113,10 +117,12 @@ mod tests {
 ### Task 3: G2 assertion gate — real per-test comparison, undiluted counting (fixes H6 + M7)
 
 **Files:**
+
 - Modify: `.port/tools/gates/check_assertions.py:124` (per-test resolution)
 - Modify: `.port/tools/gates/_gatelib.py:358-373` (`ASSERTION_PATTERNS`)
 
 **Interfaces:**
+
 - Consumes: Task 2's fixed `name_candidates`.
 - Produces: per-test WEAKENED check resolves ref string-name → ported fn via `name_candidates` (today only 43/3,065 compare); Rust assertion counting drops `.expect(`, `.unwrap()`, `?` from the parity count (keeps `unwrap_err`, `should_panic`, plus a per-test baseline equal to the Zig body's non-testing `try` count from `tests.jsonl`, per M7's alternative if pure removal floors any crate below contract).
 
@@ -129,6 +135,7 @@ mod tests {
 ### Task 4: Done-detection unification + `--strict` semantics (fixes H5, DG3)
 
 **Files:**
+
 - Modify: `.port/tools/gates/check_leaks.sh:71-75`, `.port/tools/gates/check_comment_coverage.py:142-145`
 - Modify: `.port/tools/gates/check_tests_ported.py` (strict mode per DG3)
 - Modify: `.port/phase-0/plan/DEFINITION_OF_PARITY.md` (record DG3), `.port/tools/gates/README` (drift, §3a)
@@ -144,11 +151,13 @@ mod tests {
 ### Task 5: Arm G4 — the real byte-exact differential gate (fixes B1; the port's single biggest un-run check)
 
 **Files:**
+
 - Modify: `.port/tools/gates/run_differential.sh:57-110`
 - Modify: `.port/phase-0/harness/build_port_driver.sh` (wire librustty_vt_c staticlib → `harness/bin/vt_driver_port`)
 - Modify: `.port/tools/ci.sh:45-46`, `.port/tools/CI.md` (truthful G4 description)
 
 **Interfaces:**
+
 - Produces: `run_differential.sh` auto-arms when `harness/bin/vt_driver_port` (or `$RUSTTY_VT_DRIVER`) exists; drives `comparator.py` with its REAL CLI (`comparator.py <input> --ref <golden> --port <port-output> ...` — read the argparse in `harness/comparator.py` first and use exactly that); a present-but-diverging port is RED (exit 1), never WARNING; `gate_empty_divergence.sh` runs only on the truly-empty branch.
 
 - [ ] **Step 1: Build the port driver** — `bash .port/phase-0/harness/build_port_driver.sh` (target/debug/librustty_vt_c.a already exports the 162 `rustty_*` symbols it needs, per B1). If the script needs the release lib: `cargo build -p rustty-vt-c --release` first. Deliverable: executable `harness/bin/vt_driver_port`.
@@ -162,6 +171,7 @@ mod tests {
 ### Task 6: CI workflow can actually pass (fixes H7)
 
 **Files:**
+
 - Modify: `.github/workflows/ci.yml:44-50`
 - Modify: `.port/tools/gates/check_leaks.sh:29-31` (require_miri exit code)
 
@@ -173,6 +183,7 @@ mod tests {
 ### Task 7: Register `check_test_counts.py` in ci.sh (§3a — the only fidelity net for 11 non-contract crates)
 
 **Files:**
+
 - Modify: `.port/tools/ci.sh` (new gate line), `.port/tools/CI.md`
 
 - [ ] **Step 1:** Add it after G1, gated on an oracle-checkout probe: absent (CI) → exit 3 BLOCKED per R3; present (local) → binding.
@@ -181,9 +192,10 @@ mod tests {
 ### Task 8: termio test-binary fork deadlock (live finding from ci-run-2026-07-10.log)
 
 **Files:**
+
 - Investigate: `crates/rustty-termio/src/command.rs` (`command_rt_pre_exec_1`), `src/exec.rs` (`subprocess_start_spawns_and_reaps`, `threadenter_queuewrite_writes_to_pty`)
 
-Evidence: under system load, the test binary hung >29 min with a forked child at 0.00s CPU (PID snapshot in the CI log analysis) — the fork-in-threaded-process class: child forked while another test thread held a lock; only async-signal-safe work is legal between `fork` and `exec`. The same tests pass in isolation (3661-pass run earlier the same day). The hang had to be killed, which is why ci-run-2026-07-10.log shows `cargo test --workspace` HARD-FAIL exit 101 (`error: test failed ... -p rustty-termio --lib`) — i.e. this flake is CI-breaking, not cosmetic. Same *class* as memory `parallel-cargo-test-exposes-c-init-races` (crash site ≠ cause; parallel test harness exposes it).
+Evidence: under system load, the test binary hung >29 min with a forked child at 0.00s CPU (PID snapshot in the CI log analysis) — the fork-in-threaded-process class: child forked while another test thread held a lock; only async-signal-safe work is legal between `fork` and `exec`. The same tests pass in isolation (3661-pass run earlier the same day). The hang had to be killed, which is why ci-run-2026-07-10.log shows `cargo test --workspace` HARD-FAIL exit 101 (`error: test failed ... -p rustty-termio --lib`) — i.e. this flake is CI-breaking, not cosmetic. Same _class_ as memory `parallel-cargo-test-exposes-c-init-races` (crash site ≠ cause; parallel test harness exposes it).
 
 - [ ] **Step 1: REQUIRED SUB-SKILL `superpowers:systematic-debugging`.** Reproduce: `while cargo test -p rustty-termio 2>&1 | tail -1; do :; done` under parallel load (run `cargo build --workspace` concurrently). Capture the hung child's stack (`sample <pid>` on macOS).
 - [ ] **Step 2:** Identify what the child touches pre-exec (allocator? env lock? `std::process` internals vs a hand-rolled fork?). Compare with ghostty's `Command.zig` — Zig's posix spawn path does only async-signal-safe work in the child; if the Rust port's `pre_exec` closure allocates or locks, that is a fidelity-relevant divergence, not just a test flake.
@@ -201,6 +213,7 @@ Evidence: under system load, the test binary hung >29 min with a forked child at
 ### Task 10: Release-profile semantics (M6 + DG2 + DG4 + §3d Kitty multiply)
 
 **Files:**
+
 - Modify: root `Cargo.toml` (currently has NO `[profile.*]`)
 - Modify: `.port/PORT_RULES.md` (record the fork)
 
@@ -232,6 +245,7 @@ debug-assertions = true
 ### Task 11: vaxis `Loop::stop()` SB/TB protector UB (H1) — mirihar-proven
 
 **Files:**
+
 - Modify: `crates/rustty-vaxis/src/loop_.rs:206-211`
 - Extend: `.port/phase-2/mirihar-chunk3b` (new overlap model)
 
@@ -245,6 +259,7 @@ debug-assertions = true
 **Files:** Create: `.port/phase-2/wf-soundness-mediums.js` (implement→adversarial-verify→surgical-fix pipeline per R11 shape)
 
 Items (each = one pipeline element, file:line from VALIDATION_REPORT §3c):
+
 1. `page_impl.rs:1278-1281` `Page::get_row` — replace `&mut Row`→`*mut` materialization with pure pointer arithmetic (match siblings `get_row_and_cell`/`get_cells`).
 2. `vt-c/sys.rs:176` `decode_png_wrapper` — free the C-callback-allocated buffer (leak per kitty PNG decode); add an ASan-visible test.
 3. `metal_impl.rs:829` — `extern "C-unwind"` display path: `catch_unwind` + abort (Zig reference aborts); never unwind into ObjC frames.
@@ -274,6 +289,7 @@ Same wf-script shape (`.port/phase-2/wf-semantics-mediums.js`): tmux DCS dormant
 **Files:** Create: `.port/phase-2/wf-ledger-realign.js`
 
 Scope (all from VALIDATION_REPORT — every claim pre-verified):
+
 - Flip PORT STATUS to accurate values: vt (M1, after Task 2), config (M2), vt-c (M3 + stale comments terminal.rs:823/:1647), core, apprt, termio, font-shaper, renderer DEFERRED block, cli. Add missing `PORT STATUS:` markers: identity, terminfo, xev (normalize 'CHUNK STATUS'), z2d.
 - DEFERRALS.md: add W0–W5 + vaxis 4a/4b + synthetic + wuffs sections; resolve R-d :505/:3134, W2 loop_enter note, synthetic :3266, cli C5 :2618; net effect: zero phantom open seams (~25 today), every live `unimplemented!()`/`todo!()` (69) maps to a live entry.
 - GAP_ANALYSIS.md: stamp `superseded-by` header pointing at this plan + regenerate the workstream table.
@@ -297,10 +313,12 @@ Scope (all from VALIDATION_REPORT — every claim pre-verified):
 ### Task 16: GHOSTTY_LIFETIMES.tsv — retroactive build + audit (locked decision, memory: adopt-lifetimes-tsv)
 
 **Files:**
+
 - Create: `.port/audits/GHOSTTY_LIFETIMES.tsv`
 - Create: `.port/phase-2/wf-lifetime-classify.js` (modeled on Bun's `.claude/workflows/lifetime-classify.workflow.js` @ ed1a70f81708 — fetch it as the template)
 
 **Interfaces:**
+
 - Produces: TSV schema `file<TAB>struct<TAB>field<TAB>zig_type<TAB>class<TAB>rust_type<TAB>evidence`; classes {OWNED, SHARED, BORROW_PARAM, BORROW_FIELD, STATIC, BACKREF, INTRUSIVE, FFI, ARENA, GHOSTTY_C, UNKNOWN}; evidence = "file:line — what you saw"; UNKNOWN ⇒ `Option<NonNull<T>>` + `TODO(port)`.
 
 - [ ] **Step 1:** Author the wf script: (a) enumerate every pointer-typed struct field in the RETROACTIVE scope — ghostty sources for rustty-vt (Page/PageList/Screen/Terminal), vt-c wrappers, xev intrusive nodes, vaxis (Tty/Vaxis/Loop — direct H1 relevance), font/font-shaper hooks, termio; (b) classify with deinit-as-ownership-oracle (§3.1) + evidence citation; (c) 3-vote default-refute verification on every UNKNOWN + a 12% sample of confident rows; (d) publish inter-classifier agreement in the TSV header comment.
@@ -311,6 +329,7 @@ Scope (all from VALIDATION_REPORT — every claim pre-verified):
 ### Task 17: Unsafe census + UNSOUND_SAFE ledger (D7, R9)
 
 **Files:**
+
 - Create: `.port/audits/count-unsafe.sh` (the exact Bun rg command, vendor-excluded, per BUN_PORT_LEARNINGS §4-D7)
 - Create: `.port/audits/UNSOUND_SAFE.md`
 - Create: `.port/phase-2/wf-safety-tags.js` (retro-tag `// SAFETY(origin/dest):` on existing unsafe blocks)
@@ -356,6 +375,7 @@ Scope (all from VALIDATION_REPORT — every claim pre-verified):
 **Files:** Create: `.port/phase-2/wf-port-validation-2.js` (reuse wf-port-validation.js skeleton; swap auditor prompts)
 
 Auditor set (from VALIDATION_REPORT §4 "What NO auditor examined"):
+
 1. **Dynamic Miri** — the full per-crate Miri suite vs MIRI_EXCEPTIONS (now with the Task 4 enumerator); every exception's compensating coverage actually executed.
 2. **Dynamic ASan** — G6 --all-done across the widened FFI set (termio's 233 unsafe occurrences, wuffs 27).
 3. **Armed G4 runs** — full corpus + fixtures, release-safe profile (this is now just "run the gate", Task 5 armed it).
@@ -444,9 +464,9 @@ RendererConfig accessor trait), `crates/rustty-renderer/src/metal/metal_impl.rs`
 `GraphicsAPI.init(alloc, options)` is the on-screen construction site.
 
 - [ ] **Step 1:** Port the attach wiring (R1 line-level against Metal.zig
-  init); keep `init_offscreen` for the headless/golden lanes.
+      init); keep `init_offscreen` for the headless/golden lanes.
 - [ ] **Step 2 (acceptance):** remove the `#[ignore]` from
-  `hosts_view_layer_and_presents_live_frame` — acceptance IS both
-  windowed-present KATs un-ignored and green on a Metal host
-  (`cargo test -p rustty-apprt-c --test macos_window_host`), plus
-  `cargo test --workspace` green. Close DEFERRALS W-ATTACH in the same commit.
+      `hosts_view_layer_and_presents_live_frame` — acceptance IS both
+      windowed-present KATs un-ignored and green on a Metal host
+      (`cargo test -p rustty-apprt-c --test macos_window_host`), plus
+      `cargo test --workspace` green. Close DEFERRALS W-ATTACH in the same commit.

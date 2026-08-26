@@ -916,8 +916,7 @@ fn encode_payload(
 #[inline]
 fn decode_alloc_check() -> Result<(), PayloadDecodeError> {
     #[cfg(test)]
-    super::tw::check(super::tw::SnapshotFp::Alloc)
-        .map_err(|_| PayloadDecodeError::OutOfMemory)?;
+    super::tw::check(super::tw::SnapshotFp::Alloc).map_err(|_| PayloadDecodeError::OutOfMemory)?;
     Ok(())
 }
 
@@ -976,7 +975,8 @@ fn decode_payload(
         return Err(err.into());
     }
 
-    let mut palette: terminal_color::DynamicPalette = terminal_color::DynamicPalette::init(original);
+    let mut palette: terminal_color::DynamicPalette =
+        terminal_color::DynamicPalette::init(original);
     for index in 0..256usize {
         let mask = 1u8 << (index % 8);
         if override_mask[index / 8] & mask != 0 {
@@ -1444,7 +1444,10 @@ fn decode_rgb(reader: &mut dyn io::Reader) -> Result<RGB, io::ReadError> {
     })
 }
 
-fn encode_dynamic_rgb(value: DynamicRGB, writer: &mut dyn io::Writer) -> Result<(), io::WriteFailed> {
+fn encode_dynamic_rgb(
+    value: DynamicRGB,
+    writer: &mut dyn io::Writer,
+) -> Result<(), io::WriteFailed> {
     if let Some(rgb) = value.default {
         writer.write_byte(1)?;
         encode_rgb(rgb, writer)?;
@@ -1495,8 +1498,7 @@ fn encode_scrollback_limit(value: usize) -> Result<Option<u64>, HeaderInitError>
     if value == usize::MAX {
         return Ok(None);
     }
-    let result =
-        u64::try_from(value).map_err(|_| HeaderInitError::ScrollbackLimitOverflow)?;
+    let result = u64::try_from(value).map_err(|_| HeaderInitError::ScrollbackLimitOverflow)?;
     if result == u64::MAX {
         return Err(HeaderInitError::ScrollbackLimitOverflow);
     }
@@ -1760,7 +1762,10 @@ mod tests {
             .get_mode(terminal_modes::Mode::DisableKeyboard));
         assert_eq!(DynamicRGB::UNSET, decoded.background);
         assert_eq!(None, decoded.foreground.default);
-        assert_eq!(RGB { r: 4, g: 5, b: 6 }, decoded.foreground.override_.unwrap());
+        assert_eq!(
+            RGB { r: 4, g: 5, b: 6 },
+            decoded.foreground.override_.unwrap()
+        );
 
         // Each scrolling axis is normalized independently.
         let mut invalid_horizontal = test_header_fixture();
@@ -1925,11 +1930,8 @@ mod tests {
     // test "TERMINAL record encodes native terminal state"
     #[test]
     fn terminal_record_encodes_native_terminal_state() {
-        let mut terminal = Terminal::init(
-            Allocator,
-            terminal_options(10, 3, Some(12_345), Some(67)),
-        )
-        .unwrap();
+        let mut terminal =
+            Terminal::init(Allocator, terminal_options(10, 3, Some(12_345), Some(67))).unwrap();
         // defer terminal.deinit(testing.allocator);
 
         // Exercise every native header section plus sentinel-backed strings.

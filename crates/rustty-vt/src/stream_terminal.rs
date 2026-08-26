@@ -46,7 +46,6 @@
 // const Terminal = @import("Terminal.zig");
 use crate::ansi;
 use crate::clipboard;
-use crate::paste as paste_pkg;
 use crate::color;
 use crate::csi;
 use crate::device_attributes;
@@ -54,6 +53,7 @@ use crate::device_status;
 use crate::kitty;
 use crate::modes;
 use crate::osc;
+use crate::paste as paste_pkg;
 use crate::sgr;
 use crate::size_report;
 use crate::stream;
@@ -1332,7 +1332,9 @@ impl<'a> Handler<'a> {
         // than silence.
         self.kitty_clipboard_finish(
             &state,
-            reply_state.status.unwrap_or(kitty::clipboard::Status::Eperm),
+            reply_state
+                .status
+                .unwrap_or(kitty::clipboard::Status::Eperm),
             terminator,
         );
     }
@@ -6001,19 +6003,13 @@ mod tests {
         // try testing.expectEqual(@as(usize, cases.len + 1), S.count);
         assert_eq!(cases.len() + 1, PR_COUNT.with(|c| c.get()));
         // try testing.expectEqual(osc.Command.ProgressReport.State.set, S.last_state);
-        assert_eq!(
-            osc::ProgressReportState::Set,
-            PR_STATE.with(|c| c.get())
-        );
+        assert_eq!(osc::ProgressReportState::Set, PR_STATE.with(|c| c.get()));
         // s.nextSlice("\x1Bc");
         s.next_slice(b"\x1Bc");
         // try testing.expectEqual(@as(usize, cases.len + 2), S.count);
         assert_eq!(cases.len() + 2, PR_COUNT.with(|c| c.get()));
         // try testing.expectEqual(osc.Command.ProgressReport.State.remove, S.last_state);
-        assert_eq!(
-            osc::ProgressReportState::Remove,
-            PR_STATE.with(|c| c.get())
-        );
+        assert_eq!(osc::ProgressReportState::Remove, PR_STATE.with(|c| c.get()));
         // try testing.expectEqual(@as(?u8, null), S.last_progress);
         assert_eq!(None::<u8>, PR_PROGRESS.with(|c| c.get()));
 
@@ -7309,8 +7305,7 @@ mod tests {
                         .iter()
                         .map(|(mime, data)| clipboard::Content { mime, data })
                         .collect();
-                    let available_b: Vec<&[u8]> =
-                        available.iter().map(|a| a.as_slice()).collect();
+                    let available_b: Vec<&[u8]> = available.iter().map(|a| a.as_slice()).collect();
                     read.reply(clipboard::ReadResult::Success(
                         clipboard::ReadResultSuccess {
                             contents: &contents_b,
@@ -7422,7 +7417,7 @@ mod tests {
         s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;R2hvc3Q=\x1B\\"); // "Ghost"
         s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9wbGFpbg==;dHk=\x1B\\"); // "ty"
         s.next_slice(b"\x1B]5522;type=wdata:mime=dGV4dC9odG1s;PGI+aGk8L2I+\x1B\\"); // "<b>hi</b>"
-        // Alias "TEXT UTF8_STRING" -> text/plain.
+                                                                                    // Alias "TEXT UTF8_STRING" -> text/plain.
         s.next_slice(b"\x1B]5522;type=walias:mime=dGV4dC9wbGFpbg==;VEVYVCBVVEY4X1NUUklORw==\x1B\\");
         assert_eq!(0, kc(|c| c.write_count));
         assert_eq!(0, kc_responses_len());
@@ -7633,7 +7628,9 @@ mod tests {
 
         // Request the targets listing plus two types from the primary
         // selection: ". text/plain text/html".
-        s.next_slice(b"\x1B]5522;type=read:loc=primary:id=r1;LiB0ZXh0L3BsYWluIHRleHQvaHRtbA==\x1B\\");
+        s.next_slice(
+            b"\x1B]5522;type=read:loc=primary:id=r1;LiB0ZXh0L3BsYWluIHRleHQvaHRtbA==\x1B\\",
+        );
         assert_eq!(1, kc(|c| c.read_count));
         assert_eq!(
             Some(clipboard::Location::Primary),
@@ -8451,7 +8448,10 @@ mod tests {
         assert_eq!(0, CR_NAME.with(|c| c.borrow().len()));
         assert!(!CR_GRANTED.with(|c| c.get()));
         assert!(!CR_CAN_REMEMBER.with(|c| c.get()));
-        assert_eq!(b"\x1B]52;c;aGVsbG8=\x1B\\".as_slice(), cr_written().as_slice());
+        assert_eq!(
+            b"\x1B]52;c;aGVsbG8=\x1B\\".as_slice(),
+            cr_written().as_slice()
+        );
 
         CR_WRITTEN.with(|c| c.borrow_mut().clear());
         s.next_slice(b"\x1B]52;p;?\x07");
@@ -8459,7 +8459,10 @@ mod tests {
             Some(clipboard::Location::Primary),
             CR_LOCATION.with(|c| c.get())
         );
-        assert_eq!(b"\x1B]52;p;aGVsbG8=\x07".as_slice(), cr_written().as_slice());
+        assert_eq!(
+            b"\x1B]52;p;aGVsbG8=\x07".as_slice(),
+            cr_written().as_slice()
+        );
 
         // Only the first text representation is used.
         CR_WRITTEN.with(|c| c.borrow_mut().clear());
@@ -8513,7 +8516,10 @@ mod tests {
         });
         CR_REPLY_TWICE.with(|c| c.set(true));
         s.next_slice(b"\x1B]52;c;?\x1B\\");
-        assert_eq!(b"\x1B]52;c;aGVsbG8=\x1B\\".as_slice(), cr_written().as_slice());
+        assert_eq!(
+            b"\x1B]52;c;aGVsbG8=\x1B\\".as_slice(),
+            cr_written().as_slice()
+        );
 
         CR_REPLY_TWICE.with(|c| c.set(false));
         s.deinit();
@@ -8761,7 +8767,12 @@ mod tests {
         // Registration survives (matching kitty), chunking was interrupted
         // so a new command is not treated as a continuation.
         assert!(unsafe { (*ptr).kitty_dnd.is_some() });
-        assert!(!unsafe { (*ptr).kitty_dnd.as_ref() }.unwrap().chunking.active);
+        assert!(
+            !unsafe { (*ptr).kitty_dnd.as_ref() }
+                .unwrap()
+                .chunking
+                .active
+        );
         s.next_slice(b"\x1B]72;t=q\x1B\\");
         assert_eq!(b"\x1b]72;t=q\x1b\\".as_slice(), dnd_pty().as_slice());
 
@@ -8789,6 +8800,10 @@ mod tests {
                         return;
                     };
                     let mut it = state.registered_mimes();
+                    // `while let ... = it.next()`, not `for m in it`: the
+                    // reference writes `while (it.next()) |m|` and the port
+                    // mirrors its loop form.
+                    #[allow(clippy::while_let_on_iterator)]
                     while let Some(m) = it.next() {
                         mimes.extend_from_slice(m);
                         mimes.push(b',');
@@ -9338,10 +9353,7 @@ mod tests {
         // A paste event lists the types and reads nothing at all.
         pc_reset();
         unsafe { (*ptr).modes.set(modespkg::Mode::KittyPasteEvents, true) };
-        let mut reader = PasteReader::new(
-            &[b"text/plain", b"image/png"],
-            &[b"secret", b"\x89PNG"],
-        );
+        let mut reader = PasteReader::new(&[b"text/plain", b"image/png"], &[b"secret", b"\x89PNG"]);
         assert!(handler
             .paste(Paste {
                 source: paste_pkg::Source::default(),
@@ -9528,7 +9540,9 @@ mod tests {
             })
             .unwrap());
         let written = pc_written();
-        assert!(!written.windows(pw_b64.len()).any(|w| w == pw_b64.as_slice()));
+        assert!(!written
+            .windows(pw_b64.len())
+            .any(|w| w == pw_b64.as_slice()));
 
         s.deinit();
         t.deinit(Global);

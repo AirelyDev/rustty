@@ -75,6 +75,8 @@ parse_allowlist() {
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in ''|'#'*) continue;; esac
     case "$line" in "site${TAB}"*) continue;; esac   # header
+    # `zig` is read only to advance past that TSV column.
+    # shellcheck disable=SC2034
     IFS="$TAB" read -r site decision zig test rest <<< "$line"
     [ -n "$site" ] || continue
     printf '%s\t%s\t%s\n' "$site" "$decision" "$test" >> "$out"

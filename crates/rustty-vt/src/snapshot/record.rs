@@ -645,7 +645,10 @@ mod tests {
         let mut source = io::FixedReader::new(&buffered);
         let mut record_reader = Reader::init(&mut source).unwrap();
         let mut decoded = [0u8; 16];
-        record_reader.payload_reader().read_slice_all(&mut decoded).unwrap();
+        record_reader
+            .payload_reader()
+            .read_slice_all(&mut decoded)
+            .unwrap();
         record_reader.finish().unwrap();
         assert_eq!(payload, &decoded);
         assert_eq!(b"next", source.take(4).unwrap());

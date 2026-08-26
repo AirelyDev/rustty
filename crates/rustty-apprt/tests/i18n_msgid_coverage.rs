@@ -328,9 +328,9 @@ fn code_msgids_all_wrapped_and_in_pot() {
         .iter()
         .filter(|(m, refs)| {
             !command_block.contains(m)
-                && refs.lines().any(|r| {
-                    (r.contains(".zig:") || r.contains(".rs:")) && !r.contains("nautilus")
-                })
+                && refs
+                    .lines()
+                    .any(|r| (r.contains(".zig:") || r.contains(".rs:")) && !r.contains("nautilus"))
         })
         .map(|(m, _)| m)
         .collect();

@@ -25,6 +25,7 @@
 ## File Structure
 
 **Create:**
+
 - `crates-sys/dcimgui-sys/vendor/imgui/backends/imgui_impl_opengl3.cpp` — vendored GL backend (git-tracked).
 - `crates-sys/dcimgui-sys/vendor/imgui/backends/imgui_impl_opengl3.h` — vendored header.
 - `crates-sys/dcimgui-sys/vendor/imgui/backends/imgui_impl_opengl3_loader.h` — vendored GL loader.
@@ -34,6 +35,7 @@
 - `crates/rustty-apprt/tests/gtk_inspector_dump.rs` — headed framebuffer→PPM KAT.
 
 **Modify:**
+
 - `crates-sys/dcimgui-sys/build.rs` — non-macOS OpenGL3 compile branch + `ZIGPKG_IMGUI_ENABLE_OPENGL3` define.
 - `crates-sys/dcimgui-sys/src/lib.rs` — `ImGui_ImplOpenGL3_*` FFI decls (non-macOS).
 - `crates/rustty-vt/src/input/key.rs:792` — fill `imgui_key` from the verbatim body at `:1002`.
@@ -52,10 +54,12 @@
 ### Task 1: Vendor + compile `imgui_impl_opengl3` into dcimgui-sys
 
 **Files:**
+
 - Create (git add): `crates-sys/dcimgui-sys/vendor/imgui/backends/imgui_impl_opengl3.{cpp,h}`, `imgui_impl_opengl3_loader.h`
 - Modify: `crates-sys/dcimgui-sys/build.rs`
 
 **Interfaces:**
+
 - Produces: a `dcimgui-sys` that compiles `imgui_impl_opengl3.cpp` on non-macOS and defines `ZIGPKG_IMGUI_ENABLE_OPENGL3` for the `ext.cpp` TU (activating the `ImGui_ImplOpenGL3_ShutdownWithLoaderCleanup` shim already at `ext.cpp:44`).
 
 - [ ] **Step 1: Source the vendored files at the matching imgui version.** Read the vendored imgui version: `grep IMGUI_VERSION_NUM crates-sys/dcimgui-sys/vendor/imgui/imgui.h`. Copy the three backend files from ghostty's vendored imgui (same version the Metal files came from) — locate with `find /home/gael/projects/ghostty -path '*backends/imgui_impl_opengl3*'` (ghostty's dcimgui pkg cache under `.zig-cache`/`zig-out` or the pkg source). If not present there, fetch from the upstream imgui repo at the exact matching tag. Verify the copied `imgui_impl_opengl3.cpp` `#include "imgui_impl_opengl3_loader.h"` and the version guard matches. `git add` all three.
@@ -66,11 +70,14 @@
 ### Task 2: Expose the ImGui_ImplOpenGL3 FFI in dcimgui-sys
 
 **Files:**
+
 - Modify: `crates-sys/dcimgui-sys/src/lib.rs` (mirror the Metal FFI block at `:202-241`, but `#[cfg(not(target_os = "macos"))]`)
 
 **Interfaces:**
+
 - Consumes: the compiled backend (Task 1).
 - Produces (exact decls):
+
   ```rust
   #[cfg(not(target_os = "macos"))]
   extern "C" {
@@ -96,10 +103,12 @@
 ### Task 3: Fill `Key::imgui_key` + enable `imgui` in the gtk build
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/input/key.rs:792` (replace `unimplemented!()`), using the verbatim reference body preserved at `key.rs:1002`
 - Modify: `crates/rustty-apprt/Cargo.toml` (the `gtk` feature enables `rustty-vt/imgui`)
 
 **Interfaces:**
+
 - Produces: `rustty_vt::input::Key::imgui_key(self) -> Option<c_int>` returning the `ImGuiKey_*` constant for a `Key` (used by `ImguiWidget::key_event` in Task 4). Compiled whenever `feature = "imgui"` is on.
 
 - [ ] **Step 1: Port the body.** Read the verbatim reference body at `key.rs:1002` (the `imguiKey` `switch` preserved as a comment) and the oracle `src/input/key.zig:545`. Replace the `unimplemented!("...")` at `key.rs:796` with the real `match self { … => dcimgui_sys::ImGuiKey_… as c_int, … }`, returning `Some(constant)` for mapped keys and `None` otherwise. Preserve the reference comment lines.
@@ -110,11 +119,13 @@
 ### Task 4: `ImguiWidget` — generic ImGui-over-GLArea GObject
 
 **Files:**
+
 - Create: `crates/rustty-apprt/src/gtk/class/imgui_widget.rs`
 - Modify: the class module index (`crates/rustty-apprt/src/gtk/class/mod.rs` or wherever classes are declared — follow the existing `surface`/`window` registration pattern) to add `pub mod imgui_widget;`
 - Oracle: `src/apprt/gtk/class/imgui_widget.zig` (551 L) + `assets/ui/1.5/imgui-widget.blp` (already tracked)
 
 **Interfaces:**
+
 - Consumes: `dcimgui_sys` (`ImGui_CreateContext`/`DestroyContext`/`SetCurrentContext`/`GetIO`/`NewFrame`/`Render`/`GetDrawData`/`GetStyle`, the ext `ImGuiStyle_ImGuiStyle` + `ImGuiStyle_ScaleAllSizes`), the Task 2 `ImGui_ImplOpenGL3_*` FFI, `rustty_vt::input::Key::imgui_key` (Task 3).
 - Produces: `class::imgui_widget::ImguiWidget` (glib subclass of `adw::Bin`, GType `"RusttyImguiWidget"`), template child `gl_area: gtk4::GLArea`, `im_context: gtk4::IMMulticontext`; a subclassable virtual seam `imgui_setup(&self)` / `imgui_render(&self)` (default impls log a "should be overridden" warning); public `queue_render(&self)` → `gl_area.queue_render()`; `set_current_context(&self)`.
 
@@ -128,11 +139,13 @@
 ### Task 5: `InspectorWidget : ImguiWidget`
 
 **Files:**
+
 - Create: `crates/rustty-apprt/src/gtk/class/inspector_widget.rs`
 - Modify: class module index (`pub mod inspector_widget;`)
 - Oracle: `src/apprt/gtk/class/inspector_widget.zig` (245 L) + `assets/ui/1.5/inspector-widget.blp`
 
 **Interfaces:**
+
 - Consumes: `ImguiWidget` (Task 4) as parent; `rustty_inspector::Inspector::{setup, render}`; the gtk `Surface` class `core()` accessor + core `CoreSurface::{activateInspector, deactivateInspector, inspector}`.
 - Produces: `class::inspector_widget::InspectorWidget` (subclass of `ImguiWidget`, GType `"RusttyInspectorWidget"`) with a `surface` GObject property (custom getter/setter) and the two virtual overrides.
 
@@ -145,11 +158,13 @@
 ### Task 6: `InspectorWindow`
 
 **Files:**
+
 - Create: `crates/rustty-apprt/src/gtk/class/inspector_window.rs`
 - Modify: class module index (`pub mod inspector_window;`)
 - Oracle: `src/apprt/gtk/class/inspector_window.zig` (218 L) + `assets/ui/1.5/inspector-window.blp`
 
 **Interfaces:**
+
 - Consumes: `InspectorWidget` (Task 5).
 - Produces: `class::inspector_window::InspectorWindow` (subclass of `adw::ApplicationWindow`, GType `"RusttyInspectorWindow"`), `new(surface: &Surface) -> Self`, `present(&self)`, `queue_render(&self)` (→ embedded widget), a `surface` property bound down to the widget (`surface: bind template.surface` in the `.blp`), and a `debug` property.
 
@@ -161,10 +176,12 @@
 ### Task 7: Wire the actions (toggle / control / redraw) + type registration
 
 **Files:**
+
 - Modify: `crates/rustty-apprt/src/gtk/class/window.rs:1154` (`toggle_inspector`), `crates/rustty-apprt/src/gtk/class/surface.rs:1835` (`control_inspector`), `crates/rustty-apprt/src/gtk/surface.rs:259` (`redraw_inspector`)
 - Oracle: `src/apprt/gtk/class/surface.zig:885-913` (`controlInspector` + `redrawInspector`), `window.zig:2069-2083`
 
 **Interfaces:**
+
 - Consumes: `InspectorWindow` (Task 6).
 - Produces: a functional `win.toggle-inspector` action path; the surface's `inspector` weak backref (`gtk/class/surface.rs:396`) now holds an `InspectorWindow`.
 
@@ -181,10 +198,12 @@
 ### Task 8: `gtk_inspector_dump.rs` — headed framebuffer KAT
 
 **Files:**
+
 - Create: `crates/rustty-apprt/tests/gtk_inspector_dump.rs`
 - Reference: `crates/rustty-apprt/tests/gtk_glyph_dump.rs` (the readback/PPM harness to reuse)
 
 **Interfaces:**
+
 - Consumes: the full inspector path (Tasks 1-7), `rustty_renderer` `read_bound_framebuffer_rgba` + the `write_ppm` helper pattern.
 
 - [ ] **Step 1: Write the KAT** (`#[ignore]`, `--exact`, env `RUSTTY_DUMP_PPM`): construct a headed GTK surface (as `gtk_glyph_dump.rs` does), open the inspector (`control_inspector(Toggle)`), pump the main loop so the InspectorWidget realizes + renders, feed a synthetic key event into the ImguiWidget, render again. Read back the inspector GLArea framebuffer (`read_bound_framebuffer_rgba(w,h)`), `write_ppm`. Assert: (a) the framebuffer is NOT uniformly the `#282C34` clear color (panels drew), and (b) needle-scan the keyboard-panel region for a pixel-delta between the pre-key and post-key frames (proves live input reaches the panel), mirroring the grid needle-scan at `gtk_glyph_dump.rs:209`.
@@ -206,6 +225,7 @@
 ## Self-Review
 
 **1. Spec coverage** (against the design doc):
+
 - OpenGL3 backend (vendor + build + FFI) → Tasks 1-2. ✅
 - `ImguiWidget` (context lifecycle, two-pass render, scale, all input, 30-FPS tick, virtual seam) → Task 4. ✅
 - `InspectorWidget` (setup/render overrides, surface weak lifecycle) → Task 5. ✅

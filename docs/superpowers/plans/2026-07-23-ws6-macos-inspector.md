@@ -14,18 +14,18 @@
 
 The roadmap's WS6 row ("port the ~4.4k-LOC inspector widget render; fill `Surface.activate/deactivateInspector` + `embedded::Inspector::{init,initMetal,renderMetal}` + `rustty_inspector_metal_*`; remove the no-op crash sentinel") describes work that is **already on `main`**. Evidence gathered at authoring time (2026-07-28, `HEAD` = `74226dd`):
 
-| Roadmap item | Actual state | Evidence |
-|---|---|---|
-| dcimgui `ImGui_ImplMetal` vendor + compile | **DONE** | `crates-sys/dcimgui-sys/build.rs:180-219` compiles `vendor/imgui/backends/imgui_impl_metal.mm` as a separate ObjC++ `cc::Build` (`-x objective-c++ -fno-objc-arc`) into a `dcimgui_metal` archive and links `Metal`/`QuartzCore`/`Foundation`. Commit `c6a68e5`. |
-| `ImGui_ImplMetal_*` FFI | **DONE** | `crates-sys/dcimgui-sys/src/lib.rs:202-241` (6 `extern "C"` decls, `#[cfg(target_os = "macos")]`) + link KAT `link_imgui_impl_metal_ffi` (lib.rs:355-373). Commit `9038a87`. |
-| GTK OpenGL3 arm not regressed | **PRESENT** | Same files, `#[cfg(not(target_os = "macos"))]` block (lib.rs:253-281) + `opengl3_symbols_link` KAT. Commits `657f223`, `f780650`. |
-| ~4.4k-LOC widget render | **DONE, SHARED, INHABITED** | Oracle `src/inspector/**` = **4873** Zig LOC across 13 files. Port = **11 625** Rust LOC across the same 13 modules (`crates/rustty-inspector/src/{Inspector,lib,units,widgets}.rs` + `widgets/{key,page,pagelist,renderer,screen,style,surface,terminal,termio}.rs`). Zero `unimplemented!()`/`todo!()` in the crate; the only three `TODO` strings are faithful copies of oracle TODOs. Commits `b344e09`…`d6be9b2`. |
-| `Surface.activate/deactivateInspector` | **DONE (live)** | `crates/rustty-core/src/surface.rs:2873` / `:2967` — real bodies (heap-box the inspector, publish the `*mut dyn InspectorOverlay` + type-erased `inspector_ptr` under `renderer_state.mutex`, push `Message::Inspector(true/false)` to the renderer mailbox and termio). Commit `2dfcc32`. |
-| `embedded::Inspector::{init,initMetal,renderMetal}` | **DONE (live)** | `crates/rustty-apprt/src/embedded.rs:1933` / `:2018` / `:2107` — real `ImGui_CreateContext`, `ImGui_ImplMetal_Init`, the double-frame loop + `renderCommandEncoderWithDescriptor:` objc2 msgSends + `ImGui_ImplMetal_RenderDrawData`. Commits `027f695`, `86b04b4`, `0b8f7af`. |
-| `rustty_inspector_metal_*` exports | **DONE (live)** | `crates/rustty-apprt-c/src/lib.rs:2927` / `:2952` / `:2984`; declared in `include/rustty-embed.h:1197-1199`; called by `macos/Sources/RusttyKit/Rustty.Inspector.swift:84-95` and driven by `macos/Sources/RusttyKit/Surface View/InspectorView.swift`. |
-| Crash-guard no-op sentinel | **ALREADY REMOVED FROM CODE; LEDGER STALE** | `grep -rn "not yet ported" crates/` has **zero** hits in `rustty-apprt`/`rustty-apprt-c`. `Inspector::init` is fully live. The DEFERRALS §"P2 crash-guard" section (line 4581) still claims it is guarded. **The removal WS6 owes is a ledger + code-comment removal, not a code change.** |
-| ⌘⌥I keybind | **PORTED** | `crates/rustty-config/src/value_types.rs:4413` (`super+alt+i` macOS default). |
-| Live ⌘⌥I shakedown | **NEVER PERFORMED** | The prior plan `docs/superpowers/plans/2026-07-14-inspector-port.md` Task 18 ("End-to-end shakedown — ⌘⌥I opens the inspector") has no corresponding commit, and every checkbox in that file is unticked. This is WS6's headline deliverable. |
+| Roadmap item                                        | Actual state                                | Evidence                                                                                                                                                                                                                                                                                                                                                                                                               |
+| --------------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| dcimgui `ImGui_ImplMetal` vendor + compile          | **DONE**                                    | `crates-sys/dcimgui-sys/build.rs:180-219` compiles `vendor/imgui/backends/imgui_impl_metal.mm` as a separate ObjC++ `cc::Build` (`-x objective-c++ -fno-objc-arc`) into a `dcimgui_metal` archive and links `Metal`/`QuartzCore`/`Foundation`. Commit `c6a68e5`.                                                                                                                                                       |
+| `ImGui_ImplMetal_*` FFI                             | **DONE**                                    | `crates-sys/dcimgui-sys/src/lib.rs:202-241` (6 `extern "C"` decls, `#[cfg(target_os = "macos")]`) + link KAT `link_imgui_impl_metal_ffi` (lib.rs:355-373). Commit `9038a87`.                                                                                                                                                                                                                                           |
+| GTK OpenGL3 arm not regressed                       | **PRESENT**                                 | Same files, `#[cfg(not(target_os = "macos"))]` block (lib.rs:253-281) + `opengl3_symbols_link` KAT. Commits `657f223`, `f780650`.                                                                                                                                                                                                                                                                                      |
+| ~4.4k-LOC widget render                             | **DONE, SHARED, INHABITED**                 | Oracle `src/inspector/**` = **4873** Zig LOC across 13 files. Port = **11 625** Rust LOC across the same 13 modules (`crates/rustty-inspector/src/{Inspector,lib,units,widgets}.rs` + `widgets/{key,page,pagelist,renderer,screen,style,surface,terminal,termio}.rs`). Zero `unimplemented!()`/`todo!()` in the crate; the only three `TODO` strings are faithful copies of oracle TODOs. Commits `b344e09`…`d6be9b2`. |
+| `Surface.activate/deactivateInspector`              | **DONE (live)**                             | `crates/rustty-core/src/surface.rs:2873` / `:2967` — real bodies (heap-box the inspector, publish the `*mut dyn InspectorOverlay` + type-erased `inspector_ptr` under `renderer_state.mutex`, push `Message::Inspector(true/false)` to the renderer mailbox and termio). Commit `2dfcc32`.                                                                                                                             |
+| `embedded::Inspector::{init,initMetal,renderMetal}` | **DONE (live)**                             | `crates/rustty-apprt/src/embedded.rs:1933` / `:2018` / `:2107` — real `ImGui_CreateContext`, `ImGui_ImplMetal_Init`, the double-frame loop + `renderCommandEncoderWithDescriptor:` objc2 msgSends + `ImGui_ImplMetal_RenderDrawData`. Commits `027f695`, `86b04b4`, `0b8f7af`.                                                                                                                                         |
+| `rustty_inspector_metal_*` exports                  | **DONE (live)**                             | `crates/rustty-apprt-c/src/lib.rs:2927` / `:2952` / `:2984`; declared in `include/rustty-embed.h:1197-1199`; called by `macos/Sources/RusttyKit/Rustty.Inspector.swift:84-95` and driven by `macos/Sources/RusttyKit/Surface View/InspectorView.swift`.                                                                                                                                                                |
+| Crash-guard no-op sentinel                          | **ALREADY REMOVED FROM CODE; LEDGER STALE** | `grep -rn "not yet ported" crates/` has **zero** hits in `rustty-apprt`/`rustty-apprt-c`. `Inspector::init` is fully live. The DEFERRALS §"P2 crash-guard" section (line 4581) still claims it is guarded. **The removal WS6 owes is a ledger + code-comment removal, not a code change.**                                                                                                                             |
+| ⌘⌥I keybind                                         | **PORTED**                                  | `crates/rustty-config/src/value_types.rs:4413` (`super+alt+i` macOS default).                                                                                                                                                                                                                                                                                                                                          |
+| Live ⌘⌥I shakedown                                  | **NEVER PERFORMED**                         | The prior plan `docs/superpowers/plans/2026-07-14-inspector-port.md` Task 18 ("End-to-end shakedown — ⌘⌥I opens the inspector") has no corresponding commit, and every checkbox in that file is unticked. This is WS6's headline deliverable.                                                                                                                                                                          |
 
 **The genuine residual WS6 must produce:**
 
@@ -66,12 +66,12 @@ Do NOT re-port anything in the table above. If a step finds a table row to be fa
 
 ## Phase map (each phase is independently testable)
 
-| Phase | Tasks | Deliverable | Independent gate |
-|---|---|---|---|
-| **A — dcimgui-sys `ImGui_ImplMetal` FFI: verify, do not re-port** | T1 | Offscreen Metal render KAT | `cargo test -p dcimgui-sys` green on macOS; file compiles to nothing on Linux |
-| **B — Shared widget-render residual** | T2, T3 | G3b zero-drop proof; `updateContentScale` filled + KAT | `check_comment_coverage.py --crate rustty-inspector --strict` GREEN; `cargo test -p rustty-apprt` green |
-| **C — Embedded/C-export seams + sentinel removal + live shakedown** | T4, T5 | Truthful code comments; **screenshot of a live ⌘⌥I inspector** | `check_stale_comments.sh` green; screenshot artifact |
-| **D — Gates, ledgers, merge** | T6, T7, T8 | Both-platform build, truthful ledgers, merged branch | macOS + `ssh rvm` builds green; merge |
+| Phase                                                               | Tasks      | Deliverable                                                    | Independent gate                                                                                        |
+| ------------------------------------------------------------------- | ---------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| **A — dcimgui-sys `ImGui_ImplMetal` FFI: verify, do not re-port**   | T1         | Offscreen Metal render KAT                                     | `cargo test -p dcimgui-sys` green on macOS; file compiles to nothing on Linux                           |
+| **B — Shared widget-render residual**                               | T2, T3     | G3b zero-drop proof; `updateContentScale` filled + KAT         | `check_comment_coverage.py --crate rustty-inspector --strict` GREEN; `cargo test -p rustty-apprt` green |
+| **C — Embedded/C-export seams + sentinel removal + live shakedown** | T4, T5     | Truthful code comments; **screenshot of a live ⌘⌥I inspector** | `check_stale_comments.sh` green; screenshot artifact                                                    |
+| **D — Gates, ledgers, merge**                                       | T6, T7, T8 | Both-platform build, truthful ledgers, merged branch           | macOS + `ssh rvm` builds green; merge                                                                   |
 
 ---
 
@@ -106,10 +106,12 @@ Expected: `OK: zero unimplemented in rustty-inspector`, `OK: no crash-guard sent
 ## Task 1: Real-`MTLDevice` offscreen render KAT for `ImGui_ImplMetal_*`
 
 **Files:**
+
 - Create: `crates-sys/dcimgui-sys/tests/metal_offscreen.rs`
 - Modify: `crates-sys/dcimgui-sys/Cargo.toml` (add a macOS-gated `dev-dependencies` table)
 
 **Interfaces:**
+
 - Consumes: the already-declared `dcimgui_sys::{ImGui_CreateContext, ImGui_DestroyContext, ImGui_SetCurrentContext, ImGui_GetIO, ImGui_NewFrame, ImGui_Render, ImGui_GetDrawData, ImGui_Begin, ImGui_End, ImGui_Text, ImGui_SetNextWindowPos, ImGui_SetNextWindowSize, ImGui_StyleColorsDark, ImVec2, ImGui_ImplMetal_Init, ImGui_ImplMetal_NewFrame, ImGui_ImplMetal_RenderDrawData, ImGui_ImplMetal_Shutdown}`.
 - Produces: the integration test `metal_offscreen_render_writes_pixels` (macOS only). Nothing depends on it; it is a gate.
 
@@ -386,10 +388,12 @@ git commit -m "dcimgui-sys: offscreen Metal render KAT — prove ImGui_ImplMetal
 ## Task 2: Prove the shared widget-render residual is zero (G3b + oracle TODO check)
 
 **Files:**
+
 - Modify: none expected. (If the gate reports a RED drop, that file is modified — the gate output names it.)
 - Test: `.port/tools/gates/check_comment_coverage.py --crate rustty-inspector --strict`
 
 **Interfaces:**
+
 - Consumes: nothing from earlier tasks.
 - Produces: the recorded evidence that Phase B has no widget-port work, which Task 7's ledger edit cites.
 
@@ -442,10 +446,12 @@ git add -A && git commit -m "inspector: G3b zero-drop proof for the shared widge
 ## Task 3: Fill `Inspector::updateContentScale`'s ImGui style scaling (the one unported reference body)
 
 **Files:**
+
 - Modify: `crates/rustty-apprt/src/embedded.rs` (`Inspector::updateContentScale`, currently at `:2279-2304`)
 - Test: `crates/rustty-apprt/src/embedded.rs` — new `#[cfg(test)] mod inspector_style_tests` appended after the existing `#[cfg(test)] mod host_view_tests`
 
 **Interfaces:**
+
 - Consumes: `dcimgui_sys::{ImGui_SetCurrentContext, ImGui_GetStyle, ImGuiStyle, ImGuiStyle_ScaleAllSizes, ImGuiStyle_ImGuiStyle, ImGui_CreateContext, ImGui_DestroyContext}` — all already exported by `dcimgui-sys` (`ImGuiStyle_ImGuiStyle` is the hand-declared `ext.cpp` shim in `crates-sys/dcimgui-sys/src/lib.rs:76`; `ImGuiStyle_ScaleAllSizes` and `ImGui_GetStyle` are bindgen-generated from `dcimgui.h`).
 - Produces: `pub fn updateContentScale(&mut self, x: f64, y: f64)` — signature UNCHANGED (callers `rustty_inspector_set_content_scale` in `rustty-apprt-c` and `InspectorView.swift` are untouched); behaviour now includes the ImGui style rescale.
 
@@ -683,10 +689,12 @@ git commit -m "apprt: fill Inspector::updateContentScale ImGuiStyle rescale + KA
 ## Task 4: Remove the false "Phase-3 leaf / crash-guard sentinel" claims from code comments
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c/src/lib.rs` (four PORT NOTEs: `rustty_surface_inspector` ~`:2300`, `rustty_inspector_metal_init` ~`:2918`, `rustty_inspector_metal_render` ~`:2943`, `rustty_inspector_metal_shutdown` ~`:2975`)
 - Modify: `crates/rustty-apprt/src/embedded.rs` (two PORT NOTEs: `Inspector::init` ~`:1927`, `Inspector::deinit` ~`:1983`)
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: nothing at the type level. This task exists because `.port/tools/gates/check_stale_comments.sh` treats resolved-deferral prose as a defect, and because a future reader must not be told a live path is an `unimplemented!()` leaf.
 
@@ -854,6 +862,7 @@ git commit -m "apprt/apprt-c: retire the Phase-3-leaf + crash-guard prose on the
 **Files:** none (runtime verification). Any wiring defect this surfaces is fixed here and committed in Step 7.
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 1–4.
 - Produces: a screenshot artifact + the recorded evidence Task 7's `VERIFICATION_DEBT.md` edit cites.
 
@@ -949,6 +958,7 @@ git add -A && git commit -m "inspector: end-to-end shakedown fixes — cmd+opt+i
 **Files:** none (verification); fixes go on this branch.
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 1–5.
 - Produces: the green-on-both-platforms evidence the merge in Task 8 requires.
 
@@ -1004,11 +1014,13 @@ git push
 ## Task 7: Ledger strikes — make DEFERRALS / MACOS_APP_GAPS / VERIFICATION_DEBT truthful
 
 **Files:**
+
 - Modify: `.port/phase-2/DEFERRALS.md`
 - Modify: `.port/phase-2/MACOS_APP_GAPS.md`
 - Modify: `.port/phase-2/VERIFICATION_DEBT.md`
 
 **Interfaces:**
+
 - Consumes: the evidence produced by Tasks 1–6 (test names, commit refs, screenshot paths).
 - Produces: ledgers a future wave can trust. (Standing lesson: prior waves repeatedly burned time on stale ledger entries.)
 
@@ -1025,7 +1037,8 @@ Mark its `activateInspector`/`deactivateInspector` bullet **RESOLVED (WS6)** wit
 - [ ] **Step 3: `DEFERRALS.md` — the core roll-up** (~lines 1813-1835)
 
 Two edits:
-- In the `unimplemented!()` audit line for `surface.rs`, change `**2** … `activateInspector` / `deactivateInspector` (Phase-3 inspector, §4)` to `**0** — the two inspector entries closed by WS6; re-run the audit to confirm the current count`.
+
+- In the `unimplemented!()` audit line for `surface.rs`, change `**2** … `activateInspector`/`deactivateInspector` (Phase-3 inspector, §4)` to `**0** — the two inspector entries closed by WS6; re-run the audit to confirm the current count`.
 - Mark roll-up item **1. Inspector activate/deactivate** as `RESOLVED (WS6)` with the same evidence as Step 2.
 
 Then re-run the audit to make the new number true:
@@ -1041,6 +1054,7 @@ Write whatever count that reports into the ledger line, listing each remaining s
 - [ ] **Step 4: `DEFERRALS.md` — the E4 section** (heading `## rustty-apprt embedded E4 (Inspector — dcimgui + Metal) — Phase-3 inhabited placeholder`, ~line 2107)
 
 Add a `**RESOLVED IN FULL (WS6, 2026-07-…)**` paragraph under the heading and mark each of its four deferred items closed with evidence:
+
 1. `Inspector::init` / `deinit` — live at `embedded.rs:1933` / `:1985` (commit `027f695`).
 2. `initMetal` / `renderMetal` / `Backend::deinit` — live at `embedded.rs:2018` / `:2107` / `:1889` (commits `86b04b4`, `0b8f7af`); the Metal backend is proven to rasterize by `dcimgui-sys` `metal_offscreen_render_writes_pixels` (WS6 T1).
 3. The six input callbacks + `newFrame` — live (commit `c62ab07`); proven end-to-end by the WS6 T5 shakedown (Keyboard/Termio panels populate on real input).
@@ -1108,6 +1122,7 @@ git push
 ## Task 8: Merge
 
 **Files:**
+
 - Modify: `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md`
 
 - [ ] **Step 1: Re-run the both-platform gate on the final branch state**
@@ -1167,22 +1182,22 @@ Expected: both post-merge builds green; branch deleted on both sides.
 
 **1. Spec coverage.** Every WS6 item named in the task brief maps to a task:
 
-| Brief item | Task |
-|---|---|
-| dcimgui `ImGui_ImplMetal` FFI (mirror the GTK OpenGL3 precedent) | T0 Step 2 + **T1** (verified already landed; T1 adds the missing rasterization proof) |
-| "How much of the ~4.4k-LOC widget render is already ported vs Metal-specific?" | Answered in **Scope finding** with LOC + commit evidence; enforced by **T2** |
-| `Surface.activate/deactivateInspector` (DEFERRALS ~1827) | Verified live (Scope finding); ledger struck in **T7 Steps 2–3** |
-| `embedded::Inspector::{init,initMetal,renderMetal}` + `rustty_inspector_metal_*` (DEFERRALS ~2112-2161) | Verified live; comments corrected in **T4**; ledger struck in **T7 Step 4** |
-| Remove the crash-guard no-op sentinel (DEFERRALS ~4567-4615) | **T4 Step 6** (proves none remains in code) + **T7 Step 5** (removes the ledger claim) — the plan states explicitly that the code sentinel was already gone |
-| Oracle fidelity (`src/inspector/**`, embedded.zig inspector fns, ImGui_ImplMetal usage) | Oracle body quoted verbatim in **T3**; oracle TODO/module cross-check in **T2 Steps 2–3** |
-| C-ABI panic policy ABORT (DG5) | Global Constraints; **T4** keeps the exports free of `catch_unwind`; **T5 Step 4** treats an abort as a hard failure with a crash-report capture |
-| GTK/Linux inspector must keep building | Global Constraints; enforced by **T6 Steps 3–4** (VM build + `opengl3_symbols_link` + `--features gtk`) |
-| Acyclic crate graph gate | **T6 Step 2**, with the explicit note that T1's additions are dev-dependencies only |
-| Inspector KATs following existing test patterns | **T1** follows `dcimgui-sys`'s `IMGUI_CONTEXT_TEST_LOCK` + KAT-doc style and the `gtk_inspector_dump` "assert the framebuffer is not a uniform clear" idea; **T3** follows the `host_view_tests` unit-module style in the same file |
-| End-to-end: build workspace, `macos/build-rustty.sh`, launch, ⌘⌥I, confirm live render — MANUAL | **T5**, flagged MANUAL/screenshot in bold with an explicit "do not claim from a process tree" rule |
-| Both-platform build gate incl. `ssh rvm '…cargo build --workspace'` | **T6 Step 3** |
-| DEFERRALS ledger strikes incl. sentinel entry | **T7** (5 DEFERRALS sections + MACOS_APP_GAPS + VERIFICATION_DEBT) |
-| Branch/merge flow per the roadmap | **T0** + **T8** |
+| Brief item                                                                                              | Task                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| dcimgui `ImGui_ImplMetal` FFI (mirror the GTK OpenGL3 precedent)                                        | T0 Step 2 + **T1** (verified already landed; T1 adds the missing rasterization proof)                                                                                                                                               |
+| "How much of the ~4.4k-LOC widget render is already ported vs Metal-specific?"                          | Answered in **Scope finding** with LOC + commit evidence; enforced by **T2**                                                                                                                                                        |
+| `Surface.activate/deactivateInspector` (DEFERRALS ~1827)                                                | Verified live (Scope finding); ledger struck in **T7 Steps 2–3**                                                                                                                                                                    |
+| `embedded::Inspector::{init,initMetal,renderMetal}` + `rustty_inspector_metal_*` (DEFERRALS ~2112-2161) | Verified live; comments corrected in **T4**; ledger struck in **T7 Step 4**                                                                                                                                                         |
+| Remove the crash-guard no-op sentinel (DEFERRALS ~4567-4615)                                            | **T4 Step 6** (proves none remains in code) + **T7 Step 5** (removes the ledger claim) — the plan states explicitly that the code sentinel was already gone                                                                         |
+| Oracle fidelity (`src/inspector/**`, embedded.zig inspector fns, ImGui_ImplMetal usage)                 | Oracle body quoted verbatim in **T3**; oracle TODO/module cross-check in **T2 Steps 2–3**                                                                                                                                           |
+| C-ABI panic policy ABORT (DG5)                                                                          | Global Constraints; **T4** keeps the exports free of `catch_unwind`; **T5 Step 4** treats an abort as a hard failure with a crash-report capture                                                                                    |
+| GTK/Linux inspector must keep building                                                                  | Global Constraints; enforced by **T6 Steps 3–4** (VM build + `opengl3_symbols_link` + `--features gtk`)                                                                                                                             |
+| Acyclic crate graph gate                                                                                | **T6 Step 2**, with the explicit note that T1's additions are dev-dependencies only                                                                                                                                                 |
+| Inspector KATs following existing test patterns                                                         | **T1** follows `dcimgui-sys`'s `IMGUI_CONTEXT_TEST_LOCK` + KAT-doc style and the `gtk_inspector_dump` "assert the framebuffer is not a uniform clear" idea; **T3** follows the `host_view_tests` unit-module style in the same file |
+| End-to-end: build workspace, `macos/build-rustty.sh`, launch, ⌘⌥I, confirm live render — MANUAL         | **T5**, flagged MANUAL/screenshot in bold with an explicit "do not claim from a process tree" rule                                                                                                                                  |
+| Both-platform build gate incl. `ssh rvm '…cargo build --workspace'`                                     | **T6 Step 3**                                                                                                                                                                                                                       |
+| DEFERRALS ledger strikes incl. sentinel entry                                                           | **T7** (5 DEFERRALS sections + MACOS_APP_GAPS + VERIFICATION_DEBT)                                                                                                                                                                  |
+| Branch/merge flow per the roadmap                                                                       | **T0** + **T8**                                                                                                                                                                                                                     |
 
 **2. Placeholder scan.** No "TBD" / "implement later" / "add error handling" / "similar to Task N". Every code step carries complete, compilable code. The three places that could read as vague are bounded decision procedures with an explicit stop condition, not placeholders: T1 Step 4's objc2-metal feature-name fix (the compiler error names the exact gate), T2 Step 1's gate-RED remediation (the gate output names the file and the dropped comment), and T7 Step 3's "write whatever count you just measured" (a measurement, not a guess — deliberately not hard-coded, because asserting an unverified number in a ledger is the exact failure mode this WS is cleaning up).
 

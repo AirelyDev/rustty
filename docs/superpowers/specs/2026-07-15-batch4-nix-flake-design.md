@@ -42,7 +42,7 @@ GTK app at least building.
   rust-overlay for `fromRustupToolchainFile`.)
 - **Rebrand map** (same as the project spec): `Ghostty→Rustty`, `ghostty→rustty`,
   app-id `com.mitchellh.ghostty → io.airely.rustty`, `libghostty-vt →
-  librustty-vt`, `include/ghostty → include/rustty`, cachix/substituter →
+librustty-vt`, `include/ghostty → include/rustty`, cachix/substituter →
   rustty's own or dropped, repo → `github.com/AirelyDev/rustty`, site →
   `rustty.sh`. The `identity-oracle`/`simd` cargo features already exist.
 - **No secrets fabricated:** the `nixConfig` cachix substituter + trusted
@@ -101,24 +101,25 @@ revision → version string).
 ## File inventory
 
 **Create (rebranded/authored):**
-| File | Origin | Notes |
-|---|---|---|
-| `flake.nix` | ghostty `flake.nix` | crane rewrite; outputs shape kept |
-| `flake.lock` | — | `nix flake lock` generates |
-| `default.nix` | ghostty `default.nix` | flake-compat shim; generic, copy+rebrand |
-| `shell.nix` | ghostty `shell.nix` | flake-compat shim; generic, near-verbatim |
-| `.envrc` | ghostty `.envrc` | direnv; `watch_file nix/{devShell,package}.nix; use flake` |
-| `nix/devShell.nix` | ghostty | swap zig→rust toolchain+cbindgen; keep the rest |
-| `nix/librustty-vt.nix` | ghostty `nix/libghostty-vt.nix` | crane, headless, `passthru.tests` |
-| `nix/package.nix` | ghostty | crane GTK app (Phase B) |
-| `nix/build-support/build-inputs.nix` | ghostty | the shared native `buildInputs` — carries over 1:1 |
-| `nix/build-support/gi-typelib-path.nix` | ghostty | GTK runtime typelib path — keep |
-| `nix/build-support/ld-library-path.nix` | ghostty | GTK rpath — keep |
-| `nix/build-support/check-blueprints.sh` | ghostty | keep IF rustty ships `.blp` UI files (verify) |
-| `nix/pkgs/{blessed,ucs-detect,wcwidth,wraptest}.nix` | ghostty | **verbatim copy** (zig-independent) |
-| `nix/tests.nix` | ghostty | harness kept; assertions rebranded (Phase B) |
-| `nix/test-src/test_librustty_vt.c` | ghostty `test_libghostty_vt.c` | port to `<rustty/vt.h>` + `rustty_build_info` |
-| `nix/vm/*` (16 files) | ghostty `nix/vm/*` | port all; rebrand pkg/icon/app-id (Phase B) |
+
+| File                                                 | Origin                          | Notes                                                      |
+| ---------------------------------------------------- | ------------------------------- | ---------------------------------------------------------- |
+| `flake.nix`                                          | ghostty `flake.nix`             | crane rewrite; outputs shape kept                          |
+| `flake.lock`                                         | —                               | `nix flake lock` generates                                 |
+| `default.nix`                                        | ghostty `default.nix`           | flake-compat shim; generic, copy+rebrand                   |
+| `shell.nix`                                          | ghostty `shell.nix`             | flake-compat shim; generic, near-verbatim                  |
+| `.envrc`                                             | ghostty `.envrc`                | direnv; `watch_file nix/{devShell,package}.nix; use flake` |
+| `nix/devShell.nix`                                   | ghostty                         | swap zig→rust toolchain+cbindgen; keep the rest            |
+| `nix/librustty-vt.nix`                               | ghostty `nix/libghostty-vt.nix` | crane, headless, `passthru.tests`                          |
+| `nix/package.nix`                                    | ghostty                         | crane GTK app (Phase B)                                    |
+| `nix/build-support/build-inputs.nix`                 | ghostty                         | the shared native `buildInputs` — carries over 1:1         |
+| `nix/build-support/gi-typelib-path.nix`              | ghostty                         | GTK runtime typelib path — keep                            |
+| `nix/build-support/ld-library-path.nix`              | ghostty                         | GTK rpath — keep                                           |
+| `nix/build-support/check-blueprints.sh`              | ghostty                         | keep IF rustty ships `.blp` UI files (verify)              |
+| `nix/pkgs/{blessed,ucs-detect,wcwidth,wraptest}.nix` | ghostty                         | **verbatim copy** (zig-independent)                        |
+| `nix/tests.nix`                                      | ghostty                         | harness kept; assertions rebranded (Phase B)               |
+| `nix/test-src/test_librustty_vt.c`                   | ghostty `test_libghostty_vt.c`  | port to `<rustty/vt.h>` + `rustty_build_info`              |
+| `nix/vm/*` (16 files)                                | ghostty `nix/vm/*`              | port all; rebrand pkg/icon/app-id (Phase B)                |
 
 **Drop (pure zig/zon2nix machinery — NO analog):**
 `build.zig.zon.nix`, `nix/zigCacheHash.nix`, `nix/build-support/check-zig-cache.sh`,
@@ -137,6 +138,7 @@ Inputs: `nixpkgs` (nixpkgs-unstable or a recent stable), `crane`, `rust-overlay`
 (Phase B tests). Drop `zig`, `zon2nix`.
 
 Sketch:
+
 ```nix
 {
   inputs = {
@@ -167,6 +169,7 @@ Sketch:
   };
 }
 ```
+
 `nixConfig` cachix block: drop (or commented placeholder for rustty's cache).
 
 ### A2. `nix/librustty-vt.nix` (crane, headless)
@@ -176,8 +179,8 @@ Sketch:
 - `nativeBuildInputs`: `pkg-config, cbindgen` + rust toolchain (from crane) +
   (Darwin) `fixDarwinDylibNames`.
 - Build: `craneLib.buildPackage { cargoExtraArgs = "-p rustty-vt-c" + (if simd
-  then " --features simd" else ""); }`. Emit the cbindgen headers into `include/
-  rustty/` (already checked in — install them), the `.a`/`.so`, and a generated
+then " --features simd" else ""); }`. Emit the cbindgen headers into `include/
+rustty/` (already checked in — install them), the `.a`/`.so`, and a generated
   `librustty-vt.pc` pkg-config file (mirror ghostty's `.pc`: `Name: librustty-vt`,
   `Cflags: -I${dev}/include`, `Libs: -L${lib} -lrustty_vt_c`, `Libs.private` per
   the `rustc --print native-static-libs` list from Batch 2).
@@ -189,9 +192,9 @@ Sketch:
     `simd`, greps for `simdutf` and highway (`3hwy`) symbols.
   - `pkg-config` = `testers.hasPkgConfigModules`.
   - `pkg-config-libs`: assert `pkg-config --libs --static` emits `-lrustty_vt_c`
-    + the `.a` path.
+    - the `.a` path.
   - `build-with-shared` / `build-with-static`: compile `nix/test-src/
-    test_librustty_vt.c` with `cc $(pkg-config …)`, run, assert `SIMD: yes/no`
+test_librustty_vt.c` with `cc $(pkg-config …)`, run, assert `SIMD: yes/no`
     and (via `ldd`/`otool`) dynamic vs static linkage.
   - `build-example-c-vt-build-info`: build `example/c-vt-build-info/src/main.c`,
     run `versionCheckHook`.
@@ -211,22 +214,22 @@ Port ghostty's 9-line client: `#include <rustty/vt.h>`; call
 - **Add:** the rust toolchain (`fromRustupToolchainFile` → rustc/cargo/clippy/
   rustfmt/rust-analyzer) + `cbindgen`.
 - **Keep (all platforms):** `cmake, doxygen, jq, minisign, ncurses, pandoc,
-  pkg-config, scdoc, zip, nodejs, prettier, alejandra, pinact, typos, shellcheck,
-  parallel, python3, vttest, hyperfine, gettext, uv, nushell, blueprint-compiler,
-  libadwaita, gtk4`, `(python3.withPackages [ucs-detect])`.
+pkg-config, scdoc, zip, nodejs, prettier, alejandra, pinact, typos, shellcheck,
+parallel, python3, vttest, hyperfine, gettext, uv, nushell, blueprint-compiler,
+libadwaita, gtk4`, `(python3.withPackages [ucs-detect])`.
 - **Keep (Linux):** `bashInteractive, qemu, appstream, flatpak-builder, gdb,
-  valgrind, wraptest, bzip2, expat, fontconfig, freetype, harfbuzz, libpng,
-  libxml2, oniguruma, simdutf, zlib, libxkbcommon, libX11, libXcursor, libXext,
-  libXi, libXinerama, libXrandr, gtk4-layer-shell, glib, gobject-introspection,
-  wayland, wayland-scanner, wayland-protocols, gst_all_1.{gstreamer,
-  gst-plugins-base,gst-plugins-good}, glycin-loaders, librsvg, poop`.
+valgrind, wraptest, bzip2, expat, fontconfig, freetype, harfbuzz, libpng,
+libxml2, oniguruma, simdutf, zlib, libxkbcommon, libX11, libXcursor, libXext,
+libXi, libXinerama, libXrandr, gtk4-layer-shell, glib, gobject-introspection,
+wayland, wayland-scanner, wayland-protocols, gst_all_1.{gstreamer,
+gst-plugins-base,gst-plugins-good}, glycin-loaders, librsvg, poop`.
 - **Darwin:** `swiftlint`.
 - **Env/hooks (keep verbatim):** `LD_LIBRARY_PATH` from `ld-library-path.nix`;
   `GI_TYPELIB_PATH` from `gi-typelib-path.nix`; Linux hook appends
   `hicolor-icon-theme`/`adwaita-icon-theme` share dirs + `$GSETTINGS_SCHEMAS_PATH`
   to `XDG_DATA_DIRS`; Darwin hook unsets the Nix macOS SDK/toolchain vars
   (`SDKROOT, DEVELOPER_DIR, NIX_CC, NIX_CFLAGS_COMPILE, NIX_LDFLAGS, CC, CXX,
-  CFLAGS`), strips `xcrun` from PATH, prepends Homebrew LLVM.
+CFLAGS`), strips `xcrun` from PATH, prepends Homebrew LLVM.
 
 ### A5. `nix/pkgs/{blessed,ucs-detect,wcwidth,wraptest}.nix`
 
@@ -238,15 +241,15 @@ test tools: jquast/blessed, jquast/ucs-detect, wcwidth, mattiase/wraptest).
 - `build-inputs.nix` — the shared native `buildInputs` list, parametrized by
   `enableX11`/`enableWayland`. **Carries over 1:1** (it's the crane `buildInputs`
   for the GTK app). Contents: always `libGL`; Linux `bzip2, expat, fontconfig,
-  freetype, harfbuzz, libpng, libxml2, oniguruma, simdutf, zlib, glslang,
-  spirv-cross, libxkbcommon, glib, gobject-introspection,
-  gsettings-desktop-schemas, gst_all_1.{gst-plugins-base,gst-plugins-good,
-  gstreamer}, gtk4, libadwaita`; X11 adds `libx11, libxcursor, libxi, libxrandr`;
+freetype, harfbuzz, libpng, libxml2, oniguruma, simdutf, zlib, glslang,
+spirv-cross, libxkbcommon, glib, gobject-introspection,
+gsettings-desktop-schemas, gst_all_1.{gst-plugins-base,gst-plugins-good,
+gstreamer}, gtk4, libadwaita`; X11 adds `libx11, libxcursor, libxi, libxrandr`;
   Wayland adds `gtk4-layer-shell, wayland`. (Drop `simdutf`/`glslang`/
   `spirv-cross` only if rustty's GTK build doesn't use them — verify.)
 - `gi-typelib-path.nix` — `GI_TYPELIB_PATH` over `cairo, gdk-pixbuf, glib,
-  gobject-introspection, graphene, gtk4, gtk4-layer-shell, harfbuzz, libadwaita,
-  pango`. Keep.
+gobject-introspection, graphene, gtk4, gtk4-layer-shell, harfbuzz, libadwaita,
+pango`. Keep.
 - `ld-library-path.nix` — `lib.makeLibraryPath` over `build-inputs.nix`. Keep.
 - `check-blueprints.sh` — formats+compiles `src/**/*.blp`. Keep only if rustty
   ships Blueprint UI files (verify: `find crates -name '*.blp'`).
@@ -258,6 +261,7 @@ watch_file nix/devShell.nix nix/package.nix; use flake; fi; source_env_if_exists
 .envrc.local`.
 
 **Phase A verification (Linux):**
+
 - `nix develop` enters the shell; `cargo --version`/`cbindgen --version` resolve.
 - `nix build .#librustty-vt` builds the `.a`/`.so`/`.pc`/headers.
 - `nix flake check` runs the `librustty-vt` `passthru.tests` (sanity-check,
@@ -275,13 +279,13 @@ watch_file nix/devShell.nix nix/package.nix; use flake; fi; source_env_if_exists
 - `src`: crane cargo source + a fileset union of the non-Rust assets
   (`dist/linux, images, po, include`).
 - `nativeBuildInputs`: rust toolchain (crane) + `cbindgen` + `git, ncurses,
-  pandoc, pkg-config, gobject-introspection, wrapGAppsHook4, blueprint-compiler,
-  libxml2 (xmllint), gettext` + (Wayland) `wayland-scanner, wayland-protocols`.
+pandoc, pkg-config, gobject-introspection, wrapGAppsHook4, blueprint-compiler,
+libxml2 (xmllint), gettext` + (Wayland) `wayland-scanner, wayland-protocols`.
   (Drop `zig_0_15`.)
 - `buildInputs = import ./build-support/build-inputs.nix { … enableX11
-  enableWayland }`.
+enableWayland }`.
 - Build: `craneLib.buildPackage { cargoExtraArgs = "-p rustty --features
-  gtk-wayland,gtk-x11"; }` (confirm the live GTK feature flags), `CARGO_PROFILE`
+gtk-wayland,gtk-x11"; }` (confirm the live GTK feature flags), `CARGO_PROFILE`
   per `profile`, `dontStrip = profile == "debug"`.
 - **`outputs = ["out" "terminfo" "shell_integration" "vim"]`**; `postInstall`
   moves `share/terminfo`, `share/rustty/shell-integration`, `share/vim/vimfiles`
@@ -289,16 +293,17 @@ watch_file nix/devShell.nix nix/package.nix; use flake; fi; source_env_if_exists
   `nix-support/propagated-user-env-packages` (incl. gstreamer plugins). Port
   the packaging logic as-is; re-path `ghostty`→`rustty`.
 - `GI_TYPELIB_PATH` from `gi-typelib-path.nix`. `meta.platforms =
-  [x86_64-linux, aarch64-linux]`, `mainProgram = "rustty"`.
+[x86_64-linux, aarch64-linux]`, `mainProgram = "rustty"`.
 - **Gate:** requires `cargo build -p rustty --features gtk-*` to succeed (the
   live GTK apprt). Until then, this derivation is authored-but-unbuilt.
 
 ### B2. `nix/vm/*` (16 files) — all rebranded
 
 Three layers (port all, incl. the 4 unused `create-*` shims for completeness):
+
 - `common.nix` — base NixOS VM (systemd-boot, 2048MB, nix-command/flakes,
   immutable `rustty` user autologin, `systemPackages = [kitty, fish, rustty,
-  helix, neovim, xterm, zsh]`, polkit/dbus/libinput/qemuGuest/spice/xserver).
+helix, neovim, xterm, zsh]`, polkit/dbus/libinput/qemuGuest/spice/xserver).
   **Only `pkgs.rustty` is rustty-specific.**
 - Desktop commons — `common-gnome.nix` (gdm+gnome, unsafe-mode shell for the
   Eval API, ~40 gnome-app exclusions, dconf sets desktop/lock background +
@@ -310,7 +315,7 @@ Three layers (port all, incl. the 4 unused `create-*` shims for completeness):
   `x11-{cinnamon,plasma6,xfce}.nix`: `imports` its desktop-common + sets
   `services.displayManager.defaultSession`. Generic — rebrand filenames only.
 - `create.nix` — factory: `nixpkgs.lib.nixosSystem` composing `[inline-module
-  (applies overlay, sets rustty uid/gid 1000, stateVersion), common, module]`.
+(applies overlay, sets rustty uid/gid 1000, stateVersion), common, module]`.
   Keep; the overlay carries `pkgs.rustty` in.
 - `create-{gnome,plasma6,cinnamon,xfce}.nix` — thin wrappers (currently unused
   in ghostty). Port for completeness.
@@ -323,6 +328,7 @@ imports `create.nix` with `overlay = self.overlays.debug`.
 Port the harness (`runNixOSTest` with `self.overlays.debug`, `mkNodeGnome`/
 `mkTestGnome` home-manager+ssh wiring, the pixel-color-check helper). Rewrite
 assertions for rustty:
+
 - `basic-version-check`: `rustty +version`.
 - `basic-window-check-gnome`: boot GNOME/Wayland VM, launch rustty via D-Bus
   activation, screendump, grep the histogram color (rebrand the wm_class /
@@ -331,6 +337,7 @@ assertions for rustty:
 - `bell-leak-check-gnome`: 100 bells, assert bounded GStreamer thread count.
 
 **Phase B verification (Linux, gated):**
+
 - `nix build .#rustty` (once the GTK app compiles).
 - `nix eval .#nixosConfigurations…` / `nix flake show` — the VM apps evaluate.
 - `nix run .#wayland-gnome` — boots a VM (interactive).
@@ -372,16 +379,16 @@ Folded in here (per decision) because they depend on the Nix flake and/or the
 live GTK Linux app, so they can't be exercised until this batch lands. Port +
 rebrand them alongside the flake:
 
-| Workflow | Coupling | Notes |
-|---|---|---|
-| `nix.yml` | Nix | runs `nix flake check` / builds via the flake; wire to Phase A/B outputs |
-| `release-tag.yml` | Nix (13 refs) | tagged-release pipeline; builds via nix, signs with minisign, runs `dist/macos/update_appcast_tag.py`. Rebrand env vars `RUSTTY_*`, the minisign key ref, `rustty.sh` release host |
-| `release-tip.yml` | Nix (44 refs) | per-commit tip build; `dist/macos/update_appcast_tip.py`, `tip.rustty.sh` |
-| `publish-tag.yml` | release infra | tag-publish step (pairs with release-tag) — defer with the release pipeline |
-| `update-colorschemes.yml` | Nix (8 refs) | regenerates theme list via nix; rebrand to the rustty theme generator |
-| `flatpak.yml` | GTK app | builds a flatpak of the GTK app (needs the live app); references `dist/linux` (already ported in Batch 3) |
-| `snap.yml` | GTK app | builds a snap of the GTK app |
-| `test.yml` (example-build jobs) | Nix | the `build-examples-{zig→cargo,cmake,swift}` jobs build via nix; extract into a rustty examples workflow. rustty's own `ci.yml` already covers the core gate — do NOT port test.yml wholesale |
+| Workflow                        | Coupling      | Notes                                                                                                                                                                                         |
+| ------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nix.yml`                       | Nix           | runs `nix flake check` / builds via the flake; wire to Phase A/B outputs                                                                                                                      |
+| `release-tag.yml`               | Nix (13 refs) | tagged-release pipeline; builds via nix, signs with minisign, runs `dist/macos/update_appcast_tag.py`. Rebrand env vars `RUSTTY_*`, the minisign key ref, `rustty.sh` release host            |
+| `release-tip.yml`               | Nix (44 refs) | per-commit tip build; `dist/macos/update_appcast_tip.py`, `tip.rustty.sh`                                                                                                                     |
+| `publish-tag.yml`               | release infra | tag-publish step (pairs with release-tag) — defer with the release pipeline                                                                                                                   |
+| `update-colorschemes.yml`       | Nix (8 refs)  | regenerates theme list via nix; rebrand to the rustty theme generator                                                                                                                         |
+| `flatpak.yml`                   | GTK app       | builds a flatpak of the GTK app (needs the live app); references `dist/linux` (already ported in Batch 3)                                                                                     |
+| `snap.yml`                      | GTK app       | builds a snap of the GTK app                                                                                                                                                                  |
+| `test.yml` (example-build jobs) | Nix           | the `build-examples-{zig→cargo,cmake,swift}` jobs build via nix; extract into a rustty examples workflow. rustty's own `ci.yml` already covers the core gate — do NOT port test.yml wholesale |
 
 Verification (Linux, gated on Phase A/B): `act` or a real push exercises them;
 `actionlint` for static validation.

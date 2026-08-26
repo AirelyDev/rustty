@@ -100,8 +100,8 @@ pub use write::max_write_aliases;
 // (rustty-only riders: the write error sets and nested types, flattened to
 // module scope by the port — the reference reaches them as inline error sets
 // and `WriteState.Options`/`WriteState.Committed`.)
-pub use write::{AliasError, CommitError, Committed, DataError};
 pub use write::Options as WriteOptions;
+pub use write::{AliasError, CommitError, Committed, DataError};
 
 // pub const Response = response.Response;
 pub use response::Response;

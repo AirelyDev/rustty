@@ -191,9 +191,8 @@ pub fn rasterize(
     // and allocation layout), so the Vec's allocation can be reinterpreted
     // in place.
     let mut buf = core::mem::ManuallyDrop::new(buf);
-    let data: Vec<u8> = unsafe {
-        Vec::from_raw_parts(buf.as_mut_ptr() as *mut u8, buf.len(), buf.capacity())
-    };
+    let data: Vec<u8> =
+        unsafe { Vec::from_raw_parts(buf.as_mut_ptr() as *mut u8, buf.len(), buf.capacity()) };
 
     Ok(Bitmap {
         width,

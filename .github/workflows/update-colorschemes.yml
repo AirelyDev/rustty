@@ -1,0 +1,109 @@
+# PORTS: ghostty .github/workflows/update-colorschemes.yml.
+#
+# STRUCTURALLY DIFFERENT, because the corpus lives somewhere else.
+#
+# The reference does not vendor the themes: it `zig fetch --save`es a tarball
+# into build.zig.zon, mirrors it to its own R2 bucket, and the PR it opens
+# touches build.zig.zon + the four generated hash files + flatpak/zig-packages.json.
+#
+# rustty vendors the 604 theme files IN-TREE under crates/rustty-extra/themes/,
+# guarded by a per-file SHA-256 manifest (crates/rustty-extra/themes.manifest,
+# gate G-THEMES). So the rustty flow is: download the upstream tarball, replace
+# the tree, regenerate the manifest with the gate's own `--write` mode, verify
+# the gate then AGREES, and open a PR touching those paths.
+#
+# Also dropped: the R2 mirror step. That exists so the reference's build can
+# fetch the tarball at build time from a URL it controls; rustty's build reads
+# the checked-in tree and fetches nothing.
+name: Update iTerm2 colorschemes
+on:
+  schedule:
+    # Once a week
+    - cron: "0 0 * * 0"
+  workflow_dispatch:
+jobs:
+  update-iterm2-schemes:
+    if: github.repository == 'AirelyDev/rustty'
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed for create-pull-request action
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Download colorschemes
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RELEASE_INFO=$(gh api repos/mbadolato/iTerm2-Color-Schemes/releases/latest)
+          TAG_NAME=$(echo "$RELEASE_INFO" | jq -r '.tag_name')
+          # Sanitize before it reaches $GITHUB_OUTPUT: a tag containing a
+          # newline could otherwise inject additional step outputs. The
+          # upstream repo is trusted, but the cost of checking is one line.
+          case "$TAG_NAME" in
+            *[!A-Za-z0-9._-]* | "" )
+              echo "::error title=Unexpected tag::refusing tag_name '$TAG_NAME'"
+              exit 1 ;;
+          esac
+          # The upstream asset is named for ghostty because that is the format
+          # it emits; the FILE CONTENT is the theme corpus, which rustty parses
+          # with the same reader. Renaming it upstream is not ours to do.
+          curl -fL -o themes.tgz \
+            "https://github.com/mbadolato/iTerm2-Color-Schemes/releases/download/${TAG_NAME}/ghostty-themes.tgz"
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Replace the vendored corpus
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          tar xzf themes.tgz -C "$tmp"
+          # The tarball has a single top-level directory holding the themes.
+          src="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)"
+          test -n "$src"
+          n="$(find "$src" -type f | wc -l)"
+          # Anti-vacuity: an empty or near-empty extract must not silently wipe
+          # the corpus and then be blessed by --write on the next step.
+          if [ "$n" -lt 100 ]; then
+            echo "::error title=Suspicious theme corpus::extracted only $n files; refusing to replace 604"
+            exit 1
+          fi
+          rm -rf crates/rustty-extra/themes
+          mkdir -p crates/rustty-extra/themes
+          cp -a "$src"/. crates/rustty-extra/themes/
+          rm -f themes.tgz
+
+      - name: Regenerate the digest manifest
+        run: python3 .port/tools/gates/check_theme_corpus.py --write
+
+      # The gate must AGREE with the manifest we just wrote. Running it after
+      # --write is the point: --write blesses whatever is on disk, and this is
+      # what proves the blessing is self-consistent.
+      - name: Verify G-THEMES
+        run: python3 .port/tools/gates/check_theme_corpus.py
+
+      # Canary that the corpus still parses. res_themes.rs reads every file.
+      - name: Test Build
+        run: cargo test -p rustty-extra
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          title: Update iTerm2 colorschemes
+          base: main
+          branch: iterm2_colors_action
+          commit-message: "deps: Update iTerm2 color schemes"
+          add-paths: |
+            crates/rustty-extra/themes
+            crates/rustty-extra/themes.manifest
+          body: |
+            Upstream release: https://github.com/mbadolato/iTerm2-Color-Schemes/releases/tag/${{ steps.download.outputs.tag_name }}
+          labels: dependencies

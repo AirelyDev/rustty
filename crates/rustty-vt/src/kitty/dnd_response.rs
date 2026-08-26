@@ -236,8 +236,7 @@ const fn base64_calc_size(n: usize) -> usize {
 /// base64 *encoder* (rustty-simd only decodes), matching the precedent of
 /// local encoders in `apc/glyph/glossary.rs` and `rustty-core/surface.rs`.
 fn base64_standard_encode<'a>(dest: &'a mut [u8], source: &[u8]) -> &'a [u8] {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let out_len = base64_calc_size(source.len());
     debug_assert!(dest.len() >= out_len);
 
@@ -278,9 +277,7 @@ fn base64_standard_encode<'a>(dest: &'a mut [u8], source: &[u8]) -> &'a [u8] {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        encode, encode_error, Encoding, Errno, ErrorKind, RequestKeys, MAX_CHUNK_RAW,
-    };
+    use super::{encode, encode_error, Encoding, Errno, ErrorKind, RequestKeys, MAX_CHUNK_RAW};
     use crate::osc::Terminator;
 
     #[test]
@@ -334,10 +331,7 @@ mod tests {
         // First chunk: full header, m=1, 4096 base64 chars.
         let prefix = b"\x1b]72;t=r:x=1:i=3:m=1;";
         assert!(out.starts_with(prefix));
-        let first_end = out
-            .windows(2)
-            .position(|w| w == b"\x1b\\")
-            .unwrap();
+        let first_end = out.windows(2).position(|w| w == b"\x1b\\").unwrap();
         assert_eq!(prefix.len() + 4096, first_end);
 
         // Second chunk: m=0 with the single remaining byte.
@@ -408,7 +402,10 @@ mod tests {
                 Terminator::St,
             )
             .unwrap();
-            assert_eq!(b"\x1b]72;t=E:i=5:m=0;EPERM\x1b\\".as_slice(), buf.as_slice());
+            assert_eq!(
+                b"\x1b]72;t=E:i=5:m=0;EPERM\x1b\\".as_slice(),
+                buf.as_slice()
+            );
         }
     }
 

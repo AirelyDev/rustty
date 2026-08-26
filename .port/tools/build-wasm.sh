@@ -7,7 +7,7 @@
 # Usage:  .port/tools/build-wasm.sh [--release] [extra cargo args...]
 # Default target crate is rustty-vt-c (the .wasm cdylib deliverable).
 set -e
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 export CC_wasm32_wasip1="$here/zig-cc-wasm.sh"
 export CXX_wasm32_wasip1="$here/zig-cxx-wasm.sh"
 export AR_wasm32_wasip1="$here/zig-ar-wasm.sh"

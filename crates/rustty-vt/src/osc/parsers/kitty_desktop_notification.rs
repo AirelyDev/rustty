@@ -532,8 +532,7 @@ fn parse_packed_struct(str: &[u8]) -> Action {
 const VALID_METADATA_EXTRA_CHARACTERS: &[u8] = b"/,(){}[]*&^%$#@!`~=?";
 const VALID_METADATA_VALUE_CHARACTERS_ARR: [u8; VALID_IDENTIFIER_CHARACTERS.len()
     + VALID_METADATA_EXTRA_CHARACTERS.len()] = {
-    let mut out =
-        [0u8; VALID_IDENTIFIER_CHARACTERS.len() + VALID_METADATA_EXTRA_CHARACTERS.len()];
+    let mut out = [0u8; VALID_IDENTIFIER_CHARACTERS.len() + VALID_METADATA_EXTRA_CHARACTERS.len()];
     let mut i = 0;
     while i < VALID_IDENTIFIER_CHARACTERS.len() {
         out[i] = VALID_IDENTIFIER_CHARACTERS[i];

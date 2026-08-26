@@ -4,7 +4,7 @@
 
 **Goal:** Close the four WS2 gaps from `.port/phase-2/MACOS_APP_GAPS.md` — quicklook/Look-Up abort risk, cross-DPI contentsScale re-stamp, drainMailbox autoreleasepool, and B2–B4 present/resize verification — leaving the ledgers truthful.
 
-**Architecture:** Research (2026-07-23, this plan's authoring pass) resolved the ledger conflict: **the quicklook exports and the entire content-scale chain are ALREADY fully implemented** — `MACOS_APP_GAPS.md` §3 is stale against the code. WS2 is therefore mostly *verification KATs pinning already-landed behavior* (extending the live `HostedSurface` harness in `crates/rustty-apprt-c/tests/macos_window_host.rs`), plus **one real production change**: the `rustty_os` autoreleasepool shim wired into the renderer thread's `drainMailbox` (closing the W3 deferral at `renderer_seam.rs:1115`). Oracle-ownership for cross-DPI is resolved: **the Swift host owns the re-stamp** (no renderer mailbox message exists in the oracle), so no Metal `set_content_scale` message is added — adding one would be an R1 deviation.
+**Architecture:** Research (2026-07-23, this plan's authoring pass) resolved the ledger conflict: **the quicklook exports and the entire content-scale chain are ALREADY fully implemented** — `MACOS_APP_GAPS.md` §3 is stale against the code. WS2 is therefore mostly _verification KATs pinning already-landed behavior_ (extending the live `HostedSurface` harness in `crates/rustty-apprt-c/tests/macos_window_host.rs`), plus **one real production change**: the `rustty_os` autoreleasepool shim wired into the renderer thread's `drainMailbox` (closing the W3 deferral at `renderer_seam.rs:1115`). Oracle-ownership for cross-DPI is resolved: **the Swift host owns the re-stamp** (no renderer mailbox message exists in the oracle), so no Metal `set_content_scale` message is added — adding one would be an R1 deviation.
 
 **Tech Stack:** Rust 1.93.1 (pinned), objc2 0.6 family (objc2-core-foundation / objc2-io-surface / objc2-foundation 0.3), libtest KATs against the live C-ABI (`rustty_*` exports), ghostty oracle at `../ghostty` (pinned `4749c4e`).
 
@@ -27,24 +27,25 @@
 
 **A) Quicklook ledger conflict — RESOLVED: implemented, NOT aborting.**
 
-| Check | Where | Finding |
-|---|---|---|
-| `rustty_surface_quicklook_font` | `crates/rustty-apprt-c/src/lib.rs:2593-2710` | REAL implementation (P2.2): reads `font_grid` primary CoreText face, `attribute(kCTFontSizeAttribute)`, `copy_with_attributes(size/content_scale.y)`, returns +1 CTFontRef via `CFRetained::into_raw`. Zero `unimplemented!()`. |
-| `rustty_surface_quicklook_word` | `crates/rustty-apprt-c/src/lib.rs:2732-2836` | REAL implementation (P2.1): `renderer_state.mutex` lock → `get_cursor_pos` → `posToViewport` → `pages.pin` → `select_word` → `readTextLocked`, explicit unlock at every exit. Zero `unimplemented!()`. |
-| Focused unit tests | `crates/rustty-apprt-c/src/lib.rs:3054` (`quicklook_word_tests`, 2 tests), `:3149` (`quicklook_font_tests`, 1 test) | Exist and pass. |
-| Ledger | `.port/phase-2/DEFERRALS.md:4567-4614` (P2 crash-guard section) | Records "quicklook_word: DONE in P2.1 … quicklook_font: DONE in P2.2". |
-| Ledger | `.port/phase-2/MACOS_APP_GAPS.md` §3 HIGH rows (lines 57-61) | **STALE** — still lists both as abort risks at old line numbers 2628/2688. |
+| Check                           | Where                                                                                                               | Finding                                                                                                                                                                                                                         |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rustty_surface_quicklook_font` | `crates/rustty-apprt-c/src/lib.rs:2593-2710`                                                                        | REAL implementation (P2.2): reads `font_grid` primary CoreText face, `attribute(kCTFontSizeAttribute)`, `copy_with_attributes(size/content_scale.y)`, returns +1 CTFontRef via `CFRetained::into_raw`. Zero `unimplemented!()`. |
+| `rustty_surface_quicklook_word` | `crates/rustty-apprt-c/src/lib.rs:2732-2836`                                                                        | REAL implementation (P2.1): `renderer_state.mutex` lock → `get_cursor_pos` → `posToViewport` → `pages.pin` → `select_word` → `readTextLocked`, explicit unlock at every exit. Zero `unimplemented!()`.                          |
+| Focused unit tests              | `crates/rustty-apprt-c/src/lib.rs:3054` (`quicklook_word_tests`, 2 tests), `:3149` (`quicklook_font_tests`, 1 test) | Exist and pass.                                                                                                                                                                                                                 |
+| Ledger                          | `.port/phase-2/DEFERRALS.md:4567-4614` (P2 crash-guard section)                                                     | Records "quicklook_word: DONE in P2.1 … quicklook_font: DONE in P2.2".                                                                                                                                                          |
+| Ledger                          | `.port/phase-2/MACOS_APP_GAPS.md` §3 HIGH rows (lines 57-61)                                                        | **STALE** — still lists both as abort risks at old line numbers 2628/2688.                                                                                                                                                      |
 
 **Decision table** (Task 1 re-runs the checks; this row is the branch taken):
 
-| State found | Action |
-|---|---|
-| Real impls + tests present (the verified state) | Branch **A-implemented**: Task 2 adds the missing *end-to-end* regression KAT (live surface through the actual exports); Task 7 strikes the stale §3 rows. |
-| `unimplemented!()` found (regression on the executor's checkout only) | Branch **A-aborting** (contingency): `git log --oneline -- crates/rustty-apprt-c/src/lib.rs | grep -iE 'P2\.[12]|quicklook'` and restore the P2.1/P2.2 commits; if truly absent, port from the oracle `../ghostty/src/apprt/embedded.zig:2140-2250` (`ghostty_surface_quicklook_font` / `ghostty_surface_quicklook_word`) + `../ghostty/src/Surface.zig` (`selectWord`/`readTextLocked` seams) — the bodies to produce are exactly the ones quoted verbatim as `//`-comments above each export in `lib.rs:2583-2836`. |
+| State found                                                           | Action                                                                                                                                                     |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Real impls + tests present (the verified state)                       | Branch **A-implemented**: Task 2 adds the missing _end-to-end_ regression KAT (live surface through the actual exports); Task 7 strikes the stale §3 rows. |
+| `unimplemented!()` found (regression on the executor's checkout only) | Branch **A-aborting** (contingency): `git log --oneline -- crates/rustty-apprt-c/src/lib.rs                                                                | grep -iE 'P2\.[12] | quicklook'`and restore the P2.1/P2.2 commits; if truly absent, port from the oracle`../ghostty/src/apprt/embedded.zig:2140-2250` (`ghostty_surface_quicklook_font`/`ghostty_surface_quicklook_word`) + `../ghostty/src/Surface.zig` (`selectWord`/`readTextLocked`seams) — the bodies to produce are exactly the ones quoted verbatim as`//`-comments above each export in `lib.rs:2583-2836`. |
 
 **B) Cross-DPI contentsScale — ORACLE OWNERSHIP RESOLVED: the HOST owns the re-stamp.**
+
 - Oracle: `../ghostty/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift:836-872` — `viewDidChangeBackingProperties` sets `layer?.contentsScale = window.backingScaleFactor` (inside a `CATransaction` with actions disabled), then calls `ghostty_surface_set_content_scale(surface, xScale, yScale)` and `setSurfaceSize(backing size)`. On monitor move, `windowDidChangeScreen` re-triggers it (`SurfaceView_AppKit.swift:780-795`).
-- Oracle renderer: `grep content_scale ../ghostty/src/renderer/{message.zig,Thread.zig,generic.zig}` → **no matches**. There is NO renderer mailbox content-scale message; `Metal.zig:218` just *reads* `layer.contentsScale` in `surfaceSize()`. So the "add a Metal `set_content_scale` mailbox message" idea in MACOS_APP_GAPS §3 MEDIUM is the *wrong* branch — R1 forbids inventing it.
+- Oracle renderer: `grep content_scale ../ghostty/src/renderer/{message.zig,Thread.zig,generic.zig}` → **no matches**. There is NO renderer mailbox content-scale message; `Metal.zig:218` just _reads_ `layer.contentsScale` in `surfaceSize()`. So the "add a Metal `set_content_scale` mailbox message" idea in MACOS_APP_GAPS §3 MEDIUM is the _wrong_ branch — R1 forbids inventing it.
 - Rustty side is ALREADY the faithful port, end to end: Swift `macos/Sources/RusttyKit/Surface View/SurfaceView_AppKit.swift:837-871` (re-stamp + `rustty_surface_set_content_scale`), export `crates/rustty-apprt-c/src/lib.rs:1563`, `Surface::updateContentScale` `crates/rustty-apprt/src/embedded.rs:1436`, `Surface::contentScaleCallback` `crates/rustty-core/src/surface.rs:7852` (NOT :7721 — the gaps doc's line ref is stale), Metal `surface_size` reading `bounds × contentsScale` live at `crates/rustty-renderer/src/metal/metal_impl.rs:751-768`.
 - Remaining work: a KAT proving the chain (Task 3) + ledger truth (Task 7). **No production code.**
 
@@ -67,9 +68,11 @@
 ### Task 1: Branch + WS2-A verification (decision table gate)
 
 **Files:**
+
 - No file changes. Read-only verification + branch creation.
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces: the branch `ws2-macos-guards-plumbing`; a recorded decision (**A-implemented** vs **A-aborting**) that Task 2 consumes.
 
@@ -84,11 +87,13 @@ git checkout -b ws2-macos-guards-plumbing
 - [ ] **Step 2: Verify the quicklook exports are real (no abort paths)**
 
 Run:
+
 ```bash
 awk 'NR>=2593 && NR<=2836' crates/rustty-apprt-c/src/lib.rs | grep -c "unimplemented!\|todo!"
 grep -n "pub unsafe extern \"C\" fn rustty_surface_quicklook" crates/rustty-apprt-c/src/lib.rs
 grep -rn "quicklook" crates/rustty-apprt/src/embedded.rs
 ```
+
 Expected: `0` from the first command (no panic macros in either export body); the second shows both exports at ~:2595 and ~:2734; the third shows only the `:696` doc-comment (the embedded backend itself has no quicklook leaf — the exports live wholly in apprt-c, faithful to the oracle where both are `Darwin` C-API fns in `embedded.zig`, not backend methods).
 
 - [ ] **Step 3: Run the existing focused quicklook unit tests**
@@ -105,6 +110,7 @@ Contingency (**A-aborting** — only if the checkout differs from the verified s
 - [ ] **Step 5: Commit (branch marker only — no changes expected on the verified path)**
 
 No commit if nothing changed. If the contingency path modified code:
+
 ```bash
 git add crates/rustty-apprt-c/src/lib.rs
 git commit -m "rustty-apprt-c: restore quicklook_word/font real impls (WS2-A)"
@@ -112,13 +118,15 @@ git commit -m "rustty-apprt-c: restore quicklook_word/font real impls (WS2-A)"
 
 ### Task 2: WS2-A end-to-end quicklook regression KAT (live surface, real exports)
 
-The P2.1/P2.2 unit tests exercise the *bodies'* logic against a bare vt `Screen` / standalone CTFont. What no test pins yet — and what MACOS_APP_GAPS §3 feared — is the **actual exports on a live surface under panic=abort-style scrutiny** (Look-Up + VoiceOver fire them without user intent). Add that KAT.
+The P2.1/P2.2 unit tests exercise the _bodies'_ logic against a bare vt `Screen` / standalone CTFont. What no test pins yet — and what MACOS_APP_GAPS §3 feared — is the **actual exports on a live surface under panic=abort-style scrutiny** (Look-Up + VoiceOver fire them without user intent). Add that KAT.
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c/Cargo.toml:148` (add one dev-dep line after `objc2-io-surface`)
 - Modify: `crates/rustty-apprt-c/tests/macos_window_host.rs:65-69` (imports) and append one test after `set_display_id_pushes_to_render_thread_panic_free` (:485)
 
 **Interfaces:**
+
 - Consumes: `HostedSurface::spawn() -> Option<HostedSurface>`, `pump_bounded(&self)` (existing harness); `rustty_surface_quicklook_font(*mut Surface) -> *mut c_void`, `rustty_surface_quicklook_word(*mut Surface, *mut Text) -> bool`, `rustty_surface_free_text(*mut Surface, *mut Text)` (existing exports); `rustty_apprt_c::capi::Text` (pub fields).
 - Produces: test `quicklook_exports_are_abort_free_on_live_surface`.
 
@@ -238,9 +246,11 @@ git commit -m "rustty-apprt-c: live-surface quicklook abort-free regression KAT 
 No production change (see Research findings B: host-owned per oracle; rustty's Swift host + full chain already faithful). This task adds the KAT that drives the exact host sequence and 4 small helpers Task 4 reuses.
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c/tests/macos_window_host.rs` — add 4 methods inside `impl HostedSurface` (insert after `read_presented_bgra`, i.e. just before the closing `}` of the impl at :384) + 1 test.
 
 **Interfaces:**
+
 - Consumes: existing `HostedSurface` fields/methods (`view: Retained<MockHostView>`, `app`, `surface`, `drive_display`, `pump_bounded`); `rustty_surface_set_content_scale`, `rustty_surface_set_size` (imported in Task 2).
 - Produces (Task 4 consumes these exact signatures):
   - `fn presented_size(&self) -> Option<(usize, usize)>`
@@ -388,26 +398,31 @@ git commit -m "rustty-apprt-c: cross-DPI contentsScale re-stamp KAT + size helpe
 ### Task 4: WS2-D B4 resize-tracking KAT + B2 present-error verification
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c/tests/macos_window_host.rs` — 1 new test.
 - Read-only verify: `crates/rustty-renderer/src/metal/metal_impl.rs:799-830`, `crates/rustty-renderer/src/generic.rs:5188-5199,5520-5530`.
 
 **Interfaces:**
+
 - Consumes: Task 3 helpers (`presented_size`, `set_host_layer_bounds`, `pump_until_presented_size`); `rustty_surface_set_size` (imported in Task 2).
 - Produces: test `resize_tracks_host_layer_bounds`; a B2 verification record for the Task 7 ledger note.
 
 - [ ] **Step 1: B2 — verify present-error propagation (read, no code)**
 
 Run and read:
+
 ```bash
 sed -n '799,835p' crates/rustty-renderer/src/metal/metal_impl.rs
 sed -n '5185,5200p' crates/rustty-renderer/src/generic.rs
 sed -n '5518,5530p' crates/rustty-renderer/src/generic.rs
 ```
+
 Confirm (all three were verified at plan time — this re-run is the executor's evidence):
+
 1. `Metal::present` `Some(layer)` async arm: `layer.set_surface(...).map_err(|iosurface_layer::Error::ObjCFailed| Error::ObjCFailed)?` — the error PROPAGATES (no `Ok(())` swallow on the live arm; the `None => Ok(())` no-op is offscreen-only).
 2. `generic.rs:5195` (async buffer-completed path): present error is caught + logged — the oracle's `catch |err| log` parity.
 3. `generic.rs:5525`: sync `present_last_target()?` propagates via `?`.
-Record the three citations for Task 7's B2 strike note. If any arm differs, STOP and fix to match `../ghostty/src/renderer/Metal.zig:253-259` + the generic.zig caller before proceeding.
+   Record the three citations for Task 7's B2 strike note. If any arm differs, STOP and fix to match `../ghostty/src/renderer/Metal.zig:253-259` + the generic.zig caller before proceeding.
 
 - [ ] **Step 2: B4 — write the resize-tracking KAT**
 
@@ -465,9 +480,11 @@ git commit -m "rustty-apprt-c: B4 resize-tracking KAT; B2 present-propagation ve
 ### Task 5: WS2-D full harness run on this Mac + the on-device `#[ignore]` window test
 
 **Files:**
+
 - Possibly modify: `crates/rustty-apprt-c/tests/macos_window_host.rs:496-497` (the `#[ignore]` attribute — decision-gated below).
 
 **Interfaces:**
+
 - Consumes: all tests from Tasks 2-4 + the 3 pre-existing tests.
 - Produces: a green full-suite run; an un-ignore decision for `shows_visible_window_on_device`; run records for Task 7.
 
@@ -480,12 +497,14 @@ Expected: `6 passed; 0 failed; 1 ignored` (hosts_view_layer_and_presents_live_fr
 
 Run: `cargo test -p rustty-apprt-c --test macos_window_host -- --ignored --test-threads=1`
 Two possible outcomes (both are data, not failures):
+
 - **Main thread acquired** (single-threaded libtest runs on the process main thread in a GUI login session): a real 200×120 NSWindow appears, the pump runs ~5s, blur is applied via the real CGS SPI, test PASSES.
 - **`MainThreadMarker::new()` is `None`** (libtest still used a worker thread): the test prints its skip note and passes vacuously. In that case retry once with the env harness: `RUST_TEST_THREADS=1 cargo test -p rustty-apprt-c --test macos_window_host -- --ignored`. If still off-main-thread, the vacuous pass stands.
 
 - [ ] **Step 3: Un-ignore decision**
 
 Rule (the roadmap's "un-ignore what passes", applied honestly):
+
 - If Step 2 achieved the REAL window path and passed: remove the `#[ignore = …]` attribute (`macos_window_host.rs:497`) — the test is safe un-ignored because its off-main-thread arm self-skips with a note (`:503-509`), so default parallel runs and the Linux VM (file is `#![cfg(target_os = "macos")]`) are unaffected. Update the test's doc comment (`:487-495`) to say it runs un-ignored, self-skipping off the main thread, and was live-verified 2026-07-23 on this Mac.
 - If only the vacuous skip was reachable: KEEP `#[ignore]` (an always-vacuous "passing" test is worse than an honest ignore) and record in Task 7 that the on-device path remains manual-only, with the Step 2 command as the runbook.
 
@@ -504,12 +523,14 @@ git commit -m "rustty-apprt-c: un-ignore on-device window KAT after live run (WS
 The one production change. Oracle scope: `../ghostty/src/renderer/Thread.zig:338-346` — the ONLY AutoreleasePool site (verified: termio/Thread.zig and os/cf_release_thread.zig have none), so exactly one call site is wired.
 
 **Files:**
+
 - Create: `crates/rustty-os/src/autorelease.rs`
 - Modify: `crates/rustty-os/src/lib.rs` (one `pub mod` line, after `pub mod args;` at :38)
 - Modify: `crates/rustty-core/src/renderer_seam.rs:1104-1121` (wrapper + body hoist)
 - Modify: `.port/phase-2/DEFERRALS.md:3552-3561` (RESOLVED note — same-commit ledger discipline)
 
 **Interfaces:**
+
 - Consumes: `objc2::rc::autoreleasepool` (rustty-os's existing macOS-gated `objc2 = "0.6"` dep, `Cargo.toml:63`; direct-use precedent `locale.rs:117`). `rustty-core` already deps `rustty-os` unconditionally (`crates/rustty-core/Cargo.toml:31`) — NO Cargo.toml change anywhere.
 - Produces: `pub fn rustty_os::autorelease::autoreleasepool<T, F: FnOnce() -> T>(f: F) -> T` (macOS: real ObjC pool; every other target incl. wasm32: identity — so this compiles everywhere, which is what the rvm gate confirms).
 
@@ -665,11 +686,13 @@ Nothing else changes: the 220-line message-match body (`:1122-1345`, ending `Ok(
 - [ ] **Step 4: Build + run the touched-crate tests**
 
 Run:
+
 ```bash
 cargo build -p rustty-core
 cargo test -p rustty-core
 cargo test -p rustty-apprt-c --test macos_window_host
 ```
+
 Expected: build green; core tests pass unchanged; the window-host suite (whose every `pump_bounded` tick exercises the wrapped drain on a live render thread) stays green — proving the pooled drain is behavior-neutral.
 
 - [ ] **Step 5: Strike the DEFERRALS entry (same-commit ledger discipline)**
@@ -696,9 +719,11 @@ git commit -m "rustty-os/core: autoreleasepool shim wired into renderer drainMai
 ### Task 7: Ledger truth pass — MACOS_APP_GAPS §2/§3
 
 **Files:**
+
 - Modify: `.port/phase-2/MACOS_APP_GAPS.md`
 
 **Interfaces:**
+
 - Consumes: Task 4 Step 1's B2 citations; Task 5's run records; Tasks 2/3 test names.
 - Produces: a truthful ledger (roadmap "Ledger corrections" mandate).
 
@@ -732,9 +757,11 @@ git commit -m "port-ledgers: strike WS2 rows in MACOS_APP_GAPS (A/B/C/D resolved
 ### Task 8: Both-platform gate, full verification, merge
 
 **Files:**
+
 - No new changes; gates + merge flow only.
 
 **Interfaces:**
+
 - Consumes: everything above.
 - Produces: WS2 merged to main, branch deleted, ROADMAP checklist updated.
 
@@ -748,6 +775,7 @@ cargo clippy --workspace -- -D warnings
 cargo build --workspace
 cargo test -p rustty-os && cargo test -p rustty-core && cargo test -p rustty-apprt-c
 ```
+
 Expected: all green (acyclic gate unchanged — no new crate edges were added anywhere in this WS). Fix anything red before proceeding; gates are invariant (R4/R5) — never weaken them.
 
 - [ ] **Step 2: Remote build gate (Linux VM)**
@@ -756,6 +784,7 @@ Expected: all green (acyclic gate unchanged — no new crate edges were added an
 git push origin ws2-macos-guards-plumbing
 ssh rvm 'cd ~/projects/rustty && git fetch origin && git checkout ws2-macos-guards-plumbing && git pull --ff-only && cargo build --workspace'
 ```
+
 Expected: green. The only cross-platform-visible change is the `renderer_seam.rs` hoist + the unconditional `autorelease` module (identity arm on Linux) — this gate is precisely the standing lesson (xev `Loop::init` / `COMPLETION_SIZE`) applied.
 
 - [ ] **Step 3: Verification-before-completion + merge**

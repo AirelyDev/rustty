@@ -40,10 +40,12 @@
 ### Task 1: Vendor + compile `imgui_impl_metal` into dcimgui-sys
 
 **Files:**
+
 - Track (git add): `crates-sys/dcimgui-sys/vendor/imgui/backends/imgui_impl_metal.{mm,h}` (present, untracked)
 - Modify: `crates-sys/dcimgui-sys/build.rs` (compile the `.mm` under an `objc` + Metal cfg), `crates-sys/dcimgui-sys/Cargo.toml` (a `metal-backend` feature or macos-cfg), `crates-sys/dcimgui-sys/ext.cpp` (include `backends/imgui_impl_metal.h` under `__has_include`, mirroring the existing opengl3 block at ext.cpp:39-50)
 
 **Interfaces:**
+
 - Produces: a dcimgui-sys that compiles `imgui_impl_metal.mm` (ObjC++, `-x objective-c++`, linking Metal + QuartzCore) on macOS.
 
 - [ ] **Step 1: Confirm the reference's build wiring.** Read how ghostty compiles the Metal backend (`/Users/gael/projects/ghostty/src/build/` cimgui/imgui steps) — it compiles `imgui_impl_metal.mm` with ARC-off ObjC++ against the imgui headers. Match that: `cc::Build` with `.file("vendor/imgui/backends/imgui_impl_metal.mm").flag("-x").flag("objective-c++").flag("-fno-objc-arc")`, `.include("vendor/imgui")`, macOS-only (`#[cfg(target_os=…)]` in build.rs), link `framework=Metal`, `framework=QuartzCore`, `framework=Foundation`.
@@ -54,9 +56,11 @@
 ### Task 2: Expose the ImGui_ImplMetal FFI in dcimgui-sys
 
 **Files:**
+
 - Modify: `crates-sys/dcimgui-sys/ext.cpp` (a C wrapper `extern "C"` surface for the ImplMetal calls the port needs, if the raw ObjC++ signatures aren't directly bindgen-able), `crates-sys/dcimgui-sys/src/lib.rs` (the `extern "C"` decls / bindgen include)
 
 **Interfaces:**
+
 - Produces: `dcimgui_sys::ImGui_ImplMetal_Init(device: *mut c_void) -> bool`, `_NewFrame(render_pass_descriptor: *mut c_void)`, `_RenderDrawData(draw_data: *mut ImDrawData, command_buffer: *mut c_void, command_encoder: *mut c_void)`, `_Shutdown()`, `_CreateDeviceObjects(device)`, `_DestroyDeviceObjects()` — the exact set embedded.zig's inspector calls (ghostty embedded.zig:1090-1145). `id<MTLDevice>` etc. cross as `*mut c_void` (objc id).
 
 - [ ] **Step 1: Enumerate the exact ImplMetal calls** the reference inspector makes: read `/Users/gael/projects/ghostty/src/apprt/embedded.zig` inspector (992-1250) — the `ImGui_ImplMetal_Init(device)`, `_NewFrame(descriptor)`, `_RenderDrawData(draw_data, command_buffer, command_encoder)`, `_Shutdown()`. List the exact C signatures (objc ids as opaque pointers).
@@ -67,9 +71,11 @@
 ### Task 3: Implement `rustty_inspector_metal_{init,render,shutdown}` in apprt-c
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c/src/lib.rs` — the `rustty_inspector_metal_init` / `_metal_render` / `_metal_shutdown` exports (currently `unimplemented!()` E4 sinks; header docs at :36)
 
 **Interfaces:**
+
 - Consumes: the dcimgui-sys ImplMetal FFI (Task 2), the `Inspector` (Task 4 — but the metal exports operate on the ImGui context + Metal handles, so they can land before the widget bodies; they need the `Inspector`'s `ig_ctx` + `backend` fields, which Task 4 provides — sequence Task 4's struct fields before this, or land the struct-fields subset first).
 - Produces: `rustty_inspector_metal_init(ptr: *mut Inspector, device: *mut c_void) -> bool`, `rustty_inspector_metal_render(ptr, command_buffer, descriptor) -> bool`, `rustty_inspector_metal_shutdown(ptr)` — faithful ports of ghostty embedded.zig `ghostty_inspector_metal_init/render/shutdown` (:2225/2229/2243).
 
@@ -85,10 +91,12 @@
 ### Task 4: Inhabit the `Inspector` struct + per-Surface ImGui context (embedded.rs)
 
 **Files:**
+
 - Modify: `crates/rustty-apprt/src/embedded.rs` — the `Inspector` struct (ports embedded.zig:992-1250), its `init`/`deinit`, `redrawInspector` (:514→:517)
 - Modify: `crates/rustty-inspector/src/lib.rs` — replace `pub enum Inspector {}` with the inhabited top-level `Inspector` shell (LIFETIMES §1 rows: `gui`, `surface` back-ref, `ig_ctx` GHOSTTY_C, `backend`)
 
 **Interfaces:**
+
 - Consumes: `dcimgui_sys` context calls (`ImGui_CreateContext`/`DestroyContext`, `ImGui_SetCurrentContext`, IO setup).
 - Produces: `apprt::embedded::Inspector` with `surface: *mut Surface` (BORROW_FIELD, LIFETIMES row), `ig_ctx: *mut ImGuiContext` (GHOSTTY_C, owned via Create→Destroy), `backend: Option<Backend>` (enum{metal} tag). `rustty_inspector::Inspector` becomes the inhabited aggregate (owns key_stream/vt_stream/renderer_info per Inspector.zig:22).
 
@@ -101,10 +109,12 @@
 ### Task 5: R2 accessor-trait for the inspector↔renderer overlay edge
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/src/generic.rs:4600` (the `overlayFeatures` consumer) + a renderer-defined accessor trait (mirror the `RendererConfig` precedent — see [[renderer-config-accessor-trait-acyclic]])
 - Modify: `crates/rustty-inspector/src/widgets/renderer.rs` (impl the trait; `overlayFeatures` dupes the values into a fresh slice the renderer owns — renderer.zig:25-41)
 
 **Interfaces:**
+
 - Consumes: `State.inspector: Option<*mut Inspector>` (State.zig, renderer already has the opaque-pointer placeholder at generic.rs:6514/6616).
 - Produces: a renderer-defined trait (e.g. `InspectorOverlay { fn overlay_features(&self) -> Vec<crate::overlay::Feature>; }`) impl'd by the inspector's `renderer::Info` — the renderer calls it through the trait object, never naming a `rustty-inspector` type. INV-7 bidirectional edge (inspector checkboxes write `Info.features`, renderer reads via the trait).
 
@@ -116,9 +126,11 @@
 ### Task 6: Core lifecycle — activate/deactivate/initInspector + queueInspectorRender (INV-12)
 
 **Files:**
+
 - Modify: `crates/rustty-core/src/surface.rs` — `activateInspector`/`deactivateInspector` (the verbatim-comment seam at :25), `initInspector`, `queueInspectorRender`, the `inspector` field (:395 already `Option<*mut inspectorpkg::Inspector>`), the keyCallback inspector defer (:1524)
 
 **Interfaces:**
+
 - Consumes: `rustty_inspector::Inspector` (Task 4), `redrawInspector` (apprt).
 - Produces: `Surface::activateInspector` (constructs the Inspector, wires it onto `renderer_state.inspector` + the render-thread mailbox — the verbatim comment shows the exact push), `deactivateInspector` (tears down), `queueInspectorRender` (INV-12: after `gui.draw`, always `renderer_thread.wakeup.notify()` because inspector edits can change terminal state).
 
@@ -137,43 +149,51 @@ Port order = dependency order: shared helpers first, then leaf widgets, then agg
 
 **Files:** Create/fill `crates/rustty-inspector/src/widgets.rs` (currently 24-line stub) + `crates/rustty-inspector/src/units.rs`.
 **Interfaces:** Produces `detachableHeader(label, state, ctx, content_fn)` (widgets.zig:150-227 — the comptime callback, §3: port as a generic `FnOnce`/monomorphized closure), the units helpers (units.zig:3).
+
 - [ ] **Step 1:** Port `widgets.zig` (227 LOC) — `detachableHeader` (generic content closure → Rust generic `fn`/`FnMut`), the shared table/window helpers. Port `units.zig`.
 - [ ] **Step 2:** Verify `cargo build -p rustty-inspector`. Commit (`inspector: widgets.rs + units.rs shared helpers (Task 7)`).
 
 ### Task 8: `widgets/key.rs` ImGui half
 
 **Files:** Modify `crates/rustty-inspector/src/widgets/key.rs` (the pure-data `Event`/`EventRing`/`label()` half is LIVE; add the ImGui draw half). Oracle: `key.zig` (535). LIFETIMES rows: Event.binding/pty/event.utf8 (OWNED), Stream.events (CircBuf, INV-9 eviction). INV-10 Event ownership already ported.
+
 - [ ] **Step 1:** Port the ImGui draw half of `key.zig` (the keyboard-event table) against dcimgui-sys, preserving the live data half. §3 `inline for` over the key tuple (getKeyAction). Commit (`inspector: key.rs ImGui draw half (Task 8)`).
 
 ### Task 9: `widgets/style.rs`
 
 **Files:** Create `crates/rustty-inspector/src/widgets/style.rs`. Oracle: `style.zig` (125). §3 `inline for (style_flags)` tuple.
+
 - [ ] Port faithfully (R1). Build. Commit (`inspector: style.rs widget (Task 9)`).
 
 ### Task 10: `widgets/renderer.rs`
 
 **Files:** Modify `crates/rustty-inspector/src/widgets/renderer.rs` (created in Task 5 for the trait impl — now port the full widget). Oracle: `renderer.zig` (123). LIFETIMES: Info.features (OWNED map, INV-7). §3 `std.meta.Tag(Overlay.Feature)` map key.
+
 - [ ] Port the renderer-info widget (checkboxes writing `Info.features`, INV-7); the `overlayFeatures` dupe was done in Task 5 — now the draw half. Build. Commit (`inspector: renderer.rs widget (Task 10)`).
 
 ### Task 11: `widgets/screen.rs`
 
 **Files:** Create `crates/rustty-inspector/src/widgets/screen.rs`. Oracle: `screen.zig` (400). LIFETIMES: Info.draw(data).screen / color_palette (BORROW_PARAM, call-scoped under mutex, INV-1). INV-4 mode reads (kitty_keyboard flags), INV-6 screen-window lifecycle re-fetch. §3 `@typeInfo(Flags).@"struct".fields` kitty-keyboard rows, `comptimePrint` field names.
+
 - [ ] Port faithfully. The `*Screen`/`*DynamicPalette` are per-frame call-scoped (never cached, INV-1/INV-6). Build. Commit (`inspector: screen.rs widget (Task 11)`).
 
 ### Task 12: `widgets/page.rs`
 
 **Files:** Create `crates/rustty-inspector/src/widgets/page.rs`. Oracle: `page.zig` (428). INV-2 dirty READ-ONLY (`page.isDirty()`, `row.dirty` — observe never clear).
+
 - [ ] Port faithfully; dirty reads are pure observation (INV-2). Build. Commit (`inspector: page.rs widget (Task 12)`).
 
 ### Task 13: `widgets/pagelist.rs` (comptime-heavy)
 
 **Files:** Create `crates/rustty-inspector/src/widgets/pagelist.rs`. Oracle: `pagelist.zig` (852 — largest widget). INV-2 dirty read (`pin.isDirty()`). §3 comptime: `std.meta.tags(point.Tag)`, `combo_width` comptime block (scan tag-name lengths → const), `regionHelpText(comptime tag)` + `regionRow(pages, comptime tag)` (monomorphize per tag).
+
 - [ ] **Step 1:** Port the comptime obligations by hand-expansion/monomorphization per the §3 inventory (the `comptime`-computed `combo_width`, the per-tag `regionRow`/`regionHelpText`). Preserve the verbatim `point.Tag` set.
 - [ ] **Step 2:** Build. Commit (`inspector: pagelist.rs widget + comptime hand-expansion (Task 13)`).
 
 ### Task 14: `widgets/terminal.rs` (comptime modes table + INV-3 write-back)
 
 **Files:** Create `crates/rustty-inspector/src/widgets/terminal.rs`. Oracle: `terminal.zig` (726). LIFETIMES: Info.screens (EnumMap of owned screen.Info, INV-6 re-validate each frame). **INV-3: the ONLY write-back — `t.scrolling_region = override` in layoutTable, guarded `changed and top<bottom and left<right`.** §3 comptime: `@typeInfo(Mode).@"enum".fields` with `@setEvalBranchQuota(6000)` + `@bitCast(ModeTag.Backing)` (modes table), `std.meta.tags(ScreenSet.Key)`, `comptimePrint`.
+
 - [ ] **Step 1:** Port the modes table by hand-expanding the `inline for` over `Mode` enum fields (INV-4 `t.modes.get` display-only). Port the ScreenSet.Key EnumMap with the INV-6 per-frame re-fetch/removal.
 - [ ] **Step 2:** Port layoutTable with the INV-3 single write-back (`scrolling_region` override, guarded) — EVERY other editable widget reads-into-local-and-discards (display-only). This is the one place the inspector mutates live terminal state.
 - [ ] **Step 3:** Build. Commit (`inspector: terminal.rs widget + modes table + INV-3 scrolling_region write-back (Task 14)`).
@@ -181,6 +201,7 @@ Port order = dependency order: shared helpers first, then leaf widgets, then agg
 ### Task 15: `widgets/surface.rs` + R3 pin-invalidation hazard
 
 **Files:** Create `crates/rustty-inspector/src/widgets/surface.rs`. Create `.port/phase-2/mirihar-inspector-pin/`. Oracle: `surface.zig` (504). LIFETIMES: Inspector.draw.surface (BORROW_PARAM, all reads under `renderer_state.mutex`, INV-1), **Mouse.last_point (BORROW_FIELD `?terminal.Pin` — R3: raw-aliases pagelist memory, INVALIDATED by reflow)**.
+
 - [ ] **Step 1: R3 proof.** The `Mouse.last_point: Option<Pin>` raw-aliases PageList memory that reflow invalidates. Prove the port's pin-handling is SB-clean on an isolated `mirihar-inspector-pin` harness (Pin held across a reflow-like `&mut PageList` → must re-validate or drop, not deref stale). Only then port.
 - [ ] **Step 2:** Port `surface.zig` — the top-level surface inspector window (aggregates terminal/keyboard/termio/renderer sub-windows, all under one mutex lock, INV-1). Build.
 - [ ] **Step 3:** `cargo +nightly miri test` the pin harness green. Commit (`inspector: surface.rs widget + R3 pin Miri proof (Task 15)`).
@@ -188,6 +209,7 @@ Port order = dependency order: shared helpers first, then leaf widgets, then agg
 ### Task 16: `widgets/termio.rs` — metadata-encoder design + R1 self-alias Miri + R4
 
 **Files:** Create `crates/rustty-inspector/src/widgets/termio.rs`. Create `.port/phase-2/mirihar-inspector-vthandler/`. Oracle: `termio.zig` (811 — the design-heaviest widget). LIFETIMES: **VTHandler.State.events (BORROW_FIELD `*mut VTEvent.Ring` SELF-ALIAS of Stream.events — R1), State.terminal (BORROW_FIELD call-scoped, INV-8), VTEvent.{arena_state,raw_description,metadata} (OWNED, arena-backed)**. INV-8 recordPtyRead capture window, INV-9 ring eviction, **INV-13 termio selection sync (R4: reverse iterator MUTATES `ev.imgui_selected` during draw)**.
+
 - [ ] **Step 1: The metadata-encoder hand-expansion (the single largest design task, §3).** `encodeMetadata`/`encodeMetadataSingle` switch on `@typeInfo(T)` over arbitrary OSC/parser-action payloads (`.optional`/`.bool`/`.enum`→tagName/`.union`/`.struct`/`.int`). Rust has no `@typeInfo` — hand-expand per concrete `osc.Command`/`Parser.Action` variant (a visitor/`match` over the real rustty-vt variants). DESIGN: enumerate every concrete variant the parser produces and its metadata encoding, faithful to the reference's per-type output.
 - [ ] **Step 2: R1 self-alias Miri proof.** `VTHandler.State.events = &self.events` is a self-alias of a sibling field of the same Stream, appended-through during `nextSlice` (INV-8 capture window). Route the append via the alias's OWN pointer + raw-self helpers (the [[shaper-hook-sb-clean-interleave]] doctrine); PROVE on `mirihar-inspector-vthandler` (long-lived raw alias into a field + interleaved `&mut` to that field = SB/TB UB) before shipping.
 - [ ] **Step 3:** Port `termio.zig` — the `Stream<VTHandler>` parser (§3 generic-parser-as-trait, the handler impls the rustty-vt handler trait), the VTEvent ring (INV-9 eviction: element drop before slot reuse), the arena-backed VTEvent (raw_description/metadata in the event's arena, INV-8 snapshot cursor/scrolling_region BY VALUE at event time), the R4 selection sync (reverse iterator mutates `imgui_selected` — port the mutation-during-draw faithfully).
@@ -197,11 +219,13 @@ Port order = dependency order: shared helpers first, then leaf widgets, then agg
 
 **Files:** Create `crates/rustty-inspector/src/Inspector.rs` (or fold into lib.rs). Oracle: `Inspector.zig` (131), `main.zig` (8).
 **Interfaces:** Produces `Inspector::render` — sets current ImGui context (INV-11), draws `gui` (the surface.Inspector aggregate = all sub-windows), then `renderer_thread.wakeup.notify()` (INV-12). Ties key_stream/vt_stream/renderer_info together.
+
 - [ ] Port `Inspector.zig` — the top-level `render` (INV-11 SetCurrentContext, INV-12 wakeup), the aggregate that owns the streams + info + the surface.Inspector gui. Build `cargo build --workspace`. Commit (`inspector: Inspector.rs aggregate + top-level render (Task 17)`).
 
 ### Task 18: End-to-end shakedown — ⌘⌥I opens the inspector
 
 **Files:** none (verification); may fix wiring surfaced by the live build.
+
 - [ ] **Step 1:** `cargo build --workspace` green; `bash macos/build-rustty.sh` → Rustty.app.
 - [ ] **Step 2:** Launch Rustty.app, press ⌘⌥I. **Screenshot-verify** (do NOT claim from process tree) the inspector opens with live panels (terminal/screen/cursor/keyboard/termio/modes/cell). Type input → the keyboard-events panel populates; run output → the termio VT-events panel populates.
 - [ ] **Step 3:** Confirm INV-3 (a scrolling-region edit in the terminal panel takes effect) and INV-12 (edits trigger a re-render). Commit any wiring fixes (`inspector: end-to-end shakedown — ⌘⌥I inspector functional (Task 18)`).
@@ -211,6 +235,7 @@ Port order = dependency order: shared helpers first, then leaf widgets, then agg
 ## Self-Review
 
 **1. Spec coverage** (against PREPORT_INSPECTOR.md):
+
 - Backend (imgui_impl_metal vendor+wire+FFI+exports) → Tasks 1-3. ✅
 - Lifecycle (Inspector struct/context INV-11, R2 accessor-trait, activate/deactivate/init/queueInspectorRender INV-12) → Tasks 4-6. ✅
 - 9 widget submodules → Tasks 8-16 (+ shared helpers Task 7, aggregate Task 17). ✅

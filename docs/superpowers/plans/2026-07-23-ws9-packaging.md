@@ -22,21 +22,21 @@
 
 ## File Structure
 
-| File | Responsibility |
-|---|---|
-| `crates-sys/gettext-sys/vendor/intl/**` | NEW — verbatim upstream gettext-0.24 `gettext-runtime/intl/` core (23 `.c` + 7 private `.h`) |
-| `crates-sys/gettext-sys/vendor/intl/gnulib-lib/**` | NEW location for the 7 gnulib `.c` + 15 `.h` (13 move here from the flat `vendor/`, 2 are new `glthread/` headers) |
-| `crates-sys/gettext-sys/build.rs` | `SOURCES` 6 → 30 TUs; three include paths; archive renamed `rustty_intl` |
-| `crates-sys/gettext-sys/src/lib.rs` | adds the `catalog` FFI module (`bindtextdomain`/`textdomain`/`dgettext`) + its link KAT |
-| `crates-sys/gettext-sys/README.md` | provenance rewrite: full libintl, not a slice |
-| `crates/rustty-os/build.rs` | DELETE the Homebrew `-L/opt/homebrew/opt/gettext/lib -lintl` block (review finding WS4-M1) |
-| `crates/rustty-os/src/i18n.rs` | adds the `gettext_` link/round-trip KAT |
-| `xtask/Cargo.toml` | adds `serde_json` |
-| `xtask/src/archives.rs` | NEW — cargo-JSON archive-set parsing + `ranlib` normalization, with unit tests |
-| `xtask/src/main.rs` | `xcframework()` uses the JSON set + normalization instead of the `read_dir` glob |
-| `macos/build-rustty.sh` | DELETE `-L/opt/homebrew/opt/gettext/lib -lintl` from `OTHER_LDFLAGS` |
-| `.port/tools/gates/no_homebrew_gettext_gate.sh` | NEW — the hermetic acceptance gate (hides Homebrew libintl, rebuilds, asserts symbols) |
-| `.port/phase-2/INTEGRATION_PARITY.md`, `.port/phase-2/DEFERRALS.md`, `macos/MILESTONE.md` | ledger strikes |
+| File                                                                                      | Responsibility                                                                                                     |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `crates-sys/gettext-sys/vendor/intl/**`                                                   | NEW — verbatim upstream gettext-0.24 `gettext-runtime/intl/` core (23 `.c` + 7 private `.h`)                       |
+| `crates-sys/gettext-sys/vendor/intl/gnulib-lib/**`                                        | NEW location for the 7 gnulib `.c` + 15 `.h` (13 move here from the flat `vendor/`, 2 are new `glthread/` headers) |
+| `crates-sys/gettext-sys/build.rs`                                                         | `SOURCES` 6 → 30 TUs; three include paths; archive renamed `rustty_intl`                                           |
+| `crates-sys/gettext-sys/src/lib.rs`                                                       | adds the `catalog` FFI module (`bindtextdomain`/`textdomain`/`dgettext`) + its link KAT                            |
+| `crates-sys/gettext-sys/README.md`                                                        | provenance rewrite: full libintl, not a slice                                                                      |
+| `crates/rustty-os/build.rs`                                                               | DELETE the Homebrew `-L/opt/homebrew/opt/gettext/lib -lintl` block (review finding WS4-M1)                         |
+| `crates/rustty-os/src/i18n.rs`                                                            | adds the `gettext_` link/round-trip KAT                                                                            |
+| `xtask/Cargo.toml`                                                                        | adds `serde_json`                                                                                                  |
+| `xtask/src/archives.rs`                                                                   | NEW — cargo-JSON archive-set parsing + `ranlib` normalization, with unit tests                                     |
+| `xtask/src/main.rs`                                                                       | `xcframework()` uses the JSON set + normalization instead of the `read_dir` glob                                   |
+| `macos/build-rustty.sh`                                                                   | DELETE `-L/opt/homebrew/opt/gettext/lib -lintl` from `OTHER_LDFLAGS`                                               |
+| `.port/tools/gates/no_homebrew_gettext_gate.sh`                                           | NEW — the hermetic acceptance gate (hides Homebrew libintl, rebuilds, asserts symbols)                             |
+| `.port/phase-2/INTEGRATION_PARITY.md`, `.port/phase-2/DEFERRALS.md`, `macos/MILESTONE.md` | ledger strikes                                                                                                     |
 
 ## Pre-verified facts the tasks rely on (researched 2026-07-28 — do NOT re-derive)
 
@@ -48,8 +48,8 @@
 - **The exact header closure** (from `clang -MM` over all 30 TUs) is the file list given in Task 1. `localename-table.h` and `verify.h` are not in that closure but are already vendored and byte-identical; they move along with the rest (harmless, keeps the vendor set a superset of upstream's needs).
 - **`crates/rustty-os` already depends on `gettext-sys`** (`crates/rustty-os/Cargo.toml:67`, `gettext-sys = { path = "../../crates-sys/gettext-sys" }`), so the vendored archive's link directives already propagate. No new dependency edge, no acyclic-graph change.
 - **`crates/rustty-os/src/i18n.rs:271-277`** declares its own `extern "C" { fn bindtextdomain(...); fn textdomain(...); fn dgettext(...); }` block — these are exactly the three symbols the full vendor supplies. `rustty_build_config::i18n()` is `true` on macOS (`crates/rustty-build-config/src/build.rs:127-133`), so `i18n::gettext_` really calls `dgettext` at runtime.
-- **The `-lintl` link sites are exactly two**: `crates/rustty-os/build.rs:49-67` (the WS4-added block — review finding **WS4-M1**; it hardcodes `/opt/homebrew/opt/gettext/lib`, so it also misses Intel Homebrew at `/usr/local`) and `macos/build-rustty.sh:31` `OTHER_LDFLAGS`. `.port/tools/macos-parity/menu-shortcut-parity.sh:51` and `.port/phase-0/harness/build_port_driver.sh:153` reference libintl only as *optional* harness flags and are out of scope.
-- **`msgfmt` is a build-time TOOL dependency, not a link dependency.** `xtask/src/res_misc.rs:388-402` spawns Homebrew's `msgfmt` to compile the 31 `po/*.po` catalogs, and `msgfmt_path()` (line 405-420) prepends `/opt/homebrew/opt/gettext/bin`. The oracle equally needs `msgfmt` at build time (`GhosttyI18n.zig`). WS9's claim is about the **linked product**, so the acceptance gate hides Homebrew's libintl *libraries* while leaving `bin/msgfmt` functional — see Task 6.
+- **The `-lintl` link sites are exactly two**: `crates/rustty-os/build.rs:49-67` (the WS4-added block — review finding **WS4-M1**; it hardcodes `/opt/homebrew/opt/gettext/lib`, so it also misses Intel Homebrew at `/usr/local`) and `macos/build-rustty.sh:31` `OTHER_LDFLAGS`. `.port/tools/macos-parity/menu-shortcut-parity.sh:51` and `.port/phase-0/harness/build_port_driver.sh:153` reference libintl only as _optional_ harness flags and are out of scope.
+- **`msgfmt` is a build-time TOOL dependency, not a link dependency.** `xtask/src/res_misc.rs:388-402` spawns Homebrew's `msgfmt` to compile the 31 `po/*.po` catalogs, and `msgfmt_path()` (line 405-420) prepends `/opt/homebrew/opt/gettext/bin`. The oracle equally needs `msgfmt` at build time (`GhosttyI18n.zig`). WS9's claim is about the **linked product**, so the acceptance gate hides Homebrew's libintl _libraries_ while leaving `bin/msgfmt` functional — see Task 6.
 - **Cargo JSON shape** (verified by running `cargo build -p zlib-sys -p gettext-sys --message-format=json`): `{"reason":"build-script-executed","package_id":"path+file:///…/crates-sys/zlib-sys#0.1.0","linked_libs":["static=z"],"linked_paths":["native=/…/target/debug/build/zlib-sys-38fc4eb3de9b7298/out"],…}`. `linked_libs` entries are the raw `cargo:rustc-link-lib` values (`static=z`, `framework=CoreFoundation`, `dylib=pthread`, or a bare name); `linked_paths` are the raw `cargo:rustc-link-search` values (`native=<dir>` or a bare dir). `compiler-artifact` messages carry `target.kind` and `filenames`.
 - **`ranlib` behaviour** (verified): `/usr/bin/ar rcS lib.a p.o` produces an archive whose `ar -t` lists only `p.o`; after `cp` + `/usr/bin/ranlib`, `ar -t` lists `__.SYMDEF SORTED` first. That is the assertion Task 4 uses.
 - **Homebrew layout** (verified on this host): `/opt/homebrew/opt/gettext -> ../Cellar/gettext/1.0`; `/opt/homebrew/lib/{libintl.dylib,libintl.a,libintl.8.dylib}` and `/opt/homebrew/include/libintl.h` are symlinks into that Cellar. The Cellar `lib` dir is user-writable (`gael:staff`, `drwxr-xr-x`). `msgfmt` links `libintl.8.dylib` by **absolute path**, so renaming only the linker-facing `libintl.dylib` symlink and `libintl.a` disables `-lintl` everywhere while keeping `msgfmt` runnable.
@@ -63,10 +63,12 @@
 - [ ] **Step 0.1: Create the WS9 branch off up-to-date main**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 git checkout main && git pull && git checkout -b ws9-packaging
 ```
+
 Expected: `Switched to a new branch 'ws9-packaging'`.
 
 ---
@@ -74,6 +76,7 @@ Expected: `Switched to a new branch 'ws9-packaging'`.
 ## Task 1: `gettext-sys` — vendor the FULL libintl (§2.3, gettext half)
 
 **Files:**
+
 - Create: `crates-sys/gettext-sys/vendor/intl/` (23 `.c` + 7 `.h`), `crates-sys/gettext-sys/vendor/intl/gnulib-lib/` (7 `.c` + 13 `.h`), `crates-sys/gettext-sys/vendor/intl/gnulib-lib/glthread/` (2 `.h`)
 - Delete: the 13 flat files currently at `crates-sys/gettext-sys/vendor/` (they move into `vendor/intl/gnulib-lib/`)
 - Modify: `crates-sys/gettext-sys/build.rs` (`SOURCES` const lines 32-42; the `cc::Build` block lines 56-70; the `build.compile` call and its comment lines 62-84)
@@ -81,6 +84,7 @@ Expected: `Switched to a new branch 'ws9-packaging'`.
 - Modify: `crates-sys/gettext-sys/README.md` (provenance rewrite)
 
 **Interfaces:**
+
 - Produces: the `gettext-sys` static archive is now named **`rustty_intl`** (was `rustty_gettext_localename`) and defines `_dgettext`, `_dcgettext`, `_ngettext`, `_dngettext`, `_dcngettext`, `_bindtextdomain`, `_bind_textdomain_codeset`, `_textdomain`, `_gettext` plus the `_libintl_*` primaries and the existing `_libintl_locale_name_canonicalize`. It still needs `framework=CoreFoundation`.
 - Produces: `gettext_sys::catalog::{bindtextdomain, textdomain, dgettext}` — raw `extern "C"` re-exports (macOS only), used by Task 1's KAT. `crates/rustty-os/src/i18n.rs` keeps its OWN identical `extern "C"` block and is NOT changed to use these (YAGNI — the symbols are the same).
 - Consumes: nothing from earlier tasks.
@@ -174,25 +178,30 @@ Expected: **FAIL at link time**, with `Undefined symbols for architecture arm64:
 - [ ] **Step 1.3: Download and verify the upstream gettext tarball**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 mkdir -p /tmp/ws9 && cd /tmp/ws9
 curl -sSL -o gettext-0.24.tar.gz https://deps.files.ghostty.org/gettext-0.24.tar.gz
 shasum -a 256 gettext-0.24.tar.gz
 ```
+
 Expected: `c918503d593d70daf4844d175a13d816afacb667c06fba1ec9dcd5002c1518b7  gettext-0.24.tar.gz`.
 **If the hash differs, STOP** — do not vendor an unverified tarball; report the mismatch.
 
 Then extract only the `intl/` subtree:
+
 ```bash
 cd /tmp/ws9 && tar xzf gettext-0.24.tar.gz gettext-0.24/gettext-runtime/intl
 ls /tmp/ws9/gettext-0.24/gettext-runtime/intl/plural.c
 ```
+
 Expected: the `plural.c` path prints (it ships pre-generated; no Bison needed).
 
 - [ ] **Step 1.4: Restructure `vendor/` and copy the full source set**
 
 Run (exact, from the repo root):
+
 ```bash
 cd /Users/gael/projects/rustty
 U=/tmp/ws9/gettext-0.24/gettext-runtime/intl
@@ -240,6 +249,7 @@ done
 - [ ] **Step 1.5: Verify the vendored tree byte-matches upstream and has the right shape**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 U=/tmp/ws9/gettext-0.24/gettext-runtime/intl
@@ -251,6 +261,7 @@ echo "intl TUs:        $(ls $V/intl/*.c | wc -l | tr -d ' ')"
 echo "gnulib TUs:      $(ls $V/intl/gnulib-lib/*.c | wc -l | tr -d ' ')"
 echo "flat leftovers:  $(ls $V/*.c 2>/dev/null | wc -l | tr -d ' ')"
 ```
+
 Expected: no `MISMATCH` lines; `intl TUs: 23`; `gnulib TUs: 7`; `flat leftovers: 0`. The four remaining top-level files are `config.h`, `libintl.h`, `libgnuintl.h`, `wrapper.h`.
 
 - [ ] **Step 1.6: Update `crates-sys/gettext-sys/build.rs`**
@@ -387,6 +398,7 @@ Expected: PASS — `test catalog_tests::catalog_api_links_and_round_trips ... ok
 - [ ] **Step 1.9: Assert the symbols at the archive level**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 ARCHIVE=$(ls -t target/debug/build/gettext-sys-*/out/librustty_intl.a | head -1)
@@ -394,6 +406,7 @@ echo "archive: $ARCHIVE"
 nm -g "$ARCHIVE" | grep -E " T _(dgettext|bindtextdomain|textdomain)$" | sort
 nm -g "$ARCHIVE" | grep -c " T _libintl_locale_name_canonicalize"
 ```
+
 Expected: exactly three lines — `T _bindtextdomain`, `T _dgettext`, `T _textdomain` — and the count `1` (the pre-existing canonicalizer is still there).
 
 - [ ] **Step 1.10: Rewrite `crates-sys/gettext-sys/README.md`**
@@ -445,12 +458,12 @@ end-to-end R3 toolchain (copied C -> `cc` compile -> `bindgen` FFI ->
 
 - Build template — copied verbatim from `ghostty/pkg/libintl/` (the reference's
   macOS libintl build), kept at the top of `vendor/`:
-  - `config.h`       — gettext's macOS `config.h` (generated on a Mac by the
-                       reference; includes the reference's manual `xlocale.h`
-                       addition at the end). Drives `-DHAVE_CONFIG_H`.
-  - `libintl.h`      — the public libintl header.
-  - `libgnuintl.h`   — `#include "libintl.h"`.
-  - `wrapper.h`      — declaration-only header for `bindgen`.
+  - `config.h` — gettext's macOS `config.h` (generated on a Mac by the
+    reference; includes the reference's manual `xlocale.h`
+    addition at the end). Drives `-DHAVE_CONFIG_H`.
+  - `libintl.h` — the public libintl header.
+  - `libgnuintl.h` — `#include "libintl.h"`.
+  - `wrapper.h` — declaration-only header for `bindgen`.
 - Upstream sources — copied verbatim from
   `gettext-0.24/gettext-runtime/intl/`, preserving the upstream directory shape:
   - `vendor/intl/*.c`, `vendor/intl/*.h`
@@ -481,10 +494,12 @@ git commit -m "gettext-sys: vendor the full macOS libintl (catalog API + localen
 ## Task 2: Drop the Homebrew `-lintl` from `rustty-os/build.rs` (review finding WS4-M1)
 
 **Files:**
+
 - Modify: `crates/rustty-os/build.rs:49-67` (delete the WS4 Homebrew block)
 - Test: `crates/rustty-os/src/i18n.rs` (new test in the existing `#[cfg(test)] mod tests`, after `canonicalizeLocale_darwin`)
 
 **Interfaces:**
+
 - Consumes: the `rustty_intl` archive from Task 1 (defines `_dgettext`/`_bindtextdomain`/`_textdomain`), reaching `rustty-os` through the existing `gettext-sys` dependency at `crates/rustty-os/Cargo.toml:67`.
 - Produces: no workspace build script references `/opt/homebrew` any more. Later tasks rely on this: Task 5's `build-rustty.sh` edit and Task 6's hermetic gate both assume `cargo build` itself is Homebrew-free.
 
@@ -514,7 +529,7 @@ Add to `crates/rustty-os/src/i18n.rs`, inside the existing `#[cfg(test)] mod tes
 
 - [ ] **Step 2.2: Run the test to verify it passes only via the vendored archive**
 
-First confirm it currently passes *while still linking Homebrew* (baseline), then remove the Homebrew block and re-run — the removal is the change under test.
+First confirm it currently passes _while still linking Homebrew_ (baseline), then remove the Homebrew block and re-run — the removal is the change under test.
 
 Run: `cargo test -p rustty-os i18n:: 2>&1 | tail -20`
 Expected: PASS (baseline — the symbols currently come from Homebrew).
@@ -550,20 +565,24 @@ Replace them with this comment (so the resolved history is legible and nobody re
 - [ ] **Step 2.4: Run the test again to verify it still passes without Homebrew in the link**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 touch crates/rustty-os/build.rs
 cargo test -p rustty-os i18n:: 2>&1 | tail -20
 ```
+
 Expected: PASS — `gettext_resolves_from_vendored_libintl ... ok` and `canonicalizeLocale_darwin ... ok`.
 
 - [ ] **Step 2.5: Assert no build script references Homebrew any more**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 grep -rn "opt/homebrew\|/usr/local/opt" crates/*/build.rs crates-sys/*/build.rs || echo "CLEAN"
 ```
+
 Expected: `CLEAN`.
 
 - [ ] **Step 2.6: Commit**
@@ -579,11 +598,13 @@ git commit -m "os: drop the Homebrew -lintl link-search; libintl now comes from 
 ## Task 3: `xtask::archives` — deterministic archive set from cargo JSON (§2.4)
 
 **Files:**
+
 - Create: `xtask/src/archives.rs`
 - Modify: `xtask/Cargo.toml` (add `serde_json` to `[dependencies]`)
 - Modify: `xtask/src/main.rs` (add `mod archives;` next to the other `mod` declarations near line 11-23)
 
 **Interfaces:**
+
 - Produces (Task 5 consumes these exact names):
   - `pub struct NativeArchiveRequest { pub package_id: String, pub lib_name: String, pub search_paths: Vec<PathBuf> }`
   - `pub struct ParsedArtifacts { pub staticlibs: Vec<PathBuf>, pub native: Vec<NativeArchiveRequest> }`
@@ -953,9 +974,11 @@ git commit -m "xtask: derive the xcframework archive set from cargo --message-fo
 ## Task 4: `xtask::archives` — `ranlib` normalization before `libtool` (§2.5)
 
 **Files:**
+
 - Modify: `xtask/src/archives.rs` (add `normalize_archive` + its test)
 
 **Interfaces:**
+
 - Consumes: nothing (self-contained shell-out).
 - Produces (Task 5 consumes): `pub fn normalize_archive(src: &Path, dst: &Path) -> Result<(), String>` — copies `src` to `dst` and runs `/usr/bin/ranlib` on `dst`; `src` is left untouched.
 
@@ -1087,10 +1110,12 @@ git commit -m "xtask: port LibtoolStep normalizeArchive (cp + ranlib per source 
 ## Task 5: Wire the new combine pipeline + drop `-lintl` from the app link
 
 **Files:**
+
 - Modify: `xtask/src/main.rs:320-388` (the cargo build + combine block inside `xcframework()`)
 - Modify: `macos/build-rustty.sh:19-31` (comment block + `OTHER_LDFLAGS`)
 
 **Interfaces:**
+
 - Consumes: `archives::cargo_build_json`, `archives::parse_artifacts`, `archives::NativeArchiveRequest::resolve`, `archives::normalize_archive` (signatures in Tasks 3 and 4); the `rustty_intl` archive from Task 1.
 - Produces: `target/aarch64-apple-darwin/xcframework/libRusttyKit.a` defines `_dgettext`, `_deflate` and has NO undefined `_dgettext`/`_deflate`; `dist/RusttyKit.xcframework`; `Rustty.app` links no `libintl` dylib.
 
@@ -1191,16 +1216,19 @@ In `xtask/src/main.rs`, replace lines 320-388 (from `let status = Command::new("
 - [ ] **Step 5.2: Build the xcframework and verify the archive set is explicit**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 rm -rf target/aarch64-apple-darwin/xcframework
 cargo run -q -p xtask -- xcframework 2>&1 | tail -20
 ```
+
 Expected: a line `xcframework: folding N archives (1 Rust staticlib + M vendored C)` with `M >= 10` (zlib, gettext, harfbuzz, freetype, oniguruma, libpng, libxml2, fontconfig, sentry, simdutf, highway, wuffs, …), then the `xcodebuild -create-xcframework` output, exit 0. **No** "was not found in any of its link-search paths" error.
 
 - [ ] **Step 5.3: Assert the combined archive is self-contained for gettext and zlib**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 LIB=target/aarch64-apple-darwin/xcframework/libRusttyKit.a
@@ -1211,7 +1239,9 @@ nm -u "$LIB" 2>/dev/null | grep -E "^_(dgettext|bindtextdomain|textdomain|deflat
 echo "--- symbol table present ---"
 ar -t "$LIB" | head -1
 ```
+
 Expected:
+
 - defined: four lines — `T _bindtextdomain`, `T _deflate`, `T _dgettext`, `T _textdomain`.
 - undefined: **empty**.
 - the `ar -t` first entry is `__.SYMDEF SORTED`.
@@ -1247,13 +1277,16 @@ and replace line 31 with:
 - [ ] **Step 5.5: Build the app and verify it does not link Homebrew libintl**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 bash macos/build-rustty.sh 2>&1 | tail -20
 ```
+
 Expected: `** BUILD SUCCEEDED **`.
 
 Then:
+
 ```bash
 cd /Users/gael/projects/rustty
 BUILT=$(xcodebuild -project macos/Rustty.xcodeproj -scheme Rustty -configuration Debug \
@@ -1264,6 +1297,7 @@ otool -L "$BIN" | grep -i intl && echo "FAIL: links libintl" || echo "OK: no lib
 otool -L "$BIN" | grep -i homebrew && echo "FAIL: links Homebrew" || echo "OK: no Homebrew dylib"
 nm -u "$BIN" 2>/dev/null | grep -E "_(dgettext|bindtextdomain|textdomain)$" && echo "FAIL: undefined gettext" || echo "OK: gettext resolved"
 ```
+
 Expected: `OK: no libintl dylib`, `OK: no Homebrew dylib`, `OK: gettext resolved`.
 
 - [ ] **Step 5.6: Commit**
@@ -1279,13 +1313,15 @@ git commit -m "xtask+macos: explicit archive set + ranlib normalization; drop th
 ## Task 6: The hermetic no-Homebrew-gettext acceptance gate
 
 **Files:**
+
 - Create: `.port/tools/gates/no_homebrew_gettext_gate.sh`
 
 **Interfaces:**
+
 - Consumes: `macos/build-rustty.sh` (Task 5), the vendored libintl (Task 1), the Homebrew-free build scripts (Task 2).
 - Produces: an executable gate script; a green run of it is the WS9 acceptance criterion.
 
-**Design note (read before implementing):** the gate must disable Homebrew's libintl for the *linker* without breaking Homebrew's `msgfmt`, which `xtask resources` legitimately needs at build time (the oracle needs it too — `GhosttyI18n.zig`). Renaming the whole `gettext` prefix would break `msgfmt` and prove nothing about linking. So the gate renames exactly the two linker-facing files inside the Cellar — `lib/libintl.dylib` (the unversioned dev symlink) and `lib/libintl.a` — which simultaneously dangles `/opt/homebrew/opt/gettext/lib/libintl.{dylib,a}` and `/opt/homebrew/lib/libintl.{dylib,a}` (both are symlinks into that dir). `ld` resolves `-lintl` only via `libintl.dylib`/`libintl.tbd`/`libintl.a`, never `libintl.8.dylib`, so after the rename `-lintl` is unresolvable host-wide while `msgfmt` (which loads `libintl.8.dylib` by absolute path) keeps working. Both renames are reversed by an `EXIT` trap, so an interrupted run still restores the host.
+**Design note (read before implementing):** the gate must disable Homebrew's libintl for the _linker_ without breaking Homebrew's `msgfmt`, which `xtask resources` legitimately needs at build time (the oracle needs it too — `GhosttyI18n.zig`). Renaming the whole `gettext` prefix would break `msgfmt` and prove nothing about linking. So the gate renames exactly the two linker-facing files inside the Cellar — `lib/libintl.dylib` (the unversioned dev symlink) and `lib/libintl.a` — which simultaneously dangles `/opt/homebrew/opt/gettext/lib/libintl.{dylib,a}` and `/opt/homebrew/lib/libintl.{dylib,a}` (both are symlinks into that dir). `ld` resolves `-lintl` only via `libintl.dylib`/`libintl.tbd`/`libintl.a`, never `libintl.8.dylib`, so after the rename `-lintl` is unresolvable host-wide while `msgfmt` (which loads `libintl.8.dylib` by absolute path) keeps working. Both renames are reversed by an `EXIT` trap, so an interrupted run still restores the host.
 
 - [ ] **Step 6.1: Write the gate script**
 
@@ -1444,21 +1480,25 @@ echo "GATE PASS: Rustty.app builds and links with NO Homebrew gettext available.
 - [ ] **Step 6.2: Make it executable and run it**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 chmod +x .port/tools/gates/no_homebrew_gettext_gate.sh
 bash .port/tools/gates/no_homebrew_gettext_gate.sh
 echo "exit=$?"
 ```
+
 Expected: the five sections each print `ok:` lines, ending with `GATE PASS: Rustty.app builds and links with NO Homebrew gettext available.` and `exit=0`. Every `restored …` line must appear before the process exits.
 
 - [ ] **Step 6.3: Verify the host was restored**
 
 Run:
+
 ```bash
 ls -l /opt/homebrew/opt/gettext/lib/libintl.dylib /opt/homebrew/opt/gettext/lib/libintl.a
 ls /opt/homebrew/opt/gettext/lib/*.ws9-hidden 2>/dev/null && echo "FAIL: leftovers" || echo "OK: no leftovers"
 ```
+
 Expected: both files listed normally; `OK: no leftovers`.
 
 - [ ] **Step 6.4: Commit**
@@ -1474,9 +1514,11 @@ git commit -m "gates: hermetic no-Homebrew-gettext acceptance gate for the self-
 ## Task 7: Deployment-target re-verification (already settled by WS3 — verify only)
 
 **Files:**
+
 - Modify: none expected. (`xtask/src/main.rs:301` `MACOS_DEPLOYMENT_TARGET = "13.0"` and the `.env(...)` at the call built in Task 5 are already correct.)
 
 **Interfaces:**
+
 - Consumes: the Task 5 xcframework build (which passes `MACOSX_DEPLOYMENT_TARGET` through `archives::cargo_build_json`'s `envs`).
 - Produces: evidence that the WS9 pipeline rewrite did not regress the deployment-target pinning. Nothing later depends on it.
 
@@ -1485,20 +1527,24 @@ git commit -m "gates: hermetic no-Homebrew-gettext acceptance gate for the self-
 - [ ] **Step 7.1: Verify the env var still reaches every object our build compiles**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 LIB=target/aarch64-apple-darwin/xcframework/libRusttyKit.a
 otool -l "$LIB" 2>/dev/null | grep -A3 LC_BUILD_VERSION | grep "minos" | sort | uniq -c
 ```
+
 Expected: two buckets only — a large count of `minos 13.0` (our crates plus every `-sys` build-script object) and a `minos 11.0` bucket of at most a few hundred (the pre-built Rust sysroot objects WS3 identified). **No bucket newer than 13.0.**
 
 - [ ] **Step 7.2: Verify the app link log is warning-free**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 grep -c "was built for newer macOS version" /tmp/ws9-gate-build.log
 ```
+
 Expected: `0` (the gate's build log from Task 6 is the freshest full app build).
 
 - [ ] **Step 7.3: Record the result — no code change if both checks pass**
@@ -1522,42 +1568,50 @@ then re-run Step 7.1 and commit with `xtask: forward the deployment target to cc
 ## Task 8: Both-platform gate, ledger strikes, merge
 
 **Files:**
+
 - Modify: `.port/phase-2/INTEGRATION_PARITY.md` (§2.3 lines 83-102, §2.4 lines 107-118, §2.5 lines 120-131; and the §5 "Fix List" entries for those three)
 - Modify: `.port/phase-2/DEFERRALS.md` (the `## gettext-sys — self-contained libintl …` section beginning at line 4542)
 - Modify: `macos/MILESTONE.md` (lines 46-49, the "Self-contained lib" follow-up; line 77, the "P3 polish" line)
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 1-7.
 - Produces: truthful ledgers and a merged `main`.
 
 - [ ] **Step 8.1: Run the full macOS workspace gates**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 cargo build --workspace 2>&1 | tail -5
 cargo test -p gettext-sys -p rustty-os -p xtask 2>&1 | tail -20
 bash .port/tools/gates/check_acyclic.sh && echo "ACYCLIC OK"
 ```
+
 Expected: build exit 0; all three test suites `test result: ok`; `ACYCLIC OK`.
 
 - [ ] **Step 8.2: Run the Linux gate on the VM**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 git push -u origin ws9-packaging
 ssh rvm 'cd ~/projects/rustty && git fetch --all -q && git checkout ws9-packaging && git pull -q && cargo build --workspace 2>&1 | tail -5'
 ```
+
 Expected: exit 0, `Finished` line. (`gettext-sys`'s build script is a no-op on non-macOS — `build.rs` returns early when `CARGO_CFG_TARGET_OS != "macos"` — so the new vendor set is never compiled there, and `rustty-os/build.rs` lost only a macOS-gated block.)
 
 - [ ] **Step 8.3: Re-run the acceptance gate on the final tree**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 bash .port/tools/gates/no_homebrew_gettext_gate.sh && echo "ACCEPTANCE OK"
 ```
+
 Expected: `GATE PASS: …` then `ACCEPTANCE OK`.
 
 - [ ] **Step 8.4: Strike INTEGRATION_PARITY §2.3**
@@ -1572,10 +1626,10 @@ and append this paragraph at the end of the §2.3 body (after the `**Fix sketch*
 
 ```markdown
 - **RESOLUTION**: the zlib half was already closed by the P3 pass (`crates-sys/
-  zlib-sys` vendors `deflate.c`/`trees.c`/`compress.c`; `-lz` dropped) — that
+zlib-sys` vendors `deflate.c`/`trees.c`/`compress.c`; `-lz` dropped) — that
   part of the text above was stale when written. WS9 closed the gettext half:
   `crates-sys/gettext-sys` now vendors the reference's FULL `pkg/libintl/
-  build.zig` `srcs` set (30 TUs from gettext 0.24, incl. the pre-generated Bison
+build.zig` `srcs` set (30 TUs from gettext 0.24, incl. the pre-generated Bison
   `plural.c`) and emits `librustty_intl.a` defining `_dgettext`/
   `_bindtextdomain`/`_textdomain`. `-L/opt/homebrew/opt/gettext/lib -lintl` was
   removed from BOTH link sites — `macos/build-rustty.sh` `OTHER_LDFLAGS` (now
@@ -1603,7 +1657,7 @@ and append to its body:
 ```markdown
 - **RESOLUTION**: `xtask/src/archives.rs` (`parse_artifacts` +
   `NativeArchiveRequest::resolve`) derives the set from `cargo build
-  --message-format=json` — the staticlib target's own `filenames`, plus every
+--message-format=json` — the staticlib target's own `filenames`, plus every
   `cargo:rustc-link-lib=static=<name>` a build script declared, resolved against
   that same script's `cargo:rustc-link-search` paths and de-duplicated per
   (package, lib). A nested OUT_DIR now resolves by construction (cargo reports
@@ -1688,9 +1742,9 @@ and replace line 77 (`- **P3 polish:** autoreleasepool shim, self-contained zlib
 Also append to the "Deployment target" bullet (the `✅ DONE (WS3, 2026-07-23)` line) the sentence:
 
 ```markdown
-  Re-verified by WS9 after the xcframework pipeline rewrite (otool `minos`
-  buckets are 13.0 + the toolchain's own sysroot 11.0; zero "built for newer
-  macOS version" warnings in the app link log).
+Re-verified by WS9 after the xcframework pipeline rewrite (otool `minos`
+buckets are 13.0 + the toolchain's own sysroot 11.0; zero "built for newer
+macOS version" warnings in the app link log).
 ```
 
 - [ ] **Step 8.9: Commit the ledger strikes**
@@ -1704,6 +1758,7 @@ git commit -m "ledgers: strike INTEGRATION_PARITY 2.3/2.4/2.5, the gettext defer
 - [ ] **Step 8.10: Merge to main and delete the branch**
 
 Run:
+
 ```bash
 cd /Users/gael/projects/rustty
 git checkout main && git pull
@@ -1713,6 +1768,7 @@ git push
 ssh rvm 'cd ~/projects/rustty && git checkout main && git pull -q && cargo build --workspace 2>&1 | tail -3'
 git branch -d ws9-packaging && git push origin --delete ws9-packaging
 ```
+
 Expected: merge commit created; both builds exit 0; branch deleted locally and remotely.
 
 ---
@@ -1721,22 +1777,22 @@ Expected: merge commit created; both builds exit 0; branch deleted locally and r
 
 **1. Spec coverage.**
 
-| Spec item | Task |
-|---|---|
-| (a) Vendor full libintl into `gettext-sys` so `out/` carries `_dgettext` | Task 1 |
-| (a) Drop `-lintl` from `macos/build-rustty.sh` | Task 5 (Step 5.4) |
-| (a) Drop `-lintl` from `crates/rustty-os/build.rs` (WS4-M1, incl. the Intel-Homebrew miss) | Task 2 |
-| (a) VERIFY the zlib deflate claim, scope accordingly | "Pre-verified facts" bullet 1 (already fixed — no work), asserted anyway in Steps 5.3 and 6.4, corrected in the §2.3 ledger text (Step 8.4) |
-| (b) Explicit archive set from `cargo build --message-format=json` | Task 3 (parse + resolve, 7 unit tests), Task 5 (wire-in) |
-| (c) `ranlib` normalization before `libtool` | Task 4 (port + unit test), Task 5 (wire-in) |
-| (d) Deployment target: verify, extend only if needed; do not redo WS3 | Task 7 (verification-only, with a contingency branch) |
-| KEY GATE: `build-rustty.sh` succeeds with NO Homebrew gettext | Task 6 (surgical Cellar rename + trap-restored, with a proof that `-lintl` really stopped linking) |
-| `nm`/`otool` symbol assertions | Steps 1.9, 5.3, 5.5, 6.4, 6.5 |
-| Both-platform gate | Steps 8.1-8.2 |
-| Ledger strikes (§2.3-2.5, MILESTONE, DEFERRALS) + WS4-M1 resolved note | Task 8 |
-| Branch/merge flow per roadmap | Task 0, Step 8.10 |
-| Oracle mirroring (SharedDeps/GhosttyLib/CombineArchivesStep/LibtoolStep) | Task 1 (`build.zig` `srcs` + flags + include layering), Task 3 (`GhosttyLib.zig` enumerated deps), Task 4 (`LibtoolStep.zig` `normalizeArchive`) |
-| Existing `-sys` vendoring pattern followed | Task 1 keeps `cc` + `bindgen` + `links` exactly as `zlib-sys`/`oniguruma-sys`/`libpng-sys` do |
+| Spec item                                                                                  | Task                                                                                                                                             |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| (a) Vendor full libintl into `gettext-sys` so `out/` carries `_dgettext`                   | Task 1                                                                                                                                           |
+| (a) Drop `-lintl` from `macos/build-rustty.sh`                                             | Task 5 (Step 5.4)                                                                                                                                |
+| (a) Drop `-lintl` from `crates/rustty-os/build.rs` (WS4-M1, incl. the Intel-Homebrew miss) | Task 2                                                                                                                                           |
+| (a) VERIFY the zlib deflate claim, scope accordingly                                       | "Pre-verified facts" bullet 1 (already fixed — no work), asserted anyway in Steps 5.3 and 6.4, corrected in the §2.3 ledger text (Step 8.4)      |
+| (b) Explicit archive set from `cargo build --message-format=json`                          | Task 3 (parse + resolve, 7 unit tests), Task 5 (wire-in)                                                                                         |
+| (c) `ranlib` normalization before `libtool`                                                | Task 4 (port + unit test), Task 5 (wire-in)                                                                                                      |
+| (d) Deployment target: verify, extend only if needed; do not redo WS3                      | Task 7 (verification-only, with a contingency branch)                                                                                            |
+| KEY GATE: `build-rustty.sh` succeeds with NO Homebrew gettext                              | Task 6 (surgical Cellar rename + trap-restored, with a proof that `-lintl` really stopped linking)                                               |
+| `nm`/`otool` symbol assertions                                                             | Steps 1.9, 5.3, 5.5, 6.4, 6.5                                                                                                                    |
+| Both-platform gate                                                                         | Steps 8.1-8.2                                                                                                                                    |
+| Ledger strikes (§2.3-2.5, MILESTONE, DEFERRALS) + WS4-M1 resolved note                     | Task 8                                                                                                                                           |
+| Branch/merge flow per roadmap                                                              | Task 0, Step 8.10                                                                                                                                |
+| Oracle mirroring (SharedDeps/GhosttyLib/CombineArchivesStep/LibtoolStep)                   | Task 1 (`build.zig` `srcs` + flags + include layering), Task 3 (`GhosttyLib.zig` enumerated deps), Task 4 (`LibtoolStep.zig` `normalizeArchive`) |
+| Existing `-sys` vendoring pattern followed                                                 | Task 1 keeps `cc` + `bindgen` + `links` exactly as `zlib-sys`/`oniguruma-sys`/`libpng-sys` do                                                    |
 
 No gaps.
 

@@ -104,7 +104,11 @@ impl<'a> ValueIterator<'a> {
                 None => self.metadata.len(),
             };
             let field = &self.metadata[self.pos..end];
-            self.pos = if end < self.metadata.len() { end + 1 } else { end };
+            self.pos = if end < self.metadata.len() {
+                end + 1
+            } else {
+                end
+            };
 
             // const equals = std.mem.indexOfScalar(u8, field, '=') orelse continue;
             let equals = match field.iter().position(|&b| b == b'=') {

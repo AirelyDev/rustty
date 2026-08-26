@@ -291,7 +291,9 @@ fn decode_png_wrapper(
 //     const func = global.random_secure orelse return error.EntropyUnavailable;
 //     if (!func(global.userdata, buffer.ptr, buffer.len)) return error.EntropyUnavailable;
 // }
-fn random_secure_wrapper(buffer: &mut [u8]) -> core::result::Result<(), terminal_sys::RandomSecureError> {
+fn random_secure_wrapper(
+    buffer: &mut [u8],
+) -> core::result::Result<(), terminal_sys::RandomSecureError> {
     let g = GLOBAL.lock().unwrap();
     let func = match g.random_secure {
         Some(f) => f,

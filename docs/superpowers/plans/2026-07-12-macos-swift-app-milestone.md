@@ -35,10 +35,12 @@ A **runnable windowed terminal** needs: app+surface lifecycle (`ghostty_app_new/
 ### Task A1: Symbol manifest (the machine-checkable ABI table)
 
 **Files:**
+
 - Create: `.port/audits/CABI_SYMBOLS.tsv`
 - Create: `.port/tools/gates/check_symbol_manifest.sh`
 
 **Interfaces:**
+
 - Produces: TSV `ghostty_name⇥rustty_name⇥signature⇥source_file⇥darwin_only`, one row per the 90 app-C-ABI entrypoints (`grep -c '^GHOSTTY_API' /Users/gael/projects/ghostty/include/ghostty.h` == 90). Consumed by A2 (alias generator) and the header-diff gate.
 
 - [ ] **Step 1:** Extract the 90 `GHOSTTY_API` declarations from `/Users/gael/projects/ghostty/include/ghostty.h` (name + full signature). For each, find the rustty counterpart (`rustty_<name>` in rustty-apprt-c, or the config/main_c/benchmark tier). Mark the 6 Darwin-only (PREPORT §0: `set_display_id`, `quicklook_font`, `quicklook_word`, `inspector_metal_init/render/shutdown`).
@@ -48,10 +50,12 @@ A **runnable windowed terminal** needs: app+surface lifecycle (`ghostty_app_new/
 ### Task A2: `ghostty_*` alias layer (Branch A)
 
 **Files:**
+
 - Create: `crates/rustty-apprt-c/src/ghostty_alias.rs`
 - Modify: `crates/rustty-apprt-c/src/lib.rs` (add `#[cfg(feature = "identity-oracle")] mod ghostty_alias;`), `crates/rustty-apprt-c/Cargo.toml` (add `identity-oracle` feature)
 
 **Interfaces:**
+
 - Consumes: A1's manifest.
 - Produces: under `--features identity-oracle`, the staticlib exports both `rustty_<name>` and `ghostty_<name>` (identical symbol, one body). Mechanism: `#[no_mangle] pub unsafe extern "C" fn ghostty_<name>(args) -> Ret { rustty_<name>(args) }` thin forwarders (the PREPORT §3 option (a); simplest, works with staticlib + xcframework; avoids linker-alias portability issues).
 
@@ -63,10 +67,12 @@ A **runnable windowed terminal** needs: app+surface lifecycle (`ghostty_app_new/
 ### Task A3: xcframework header + ABI-layout gate
 
 **Files:**
+
 - Create: `.port/tools/gates/check_ghostty_h_abi.sh`
 - Create: `crates/rustty-apprt-c/tests/abi_layout.rs`
 
 **Interfaces:**
+
 - Produces: the xcframework's public header IS the upstream `include/ghostty.h` verbatim (Branch A: byte-identical so Swift's `#import` + every `ghostty_*_s/_e` typedef resolves unchanged). The gate proves rustty's `#[repr(C)]` structs/unions/enums match that header's layout via `const` size/align/ordinal asserts.
 
 - [ ] **Step 1:** `abi_layout.rs` — for each ABI struct/union/enum in PREPORT §1/§6 (App.Options, Surface.Options, Platform union, EnvVar, Text, String, ClipboardContent, Target/Action unions, the enums with pinned ordinals), assert `size_of`/`align_of` and each enum discriminant equals the ghostty.h value. E.g. `const _: () = assert!(core::mem::size_of::<Options>() == <N>);` and `assert!(PlatformTag::Macos as c_int == 1 && /* 0 reserved invalid */)`. Pull expected sizes by reading the header's struct field types.
@@ -76,6 +82,7 @@ A **runnable windowed terminal** needs: app+surface lifecycle (`ghostty_app_new/
 ### Task A4: prove the `rt_surface` pin (I2) with a Miri harness
 
 **Files:**
+
 - Create: `.port/phase-2/mirihar-surface-pin/` (standalone cargo project, model on `mirihar-chunk3b`)
 - Modify: `crates/rustty-apprt-c/src/lib.rs` (ensure `Surface` is heap-boxed + no-move; add a `// SB`/`Pin` note if not already)
 
@@ -90,9 +97,11 @@ A **runnable windowed terminal** needs: app+surface lifecycle (`ghostty_app_new/
 ### Task B1: xcframework packaging in xtask
 
 **Files:**
+
 - Modify: `xtask/src/main.rs` (+ a new `xtask/src/xcframework.rs`)
 
 **Interfaces:**
+
 - Consumes: A2's `identity-oracle` staticlib.
 - Produces: `dist/GhosttyKit.xcframework/macos-arm64_x86_64/{Headers/ghostty.h, GhosttyKit}` (mirror the oracle structure; universal arm64+x86_64 via `lipo`, header from A3). Command: `cargo run -p xtask -- xcframework`.
 
@@ -104,9 +113,11 @@ A **runnable windowed terminal** needs: app+surface lifecycle (`ghostty_app_new/
 ### Task B2: bring the Swift app into rustty + rebrand identity
 
 **Files:**
+
 - Create: `macos/` (copy of `/Users/gael/projects/ghostty/macos/`, MINUS the prebuilt `GhosttyKit.xcframework`), rebranded.
 
 **Interfaces:**
+
 - Consumes: B1's `GhosttyKit.xcframework`.
 - Produces: a `macos/Rustty.xcodeproj` (or kept `Ghostty.xcodeproj` name internally) that references rustty's xcframework and carries rustty identity (R2), Swift sources byte-identical to upstream (R1, Branch A) except identity strings/plist/bundle-id.
 
@@ -142,9 +153,11 @@ Phase A (workflow wf-swiftapp-abi.js, parallel):  A1 → A2 (needs A1);  A3 ∥ 
 Phase B (serial spine, inline):                   B1 (needs A2/A3) → B2 → B3 (iterates with A2/A3 fixes)
 Phase C (inline, iterative):                      C1 (needs B3)
 ```
+
 Phase A parallelizes cleanly (workflow). Phase B is a serial integration spine best driven inline with real `xcodebuild` verification — but B3's fix-loop feeds back into A2/A3, so keep those gates fast. Phase C is inherently iterative (run → observe → fix).
 
 ## Self-review notes
+
 - Spec coverage: PREPORT §1 LIFETIMES → enforced by A3 (layout) + A4 (pin) + the abort policy in §4 (B3/C1 stubs). §2 invariants I1–I16 → I2/I5 have explicit tasks (A4, R-F review in B3); I6/I7/I8 (ownership transfer, clipboard round-trip, config clone) are already in the ported `rustty_*` bodies (verified by sweep #2 clean) — no new task, but C1 exercises them live. §3 Branch A → A2. §4 abort → the `panic="abort"` profile (add to B1's release build) + B3/C1 sentinel/abort triage. §6 constants → A3 asserts. §7 risks: R-A/B/C header typos → A3 diff preserves; R-E pin → A4; R-F !Send → B3 review; R-G overflow-checks → already landed; R-H manifest → A1.
 - One gap made explicit: the `panic = "abort"` profile for the shipped staticlib — fold into B1 Step 2 (build the release staticlib under a profile with `panic = "abort"`; add `[profile.release] panic = "abort"` or a dedicated `xcframework` profile to root Cargo.toml, verifying it doesn't break the workspace test build which needs unwind — use a dedicated profile).
 - No placeholders; every task ends testable (nm counts, cargo test, xcodebuild, a running app).

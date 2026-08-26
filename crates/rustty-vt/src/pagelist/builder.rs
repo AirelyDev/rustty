@@ -193,9 +193,7 @@ impl PageAllocation {
                 // PagePool.item_size (a full standard pool item).
                 super::Owned::Pool => super::std_size(),
                 // node.pageAssumeResident().memory.len
-                super::Owned::Heap => {
-                    PageList::page_memory(Node::page_assume_resident(node)).1
-                }
+                super::Owned::Heap => PageList::page_memory(Node::page_assume_resident(node)).1,
             };
             let page_size = (*destination)
                 .page_size
@@ -401,7 +399,11 @@ impl Builder {
         };
 
         // Set our viewport up to the active
-        let viewport_pin = self.pool.pins.create().map_err(|_| FinishError::OutOfMemory)?;
+        let viewport_pin = self
+            .pool
+            .pins
+            .create()
+            .map_err(|_| FinishError::OutOfMemory)?;
         // errdefer self.pool.pins.destroy(viewport_pin);
         // SAFETY: fresh pin storage from the pin pool.
         unsafe {

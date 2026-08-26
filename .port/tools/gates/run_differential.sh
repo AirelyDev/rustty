@@ -296,6 +296,7 @@ run_self_test() {
   #    one-byte-corrupted copy of the same output must be RED (exit 1).
   if [ -x "$REF_DRIVER" ]; then
     local fx tmpd
+    # shellcheck disable=SC2010  # fixture names are known-safe (no newlines).
     fx="$(ls "$HARNESS"/fixtures/*.vt | grep -v empty.vt | head -1)"
     tmpd="$(mktemp -d)"
     # Stand-in "port": the reference driver itself (a byte-exact port).

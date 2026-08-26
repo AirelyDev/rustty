@@ -7,13 +7,37 @@
 *.md    text eol=lf
 *.py    text eol=lf
 *.sh    text eol=lf
+*.bash  text eol=lf
 *.c     text eol=lf
 *.h     text eol=lf
 *.cpp   text eol=lf
 *.cc    text eol=lf
+*.m     text eol=lf
+*.swift text eol=lf
 *.zig   text eol=lf
+*.nix   text eol=lf
 *.json  text eol=lf
 *.csv   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.blp   text eol=lf
+*.glsl  text eol=lf
+*.frag  text eol=lf
+*.metal text eol=lf
+*.po    text eol=lf
+*.pot   text eol=lf
+CMakeLists.txt  text eol=lf
+*.cmake text eol=lf
+Makefile        text eol=lf
+
+# Windows resource files: preserve bytes as-is. `* text=auto` above would
+# otherwise let git normalize their line endings, and native Windows resource
+# tooling (rc.exe / the manifest reader) is picky about that. Matches the
+# reference tree's treatment of dist/windows/*.
+*.rc        -text
+*.manifest  -text
 
 # VT corpus / golden fixtures are byte-exact: treat as binary so git never
 # rewrites them (escape sequences, control bytes must round-trip exactly).
@@ -27,6 +51,23 @@
 *.dylib     binary
 *.wasm      binary
 *.png       binary
+*.ico       binary
+*.icns      binary
+*.ttf       binary
+*.otf       binary
+*.bdf       binary
+
+# Linguist: keep vendored third-party sources and generated files out of the
+# repository's language statistics and collapsed by default in diffs. Without
+# these, the ~54 MB of C vendored under crates-sys/*/vendor counts as rustty's
+# own code and every review renders it in full.
+crates-sys/*/vendor/**              linguist-vendored
+crates/rustty-vaxis/ucd/**          linguist-vendored
+crates/rustty-vt/src/res/**         linguist-vendored
+crates/rustty-extra/themes/**       linguist-vendored
+include/rustty.h                    linguist-generated=true
+include/rustty-apprt.h              linguist-generated=true
+crates/rustty-font/src/nerd_font_attributes.rs  linguist-generated=true
 
 # Dev-process internals excluded from `git archive` source tarballs
 # (cargo run -p xtask -- dist). These are the port harness/plans/specs, not

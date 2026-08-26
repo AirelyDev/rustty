@@ -77,7 +77,11 @@ impl Ascii {
             rand,
             alphabet: Some(ascii()),
             // .min_len = if (lines) @max(self.opts.@"line-min", 1) else 1024,
-            min_len: if lines { self.opts.line_min.max(1) } else { 1024 },
+            min_len: if lines {
+                self.opts.line_min.max(1)
+            } else {
+                1024
+            },
             // .max_len = if (lines) line_max else 1024,
             max_len: if lines { line_max } else { 1024 },
         };

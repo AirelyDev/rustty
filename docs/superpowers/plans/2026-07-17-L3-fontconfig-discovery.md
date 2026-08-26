@@ -77,20 +77,20 @@ built via `cc` + FFI via `bindgen`, the vendored `libxml2` C library (ghostty pi
 
 ## File structure
 
-| File | Responsibility |
-|---|---|
-| `crates/rustty-font-shaper/src/face/mod.rs` (**modify**) | Fix the `Options`/`FreetypeLoadFlags` 3-way cfg split (macOS / wasm32 / freetype-active) so the freetype-active arm ALIASES `face::freetype::{Options, FreetypeLoadFlags}` instead of redeclaring a placeholder. |
-| `crates/rustty-font-shaper/src/face/freetype.rs` (**modify**) | Add a `const DEFAULT: FreetypeLoadFlags` (freetype's existing `Default` impl delegates to it) so `mod.rs` can name it in a `const` context. |
-| `crates/rustty-font-shaper/src/discovery.rs` (**modify**) | Replace the DEFERRED `toFcPattern`/`Fontconfig`/`DiscoverIterator` comment blocks with real ports; add the Linux `discovery::Error` type; flesh out the 2 skip-stub `#[test]`s. |
-| `crates/rustty-font-shaper/src/deferred_face.rs` (**modify**) | Replace the non-macOS `_deferred: ()` placeholder with a real `fc: Option<FontconfigData>` payload; wire the 3 `unimplemented!()` arms + `familyName`/`name` fontconfig arms; flesh out the `fontconfig` KAT. |
-| `crates/rustty-font-shaper/src/fc.rs` (**create**) | Thin, faithful FFI wrapper over `fontconfig-sys` — port of `pkg/fontconfig/{main,init,config,pattern,common,char_set,font_set,lang_set,value,error}.zig` (11 tests). Sibling of the existing `ft.rs`/`hb.rs`. |
-| `crates/rustty-font-shaper/src/lib.rs` (**modify**) | `pub mod fc;` gated `#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]`. |
-| `crates/rustty-font-shaper/Cargo.toml` (**modify**) | New `[target.'cfg(not(any(target_os = "macos", target_arch = "wasm32")))'.dependencies]` table: `fontconfig-sys = { path = "../../crates-sys/fontconfig-sys" }`. |
-| `crates-sys/libxml2-sys/{Cargo.toml,build.rs,src/lib.rs,vendor/**}` (**create**) | Vendored libxml2 2.11.5, port of `pkg/libxml2/build.zig` `buildLib` (cc + bindgen + KAT). |
-| `crates-sys/fontconfig-sys/{Cargo.toml,build.rs,src/lib.rs,vendor/**}` (**modify from stub**) | Vendored fontconfig 2.14.2, port of `pkg/fontconfig/build.zig` `buildLib` (cc + bindgen + KAT), linking `freetype-sys` + `libxml2-sys`. |
-| `Cargo.toml` (workspace root) (**modify**) | Add `"crates-sys/libxml2-sys"` to `members`. |
-| `.port/tools/gates/check_test_counts.py` (**modify**) | Add a `font_shaper_fc` manifest row (`pkg/fontconfig/*.zig` → `fc.rs`, 11 tests). |
-| `.port/phase-2/DEFERRALS.md` (**modify**) | Mark the `deferred_face.rs:479/482/489` entry (added 2026-07-10) RESOLVED, cross-reference this plan's commits. |
+| File                                                                                          | Responsibility                                                                                                                                                                                                   |
+| --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `crates/rustty-font-shaper/src/face/mod.rs` (**modify**)                                      | Fix the `Options`/`FreetypeLoadFlags` 3-way cfg split (macOS / wasm32 / freetype-active) so the freetype-active arm ALIASES `face::freetype::{Options, FreetypeLoadFlags}` instead of redeclaring a placeholder. |
+| `crates/rustty-font-shaper/src/face/freetype.rs` (**modify**)                                 | Add a `const DEFAULT: FreetypeLoadFlags` (freetype's existing `Default` impl delegates to it) so `mod.rs` can name it in a `const` context.                                                                      |
+| `crates/rustty-font-shaper/src/discovery.rs` (**modify**)                                     | Replace the DEFERRED `toFcPattern`/`Fontconfig`/`DiscoverIterator` comment blocks with real ports; add the Linux `discovery::Error` type; flesh out the 2 skip-stub `#[test]`s.                                  |
+| `crates/rustty-font-shaper/src/deferred_face.rs` (**modify**)                                 | Replace the non-macOS `_deferred: ()` placeholder with a real `fc: Option<FontconfigData>` payload; wire the 3 `unimplemented!()` arms + `familyName`/`name` fontconfig arms; flesh out the `fontconfig` KAT.    |
+| `crates/rustty-font-shaper/src/fc.rs` (**create**)                                            | Thin, faithful FFI wrapper over `fontconfig-sys` — port of `pkg/fontconfig/{main,init,config,pattern,common,char_set,font_set,lang_set,value,error}.zig` (11 tests). Sibling of the existing `ft.rs`/`hb.rs`.    |
+| `crates/rustty-font-shaper/src/lib.rs` (**modify**)                                           | `pub mod fc;` gated `#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]`.                                                                                                                             |
+| `crates/rustty-font-shaper/Cargo.toml` (**modify**)                                           | New `[target.'cfg(not(any(target_os = "macos", target_arch = "wasm32")))'.dependencies]` table: `fontconfig-sys = { path = "../../crates-sys/fontconfig-sys" }`.                                                 |
+| `crates-sys/libxml2-sys/{Cargo.toml,build.rs,src/lib.rs,vendor/**}` (**create**)              | Vendored libxml2 2.11.5, port of `pkg/libxml2/build.zig` `buildLib` (cc + bindgen + KAT).                                                                                                                        |
+| `crates-sys/fontconfig-sys/{Cargo.toml,build.rs,src/lib.rs,vendor/**}` (**modify from stub**) | Vendored fontconfig 2.14.2, port of `pkg/fontconfig/build.zig` `buildLib` (cc + bindgen + KAT), linking `freetype-sys` + `libxml2-sys`.                                                                          |
+| `Cargo.toml` (workspace root) (**modify**)                                                    | Add `"crates-sys/libxml2-sys"` to `members`.                                                                                                                                                                     |
+| `.port/tools/gates/check_test_counts.py` (**modify**)                                         | Add a `font_shaper_fc` manifest row (`pkg/fontconfig/*.zig` → `fc.rs`, 11 tests).                                                                                                                                |
+| `.port/phase-2/DEFERRALS.md` (**modify**)                                                     | Mark the `deferred_face.rs:479/482/489` entry (added 2026-07-10) RESOLVED, cross-reference this plan's commits.                                                                                                  |
 
 ---
 
@@ -102,21 +102,23 @@ This unblocks every later task (which all assume a green `cargo build`) and, per
 Global Constraints, is a prerequisite for the L1 plan's workspace-wide Linux build.
 
 **Files:**
+
 - Modify: `crates/rustty-font-shaper/src/face/mod.rs:120-150` (the `FreetypeLoadFlags`/
   `Options` cfg split)
 - Modify: `crates/rustty-font-shaper/src/face/freetype.rs:110-142` (add a `const DEFAULT`)
 - Modify: `crates/rustty-font-shaper/src/discovery.rs:60-69` (the `Discover`/`Fontconfig`
   stub) — add a properly-typed, still-`unimplemented!()` `Fontconfig` + `DiscoverIterator`
-  + a real `discovery::Error` enum for the `not(macos) & not(wasm32)` target class
+  - a real `discovery::Error` enum for the `not(macos) & not(wasm32)` target class
 
 **Interfaces:**
+
 - Consumes: `crate::face::freetype::{Options, FreetypeLoadFlags}` (already fully
   implemented, `face/freetype.rs:102-142`); `crate::library::Library` (already
   `FreetypeLibrary` on Linux, `library.rs:32-34`).
 - Produces:
   - `face::Options`/`face::FreetypeLoadFlags` now resolve, on every target that is
     neither `macos` nor `wasm32`, to the SAME type as `face::freetype::{Options,
-    FreetypeLoadFlags}` (a `pub use`, not a redeclaration) — so `DeferredFace::load`'s
+FreetypeLoadFlags}` (a `pub use`, not a redeclaration) — so `DeferredFace::load`'s
     `opts: crate::face::Options` parameter is directly passable to
     `crate::face::Face::init_file`/`::init` (`face::Face` already `= freetype::Face` on
     this target class, `face/mod.rs:81-82`).
@@ -126,42 +128,42 @@ Global Constraints, is a prerequisite for the L1 plan's workspace-wide Linux bui
     `coretext_impl::Error` (`discovery.rs:472-479`: a `Face(FaceError)` variant + a
     catch-all), fully fleshed out in Task 6.
   - `discovery::Fontconfig` gains real method SIGNATURES (`init(lib: Library) ->
-    Fontconfig`, `deinit(&mut self)`, `discover(&self, desc: Descriptor) ->
-    Result<DiscoverIterator, Error>`, `discover_fallback(&self, collection: *mut
-    Collection, desc: Descriptor) -> Result<DiscoverIterator, Error>`) with
+Fontconfig`, `deinit(&mut self)`, `discover(&self, desc: Descriptor) ->
+Result<DiscoverIterator, Error>`, `discover_fallback(&self, collection: *mut
+Collection, desc: Descriptor) -> Result<DiscoverIterator, Error>`) with
     `unimplemented!("Fontconfig discovery is DEFERRED to L3 Task 6/7")` bodies, matching
     the exact honesty convention already used at `deferred_face.rs:472-491`. Add a
     matching `discovery::DiscoverIterator` stub (`next`/`deinit`).
 
 - [ ] **Step 1: Write the failing test** — a new `#[test] fn linux_font_shaper_compiles()`
-  is not meaningful (this is a compile-level fix); instead widen the EXISTING skip-stub
-  tests' preconditions: temporarily change
-  `crates/rustty-font-shaper/src/shared_grid_set.rs`'s test module (or add a new
-  `#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))] #[test] fn
-  discover_impl_typechecks()` compile-only smoke test that calls
-  `discovery::Fontconfig::init(lib)` then `.deinit()`) to PROVE the current state fails to
-  compile: `cargo build -p rustty-font-shaper` (native Linux host, no `--target` needed).
+      is not meaningful (this is a compile-level fix); instead widen the EXISTING skip-stub
+      tests' preconditions: temporarily change
+      `crates/rustty-font-shaper/src/shared_grid_set.rs`'s test module (or add a new
+      `#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))] #[test] fn
+discover_impl_typechecks()` compile-only smoke test that calls
+      `discovery::Fontconfig::init(lib)` then `.deinit()`) to PROVE the current state fails to
+      compile: `cargo build -p rustty-font-shaper` (native Linux host, no `--target` needed).
 - [ ] **Step 2: Run to verify it fails** — `cargo build -p rustty-font-shaper` → FAIL
-  with exactly the three errors: (a) `discovery::Error` not found (used by
-  `shared_grid_set.rs:94,108`), (b) no method `init`/`deinit`/`discover`/
-  `discover_fallback` on `discovery::Fontconfig` (used by `shared_grid_set.rs:623`), (c)
-  (once (a)/(b) are naively patched) a type mismatch passing `crate::face::Options` where
-  `crate::face::freetype::Options` is expected, the moment any call site tries to bridge
-  `DeferredFace::load`'s `opts` into `Face::init_file`.
+      with exactly the three errors: (a) `discovery::Error` not found (used by
+      `shared_grid_set.rs:94,108`), (b) no method `init`/`deinit`/`discover`/
+      `discover_fallback` on `discovery::Fontconfig` (used by `shared_grid_set.rs:623`), (c)
+      (once (a)/(b) are naively patched) a type mismatch passing `crate::face::Options` where
+      `crate::face::freetype::Options` is expected, the moment any call site tries to bridge
+      `DeferredFace::load`'s `opts` into `Face::init_file`.
 - [ ] **Step 3: Implement**:
   1. In `face/mod.rs`, replace the 2-way `#[cfg(target_os = "macos")]` /
      `#[cfg(not(target_os = "macos"))]` split on `FreetypeLoadFlags`/`FREETYPE_LOAD_FLAGS_
-     DEFAULT` (lines 120-136) and the unconditional `Options` struct (lines 143-150) with
+DEFAULT` (lines 120-136) and the unconditional `Options` struct (lines 143-150) with
      a 3-way split: macOS keeps its own `Options`/`FreetypeLoadFlags = ()` (unchanged);
      `#[cfg(target_arch = "wasm32")]` keeps its OWN `Options`/placeholder
      `FreetypeLoadFlags` struct (unchanged behavior, needed because `face/web_canvas.rs`
      names `super::Options` directly and the `freetype` module is not compiled on wasm32,
      `face/mod.rs:24-25`); everyone else (`not(any(macos, wasm32))`) does
      `pub use freetype::{FreetypeLoadFlags, Options};` + `pub const
-     FREETYPE_LOAD_FLAGS_DEFAULT: FreetypeLoadFlags = freetype::FreetypeLoadFlags::DEFAULT;`.
+FREETYPE_LOAD_FLAGS_DEFAULT: FreetypeLoadFlags = freetype::FreetypeLoadFlags::DEFAULT;`.
   2. In `face/freetype.rs`, add `impl FreetypeLoadFlags { pub const DEFAULT: Self = Self {
-     hinting: true, force_autohint: false, monochrome: false, autohint: true, light: true
-     }; }` right above the existing `impl Default for FreetypeLoadFlags` (line 120), then
+hinting: true, force_autohint: false, monochrome: false, autohint: true, light: true
+}; }` right above the existing `impl Default for FreetypeLoadFlags` (line 120), then
      change that `impl Default` body to `fn default() -> Self { Self::DEFAULT }`
      (behavior-preserving refactor — same literal values, now also reachable as a
      `const`).
@@ -172,20 +174,21 @@ Global Constraints, is a prerequisite for the L1 plan's workspace-wide Linux bui
      wasm_noop module's imports, `discovery.rs:90-95`, as the template for what a Linux
      `Fontconfig`/`DiscoverIterator`/`Error` skeleton needs).
 - [ ] **Step 4: Run to verify it passes** — `cargo build -p rustty-font-shaper` → GREEN;
-  `cargo test -p rustty-font-shaper` → GREEN (all existing tests, including the
-  macOS-only `#[cfg(target_os = "macos")]` ones, remain compiled-out and unaffected on
-  Linux; re-run on a macOS host, or at minimum diff-review, to confirm the macOS
-  `Options`/`FreetypeLoadFlags` arm is byte-unchanged). Remove the throwaway smoke test
-  from Step 1 (or fold it into `discovery.rs`'s own test module as a permanent
-  `#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]` compile-touch test).
+      `cargo test -p rustty-font-shaper` → GREEN (all existing tests, including the
+      macOS-only `#[cfg(target_os = "macos")]` ones, remain compiled-out and unaffected on
+      Linux; re-run on a macOS host, or at minimum diff-review, to confirm the macOS
+      `Options`/`FreetypeLoadFlags` arm is byte-unchanged). Remove the throwaway smoke test
+      from Step 1 (or fold it into `discovery.rs`'s own test module as a permanent
+      `#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]` compile-touch test).
 - [ ] **Step 5: Commit** — `git commit -m "rustty-font-shaper: fix Linux hard compile
-  errors (Options alias, discovery::Error, typed Fontconfig stub) (L3 Task 1)"`
+errors (Options alias, discovery::Error, typed Fontconfig stub) (L3 Task 1)"`
 
 ---
 
 ### Task 2: Vendor `libxml2-sys` (libxml2 2.11.5 — cc + bindgen + KAT)
 
 **Files:**
+
 - Create: `crates-sys/libxml2-sys/{Cargo.toml,build.rs,wrapper.h,src/lib.rs}`
 - Create: `crates-sys/libxml2-sys/vendor/**` (vendored libxml2 2.11.5 sources + the two
   ghostty override files)
@@ -193,6 +196,7 @@ Global Constraints, is a prerequisite for the L1 plan's workspace-wide Linux bui
   (adjacent to `"crates-sys/fontconfig-sys"`, `Cargo.toml:113`)
 
 **Interfaces:**
+
 - Consumes: nothing (leaf `-sys` crate, like `zlib-sys`).
 - Produces: `libxml2_sys::*` — the bindgen FFI surface over `<libxml/parser.h>` +
   `<libxml/tree.h>` (whatever the wrapper.h includes; start minimal — `xmlReadMemory`,
@@ -201,11 +205,11 @@ Global Constraints, is a prerequisite for the L1 plan's workspace-wide Linux bui
   `fontconfig-sys` (`DEP_XML2_INCLUDE`).
 
 - [ ] **Step 1: Write the failing test** — `#[test] fn kat_libxml2_2_11_5_parse_memory()`
-  in `src/lib.rs`: build a small embedded XML string (e.g.
-  `b"<root><a>1</a></root>\0"`), call `xmlReadMemory` + walk to the root element name +
-  `xmlFreeDoc` + `xmlCleanupParser`; assert the root element name is `"root"`.
+      in `src/lib.rs`: build a small embedded XML string (e.g.
+      `b"<root><a>1</a></root>\0"`), call `xmlReadMemory` + walk to the root element name +
+      `xmlFreeDoc` + `xmlCleanupParser`; assert the root element name is `"root"`.
 - [ ] **Step 2: Run to verify it fails** — `cargo test -p libxml2-sys` → FAIL (crate
-  doesn't exist yet / build.rs empty).
+      doesn't exist yet / build.rs empty).
 - [ ] **Step 3: Implement**:
   1. Fetch libxml2 **2.11.5** sources — per `pkg/libxml2/build.zig.zon:8`
      (`https://deps.files.ghostty.org/libxml2-2.11.5.tar.gz`); if unreachable, fall back
@@ -223,9 +227,9 @@ Global Constraints, is a prerequisite for the L1 plan's workspace-wide Linux bui
      with `.include(vendor/include)`, `.include(vendor/override/include)`,
      `.include(vendor/override/config/posix)` (off-Windows), the verbatim flag list
      (`build.zig:30-65`: `-DLIBXML_VERSION=21105 -DLIBXML_VERSION_STRING=\"21105\"
-     -DLIBXML_VERSION_EXTRA=\"\" -DLIBXML_DOTTED_VERSION=\"2.11.5\" -DSEND_ARG2_CAST=
-     -DGETHOSTBYNAME_ARG_CAST= -DGETHOSTBYNAME_ARG_CAST_CONST= -DLIBXML_STATIC=1
-     -DLIBXML_AUTOMATA_ENABLED=1 -DWITHOUT_TRIO=1`, plus off-Windows
+-DLIBXML_VERSION_EXTRA=\"\" -DLIBXML_DOTTED_VERSION=\"2.11.5\" -DSEND_ARG2_CAST=
+-DGETHOSTBYNAME_ARG_CAST= -DGETHOSTBYNAME_ARG_CAST_CONST= -DLIBXML_STATIC=1
+-DLIBXML_AUTOMATA_ENABLED=1 -DWITHOUT_TRIO=1`, plus off-Windows
      `-DHAVE_ARPA_INET_H=1 ... -DHAVE_SYS_TYPES_H=1`, `build.zig:49-65`), the default-ON
      `Options` set's `-DLIBXML_{FIELD}_ENABLED=1` defines (`build.zig:68-98` — reproduce
      the DEFAULT values only: `c14n`/`catalog`/`debug`/`history`/`html`/`iconv`/
@@ -241,22 +245,24 @@ Global Constraints, is a prerequisite for the L1 plan's workspace-wide Linux bui
      `fcxml.c` actually need — keep it minimal, widen only if fontconfig-sys's build in
      Task 3 needs more). `cargo:include=<vendor/include>`.
 - [ ] **Step 4: Run to verify it passes** — `cargo build -p libxml2-sys` → GREEN;
-  `cargo test -p libxml2-sys` → GREEN (KAT parses the embedded XML, root name asserts
-  `"root"`).
+      `cargo test -p libxml2-sys` → GREEN (KAT parses the embedded XML, root name asserts
+      `"root"`).
 - [ ] **Step 5: Commit** — `git commit -m "rustty: vendor libxml2-sys (libxml2 2.11.5,
-  cc+bindgen+KAT) — R3 (L3 Task 2)"`
+cc+bindgen+KAT) — R3 (L3 Task 2)"`
 
 ---
 
 ### Task 3: Vendor `fontconfig-sys` (fontconfig 2.14.2 — cc + bindgen + KAT)
 
 **Files:**
+
 - Modify (from stub): `crates-sys/fontconfig-sys/{Cargo.toml,build.rs,src/lib.rs}`
 - Create: `crates-sys/fontconfig-sys/wrapper.h`
 - Create: `crates-sys/fontconfig-sys/vendor/**` (vendored fontconfig 2.14.2 sources + the
   ghostty override files)
 
 **Interfaces:**
+
 - Consumes: `freetype-sys` (`DEP_FREETYPE_INCLUDE`, link-only dep — mirrors
   `harfbuzz-sys`'s exact wiring, `crates-sys/harfbuzz-sys/Cargo.toml:49` +
   `build.rs:43-47`), `libxml2-sys` (`DEP_XML2_INCLUDE`, link-only dep, same pattern —
@@ -271,14 +277,14 @@ Global Constraints, is a prerequisite for the L1 plan's workspace-wide Linux bui
   the stub `Cargo.toml`).
 
 - [ ] **Step 1: Write the failing test** — `#[test] fn kat_fontconfig_2_14_2_init_and_pattern()`
-  in `src/lib.rs`, mirroring `pkg/fontconfig/init.zig`'s `"init"`/`"initLoadConfigAndFonts"`
-  tests (lines 30-43) + `pattern.zig`'s `"create"` test (lines 147-161): `FcInit()` →
-  true; `FcInitLoadConfigAndFonts()` → non-null `*FcConfig`; `FcPatternCreate()` →
-  non-null; `FcPatternAdd(pat, FC_FAMILY, monospace-string-value, FcFalse)` → `FcTrue`;
-  `FcPatternGet(pat, FC_FAMILY, 0, &val)` → `FcResultMatch` with `val.u.s == "monospace"`;
-  `FcPatternDestroy`/`FcConfigDestroy`.
+      in `src/lib.rs`, mirroring `pkg/fontconfig/init.zig`'s `"init"`/`"initLoadConfigAndFonts"`
+      tests (lines 30-43) + `pattern.zig`'s `"create"` test (lines 147-161): `FcInit()` →
+      true; `FcInitLoadConfigAndFonts()` → non-null `*FcConfig`; `FcPatternCreate()` →
+      non-null; `FcPatternAdd(pat, FC_FAMILY, monospace-string-value, FcFalse)` → `FcTrue`;
+      `FcPatternGet(pat, FC_FAMILY, 0, &val)` → `FcResultMatch` with `val.u.s == "monospace"`;
+      `FcPatternDestroy`/`FcConfigDestroy`.
 - [ ] **Step 2: Run to verify it fails** — `cargo test -p fontconfig-sys` → FAIL (the
-  current stub `build.rs` compiles nothing, `src/lib.rs` has no FFI).
+      current stub `build.rs` compiles nothing, `src/lib.rs` has no FFI).
 - [ ] **Step 3: Implement**:
   1. Fetch fontconfig **2.14.2** sources — per `pkg/fontconfig/build.zig.zon:8`
      (`https://deps.files.ghostty.org/fontconfig-2.14.2.tar.gz`); upstream
@@ -296,14 +302,14 @@ Global Constraints, is a prerequisite for the L1 plan's workspace-wide Linux bui
      (`build.zig:87-129`: the `-DHAVE_*` set, `-DFLEXIBLE_ARRAY_MEMBER`,
      `-DHAVE_STDATOMIC_PRIMITIVES`, `-DFC_GPERF_SIZE_T=size_t`,
      `-Wno-implicit-function-declaration -Wno-int-conversion
-     -fno-sanitize=undefined -fno-sanitize-trap=undefined`), the pointer-width defines
+-fno-sanitize=undefined -fno-sanitize-trap=undefined`), the pointer-width defines
      (`build.zig:131-143`: `-DSIZEOF_VOID_P=8 -DALIGNOF_VOID_P=8` on 64-bit), the
      non-Windows block (`build.zig:151-194`: `-DHAVE_FSTATFS ... -DHAVE_SYS_STATFS_H
-     -DHAVE_SYS_VFS_H` on Linux specifically, plus
+-DHAVE_SYS_VFS_H` on Linux specifically, plus
      `-DFC_CACHEDIR=\"/var/cache/fontconfig\"
-     -DFC_DEFAULT_FONTS=\"<dir>/usr/share/fonts</dir><dir>/usr/local/share/fonts</dir>\"
-     -DFC_TEMPLATEDIR=\"/usr/share/fontconfig/conf.avail\"
-     -DFONTCONFIG_PATH=\"/etc/fonts\" -DCONFIGDIR=\"/usr/local/fontconfig/conf.d\"` — the
+-DFC_DEFAULT_FONTS=\"<dir>/usr/share/fonts</dir><dir>/usr/local/share/fonts</dir>\"
+-DFC_TEMPLATEDIR=\"/usr/share/fontconfig/conf.avail\"
+-DFONTCONFIG_PATH=\"/etc/fonts\" -DCONFIGDIR=\"/usr/local/fontconfig/conf.d\"` — the
      non-FreeBSD arm), the libxml2 enablement block (`build.zig:216-227`:
      `-DENABLE_LIBXML2 -DLIBXML_STATIC -DLIBXML_PUSH_ENABLED`), the `srcs` list verbatim
      (`build.zig:269-298`, 27 files), `.include(DEP_FREETYPE_INCLUDE)`,
@@ -315,12 +321,12 @@ Global Constraints, is a prerequisite for the L1 plan's workspace-wide Linux bui
      `pkg/fontconfig/c.zig:1-3` — the ENTIRE binding surface is this one header),
      `clang_arg` the override-include + `DEP_FREETYPE_INCLUDE` + `DEP_XML2_INCLUDE` dirs,
      allowlist `Fc.*|FC_.*`. `cargo:include=<vendor/override/include + upstream fontconfig
-     dir>` for completeness (no downstream consumer needs it beyond this plan's `fc.rs`,
+dir>` for completeness (no downstream consumer needs it beyond this plan's `fc.rs`,
      which links the crate directly rather than re-including headers).
 - [ ] **Step 4: Run to verify it passes** — `cargo build -p fontconfig-sys` → GREEN;
-  `cargo test -p fontconfig-sys` → GREEN.
+      `cargo test -p fontconfig-sys` → GREEN.
 - [ ] **Step 5: Commit** — `git commit -m "rustty: vendor fontconfig-sys (fontconfig
-  2.14.2, cc+bindgen+KAT, deps freetype-sys+libxml2-sys) — R3 (L3 Task 3)"`
+2.14.2, cc+bindgen+KAT, deps freetype-sys+libxml2-sys) — R3 (L3 Task 3)"`
 
 **Gate after Task 3:** `bash .port/tools/gates/check_acyclic.sh` green (`fontconfig-sys →
 {freetype-sys, libxml2-sys}`, `libxml2-sys → {}`, no cycle); `cargo build --workspace`
@@ -333,34 +339,36 @@ unaffected (both crates are currently unreferenced by any `[dependencies]` table
 ### Task 4: `crate::fc` — the Rust binding wrapper over `fontconfig-sys`
 
 **Files:**
+
 - Create: `crates/rustty-font-shaper/src/fc.rs`
 - Modify: `crates/rustty-font-shaper/src/lib.rs` — `#[cfg(not(any(target_os = "macos",
-  target_arch = "wasm32")))] pub mod fc;`
+target_arch = "wasm32")))] pub mod fc;`
 - Modify: `crates/rustty-font-shaper/Cargo.toml` — new
   `[target.'cfg(not(any(target_os = "macos", target_arch = "wasm32")))'.dependencies]`
   table: `fontconfig-sys = { path = "../../crates-sys/fontconfig-sys" }`
 
 **Interfaces:**
+
 - Consumes: `fontconfig_sys as c` (Task 3).
 - Produces (faithful port of `pkg/fontconfig/*.zig`, sibling of `ft.rs`/`hb.rs`):
   - `fc::init() -> bool` (`FcInit`, `init.zig:5-7`), `fc::init_load_config_and_fonts() ->
-    *mut Config` (`initLoadConfigAndFonts`, `init.zig:17-19`), `fc::version() -> u32`
+*mut Config` (`initLoadConfigAndFonts`, `init.zig:17-19`), `fc::version() -> u32`
     (`init.zig:21-23`).
   - `fc::Config` — opaque raw-pointer newtype (raw-ptr discipline: no borrow-checked
     lifetime, matching the reference's manually-managed `*Config`); `destroy(&mut self)`,
     `font_sort(&mut self, pat: &Pattern, trim: bool, charset: Option<*mut *mut
-    CharSet>) -> FontSortResult` (`config.zig:20-36`), `font_render_prepare(&mut self, pat:
-    &Pattern, font: &Pattern) -> Result<*mut Pattern, Error>` (`config.zig:38-43`),
+CharSet>) -> FontSortResult` (`config.zig:20-36`), `font_render_prepare(&mut self, pat:
+&Pattern, font: &Pattern) -> Result<*mut Pattern, Error>` (`config.zig:38-43`),
     `substitute_with_pat(&mut self, pat: &Pattern, kind: MatchKind) -> bool`
     (`config.zig:45-51`).
   - `fc::Pattern` — opaque raw-ptr newtype; `create() -> *mut Pattern` (`pattern.zig:13-
-    15`), `destroy(&mut self)`, `default_substitute(&mut self)`, `add(&mut self, prop:
-    Property, value: Value, append: bool) -> bool` (`pattern.zig:29-36`), `get(&self, prop:
-    Property, id: u32) -> Result<Value, Error>` (`pattern.zig:38-48`).
+15`), `destroy(&mut self)`, `default_substitute(&mut self)`, `add(&mut self, prop:
+Property, value: Value, append: bool) -> bool` (`pattern.zig:29-36`), `get(&self, prop:
+Property, id: u32) -> Result<Value, Error>` (`pattern.zig:38-48`).
   - `fc::CharSet` — `create() -> *mut CharSet`, `destroy(&mut self)`, `add_char(&mut self,
-    cp: u32) -> bool`, `has_char(&self, cp: u32) -> bool` (`char_set.zig:6-28`).
+cp: u32) -> bool`, `has_char(&self, cp: u32) -> bool` (`char_set.zig:6-28`).
   - `fc::LangSet` — `create() -> *mut LangSet`, `destroy(&mut self)`, `add_lang(&mut self,
-    lang: &CStr) -> bool`, `has_lang(&self, lang: &CStr) -> bool` (`lang_set.zig:5-28`).
+lang: &CStr) -> bool`, `has_lang(&self, lang: &CStr) -> bool` (`lang_set.zig:5-28`).
   - `fc::FontSet` — `create()`/`destroy()`, `fonts(&self) -> &[*mut Pattern]`
     (`font_set.zig:6-34`).
   - `fc::{Weight, Slant, Spacing, Property, Result as FcResult, MatchKind}` enums
@@ -375,36 +383,38 @@ unaffected (both crates are currently unreferenced by any `[dependencies]` table
     `FontconfigNoMatch`, `FontconfigTypeMismatch`, `FontconfigNoId`).
 
 - [ ] **Step 1: Write the failing tests** — port all 11 `pkg/fontconfig` tests as
-  `#[test]`s in `fc.rs`'s own `#[cfg(test)] mod tests`: `fc_version` (`init.zig:25-28`),
-  `fc_init` (`init.zig:30-33`), `fc_init_load_config` (`init.zig:35-38`),
-  `fc_init_load_config_and_fonts` (`init.zig:40-43`), `pattern_create`
-  (`pattern.zig:147-161`), `pattern_name_parse` (`pattern.zig:163-168`), `property_cval`
-  (`common.zig:110-114`), `char_set_create` (`char_set.zig:31-40`), `font_set_create`
-  (`font_set.zig:37-44`), `lang_set_create` (`lang_set.zig:31-38`),
-  `lang_set_has_lang_exact_match` (`lang_set.zig:40-61`).
-- [ ] **Step 2: Run to verify they fail** — `cargo test -p rustty-font-shaper fc::`  →
-  FAIL (module doesn't exist).
+      `#[test]`s in `fc.rs`'s own `#[cfg(test)] mod tests`: `fc_version` (`init.zig:25-28`),
+      `fc_init` (`init.zig:30-33`), `fc_init_load_config` (`init.zig:35-38`),
+      `fc_init_load_config_and_fonts` (`init.zig:40-43`), `pattern_create`
+      (`pattern.zig:147-161`), `pattern_name_parse` (`pattern.zig:163-168`), `property_cval`
+      (`common.zig:110-114`), `char_set_create` (`char_set.zig:31-40`), `font_set_create`
+      (`font_set.zig:37-44`), `lang_set_create` (`lang_set.zig:31-38`),
+      `lang_set_has_lang_exact_match` (`lang_set.zig:40-61`).
+- [ ] **Step 2: Run to verify they fail** — `cargo test -p rustty-font-shaper fc::` →
+      FAIL (module doesn't exist).
 - [ ] **Step 3: Implement** — write `fc.rs` per the Interfaces section above, each method
-  a thin `unsafe` call into `fontconfig_sys::Fc*`, matching `ft.rs`'s existing idiom
-  (module doc comment explaining the "additive glue, not the full `pkg/fontconfig` test
-  contract [wait — it IS the full contract here, all 11 tests ported], R1" framing);
-  wire the crate dep + `pub mod fc;`.
+      a thin `unsafe` call into `fontconfig_sys::Fc*`, matching `ft.rs`'s existing idiom
+      (module doc comment explaining the "additive glue, not the full `pkg/fontconfig` test
+      contract [wait — it IS the full contract here, all 11 tests ported], R1" framing);
+      wire the crate dep + `pub mod fc;`.
 - [ ] **Step 4: Run to verify they pass** — `cargo test -p rustty-font-shaper fc::` → 11
-  tests PASS (exercising the REAL vendored fontconfig against a `FcInitLoadConfigAndFonts`
-  call, which reads this host's `/etc/fonts/fonts.conf` — confirmed present via
-  `fc-list`/`fc-match` on this box during planning).
+      tests PASS (exercising the REAL vendored fontconfig against a `FcInitLoadConfigAndFonts`
+      call, which reads this host's `/etc/fonts/fonts.conf` — confirmed present via
+      `fc-list`/`fc-match` on this box during planning).
 - [ ] **Step 5: Commit** — `git commit -m "rustty-font-shaper: fc.rs — Fontconfig FFI
-  wrapper (port of pkg/fontconfig/*.zig, 11 tests) (L3 Task 4)"`
+wrapper (port of pkg/fontconfig/*.zig, 11 tests) (L3 Task 4)"`
 
 ---
 
 ### Task 5: `Descriptor::to_fc_pattern` (`toFcPattern`)
 
 **Files:**
+
 - Modify: `crates/rustty-font-shaper/src/discovery.rs:286-332` (replace the DEFERRED
   comment block with a real `impl Descriptor` method, `not(any(macos, wasm32))`-gated)
 
 **Interfaces:**
+
 - Consumes: `crate::fc::{Pattern, CharSet, Weight, Slant, Spacing, Property, Value}`
   (Task 4).
 - Produces: `Descriptor::to_fc_pattern(&self) -> *mut fc::Pattern` — port of
@@ -418,59 +428,61 @@ unaffected (both crates are currently unreferenced by any `[dependencies]` table
   crate, e.g. `face/freetype.rs:41`), matching `discovery.zig`'s `assert(pat.add(...))`.
 
 - [ ] **Step 1: Write the failing test** — `#[test] fn descriptor_to_fc_pattern_family_size_mono()`:
-  build a `Descriptor { family: Some(b"monospace".to_vec()), size: 12.0, ..Default::default()
-  }`, call `to_fc_pattern`, then `fc::Pattern::get(&pat, Property::Family, 0)` →
-  `Value::String("monospace")`, `Property::Size, 0` → `Value::Integer(12)`,
-  `Property::Spacing, 0` → `Value::Integer(Spacing::Mono as i32)` (always present, per the
-  reference's unconditional add). `#[test] fn descriptor_to_fc_pattern_codepoint()`:
-  `Descriptor { codepoint: u32::from('A'), ..Default::default() }` → `Property::Charset,
-  0` → a `CharSet` whose `has_char('A')` is true.
+      build a `Descriptor { family: Some(b"monospace".to_vec()), size: 12.0, ..Default::default()
+}`, call `to_fc_pattern`, then `fc::Pattern::get(&pat, Property::Family, 0)` →
+      `Value::String("monospace")`, `Property::Size, 0` → `Value::Integer(12)`,
+      `Property::Spacing, 0` → `Value::Integer(Spacing::Mono as i32)` (always present, per the
+      reference's unconditional add). `#[test] fn descriptor_to_fc_pattern_codepoint()`:
+      `Descriptor { codepoint: u32::from('A'), ..Default::default() }` → `Property::Charset,
+0` → a `CharSet` whose `has_char('A')` is true.
 - [ ] **Step 2: Run to verify they fail** — `cargo test -p rustty-font-shaper
-  descriptor_to_fc_pattern` → FAIL (method doesn't exist).
+descriptor_to_fc_pattern` → FAIL (method doesn't exist).
 - [ ] **Step 3: Implement** — per Interfaces above, from `discovery.zig:117-157`.
 - [ ] **Step 4: Run to verify they pass** — same command → PASS.
 - [ ] **Step 5: Commit** — `git commit -m "rustty-font-shaper: Descriptor::to_fc_pattern
-  (toFcPattern) (L3 Task 5)"`
+(toFcPattern) (L3 Task 5)"`
 
 ---
 
 ### Task 6: The real `Fontconfig` discoverer + `DiscoverIterator`
 
 **Files:**
+
 - Modify: `crates/rustty-font-shaper/src/discovery.rs` — replace Task 1's typed-stub
   `Fontconfig`/`DiscoverIterator`/`Error` with real bodies (the DEFERRED comment block at
   `discovery.rs:350-433` becomes the implementation); flesh out the 2 skip-stub `#[test]`s
   at `discovery.rs:1753-1792`.
 
 **Interfaces:**
+
 - Consumes: `crate::fc::*` (Task 4), `Descriptor::to_fc_pattern` (Task 5),
   `crate::library::Library` (= `FreetypeLibrary` on this target class).
 - Produces (port of `discovery.zig:247-339`):
   - `Fontconfig { fc_config: *mut fc::Config }`; `init(lib: Library) -> Fontconfig` (`_ =
-    lib` — unused, matches `discovery.zig:250-255`: `fc::init()` + `fc::
-    init_load_config_and_fonts()`); `deinit(&mut self)` (`fc_config.destroy()`,
+lib` — unused, matches `discovery.zig:250-255`: `fc::init()` + `fc::
+init_load_config_and_fonts()`); `deinit(&mut self)` (`fc_config.destroy()`,
     `discovery.zig:257-259`).
   - `discover(&self, desc: Descriptor) -> Result<DiscoverIterator, Error>` — build the
     pattern via `desc.to_fc_pattern()`, `self.fc_config.substitute_with_pat(pat,
-    MatchKind::Pattern)` (asserted), `pat.default_substitute()`, `self.fc_config.
-    font_sort(pat, false, None)`; if `result != Result::Match` return
+MatchKind::Pattern)` (asserted), `pat.default_substitute()`, `self.fc_config.
+font_sort(pat, false, None)`; if `result != Result::Match` return
     `Error::FontConfigFailed` — **note the exact reference spelling**: this is the AD HOC
     `error.FontConfigFailed` at `discovery.zig:278` (capital "C" in "Config"), a DIFFERENT
     Zig error atom from `pkg/fontconfig/error.zig`'s `Error.FontconfigFailed` (lowercase
     "c") that `Pattern::get`/`Config::font_render_prepare` propagate — model these as TWO
     distinct `discovery::Error` variants (e.g. `SortFailed` for the ad hoc one, `Fc(fc::
-    Error)` wrapping the pkg-level one via `From`), do not conflate them.
+Error)` wrapping the pkg-level one via `From`), do not conflate them.
   - `DiscoverIterator { config: *mut fc::Config, pattern: *mut fc::Pattern, set: *mut fc::
-    FontSet, fonts: Vec<*mut fc::Pattern> /* or a slice view */, variations: Vec<Variation>,
-    i: usize }`; `deinit(&mut self)` (`set.destroy(); pattern.destroy();`,
+FontSet, fonts: Vec<*mut fc::Pattern> /* or a slice view */, variations: Vec<Variation>,
+i: usize }`; `deinit(&mut self)` (`set.destroy(); pattern.destroy();`,
     `discovery.zig:309-313`); `next(&mut self) -> Result<Option<DeferredFace>, Error>` —
     `self.config.font_render_prepare(self.pattern, self.fonts[self.i])`, build
     `DeferredFace { fc: Some(FontconfigData { pattern: font_pattern, charset:
-    font_pattern.get(Property::Charset,0)?.as_char_set(), langset: font_pattern.
-    get(Property::Lang,0)?.as_lang_set(), variations: self.variations.clone() }) }`,
+font_pattern.get(Property::Charset,0)?.as_char_set(), langset: font_pattern.
+get(Property::Lang,0)?.as_lang_set(), variations: self.variations.clone() }) }`,
     `self.i += 1` (`discovery.zig:315-337`).
   - `discover_fallback(&self, collection: *mut Collection, desc: Descriptor) ->
-    Result<DiscoverIterator, Error>` — `_ = collection; self.discover(desc)`
+Result<DiscoverIterator, Error>` — `_ = collection; self.discover(desc)`
     (`discovery.zig:291-299`).
   - `discovery::Error` fully fleshed (composing `Fc(fc::Error)`, `SortFailed`, plus a
     `Face(FaceError)`/`Collection(collection::Error)` arm so `shared_grid_set.rs:94/108`
@@ -478,42 +490,44 @@ unaffected (both crates are currently unreferenced by any `[dependencies]` table
     `discovery.rs:472-493`).
 
 - [ ] **Step 1: Write the failing tests** — flesh out the 2 EXISTING skip-stub `#[test]`s
-  (`discovery.rs:1753-1768` and `:1771-1792`) with real bodies, porting `discovery.zig`'s
-  `"fontconfig"` test (:1161-1174: `Fontconfig::init`, `discover(Descriptor{family:
-  Some("monospace"), size: 12.0, ..})`, assert it doesn't error) and `"fontconfig
-  codepoint"` test (:1176-1198: `discover(Descriptor{codepoint: 'A', size: 12.0, ..})`,
-  `it.next()` → `Some(face)`, `face.has_codepoint('A', None)` true, `face.
-  has_codepoint('B', None)` true — this second assertion depends on Task 7's
-  `has_codepoint` landing; if sequenced strictly, stub `has_codepoint` here and finish
-  the assertion in Task 7's step, OR do Tasks 6+7 in one PR-sized unit if that reads
-  cleaner during execution).
+      (`discovery.rs:1753-1768` and `:1771-1792`) with real bodies, porting `discovery.zig`'s
+      `"fontconfig"` test (:1161-1174: `Fontconfig::init`, `discover(Descriptor{family:
+Some("monospace"), size: 12.0, ..})`, assert it doesn't error) and `"fontconfig
+codepoint"` test (:1176-1198: `discover(Descriptor{codepoint: 'A', size: 12.0, ..})`,
+      `it.next()` → `Some(face)`, `face.has_codepoint('A', None)` true, `face.
+has_codepoint('B', None)` true — this second assertion depends on Task 7's
+      `has_codepoint` landing; if sequenced strictly, stub `has_codepoint` here and finish
+      the assertion in Task 7's step, OR do Tasks 6+7 in one PR-sized unit if that reads
+      cleaner during execution).
 - [ ] **Step 2: Run to verify they fail** — `cargo test -p rustty-font-shaper fontconfig`
-  → FAIL.
+      → FAIL.
 - [ ] **Step 3: Implement** — per Interfaces above, from `discovery.zig:247-339`.
 - [ ] **Step 4: Run to verify they pass** — same command → PASS (discovers real fonts
-  from this host's fontconfig config — verified reachable via `fc-match monospace` →
-  `Noto Sans Mono` during planning).
+      from this host's fontconfig config — verified reachable via `fc-match monospace` →
+      `Noto Sans Mono` during planning).
 - [ ] **Step 5: Commit** — `git commit -m "rustty-font-shaper: real Fontconfig discoverer
-  + DiscoverIterator (L3 Task 6)"`
+  - DiscoverIterator (L3 Task 6)"`
 
 ---
 
 ### Task 7: `DeferredFace` Fontconfig payload + the 3 `unimplemented!()` arms
 
 **Files:**
+
 - Modify: `crates/rustty-font-shaper/src/deferred_face.rs`
 
 **Interfaces:**
+
 - Consumes: `crate::fc::*` (Task 4), the real `discovery::Fontconfig::discover` (Task 6).
 - Produces (port of `DeferredFace.zig:21-23,37-56,129,149-150,179-180,205-238,325-347`):
   - Replace the non-macOS `pub _deferred: ()` field (`deferred_face.rs:49-50`) with `pub
-    fc: Option<FontconfigData>` (mirrors the macOS `pub ct: Option<CoreTextData>` shape,
+fc: Option<FontconfigData>` (mirrors the macOS `pub ct: Option<CoreTextData>` shape,
     `deferred_face.rs:45-46`).
   - `struct FontconfigData { pattern: *mut fc::Pattern, charset: *const fc::CharSet,
-    langset: *const fc::LangSet, variations: Vec<Variation> }` (`DeferredFace.zig:38-56`);
+langset: *const fc::LangSet, variations: Vec<Variation> }` (`DeferredFace.zig:38-56`);
     `deinit(&mut self)` = `pattern.destroy()` (`:52-55`).
   - `DeferredFace::undefined() -> DeferredFace` → `DeferredFace { fc: None }` (was `{
-    _deferred: () }`).
+_deferred: () }`).
   - `deinit(&mut self)` — `if let Some(fc) = self.fc.as_mut() { fc.deinit(); }`
     (`:129`).
   - `family_name`/`name` fontconfig arms — `(try fc.pattern.get(.family, 0)).string`
@@ -536,52 +550,54 @@ unaffected (both crates are currently unreferenced by any `[dependencies]` table
     folding it into the `family_name`/`name` pair above.
 
 - [ ] **Step 1: Write the failing test** — extend Task 6's `"fontconfig codepoint"`
-  discovery test to also assert `face.has_codepoint('B', None)` (the second-codepoint
-  check, `discovery.zig:1197`) if it was stubbed in Task 6; add a focused
-  `#[test] fn deferred_face_fontconfig_name_and_load()` in `deferred_face.rs`: discover
-  `monospace`, call `.name(&mut buf)` (non-empty), call
-  `.load(lib, Options { size: DesiredSize { points: 12.0, ..default DPI }, freetype_load_
-  flags: FREETYPE_LOAD_FLAGS_DEFAULT })`, assert `face.glyph_index(' ').is_some()`.
+      discovery test to also assert `face.has_codepoint('B', None)` (the second-codepoint
+      check, `discovery.zig:1197`) if it was stubbed in Task 6; add a focused
+      `#[test] fn deferred_face_fontconfig_name_and_load()` in `deferred_face.rs`: discover
+      `monospace`, call `.name(&mut buf)` (non-empty), call
+      `.load(lib, Options { size: DesiredSize { points: 12.0, ..default DPI }, freetype_load_
+flags: FREETYPE_LOAD_FLAGS_DEFAULT })`, assert `face.glyph_index(' ').is_some()`.
 - [ ] **Step 2: Run to verify they fail** — `cargo test -p rustty-font-shaper
-  deferred_face` → FAIL (`unimplemented!()` panics).
+deferred_face` → FAIL (`unimplemented!()` panics).
 - [ ] **Step 3: Implement** — per Interfaces above.
 - [ ] **Step 4: Run to verify they pass** — same command → PASS.
 - [ ] **Step 5: Commit** — `git commit -m "rustty-font-shaper: DeferredFace Fontconfig
-  payload + load/has_codepoint/name arms (L3 Task 7)"`
+payload + load/has_codepoint/name arms (L3 Task 7)"`
 
 ---
 
 ### Task 8: The end-to-end KAT — port `DeferredFace.zig`'s `"fontconfig"` test
 
 **Files:**
+
 - Modify: `crates/rustty-font-shaper/src/deferred_face.rs` (the `fontconfig` `#[test]`
   currently a no-op body at `:493-507`)
 
 **Interfaces:**
+
 - Consumes: everything from Tasks 1-7.
 - Produces: the single test that proves the whole tier — port of `DeferredFace.zig:468-
-  498` verbatim: `Library::init()`, `discovery::Fontconfig::init(lib)`, `discover
-  (Descriptor{family: Some("monospace"), size: 12.0, ..})`, `it.next()` → a `DeferredFace`,
+498` verbatim: `Library::init()`, `discovery::Fontconfig::init(lib)`, `discover
+(Descriptor{family: Some("monospace"), size: 12.0, ..})`, `it.next()` → a `DeferredFace`,
   `def.name(&mut buf)` → non-empty, `def.load(lib, Options{size:{points:12.0}, ..})` →
   `Face`, `face.glyph_index(u32::from(' ')).is_some()` → true.
 
 - [ ] **Step 1: Write the failing test** — replace the no-op body at
-  `deferred_face.rs:493-507` with the real port (drop the
-  `if crate::options::BACKEND == crate::Backend::FontconfigFreetype {}` no-op guard's
-  empty body for a real one; keep the guard itself since this remains a
-  backend-conditional test mirroring the reference's `SkipZigTest` early-return).
+      `deferred_face.rs:493-507` with the real port (drop the
+      `if crate::options::BACKEND == crate::Backend::FontconfigFreetype {}` no-op guard's
+      empty body for a real one; keep the guard itself since this remains a
+      backend-conditional test mirroring the reference's `SkipZigTest` early-return).
 - [ ] **Step 2: Run to verify it fails** — `cargo test -p rustty-font-shaper --
-  deferred_face::tests::fontconfig` → this specific test should already PASS trivially
-  before this task (empty body) — the meaningful check is that it FAILS if you
-  temporarily break any of Tasks 1-7 (a sanity/regression check), then confirm it passes
-  once real.
+deferred_face::tests::fontconfig` → this specific test should already PASS trivially
+      before this task (empty body) — the meaningful check is that it FAILS if you
+      temporarily break any of Tasks 1-7 (a sanity/regression check), then confirm it passes
+      once real.
 - [ ] **Step 3: Implement** — per Interfaces above.
 - [ ] **Step 4: Run to verify it passes** — `cargo test -p rustty-font-shaper` → FULL
-  suite GREEN on Linux, including this KAT, against the REAL system fontconfig
-  (`/etc/fonts/fonts.conf`, confirmed resolving `monospace` → `Noto Sans Mono[wght].ttf`
-  on this host via `fc-match` during planning) and the vendored FreeType (already wired).
+      suite GREEN on Linux, including this KAT, against the REAL system fontconfig
+      (`/etc/fonts/fonts.conf`, confirmed resolving `monospace` → `Noto Sans Mono[wght].ttf`
+      on this host via `fc-match` during planning) and the vendored FreeType (already wired).
 - [ ] **Step 5: Commit** — `git commit -m "rustty-font-shaper: fontconfig KAT — discover
-  + load + glyph_index end-to-end on Linux (L3 Task 8)"`
+  - load + glyph_index end-to-end on Linux (L3 Task 8)"`
 
 **Gate after Task 8:** a real Linux system font resolves through rustty's font stack,
 end to end. The 3 `unimplemented!()` leaves this plan set out to remove
@@ -592,54 +608,55 @@ end to end. The 3 `unimplemented!()` leaves this plan set out to remove
 ### Task 9: Gate wiring — acyclic, test-counts, DEFERRALS
 
 **Files:**
+
 - Modify: `.port/tools/gates/check_test_counts.py` (add the `font_shaper_fc` row)
 - Modify: `.port/phase-2/DEFERRALS.md` (mark the L3 entry RESOLVED)
 
 **Interfaces:**
+
 - Consumes: nothing new — this task only updates bookkeeping/gates.
 - Produces: `check_test_counts.py`'s manifest gains a `font_shaper_fc` row mapping the 10
-  `pkg/fontconfig/*.zig` files (Task 4's Interfaces list) to `[f"{RSFS}/fc.rs"]`, count
-  11.
+  `pkg/fontconfig/*.zig` files (Task 4's Interfaces list) to `[f"{RSFS}/fc.rs"]`, count 11.
 
 - [ ] **Step 0 (pre-flight, do NOT skip): the manifest's path constants are STALE.**
-  `check_test_counts.py:24-92` hardcodes `GH*`/`RS*` as `/Users/gael/projects/ghostty/...`
-  / `/Users/gael/projects/rustty/...` (an old macOS checkout layout) — NOT
-  `/home/gael/projects/ghostty` / `/home/gael/projects/rustty-gtk` (this environment).
-  There is no env-var override (`grep -n "os.environ\|getenv"` on the file returns
-  nothing relevant). This is a PRE-EXISTING condition, not introduced by this plan.
-  Before adding the `font_shaper_fc` row: (a) run the script once unmodified and confirm
-  it is currently non-functional here (exit 3 "BLOCKED"/missing-file, or silently
-  vacuous) on THIS host; (b) if some other in-flight change has already repointed these
-  constants (e.g. to env-derived paths) by the time this task executes, follow that
-  convention instead of the literal paths below; (c) if not, add the new row using
-  whatever base constant is live at the time (do not invent a `GHPKG`/`pkg`-relative
-  helper unless the file already has one), and flag the broader staleness to the user
-  rather than silently "fixing" 90+ unrelated rows outside this plan's scope.
+      `check_test_counts.py:24-92` hardcodes `GH*`/`RS*` as `/Users/gael/projects/ghostty/...`
+      / `/Users/gael/projects/rustty/...` (an old macOS checkout layout) — NOT
+      `/home/gael/projects/ghostty` / `/home/gael/projects/rustty-gtk` (this environment).
+      There is no env-var override (`grep -n "os.environ\|getenv"` on the file returns
+      nothing relevant). This is a PRE-EXISTING condition, not introduced by this plan.
+      Before adding the `font_shaper_fc` row: (a) run the script once unmodified and confirm
+      it is currently non-functional here (exit 3 "BLOCKED"/missing-file, or silently
+      vacuous) on THIS host; (b) if some other in-flight change has already repointed these
+      constants (e.g. to env-derived paths) by the time this task executes, follow that
+      convention instead of the literal paths below; (c) if not, add the new row using
+      whatever base constant is live at the time (do not invent a `GHPKG`/`pkg`-relative
+      helper unless the file already has one), and flag the broader staleness to the user
+      rather than silently "fixing" 90+ unrelated rows outside this plan's scope.
 
 - [ ] **Step 1: Write the failing check** — run
-  `python3 .port/tools/gates/check_test_counts.py` before the edit; confirm `fc.rs`'s 11
-  tests are currently UNTRACKED (no manifest row references them, so the gate is silently
-  blind to this file, not red — note this as the "failing" precondition rather than a
-  literal red gate).
+      `python3 .port/tools/gates/check_test_counts.py` before the edit; confirm `fc.rs`'s 11
+      tests are currently UNTRACKED (no manifest row references them, so the gate is silently
+      blind to this file, not red — note this as the "failing" precondition rather than a
+      literal red gate).
 - [ ] **Step 2: N/A** (bookkeeping task, no red/green test cycle in the TDD sense) —
-  instead, confirm `check_test_counts.py`'s existing rows for `font_shaper_discovery`
-  (`discovery.zig` 8 tests) and `font_shaper_deferred_face` (`DeferredFace.zig` 2 tests)
-  are UNCHANGED by this plan (the reference test COUNT didn't change — only the bodies
-  went from skip-stubs to real; the gate is line-count/name-based, not pass/fail-based,
-  so it was already green before this plan and stays green).
+      instead, confirm `check_test_counts.py`'s existing rows for `font_shaper_discovery`
+      (`discovery.zig` 8 tests) and `font_shaper_deferred_face` (`DeferredFace.zig` 2 tests)
+      are UNCHANGED by this plan (the reference test COUNT didn't change — only the bodies
+      went from skip-stubs to real; the gate is line-count/name-based, not pass/fail-based,
+      so it was already green before this plan and stays green).
 - [ ] **Step 3: Implement** — add the `font_shaper_fc` manifest row (Task 4's 11 tests);
-  in `DEFERRALS.md`, edit the `## rustty-font-shaper — Linux fontconfig backend +
-  web_canvas` section (`DEFERRALS.md:3946-3965`): strike the `deferred_face.rs:479/482/
-  489` bullet, replace with "**RESOLVED (this plan's date).** Ported in L3
-  (`docs/superpowers/plans/2026-07-17-L3-fontconfig-discovery.md`): the real Fontconfig
-  discoverer (`discovery.rs`), the `fc.rs` FFI wrapper, and the `DeferredFace` `fc`
-  payload all landed; see Tasks 1-8." Cross-reference the commit SHAs from Tasks 1-8.
+      in `DEFERRALS.md`, edit the `## rustty-font-shaper — Linux fontconfig backend +
+web_canvas` section (`DEFERRALS.md:3946-3965`): strike the `deferred_face.rs:479/482/
+489` bullet, replace with "**RESOLVED (this plan's date).** Ported in L3
+      (`docs/superpowers/plans/2026-07-17-L3-fontconfig-discovery.md`): the real Fontconfig
+      discoverer (`discovery.rs`), the `fc.rs` FFI wrapper, and the `DeferredFace` `fc`
+      payload all landed; see Tasks 1-8." Cross-reference the commit SHAs from Tasks 1-8.
 - [ ] **Step 4: Run to verify** — `python3 .port/tools/gates/check_test_counts.py` →
-  GREEN (still — the new row adds a passing entry, doesn't regress existing ones);
-  `bash .port/tools/gates/check_acyclic.sh` → GREEN; `cargo build --workspace` → GREEN on
-  Linux; `cargo test -p rustty-font-shaper -p fontconfig-sys -p libxml2-sys` → GREEN.
+      GREEN (still — the new row adds a passing entry, doesn't regress existing ones);
+      `bash .port/tools/gates/check_acyclic.sh` → GREEN; `cargo build --workspace` → GREEN on
+      Linux; `cargo test -p rustty-font-shaper -p fontconfig-sys -p libxml2-sys` → GREEN.
 - [ ] **Step 5: Commit** — `git commit -m "rustty-font-shaper: L3 fontconfig discovery —
-  gate wiring + DEFERRALS resolution (L3 Task 9)"`
+gate wiring + DEFERRALS resolution (L3 Task 9)"`
 
 **Final gate:** `cargo build --workspace` green on Linux; `cargo test -p
 rustty-font-shaper -p fontconfig-sys -p libxml2-sys` green; `check_acyclic.sh` /
@@ -652,7 +669,7 @@ rustty's font stack.**
 ## Deferred (out of L3 scope, documented)
 
 - **Windows FreeType-scan discoverer** (`freetype_windows` backend, `discovery.zig:900-
-  1349` `Windows` struct) — Windows is not a rustty-gtk target; stays a DEFERRED comment
+1349` `Windows` struct) — Windows is not a rustty-gtk target; stays a DEFERRED comment
   block (`discovery.rs:1557+`).
 - **`fontconfig`'s cache subsystem** (`fccache.c`'s on-disk `.cache-*` binary cache) — the
   reference vendors and compiles it (it's in the `srcs` list, Task 3), but this plan does

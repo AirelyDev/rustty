@@ -14,17 +14,17 @@ because three foundational tiers below the GUI are macOS-only today, plus the GU
 is unported. rustty-os is the one big surprise: **already Linux-complete**. The work sequences
 into 7 tiers (L0 tiny → L5 huge):
 
-| Tier | Name | State | Reference | Effort |
-|---|---|---|---|---|
-| **L0** | Compile-gating | 2-edit manifest fix | — | XS |
-| **L1** | `rustty-xev` epoll loop | not started | libxev `backend/epoll.zig` (2061 loc/12t) | L |
-| **L2** | rustty-os Linux | **✅ already done** | — | — |
-| **L3** | Linux font discovery | skip-stubbed | fontconfig discoverer + `fontconfig-sys`/`libxml2-sys` | M |
-| **L4** | renderer OpenGL backend | not started | `OpenGL.zig` 461 + `opengl/*` 1090 loc + 10 GLSL | L |
-| **L5** | GTK apprt (native backend) | not started | `src/apprt/gtk/**` 22k loc + 21 `.blp` + 4 `.css` | XL |
-| **L6** | winproto / inspector / layer-shell | not started | `winproto/{wayland,x11}`, imgui GL, gtk4-layer-shell | L |
+| Tier   | Name                               | State               | Reference                                              | Effort |
+| ------ | ---------------------------------- | ------------------- | ------------------------------------------------------ | ------ |
+| **L0** | Compile-gating                     | 2-edit manifest fix | —                                                      | XS     |
+| **L1** | `rustty-xev` epoll loop            | not started         | libxev `backend/epoll.zig` (2061 loc/12t)              | L      |
+| **L2** | rustty-os Linux                    | **✅ already done** | —                                                      | —      |
+| **L3** | Linux font discovery               | skip-stubbed        | fontconfig discoverer + `fontconfig-sys`/`libxml2-sys` | M      |
+| **L4** | renderer OpenGL backend            | not started         | `OpenGL.zig` 461 + `opengl/*` 1090 loc + 10 GLSL       | L      |
+| **L5** | GTK apprt (native backend)         | not started         | `src/apprt/gtk/**` 22k loc + 21 `.blp` + 4 `.css`      | XL     |
+| **L6** | winproto / inspector / layer-shell | not started         | `winproto/{wayland,x11}`, imgui GL, gtk4-layer-shell   | L      |
 
-Critical path to *pixels on screen*: **L0 → L1 → L4 → L5** (L3 parallel; L6 after L5's noop core).
+Critical path to _pixels on screen_: **L0 → L1 → L4 → L5** (L3 parallel; L6 after L5's noop core).
 
 ## 1. Current state (what's already true on this machine)
 
@@ -75,7 +75,8 @@ Critical path to *pixels on screen*: **L0 → L1 → L4 → L5** (L3 parallel; L
 
 ## 3. Milestone roadmap
 
-### L0 — Compile the Linux workspace  ·  effort XS · risk none · deps: none
+### L0 — Compile the Linux workspace · effort XS · risk none · deps: none
+
 - **Goal:** `cargo build --workspace` (and `cargo test`) green on Linux.
 - **Work:** `crates/rustty-apprt-c/Cargo.toml` — move `objc2` (`:101`) into
   `[target.'cfg(target_os = "macos")'.dependencies]` (a gated objc2 block already exists at
@@ -85,7 +86,8 @@ Critical path to *pixels on screen*: **L0 → L1 → L4 → L5** (L3 parallel; L
   Linux; macOS build unaffected (deps still present under the cfg).
 - **Gate:** workspace compiles; no regression to the -sys or headless crates.
 
-### L1 — `rustty-xev` Linux event loop: epoll + io_uring + `Dynamic`  ·  effort L/XL · risk high · deps: L0
+### L1 — `rustty-xev` Linux event loop: epoll + io_uring + `Dynamic` · effort L/XL · risk high · deps: L0
+
 - **Goal:** termio can spawn and pump a live shell on Linux (the same `live_shell.rs` KAT that
   passes on macOS/kqueue, now on Linux). This is the foundational unblock — without it every
   `Surface::init` (pty + io thread + renderer thread) is inert on Linux.
@@ -119,17 +121,19 @@ Critical path to *pixels on screen*: **L0 → L1 → L4 → L5** (L3 parallel; L
 - **Gate:** xev tests (both backends + dynamic) + termio live-shell green on Linux; macOS kqueue
   path byte-unaffected (per-target re-export); acyclic/counts green.
 
-### L2 — rustty-os Linux  ·  ✅ ALREADY DONE
+### L2 — rustty-os Linux · ✅ ALREADY DONE
+
 - No work. Two documented non-blocking notes: `i18n::canonicalizeLocale` references a libintl
   symbol only reachable on the macOS path (flag if any Linux caller appears); flatpak host-command
   is behind the off-by-default `flatpak` feature (intentional parity).
 
-### L3 — Linux font discovery (fontconfig)  ·  effort M · risk med · deps: L0 (parallel with L1)
+### L3 — Linux font discovery (fontconfig) · effort M · risk med · deps: L0 (parallel with L1)
+
 - **Goal:** a font resolves on Linux via Fontconfig, replacing the `unimplemented!()` DeferredFace
   leaves (`crates/rustty-font-shaper/src/deferred_face.rs:479,482,489`) and the discovery skip-stubs.
 - **Reference:** ghostty `src/font/discovery.zig` (Fontconfig `toFcPattern` + `Fontconfig` struct)
-  + the `DeferredFace` fontconfig arms. Backend already cfg-selects
-  `Linux default = FontconfigFreetype` (`face/mod.rs`, `discovery.rs`).
+  - the `DeferredFace` fontconfig arms. Backend already cfg-selects
+    `Linux default = FontconfigFreetype` (`face/mod.rs`, `discovery.rs`).
 - **Work:** vendor **`fontconfig-sys`** + **`libxml2-sys`** (the deferred new-dep pair — follow the
   validated -sys template; fontconfig links freetype-sys + libxml2-sys; system libs present),
   then implement the Fontconfig discoverer + `toFcPattern` + the 3 DeferredFace fontconfig arms
@@ -139,7 +143,8 @@ Critical path to *pixels on screen*: **L0 → L1 → L4 → L5** (L3 parallel; L
 - **Gate:** font-shaper tests green on Linux; the 3 leaves gone; acyclic (fontconfig-sys →
   freetype-sys + libxml2-sys).
 
-### L4 — renderer OpenGL backend  ·  effort L · risk high · deps: L0 (needed by L5)
+### L4 — renderer OpenGL backend · effort L · risk high · deps: L0 (needed by L5)
+
 - **Goal:** the monomorphic `Renderer` over a new concrete `OpenGL` backend renders a terminal
   state through a GL context (the GLArea path L5 will host).
 - **Reference:** `src/renderer/OpenGL.zig` (461 loc) + `src/renderer/opengl/*.zig` (1090 loc:
@@ -158,7 +163,8 @@ Critical path to *pixels on screen*: **L0 → L1 → L4 → L5** (L3 parallel; L
   with the shared vertex structs, offscreen-GL availability in CI.
 - **Gate:** OpenGL offscreen KAT green; Metal lane unaffected; `renderer` compiles cfg-clean on Linux.
 
-### L5 — GTK apprt (the native Rust backend)  ·  effort XL · risk high · deps: L1, L4, (L3 for fonts)
+### L5 — GTK apprt (the native Rust backend) · effort XL · risk high · deps: L1, L4, (L3 for fonts)
+
 The main body. Governed by `PREPORT_GTK.md` (LIFETIMES rows, 12 paired invariants, comptime
 inventory, constants). Sub-milestones:
 
@@ -201,7 +207,8 @@ inventory, constants). Sub-milestones:
   hazards (floating refs, WeakRef races, source-id leaks — PREPORT_GTK §5.2), the render-thread
   contract.
 
-### L6 — winproto + inspector + layer-shell (polish to full parity)  ·  effort L · risk med · deps: L5
+### L6 — winproto + inspector + layer-shell (polish to full parity) · effort L · risk med · deps: L5
+
 - **winproto Wayland/X11** (feature-gated): `wayland` (wl_display/Globals, KDE blur/slide,
   xdg-activation, CSD) + `x11` (XKB, `_MOTIF_WM_HINTS`, `_KDE_NET_WM_BLUR_BEHIND_REGION`) via
   `wayland-client`/`wayland-protocols` + `x11rb`/`gdk4-x11`. Replaces the noop union arms.
@@ -216,9 +223,9 @@ inventory, constants). Sub-milestones:
 
 - **D-A · Event-loop backend — DECIDED (2026-07-16): epoll + io_uring + live `Dynamic`.** See AD-5.
 - **D-B · winproto scope — DECIDED (2026-07-16): Wayland inside L5; X11 in L6.** See AD-6.
-- **D-C · Crate placement.** *Recommend:* GTK backend as a `gtk` **module inside `rustty-apprt`**
+- **D-C · Crate placement.** _Recommend:_ GTK backend as a `gtk` **module inside `rustty-apprt`**
   (sibling of `embedded`, matches ghostty's single-apprt-crate shape and Agent-C's acyclic
-  analysis). *Alt:* a dedicated `rustty-apprt-gtk` crate (cleaner feature isolation; more wiring).
+  analysis). _Alt:_ a dedicated `rustty-apprt-gtk` crate (cleaner feature isolation; more wiring).
 - **D-D · GL loader for L4.** `glow` vs `gl` vs raw `epoxy`-via-`-sys`. Decide in the L4 detail plan.
 - **D-E · Identity/branding.** The gresource prefix, application-id, `.mo` domain are
   `com.mitchellh.ghostty` in the reference. Rebrand to the rustty identity (R2) — confirm the exact
@@ -229,7 +236,7 @@ inventory, constants). Sub-milestones:
 1. **L0** (unblocks compiling) — immediate, safe, tiny.
 2. **L1 epoll** (unblocks live shell) + **L3 fontconfig** in parallel (independent).
 3. **L4 OpenGL** (offscreen) — parallel with L1/L3 once L0 lands.
-4. **L5** GTK backend — needs L1 (loop) + L4 (render) + L3 (fonts) for a *fully* live window;
+4. **L5** GTK backend — needs L1 (loop) + L4 (render) + L3 (fonts) for a _fully_ live window;
    L5.0/L5.1 scaffolding can begin against noop before L4 finishes.
 5. **L6** — after L5's noop core is functional.
 
@@ -237,6 +244,7 @@ Each tier gets its own detailed TDD implementation plan (writing-plans) before i
 code — L0 is small enough to execute directly; L1/L4/L5 each warrant a dedicated plan doc.
 
 ## 6. Risks (largest first)
+
 1. **L5 GTK volume + GObject lifetimes** — 22k loc, 22 subclasses, floating-ref/WeakRef/source-id
    hazards; weak test gate (mitigated by PREPORT_GTK LIFETIMES rows + G3b + review).
 2. **L4 OpenGL parity + offscreen-GL in CI** — shader/uniform layout fidelity; headless GL context.

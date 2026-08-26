@@ -4,7 +4,7 @@
 
 **Goal:** Port the full ghostty `global.zig` `state.init()` bootstrap (logging config, SIGPIPE, rlimits, crash.init, locale, glslang, oniguruma, i18n) into the rustty embedded/C and exe paths, and make `rustty_cli_try_action`'s non-null path run a detected CLI action and exit.
 
-**Architecture:** The reference `global.zig` `GlobalState.init` is the BREAK #1 seam: `rustty-global` is the leaf state-holder, `rustty-core` binds `ResourcesDir` (Action stays `()` — `rustty-cli` depends on `rustty-core`, so the concrete cli `Action` type can NEVER live in core's `GlobalState`; the port's ratified shape, per `main_rustty.rs` ADV-FIX 2, is "detection lives above apprt"). This WS: (a) grows `rustty_apprt::init` into the full cli-free side-effect body (`init_with_action(action_detected: bool)`), (b) runs `detectArgs` at the two tiers that legitimately dep cli — the `rustty` bin (already does) and `rustty-apprt-c`'s `rustty_init` (new) — stashing the concrete action in an apprt-c-local `OnceLock` while mirroring *presence* into `rustty_core::STATE.action: Option<()>`, and (c) implements the `rustty_cli_try_action` `Some` arm from that stash. A shared log facade (`rustty_core::logging`, the `main_ghostty.zig` `logFn` port with stderr + macOS-unified-logging sinks) makes the `RUSTTY_LOG` config observable.
+**Architecture:** The reference `global.zig` `GlobalState.init` is the BREAK #1 seam: `rustty-global` is the leaf state-holder, `rustty-core` binds `ResourcesDir` (Action stays `()` — `rustty-cli` depends on `rustty-core`, so the concrete cli `Action` type can NEVER live in core's `GlobalState`; the port's ratified shape, per `main_rustty.rs` ADV-FIX 2, is "detection lives above apprt"). This WS: (a) grows `rustty_apprt::init` into the full cli-free side-effect body (`init_with_action(action_detected: bool)`), (b) runs `detectArgs` at the two tiers that legitimately dep cli — the `rustty` bin (already does) and `rustty-apprt-c`'s `rustty_init` (new) — stashing the concrete action in an apprt-c-local `OnceLock` while mirroring _presence_ into `rustty_core::STATE.action: Option<()>`, and (c) implements the `rustty_cli_try_action` `Some` arm from that stash. A shared log facade (`rustty_core::logging`, the `main_ghostty.zig` `logFn` port with stderr + macOS-unified-logging sinks) makes the `RUSTTY_LOG` config observable.
 
 **Tech Stack:** Rust 1.93.1 workspace; `libc` (sigaction/setrlimit); libSystem `os_log` via a `cc`-built C shim (rustty-os `cbits/` precedent); existing ported crates: `rustty-cli` (detect + Action::run), `rustty-crash`, `rustty-os` (ensureLocale/i18n/fixMaxFiles/getenv), `rustty-oniguruma`, `rustty-renderer::shadertoy` (glslang), `rustty-args` (parse_packed_struct).
 
@@ -23,19 +23,19 @@
 
 ## File Structure
 
-| File | Responsibility |
-|---|---|
-| `crates/rustty-core/src/lib.rs` | add `pub use rustty_global::Logging;` + `pub mod logging;` |
-| `crates/rustty-core/src/logging.rs` (new) | the `main_ghostty.zig` `logFn` port (shared stderr + macOS sinks) |
-| `crates/rustty-os/cbits/log_shim.c` (new) | `os_log_with_type` C-macro shim (oracle `zig_os_log_with_type` analogue) |
-| `crates/rustty-os/build.rs` | compile the shim on macOS |
-| `crates/rustty-os/src/macos.rs` | `Log`/`LogType` — port of `pkg/macos/os/log.zig` |
-| `crates/rustty-global/src/lib.rs` + `Cargo.toml` | `seam::Rlimit = libc::rlimit` rebind + live `ResourceLimits::restore` |
-| `crates/rustty-renderer/src/shadertoy.rs` | `pub fn init()` (glslang init, pkg/glslang `init.zig`) |
-| `crates/rustty-apprt/src/lib.rs` + `Cargo.toml` | `compute_logging`, `init_signals`, the full `init_with_action` |
-| `crates/rustty/src/main_rustty.rs` | bin wiring: `init_with_action(action.is_some())`, `log_fn` delegates to core |
-| `crates/rustty-apprt-c/src/lib.rs` + `Cargo.toml` | argv storage, `detect_from_argv`, full `rustty_init`, `rustty_cli_try_action` Some arm |
-| `.port/phase-2/DEFERRALS.md`, `.port/phase-2/INTEGRATION_PARITY.md` | ledger strikes |
+| File                                                                | Responsibility                                                                         |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `crates/rustty-core/src/lib.rs`                                     | add `pub use rustty_global::Logging;` + `pub mod logging;`                             |
+| `crates/rustty-core/src/logging.rs` (new)                           | the `main_ghostty.zig` `logFn` port (shared stderr + macOS sinks)                      |
+| `crates/rustty-os/cbits/log_shim.c` (new)                           | `os_log_with_type` C-macro shim (oracle `zig_os_log_with_type` analogue)               |
+| `crates/rustty-os/build.rs`                                         | compile the shim on macOS                                                              |
+| `crates/rustty-os/src/macos.rs`                                     | `Log`/`LogType` — port of `pkg/macos/os/log.zig`                                       |
+| `crates/rustty-global/src/lib.rs` + `Cargo.toml`                    | `seam::Rlimit = libc::rlimit` rebind + live `ResourceLimits::restore`                  |
+| `crates/rustty-renderer/src/shadertoy.rs`                           | `pub fn init()` (glslang init, pkg/glslang `init.zig`)                                 |
+| `crates/rustty-apprt/src/lib.rs` + `Cargo.toml`                     | `compute_logging`, `init_signals`, the full `init_with_action`                         |
+| `crates/rustty/src/main_rustty.rs`                                  | bin wiring: `init_with_action(action.is_some())`, `log_fn` delegates to core           |
+| `crates/rustty-apprt-c/src/lib.rs` + `Cargo.toml`                   | argv storage, `detect_from_argv`, full `rustty_init`, `rustty_cli_try_action` Some arm |
+| `.port/phase-2/DEFERRALS.md`, `.port/phase-2/INTEGRATION_PARITY.md` | ledger strikes                                                                         |
 
 Every task below runs from the repo root `/Users/gael/projects/rustty`.
 
@@ -44,12 +44,14 @@ Every task below runs from the repo root `/Users/gael/projects/rustty`.
 ### Task 1: Branch + `Logging` re-export + `RUSTTY_LOG` packed-struct parse (`compute_logging`)
 
 **Files:**
+
 - Modify: `crates/rustty-core/src/lib.rs` (near line 53, the `GlobalState` type alias)
 - Modify: `crates/rustty-apprt/src/lib.rs`
 - Modify: `crates/rustty-apprt/Cargo.toml`
 - Test: in-crate `#[cfg(test)]` in `crates/rustty-apprt/src/lib.rs`
 
 **Interfaces:**
+
 - Consumes: `rustty_global::Logging` (fields `stderr: bool`, `macos: bool`, `Copy`, `Default` = `{stderr: app_runtime()!=None, macos: cfg!(macos)}`); `rustty_args::args::{PackedStruct, parse_packed_struct}` (trait: `set_all(&mut self, bool)`, `set_field(&mut self, part: &[u8], value: bool) -> bool`, `field_names() -> &'static [&'static [u8]]`, supertrait `Default`).
 - Produces: `rustty_core::Logging` (re-export, used by every later task); `rustty-apprt`-private `fn compute_logging(action_detected: bool, env_value: Option<&[u8]>) -> Logging` (Task 7 consumes it).
 
@@ -222,12 +224,14 @@ git commit -m "rustty-apprt: RUSTTY_LOG packed-struct logging config (WS4 T1)"
 ### Task 2: rustty-os `macos::Log` — the unified-logging (os_log) binding
 
 **Files:**
+
 - Create: `crates/rustty-os/cbits/log_shim.c`
 - Modify: `crates/rustty-os/build.rs`
 - Modify: `crates/rustty-os/src/macos.rs` (append at end)
 - Test: in-crate `#[cfg(test)]` appended in `crates/rustty-os/src/macos.rs`
 
 **Interfaces:**
+
 - Produces (macOS only): `rustty_os::macos::Log` with `Log::create(subsystem: &CStr, category: &CStr) -> Log`, `log.type_enabled(LogType) -> bool`, `log.log(LogType, message: &str)`, `log.release(self)`; `rustty_os::macos::LogType{Default,Info,Debug,Err,Fault}`. Task 3 consumes these.
 
 - [ ] **Step 1: Write the failing test**
@@ -401,11 +405,13 @@ git commit -m "rustty-os: pkg/macos os_log unified-logging binding (WS4 T2)"
 ### Task 3: `rustty_core::logging` — the shared `logFn` port
 
 **Files:**
+
 - Create: `crates/rustty-core/src/logging.rs`
 - Modify: `crates/rustty-core/src/lib.rs` (add `pub mod logging;` next to `pub mod surface;`)
 - Test: in-crate `#[cfg(test)]` in `crates/rustty-core/src/logging.rs`
 
 **Interfaces:**
+
 - Consumes: `rustty_os::macos::{Log, LogType}` (Task 2); `rustty_global::Logging` (via the Task 1 re-export); `rustty_identity::BUNDLE_ID` (`"io.airely.rustty"`; rustty-core already deps rustty-identity, Cargo.toml:66); `crate::STATE`.
 - Produces: `rustty_core::logging::Level{Debug,Info,Warn,Err}` (`Copy`), `pub fn log_with(level: Level, scope: &str, message: &str, logging: &Logging)`, `pub fn log(level: Level, scope: &str, message: &str)` (STATE-reading variant; falls back to `Logging::default()` when STATE is unset). Tasks 5, 7, 8, 10, 11 consume these.
 
@@ -593,11 +599,13 @@ git commit -m "rustty-core: shared logFn port (stderr + os_log sinks) (WS4 T3)"
 The seam type is currently `u64` but `rustty_os::fixMaxFiles()` returns `Option<libc::rlimit>`; `rustty_termio::command.rs:463` already calls `state.rlimits.restore()` (a no-op today). Rebind the seam to the real type and make restore live.
 
 **Files:**
+
 - Modify: `crates/rustty-global/Cargo.toml` (add `libc`)
 - Modify: `crates/rustty-global/src/lib.rs` (`seam::Rlimit`, `ResourceLimits::restore`)
 - Test: in-crate `#[cfg(test)]` in `crates/rustty-global/src/lib.rs`
 
 **Interfaces:**
+
 - Produces: `rustty_global::seam::Rlimit = libc::rlimit` on unix (`()` elsewhere); `ResourceLimits::restore(&self)` performs `setrlimit(RLIMIT_NOFILE)`. Task 7 stores `rustty_os::fixMaxFiles()`'s return in `ResourceLimits`.
 
 - [ ] **Step 1: Add the dependency**
@@ -714,11 +722,13 @@ git commit -m "rustty-global: rlimit seam rebind + live restore (WS4 T4)"
 ### Task 5: `init_signals` — SIGPIPE ignore in rustty-apprt
 
 **Files:**
+
 - Modify: `crates/rustty-apprt/Cargo.toml` (add `libc`)
 - Modify: `crates/rustty-apprt/src/lib.rs`
 - Test: extend `bootstrap_tests` in the same file
 
 **Interfaces:**
+
 - Produces: `rustty-apprt`-private `fn init_signals()`. Task 7 calls it inside `init_with_action`.
 
 - [ ] **Step 1: Add the dependency**
@@ -804,9 +814,11 @@ git commit -m "rustty-apprt: initSignals SIGPIPE ignore (WS4 T5)"
 ### Task 6: Expose `rustty_renderer::shadertoy::init` (glslang init)
 
 **Files:**
+
 - Modify: `crates/rustty-renderer/src/shadertoy.rs` (near the private `glslang_init`, ~line 721)
 
 **Interfaces:**
+
 - Consumes: the existing private `fn glslang_init() -> Result<(), Error>` and `pub enum Error` (`shadertoy.rs:119`, has `GlslangInitFailed`).
 - Produces: `rustty_renderer::shadertoy::init() -> Result<(), rustty_renderer::shadertoy::Error>`. Task 7 calls it.
 
@@ -859,11 +871,13 @@ git commit -m "rustty-renderer: pub shadertoy::init (glslang) for state.init (WS
 ### Task 7: The full `rustty_apprt::init_with_action` — the BREAK #1 body
 
 **Files:**
+
 - Modify: `crates/rustty-apprt/Cargo.toml`
 - Modify: `crates/rustty-apprt/src/lib.rs` (replace `InitError` + `init`)
 - Test: extend `bootstrap_tests`
 
 **Interfaces:**
+
 - Consumes: Tasks 1–6 (`compute_logging`, `init_signals`, `rustty_os::macos` sinks via `rustty_core::logging`, `seam::Rlimit`, `shadertoy::init`); `rustty_crash::init/deinit` (`init() -> Result<(), rustty_crash::sentry::InitError>`); `rustty_os::{ensureLocale, fixMaxFiles, resourcesDir}`, `rustty_os::env::getenv` (`Result<Option<GetEnvResult>, Infallible>`, `.value: String`); `rustty_os::i18n::init(&str)`; `rustty_oniguruma::testing::ensure_init` (the process-global OnceLock guard over `onig_initialize(&[utf8])` — EXACTLY the encoding set the reference app init passes; using the guard instead of raw `init::init` is the ratified fix for the parallel-test init race); `rustty_config::theme::set_resources_dir`; `rustty_build_config::{VERSION_STRING, mode_string, app_runtime, font_backend, renderer}`; `harfbuzz_sys::hb_version`, `fontconfig_sys::FcGetVersion`.
 - Produces: `pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, InitError>`; `pub fn init() -> Result<(), InitError>` (compat wrapper, `init_with_action(false)` — the ~12 existing gtk-test callers and the smoke KAT keep compiling unchanged); `pub enum InitError { ResourcesDir(..), Locale(std::io::Error), Glslang(..), Oniguruma(..) }` (all variants `Debug`). Tasks 8 and 10 consume `init_with_action`.
 
@@ -1127,9 +1141,11 @@ git commit -m "rustty-apprt: the full state.init body — BREAK #1 wired (WS4 T7
 ### Task 8: `rustty` bin wiring — full init + log_fn delegation
 
 **Files:**
+
 - Modify: `crates/rustty/src/main_rustty.rs`
 
 **Interfaces:**
+
 - Consumes: `rustty_apprt::init_with_action` (Task 7); `rustty_core::logging::{log_with, Level}` (Task 3); the bin already deps rustty-core (Cargo.toml:42).
 - Produces: the exe path runs the complete bootstrap; `log_fn` gains the macOS unified-logging sink for free.
 
@@ -1203,16 +1219,19 @@ Remove the now-unused `use std::io::Write;` only if the compiler flags it (the u
 cargo build -p rustty
 ./target/debug/rustty +version && echo "exit=$?"
 ```
+
 Expected: version output, `exit=0`, NO info logs (action ⇒ stderr off).
 
 ```bash
 RUSTTY_LOG=stderr ./target/debug/rustty +version 2>&1 | head -20
 ```
+
 Expected: `info: rustty version=...`, `info: rustty build optimize=...`, `info: runtime=...`, `info: font_backend=...`, `info: renderer=...`, `info: libxev default backend=kqueue` lines on stderr, then the version output.
 
 ```bash
 ./target/debug/rustty +bogus; echo "exit=$?"
 ```
+
 Expected: the "unknown CLI action" error text, `exit=1`.
 
 Run: `cargo test -p rustty`
@@ -1230,11 +1249,13 @@ git commit -m "rustty: bin runs the full state.init + shared logFn (WS4 T8)"
 ### Task 9: rustty-apprt-c — argv storage + `detect_from_argv`
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c/Cargo.toml`
 - Modify: `crates/rustty-apprt-c/src/lib.rs`
 - Test: in-crate `tests` module in the same file
 
 **Interfaces:**
+
 - Consumes: `rustty_cli::action::{detect_iter, ArgsIter, DetectError}`; `rustty_cli::rustty::Action` (`Copy`, `Debug`, impls `rustty_cli::action::Action` incl. `detect_special_case`).
 - Produces: apprt-c-private `static ARGV: OnceLock<Vec<Vec<u8>>>`, `static CLI_ACTION: OnceLock<Option<rustty_cli::rustty::Action>>`, `fn detect_from_argv(argv: &[Vec<u8>]) -> Result<Option<rustty_cli::rustty::Action>, rustty_cli::action::DetectError>`. Tasks 10–11 consume all three.
 
@@ -1367,10 +1388,12 @@ git commit -m "rustty-apprt-c: argv store + detectArgs over stored argv (WS4 T9)
 ### Task 10: `rustty_init` — the full C-path bootstrap
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c/src/lib.rs` (`rustty_init` body + doc, lines ~168–223)
 - Test: extend the in-crate `tests` module
 
 **Interfaces:**
+
 - Consumes: Task 9 statics + `detect_from_argv`; `rustty_apprt::init_with_action` (Task 7); `rustty_core::logging::{log, Level}` (Task 3).
 - Produces: `rustty_init` detects + stashes the action and runs the full bootstrap. Signature is UNCHANGED (`extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_int`) — no header/A4 impact. Task 11 relies on `CLI_ACTION` being stashed iff `global_state().action.is_some()`.
 
@@ -1490,10 +1513,12 @@ git commit -m "rustty-apprt-c: rustty_init runs the full state.init (WS4 T10)"
 ### Task 11: `rustty_cli_try_action` — the non-null (run + exit) arm
 
 **Files:**
+
 - Modify: `crates/rustty-apprt-c/src/lib.rs` (`rustty_cli_try_action`, lines ~225–298)
 - Test: subprocess KAT in the in-crate `tests` module
 
 **Interfaces:**
+
 - Consumes: `CLI_ACTION` (Task 9/10); `rustty_cli::rustty::Action::run(self) -> Result<u8, rustty_cli::rustty::Error>`; `rustty_core::logging`.
 - Produces: the complete `ghostty_cli_try_action` semantics through the C ABI. Signature unchanged.
 
@@ -1622,6 +1647,7 @@ cargo clippy --workspace --all-targets
 cargo fmt --all -- --check
 bash .port/phase-2/check_acyclic.sh 2>/dev/null || bash scripts/check_acyclic.sh 2>/dev/null || true  # run the acyclicity gate from wherever it lives (locate with: git ls-files | grep check_acyclic)
 ```
+
 Expected: all green.
 
 - [ ] **Step 2: Rebuild the app**
@@ -1629,6 +1655,7 @@ Expected: all green.
 ```bash
 bash macos/build-rustty.sh
 ```
+
 Expected: `BUILD SUCCEEDED`.
 
 - [ ] **Step 3: RUSTTY_LOG smoke on the app**
@@ -1638,11 +1665,13 @@ APP=$(ls -d ~/Library/Developer/Xcode/DerivedData/Rustty-*/Build/Products/Debug/
 RUSTTY_LOG=stderr "$APP/Contents/MacOS/Rustty" 2>&1 | head -12 &
 sleep 8; kill %1 2>/dev/null
 ```
+
 Expected: the init info lines (`info: rustty version=...`, `info: renderer=...`, etc.) appear on stderr AND the terminal window opens and renders (visually confirm a shell prompt, then it is killed). Also verify unified logging:
 
 ```bash
 log show --last 2m --predicate 'subsystem=="io.airely.rustty"' | head -8
 ```
+
 Expected: the same init messages in the unified log (the `macos` sink defaults ON).
 
 - [ ] **Step 4: CLI action through the C ABI in the real app**
@@ -1650,11 +1679,13 @@ Expected: the same init messages in the unified log (the `macos` sink defaults O
 ```bash
 "$APP/Contents/MacOS/Rustty" +version; echo "exit=$?"
 ```
+
 Expected: the version output on stdout, `exit=0`, NO window (the Swift host's `rustty_cli_try_action()` call at `main.swift:31` exits before app launch).
 
 ```bash
 "$APP/Contents/MacOS/Rustty" +bogus; echo "exit=$?"
 ```
+
 Expected: `exit=1` (init fails on InvalidAction; the Swift host logs `rustty_init failed` and exits — `main.swift:8-10`).
 
 - [ ] **Step 5: Commit any fixes**
@@ -1670,6 +1701,7 @@ git add -A && git commit -m "rustty-apprt-c: WS4 end-to-end fixes (WS4 T12)"
 ### Task 13: Both-platform gate, ledger strikes, merge
 
 **Files:**
+
 - Modify: `.port/phase-2/DEFERRALS.md` (lines ~1894–1908 "rustty-apprt embedded E0" items 1–2; line ~3077 note; the ~4502–4526 `rustty_cli_try_action` entry)
 - Modify: `.port/phase-2/INTEGRATION_PARITY.md` (§3.5 item 5, ~line 200)
 
@@ -1679,12 +1711,14 @@ git add -A && git commit -m "rustty-apprt-c: WS4 end-to-end fixes (WS4 T12)"
 git push -u origin ws4-app-bootstrap
 ssh rvm 'cd ~/projects/rustty && git fetch && git checkout ws4-app-bootstrap && cargo build --workspace && cargo test -p rustty-global -p rustty-apprt -p rustty-apprt-c'
 ```
+
 Expected: green. (Linux notes: `Logging::default().macos == false`; the os_log module is macOS-gated; the harfbuzz/fontconfig log lines are LIVE there — `FontconfigFreetype` has both; the gtk tests keep passing on the `init()` wrapper.) Fix any breakage on the branch and re-run BOTH platforms.
 
 - [ ] **Step 2: Ledger strikes**
 
 In `.port/phase-2/DEFERRALS.md`:
-1. E0 entry item 1 ("The full `state.init()` port", ~line 1894): rewrite to `**LANDED (WS4, 2026-07-23):** the full body is `rustty_apprt::init_with_action` (logging config via RUSTTY_LOG, initSignals SIGPIPE, rlimits, crash.init, ensureLocale, glslang.init, oni.init, i18n.init, the init info-log lines); detection stays above apprt (ADV-FIX 2). Remaining under OTHER entries: tree-wide `std.log.scoped` facade routing (the per-crate scoped-log sites — pre-existing, not created here).`
+
+1. E0 entry item 1 ("The full `state.init()` port", ~line 1894): rewrite to `**LANDED (WS4, 2026-07-23):** the full body is `rustty_apprt::init_with_action`(logging config via RUSTTY_LOG, initSignals SIGPIPE, rlimits, crash.init, ensureLocale, glslang.init, oni.init, i18n.init, the init info-log lines); detection stays above apprt (ADV-FIX 2). Remaining under OTHER entries: tree-wide`std.log.scoped` facade routing (the per-crate scoped-log sites — pre-existing, not created here).`
 2. E0 entry item 2 (argv storage): mark LANDED (WS4) — `rustty_init` stores argv in the apprt-c `ARGV` OnceLock and detection consumes it.
 3. The `rustty_cli_try_action` entry (~4502): mark the non-null path LANDED (WS4) with the stash-split note (presence in `STATE.action: Option<()>`, value in the apprt-c `CLI_ACTION` stash — the acyclic realization of the reference field; the entry's "bind Action in rustty-core" hypothesis was impossible: rustty-cli deps rustty-core).
 4. Line ~3077 (`ensureLocale`/`glslang.init`/`oni.init`/`i18n.init` "stay BREAK #1 deferred") and the ~2961 `theme::set_resources_dir` note: update to reflect the WS4 landing.

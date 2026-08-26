@@ -264,10 +264,8 @@ fn rgba_src_over(dst: &mut [u8], src: &[u8]) {
     assert!(dst.len() == src.len());
     assert!(dst.len() % 4 == 0);
     for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
-        let out = composite_nonpremul_nonpremul_axxx(
-            [d[0], d[1], d[2], d[3]],
-            [s[0], s[1], s[2], s[3]],
-        );
+        let out =
+            composite_nonpremul_nonpremul_axxx([d[0], d[1], d[2], d[3]], [s[0], s[1], s[2], s[3]]);
         d.copy_from_slice(&out);
     }
 }

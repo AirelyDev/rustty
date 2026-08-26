@@ -8,6 +8,7 @@
 
 > **EXECUTION CORRECTIONS (recorded WS8 T12/T13, evidence-based — see the commit
 > bodies):**
+>
 > 1. The Tech Stack line below says "the `libc` crate is deliberately NOT a
 >    dependency". `libc` IS already a `rustty-vt` dependency (for the POSIX
 >    shared-memory medium in `kitty/graphics_image.rs`, and dev-only in the bench
@@ -119,10 +120,12 @@ New parser, structurally identical to the already-ported `kitty_clipboard_protoc
 ### Task 2: `kitty_dnd_protocol` parser module (`91c87e2cf`, cleaned up per `dd6c09bcf`/`a6132c18b`/`c488ccda6`)
 
 **Files:**
+
 - Create: `crates/rustty-vt/src/osc/parsers/kitty_dnd_protocol.rs`
 - Test: same file, `#[cfg(test)] mod tests`
 
 **Interfaces:**
+
 - Consumes: `crate::osc::{Command, Parser, State, Terminator}` (same imports as `kitty_clipboard_protocol.rs:19`).
 - Produces: `pub struct OSC { metadata: Vec<u8>, payload: Option<Vec<u8>>, terminator: Terminator }`, `pub enum EventType`, `pub enum Option_`, `pub enum OptionValue`, `pub fn parse<'a>(parser: &'a mut Parser, terminator_ch: Option<u8>) -> Option<&'a mut Command>` — consumed by Task 3 (`osc/mod.rs` dispatch) and Task 4 (`stream.rs`).
 
@@ -688,9 +691,11 @@ Expected: compile errors pointing at `Command::KittyDndProtocol` (unresolved) in
 ### Task 3: Wire `Command::KittyDndProtocol` + `State::S72` into `osc/mod.rs`
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/osc/mod.rs`
 
 **Interfaces:**
+
 - Consumes: `crate::osc::parsers::kitty_dnd_protocol::{OSC, parse}` (Task 2).
 - Produces: `Command::KittyDndProtocol(KittyDndProtocol)` variant, `CommandKey::KittyDndProtocol`, `State::S72` — consumed by Task 4 (`stream.rs`).
 
@@ -803,9 +808,11 @@ git commit -m "osc: port kitty drag-and-drop protocol OSC 72 parser (BL-7, WS8 T
 ### Task 4: Wire `Command::KittyDndProtocol` into the `stream.rs` unimplemented-OSC dispatch
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/stream.rs:2577-2590`
 
 **Interfaces:**
+
 - Consumes: `osc::Command::KittyDndProtocol` (Task 3).
 
 - [ ] **Step 1: Write the failing test** — assert the dispatch match is exhaustive by constructing a `Command::KittyDndProtocol` and feeding it through whatever harness the existing `KittyClipboardProtocol` no-op case is tested with. Find that harness first:
@@ -885,10 +892,12 @@ and `search/screen.rs` — but **not** in `terminal.rs`. This task locates the
 house idiom and lands the `terminal.rs` instance so Tasks 6–7 can arm it.
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/terminal.rs` (new `#[cfg(test)]` tripwire block,
   placed immediately before `mod tests` at `terminal.rs:4964`)
 
 **Interfaces:**
+
 - Consumes: `rustty_util::tripwire::{Module, module, ResetMode, UntrippedError}`,
   `crate::pagelist::OutOfMemory`.
 - Produces (used by Task 7):
@@ -897,7 +906,7 @@ house idiom and lands the `terminal.rs` instance so Tasks 6–7 can arm it.
   - `#[cfg(test)] fn set_string_tw_check(point: SetStringFp) -> Result<(), OutOfMemory>`
 
 - [ ] **Step 1: Read the three existing instances of the house idiom** so the new
-  one matches them character-for-character in shape:
+      one matches them character-for-character in shape:
 
 ```bash
 sed -n '330,350p' /Users/gael/projects/rustty/crates/rustty-vt/src/tabstops.rs
@@ -914,8 +923,8 @@ There is **no** failing-allocator harness in this crate — the tripwire IS the
 convention. Record that conclusion; do not introduce a second mechanism.
 
 - [ ] **Step 2: Write the failing test** — append to `terminal.rs`'s
-  `mod tests` (this is a self-test of the new seam; it fails to compile until
-  Step 3 lands the module):
+      `mod tests` (this is a self-test of the new seam; it fails to compile until
+      Step 3 lands the module):
 
 ```rust
     // Self-test for the terminal.rs tripwire seam introduced for the
@@ -947,7 +956,7 @@ Expected: COMPILE FAIL — `cannot find value SET_STRING_TW in this scope`,
 `cannot find type SetStringFp`, `cannot find function set_string_tw_check`.
 
 - [ ] **Step 4: Add the tripwire module** to `crates/rustty-vt/src/terminal.rs`,
-  immediately above `#[cfg(test)] mod tests {` (currently line 4964):
+      immediately above `#[cfg(test)] mod tests {` (currently line 4964):
 
 ```rust
 // PORT NOTE: upstream's `setTitle`/`setPwd` allocation-failure tests
@@ -1002,6 +1011,7 @@ git commit -m "terminal: add setString tripwire fail-point seam for OOM tests (B
 ### Task 6: `screen.rs` hyperlink fixes — dupe-before-end + wrapping implicit IDs (`cfce1cd56`, `04810273a`)
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/screen.rs:3040-3141` (`start_hyperlink`,
   `start_hyperlink_once`), plus a new `#[cfg(test)]` tripwire block next to the
   existing `SELECTION_STRING_TW` block (`screen.rs:460-481`)
@@ -1009,6 +1019,7 @@ git commit -m "terminal: add setString tripwire fail-point seam for OOM tests (B
   `screen_hyperlink_start_end` (`screen.rs:11959`) and `screen_hyperlink_reuse`
 
 **Interfaces:**
+
 - Consumes: `rustty_util::tripwire` (idiom confirmed in Task 5),
   `crate::screen::StartHyperlinkOnceError` (`screen.rs:537`),
   `crate::hyperlink::{Hyperlink, HyperlinkId}`, `crate::size::OffsetInt`.
@@ -1019,7 +1030,7 @@ git commit -m "terminal: add setString tripwire fail-point seam for OOM tests (B
 **PORT FINDING (record in the commit message, verbatim):** `cfce1cd56`'s
 use-after-free is **not reachable in rustty as written**, because
 `Screen::start_hyperlink` (`screen.rs:3049-3051`) materialises `uri.to_vec()` /
-`HyperlinkId::Explicit(id.to_vec())` into an OWNED `Hyperlink` *before*
+`HyperlinkId::Explicit(id.to_vec())` into an OWNED `Hyperlink` _before_
 `start_hyperlink_once` is ever called, so the `source: Hyperlink` value that
 `start_hyperlink_once` receives never borrows the cursor's hyperlink. The
 reorder below is therefore an **R1 fidelity port + regression lock**, not a live
@@ -1036,7 +1047,7 @@ git -C /Users/gael/projects/ghostty show 04810273a
 ```
 
 - [ ] **Step 2: Write the three failing tests** in `screen.rs`'s `mod tests`,
-  immediately after `screen_hyperlink_start_end`:
+      immediately after `screen_hyperlink_start_end`:
 
 ```rust
     // test "Screen: hyperlink accepts its current values"
@@ -1133,7 +1144,7 @@ After Step 4's tripwire block lands but before Step 5/6,
 `attempt to add with overflow` at `screen.rs:3055`.
 
 - [ ] **Step 4: Add the `start_hyperlink` tripwire block** to `screen.rs`,
-  immediately after the existing `selection_string_tw_check` helper (line 481):
+      immediately after the existing `selection_string_tw_check` helper (line 481):
 
 ```rust
 // PORT NOTE: `04810273a`'s rollback test uses `std.testing.FailingAllocator` on
@@ -1162,8 +1173,8 @@ fn start_hyperlink_tw_check(point: StartHyperlinkFp) -> Result<(), OutOfMemory> 
 ```
 
 - [ ] **Step 5: Apply the `cfce1cd56` reorder** in `start_hyperlink_once`
-  (`screen.rs:3107-3125`) — delete the leading `self.end_hyperlink();` and move
-  it to after the dupe, and add the tripwire check at the allocation:
+      (`screen.rs:3107-3125`) — delete the leading `self.end_hyperlink();` and move
+      it to after the dupe, and add the tripwire check at the allocation:
 
 ```rust
     fn start_hyperlink_once(
@@ -1194,7 +1205,7 @@ fn start_hyperlink_tw_check(point: StartHyperlinkFp) -> Result<(), OutOfMemory> 
 the `Insert` error path, and the `Save it all` block — is unchanged.)
 
 - [ ] **Step 6: Apply the `04810273a` wrapping arithmetic** at the three
-  `hyperlink_implicit_id` sites in `start_hyperlink`:
+      `hyperlink_implicit_id` sites in `start_hyperlink`:
 
 `screen.rs:3055`:
 
@@ -1242,11 +1253,13 @@ destination — reachable through the vt-c raw-pointer FFI seam when a caller
 re-passes `get_pwd()`/`get_title()`'s return.
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/terminal.rs:4529-4540` (`set_pwd`), `:4556-4567`
   (`set_title`)
 - Test: `crates/rustty-vt/src/terminal.rs`, `mod tests`
 
 **Interfaces:**
+
 - Consumes: `SetStringFp`, `SET_STRING_TW`, `set_string_tw_check` (Task 5);
   `Terminal::init(Global, opts(cols, rows))` / `t.deinit(Global)` /
   `t.get_pwd()` / `t.get_title()` (all existing).
@@ -1254,6 +1267,7 @@ re-passes `get_pwd()`/`get_title()`'s return.
   `pub fn set_pwd(&mut self, pwd: &[u8]) -> Result<(), OutOfMemory>`.
 
 **CRITICAL translation notes (do not deviate):**
+
 - `std.mem.copyForwards` → **`core::ptr::copy` (memmove)**. NEVER
   `copy_from_slice` or `extend_from_slice` — both are `memcpy` and are UB on
   overlapping ranges. That IS the bug being fixed.
@@ -1435,7 +1449,7 @@ protected, which Step 4 fixes.
 ```
 
 - [ ] **Step 5: Rewrite `set_title`** (`terminal.rs:4555-4567`) — the identical
-  shape over `self.title`:
+      shape over `self.title`:
 
 ```rust
     /// Set the title for the terminal, as set by escape sequences (e.g. OSC 0/2).
@@ -1491,7 +1505,7 @@ cd /Users/gael/projects/rustty && cargo test -p rustty-vt --lib pwd title 2>&1 |
 Expected: all PASS.
 
 - [ ] **Step 7: Prove the aliasing tests are Stacked-Borrows clean under Miri**
-  (memory: `shaper-hook-sb-clean-interleave` — do NOT hand-reason SB):
+      (memory: `shaper-hook-sb-clean-interleave` — do NOT hand-reason SB):
 
 ```bash
 cd /Users/gael/projects/rustty && .port/tools/miri-run.sh -p rustty-vt --lib \
@@ -1542,11 +1556,13 @@ CURRENT tracked selection back in shares those pins with the replacement, so the
 replacement is left pointing at freed pool entries.
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/screen.rs:3298-3310`
 - Test: `crates/rustty-vt/src/screen.rs`, `mod tests`, next to
   `screen_select_replaces_existing_pins` (`screen.rs:~11924`)
 
 **Interfaces:**
+
 - Consumes: `crate::selection::{Selection, Bounds, Order}` (`Bounds::Tracked`'s
   fields are already `*mut Pin`, `selection.rs:71`), `PageList::untrack_pin`
   (`pagelist/pin.rs:85`, takes `*mut Pin`), `Selection::order(&Screen) -> Order`.
@@ -1560,7 +1576,7 @@ git -C /Users/gael/projects/ghostty show 0c299000f
 ```
 
 - [ ] **Step 2: Write the failing test** in `screen.rs`'s `mod tests`,
-  immediately after `screen_select_replaces_existing_pins`:
+      immediately after `screen_select_replaces_existing_pins`:
 
 ```rust
     // test "Screen: reselecting tracked selection preserves its pins"
@@ -1601,7 +1617,7 @@ entry was released (in a debug build this surfaces as a `pin_is_valid` /
 tracked-pin assertion, or as a wrong `Order`).
 
 - [ ] **Step 4: Apply the fix** — replace the `// Untrack prior selection`
-  block at `screen.rs:3304-3307`:
+      block at `screen.rs:3304-3307`:
 
 ```rust
         // Untrack prior selection pins that aren't also owned by the
@@ -1654,17 +1670,19 @@ git commit -m "screen: preserve aliased selection pins in select() (BL-3 0c29900
 ### Task 9: `selection.rs` page-width clamps — mirrored corners + contained rows (`b6f34be44`, `a9f5b7eba`)
 
 Both fixes are the same class: a column taken from one page is applied to a pin
-on a *different*, possibly narrower page during incomplete reflow, producing an
+on a _different_, possibly narrower page during incomplete reflow, producing an
 out-of-bounds pin that panics when resolved. Both live in `selection.rs` and
 share the mixed-width-page test harness, so they are one task.
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/selection.rs:177-210` (`top_left`,
   `bottom_right`), `:367-447` (`contained_row_cached`)
 - Test: `crates/rustty-vt/src/selection.rs`, `mod tests` (helpers
   `screen_init(cols, rows, max_scrollback)` at `:629`, `pin_screen` at `:643`)
 
 **Interfaces:**
+
 - Consumes: `Pin { node: *mut Node, x: size::CellCountInt, y: u32, garbage: bool }`,
   page width via `unsafe { (*pin.node).data.size.cols }` (there is **no**
   `Node::cols()` helper in this port — the reference `node.cols()` maps to that
@@ -1818,7 +1836,7 @@ Expected: FAIL — an out-of-bounds panic inside `row_and_cell()` (x = 3 on a
 ```
 
 - [ ] **Step 5: Clamp `contained_row_cached`** — `selection.rs:367-447`. Add
-  the unused-parameter binding at the top and replace the four column sites:
+      the unused-parameter binding at the top and replace the four column sites:
 
 ```rust
     ) -> Option<Selection> {
@@ -1888,11 +1906,12 @@ git commit -m "selection: clamp mirrored corners and contained rows to page widt
 ### Task 10: `screen.rs` page-width clamps — cloned selections + line selection (`607160657`, `fa8cae88b`)
 
 Same class as Task 9, on the `screen.rs` side: `Screen::clone`'s selection
-fallback pins use the *desired* screen width (`pages.cols`) or an unclamped
+fallback pins use the _desired_ screen width (`pages.cols`) or an unclamped
 rectangle column, and `Screen::select_line` assigns the previous pin a column
 taken from the NEXT page.
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/screen.rs:971-999` (`clone` selection fallback
   pins), `:3531` (`select_line`'s `'end_pin` block)
 - Test: `crates/rustty-vt/src/screen.rs`, `mod tests`, next to
@@ -1900,6 +1919,7 @@ taken from the NEXT page.
   `screen_select_line_semantic_*` tests
 
 **Interfaces:**
+
 - Consumes: `PageList::track_pin(Pin) -> Result<*mut Pin, OutOfMemory>`,
   `PageList::split(Pin)`, `PageList::pause_integrity_checks(bool)`
   (`pagelist/mod.rs:1103`), `Screen::cursor_set_semantic_content`,
@@ -2079,7 +2099,7 @@ clone x assertions, and an out-of-bounds pin panic / wrong end pin for
 ```
 
 - [ ] **Step 5: Fix `select_line`'s destination width** — `screen.rs:3531`,
-  inside the `'end_pin` block. `p.node` becomes `prev.node`:
+      inside the `'end_pin` block. `p.node` becomes `prev.node`:
 
 ```rust
                     if start_offset == 0 && cells[0].semantic_content() != v {
@@ -2115,11 +2135,13 @@ git commit -m "screen: clamp cloned selections and line selection to page width 
 ### Task 11: `selection_gesture.rs` — bound drag geometry (`08e376f23`)
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/selection_gesture.rs:799-843` (`drag_selection`)
 - Test: `crates/rustty-vt/src/selection_gesture.rs`, `mod tests` (helpers
   `test_press` at `:1101`, `test_drag` at `:1124`, `test_pin` at `:1164`)
 
 **Interfaces:**
+
 - Consumes: `Geometry { columns: u32, cell_width: u32, padding_left: u32, screen_height: u32 }`
   (`selection_gesture.rs:723`), `SelectionGesture::press(&mut self, &mut Terminal, Press<'_>) -> Result<Option<Selection>, OutOfMemory>`
   (`:283`), `SelectionGesture::drag(&mut self, &mut Terminal, Drag<'_>) -> Option<Selection>` (`:325`).
@@ -2146,7 +2168,7 @@ git -C /Users/gael/projects/ghostty show 08e376f23
 ```
 
 - [ ] **Step 2: Write the three failing tests** in
-  `selection_gesture.rs`'s `mod tests`:
+      `selection_gesture.rs`'s `mod tests`:
 
 ```rust
     // test "SelectionGesture drag clamps unrepresentable positions"
@@ -2298,6 +2320,7 @@ sized, so they can be decommitted while they sit in the free list.
 ### Task 12: `decommit_pool_item` / `recommit_pool_item` + pool wiring
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/pagelist/mod.rs` — new module-private
   `decommit_pool_item`/`recommit_pool_item` + per-OS `madvise` bindings, placed
   immediately after the `destroy_node_ext` function (currently ending at
@@ -2307,6 +2330,7 @@ sized, so they can be decommitted while they sit in the free list.
   module — whichever holds the existing pool tests; located in Step 2)
 
 **Interfaces:**
+
 - Consumes: `Self::page_memory(page) -> (*mut u8, usize)` and
   `Self::page_memory_len(node) -> usize` (existing private helpers in
   `pagelist/mod.rs`), `std_size() -> usize`, `pool.pages.create() -> Result<NonNull<u8>, _>`,
@@ -2314,7 +2338,7 @@ sized, so they can be decommitted while they sit in the free list.
 - Produces:
   - `fn decommit_pool_item(item: *mut u8, item_size: usize, dirty_len: usize)`
   - `fn recommit_pool_item(item: *mut u8, item_size: usize)`
-  Both module-private to `pagelist/mod.rs`; no other task consumes them.
+    Both module-private to `pagelist/mod.rs`; no other task consumes them.
 
 **PLATFORM PRIMITIVE — MANDATORY CONVENTION.** This crate deliberately avoids
 the `libc` crate and hand-rolls its syscall bindings: see
@@ -2332,7 +2356,7 @@ git -C /Users/gael/projects/ghostty show 896aca499
 ```
 
 - [ ] **Step 2: Locate the existing pool-reuse test and the `#[cfg(test)]`
-  backing-allocator split**
+      backing-allocator split**
 
 ```bash
 grep -n "PageBackingAlloc\|page_backing_alloc\|TrackingAllocator" /Users/gael/projects/rustty/crates/rustty-vt/src/pagelist/mod.rs | head
@@ -2345,7 +2369,7 @@ Expected: under `cfg(test)` the pool's backing allocator is a
 upstream's `if (comptime builtin.is_test)` guard.
 
 - [ ] **Step 3: Write the failing test** — the zero-invariant is the contract
-  the decommit must preserve. Add to the pagelist test module:
+      the decommit must preserve. Add to the pagelist test module:
 
 ```rust
     // A pooled page buffer returning to the free list must read back as all
@@ -2371,7 +2395,7 @@ cd /Users/gael/projects/rustty && cargo test -p rustty-vt --lib pagelist_decommi
 Expected: COMPILE FAIL — `cannot find function decommit_pool_item in module super`.
 
 - [ ] **Step 5: Add the primitives** to `crates/rustty-vt/src/pagelist/mod.rs`,
-  immediately after `destroy_node_ext`:
+      immediately after `destroy_node_ext`:
 
 ```rust
 /// Zero a pool item buffer that is about to be returned to the pool free list
@@ -2484,7 +2508,7 @@ const MADV_FREE_REUSE: i32 = 8;
 ```
 
 - [ ] **Step 6: Verify the constants against the platform headers** (do not
-  trust the literals above without this check):
+      trust the literals above without this check):
 
 ```bash
 grep -n "MADV_FREE_REUSABLE\|MADV_FREE_REUSE\|define MADV_FREE" \
@@ -2504,7 +2528,7 @@ cd /Users/gael/projects/rustty && cargo test -p rustty-vt --lib pagelist_decommi
 Expected: 1 passed.
 
 - [ ] **Step 8: Wire the decommit site** — `pagelist/mod.rs:1497-1506`, inside
-  `destroy_node_ext`, replacing the plain `write_bytes` + `destroy` pair:
+      `destroy_node_ext`, replacing the plain `write_bytes` + `destroy` pair:
 
 ```rust
         if Self::page_memory_len(node) <= std_size() {
@@ -2529,7 +2553,7 @@ Expected: 1 passed.
 ```
 
 - [ ] **Step 9: Wire the recommit site** — `pagelist/mod.rs:1403-1412`, inside
-  `create_page_ext`'s pooled branch:
+      `create_page_ext`'s pooled branch:
 
 ```rust
         let page_buf: NonNull<u8> = if pooled {
@@ -2549,10 +2573,10 @@ Expected: 1 passed.
 ```
 
 - [ ] **Step 10: Wire the second recommit site in `init_pages`** — the pooled
-  branch guarded by `init_pages_tw_check(InitPagesFp::PageBufStd)` at
-  `pagelist/mod.rs:993`. Locate the `pool.pages.create()` call directly beneath
-  it and apply the identical `recommit_pool_item(b.as_ptr(), std_size())` on the
-  success arm:
+      branch guarded by `init_pages_tw_check(InitPagesFp::PageBufStd)` at
+      `pagelist/mod.rs:993`. Locate the `pool.pages.create()` call directly beneath
+      it and apply the identical `recommit_pool_item(b.as_ptr(), std_size())` on the
+      success arm:
 
 ```bash
 sed -n '990,1010p' /Users/gael/projects/rustty/crates/rustty-vt/src/pagelist/mod.rs
@@ -2593,35 +2617,37 @@ Note that the `#[cfg(test)]` branch of `decommit_pool_item` is what runs under
 non-test `madvise` branches are excepted.
 
 **Files:**
+
 - Modify: `.port/phase-2/MIRI_EXCEPTIONS.md` (new section)
 - Modify: `.port/phase-2/VT_MIRI_SWEEP.md` (cross-reference row)
 - Create: `/private/tmp/.../ws8-rss-probe.rs` is NOT wanted — the probe runs as a
   `#[ignore]`d test inside `crates/rustty-vt/src/pagelist/tests.rs`
 
 **Interfaces:**
+
 - Consumes: `PageList` public API (`init`, `grow`, `erase`/scrollback clear,
   `deinit`) — the exact method names are confirmed in Step 3.
 - Produces: an `#[ignore]`d test
   `pagelist_scrollback_clear_returns_rss_to_the_os` used only as a manual probe.
 
 - [ ] **Step 1: Add the Miri exception entry** to
-  `.port/phase-2/MIRI_EXCEPTIONS.md`, as a new top-level section after the
-  existing "The exception list" section:
+      `.port/phase-2/MIRI_EXCEPTIONS.md`, as a new top-level section after the
+      existing "The exception list" section:
 
 ```markdown
 ## Category 2 — raw syscall memory management (outside Miri's model)
 
 Miri models Rust's abstract machine; it does not model `mmap`/`munmap`/`madvise`
 on OS-backed pages. Code that manages its own mappings therefore cannot be run
-under Miri at all — this is a *model* limitation, not a soundness gap, and it is
+under Miri at all — this is a _model_ limitation, not a soundness gap, and it is
 NOT a regression to chase.
 
-| Site | Syscall | Miri coverage | Complement |
-|---|---|---|---|
-| `crates/rustty-vt/src/page.rs` `Backing::alloc`/`Backing::free` (~250-313) | `mmap`/`munmap` | none (pre-existing; no `.port/phase-2/mirihar-*` touches `page.rs` or `pagelist`) | native + ASan over all 210 PageList tests; page tracking allocator asserts no leaks |
+| Site                                                                                                            | Syscall                                                                                            | Miri coverage                                                                                                                                                                                            | Complement                                                                                                                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `crates/rustty-vt/src/page.rs` `Backing::alloc`/`Backing::free` (~250-313)                                      | `mmap`/`munmap`                                                                                    | none (pre-existing; no `.port/phase-2/mirihar-*` touches `page.rs` or `pagelist`)                                                                                                                        | native + ASan over all 210 PageList tests; page tracking allocator asserts no leaks                                                                                                                                            |
 | `crates/rustty-vt/src/pagelist/mod.rs` `decommit_pool_item`/`recommit_pool_item` (WS8 BL-2, oracle `896aca499`) | `madvise` (`MADV_DONTNEED` on Linux; `MADV_FREE_REUSABLE`/`MADV_FREE_REUSE`/`MADV_FREE` on Darwin) | none — the `madvise` arms are `#[cfg(not(test))]`, so Miri and `cargo test` both execute the plain-memset `#[cfg(test)]` arm instead, which IS Miri-provable and IS what upholds the pool zero-invariant | native + ASan; the zero-invariant unit test `pagelist_decommit_pool_item_zeroes_the_dirty_region`; the empirical RSS probe `pagelist_scrollback_clear_returns_rss_to_the_os` (`#[ignore]`, run manually on macOS and on `rvm`) |
 
-Criterion note: the WS8 entry is *stronger* than the `page.rs` precedent, because
+Criterion note: the WS8 entry is _stronger_ than the `page.rs` precedent, because
 the exact code path Miri would need to verify (the zero-invariant) is still run
 under Miri via the `#[cfg(test)]` arm. Only the OS-hint calls — which have no
 observable effect on program semantics, only on RSS — are unverifiable, and those
@@ -2629,7 +2655,7 @@ are covered by the RSS probe.
 ```
 
 - [ ] **Step 2: Cross-reference it** in `.port/phase-2/VT_MIRI_SWEEP.md` — add
-  one row to the summary table near line 15:
+      one row to the summary table near line 15:
 
 ```markdown
 | Raw syscall memory mgmt | 2 sites | `page.rs` mmap/munmap + `pagelist/mod.rs` madvise decommit (WS8 BL-2) → MIRI_EXCEPTIONS.md "Category 2"; the `#[cfg(test)]` arms ARE Miri-run, only the OS hints are excepted |
@@ -2646,7 +2672,7 @@ Use the exact signatures found; the probe below uses `PageList::init` /
 `grow` / the scrollback-erase entry point / `deinit`.
 
 - [ ] **Step 4: Write the RSS probe** as an `#[ignore]`d test in
-  `crates/rustty-vt/src/pagelist/tests.rs`:
+      `crates/rustty-vt/src/pagelist/tests.rs`:
 
 ```rust
     // BL-2 empirical verification (WS8 T13). `madvise` has no observable effect
@@ -2740,7 +2766,7 @@ ssh rvm "cd ~/projects/rustty && git fetch origin && git checkout ws8-upstream-s
 Expected: PASS (this exercises the `MADV_DONTNEED` arm, which macOS does not).
 
 - [ ] **Step 7: Commit** (paste both platforms' printed RSS lines into the
-  commit body as the evidence record):
+      commit body as the evidence record):
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -2762,6 +2788,7 @@ set by scrolling and resizing, which move placements without changing contents.
 ### Task 14: `rustty-vt` core — generation counter, storage/image stamps, mutation-aware delete
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/kitty/graphics_storage.rs` — new
   `GENERATION_COUNTER`/`next_generation`, `ImageStorage.generation` (:54-91),
   `mark_mutated`, `set_limit` (:148), `add_image` (:180), `add_placement` (:233),
@@ -2778,6 +2805,7 @@ set by scrolling and resizing, which move placements without changing contents.
   test modules
 
 **Interfaces:**
+
 - Produces (consumed by Tasks 15 and 16):
   - `pub fn crate::kitty::graphics_storage::next_generation() -> u64`
     (re-exported as `crate::kitty::graphics::next_generation`)
@@ -2802,8 +2830,8 @@ git -C /Users/gael/projects/ghostty show 8fe5913f7
 ```
 
 - [ ] **Step 2: Resolve the 32-bit-atomic decision with a concrete check.**
-  Enumerate every target rustty is built for and test `target_has_atomic="64"`
-  on each:
+      Enumerate every target rustty is built for and test `target_has_atomic="64"`
+      on each:
 
 ```bash
 cd /Users/gael/projects/rustty
@@ -2819,12 +2847,12 @@ and wasm32 reports `target_has_atomic="64"`).
 
 - **If every target reports 1** (the expected outcome): use a plain
   `static GENERATION_COUNTER: AtomicU64` with NO fallback, and record in the
-  module doc comment: *"PORT NOTE (8fe5913f7): upstream's comptime-selected
+  module doc comment: _"PORT NOTE (8fe5913f7): upstream's comptime-selected
   mutex fallback for targets without 64-bit atomics is not needed — every target
   in rustty's matrix (`aarch64-apple-darwin`, `x86_64-apple-darwin`,
   `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
   `wasm32-unknown-unknown`) reports `target_has_atomic = \"64\"`, verified WS8
-  T14. `8fe5913f7` is therefore ported as this note (N/A), not as code."*
+  T14. `8fe5913f7` is therefore ported as this note (N/A), not as code."_
   Mark `8fe5913f7` in MAIN_PARITY.md as **ported (N/A — not applicable to
   rustty's target matrix)**, with the check command in the row.
 - **If ANY target reports 0**: land the fallback in the same commit —
@@ -2854,10 +2882,10 @@ pub fn next_generation() -> u64 {
 }
 ```
 
-  and mark `8fe5913f7` as fully ported.
+and mark `8fe5913f7` as fully ported.
 
 - [ ] **Step 3: Write the failing tests** in `graphics_storage.rs`'s test
-  module (all three are direct ports of `bdc0b6c19`'s test hunk):
+      module (all three are direct ports of `bdc0b6c19`'s test hunk):
 
 ```rust
     // test "storage: generation stamps on image add and replace"
@@ -2955,8 +2983,9 @@ pub fn next_generation() -> u64 {
 ```
 
 Before running, copy the neighbouring tests' exact spellings for `Terminal::init`
-+ `opts`, the `Image` literal, and the placement-construction helper (the
-reference `trackPin(&t, .{ .x = 1, .y = 1 })`):
+
+- `opts`, the `Image` literal, and the placement-construction helper (the
+  reference `trackPin(&t, .{ .x = 1, .y = 1 })`):
 
 ```bash
 grep -n "fn opts(\|ImageStorage::default\|add_placement(\|Location::Pin" \
@@ -2976,7 +3005,7 @@ Expected: COMPILE FAIL — no field `generation` on `ImageStorage`, no field
 `generation` on `Image`.
 
 - [ ] **Step 5: Add the counter and `next_generation`** at the top of
-  `crates/rustty-vt/src/kitty/graphics_storage.rs`, after the existing imports:
+      `crates/rustty-vt/src/kitty/graphics_storage.rs`, after the existing imports:
 
 ```rust
 /// Process-global counter backing all generation stamps (see
@@ -3003,7 +3032,7 @@ pub fn next_generation() -> u64 {
 plus whichever module doc note Step 2 resolved.
 
 - [ ] **Step 6: Add `ImageStorage.generation` + `mark_mutated`.** Field, in the
-  struct at `graphics_storage.rs:54-91`, immediately after `dirty`:
+      struct at `graphics_storage.rs:54-91`, immediately after `dirty`:
 
 ```rust
     /// Dirty is set to true if placements or images change. This is
@@ -3056,7 +3085,7 @@ right after `enabled()` (`:139-142`):
 ```
 
 - [ ] **Step 7: Replace `Image.transmit_time` with `Image.generation`** in
-  `crates/rustty-vt/src/kitty/graphics_image.rs`.
+      `crates/rustty-vt/src/kitty/graphics_image.rs`.
 
 At `:762-765`, replace the field and its PORT NOTE:
 
@@ -3125,9 +3154,9 @@ after the struct is replaced:
 ```
 
 - [ ] **Step 9: Make `delete` mutation-aware** — `graphics_storage.rs:322`.
-  Capture the counts at entry and compare at exit, and delete the seven
-  `self.dirty = true;` statements upstream removed from the `All`, `Column`,
-  `Row`, `Z`, `Range`, `delete_by_id` and `delete_by_number` arms:
+      Capture the counts at entry and compare at exit, and delete the seven
+      `self.dirty = true;` statements upstream removed from the `All`, `Column`,
+      `Row`, `Z`, `Range`, `delete_by_id` and `delete_by_number` arms:
 
 ```rust
     /// Delete placements, images.
@@ -3170,7 +3199,7 @@ grep -n "self.dirty = true" /Users/gael/projects/rustty/crates/rustty-vt/src/kit
 covers them.)
 
 - [ ] **Step 10: Switch the newest-image comparison** —
-  `graphics_storage.rs:310`:
+      `graphics_storage.rs:310`:
 
 ```rust
         for kv in self.images.values() {
@@ -3183,7 +3212,7 @@ covers them.)
 ```
 
 - [ ] **Step 11: Switch eviction ordering and mark eviction as a mutation** —
-  `graphics_storage.rs:721-800` and the `Candidate` struct at `:829`:
+      `graphics_storage.rs:721-800` and the `Candidate` struct at `:829`:
 
 ```rust
 /// The candidate type used during eviction (`evictImage`).
@@ -3243,7 +3272,7 @@ removal and image removal), and calling `if any_evicted { self.mark_mutated(); }
 immediately before EACH `return`/tail of the function.
 
 - [ ] **Step 12: Re-export `next_generation`** from the kitty graphics facade
-  module (upstream: `pub const nextGeneration = storage.nextGeneration;`):
+      module (upstream: `pub const nextGeneration = storage.nextGeneration;`):
 
 ```bash
 grep -n "pub use\|pub const ImageStorage\|graphics_storage" /Users/gael/projects/rustty/crates/rustty-vt/src/kitty/graphics.rs
@@ -3297,11 +3326,13 @@ git commit -m "kitty/gfx: add generation stamps, delete transmit time (BL-6 bdc0
 ### Task 15: `rustty-renderer` — swap the texture-cache staleness key to the generation
 
 **Files:**
-- Modify: `crates/rustty-renderer/src/image.rs` — `overlay_update` (~:292-302),
-  `prep_image` (~:930-1004), `prep_kitty_image` (~:1045-1053), the `ImageMap`
+
+- Modify: `crates/rustty-renderer/src/image.rs` — `overlay_update` (~~:292-302),
+  `prep_image` (~~:930-1004), `prep_kitty_image` (~:1045-1053), the `ImageMap`
   value struct (:1167-1173)
 
 **Interfaces:**
+
 - Consumes: `rustty_vt::kitty::graphics::next_generation() -> u64` and
   `Image::generation: u64` (Task 14).
 - Produces: `prep_image(&mut self, alloc, id: Id, generation: u64, pending: Image::Pending) -> Result<(), PrepImageError>`
@@ -3314,8 +3345,8 @@ git -C /Users/gael/projects/ghostty show bdc0b6c19 -- src/renderer/image.zig
 ```
 
 - [ ] **Step 2: Confirm the compile failure exists first** (the failing "test"
-  here is the compiler — `rustty-renderer` cannot build against Task 14's
-  `Image` any more):
+      here is the compiler — `rustty-renderer` cannot build against Task 14's
+      `Image` any more):
 
 ```bash
 cd /Users/gael/projects/rustty && cargo build -p rustty-renderer 2>&1 | grep -c "transmit_time"
@@ -3343,7 +3374,7 @@ pub struct ImageMapValue {
 change only the field. Do not rename the type.)
 
 - [ ] **Step 4: Swap `prep_image`'s parameter and comparisons** —
-  `crates/rustty-renderer/src/image.rs:925-1005`:
+      `crates/rustty-renderer/src/image.rs:925-1005`:
 
 ```rust
         id: Id,
@@ -3416,6 +3447,7 @@ git commit -m "renderer: key texture staleness on kitty generation stamps (BL-6 
 ### Task 16: `rustty-vt-c` — `Data::Generation` + `ImageData::Generation` + header
 
 **Files:**
+
 - Modify: `crates/rustty-vt-c/src/kitty_graphics.rs` — `Data` enum (:118-123),
   `get` dispatch (:161-172), `get_typed` (:195-226), `ImageData` enum (:290-304),
   `image_get_typed` (:429-460)
@@ -3425,6 +3457,7 @@ git commit -m "renderer: key texture staleness on kitty generation stamps (BL-6 
 - Test: `crates/rustty-vt-c/src/kitty_graphics.rs` test module
 
 **Interfaces:**
+
 - Consumes: `ImageStorage::generation: u64` and `Image::generation: u64`
   (Task 14).
 - Produces: `Data::Generation = 2`, `ImageData::Generation = 9` and their
@@ -3443,9 +3476,9 @@ git -C /Users/gael/projects/ghostty show bdc0b6c19 -- include/ghostty/vt/kitty_g
 ```
 
 - [ ] **Step 2: Write the failing tests** in `crates/rustty-vt-c/src/kitty_graphics.rs`'s
-  test module (ports of the oracle's `storage generation via get` and
-  `image generation via image_get_multi`; follow the file's existing test
-  conventions for building a `KittyGraphics` handle):
+      test module (ports of the oracle's `storage generation via get` and
+      `image generation via image_get_multi`; follow the file's existing test
+      conventions for building a `KittyGraphics` handle):
 
 ```rust
     #[test]
@@ -3664,8 +3697,8 @@ Expected: no output. If there IS output, extend whichever list it belongs to
 with the two new members and re-run the gate.
 
 - [ ] **Step 8: Extend the C example** — `example/c-vt-kitty-graphics/src/main.c`
-  already uses `RUSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR` (:135) and
-  `RUSTTY_KITTY_IMAGE_DATA_DATA_LEN` (:180). Port upstream's example hunk:
+      already uses `RUSTTY_KITTY_GRAPHICS_DATA_PLACEMENT_ITERATOR` (:135) and
+      `RUSTTY_KITTY_IMAGE_DATA_DATA_LEN` (:180). Port upstream's example hunk:
 
 ```bash
 git -C /Users/gael/projects/ghostty show bdc0b6c19 -- example/c-vt-kitty-graphics/src/main.c
@@ -3715,11 +3748,13 @@ After this task, **nothing from `91f0cf67d` remains recorded as debt** — the
 fully-ported strikes (Task 19).
 
 **Files:**
+
 - Modify: `crates/rustty-vt/src/tabstops.rs:330-347` (visibility + accessors)
 - Modify: `crates/rustty-vt/src/terminal.rs:4438-4441` (stale PORT NOTE)
 - Test: `crates/rustty-vt/src/terminal.rs`, `mod tests`
 
 **Interfaces:**
+
 - Produces (consumed by the test in this task):
   - `#[cfg(test)] pub(crate) enum crate::tabstops::ResizeFp { DynamicAlloc }`
   - `#[cfg(test)] pub(crate) fn crate::tabstops::resize_tw_error_always(point: ResizeFp)`
@@ -3770,7 +3805,7 @@ Expected: COMPILE FAIL — `enum ResizeFp is private`, `function
 resize_tw_error_always not found in module crate::tabstops`.
 
 - [ ] **Step 4: Widen the visibility and add the accessors** —
-  `crates/rustty-vt/src/tabstops.rs:330-347`:
+      `crates/rustty-vt/src/tabstops.rs:330-347`:
 
 ```rust
 // PORT NOTE: tripwire fail-point enum + thread-local module for `resize`,
@@ -3833,8 +3868,8 @@ accessors, so there is exactly one arming idiom:
 ```
 
 - [ ] **Step 5: Update the now-stale PORT NOTE** in
-  `crates/rustty-vt/src/terminal.rs:4436-4441` — delete the parenthetical
-  claiming the test hunk is unportable:
+      `crates/rustty-vt/src/terminal.rs:4436-4441` — delete the parenthetical
+      claiming the test hunk is unportable:
 
 ```rust
         // PORT NOTE (parity 91f0cf67d): allocate and initialize the replacement
@@ -3896,12 +3931,13 @@ cd /Users/gael/projects/rustty && cargo test -p rustty-renderer 2>&1 | tail -5
 ```
 
 Expected: all green. `rustty-vt --lib` count = 2035 baseline + 11 (T2 OSC 72)
-+ 1 (T5) + 3 (T6) + 4 (T7) + 1 (T8) + 2 (T9) + 2 (T10) + 3 (T11) + 1 (T12)
-+ 3 (T14 storage) + 2 (T14 exec) + 1 (T17) = **2069 passed** (the T13 RSS probe
-is `#[ignore]`d and does not count). If the number differs, reconcile before
-proceeding — do not adjust the expectation to match.
 
-- [ ] **Step 4: Full test lanes on Linux**
+- 1 (T5) + 3 (T6) + 4 (T7) + 1 (T8) + 2 (T9) + 2 (T10) + 3 (T11) + 1 (T12)
+- 3 (T14 storage) + 2 (T14 exec) + 1 (T17) = **2069 passed** (the T13 RSS probe
+  is `#[ignore]`d and does not count). If the number differs, reconcile before
+  proceeding — do not adjust the expectation to match.
+
+* [ ] **Step 4: Full test lanes on Linux**
 
 ```bash
 ssh rvm "cd ~/projects/rustty && cargo test -p rustty-vt --lib 2>&1 | tail -5 && cargo test -p rustty-vt-c 2>&1 | tail -5 && cargo test -p rustty-renderer 2>&1 | tail -5"
@@ -3953,19 +3989,20 @@ git -C /Users/gael/projects/rustty worktree remove /tmp/ws8-baseline
 Expected diff: additions only where a NEW passing test appears; no new failures.
 
 - [ ] **Step 8: No commit** — this task produces evidence, not changes. Record
-  the six command outputs in the Task 19 commit body.
+      the six command outputs in the Task 19 commit body.
 
 ---
 
 ### Task 19: Strike the landed hashes in `.port/phase-2/MAIN_PARITY.md`
 
 **Files:**
+
 - Modify: `.port/phase-2/MAIN_PARITY.md`
 
 - [ ] **Step 1: Strike the §1 PARTIAL row.** Replace the `91f0cf67d` row at
-  `MAIN_PARITY.md:34` — the PARTIAL debt is fully closed by Task 17, so it moves
-  out of §1 entirely (§1 lists open partials). Delete the row from §1 and mark
-  the §3 row as ported (Step 3 below).
+      `MAIN_PARITY.md:34` — the PARTIAL debt is fully closed by Task 17, so it moves
+      out of §1 entirely (§1 lists open partials). Delete the row from §1 and mark
+      the §3 row as ported (Step 3 below).
 
 - [ ] **Step 2: Update the BL bullets** at `MAIN_PARITY.md:50-55`:
 
@@ -3980,34 +4017,34 @@ Expected diff: additions only where a NEW passing test appears; no new failures.
   `grep -r kitty_dnd crates/rustty-vt/src` → non-zero hits.
 
 - [ ] **Step 3: Strike exactly these §3 rows** (and no others — the rows listed
-  in "Scope of this plan revision" stay `pending-small BL-3`):
+      in "Scope of this plan revision" stay `pending-small BL-3`):
 
-| Hash | New status |
-|---|---|
-| `cfce1cd56` | ported (WS8 T6) — R1 fidelity reorder; UAF was already unreachable in rustty (owned `Vec<u8>` dupe in `start_hyperlink`), regression test ported |
-| `04810273a` | ported (WS8 T6) |
-| `1d5b6f90e` | ported (WS8 T7) |
-| `a14a619ce` | ported (WS8 T7) |
-| `fdd255c78` | ported (WS8 T7) |
-| `dace6d1c6` | ported (WS8 T7) |
-| `0c299000f` | ported (WS8 T8) |
-| `b6f34be44` | ported (WS8 T9) |
-| `a9f5b7eba` | ported (WS8 T9) |
-| `607160657` | ported (WS8 T10) |
-| `fa8cae88b` | ported (WS8 T10) |
+| Hash        | New status                                                                                                                                                                   |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cfce1cd56` | ported (WS8 T6) — R1 fidelity reorder; UAF was already unreachable in rustty (owned `Vec<u8>` dupe in `start_hyperlink`), regression test ported                             |
+| `04810273a` | ported (WS8 T6)                                                                                                                                                              |
+| `1d5b6f90e` | ported (WS8 T7)                                                                                                                                                              |
+| `a14a619ce` | ported (WS8 T7)                                                                                                                                                              |
+| `fdd255c78` | ported (WS8 T7)                                                                                                                                                              |
+| `dace6d1c6` | ported (WS8 T7)                                                                                                                                                              |
+| `0c299000f` | ported (WS8 T8)                                                                                                                                                              |
+| `b6f34be44` | ported (WS8 T9)                                                                                                                                                              |
+| `a9f5b7eba` | ported (WS8 T9)                                                                                                                                                              |
+| `607160657` | ported (WS8 T10)                                                                                                                                                             |
+| `fa8cae88b` | ported (WS8 T10)                                                                                                                                                             |
 | `08e376f23` | ported (WS8 T11) — pt.2 fixed; pt.1 (`pixelFromFloat`) is a VERIFIED NON-ISSUE in Rust (`f64 as u32` is saturating + NaN-safe by RFC 2884), ported as a regression test only |
-| `896aca499` | ported (WS8 T12/T13) — Miri exception registered (MIRI_EXCEPTIONS.md Category 2), verified by RSS probe on macOS + Linux |
-| `bdc0b6c19` | ported (WS8 T14/T15/T16) |
-| `8fe5913f7` | ported (WS8 T14) — resolve to "N/A: every rustty target reports `target_has_atomic=\"64\"`" or "ported" per Task 14 Step 2's actual outcome |
-| `91f0cf67d` | ported (WS8 T17) — PARTIAL closed; tripwire made `pub(crate)`, `terminal_resize_preserves_tabstops_on_allocation_failure` added |
-| `91c87e2cf` | ported (WS8 T2-T3) |
-| `dd6c09bcf` | ported (WS8 T2-T3) |
-| `a6132c18b` | ported (WS8 T2-T3) |
-| `c488ccda6` | ported (WS8 T2-T3) |
-| `688750903` | ported (n/a-merge; constituents landed WS8 T2-T4) |
+| `896aca499` | ported (WS8 T12/T13) — Miri exception registered (MIRI_EXCEPTIONS.md Category 2), verified by RSS probe on macOS + Linux                                                     |
+| `bdc0b6c19` | ported (WS8 T14/T15/T16)                                                                                                                                                     |
+| `8fe5913f7` | ported (WS8 T14) — resolve to "N/A: every rustty target reports `target_has_atomic=\"64\"`" or "ported" per Task 14 Step 2's actual outcome                                  |
+| `91f0cf67d` | ported (WS8 T17) — PARTIAL closed; tripwire made `pub(crate)`, `terminal_resize_preserves_tabstops_on_allocation_failure` added                                              |
+| `91c87e2cf` | ported (WS8 T2-T3)                                                                                                                                                           |
+| `dd6c09bcf` | ported (WS8 T2-T3)                                                                                                                                                           |
+| `a6132c18b` | ported (WS8 T2-T3)                                                                                                                                                           |
+| `c488ccda6` | ported (WS8 T2-T3)                                                                                                                                                           |
+| `688750903` | ported (n/a-merge; constituents landed WS8 T2-T4)                                                                                                                            |
 
 - [ ] **Step 4: Check `DEFERRALS.md` and `VERIFICATION_DEBT.md`** for stale
-  WS8-adjacent rows and update any that this WS closed:
+      WS8-adjacent rows and update any that this WS closed:
 
 ```bash
 grep -n "91f0cf67d\|transmit_time\|tabstops\|FailingAllocator\|madvise\|kitty_dnd" \

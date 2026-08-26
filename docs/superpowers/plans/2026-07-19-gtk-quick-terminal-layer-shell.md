@@ -33,7 +33,8 @@
 - **Modify:** `crates/rustty-apprt/src/gtk/winproto/wayland.rs` — un-stub `supports_quick_terminal` + `init_quick_terminal`; add `sync_quick_terminal`, `resolve_quick_terminal_monitor`, `entered_monitor`; wire the `enter_monitor` signal in `Window::init` (its `// PORT NOTE: wayland.zig:169-177 connects enter_monitor…`); un-comment the `sync_quick_terminal` call in `sync_appearance` (its `// … syncQuickTerminal() … — DEFERRED` comment).
 - **Modify:** `crates/rustty-apprt/src/gtk/class/application.rs` — implement `toggle_quick_terminal` (the `INHABITED placeholder` returning `false`) + add `get_quick_terminal_window`.
 
-> **⚠ Key every edit off the function/comment NAME, not a line number.** `wayland.rs` is under concurrent edit by the deferred-tail workflow (the `set_urgent` task also touches this arm), so line numbers drift. **Sequencing:** run this plan *after* the deferred-tail workflow lands, to avoid conflicts in `wayland.rs`.
+> **⚠ Key every edit off the function/comment NAME, not a line number.** `wayland.rs` is under concurrent edit by the deferred-tail workflow (the `set_urgent` task also touches this arm), so line numbers drift. **Sequencing:** run this plan _after_ the deferred-tail workflow lands, to avoid conflicts in `wayland.rs`.
+
 - **Reused as-is (DONE):** the `quick-terminal` property + autohide + header suppression + `toggle_visibility` (window.rs); all `quick-terminal-*` config keys; the staged `Window.slide`/`slide_manager` scaffold + `deinit` release path; the `toggle-quick-terminal` action wiring; the X11 unsupported arms.
 
 ---
@@ -41,6 +42,7 @@
 ## Task 1: Add the `gtk4-layer-shell` dependency
 
 **Files:** `crates/rustty-apprt/Cargo.toml`
+
 - [ ] **Step 1:** Add `gtk4-layer-shell = { version = "0.8", optional = true }`; add `dep:gtk4-layer-shell` to the `wayland` feature. (0.8.0 → gtk4 ^0.11, matches ours.)
 - [ ] **Step 2:** Build `cargo build -p rustty-apprt --features gtk,wayland` → green (the optional dep resolves; needs `gtk4-layer-shell-devel`). Add **NO** dummy `let _ = …is_supported` symbol reference — an unused optional dep does not fail the build, and ghostty has no such construct (its first use is the real `is_supported()` call, `wayland.zig:72`); linkage is exercised by the real call added in Task 2. Confirm `--features gtk` (no wayland) still green.
 - [ ] **Step 3:** Commit: `gtk/winproto(wayland): add gtk4-layer-shell dependency (Task 1)`.
@@ -49,6 +51,7 @@
 
 **Files:** `crates/rustty-apprt/src/gtk/winproto/wayland.rs`
 **Oracle:** `wayland.zig:70-78` (supports), `:80-88` (init), `:449-483` (resolveQuickTerminalMonitor).
+
 - [ ] **Step 1:** `supports_quick_terminal` (the stub returning `false`) → `if !gtk4_layer_shell::is_supported() { warn; return false } true`. Ported comment (`wayland.zig:70-78`).
 - [ ] **Step 2:** Add `resolve_quick_terminal_monitor(primary_output_name: Option<&str>, apprt_window) -> Option<gdk::Monitor>` per `:449-483`: map `quick-terminal-screen` (`.mouse` → None; `.main`/`.macos-menu-bar` → match `primary_output_name` against monitor connectors, fall back to first). Caller unrefs.
   - **PLUMBING (rustty divergence the plan must resolve):** the oracle's `syncQuickTerminal`/`enteredMonitor` read `self.globals.state.primary_output_name`, but rustty's winproto `Window` **deliberately holds no globals pointer** (it snapshots only proxy clones + `default_deco_mode` + `bg_blur_supported`, wayland.rs docs), and `winproto::App` exposes no globals accessor. Without fixing this, `.main`/`.macos-menu-bar` silently degrades to "first monitor." **Faithful fix (matches the oracle re-resolving live each sync):** add a `primary_output_name(&self) -> Option<&str>` accessor on the wayland `winproto::App` (reads `globals.state.primary_output_name`) and reach it from both the `Window` method and the `enter_monitor` callback via `apprt_window.application().winproto()` (the existing `app.winproto()` accessor). `init_quick_terminal` (an App method) already has globals in scope. Do NOT freeze it into the `Window` at init — the oracle re-resolves so primary-output/config changes take effect (`wayland.zig:325-326`).
@@ -59,6 +62,7 @@
 
 **Files:** `crates/rustty-apprt/src/gtk/winproto/wayland.rs`
 **Oracle:** `wayland.zig:310-389` (syncQuickTerminal), invoked from `syncAppearance:209-213`.
+
 - [ ] **Step 1:** Add `fn sync_quick_terminal(&mut self)` on the winproto `Window`: `set_layer` (from `gtk_quick_terminal_layer`), `set_namespace` (`gtk_quick_terminal_namespace`), re-resolve + `set_monitor`, `set_keyboard_mode` (from `quick_terminal_keyboard_interactivity`, with the `get_protocol_version() < 4` → exclusive fallback), the `anchored_edge` from `quick_terminal_position` (center → None), the per-`ShellEdge` loop (anchored edge: margin 0 + anchor true; others: margin 20 + anchor false). Then the KDE slide: `if let Some(s) = self.slide.take() { s.release() }`; if anchored, `self.slide_manager` → `create(self.surface)` → `set_location(edge)` → `commit()` → store; else `None`. Uses the ALREADY-STAGED `slide`/`slide_manager` fields.
 - [ ] **Step 2:** Add the `sync_quick_terminal()` call in `sync_appearance` (at its `// … syncQuickTerminal() … — DEFERRED` comment) guarded by `is_quick_terminal()` (mirror `wayland.zig:209-213`).
 - [ ] **Step 3:** Build `--features gtk,wayland` green. Commit: `gtk/winproto(wayland): sync_quick_terminal — layer/anchor/margin + KDE slide (Task 3)`.
@@ -67,6 +71,7 @@
 
 **Files:** `crates/rustty-apprt/src/gtk/winproto/wayland.rs`
 **Oracle:** `wayland.zig:392-421` (enteredMonitor) + `Window.init:169-177` (signal connect).
+
 - [ ] **Step 1:** Add `entered_monitor(surface, monitor, apprt_window)`: resolve the sizing monitor (configured, or the entered one in `.mouse` mode), read geometry, `config.quick_terminal_size.calculate(position, {w,h})` → `window.set_default_size(w, h)`.
 - [ ] **Step 2:** In `Window::init`, when `apprt_window.is_quick_terminal()`, connect the GDK surface `enter-monitor` signal → `entered_monitor` (replacing the `// PORT NOTE: wayland.zig:169-177 connects enter_monitor…`). `entered_monitor` reaches `primary_output_name` via `apprt_window.application().winproto()`.
 - [ ] **Step 3:** Build `--features gtk,wayland` green. Commit: `gtk/winproto(wayland): quick-terminal sizing via enter_monitor (Task 4)`.
@@ -75,6 +80,7 @@
 
 **Files:** `crates/rustty-apprt/src/gtk/class/application.rs`
 **Oracle:** `application.zig:2649-2669` (toggle) + `:2713-2731` (getQuickTerminalWindow).
+
 - [ ] **Step 1:** Add `get_quick_terminal_window() -> Option<Window>`: scan `gtk::Window::toplevels()`, return the first that downcasts to `Window` with `is_quick_terminal()`.
 - [ ] **Step 2:** Implement `toggle_quick_terminal` (mirror `application.zig:2649-2669`): if `get_quick_terminal_window()` → `win.toggle_visibility()`, return true; else if `!winproto().supports_quick_terminal()` return false; else construct a `Window` with the `quick-terminal` property = true (via `glib::Object::builder().property("application", …).property("quick-terminal", true).build()`, mirroring `newInstance(Window, .{application, "quick-terminal"=true})`), assert `is_quick_terminal()`, then show it.
   - **SEAM (rustty divergence the plan must resolve):** the oracle calls the SHARED helper `initAndShowWindow(self, win, null, .none)` on the **pre-built** window (`application.zig:2662-2667`, body `:2285-2329`). But rustty **folded `initAndShowWindow` into `new_window`**, which self-constructs its own window via `Window::new(app, overrides.title)` — it neither accepts a pre-built window nor sets `quick-terminal=true`. So do NOT call `new_window`. Extract an init-and-show helper out of `new_window` that takes an already-constructed `Window` (bind app `config` → win `config`, `win.new_tab_for_window(None, TabOverrides::none())`, estimate size, `present`), and call it with the quick-terminal window; or duplicate that exact sequence inline in `toggle_quick_terminal`.

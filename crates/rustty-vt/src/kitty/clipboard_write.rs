@@ -530,11 +530,8 @@ mod tests {
         // Invalid characters anywhere in the stream are error.Invalid,
         // which the handlers turn into an EINVAL abort. These mirror
         // kitty's own tests for the spec change.
-        let invalid_payloads: [&[u8]; 3] = [
-            b"!!!",
-            b"SGVs!!!bG8=",
-            b"\nZGF0YSB3aXRoIGEgbmV3bGluZQ==",
-        ];
+        let invalid_payloads: [&[u8]; 3] =
+            [b"!!!", b"SGVs!!!bG8=", b"\nZGF0YSB3aXRoIGEgbmV3bGluZQ=="];
         for payload in invalid_payloads {
             let begin_meta = Metadata::new(Operation::Write);
             let mut state = WriteState::init(&begin_meta, Options::default());
@@ -569,7 +566,9 @@ mod tests {
 
             let mut prev: usize = 0;
             for &end in split {
-                state.data(&wdata(b"text/plain"), &encoded[prev..end]).unwrap();
+                state
+                    .data(&wdata(b"text/plain"), &encoded[prev..end])
+                    .unwrap();
                 prev = end;
             }
             state.data(&wdata(b"text/plain"), &encoded[prev..]).unwrap();

@@ -1,0 +1,14 @@
+# See librustty-vt.pc.in for why the prefix is derived from ${pcfiledir}
+# rather than baked in from CMAKE_INSTALL_PREFIX.
+prefix=${pcfiledir}/../..
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+
+Name: librustty-vt-static
+URL: https://github.com/AirelyDev/rustty
+Description: Rustty VT library (static)
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir} -DRUSTTY_STATIC
+Libs: ${libdir}/@RUSTTY_VT_STATIC_REALNAME@
+Libs.private: @RUSTTY_VT_PC_LIBS_PRIVATE@
+Requires.private: @RUSTTY_VT_PC_REQUIRES_PRIVATE@

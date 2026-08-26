@@ -4,7 +4,7 @@
 
 **Goal:** Close Phase 2 **completely**, with **no additional deferrals**. Concretely: (1) repair the **vacuous and broken gates** — G1b silently gates `main` when run from a worktree, G1b is BLOCKED because the zig reference corpus was evicted, the debug test lane fail-fasts and masks later crates, and `include/rustty.h` has never compiled as standalone C because gate A5 only checks the curated header; (2) take ownership of every **ORPHANED** ledger item (items filed into WS8, which is closed and merged, plus items that never had an owner at all); (3) reclassify what is genuinely permanent into **Justified R1 Divergences** with a 4-criterion basis and what is genuinely environment-blocked into **verification debt** with a runnable recipe; (4) route what belongs to an open workstream to WS10–WS14/WS17 explicitly, in-ledger; and (5) land a **Phase 2 closure gate** that FAILS if any ledger item is open without an owner in an open workstream — with its FAIL arm proven reachable by a synthetic fixture, because a gate that cannot fail is worthless.
 
-**Architecture:** WS19 has four layers, and they must execute in that order. **Layer 0 (gates, T1–T4)** repairs the verification substrate. It comes first because every "green" claim made by a vacuous gate is unproven, so no later task's evidence can be trusted until the instruments are honest — and specifically because N4 currently *masks* N1 (the gate exits `3 BLOCKED` before it counts anything, so restoring the zig corpus without fixing the hardcoded path would turn a loudly-blocked gate into a silently-wrong one). **Layer 1 (ledger truth, T2)** rewrites `.port/phase-2/DEFERRALS.md`, `VERIFICATION_DEBT.md` and `INTEGRATION_PARITY.md` so that the closure gate in T19 has truthful input; the audit that establishes what is wrong is already committed as the `# PHASE 2 CLOSURE AUDIT (WS19)` section of `DEFERRALS.md` and is this plan's factual basis. **Layer 2 (product fixes, T5–T18)** closes the orphaned code items WS19 owns itself. **Layer 3 (T19–T20)** lands the closure gate and the both-platform finale. Nothing in WS19 ports beyond-pin oracle state: where an item would be cheaper after the pin advances, it is routed to WS10 or Phase 3 **with the reasoning written into the ledger row**, never silently deferred.
+**Architecture:** WS19 has four layers, and they must execute in that order. **Layer 0 (gates, T1–T4)** repairs the verification substrate. It comes first because every "green" claim made by a vacuous gate is unproven, so no later task's evidence can be trusted until the instruments are honest — and specifically because N4 currently _masks_ N1 (the gate exits `3 BLOCKED` before it counts anything, so restoring the zig corpus without fixing the hardcoded path would turn a loudly-blocked gate into a silently-wrong one). **Layer 1 (ledger truth, T2)** rewrites `.port/phase-2/DEFERRALS.md`, `VERIFICATION_DEBT.md` and `INTEGRATION_PARITY.md` so that the closure gate in T19 has truthful input; the audit that establishes what is wrong is already committed as the `# PHASE 2 CLOSURE AUDIT (WS19)` section of `DEFERRALS.md` and is this plan's factual basis. **Layer 2 (product fixes, T5–T18)** closes the orphaned code items WS19 owns itself. **Layer 3 (T19–T20)** lands the closure gate and the both-platform finale. Nothing in WS19 ports beyond-pin oracle state: where an item would be cheaper after the pin advances, it is routed to WS10 or Phase 3 **with the reasoning written into the ledger row**, never silently deferred.
 
 **Tech Stack:** Rust 1.93.1 (pinned, `rust-toolchain.toml`); Python 3 for the gate scripts (`.port/tools/gates/*.py`, `_gatelib.py`); Bash for the shell gates; `cargo +nightly miri` for the vt Miri lanes; `clang`/`clang++` from Xcode 26.5 for the header compile checks; macOS M4 Pro host for the Metal/embedded half; Fedora 44 aarch64 VM over `ssh rvm` for the GTK/Wayland/X11 half; oracle git repo at `/Users/gael/projects/ghostty`, working tree pinned at `4749c4e93`.
 
@@ -12,7 +12,7 @@
 
 - R1 full fidelity vs the ghostty oracle at `../ghostty` (pinned `4749c4e93`); the oracle is reference-only — no build-time dependency on it (R3).
 - R2 product identity: rustty naming with per-token casing preservation (Ghostty→Rustty, ghostty→rustty). **CORRECTION to the ROADMAP's own wording** — see PREMISE CORRECTION §4: the `ghostty_*` C-ABI alias layer was **deleted upstream** at `e4cc852`; rustty exports `rustty_*` only, in every profile. Do not re-add aliases.
-- R4/R5: acyclic crate graph; gates are invariant — **never weakened to pass**. WS19 is the workstream that *strengthens* four of them; every strengthening must be additive (a gate that binds more, never less) and must ship a proof that its FAIL arm is reachable.
+- R4/R5: acyclic crate graph; gates are invariant — **never weakened to pass**. WS19 is the workstream that _strengthens_ four of them; every strengthening must be additive (a gate that binds more, never less) and must ship a proof that its FAIL arm is reachable.
 - DG5: C-ABI panic policy is ABORT — no unwind across the ABI. T3 touches a generated header only; T17 touches `posix_waitpid`, which is reachable from `Command::wait` but not from a C-ABI entry — confirm before changing its signature.
 - Toolchain: pinned Rust 1.93.1. LTO stays banned.
 - Ledger discipline: every task that closes a row strikes that row **in the same commit**. The `# PHASE 2 CLOSURE AUDIT (WS19)` section of `DEFERRALS.md` is the index; when a row closes, mark it in both places.
@@ -63,8 +63,8 @@ not build on Linux" — it does, the arm is ported), the xev `ThreadPool` body (
 xcframework` is registered), the `ghostty_*` alias layer (deleted upstream; the premise
 is moot), the `+version` STUB lines (WS3-B replaced all three), the GUI launch leaf (the
 GTK arm is live and diverges first), and `VERIFICATION_DEBT.md` V1 (ROADMAP records it
-DISCHARGED 2026-07-23). Plus ~40 "Target: Phase-3" labels that mean the *pre-WS codename
-for the GPU/xev/inspector tiers* — all landed — while "Phase 3" today means upstream
+DISCHARGED 2026-07-23). Plus ~40 "Target: Phase-3" labels that mean the _pre-WS codename
+for the GPU/xev/inspector tiers_ — all landed — while "Phase 3" today means upstream
 resync, so grepping this file for a Phase-3 worklist yields ~40 false positives.
 **Consequence for WS19:** T2 is not cosmetic. The closure gate in T19 parses these
 ledgers; feeding it 11 wrong rows and 40 mis-labels would make it authoritative about
@@ -98,34 +98,34 @@ for G1b. **WS19 records this verdict (T2); Phase 3 realizes it.** No code change
 
 ### What WS19 does itself vs what it routes
 
-| Item | Disposition |
-|---|---|
-| N1 G1b worktree vacuity, N4 zig corpus, N5 debug-lane fail-fast | **WS19 T1** |
-| Ledger truth-up: W1–W11, E.1–E.4, N6 verdict, O3/O5 restatement | **WS19 T2** |
-| N2 `include/rustty.h` standalone C + widen A5 | **WS19 T3** |
-| N3 two `gtk4::init()` tests in one binary | **WS19 T4** |
-| O1 `style::Color` padding-free | **WS19 T5** |
-| O2 `-C debug-assertions=off` vt Miri lane | **WS19 T6** |
-| O4 inspector cell-detail restore + whole-file guard | **WS19 T7** |
-| O6 GTK portal `OpenURI` | **WS19 T8** |
-| O7 wayland decoration-mode re-read; O8 duplicate-global (→ divergence) | **WS19 T9** |
-| O9 kqueue `thread_perform` `&mut Loop` + `task_loop` lineage | **WS19 T10** |
-| O10 macOS File/TCP/UDP watchers; O11 xev `c_api.zig` (→ divergences) | **WS19 T11** |
-| O12 `+version` OSC-8 commit hyperlink | **WS19 T12** |
-| O18 synthetic binary entries; O19 bench binary entry + local `detectArgs` | **WS19 T13** |
-| O19a `os_signpost`; O20 terminfo source/termcap (→ divergences); V1 delete; V5 → WS17 | **WS19 T14** |
-| O21 `shell_integration.rs` lossy path | **WS19 T15** |
-| N7 23 × `example/*/build.sh` stale dylib | **WS19 T16** |
-| N9 `threadEnter` drain ordering + `posix_waitpid` `ECHILD` | **WS19 T17** |
-| N10 `Terminal::compress(.incremental)` restart documentation | **WS19 T18** |
-| **Phase 2 closure gate (G-P2)** | **WS19 T19** |
-| O3 `cursor_scroll_region_up` (BL-4, beyond-pin) | **→ WS10** |
-| O17 `stb_image_resize` glyph resize | **→ WS11** — routing was right, the STATUS was wrong: the port shipped 2026-06-30 (`2e82776`); WS11 closed the *vacuous-coverage* residual instead, 2026-07-29 |
-| O13a `main_wasm.zig`, O14 `Atlas.Wasm` test, O15 `App.zig` Wasm block, O16 WebGL backend | **→ WS14** |
-| O13b `main_build_data.zig` + `+gen-*` emit; N8 3 `.blp` msgids + 25 unwrapped call sites | **→ WS13** (already in its plan) |
-| O5 `PageList::Limits` | **→ Phase 3** (re-vet row) |
-| V2/V3/V4/V1b, and now **V5** | **→ WS17** (V5 was orphaned; T14 adds it to WS17's scope) |
-| N6 G3b pin artifact | **→ Phase 3** (resolved by advancing the pin) |
+| Item                                                                                     | Disposition                                                                                                                                                    |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| N1 G1b worktree vacuity, N4 zig corpus, N5 debug-lane fail-fast                          | **WS19 T1**                                                                                                                                                    |
+| Ledger truth-up: W1–W11, E.1–E.4, N6 verdict, O3/O5 restatement                          | **WS19 T2**                                                                                                                                                    |
+| N2 `include/rustty.h` standalone C + widen A5                                            | **WS19 T3**                                                                                                                                                    |
+| N3 two `gtk4::init()` tests in one binary                                                | **WS19 T4**                                                                                                                                                    |
+| O1 `style::Color` padding-free                                                           | **WS19 T5**                                                                                                                                                    |
+| O2 `-C debug-assertions=off` vt Miri lane                                                | **WS19 T6**                                                                                                                                                    |
+| O4 inspector cell-detail restore + whole-file guard                                      | **WS19 T7**                                                                                                                                                    |
+| O6 GTK portal `OpenURI`                                                                  | **WS19 T8**                                                                                                                                                    |
+| O7 wayland decoration-mode re-read; O8 duplicate-global (→ divergence)                   | **WS19 T9**                                                                                                                                                    |
+| O9 kqueue `thread_perform` `&mut Loop` + `task_loop` lineage                             | **WS19 T10**                                                                                                                                                   |
+| O10 macOS File/TCP/UDP watchers; O11 xev `c_api.zig` (→ divergences)                     | **WS19 T11**                                                                                                                                                   |
+| O12 `+version` OSC-8 commit hyperlink                                                    | **WS19 T12**                                                                                                                                                   |
+| O18 synthetic binary entries; O19 bench binary entry + local `detectArgs`                | **WS19 T13**                                                                                                                                                   |
+| O19a `os_signpost`; O20 terminfo source/termcap (→ divergences); V1 delete; V5 → WS17    | **WS19 T14**                                                                                                                                                   |
+| O21 `shell_integration.rs` lossy path                                                    | **WS19 T15**                                                                                                                                                   |
+| N7 23 × `example/*/build.sh` stale dylib                                                 | **WS19 T16**                                                                                                                                                   |
+| N9 `threadEnter` drain ordering + `posix_waitpid` `ECHILD`                               | **WS19 T17**                                                                                                                                                   |
+| N10 `Terminal::compress(.incremental)` restart documentation                             | **WS19 T18**                                                                                                                                                   |
+| **Phase 2 closure gate (G-P2)**                                                          | **WS19 T19**                                                                                                                                                   |
+| O3 `cursor_scroll_region_up` (BL-4, beyond-pin)                                          | **→ WS10**                                                                                                                                                     |
+| O17 `stb_image_resize` glyph resize                                                      | **→ WS11** — routing was right, the STATUS was wrong: the port shipped 2026-06-30 (`2e82776`); WS11 closed the _vacuous-coverage_ residual instead, 2026-07-29 |
+| O13a `main_wasm.zig`, O14 `Atlas.Wasm` test, O15 `App.zig` Wasm block, O16 WebGL backend | **→ WS14**                                                                                                                                                     |
+| O13b `main_build_data.zig` + `+gen-*` emit; N8 3 `.blp` msgids + 25 unwrapped call sites | **→ WS13** (already in its plan)                                                                                                                               |
+| O5 `PageList::Limits`                                                                    | **→ Phase 3** (re-vet row)                                                                                                                                     |
+| V2/V3/V4/V1b, and now **V5**                                                             | **→ WS17** (V5 was orphaned; T14 adds it to WS17's scope)                                                                                                      |
+| N6 G3b pin artifact                                                                      | **→ Phase 3** (resolved by advancing the pin)                                                                                                                  |
 
 ### Dependency order
 
@@ -216,6 +216,7 @@ verify each tarball's digest, and **fail loudly on a digest mismatch** — never
 to an unverified fetch. Take the URLs from `../ghostty/build.zig.zon.json` (read-only).
 
 Requirements, each of which must be visible in the script:
+
 - idempotent: a present, digest-matching directory is left alone;
 - `set -euo pipefail`;
 - prints the exact list of paths `check_test_counts.py` will read, then re-runs
@@ -287,19 +288,19 @@ NOT delete the historical text — this repo's convention is strike-and-annotate
 
 Rows and files:
 
-| Row | File:line to edit |
-|---|---|
-| W1 | `.port/phase-2/DEFERRALS.md:1839`, `:1869-1878`; **and** `crates/rustty-core/src/renderer_seam.rs:35` (`PORT STATUS: placeholder` → the live status) |
-| W2 | `.port/phase-2/DEFERRALS.md:2609-2614` |
-| W3 | `.port/phase-2/DEFERRALS.md:2954`, `:2989-2996`; **and** `crates/rustty-cli/src/lib.rs:12` |
-| W4 | `.port/phase-2/DEFERRALS.md:3409-3421` |
-| W5 | `.port/phase-2/DEFERRALS.md:3258-3266` (keep the narrow macOS residual, now O10) |
-| W6 | `.port/phase-2/DEFERRALS.md:3771` |
-| W7 | `.port/phase-2/DEFERRALS.md:3756` |
-| W8 | `.port/phase-2/DEFERRALS.md:3089-3093` |
-| W9 | `.port/phase-2/DEFERRALS.md:3038-3047` |
-| W10 | every `Target: Phase-3` / `Phase-3 R-d` / `Phase-3 dcimgui` label (`grep -n 'Phase-3\|Phase 3' .port/phase-2/DEFERRALS.md`) |
-| W11 | `.port/phase-2/VERIFICATION_DEBT.md` V1 (already marked by the audit; delete the row here per T14) |
+| Row | File:line to edit                                                                                                                                    |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| W1  | `.port/phase-2/DEFERRALS.md:1839`, `:1869-1878`; **and** `crates/rustty-core/src/renderer_seam.rs:35` (`PORT STATUS: placeholder` → the live status) |
+| W2  | `.port/phase-2/DEFERRALS.md:2609-2614`                                                                                                               |
+| W3  | `.port/phase-2/DEFERRALS.md:2954`, `:2989-2996`; **and** `crates/rustty-cli/src/lib.rs:12`                                                           |
+| W4  | `.port/phase-2/DEFERRALS.md:3409-3421`                                                                                                               |
+| W5  | `.port/phase-2/DEFERRALS.md:3258-3266` (keep the narrow macOS residual, now O10)                                                                     |
+| W6  | `.port/phase-2/DEFERRALS.md:3771`                                                                                                                    |
+| W7  | `.port/phase-2/DEFERRALS.md:3756`                                                                                                                    |
+| W8  | `.port/phase-2/DEFERRALS.md:3089-3093`                                                                                                               |
+| W9  | `.port/phase-2/DEFERRALS.md:3038-3047`                                                                                                               |
+| W10 | every `Target: Phase-3` / `Phase-3 R-d` / `Phase-3 dcimgui` label (`grep -n 'Phase-3\|Phase 3' .port/phase-2/DEFERRALS.md`)                          |
+| W11 | `.port/phase-2/VERIFICATION_DEBT.md` V1 (already marked by the audit; delete the row here per T14)                                                   |
 
 For W10 specifically: replace each label with the tier that actually owns it and its
 landing evidence (`W0–W5` for windowing, `xev Milestone A/B` for D6, `WS6` for the
@@ -333,15 +334,15 @@ in that section uses.
 
 - `D:4981`/`:5011` (`cursor_scroll_region_up`): rewrite the **Disposition** paragraph to
   name **WS10 (BL-4 perf series)** as owner, state that WS8 is closed and that BL-4 was
-  never WS8's scope, and state explicitly: *"`77190bd02` is beyond the pin. Porting it
+  never WS8's scope, and state explicitly: _"`77190bd02` is beyond the pin. Porting it
   into the pinned tree means hand-transcribing a commit that Phase 3's re-vet will
   revisit; it is therefore cheaper AFTER Phase 3 advances the pin, and WS10 should
   sequence it that way. This is a stated sequencing decision, not a deferral — the owner
-  and the trigger are both named."*
+  and the trigger are both named."_
 - `D:4973` (`PageList::Limits`): rewrite as a **Phase 3 re-vet row** with the exact
-  assertion Phase 3 must make: *"if the resync introduces a `Limits` struct,
+  assertion Phase 3 must make: _"if the resync introduces a `Limits` struct,
   `Limits::enforce` must call `mark_activity` on entry, taking rustty's
-  `mark_activity` site count from 10 to 11."* Add the same line to
+  `mark_activity` site count from 10 to 11."_ Add the same line to
   `.port/phase-3/README.md`'s re-vet list so Phase 3 cannot miss it.
 
 - [ ] **Step 5: Record the N6 G3b verdict where a lane owner will read it**
@@ -357,6 +358,7 @@ its beyond-pin delta in its own report.
 - [ ] **Step 6: Correct the ROADMAP (audit §E.3, §E.4) and its stale wave status**
 
 In `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md`:
+
 - `:25` — replace "`ghostty_*` C-ABI aliases stay" with "`ghostty_*` C-ABI aliases were
   **deleted upstream at `e4cc852`**; rustty exports `rustty_*` only, in every profile
   (`crates/rustty-apprt-c/Cargo.toml:31-33`)".
@@ -369,19 +371,19 @@ In `docs/superpowers/plans/2026-07-23-rustty-completion-ROADMAP.md`:
 
 - [ ] **Step 7: Write the true remaining-scope table into the ROADMAP**
 
-| WS | Plan | Executed | True state |
-|---|---|---|---|
-| WS1–WS9 | authored | **merged** | DONE |
-| WS10 perf (BL-4) | **NOT authored** | no | open; inherits O3 |
-| WS11 font glyph resize | **authored + LANDED** (`docs/superpowers/plans/2026-07-23-ws11-font-glyph-resize.md`) | yes | **CLOSED 2026-07-29** — O17's port shipped 2026-06-30; WS11 closed the vacuous-coverage residual (5 tests + gate D10) |
-| WS12 vaxis completion | authored (`c7c93f7`) | **no** | open; consumes T1's restore script |
-| WS13 i18n & docs | authored (`39355ff`) | **no** | open; owns N8, O13b |
-| WS14 wasm/WebGL | **NOT authored** | no | open; inherits O13a/O14/O15/O16 |
-| WS15 GTK GlobalShortcuts | authored | **merged `e8a9f59`** | DONE |
-| WS16 X11 winproto | authored | **merged `07b64db`** | DONE |
-| WS17 verification debt | authored (`ef7621a`) | **no** | open; scope now V2/V3/V4/V1b **+ V5** |
-| WS18 release lane | authored in-ROADMAP | **merged `eeec83f`** | DONE |
-| **WS19 Phase 2 closeout** | this plan | in flight | closes Phase 2 |
+| WS                        | Plan                                                                                  | Executed             | True state                                                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| WS1–WS9                   | authored                                                                              | **merged**           | DONE                                                                                                                  |
+| WS10 perf (BL-4)          | **NOT authored**                                                                      | no                   | open; inherits O3                                                                                                     |
+| WS11 font glyph resize    | **authored + LANDED** (`docs/superpowers/plans/2026-07-23-ws11-font-glyph-resize.md`) | yes                  | **CLOSED 2026-07-29** — O17's port shipped 2026-06-30; WS11 closed the vacuous-coverage residual (5 tests + gate D10) |
+| WS12 vaxis completion     | authored (`c7c93f7`)                                                                  | **no**               | open; consumes T1's restore script                                                                                    |
+| WS13 i18n & docs          | authored (`39355ff`)                                                                  | **no**               | open; owns N8, O13b                                                                                                   |
+| WS14 wasm/WebGL           | **NOT authored**                                                                      | no                   | open; inherits O13a/O14/O15/O16                                                                                       |
+| WS15 GTK GlobalShortcuts  | authored                                                                              | **merged `e8a9f59`** | DONE                                                                                                                  |
+| WS16 X11 winproto         | authored                                                                              | **merged `07b64db`** | DONE                                                                                                                  |
+| WS17 verification debt    | authored (`ef7621a`)                                                                  | **no**               | open; scope now V2/V3/V4/V1b **+ V5**                                                                                 |
+| WS18 release lane         | authored in-ROADMAP                                                                   | **merged `eeec83f`** | DONE                                                                                                                  |
+| **WS19 Phase 2 closeout** | this plan                                                                             | in flight            | closes Phase 2                                                                                                        |
 
 - [ ] **Step 8: Commit**
 
@@ -466,7 +468,7 @@ git commit -m "vt-c: declare the wasm Opaque handle so include/rustty.h compiles
 **Rationale.** `crates/rustty-apprt/tests/gtk_wayland_winproto.rs` calls `gtk4::init()`
 in two `#[test]`s (`:26`, `:81`). `gtk4::init()` pins GTK to the calling thread and
 libtest gives each `#[test]` its own thread even at `--test-threads=1`, so the second
-panics *"Attempted to initialize GTK from two different threads"*. WS16 T2 already
+panics _"Attempted to initialize GTK from two different threads"_. WS16 T2 already
 established the fix pattern for the x11 KATs (`a7fa3b7`); the wayland file was missed.
 
 - [ ] **Step 1: RED — reproduce on the VM**
@@ -558,7 +560,7 @@ Rust enum whose `None`/`Palette` variants do not cover their whole slot. The ref
 is `union(Tag)` with `Tag = enum(u8) { none, palette, rgb }` and its own `PackedStyle`
 already models the byte layout (`style.rs:677`+, `data_from_color`). Write the chosen
 representation as a PORT NOTE at the type, arguing fidelity against the reference union
-(a byte-complete value is *closer* to the Zig union than a Rust enum is), and keep
+(a byte-complete value is _closer_ to the Zig union than a Rust enum is), and keep
 `ColorTag`'s explicit `u8` values.
 
 **Constraint:** `Style` is embedded in `RefCountedSet` items that live inside the page
@@ -801,7 +803,7 @@ GNOME session; two hard host crashes correlate with primary-session KAT activity
 - [ ] **Step 4: O8 — reclassify the duplicate-global nit as a permanent divergence**
 
 Move `DEFERRALS.md:4905` into `# Justified R1 Divergences` with this 4-criterion basis:
-(1) **bounded input** — it requires a compositor to re-advertise a *singleton* interface
+(1) **bounded input** — it requires a compositor to re-advertise a _singleton_ interface
 under a new `name`, which no compositor does; (2) **the oracle has the same shape** —
 `Globals.zig`'s bind path likewise overwrites the typed proxy; (3) **failure mode is
 safe** — a `global_remove(old_name)` would unbind a live proxy, degrading to the
@@ -970,7 +972,7 @@ fix-list item 8** (a row marked "(Optional)" is not a disposition). Basis: (1) t
 reference's `emit_terminfo`/`emit_termcap` default **FALSE for Release**
 (`Config.zig:410-429`) and the shipping app IS Release, so **rustty matches the oracle
 exactly in the shipped configuration**; (2) the divergence is confined to a Debug build
-and to *informational* files — the compiled DB, which is what TERM resolution actually
+and to _informational_ files — the compiled DB, which is what TERM resolution actually
 uses, IS produced (`xtask/src/res_terminfo.rs:50-90`); (3) no test observes it; (4) if a
 Debug-parity need appears, the row names the two `GhosttyResources.zig` hunks to mirror.
 
@@ -993,16 +995,16 @@ keypress) needs real hardware input. Also update WS17's ROADMAP row scope cell.
 For each, rewrite the ledger row's target line to name the WS and add a bullet to that
 WS's plan (or, where no plan exists, to the ROADMAP row so the plan author inherits it):
 
-| Row | New owner |
-|---|---|
-| `D:3741` `stb_image_resize` (O17) | **WS11** — plan `2026-07-23-ws11-font-glyph-resize.md`, **LANDED 2026-07-29**; the port itself shipped 2026-06-30, WS11 closed the vacuous-coverage residual |
-| `D:571` WebGL backend (O16) | **WS14** — ROADMAP row (no plan yet) |
-| `D:1894` `App.zig` Wasm block (O15) | **WS14** |
-| `D:4209` `Atlas.Wasm` test (O14) | **WS14** |
-| `D:3065` `main_wasm.zig` (O13a) | **WS14** |
-| `D:3725`/`:3065` `main_build_data` + `+gen-*` emit (O13b) | **WS13** — add to its plan |
-| `D:4981` `cursor_scroll_region_up` (O3) | **WS10** — ROADMAP row; pin-sequenced (see T2 Step 4) |
-| `D:4973` `PageList::Limits` (O5) | **Phase 3** re-vet (see T2 Step 4) |
+| Row                                                       | New owner                                                                                                                                                    |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `D:3741` `stb_image_resize` (O17)                         | **WS11** — plan `2026-07-23-ws11-font-glyph-resize.md`, **LANDED 2026-07-29**; the port itself shipped 2026-06-30, WS11 closed the vacuous-coverage residual |
+| `D:571` WebGL backend (O16)                               | **WS14** — ROADMAP row (no plan yet)                                                                                                                         |
+| `D:1894` `App.zig` Wasm block (O15)                       | **WS14**                                                                                                                                                     |
+| `D:4209` `Atlas.Wasm` test (O14)                          | **WS14**                                                                                                                                                     |
+| `D:3065` `main_wasm.zig` (O13a)                           | **WS14**                                                                                                                                                     |
+| `D:3725`/`:3065` `main_build_data` + `+gen-*` emit (O13b) | **WS13** — add to its plan                                                                                                                                   |
+| `D:4981` `cursor_scroll_region_up` (O3)                   | **WS10** — ROADMAP row; pin-sequenced (see T2 Step 4)                                                                                                        |
+| `D:4973` `PageList::Limits` (O5)                          | **Phase 3** re-vet (see T2 Step 4)                                                                                                                           |
 
 - [ ] **Step 5: Commit**
 
@@ -1101,6 +1103,7 @@ once, synchronously" helper shared with the read thread, and call it on every su
 before `stop()` — the invariant `threadExit` gets for free. **This is a deliberate
 divergence from upstream, which has the same ordering and the same latent defect:** record
 it as `[R1-DIVERGENCE]` next to the bounded `killPid` entry, with the reasoning (liveness
+
 > R1, the same trade the bounded wait already made) and the intent to upstream it.
 
 - [ ] **Step 3: Give `posix_waitpid` an `ECHILD`-aware variant for `killPid` only**
@@ -1193,7 +1196,7 @@ git commit -m "vt/terminal: document that compress(.incremental) restarts after 
 
 ## Task 19: The Phase 2 closure gate (**G-P2**) — with a proven-reachable FAIL arm
 
-**Rationale.** The deliverable that makes Phase 2 *stay* closed. It parses the ledgers
+**Rationale.** The deliverable that makes Phase 2 _stay_ closed. It parses the ledgers
 and FAILS if any item is open without an owner in an open workstream. **A gate that
 cannot fail is worthless**, so its FAIL arm is proven with a synthetic fixture, not
 asserted.
@@ -1240,10 +1243,12 @@ reproducing the exact defect this whole audit was created by:
 # Synthetic fixture — NOT a real ledger. Proves check_phase2_closure.py's FAIL arm.
 
 ## Deferred to WS8 upstream sweep — synthetic orphan
+
 **OPEN.** A synthetic item filed to WS8, which is merged and closed.
 **Target: WS8.**
 
 ## Synthetic item with no owner at all
+
 **OPEN.** No target line anywhere in this entry.
 ```
 

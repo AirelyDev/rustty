@@ -3258,7 +3258,6 @@ impl ApprtSurface for Surface {
         clipboard_type: Clipboard,
         state: ClipboardRequest,
     ) -> Result<ClipboardReadResult, ApprtError> {
-
         // Kitty clipboard writes carry their own contents and read
         // nothing from the clipboard, so they skip the read callback
         // entirely: the request is completed immediately, and a

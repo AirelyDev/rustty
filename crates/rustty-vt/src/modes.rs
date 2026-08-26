@@ -616,10 +616,7 @@ const ENTRIES: &[ModeEntry] = &[
     //     // Kitty clipboard read that a paste event grants.
     //     .disabled = build_options.artifact != .lib and builtin.os.tag != .macos,
     // },
-    e_disabled_if(
-        e("kitty_paste_events", 5522),
-        KITTY_PASTE_EVENTS_DISABLED,
-    ),
+    e_disabled_if(e("kitty_paste_events", 5522), KITTY_PASTE_EVENTS_DISABLED),
 ];
 
 // The macOS app and libghostty-vt can both serve the follow-up

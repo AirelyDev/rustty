@@ -952,17 +952,11 @@ impl Thread {
                 // },
                 // (the `defer free` is the owned `pw` Vec dropping at arm end.)
                 Message::KittyClipboardGrantRead(v) => unsafe {
-                    (*io).kittyClipboardGrant(
-                        &v.pw,
-                        rustty_vt::kitty::clipboard::Direction::Read,
-                    )
+                    (*io).kittyClipboardGrant(&v.pw, rustty_vt::kitty::clipboard::Direction::Read)
                 },
                 // .kitty_clipboard_grant_write => |v| { ... .write ... },
                 Message::KittyClipboardGrantWrite(v) => unsafe {
-                    (*io).kittyClipboardGrant(
-                        &v.pw,
-                        rustty_vt::kitty::clipboard::Direction::Write,
-                    )
+                    (*io).kittyClipboardGrant(&v.pw, rustty_vt::kitty::clipboard::Direction::Write)
                 },
                 // .start_synchronized_output => self.startSynchronizedOutput(cb),
                 Message::StartSynchronizedOutput => Self::startSynchronizedOutput(self_, cb),

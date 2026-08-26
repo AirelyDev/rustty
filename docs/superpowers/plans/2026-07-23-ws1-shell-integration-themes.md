@@ -32,9 +32,11 @@
 ### Task 1: Branch + oracle-parity KAT for the vendored shell-integration tree
 
 **Files:**
+
 - Modify: `xtask/src/res_shell_integration.rs` (append to the existing `#[cfg(test)] mod tests`)
 
 **Interfaces:**
+
 - Consumes: the vendored tree `crates/rustty-extra/shell-integration/`, the oracle tree `/Users/gael/projects/ghostty/src/shell-integration/` (read-only, dev-machine only).
 - Produces: `#[ignore]`d test `oracle_shell_integration_parity` — the standing re-vendoring gate (future re-vendors from a newer oracle must keep it green).
 
@@ -178,11 +180,13 @@ git commit -m "xtask: oracle-parity KAT for the vendored shell-integration tree 
 ### Task 2: Vendor the iTerm2-Color-Schemes MIT attribution (`LICENSE.md`)
 
 **Files:**
+
 - Create: `crates/rustty-extra/themes/LICENSE.md`
 - Modify: `crates/rustty-extra/themes/README.md` (add a Licensing section)
 - Test: `xtask/src/res_themes.rs` (append to existing `mod tests`)
 
 **Interfaces:**
+
 - Consumes: nothing from other tasks.
 - Produces: `crates/rustty-extra/themes/LICENSE.md` — repo-side attribution; excluded from emission by the existing `.md` filter in `gen_themes` (emitted count stays 534, matching ghostty's shipped set which also ships no license file).
 
@@ -270,7 +274,6 @@ theme.
 In `/Users/gael/projects/rustty/crates/rustty-extra/themes/README.md`, append at the end of the file:
 
 ```markdown
-
 ## Licensing
 
 The corpus derives from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)
@@ -304,11 +307,13 @@ git commit -m "resources: vendor iTerm2-Color-Schemes MIT attribution for the th
 The shell-integration and themes subtrees ship real vendored content, so the placeholder note written by `res_terminfo.rs::gen_app_root` (and the `mark_resolved` appendix bolted onto it by `res_shell_integration.rs`) is now FALSE documentation being copied into the app bundle. Delete both; scrub any stale note left in `zig-out` by earlier builds.
 
 **Files:**
+
 - Modify: `xtask/src/res_terminfo.rs` (module doc lines 51-56; `gen_app_root` lines 210-254; test lines 296-298)
 - Modify: `xtask/src/res_shell_integration.rs` (fn doc lines 90-93; `mark_resolved` call line 110; `RESOLVED_MARKER`/`mark_resolved` lines 114-143)
 - Modify: `xtask/src/main.rs` (stale doc line ~446-448)
 
 **Interfaces:**
+
 - Consumes: nothing from other tasks.
 - Produces: `gen_app_root(share_dir) -> Result<(), String>` (same signature, new behavior: mkdir + scrub stale note, never writes one). Task 4's regeneration relies on the scrub to clean `zig-out/share/rustty/DEFERRALS.md` from the working tree.
 
@@ -487,9 +492,11 @@ git commit -m "xtask: delete the share/{APP} DEFERRALS.md placeholder emission �
 Prove a clean checkout reproduces the exact resource tree (the roadmap's KAT gate). All commands from `/Users/gael/projects/rustty`.
 
 **Files:**
+
 - No source changes (verification only; `zig-out/` is untracked output).
 
 **Interfaces:**
+
 - Consumes: Task 3's scrub behavior; the vendored trees.
 - Produces: a regenerated `zig-out/share/` that Task 5's app build consumes.
 
@@ -573,9 +580,11 @@ Expected: only `Only in crates/rustty-extra/themes: README.md` / `LICENSE.md` li
 ### Task 5: App rebuild + runtime verification (headless) + both-platform gate
 
 **Files:**
+
 - No source changes (verification only).
 
 **Interfaces:**
+
 - Consumes: Task 4's regenerated `zig-out/share/`.
 - Produces: the rebuilt `Rustty.app` whose bundle carries the trees; evidence for Task 6's ledger strikes.
 
@@ -642,10 +651,12 @@ Expected: both builds green.
 ### Task 6: Ledger strikes + merge
 
 **Files:**
+
 - Modify: `.port/phase-2/INTEGRATION_PARITY.md` (verdict ¶ lines 22-28; §2.1 lines 38-52; §2.2 lines 54-63; Fix List items 1-2 lines ~297-304)
 - Modify: `.port/phase-2/DEFERRALS.md` (append at end, line 4803+)
 
 **Interfaces:**
+
 - Consumes: Tasks 1-5 evidence (KAT green, 534 bundle count, injection smoke, no placeholder).
 - Produces: truthful ledgers; WS1 merged to main.
 
@@ -741,8 +752,8 @@ with:
 Append at end of file:
 
 ```markdown
-
 ### `share/{APP}` resource root — shell-integration + themes SHIPPED ✅ RESOLVED [2026-07-23, WS1]
+
 The R5 placeholder (`share/{APP}/DEFERRALS.md`, written by
 `xtask/src/res_terminfo.rs::gen_app_root`) that stood in for the
 shell-integration and themes subtrees is DELETED — both trees ship real
