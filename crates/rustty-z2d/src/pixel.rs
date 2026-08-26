@@ -97,7 +97,13 @@ pub struct Rgba {
 }
 
 /// Describes an 8-bit alpha channel-only format.
+//
+// PORT NOTE (`6f02d9aad` rider): `#[repr(transparent)]` pins the layout to the
+// single `u8` — the guarantee `glyf_rasterize` relies on to MOVE an
+// `ImageSurface<Alpha8>` buffer out as the final `Vec<u8>` bitmap without a
+// copy (the Rust analog of z2d's `initBuffer` draw-into-the-output-buffer).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(transparent)]
 pub struct Alpha8 {
     pub a: u8,
 }

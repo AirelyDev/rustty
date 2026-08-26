@@ -140,22 +140,38 @@ impl ClipboardReadResult {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClipboardRequest {
     /// A direct paste of clipboard contents.
-    Paste,
+    // paste: Clipboard,
+    // (`c2c0db68a`: the paste request now carries which clipboard it pastes
+    // from, so completion can route mode-5522 paste events.)
+    Paste(Clipboard),
 
     /// A request to read clipboard contents via OSC 52.
     Osc52Read(Clipboard),
 
     /// A request to write clipboard contents via OSC 52.
     Osc52Write(Clipboard),
-    // PORT NOTE (W7 seam, 0ce9054bf/25c61e852 end state): the head grows
-    // `kitty_read: *KittyRead`, `kitty_write: *KittyWrite`, and
-    // `list: Clipboard` variants, and `paste` becomes payload-carrying
-    // (`paste: Clipboard`, c2c0db68a). Those UNION variants land with the
-    // W7 apprt/macOS surface half (their exhaustive matches span core
-    // Surface + gtk); the matching ClipboardRequestType TAGS and
-    // `ClipboardReadResult` are C-ABI surface (rustty-embed.h) and landed
-    // with W6 Bundle E2. The request STATE types below are already ported
-    // because the termio stream handler (this phase) builds and sends them.
+
+    /// A request to read clipboard contents via the Kitty clipboard
+    /// protocol (OSC 5522).
+    //
+    // kitty_read: *KittyRead,
+    // PORT NOTE (ownership-passing raw pointer, the reference's `*KittyRead`):
+    // the surface Message carries the OWNED `Box<KittyRead>`; the core surface
+    // leaks it to a raw pointer (`Box::into_raw`) for the request's lifetime
+    // across the apprt (the C API stores the request pointer), and
+    // `KittyRead::destroy` reconstitutes + drops the Box — the arena-teardown
+    // analog. Raw pointers keep `ClipboardRequest: Copy`, matching the
+    // by-value `state.*` copies the reference passes around.
+    KittyRead(*mut KittyRead),
+
+    /// A request to write clipboard contents via the Kitty clipboard
+    /// protocol (OSC 5522), carrying a fully committed transaction.
+    // kitty_write: *KittyWrite,
+    KittyWrite(*mut KittyWrite),
+
+    /// A request to list the available clipboard MIME types without
+    /// reading any of their data.
+    List(Clipboard),
 }
 
 /// State for one in-flight Kitty clipboard protocol read. This is
@@ -206,6 +222,28 @@ pub struct KittyRead {
     pub terminator: rustty_vt::osc::Terminator,
 }
 
+impl KittyRead {
+    // pub fn destroy(self: *KittyRead) void {
+    //     // The struct itself lives in the arena, so move the arena
+    //     // out before tearing it down.
+    //     var arena = self.arena;
+    //     arena.deinit();
+    // }
+    //
+    // PORT NOTE (assessment D hazard #2): see `KittyWrite::destroy` — the same
+    // arena-to-`Box` ownership mapping.
+    ///
+    /// # Safety
+    /// `ptr` must be a pointer produced by `Box::into_raw` on a
+    /// `Box<KittyRead>`, and `destroy` must be called exactly once for it
+    /// (the single-owner, call-exactly-once contract of the reference's
+    /// `destroy`).
+    pub unsafe fn destroy(ptr: *mut KittyRead) {
+        // SAFETY: the fn contract above.
+        unsafe { drop(Box::from_raw(ptr)) };
+    }
+}
+
 /// State for one committed Kitty clipboard protocol write
 /// transaction. Like KittyRead, this is created on the IO thread
 /// and completed on the app thread, so it owns all of its memory.
@@ -244,6 +282,30 @@ pub struct KittyWrite {
 
     /// The response terminator, matching the request's.
     pub terminator: rustty_vt::osc::Terminator,
+}
+
+impl KittyWrite {
+    // pub fn destroy(self: *KittyWrite) void {
+    //     // The struct itself lives in the arena, so move the arena
+    //     // out before tearing it down.
+    //     var arena = self.arena;
+    //     arena.deinit();
+    // }
+    //
+    // PORT NOTE (assessment D hazard #2): the reference frees an arena that
+    // owns the struct itself (self-referential free); the Rust analog
+    // reconstitutes the `Box` the core surface leaked (`Box::into_raw`) and
+    // drops it — the owned `Vec` fields free with it.
+    ///
+    /// # Safety
+    /// `ptr` must be a pointer produced by `Box::into_raw` on a
+    /// `Box<KittyWrite>`, and `destroy` must be called exactly once for it
+    /// (the single-owner, call-exactly-once contract of the reference's
+    /// `destroy`).
+    pub unsafe fn destroy(ptr: *mut KittyWrite) {
+        // SAFETY: the fn contract above.
+        unsafe { drop(Box::from_raw(ptr)) };
+    }
 }
 
 /// The owned analog of `ClipboardContent` for requests that cross

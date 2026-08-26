@@ -144,7 +144,23 @@ pub fn rasterize(
         return Ok(Bitmap::init_empty(width, height));
     }
 
-    // Build the surface we'll draw on. This is a simple alpha8 drawing.
+    // Build the surface directly over the bitmap we'll return.
+    //
+    // const data = try alloc.alloc(u8, @as(usize, width) * @as(usize, height));
+    // errdefer alloc.free(data);
+    // var sfc: z2d.Surface = .initBuffer(
+    //     .image_surface_alpha8,
+    //     null,
+    //     std.mem.bytesAsSlice(z2d.pixel.Alpha8, data),
+    //     @intCast(width),
+    //     @intCast(height),
+    // );
+    //
+    // PORT NOTE (`6f02d9aad`): the reference draws into the caller-allocated
+    // output buffer via z2d `initBuffer` (no dupe copy at the end). The Rust
+    // z2d surface owns its `Vec<Alpha8>`; with `Alpha8` `#[repr(transparent)]`
+    // over `u8`, drawing into the owned surface and MOVING the buffer out (see
+    // the return below) reaches the same single-allocation end state.
     let mut sfc: Surface =
         Surface::init(SurfaceType::ImageSurfaceAlpha8, width as i32, height as i32)?;
 
@@ -164,7 +180,20 @@ pub fn rasterize(
         FillOptions::default(),
     )?;
 
-    let data: Vec<u8> = sfc.alpha8_buf().iter().map(|p| p.a).collect();
+    // .data = data,
+    // (`6f02d9aad`: no `alloc.dupe` — the drawn buffer IS the bitmap. Move the
+    // owned `Vec<Alpha8>` out of the surface and reinterpret it as bytes.)
+    let buf: Vec<Alpha8> = match sfc {
+        Surface::ImageSurfaceAlpha8(s) => s.buf,
+        _ => unreachable!(),
+    };
+    // SAFETY: `Alpha8` is `#[repr(transparent)]` over `u8` (same size, align,
+    // and allocation layout), so the Vec's allocation can be reinterpreted
+    // in place.
+    let mut buf = core::mem::ManuallyDrop::new(buf);
+    let data: Vec<u8> = unsafe {
+        Vec::from_raw_parts(buf.as_mut_ptr() as *mut u8, buf.len(), buf.capacity())
+    };
 
     Ok(Bitmap {
         width,

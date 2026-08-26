@@ -53,7 +53,9 @@ fn clipboard_confirmation_fires_callbacks() {
     // (A) FIRE notify::request — setting the property emits notify::request, invoking the
     //     `notify_request` template callback. A mis-shaped (non-swapped) signature aborts
     //     here. apply_request must set the heading per the request variant.
-    dialog.set_request(Some(ClipboardRequestBoxed(ClipboardRequest::Paste)));
+    dialog.set_request(Some(ClipboardRequestBoxed(ClipboardRequest::Paste(
+        Clipboard::Standard,
+    ))));
     assert_eq!(
         dialog.heading().as_deref(),
         Some("Warning: Potentially Unsafe Paste"),

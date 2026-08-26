@@ -47,33 +47,26 @@ pub enum CustomShaderAnimation {
 
 /// Configuration we need derived from the main config.
 //
-// PORT NOTE: reference `Thread.DerivedConfig { custom_shader_animation }`. The
-// field-less [ADV-FIX 2] placeholder is now the real single-field struct; core
-// embeds it BY VALUE (renderer_seam.rs) and constructs it nowhere (`Thread::init`
-// is a placeholder), so promoting it breaks no core site (verified: no
-// `thread::DerivedConfig { … }` construction exists outside this crate). The
-// `custom_shader_animation` field is read through the renderer-defined
-// `RendererConfig::custom_shader_animation` accessor (R4/G7 — the renderer may
-// not name `rustty_config::CustomShaderAnimation`), which maps the config's own
-// enum into the renderer-local mirror above.
+// PORT NOTE (`aee7bf347`): `custom_shader_animation` MOVED out of this struct
+// into the renderer's own `DerivedConfig` (`generic::DerivedConfig`) — the
+// renderer computes its own animation wakes now (`Renderer::animation_wake`).
+// The renderer-local `CustomShaderAnimation` mirror above stays declared HERE
+// (unchanged decl site; `generic` imports it) so the config-side accessor
+// (`RendererConfig::custom_shader_animation`, impl'd in rustty-config) keeps
+// its acyclic seam (R4/G7 — memory `renderer-config-accessor-trait-acyclic`).
 //
 // The reference declaration this ports:
 //
 // pub const DerivedConfig = struct {
-//     custom_shader_animation: configpkg.CustomShaderAnimation,
 //     scrollback_compression: bool,
 //
 //     pub fn init(config: *const configpkg.Config) DerivedConfig {
 //         return .{
-//             .custom_shader_animation = config.@"custom-shader-animation",
 //             .scrollback_compression = config.@"scrollback-compression",
 //         };
 //     }
 // };
 pub struct DerivedConfig {
-    // custom_shader_animation: configpkg.CustomShaderAnimation,
-    pub custom_shader_animation: CustomShaderAnimation,
-
     /// Whether the renderer thread schedules idle scrollback compression.
     ///
     /// PORTS: oracle 0fb89f4ff (WS7 D3) — read by the renderer thread's
@@ -87,7 +80,6 @@ pub struct DerivedConfig {
 impl DerivedConfig {
     // pub fn init(config: *const configpkg.Config) DerivedConfig {
     //     return .{
-    //         .custom_shader_animation = config.@"custom-shader-animation",
     //         .scrollback_compression = config.@"scrollback-compression",
     //     };
     // }
@@ -100,7 +92,6 @@ impl DerivedConfig {
     // `DerivedConfig`, not `!DerivedConfig`).
     pub fn init<C: RendererConfig>(config: &C) -> DerivedConfig {
         DerivedConfig {
-            custom_shader_animation: config.custom_shader_animation(),
             scrollback_compression: config.scrollback_compression(),
         }
     }
@@ -119,11 +110,11 @@ mod derived_config_tests {
     use super::*;
     use crate::test_support::MockConfig;
 
-    #[test]
-    fn derived_config_extracts_custom_shader_animation() {
-        let d = DerivedConfig::init(&MockConfig::default());
-        assert_eq!(d.custom_shader_animation, CustomShaderAnimation::True);
-    }
+    // PORT NOTE (`aee7bf347`): the `custom_shader_animation` extraction test
+    // moved with the field to `generic::DerivedConfig` (whose full `init<C>`
+    // extraction is covered by the golden-renderer assembly + the
+    // `change_config` tests); the renderer-side wake logic is what consumes it
+    // now (`Renderer::animation_wake`).
 
     /// PORTS: oracle 0fb89f4ff (WS7 D3) — the renderer's derived config carries
     /// `scrollback-compression`, so a config reload changes what the renderer

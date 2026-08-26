@@ -399,9 +399,8 @@ typedef struct {
     ActionCValue value;
 } ActionC;
 
-/* ---- embedded.ClipboardContent (ghostty_clipboard_content_s, #[repr(C)]) ----
- * One representation of clipboard contents. The data is binary-safe with an
- * explicit length; it is not necessarily null-terminated (8c7a34d4c). */
+/* ---- embedded.ClipboardContent (ghostty_clipboard_content_s, #[repr(C)];
+ * 8c7a34d4c LAYOUT CHANGE: binary-safe data + explicit len) ---- */
 typedef struct {
     const char *mime;
     const uint8_t *data;
@@ -428,6 +427,14 @@ typedef struct {
     bool can_remember;
 } ClipboardConfirm;
 
+/* ---- apprt-api ClipboardReadResult (ghostty_clipboard_read_result_e, #[repr(C)]) ---- */
+typedef enum {
+    CLIPBOARD_READ_STARTED = 0,
+    CLIPBOARD_READ_UNAVAILABLE = 1,
+    CLIPBOARD_READ_UNSUPPORTED = 2,
+} ClipboardReadResult;
+
+
 /* ---- embedded.EnvVar (#[repr(C)]) ---- */
 typedef struct {
     const char *key;
@@ -450,12 +457,12 @@ typedef struct {
     bool supports_selection_clipboard;
     void (*wakeup)(void *userdata);
     bool (*action)(App *app, TargetC target, ActionC action);
-    int (*read_clipboard)(void *userdata,
-                          int req_type,
-                          ClipboardRequest *state,
-                          const char *const *mimes,
-                          uintptr_t mimes_len,
-                          bool list);
+    ClipboardReadResult (*read_clipboard)(void *userdata,
+                                          int req_type,
+                                          ClipboardRequest *state,
+                                          const char *const *mimes,
+                                          uintptr_t mimes_len,
+                                          bool list);
     void (*confirm_read_clipboard)(void *userdata,
                                    const ClipboardConfirm *confirm,
                                    ClipboardRequest *state,

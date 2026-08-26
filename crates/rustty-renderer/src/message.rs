@@ -258,9 +258,12 @@ mod change_config_tests {
         let msg = Message::initChangeConfig(Global, &MockConfig::default()).expect("init");
         match &msg {
             Message::ChangeConfig { thread, r#impl } => {
-                // seam 3: the thread DerivedConfig carries the extracted enum.
+                // seam 3: the thread DerivedConfig carries the extracted flag.
+                // (PORT NOTE `aee7bf347`: `custom_shader_animation` moved to the
+                // renderer DerivedConfig — asserted below.)
+                assert!(thread.scrollback_compression);
                 assert_eq!(
-                    thread.custom_shader_animation,
+                    r#impl.custom_shader_animation,
                     thread::CustomShaderAnimation::True
                 );
                 // seam 1: the renderer DerivedConfig has the extracted fields

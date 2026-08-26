@@ -228,7 +228,8 @@ impl ApprtSurface for Surface {
         clipboard_type: Clipboard,
         state: ClipboardRequest,
     ) -> Result<ClipboardReadResult, ApprtError> {
-        // PORTS: `Surface.zig:73-82`.
+        // PORTS: `Surface.zig:73-82` (`0ce9054bf`: `!bool` became
+        // `!apprt.ClipboardReadResult`).
         match self.gobj() {
             Some(s) => s.clipboard_request(clipboard_type, state),
             None => Err(ApprtError),

@@ -410,6 +410,7 @@ fn struct_sizes_and_aligns() {
         "ghostty_platform_ios_s size"
     );
     assert_eq!(core::mem::size_of::<EnvVar>(), 16, "ghostty_env_var_s size");
+    // (`8c7a34d4c` LAYOUT CHANGE: + `size_t len`.)
     assert_eq!(
         core::mem::size_of::<ClipboardContent>(),
         24,

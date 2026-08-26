@@ -359,9 +359,8 @@ typedef struct {
     ActionCValue value;
 } ActionC;
 
-/* ---- embedded.ClipboardContent (ghostty_clipboard_content_s, #[repr(C)]) ----
- * One representation of clipboard contents. The data is binary-safe with an
- * explicit length; it is not necessarily null-terminated (8c7a34d4c). */
+/* ---- embedded.ClipboardContent (ghostty_clipboard_content_s, #[repr(C)];
+ * 8c7a34d4c LAYOUT CHANGE: binary-safe data + explicit len) ---- */
 typedef struct {
     const char *mime;
     const uint8_t *data;
@@ -388,6 +387,14 @@ typedef struct {
     bool can_remember;
 } ClipboardConfirm;
 
+/* ---- apprt-api ClipboardReadResult (ghostty_clipboard_read_result_e, #[repr(C)]) ---- */
+typedef enum {
+    CLIPBOARD_READ_STARTED = 0,
+    CLIPBOARD_READ_UNAVAILABLE = 1,
+    CLIPBOARD_READ_UNSUPPORTED = 2,
+} ClipboardReadResult;
+
+
 /* ---- embedded.EnvVar (#[repr(C)]) ---- */
 typedef struct {
     const char *key;
@@ -410,12 +417,12 @@ typedef struct {
     bool supports_selection_clipboard;
     void (*wakeup)(void *userdata);
     bool (*action)(App *app, TargetC target, ActionC action);
-    int (*read_clipboard)(void *userdata,
-                          int req_type,
-                          ClipboardRequest *state,
-                          const char *const *mimes,
-                          uintptr_t mimes_len,
-                          bool list);
+    ClipboardReadResult (*read_clipboard)(void *userdata,
+                                          int req_type,
+                                          ClipboardRequest *state,
+                                          const char *const *mimes,
+                                          uintptr_t mimes_len,
+                                          bool list);
     void (*confirm_read_clipboard)(void *userdata,
                                    const ClipboardConfirm *confirm,
                                    ClipboardRequest *state,
@@ -1261,18 +1268,21 @@ bool rustty_surface_binding_action(Surface *ptr,
 /**
  * C: rustty_surface_complete_clipboard_request
  *
- * Complete a clipboard read request started via the read callback.
- * This can only be called once for a given request. Once it is called
- * with a request the request pointer will be invalidated.
+ * Complete a clipboard read request started via the read callback
+ * with the representations that could be served and, if requested,
+ * the listing of available MIME types. All memory is borrowed for
+ * the duration of the call. This can only be called once for a given
+ * request. Once it is called with a request the request pointer will
+ * be invalidated.
  *
  * To deny a request use rustty_surface_deny_clipboard_request
  * instead.
  *
  * # Safety
  * `ptr` must be a valid pointer returned by [`rustty_surface_new`]; `complete`
- * must point to a readable `rustty_clipboard_complete_s` (its arrays borrowed
- * for this call); `state` must be the request pointer handed to the host by
- * the read callback (it is invalidated by this call).
+ * must point at a valid `rustty_clipboard_complete_s` whose borrowed memory
+ * lives for the call; `state` must be the request pointer handed to the
+ * host by the read callback (it is invalidated by this call).
  */
 RUSTTY_API
 void rustty_surface_complete_clipboard_request(Surface *ptr,
@@ -1282,9 +1292,10 @@ void rustty_surface_complete_clipboard_request(Surface *ptr,
 /**
  * C: rustty_surface_deny_clipboard_request
  *
- * Deny a clipboard read request started via the read callback. Like a
- * completion this can only be called once for a given request and
- * invalidates the request pointer.
+ * Deny a clipboard read request started via the read callback,
+ * e.g. because the user rejected a confirmation prompt. Request
+ * types whose protocol expects an answer have their denial reply
+ * written to the pty. The request pointer is invalidated.
  *
  * # Safety
  * `ptr` must be a valid pointer returned by [`rustty_surface_new`]; `state`

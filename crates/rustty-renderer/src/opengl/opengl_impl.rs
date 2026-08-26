@@ -433,6 +433,19 @@ impl OpenGL {
         }
     }
 
+    /// Called when the renderer released its GPU resources; the last
+    /// presented target is deinited with them so we must drop our copy.
+    //
+    // pub fn gpuResourcesReleased(self: *OpenGL) void {
+    //     self.last_target = null;
+    // }
+    // (`c4e16970a`. The Rust `Target` has no `Drop` — GL objects are freed by
+    // the swap-chain teardown that precedes this call — so nulling the Option
+    // drops only the handle copy, exactly like the Zig assignment.)
+    pub fn gpu_resources_released(&mut self) {
+        self.last_target = None;
+    }
+
     /// GL-ATTACH — the WINDOWED present: blit `target`'s FBO into the CURRENTLY
     /// BOUND draw framebuffer, which under a live GTK GLArea IS the GLArea's
     /// framebuffer (GDK binds it — a non-zero FBO — before emitting `render`). This

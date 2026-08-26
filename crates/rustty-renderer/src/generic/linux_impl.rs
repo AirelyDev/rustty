@@ -144,9 +144,9 @@ pub enum Error {
     GlFailed,
     /// An allocation failed (the font `Atlas` allocation).
     OutOfMemory,
-    /// The swap chain is defunct (its GPU state was torn down). Reference
-    /// `error{Defunct}` (part of `drawFrame`'s error set).
-    Defunct,
+    // PORT NOTE (`c4e16970a`): the `Defunct` variant is DELETED with the swap
+    // chain's defunct flag — `nextFrame` is infallible and a released chain is
+    // `swap_chain == null` (rebuilt in `drawFrame`).
     /// A background-image `wuffs` decode failed (`WuffsError`/`Overflow`).
     /// `prepBackgroundImage` propagates the wuffs `Error` via `try` (the
     /// reference `!void` error set includes the wuffs `Error`); OOM maps to
@@ -221,11 +221,6 @@ impl From<OutOfMemory> for Error {
         Error::OutOfMemory
     }
 }
-impl From<Defunct> for Error {
-    fn from(_: Defunct) -> Self {
-        Error::Defunct
-    }
-}
 // `font.Shaper.init` (`Renderer::init`) fails with the platform shaper's error —
 // `harfbuzz` off macOS (a `Collection` failure or a HarfBuzz failure). It folds
 // into the aggregate `OutOfMemory` member of the reference `!void` inferred union
@@ -237,11 +232,8 @@ impl From<shape::harfbuzz::Error> for Error {
     }
 }
 
-/// Returned by [`SwapChain::next_frame`] when the swap chain is defunct.
-//
-// PORT NOTE (macos_impl generic.rs:1059-1063): reference `error{Defunct}`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Defunct;
+// PORT NOTE (`c4e16970a`): the `Defunct` marker type (reference
+// `error{Defunct}`) is DELETED — `SwapChain::next_frame` is infallible.
 
 // PORT NOTE (surface-mailbox seam RESOLVED — was a per-arm no-op placeholder):
 // `SurfaceMailbox`/`MailboxTimeout`/`SurfaceMessage`/`SurfaceMailboxSink` are now
@@ -372,8 +364,15 @@ pub struct Renderer {
     /// Health of the most recently completed frame.
     pub health: AtomicHealth,
 
-    /// Our swap chain (multiple buffering).
-    pub swap_chain: SwapChain,
+    /// True when we have a graphics context that can create GPU
+    /// resources. Creating any GPU resource while this is false is invalid.
+    pub display_realized: bool,
+
+    /// Our swap chain (multiple buffering). Null when it has
+    /// been released, either because the surface is hidden
+    /// (`releaseGpuResources`) or because the display is
+    /// unrealized. Rebuilt on the next `drawFrame`.
+    pub swap_chain: Option<SwapChain>,
 
     /// Force-updates swap chain targets on a config change that requires it.
     pub target_config_modified: usize,
@@ -395,6 +394,53 @@ pub struct Renderer {
 
     /// Our overlay state, if any.
     pub overlay: Option<Overlay>,
+
+    /// The base timestamp for the Kitty graphics animation clock.
+    /// Animation frame timing is expressed as milliseconds since
+    /// this instant. Set on the first frame update that observes
+    /// Kitty images.
+    //
+    // Zig `kitty_animation_clock: ?std.Io.Timestamp = null` -> `Option<Instant>`
+    // (the `first_frame_time`/`last_frame_time` monotonic-clock precedent).
+    pub kitty_animation_clock: Option<Instant>,
+
+    /// When the next Kitty animation frame is due, in
+    /// milliseconds on the animation clock, from the most recent
+    /// frame update. Null when no running animation needs a
+    /// wakeup.
+    pub kitty_animation_next_ms: Option<u64>,
+}
+
+/// The cadence of continuous (draw-only) animation wakes,
+/// i.e. 120fps, and the floor for any animation wake delay.
+//
+// PORT NOTE (`aee7bf347`): reference `pub const draw_interval_ms: u64 = 8;`
+// nested inside `Renderer`; a module-level sibling here (SCREAMING_CASE per
+// Rust const convention, the crate-wide precedent).
+pub const DRAW_INTERVAL_MS: u64 = 8;
+
+/// A point in the future when the renderer needs to be driven
+/// again to keep animating, and what kind of drive it needs.
+//
+// PORT NOTE: reference `pub const AnimationWake = struct { delay_ms, kind }`
+// nested inside `Renderer` (with `Kind` nested inside IT); module-level
+// siblings here (Rust cannot nest types inside impls), `Kind` named
+// `AnimationWakeKind`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnimationWake {
+    /// Delay in milliseconds until the wake is due.
+    pub delay_ms: u64,
+    pub kind: AnimationWakeKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnimationWakeKind {
+    /// A redraw alone suffices, no updateFrame. Much cheaper
+    /// than `update`.
+    Draw,
+
+    /// Frame data must be updated first: updateFrame, then draw.
+    Update,
 }
 
 /// Swap chain which maintains multiple copies of the state needed to render a
@@ -414,10 +460,12 @@ pub struct SwapChain {
     pub frame_index: u8,
     /// Semaphore we wait on to ensure a frame state struct is available.
     pub frame_sema: Semaphore,
-
-    /// Set to true when deinited, so a double-deinit is ignored (prevents
-    /// double-free on the `displayUnrealized`-then-`deinit` sequence).
-    pub defunct: bool,
+    // PORT NOTE (`c4e16970a`): the `defunct` flag is DELETED — the owner's
+    // `swap_chain: ?SwapChain` (`Option`) now models torn-down state. The
+    // exactly-once contract the GL per-frame `ptr::read` deinit relies on is
+    // carried by the callers: every `sc.deinit()` is immediately followed by
+    // `swap_chain = None` (release/unrealize) or by dropping the Renderer
+    // (`FrameState` has no `Drop`, so the stale copy frees nothing).
 }
 
 impl SwapChain {
@@ -441,7 +489,6 @@ impl SwapChain {
             frames,
             frame_index: 0,
             frame_sema: Semaphore::with_permits(SWAP_CHAIN_COUNT),
-            defunct: false,
         })
     }
 
@@ -452,14 +499,10 @@ impl SwapChain {
     // ports `generic.zig:283`'s `for (&self.frames) |*frame| frame.deinit()` FOR
     // REAL. `FrameState::deinit` consumes by value; since `FrameState` has no `Drop`,
     // reading each out of the array (via `ptr::read`) and consuming it is sound —
-    // the stale array copies are never dropped, and the `defunct` guard makes this
-    // run exactly once, so there is no double-free.
+    // the stale array copies are never dropped, and the callers' Option
+    // discipline (see the struct PORT NOTE) makes this run exactly once, so
+    // there is no double-free.
     pub fn deinit(&mut self) {
-        if self.defunct {
-            return;
-        }
-        self.defunct = true;
-
         // Wait for all inflight draws to complete so we can cleanly deinit GPU state.
         for _ in 0..SWAP_CHAIN_COUNT {
             self.frame_sema.wait();
@@ -467,7 +510,8 @@ impl SwapChain {
         for frame in &mut self.frames {
             // SAFETY: `FrameState` (and its GL-handle fields) have no `Drop`, so
             // duplicating the handle via `read` + consuming it in `deinit` cannot
-            // double-free; `deinit` runs exactly once (the `defunct` guard above).
+            // double-free; `deinit` runs exactly once (the callers' Option
+            // discipline).
             let frame = unsafe { core::ptr::read(frame) };
             frame.deinit();
         }
@@ -475,18 +519,12 @@ impl SwapChain {
 
     /// Get the next frame state to draw to (waits on the semaphore; must be paired
     /// with [`SwapChain::release_frame`]).
-    // PORTS: generic.zig:288-297 `SwapChain.nextFrame`; macos_impl generic.rs:1427-1441.
-    pub fn next_frame(&mut self) -> Result<&mut FrameState, Defunct> {
-        if self.defunct {
-            return Err(Defunct);
-        }
-
+    // PORTS: `SwapChain.nextFrame` (`c4e16970a`: infallible — the defunct check
+    // is gone; the Zig `errdefer` was deleted with it).
+    pub fn next_frame(&mut self) -> &mut FrameState {
         self.frame_sema.wait();
-        // (The Zig `errdefer self.frame_sema.post()` guards the infallible index
-        // update below; there is no error path between the `wait` and the return, so
-        // the errdefer never fires.)
         self.frame_index = (self.frame_index + 1) % (SWAP_CHAIN_COUNT as u8);
-        Ok(&mut self.frames[self.frame_index as usize])
+        &mut self.frames[self.frame_index as usize]
     }
 
     /// Called when the frame has completed drawing.
@@ -943,8 +981,11 @@ impl Renderer {
             font_shaper_cache: ShaperCache::init(),
             shaders,
             api,
-            swap_chain,
+            swap_chain: Some(swap_chain),
             // ---- Zig struct-decl defaults (OMITTED by the 701-787 literal) ----
+            display_realized: true,
+            kitty_animation_clock: None,
+            kitty_animation_next_ms: None,
             draw_mutex: Mutex::new(),
             custom_shader_focused_changed: false,
             cells_rebuilt: false,
@@ -1001,9 +1042,11 @@ impl Renderer {
         // arena field was collapsed (message.rs), so the owned `Option`s free via
         // Rust `Drop`; no explicit call.
         //
-        // self.swap_chain.deinit(); (805) — frees every frame's GL objects (context
-        // still current).
-        self.swap_chain.deinit();
+        // if (self.swap_chain) |*sc| sc.deinit(); (805) — frees every frame's GL
+        // objects (context still current).
+        if let Some(sc) = &mut self.swap_chain {
+            sc.deinit();
+        }
 
         // (806-811) DisplayLink teardown — omitted (void off macOS).
 
@@ -1044,11 +1087,78 @@ impl Renderer {
         // self.* = undefined; (829) — no-op (Rust ownership handles teardown).
     }
 
-    /// True if our renderer has animations (higher-frequency timer).
-    // PORTS: generic.zig `hasAnimations`; macos_impl generic.rs:5227-5229.
-    #[allow(dead_code)]
-    pub fn has_animations(&self) -> bool {
-        self.has_custom_shaders
+    /// The soonest animation wake this renderer needs, if any:
+    /// custom shader animation wants continuous draw-only wakes
+    /// at draw_interval_ms while active, and a running Kitty
+    /// graphics animation wants an update wake when its next
+    /// frame is due. The renderer thread drives its animation
+    /// timer off this, re-querying after every wake.
+    ///
+    /// Must be called on the render thread.
+    //
+    // PORTS: `animationWake` (`aee7bf347`, REPLACES `hasAnimations`); the macos
+    // twin carries the verbatim Zig quote — API-free code, copied verbatim.
+    pub fn animation_wake(&self) -> Option<AnimationWake> {
+        // Custom shaders animate by redrawing on a fixed cadence,
+        // gated by configuration and focus.
+        let shader_delay: Option<u64> = 'shader: {
+            if !self.has_custom_shaders {
+                break 'shader None;
+            }
+            break 'shader match self.config.custom_shader_animation {
+                crate::thread::CustomShaderAnimation::False => None,
+                crate::thread::CustomShaderAnimation::Always => Some(DRAW_INTERVAL_MS),
+                crate::thread::CustomShaderAnimation::True => {
+                    if self.focused {
+                        Some(DRAW_INTERVAL_MS)
+                    } else {
+                        None
+                    }
+                }
+            };
+        };
+
+        // Kitty animations tick during updateFrame; between
+        // updates the deadline is absolute on the animation
+        // clock, so a stream of draw wakes recomputing this
+        // cannot starve it into the future.
+        let kitty_delay: Option<u64> = 'kitty: {
+            let next = match self.kitty_animation_next_ms {
+                Some(next) => next,
+                None => break 'kitty None,
+            };
+            let base = match self.kitty_animation_clock {
+                Some(base) => base,
+                None => break 'kitty None,
+            };
+            let now = Instant::now();
+            let now_ms: u64 = now.duration_since(base).as_millis() as u64;
+            // Never wake faster than the draw interval; an
+            // overdue frame is picked up on the next wake.
+            break 'kitty Some(core::cmp::max(
+                next.saturating_sub(now_ms),
+                DRAW_INTERVAL_MS,
+            ));
+        };
+
+        // An update wake includes a draw, so it wins ties.
+        if let Some(k) = kitty_delay {
+            if shader_delay.is_none() || k <= shader_delay.unwrap() {
+                return Some(AnimationWake {
+                    delay_ms: k,
+                    kind: AnimationWakeKind::Update,
+                });
+            }
+        }
+
+        if let Some(s) = shader_delay {
+            return Some(AnimationWake {
+                delay_ms: s,
+                kind: AnimationWakeKind::Draw,
+            });
+        }
+
+        None
     }
 
     // =======================================================================
@@ -1169,11 +1279,59 @@ impl Renderer {
         Ok(())
     }
 
-    /// PORTS: generic.zig:1053-1065 `setVisible`; macos_impl generic.rs:2382-2390.
-    /// The whole body is inside `if (comptime DisplayLink != void)`, so on Linux
-    /// (DisplayLink void) it is a faithful no-op.
+    /// PORTS: `setVisible`. The display-link half is inside `if (comptime
+    /// DisplayLink != void)`, so on Linux (DisplayLink void) it folds away.
+    //
+    // PORT NOTE (`c4e16970a`, monomorphic fold): the release-on-hidden tail is
+    // gated `if (comptime !apprt.must_draw_from_app_thread)` — this OpenGL twin
+    // serves the GTK apprt, whose `MUST_DRAW_FROM_APP_THREAD` is TRUE (GTK owns
+    // the GL context on the app thread), so the guard folds the release AWAY
+    // here; the apprt calls `release_gpu_resources` at the appropriate time
+    // instead (on the app thread with the context current).
     pub fn set_visible(&self, visible: bool) {
         let _ = visible;
+    }
+
+    /// Release the GPU resources we hold while the surface is not
+    /// visible. Today this is the swap chain (render targets, font
+    /// atlas texture copies, cell buffers, custom shader textures),
+    /// which makes up nearly all of a surface's GPU memory usage;
+    /// a hidden surface doesn't draw, so it doesn't need it. The
+    /// swap chain is rebuilt on the next `drawFrame`.
+    ///
+    /// This is safe to call in any state; resources that are
+    /// already released are skipped.
+    ///
+    /// For OpenGL this must be called on the app thread with the
+    /// GL context current (the same requirement as
+    /// `displayUnrealized`). Other APIs may call this from the
+    /// render thread; see `apprt.must_draw_from_app_thread`.
+    //
+    // pub fn releaseGpuResources(self: *Self) void { ... }
+    // (`c4e16970a`; the macos twin carries the verbatim quote.)
+    pub fn release_gpu_resources(&mut self) {
+        self.draw_mutex.lock();
+        // `defer self.draw_mutex.unlock()`: INFALLIBLE body (no `?`) => the end
+        // unlock is reached on every non-panic path (the `set_font_grid`
+        // precedent).
+
+        if let Some(sc) = &mut self.swap_chain {
+            // Waits for any in-flight frames to complete, then
+            // frees all GPU resources.
+            sc.deinit();
+            self.swap_chain = None;
+
+            // Let the API drop any references it holds to swap
+            // chain resources (e.g. OpenGL's last presented
+            // target).
+            // if (comptime @hasDecl(GraphicsAPI, "gpuResourcesReleased")) {
+            //     self.api.gpuResourcesReleased();
+            // }
+            // (TRUE for the OpenGL leaf — OpenGL.zig declares it.)
+            self.api.gpu_resources_released();
+        }
+
+        self.draw_mutex.unlock();
     }
 
     /// Mark the full screen as dirty so that we redraw everything.
@@ -1199,9 +1357,14 @@ impl Renderer {
 
         // Update all our textures so that they sync on the next frame. We can
         // modify this without a lock because the GPU does not touch this data.
-        for frame in &mut self.swap_chain.frames {
-            frame.grayscale_modified = 0;
-            frame.color_modified = 0;
+        // A released swap chain is rebuilt with fresh frames that sync all
+        // textures on first use.
+        // if (self.swap_chain) |*sc| for (&sc.frames) |*frame| { ... };
+        if let Some(sc) = &mut self.swap_chain {
+            for frame in &mut sc.frames {
+                frame.grayscale_modified = 0;
+                frame.color_modified = 0;
+            }
         }
 
         // Get our metrics from the grid. This doesn't require a lock because the
@@ -1582,10 +1745,12 @@ impl Renderer {
         // natural end — the exact idiom used by `generic.rs::change_config`.
         self.draw_mutex.lock();
 
-        // We assume that the swap chain was deinited in `display_unrealized`, in
-        // which case it should be marked defunct. If not, we have a problem.
-        // assert(self.swap_chain.defunct); (generic.zig:952)
-        assert!(self.swap_chain.defunct);
+        // We assume that the swap chain was deinited in
+        // `displayUnrealized`. If not, we have a problem.
+        // assert(self.swap_chain == null);
+        // assert(!self.display_realized);
+        assert!(self.swap_chain.is_none());
+        assert!(!self.display_realized);
 
         // We reinitialize our shaders and our swap chain.
         // try self.initShaders(); (generic.zig:955)
@@ -1594,17 +1759,15 @@ impl Renderer {
             return Err(e);
         }
         // self.swap_chain = try SwapChain.init(self.api, self.has_custom_shaders);
-        //   (generic.zig:956-959). The old (defunct) swap chain is overwritten; its
-        // frames' GL objects were already freed by `display_unrealized` and
-        // `FrameState`/`SwapChain` have no `Drop`, so the overwrite cannot
-        // double-free.
         match SwapChain::init(&self.api, self.has_custom_shaders) {
-            Ok(sc) => self.swap_chain = sc,
+            Ok(sc) => self.swap_chain = Some(sc),
             Err(e) => {
                 self.draw_mutex.unlock();
                 return Err(e);
             }
         }
+        // self.display_realized = true;
+        self.display_realized = true;
         // self.reinitialize_shaders = false; (generic.zig:960)
         self.reinitialize_shaders = false;
         // self.target_config_modified = 1; (generic.zig:961)
@@ -1646,10 +1809,18 @@ impl Renderer {
         // + unlock at the natural end — no early-return unlock needed.
         self.draw_mutex.lock();
 
-        // We deinit our swap chain and shaders. This will mark them as defunct so
-        // that they can't be double-freed or used in draw calls.
-        // self.swap_chain.deinit(); (generic.zig:982)
-        self.swap_chain.deinit();
+        // We deinit our swap chain and shaders. Clearing
+        // `display_realized` ensures drawFrame doesn't attempt
+        // to rebuild the swap chain (we have no GPU context);
+        // displayRealized will.
+        // if (self.swap_chain) |*sc| sc.deinit();
+        // self.swap_chain = null;
+        // self.display_realized = false;
+        if let Some(sc) = &mut self.swap_chain {
+            sc.deinit();
+        }
+        self.swap_chain = None;
+        self.display_realized = false;
         // self.shaders.deinit(self.alloc); (generic.zig:983) — the Rust `Shaders`
         // frees its GL pipelines with no allocator arg (see `deinit_shaders`); it is
         // `defunct`-guarded, so the later `Renderer::deinit`/`init_shaders` won't
@@ -3438,6 +3609,46 @@ impl Renderer {
             // Get our preedit state
             let preedit: Option<state::Preedit> = state.preedit.as_ref().map(|p| p.clone());
 
+            // Advance any running Kitty graphics animations to the
+            // frame due now, and remember when the next frame is
+            // due (as an absolute deadline, see animationWake) so
+            // the renderer thread can schedule a wakeup for it.
+            // This must happen before the dirty check below:
+            // advancing a frame marks the image state dirty.
+            //
+            // (the macos twin carries the verbatim Zig quote — API-free code,
+            // copied verbatim.)
+            //
+            // SAFETY (assessment D hazard, `animationTick` threading): the
+            // tick MUTATES kitty storage (frame advance + dirty stamp) from
+            // the render thread while the terminal is LOCKED (this whole
+            // block runs under the renderer/terminal mutex, like the
+            // `begin_update` above) — the IO thread cannot interleave. The
+            // `&mut` is re-derived from the raw screen ptr for exactly this
+            // statement (no borrow held across).
+            self.kitty_animation_next_ms = 'next: {
+                // Likely case: we have no kitty images, so do nothing.
+                let active = unsafe { (*t).screens.active };
+                if unsafe { &(*active).kitty_images }.images.is_empty() {
+                    break 'next None;
+                }
+
+                let now = Instant::now();
+                let base = match self.kitty_animation_clock {
+                    Some(base) => base,
+                    None => {
+                        self.kitty_animation_clock = Some(now);
+                        now
+                    }
+                };
+                let now_ms: u64 = now.duration_since(base).as_millis() as u64;
+                let delay = match unsafe { &mut (*active).kitty_images }.animation_tick(now_ms) {
+                    Some(delay) => delay,
+                    None => break 'next None,
+                };
+                break 'next Some(now_ms + delay);
+            };
+
             // If we have Kitty graphics data, we enter a SLOW SLOW SLOW path.
             // We only do this if the Kitty image state is dirty meaning only if
             // it changes.
@@ -3976,9 +4187,12 @@ impl Renderer {
             );
         }
 
-        // Always release our semaphore.
-        // self.swap_chain.releaseFrame();
-        self.swap_chain.release_frame();
+        // Always release our semaphore. The swap chain is
+        // guaranteed to exist here: it is only torn down after
+        // waiting for all in-flight frames to complete, and this
+        // callback is what signals that completion.
+        // self.swap_chain.?.releaseFrame();
+        self.swap_chain.as_ref().unwrap().release_frame();
     }
 
     /// Draw the frame to the screen.
@@ -4065,9 +4279,11 @@ impl Renderer {
         }
         impl Drop for ReleaseGuard {
             fn drop(&mut self) {
-                // errdefer self.swap_chain.releaseFrame();
+                // errdefer swap_chain.releaseFrame();
+                // (the chain exists whenever the guard is armed — armed only
+                // after `next_frame` on the established-Some chain.)
                 if self.armed {
-                    unsafe { (*self.r).swap_chain.release_frame() };
+                    unsafe { (*self.r).swap_chain.as_ref().unwrap().release_frame() };
                 }
             }
         }
@@ -4087,15 +4303,47 @@ impl Renderer {
             return Ok(());
         }
 
+        // If we have no graphics context we can't draw. This is
+        // only the case while unrealized (GTK); displayRealized
+        // rebuilds the swap chain.
+        // if (!self.display_realized) return;
+        if !unsafe { (*self_ptr).display_realized } {
+            return Ok(());
+        }
+
+        // Get our swap chain, rebuilding it if it was released
+        // while we were hidden. Rebuilding is deferred to draw
+        // time because resource creation must happen somewhere
+        // our graphics API allows it (OpenGL requires a current
+        // context, which drawFrame guarantees).
+        //
+        // (raw-ptr discipline: instead of the reference's held `*SwapChain`
+        // local, the chain is re-derived FRESH from `self_ptr` at every use
+        // below — the same rule as `frame`; the macos twin carries the verbatim
+        // Zig quote.)
+        let swap_chain_rebuilt: bool = if unsafe { (*self_ptr).swap_chain.is_some() } {
+            false
+        } else {
+            let sc = SwapChain::init(unsafe { &(*self_ptr).api }, unsafe {
+                (*self_ptr).has_custom_shaders
+            })?;
+            unsafe { (*self_ptr).swap_chain = Some(sc) };
+            true
+        };
+
         let size_changed = unsafe {
             (*self_ptr).size.screen.width != surface_size.width
                 || (*self_ptr).size.screen.height != surface_size.height
         };
 
         // Conditions under which we need to draw the frame.
+        //
+        // While any animation is in progress (a pending animation wake)
+        // every draw must actually render.
         let needs_redraw = size_changed
+            || swap_chain_rebuilt
             || unsafe { (*self_ptr).cells_rebuilt }
-            || unsafe { (*self_ptr).has_animations() }
+            || unsafe { (*self_ptr).animation_wake().is_some() }
             || sync;
 
         if !needs_redraw {
@@ -4106,17 +4354,17 @@ impl Renderer {
         // self.cells_rebuilt = false;
         unsafe { (*self_ptr).cells_rebuilt = false };
 
-        // const frame = try self.swap_chain.nextFrame(); errdefer self.swap_chain.releaseFrame();
+        // const frame = swap_chain.nextFrame(); errdefer swap_chain.releaseFrame();
         // (called for its side effects; the returned `&mut FrameState` is dropped
-        // immediately and `frame` is re-derived fresh from `self_ptr` at each use.)
-        if let Err(e) = unsafe { (*self_ptr).swap_chain.next_frame() } {
-            return Err(e.into());
-        }
+        // immediately and `frame` is re-derived fresh from `self_ptr` at each use.
+        // The chain is Some here — established/rebuilt above; teardown is
+        // excluded by the held draw_mutex.)
+        let _ = unsafe { (*self_ptr).swap_chain.as_mut().unwrap().next_frame() };
         let mut release_guard = ReleaseGuard {
             r: self_ptr,
             armed: true,
         };
-        let idx = unsafe { (*self_ptr).swap_chain.frame_index as usize };
+        let idx = unsafe { (*self_ptr).swap_chain.as_ref().unwrap().frame_index as usize };
 
         // If we need to reinitialize our shaders, do so.
         // if (self.reinitialize_shaders) { self.reinitialize_shaders = false;
@@ -4140,8 +4388,13 @@ impl Renderer {
         // it.
         // PORTS: generic.zig:1305-1324; macos_impl generic.rs:5588-5621.
         {
-            let frame: *mut FrameState =
-                unsafe { addr_of_mut!((*self_ptr).swap_chain.frames[idx]) };
+            let frame: *mut FrameState = unsafe {
+                // Narrow projection through the `Option` (a fresh,
+                // immediately-discarded reborrow of ONLY the `swap_chain`
+                // field; the chain is Some — established above, teardown
+                // excluded by the held draw_mutex).
+                addr_of_mut!((*self_ptr).swap_chain.as_mut().unwrap().frames[idx])
+            };
             // if (self.has_custom_shaders) {
             if unsafe { (*self_ptr).has_custom_shaders } {
                 // if (frame.custom_shader_state == null) {
@@ -4191,8 +4444,13 @@ impl Renderer {
         // if (frame.target.width != self.size.screen.width or … or
         //     frame.target_config_modified != self.target_config_modified) { … }
         {
-            let frame: *mut FrameState =
-                unsafe { addr_of_mut!((*self_ptr).swap_chain.frames[idx]) };
+            let frame: *mut FrameState = unsafe {
+                // Narrow projection through the `Option` (a fresh,
+                // immediately-discarded reborrow of ONLY the `swap_chain`
+                // field; the chain is Some — established above, teardown
+                // excluded by the held draw_mutex).
+                addr_of_mut!((*self_ptr).swap_chain.as_mut().unwrap().frames[idx])
+            };
             let need_resize = unsafe {
                 (*frame).target.width != (*self_ptr).size.screen.width as usize
                     || (*frame).target.height != (*self_ptr).size.screen.height as usize
@@ -4242,7 +4500,13 @@ impl Renderer {
         // popped any earlier frame tag.
         // (No whole-`&mut self` reborrows occur from here to `complete()`, so this
         // root survives to the end.)
-        let frame: *mut FrameState = unsafe { addr_of_mut!((*self_ptr).swap_chain.frames[idx]) };
+        let frame: *mut FrameState = unsafe {
+            // Narrow projection through the `Option` (a fresh,
+            // immediately-discarded reborrow of ONLY the `swap_chain`
+            // field; the chain is Some — established above, teardown
+            // excluded by the held draw_mutex).
+            addr_of_mut!((*self_ptr).swap_chain.as_mut().unwrap().frames[idx])
+        };
 
         // Setup our frame data (the serialization boundary: ergonomic `crate::shaders`
         // structs → their OpenGL-ABI POD images via `opengl::gpu_abi`'s `From`).
@@ -4873,19 +5137,19 @@ mod tests {
         };
 
         // Fresh renderer: live GL resources.
-        assert!(!r.swap_chain.defunct);
+        assert!(r.swap_chain.is_some());
         assert!(!r.shaders.defunct);
 
         // Unrealize: frees + marks the GL-context-bound resources defunct
         // (generic.zig:982-983).
         r.display_unrealized();
-        assert!(r.swap_chain.defunct);
+        assert!(r.swap_chain.is_none());
         assert!(r.shaders.defunct);
 
         // Realize: rebuilds from the defunct state (asserts swap_chain.defunct
         // internally) and resets the frame-config flags (generic.zig:952-961).
         r.display_realized().expect("display_realized rebuild");
-        assert!(!r.swap_chain.defunct);
+        assert!(r.swap_chain.is_some());
         assert!(!r.shaders.defunct);
         assert!(!r.reinitialize_shaders);
         assert_eq!(r.target_config_modified, 1);
@@ -4893,10 +5157,10 @@ mod tests {
         // A second cycle proves the rebuilt resources are themselves re-tearable
         // (no double-free on the fresh swap chain / shaders).
         r.display_unrealized();
-        assert!(r.swap_chain.defunct);
+        assert!(r.swap_chain.is_none());
         r.display_realized()
             .expect("display_realized second rebuild");
-        assert!(!r.swap_chain.defunct);
+        assert!(r.swap_chain.is_some());
 
         // Teardown must not panic/leak after the re-realize cycle.
         r.deinit();
@@ -5251,8 +5515,10 @@ mod tests {
         r.draw_frame(true).unwrap();
 
         // Read back the FBO pixels of the frame just drawn (RGBA, rows tight).
-        let idx = r.swap_chain.frame_index as usize;
-        let px = r.swap_chain.frames[idx].target.read_rgba();
+        let idx = r.swap_chain.as_ref().unwrap().frame_index as usize;
+        let px = r.swap_chain.as_ref().unwrap().frames[idx]
+            .target
+            .read_rgba();
 
         let w = r.size.screen.width as usize;
         let h = r.size.screen.height as usize;
@@ -5436,8 +5702,10 @@ mod tests {
         // pixel. Structural threshold (>128 on all three channels), never a byte
         // comparison against Metal — llvmpipe and Metal are different rasterizers.
         // Y-FLIP as in `golden_renders_cursor_fg_bg`: `glReadPixels` is bottom-up.
-        let idx = r.swap_chain.frame_index as usize;
-        let px = r.swap_chain.frames[idx].target.read_rgba();
+        let idx = r.swap_chain.as_ref().unwrap().frame_index as usize;
+        let px = r.swap_chain.as_ref().unwrap().frames[idx]
+            .target
+            .read_rgba();
         let w = r.size.screen.width as usize;
         let h = r.size.screen.height as usize;
         let cw = r.grid_metrics.cell_width as usize;
@@ -5603,13 +5871,17 @@ mod tests {
         // The draw_frame setup block lazily created the per-frame CustomShaderState
         // (the config had no shaders at `Renderer::init`, so `FrameState::init` did
         // not — this is the F-013 wiring, absent before the fix).
-        let idx = r.swap_chain.frame_index as usize;
+        let idx = r.swap_chain.as_ref().unwrap().frame_index as usize;
         assert!(
-            r.swap_chain.frames[idx].custom_shader_state.is_some(),
+            r.swap_chain.as_ref().unwrap().frames[idx]
+                .custom_shader_state
+                .is_some(),
             "custom_shader_state not created by draw_frame"
         );
 
-        let px = r.swap_chain.frames[idx].target.read_rgba();
+        let px = r.swap_chain.as_ref().unwrap().frames[idx]
+            .target
+            .read_rgba();
         let _ = std::fs::remove_file(&path);
         Some((r, t, px))
     }
@@ -5817,8 +6089,10 @@ mod tests {
                 );
             }
 
-            let idx = r.swap_chain.frame_index as usize;
-            let px = r.swap_chain.frames[idx].target.read_rgba();
+            let idx = r.swap_chain.as_ref().unwrap().frame_index as usize;
+            let px = r.swap_chain.as_ref().unwrap().frames[idx]
+                .target
+                .read_rgba();
             let w = r.size.screen.width as usize;
             let h = r.size.screen.height as usize;
             let cw = r.grid_metrics.cell_width as usize;
@@ -6143,8 +6417,10 @@ mod tests {
         // Baseline frame WITHOUT the overlay.
         r.draw_frame(true).unwrap();
         let before = {
-            let idx = r.swap_chain.frame_index as usize;
-            r.swap_chain.frames[idx].target.read_rgba()
+            let idx = r.swap_chain.as_ref().unwrap().frame_index as usize;
+            r.swap_chain.as_ref().unwrap().frames[idx]
+                .target
+                .read_rgba()
         };
 
         // (positive) attach an inspector reporting one enabled feature.
@@ -6197,8 +6473,10 @@ mod tests {
         // byte-diff against Metal — llvmpipe is a different rasterizer.
         // Y-FLIP as in `golden_renders_cursor_fg_bg`: `glReadPixels` is bottom-up.
         let after = {
-            let idx = r.swap_chain.frame_index as usize;
-            r.swap_chain.frames[idx].target.read_rgba()
+            let idx = r.swap_chain.as_ref().unwrap().frame_index as usize;
+            r.swap_chain.as_ref().unwrap().frames[idx]
+                .target
+                .read_rgba()
         };
         let w = r.size.screen.width as usize;
         let h = r.size.screen.height as usize;

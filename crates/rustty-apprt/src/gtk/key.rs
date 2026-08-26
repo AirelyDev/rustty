@@ -519,13 +519,13 @@ static KEYMAP: &[(gdk4::Key, Key)] = &[
     // TODO: media keys
 ];
 
-/// PORTS: the physical-key resolution in `keyEvent` (`class/surface.zig:1361-1379`).
+/// PORTS: the physical-key resolution in `keyEvent` (`class/surface.zig`).
 /// Consults the W3C keycode table ([`keycodes::entries`]) for the native
-/// `keycode`, then — if the W3C key or the GDK-remapped key is eligible for
-/// remapping — prefers the remapped key. Extracted here (display-free) so it is
-/// unit-testable and shared.
+/// `keycode`, then applies [`remap_key`] (`ef01d5fda`: the former inline
+/// remap block). Extracted here (display-free) so it is unit-testable and
+/// shared.
 #[must_use]
-pub fn physical_key(keycode: u32, keyval: u32) -> Key {
+pub fn physical_key(keycode: u32, keyval: u32, is_modifier: bool) -> Key {
     // The W3C physical key for this native keycode, else `.unidentified`
     // (`surface.zig:1362-1364`).
     let w3c_key = keycodes::entries()
@@ -533,17 +533,82 @@ pub fn physical_key(keycode: u32, keyval: u32) -> Key {
         .find(|entry| entry.native == keycode)
         .map_or(Key::Unidentified, |entry| entry.key);
 
-    // Consult the pre-remapped XKB keyval to get the (possibly) remapped key.
-    // If the W3C key or the remapped key is eligible for remapping, use it
-    // (`surface.zig:1366-1375`).
+    // break :keycode gtk_key.remapKey(w3c_key, keyval, key_event.isModifier() != 0);
+    remap_key(w3c_key, keyval, is_modifier)
+}
+
+/// Returns the logical key after applying any eligible XKB remapping.
+///
+/// Modifier keyvals that Rustty doesn't represent must not fall back to the
+/// physical key. XKB can turn any physical key into a modifier, and using the
+/// original key in that case would encode an unrelated key press.
+//
+// pub fn remapKey(
+//     physical_key: input.Key,
+//     keyval: c_uint,
+//     is_modifier: bool,
+// ) input.Key {
+#[must_use]
+pub fn remap_key(physical_key: Key, keyval: u32, is_modifier: bool) -> Key {
+    // if (keyFromKeyval(keyval)) |remapped| {
+    //     if (physical_key.shouldBeRemappable() or remapped.shouldBeRemappable())
+    //         return remapped;
+    // }
     if let Some(remapped) = key_from_keyval(keyval) {
-        if w3c_key.should_be_remappable() || remapped.should_be_remappable() {
+        if physical_key.should_be_remappable() || remapped.should_be_remappable() {
             return remapped;
         }
     }
 
-    // Return the original physical key (`surface.zig:1378`).
-    w3c_key
+    // if (is_modifier or isModifierKeyval(keyval)) return .unidentified;
+    // return physical_key;
+    if is_modifier || is_modifier_keyval(keyval) {
+        return Key::Unidentified;
+    }
+    physical_key
+}
+
+/// Returns whether a keyval has modifier semantics that GDK may not expose
+/// through `gdk_key_event_is_modifier`.
+///
+/// In particular, XKB can report ISO level and group modifiers as keyvals
+/// such as `Mode_switch` while GDK reports that the event is not a modifier.
+//
+// fn isModifierKeyval(keyval: c_uint) bool {
+fn is_modifier_keyval(keyval: u32) -> bool {
+    // return switch (keyval) { gdk.KEY_Shift_L, ... => true, else => false };
+    //
+    // (gdk4-rs: the `gdk4::Key` constants; compared by keyval value.)
+    let key = unsafe { gdk4::Key::from_glib(keyval) };
+    matches!(
+        key,
+        gdk4::Key::Shift_L
+            | gdk4::Key::Shift_R
+            | gdk4::Key::Shift_Lock
+            | gdk4::Key::Control_L
+            | gdk4::Key::Control_R
+            | gdk4::Key::Caps_Lock
+            | gdk4::Key::Meta_L
+            | gdk4::Key::Meta_R
+            | gdk4::Key::Alt_L
+            | gdk4::Key::Alt_R
+            | gdk4::Key::Super_L
+            | gdk4::Key::Super_R
+            | gdk4::Key::Hyper_L
+            | gdk4::Key::Hyper_R
+            | gdk4::Key::Num_Lock
+            | gdk4::Key::Mode_switch
+            | gdk4::Key::ISO_Lock
+            | gdk4::Key::ISO_Level2_Latch
+            | gdk4::Key::ISO_Level3_Shift
+            | gdk4::Key::ISO_Level3_Latch
+            | gdk4::Key::ISO_Level3_Lock
+            | gdk4::Key::ISO_Level5_Shift
+            | gdk4::Key::ISO_Level5_Latch
+            | gdk4::Key::ISO_Level5_Lock
+            | gdk4::Key::ISO_Group_Latch
+            | gdk4::Key::ISO_Group_Lock
+    )
 }
 
 #[cfg(test)]
@@ -553,6 +618,46 @@ mod tests {
 
     fn trigger(mods: Mods, key: TriggerKey) -> Trigger {
         Trigger { key, mods }
+    }
+
+    // test "remap key" (`ef01d5fda`). Display-free.
+    #[test]
+    fn key_remap_key() {
+        // XKB remaps between non-writing-system keys are honored.
+        // try testing.expectEqual(input.Key.escape, remapKey(.caps_lock, gdk.KEY_Escape, false));
+        assert_eq!(
+            Key::Escape,
+            remap_key(Key::CapsLock, gdk4::Key::Escape.into_glib() as u32, false),
+        );
+
+        // Writing-system keys retain their physical identity.
+        // try testing.expectEqual(input.Key.key_a, remapKey(.key_a, gdk.KEY_b, false));
+        assert_eq!(
+            Key::KeyA,
+            remap_key(Key::KeyA, gdk4::Key::b.into_glib() as u32, false),
+        );
+
+        // GDK doesn't identify Mode_switch as a modifier, but it must not fall
+        // back to the physical key.
+        // try testing.expectEqual(input.Key.unidentified,
+        //     remapKey(.delete, gdk.KEY_Mode_switch, false));
+        assert_eq!(
+            Key::Unidentified,
+            remap_key(
+                Key::Delete,
+                gdk4::Key::Mode_switch.into_glib() as u32,
+                false
+            ),
+        );
+
+        // GDK's modifier flag also covers custom modifier actions whose keyval
+        // Rustty doesn't represent.
+        // try testing.expectEqual(input.Key.unidentified,
+        //     remapKey(.delete, gdk.KEY_VoidSymbol, true));
+        assert_eq!(
+            Key::Unidentified,
+            remap_key(Key::Delete, gdk4::Key::VoidSymbol.into_glib() as u32, true),
+        );
     }
 
     /// PORTS: `key.zig:300-313` `test "accelFromTrigger"`. Display-free (pure GDK

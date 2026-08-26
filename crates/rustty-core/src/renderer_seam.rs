@@ -92,26 +92,30 @@ use rustty_datastruct::blocking_queue::Timeout;
 use std::sync::Arc;
 
 // Thread.zig:19-20
-const DRAW_INTERVAL: u64 = 8; // 120 FPS
+// PORT NOTE (`aee7bf347`): `DRAW_INTERVAL` is DELETED with the draw timer —
+// the renderer computes the cadence itself (`generic`'s `DRAW_INTERVAL_MS`
+// floor inside `animation_wake`).
 const CURSOR_BLINK_INTERVAL: u64 = 600;
 
-// PORT NOTE (Thread.zig:22-30):
-//   /// Whether calls to `drawFrame` must be done from the app thread.
-//   ///
-//   /// If this is `true` then we send a `redraw_surface` message to the apprt
-//   /// whenever we need to draw instead of calling `drawFrame` directly.
-//   const must_draw_from_app_thread =
-//       if (@hasDecl(apprt.App, "must_draw_from_app_thread"))
-//           apprt.App.must_draw_from_app_thread
-//       else
-//           false;
-// `@hasDecl(apprt.App, "must_draw_from_app_thread")` — the embedded/macOS App
-// does NOT declare it (only the GTK App does), so the probe resolves to
-// `false` there. Rust models the `@hasDecl` two-case fold as a trait const that
-// DEFAULTS to `false` (`apprt::App::MUST_DRAW_FROM_APP_THREAD`); the GTK backend
-// overrides it to `true`. This is read at the `drawFrame` site below as
-// `A::MUST_DRAW_FROM_APP_THREAD` — the concrete apprt backend `A` picks the arm.
-// Both `drawFrame` arms (the `drawFrame` helper below) stay live regardless.
+// PORT NOTE (Thread.zig / `c4e16970a` HOIST): upstream moved the
+// `must_draw_from_app_thread` decl from renderer/Thread.zig into
+// `src/apprt.zig`:
+//   /// True if all GPU operations (drawing, resource creation and
+//   /// destruction) must happen on the app thread. This is the case
+//   /// when the graphics context is owned by the app thread (GTK's
+//   /// GLArea). When false, the render thread performs GPU operations
+//   /// itself.
+//   pub const must_draw_from_app_thread =
+//       @hasDecl(App, "must_draw_from_app_thread") and
+//       App.must_draw_from_app_thread;
+// Rust already models the `@hasDecl` two-case fold as the apprt-level trait
+// const `apprt::App::MUST_DRAW_FROM_APP_THREAD` (DEFAULTS to `false`; the GTK
+// backend overrides it to `true`) — i.e. the hoisted apprt-owned decl. It is
+// read at the `drawFrame` site below as `A::MUST_DRAW_FROM_APP_THREAD` — the
+// concrete apprt backend `A` picks the arm. Both `drawFrame` arms (the
+// `drawFrame` helper below) stay live regardless. The renderer twins fold the
+// same constant statically per-target (generic.rs / generic/linux_impl.rs
+// `set_visible`).
 
 /// PORT NOTE (Rust-only glue): the reference `threadMain_` returns an INFERRED
 /// error union combining the xev handle errors (`loop.run`, `wakeup.notify`)
@@ -634,19 +638,19 @@ pub struct Thread<A: apprt::App + 'static> {
     // (reference default: `= .{}`)
     pub stop_c: xev::Completion,
 
-    /// The timer used for rendering
+    /// The timer used for animations (custom shaders, Kitty graphics).
+    /// Normal rendering is driven by wakeup messages instead.
     pub render_h: xev::Timer,
     // (reference default: `= .{}`)
     pub render_c: xev::Completion,
-
-    /// The timer used for draw calls. Draw calls don't update from the
-    /// terminal state so they're much cheaper. They're used for animation
-    /// and are paused when the terminal is not focused.
-    pub draw_h: xev::Timer,
     // (reference default: `= .{}`)
-    pub draw_c: xev::Completion,
-    // (reference default: `= false`)
-    pub draw_active: bool,
+    pub render_c_cancel: xev::Completion,
+
+    /// The kind of work the currently scheduled animation wake needs,
+    /// stored when the timer is armed.
+    //
+    // animation_wake: rendererpkg.Renderer.AnimationWake.Kind = .draw,
+    pub animation_wake: rustty_renderer::generic::AnimationWakeKind,
 
     /// This async is used to force a draw immediately. This does not
     /// coalesce like the wakeup does.
@@ -822,19 +826,8 @@ impl<A: apprt::App + 'static> Thread<A> {
             }
         };
 
-        // Draw timer, see comments.
-        // var draw_h = try xev.Timer.init();
-        // errdefer draw_h.deinit();
-        let draw_h = match xev::Timer::init() {
-            Ok(v) => v,
-            Err(e) => {
-                render_h.deinit();
-                stop_h.deinit();
-                wakeup_h.deinit();
-                loop_.deinit();
-                return Err(e);
-            }
-        };
+        // (PORT NOTE `aee7bf347`: the draw timer is DELETED — `render_h` is the
+        // animation timer now.)
 
         // Draw now async, see comments.
         // var draw_now = try xev.Async.init();
@@ -842,7 +835,6 @@ impl<A: apprt::App + 'static> Thread<A> {
         let mut draw_now = match xev::Async::init() {
             Ok(v) => v,
             Err(e) => {
-                draw_h.deinit();
                 render_h.deinit();
                 stop_h.deinit();
                 wakeup_h.deinit();
@@ -858,7 +850,6 @@ impl<A: apprt::App + 'static> Thread<A> {
             Ok(v) => v,
             Err(e) => {
                 draw_now.deinit();
-                draw_h.deinit();
                 render_h.deinit();
                 stop_h.deinit();
                 wakeup_h.deinit();
@@ -902,7 +893,6 @@ impl<A: apprt::App + 'static> Thread<A> {
                 unsafe { thread::Mailbox::destroy(Box::from_raw(mailbox)) };
                 cursor_timer.deinit();
                 draw_now.deinit();
-                draw_h.deinit();
                 render_h.deinit();
                 stop_h.deinit();
                 wakeup_h.deinit();
@@ -931,10 +921,9 @@ impl<A: apprt::App + 'static> Thread<A> {
             // .render_h = render_h,
             render_h,
             render_c: xev::Completion::default(),
-            // .draw_h = draw_h,
-            draw_h,
-            draw_c: xev::Completion::default(),
-            draw_active: false,
+            render_c_cancel: xev::Completion::default(),
+            // (reference struct-decl default: `animation_wake = .draw`)
+            animation_wake: rustty_renderer::generic::AnimationWakeKind::Draw,
             // .draw_now = draw_now,
             draw_now,
             draw_now_c: xev::Completion::default(),
@@ -972,8 +961,6 @@ impl<A: apprt::App + 'static> Thread<A> {
         self.wakeup.deinit();
         // self.render_h.deinit();
         self.render_h.deinit();
-        // self.draw_h.deinit();
-        self.draw_h.deinit();
         // self.draw_now.deinit();
         self.draw_now.deinit();
         // self.cursor_h.deinit();
@@ -1140,9 +1127,10 @@ where
             );
         }
 
-        // Start the draw timer
-        // self.syncDrawTimer();
-        Self::syncDrawTimer(self_);
+        // Arm the animation timer in case the renderer already needs
+        // animation wakes (e.g. custom shaders loaded at startup).
+        // self.armAnimationTimer();
+        Self::armAnimationTimer(self_);
 
         // Run
         // log.debug("starting renderer thread", .{});
@@ -1196,58 +1184,44 @@ where
         }
     }
 
-    // fn syncDrawTimer(self: *Thread) void {
-    fn syncDrawTimer(self_: *mut Thread<A>) {
-        // skip: {
-        'skip: {
-            // If our renderer supports animations and has them, then we can apply
-            // draw timer based on custom shader animation configuration.
-            // if (@hasDecl(rendererpkg.Renderer, "hasAnimations") and
-            //     self.renderer.hasAnimations())  (@hasDecl TRUE for Metal)
-            if unsafe { (*(*self_).renderer).0.has_animations() } {
-                // If our config says to always animate, we do so.
-                // switch (self.config.custom_shader_animation) {
-                match unsafe { (*self_).config.custom_shader_animation } {
-                    // .always => break :skip,
-                    thread::CustomShaderAnimation::Always => break 'skip,
-                    // .true => if (self.flags.focused) break :skip,
-                    thread::CustomShaderAnimation::True => {
-                        if unsafe { (*self_).flags.focused } {
-                            break 'skip;
-                        }
-                    }
-                    // .false => {},
-                    thread::CustomShaderAnimation::False => {}
-                }
-            }
-
-            // We're skipping the draw timer. Stop it on the next iteration.
-            // self.draw_active = false;
-            // return;
-            unsafe { (*self_).draw_active = false };
-            return;
-        }
-
-        // Set our active state so it knows we're running. We set this before
-        // even checking the active state in case we have a pending shutdown.
-        // self.draw_active = true;
-        unsafe { (*self_).draw_active = true };
-
-        // If our draw timer is already active, then we don't have to do anything.
-        // if (self.draw_c.state() == .active) return;
-        if xev::Completion::state_of(unsafe { &(*self_).draw_c }) == xev::CompletionState::Active {
-            return;
-        }
-
-        // Start the timer which loops
-        // self.draw_h.run(&self.loop, &self.draw_c, DRAW_INTERVAL, Thread, self, drawCallback);
+    /// Schedule the animation timer for the renderer's next animation
+    /// wake, if it needs one.
+    ///
+    /// This is called after every frame update or animation draw and
+    /// whenever the wake inputs change (focus, config, visibility
+    /// regain). Resetting a pending timer is always safe: every call
+    /// recomputes the wake, so the deadline only ever moves toward the
+    /// actual next wake.
+    //
+    // fn armAnimationTimer(self: *Thread) void {
+    //     const wake = self.renderer.animationWake() orelse return;
+    //     self.animation_wake = wake.kind;
+    //     self.render_h.reset(
+    //         &self.loop,
+    //         &self.render_c,
+    //         &self.render_c_cancel,
+    //         wake.delay_ms,
+    //         Thread,
+    //         self,
+    //         animationTimerCallback,
+    //     );
+    // }
+    // (`aee7bf347`: REPLACES `syncDrawTimer` — deleted with the draw timer.)
+    fn armAnimationTimer(self_: *mut Thread<A>) {
+        // const wake = self.renderer.animationWake() orelse return;
+        let wake = match unsafe { (*(*self_).renderer).0.animation_wake() } {
+            Some(wake) => wake,
+            None => return,
+        };
+        unsafe { (*self_).animation_wake = wake.kind };
         unsafe {
-            (*self_).draw_h.run(
+            (*self_).render_h.reset(
                 &raw mut (*self_).loop_,
-                &raw mut (*self_).draw_c,
-                DRAW_INTERVAL,
+                &raw mut (*self_).render_c,
+                &raw mut (*self_).render_c_cancel,
+                wake.delay_ms,
                 self_,
-                Self::drawCallback,
+                Self::animationTimerCallback,
             );
         }
     }
@@ -1301,25 +1275,18 @@ where
                     Self::setQosClass(self_);
 
                     // If we became visible then we immediately rebuild cells
-                    // (renderCallback skips updateFrame while invisible) and draw.
-                    // if (v) {
+                    // (renderCallback skips updateFrame while invisible) and
+                    // draw. Going through renderCallback also reschedules
+                    // any Kitty graphics animation wakeup that lapsed
+                    // while we were invisible.
+                    // if (v) _ = renderCallback(self, undefined, undefined, {});
                     if v {
-                        // self.renderer.updateFrame(self.state, self.flags.cursor_blink_visible)
-                        //     catch |err| log.warn("error rendering on visibility regain err={}", .{err});
-                        //
-                        // (PORT NOTE: `update_frame` takes a SHARED `&State` — it mutates
-                        // only through the stored `*mut Terminal` — so the `*mut
-                        // State` is narrow-shared-deref'd; the error is the
-                        // `VtOutOfMemory` type, logged not propagated.)
-                        if let Err(_err) = unsafe {
-                            (*(*self_).renderer)
-                                .0
-                                .update_frame(&*(*self_).state, (*self_).flags.cursor_blink_visible)
-                        } {
-                            // log.warn("error rendering on visibility regain err={}", .{err});
-                        }
-                        // self.drawFrame(false);
-                        Self::drawFrame(self_, false);
+                        let _ = Self::renderCallback(
+                            self_,
+                            core::ptr::null_mut(),
+                            core::ptr::null_mut(),
+                            Ok(()),
+                        );
                     }
 
                     // Notify the renderer so it can update any state.
@@ -1354,9 +1321,10 @@ where
                     // try self.renderer.setFocus(v);
                     unsafe { (*(*self_).renderer).0.set_focus(v) }?;
 
-                    // We always resync our draw timer (may disable it)
-                    // self.syncDrawTimer();
-                    Self::syncDrawTimer(self_);
+                    // Focus gates custom shader animation, so re-arm
+                    // the animation timer for the new state.
+                    // self.armAnimationTimer();
+                    Self::armAnimationTimer(self_);
 
                     // if (!v) {
                     if !v {
@@ -1459,10 +1427,10 @@ where
                     // try self.renderer.changeConfig(config.impl);
                     unsafe { (*(*self_).renderer).0.change_config(*r#impl) }?;
 
-                    // Stop and start the draw timer to capture the new
-                    // hasAnimations value.
-                    // self.syncDrawTimer();
-                    Self::syncDrawTimer(self_);
+                    // The config affects what animation wakes the
+                    // renderer needs (custom shaders, animation mode).
+                    // self.armAnimationTimer();
+                    Self::armAnimationTimer(self_);
                 }
 
                 // .search_viewport_matches => |v| {
@@ -1548,7 +1516,9 @@ where
             return;
         }
 
-        // if (must_draw_from_app_thread) {
+        // if (apprt.must_draw_from_app_thread) {
+        // (`c4e16970a`: the decl is the apprt-level one now — see the module
+        // PORT NOTE above.)
         if A::MUST_DRAW_FROM_APP_THREAD {
             // _ = self.app_mailbox.push(.{ .redraw_surface = self.surface }, .{ .instant = {} });
             let _ = unsafe {
@@ -1657,48 +1627,8 @@ where
         xev::CallbackAction::Rearm
     }
 
-    // fn drawCallback(self_: ?*Thread, _: *xev.Loop, _: *xev.Completion,
-    //     r: xev.Timer.RunError!void) xev.CallbackAction {
-    fn drawCallback(
-        self_: *mut Thread<A>,
-        _l: *mut xev::Loop,
-        _c: *mut xev::Completion,
-        r: Result<(), xev::TimerRunError>,
-    ) -> xev::CallbackAction {
-        // _ = r catch unreachable;
-        if r.is_err() {
-            unreachable!()
-        }
-        // const t: *Thread = self_ orelse {
-        //     // This shouldn't happen so we log it.
-        //     log.warn("render callback fired without data set", .{});
-        //     return .disarm;
-        // };
-        // (non-null by construction)
-
-        // Draw
-        // t.drawFrame(false);
-        Self::drawFrame(self_, false);
-
-        // Only continue if we're still active
-        // if (t.draw_active) {
-        //     t.draw_h.run(&t.loop, &t.draw_c, DRAW_INTERVAL, Thread, t, drawCallback);
-        // }
-        if unsafe { (*self_).draw_active } {
-            unsafe {
-                (*self_).draw_h.run(
-                    &raw mut (*self_).loop_,
-                    &raw mut (*self_).draw_c,
-                    DRAW_INTERVAL,
-                    self_,
-                    Self::drawCallback,
-                );
-            }
-        }
-
-        // return .disarm;
-        xev::CallbackAction::Disarm
-    }
+    // PORT NOTE (`aee7bf347`): `drawCallback` is DELETED with the draw timer;
+    // `animationTimerCallback` below is the animation timer's callback.
 
     // fn renderCallback(self_: ?*Thread, _: *xev.Loop, _: *xev.Completion,
     //     r: xev.Timer.RunError!void) xev.CallbackAction {
@@ -1708,9 +1638,18 @@ where
         _c: *mut xev::Completion,
         r: Result<(), xev::TimerRunError>,
     ) -> xev::CallbackAction {
-        // _ = r catch unreachable;
-        if r.is_err() {
-            unreachable!()
+        // _ = r catch |err| switch (err) {
+        //     // Sent when a scheduled animation wakeup is superseded by a
+        //     // newer one (Timer.reset cancels the pending run). Nothing to
+        //     // do; the replacement timer carries on.
+        //     error.Canceled => return .disarm,
+        //     else => unreachable,
+        // };
+        if let Err(err) = r {
+            match err {
+                xev::TimerRunError::Canceled => return xev::CallbackAction::Disarm,
+                _ => unreachable!(),
+            }
         }
         // const t: *Thread = self_ orelse {
         //     // This shouldn't happen so we log it.
@@ -1720,6 +1659,7 @@ where
 
         // If we're not visible there's no point spending CPU rebuilding cells —
         // we'll catch up when the .visible mailbox message flips us back on.
+        // Kitty graphics animations pause with us and resume on visibility.
         // if (!t.flags.visible) return .disarm;
         if !unsafe { (*self_).flags.visible } {
             return xev::CallbackAction::Disarm;
@@ -1743,8 +1683,67 @@ where
         // t.drawFrame(false);
         Self::drawFrame(self_, false);
 
+        // Schedule the next animation wake, if the renderer needs one.
+        // t.armAnimationTimer();
+        Self::armAnimationTimer(self_);
+
         // return .disarm;
         xev::CallbackAction::Disarm
+    }
+
+    // fn animationTimerCallback(self_: ?*Thread, _: *xev.Loop, _: *xev.Completion,
+    //     r: xev.Timer.RunError!void) xev.CallbackAction {
+    fn animationTimerCallback(
+        self_: *mut Thread<A>,
+        _l: *mut xev::Loop,
+        _c: *mut xev::Completion,
+        r: Result<(), xev::TimerRunError>,
+    ) -> xev::CallbackAction {
+        // _ = r catch |err| switch (err) {
+        //     // Sent when a scheduled animation wake is superseded by a
+        //     // newer one (Timer.reset cancels the pending run). Nothing to
+        //     // do; the replacement timer carries on.
+        //     error.Canceled => return .disarm,
+        //     else => unreachable,
+        // };
+        if let Err(err) = r {
+            match err {
+                xev::TimerRunError::Canceled => return xev::CallbackAction::Disarm,
+                _ => {
+                    // log.warn("animation callback fired without data set", .{});
+                    unreachable!()
+                }
+            }
+        }
+        // const t: *Thread = self_ orelse { ...; return .disarm; };
+        // (non-null by construction)
+
+        // Animations pause entirely while we're invisible; the .visible
+        // mailbox message re-arms us when we can be seen again.
+        // if (!t.flags.visible) return .disarm;
+        if !unsafe { (*self_).flags.visible } {
+            return xev::CallbackAction::Disarm;
+        }
+
+        // switch (t.animation_wake) {
+        match unsafe { (*self_).animation_wake } {
+            // Frame data must be updated (a Kitty animation frame is
+            // due). renderCallback updates, draws, and re-arms us.
+            // .update => return renderCallback(t, undefined, undefined, {}),
+            rustty_renderer::generic::AnimationWakeKind::Update => {
+                Self::renderCallback(self_, core::ptr::null_mut(), core::ptr::null_mut(), Ok(()))
+            }
+
+            // A redraw alone suffices (custom shader time uniform).
+            // Draw calls don't update from the terminal state so they
+            // are much cheaper than a frame update.
+            // .draw => { t.drawFrame(false); t.armAnimationTimer(); return .disarm; },
+            rustty_renderer::generic::AnimationWakeKind::Draw => {
+                Self::drawFrame(self_, false);
+                Self::armAnimationTimer(self_);
+                xev::CallbackAction::Disarm
+            }
+        }
     }
 
     // fn cursorTimerCallback(self_: ?*Thread, _: *xev.Loop, _: *xev.Completion,
@@ -2467,8 +2466,9 @@ mod compression_tests {
     #[test]
     fn change_config_restarts_the_pass_only_on_disabled_to_enabled() {
         fn derived(scrollback_compression: bool) -> thread::DerivedConfig {
+            // (PORT NOTE `aee7bf347`: `custom_shader_animation` moved to the
+            // renderer's own DerivedConfig.)
             thread::DerivedConfig {
-                custom_shader_animation: rustty_renderer::thread::CustomShaderAnimation::True,
                 scrollback_compression,
             }
         }

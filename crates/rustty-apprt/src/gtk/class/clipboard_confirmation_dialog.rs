@@ -265,18 +265,22 @@ impl ClipboardConfirmationDialog {
             return;
         };
         let (heading, body) = match boxed.0 {
-            ClipboardRequest::Osc52Write(_) => (
+            // .osc_52_write, .kitty_write => { ... },
+            ClipboardRequest::Osc52Write(_) | ClipboardRequest::KittyWrite(_) => (
                 tr(c"Authorize Clipboard Access"),
                 tr(c"An application is attempting to write to the clipboard. The current clipboard contents are shown below."),
             ),
-            ClipboardRequest::Osc52Read(_) => (
+            // .osc_52_read, .kitty_read => { ... },
+            ClipboardRequest::Osc52Read(_) | ClipboardRequest::KittyRead(_) => (
                 tr(c"Authorize Clipboard Access"),
                 tr(c"An application is attempting to read from the clipboard. The current clipboard contents are shown below."),
             ),
-            ClipboardRequest::Paste => (
+            ClipboardRequest::Paste(_) => (
                 tr(c"Warning: Potentially Unsafe Paste"),
                 tr(c"Pasting this text into the terminal may be dangerous as it looks like some commands may be executed."),
             ),
+            // .list => unreachable,
+            ClipboardRequest::List(_) => unreachable!(),
         };
         self.set_heading(Some(heading));
         self.set_body(body);

@@ -61,20 +61,22 @@ static bool cb_action(App *app, TargetC target, ActionC action) {
     return false;
 }
 
-static int cb_read_clipboard(void *userdata,
-                             int req_type,
-                             ClipboardRequest *state,
-                             const char *const *mimes,
-                             uintptr_t mimes_len,
-                             bool list) {
+/* 0ce9054bf end state: the read callback reports a tri-state result and
+ * receives the requested MIME list + the listing flag. */
+static ClipboardReadResult cb_read_clipboard(void *userdata,
+                                             int req_type,
+                                             ClipboardRequest *state,
+                                             const char *const *mimes,
+                                             uintptr_t mimes_len,
+                                             bool list) {
     (void)userdata;
     (void)req_type;
     (void)state;
     (void)mimes;
     (void)mimes_len;
     (void)list;
-    /* GHOSTTY_CLIPBOARD_READ_UNSUPPORTED — the request is never started. */
-    return 2;
+    /* The request is never started. */
+    return CLIPBOARD_READ_UNSUPPORTED;
 }
 
 static void cb_confirm_read_clipboard(void *userdata,

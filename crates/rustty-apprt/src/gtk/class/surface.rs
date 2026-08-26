@@ -2127,14 +2127,10 @@ impl Surface {
         None
     }
 
-    /// PORTS: `surface.zig:1714-1724` `clipboardRequest` → delegates to
-    /// `Clipboard.request` (`surface.zig:3855-3897`). Request data from the
-    /// clipboard (a READ); this completes asynchronously and delivers the result
-    /// to the core via `completeClipboardRequest`.
-    ///
-    /// Returns `Ok(true)` if the request was started, `Ok(false)` if the clipboard
-    /// doesn't contain text (letting performable keybinds pass through), matching
-    /// the reference's early-`false` return.
+    /// PORTS: `surface.zig` `clipboardRequest` → delegates to
+    /// `Clipboard.request`. Request data from the clipboard (a READ); a started
+    /// request completes asynchronously and delivers the result to the core via
+    /// `completeClipboardRequest`.
     pub fn clipboard_request(
         &self,
         clipboard_type: Clipboard,
@@ -2142,9 +2138,16 @@ impl Surface {
     ) -> Result<ClipboardReadResult, ApprtError> {
         // The GTK apprt doesn't support the Kitty clipboard protocol
         // yet.
-        // if (state == .kitty_read or state == .kitty_write or state == .list) return .unsupported;
-        // (W7 seam: the kitty/list ClipboardRequest variants do not exist yet;
-        // this arm becomes live when they land.)
+        // if (state == .kitty_read or state == .kitty_write or state == .list)
+        //     return .unsupported;
+        if matches!(
+            state,
+            ClipboardRequest::KittyRead(_)
+                | ClipboardRequest::KittyWrite(_)
+                | ClipboardRequest::List(_)
+        ) {
+            return Ok(ClipboardReadResult::Unsupported);
+        }
 
         // Get our requested clipboard (`surface.zig:3861-3864`).
         let clipboard = self.clipboard_for(clipboard_type);
@@ -2153,7 +2156,7 @@ impl Surface {
         // This is a synchronous check that allows performable keybinds to pass
         // through when the clipboard contains non-text content, e.g. images
         // (`surface.zig:3869-3875`).
-        if state == ClipboardRequest::Paste
+        if matches!(state, ClipboardRequest::Paste(_))
             && !clipboard.formats().contains_type(String::static_type())
         {
             eprintln!("debug(gtk): clipboard has no text format, not starting paste request");
@@ -2189,7 +2192,18 @@ impl Surface {
             // `data: [:0]const u8` -> raw bytes (`&[u8]`, never a lossy String
             // — R3). `completeClipboardRequest` takes `&mut self`; mirror the
             // `&mut *core` deref used by the sizeCallback/occlusion handlers.
-            match unsafe { &mut *core }.completeClipboardRequest(state, text.as_bytes(), false) {
+            // (`0ce9054bf` end state: the read result travels as a single
+            // text/plain representation in the CompleteClipboard payload.)
+            match unsafe { &mut *core }.completeClipboardRequest(
+                state,
+                rustty_core::surface::CompleteClipboard {
+                    contents: &[rustty_vt::clipboard::Content {
+                        mime: b"text/plain",
+                        data: text.as_bytes(),
+                    }],
+                    ..rustty_core::surface::CompleteClipboard::default()
+                },
+            ) {
                 Ok(()) => {
                     // `Surface.signals.@"clipboard-read".impl.emit(...)`
                     // (`surface.zig:4099-4104`).
@@ -2208,7 +2222,7 @@ impl Surface {
             }
         });
 
-        // return .started;
+        // return .started; (`surface.zig:3896`)
         Ok(ClipboardReadResult::Started)
     }
 
@@ -2384,7 +2398,11 @@ impl Surface {
                 ClipboardRequest::Osc52Write(_) => {
                     unsafe { &mut *core }.config.clipboard_write = ClipboardAccess::Allow;
                 }
-                ClipboardRequest::Paste => {}
+                // .paste, .list, .kitty_read, .kitty_write => {},
+                ClipboardRequest::Paste(_)
+                | ClipboardRequest::List(_)
+                | ClipboardRequest::KittyRead(_)
+                | ClipboardRequest::KittyWrite(_) => {}
             }
         }
 
@@ -2394,11 +2412,22 @@ impl Surface {
         };
         let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
 
-        // `surface.completeClipboardRequest(req.*, text, true)` (`:4016-4022`).
-        // `confirmed = true`. Raw bytes, never a lossy String (R3).
-        if let Err(err) =
-            unsafe { &mut *core }.completeClipboardRequest(req.0, text.as_bytes(), true)
-        {
+        // surface.completeClipboardRequest(req.*, .{
+        //     .contents = &.{.{ .mime = "text/plain", .data = text }},
+        //     .confirmed = true,
+        // }) catch |err| { ... };
+        // Raw bytes, never a lossy String (R3).
+        if let Err(err) = unsafe { &mut *core }.completeClipboardRequest(
+            req.0,
+            rustty_core::surface::CompleteClipboard {
+                contents: &[rustty_vt::clipboard::Content {
+                    mime: b"text/plain",
+                    data: text.as_bytes(),
+                }],
+                confirmed: true,
+                ..rustty_core::surface::CompleteClipboard::default()
+            },
+        ) {
             eprintln!("warn(gtk): failed to complete clipboard request err={err}");
         }
     }
@@ -2424,11 +2453,15 @@ impl Surface {
                 ClipboardRequest::Osc52Write(_) => {
                     unsafe { &mut *core }.config.clipboard_write = ClipboardAccess::Deny;
                 }
-                // PORT NOTE: the reference `@panic("paste should not be able to be
-                // remembered")` (`:4038`); a paste request can never set the
-                // remember switch to reach here. In Rust we log instead of aborting.
-                ClipboardRequest::Paste => {
-                    eprintln!("warn(gtk): paste request should not be able to be remembered");
+                // PORT NOTE: the reference `@panic("request should not be able
+                // to be remembered")`; these requests can never set the
+                // remember switch to reach here. In Rust we log instead of
+                // aborting.
+                ClipboardRequest::Paste(_)
+                | ClipboardRequest::List(_)
+                | ClipboardRequest::KittyRead(_)
+                | ClipboardRequest::KittyWrite(_) => {
+                    eprintln!("warn(gtk): request should not be able to be remembered");
                 }
             }
         }
@@ -2701,8 +2734,11 @@ impl Surface {
         );
 
         // We want to get the physical unmapped key to process physical keybinds
-        // (`:1359-1379`).
-        let physical_key = key::physical_key(keycode, keyval);
+        // (`:1359-1379`; `ef01d5fda`: the inline remap block is now
+        // `key::remap_key`, folded into `physical_key` with the GDK modifier
+        // flag).
+        // break :keycode gtk_key.remapKey(w3c_key, keyval, key_event.isModifier() != 0);
+        let physical_key = key::physical_key(keycode, keyval, key_event.is_modifier());
 
         // Get our modifier for the event (`:1381-1388`).
         let mods = {
@@ -3673,18 +3709,30 @@ impl Surface {
             return;
         };
 
-        // `surface.completeClipboardRequest(.paste, text, false)` (`:3906-3910`).
+        // surface.completeClipboardRequest(
+        //     .{ .paste = .standard },
+        //     .{ .contents = &.{.{ .mime = "text/plain", .data = text }} },
+        // ) catch |err| switch (err) { ... };
         // SAFETY: `core` is the widget's boxed, initialized core surface;
         // `completeClipboardRequest` takes `&mut self` (mirror the deref used by
         // the async `clipboard_request` completion above).
-        match unsafe { &mut *core }.completeClipboardRequest(ClipboardRequest::Paste, text, false) {
+        match unsafe { &mut *core }.completeClipboardRequest(
+            ClipboardRequest::Paste(Clipboard::Standard),
+            rustty_core::surface::CompleteClipboard {
+                contents: &[rustty_vt::clipboard::Content {
+                    mime: b"text/plain",
+                    data: text,
+                }],
+                ..rustty_core::surface::CompleteClipboard::default()
+            },
+        ) {
             Ok(()) => {}
 
             // error.UnsafePaste, error.UnauthorizedPaste => confirmation
             // (`:3911-3921`).
             Err(CoreSurfaceError::UnsafePaste | CoreSurfaceError::UnauthorizedPaste) => {
                 self.show_clipboard_confirmation(
-                    ClipboardRequest::Paste,
+                    ClipboardRequest::Paste(Clipboard::Standard),
                     &String::from_utf8_lossy(text),
                 );
             }

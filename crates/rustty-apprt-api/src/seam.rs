@@ -232,15 +232,17 @@ pub trait Surface: Sized {
     // apprt.Clipboard) bool` — embedded.zig:662.
     fn supports_clipboard(&self, clipboard_type: Clipboard) -> bool;
 
-    /// Start a clipboard read request. Returns whether the request STARTED
-    /// (the backend may decline, e.g. no servable contents or an unreadable
-    /// clipboard).
+    /// Start a clipboard read request. The result reports whether the request
+    /// STARTED (completes asynchronously), or why not (unavailable /
+    /// unsupported contents).
     //
     // PORT NOTE: `pub fn clipboardRequest(self: *Surface, clipboard_type:
-    // apprt.Clipboard, state: apprt.ClipboardRequest) !apprt.ClipboardReadResult`
-    // — embedded.zig (0ce9054bf end state; was `!bool`). [ADV-FIX 1] the
-    // result is load-bearing at Surface.zig `startClipboardRequest` (the
-    // performable-keybind pass-through) — do NOT collapse it into the error.
+    // apprt.Clipboard, state: apprt.ClipboardRequest)
+    // !apprt.ClipboardReadResult` — embedded.zig (`0ce9054bf` end state: the
+    // former `!bool` became the tri-state result). The result is load-bearing
+    // at Surface.zig `startClipboardRequest` (the performable-keybind
+    // pass-through checks `== .started`; Kitty reads answer the program per
+    // state) — do NOT collapse it into the error.
     fn clipboard_request(
         &self,
         clipboard_type: Clipboard,

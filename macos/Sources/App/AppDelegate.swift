@@ -265,6 +265,12 @@ class AppDelegate: NSObject,
         )
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(keyboardSelectionDidChange(_:)),
+            name: NSTextInputContext.keyboardSelectionDidChangeNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(rusttyBellDidRing(_:)),
             name: .rusttyBellDidRing,
             object: nil
@@ -647,6 +653,11 @@ class AppDelegate: NSObject,
         ] as? Rustty.Config else { return }
 
         rusttyConfigDidChange(config: config)
+    }
+
+    @MainActor @objc private func keyboardSelectionDidChange(_ notification: Notification) {
+        syncMenuShortcuts(rustty.config)
+        TerminalController.all.forEach { $0.relabelTabs() }
     }
 
     @objc private func rusttyBellDidRing(_ notification: Notification) {

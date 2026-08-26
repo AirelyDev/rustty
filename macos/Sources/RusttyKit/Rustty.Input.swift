@@ -16,16 +16,28 @@ extension Rustty {
     /// (F1, F2, ...) with a KeyboardShortcut. This doesn't represent a practical issue because input
     /// handling for Rustty is handled at a lower level (usually). This function should generally only
     /// be used for things like NSMenu that only support keyboard shortcuts anyways.
-    static func keyboardShortcut(for trigger: rustty_input_trigger_s) -> KeyboardShortcut? {
+    @MainActor static func keyboardShortcut(for trigger: rustty_input_trigger_s) -> KeyboardShortcut? {
+        let modifierFlags = Self.eventModifierFlags(mods: trigger.mods)
         let key: KeyEquivalent
         switch trigger.tag {
         case RUSTTY_TRIGGER_PHYSICAL:
-            // Only functional keys can be converted to a KeyboardShortcut. Other physical
-            // mappings cannot because KeyboardShortcut in Swift is inherently layout-dependent.
-            if let equiv = Self.keyToEquivalent[trigger.key.physical] {
-                key = equiv
+            let physical = trigger.key.physical
+            if let equivalent = Self.keyToEquivalent[physical] {
+                key = equivalent
             } else {
-                return nil
+                guard
+                    Self.writingSystemKeyRange.contains(physical.rawValue),
+                    let inputKey = Input.Key(cKey: physical),
+                    let keyCode = inputKey.keyCode,
+                    // Command can select a distinct layout table. Other modifiers remain
+                    // separate in the menu's modifier mask and must not affect this character.
+                    let character = KeyboardLayout.character(
+                        for: keyCode,
+                        modifiers: modifierFlags.intersection(.command))
+                else { return nil }
+
+                // Printable physical keys must be translated through the current layout.
+                key = KeyEquivalent(character)
             }
 
         case RUSTTY_TRIGGER_UNICODE:
@@ -45,7 +57,7 @@ extension Rustty {
 
         return KeyboardShortcut(
             key,
-            modifiers: EventModifiers(nsFlags: Rustty.eventModifierFlags(mods: trigger.mods)))
+            modifiers: EventModifiers(nsFlags: modifierFlags))
     }
 
     // MARK: Mods
@@ -101,6 +113,10 @@ extension Rustty {
         RUSTTY_KEY_BACKSPACE: .delete,
         RUSTTY_KEY_SPACE: .space,
     ]
+
+    /// The contiguous W3C "Writing System Keys" § 3.1.1 key range.
+    private static let writingSystemKeyRange =
+        RUSTTY_KEY_BACKQUOTE.rawValue...RUSTTY_KEY_SLASH.rawValue
 }
 
 // MARK: Rustty.Input.BindingFlags
@@ -771,14 +787,15 @@ extension Rustty.Input {
         case cut
         case paste
 
+        init?(cKey: rustty_input_key_e) {
+            guard let key = Key.allCases.first(where: { $0.cKey == cKey }) else { return nil }
+            self = key
+        }
+
         /// Get a key from a keycode
         init?(keyCode: UInt16) {
-            if let key = Key.allCases.first(where: { $0.keyCode == keyCode }) {
-                self = key
-                return
-            }
-
-            return nil
+            guard let key = Key.allCases.first(where: { $0.keyCode == keyCode }) else { return nil }
+            self = key
         }
 
         var cKey: rustty_input_key_e {

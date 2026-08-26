@@ -166,25 +166,30 @@ const _: () = assert!(align_of::<SurfaceSize>() == 4);
 // ghostty_clipboard_content_s
 //
 // PORT NOTE: `const ClipboardContent = extern struct { mime, data, len }`
-// (embedded.zig; 8c7a34d4c end state — binary-safe data with explicit length)
-// is a BACKEND field type (`Options.write_clipboard` takes a
+// (embedded.zig, `8c7a34d4c` LAYOUT CHANGE: binary-safe data + explicit len) is
+// a BACKEND field type (`Options.write_clipboard` takes a
 // `[*]const CAPI.ClipboardContent`), so it is DEFINED in `rustty-apprt`
-// (`rustty_apprt::embedded::ClipboardContent`, `{ *const c_char, *const u8,
-// usize }`); apprt-c only re-asserts its pinned ABI here and hand-pins it in
-// cbindgen `after_includes` at header-gen time (E11).
+// (`rustty_apprt::embedded::ClipboardContent`,
+// `{ *const c_char, *const u8, usize }`); apprt-c only re-asserts its pinned
+// ABI here and hand-pins it in cbindgen `after_includes` at header-gen time
+// (E11).
 //
 // BUILD-failure gate (D2): {*const c_char, *const u8, usize} -> size 24, align 8.
 const _: () = assert!(size_of::<embedded::ClipboardContent>() == 24);
 const _: () = assert!(align_of::<embedded::ClipboardContent>() == 8);
 
-// ghostty_clipboard_complete_s / ghostty_clipboard_confirm_s
+// ghostty_clipboard_complete_s (`8c7a34d4c`)
 //
-// The Bundle-E2 completion/confirmation payloads (8c7a34d4c/af9470b19):
-// {ptr, usize, ptr, usize, bool, bool} -> size 40, align 8 (the two trailing
-// bools pack into one padded word); the confirm variant replaces them with
-// {*const c_char name, bool} -> size 48.
+// BUILD-failure gate (D2): {ptr,usize,ptr,usize,bool,bool} ->
+// contents@0(8) contents_len@8(8) available@16(8) available_len@24(8)
+// confirmed@32(1) remember@33(1) pad -> size 40, align 8.
 const _: () = assert!(size_of::<embedded::ClipboardComplete>() == 40);
 const _: () = assert!(align_of::<embedded::ClipboardComplete>() == 8);
+
+// ghostty_clipboard_confirm_s (`af9470b19`)
+//
+// BUILD-failure gate (D2): {ptr,usize,ptr,usize,ptr,bool} ->
+// name@32(8) can_remember@40(1) pad -> size 48, align 8.
 const _: () = assert!(size_of::<embedded::ClipboardConfirm>() == 48);
 const _: () = assert!(align_of::<embedded::ClipboardConfirm>() == 8);
 

@@ -99,6 +99,7 @@
                                     <action selector="openConfig:" target="bbz-4X-AYv" id="X65-fg-iWU"/>
                                 </connections>
                             </menuItem>
+                            <menuItem isSeparatorItem="YES" id="GOd-qX-exa"/>
                             <menuItem title="Reload Configuration" id="KKH-XX-5py">
                                 <modifierMask key="keyEquivalentModifierMask"/>
                                 <connections>
