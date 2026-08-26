@@ -230,6 +230,16 @@ pub struct AllocatingWriter {
     data: Vec<u8>,
 }
 
+/// Purely additive: the reference has no `Default` analog (its `.init(alloc)`
+/// takes an allocator), but `new()` with no arguments is what clippy wants a
+/// `Default` beside, and a caller reaching for `Default` should get the same
+/// empty writer `new()` builds.
+impl Default for AllocatingWriter {
+    fn default() -> AllocatingWriter {
+        AllocatingWriter::new()
+    }
+}
+
 impl AllocatingWriter {
     /// `.init(alloc)`
     pub fn new() -> AllocatingWriter {

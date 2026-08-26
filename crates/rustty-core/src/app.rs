@@ -220,7 +220,7 @@ where
         {
             if let Err(_err) = std::thread::Builder::new()
                 .spawn(rustty_font_shaper::discovery::Discover::warmup)
-                .map(|thr| drop(thr))
+                .map(drop)
             {
                 // log.warn("font warmup thread spawn failed err={}", .{err});
             }
@@ -245,7 +245,7 @@ where
         {
             if let Err(_err) = std::thread::Builder::new()
                 .spawn(rustty_renderer::metal::Metal::warmup)
-                .map(|thr| drop(thr))
+                .map(drop)
             {
                 // log.warn("renderer warmup thread spawn failed err={}", .{err});
             }

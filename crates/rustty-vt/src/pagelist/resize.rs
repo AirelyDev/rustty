@@ -1767,6 +1767,10 @@ impl ReflowCursor {
     /// be mapped into the destination page without a capacity
     /// change; the caller should fall back to writeCell which
     /// handles growing capacity.
+    // `src_cells.len() >= 1`, not `!src_cells.is_empty()`: the assertion is the
+    // reference's, spelled as the reference spells it. clippy::len_zero would
+    // have us reword an assertion whose whole job is to mirror the oracle.
+    #[allow(clippy::len_zero)]
     fn copy_run(&mut self, src_cells: &[Cell], src_page: *const Page) -> bool {
         assert!(!self.pending_wrap);
         assert!(src_cells.len() >= 1);
