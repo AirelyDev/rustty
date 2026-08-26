@@ -51,11 +51,8 @@
     # that supports it.
     supportedSystems = lib.filter (s: s != "x86_64-darwin") (import systems);
 
-    # The reference filters Darwin out of its PACKAGE outputs because its app
-    # needs Swift 6 + xcodebuild, which Nix cannot provide. rustty's headless
-    # librustty-vt has no such constraint — it is plain cargo + cmake — so it
-    # is offered everywhere. The GTK app (Phase B) will need the same Darwin
-    # filter the reference applies.
+    # rustty's headless librustty-vt is plain cargo + cmake, so it is offered on
+    # every supported system. The GTK app is not: see `forLinuxSystems` below.
     forAllSystems = f:
       lib.genAttrs supportedSystems (system:
         f (import nixpkgs {
@@ -82,6 +79,23 @@
           craneLib = craneLibFor pkgs;
         }
         // args);
+
+    rusttyFor = pkgs: args:
+      pkgs.callPackage ./nix/package.nix ({
+          craneLib = craneLibFor pkgs;
+        }
+        // args);
+
+    # The GTK app is Linux-only (nix/package.nix's meta.platforms), so its
+    # attributes are only exposed there. The reference filters Darwin out of
+    # its package outputs for the same reason — Nix cannot drive the macOS app.
+    linuxSystems = lib.filter (s: lib.hasSuffix "-linux" s) supportedSystems;
+    forLinuxSystems = f:
+      lib.genAttrs linuxSystems (system:
+        f (import nixpkgs {
+          inherit system;
+          overlays = [(import rust-overlay)];
+        }));
   in {
     devShells = forAllSystems (pkgs: {
       default = pkgs.callPackage ./nix/devShell.nix {
@@ -99,37 +113,59 @@
       };
     });
 
-    packages = forAllSystems (pkgs: rec {
-      librustty-vt-debug = librusttyVtFor pkgs (mkPkgArgs "debug");
-      librustty-vt-releasesafe = librusttyVtFor pkgs (mkPkgArgs "releasesafe");
-      librustty-vt-releasefast = librusttyVtFor pkgs (mkPkgArgs "releasefast");
-      librustty-vt-debug-no-simd = librusttyVtFor pkgs ((mkPkgArgs "debug") // {simd = false;});
-      librustty-vt-releasesafe-no-simd = librusttyVtFor pkgs ((mkPkgArgs "releasesafe") // {simd = false;});
-      librustty-vt-releasefast-no-simd = librusttyVtFor pkgs ((mkPkgArgs "releasefast") // {simd = false;});
+    packages =
+      lib.recursiveUpdate
+      (forAllSystems (pkgs: rec {
+        librustty-vt-debug = librusttyVtFor pkgs (mkPkgArgs "debug");
+        librustty-vt-releasesafe = librusttyVtFor pkgs (mkPkgArgs "releasesafe");
+        librustty-vt-releasefast = librusttyVtFor pkgs (mkPkgArgs "releasefast");
+        librustty-vt-debug-no-simd = librusttyVtFor pkgs ((mkPkgArgs "debug") // {simd = false;});
+        librustty-vt-releasesafe-no-simd = librusttyVtFor pkgs ((mkPkgArgs "releasesafe") // {simd = false;});
+        librustty-vt-releasefast-no-simd = librusttyVtFor pkgs ((mkPkgArgs "releasefast") // {simd = false;});
 
-      librustty-vt = librustty-vt-releasefast;
-      default = librustty-vt;
-    });
+        librustty-vt = librustty-vt-releasefast;
+        default = librustty-vt;
+      }))
+      (forLinuxSystems (pkgs: rec {
+        rustty-debug = rusttyFor pkgs (mkPkgArgs "debug");
+        rustty-releasesafe = rusttyFor pkgs (mkPkgArgs "releasesafe");
+        rustty-releasefast = rusttyFor pkgs (mkPkgArgs "releasefast");
+        rustty = rustty-releasefast;
+      }));
 
     # `nix flake check` runs these. passthru.tests are the substance — they
     # build a C program against the installed library both ways and run it.
-    checks = forAllSystems (pkgs:
+    checks = forAllSystems (pkgs: let
+      sys = pkgs.stdenv.hostPlatform.system;
+      pkgsFor = self.packages.${sys};
+    in
       {
-        inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) librustty-vt;
+        inherit (pkgsFor) librustty-vt;
       }
       // (lib.mapAttrs' (n: v: lib.nameValuePair "librustty-vt-${n}" v)
-        self.packages.${pkgs.stdenv.hostPlatform.system}.librustty-vt.passthru.tests));
+        pkgsFor.librustty-vt.passthru.tests)
+      # The GTK app, where it exists. Its own installCheckPhase runs
+      # `rustty +version`, so building it IS the check.
+      // (lib.optionalAttrs (pkgsFor ? rustty) {inherit (pkgsFor) rustty;}));
 
     formatter = forAllSystems (pkgs: pkgs.alejandra);
 
     overlays = {
       default = self.overlays.releasefast;
-      releasefast = final: prev: {
-        librustty-vt = librusttyVtFor final (mkPkgArgs "releasefast");
-      };
-      debug = final: prev: {
-        librustty-vt = librusttyVtFor final (mkPkgArgs "debug");
-      };
+      releasefast = final: prev:
+        {
+          librustty-vt = librusttyVtFor final (mkPkgArgs "releasefast");
+        }
+        // lib.optionalAttrs final.stdenv.hostPlatform.isLinux {
+          rustty = rusttyFor final (mkPkgArgs "releasefast");
+        };
+      debug = final: prev:
+        {
+          librustty-vt = librusttyVtFor final (mkPkgArgs "debug");
+        }
+        // lib.optionalAttrs final.stdenv.hostPlatform.isLinux {
+          rustty = rusttyFor final (mkPkgArgs "debug");
+        };
     };
   };
 

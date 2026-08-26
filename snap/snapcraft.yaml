@@ -1,0 +1,152 @@
+# PORTS: ghostty snap/snapcraft.yaml.
+#
+# ============================== UNVERIFIED ==================================
+# This has NOT been built. snapcraft is not available in any environment this
+# branch was developed on (installing it needs root on the Linux box), so
+# unlike everything else on this branch it carries no "verified" claim.
+#
+# To verify:
+#     cargo run -p xtask -- dist        # the vendored tarball this consumes
+#     snapcraft --verbose               # from the repo root
+#     sudo snap install --dangerous --classic ./rustty_*.snap
+#
+# Expect the `libs`/`mesa` stage-package lists to need adjusting: they are
+# carried over from the reference and pin Ubuntu 24.04 (core24) package names.
+# ============================================================================
+#
+# TWO STRUCTURAL DIFFERENCES FROM THE REFERENCE:
+#
+# 1. No `zig` part. The reference downloads a Zig tarball at build time; the
+#    Rust toolchain comes from the `rust` plugin's own snapcraft support, so
+#    the whole part disappears.
+#
+# 2. The source is the PRE-VENDORED tarball `xtask dist` produces, for the same
+#    reason as the flatpak manifest: snapcraft builds without network access in
+#    the store, and the tarball already ships `vendor/` plus a
+#    `.cargo/config.toml` redirecting crates.io to it. The reference solves the
+#    equivalent problem with its Zig package cache.
+name: rustty
+base: core24
+summary: A terminal emulator
+description: |
+  Rustty is a fast, feature-rich, and cross-platform terminal emulator that
+  uses platform-native UI and GPU acceleration.
+grade: devel
+confinement: classic
+contact: https://github.com/AirelyDev/rustty/discussions
+issues: https://github.com/AirelyDev/rustty/issues
+website: https://rustty.sh
+license: MIT
+icon: images/icons/icon_512.png
+adopt-info: rustty
+
+platforms:
+  amd64:
+  arm64:
+
+apps:
+  rustty:
+    command: bin/rustty
+    command-chain: [app/launcher]
+    completer: share/bash-completion/completions/rustty.bash
+    desktop: share/applications/io.airely.rustty.desktop
+    environment:
+      PATH: /snap/rustty/current/bin:/snap/rustty/current/usr/bin:$PATH
+      LC_ALL: C.UTF-8
+      RUSTTY_RESOURCES_DIR: /snap/rustty/current/share/rustty
+
+parts:
+  launcher:
+    plugin: dump
+    source: snap/local
+    source-type: local
+    organize:
+      launcher: app/
+
+  rustty:
+    source: .
+    plugin: nil
+    build-attributes: [enable-patchelf]
+    build-packages:
+      - libgtk-4-dev
+      - libadwaita-1-dev
+      - libxml2-utils
+      - git
+      - patchelf
+      - gettext
+      - clang # bindgen (crates-sys/libxml2-sys and friends) dlopens libclang
+      - pkg-config
+    build-snaps:
+      # rust-toolchain.toml pins 1.93.1; the `rustup` snap honours it.
+      - rustup
+    override-build: |
+      craftctl set version=$(cat VERSION)
+      cargo build --release --offline --locked \
+        -p rustty --no-default-features --features "gtk wayland x11"
+      cargo run --release --offline --locked -p xtask -- resources \
+        --target-os linux --prefix /snap/rustty/current
+      install -Dm755 target/release/rustty $CRAFT_PART_INSTALL/bin/rustty
+      cp -rp zig-out/share $CRAFT_PART_INSTALL/
+      sed -i 's|Icon=io.airely.rustty|Icon=${SNAP}/share/icons/hicolor/512x512/apps/io.airely.rustty.png|g' \
+        $CRAFT_PART_INSTALL/share/applications/io.airely.rustty.desktop
+
+  libs:
+    plugin: nil
+    build-attributes: [enable-patchelf]
+    stage-packages:
+      - libadwaita-1-0
+      - libglib2.0-0t64
+      - libgtk-4-1
+      - libgtk-4-media-gstreamer
+      - ibus-gtk4
+      - libpciaccess0
+      - libtinfo6
+      - libedit2
+      - libelf1t64
+      - libsensors5
+      - libllvm17
+      - libunistring5
+      - librsvg2-2
+      - librsvg2-common
+      - libgdk-pixbuf-2.0-0
+      - on amd64:
+          [
+            i965-va-driver,
+            libdrm-intel1,
+            libdrm-nouveau2,
+            libdrm-amdgpu1,
+            libdrm-radeon1,
+          ]
+    stage:
+      # The libraries in dri need no-patchelf, so they come from the mesa-unpatched part
+      - -usr/lib/*/dri
+
+  mesa:
+    plugin: nil
+    build-attributes: [enable-patchelf]
+    stage-packages:
+      - libglu1-mesa
+      - libgl1-mesa-dri
+      - libegl-mesa0
+      - libegl1
+      - libglx-mesa0
+      - mesa-libgallium
+    stage:
+      # The libraries in dri need no-patchelf, so they come from the mesa-unpatched part
+      - usr/lib/*/*.so*
+      - usr/lib/*/dri/libdril_dri.so
+      - -usr/lib/*/libxml2.so.*
+      - -usr/lib/*/libgallium*so
+      - -usr/lib/*/dri
+
+  mesa-gl1-dri:
+    plugin: nil
+    stage-packages:
+      - libgl1-mesa-dri
+    build-attributes: [no-patchelf]
+    stage:
+      # Only the libraries in dri need to not be patched, the rest come from the mesa part
+      # Otherwise snapcraft may strip the build ID and cause the driver to crash
+      - usr/lib/*/libgallium*so
+      - -usr/lib/*/dri/libdril_dri.so
+      - usr/lib/*/dri

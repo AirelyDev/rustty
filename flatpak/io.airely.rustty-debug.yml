@@ -1,0 +1,101 @@
+# PORTS: ghostty flatpak/com.mitchellh.ghostty-debug.yml — the debug twin of
+# io.airely.rustty.yml (separate app id so both can be installed at once).
+#
+# ============================== UNVERIFIED ==================================
+# This manifest has NOT been built. flatpak-builder is not available in any
+# environment this branch was developed on (installing it needs root on the
+# Linux box), so unlike everything else on this branch it carries no "verified"
+# claim. Treat it as a starting point, not a working package.
+#
+# To verify:
+#     cargo run -p xtask -- dist              # produces the vendored tarball
+#     flatpak-builder --force-clean --user --install \
+#       builddir flatpak/io.airely.rustty.yml
+#     flatpak run io.airely.rustty
+#
+# What is likely to need adjusting on the first real run: the runtime version
+# (pin it to whatever org.gnome.Platform release is current), the
+# rust-stable extension version, and the exact `xtask resources` prefix.
+# ============================================================================
+#
+# THE ONE STRUCTURAL DIFFERENCE FROM THE REFERENCE, and it is a simplification.
+#
+# ghostty ships `zig-packages.json`, a generated manifest of every Zig
+# dependency, because flatpak-builder builds with NO network and `zig build`
+# would otherwise want to fetch. The Rust analog would be a generated
+# `cargo-sources.json` (flatpak-cargo-generator.py over Cargo.lock) — another
+# generated file to keep in sync with every dependency bump, which is exactly
+# the drift-prone machinery crane let us delete from the Nix side.
+#
+# rustty does not need it. `cargo run -p xtask -- dist` already produces a
+# source tarball that contains `vendor/` plus a `.cargo/config.toml`
+# redirecting crates.io to it (the PACKAGING.md "Source Tarballs" contract),
+# and every C/C++ dependency is already vendored under crates-sys/*/vendor. So
+# the tarball builds completely offline as-is, and it is the source here.
+app-id: io.airely.rustty-debug
+runtime: org.gnome.Platform
+runtime-version: "50"
+sdk: org.gnome.Sdk
+sdk-extensions:
+  # The Rust toolchain is not in the GNOME SDK. rust-toolchain.toml pins
+  # 1.93.1; this extension tracks stable, so a pin newer than the extension's
+  # stable would need `rustup` in a build step instead.
+  - org.freedesktop.Sdk.Extension.rust-stable
+default-branch: tip
+rename-icon: io.airely.rustty
+command: rustty
+finish-args:
+  # 3D rendering
+  - --device=dri
+  # use host PTS namespace
+  - --device=all
+  # Windowing
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  # Allow user to specify additional config files in home by default
+  - --filesystem=home:ro
+  # So we can escape the sandbox
+  - --talk-name=org.freedesktop.Flatpak
+cleanup:
+  - /include
+  - /lib/girepository-1.0
+  - /lib/pkgconfig
+  - /share/gir-1.0
+  - /share/pkgconfig
+  - /share/vala
+  - "*.la"
+  - "*.a"
+  - "*.so"
+
+modules:
+  - dependencies.yml
+
+  - name: rustty
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        # The tarball ships .cargo/config.toml pointing at its own vendor/ dir,
+        # so nothing should reach the network. Make an attempt an error rather
+        # than a confusing hang.
+        CARGO_NET_OFFLINE: "true"
+        CARGO_HOME: /run/build/rustty/cargo-home
+    build-commands:
+      - cargo build --offline --locked
+        -p rustty --no-default-features --features "gtk wayland x11"
+      # Stage terminfo / shell-integration / themes / man / completions /
+      # locale / the desktop-app files. --flatpak swaps in the flatpak D-Bus
+      # service and caps the icon at 512, matching the reference's
+      # `-Dflatpak=true`.
+      - cargo run --offline --locked -p xtask -- resources
+        --target-os linux --prefix /app --flatpak --debug
+      - install -Dm755 target/debug/rustty /app/bin/rustty
+      - cp -r zig-out/share/. /app/share/
+    sources:
+      # The PRE-VENDORED source tarball, not a `type: dir` of the worktree:
+      # that is what makes the offline build work without a generated
+      # cargo-sources.json. Regenerate with `cargo run -p xtask -- dist`.
+      - type: archive
+        path: ../dist/rustty-0.1.0.tar.gz
+        strip-components: 1

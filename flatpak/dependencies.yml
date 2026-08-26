@@ -1,0 +1,34 @@
+# PORTS: ghostty flatpak/dependencies.yml.
+#
+# UNVERIFIED — see the header of io.airely.rustty.yml.
+#
+# The reference's `zig` module is DROPPED: the Rust toolchain comes from the
+# org.freedesktop.Sdk.Extension.rust-stable SDK extension the app manifest
+# declares, so there is no compiler tarball to fetch and pin here.
+#
+# `pandoc` is also dropped: it exists in the reference's build to render man
+# pages from Markdown at build time, whereas rustty's `xtask resources` writes
+# the man pages directly.
+name: dependencies-meta
+buildsystem: simple
+build-commands:
+  - true
+modules:
+  - name: bzip2-redirect
+    buildsystem: simple
+    build-commands:
+      - install -Dm644 libbzip2.so /app/lib/libbzip2.so
+    sources:
+      - type: inline
+        contents: INPUT(libbz2.so)
+        dest-filename: libbzip2.so
+
+  - name: gtk4-layer-shell
+    buildsystem: meson
+    sources:
+      # Keep this version synchronized with what nixpkgs provides to
+      # nix/build-support/build-inputs.nix, so the flatpak and Nix builds are
+      # not silently on different layer-shell releases.
+      - type: archive
+        url: https://github.com/wmww/gtk4-layer-shell/archive/refs/tags/v1.1.0.tar.gz
+        sha256: 98284281260a5eef5b4f63a55f16c4bf6a788a1020a6db037ecb0f71fa336988
