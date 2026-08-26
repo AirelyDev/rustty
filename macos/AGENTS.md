@@ -4,7 +4,9 @@
 - If code outside of `macos/` directory is modified, run
   `cargo run -p xtask -- xcframework` before building the macOS app to
   regenerate the underlying Rustty library (produces
-  `dist/RusttyKit.xcframework`).
+  `macos/RusttyKit.xcframework`, which `Rustty.xcodeproj` links directly — it
+  used to be built into `dist/` and copied here, and the copy going stale is
+  what silently broke `xcodebuild`).
 - Use `macos/build.nu` to build the macOS app, do not build it directly with
   `cargo`/`xcodebuild` (except to regenerate the underlying library as
   mentioned above).

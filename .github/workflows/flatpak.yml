@@ -81,10 +81,44 @@ jobs:
       # the manifest was first verified.
       - name: Install and run it
         run: |
+          set -euo pipefail
           flatpak remote-add --user --no-gpg-verify rustty-local flatpak/repo
           flatpak install --user -y rustty-local io.airely.rustty
           flatpak run io.airely.rustty +version | tee /tmp/version.txt
           grep -q "Rustty" /tmp/version.txt
+
+      # `+version` is NOT enough, and that is not a hypothetical.
+      #
+      # The manifest used to build without the `flatpak` feature, so
+      # `build_config.flatpak` was false and the binary was a Flatpak in
+      # packaging only: no portal/DBus integration, no `flatpak-spawn --host`,
+      # no host passwd lookup. It built, installed, ran, and printed its
+      # version perfectly — every one of those checks passed on a binary with
+      # its Flatpak integration switched off.
+      #
+      # So assert against the shipped BINARY.
+      #
+      # `+version` cannot carry this: the reference's own `cli/version.zig`
+      # prints app-runtime/font-engine/renderer/libxev and NOT the flatpak
+      # flag, and adding a field rustty's oracle does not print would be a
+      # fidelity divergence (R1) to serve a test.
+      #
+      # `/org/freedesktop/Flatpak/Development` is the D-Bus object path in
+      # `os/flatpak.rs`'s host-command call. It is compiled in ONLY when the
+      # feature is on, so its presence in the binary is a direct, artifact-level
+      # consequence of the build option — unlike `libgio-2.0`, which the GTK
+      # stack would pull in either way and which therefore proves nothing.
+      - name: Assert the flatpak build option reached the binary
+        run: |
+          set -euo pipefail
+          bin="$(flatpak info --show-location io.airely.rustty)/files/bin/rustty"
+          if ! grep -aq '/org/freedesktop/Flatpak/Development' "$bin"; then
+            echo "::error::the shipped binary has no Flatpak host-command path —"
+            echo "::error::it was built without the \`flatpak\` cargo feature."
+            echo "::error::See flatpak/io.airely.rustty.yml for what that silently disables."
+            exit 1
+          fi
+          echo "flatpak host-command path is present in the shipped binary"
 
       - name: Upload the bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -108,11 +108,16 @@ impl Config {
             exe_entrypoint: ExeEntrypoint::Rustty,
             // Reference `fromOptions`: `.version = options.app_version`.
             version: APP_VERSION,
-            // Reference field default: `flatpak: bool = false` (the `init()`
-            // option defaults to false too).
-            flatpak: false,
-            // Reference field default: `snap: bool = false`.
-            snap: false,
+            // Reference `init()`: `config.flatpak = b.option(bool, "flatpak",
+            // ...) orelse false;`. rustty's analogue of a `-D` build option is
+            // a cargo feature, so the option is read here rather than being
+            // pinned to the field default. Enabled by `rustty-termio/flatpak`,
+            // which the Flatpak manifest passes — see this crate's Cargo.toml
+            // for why it must be reached through termio and not directly.
+            flatpak: cfg!(feature = "flatpak"),
+            // Reference `init()`: `config.snap = b.option(bool, "snap", ...)
+            // orelse false;`. Passed by `snap/snapcraft.yaml`.
+            snap: cfg!(feature = "snap"),
             // Reference `init()`: `const wasm_target: WasmTarget = .browser;`.
             wasm_target,
             // Reference field default: `wasm_shared: bool = true`.

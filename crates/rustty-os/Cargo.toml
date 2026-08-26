@@ -88,3 +88,8 @@ rustty-xev = { workspace = true }
 [build-dependencies]
 # R3: compile the vendored `pty.c` standalone with the host C compiler.
 cc = "1"
+# Discovers gio-2.0 for the `flatpak` feature's host-command path — the analogue
+# of the reference's `linkSystemLibrary("gio-2.0", dynamic_link_opts)`
+# (SharedDeps.zig:683), which is itself pkg-config-backed. Only consulted when
+# that feature is on and the target is Linux/FreeBSD; see build.rs.
+pkg-config = "0.3"

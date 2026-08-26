@@ -1,0 +1,17 @@
+# G-DOXYGEN accepted-warning baseline.
+#
+# One extended-regex per line; blank lines and `#` comments ignored. A doxygen
+# warning matching any pattern here is accepted; ANYTHING ELSE fails the gate.
+#
+# This exists so R1 (verbatim comment fidelity) and "docs build clean" can both
+# hold. A warning belongs here ONLY when the text producing it is byte-identical
+# to the reference's — i.e. the wart is upstream's and "fixing" it would mean
+# editing a faithfully-ported doc comment. Record the reference file and line.
+# Any other warning is a rustty defect and must be fixed, not listed.
+
+# `rgb:<red>/<green>/<blue>` in the XParseColor syntax description. doxygen
+# parses the placeholders as HTML tags. The text is byte-identical to the
+# reference's `include/ghostty/vt/color.h:29-30,305-306` (verified with the
+# oracle checkout at 88f57ee66); escaping it in rustty would make the ported
+# comment diverge from the source it was ported from.
+Unsupported xml/html tag <(red|green|blue)> found

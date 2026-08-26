@@ -234,6 +234,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pkg-config"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
+
+[[package]]
 name = "prettyplease"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -350,6 +356,7 @@ dependencies = [
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
+ "pkg-config",
  "rustty-build-config",
  "rustty-datastruct",
  "rustty-global",
@@ -379,6 +386,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustty-terminfo"
+version = "0.1.0"
+dependencies = [
+ "rustty-identity",
+]
+
+[[package]]
 name = "rustty-unicode"
 version = "0.1.0"
 
@@ -399,6 +413,7 @@ dependencies = [
  "rustty-os",
  "rustty-render-types",
  "rustty-simd",
+ "rustty-terminfo",
  "rustty-unicode",
  "rustty-util",
  "rustty-zigstd",

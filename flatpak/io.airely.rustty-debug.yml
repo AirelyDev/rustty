@@ -90,8 +90,10 @@ modules:
         CARGO_NET_OFFLINE: "true"
         CARGO_HOME: /run/build/rustty/cargo-home
     build-commands:
+      # `flatpak` = the reference's `-Dflatpak=true`; see the release manifest
+      # (io.airely.rustty.yml) for what is inert without it.
       - cargo build --offline --locked
-        -p rustty --no-default-features --features "gtk wayland x11"
+        -p rustty --no-default-features --features "gtk wayland x11 flatpak"
       # Stage terminfo / shell-integration / themes / man / completions /
       # locale / the desktop-app files. --flatpak swaps in the flatpak D-Bus
       # service and caps the icon at 512, matching the reference's

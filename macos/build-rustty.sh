@@ -16,9 +16,18 @@ cd "$ROOT"
 CONFIGURATION="${CONFIGURATION:-Debug}"
 
 echo "== 1/3 packaging RusttyKit.xcframework =="
+# `xtask xcframework` now writes STRAIGHT to macos/RusttyKit.xcframework — the
+# path Rustty.xcodeproj links and the one the reference emits to
+# (GhosttyXCFramework.zig:41 `.out_path = "macos/GhosttyKit.xcframework"`).
+#
+# This step used to build into dist/ and then `cp -R` it here. That copy was
+# the only thing refreshing macos/, so the bundle was current exactly when this
+# script had been run and stale otherwise — and a plain `xcodebuild` (what the
+# reference's CI does, and what ci.yml's macos-app job does) silently linked
+# whatever stale copy was lying around. On this machine that copy was 69 header
+# lines behind and the app failed with 18 "cannot find X in scope" errors.
+# Having one location instead of two removes the failure mode entirely.
 cargo run -q -p xtask -- xcframework
-rm -rf macos/RusttyKit.xcframework
-cp -R dist/RusttyKit.xcframework macos/RusttyKit.xcframework
 
 echo "== 2/3 generating app resources (zig-out/share) =="
 cargo run -q -p xtask -- resources

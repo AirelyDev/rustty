@@ -32,6 +32,53 @@ permissions:
   contents: read
 
 jobs:
+  # The single job branch protection points at.
+  #
+  # PORTS the reference `test.yml`'s `required` job. Its value is that the set
+  # of jobs can change — as it does in this very commit, which adds the Windows
+  # and macOS-app legs — without anyone editing branch-protection settings, and
+  # a job that is SKIPPED or CANCELLED cannot be mistaken for a pass. The
+  # earlier audit recommended adopting this "before the matrix grows"; it is
+  # growing here.
+  #
+  # `needs` must list every job below. `always()` is required or this job would
+  # itself be skipped when a dependency fails.
+  required:
+    name: "Required Checks: rustty"
+    runs-on: ubuntu-latest
+    needs:
+      - ci
+      - windows
+      - macos-app
+    if: always()
+    steps:
+      - name: Determine status
+        shell: bash
+        env:
+          # Passed through the environment rather than interpolated into the
+          # script body, so the JSON cannot terminate a shell string.
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          set -uo pipefail
+          # RESULTS is a JSON array, e.g. ["success","success","skipped"].
+          mapfile -t states < <(printf '%s' "$RESULTS" | tr -d '[]" ' | tr ',' '\n' | grep -v '^$')
+          if [ "${#states[@]}" -eq 0 ]; then
+            echo "::error::no dependency results — the needs list is empty or malformed"
+            exit 1
+          fi
+          bad=0
+          for s in "${states[@]}"; do
+            # Anything that is not `success` — failure, cancelled, OR skipped —
+            # fails. Counting `skipped` as a pass is exactly how a required
+            # check silently stops checking.
+            if [ "$s" != "success" ]; then
+              echo "::error::a required job resolved to '$s'"
+              bad=1
+            fi
+          done
+          echo "${#states[@]} required job(s): ${states[*]}"
+          exit "$bad"
+
   ci:
     name: rustty-ci (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -117,9 +164,13 @@ jobs:
           set -euxo pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get update
-            sudo apt-get install -y blueprint-compiler valgrind libc6-dbg gettext
+            # doxygen: G-DOXYGEN. graphviz: the Doxyfile's diagram support.
+            # libglib2.0-dev: G-FEATMATRIX's `flatpak` arm links gio-2.0,
+            # exactly as SharedDeps.zig:683 does.
+            sudo apt-get install -y blueprint-compiler valgrind libc6-dbg gettext \
+              doxygen graphviz libglib2.0-dev
           else
-            brew install gettext
+            brew install gettext doxygen
           fi
 
       - name: Set up Python 3 (gate scripts + harness)
@@ -230,3 +281,154 @@ jobs:
           # time out. The gate reports them skipped by name.
           RUSTTY_NIX_VM_TESTS: "0"
         run: bash .port/tools/ci.sh
+
+  # ── Windows ────────────────────────────────────────────────────────────────
+  # PORTS the reference's `test-windows`, `build-libghostty-vt-windows` and
+  # `build-ghostty-windows-gnu` jobs.
+  #
+  # Until this existed, NO Windows object code was ever produced, linked, or
+  # run by anything in this repository. `G-WINCHK` is `cargo check` from a
+  # non-Windows host and says so in its own header — "it never LINKS and never
+  # RUNS anything on Windows ... a real windows build/test lane is the honest
+  # follow-up" — and `G-XTARGET`'s `x86_64-pc-windows-msvc` arm skips off
+  # Windows because there is no MSVC. `test/windows/test_dll_init.c` and its
+  # README were checked in, and the README's Status section read "Not run by
+  # any gate."
+  #
+  # Scope is deliberately the PORTABLE core, matching the reference: rustty-vt
+  # and its C API. The app/apprt/renderer tiers are macOS+Linux (Metal,
+  # CoreText, GTK, OpenGL) and are not built here, exactly as the reference's
+  # Windows jobs build `libghostty-vt` rather than the app.
+  windows:
+    name: rustty-windows
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      # The reference's `zig build test-lib-vt` on its Windows runner. This is
+      # the first time the VT test suite has EXECUTED on Windows — the
+      # `page_allocator` (NtAllocate/NtFreeVirtualMemory) and `page.rs`
+      # (VirtualAlloc/VirtualFree) arms were previously type-checked only.
+      - name: Test rustty-vt
+        run: cargo test -p rustty-vt --locked
+
+      - name: Test rustty-vt-c
+        run: cargo test -p rustty-vt-c --locked
+
+      # The reference's `zig build -Demit-lib-vt`.
+      - name: Build librustty-vt (release)
+        run: cargo build -p rustty-vt-c --release --locked
+
+      # `test/windows/test_dll_init.c` — the DLL-init smoke its README
+      # describes and that nothing has ever run. It loads the apprt-c DLL and
+      # calls `rustty_info` to prove a by-value struct return survives the
+      # Windows C ABI.
+      - name: Build the apprt-c DLL
+        run: cargo build -p rustty-apprt-c --release --locked --no-default-features
+
+      - name: Build and run test_dll_init
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Copy-Item target\release\rustty_apprt_c.dll test\windows\ -Force
+          Push-Location test\windows
+          # `clang`, not `cl`: cl.exe is only on PATH inside a VS developer
+          # shell, and this is exactly the command test/windows/README.md
+          # documents — so CI runs what the README tells a human to run.
+          # The test loads the DLL with LoadLibrary at runtime, so no import
+          # library is needed at link time.
+          clang test_dll_init.c -o test_dll_init.exe
+          # `2>&1`: the program writes its result to STDERR (see the fprintf in
+          # test_dll_init.c), so capturing stdout alone would yield an empty
+          # string and the assertion below would fail on a perfectly good run.
+          $out = & .\test_dll_init.exe 2>&1 | Out-String
+          Write-Host $out
+          # Assert, do not merely run: a DLL that loads and prints nothing
+          # would otherwise pass.
+          if ($out -notmatch "rustty_info:") { throw "unexpected output: $out" }
+          Pop-Location
+
+      # The reference's `build-ghostty-windows-gnu` — a different C ABI and
+      # linker, which catches things MSVC does not.
+      - name: Build for the GNU ABI
+        run: |
+          rustup target add x86_64-pc-windows-gnu
+          cargo build -p rustty-vt-c --target x86_64-pc-windows-gnu --locked
+
+  # ── macOS app bundle ───────────────────────────────────────────────────────
+  # PORTS the reference's `build-macos` and `test-macos` jobs.
+  #
+  # `xcodebuild` appeared ONLY in release-tip.yml and release-tag.yml, so the
+  # Xcode project, `Rustty.xctestplan` and `RusttyUITests/` were first exercised
+  # at release time — the same "worst time to find out" that `G-DIST` was
+  # created to eliminate for the source tarball, still open for the app.
+  macos-app:
+    name: rustty-macos-app
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: macos-app-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-app-cargo-
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # The XCFramework the Xcode project links against. This also covers
+      # `xtask xcframework`, which G-XTASK otherwise runs only under an opt-in
+      # env var because of its cost.
+      - name: Build RusttyKit.xcframework
+        run: cargo run --release -p xtask -- xcframework
+
+      # Resources the Copy-Resources build phase consumes.
+      - name: Stage share/ resources
+        run: cargo run --release -p xtask -- resources
+
+      - name: Build the app
+        run: |
+          set -euo pipefail
+          cd macos
+          xcodebuild -project Rustty.xcodeproj -scheme Rustty \
+            -configuration Debug \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO | tail -40
+
+      # `Rustty.xctestplan` + `RusttyUITests/` have never been executed by
+      # anything. Unit tests only: the UI tests need a booted GUI session that
+      # a headless runner does not provide, and pretending otherwise would put
+      # a permanently-red or permanently-skipped job in the required set.
+      - name: Run the Xcode unit tests
+        run: |
+          set -euo pipefail
+          cd macos
+          xcodebuild test -project Rustty.xcodeproj -scheme Rustty \
+            -configuration Debug \
+            -derivedDataPath build \
+            -destination 'platform=macOS' \
+            -only-testing:RusttyTests \
+            CODE_SIGNING_ALLOWED=NO | tail -60

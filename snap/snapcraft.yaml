@@ -87,8 +87,14 @@ parts:
       - rustup
     override-build: |
       craftctl set version=$(cat VERSION)
+      # `snap` is the port of the reference's `-Dsnap`, which its own
+      # snapcraft.yaml passes. It drives `build_config.snap`, which
+      # `os/open.rs` reads to handle `xdg-open` under snap confinement — the
+      # confined `xdg-open` cannot reach the host's handlers. Without the
+      # feature that guard is dead and URL/file opening silently misbehaves
+      # inside the snap.
       cargo build --release --offline --locked \
-        -p rustty --no-default-features --features "gtk wayland x11"
+        -p rustty --no-default-features --features "gtk wayland x11 snap"
       cargo run --release --offline --locked -p xtask -- resources \
         --target-os linux --prefix /snap/rustty/current
       install -Dm755 target/release/rustty $CRAFT_PART_INSTALL/bin/rustty

@@ -78,7 +78,17 @@ mod host_command {
 
     #[allow(non_camel_case_types)]
     type fd_t = libc::c_int;
-    type EnvMap = std::collections::HashMap<String, String>;
+    // `std.process.EnvMap` (flatpak.zig:58 `env: ?*const EnvMap`). Zig's EnvMap
+    // keys and values are `[]const u8` byte slices, NOT validated UTF-8 — an
+    // environment block is arbitrary bytes on every Unix — so the faithful Rust
+    // map is the shared `HashMap<Vec<u8>, Vec<u8>>`.
+    //
+    // This was a local `HashMap<String, String>` placeholder, which was BOTH
+    // lossy and the reason `--features flatpak` did not compile: `Exec`'s
+    // `self.env` is the canonical `rustty_global::EnvMap`, so the assignment at
+    // `termio/exec.rs`'s host-spawn site was a type error. Nothing ever built
+    // with the feature on, so nothing ever reported it.
+    use rustty_global::EnvMap;
 
     // PORT NOTE: `const c = @cImport({ @cInclude("gio/gio.h"); @cInclude("gio/gunixfdlist.h"); });`.
     // The GIO/GLib symbols are bound directly (R3: same system library). Only the
@@ -128,7 +138,10 @@ mod host_command {
             pub fn g_variant_unref(value: *mut GVariant);
             pub fn g_variant_ref_sink(value: *mut GVariant) -> *mut GVariant;
             pub fn g_variant_get(value: *mut GVariant, format_string: *const c_char, ...);
-            pub fn G_VARIANT_TYPE(type_string: *const c_char) -> *const GVariantType;
+            // The REAL exported symbol behind the `G_VARIANT_TYPE` macro. See
+            // the wrapper below the extern block for why this is not declared
+            // as `G_VARIANT_TYPE` directly.
+            pub fn g_variant_type_checked_(type_string: *const c_char) -> *const GVariantType;
             pub fn g_main_context_new() -> *mut GMainContext;
             pub fn g_main_context_unref(context: *mut GMainContext);
             pub fn g_main_context_push_thread_default(context: *mut GMainContext);
@@ -193,6 +206,33 @@ mod host_command {
                 cancellable: *mut GCancellable,
                 error: *mut *mut GError,
             ) -> *mut GVariant;
+        }
+
+        /// `G_VARIANT_TYPE(type_string)` — a glib MACRO, not a function:
+        ///
+        /// ```c
+        /// #ifndef G_DISABLE_CAST_CHECKS
+        /// # define G_VARIANT_TYPE(type_string) (g_variant_type_checked_ ((type_string)))
+        /// #else
+        /// # define G_VARIANT_TYPE(type_string) ((const GVariantType *) (type_string))
+        /// #endif
+        /// ```
+        ///
+        /// The reference gets it for free: `@cImport`ing `gio/gio.h` translates
+        /// the macro along with everything else. Rust has no such step, and
+        /// this was declared as `extern "C" fn G_VARIANT_TYPE` — a symbol that
+        /// does not exist in libglib, so every build carrying this module
+        /// failed to link with `undefined reference to 'G_VARIANT_TYPE'`. The
+        /// `flatpak` feature was never enabled by anything, so nothing found out.
+        ///
+        /// Expanded here as the macro expands, against the real exported
+        /// `g_variant_type_checked_`.
+        ///
+        /// # Safety
+        /// `type_string` must be a NUL-terminated, valid GVariant type string;
+        /// glib aborts on an invalid one (that is what the "checked" is).
+        pub unsafe fn G_VARIANT_TYPE(type_string: *const c_char) -> *const GVariantType {
+            unsafe { g_variant_type_checked_(type_string) }
         }
     }
 
@@ -604,8 +644,12 @@ mod host_command {
                 let env_builder = c::g_variant_builder_new(c::G_VARIANT_TYPE(cstr(b"a{ss}\0")));
                 if let Some(env) = &self.env {
                     for (k, v) in env.iter() {
-                        let key = std::ffi::CString::new(k.as_str()).unwrap();
-                        let value = std::ffi::CString::new(v.as_str()).unwrap();
+                        // `arena.dupeZ(u8, pair.key_ptr.*)` — NUL-terminate the
+                        // raw bytes. `CString::new` takes `Into<Vec<u8>>`, so
+                        // the byte-slice keys go straight in with no lossy
+                        // UTF-8 round trip.
+                        let key = std::ffi::CString::new(k.as_slice()).unwrap();
+                        let value = std::ffi::CString::new(v.as_slice()).unwrap();
                         c::g_variant_builder_add(
                             env_builder,
                             cstr(b"{ss}\0"),

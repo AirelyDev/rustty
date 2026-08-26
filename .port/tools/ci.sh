@@ -462,6 +462,37 @@ GATE_REGISTRY=(
   # forgets one of its own still compiles there and breaks for anyone who
   # depends on it alone.
   "G-FEATMATRIX|HARD|bash $GATES/check_feature_matrix.sh"
+  # G-EOL (2026-08-26) — byte fidelity of the corpora, fixtures and vendored
+  # trees. `.gitattributes` opens with `* text=auto` and guarded the byte-exact
+  # fixtures by EXTENSION, but fuzz corpus seeds have none — so git normalized
+  # `.port/phase-0/corpora/cvt/parser-initial/02-crlf`, a seed whose whole
+  # purpose is CRLF, to LF in the COMMITTED blob. `git status` stayed clean and
+  # the working tree kept its CRLF, so it was invisible on the machine that did
+  # it and existed only for anyone who cloned; the replay test read the working
+  # tree and was green either way. HARD: green, and a demonstrated RED flip
+  # (delete the corpora path rule -> "still under line-ending conversion").
+  "G-EOL|HARD|bash $GATES/check_eol_fidelity.sh"
+  # G-XTASK (2026-08-26) — the xtask subcommands nothing else ran. xtask IS
+  # rustty's build.zig; grepping every `xtask -- <cmd>` across .port/tools and
+  # .github/workflows found `resources`, `gen`, `wasm-patch-growable-table` and
+  # the app `xcframework` invoked by NOTHING. `resources` alone generates ~1,200
+  # release-critical files (man pages, the compiled terminfo db, 32 .mo
+  # catalogues, themes, shell integration, the Linux desktop/dbus/systemd
+  # units) and its only callers were the Flatpak and Snap manifests. The linux
+  # and --flatpak arms are pure file generation, so they run from any host and
+  # are asserted DIFFERENTIALLY (the plain arm must emit the systemd wiring and
+  # a >512 icon that the flatpak arm must then drop) rather than by presence.
+  "G-XTASK|HARD|bash $GATES/check_xtask_surface.sh"
+  # G-DOXYGEN (2026-08-26) — the C-API reference generates, and cleanly. The
+  # Doxyfile, DoxygenLayout.xml and all six dist/doxygen assets were ported and
+  # `doxygen` then ran from NOWHERE, while the Doxyfile's INPUT
+  # (`include/rustty`) is a GENERATED header tree that can rot silently.
+  # Warnings are filtered through `doxygen_warnings.baseline` rather than
+  # compared to zero, because the only ones the headers produce today come from
+  # text byte-identical to the reference's (`rgb:<red>/<green>/<blue>`), and
+  # demanding zero would force a faithfully-ported comment to diverge from its
+  # source. BLOCKED where doxygen is absent.
+  "G-DOXYGEN|HARD|bash $GATES/check_doxygen.sh"
   # G-REL (WS18) — the `--release` test lane. Steps 3/4 above only ever exercise
   # the DEBUG profile, so nothing noticed that release had rotted to 22 failures
   # across 7 targets. Most were tests driving a seam the port deliberately

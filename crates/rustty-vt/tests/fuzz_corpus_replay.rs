@@ -3,19 +3,27 @@
 //! `test/fuzz-libghostty/src/fuzz_{osc,parser,stream}.zig`) in plain
 //! `cargo test`, AFL/libFuzzer-free. Any panic is a real crash finding.
 //!
-//! Two corpus tiers:
-//!   * The hand-written `*-initial` seeds copied into the port tree at
-//!     `.port/phase-0/corpora/cvt/{osc,parser,stream}-initial/` (20+50+24
-//!     files) — ALWAYS replayed.
-//!   * The full reference corpora (incl. the large afl-cmin edge-deduped
-//!     `*-cmin` sets) — replayed from the read-only oracle checkout when the
-//!     `GHOSTTY_ORACLE` env var points at it (skip-if-absent, so CI without
-//!     the oracle still runs the in-tree tier). Example:
+//! The WHOLE reference corpus is mirrored in-tree at
+//! `.port/phase-0/corpora/cvt/{osc,parser,stream}-{initial,cmin}/` — all 4,001
+//! files, the hand-written seeds and the large afl-cmin edge-deduped sets
+//! alike — and every one of them is replayed by `replay_port_full_corpus` with
+//! no oracle checkout in the loop.
 //!
-//!     ```sh
-//!     GHOSTTY_ORACLE=/Users/gael/projects/ghostty cargo test -p rustty-vt \
-//!       --test fuzz_corpus_replay
-//!     ```
+//! It was not always so. The `*-cmin` tiers used to live only in the oracle,
+//! reachable exclusively via `GHOSTTY_ORACLE`, so the deep corpus replayed on
+//! one machine and never on CI. Mirroring them is what makes this test mean the
+//! same thing everywhere; the reference commits all six tiers for the same
+//! reason.
+//!
+//! Setting `GHOSTTY_ORACLE` additionally enables two provenance tests —
+//! `port_corpus_matches_oracle_bytes` (every mirrored file is byte-identical)
+//! and `replay_full_oracle_corpus` (replay from the oracle, so an oracle bump
+//! that adds files is exercised before the mirror is refreshed):
+//!
+//! ```sh
+//! GHOSTTY_ORACLE=/Users/gael/projects/ghostty cargo test -p rustty-vt \
+//!   --test fuzz_corpus_replay
+//! ```
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -162,9 +170,92 @@ fn replay_port_initial_seeds_cross() {
     replay_dir(&root.join("osc-initial"), fuzz_harness::fuzz_parser);
 }
 
-/// Full oracle-corpus replay: all six reference corpus dirs
-/// (`{osc,parser,stream}-{initial,cmin}`, 4,001 files at oracle pin 6ad1fe7d)
-/// through the matching harness. Runs only when GHOSTTY_ORACLE is set.
+/// The six corpus tiers and the file count each must reach. Lower bounds, so
+/// an oracle bump that ADDS corpus files never breaks the assertion.
+type Tier<'a> = (&'a str, fn(&[u8]), usize);
+const TIERS: [Tier<'static>; 6] = [
+    ("osc-initial", fuzz_harness::fuzz_osc as fn(&[u8]), 20),
+    ("osc-cmin", fuzz_harness::fuzz_osc, 20),
+    ("parser-initial", fuzz_harness::fuzz_parser, 50),
+    ("parser-cmin", fuzz_harness::fuzz_parser, 616),
+    ("stream-initial", fuzz_harness::fuzz_stream, 24),
+    ("stream-cmin", fuzz_harness::fuzz_stream, 3271),
+];
+
+/// The FULL corpus — all 4,001 files across all six tiers — replayed from the
+/// PORT TREE, with no oracle checkout in the loop.
+///
+/// This test is why the `*-cmin` tiers are committed. Until they were, only the
+/// 94 hand-written `*-initial` seeds were in-tree and the 3,907 afl-cmin
+/// edge-deduped cases lived exclusively in the oracle, reachable only when
+/// GHOSTTY_ORACLE was exported. That meant the deep corpus — the tier that
+/// actually walks the parser's rare edges — replayed on precisely one machine
+/// and never on CI, nor for anyone who cloned the repository. `cargo-fuzz`'s
+/// own `fuzz/corpus/` is gitignored (it is a live, growing fuzzer working set),
+/// so it could not fill the role either.
+///
+/// The reference commits all six tiers for the same reason; this mirrors that.
+#[test]
+fn replay_port_full_corpus() {
+    let root = port_corpus_root();
+    let mut total = 0usize;
+    for (dir, harness, min) in TIERS {
+        let n = replay_dir(&root.join(dir), harness);
+        assert!(n >= min, "expected >= {min} files in {dir}, found {n}");
+        total += n;
+    }
+    assert!(
+        total >= 4001,
+        "expected >= 4001 in-tree corpus files total, found {total}"
+    );
+    eprintln!("replayed {total} in-tree corpus files clean");
+}
+
+/// Provenance cross-check: every in-tree corpus file is BYTE-IDENTICAL to the
+/// oracle's copy. Guards the mirror against silent drift — including the
+/// line-ending normalization that `.gitattributes` used to allow (see
+/// `.port/tools/gates/check_eol_fidelity.sh`). Runs only when GHOSTTY_ORACLE
+/// is set; `G-EOL` performs the same comparison in the gate suite.
+#[test]
+fn port_corpus_matches_oracle_bytes() {
+    let Some(oracle_root) = oracle_corpus_root() else {
+        eprintln!("GHOSTTY_ORACLE not set; skipping corpus provenance check");
+        return;
+    };
+    let port_root = port_corpus_root();
+    let mut compared = 0usize;
+    for (dir, _, _) in TIERS {
+        for entry in
+            fs::read_dir(port_root.join(dir)).unwrap_or_else(|e| panic!("read_dir({dir}): {e}"))
+        {
+            let path = entry.expect("dir entry").path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = path.file_name().expect("file name");
+            let theirs = oracle_root.join(dir).join(name);
+            if !theirs.is_file() {
+                continue;
+            }
+            assert_eq!(
+                fs::read(&path).expect("read port seed"),
+                fs::read(&theirs).expect("read oracle seed"),
+                "corpus file {dir}/{} differs from the oracle",
+                name.to_string_lossy()
+            );
+            compared += 1;
+        }
+    }
+    assert!(
+        compared >= 4001,
+        "expected >= 4001 seeds compared against the oracle, compared {compared}"
+    );
+}
+
+/// Full oracle-corpus replay: the same six dirs read from the ORACLE checkout
+/// rather than the port tree. Retained alongside `replay_port_full_corpus` so
+/// an oracle bump that adds corpus files is exercised before the mirror is
+/// refreshed. Runs only when GHOSTTY_ORACLE is set.
 #[test]
 fn replay_full_oracle_corpus() {
     let Some(root) = oracle_corpus_root() else {
@@ -172,20 +263,8 @@ fn replay_full_oracle_corpus() {
         return;
     };
 
-    // (dir, harness, minimum file count at the current oracle pin — lower
-    // bounds so an oracle bump that ADDS corpus files does not break us).
-    type Tier<'a> = (&'a str, fn(&[u8]), usize);
-    let tiers: [Tier<'_>; 6] = [
-        ("osc-initial", fuzz_harness::fuzz_osc as fn(&[u8]), 20),
-        ("osc-cmin", fuzz_harness::fuzz_osc, 20),
-        ("parser-initial", fuzz_harness::fuzz_parser, 50),
-        ("parser-cmin", fuzz_harness::fuzz_parser, 616),
-        ("stream-initial", fuzz_harness::fuzz_stream, 24),
-        ("stream-cmin", fuzz_harness::fuzz_stream, 3271),
-    ];
-
     let mut total = 0usize;
-    for (dir, harness, min) in tiers {
+    for (dir, harness, min) in TIERS {
         let n = replay_dir(&root.join(dir), harness);
         assert!(n >= min, "expected >= {min} files in {dir}, found {n}");
         total += n;

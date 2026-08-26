@@ -72,7 +72,32 @@ done
 echo "=== G-FEATMATRIX 2/2 :: feature on/off matrices ==="
 MATRIX=(
   "rustty-crash|sentry"
+  # The packaging build options — the ports of the reference's `-Dflatpak=true`
+  # and `-Dsnap`, which its own manifests pass and which its `test-sentry-linux`
+  # job models for `-Dsentry`.
+  #
+  # These belong here more than sentry does: both were hardcoded `false` with no
+  # seam at all, so the Flatpak shipped with its portal/DBus integration,
+  # `flatpak-spawn --host` and host passwd lookup inert. Building BOTH sides is
+  # what keeps that from silently returning — and the first build with the
+  # option ON found that the path had never compiled (a lossy `EnvMap` alias)
+  # and then that it had never linked (`G_VARIANT_TYPE` is a glib MACRO, not an
+  # exported symbol).
+  "rustty-build-config|snap"
 )
+
+# `flatpak` is Linux/FreeBSD-only, in rustty exactly as in the reference: it
+# implies GTK and links gio-2.0 (`SharedDeps.zig:663-685` — "when we're
+# targeting flatpak we ALWAYS link GTK"), neither of which exists on macOS.
+# Reported skipped BY NAME elsewhere rather than quietly dropped.
+FLATPAK_SKIP=""
+case "$(uname -s)" in
+  Linux|FreeBSD) MATRIX+=("rustty-build-config|flatpak") ;;
+  *) FLATPAK_SKIP="rustty-build-config --features flatpak (Linux/FreeBSD only: implies GTK + gio-2.0)" ;;
+esac
+# Report the skip BY NAME. A gate that silently drops an arm on some hosts is
+# how "green" comes to mean different things on different machines.
+[ -n "$FLATPAK_SKIP" ] && echo "  skipped $FLATPAK_SKIP"
 for spec in "${MATRIX[@]}"; do
   crate="${spec%%|*}"
   feat="${spec##*|}"
