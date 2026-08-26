@@ -110,8 +110,23 @@ run_check() {
     rc=1
   fi
 
-  # count invariant: header == 90 == TSV rows.
-  if [ "$hdr_count" -ne 90 ]; then red "header ^GHOSTTY_API count is $hdr_count, expected 90"; rc=1; fi
+  # count invariant: header == TSV rows, and neither has collapsed.
+  #
+  # The two `comm` arms above already enforce SET equality in both directions,
+  # so drift of any single symbol is caught by name. The only thing a count adds
+  # is anti-vacuity: if the header ever failed to parse (or the manifest were
+  # emptied), both sides would be 0 and the set arms would agree on nothing.
+  #
+  # That floor used to be spelled `-ne 90`, an exact literal. Upstream added a
+  # 91st `GHOSTTY_API` entrypoint, the manifest was updated to match, and the
+  # literal was not — so this gate read RED on `main` while the header and the
+  # TSV agreed exactly with each other. A monotone floor keeps the anti-vacuity
+  # guarantee without re-rotting on the next upstream API addition; raise it
+  # when the surface grows, never lower it.
+  if [ "$hdr_count" -lt 90 ]; then
+    red "header ^GHOSTTY_API count is $hdr_count, below the floor of 90 — the header almost certainly failed to parse"
+    rc=1
+  fi
   if [ "$tsv_rows" -ne "$hdr_count" ]; then red "TSV row count ($tsv_rows) != header export count ($hdr_count)"; rc=1; fi
 
   if [ "$rc" -eq 0 ]; then

@@ -1123,14 +1123,32 @@ impl<'a, H: Handler> Stream<'a, H> {
             while i < cps.len() {
                 // const cp = cps[i];
                 let cp = cps[i];
-                // if (cp <= 0xF) {
-                if cp <= 0xF {
+                // C0 and UTF-8-decoded C1 controls never enter
+                // printable runs. A codepoint is one of those
+                // exactly when it has no bit set outside 0x9F:
+                // bits 0-4 and bit 7 cover 0x00-0x1F and
+                // 0x80-0x9F and nothing else, so a single
+                // AND-test classifies both ranges.
+                // if ((cp & ~@as(u32, 0x9F)) == 0) {
+                if (cp & !0x9Fu32) == 0 {
                     // @branchHint(.unlikely);
                     // PORT NOTE: `@branchHint(.unlikely)` has no stable Rust
                     // equivalent (`core::intrinsics::likely` is nightly); the
                     // branch structure is otherwise identical.
-                    // self.execute(@intCast(cp));
-                    self.execute(cp as u8);
+                    // if (cp <= 0x1F) {
+                    if cp <= 0x1F {
+                        // C0 controls execute rather than print.
+                        // self.execute(@intCast(cp));
+                        self.execute(cp as u8);
+                    } else {
+                        // C1 controls decoded from UTF-8 are ignored.
+                        // logUnsupportedOnce(
+                        //     "ignoring UTF-8-decoded C1 controls, first: 0x{x}",
+                        //     .{cp},
+                        //     0x80,
+                        // );
+                        log_unsupported_once(&SEEN_UTF8_DECODED_C1, 0x80);
+                    }
                     i += 1;
                     continue;
                 }
@@ -1145,12 +1163,17 @@ impl<'a, H: Handler> Stream<'a, H> {
                 let mut end = i + 1;
                 'scan: {
                     if let Some(lanes) = PRINT_RUN_LANES {
+                        // Non-printable (C0 or decoded C1) is
+                        // equivalent to "no bit outside 0x9F is
+                        // set": one AND-test per lane.
+                        // const mask: V = @splat(~@as(u32, 0x9F));
+                        // const zero: V = @splat(0);
                         while end + lanes <= cps.len() {
-                            // const gt = v > threshold;
-                            // if (!@reduce(.And, gt)) { end += @ctz(~bits); break :scan; }
+                            // const stop = (v & mask) == zero;
+                            // if (@reduce(.Or, stop)) { end += @ctz(bits); break :scan; }
                             let mut first_bad: Option<usize> = None;
                             for j in 0..lanes {
-                                if cps[end + j] <= 0xF {
+                                if (cps[end + j] & !0x9Fu32) == 0 {
                                     first_bad = Some(j);
                                     break;
                                 }
@@ -1162,8 +1185,8 @@ impl<'a, H: Handler> Stream<'a, H> {
                             end += lanes;
                         }
                     }
-                    // while (end < cps.len and cps[end] > 0xF) end += 1;
-                    while end < cps.len() && cps[end] > 0xF {
+                    // while (end < cps.len and (cps[end] & ~@as(u32, 0x9F)) != 0) end += 1;
+                    while end < cps.len() && (cps[end] & !0x9Fu32) != 0 {
                         end += 1;
                     }
                 }
@@ -1785,17 +1808,35 @@ impl<'a, H: Handler> Stream<'a, H> {
         // a chain of inline functions.
         // @setEvalBranchQuota(100_000);
 
-        // C0 control
-        // if (c <= 0xF) { self.execute(@intCast(c)); return; }
-        if c <= 0xF {
+        // C0 control or a C1 control decoded from UTF-8: exactly
+        // the codepoints with no bit set outside 0x9F (bits 0-4
+        // and bit 7 cover 0x00-0x1F and 0x80-0x9F and nothing
+        // else), so the printable fast path stays a single
+        // AND-test.
+        // if ((c & ~@as(u21, 0x9F)) == 0) {
+        if (c & !0x9Fu32) == 0 {
+            // ESC
+            // if (c == 0x1B) { self.parser.state = .escape; self.parser.clear(); return; }
+            if c == 0x1B {
+                self.parser.state = parser::State::Escape;
+                self.parser.clear();
+                return;
+            }
+
+            // Ignore C1 that came via UTF-8 decoding, matching xterm.
+            // if (c > 0x1F) {
+            if c > 0x1F {
+                // logUnsupportedOnce(
+                //     "ignoring UTF-8-decoded C1 controls, first: 0x{x}",
+                //     .{c},
+                //     0x80,
+                // );
+                log_unsupported_once(&SEEN_UTF8_DECODED_C1, 0x80);
+                return;
+            }
+
+            // self.execute(@intCast(c));
             self.execute(c as u8);
-            return;
-        }
-        // ESC
-        // if (c == 0x1B) { self.parser.state = .escape; self.parser.clear(); return; }
-        if c == 0x1B {
-            self.parser.state = parser::State::Escape;
-            self.parser.clear();
             return;
         }
         // self.print(@intCast(c));
@@ -4179,10 +4220,11 @@ fn log_unsupported_once(table: &UnsupportedOnceTable, key: u16) -> bool {
     false
 }
 
-// The eight reference `(format, @TypeOf(args))` instantiations, in the order
-// they appear in `stream.zig`. `SEEN_UNIMPLEMENTED_MODE` and
-// `SEEN_UNIMPLEMENTED_ESC_ACTION` are each shared by two call sites, exactly as
-// Zig shares them.
+// The nine reference `(format, @TypeOf(args))` instantiations, in the order
+// they appear in `stream.zig`. `SEEN_UTF8_DECODED_C1`,
+// `SEEN_UNIMPLEMENTED_MODE` and `SEEN_UNIMPLEMENTED_ESC_ACTION` are each shared
+// by two call sites, exactly as Zig shares them.
+static SEEN_UTF8_DECODED_C1: UnsupportedOnceTable = UnsupportedOnceTable::new();
 static SEEN_INVALID_C0: UnsupportedOnceTable = UnsupportedOnceTable::new();
 static SEEN_INVALID_DEVICE_ATTRIBUTES: UnsupportedOnceTable = UnsupportedOnceTable::new();
 static SEEN_UNIMPLEMENTED_MODE: UnsupportedOnceTable = UnsupportedOnceTable::new();
@@ -5123,6 +5165,196 @@ mod tests {
         assert!(s.handler.c.is_none());
         s.next_slice(&[0x80]);
         assert_eq!(0x800u32, s.handler.c.unwrap());
+    }
+
+    // test "stream: ground state C0 controls are executed, not printed" { ... }
+    #[test]
+    fn stream_ground_state_c0_controls_are_executed_not_printed() {
+        // buf: [128]u21 = undefined,
+        // len: usize = 0,
+        //
+        // PORT NOTE: the reference handler is a bare struct with default field
+        // values; `Default` is the Rust spelling of that `.{}` construction.
+        struct H {
+            buf: [u32; 128],
+            len: usize,
+        }
+        impl Default for H {
+            fn default() -> Self {
+                Self {
+                    buf: [0; 128],
+                    len: 0,
+                }
+            }
+        }
+        impl Handler for H {
+            // .print => { self.buf[self.len] = value.cp; self.len += 1; },
+            fn print(&mut self, cp: u32) {
+                self.buf[self.len] = cp;
+                self.len += 1;
+            }
+            // .print_slice => for (value.cps) |cp| {
+            //     self.buf[self.len] = @intCast(cp);
+            //     self.len += 1;
+            // },
+            fn print_slice(&mut self, cps: &[u32]) {
+                for &cp in cps {
+                    self.buf[self.len] = cp;
+                    self.len += 1;
+                }
+            }
+        }
+
+        // Every C0 control except ESC must never produce a print action
+        // in the ground state. ESC is excluded because it begins an
+        // escape sequence rather than executing.
+        for c in 0u32..0x20 {
+            if c == 0x1B {
+                continue;
+            }
+
+            // Scalar path.
+            {
+                let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
+                s.next(b'A');
+                s.next(c as u8);
+                s.next(b'B');
+                assert_eq!(2usize, s.handler.len);
+                assert_eq!(b'A' as u32, s.handler.buf[0]);
+                assert_eq!(b'B' as u32, s.handler.buf[1]);
+            }
+
+            // Batched path.
+            {
+                let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
+                s.next_slice(&[b'A', b'B', c as u8, b'C', b'D']);
+                assert_eq!(4usize, s.handler.len);
+                for (i, expected) in b"ABCD".iter().enumerate() {
+                    assert_eq!(*expected as u32, s.handler.buf[i]);
+                }
+            }
+
+            // Batched path with a run long enough to exercise the
+            // vectorized printable-run scan on either side of the control.
+            {
+                let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
+                // var input: [65]u8 = @splat('A');
+                let mut input: [u8; 65] = [b'A'; 65];
+                input[32] = c as u8;
+                s.next_slice(&input);
+                assert_eq!(64usize, s.handler.len);
+                for &cp in &s.handler.buf[0..s.handler.len] {
+                    assert_eq!(b'A' as u32, cp);
+                }
+            }
+        }
+    }
+
+    // test "stream: ground state UTF-8-decoded C1 controls are ignored" { ... }
+    #[test]
+    fn stream_ground_state_utf8_decoded_c1_controls_are_ignored() {
+        // buf: [128]u21 = undefined,
+        // len: usize = 0,
+        struct H {
+            buf: [u32; 128],
+            len: usize,
+        }
+        impl Default for H {
+            fn default() -> Self {
+                Self {
+                    buf: [0; 128],
+                    len: 0,
+                }
+            }
+        }
+        impl Handler for H {
+            // .print => { self.buf[self.len] = value.cp; self.len += 1; },
+            fn print(&mut self, cp: u32) {
+                self.buf[self.len] = cp;
+                self.len += 1;
+            }
+            // .print_slice => for (value.cps) |cp| {
+            //     self.buf[self.len] = @intCast(cp);
+            //     self.len += 1;
+            // },
+            fn print_slice(&mut self, cps: &[u32]) {
+                for &cp in cps {
+                    self.buf[self.len] = cp;
+                    self.len += 1;
+                }
+            }
+        }
+
+        // Every C1 control that arrives as well-formed UTF-8 (a two byte
+        // 0xC2-lead sequence) must be dropped: not printed and not
+        // interpreted as a control (e.g. U+009B must not start a CSI).
+        for c in 0x80u32..0xA0 {
+            // const enc: [2]u8 = .{ 0xC2, @intCast(c) };
+            let enc: [u8; 2] = [0xC2, c as u8];
+
+            // Scalar path.
+            {
+                let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
+                s.next(b'A');
+                s.next(enc[0]);
+                s.next(enc[1]);
+                s.next(b'B');
+                assert_eq!(2usize, s.handler.len);
+                assert_eq!(b'A' as u32, s.handler.buf[0]);
+                assert_eq!(b'B' as u32, s.handler.buf[1]);
+            }
+
+            // Batched path.
+            {
+                let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
+                s.next_slice(&[b'A', b'B', enc[0], enc[1], b'C', b'D']);
+                assert_eq!(4usize, s.handler.len);
+                for (i, expected) in b"ABCD".iter().enumerate() {
+                    assert_eq!(*expected as u32, s.handler.buf[i]);
+                }
+            }
+
+            // Batched path with a run long enough to exercise the
+            // vectorized printable-run scan on either side of the control.
+            {
+                let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
+                // var input: [66]u8 = @splat('A');
+                let mut input: [u8; 66] = [b'A'; 66];
+                input[32] = enc[0];
+                input[33] = enc[1];
+                s.next_slice(&input);
+                assert_eq!(64usize, s.handler.len);
+                for &cp in &s.handler.buf[0..s.handler.len] {
+                    assert_eq!(b'A' as u32, cp);
+                }
+            }
+        }
+
+        // U+00A0 (NBSP), just past the C1 range, must still print.
+        {
+            let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
+            s.next_slice(&[0xC2, 0xA0]);
+            assert_eq!(1usize, s.handler.len);
+            assert_eq!(0xA0u32, s.handler.buf[0]);
+        }
+
+        // A codepoint whose continuation byte falls in the C1 range must
+        // still print: "Ü" is 0xC3 0x9C.
+        {
+            let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
+            s.next_slice("Ü".as_bytes());
+            assert_eq!(1usize, s.handler.len);
+            assert_eq!(0xDCu32, s.handler.buf[0]);
+        }
+
+        // A raw C1 byte is ill-formed UTF-8, not a decoded C1: it must
+        // still produce a U+FFFD replacement.
+        {
+            let mut s: Stream<H> = Stream::init(Options::with_handler(H::default()));
+            s.next_slice(&[0x9B]);
+            assert_eq!(1usize, s.handler.len);
+            assert_eq!(0xFFFDu32, s.handler.buf[0]);
+        }
     }
 
     // test "stream: cursor right (CUF)" { ... }

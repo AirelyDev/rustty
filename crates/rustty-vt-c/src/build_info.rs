@@ -234,19 +234,27 @@ mod tests {
             .split_once("\n[features]")
             .expect("rustty-vt-c Cargo.toml has a [features] section")
             .1;
-        let default_line = features
-            .lines()
-            .find(|l| l.trim_start().starts_with("default"))
-            .expect(
-                "rustty-vt-c declares no `default` feature: a plain \
+        // The whole `default = [...]` array, not just its first line: the
+        // `-Dvt-features` work made this a multi-line array (it now names the
+        // nine feature tokens alongside `simd`), and a line-oriented read would
+        // have seen a bare `default = [` and reported a missing `simd` that is
+        // right there on the next line. Read to the closing bracket instead, so
+        // the arm keeps its teeth under either spelling.
+        let default_start = features.find("\ndefault").expect(
+            "rustty-vt-c declares no `default` feature: a plain \
                  `cargo build -p rustty-vt-c` therefore leaves `rustty-vt/simd` \
                  OFF, while ghostty's `-Dsimd` defaults to true for every \
                  non-WASM target (build/Config.zig:196-206)",
-            );
+        );
+        let tail = &features[default_start..];
+        let default_decl = &tail[..tail
+            .find(']')
+            .expect("`default` feature list is not a closed `[...]` array")
+            + 1];
         assert!(
-            default_line.contains("\"simd\""),
+            default_decl.contains("\"simd\""),
             "rustty-vt-c's default feature set does not include `simd` \
-             ({default_line:?}); ghostty's default libghostty-vt is SIMD-on"
+             ({default_decl:?}); ghostty's default libghostty-vt is SIMD-on"
         );
 
         // 2. ABI arm.

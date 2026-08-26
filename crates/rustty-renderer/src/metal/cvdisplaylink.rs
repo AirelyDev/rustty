@@ -113,7 +113,7 @@ pub enum Error {
 /// only the opaque link ptr (the `Async` payload is a bare mach port; nothing to show).
 pub struct DisplayLink {
     /// The `CVDisplayLinkRef` (reference `@ptrCast(self)`). Non-null: the ctor
-    /// rejects a null result exactly as the reference `orelse error.OutOfMemory`.
+    /// rejects a null result exactly as the reference `orelse error.CreationFailed`.
     link: NonNull<CVDisplayLink>,
     /// The userdata the CoreVideo output callback dereferences — the `xev.Async`
     /// the reference stores in `renderer.Thread`. `None` until `set_output_callback`.

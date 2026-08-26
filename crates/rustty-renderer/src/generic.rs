@@ -1430,6 +1430,9 @@ mod macos_impl {
         /// True if the window is focused
         pub focused: bool,
 
+        /// True if the window is visible.
+        pub visible: bool,
+
         /// Flag to indicate that our focus state changed for custom
         /// shaders to update their state.
         pub custom_shader_focused_changed: bool,
@@ -2158,54 +2161,15 @@ mod macos_impl {
                 unsafe { (*g).metrics }
             };
 
-            // generic.zig:692-699:
-            //   const display_link: ?DisplayLink = switch (builtin.os.tag) {
-            //       .macos => if (options.config.vsync)
-            //           try macos.video.DisplayLink.createWithActiveCGDisplays()
-            //       else null,
-            //       else => null,
-            //   };
-            //   errdefer if (display_link) |v| v.release();
-            // macOS-only crate ⇒ the `.macos` arm only. The `try` maps to `?`; the
-            // reference `error.OutOfMemory` becomes `generic::Error` via the
-            // `From<cvdisplaylink::Error>` impl above (`InvalidOperation -> OutOfMemory`).
-            //
-            // errdefer: the freshly-created +1 `CVDisplayLinkRef` must be released on
-            // ANY later `?`-return in `init` (reference `errdefer if (display_link)
-            // |v| v.release();`). Rust has no `errdefer`; use a disarm-on-success RAII
-            // guard that OWNS the `Option<DisplayLink>`. `Drop` releases; `disarm()`
-            // extracts the value on success (leaving `None`, so the ensuing `Drop` is
-            // a no-op) to move into the `Renderer`. An OWNING guard (not a `&`-borrow
-            // guard) is required — a borrow would conflict with moving `display_link`
-            // into the struct literal.
-            struct DisplayLinkErrdefer {
-                dl: Option<DisplayLink>,
-            }
-            impl DisplayLinkErrdefer {
-                /// Disarm on success: take the link out (leaving `None`, so the
-                /// subsequent `Drop` releases nothing) to move into the Renderer.
-                fn disarm(mut self) -> Option<DisplayLink> {
-                    self.dl.take()
-                }
-            }
-            impl Drop for DisplayLinkErrdefer {
-                fn drop(&mut self) {
-                    // reference `errdefer if (display_link) |v| v.release();`
-                    if let Some(dl) = self.dl.as_ref() {
-                        dl.release();
-                    }
-                }
-            }
-            // The `?` inside the `Some(...)` initializer returns BEFORE the guard is
-            // built (nothing created ⇒ nothing to leak); every `?` AFTER this drops
-            // the guard ⇒ `release()`.
-            let display_link_errdefer = DisplayLinkErrdefer {
-                dl: if options.config.vsync {
-                    Some(DisplayLink::create_with_active_cg_displays()?)
-                } else {
-                    None
-                },
-            };
+            // PORT NOTE (`a177ba90a`): `init` no longer creates the display link.
+            // The reference DELETED its eager `createWithActiveCGDisplays()` +
+            // `errdefer ... release()` pair here, because a locked macOS session can
+            // temporarily have no active displays and that error path aborted renderer
+            // init (reported as OutOfMemory, no less). Creation is now LAZY, inside
+            // `sync_display_link` below, which tolerates failure by falling back to
+            // event-driven rendering without vsync and retrying on the next display
+            // update. The field starts `None`; the owning-`DisplayLinkErrdefer` RAII
+            // guard this replaced is gone with the fallible call it guarded.
 
             // generic.zig:718-743 uniforms literal. The reference sets
             // projection_matrix/cell_size/grid_size/grid_padding/screen_size (and
@@ -2266,11 +2230,6 @@ mod macos_impl {
             // (generic.rs `rebuild_cells`: `if grid_size_diff { self.cells.resize(..) }`).
             let cells = Contents::default();
 
-            // Disarm the errdefer just before the successful build — extract the
-            // link to move into the Renderer (any earlier `?`-return already ran
-            // the guard's `Drop` → `release()`).
-            let display_link: Option<DisplayLink> = display_link_errdefer.disarm();
-
             let mut result = Self {
                 // ---- generic.zig:701-787 (spelled out in the reference literal) ----
                 alloc,
@@ -2280,6 +2239,8 @@ mod macos_impl {
                 grid_metrics, // font_critical.metrics
                 size: options.size,
                 focused: true,
+                // .visible = true,  (a177ba90a)
+                visible: true,
                 scrollbar: Scrollbar::ZERO,
                 scrollbar_dirty: false,
                 last_bottom_node: None,
@@ -2298,8 +2259,13 @@ mod macos_impl {
                 shaders,
                 api,
                 swap_chain: Some(swap_chain),
-                display_link,
                 // ---- Zig struct-decl defaults (OMITTED by 701-787; per golden_renderer) ----
+                // PORT NOTE (`a177ba90a`): the reference DROPPED `.display_link =
+                // display_link` from the 701-787 literal when creation moved into
+                // `sync_display_link`, so the field now takes its struct-decl default
+                // (generic.zig:205 `display_link: ?DisplayLink = null`) and joins this
+                // section.
+                display_link: None,
                 display_realized: true,
                 kitty_animation_clock: None,
                 kitty_animation_next_ms: None,
@@ -2524,16 +2490,14 @@ mod macos_impl {
         //   }
         pub fn thread_exit(&self) {}
 
-        // generic.zig:897-916 loopEnter. Adapted for R4: the reference takes
+        // generic.zig:891-903 loopEnter. Adapted for R4: the reference takes
         // `thr: *renderer.Thread` and reads `&thr.draw_now`; we cannot name
         // `renderer.Thread` (R4), so the caller passes the `draw_now: xev::Async`
         // field directly (Copy+Send handle — NOT an apprt type).
         //   pub fn loopEnter(self, thr: *renderer.Thread) !void {
         //       if (@hasDecl(GraphicsAPI, "loopEnter")) self.api.loopEnter();
         //       if (comptime DisplayLink == void) return;      // (macOS: never)
-        //       const display_link = self.display_link orelse return;
-        //       try display_link.setOutputCallback(xev.Async, &displayLinkCallback, &thr.draw_now);
-        //       display_link.start() catch {};
+        //       self.syncDisplayLink(null, &thr.draw_now);
         //   }
         pub fn loop_enter(&mut self, draw_now: Async) -> Result<(), Error> {
             // Metal DECLARES loopEnter ⇒ this hook fires. It installs the
@@ -2546,11 +2510,11 @@ mod macos_impl {
             unsafe { Metal::loop_enter(api_ptr) };
             // `if (comptime DisplayLink == void) return;` — macOS: DisplayLink is
             // never void; no early return.
-            let Some(display_link) = self.display_link.as_mut() else {
-                return Ok(());
-            };
-            display_link.set_output_callback(draw_now)?;
-            let _ = display_link.start(); // catch {}
+            //
+            // `self.syncDisplayLink(null, &thr.draw_now)` (a177ba90a): this is the
+            // one call site that can CREATE the link, because it is the only one
+            // holding the `draw_now` the output callback needs.
+            self.sync_display_link(None, Some(draw_now));
             Ok(())
         }
 
@@ -2578,22 +2542,25 @@ mod macos_impl {
         //       draw_now.notify() catch |err| log.err("error notifying draw_now err={}", .{err});
         //   }
 
-        // generic.zig:1001-1009 setMacOSDisplayID. FULLY runnable.
-        //   pub fn setMacOSDisplayID(self, id: u32) !void {
+        // generic.zig:988-996 setMacOSDisplayID. FULLY runnable.
+        //   pub fn setMacOSDisplayID(
+        //       self: *Self,
+        //       id: u32,
+        //       draw_now: *xev.Async,
+        //   ) !void {
         //       if (comptime DisplayLink == void) return;
-        //       const display_link = self.display_link orelse return;
-        //       log.info("updating display link display id={}", .{id});
-        //       display_link.setCurrentCGDisplay(id) catch |err|
-        //           log.warn("error setting display link display id err={}", .{err});
+        //       self.syncDisplayLink(id, draw_now);
         //   }
-        pub fn set_macos_display_id(&self, id: u32) -> Result<(), Error> {
-            let Some(display_link) = self.display_link.as_ref() else {
-                return Ok(());
-            };
-            // log.info("updating display link display id={}", id);
-            if let Err(_err) = display_link.set_current_cg_display(id) {
-                // log.warn("error setting display link display id err={}", err);
-            }
+        //
+        // PORT NOTE (`a177ba90a`): `&self` -> `&mut self` and the new `draw_now`
+        // parameter, both consequences of routing through `sync_display_link`: a
+        // display change is now allowed to CREATE the link (that is the "when a
+        // display becomes available it re-adds itself" half of the commit), which
+        // needs both the mutable field and the output-callback userdata. The R4
+        // adaptation of `*xev.Async` matches `loop_enter`'s: the Copy+Send handle
+        // by value.
+        pub fn set_macos_display_id(&mut self, id: u32, draw_now: Async) -> Result<(), Error> {
+            self.sync_display_link(Some(id), Some(draw_now));
             Ok(())
         }
 
@@ -2610,38 +2577,152 @@ mod macos_impl {
             }
         }
 
-        // generic.zig:1029-1048 setFocus. FULLY runnable. NB: keeps the reference
-        // `assert(self.focused != focus)` + the custom-shader flag + start/stop.
+        // generic.zig:1090-1101 setFocus. FULLY runnable. NB: keeps the reference
+        // `assert(self.focused != focus)` + the custom-shader flag + the sync.
         //   pub fn setFocus(self, focus: bool) !void {
         //       assert(self.focused != focus);
         //       self.focused = focus;
+        //
+        //       // Flag that we need to update our custom shaders
         //       self.custom_shader_focused_changed = true;
-        //       if (comptime DisplayLink != void) link: {
-        //           const display_link = self.display_link orelse break :link;
-        //           if (focus) display_link.start() catch {} else display_link.stop() catch {};
-        //       }
+        //
+        //       self.syncDisplayLink(null, null);
         //   }
         pub fn set_focus(&mut self, focus: bool) -> Result<(), Error> {
             assert!(self.focused != focus);
             self.focused = focus;
+
+            // Flag that we need to update our custom shaders
             self.custom_shader_focused_changed = true;
-            if let Some(display_link) = self.display_link.as_ref() {
-                let _ = if focus {
-                    display_link.start()
-                } else {
-                    display_link.stop()
-                };
-            }
+
+            // PORT NOTE (`a177ba90a`): the inlined `if (focus) start() else stop()`
+            // moved into `sync_display_link`, which gates on visibility TOO —
+            // focusing an occluded surface no longer spins vsync back up.
+            self.sync_display_link(None, None);
             Ok(())
         }
 
-        // generic.zig:1053-1065 setVisible. FULLY runnable.
-        //   pub fn setVisible(self, visible: bool) void {
-        //       if (comptime DisplayLink != void) link: {
-        //           const display_link = self.display_link orelse break :link;
-        //           if (visible and self.focused) display_link.start() catch {}
-        //           else display_link.stop() catch {};
+        /// Create or update the display link and match it to the current
+        /// surface state.
+        // generic.zig:1121-1153 syncDisplayLink (NEW in `a177ba90a`).
+        //   fn syncDisplayLink(
+        //       self: *Self,
+        //       display_id: ?u32,
+        //       draw_now: ?*xev.Async,
+        //   ) void {
+        //       if (comptime DisplayLink == void) return;
+        //
+        //       const display_link = self.display_link orelse display_link: {
+        //           if (!self.config.vsync) return;
+        //           const callback = draw_now orelse return;
+        //           const result = macos.video.DisplayLink.createWithActiveCGDisplays() catch |err| {
+        //               // A locked macOS session can temporarily have no active
+        //               // displays. Rendering can continue without vsync and a
+        //               // later display update will retry this method.
+        //               log.warn("error creating display link; using fallback rendering err={}", .{err});
+        //               return;
+        //           };
+        //           result.setOutputCallback(
+        //               xev.Async,
+        //               &displayLinkCallback,
+        //               callback,
+        //           ) catch |err| {
+        //               log.warn("error configuring display link err={}", .{err});
+        //               result.release();
+        //               return;
+        //           };
+        //
+        //           self.display_link = result;
+        //           log.info("created display link", .{});
+        //           break :display_link result;
+        //       };
+        //
+        //       if (display_id) |id| {
+        //           log.info("updating display link display id={}", .{id});
+        //           display_link.setCurrentCGDisplay(id) catch |err| {
+        //               log.warn("error setting display link display id err={}", .{err});
+        //           };
         //       }
+        //
+        //       // If we're not visible, then we want to stop the display link
+        //       // because it is a waste of resources and we can move to pure
+        //       // change-driven updates.
+        //       if (self.visible and self.focused) {
+        //           display_link.start() catch {};
+        //       } else {
+        //           display_link.stop() catch {};
+        //       }
+        //   }
+        //
+        // PORT NOTE: the reference's `orelse ... break :display_link result` labelled
+        // block yields a `DisplayLink` VALUE (a `*DisplayLink` pointer in Zig, so the
+        // copy and `self.display_link` denote the same CoreVideo object). Rust's
+        // `DisplayLink` is a NonNull wrapper that owns the boxed callback userdata and
+        // is NOT `Copy`, so the port keeps the link in the field throughout and
+        // re-borrows it after the creation arm — same object, no aliasing copy. The
+        // creation arm therefore assigns `self.display_link` and falls through rather
+        // than yielding a value.
+        //
+        // `if (comptime DisplayLink == void) return;` — macOS: DisplayLink is never
+        // void; no early return.
+        fn sync_display_link(&mut self, display_id: Option<u32>, draw_now: Option<Async>) {
+            if self.display_link.is_none() {
+                // if (!self.config.vsync) return;
+                if !self.config.vsync {
+                    return;
+                }
+                // const callback = draw_now orelse return;
+                let Some(callback) = draw_now else {
+                    return;
+                };
+                // A locked macOS session can temporarily have no active
+                // displays. Rendering can continue without vsync and a
+                // later display update will retry this method.
+                let Ok(mut result) = DisplayLink::create_with_active_cg_displays() else {
+                    // log.warn("error creating display link; using fallback rendering err={}", err);
+                    return;
+                };
+                if result.set_output_callback(callback).is_err() {
+                    // log.warn("error configuring display link err={}", err);
+                    result.release();
+                    return;
+                }
+
+                self.display_link = Some(result);
+                // log.info("created display link", .{});
+            }
+
+            // The `orelse` arm above either returned or assigned, so the link is
+            // present here — the re-borrow standing in for the reference's copy.
+            let Some(display_link) = self.display_link.as_ref() else {
+                return;
+            };
+
+            // if (display_id) |id| { ... }
+            if let Some(id) = display_id {
+                // log.info("updating display link display id={}", id);
+                if let Err(_err) = display_link.set_current_cg_display(id) {
+                    // log.warn("error setting display link display id err={}", err);
+                }
+            }
+
+            // If we're not visible, then we want to stop the display link
+            // because it is a waste of resources and we can move to pure
+            // change-driven updates.
+            let _ = if self.visible && self.focused {
+                display_link.start() // catch {}
+            } else {
+                display_link.stop() // catch {}
+            };
+        }
+
+        /// Callback when the window is visible or occluded.
+        ///
+        /// Must be called on the render thread.
+        // generic.zig:1103-1119 setVisible. FULLY runnable.
+        //   pub fn setVisible(self: *Self, visible: bool) void {
+        //       self.visible = visible;
+        //       self.syncDisplayLink(null, null);
         //
         //       // When we're hidden, release our GPU resources if GPU
         //       // operations are allowed from this thread. Apprts where
@@ -2655,13 +2736,12 @@ mod macos_impl {
         //
         // (`&mut self` now: `releaseGpuResources` tears down the swap chain.)
         pub fn set_visible(&mut self, visible: bool) {
-            if let Some(display_link) = self.display_link.as_ref() {
-                let _ = if visible && self.focused {
-                    display_link.start()
-                } else {
-                    display_link.stop()
-                };
-            }
+            // PORT NOTE (`a177ba90a`): the start/stop pair that used to be inlined
+            // here moved into `sync_display_link`, and the visibility it decided on
+            // is now STORED so every other sync (focus change, display change,
+            // lazy creation) can consult it.
+            self.visible = visible;
+            self.sync_display_link(None, None);
 
             // When we're hidden, release our GPU resources if GPU
             // operations are allowed from this thread. Apprts where
@@ -6837,6 +6917,7 @@ mod macos_impl {
                 grid_metrics,
                 size,
                 focused: true,
+                visible: true,
                 custom_shader_focused_changed: false,
                 scrollbar: Scrollbar::ZERO,
                 scrollbar_dirty: false,
@@ -7944,6 +8025,79 @@ mod macos_impl {
             );
 
             t.deinit(Global);
+        }
+
+        // PORT-SIDE REGRESSION (`a177ba90a`, gap-close): the display-link lifecycle
+        // refactor. The reference added no `test {}` for it — every branch that
+        // succeeds needs a real CoreVideo display — but the two GUARD CLAUSES of
+        // `sync_display_link` and the new `visible` field are observable without one,
+        // and they are exactly what the pre-refactor port got wrong: it created the
+        // link EAGERLY in `init` (so `create_with_active_cg_displays` failing on a
+        // locked session aborted renderer init instead of falling back to
+        // event-driven rendering) and it never stored visibility (so focusing an
+        // occluded surface spun vsync back up).
+        mod display_link_sync {
+            use super::*;
+
+            /// `if (!self.config.vsync) return;` — vsync off never creates a link,
+            /// even from the one call site that carries a `draw_now`.
+            #[test]
+            fn sync_without_vsync_never_creates_a_link() {
+                let mut r = match test_renderer(10, 3) {
+                    Some(r) => r,
+                    None => return, // skip w/o Metal
+                };
+                r.config.vsync = false;
+                let draw_now = Async::init().expect("xev Async");
+                r.sync_display_link(None, Some(draw_now));
+                assert!(r.display_link.is_none());
+                r.deinit();
+            }
+
+            /// `const callback = draw_now orelse return;` — a sync with no
+            /// `draw_now` (focus/visibility changes, and a display change that
+            /// arrives before `loop_enter`) must not create a link, because the
+            /// output callback would have no userdata to notify.
+            #[test]
+            fn sync_without_draw_now_never_creates_a_link() {
+                let mut r = match test_renderer(10, 3) {
+                    Some(r) => r,
+                    None => return, // skip w/o Metal
+                };
+                r.config.vsync = true;
+                r.sync_display_link(None, None);
+                assert!(r.display_link.is_none());
+
+                // A display-id sync is the "re-adds itself" path and is equally
+                // barred while there is nothing to call back into.
+                r.sync_display_link(Some(1), None);
+                assert!(r.display_link.is_none());
+                r.deinit();
+            }
+
+            /// `self.visible = visible;` — the field the pre-refactor port dropped.
+            /// `syncDisplayLink` gates start/stop on `visible and focused`, so
+            /// losing it silently degraded to focus-only gating.
+            #[test]
+            fn set_visible_tracks_visibility_state() {
+                let mut r = match test_renderer(10, 3) {
+                    Some(r) => r,
+                    None => return, // skip w/o Metal
+                };
+                assert!(r.visible, "init starts visible (.visible = true)");
+
+                r.set_visible(false);
+                assert!(!r.visible);
+
+                // Focusing while hidden must not flip visibility back.
+                r.focused = false;
+                r.set_focus(true).unwrap();
+                assert!(!r.visible);
+
+                r.set_visible(true);
+                assert!(r.visible);
+                r.deinit();
+            }
         }
 
         #[test]

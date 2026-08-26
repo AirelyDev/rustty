@@ -6,9 +6,9 @@ R3 forbids any build-time dependency on it).
 ## Pinned baseline
 
 ```
-commit  683d8db643b95cf229bfb5fe9fab9ae677920343   (short: 683d8db64 / 683d8db)
+commit  88f57ee66eeaad4da77b414b245f7b6693348985   (short: 88f57ee66 / 88f57ee)
 date    2026-08-25
-subject renderer: release GPU resources for hidden surfaces (macOS) (#14017)
+subject terminal: ignore UTF-8-decoded C1 controls in the ground state (#14023)
 ```
 
 There is **one** sync point. The oracle working tree is checked out (detached) at this commit, and
@@ -18,7 +18,7 @@ it is the SHA referenced by `.port/PORT_RULES.md` (R12 main-parity tracking) and
 Verify with:
 
 ```sh
-git -C ../ghostty rev-parse HEAD          # 683d8db643b95cf229bfb5fe9fab9ae677920343
+git -C ../ghostty rev-parse HEAD          # 88f57ee66eeaad4da77b414b245f7b6693348985
 git -C ../ghostty status --porcelain      # empty
 ```
 
@@ -36,6 +36,7 @@ at an empty tree and every gate finds zero reference sentences, i.e. vacuous gre
 | 2026-07-31 | `4749c4e93` (2026-06-20) | `6ad1fe7d8` (2026-07-29) | `P3-W10 T3`, Phase 3 upstream resync |
 | 2026-08-17 | `6ad1fe7d8` (2026-07-29) | `12967b68f` (2026-08-17) | Phase 4 upstream resync (advance-first by explicit user direction; before/after gate states in `.port/phase-4/w0/`) |
 | 2026-08-25 | `12967b68f` (2026-08-17) | `683d8db64` (2026-08-25) | Phase 5 upstream resync (advance-first, same doctrine; before/after gate states in `.port/phase-5/w0/`) |
+| 2026-08-26 | `683d8db64` (2026-08-25) | `88f57ee66` (2026-08-25) | Gap-close drift absorb (advance-first): the 2-commit `stream.zig` ground-state tail — `0f35043c9` (execute C0 0x10-0x1F) + `40a40f848` (ignore UTF-8-decoded C1). See `.port/gap-close/`. |
 
 **Phase-4 note on ordering.** Unlike `P3-W10`, this advance happened at the *start* of the
 resync (explicit user direction: update the oracle, then port the whole range). The

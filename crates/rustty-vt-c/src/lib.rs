@@ -132,6 +132,7 @@ pub unsafe extern "C" fn rustty_build_info(data: c_int, out: *mut std::ffi::c_vo
 ///
 /// # Safety
 /// `color` must be a valid readable `RgbC`; `r`/`g`/`b` valid writable `u8`.
+#[cfg(feature = "color")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_color_rgb_get(
     color: *const color::RgbC,
@@ -147,6 +148,7 @@ pub unsafe extern "C" fn rustty_color_rgb_get(
 /// C: rustty_color_parse
 /// # Safety
 /// `value`, if non-null, readable for `len` bytes; `out` valid writable.
+#[cfg(feature = "color")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_color_parse(
     value: *const u8,
@@ -160,6 +162,7 @@ pub unsafe extern "C" fn rustty_color_parse(
 /// C: rustty_color_parse_x11
 /// # Safety
 /// `name`, if non-null, readable for `len` bytes; `out` valid writable.
+#[cfg(feature = "color")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_color_parse_x11(
     name: *const u8,
@@ -173,6 +176,7 @@ pub unsafe extern "C" fn rustty_color_parse_x11(
 /// C: rustty_color_parse_palette_entry
 /// # Safety
 /// `value`, if non-null, readable for `len`; `out_index`/`out_rgb` writable.
+#[cfg(feature = "color")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_color_parse_palette_entry(
     value: *const u8,
@@ -187,6 +191,7 @@ pub unsafe extern "C" fn rustty_color_parse_palette_entry(
 /// C: rustty_color_palette_default
 /// # Safety
 /// `out` must point to writable storage for 256 RGB values.
+#[cfg(feature = "color")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_color_palette_default(out: *mut color::PaletteC) {
     // SAFETY: caller contract.
@@ -196,6 +201,7 @@ pub unsafe extern "C" fn rustty_color_palette_default(out: *mut color::PaletteC)
 /// C: rustty_color_palette_generate
 /// # Safety
 /// `bg`/`fg`/`out` valid; `base`/`skip` valid or null; out may alias base.
+#[cfg(feature = "color")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_color_palette_generate(
     base: *const color::PaletteC,
@@ -212,6 +218,7 @@ pub unsafe extern "C" fn rustty_color_palette_generate(
 /// C: rustty_color_luminance
 /// # Safety
 /// `color` must be a valid readable RGB pointer.
+#[cfg(feature = "color")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_color_luminance(color_: *const color::RgbC) -> f64 {
     // SAFETY: caller contract.
@@ -221,6 +228,7 @@ pub unsafe extern "C" fn rustty_color_luminance(color_: *const color::RgbC) -> f
 /// C: rustty_color_perceived_luminance
 /// # Safety
 /// `color` must be a valid readable RGB pointer.
+#[cfg(feature = "color")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_color_perceived_luminance(color_: *const color::RgbC) -> f64 {
     // SAFETY: caller contract.
@@ -230,6 +238,7 @@ pub unsafe extern "C" fn rustty_color_perceived_luminance(color_: *const color::
 /// C: rustty_color_contrast
 /// # Safety
 /// `a`/`b` must be valid readable RGB pointers.
+#[cfg(feature = "color")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_color_contrast(
     a: *const color::RgbC,
@@ -240,12 +249,14 @@ pub unsafe extern "C" fn rustty_color_contrast(
 }
 
 /// C: rustty_color_x11_names
+#[cfg(feature = "color")]
 #[no_mangle]
 pub extern "C" fn rustty_color_x11_names() -> *const color::X11Entry {
     color::x11_names()
 }
 
 /// C: rustty_color_x11_name_count
+#[cfg(feature = "color")]
 #[no_mangle]
 pub extern "C" fn rustty_color_x11_name_count() -> usize {
     color::x11_name_count()
@@ -283,6 +294,7 @@ pub unsafe extern "C" fn rustty_color_scheme_report_encode(
 /// # Safety
 /// `out`, if non-null, must point to `out_len` writable bytes; `out_written`
 /// must be a valid, writable pointer to `usize`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_focus_encode(
     // D11: inbound as the C integer, narrowed below. See `FocusEvent::from_c_int`.
@@ -416,6 +428,7 @@ pub unsafe extern "C" fn rustty_sys_set(option: c_int, value: *const std::ffi::c
 ///
 /// # Safety
 /// `data`, if non-null, must point to `len` readable bytes.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_paste_is_safe(data: *const u8, len: usize) -> bool {
     // SAFETY: `data`/`len` validity is the caller's contract.
@@ -429,6 +442,7 @@ pub unsafe extern "C" fn rustty_paste_is_safe(data: *const u8, len: usize) -> bo
 /// `data`, if non-null, must point to `data_len` writable bytes; `out`, if
 /// non-null, must point to `out_len` writable bytes; `out_written` must be a
 /// valid, writable pointer to `usize`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_paste_encode(
     data: *mut u8,
@@ -450,6 +464,7 @@ pub unsafe extern "C" fn rustty_paste_encode(
 /// non-null, must point to a readable `RusttyPaste` whose `mimes`/`reader`
 /// describe valid memory; `out_written`, if non-null, must be a valid,
 /// writable pointer to `bool`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_paste(
     terminal: terminal::Terminal,
@@ -521,6 +536,7 @@ pub unsafe extern "C" fn rustty_size_report_encode(
 /// # Safety
 /// `alloc`, if non-null, must point to a valid allocator; `result` must be a
 /// valid, writable pointer to a key-event handle.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_new(
     alloc: *const rustty_lib::allocator::Allocator,
@@ -535,6 +551,7 @@ pub unsafe extern "C" fn rustty_key_event_new(
 ///
 /// # Safety
 /// `event`, if non-null, must be a handle returned by `rustty_key_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_free(event: key_event::Event) {
     // SAFETY: `event` validity is the caller's contract.
@@ -546,6 +563,7 @@ pub unsafe extern "C" fn rustty_key_event_free(event: key_event::Event) {
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_key_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_set_action(event: key_event::Event, action: c_int) {
     // _ = std.meta.intToEnum(key.Action, ...) catch { log.warn(...); return; };
@@ -567,6 +585,7 @@ pub unsafe extern "C" fn rustty_key_event_set_action(event: key_event::Event, ac
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_key_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_get_action(event: key_event::Event) -> c_int {
     // SAFETY: `event` validity is the caller's contract.
@@ -578,6 +597,7 @@ pub unsafe extern "C" fn rustty_key_event_get_action(event: key_event::Event) ->
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_key_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_set_key(event: key_event::Event, k: c_int) {
     // _ = std.meta.intToEnum(key.Key, ...) catch { log.warn(...); return; };
@@ -599,6 +619,7 @@ pub unsafe extern "C" fn rustty_key_event_set_key(event: key_event::Event, k: c_
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_key_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_get_key(event: key_event::Event) -> c_int {
     // SAFETY: `event` validity is the caller's contract.
@@ -610,6 +631,7 @@ pub unsafe extern "C" fn rustty_key_event_get_key(event: key_event::Event) -> c_
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_key_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_set_mods(
     event: key_event::Event,
@@ -624,6 +646,7 @@ pub unsafe extern "C" fn rustty_key_event_set_mods(
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_key_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_get_mods(
     event: key_event::Event,
@@ -637,6 +660,7 @@ pub unsafe extern "C" fn rustty_key_event_get_mods(
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_key_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_set_consumed_mods(
     event: key_event::Event,
@@ -653,6 +677,7 @@ pub unsafe extern "C" fn rustty_key_event_set_consumed_mods(
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_key_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_get_consumed_mods(
     event: key_event::Event,
@@ -666,6 +691,7 @@ pub unsafe extern "C" fn rustty_key_event_get_consumed_mods(
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_key_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_set_composing(event: key_event::Event, composing: bool) {
     // SAFETY: `event` validity is the caller's contract.
@@ -677,6 +703,7 @@ pub unsafe extern "C" fn rustty_key_event_set_composing(event: key_event::Event,
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_key_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_get_composing(event: key_event::Event) -> bool {
     // SAFETY: `event` validity is the caller's contract.
@@ -689,6 +716,7 @@ pub unsafe extern "C" fn rustty_key_event_get_composing(event: key_event::Event)
 /// # Safety
 /// `event` must be a handle returned by `rustty_key_event_new`; `utf8`, if
 /// non-null, must point to `len` readable bytes.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_set_utf8(
     event: key_event::Event,
@@ -705,6 +733,7 @@ pub unsafe extern "C" fn rustty_key_event_set_utf8(
 /// # Safety
 /// `event` must be a handle returned by `rustty_key_event_new`; `len`, if
 /// non-null, must be a valid, writable pointer to `usize`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_get_utf8(
     event: key_event::Event,
@@ -720,6 +749,7 @@ pub unsafe extern "C" fn rustty_key_event_get_utf8(
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_key_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_set_unshifted_codepoint(
     event: key_event::Event,
@@ -735,17 +765,29 @@ pub unsafe extern "C" fn rustty_key_event_set_unshifted_codepoint(
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_key_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_event_get_unshifted_codepoint(event: key_event::Event) -> u32 {
     // SAFETY: `event` validity is the caller's contract.
     unsafe { key_event::get_unshifted_codepoint(event) }
 }
 
+// PORT NOTE (`-Dvt-features`): the `c_int -> enum` projections below, and the
+// selection-gesture pair further down, are private helpers of ONE export group
+// each, so a build that trims that group leaves them unreferenced. Zig simply
+// never analyzes an unreferenced fn, so the reference's `if (features.X)` gating
+// costs it nothing; Rust compiles them and warns. Each therefore carries the
+// same `#[cfg]` as the exports it serves — a cfg rather than an
+// `allow(dead_code)`, which would also blind the DEFAULT build.
+//
 // PORT NOTE: range-checked `c_int -> enum` projections for the guarded setters.
 // `key::Key`/`key::Action`/`mouse::Action`/`mouse::Button` are contiguous
 // `#[repr(C)]` enums; the range check IS `std.meta.intToEnum` (reject out-of-
 // range), after which a `transmute` from the validated `c_int` is the enum.
+#[cfg(feature = "input-encode")]
 const KEY_KEY_COUNT: c_int = 176; // contiguous 0..=175
+
+#[cfg(feature = "input-encode")]
 fn key_key_from_c_int(v: c_int) -> Option<rustty_vt::input::key::Key> {
     if (0..KEY_KEY_COUNT).contains(&v) {
         // SAFETY: `v` is a valid `key::Key` discriminant (range-checked above).
@@ -755,6 +797,7 @@ fn key_key_from_c_int(v: c_int) -> Option<rustty_vt::input::key::Key> {
     }
 }
 
+#[cfg(feature = "input-encode")]
 fn key_action_from_c_int(v: c_int) -> Option<rustty_vt::input::key::Action> {
     match v {
         0 => Some(rustty_vt::input::key::Action::Release),
@@ -764,6 +807,7 @@ fn key_action_from_c_int(v: c_int) -> Option<rustty_vt::input::key::Action> {
     }
 }
 
+#[cfg(feature = "input-encode")]
 fn mouse_action_from_c_int(v: c_int) -> Option<rustty_vt::input::mouse::Action> {
     match v {
         0 => Some(rustty_vt::input::mouse::Action::Press),
@@ -773,6 +817,7 @@ fn mouse_action_from_c_int(v: c_int) -> Option<rustty_vt::input::mouse::Action> 
     }
 }
 
+#[cfg(feature = "input-encode")]
 fn mouse_button_from_c_int(v: c_int) -> Option<rustty_vt::input::mouse::Button> {
     if (0..=11).contains(&v) {
         // SAFETY: `v` is a valid `mouse::Button` discriminant (range-checked).
@@ -789,6 +834,7 @@ fn mouse_button_from_c_int(v: c_int) -> Option<rustty_vt::input::mouse::Button> 
 /// # Safety
 /// `alloc`, if non-null, must point to a valid allocator; `result` must be a
 /// valid, writable pointer to a key-encoder handle.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_encoder_new(
     alloc: *const rustty_lib::allocator::Allocator,
@@ -803,6 +849,7 @@ pub unsafe extern "C" fn rustty_key_encoder_new(
 ///
 /// # Safety
 /// `encoder`, if non-null, must be a handle returned by `rustty_key_encoder_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_encoder_free(encoder: key_encode::Encoder) {
     // SAFETY: `encoder` validity is the caller's contract.
@@ -815,6 +862,7 @@ pub unsafe extern "C" fn rustty_key_encoder_free(encoder: key_encode::Encoder) {
 /// # Safety
 /// `encoder`, if non-null, must be a `rustty_key_encoder_new` handle; `value`,
 /// if non-null, must point to a readable value of the option's in-type.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_encoder_setopt(
     encoder: key_encode::Encoder,
@@ -832,6 +880,7 @@ pub unsafe extern "C" fn rustty_key_encoder_setopt(
 ///
 /// # Safety
 /// `encoder`/`terminal`, if non-null, must be live handles.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_encoder_setopt_from_terminal(
     encoder: key_encode::Encoder,
@@ -847,6 +896,7 @@ pub unsafe extern "C" fn rustty_key_encoder_setopt_from_terminal(
 /// # Safety
 /// `encoder`/`event` must be non-null `new` handles; `out` (if non-null) must
 /// point to `out_len` writable bytes; `out_written` must be valid, writable.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_key_encoder_encode(
     encoder: key_encode::Encoder,
@@ -870,6 +920,7 @@ pub unsafe extern "C" fn rustty_key_encoder_encode(
 /// # Safety
 /// `alloc`, if non-null, must point to a valid allocator; `result` must be a
 /// valid, writable pointer to a mouse-event handle.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_new(
     alloc: *const rustty_lib::allocator::Allocator,
@@ -884,6 +935,7 @@ pub unsafe extern "C" fn rustty_mouse_event_new(
 ///
 /// # Safety
 /// `event`, if non-null, must be a handle returned by `rustty_mouse_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_free(event: mouse_event::Event) {
     // SAFETY: `event` validity is the caller's contract.
@@ -895,6 +947,7 @@ pub unsafe extern "C" fn rustty_mouse_event_free(event: mouse_event::Event) {
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_set_action(event: mouse_event::Event, action: c_int) {
     // _ = std.meta.intToEnum(Action, ...) catch { log.warn(...); return; };
@@ -916,6 +969,7 @@ pub unsafe extern "C" fn rustty_mouse_event_set_action(event: mouse_event::Event
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_get_action(event: mouse_event::Event) -> c_int {
     // SAFETY: `event` validity is the caller's contract.
@@ -927,6 +981,7 @@ pub unsafe extern "C" fn rustty_mouse_event_get_action(event: mouse_event::Event
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_set_button(event: mouse_event::Event, button: c_int) {
     // _ = std.meta.intToEnum(Button, ...) catch { log.warn(...); return; };
@@ -948,6 +1003,7 @@ pub unsafe extern "C" fn rustty_mouse_event_set_button(event: mouse_event::Event
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_clear_button(event: mouse_event::Event) {
     // SAFETY: `event` validity is the caller's contract.
@@ -960,6 +1016,7 @@ pub unsafe extern "C" fn rustty_mouse_event_clear_button(event: mouse_event::Eve
 /// # Safety
 /// `event` must be a handle returned by `rustty_mouse_event_new`; `out`, if
 /// non-null, must be a valid, writable pointer to a `c_int` button code.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_get_button(
     event: mouse_event::Event,
@@ -981,6 +1038,7 @@ pub unsafe extern "C" fn rustty_mouse_event_get_button(
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_set_mods(
     event: mouse_event::Event,
@@ -995,6 +1053,7 @@ pub unsafe extern "C" fn rustty_mouse_event_set_mods(
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_get_mods(
     event: mouse_event::Event,
@@ -1008,6 +1067,7 @@ pub unsafe extern "C" fn rustty_mouse_event_get_mods(
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_set_position(
     event: mouse_event::Event,
@@ -1022,6 +1082,7 @@ pub unsafe extern "C" fn rustty_mouse_event_set_position(
 ///
 /// # Safety
 /// `event` must be a handle returned by `rustty_mouse_event_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_event_get_position(
     event: mouse_event::Event,
@@ -1037,6 +1098,7 @@ pub unsafe extern "C" fn rustty_mouse_event_get_position(
 /// # Safety
 /// `alloc`, if non-null, must point to a valid allocator; `result` must be a
 /// valid, writable pointer to a mouse-encoder handle.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_encoder_new(
     alloc: *const rustty_lib::allocator::Allocator,
@@ -1051,6 +1113,7 @@ pub unsafe extern "C" fn rustty_mouse_encoder_new(
 ///
 /// # Safety
 /// `encoder`, if non-null, must be a handle returned by `rustty_mouse_encoder_new`.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_encoder_free(encoder: mouse_encode::Encoder) {
     // SAFETY: `encoder` validity is the caller's contract.
@@ -1063,6 +1126,7 @@ pub unsafe extern "C" fn rustty_mouse_encoder_free(encoder: mouse_encode::Encode
 /// # Safety
 /// `encoder`, if non-null, must be a `rustty_mouse_encoder_new` handle; `value`,
 /// if non-null, must point to a readable value of the option's in-type.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_encoder_setopt(
     encoder: mouse_encode::Encoder,
@@ -1080,6 +1144,7 @@ pub unsafe extern "C" fn rustty_mouse_encoder_setopt(
 ///
 /// # Safety
 /// `encoder`/`terminal`, if non-null, must be live handles.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_encoder_setopt_from_terminal(
     encoder: mouse_encode::Encoder,
@@ -1094,6 +1159,7 @@ pub unsafe extern "C" fn rustty_mouse_encoder_setopt_from_terminal(
 ///
 /// # Safety
 /// `encoder`, if non-null, must be a `rustty_mouse_encoder_new` handle.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_encoder_reset(encoder: mouse_encode::Encoder) {
     // SAFETY: `encoder` validity is the caller's contract.
@@ -1107,6 +1173,7 @@ pub unsafe extern "C" fn rustty_mouse_encoder_reset(encoder: mouse_encode::Encod
 /// `encoder`/`event` must be `rustty_mouse_encoder_new`/`rustty_mouse_event_new`
 /// handles; `out` (if non-null) must point to `out_len` writable bytes;
 /// `out_written` must be valid, writable.
+#[cfg(feature = "input-encode")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_mouse_encoder_encode(
     encoder: mouse_encode::Encoder,
@@ -1133,6 +1200,7 @@ pub unsafe extern "C" fn rustty_mouse_encoder_encode(
 ///
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
+#[cfg(feature = "grid-introspection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_cell_get(
     cell_: cell::CCell,
@@ -1148,6 +1216,7 @@ pub unsafe extern "C" fn rustty_cell_get(
 ///
 /// # Safety
 /// `keys`/`values`/`out_written` validity is the caller's contract.
+#[cfg(feature = "grid-introspection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_cell_get_multi(
     cell_: cell::CCell,
@@ -1172,6 +1241,7 @@ pub unsafe extern "C" fn rustty_cell_get_multi(
 ///
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
+#[cfg(feature = "grid-introspection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_row_get(
     row_: row::CRow,
@@ -1187,6 +1257,7 @@ pub unsafe extern "C" fn rustty_row_get(
 ///
 /// # Safety
 /// `keys`/`values`/`out_written` validity is the caller's contract.
+#[cfg(feature = "grid-introspection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_row_get_multi(
     row_: row::CRow,
@@ -1478,6 +1549,7 @@ pub unsafe extern "C" fn rustty_osc_command_data(
 /// valid, writable pointer to a formatter handle; `terminal`, if non-null, must
 /// be a live terminal handle; `opts.selection`, if non-null, must point to a
 /// valid `CSelection`.
+#[cfg(feature = "formatter")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_formatter_terminal_new(
     alloc: *const rustty_lib::allocator::Allocator,
@@ -1497,6 +1569,7 @@ pub unsafe extern "C" fn rustty_formatter_terminal_new(
 /// `rustty_formatter_terminal_new`; `writer`'s callback contract is the
 /// caller's (it must not call formatter or terminal APIs using the same
 /// formatter or its terminal).
+#[cfg(feature = "formatter")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_formatter_format(
     formatter: formatter::Formatter,
@@ -1513,6 +1586,7 @@ pub unsafe extern "C" fn rustty_formatter_format(
 /// `formatter`, if non-null, must be a handle returned by
 /// `rustty_formatter_terminal_new`; `out` (if non-null) must point to `out_len`
 /// writable bytes; `out_written` must be a valid, writable pointer.
+#[cfg(feature = "formatter")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_formatter_format_buf(
     formatter: formatter::Formatter,
@@ -1532,6 +1606,7 @@ pub unsafe extern "C" fn rustty_formatter_format_buf(
 /// `alloc`, if non-null, a valid allocator; `out_ptr`/`out_len` must be
 /// valid, writable pointers. The returned buffer is owned by the caller and must
 /// be freed with the same allocator.
+#[cfg(feature = "formatter")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_formatter_format_alloc(
     formatter: formatter::Formatter,
@@ -1549,6 +1624,7 @@ pub unsafe extern "C" fn rustty_formatter_format_alloc(
 /// # Safety
 /// `formatter`, if non-null, must be a handle returned by
 /// `rustty_formatter_terminal_new`.
+#[cfg(feature = "formatter")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_formatter_free(formatter: formatter::Formatter) {
     // SAFETY: `formatter` validity is the caller's contract.
@@ -1563,6 +1639,7 @@ pub unsafe extern "C" fn rustty_formatter_free(formatter: formatter::Formatter) 
 /// `terminal`, if non-null, must be a live `rustty_terminal_new` handle with no
 /// concurrent mutation; `writer`'s callback must not call terminal APIs with
 /// the same terminal handle.
+#[cfg(feature = "snapshot")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_snapshot_encode(
     terminal: terminal::Terminal,
@@ -1578,6 +1655,7 @@ pub unsafe extern "C" fn rustty_snapshot_encode(
 /// # Safety
 /// `terminal`, if non-null, must be a live terminal handle; `buf`, if non-null,
 /// must point to `buf_len` writable bytes; `out_written` must be writable.
+#[cfg(feature = "snapshot")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_snapshot_encode_buf(
     terminal: terminal::Terminal,
@@ -1597,6 +1675,7 @@ pub unsafe extern "C" fn rustty_snapshot_encode_buf(
 /// non-null, a valid allocator; `out_ptr`/`out_len` must be writable. The
 /// returned buffer is caller-owned and released with `rustty_free` + the same
 /// allocator.
+#[cfg(feature = "snapshot")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_snapshot_encode_alloc(
     terminal: terminal::Terminal,
@@ -1615,6 +1694,7 @@ pub unsafe extern "C" fn rustty_snapshot_encode_alloc(
 /// `alloc`, if non-null, must point to a valid allocator; `decoder` must be
 /// writable; `reader`'s callback and userdata must remain valid until FINISH
 /// is reached or the decoder is freed.
+#[cfg(feature = "snapshot")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_snapshot_decoder_new(
     alloc: *const rustty_lib::allocator::Allocator,
@@ -1632,6 +1712,7 @@ pub unsafe extern "C" fn rustty_snapshot_decoder_new(
 /// `alloc`, if non-null, must point to a valid allocator; `decoder` must be
 /// writable; `ptr`, if non-null, must point to `len` bytes that remain valid
 /// and immutable until FINISH is reached or the decoder is freed.
+#[cfg(feature = "snapshot")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_snapshot_decoder_new_buf(
     alloc: *const rustty_lib::allocator::Allocator,
@@ -1649,6 +1730,7 @@ pub unsafe extern "C" fn rustty_snapshot_decoder_new_buf(
 /// # Safety
 /// `decoder`, if non-null, must be a handle returned by a decoder constructor,
 /// not yet freed.
+#[cfg(feature = "snapshot")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_snapshot_decoder_free(decoder: snapshot::Decoder) {
     // SAFETY: `decoder` validity is the caller's contract.
@@ -1661,6 +1743,7 @@ pub unsafe extern "C" fn rustty_snapshot_decoder_free(decoder: snapshot::Decoder
 /// # Safety
 /// `decoder`, if non-null, must be a live decoder handle; `value`, if
 /// non-null, must point to the type documented for `option`.
+#[cfg(feature = "snapshot")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_snapshot_decoder_set(
     decoder: snapshot::Decoder,
@@ -1682,6 +1765,7 @@ pub unsafe extern "C" fn rustty_snapshot_decoder_set(
 /// # Safety
 /// `decoder`, if non-null, must be a live decoder handle; `out`, if non-null,
 /// must point to writable storage of the type documented for `data`.
+#[cfg(feature = "snapshot")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_snapshot_decoder_get(
     decoder: snapshot::Decoder,
@@ -1703,6 +1787,7 @@ pub unsafe extern "C" fn rustty_snapshot_decoder_get(
 /// `decoder`, if non-null, must be a live decoder handle; `keys`/`values`, if
 /// non-null, must point to `count` elements; `out_written`, if non-null, must
 /// be writable.
+#[cfg(feature = "snapshot")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_snapshot_decoder_get_multi(
     decoder: snapshot::Decoder,
@@ -1723,6 +1808,7 @@ pub unsafe extern "C" fn rustty_snapshot_decoder_get_multi(
 /// # Safety
 /// `decoder`, if non-null, must be a live decoder handle; `terminal` must be
 /// writable.
+#[cfg(feature = "snapshot")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_snapshot_decoder_ready(
     decoder: snapshot::Decoder,
@@ -1738,6 +1824,7 @@ pub unsafe extern "C" fn rustty_snapshot_decoder_ready(
 /// # Safety
 /// `decoder`, if non-null, must be a live decoder handle whose READY terminal
 /// (if any) is still alive.
+#[cfg(feature = "snapshot")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_snapshot_decoder_next(decoder: snapshot::Decoder) -> c_int {
     // SAFETY: `decoder` validity is the caller's contract.
@@ -1750,6 +1837,7 @@ pub unsafe extern "C" fn rustty_snapshot_decoder_next(decoder: snapshot::Decoder
 /// # Safety
 /// `decoder`, if non-null, must be a live decoder handle; `terminal` must be
 /// writable.
+#[cfg(feature = "snapshot")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_snapshot_decoder_decode(
     decoder: snapshot::Decoder,
@@ -1833,6 +1921,7 @@ mod wasm_alloc_exports {
 /// # Safety
 /// `graphics` must be a valid `KittyGraphics` handle; `out` must point to storage
 /// of the type required by `data`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_get(
     graphics: kitty_graphics::KittyGraphics,
@@ -1853,6 +1942,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_get(
 ///
 /// # Safety
 /// `graphics` must be a valid `KittyGraphics` handle.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_image(
     graphics: kitty_graphics::KittyGraphics,
@@ -1868,6 +1958,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_image(
 /// # Safety
 /// `image`, if non-null, must point to a valid `Image`; `out` must point to
 /// storage of the type required by `data`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_image_get(
     image: kitty_graphics::ImageHandle,
@@ -1888,6 +1979,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_image_get(
 ///
 /// # Safety
 /// See `kitty_graphics::image_get_multi`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_image_get_multi(
     image: kitty_graphics::ImageHandle,
@@ -1906,6 +1998,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_image_get_multi(
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid C allocator; `out` must be a
 /// valid, writable pointer to a `PlacementIterator`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_new(
     alloc_: *const rustty_lib::allocator::Allocator,
@@ -1920,6 +2013,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_new(
 ///
 /// # Safety
 /// `iter`, if non-null, must be a pointer returned by the matching `_new`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_free(
     iter: kitty_graphics::PlacementIterator,
@@ -1934,6 +2028,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_free(
 /// # Safety
 /// `iter`, if non-null, must be a live iterator; `value`, if non-null, must point
 /// to a value of the type required by `option`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_set(
     iter: kitty_graphics::PlacementIterator,
@@ -1956,6 +2051,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_set(
 ///
 /// # Safety
 /// `iter`, if non-null, must be a live iterator seeded by `get(.., .placement_iterator, ..)`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_next(
     iter: kitty_graphics::PlacementIterator,
@@ -1970,6 +2066,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_next(
 /// # Safety
 /// `iter`, if non-null, must be a live iterator positioned on an entry; `out`
 /// must point to storage of the type required by `data`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_get(
     iter: kitty_graphics::PlacementIterator,
@@ -1990,6 +2087,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_get(
 ///
 /// # Safety
 /// See `kitty_graphics::placement_get_multi`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_get_multi(
     iter: kitty_graphics::PlacementIterator,
@@ -2009,6 +2107,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_get_multi(
 /// # Safety
 /// `iter`/`image`/`terminal`, if non-null, must be live; `out` must be a valid,
 /// writable pointer to a `CSelection`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_rect(
     iter: kitty_graphics::PlacementIterator,
@@ -2026,6 +2125,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_rect(
 /// # Safety
 /// `iter`/`image`/`terminal`, if non-null, must be live; `out_width`/`out_height`
 /// must be valid, writable pointers to `u32`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_pixel_size(
     iter: kitty_graphics::PlacementIterator,
@@ -2045,6 +2145,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_pixel_size(
 /// # Safety
 /// `iter`/`image`/`terminal`, if non-null, must be live; `out_cols`/`out_rows`
 /// must be valid, writable pointers to `u32`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_grid_size(
     iter: kitty_graphics::PlacementIterator,
@@ -2064,6 +2165,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_grid_size(
 /// # Safety
 /// `iter`/`image`/`terminal`, if non-null, must be live; `out_col`/`out_row` must
 /// be valid, writable pointers to `i32`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_viewport_pos(
     iter: kitty_graphics::PlacementIterator,
@@ -2083,6 +2185,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_viewport_pos(
 /// # Safety
 /// `iter`/`image`, if non-null, must be live; the four `out_*` pointers must be
 /// valid, writable pointers to `u32`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_source_rect(
     iter: kitty_graphics::PlacementIterator,
@@ -2105,6 +2208,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_source_rect(
 /// # Safety
 /// `iter`/`image`/`terminal`, if non-null, must be live; `out`, if non-null, must
 /// be a valid, writable pointer to a `PlacementRenderInfo`.
+#[cfg(feature = "kitty-graphics")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_kitty_graphics_placement_render_info(
     iter: kitty_graphics::PlacementIterator,
@@ -2130,6 +2234,7 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_render_info(
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid allocator; `result` must be a
 /// valid, writable pointer to a render-state handle.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_new(
     alloc_: *const rustty_lib::allocator::Allocator,
@@ -2144,6 +2249,7 @@ pub unsafe extern "C" fn rustty_render_state_new(
 ///
 /// # Safety
 /// `state`, if non-null, must be a handle returned by `rustty_render_state_new`.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_free(state: render::RenderState) {
     // SAFETY: `state` validity is the caller's contract.
@@ -2155,6 +2261,7 @@ pub unsafe extern "C" fn rustty_render_state_free(state: render::RenderState) {
 ///
 /// # Safety
 /// `state`/`terminal`, if non-null, must be live handles.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_update(
     state: render::RenderState,
@@ -2169,6 +2276,7 @@ pub unsafe extern "C" fn rustty_render_state_update(
 ///
 /// # Safety
 /// `state`/`terminal`, if non-null, must be live handles.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_begin_update(
     state: render::RenderState,
@@ -2183,6 +2291,7 @@ pub unsafe extern "C" fn rustty_render_state_begin_update(
 ///
 /// # Safety
 /// `state`, if non-null, must be a live handle.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_end_update(state: render::RenderState) -> c_int {
     // SAFETY: `state` validity is the caller's contract.
@@ -2194,6 +2303,7 @@ pub unsafe extern "C" fn rustty_render_state_end_update(state: render::RenderSta
 ///
 /// # Safety
 /// `state`, if non-null, must be a live handle.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_clean(state: render::RenderState) -> c_int {
     // SAFETY: `state` validity is the caller's contract.
@@ -2205,6 +2315,7 @@ pub unsafe extern "C" fn rustty_render_state_clean(state: render::RenderState) -
 ///
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_get(
     state: render::RenderState,
@@ -2224,6 +2335,7 @@ pub unsafe extern "C" fn rustty_render_state_get(
 ///
 /// # Safety
 /// `keys`/`values`/`out_written` validity is the caller's contract.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_get_multi(
     state: render::RenderState,
@@ -2247,6 +2359,7 @@ pub unsafe extern "C" fn rustty_render_state_get_multi(
 ///
 /// # Safety
 /// `value`, if non-null, must point to a value of the type required by `option`.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_set(
     state: render::RenderState,
@@ -2277,6 +2390,7 @@ pub unsafe extern "C" fn rustty_render_state_set(
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid allocator; `result` must be a
 /// valid, writable pointer to a row-iterator handle.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_row_iterator_new(
     alloc_: *const rustty_lib::allocator::Allocator,
@@ -2291,6 +2405,7 @@ pub unsafe extern "C" fn rustty_render_state_row_iterator_new(
 ///
 /// # Safety
 /// `iterator`, if non-null, must be a live iterator.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_row_iterator_next(
     iterator: render::RowIterator,
@@ -2306,6 +2421,7 @@ pub unsafe extern "C" fn rustty_render_state_row_iterator_next(
 /// `iterator`, if non-null, must be a live iterator whose borrowed render state
 /// has not been updated since it was populated; `out_y`, if non-null, must be a
 /// valid writable pointer.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_row_iterator_next_dirty(
     iterator: render::RowIterator,
@@ -2320,6 +2436,7 @@ pub unsafe extern "C" fn rustty_render_state_row_iterator_next_dirty(
 ///
 /// # Safety
 /// `iterator`, if non-null, must be a handle returned by the matching `_new`.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_row_iterator_free(iterator: render::RowIterator) {
     // SAFETY: `iterator` validity is the caller's contract.
@@ -2331,6 +2448,7 @@ pub unsafe extern "C" fn rustty_render_state_row_iterator_free(iterator: render:
 ///
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_row_get(
     iterator: render::RowIterator,
@@ -2349,6 +2467,7 @@ pub unsafe extern "C" fn rustty_render_state_row_get(
 ///
 /// # Safety
 /// `keys`/`values`/`out_written` validity is the caller's contract.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_row_get_multi(
     iterator: render::RowIterator,
@@ -2369,6 +2488,7 @@ pub unsafe extern "C" fn rustty_render_state_row_get_multi(
 ///
 /// # Safety
 /// `value`, if non-null, must point to a value of the type required by `option`.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_row_set(
     iterator: render::RowIterator,
@@ -2399,6 +2519,7 @@ pub unsafe extern "C" fn rustty_render_state_row_set(
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid allocator; `result` must be a
 /// valid, writable pointer to a row-cells handle.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_row_cells_new(
     alloc_: *const rustty_lib::allocator::Allocator,
@@ -2413,6 +2534,7 @@ pub unsafe extern "C" fn rustty_render_state_row_cells_new(
 ///
 /// # Safety
 /// `cells`, if non-null, must be a live row-cells handle.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_row_cells_next(cells: render::RowCells) -> bool {
     // SAFETY: `cells` validity is the caller's contract.
@@ -2424,6 +2546,7 @@ pub unsafe extern "C" fn rustty_render_state_row_cells_next(cells: render::RowCe
 ///
 /// # Safety
 /// `cells`, if non-null, must be a live row-cells handle.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_row_cells_select(
     cells: render::RowCells,
@@ -2438,6 +2561,7 @@ pub unsafe extern "C" fn rustty_render_state_row_cells_select(
 ///
 /// # Safety
 /// `cells`, if non-null, must be a handle returned by the matching `_new`.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_row_cells_free(cells: render::RowCells) {
     // SAFETY: `cells` validity is the caller's contract.
@@ -2449,6 +2573,7 @@ pub unsafe extern "C" fn rustty_render_state_row_cells_free(cells: render::RowCe
 ///
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_row_cells_get(
     cells: render::RowCells,
@@ -2468,6 +2593,7 @@ pub unsafe extern "C" fn rustty_render_state_row_cells_get(
 ///
 /// # Safety
 /// `keys`/`values`/`out_written` validity is the caller's contract.
+#[cfg(feature = "render-state")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_render_state_row_cells_get_multi(
     cells: render::RowCells,
@@ -2503,6 +2629,7 @@ pub unsafe extern "C" fn rustty_render_state_row_cells_get_multi(
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid allocator; `out_gesture`, if
 /// non-null, must be a valid, writable pointer to a gesture handle.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_selection_gesture_new(
     alloc_: *const rustty_lib::allocator::Allocator,
@@ -2518,6 +2645,7 @@ pub unsafe extern "C" fn rustty_selection_gesture_new(
 /// # Safety
 /// `gesture`, if non-null, must be a handle returned by `_new`; `terminal`, if
 /// non-null, must be a live terminal handle.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_selection_gesture_free(
     gesture: selection_gesture::Gesture,
@@ -2532,6 +2660,7 @@ pub unsafe extern "C" fn rustty_selection_gesture_free(
 ///
 /// # Safety
 /// `gesture`/`terminal`, if non-null, must be live handles.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_selection_gesture_reset(
     gesture: selection_gesture::Gesture,
@@ -2547,6 +2676,7 @@ pub unsafe extern "C" fn rustty_selection_gesture_reset(
 /// # Safety
 /// `gesture`/`terminal`/`event`, if non-null, must be live handles;
 /// `out_selection`, if non-null, must be a valid, writable pointer to a `CSelection`.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_selection_gesture_event(
     gesture: selection_gesture::Gesture,
@@ -2563,6 +2693,7 @@ pub unsafe extern "C" fn rustty_selection_gesture_event(
 ///
 /// # Safety
 /// `out` must point to writable storage of the type required by `data`.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_selection_gesture_get(
     gesture: selection_gesture::Gesture,
@@ -2584,6 +2715,7 @@ pub unsafe extern "C" fn rustty_selection_gesture_get(
 ///
 /// # Safety
 /// `keys`/`values`/`out_written` validity is the caller's contract.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_selection_gesture_get_multi(
     gesture: selection_gesture::Gesture,
@@ -2620,6 +2752,7 @@ pub unsafe extern "C" fn rustty_selection_gesture_get_multi(
 /// # Safety
 /// `alloc_`, if non-null, must point to a valid allocator; `out_event`, if
 /// non-null, must be a valid, writable pointer to an event handle.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_selection_gesture_event_new(
     alloc_: *const rustty_lib::allocator::Allocator,
@@ -2639,6 +2772,7 @@ pub unsafe extern "C" fn rustty_selection_gesture_event_new(
 ///
 /// # Safety
 /// `event`, if non-null, must be a handle returned by `_event_new`.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_selection_gesture_event_free(event: selection_gesture::Event) {
     // SAFETY: `event` validity is the caller's contract.
@@ -2650,6 +2784,7 @@ pub unsafe extern "C" fn rustty_selection_gesture_event_free(event: selection_ge
 ///
 /// # Safety
 /// `value`, if non-null, must point to a value of the type required by `option`.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_selection_gesture_event_set(
     event: selection_gesture::Event,
@@ -2670,11 +2805,15 @@ pub unsafe extern "C" fn rustty_selection_gesture_event_set(
     unsafe { selection_gesture::event_set(event, opt, value) }.to_c_int()
 }
 
+#[cfg(feature = "selection")]
 // PORT NOTE: range-checked `c_int -> enum` projections for the selection_gesture
 // guards. `EventType`/`EventOption` are contiguous `#[repr(C)]` enums. (`Data`'s
 // projection lives in the module as `selection_gesture::Data::from_c_int`, since
 // `get_multi` must reach it per array element — W66-GETMULTI-RAW-01.)
+#[cfg(feature = "selection")]
 const SELECTION_GESTURE_EVENT_TYPE_COUNT: c_int = 5; // contiguous 0..=4
+
+#[cfg(feature = "selection")]
 fn selection_gesture_event_type_from_c_int(v: c_int) -> Option<selection_gesture::EventType> {
     if (0..SELECTION_GESTURE_EVENT_TYPE_COUNT).contains(&v) {
         // SAFETY: `v` is a valid `EventType` discriminant (range-checked above).
@@ -2684,7 +2823,10 @@ fn selection_gesture_event_type_from_c_int(v: c_int) -> Option<selection_gesture
     }
 }
 
+#[cfg(feature = "selection")]
 const SELECTION_GESTURE_EVENT_OPTION_COUNT: c_int = 10; // contiguous 0..=9
+
+#[cfg(feature = "selection")]
 fn selection_gesture_event_option_from_c_int(v: c_int) -> Option<selection_gesture::EventOption> {
     if (0..SELECTION_GESTURE_EVENT_OPTION_COUNT).contains(&v) {
         // SAFETY: `v` is a valid `EventOption` discriminant (range-checked above).
@@ -2979,6 +3121,7 @@ pub unsafe extern "C" fn rustty_terminal_get_multi(
 /// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `options`, if
 /// non-null, must point to a valid `SelectWordOptions`; `out_selection`, if
 /// non-null, must be a valid, writable pointer to a `CSelection`.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_select_word(
     terminal: terminal::Terminal,
@@ -2995,6 +3138,7 @@ pub unsafe extern "C" fn rustty_terminal_select_word(
 ///
 /// # Safety
 /// `terminal`/`options`/`out_selection` validity is the caller's contract.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_select_word_between(
     terminal: terminal::Terminal,
@@ -3010,6 +3154,7 @@ pub unsafe extern "C" fn rustty_terminal_select_word_between(
 ///
 /// # Safety
 /// `terminal`/`options`/`out_selection` validity is the caller's contract.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_select_line(
     terminal: terminal::Terminal,
@@ -3025,6 +3170,7 @@ pub unsafe extern "C" fn rustty_terminal_select_line(
 ///
 /// # Safety
 /// `terminal`/`out_selection` validity is the caller's contract.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_select_all(
     terminal: terminal::Terminal,
@@ -3040,6 +3186,7 @@ pub unsafe extern "C" fn rustty_terminal_select_all(
 /// # Safety
 /// `terminal`/`out_selection` validity is the caller's contract; `ref_` must be a
 /// valid `CGridRef`.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_select_output(
     terminal: terminal::Terminal,
@@ -3058,6 +3205,7 @@ pub unsafe extern "C" fn rustty_terminal_select_output(
 /// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out` (if
 /// non-null) must point to `out_len` writable bytes; `out_written` must be a
 /// valid, writable pointer.
+#[cfg(all(feature = "formatter", feature = "selection"))]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_selection_format_buf(
     terminal: terminal::Terminal,
@@ -3079,6 +3227,7 @@ pub unsafe extern "C" fn rustty_terminal_selection_format_buf(
 /// non-null, a valid allocator; `out_ptr`/`out_len` must be valid, writable
 /// pointers. The returned buffer is owned by the caller and must be freed with the
 /// same allocator.
+#[cfg(all(feature = "formatter", feature = "selection"))]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_selection_format_alloc(
     terminal: terminal::Terminal,
@@ -3097,6 +3246,7 @@ pub unsafe extern "C" fn rustty_terminal_selection_format_alloc(
 /// # Safety
 /// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `selection`,
 /// if non-null, must be a valid, writable pointer to a `CSelection`.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_selection_adjust(
     terminal: terminal::Terminal,
@@ -3130,6 +3280,7 @@ pub unsafe extern "C" fn rustty_terminal_selection_adjust(
 /// # Safety
 /// `terminal`/`selection`, if non-null, must be live; `out_order`, if non-null,
 /// must be a valid, writable pointer to an `Order`.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_selection_order(
     terminal: terminal::Terminal,
@@ -3146,6 +3297,7 @@ pub unsafe extern "C" fn rustty_terminal_selection_order(
 /// # Safety
 /// `terminal`/`selection`, if non-null, must be live; `out_selection`, if
 /// non-null, must be a valid, writable pointer to a `CSelection`.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_selection_ordered(
     terminal: terminal::Terminal,
@@ -3179,6 +3331,7 @@ pub unsafe extern "C" fn rustty_terminal_selection_ordered(
 /// # Safety
 /// `terminal`/`selection`, if non-null, must be live; `out_contains`, if
 /// non-null, must be a valid, writable pointer to a `bool`.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_selection_contains(
     terminal: terminal::Terminal,
@@ -3196,6 +3349,7 @@ pub unsafe extern "C" fn rustty_terminal_selection_contains(
 /// # Safety
 /// `terminal`/`a`/`b`, if non-null, must be live; `out_equal`, if non-null, must
 /// be a valid, writable pointer to a `bool`.
+#[cfg(feature = "selection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_selection_equal(
     terminal: terminal::Terminal,
@@ -3213,6 +3367,7 @@ pub unsafe extern "C" fn rustty_terminal_selection_equal(
 /// # Safety
 /// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out_ref`, if
 /// non-null, must be a valid, writable pointer to a `CGridRef`.
+#[cfg(any(feature = "grid-introspection", feature = "selection"))]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_grid_ref(
     terminal: terminal::Terminal,
@@ -3229,6 +3384,7 @@ pub unsafe extern "C" fn rustty_terminal_grid_ref(
 /// # Safety
 /// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `out_ref`, if
 /// non-null, must be a valid, writable pointer to a `CTrackedGridRef`.
+#[cfg(feature = "grid-introspection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_grid_ref_track(
     terminal: terminal::Terminal,
@@ -3247,6 +3403,7 @@ pub unsafe extern "C" fn rustty_terminal_grid_ref_track(
 /// `terminal`, if non-null, must be a `rustty_terminal_new` handle; `ref_` must
 /// be a valid `CGridRef`; `out`, if non-null, must be a valid, writable pointer
 /// to a `Coordinate`.
+#[cfg(any(feature = "grid-introspection", feature = "selection"))]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_terminal_point_from_grid_ref(
     terminal: terminal::Terminal,
@@ -3275,6 +3432,7 @@ pub unsafe extern "C" fn rustty_terminal_point_from_grid_ref(
 /// # Safety
 /// `ref_` must be a valid pointer to a `CGridRef`; `out`, if non-null, must be a
 /// valid, writable pointer to a `CCell`.
+#[cfg(feature = "grid-introspection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_grid_ref_cell(
     ref_: *const grid_ref::CGridRef,
@@ -3290,6 +3448,7 @@ pub unsafe extern "C" fn rustty_grid_ref_cell(
 /// # Safety
 /// `ref_` must be a valid pointer to a `CGridRef`; `out`, if non-null, must be a
 /// valid, writable pointer to a `CRow`.
+#[cfg(feature = "grid-introspection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_grid_ref_row(
     ref_: *const grid_ref::CGridRef,
@@ -3305,6 +3464,7 @@ pub unsafe extern "C" fn rustty_grid_ref_row(
 /// # Safety
 /// `ref_` must be a valid `CGridRef`; `out_buf`, if non-null, must point to
 /// `buf_len` writable `u32`; `out_len` must be a valid, writable pointer.
+#[cfg(feature = "grid-introspection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_grid_ref_graphemes(
     ref_: *const grid_ref::CGridRef,
@@ -3323,6 +3483,7 @@ pub unsafe extern "C" fn rustty_grid_ref_graphemes(
 /// # Safety
 /// `ref_` must be a valid `CGridRef`; `out_buf`, if non-null, must point to
 /// `buf_len` writable bytes; `out_len` must be a valid, writable pointer.
+#[cfg(feature = "grid-introspection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_grid_ref_hyperlink_uri(
     ref_: *const grid_ref::CGridRef,
@@ -3340,6 +3501,7 @@ pub unsafe extern "C" fn rustty_grid_ref_hyperlink_uri(
 /// # Safety
 /// `ref_` must be a valid pointer to a `CGridRef`; `out`, if non-null, must be a
 /// valid, writable pointer to a `Style`.
+#[cfg(feature = "grid-introspection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_grid_ref_style(
     ref_: *const grid_ref::CGridRef,
@@ -3360,6 +3522,7 @@ pub unsafe extern "C" fn rustty_grid_ref_style(
 ///
 /// # Safety
 /// `ref_`, if non-null, must be a handle returned by `rustty_terminal_grid_ref_track`.
+#[cfg(feature = "grid-introspection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_tracked_grid_ref_free(ref_: grid_ref_tracked::CTrackedGridRef) {
     // SAFETY: `ref_` validity is the caller's contract.
@@ -3372,6 +3535,7 @@ pub unsafe extern "C" fn rustty_tracked_grid_ref_free(ref_: grid_ref_tracked::CT
 ///
 /// # Safety
 /// `ref_`, if non-null, must be a live tracked-grid-ref handle.
+#[cfg(feature = "grid-introspection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_tracked_grid_ref_has_value(
     ref_: grid_ref_tracked::CTrackedGridRef,
@@ -3387,6 +3551,7 @@ pub unsafe extern "C" fn rustty_tracked_grid_ref_has_value(
 /// # Safety
 /// `ref_`, if non-null, must be a live handle; `out`, if non-null, must be a
 /// valid, writable pointer to a `Coordinate`.
+#[cfg(feature = "grid-introspection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_tracked_grid_ref_point(
     ref_: grid_ref_tracked::CTrackedGridRef,
@@ -3409,6 +3574,7 @@ pub unsafe extern "C" fn rustty_tracked_grid_ref_point(
 ///
 /// # Safety
 /// `ref_`/`terminal`, if non-null, must be live handles.
+#[cfg(feature = "grid-introspection")]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_tracked_grid_ref_set(
     ref_: grid_ref_tracked::CTrackedGridRef,
@@ -3426,6 +3592,7 @@ pub unsafe extern "C" fn rustty_tracked_grid_ref_set(
 /// # Safety
 /// `ref_`, if non-null, must be a live handle; `out_ref`, if non-null, must be a
 /// valid, writable pointer to a `CGridRef`.
+#[cfg(all(feature = "grid-introspection", feature = "snapshot"))]
 #[no_mangle]
 pub unsafe extern "C" fn rustty_tracked_grid_ref_snapshot(
     ref_: grid_ref_tracked::CTrackedGridRef,

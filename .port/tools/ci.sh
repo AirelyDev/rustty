@@ -714,6 +714,25 @@ GATE_REGISTRY=(
   # continuously layout-gated (the vt header declares no by-value struct returns,
   # so this covers field-offset drift rather than the A4 sret crash class).
   "A5|PROGRESS|sh $GATES/check_rustty_vt_headers.sh"
+  # G-VTFEAT (gap-close 2026-08-26, oracle 1fdbb8c91) — the `-Dvt-features`
+  # trimming gate. The reference lets a LIB artifact drop optional features so
+  # embedders can shrink the binary, and each feature gates a block of
+  # `@export`s in lib_vt.zig. rustty spells it as nine cargo features on
+  # rustty-vt + rustty-vt-c, all named in `default` (an additive feature set
+  # equals the reference's subtract-from-all model only if the default is the
+  # full set — arm 1 asserts exactly that, because a feature silently leaving
+  # `default` would quietly cut C API surface from the whole application tier).
+  # Arms 2-3 build all eleven configurations (each feature alone, -all, and
+  # default) and require each to compile CLEANLY and to export EXACTLY the
+  # symbol set derived from the oracle's lib_vt.zig — so a missed `#[cfg]`
+  # surfaces as an untrimmed symbol and an over-eager one as a missing symbol.
+  # Deliberately NOT run: the test suite under a trimmed build. Upstream cannot
+  # do that either (`Config.terminalOptions` gives `.ghostty` every feature and
+  # only `.lib` gets `vt_features`), so trimming is a build configuration, not
+  # a test configuration. PROGRESS on first landing per the bedding-in
+  # convention; a genuine drift RED is escalated by run_gate's
+  # PROGRESS-went-RED branch.
+  "G-VTFEAT|PROGRESS|python3 $GATES/check_vt_features.py"
   # G-ABISCHEMA (P4-W5 Bundle T, oracle c75559589) — the librustty-vt ABI type
   # manifest (`rustty_type_json`) validates against its checked-in JSON Schema
   # (`crates/rustty-vt-c/types.schema.json`) via the ported

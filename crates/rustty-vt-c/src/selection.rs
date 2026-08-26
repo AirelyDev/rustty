@@ -37,6 +37,10 @@ use std::os::raw::c_int;
 // callback as the scope text. The `adjust`/`ordered` guards themselves narrow
 // the raw `c_int` in the `extern "C"` wrappers (lib.rs), which emit on this
 // scope.
+// PORT NOTE (`-Dvt-features`): only the `selection` export group logs with
+// this scope, so a `-selection` build never references it (see the helper
+// note in lib.rs for why this is a cfg rather than an allow).
+#[cfg(feature = "selection")]
 pub(crate) const LOG_SCOPE: &str = "selection_c";
 
 // pub const Adjustment = Selection.Adjustment;
