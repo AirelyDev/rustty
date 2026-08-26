@@ -1,20 +1,20 @@
 # PORTS: ghostty flatpak/com.mitchellh.ghostty.yml.
 #
-# ============================== UNVERIFIED ==================================
-# This manifest has NOT been built. flatpak-builder is not available in any
-# environment this branch was developed on (installing it needs root on the
-# Linux box), so unlike everything else on this branch it carries no "verified"
-# claim. Treat it as a starting point, not a working package.
+# =============================== VERIFIED ===================================
+# Built, installed and run on aarch64-linux (Fedora 44):
 #
-# To verify:
-#     cargo run -p xtask -- dist              # produces the vendored tarball
-#     flatpak-builder --force-clean --user --install \
-#       builddir flatpak/io.airely.rustty.yml
-#     flatpak run io.airely.rustty
+#     cargo run -p xtask -- dist
+#     flatpak run org.flatpak.Builder --force-clean --user \
+#       --repo=flatpak/repo flatpak/builddir flatpak/io.airely.rustty.yml
+#     flatpak remote-add --user --no-gpg-verify rustty-local flatpak/repo
+#     flatpak install --user rustty-local io.airely.rustty
+#     flatpak run io.airely.rustty +version     # -> "Rustty 0.1.0"
 #
-# What is likely to need adjusting on the first real run: the runtime version
-# (pin it to whatever org.gnome.Platform release is current), the
-# rust-stable extension version, and the exact `xtask resources` prefix.
+# flatpak-builder itself is available WITHOUT root as the org.flatpak.Builder
+# flatpak, which is how this was built; the Fedora `flathub` remote is filtered,
+# so the full one has to be added at user level first:
+#     flatpak remote-add --user --if-not-exists flathub \
+#       https://dl.flathub.org/repo/flathub.flatpakrepo
 # ============================================================================
 #
 # THE ONE STRUCTURAL DIFFERENCE FROM THE REFERENCE, and it is a simplification.
@@ -40,6 +40,12 @@ sdk-extensions:
   # 1.93.1; this extension tracks stable, so a pin newer than the extension's
   # stable would need `rustup` in a build step instead.
   - org.freedesktop.Sdk.Extension.rust-stable
+  # bindgen (crates-sys/libxml2-sys and friends) dlopens libclang at BUILD
+  # time, and the GNOME SDK ships none — `find / -name 'libclang*.so*'` inside
+  # org.gnome.Sdk//50 returns nothing, so the build failed with
+  #   Unable to find libclang ... set the LIBCLANG_PATH environment variable
+  # This extension provides it; LIBCLANG_PATH is set in build-options below.
+  - org.freedesktop.Sdk.Extension.llvm21
 default-branch: tip
 command: rustty
 finish-args:
@@ -72,8 +78,10 @@ modules:
   - name: rustty
     buildsystem: simple
     build-options:
-      append-path: /usr/lib/sdk/rust-stable/bin
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm21/bin
+      prepend-ld-library-path: /usr/lib/sdk/llvm21/lib
       env:
+        LIBCLANG_PATH: /usr/lib/sdk/llvm21/lib
         # The tarball ships .cargo/config.toml pointing at its own vendor/ dir,
         # so nothing should reach the network. Make an attempt an error rather
         # than a confusing hang.

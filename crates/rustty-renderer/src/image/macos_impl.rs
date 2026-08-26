@@ -986,6 +986,9 @@ impl State {
     //     try self.appendKittyPlacement(alloc, t, image, p, x_pos, y_pos);
     // }
     #[allow(clippy::too_many_arguments)]
+    // PORT NOTE: the explicit trailing `return` is the reference's; the port
+    // mirrors it so the two read line-for-line.
+    #[allow(clippy::needless_return)]
     fn prep_kitty_placement<A: Allocator + Copy>(
         &mut self,
         alloc: A,
@@ -2301,7 +2304,12 @@ mod tests {
         );
         assert_eq!(1usize, unsafe { &(*sp).kitty_images }.placements.len());
         assert_eq!(0usize, state.kitty_placements.len());
-        assert!(state.images.get(&Id::Kitty(1)).is_none());
+        // `.get(..).is_none()`, not `!contains_key(..)`: the reference asserts
+        // `state.images.get(...) == null`, and the port mirrors that.
+        #[allow(clippy::unnecessary_get_then_check)]
+        {
+            assert!(state.images.get(&Id::Kitty(1)).is_none());
+        }
 
         // const pixels = try alloc.dupe(u8, "rgba");
         let pixels = b"rgba".to_vec();

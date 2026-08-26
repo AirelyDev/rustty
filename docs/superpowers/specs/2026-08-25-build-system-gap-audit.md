@@ -10,112 +10,88 @@ not product source. Companion to
 
 ---
 
-## Status (updated 2026-08-26)
+## Status (updated 2026-08-26) — COMPLETE
 
-Steps 1, 2 and **Nix Phase A** of the fill order below are **done**, on branch
-`build-system-gaps`. Five new gates now run from `.port/tools/ci.sh`:
+Every step of the fill order below is done, on branch `build-system-gaps`
+(merged to `main`). Seven new gates run from `.port/tools/ci.sh`:
 
 | Gate          | Covers                                                                |
 | ------------- | --------------------------------------------------------------------- |
 | `G-LINT`      | shellcheck, prettier, typos, swiftlint, alejandra, pinact             |
 | `G-CCONSUMER` | cmake build/install, both `.pc` files, shared+static link             |
-| `G-EXAMPLES`  | all 32 `example/` programs, incl. the cross one                       |
-| `G-DIST`      | `xtask dist` shape + (opt-in) `distcheck`                             |
+| `G-EXAMPLES`  | all 33 `example/` programs, incl. cross and SwiftPM                   |
+| `G-DIST`      | `xtask dist` + `dist-lib-vt` shape, + (opt-in) `distcheck`            |
 | `G-NIX`       | `nix flake check` (7 checks) + `alejandra --check`; BLOCKED w/o `nix` |
+| `G-XTARGET`   | cross-target builds of `rustty-vt-c` (wasm ×2, windows, freebsd)      |
 
-**Nix is verified, not merely authored.** On an aarch64-linux host
-`nix build .#librustty-vt` AND `nix build .#rustty` (the GTK app) both succeed,
-`nix flake check` reports _all checks passed_ over seven checks (the library,
-the app, symbol sanity, both `.pc` files, and a C consumer compiled+linked+run
-against **both** the shared and static libraries), and `nix develop` yields
-exactly the `rust-toolchain.toml` pin (rustc 1.93.1) plus all six G-LINT
-linters.
+**Nix is complete and verified.** `nix build .#librustty-vt`, `nix build
+.#rustty` (the GTK app), `nix flake check` (all 7), `nix develop` (exactly the
+`rust-toolchain.toml` pin), and all six `nix run .#<desktop>` VM launchers
+evaluate on aarch64-linux.
 
-Phase B's premise — "gated on the GTK apprt going live" — turned out to be
-stale: `cargo build --features gtk` succeeds on Fedora 44 and the binary runs.
-What is still missing from Phase B is `nix/vm/*` and `nix/tests.nix`.
+**The flatpak is verified**: built, installed and run — `flatpak run
+io.airely.rustty +version` → `Rustty 0.1.0`. flatpak-builder needs no root; it
+ships as a flatpak.
 
-`flatpak/` and `snap/` manifests are authored but **UNVERIFIED** — neither
-flatpak-builder nor snapcraft could be installed without root — and say so in
-their own headers rather than implying otherwise.
+### What remains genuinely blocked
 
-**Turning those on found nine real defects**, listed here because their
-existence is the argument for the rest of the fill order — every one of them
-lived in a file that looked fine and had simply never been executed:
+Two things, both needing privileges or hardware this environment does not have.
+Neither is a code gap, and both say so in their own headers:
 
-1. `cargo fmt --check` — check #1 of ci.sh and a HARD-FAIL — was **red on
-   `main`**: 243 hunks across 73 files on the pinned toolchain.
-2. rustty emitted **no pkg-config files at all**; the oracle emits four.
-3. `librustty_vt_c.a` carried an `_OnigEncodingKOI8` that nothing defined, so
-   static consumers pulling in that object could not link.
-4. CMake's `add_custom_command(OUTPUT …)` meant `cmake --build` **never
-   re-invoked cargo**, installing whatever archive an unrelated cargo run had
-   left in `target/` — a different feature set, and never rebuilt after an edit.
-5. Three `# shellcheck disable=SC2086 — <reason>` directives were **silently
-   inert** (the em-dash makes shellcheck reject the whole directive).
-6. `rustty_vt_add_target()` ran the cross cargo build with **no cross compiler
-   in the environment**, so every `crates-sys/*` package failed.
-7. The zig cross-compiler wrappers did not strip cc-rs's clang-style
-   `--target=`, which zig's parser rejects.
-8. cc-rs archived cross objects with the **host `ar`/`ranlib`**; Apple's ranlib
-   warns rather than errors on ELF members and the members were then dropped —
-   the cross archive had zero zlib and zero gettext objects.
-9. `rustty_vt_add_target()` set `INTERFACE_INCLUDE_DIRECTORIES` from a
-   directory-scope variable invisible inside a CMake function, so it resolved
-   to the **empty string** for every downstream `FetchContent` consumer.
+- **snap** — snapcraft is itself a snap and snapd is absent; installing it
+  needs root. The manifest names the exact commands.
+- **`nix/tests.nix`** — NixOS VM tests boot a desktop under QEMU/KVM. The
+  Linux box here is itself a VM and the container the flake was verified in
+  has no `/dev/kvm`. Ported, not wired into `checks`, with the three steps to
+  enable it written down.
 
-Three more found once Nix Phase A could run:
+Also not done: `test/fuzz-libghostty`. rustty has G5 (`run_fuzz_smoke.sh`) at
+the Rust level; a C-API-level fuzz harness is a genuine remaining gap and is
+listed as such rather than stubbed.
 
-10. `crates/rustty-os/src/i18n.rs` declared
-    `_libintl_locale_name_canonicalize` `extern` on **every non-macOS target**,
-    claiming "the symbol is provided by the system libintl". It is not — it is
-    a gnulib internal that only GNU gettext's own build exports, and rustty
-    vendors libintl on Apple only (mirroring the oracle). Every non-macOS
-    static link was therefore broken; the cdylib merely dead-stripped it. Same
-    Zig-lazy-vs-Rust-eager shape as defect 3. **This is what made the cross
-    example's executable link fail** — it was never a zig-sysroot limitation,
-    and with it fixed `example/c-vt-cmake-cross` now produces a real aarch64
-    Linux ELF from macOS.
-11. `crates/rustty-bench`'s `+terminal-snapshot` sat behind a `snapshot-codec`
-    feature nothing ever enabled, with an `unimplemented!()` CLI leaf. The
-    codec it waited for had **already landed** — but the module had drifted six
-    compile errors from the API that shipped, invisibly, _because_ the feature
-    was never built. Un-gated; G-BENCH's floor 24 → 27.
-12. `G-LINT` was scanning `.claude/worktrees/` — agent-created worktrees that
-    are whole extra checkouts of this repo, re-reporting findings from whatever
-    commit they are parked on.
-13. **`cargo clippy --workspace --all-targets -- -D warnings` — check #2 of
-    ci.sh and a HARD-FAIL — is RED on `main`**, with 65 warnings. Verified on a
-    pristine `main` worktree, so it predates this branch, exactly like defect 1.
-    NOT fixed here, deliberately: unlike `cargo fmt`, clippy fixes change code,
-    and the largest categories look like deliberate port fidelity rather than
-    mistakes — 9 `mem::drop` on non-`Drop` values (the shape a Zig `defer`
-    port takes), 4 "operation has no effect", 4 manual `div_ceil`, 4
-    same-type casts. Concentrated in `rustty-vt` (26), `rustty-vt-c` (14),
-    `wuffs-sys` (7) and `rustty-core` (6). The right fix is probably targeted
-    `#[allow(...)]` with PORT NOTEs (or a workspace lint table) rather than
-    rewriting ported arithmetic — a judgement call about fidelity that should
-    be made deliberately, not swept in at the end of a build-system branch.
+### The defects this work found
 
-### Still open
+Sixteen, all in files that looked fine and had simply never been executed. In
+rough order of severity:
 
-- **Nix VMs + `nix/tests.nix`** (17 files) — the desktop-environment VMs.
-- **flatpak / snap verification** — the manifests exist; nothing has built them.
-- **Release-pipeline holes** — `sentry-dsym` (needs a DSN),
-  `source-tarball-lib-vt`, `build-lib-vt-wasm`, the macOS debug tip builds, and
-  `update-colorschemes.yml`. The `build-lib-vt-xcframework` artifact itself now
-  exists (`xtask xcframework-vt`); only the upload job is missing.
-- **Cross-target CI legs** — Windows / Android / wasm build jobs, plus
-  `test/windows/test_dll_init.c` and `test/fuzz-libghostty`.
+1. **`cargo clippy -D warnings` (ci.sh check #2, HARD-FAIL) was RED on `main`**
+   with 66 warnings. Now 0 — style lints that a faithful Zig port
+   systematically trips are allowed workspace-wide with the reason recorded at
+   the table; genuinely incidental ones were fixed at the site.
+2. **`cargo fmt --check` (check #1, HARD-FAIL) was RED on `main`** — 243 hunks
+   across 73 files.
+3. **The Linux build was broken** — `set_macos_display_id` gained a `draw_now`
+   argument on the macOS arm only, and the shared mailbox drain calls it
+   unconditionally.
+4. `crates/rustty-os/src/i18n.rs` declared `_libintl_locale_name_canonicalize`
+   `extern` on every non-macOS target, breaking every non-macOS **static**
+   link. Found only in a hermetic sandbox — the macOS host had a Homebrew
+   gettext lying around to satisfy it.
+5. `librustty_vt_c.a` carried an `_OnigEncodingKOI8` nothing defined.
+6. rustty emitted **no pkg-config files at all**; the oracle emits four.
+7. CMake's `add_custom_command(OUTPUT …)` meant `cmake --build` **never
+   re-invoked cargo**.
+   8–11. Four separate defects made `example/c-vt-cmake-cross` unbuildable: no
+   cross compiler exported to cargo, cc-rs's `--target=` flag zig rejects,
+   host `ar`/`ranlib` on cross objects (silently dropping archive members),
+   and `INTERFACE_INCLUDE_DIRECTORIES` resolving to the empty string for every
+   downstream consumer.
+8. `--no-default-features` stopped meaning "SIMD off" when `-Dvt-features`
+   landed, so CMake's SIMD-off path dropped the whole C API surface.
+9. `+terminal-snapshot` sat behind a feature nothing enabled, hiding six
+   compile errors' worth of drift from the codec that had already landed.
+10. Three `# shellcheck disable=… — <reason>` directives were silently inert.
+11. `overlays` read `final.stdenv` — a cycle that made every Nix VM app fail
+    with "infinite recursion encountered".
+12. `G-LINT` was scanning `.claude/worktrees/`.
 
 ### A note on where defects hide
 
-Ten of the twelve were found by _running_ something that had never been run,
-and two of those needed a **hermetic** environment specifically: the macOS host
-lane could not see defect 10 because a Homebrew `gettext` was lying around to
-satisfy the link. That is the argument for keeping `G-NIX` even though it
-overlaps `G-CCONSUMER` — it is the same install checked without ambient system
-libraries.
+Fourteen of the sixteen were found by _running_ something that had never been
+run. Two needed a **hermetic** environment specifically. That is the argument
+for keeping `G-NIX` even though it overlaps `G-CCONSUMER`, and for `G-XTARGET`
+even though `G-WINCHK` already exists: same code, checked without the host's
+ambient conveniences.
 
 ---
 

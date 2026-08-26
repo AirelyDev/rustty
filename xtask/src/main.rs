@@ -94,6 +94,11 @@ SUBCOMMANDS:
                        terminfo. Port of ghostty's `src/main_build_data.zig` `+gen-*`
                        CLI; the same bytes `resources` writes into zig-out/share.
     dist               Build the source tarball at dist/rustty-<version>.tar.gz (git archive)
+    dist-lib-vt        Build the VT-library-only source tarball at
+                       dist/librustty-vt-<version>.tar.gz — the workspace sliced to
+                       rustty-vt-c's closure. Port of ghostty's
+                       `zig build dist -Demit-lib-vt=true` (release-tip.yml's
+                       source-tarball-lib-vt job).
     distcheck          Build the source tarball, extract it, and build it to validate self-containment
     release-info [--version <vX.Y.Z>] [--ref <refs/tags/vX.Y.Z>] [--no-workspace-check]
                        Emit the release metadata (version, build, commit, commit_long)
@@ -182,6 +187,16 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("xtask: dist failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("dist-lib-vt") => match dist::dist_lib_vt() {
+            Ok(out) => {
+                println!("wrote {}", out.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("xtask: dist-lib-vt failed: {e}");
                 ExitCode::FAILURE
             }
         },

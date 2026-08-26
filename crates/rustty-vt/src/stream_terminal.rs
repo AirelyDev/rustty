@@ -8800,6 +8800,10 @@ mod tests {
                         return;
                     };
                     let mut it = state.registered_mimes();
+                    // `while let ... = it.next()`, not `for m in it`: the
+                    // reference writes `while (it.next()) |m|` and the port
+                    // mirrors its loop form.
+                    #[allow(clippy::while_let_on_iterator)]
                     while let Some(m) = it.next() {
                         mimes.extend_from_slice(m);
                         mimes.push(b',');

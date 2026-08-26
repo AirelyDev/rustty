@@ -30,7 +30,7 @@
 //!      The crate declares `links = "wuffs"`, so Cargo enforces a single
 //!      linkage; the vendored `release/c` include dir is re-exported via
 //!      `DEP_WUFFS_INCLUDE` for downstream crates.
-
+//!
 //! Reference `pkg/wuffs/include/{stdlib.h,string.h}` (`619555d1c`
 //! build-without-libc) are mirrored at `include/` but NOT placed on any
 //! include path: they exist so the reference's translate-c can parse wuffs

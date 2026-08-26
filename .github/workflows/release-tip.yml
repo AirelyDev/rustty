@@ -217,6 +217,184 @@ jobs:
             rustty-source.tar.gz.minisig
           token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
 
+  # PORTS: ghostty release-tip.yml `source-tarball-lib-vt`. The VT-library-only
+  # source tarball, for C consumers who do not want the whole workspace
+  # (43 MB vs 67 MB). `xtask dist-lib-vt` slices the workspace to
+  # rustty-vt-c's dependency closure — see xtask/src/dist.rs `prune_to_lib_vt`.
+  source-tarball-lib-vt:
+    needs: [setup]
+    if: needs.setup.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RUSTTY_COMMIT_LONG: ${{ needs.setup.outputs.commit_long }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+      - name: Create Tarball
+        run: |
+          rm -f dist/librustty-vt-*.tar.gz
+          cargo run -q -p xtask -- dist-lib-vt
+          cp dist/librustty-vt-*.tar.gz librustty-vt-source.tar.gz
+
+      # Prove the sliced tarball actually builds before shipping it. The full
+      # tarball gets this from `xtask distcheck`; the sliced one has no
+      # equivalent subcommand, so it is spelled out.
+      - name: Verify Tarball Builds
+        run: |
+          tmp="$(mktemp -d)"
+          tar xzf librustty-vt-source.tar.gz -C "$tmp"
+          cd "$tmp"/librustty-vt-*
+          cargo build --offline --release -p rustty-vt-c --features simd
+          test -f target/release/librustty_vt_c.a
+
+      - name: Sign Tarball
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          if [ -z "$MINISIGN_KEY" ]; then
+            echo "::warning title=Unsigned tarball::MINISIGN_KEY is not configured; publishing the lib-vt tarball without a signature."
+            exit 0
+          fi
+          printf '%s' "$MINISIGN_KEY" > minisign.key
+          printf '%s' "$MINISIGN_PASSWORD" > minisign.password
+          minisign -S -m librustty-vt-source.tar.gz -s minisign.key < minisign.password
+          rm -f minisign.key minisign.password
+
+      - name: Update Release
+        if: github.repository == 'AirelyDev/rustty'
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          name: 'Rustty Tip ("Nightly")'
+          prerelease: true
+          tag_name: tip
+          target_commitish: ${{ github.sha }}
+          files: |
+            librustty-vt-source.tar.gz
+            librustty-vt-source.tar.gz.minisig
+          token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
+
+  # PORTS: ghostty release-tip.yml `build-lib-vt-xcframework`. The VT library
+  # packaged for Swift consumers (module RusttyVt). `xtask xcframework-vt`
+  # builds it; example/swift-vt-xcframework is the consumer.
+  build-lib-vt-xcframework:
+    needs: [setup]
+    if: needs.setup.outputs.should_skip != 'true'
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    env:
+      RUSTTY_COMMIT_LONG: ${{ needs.setup.outputs.commit_long }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build XCFramework
+        run: cargo run -q -p xtask -- xcframework-vt
+
+      - name: Zip XCFramework
+        run: |
+          cd dist
+          zip -9 -r ../rustty-vt.xcframework.zip rustty-vt.xcframework
+
+      - name: Sign XCFramework
+        env:
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          if [ -z "$MINISIGN_KEY" ]; then
+            echo "::warning title=Unsigned XCFramework::MINISIGN_KEY is not configured; publishing without a signature."
+            exit 0
+          fi
+          brew install minisign
+          printf '%s' "$MINISIGN_KEY" > minisign.key
+          printf '%s' "$MINISIGN_PASSWORD" > minisign.password
+          minisign -S -m rustty-vt.xcframework.zip -s minisign.key < minisign.password
+          rm -f minisign.key minisign.password
+
+      - name: Update Release
+        if: github.repository == 'AirelyDev/rustty'
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          name: 'Rustty Tip ("Nightly")'
+          prerelease: true
+          tag_name: tip
+          target_commitish: ${{ github.sha }}
+          files: |
+            rustty-vt.xcframework.zip
+            rustty-vt.xcframework.zip.minisig
+          token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
+
+  # PORTS: ghostty release-tip.yml `build-lib-vt-wasm`. The reference ships two
+  # optimization tiers (ReleaseFast and ReleaseSmall); cargo has one `release`
+  # profile plus rustty's `release-fast`, so the two artifacts here are the
+  # cargo analogs of that pair rather than a 1:1 flag mapping.
+  build-lib-vt-wasm:
+    needs: [setup]
+    if: needs.setup.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RUSTTY_COMMIT_LONG: ${{ needs.setup.outputs.commit_long }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain (pinned via rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install binaryen (wasm-opt)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binaryen
+
+      # build-vt-wasm.sh is the same script the WS14 wasm lane uses: it builds
+      # rustty-vt-c for wasm32-unknown-unknown and runs the growable-table
+      # patch (`xtask wasm-patch-growable-table`), installing the result as
+      # zig-out/bin/rustty-vt.wasm — the analog of the reference's installed
+      # ghostty-vt.wasm.
+      - name: Build WASM
+        run: bash .port/tools/build-vt-wasm.sh
+
+      - name: Optimize WASM
+        run: |
+          wasm-opt -O3 --strip-dwarf \
+            --enable-simd \
+            --enable-bulk-memory \
+            --enable-sign-ext \
+            --enable-nontrapping-float-to-int \
+            --enable-multivalue \
+            --enable-reference-types \
+            zig-out/bin/rustty-vt.wasm \
+            -o rustty-vt.wasm
+          ls -la rustty-vt.wasm
+
+      - name: Update Release
+        if: github.repository == 'AirelyDev/rustty'
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          name: 'Rustty Tip ("Nightly")'
+          prerelease: true
+          tag_name: tip
+          target_commitish: ${{ github.sha }}
+          files: |
+            rustty-vt.wasm
+          token: ${{ secrets.GH_RELEASE_TOKEN || github.token }}
+
   build-macos:
     needs: [setup]
     if: needs.setup.outputs.should_skip != 'true'

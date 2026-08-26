@@ -1,17 +1,23 @@
 # PORTS: ghostty snap/snapcraft.yaml.
 #
 # ============================== UNVERIFIED ==================================
-# This has NOT been built. snapcraft is not available in any environment this
-# branch was developed on (installing it needs root on the Linux box), so
-# unlike everything else on this branch it carries no "verified" claim.
+# NOT built. snapcraft is distributed as a snap, and snapd itself is absent
+# from the Linux box this branch was developed on; installing it needs root.
+# Unlike flatpak/ — which IS verified, because flatpak-builder ships as a
+# flatpak and installs at user level — this carries no verification claim.
 #
-# To verify:
+# To verify (needs root once, for snapd):
+#     sudo dnf install snapd && sudo ln -s /var/lib/snapd/snap /snap
+#     sudo snap install snapcraft --classic
 #     cargo run -p xtask -- dist        # the vendored tarball this consumes
 #     snapcraft --verbose               # from the repo root
 #     sudo snap install --dangerous --classic ./rustty_*.snap
+#     rustty +version
 #
 # Expect the `libs`/`mesa` stage-package lists to need adjusting: they are
 # carried over from the reference and pin Ubuntu 24.04 (core24) package names.
+# The flatpak build DID surface one thing that likely applies here too: bindgen
+# needs libclang at build time, which is why `clang` is in build-packages below.
 # ============================================================================
 #
 # TWO STRUCTURAL DIFFERENCES FROM THE REFERENCE:
