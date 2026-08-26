@@ -61,8 +61,10 @@ rustc-ice-*.txt
 .port/phase-0/harness/results/diag/
 rust_out
 
-# macOS app: regenerable via `cargo run -p xtask -- xcframework`; build output
-macos/GhosttyKit.xcframework/
+# macOS app: regenerable via `cargo run -p xtask -- xcframework`; build output.
+# (The bundle is `RusttyKit`, not `GhosttyKit` — R2. The old spelling was left
+# behind by the rename and matched nothing.)
+macos/RusttyKit.xcframework/
 macos/build/
 macos/DerivedData/
 
@@ -87,6 +89,17 @@ example/swift-vt-xcframework/.build/
 
 # llvm coverage profiling artifacts
 *.profraw
+
+# Nix build results — `nix build` drops a `result` symlink (and `result-<name>`
+# for multi-output derivations) in the invocation directory, and the NixOS test
+# driver writes an interactive-history file. Both became reachable when the
+# flake landed; the reference ignores them for the same reason.
+/result*
+/.nixos-test-history
+
+# Valgrind core dumps. G-VALGRIND runs the FFI crates' test binaries under
+# memcheck, and a crash there leaves one of these behind.
+vgcore.*
 
 # SDD scratch (ledger, briefs, reports, review diffs) — not tracked
 .superpowers/

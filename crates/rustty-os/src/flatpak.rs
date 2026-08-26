@@ -138,7 +138,10 @@ mod host_command {
             pub fn g_variant_unref(value: *mut GVariant);
             pub fn g_variant_ref_sink(value: *mut GVariant) -> *mut GVariant;
             pub fn g_variant_get(value: *mut GVariant, format_string: *const c_char, ...);
-            pub fn G_VARIANT_TYPE(type_string: *const c_char) -> *const GVariantType;
+            // The REAL exported symbol behind the `G_VARIANT_TYPE` macro. See
+            // the wrapper below the extern block for why this is not declared
+            // as `G_VARIANT_TYPE` directly.
+            pub fn g_variant_type_checked_(type_string: *const c_char) -> *const GVariantType;
             pub fn g_main_context_new() -> *mut GMainContext;
             pub fn g_main_context_unref(context: *mut GMainContext);
             pub fn g_main_context_push_thread_default(context: *mut GMainContext);
@@ -203,6 +206,33 @@ mod host_command {
                 cancellable: *mut GCancellable,
                 error: *mut *mut GError,
             ) -> *mut GVariant;
+        }
+
+        /// `G_VARIANT_TYPE(type_string)` — a glib MACRO, not a function:
+        ///
+        /// ```c
+        /// #ifndef G_DISABLE_CAST_CHECKS
+        /// # define G_VARIANT_TYPE(type_string) (g_variant_type_checked_ ((type_string)))
+        /// #else
+        /// # define G_VARIANT_TYPE(type_string) ((const GVariantType *) (type_string))
+        /// #endif
+        /// ```
+        ///
+        /// The reference gets it for free: `@cImport`ing `gio/gio.h` translates
+        /// the macro along with everything else. Rust has no such step, and
+        /// this was declared as `extern "C" fn G_VARIANT_TYPE` — a symbol that
+        /// does not exist in libglib, so every build carrying this module
+        /// failed to link with `undefined reference to 'G_VARIANT_TYPE'`. The
+        /// `flatpak` feature was never enabled by anything, so nothing found out.
+        ///
+        /// Expanded here as the macro expands, against the real exported
+        /// `g_variant_type_checked_`.
+        ///
+        /// # Safety
+        /// `type_string` must be a NUL-terminated, valid GVariant type string;
+        /// glib aborts on an invalid one (that is what the "checked" is).
+        pub unsafe fn G_VARIANT_TYPE(type_string: *const c_char) -> *const GVariantType {
+            unsafe { g_variant_type_checked_(type_string) }
         }
     }
 
