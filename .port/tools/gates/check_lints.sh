@@ -61,9 +61,14 @@ run_shellcheck() {
 
   local list zsh_list
   list="$(mktemp)"; zsh_list="$(mktemp)"
+  # `.claude/worktrees/` holds agent-created git worktrees — whole extra
+  # checkouts of this repository living inside it. Linting them re-reports
+  # every finding from whatever commit they are parked on, which is noise at
+  # best and a RED for code that is not on this branch at worst.
   find . \( -name '*.sh' -o -name '*.bash' \) -type f \
     ! -path './target/*' ! -path './zig-out/*' ! -path './macos/build/*' \
     ! -path './.git/*' ! -path '*/vendor/*' ! -path './build-cmake/*' \
+    ! -path './.claude/*' \
     | sort > "$list"
 
   # Split out anything whose shebang names zsh.

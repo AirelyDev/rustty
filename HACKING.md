@@ -98,13 +98,14 @@ layered on top of those two.
 
 > [!NOTE]
 >
-> Some methods above are **forward references** while the port is brought up:
-> the **Nix** flake and VMs land in Batch 4 (see
-> `docs/superpowers/specs/2026-07-15-batch4-nix-flake-design.md`); the automated
-> **release / flatpak / snap** GitHub workflows land with it (Phase C); the
-> translation `.mo` compilation and runtime loading land with the i18n batch;
-> and the **GTK Linux app** (`nix build .#rustty`, flatpak/snap) is gated on the
-> GTK apprt going live. Everything under **cargo**, the wired **xtask**
+> The **Nix** flake is live for the headless C library and the dev shell:
+> `nix build .#librustty-vt`, `nix flake check`, and `nix develop` all work
+> (`docs/superpowers/specs/2026-07-15-batch4-nix-flake-design.md`, Phase A).
+>
+> Still forward references: `nix build .#rustty` (the **GTK Linux app**), the
+> `nix/vm/*` desktop VMs and `nix/tests.nix` — all three are Phase B and gated
+> on the GTK app building — plus the **flatpak / snap** manifests and their
+> GitHub workflows. Everything under **cargo**, the wired **xtask**
 > subcommands, **CMake**, **Doxygen**, the **Makefile**, and the **macOS app**
 > works today.
 
@@ -217,10 +218,15 @@ cargo clippy --workspace --all-targets
 
 > [!NOTE]
 >
-> The commands in this section that invoke `nix develop -c ...` are a **forward
-> reference**: they become available once the Nix flake lands (Batch 4). Until
-> then, use the non-Nix install instructions below. Pin your tool versions to
-> whatever the flake's `nix/devShell.nix` declares once it exists.
+> `nix/devShell.nix` is the version pin for every linter below —
+> `nix develop -c <tool>` gives you exactly what CI runs. Without Nix, install
+> them yourself (instructions in each section) and match the versions the dev
+> shell declares.
+>
+> All six run together as the `G-LINT` gate in `.port/tools/ci.sh`
+> (`.port/tools/gates/check_lints.sh`), which is also what CI invokes, so
+> `bash .port/tools/ci.sh` reproduces the CI verdict locally. A linter you do
+> not have installed is reported as `skipped <name>`, never silently passed.
 
 ### Prettier
 
@@ -235,9 +241,9 @@ prettier --write .
 ```
 
 Make sure your Prettier version matches the version of Prettier in
-`nix/devShell.nix` (once the Nix flake lands, Batch 4).
+`nix/devShell.nix`.
 
-Once the Nix flake lands, Nix users can use the following command to format
+Nix users can use the following command to format
 with Prettier:
 
 ```
@@ -248,7 +254,7 @@ nix develop -c prettier --write .
 
 Nix modules are formatted with [Alejandra](https://github.com/kamadorueda/alejandra/). An Alejandra CI check will fail builds with improper formatting.
 
-Once the Nix flake lands (Batch 4), Nix users can use the following command to
+Nix users can use the following command to
 format with Alejandra:
 
 ```
@@ -262,13 +268,13 @@ alejandra .
 ```
 
 Make sure your Alejandra version matches the version of Alejandra in
-`nix/devShell.nix` (once the Nix flake lands, Batch 4).
+`nix/devShell.nix`.
 
 ### ShellCheck
 
 Bash scripts are checked with [ShellCheck](https://www.shellcheck.net/) in CI.
 
-Once the Nix flake lands (Batch 4), Nix users can use the following command to
+Nix users can use the following command to
 run ShellCheck over all of our scripts:
 
 ```
@@ -299,9 +305,9 @@ swiftlint lint --fix
 ```
 
 Make sure your SwiftLint version matches the version in `nix/devShell.nix`
-(once the Nix flake lands, Batch 4).
+.
 
-Once the Nix flake lands, Nix users can use the following command to format
+Nix users can use the following command to format
 with SwiftLint:
 
 ```
@@ -440,9 +446,9 @@ should commit the text:
 
 > [!NOTE]
 >
-> The Nix flake and VM definitions land in Batch 4. The commands below become
-> available once the flake lands; treat this section as a forward reference
-> until then.
+> The flake is live, but the `nix/vm/*` definitions are **Phase B** and are not
+> written yet: they boot a desktop and launch the GTK app, so they are gated on
+> `nix build .#rustty`. Treat this section as a forward reference until then.
 
 Several Nix virtual machine definitions are provided by the project for testing
 and developing Rustty against multiple different Linux desktop environments.
@@ -543,8 +549,11 @@ We welcome the contribution of new VM definitions, as long as they meet the foll
 
 > [!NOTE]
 >
-> Like the VM definitions above, the Nix VM integration tests land in Batch 4
-> alongside the flake. Treat this section as a forward reference until then.
+> Like the VM definitions above, `nix/tests.nix` is **Phase B** and gated on the
+> GTK app. Treat this section as a forward reference until then. The checks that
+> DO run today are the headless ones — `nix flake check` builds
+> `librustty-vt`, validates both pkg-config files, and compiles + runs a C
+> consumer against the shared and static libraries.
 
 Several Nix VM tests are provided by the project for testing Rustty in a "live"
 environment rather than just unit tests.

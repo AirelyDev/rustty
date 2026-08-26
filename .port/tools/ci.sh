@@ -66,6 +66,12 @@
 #                                    under RUSTTY_DISTCHECK=1 — a cold full
 #                                    build, so opt-in; skipped is reported by
 #                                    name, never greened.
+#   G-NIX check_nix.sh               `nix flake check` (librustty-vt + its five
+#                                    passthru tests) and `alejandra --check`
+#                                    -> HARD-FAIL where nix exists, BLOCKED
+#                                    (exit 3) where it does not. The hermetic
+#                                    counterpart to G-CCONSUMER: same install,
+#                                    no ambient system libraries.
 #   G-THEMES check_theme_corpus.py   the 602 vendored iterm2 theme files match
 #                                    a committed per-file SHA-256 manifest
 #                                    -> HARD-FAIL. res_themes.rs only counts
@@ -381,6 +387,12 @@ GATE_REGISTRY=(
   # RUSTTY_DISTCHECK=1 (set by ci.yml on the Ubuntu leg); otherwise the gate
   # reports it skipped BY NAME rather than implying it ran.
   "G-DIST|HARD|bash $GATES/check_dist.sh"
+  # G-NIX (2026-08-26) — `nix flake check` + alejandra, the reference's
+  # build-nix and alejandra jobs. Builds librustty-vt in a hermetic sandbox
+  # with a pinned toolchain and runs the five passthru tests (symbols, both
+  # .pc files, and a C consumer linked BOTH ways). BLOCKED, never green, where
+  # nix is absent — which is every macOS leg here.
+  "G-NIX|HARD|bash $GATES/check_nix.sh"
   # G-REL (WS18) — the `--release` test lane. Steps 3/4 above only ever exercise
   # the DEBUG profile, so nothing noticed that release had rotted to 22 failures
   # across 7 targets. Most were tests driving a seam the port deliberately
