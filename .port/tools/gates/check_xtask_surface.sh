@@ -63,6 +63,8 @@ if [ -d "$SHARE" ]; then
   STASH="$WORK/share-stash"
   mv "$SHARE" "$STASH"
 fi
+# Invoked from the EXIT trap below, which shellcheck cannot see.
+# shellcheck disable=SC2329
 restore_share() {
   rm -rf "$SHARE"
   if [ -n "$STASH" ] && [ -d "$STASH" ]; then

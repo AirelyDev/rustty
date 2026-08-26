@@ -90,10 +90,14 @@ MATRIX=(
 # implies GTK and links gio-2.0 (`SharedDeps.zig:663-685` — "when we're
 # targeting flatpak we ALWAYS link GTK"), neither of which exists on macOS.
 # Reported skipped BY NAME elsewhere rather than quietly dropped.
+FLATPAK_SKIP=""
 case "$(uname -s)" in
   Linux|FreeBSD) MATRIX+=("rustty-build-config|flatpak") ;;
-  *) FLATPAK_SKIP=1 ;;
+  *) FLATPAK_SKIP="rustty-build-config --features flatpak (Linux/FreeBSD only: implies GTK + gio-2.0)" ;;
 esac
+# Report the skip BY NAME. A gate that silently drops an arm on some hosts is
+# how "green" comes to mean different things on different machines.
+[ -n "$FLATPAK_SKIP" ] && echo "  skipped $FLATPAK_SKIP"
 for spec in "${MATRIX[@]}"; do
   crate="${spec%%|*}"
   feat="${spec##*|}"
