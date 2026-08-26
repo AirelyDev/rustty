@@ -240,14 +240,12 @@ mod tests {
         // have seen a bare `default = [` and reported a missing `simd` that is
         // right there on the next line. Read to the closing bracket instead, so
         // the arm keeps its teeth under either spelling.
-        let default_start = features
-            .find("\ndefault")
-            .expect(
-                "rustty-vt-c declares no `default` feature: a plain \
+        let default_start = features.find("\ndefault").expect(
+            "rustty-vt-c declares no `default` feature: a plain \
                  `cargo build -p rustty-vt-c` therefore leaves `rustty-vt/simd` \
                  OFF, while ghostty's `-Dsimd` defaults to true for every \
                  non-WASM target (build/Config.zig:196-206)",
-            );
+        );
         let tail = &features[default_start..];
         let default_decl = &tail[..tail
             .find(']')

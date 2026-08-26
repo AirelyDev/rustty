@@ -772,22 +772,21 @@ pub unsafe extern "C" fn rustty_key_event_get_unshifted_codepoint(event: key_eve
     unsafe { key_event::get_unshifted_codepoint(event) }
 }
 
-// PORT NOTE (`-Dvt-features`): private helper of the input-encode export group.
-// Zig only codegens a fn that is referenced, so the reference's `if
-// (features.input_encode)`-gated exports simply leave its helpers unanalyzed;
-// Rust still compiles them and warns. The cfg keeps a trimmed build warning-
-// clean without an `allow(dead_code)` that would also blind the DEFAULT build.
-#[cfg(feature = "input-encode")]
+// PORT NOTE (`-Dvt-features`): the `c_int -> enum` projections below, and the
+// selection-gesture pair further down, are private helpers of ONE export group
+// each, so a build that trims that group leaves them unreferenced. Zig simply
+// never analyzes an unreferenced fn, so the reference's `if (features.X)` gating
+// costs it nothing; Rust compiles them and warns. Each therefore carries the
+// same `#[cfg]` as the exports it serves — a cfg rather than an
+// `allow(dead_code)`, which would also blind the DEFAULT build.
+//
 // PORT NOTE: range-checked `c_int -> enum` projections for the guarded setters.
 // `key::Key`/`key::Action`/`mouse::Action`/`mouse::Button` are contiguous
 // `#[repr(C)]` enums; the range check IS `std.meta.intToEnum` (reject out-of-
 // range), after which a `transmute` from the validated `c_int` is the enum.
+#[cfg(feature = "input-encode")]
 const KEY_KEY_COUNT: c_int = 176; // contiguous 0..=175
-// PORT NOTE (`-Dvt-features`): private helper of the input-encode export group.
-// Zig only codegens a fn that is referenced, so the reference's `if
-// (features.input_encode)`-gated exports simply leave its helpers unanalyzed;
-// Rust still compiles them and warns. The cfg keeps a trimmed build warning-
-// clean without an `allow(dead_code)` that would also blind the DEFAULT build.
+
 #[cfg(feature = "input-encode")]
 fn key_key_from_c_int(v: c_int) -> Option<rustty_vt::input::key::Key> {
     if (0..KEY_KEY_COUNT).contains(&v) {
@@ -798,11 +797,6 @@ fn key_key_from_c_int(v: c_int) -> Option<rustty_vt::input::key::Key> {
     }
 }
 
-// PORT NOTE (`-Dvt-features`): private helper of the input-encode export group.
-// Zig only codegens a fn that is referenced, so the reference's `if
-// (features.input_encode)`-gated exports simply leave its helpers unanalyzed;
-// Rust still compiles them and warns. The cfg keeps a trimmed build warning-
-// clean without an `allow(dead_code)` that would also blind the DEFAULT build.
 #[cfg(feature = "input-encode")]
 fn key_action_from_c_int(v: c_int) -> Option<rustty_vt::input::key::Action> {
     match v {
@@ -813,11 +807,6 @@ fn key_action_from_c_int(v: c_int) -> Option<rustty_vt::input::key::Action> {
     }
 }
 
-// PORT NOTE (`-Dvt-features`): private helper of the input-encode export group.
-// Zig only codegens a fn that is referenced, so the reference's `if
-// (features.input_encode)`-gated exports simply leave its helpers unanalyzed;
-// Rust still compiles them and warns. The cfg keeps a trimmed build warning-
-// clean without an `allow(dead_code)` that would also blind the DEFAULT build.
 #[cfg(feature = "input-encode")]
 fn mouse_action_from_c_int(v: c_int) -> Option<rustty_vt::input::mouse::Action> {
     match v {
@@ -828,11 +817,6 @@ fn mouse_action_from_c_int(v: c_int) -> Option<rustty_vt::input::mouse::Action> 
     }
 }
 
-// PORT NOTE (`-Dvt-features`): private helper of the input-encode export group.
-// Zig only codegens a fn that is referenced, so the reference's `if
-// (features.input_encode)`-gated exports simply leave its helpers unanalyzed;
-// Rust still compiles them and warns. The cfg keeps a trimmed build warning-
-// clean without an `allow(dead_code)` that would also blind the DEFAULT build.
 #[cfg(feature = "input-encode")]
 fn mouse_button_from_c_int(v: c_int) -> Option<rustty_vt::input::mouse::Button> {
     if (0..=11).contains(&v) {
@@ -2821,22 +2805,14 @@ pub unsafe extern "C" fn rustty_selection_gesture_event_set(
     unsafe { selection_gesture::event_set(event, opt, value) }.to_c_int()
 }
 
-// PORT NOTE (`-Dvt-features`): private helper of the selection export group.
-// Zig only codegens a fn that is referenced, so the reference's `if
-// (features.selection)`-gated exports simply leave its helpers unanalyzed;
-// Rust still compiles them and warns. The cfg keeps a trimmed build warning-
-// clean without an `allow(dead_code)` that would also blind the DEFAULT build.
 #[cfg(feature = "selection")]
 // PORT NOTE: range-checked `c_int -> enum` projections for the selection_gesture
 // guards. `EventType`/`EventOption` are contiguous `#[repr(C)]` enums. (`Data`'s
 // projection lives in the module as `selection_gesture::Data::from_c_int`, since
 // `get_multi` must reach it per array element — W66-GETMULTI-RAW-01.)
+#[cfg(feature = "selection")]
 const SELECTION_GESTURE_EVENT_TYPE_COUNT: c_int = 5; // contiguous 0..=4
-// PORT NOTE (`-Dvt-features`): private helper of the selection export group.
-// Zig only codegens a fn that is referenced, so the reference's `if
-// (features.selection)`-gated exports simply leave its helpers unanalyzed;
-// Rust still compiles them and warns. The cfg keeps a trimmed build warning-
-// clean without an `allow(dead_code)` that would also blind the DEFAULT build.
+
 #[cfg(feature = "selection")]
 fn selection_gesture_event_type_from_c_int(v: c_int) -> Option<selection_gesture::EventType> {
     if (0..SELECTION_GESTURE_EVENT_TYPE_COUNT).contains(&v) {
@@ -2847,18 +2823,9 @@ fn selection_gesture_event_type_from_c_int(v: c_int) -> Option<selection_gesture
     }
 }
 
-// PORT NOTE (`-Dvt-features`): private helper of the selection export group.
-// Zig only codegens a fn that is referenced, so the reference's `if
-// (features.selection)`-gated exports simply leave its helpers unanalyzed;
-// Rust still compiles them and warns. The cfg keeps a trimmed build warning-
-// clean without an `allow(dead_code)` that would also blind the DEFAULT build.
 #[cfg(feature = "selection")]
 const SELECTION_GESTURE_EVENT_OPTION_COUNT: c_int = 10; // contiguous 0..=9
-// PORT NOTE (`-Dvt-features`): private helper of the selection export group.
-// Zig only codegens a fn that is referenced, so the reference's `if
-// (features.selection)`-gated exports simply leave its helpers unanalyzed;
-// Rust still compiles them and warns. The cfg keeps a trimmed build warning-
-// clean without an `allow(dead_code)` that would also blind the DEFAULT build.
+
 #[cfg(feature = "selection")]
 fn selection_gesture_event_option_from_c_int(v: c_int) -> Option<selection_gesture::EventOption> {
     if (0..SELECTION_GESTURE_EVENT_OPTION_COUNT).contains(&v) {
