@@ -11,7 +11,8 @@
 # reference runs it on every push for exactly that reason.
 #
 # TWO DEPTHS.
-#   default          `xtask dist`, then assert the tarball's SHAPE: the
+#   default          `xtask dist` AND `xtask dist-lib-vt`, then assert both
+#                    tarballs' SHAPE: the
 #                    rustty-<version>/ prefix, the files a from-scratch build
 #                    needs, the vendored C that makes it self-contained, and
 #                    the absence of the dev-only trees .gitattributes marks
@@ -41,7 +42,7 @@ VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/Cargo.toml" | head -1)"
 TARBALL="$ROOT/dist/rustty-$VERSION.tar.gz"
 PREFIX="rustty-$VERSION"
 
-echo "=== G-DIST 1/3 :: cargo run -p xtask -- dist ==="
+echo "=== G-DIST 1/4 :: cargo run -p xtask -- dist ==="
 rm -f "$TARBALL"
 if ! cargo run -q -p xtask -- dist > /dev/null 2>&1; then
   cargo run -q -p xtask -- dist 2>&1 | tail -20 | sed 's/^/    /'
@@ -50,7 +51,7 @@ fi
 [ -f "$TARBALL" ] || red "xtask dist reported success but $TARBALL does not exist"
 echo "    ok      $(basename "$TARBALL") ($(( $(wc -c < "$TARBALL") / 1024 / 1024 )) MB)"
 
-echo "=== G-DIST 2/3 :: tarball shape ==="
+echo "=== G-DIST 2/4 :: tarball shape ==="
 LIST="$(mktemp)"; trap 'rm -f "$LIST"' EXIT
 tar tzf "$TARBALL" > "$LIST" || red "the tarball is not readable as gzip'd tar"
 
@@ -84,7 +85,38 @@ for d in .port docs/superpowers; do
   echo "    ok      $d/ correctly excluded"
 done
 
-echo "=== G-DIST 3/3 :: distcheck (extract + build) ==="
+echo "=== G-DIST 3/4 :: xtask dist-lib-vt (the VT-library-only tarball) ==="
+LIBVT="$ROOT/dist/librustty-vt-$VERSION.tar.gz"
+rm -f "$LIBVT"
+if ! cargo run -q -p xtask -- dist-lib-vt > /dev/null 2>&1; then
+  cargo run -q -p xtask -- dist-lib-vt 2>&1 | tail -20 | sed 's/^/    /'
+  red "xtask dist-lib-vt failed"
+fi
+[ -f "$LIBVT" ] || red "xtask dist-lib-vt reported success but $LIBVT does not exist"
+echo "    ok      $(basename "$LIBVT") ($(( $(wc -c < "$LIBVT") / 1024 / 1024 )) MB)"
+
+LVLIST="$(mktemp)"
+tar tzf "$LIBVT" > "$LVLIST" || red "the lib-vt tarball is not readable"
+LVPREFIX="librustty-vt-$VERSION"
+# It must be a STRICT SUBSET of the workspace: the whole point is a smaller
+# tree for C consumers. If the slice ever stops slicing, this catches it.
+full_n="$(wc -l < "$LIST" | tr -d ' ')"
+lv_n="$(wc -l < "$LVLIST" | tr -d ' ')"
+[ "$lv_n" -lt "$full_n" ] || red "the lib-vt tarball ($lv_n entries) is not smaller than the full one ($full_n)"
+echo "    ok      $lv_n entries vs the workspace tarball's $full_n"
+# ...and it must still contain what a C consumer builds against.
+for f in "Cargo.toml" "Cargo.lock" "CMakeLists.txt" "include/rustty/vt.h"          "crates/rustty-vt-c/Cargo.toml" "crates/rustty-vt/Cargo.toml"; do
+  grep -qx "$LVPREFIX/$f" "$LVLIST" || red "the lib-vt tarball is missing $f"
+done
+echo "    ok      the C-consumer surface is present"
+# The crates that fell out of the slice must really be gone.
+if grep -q "^$LVPREFIX/crates/rustty-apprt/" "$LVLIST"; then
+  red "rustty-apprt is in the lib-vt tarball — the slice is not pruning"
+fi
+echo "    ok      out-of-closure crates pruned (rustty-apprt absent)"
+rm -f "$LVLIST"
+
+echo "=== G-DIST 4/4 :: distcheck (extract + build) ==="
 if [ "${RUSTTY_DISTCHECK:-0}" != "1" ]; then
   echo "    skipped distcheck (set RUSTTY_DISTCHECK=1 — it is a cold full-workspace build)"
   echo "G-DIST GREEN (tarball built and shape-checked). Not run: distcheck."
