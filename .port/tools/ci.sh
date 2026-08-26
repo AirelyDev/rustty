@@ -89,6 +89,11 @@
 #                                    BLOCKED without valgrind (all of macOS).
 #                                    Closes check_leaks.sh's "deferred to Linux
 #                                    CI" FFI-leak note.
+#   G-XCF check_xcframework.sh       dist/rustty-vt.xcframework is well-formed:
+#                                    bundle shape, slice arch, _rustty_* export
+#                                    floor, no _ghostty_* leak (R2), and a
+#                                    resolvable module map    -> HARD-FAIL.
+#                                    BLOCKED off macOS.
 #   G-THEMES check_theme_corpus.py   the 602 vendored iterm2 theme files match
 #                                    a committed per-file SHA-256 manifest
 #                                    -> HARD-FAIL. res_themes.rs only counts
@@ -434,6 +439,14 @@ GATE_REGISTRY=(
   # impossible on arm64 macOS (no LSan, no valgrind), so the crates that cross
   # into C have had no leak coverage anywhere. BLOCKED where valgrind is absent.
   "G-VALGRIND|HARD|bash $GATES/check_valgrind.sh"
+  # G-XCF (2026-08-26) — the XCFramework structure/ABI lane, the adapted port
+  # of the reference's check-apple-libghostty-vt.nu. Adapted because rustty
+  # ships a STATIC ARCHIVE where the reference ships a dylib: no Mach-O dylib
+  # load commands to inspect, and "only rustty_* is exported" is false by
+  # construction for a .a. Checks the bundle shape, the slice architecture, an
+  # export FLOOR, R2 identity (no _ghostty_* leaked), and that the module map's
+  # umbrella header resolves. macOS-only; BLOCKED elsewhere.
+  "G-XCF|HARD|bash $GATES/check_xcframework.sh"
   # G-REL (WS18) — the `--release` test lane. Steps 3/4 above only ever exercise
   # the DEBUG profile, so nothing noticed that release had rotted to 22 failures
   # across 7 targets. Most were tests driving a seam the port deliberately

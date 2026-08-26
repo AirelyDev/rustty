@@ -6,44 +6,30 @@
 # screendump + ImageMagick histogram colour probe, the home-manager node
 # builders, the ssh-integration node pair — carries over unchanged.
 #
-# ============================== UNVERIFIED ==================================
-# These are NOT wired into `checks` and have NOT been run. A NixOS VM test boots
-# a full desktop under QEMU with KVM; the Linux box available here is itself a
-# VM, so nested virtualisation would be needed, and the podman container these
-# flake outputs were verified in has no /dev/kvm at all.
+# These ARE wired into `checks` (flake.nix), Linux only. They boot a NixOS
+# guest under QEMU, which needs /dev/kvm — so `nix flake check` will attempt
+# them wherever KVM is present and the desktop ones are correspondingly heavy.
+# `basic-version-check` is the light one: no desktop, just
+# `su - rustty -c 'rustty +version'` in the guest.
 #
-# They also depend on a `home-manager` flake input that flake.nix deliberately
-# does NOT declare yet — adding an input that nothing evaluates would be dead
-# weight, and `nix flake check` would then fail for everyone on a machine
-# without KVM rather than skipping.
-#
-# To wire them up on a machine with KVM:
-#   1. add `home-manager` to flake.nix inputs (following nixpkgs);
-#   2. add to the flake outputs:
-#        checks = ... // (import ./nix/tests.nix {
-#          inherit home-manager nixpkgs self;
-#          inherit (pkgs.stdenv.hostPlatform) system;
-#        });
-#   3. `nix flake check` — or run one directly:
-#        nix build .#checks.x86_64-linux.basic-version-check
-#
-# `basic-version-check` is the one that needs no desktop and is the sensible
-# first target.
-# ============================================================================
+#     nix build .#checks.aarch64-linux.basic-version-check
 {
   self,
   system,
   nixpkgs,
   home-manager,
+  # The overlay list for the guest's nixpkgs. Taken as an ARGUMENT rather than
+  # hardcoded to `self.overlays.debug` (as the reference does) because rustty's
+  # overlay reaches `pkgs.rust-bin` to honour rust-toolchain.toml, and this
+  # file builds its own nixpkgs instance. Same reason nix/vm/create.nix is
+  # handed a composed overlay — see flake.nix.
+  overlays ? [self.overlays.debug],
   ...
 }: let
   nixos-version = nixpkgs.lib.trivial.release;
 
   pkgs = import nixpkgs {
-    inherit system;
-    overlays = [
-      self.overlays.debug
-    ];
+    inherit system overlays;
   };
 
   pink_value = "#FF0087";

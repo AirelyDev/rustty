@@ -2,8 +2,11 @@
 # run_fuzz_smoke.sh — GATE G5 (differential fuzz clean) — thin runner.
 #
 # DoP id:  G5  (DEFINITION_OF_PARITY §1, "Differential fuzz clean")
-# Drives:  crates/rustty-vt/fuzz/  (cargo-fuzz target `vt_diff`, shares the G4
-#                                    harness) when it exists.
+# Drives:  crates/rustty-vt/fuzz/  — ALL FOUR cargo-fuzz targets: `vt_diff`
+#                                    (differential, shares the G4 harness) plus
+#                                    `fuzz_osc` / `fuzz_parser` / `fuzz_stream`,
+#                                    the ports of the reference's
+#                                    test/fuzz-libghostty harnesses.
 # Pass:    exit 0, ZERO new entries in fuzz/artifacts/ for the configured budget;
 #          the regression corpus replays clean.
 #
@@ -87,28 +90,60 @@ if command -v cargo >/dev/null 2>&1 && cargo fuzz --help >/dev/null 2>&1; then
   have_cargo_fuzz=1
 fi
 
+# EVERY target, not just vt_diff.
+#
+# The reference's test/fuzz-libghostty ships three harnesses — osc, parser and
+# stream — and rustty ported all three to crates/rustty-vt/fuzz/fuzz_targets/
+# alongside its own differential `vt_diff`. This runner drove ONLY vt_diff, so
+# the other three were compiled-but-never-run: their seed corpora
+# (.port/phase-0/corpora/cvt/{osc,parser,stream}-initial, 20/50/24 files,
+# matching the reference's counts) were replayed by nothing.
+#
+# Order matters: vt_diff first, because it is the differential one and the most
+# likely to catch a real regression, so a red arrives sooner.
+FUZZ_TARGETS="${FUZZ_TARGETS:-vt_diff fuzz_osc fuzz_parser fuzz_stream}"
+
 if [ "$MODE" = "auto" ] && [ "$have_cargo_fuzz" = "1" ] && [ -d "$FUZZ_DIR" ]; then
-  echo "--- REAL fuzz smoke (cargo fuzz + vt_diff target found) ---"
-  ARTIFACTS="$FUZZ_DIR/artifacts/vt_diff"
-  before=0
-  [ -d "$ARTIFACTS" ] && before="$(ls -1 "$ARTIFACTS" 2>/dev/null | wc -l | tr -d ' ')"
-  set +e
-  # cargo-fuzz resolves `fuzz/` relative to cwd, so run from the crate that
-  # owns the fuzz dir (crates/rustty-vt), not the workspace root.
-  ( cd "$RUSTTY_ROOT/crates/rustty-vt" && cargo +nightly fuzz run vt_diff -- \
-      -max_total_time="$FUZZ_SECS" ${FUZZ_RUNS:+-runs=$FUZZ_RUNS} )
-  rc=$?
-  set -e
-  after=0
-  [ -d "$ARTIFACTS" ] && after="$(ls -1 "$ARTIFACTS" 2>/dev/null | wc -l | tr -d ' ')"
-  if [ "$rc" -eq 0 ] && [ "$after" -le "$before" ]; then
-    echo "GREEN: fuzz smoke clean — no new artifacts (G5)"
-    exit 0
-  else
-    echo "RED: fuzz produced a new artifact / non-zero exit (divergence or crash repro) (G5)"
-    echo "     artifacts before=$before after=$after rc=$rc"
-    exit 1
+  echo "--- REAL fuzz smoke (cargo fuzz found; targets: $FUZZ_TARGETS) ---"
+  overall=0
+  ran=0
+  for target in $FUZZ_TARGETS; do
+    if [ ! -f "$FUZZ_DIR/fuzz_targets/$target.rs" ]; then
+      echo "  skipped $target (no fuzz_targets/$target.rs)"
+      continue
+    fi
+    ARTIFACTS="$FUZZ_DIR/artifacts/$target"
+    before=0
+    [ -d "$ARTIFACTS" ] && before="$(ls -1 "$ARTIFACTS" 2>/dev/null | wc -l | tr -d ' ')"
+    set +e
+    # cargo-fuzz resolves `fuzz/` relative to cwd, so run from the crate that
+    # owns the fuzz dir (crates/rustty-vt), not the workspace root.
+    ( cd "$RUSTTY_ROOT/crates/rustty-vt" && cargo +nightly fuzz run "$target" -- \
+        -max_total_time="$FUZZ_SECS" ${FUZZ_RUNS:+-runs=$FUZZ_RUNS} ) \
+      > "$RUSTTY_ROOT/target/fuzz-$target.log" 2>&1
+    rc=$?
+    set -e
+    after=0
+    [ -d "$ARTIFACTS" ] && after="$(ls -1 "$ARTIFACTS" 2>/dev/null | wc -l | tr -d ' ')"
+    ran=$((ran+1))
+    if [ "$rc" -eq 0 ] && [ "$after" -le "$before" ]; then
+      echo "  ok      $target (${FUZZ_SECS}s, no new artifacts)"
+    else
+      echo "  FAIL    $target — artifacts before=$before after=$after rc=$rc"
+      tail -25 "$RUSTTY_ROOT/target/fuzz-$target.log" | sed 's/^/            /'
+      overall=1
+    fi
+  done
+  if [ "$ran" -eq 0 ]; then
+    echo "BLOCKED: no fuzz target was runnable; nothing was fuzzed (G5)"
+    exit 3
   fi
+  if [ "$overall" -eq 0 ]; then
+    echo "GREEN: fuzz smoke clean over $ran target(s) — no new artifacts (G5)"
+    exit 0
+  fi
+  echo "RED: a fuzz target produced a new artifact / non-zero exit (G5)"
+  exit 1
 fi
 
 # --- progress mode ---

@@ -416,6 +416,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustty-terminfo"
+version = "0.1.0"
+dependencies = [
+ "rustty-identity",
+]
+
+[[package]]
 name = "rustty-unicode"
 version = "0.1.0"
 
@@ -436,6 +443,7 @@ dependencies = [
  "rustty-os",
  "rustty-render-types",
  "rustty-simd",
+ "rustty-terminfo",
  "rustty-unicode",
  "rustty-util",
  "rustty-zigstd",

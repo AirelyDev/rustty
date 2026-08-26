@@ -4,7 +4,11 @@
 # PORTS: ghostty `.github/workflows/test.yml`'s `build-nix` job, plus the
 # `alejandra` job (the flake's own `formatter` output).
 #
-# Runs `nix flake check`, which for rustty builds `librustty-vt`, the `rustty`
+# Runs `nix flake check` plus, under RUSTTY_NIX_VM_TESTS=1, the NixOS VM
+# integration tests in the flake's `vmChecks` output (see flake.nix for why
+# they are a separate output rather than inside `checks`).
+#
+# `nix flake check` for rustty builds `librustty-vt`, the `rustty`
 # GTK app (on Linux, where nix/package.nix applies — its own installCheckPhase
 # runs `rustty +version`), and librustty-vt's five passthru tests:
 #   sanity-check        the exported symbols are present in BOTH artifacts, and
@@ -51,7 +55,7 @@ NIXFLAGS=(--extra-experimental-features "nix-command flakes")
 LOG="$(mktemp)"
 trap 'rm -f "$LOG"' EXIT
 
-echo "=== G-NIX 1/2 :: nix flake check ==="
+echo "=== G-NIX 1/3 :: nix flake check ==="
 if ! nix "${NIXFLAGS[@]}" flake check 2>&1 | tee "$LOG" | tail -40; then
   echo "G-NIX RED: nix flake check failed (see above)" >&2
   exit 1
@@ -63,7 +67,25 @@ if ! grep -q "all checks passed" "$LOG"; then
   exit 1
 fi
 
-echo "=== G-NIX 2/2 :: alejandra --check ==="
+echo "=== G-NIX 2/3 :: NixOS VM integration tests ==="
+if [ "${RUSTTY_NIX_VM_TESTS:-0}" != "1" ]; then
+  echo "    skipped vmChecks (set RUSTTY_NIX_VM_TESTS=1 — they boot a NixOS guest)"
+else
+  sys="$(nix "${NIXFLAGS[@]}" eval --raw --impure --expr 'builtins.currentSystem')"
+  names="$(nix "${NIXFLAGS[@]}" eval --json ".#vmChecks.$sys" --apply 'builtins.attrNames' 2>/dev/null \
+            | tr -d '[]"' | tr ',' ' ')"
+  [ -n "$names" ] || red "vmChecks.$sys exposes no tests"
+  for t in $names; do
+    echo "    --- $t ---"
+    if ! nix "${NIXFLAGS[@]}" build ".#vmChecks.$sys.$t" --no-link 2>&1 | tail -20; then
+      echo "G-NIX RED: NixOS VM test $t failed" >&2
+      exit 1
+    fi
+    echo "    ok      $t"
+  done
+fi
+
+echo "=== G-NIX 3/3 :: alejandra --check ==="
 if ! nix "${NIXFLAGS[@]}" develop --command alejandra --check . 2>&1 | tail -5; then
   echo "G-NIX RED: Nix files are not alejandra-formatted (run 'nix develop -c alejandra .')" >&2
   exit 1
