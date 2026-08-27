@@ -99,13 +99,18 @@ PY
 
   for b in "${bins[@]}"; do
     name="$c/$(basename "$b" | sed 's/-[0-9a-f]*$//')"
-    if valgrind \
-         --leak-check=full \
-         --errors-for-leak-kinds=definite \
-         --error-exitcode=1 \
-         --num-callers=50 \
-         --suppressions="$SUPP" \
-         "$b" --test-threads=1 > "$WORK/run.log" 2>&1; then
+    # An ARRAY rather than a `\`-continued command line so each option can
+    # carry its reason on its OWN line — D6's suppression audit (rule c)
+    # requires the WHY to sit on the same physical line as the toggle, and a
+    # backslash continuation makes a trailing `#` comment impossible.
+    vg_opts=(
+      --leak-check=full
+      --errors-for-leak-kinds=definite
+      --error-exitcode=1
+      --num-callers=50
+      --suppressions="$SUPP" # WHY: valgrind.supp suppresses ONLY dyld/libSystem frames that fire before main() on every process — no rustty frame is suppressed, and each entry carries its own reason in that file.
+    )
+    if valgrind "${vg_opts[@]}" "$b" --test-threads=1 > "$WORK/run.log" 2>&1; then
       ok_line="$(grep -m1 '^test result:' "$WORK/run.log" || echo 'ran')"
       echo "  ok      $name — $ok_line"
       RAN=$((RAN+1))
