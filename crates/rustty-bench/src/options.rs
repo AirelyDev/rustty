@@ -12,7 +12,13 @@ pub enum DataFile {
     // if (std.mem.eql(u8, path, "-")) return .stdin();
     Stdin(io::Stdin),
     // const file = try std.fs.cwd().openFile(path, .{});
-    File(std::fs::File),
+    //
+    // PERF(port): the reference reads through `f.reader(&read_buf)` — a
+    // BUFFERED std.Io.File.Reader. The port read straight through, paying one
+    // read(2) per 4 KiB `read_slice_short` (16384 syscalls on a 64 MiB
+    // corpus, ~10 ms measured). 256 KiB is an internal choice (R10): the
+    // bytes delivered are identical, only the syscall count changes.
+    File(io::BufReader<std::fs::File>),
 }
 
 impl Read for DataFile {
@@ -64,7 +70,10 @@ pub fn data_file(path_: Option<&[u8]>) -> io::Result<Option<DataFile>> {
     let file = std::fs::File::open(os_path)?;
 
     // return file;
-    Ok(Some(DataFile::File(file)))
+    Ok(Some(DataFile::File(io::BufReader::with_capacity(
+        256 * 1024,
+        file,
+    ))))
 }
 
 /// A cache-line-aligned 4096-byte scratch buffer.

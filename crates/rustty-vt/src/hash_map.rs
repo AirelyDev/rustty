@@ -184,14 +184,17 @@ impl<K: core::hash::Hash + PartialEq> HashMapContext<K> for AutoContext<K> {
     // in a measurable almost 2x slowdown on our hyperlink map
     // benchmark. So, force it.
     //
-    // This port's context is already an explicit
-    // body (see the note above), so the portable half of that change is the
-    // inlining hint — `#[inline]` is the Rust spelling of
-    // `@call(.always_inline, ...)` across the crate boundary. The
-    // `hasUniqueRepresentation` split has no counterpart: it selects between the
-    // one-shot and the iterative form of the SAME (Wyhash, seed 0) hash, which
-    // agree on the same byte sequence, and this port always takes the iterative
-    // form.
+    // This port's context is an explicit body (see the note above), and the
+    // `hasUniqueRepresentation` split IS load-bearing here, not just a spelling
+    // choice: the one-shot `Wyhash::hash` on a small key goes straight through
+    // `small_key` with no hasher-state materialization, while the iterative
+    // `init`/`update`/`finalize` route spills the 88-byte state and buffers the
+    // key even when inlined (measured: the iterative route alone made churn on
+    // the hyperlink map benchmark ~4x slower than the reference). Small
+    // fixed-width keys (all of the terminal page maps') take the one-shot path
+    // below — `SmallKeyBytes` reassembles the exact byte sequence the key's
+    // `Hash` impl writes, so the digest is unchanged (one-shot and iterative
+    // Wyhash agree on the same byte sequence).
     #[inline]
     fn hash(&self, key: K) -> u64 {
         use core::hash::Hasher;
@@ -226,6 +229,28 @@ impl<K: core::hash::Hash + PartialEq> HashMapContext<K> for AutoContext<K> {
             // x ^= x >> 33;
             x ^= x >> 33;
             return x;
+        }
+
+        // `if (comptime std.meta.hasUniqueRepresentation(K))` — the one-shot
+        // form over the key's bytes, force-inlined (see the note above). The
+        // key types taking this arm are integers and `#[repr(transparent)]`
+        // wrappers over them, whose `Hash` impls write exactly their own
+        // bytes, so `SmallKeyBytes` reproduces `std.mem.asBytes(&key)`.
+        //     return @call(
+        //         .always_inline,
+        //         std.hash.Wyhash.hash,
+        //         .{ 0, std.mem.asBytes(&key) },
+        //     );
+        if core::mem::size_of::<K>() <= 8 {
+            let mut collector = SmallKeyBytes { x: 0, len: 0 };
+            key.hash(&mut collector);
+            // `asBytes` has a COMPTIME length; feeding a runtime `collector.len`
+            // here left the ≤16-byte branch in `Wyhash::hash` unfoldable and the
+            // whole hash out-of-line. `size_of::<K>()` is the same value as a
+            // compile-time constant (these keys write exactly their own bytes).
+            debug_assert_eq!(collector.len, core::mem::size_of::<K>());
+            let bytes = collector.x.to_le_bytes();
+            return rustty_zigstd::wyhash::Wyhash::hash(0, &bytes[..core::mem::size_of::<K>()]);
         }
 
         let mut hasher = rustty_zigstd::wyhash::Wyhash::init(0);
@@ -784,6 +809,9 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     pub fn get_entry_context(&self, key: K, ctx: &Context) -> Option<Entry<K, V>> {
         self.get_entry_adapted(key, ctx)
     }
+    // PERF(port): `#[inline]` — hot probe path; cross-crate callers can't
+    // inline without LTO (banned), the reference's single-CU build inlines it.
+    #[inline]
     pub fn get_entry_adapted(&self, key: K, ctx: &Context) -> Option<Entry<K, V>> {
         if let Some(idx) = self.get_index(key, ctx) {
             return Some(Entry {
@@ -835,9 +863,15 @@ impl<K: Copy, V: Copy, Context: HashMapContext<K>, const MAX_LOAD_PERCENTAGE: u8
     }
 
     /// Get a copy of the value associated with key, if present.
+    // PERF(port): `#[inline]` — hot probe path; cross-crate callers can't
+    // inline without LTO (banned), the reference's single-CU build inlines it.
+    #[inline]
     pub fn get_context(&self, key: K, ctx: &Context) -> Option<V> {
         self.get_adapted(key, ctx)
     }
+    // PERF(port): `#[inline]` — hot probe path; cross-crate callers can't
+    // inline without LTO (banned), the reference's single-CU build inlines it.
+    #[inline]
     pub fn get_adapted(&self, key: K, ctx: &Context) -> Option<V> {
         if let Some(idx) = self.get_index(key, ctx) {
             return Some(unsafe { *self.values().add(idx) });

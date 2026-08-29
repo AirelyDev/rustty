@@ -16,7 +16,6 @@ use crate::cli::{BenchmarkAction, CreateError};
 use crate::options::{self, read_slice_short, CacheLineBuf, DataFile};
 use allocator_api2::alloc::Global as Allocator;
 use core::ffi::c_void;
-use core::hint::black_box;
 use rustty_unicode as unicode;
 use rustty_unicode::grapheme::BreakState;
 use rustty_vt::pagelist::OutOfMemory;
@@ -230,7 +229,7 @@ impl GraphemeBreak {
                 // if (cp_) |cp2| {
                 if let Some(cp2) = cp_ {
                     // std.mem.doNotOptimizeAway(unicode.graphemeBreak(cp1, @intCast(cp2), &state));
-                    black_box(unicode::graphemeBreak(cp1, cp2, &mut state));
+                    crate::do_not_optimize_away(unicode::graphemeBreak(cp1, cp2, &mut state));
                     // cp1 = cp2;
                     cp1 = cp2;
                 }

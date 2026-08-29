@@ -19,7 +19,6 @@ use crate::cli::{BenchmarkAction, CreateError};
 use crate::options::{self, read_slice_short, CacheLineBuf, DataFile};
 use allocator_api2::alloc::Global as Allocator;
 use core::ffi::c_void;
-use core::hint::black_box;
 use rustty_simd as simd;
 use rustty_unicode::table;
 use rustty_vt::pagelist::OutOfMemory;
@@ -252,7 +251,7 @@ impl CodepointWidth {
                     // if (cp_) |cp| {
                     if let Some(cp) = cp_ {
                         // std.mem.doNotOptimizeAway(wcwidth(cp));
-                        black_box(unsafe { wcwidth(cp) });
+                        crate::do_not_optimize_away(unsafe { wcwidth(cp) });
                     }
                 }
             }
@@ -295,7 +294,7 @@ impl CodepointWidth {
                     // This is the same trick we do in terminal.zig so we
                     // keep it here.
                     // std.mem.doNotOptimizeAway(if (cp <= 0xFF) 1 else table.get(@intCast(cp)).width);
-                    black_box(if cp <= 0xFF {
+                    crate::do_not_optimize_away(if cp <= 0xFF {
                         1u8
                     } else {
                         table().get(cp).width
@@ -339,7 +338,7 @@ impl CodepointWidth {
                 debug_assert!(consumed);
                 if let Some(cp) = cp_ {
                     // std.mem.doNotOptimizeAway(simd.codepointWidth(cp));
-                    black_box(simd::codepointWidth(cp));
+                    crate::do_not_optimize_away(simd::codepointWidth(cp));
                 }
             }
         }

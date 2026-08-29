@@ -547,7 +547,17 @@ pub fn encode(page: &TerminalPage, writer: &mut dyn io::Writer) -> Result<(), En
     result
 }
 
+/// The bulk row emit chunk: header plus encoded cells are assembled here and
+/// emitted with one `write_all` per row.
+const EMIT_CHUNK: usize = 4096;
+
 fn encode_inner(page: &TerminalPage, writer: &mut dyn io::Writer) -> Result<(), EncodeError> {
+    // PERF(port): the bulk row chunk is hoisted out of the row loop so its
+    // zero-fill happens once per grid, not once per row (the reference has no
+    // buffer at all here — it writes into the writer's spare capacity, which
+    // is never zeroed). Declared-in-loop, the 4 KiB memset per ~100-byte row
+    // was ~36% of encode time.
+    let mut out = [0u8; EMIT_CHUNK];
     for y in 0..page.size.rows as usize {
         let row_ptr = page.get_row(y);
         let cells_ptr = page.get_cells(row_ptr);
@@ -622,8 +632,6 @@ fn encode_inner(page: &TerminalPage, writer: &mut dyn io::Writer) -> Result<(), 
         // identical bytes). Rows larger than the chunk take the generic path
         // below, mirroring the reference's insufficient-capacity bail.
         if BULK_CODEC {
-            const EMIT_CHUNK: usize = 4096;
-            let mut out = [0u8; EMIT_CHUNK];
             match cell_width {
                 EncodedWidth::One | EncodedWidth::Two | EncodedWidth::Four => {
                     let size = cell_width.size();
@@ -781,6 +789,29 @@ fn classify_word(cell: &TerminalCell) -> u64 {
     wire.bits()
 }
 
+// PORT NOTE / PERF(port): the reference passes the encoded width as a
+// COMPTIME parameter (`inline .one, .two, .four => |width|` at the row
+// dispatch, `comptime width` on every helper), monomorphizing the cell
+// loops so each per-cell store is a fixed-size write. The const-generic
+// `SIZE` on the `_sized` helpers below is that comptime parameter's Rust
+// spelling; the runtime-`width` wrappers keep the reference's call shape.
+// A single runtime-`width` instantiation made every store a dynamic-length
+// `copy_from_slice` — one libc `memcpy` call PER CELL, measured as ~4x on
+// the encode benchmark.
+
+/// `width.truncate(word)` with the width as a compile-time constant.
+#[inline(always)]
+fn truncate_sized<const SIZE: usize>(word: u64) -> u64 {
+    match SIZE {
+        // The bare codepoint, shifted down from the content field.
+        1 => (Cell::from_bits(word).content as u64) & 0xFF,
+        2 => (Cell::from_bits(word).content as u64) & 0xFFFF,
+        // The word itself.
+        4 => word & 0xFFFF_FFFF,
+        _ => word,
+    }
+}
+
 /// Write one row's cells truncated to the given encoded width.
 ///
 /// Every admitted cell round-trips exactly because the row's width
@@ -790,16 +821,27 @@ fn encode_narrow_cells(
     cells: &[TerminalCell],
     writer: &mut dyn io::Writer,
 ) -> Result<(), io::WriteFailed> {
-    let size = width.size();
+    match width {
+        EncodedWidth::One => encode_narrow_cells_sized::<1>(cells, writer),
+        EncodedWidth::Two => encode_narrow_cells_sized::<2>(cells, writer),
+        EncodedWidth::Four => encode_narrow_cells_sized::<4>(cells, writer),
+        EncodedWidth::Eight => encode_narrow_cells_sized::<8>(cells, writer),
+    }
+}
+
+fn encode_narrow_cells_sized<const SIZE: usize>(
+    cells: &[TerminalCell],
+    writer: &mut dyn io::Writer,
+) -> Result<(), io::WriteFailed> {
     let mut chunk = [0u8; 1024];
     let mut i: usize = 0;
     while i < cells.len() {
-        let n = (cells.len() - i).min(chunk.len() / size);
+        let n = (cells.len() - i).min(chunk.len() / SIZE);
         for (j, cell) in cells[i..i + n].iter().enumerate() {
-            let value = width.truncate(classify_word(cell));
-            chunk[j * size..j * size + size].copy_from_slice(&value.to_le_bytes()[..size]);
+            let value = truncate_sized::<SIZE>(classify_word(cell));
+            chunk[j * SIZE..j * SIZE + SIZE].copy_from_slice(&value.to_le_bytes()[..SIZE]);
         }
-        writer.write_all(&chunk[..n * size])?;
+        writer.write_all(&chunk[..n * SIZE])?;
         i += n;
     }
     Ok(())
@@ -807,23 +849,35 @@ fn encode_narrow_cells(
 
 /// Truncate one row's cell words into `out` at the given encoded width.
 fn encode_narrow_into(width: EncodedWidth, cells: &[TerminalCell], count: usize, out: &mut [u8]) {
+    match width {
+        EncodedWidth::One => encode_narrow_into_sized::<1>(cells, count, out),
+        EncodedWidth::Two => encode_narrow_into_sized::<2>(cells, count, out),
+        EncodedWidth::Four => encode_narrow_into_sized::<4>(cells, count, out),
+        EncodedWidth::Eight => encode_narrow_into_sized::<8>(cells, count, out),
+    }
+}
+
+fn encode_narrow_into_sized<const SIZE: usize>(
+    cells: &[TerminalCell],
+    count: usize,
+    out: &mut [u8],
+) {
     assert!(BULK_CODEC);
-    let size = width.size();
 
     let mut j: usize = 0;
     while j + 4 <= count {
-        encode_narrow_step(width, cells, j, out);
+        encode_narrow_step::<SIZE>(cells, j, out);
         j += 4;
     }
     if j < count {
         if count >= 4 {
             // Reprocess the final full window with overlapping stores,
             // which rewrite the same truncated values.
-            encode_narrow_step(width, cells, count - 4, out);
+            encode_narrow_step::<SIZE>(cells, count - 4, out);
         } else {
             while j < count {
-                let value = width.truncate(cells[j].to_bits());
-                out[j * size..j * size + size].copy_from_slice(&value.to_le_bytes()[..size]);
+                let value = truncate_sized::<SIZE>(cells[j].to_bits());
+                out[j * SIZE..j * SIZE + SIZE].copy_from_slice(&value.to_le_bytes()[..SIZE]);
                 j += 1;
             }
         }
@@ -831,15 +885,25 @@ fn encode_narrow_into(width: EncodedWidth, cells: &[TerminalCell], count: usize,
 }
 
 /// Emit four truncated cell words starting at cell index `j`.
-/// (PORT NOTE: the reference's two-lane shift + byte shuffle; see the module
-/// vector-paths note.)
+/// (PORT NOTE: the reference's two-lane shift + byte shuffle; the packed
+/// integer below is that shuffle's scalar spelling — the four truncated
+/// values land in one `4 * SIZE`-byte store instead of four dynamic-length
+/// copies. See the module vector-paths note.)
 #[inline]
-fn encode_narrow_step(width: EncodedWidth, cells: &[TerminalCell], j: usize, out: &mut [u8]) {
-    let size = width.size();
-    for k in 0..4 {
-        let value = width.truncate(cells[j + k].to_bits());
-        out[(j + k) * size..(j + k) * size + size].copy_from_slice(&value.to_le_bytes()[..size]);
+fn encode_narrow_step<const SIZE: usize>(cells: &[TerminalCell], j: usize, out: &mut [u8]) {
+    if SIZE == 8 {
+        for k in 0..4 {
+            let value = truncate_sized::<SIZE>(cells[j + k].to_bits());
+            out[(j + k) * 8..(j + k) * 8 + 8].copy_from_slice(&value.to_le_bytes());
+        }
+        return;
     }
+    let mut packed: u128 = 0;
+    for k in 0..4 {
+        let value = truncate_sized::<SIZE>(cells[j + k].to_bits());
+        packed |= (value as u128) << (8 * SIZE * k);
+    }
+    out[j * SIZE..j * SIZE + SIZE * 4].copy_from_slice(&packed.to_le_bytes()[..SIZE * 4]);
 }
 
 /// Encode the grapheme suffix section for every kind 1 cell in the grid.
@@ -1135,9 +1199,33 @@ fn decode_narrow_cells(
 }
 
 /// Store codepoint-valued encoded cells of the given width.
+//
+// PORT NOTE / PERF(port): the width is the reference's comptime parameter;
+// see the note above `truncate_sized`. The `_sized` split monomorphizes the
+// widening loops per width.
 fn widen_cells(width: EncodedWidth, bytes: &[u8], cells: &mut [TerminalCell]) {
-    let size = width.size();
+    match width {
+        EncodedWidth::One => widen_cells_sized::<1>(bytes, cells),
+        EncodedWidth::Two => widen_cells_sized::<2>(bytes, cells),
+        EncodedWidth::Four => widen_cells_sized::<4>(bytes, cells),
+        EncodedWidth::Eight => widen_cells_sized::<8>(bytes, cells),
+    }
+}
 
+/// `width.extend(value)` with the width as a compile-time constant.
+#[inline(always)]
+fn extend_sized<const SIZE: usize>(value: u64) -> u64 {
+    match SIZE {
+        1 | 2 => Cell {
+            content: value as u32,
+            ..Cell::default()
+        }
+        .bits(),
+        _ => value,
+    }
+}
+
+fn widen_cells_sized<const SIZE: usize>(bytes: &[u8], cells: &mut [TerminalCell]) {
     // With the bulk codec layout this is a pure widening store: sixteen
     // transported bytes per step, widening each encoded value into u64 word
     // position and shifting it into the content field. (PORT NOTE: the
@@ -1145,10 +1233,10 @@ fn widen_cells(width: EncodedWidth, bytes: &[u8], cells: &mut [TerminalCell]) {
     // note. Zig 0.16 disables loop auto-vectorization, so its scalar loop
     // would issue one widening store per cell.)
     if BULK_CODEC {
-        let step = 16 / size;
+        let step = 16 / SIZE;
         let mut i: usize = 0;
         while i + step <= cells.len() {
-            widen_step(width, bytes, cells, i);
+            widen_step::<SIZE>(bytes, cells, i);
             i += step;
         }
         if i < cells.len() {
@@ -1156,12 +1244,13 @@ fn widen_cells(width: EncodedWidth, bytes: &[u8], cells: &mut [TerminalCell]) {
                 // Reprocess the final full window with overlapping stores,
                 // which rewrite the same widened values.
                 let start = cells.len() - step;
-                widen_step(width, bytes, cells, start);
+                widen_step::<SIZE>(bytes, cells, start);
             } else {
                 while i < cells.len() {
-                    cells[i] = TerminalCell::from_bits(
-                        width.extend(widen_value(width, &bytes[i * size..])),
-                    );
+                    cells[i] =
+                        TerminalCell::from_bits(extend_sized::<SIZE>(widen_value_sized::<SIZE>(
+                            &bytes[i * SIZE..],
+                        )));
                     i += 1;
                 }
             }
@@ -1173,13 +1262,18 @@ fn widen_cells(width: EncodedWidth, bytes: &[u8], cells: &mut [TerminalCell]) {
     // loop over integers.
     if NATIVE_MATCHES_WIRE {
         for (i, cell) in cells.iter_mut().enumerate() {
-            *cell = TerminalCell::from_bits(width.extend(widen_value(width, &bytes[i * size..])));
+            *cell = TerminalCell::from_bits(extend_sized::<SIZE>(widen_value_sized::<SIZE>(
+                &bytes[i * SIZE..],
+            )));
         }
         return;
     }
 
     for (i, cell) in cells.iter_mut().enumerate() {
-        store_cell_ref(cell, width.extend(widen_value(width, &bytes[i * size..])));
+        store_cell_ref(
+            cell,
+            extend_sized::<SIZE>(widen_value_sized::<SIZE>(&bytes[i * SIZE..])),
+        );
     }
 }
 
@@ -1187,34 +1281,42 @@ fn widen_cells(width: EncodedWidth, bytes: &[u8], cells: &mut [TerminalCell]) {
 /// Width two first degrades surrogate lanes to U+FFFD, matching
 /// `widen_value`. (PORT NOTE: scalar form of the reference's vector step;
 /// see the module vector-paths note.)
-#[inline]
-fn widen_step(width: EncodedWidth, bytes: &[u8], cells: &mut [TerminalCell], i: usize) {
-    let size = width.size();
-    let step = 16 / size;
+// PERF(port): plain `#[inline]` lost to the cost model (a real symbol + a
+// `bl` per 16 cells in `widen_cells`, zero vectorization); forcing it lets
+// LLVM auto-vectorize the widening loop — the same treatment that already
+// gives the encode side 32 cells per iteration.
+#[inline(always)]
+fn widen_step<const SIZE: usize>(bytes: &[u8], cells: &mut [TerminalCell], i: usize) {
+    let step = 16 / SIZE;
     for k in 0..step {
         // Width two admits surrogates, which degrade to U+FFFD exactly
         // like `widen_value`. Width one cannot encode an invalid scalar.
-        let value = widen_value(width, &bytes[(i + k) * size..]);
-        cells[i + k] = TerminalCell::from_bits(width.extend(value));
+        let value = widen_value_sized::<SIZE>(&bytes[(i + k) * SIZE..]);
+        cells[i + k] = TerminalCell::from_bits(extend_sized::<SIZE>(value));
     }
 }
 
-/// Read and validate one narrow transported value.
-#[inline]
-fn widen_value(width: EncodedWidth, bytes: &[u8]) -> u64 {
-    let value: u64 = match width {
-        EncodedWidth::One => bytes[0] as u64,
-        EncodedWidth::Two => u16::from_le_bytes(bytes[0..2].try_into().unwrap()) as u64,
-        EncodedWidth::Four => u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as u64,
-        EncodedWidth::Eight => u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
+/// Read and validate one narrow transported value, with the width as a
+/// compile-time constant.
+#[inline(always)]
+fn widen_value_sized<const SIZE: usize>(bytes: &[u8]) -> u64 {
+    let value: u64 = match SIZE {
+        1 => bytes[0] as u64,
+        2 => u16::from_le_bytes(bytes[0..2].try_into().unwrap()) as u64,
+        4 => u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as u64,
+        _ => u64::from_le_bytes(bytes[0..8].try_into().unwrap()),
     };
 
     // Width one cannot encode an invalid scalar. Width two admits
     // surrogates, which degrade exactly like their full-width form.
-    if width != EncodedWidth::One && !valid_scalar(value as u32) {
-        return 0xFFFD;
+    // PERF(port): a value-select rather than an early `return` — the
+    // reference does this branchlessly with `@select` on a vector; the
+    // control-flow form blocked vectorization of the widening loop.
+    if SIZE != 1 && !valid_scalar(value as u32) {
+        0xFFFD
+    } else {
+        value
     }
-    value
 }
 
 /// Decode one row of width-four or fallback full-width cells through the

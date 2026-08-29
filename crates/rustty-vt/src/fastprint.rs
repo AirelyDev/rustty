@@ -18,6 +18,9 @@ fn digits2(value: u8) -> [u8; 2] {
 /// comptime type and only supports the types we need (`else => comptime
 /// unreachable`). Here that comptime dispatch is the `PrintDecimal` trait,
 /// implemented for exactly `u8` and `u21`; `T` is inferred from `v`.
+// PERF(port): `#[inline]` — the reference's comptime `printDecimal` emits no
+// symbol at all; out-of-line this was 6 calls per SGR color.
+#[inline]
 pub fn print_decimal<T: PrintDecimal>(buf: &mut [u8], v: T) -> usize {
     // Note this only supports types as we need them.
     v.print_decimal(buf)
@@ -30,6 +33,7 @@ pub trait PrintDecimal: Copy {
 }
 
 impl PrintDecimal for u8 {
+    #[inline]
     fn print_decimal(self, buf: &mut [u8]) -> usize {
         let v = self;
         if v >= 100 {
@@ -48,6 +52,7 @@ impl PrintDecimal for u8 {
 
 // This can probably be generalized...
 impl PrintDecimal for u21 {
+    #[inline]
     fn print_decimal(self, buf: &mut [u8]) -> usize {
         // Maximum u21 is 2097151: at most 7 digits.
         let mut tmp: [u8; 7] = [0; 7];

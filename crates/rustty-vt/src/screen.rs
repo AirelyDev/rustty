@@ -2945,6 +2945,9 @@ impl Screen {
 
     /// Resize the screen. The rows or cols can be bigger or smaller. If this
     /// returns an error, the screen is unchanged.
+    // PERF(port): `#[inline]` — the reference is `pub inline fn resize`; the
+    // extra call frame was a surplus fixed cost on the 5M-call rows benchmark.
+    #[inline]
     pub fn resize(&mut self, opts: Resize) -> Result<(), OutOfMemory> {
         // defer self.assertIntegrity();
         // PORT NOTE: Rust has no `defer`. The reference runs `assertIntegrity`

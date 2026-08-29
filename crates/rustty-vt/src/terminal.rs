@@ -1521,19 +1521,21 @@ impl Terminal {
             // the scalar loop below.
             if WIDTH == PRINT_SLICE_NARROW {
                 if let Some(lanes) = CP_LANES {
+                    // PERF(port): branchless per lane like the reference
+                    // (vector range-compare -> @reduce -> @ctz); see the
+                    // printable-run scan in `stream.rs` for the rationale —
+                    // the early-exit form was 4.4x the reference's
+                    // instruction count.
                     while idx + lanes <= cps.len() {
                         // const in_range = (v >= lo) & (v <= hi);
                         // if (!@reduce(.And, in_range)) { idx += @ctz(~bits); break; }
-                        let mut first_bad: Option<usize> = None;
-                        for j in 0..lanes {
-                            let v = cps[idx + j];
-                            if !(0x10..=0xFF).contains(&v) {
-                                first_bad = Some(j);
-                                break;
-                            }
+                        let window = &cps[idx..idx + lanes];
+                        let mut bad: u32 = 0;
+                        for (j, &v) in window.iter().enumerate() {
+                            bad |= ((!(0x10..=0xFF).contains(&v)) as u32) << j;
                         }
-                        if let Some(j) = first_bad {
-                            idx += j;
+                        if bad != 0 {
+                            idx += bad.trailing_zeros() as usize;
                             break;
                         }
                         idx += lanes;
@@ -1630,9 +1632,15 @@ impl Terminal {
             let avail: usize = right_limit - unsafe { (*cursor).x } as usize;
             assert!(avail > 0);
 
-            // const page = &cursor.page_pin.node.data;
+            // The cursor caches live row and cell pointers into this mapping, so
+            // its page cannot be compressed while this print path is active.
+            // const page = cursor.page_pin.node.pageAssumeResident();
+            //
+            // PERF(port): `pageAssumeResident` like the reference — the
+            // restore-capable `Node::page` was an out-of-line call (twice per
+            // row) that also forced register spills around it.
             let page: *mut Page =
-                unsafe { crate::pagelist::Node::page((*(*cursor).page_pin).node) };
+                unsafe { crate::pagelist::Node::page_assume_resident((*(*cursor).page_pin).node) };
             // const cells: [*]Cell = @ptrCast(cursor.page_cell);
             let cells: *mut pagepkg::Cell = unsafe { (*cursor).page_cell };
             let style_id = unsafe { (*cursor).style_id };
@@ -1702,20 +1710,22 @@ impl Terminal {
                 // rows typically match the whole way through, so scan
                 // several cells at a time manually.
                 let mut simple = k;
-                'simple: {
+                {
                     if let Some(lanes) = CELL_LANES {
+                        // PERF(port): the reference's `SimpleMask.eqlPrefix`
+                        // idiom — a BRANCHLESS whole-group compare, paying
+                        // the exact-index extraction only on a run's final
+                        // group (here: falling through to the scalar tail,
+                        // which walks at most lanes-1 cells). A per-lane
+                        // early-exit `break` blocked vectorization.
                         while simple + lanes <= cell_count {
-                            let mut first_bad: Option<usize> = None;
+                            let mut all = true;
                             for j in 0..lanes {
                                 let bits = unsafe { (*cells.add(simple + j)).to_bits() };
-                                if (bits & SIMPLE_MASK) != check_expected {
-                                    first_bad = Some(j);
-                                    break;
-                                }
+                                all &= (bits & SIMPLE_MASK) == check_expected;
                             }
-                            if let Some(j) = first_bad {
-                                simple += j;
-                                break 'simple;
+                            if !all {
+                                break;
                             }
                             simple += lanes;
                         }
@@ -1800,20 +1810,18 @@ impl Terminal {
 
                         // Find the run of cells with identical masked bits.
                         let mut m = k + 1;
-                        'scan: {
+                        {
                             if let Some(lanes) = CELL_LANES {
+                                // PERF(port): branchless whole-group compare;
+                                // see the simple-cell scan above.
                                 while m + lanes <= cell_count {
-                                    let mut first_bad: Option<usize> = None;
+                                    let mut all = true;
                                     for j in 0..lanes {
                                         let bits = unsafe { (*cells.add(m + j)).to_bits() };
-                                        if (bits & SIMPLE_MASK) != first {
-                                            first_bad = Some(j);
-                                            break;
-                                        }
+                                        all &= (bits & SIMPLE_MASK) == first;
                                     }
-                                    if let Some(j) = first_bad {
-                                        m += j;
-                                        break 'scan;
+                                    if !all {
+                                        break;
                                     }
                                     m += lanes;
                                 }

@@ -715,8 +715,10 @@ fn std_capacity() -> Capacity {
 /// The byte size required for a standard page.
 //
 // PORT NOTE: the reference `std_size = Page.layout(std_capacity).total_size` is
-// a comptime constant. In Rust the layout is computed at runtime (cheap), so we
-// expose it as a function.
+// a comptime constant. PERF(port): with `Page::layout` force-inlined and
+// `std_capacity()` returning literals, LLVM constant-folds this at every call
+// site — an earlier `OnceLock` memoization (an acquire-atomic load on the
+// `PageList::resize` hot path) is no longer needed.
 #[inline]
 fn std_size() -> usize {
     Page::layout(std_capacity()).total_size
@@ -1602,6 +1604,8 @@ impl PageList {
     /// The returned capacity is always guaranteed to layout properly (not
     /// overflow). We are able to support capacities up to the maximum int
     /// value of cols, so this will never overflow.
+    // PERF(port): `#[inline]` — see `Page::layout`.
+    #[inline]
     fn initial_capacity(cols: size::CellCountInt) -> Capacity {
         // This is an important invariant that ensures that this function
         // can never return an error. We verify here that our standard capacity

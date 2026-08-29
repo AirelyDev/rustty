@@ -59,6 +59,14 @@ pub struct Wyhash {
 
 impl Wyhash {
     /// `pub fn init(seed: u64) Wyhash`
+    // PERF(port): `#[inline]` on the whole public API so cross-crate callers
+    // can inline without LTO (banned; PERF_LOG.md). The reference needs the
+    // same treatment on the Zig side — hash_map.zig force-inlines its hash
+    // call ("LLVM 21 (Zig 0.16) failed to inline this which resulted in a
+    // measurable almost 2x slowdown on our hyperlink map benchmark"). Without
+    // these, `release-fast` paid 3 real calls + a PLT memcpy + an 88-byte
+    // stack spill per 4-byte key hash (measured 6.1x on hyperlink churn).
+    #[inline]
     pub fn init(seed: u64) -> Wyhash {
         let mut self_ = Wyhash {
             a: 0,
@@ -78,6 +86,7 @@ impl Wyhash {
     // This is subtly different from other hash function update calls. Wyhash requires the last
     // full 48-byte block to be run through final1 if is exactly aligned to 48-bytes.
     /// `pub fn update(self: *Wyhash, input: []const u8) void`
+    #[inline]
     pub fn update(&mut self, input: &[u8]) {
         self.total_len += input.len();
 
@@ -119,6 +128,7 @@ impl Wyhash {
     // takes `*Wyhash` but explicitly `shallowCopy()`s "to ensure idempotency", so
     // the port takes `&self` and works on the copy — same observable behavior,
     // and callers may finalize repeatedly.
+    #[inline]
     pub fn finalize(&self) -> u64 {
         let mut input: &[u8] = &self.buf[0..self.buf_len];
         let mut new_self = self.shallow_copy();
@@ -232,6 +242,7 @@ impl Wyhash {
     }
 
     /// `pub fn hash(seed: u64, input: []const u8) u64`
+    #[inline]
     pub fn hash(seed: u64, input: &[u8]) -> u64 {
         let mut self_ = Wyhash::init(seed);
 
@@ -292,10 +303,12 @@ fn mix(a_: u64, b_: u64) -> u64 {
 // `str` writes a length prefix and Zig's `autoHash` does not, so keep this
 // hasher scoped to the fixed-width key types the terminal maps use.
 impl core::hash::Hasher for Wyhash {
+    #[inline]
     fn write(&mut self, bytes: &[u8]) {
         self.update(bytes);
     }
 
+    #[inline]
     fn finish(&self) -> u64 {
         self.finalize()
     }

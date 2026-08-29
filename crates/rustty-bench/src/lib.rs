@@ -138,3 +138,46 @@ mod tests {
         let _ = core::any::type_name::<crate::osc_parser::OscParser>();
     }
 }
+
+/// `std.mem.doNotOptimizeAway(val)` for register-width integers (Zig 0.16
+/// std/mem.zig: `asm volatile("" :: "r"(val))` — a REGISTER constraint, no
+/// store, no memory clobber).
+//
+// PERF(port) (fidelity fix): `core::hint::black_box` spills its argument to a
+// stack slot and hands inline asm a POINTER with a memory clobber — one store
+// per call in the per-codepoint bench loops, which the reference does not
+// pay. Pointer-valued sinks (`black_box(&x)`) stay `black_box`: Zig's
+// `.pointer` arm does use a memory operand there.
+#[inline(always)]
+pub fn do_not_optimize_away<T: DoNotOptimize>(val: T) {
+    val.sink()
+}
+
+pub trait DoNotOptimize {
+    fn sink(self);
+}
+
+macro_rules! reg_sink {
+    ($($t:ty),*) => {$(
+        impl DoNotOptimize for $t {
+            #[inline(always)]
+            fn sink(self) {
+                // SAFETY: empty asm, one register input, no memory access.
+                unsafe {
+                    // The template must reference the operand; an assembler
+                    // comment emits no instructions.
+                    core::arch::asm!("/* {v} */", v = in(reg) self as u64,
+                        options(nomem, nostack, preserves_flags));
+                }
+            }
+        }
+    )*};
+}
+reg_sink!(u8, i8, u16, i16, u32, i32, u64, i64, usize, isize);
+
+impl DoNotOptimize for bool {
+    #[inline(always)]
+    fn sink(self) {
+        (self as u8).sink()
+    }
+}

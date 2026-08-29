@@ -15,7 +15,20 @@ extern "C" {
 }
 
 #[allow(non_snake_case)]
+// PERF(port): `#[inline]` — a non-generic cross-crate fn is un-inlinable
+// without LTO (banned); the reference's `codepointWidth` is a plain Zig fn in
+// the same compilation unit, so its callers never pay a frame here.
+#[inline]
 pub fn codepointWidth(cp: u32) -> i8 {
+    // PERF(port) (R10 reshape): the C++ kernel's OWN first statement is
+    //   `if (input <= 0xFF) return 1;`  (cbits/simd/codepoint_width.cpp,
+    //   `CodepointWidth`). Hoisting it here is byte-identical for every input
+    // and skips the FFI frame + highway's dynamic-dispatch resolution for the
+    // ASCII/Latin-1 share of real input. Machine-checked by
+    // `codepointWidth_matches_kernel` (exhaustive 0..=0x10FFFF) below.
+    if cp <= 0xFF {
+        return 1;
+    }
     #[cfg(not(target_arch = "wasm32"))]
     if SIMD {
         return unsafe { rustty_simd_codepoint_width(cp) };
@@ -77,4 +90,22 @@ mod tests {
     //         }
     //     }
     // }
+
+    /// PERF(port) guard for the ASCII early-out hoist in `codepointWidth`:
+    /// the wrapper must agree with the raw kernel on every scalar (the hoisted
+    /// predicate is the kernel's own first statement).
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn codepointWidth_matches_kernel() {
+        if !super::SIMD {
+            return;
+        }
+        for cp in 0..=0x10_FFFFu32 {
+            assert_eq!(
+                super::codepointWidth(cp),
+                unsafe { super::rustty_simd_codepoint_width(cp) },
+                "cp={cp:#x}"
+            );
+        }
+    }
 }

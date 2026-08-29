@@ -1168,18 +1168,25 @@ impl<'a, H: Handler> Stream<'a, H> {
                         // set": one AND-test per lane.
                         // const mask: V = @splat(~@as(u32, 0x9F));
                         // const zero: V = @splat(0);
+                        //
+                        // PERF(port): the reference's per-lane body is
+                        // BRANCHLESS (vector compare -> @reduce -> @ctz); an
+                        // earlier early-exit `break` per lane blocked
+                        // vectorization and kept a bounds check per lane
+                        // (measured 5.3x the reference's instruction count).
+                        // The bitmask accumulate below is the scalar spelling
+                        // of the same reduction and LLVM lowers it back to
+                        // the vector compare + movemask shape.
                         while end + lanes <= cps.len() {
                             // const stop = (v & mask) == zero;
                             // if (@reduce(.Or, stop)) { end += @ctz(bits); break :scan; }
-                            let mut first_bad: Option<usize> = None;
-                            for j in 0..lanes {
-                                if (cps[end + j] & !0x9Fu32) == 0 {
-                                    first_bad = Some(j);
-                                    break;
-                                }
+                            let window = &cps[end..end + lanes];
+                            let mut stop: u32 = 0;
+                            for (j, &v) in window.iter().enumerate() {
+                                stop |= (((v & !0x9Fu32) == 0) as u32) << j;
                             }
-                            if let Some(j) = first_bad {
-                                end += j;
+                            if stop != 0 {
+                                end += stop.trailing_zeros() as usize;
                                 break 'scan;
                             }
                             end += lanes;

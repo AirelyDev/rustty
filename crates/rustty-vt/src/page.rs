@@ -1333,6 +1333,9 @@ impl Capacity {
     /// Adjustments always happen by limiting the rows in the page. Everything
     /// else can grow. If it is impossible to achieve the desired adjustment,
     /// OutOfMemory is returned.
+    // PERF(port): `#[inline]` — on the constant-argument `PageList::resize`
+    // path; see `Page::layout`.
+    #[inline]
     pub fn adjust(self, req: Adjustment) -> Result<Capacity, OutOfMemory> {
         let mut adjusted = self;
         if let Some(cols) = req.cols {
@@ -1362,6 +1365,8 @@ impl Capacity {
     /// This is done by laying out the "meta" members (styles, graphemes,
     /// hyperlinks, strings) from the end of the page and finding where they
     /// start, which gives us the space available for rows and cells.
+    // PERF(port): `#[inline]` — see `Page::layout`.
+    #[inline]
     fn available_bits_for_grid(self) -> usize {
         // The math below only works if there is no alignment gap between
         // the end of the rows array and the start of the cells array.
@@ -2042,6 +2047,47 @@ impl<T: Packed, const MASK: Backing, const GROUP_LEN: usize> Mask<T, MASK, GROUP
     #[inline]
     pub fn eql_scalar(v: T, expected: Backing) -> bool {
         Self::pattern(v) == expected
+    }
+
+    /// `eql` over an already-extracted group. Taking `&[T; GROUP_LEN]` instead
+    /// of `(&[T], usize)` removes the `values[i..i + GROUP_LEN]` bounds check
+    /// (two compares + two branches per group in the reflow run scan) and
+    /// gives LLVM a fixed-size load.
+    ///
+    /// PERF(port): the reduction is spelled as an OR of XORs rather than an
+    /// AND of equalities. Same predicate — `x == y` iff `x ^ y == 0`, and an
+    /// OR of unsigned terms is zero iff every term is — but it is a
+    /// branch-free associative reduction over a fixed-length array, the shape
+    /// LLVM's SLP pass turns into the vector compare + reduce the reference
+    /// gets from `@reduce(.And, ...)` on a `@Vector`.
+    #[inline]
+    pub fn eql_group(g: &[T; GROUP_LEN], expected: Backing) -> bool {
+        let () = Self::GROUP_NONZERO;
+        let mut acc: Backing = 0;
+        let mut k = 0;
+        while k < GROUP_LEN {
+            acc |= (g[k].to_bits() & MASK) ^ expected;
+            k += 1;
+        }
+        acc == 0
+    }
+
+    /// `eql_any` over an already-extracted group. Same reasoning as
+    /// `eql_group`; "some lane matches" is spelled as "the unsigned MIN of
+    /// the per-lane XORs is zero", which lowers to a vector min-reduce
+    /// instead of a chain of scalar compares with the expected pattern
+    /// rematerialized per lane.
+    #[inline]
+    pub fn eql_any_group(g: &[T; GROUP_LEN], expected: Backing) -> bool {
+        let () = Self::GROUP_NONZERO;
+        let mut acc: Backing = Backing::MAX;
+        let mut k = 0;
+        while k < GROUP_LEN {
+            let x = (g[k].to_bits() & MASK) ^ expected;
+            acc = if x < acc { x } else { acc };
+            k += 1;
+        }
+        acc == 0
     }
 
     /// Returns true if any value in the group of group_len values

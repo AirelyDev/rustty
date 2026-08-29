@@ -593,6 +593,10 @@ impl Style {
     }
 
     /// Compute the style hash.
+    // PERF(port): `#[inline]` — the reference force-inlines this whole chain
+    // (`inline fn fromStyle`, `@call(.always_inline, std.hash.int, ...)`);
+    // out-of-line it was a standalone hotspot in the rows-resize profile.
+    #[inline]
     pub fn hash(&self) -> u64 {
         // We pack the style in to 128 bits, fold it to 64 bits,
         // then use std.hash.int to make it sufficiently uniform.
@@ -645,6 +649,25 @@ pub struct VtFormatter<'a> {
 
 impl<'a> VtFormatter<'a> {
     pub fn format<W: core::fmt::Write>(&self, writer: &mut W) -> core::fmt::Result {
+        let mut buf: [u8; 128] = [0; 128];
+        let len = self.format_into(&mut buf);
+        // PORT NOTE: `writer.writeAll(buf[0..len])` — the `core::fmt::Write`
+        // seam takes `&str`; every emitted byte is ASCII so the conversion is
+        // infallible.
+        writer.write_str(core::str::from_utf8(&buf[..len]).unwrap())
+    }
+
+    /// Assemble the style's complete SGR emission into `buf`, returning the
+    /// emitted length.
+    //
+    // PERF(port): the byte core is split from `format` so the hot formatter
+    // path (`format_style_open`) can emit the bytes straight into its
+    // `io::Write` sink — the reference writes bytes directly
+    // (`writer.writeAll(buf[0..len])`), and routing through the
+    // `core::fmt::Write` seam added a UTF-8 validation scan plus a
+    // non-inlinable adapter hop per style change.
+    #[inline]
+    pub fn format_into(&self, buf: &mut [u8; 128]) -> usize {
         // Style emission is a hot path when formatting styled terminal
         // contents, so all of the sequences are assembled in a buffer
         // and written in one call rather than going through the
@@ -652,7 +675,6 @@ impl<'a> VtFormatter<'a> {
         //
         // Worst case: `\x1b[0m` (4) + 7 flags (28) + `\x1b[53m` (5) +
         // `\x1b[4:2m` (6) + 3 RGB colors (19 each = 57) = 100.
-        let mut buf: [u8; 128] = [0; 128];
 
         // Always reset the style. Styles are fully self-contained.
         // Even if this style is empty, then that means we want to go
@@ -718,34 +740,39 @@ impl<'a> VtFormatter<'a> {
         }
 
         // Various colors.
-        len += self.append_color(&mut buf[len..], 38, self.style.fg_color);
-        len += self.append_color(&mut buf[len..], 48, self.style.bg_color);
-        len += self.append_color(&mut buf[len..], 58, self.style.underline_color);
+        len = self.append_color(buf, len, 38, self.style.fg_color);
+        len = self.append_color(buf, len, 48, self.style.bg_color);
+        len = self.append_color(buf, len, 58, self.style.underline_color);
 
-        // PORT NOTE: `writer.writeAll(buf[0..len])` — the `core::fmt::Write`
-        // seam takes `&str`; every emitted byte is ASCII so the conversion is
-        // infallible.
-        writer.write_str(core::str::from_utf8(&buf[..len]).unwrap())
+        len
     }
 
     /// Appends a standalone `\x1b[{prefix};5;{idx}m` or
     /// `\x1b[{prefix};2;{r};{g};{b}m` sequence to buf, returning the
     /// length written.
-    fn append_color(&self, buf: &mut [u8], prefix: u8, value: Color) -> usize {
+    // PERF(port): `#[inline(always)]` — SGR emission helper on the
+    // per-style-change hot path; the reference inlines the whole chain (plain
+    // `#[inline]` lost to the cost model — verified out-of-line in the
+    // binary). Takes the whole fixed buffer plus a cursor and RETURNS the new
+    // cursor, instead of a runtime-length subslice, so the internal indexing
+    // checks fold against the known 128-byte array.
+    #[inline(always)]
+    fn append_color(&self, buf: &mut [u8; 128], len: usize, prefix: u8, value: Color) -> usize {
         match value.tag() {
-            ColorTag::None => 0,
+            ColorTag::None => len,
 
             ColorTag::Palette => {
                 let idx = value.palette();
 
                 // Direct RGB: `\x1b[{prefix};2;{r};{g};{b}m`
                 if let Some(p) = self.palette {
-                    return append_color_rgb(buf, prefix, p[idx as usize]);
+                    return append_color_rgb(buf, len, prefix, p[idx as usize]);
                 }
 
                 // Palette reference: `\x1b[{prefix};5;{idx}m`
-                buf[0..2].copy_from_slice(b"\x1b[");
-                let mut len: usize = 2;
+                let mut len = len;
+                buf[len..len + 2].copy_from_slice(b"\x1b[");
+                len += 2;
                 len += fastprint::print_decimal(&mut buf[len..], prefix);
                 buf[len..len + 3].copy_from_slice(b";5;");
                 len += 3;
@@ -755,7 +782,7 @@ impl<'a> VtFormatter<'a> {
                 len
             }
 
-            ColorTag::Rgb => append_color_rgb(buf, prefix, value.rgb()),
+            ColorTag::Rgb => append_color_rgb(buf, len, prefix, value.rgb()),
         }
     }
 }
@@ -764,9 +791,13 @@ impl<'a> VtFormatter<'a> {
 /// length written.
 // PORT NOTE: the reference nests this self-less fn inside `VTFormatter`; a
 // module-level fn is the Rust equivalent.
-fn append_color_rgb(buf: &mut [u8], prefix: u8, rgb: color::RGB) -> usize {
-    buf[0..2].copy_from_slice(b"\x1b[");
-    let mut len: usize = 2;
+// PERF(port): `#[inline(always)]` + whole-buffer-plus-cursor signature — see
+// `append_color`.
+#[inline(always)]
+fn append_color_rgb(buf: &mut [u8; 128], len: usize, prefix: u8, rgb: color::RGB) -> usize {
+    let mut len = len;
+    buf[len..len + 2].copy_from_slice(b"\x1b[");
+    len += 2;
     len += fastprint::print_decimal(&mut buf[len..], prefix);
     buf[len..len + 3].copy_from_slice(b";2;");
     len += 3;
@@ -1040,6 +1071,8 @@ pub type Set = crate::ref_counted_set::RefCountedSet<Style, Id, size::CellCountI
 
 // PORT NOTE: `std.hash.int` on a u64 dispatches to `uint64` (mx3). Ported
 // verbatim so the deferred `Set` hashing matches when RefCountedSet lands.
+// PERF(port): `#[inline]` — the reference calls it `@call(.always_inline, ...)`.
+#[inline]
 fn hash_int_u64(input: u64) -> u64 {
     // fn uint64(input: u64) u64 {
     let mut x: u64 = input;

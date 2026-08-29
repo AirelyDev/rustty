@@ -1713,6 +1713,10 @@ impl Page {
     }
 
     /// Get the row and cell for the given X/Y within this page.
+    // PERF(port): `#[inline]` — tiny hot accessor; cross-crate callers (the
+    // bench, the C API) can't inline it without LTO (banned; PERF_LOG.md),
+    // while the reference's single-compilation-unit build inlines it freely.
+    #[inline]
     pub fn get_row_and_cell(&self, x: usize, y: usize) -> RowAndCell {
         assert!(y < self.size.rows as usize);
         assert!(x < self.size.cols as usize);
@@ -2007,6 +2011,8 @@ impl Page {
     }
 
     /// Returns the hyperlink ID for the given cell.
+    // PERF(port): `#[inline]` — see `get_row_and_cell`.
+    #[inline]
     pub fn lookup_hyperlink(&self, cell: *const Cell) -> Option<hyperlink::Id> {
         let base = self.memory_ptr();
         let cell_offset = unsafe { get_offset::<Cell, _>(base, cell) };
@@ -2572,6 +2578,15 @@ impl Page {
 
     /// The memory layout for a page given a desired minimum cols
     /// and rows size.
+    // PERF(port): `#[inline(always)]` — the reference is `pub inline fn layout`
+    // (page.zig), a HARD inline directive, and `std_size =
+    // Page.layout(std_capacity).total_size` is a comptime constant. Plain
+    // `#[inline]` was only a hint and LLVM declined it (the body is ~254
+    // instructions), so every `PageList::resize` paid two out-of-line calls
+    // each materializing a ~250-byte `Layout` through an sret buffer — the
+    // dominant fixed cost of the rows-resize benchmark. Forcing the inline
+    // lets the constant-argument callers fold to a few instructions.
+    #[inline(always)]
     pub fn layout(cap: Capacity) -> Layout {
         // The rows array must stay at offset 0: the PageList memory
         // pool relies on `init_buf` overwriting the first bytes of a

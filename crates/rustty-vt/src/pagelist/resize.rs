@@ -1376,12 +1376,14 @@ impl ReflowCursor {
         // rightmost blanks.
         let mut cols_len = unsafe { (*src_page).size.cols };
         if !unsafe { (*src_row).wrap() } {
-            while cols_len > 0 {
-                if !cells[cols_len as usize - 1].is_empty() {
-                    break;
-                }
-                cols_len -= 1;
-            }
+            // PERF(port): `cols_len` starts at `src_page.size.cols`, which is
+            // exactly `cells.len()` (the slice is built from it directly
+            // above), so the downward indexed walk is precisely "strip the
+            // maximal empty suffix" — the reverse iterator expresses that
+            // with the bound built into the walk, where the indexed form
+            // paid a bounds check plus two spill reloads per iteration.
+            let trailing = cells.iter().rev().take_while(|c| c.is_empty()).count();
+            cols_len -= trailing as size::CellCountInt;
 
             // If the row has a semantic prompt then the blank row is meaningful
             // so we just consider pretend the first cell of the row isn't empty.
@@ -1717,14 +1719,28 @@ impl ReflowCursor {
             // whole group; otherwise fall through to the scalar loop
             // below, which finds the exact end of the run within it
             // or continues through a wide pair.
-            while cells.len() - len >= BULK_GROUP_LEN {
-                if !BulkRunMask::eql(cells, len, narrow_pattern) {
-                    break;
+            //
+            // PERF(port): `as_chunks` instead of the indexed
+            // `values[i..i + GROUP_LEN]` walk — the chunk iterator carries
+            // its own end, so the group walk has zero bounds checks and each
+            // item is a `&[Cell; BULK_GROUP_LEN]` LLVM can load as one
+            // fixed-size vector (same reshape as the r4-render-win zip walk,
+            // PERF_LOG.md). Byte-identical: `as_chunks` yields exactly the
+            // groups the old `cells.len() - len >= BULK_GROUP_LEN` guard
+            // admitted, in order; the remainder falls to the scalar loop.
+            {
+                let (groups, _rem) = cells[len..].as_chunks::<BULK_GROUP_LEN>();
+                let mut advanced: usize = 0;
+                for g in groups {
+                    if !BulkRunMask::eql_group(g, narrow_pattern) {
+                        break;
+                    }
+                    if check_placeholder && PlaceholderMask::eql_any_group(g, placeholder_pattern) {
+                        break;
+                    }
+                    advanced += BULK_GROUP_LEN;
                 }
-                if check_placeholder && PlaceholderMask::eql_any(cells, len, placeholder_pattern) {
-                    break;
-                }
-                len += BULK_GROUP_LEN;
+                len += advanced;
             }
 
             while len < cells.len() {

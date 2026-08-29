@@ -65,6 +65,54 @@ use std::io::Write as _;
 // style emission to `style.rs` without re-porting it, we wrap the `io::Write`
 // sink in a tiny adapter that implements `core::fmt::Write` by forwarding the
 // UTF-8 bytes. Style/escape output is always valid UTF-8, so this is lossless.
+// PERF(port): a minimal buffered adapter installed by `format_with_state_emit`
+// around its sink for the duration of one format — the Rust stand-in for the
+// reference's `*std.Io.Writer`, whose `writeAll` appends to an inline buffer
+// and only takes the vtable when draining. See the note at the install site.
+struct BufOut<'w> {
+    inner: &'w mut dyn io::Write,
+    buf: [u8; 4096],
+    len: usize,
+}
+
+impl BufOut<'_> {
+    fn flush_buf(&mut self) -> io::Result<()> {
+        if self.len > 0 {
+            let n = self.len;
+            self.len = 0;
+            self.inner.write_all(&self.buf[..n])?;
+        }
+        Ok(())
+    }
+}
+
+impl io::Write for BufOut<'_> {
+    #[inline]
+    fn write(&mut self, s: &[u8]) -> io::Result<usize> {
+        self.write_all(s)?;
+        Ok(s.len())
+    }
+
+    #[inline]
+    fn write_all(&mut self, s: &[u8]) -> io::Result<()> {
+        if self.len + s.len() > self.buf.len() {
+            self.flush_buf()?;
+            // Oversized writes go straight through (buffer is empty now).
+            if s.len() > self.buf.len() {
+                return self.inner.write_all(s);
+            }
+        }
+        self.buf[self.len..self.len + s.len()].copy_from_slice(s);
+        self.len += s.len();
+        Ok(())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_buf()?;
+        self.inner.flush()
+    }
+}
+
 struct IoToFmt<'w> {
     inner: &'w mut dyn io::Write,
     err: Option<io::Error>,
@@ -165,6 +213,24 @@ pub fn format_styled(fmt: Format) -> bool {
     match fmt {
         Format::Plain => false,
         Format::Html | Format::Vt => true,
+    }
+}
+
+// PERF(port): the reference passes `emit` as a COMPTIME parameter down the
+// emission chain (`comptime emit: Format` on `writeCellRun` and
+// `encodeCodepoint`, dispatched by `inline else` at the top), monomorphizing
+// the hot loop per format so every `emit` branch and the unused formats' code
+// disappear from each instantiation. The const-generic `EMIT` discriminant is
+// that comptime parameter's Rust spelling: the hot helpers derive a
+// compile-time-known `Format` from it and their bodies are otherwise
+// unchanged. A single runtime-`emit` instantiation kept all three format arms
+// (and the HTML arm's hyperlink lookup) live inside the per-cell loop.
+#[inline(always)]
+const fn emit_from_const<const EMIT: u8>() -> Format {
+    match EMIT {
+        0 => Format::Plain,
+        1 => Format::Vt,
+        _ => Format::Html,
     }
 }
 
@@ -1396,6 +1462,34 @@ impl<'a> PageFormatter<'a> {
     }
 
     fn format_with_state_emit(
+        self,
+        writer: &mut dyn io::Write,
+        emit: Format,
+    ) -> io::Result<TrailingState> {
+        // PERF(port): the reference's `*std.Io.Writer` buffers every
+        // `writeAll` inline and only takes the vtable when draining; the
+        // port's `&mut dyn io::Write` seam paid one virtual call PLUS the
+        // sink's own machinery (`Vec::reserve` + memcpy) per emission —
+        // ~230k calls per format on styled content (per-run flushes, SGR
+        // opens/closes, newlines). Wrapping the sink in a small buffered
+        // adapter for the duration of one format restores the reference's
+        // batching: the byte stream is unchanged (same bytes, same order),
+        // only the call count changes (~bytes/4096). Flushed on BOTH exits —
+        // an unbuffered writer would also have delivered all bytes produced
+        // before an error surfaced.
+        let mut out = BufOut {
+            inner: writer,
+            buf: [0; 4096],
+            len: 0,
+        };
+        let result = self.format_with_state_emit_inner(&mut out, emit);
+        let flushed = out.flush_buf();
+        let ts = result?;
+        flushed?;
+        Ok(ts)
+    }
+
+    fn format_with_state_emit_inner(
         mut self,
         writer: &mut dyn io::Write,
         emit: Format,
@@ -1406,6 +1500,18 @@ impl<'a> PageFormatter<'a> {
 
         let mut blank_rows: usize = 0;
         let mut blank_cells: usize = 0;
+
+        // PERF(port): the cell-run emit buffer is declared once here and
+        // threaded into `write_cell_run` — the reference declares it
+        // `undefined` (never zeroed) inside `writeCellRun`; a zeroed
+        // in-function declaration cost two 512-byte memsets per style
+        // boundary on styled content.
+        let mut run_buf: [u8; 512] = [0; 512];
+        // PERF(port): same treatment for the SGR scratch `format_style_open`'s
+        // Vt arm assembles into (the reference's is `undefined` in-frame): a
+        // zeroed in-function declaration was a 128-byte memset per style
+        // change.
+        let mut style_buf: [u8; 128] = [0; 128];
 
         // Continue our prior trailing state if we have it, but only if we're
         // starting from the beginning (start_y and start_x are both 0).
@@ -1699,17 +1805,43 @@ impl<'a> PageFormatter<'a> {
                         }
 
                         let track_points = self.point_map.is_some();
-                        let consumed = self.write_cell_run(
-                            emit,
-                            track_points,
-                            writer,
-                            &cells_subset[cell_i..],
-                            x,
-                            y,
-                            style_id,
-                            current_hyperlink_id,
-                            &mut blank_cells,
-                        )?;
+                        // `inline else` — one dispatch per run start; see
+                        // `emit_from_const`.
+                        let consumed = match emit {
+                            Format::Plain => self.write_cell_run::<{ Format::Plain as u8 }>(
+                                track_points,
+                                writer,
+                                &cells_subset[cell_i..],
+                                x,
+                                y,
+                                style_id,
+                                current_hyperlink_id,
+                                &mut blank_cells,
+                                &mut run_buf,
+                            )?,
+                            Format::Vt => self.write_cell_run::<{ Format::Vt as u8 }>(
+                                track_points,
+                                writer,
+                                &cells_subset[cell_i..],
+                                x,
+                                y,
+                                style_id,
+                                current_hyperlink_id,
+                                &mut blank_cells,
+                                &mut run_buf,
+                            )?,
+                            Format::Html => self.write_cell_run::<{ Format::Html as u8 }>(
+                                track_points,
+                                writer,
+                                &cells_subset[cell_i..],
+                                x,
+                                y,
+                                style_id,
+                                current_hyperlink_id,
+                                &mut blank_cells,
+                                &mut run_buf,
+                            )?,
+                        };
 
                         // Zero cells consumed means the first cell isn't
                         // eligible for the fast path; handle it below.
@@ -1846,13 +1978,13 @@ impl<'a> PageFormatter<'a> {
                     }
 
                     // New style, emit it.
-                    self.format_style_open(emit, writer, &style)?;
+                    self.format_style_open(emit, writer, &style, &mut style_buf)?;
 
                     // If we have a point map, we map the style to
                     // this cell.
                     if self.point_map.is_some() {
                         let mut discarding = Discarding::new();
-                        self.format_style_open(emit, &mut discarding, &style)?;
+                        self.format_style_open(emit, &mut discarding, &style, &mut style_buf)?;
                         let count = discarding.count;
                         // PORT NOTE: `count` is computed above (needs `&self`),
                         // then the map borrow is taken separately to satisfy the
@@ -2023,9 +2155,8 @@ impl<'a> PageFormatter<'a> {
     // `#[inline(never)]` to keep the reference's row-loop code-size intent.
     #[allow(clippy::too_many_arguments)]
     #[inline(never)]
-    fn write_cell_run(
+    fn write_cell_run<const EMIT: u8>(
         &mut self,
-        emit: Format,
         track_points: bool,
         writer: &mut dyn io::Write,
         cells: &[Cell],
@@ -2034,7 +2165,12 @@ impl<'a> PageFormatter<'a> {
         run_style_id: u32,
         run_hyperlink_id: Option<crate::hyperlink::Id>,
         blank_cells: &mut usize,
+        // PERF(port): caller-provided scratch — see `format_with_state_emit`.
+        // The reference's is `var buf: [512]u8 = undefined;` in this frame.
+        run_buf: &mut [u8; 512],
     ) -> io::Result<usize> {
+        // `comptime emit: Format` — see `emit_from_const`.
+        let emit: Format = emit_from_const::<EMIT>();
         debug_assert!(track_points == self.point_map.is_some());
 
         let page: &Page = unsafe { &*self.page };
@@ -2043,7 +2179,7 @@ impl<'a> PageFormatter<'a> {
         // HTML entity for the maximum codepoint ("&#2097151;") is 10
         // bytes, escapes are up to 6.
         const MAX_ENCODING_LEN: usize = 16;
-        let mut buf: [u8; 512] = [0; 512];
+        let buf: &mut [u8; 512] = run_buf;
         let mut len: usize = 0;
         let mut pending: usize = *blank_cells;
 
@@ -2163,14 +2299,15 @@ impl<'a> PageFormatter<'a> {
                 len += 1;
                 cell_bytes = 1;
             } else {
-                cell_bytes = encode_codepoint(emit, &mut buf, &mut len, cp);
+                let new_len = encode_codepoint::<EMIT>(buf, len, cp);
+                cell_bytes = new_len - len;
+                len = new_len;
 
                 // Multi-codepoint graphemes emit their extra codepoints,
                 // matching writeCell. This is out-of-line to keep the
                 // hot loop for the common single-codepoint case small.
                 if cell.content_tag() == pagepkg::ContentTag::CodepointGrapheme {
-                    cell_bytes +=
-                        self.write_grapheme_cps(emit, writer, cell, &mut buf, &mut len)?;
+                    cell_bytes += self.write_grapheme_cps(emit, writer, cell, buf, &mut len)?;
                 }
             }
 
@@ -2214,7 +2351,15 @@ impl<'a> PageFormatter<'a> {
                 writer.write_all(&buf[..*len])?;
                 *len = 0;
             }
-            bytes += encode_codepoint(emit, buf, len, gcp as u21);
+            // Cold path (see `#[inline(never)]` above): one runtime dispatch
+            // into the monomorphized encoder per grapheme codepoint.
+            let new_len = match emit {
+                Format::Plain => encode_codepoint::<{ Format::Plain as u8 }>(buf, *len, gcp as u21),
+                Format::Vt => encode_codepoint::<{ Format::Vt as u8 }>(buf, *len, gcp as u21),
+                Format::Html => encode_codepoint::<{ Format::Html as u8 }>(buf, *len, gcp as u21),
+            };
+            bytes += new_len - *len;
+            *len = new_len;
         }
         Ok(bytes)
     }
@@ -2411,6 +2556,8 @@ impl<'a> PageFormatter<'a> {
         emit: Format,
         writer: &mut dyn io::Write,
         style: &crate::style::Style,
+        // PERF(port): caller-provided SGR scratch — see `format_with_state_emit`.
+        style_buf: &mut [u8; 128],
     ) -> io::Result<()> {
         match emit {
             Format::Plain => unreachable!(),
@@ -2420,8 +2567,12 @@ impl<'a> PageFormatter<'a> {
                 // PORT NOTE: `self.opts.palette` is `Option<*const Palette>`;
                 // deref to the `Option<&Palette>` the style formatter expects.
                 formatter.palette = self.opts.palette.map(|p| unsafe { &*p });
-                let mut adapter = IoToFmt::new(writer);
-                write_fmt_result(&mut adapter, |w| formatter.format(w))
+                // PERF(port): the reference emits the SGR bytes directly
+                // (`writer.print("{f}", ...)` bottoms out in `writeAll`);
+                // going through the `core::fmt::Write` adapter added a UTF-8
+                // validation scan and a non-inlinable hop per style change.
+                let len = formatter.format_into(style_buf);
+                writer.write_all(&style_buf[..len])
             }
 
             // We use `display: inline` so that the div doesn't impact
@@ -2505,31 +2656,41 @@ impl<'a> PageFormatter<'a> {
     }
 }
 
-/// Encode a single codepoint into buf at len, advancing len and
-/// returning the number of bytes written. The caller must guarantee
-/// enough remaining buffer space for the largest possible encoding.
+/// Encode a single codepoint into buf at len, returning the new
+/// length. The caller must guarantee enough remaining buffer space
+/// for the largest possible encoding.
 // PORT NOTE: the reference nests this self-less `inline fn` inside
 // `PageFormatter`; Rust impl blocks only hold associated fns, so it is a
-// module-level fn (`inline` -> `#[inline]`).
-#[inline]
-fn encode_codepoint(emit: Format, buf: &mut [u8; 512], len: &mut usize, cp: u21) -> usize {
-    let start = *len;
+// module-level fn. `comptime emit` is the const-generic `EMIT` (see
+// `emit_from_const`), which prunes the unused format arms per instantiation;
+// `inline` -> `#[inline(always)]` (plain `#[inline]` lost to the cost model,
+// leaving an out-of-line call per emitted codepoint where the reference's
+// comptime-specialized form is ~4 instructions).
+#[inline(always)]
+// PERF(port): `len` travels BY VALUE (returning the new length) — the
+// `&mut usize` form address-took it, pinning it to a stack slot per
+// iteration and blocking the range fact from the caller's flush guard, which
+// left a bounds check per emitted byte.
+fn encode_codepoint<const EMIT: u8>(buf: &mut [u8; 512], len: usize, cp: u21) -> usize {
+    let emit: Format = emit_from_const::<EMIT>();
+    let mut len = len;
+    let start = len;
     match emit {
         Format::Plain | Format::Vt => {
             if cp < 0x80 {
                 buf[start] = cp as u8;
-                *len += 1;
+                len += 1;
             } else {
                 // PORT NOTE: `std.unicode.utf8Encode(cp, ..) catch { .. }` —
                 // `char::from_u32` rejects the same domain (surrogates and
                 // out-of-range values).
                 match char::from_u32(cp) {
-                    Some(c) => *len += c.encode_utf8(&mut buf[start..start + 4]).len(),
+                    Some(c) => len += c.encode_utf8(&mut buf[start..start + 4]).len(),
                     None => {
                         // Matches Writer.printUnicodeCodepoint: invalid
                         // codepoints become the replacement character.
                         buf[start..start + 3].copy_from_slice(&[0xEF, 0xBF, 0xBD]);
-                        *len += 3;
+                        len += 3;
                     }
                 }
             }
@@ -2546,7 +2707,7 @@ fn encode_codepoint(emit: Format, buf: &mut [u8; 512], len: &mut usize, cp: u21)
             };
             if let Some(s) = esc {
                 buf[start..start + s.len()].copy_from_slice(s);
-                *len += s.len();
+                len += s.len();
                 break 'html;
             }
 
@@ -2554,19 +2715,19 @@ fn encode_codepoint(emit: Format, buf: &mut [u8; 512], len: &mut usize, cp: u21)
             // numeric entity. See writeCodepoint.
             if cp < 0x80 {
                 buf[start] = cp as u8;
-                *len += 1;
+                len += 1;
                 break 'html;
             }
 
             buf[start..start + 2].copy_from_slice(b"&#");
-            *len += 2;
-            *len += fastprint::print_decimal(&mut buf[*len..], cp);
-            buf[*len] = b';';
-            *len += 1;
+            len += 2;
+            len += fastprint::print_decimal(&mut buf[len..], cp);
+            buf[len] = b';';
+            len += 1;
         }
     }
 
-    *len - start
+    len
 }
 
 #[cfg(test)]

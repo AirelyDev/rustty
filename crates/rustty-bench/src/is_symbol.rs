@@ -16,7 +16,6 @@ use crate::cli::{BenchmarkAction, CreateError};
 use crate::options::{self, read_slice_short, CacheLineBuf, DataFile};
 use allocator_api2::alloc::Global as Allocator;
 use core::ffi::c_void;
-use core::hint::black_box;
 use rustty_unicode::props_uucode::MAX_CODE_POINT;
 use rustty_unicode::symbols_table::table as symbols_table;
 use rustty_vt::pagelist::OutOfMemory;
@@ -192,7 +191,7 @@ impl IsSymbol {
                     // its `get`-closure rule, written inline over already-`pub`
                     // APIs: an out-of-range guard (`cp > MAX_CODE_POINT`) around
                     // the symbols table lookup.
-                    black_box(if cp > MAX_CODE_POINT {
+                    crate::do_not_optimize_away(if cp > MAX_CODE_POINT {
                         false
                     } else {
                         symbols_table().get(cp)
@@ -234,7 +233,7 @@ impl IsSymbol {
                 debug_assert!(consumed);
                 if let Some(cp) = cp_ {
                     // std.mem.doNotOptimizeAway(symbols_table.get(cp));
-                    black_box(symbols_table().get(cp));
+                    crate::do_not_optimize_away(symbols_table().get(cp));
                 }
             }
         }
