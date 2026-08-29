@@ -54,6 +54,11 @@ __pycache__/
 # seeds). Not needed for the parity gates; kept out of history to stay lean.
 /.port/phase-0/baseline/corpora/*.bin
 
+# perf-new7 benchmark corpora: regenerable via the recipe in
+# .port/phase-2/perf-new7/RESULTS.md (rustty-synthetic, fixed seeds/sizes).
+# Same rationale as the phase-0 corpora above.
+/.port/phase-2/perf-new7/corpora/*.vt
+
 # rustc/Miri ICE crash dumps (transient; appear under heavy parallel Miri load)
 rustc-ice-*.txt
 

@@ -160,3 +160,125 @@ checkout (its pinned oracle binary + corpora were cleaned; corpora now
 regenerated) — substituted with a same-suite self-fence: NEW vs PRE-CHANGE
 rustty-bench on 11 of the original configs, worst delta +1.5% (noise), i.e.
 no regression on the old suite from these changes.
+
+---
+
+# Full-suite baseline (2026-08-28, post-fix session 2) — all 33 configs
+
+First-ever run of the COMPLETE bench matrix (original 14 + perf-new7's 19)
+against one oracle (current main 4540d499a, ReleaseFast). Harness:
+`full_suite.py`, N=7+warmup, medians. Corpora regenerated via
+rustty-synthetic (byte-parity generator). Raw: `full-baseline-{zig,rust}.jsonl`.
+
+**Rust wins 22/33. Suite total: zig 9930ms, rust 8202ms → rust −17.4%.**
+
+Sorted by absolute ms lost (positive = rust slower — the optimization targets):
+
+| id | zig_ms | rust_ms | delta | abs_ms |
+|---|--:|--:|--:|--:|
+| terminal-resize.rows | 1615.7 | 2048.5 | +26.8% | +432.8 |
+| terminal-resize.both | 332.8 | 410.7 | +23.4% | +77.9 |
+| terminal-resize.cols | 341.7 | 413.0 | +20.9% | +71.3 |
+| terminal-formatter.format-vt | 207.1 | 253.0 | +22.1% | +45.9 |
+| terminal-stream/ascii | 55.9 | 72.4 | +29.5% | +16.5 |
+| terminal-formatter.format-plain | 163.4 | 174.5 | +6.8% | +11.1 |
+| scrollback-compression.restore | 31.7 | 36.3 | +14.5% | +4.6 |
+| terminal-snapshot.encode | 30.5 | 34.8 | +14.0% | +4.3 |
+| terminal-snapshot.decode | 58.9 | 63.0 | +7.1% | +4.2 |
+| scrollback-compression.incremental | 31.8 | 33.5 | +5.4% | +1.7 |
+| scrollback-compression.compress | 30.6 | 32.0 | +4.9% | +1.5 |
+| (22 rust-winning configs) | | | −8% to −87% | −2405 total |
+
+Biggest rust wins: terminal-parser −86.6% (92 vs 689ms), wcwidth −70.2%,
+osc-parser −73.9%, screen-clone.clone −61.9%, cols-no-reflow −23.6% (−762ms,
+largest absolute win), hyperlink-map.lookup −59.9%.
+
+**Oracle-regression note (validated, not a measurement error):** current-main
+ghostty is far slower than its own pinned-era self on terminal-parser
+(~689ms vs ~286ms era) and codepoint-width.wcwidth (~815 vs ~273ms era) —
+reps are tight (max/min ≤1.04), stderr shows no log spam, same corpus bytes
+feed both binaries. Presumably the Zig 0.16/std.Io/uucode migration. Those
+rust wins are real against today's main but partly reflect the oracle
+regressing, not only rustty improving.
+
+**terminal-stream +29.5% is a genuine rustty regression-relative-to-parity**
+(July: +1.3%): upstream gained quirks_memset (deliberately not ported —
+ODR risk) and the config got ~8x faster on both sides via the new bench
+shape; the remaining delta is under diagnosis.
+
+---
+
+# Optimization wave 2 — final full-suite results (2026-08-28, same session)
+
+Diagnosis: 4 more read-only agents (stream, formatter residual, resize
+residual, R10 win-extension), all disassembly-level; fixes measured
+individually. Full log to append to DIAGNOSIS.md. Raw:
+`full-final-{zig,rust}.jsonl` (same harness/corpora as full-baseline).
+
+**Rust wins 23/33 (was 22). Suite total: rust 7607ms vs zig 8968ms (−15.2%).
+Rustty's own suite time improved −7.3% in this wave (8202→7607ms on identical
+corpora — the clean cross-run metric; the zig side's own run-to-run swing on
+cols-no-reflow muddies suite-total comparisons). Geomean across all 33
+configs: rustty 1.33x faster (median 1.18x).**
+
+Key per-config moves (rust_before → rust_now, same harness):
+- terminal-resize.rows: 2048.5 → 1588.0ms (**+26.8% → −1.3%, now a WIN**) —
+  `#[inline(always)]` on `Page::layout` (reference is a HARD `pub inline fn`;
+  plain `#[inline]` lost to the cost model at 254 instructions) + helper
+  chain + `Screen::resize` inline.
+- terminal-stream: 72.4 → 60.0ms (+29.5% → +10.4%) — three scalar early-exit
+  scan loops rewritten to the reference's branchless vector-reduce idiom
+  (bitmask accumulate + trailing_zeros; whole-group compare with scalar-tail
+  pinpointing), plus `page_assume_resident` at the print hot site.
+- terminal-formatter.format-vt: 253.0 → 241.7ms (+22.1% → +15.9%) and
+  format-plain 174.5 → 169.3 (+4.2%) — SGR chain `#[inline(always)]` with
+  fixed-array cursors, style-scratch hoist, `BufOut` buffered emission
+  (~230k dyn write calls → ~bytes/4096), `len` by value through
+  `encode_codepoint`.
+- scrollback-compression: all three modes now ≤ +0.3% (restore was +14.5%) —
+  entirely the stream fix (the "compression" configs are dominated by the
+  untimed-in-name-only VT parse of the 16MiB corpus in-process).
+- resize cols/both: 413/411 → 391/395ms (+18-19% remaining) — `as_chunks`
+  group scan + branchless group ops + reverse-iterator trailing-blank trim
+  landed; residual is the write_cell/style-set half of reflow_row (next
+  lever documented in the resize agent report).
+- unicode family extended its wins (gb.table −21%, cw.table −15.7%,
+  is.table −15.6%, cw.simd −12.4%) — `do_not_optimize_away` fidelity fix
+  (rustc `black_box` spills to stack per call where Zig's
+  `doNotOptimizeAway` is a pure register constraint — a mis-port), 256KiB
+  `BufReader` on `DataFile` (the reference reads buffered; 16384 → 256
+  syscalls per 64MiB corpus), `#[inline]` + ASCII early-out on
+  `codepointWidth` (guarded by a new exhaustive 0..=0x10FFFF KAT).
+
+Falsified and reverted (measured, kept for the record):
+- Transposed 16x256 DFA transition table (shorter loop-carried chain on
+  paper): regressed every decode config by 5-13% — the 512B→4KB table
+  footprint beat the chain win. Reverted.
+- Grapheme `Value` packed back to the reference's u8 bitfield (8KB table,
+  one load): gb.table +7% — the two-byte struct's aligned pair-load beats
+  the unpack ALU on this core. Reverted. (Both experiments echo the
+  debug_assert lesson: measure, don't model.)
+
+Remaining above-noise Zig wins, all ≤ +19%: resize.both/cols (+18-19%),
+format-vt (+16%), snapshot.encode (+16%), stream (+10%), cols-no-reflow
+(+5.8%, high inter-run variance — was a rust win in the baseline run),
+format-plain/decode (+4%). Next levers are documented in the four wave-2
+agent reports (write_cell/style-set half of reflow_row; spare-capacity
+`io::Writer` for snapshot; formatter per-boundary chain; NEON
+`CodepointWidth` port for cw.simd; 3-way interleaved CRC32C).
+
+Verification: full workspace test suite green post-wave, formatter
+roundtrip byte-equal, exhaustive codepointWidth KAT green, snapshot codec
+tests green, clippy/fmt clean, G3b/G7/test-count gates GREEN.
+
+On the "50% faster" target: by geomean rustty is 1.33x faster (25% less
+time on the typical config) with 23/33 outright wins and every former
+multi-x gap eliminated; by suite total it is −15 to −17% (dominated by the
+two long resize configs). Reaching a 50% suite-total advantage would
+require rustty to be ~2x Zig on the resize family specifically — the
+per-call fixed costs there are now at or below Zig's (rows is a win), and
+the remaining reflow inner-loop work is bounded by the same memory
+bandwidth both engines share, so treat 50%-by-suite-total as out of reach
+without algorithmic divergence; 50%-by-geomean is plausible with the
+documented next levers plus the parser/osc/wcwidth-class wins already in
+hand.
