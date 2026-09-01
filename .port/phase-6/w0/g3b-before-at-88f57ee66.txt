@@ -1,0 +1,68 @@
+G3b [apprt]: SKIPPED — PORT STATUS is not done (57 oracle file(s) unexamined)
+G3b [apprt-api]: SKIPPED — PORT STATUS is not done (5 oracle file(s) unexamined)
+G3b [args]: distinctive ref comments=186 missing=0 review=1
+    REVIEW (ratio 0.79): returns true if this type can track diagnostics.
+G3b [bench]: distinctive ref comments=137 missing=0 review=0
+G3b [bin]: SKIPPED — PORT STATUS is not done (7 oracle file(s) unexamined)
+G3b [build-config]: distinctive ref comments=27 missing=0 review=0
+G3b [cfg-fmt]: SKIPPED — PORT STATUS is not done (2 oracle file(s) unexamined)
+G3b [cli]: distinctive ref comments=602 missing=0 review=2
+    REVIEW (ratio 0.68): this should be returned by actions that want to print the help text.
+    REVIEW (ratio 0.72): var buf: [std.compress.flate.max_window_len]u8 = undefined;
+G3b [config]: distinctive ref comments=2851 missing=0 review=8
+    REVIEW (ratio 0.64): 3. "application support" directory (macos only)
+    REVIEW (ratio 0.71): load the configuration according to the default rules:
+    REVIEW (ratio 0.64): options for copy on select behavior.
+    REVIEW (ratio 0.73): see "clipboard-codepoint-map" for documentation.
+    REVIEW (ratio 0.69): see `font-synthetic-style` for documentation.
+    REVIEW (ratio 0.75): see macos-dock-drop-behavior
+    REVIEW (ratio 0.74): see window-show-tab-bar
+    REVIEW (ratio 0.63): valid values for confirm-close-surface
+G3b [core]: distinctive ref comments=1249 missing=0 review=0
+G3b [crash]: distinctive ref comments=167 missing=0 review=2
+    REVIEW (ratio 0.75): linux). on darwin the thread names itself in initthread.
+    REVIEW (ratio 0.76): naming the thread from here only works on some platforms (e.g.
+G3b [datastruct]: distinctive ref comments=478 missing=0 review=0
+G3b [extra]: distinctive ref comments=20 missing=0 review=2
+    REVIEW (ratio 0.67): generates the syntax file at comptime.
+    REVIEW (ratio 0.72): this results leading or tailing spaces being necessary to move onto the next match.
+G3b [font]: SKIPPED — PORT STATUS is not done (50 oracle file(s) unexamined)
+G3b [global]: distinctive ref comments=106 missing=0 review=2
+    REVIEW (ratio 0.64): asserts that `self.io_impl` has been initialized.
+    REVIEW (ratio 0.78): returns the global state action.
+G3b [input]: SKIPPED — PORT STATUS is not done (13 oracle file(s) unexamined)
+G3b [inspector]: distinctive ref comments=202 missing=0 review=0
+G3b [lib]: distinctive ref comments=82 missing=0 review=0
+G3b [os]: distinctive ref comments=666 missing=0 review=2
+    REVIEW (ratio 0.75): first check the env var. on windows we treat `localappdata` as a
+    REVIEW (ratio 0.66): not great, but xev timer can't fail atm
+G3b [render-types]: distinctive ref comments=149 missing=0 review=0
+G3b [renderer]: SKIPPED — PORT STATUS is not done (35 oracle file(s) unexamined)
+G3b [simd]: distinctive ref comments=177 missing=0 review=0
+G3b [synthetic]: distinctive ref comments=101 missing=0 review=0
+G3b [terminfo]: distinctive ref comments=99 missing=0 review=0
+G3b [termio]: distinctive ref comments=1219 missing=0 review=5
+    REVIEW (ratio 0.75): child. empirically chosen through measurements on an m4 max.
+    REVIEW (ratio 0.65): or if due to race conditions it doesn't exist or any various other
+    REVIEW (ratio 0.72): password is allocated and must be freed.
+    REVIEW (ratio 0.7): reasons. we don't want to crash the entire process if this fails so we
+    REVIEW (ratio 0.68): sets the fd to non-blocking mode. returns false on failure.
+G3b [unicode]: distinctive ref comments=124 missing=0 review=0
+G3b [util]: distinctive ref comments=146 missing=0 review=0
+G3b [vt]: distinctive ref comments=13820 missing=0 review=68
+    REVIEW (ratio 0.74): (markmutated sets both); dirty set without a generation change
+    REVIEW (ratio 0.79): `page_serial`. consequently, every previously captured pointer-plus-serial
+    REVIEW (ratio 0.71): `page` metadata. a resident page can access the mapping directly since
+    REVIEW (ratio 0.79): a caller may pass our current tracked selection back to us by value, so
+    REVIEW (ratio 0.62): a group of raw values for the vectorized operations.
+    REVIEW (ratio 0.68): backing int of the packed struct
+    REVIEW (ratio 0.72): behind the raw mapping is discarded. however, we retain the
+    REVIEW (ratio 0.75): both states retain the same `page.memory` virtual mapping and the same
+    REVIEW (ratio 0.75): buffered bytes go first to keep the order.
+    REVIEW (ratio 0.76): bumping the generation for geometry changes would break the
+G3b [vt-c]: distinctive ref comments=667 missing=0 review=1
+    REVIEW (ratio 0.62): the caller owns the returned slice and must free it with `alloc`.
+
+G3b SCOPE: 7 crate(s) SKIPPED (PORT STATUS not done) = 169 oracle file(s) unexamined: apprt, apprt-api, bin, cfg-fmt, font, input, renderer
+  The verdict below covers the EXAMINED crates only. Use --strict or --crate <name> to include a skipped crate.
+GREEN: every distinctive reference comment has a match in the port (G3b)

@@ -1,0 +1,74 @@
+20abdb50a Update VOUCHED list (#14101)
+76d9fcefe libghostty: set the search needle via ghostty_search_set, drop GhosttySearchOptions
+674abd8a1 example: add c-vt-search demonstrating the terminal search C API
+f9202919f libghostty: add ghostty_search_* terminal search C API
+f0c918fc4 terminal/c: allow freeing a search and its terminal in any order
+cdef14a1f Remove X-Generator from the sr.po file
+32601cd79 terminal/c: add search wrapper implementing the whole-terminal search API
+149c9f562 terminal: extract whole-terminal search orchestration from the search thread
+458f079f1 Use the informal form
+5e02d0014 ci: require freestanding libghostty-vt builds
+8bf7e517f Regenerate sr@latin.po from sr.po
+90f775976 Fix HTML/URL acronyms as agreed
+028af92ce terminal: clarify page allocator fallback
+fc7bfa60b ci: move freestanding build into test workflow
+e80ce2ed4 Fix build error
+dfccdb2d4 Implement needed modifications for issue #12600
+e8aa09867 Update VOUCHED list (#14092)
+ec3e384d2 Sync CODEOWNERS vouch list (#14090)
+10b7158e8 ci: cross-compile freestanding libghostty-vt
+860cfb1d7 Address review feedback
+3e2c0fa2d gtk: do not warn when gtk-xft-dpi is -1
+6d850fef7 Update VOUCHED list (#14084)
+c18198325 build: update Sparkle to 2.9.6 and pin SPM
+5f5495826 terminal: fix living item over-count in RefCountedSet.addWithId
+090fca451 terminal/kitty: validate POSIX shared memory names
+98cd670c0 Update VOUCHED list (#14079)
+094d175ef deps: Update iTerm2 color schemes
+3376153a4 build: support native freestanding libghostty-vt
+a5423592c libghostty: use caller allocation on native freestanding
+7b47213f9 Update VOUCHED list (#14074)
+166d2fe34 build: update Sparkle to 2.9.4
+caf48a41e main: fix inverted allow_stack_tracing condition
+97f57edcc renderer: vsync unfocused surfaces while dirty
+84c8e7d82 Align translation for Focus
+e3969ab49 Align translations for current and to left/right
+17a24746c Use the correct accusative form for inanimata
+2a0371b28 Apply batched suggestions from code review
+1ae448c23 Fix translation of sequences
+e8ba5d2c2 Standardize how config/setting/preference is translated
+6cd684d5d gtk: fix stale pointers to property bindings
+635abb7ee Update po/sr.po
+7aa476714 Add new translations to locales file
+74e0bfdf2 Register code ownership
+300a0dfcb Add the Serbian and Serbian Latin translations
+777929a8f macOS: review windows when closing multiple tabs
+eb722cb26 terminal: mark the previous row dirty when clearing its spacer head
+1c3a4a831 Update macos/Sources/Helpers/Extensions/URL+Extension.swift
+07abbd1e7 Update macos/Sources/Helpers/Extensions/URL+Extension.swift
+2de159611 macos: normalize action working directory paths
+572fd5837 macOS: use the same default BellFeatures as config
+28b5bf905 font: update embedded Noto emoji fonts
+278b4e2fc i18n(ru): refine Russian translation
+522ebdd0a build(deps): bump hustcer/milestone-action from 3.1 to 3.2
+915977a48 i18n(ru): equalize splits
+0a9f47cae macOS: update note about tab accessory view
+b6ac6e1d4 Revert "macOS: use same ResetZoomAccessoryView (#14028)"
+6688aa072 renderer: park DisplayLink while idle
+84dff76b1 Update po/ru.po
+6244458a1 Update po/ru.po
+7a15898bc macOS: use same ResetZoomAccessoryView
+851751a11 macOS: clean up deprecated toolbar button
+73e53ceea i18n: update fr_FR translations
+ee8095d37 terminal/snapshot: use stack fallback for record scratch
+6229d4eb6 macOS: fix AppleScript send key for non-control keys
+ba3574637 i18n(ru): improve Russian translation
+0a396b43d i18n(ru): context menu fix in Russian translation
+32159b6fe i18n(ru): small fix in Russian translation
+3f87b2e58 i18n(ru): second part of Russian translation
+1026a00c1 i18n: adjust Ukrainian translations
+2a51bdf12 i18n: return Ghostty to Ukrainian translation
+c50288c35 i18n: address comments for Ukrainian translation
+0525c18f6 i18n: adjust and extend Ukrainian translation
+1dd31f9e9 i18n(ru): work in progress on Russian translation
+4bb135e2d i18n(ru): start updating Russian translation
