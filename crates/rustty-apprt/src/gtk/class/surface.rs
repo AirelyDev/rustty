@@ -706,6 +706,14 @@ mod imp {
             // (B7, f0f3f4d8d: the reference deleted the `bell_media` unref here —
             // the audio bell is application-owned now.)
 
+            // `is_split_binding`: `unbind()` + `unref()` + null (`6cd684d5d`,
+            // `surface.zig:1898-1902`) — the binding's own ref goes with
+            // `unbind()`, the extra ref `bind_is_split` holds goes with the
+            // scope-end drop.
+            if let Some(binding) = self.is_split_binding.take() {
+                binding.unbind();
+            }
+
             // `vadj_signal_group`: `setTarget(null)` THEN unref (`:1868-1872` — the
             // order matters: detach the target before releasing our ref). The typed
             // `SignalGroup` binding is behind a glib feature this build does not
@@ -1185,23 +1193,38 @@ impl Surface {
         obj
     }
 
-    /// PORTS: `surface.zig:854-864` `bindIsSplit` (B6, 1d053bd6e). (Re)binds this
-    /// surface's `is-split` property to the given tree's, unbinding any stale
-    /// binding first (the cross-tree-move re-bind).
+    /// PORTS: `surface.zig:854-874` `bindIsSplit` (B6, 1d053bd6e; `6cd684d5d`
+    /// stale-pointer fix). (Re)binds this surface's `is-split` property to the
+    /// given tree's, unbinding AND releasing any stale binding first (the
+    /// cross-tree-move re-bind).
     pub fn bind_is_split(&self, tree: &super::split_tree::SplitTree) {
         let imp = self.imp();
-        // `if (priv.is_split_binding) |bind| bind.unbind();`
-        if let Some(bind) = imp.is_split_binding.take() {
-            bind.unbind();
+        // `if (priv.is_split_binding) |binding| { binding.unbind();
+        // binding.unref(); priv.is_split_binding = null; }` — `take()` nulls the
+        // field, `unbind()` releases the binding's own ref, and the scope-end
+        // drop is our `unref()`.
+        if let Some(binding) = imp.is_split_binding.take() {
+            binding.unbind();
         }
 
-        // `priv.is_split_binding = tree.bindProperty("is-split", self,
-        // "is-split", .{ .sync_create = true });`
-        imp.is_split_binding.replace(Some(
-            tree.bind_property("is-split", self, "is-split")
-                .sync_create()
-                .build(),
-        ));
+        // `const binding = tree.bindProperty("is-split", self, "is-split",
+        // .{ .sync_create = true });`
+        let binding = tree
+            .bind_property("is-split", self, "is-split")
+            .sync_create()
+            .build();
+        // The ref created by bindProperty is owned by the binding itself.
+        // We need another ref to prevent the binding object from being
+        // freed if the source object (SplitTree) is finalized. Otherwise
+        // our pointer to the binding could become stale.
+        //
+        // PORT NOTE (`6cd684d5d`): the reference's explicit `binding.ref()` is
+        // what gtk-rs's `build()` already does — `g_object_bind_property`'s
+        // (transfer none) result comes back through `from_glib_none`, i.e. a
+        // strong `glib::Binding` we own on top of the binding's own ref. So the
+        // pointer this field holds was never stale in the port; the END STATE's
+        // `unbind()`+`unref()` pairs (here and in `dispose`) are what changed.
+        imp.is_split_binding.replace(Some(binding));
     }
 
     /// PORTS: `surface.zig:766-769` `core` — `return priv.core_surface` (a raw
@@ -1734,7 +1757,11 @@ impl Surface {
                 1.0
             }
             Some(dpi) if dpi <= 0 => {
-                eprintln!("warn(gtk): gtk-xft-dpi has invalid value ({dpi}), using default");
+                // -1 is a valid value which specifies default scale.
+                // https://docs.gtk.org/gtk4/property.Settings.gtk-xft-dpi.html
+                if dpi != -1 {
+                    eprintln!("warn(gtk): gtk-xft-dpi has invalid value ({dpi}), using default");
+                }
                 1.0
             }
             Some(dpi) => (dpi as f32 / 1024.0) / 96.0,
