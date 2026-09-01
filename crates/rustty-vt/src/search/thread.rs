@@ -2,10 +2,14 @@
 //!
 //! PORTS: ghostty src/terminal/search/Thread.zig
 //!
-//! PORT STATUS: complete (vt-15). Faithful port of the background search
-//! `Thread`: the dedicated thread that searches a terminal for a string match,
-//! interleaving incremental search work with an event loop that drains a
-//! mailbox, refreshes terminal state on a timer, and emits search events.
+//! PORT STATUS: complete (vt-15; phase-6 W2 `149c9f562`). Faithful port of the
+//! background search `Thread`: the dedicated thread that searches a terminal
+//! for a string match, interleaving incremental search work with an event loop
+//! that drains a mailbox, refreshes terminal state on a timer, and emits search
+//! events. The whole-terminal orchestration (the former private `Search`
+//! struct) lives in `search/terminal.rs` (`TerminalSearch`) since `149c9f562`;
+//! this thread keeps only the event-diffing `NotifyState` and the
+//! `search_viewport_dirty` flag hand-off (`feed_locked`).
 //
 //! Search thread that handles searching a terminal for a string match.
 //! This is expected to run on a dedicated thread to try to prevent too much
@@ -21,7 +25,6 @@
 // const builtin = @import("builtin");
 // const testing = std.testing;
 // const Allocator = std.mem.Allocator;
-// const ArenaAllocator = std.heap.ArenaAllocator;
 // const Mutex = std.Thread.Mutex;
 // const xev = @import("../../global.zig").xev;
 // const internal_os = @import("../../os/main.zig");
@@ -31,11 +34,10 @@
 // const FlattenedHighlight = @import("../highlight.zig").Flattened;
 // const UntrackedHighlight = @import("../highlight.zig").Untracked;
 // const ScreenSet = @import("../ScreenSet.zig");
-// const Selection = @import("../Selection.zig");
 // const Terminal = @import("../Terminal.zig");
 //
 // const ScreenSearch = @import("screen.zig").ScreenSearch;
-// const ViewportSearch = @import("viewport.zig").ViewportSearch;
+// const TerminalSearch = @import("terminal.zig").TerminalSearch;
 //
 // PORT NOTE: the reference imports the event-loop backend via
 // `@import("../../global.zig").xev` — a re-export of `@import("xev").Dynamic`.
@@ -56,11 +58,9 @@
 // `.rearm`/`.disarm` callback actions, `run(.once)`/`run(.no_wait)`, and
 // `loop.stop()`/`loop.stopped()`).
 use super::screen::ScreenSearch;
-use super::viewport::ViewportSearch;
+use super::terminal::{SelectScroll, TerminalSearch, Tick as TerminalSearchTick};
 use crate::highlight::Flattened as FlattenedHighlight;
 use crate::highlight::Untracked as UntrackedHighlight;
-use crate::point;
-use crate::screen_set::Key;
 use crate::screen_set::Key as ScreenSetKey;
 use crate::terminal::Terminal;
 use allocator_api2::alloc::Global as Allocator;
@@ -164,8 +164,12 @@ pub struct Thread {
 
     /// Search state. Starts as null and is populated when a search is
     /// started (a needle is given).
-    // search: ?Search = null,
-    pub search: Option<Search>,
+    // search: ?TerminalSearch = null,
+    pub search: Option<TerminalSearch>,
+
+    /// The last-notified values used to diff search state into events.
+    // notify_state: NotifyState = .{},
+    pub notify_state: NotifyState,
 
     /// The options used to initialize this thread.
     // opts: Options,
@@ -224,6 +228,7 @@ impl Thread {
             refresh_c: xev::Completion::new(),
             refresh_active: false,
             search: None,
+            notify_state: NotifyState::default(),
             opts,
         })
     }
@@ -253,13 +258,14 @@ impl Thread {
         //     s.deinit(self.opts.terminal);
         // }
         //
-        // Cleanup must hold the terminal lock: `Search::deinit` reads the live
-        // ScreenSet to decide which searchers may still untrack their pins.
+        // Cleanup must hold the terminal lock: `TerminalSearch::deinit` reads
+        // the live ScreenSet to decide which searchers may still untrack their
+        // pins.
         let mutex = self.opts.mutex;
         let terminal = self.opts.terminal;
         if let Some(s) = self.search.as_mut() {
             let _guard = lock_deferred(mutex);
-            s.deinit(terminal);
+            s.deinit(Some(terminal));
         }
     }
 
@@ -394,7 +400,7 @@ impl Thread {
                 return Ok(());
             }
 
-            // const s: *Search = if (self.search) |*s| s else {
+            // const s: *TerminalSearch = if (self.search) |*s| s else {
             //     // If we're not actively searching, we can block the loop
             //     // until it does some work.
             //     try self.loop.run(.once);
@@ -411,16 +417,16 @@ impl Thread {
             // notifications. Even if the search is complete, there may be
             // notifications to send.
             // if (self.opts.event_cb) |cb| {
-            //     s.notify(
-            //         self.alloc,
-            //         cb,
-            //         self.opts.event_userdata,
-            //     );
+            //     self.notify(s, cb, self.opts.event_userdata);
             // }
             if let Some(cb) = self.opts.event_cb {
-                let alloc = self.alloc;
                 let ud = self.opts.event_userdata;
-                self.search.as_mut().unwrap().notify(alloc, cb, ud);
+                Self::notify(
+                    &mut self.notify_state,
+                    self.search.as_mut().unwrap(),
+                    cb,
+                    ud,
+                );
             }
 
             // if (s.isComplete()) {
@@ -442,23 +448,21 @@ impl Thread {
             match self.search.as_mut().unwrap().tick() {
                 // We're complete now when we were not before. Notify!
                 // .complete => {},
-                Search_Tick::Complete => {}
+                TerminalSearchTick::Complete => {}
 
                 // Forward progress was made.
                 // .progress => {},
-                Search_Tick::Progress => {}
+                TerminalSearchTick::Progress => {}
 
                 // All searches are blocked. Let's grab the lock and feed data.
                 // .blocked => {
-                //     self.opts.mutex.lock();
-                //     defer self.opts.mutex.unlock();
-                //     s.feed(self.alloc, self.opts.terminal);
+                //     self.opts.mutex.lockUncancelable(global.io());
+                //     defer self.opts.mutex.unlock(global.io());
+                //     self.feedLocked(s);
                 // },
-                Search_Tick::Blocked => {
+                TerminalSearchTick::Blocked => {
                     let _guard = lock_deferred(self.opts.mutex);
-                    let alloc = self.alloc;
-                    let terminal = self.opts.terminal;
-                    self.search.as_mut().unwrap().feed(alloc, terminal);
+                    Self::feed_locked(&self.opts, self.search.as_mut().unwrap());
                 }
             }
 
@@ -502,6 +506,34 @@ impl Thread {
         Ok(())
     }
 
+    /// Feed the search from the terminal state. The terminal mutex must
+    /// be held by the caller.
+    // fn feedLocked(self: *Thread, s: *TerminalSearch) void {
+    //
+    // PORT NOTE: the reference takes `self: *Thread` only to read
+    // `self.opts.terminal`, and `s` always points INTO `self.search`. Taking
+    // `&Options` (the field actually read) instead of `&mut self` lets the
+    // callers borrow `self.opts` and `self.search` disjointly — no aliasing
+    // `*mut Thread` is needed. Dereferences the raw `*Terminal` under the
+    // caller-held mutex (crate `*Terminal` convention).
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+    fn feed_locked(opts: &Options, s: &mut TerminalSearch) {
+        // const t = self.opts.terminal;
+        let t = opts.terminal;
+
+        // See the `search_viewport_dirty` flag on the terminal to know
+        // what exactly this is for. But, if this is set, we know the renderer
+        // found the viewport/active area dirty, so the active area must be
+        // re-scanned.
+        // const active_dirty = t.flags.search_viewport_dirty;
+        let active_dirty = unsafe { (*t).flags.search_viewport_dirty };
+        // t.flags.search_viewport_dirty = false;
+        unsafe { (*t).flags.search_viewport_dirty = false };
+
+        // s.feed(t, active_dirty);
+        s.feed(t, active_dirty);
+    }
+
     /// Drain the mailbox.
     // fn drainMailbox(self: *Thread) !void {
     fn drain_mailbox(&mut self) -> Result<(), DrainError> {
@@ -532,117 +564,29 @@ impl Thread {
     }
 
     // fn select(self: *Thread, sel: ScreenSearch.Select) !void {
-    // PORT NOTE: dereferences the raw `self.opts.terminal`/`screen` pointers
-    // under the held mutex; lint allowed per the crate `*Terminal`/`*Screen`
-    // convention. The `for i in 0..hl_chunks.len()` mirrors the reference
-    // `for (0..hl_chunks.len) |i|` verbatim.
-    #[allow(clippy::not_unsafe_ptr_arg_deref, clippy::needless_range_loop)]
     fn select(&mut self, sel: super::screen::Select) -> Result<(), DrainError> {
         // const s = if (self.search) |*s| s else return;
         if self.search.is_none() {
             return Ok(());
         }
-        // self.opts.mutex.lock();
-        // defer self.opts.mutex.unlock();
+        // self.opts.mutex.lockUncancelable(global.io());
+        // defer self.opts.mutex.unlock(global.io());
         let _guard = lock_deferred(self.opts.mutex);
 
-        // A screen can be removed or replaced between refresh ticks. Reconcile
-        // while holding the terminal lock before touching any ScreenSearch pins.
-        // s.feed(self.alloc, self.opts.terminal);
-        let alloc = self.alloc;
+        // if (try s.select(self.opts.terminal, sel, .if_needed)) {
         let terminal = self.opts.terminal;
-        self.search.as_mut().unwrap().feed(alloc, terminal);
-
-        // const screen_search = s.screens.getPtr(s.last_screen.key) orelse return;
-        let last_key = self.search.as_ref().unwrap().last_screen.key;
         if self
             .search
             .as_mut()
             .unwrap()
-            .screens
-            .get_ptr(last_key)
-            .is_none()
+            .select(terminal, sel, SelectScroll::IfNeeded)?
         {
-            return Ok(());
+            // No matter what we reset our selected match cache. This will
+            // trigger a callback which will trigger the renderer to wake up
+            // so it can be notified the screen scrolled.
+            // self.notify_state.selected = null;
+            self.notify_state.selected = None;
         }
-
-        // Make the selection. Ignore the result because we don't
-        // care if the selection didn't change.
-        // _ = try screen_search.select(sel);
-        let screen_search = self
-            .search
-            .as_mut()
-            .unwrap()
-            .screens
-            .get_ptr(last_key)
-            .unwrap();
-        screen_search.select(sel)?;
-
-        // Grab our match if we have one. If we don't have a selection
-        // then we do nothing.
-        // const flattened = screen_search.selectedMatch() orelse return;
-        let flattened = match screen_search.selected_match() {
-            Some(f) => f,
-            None => return Ok(()),
-        };
-
-        // No matter what we reset our selected match cache. This will
-        // trigger a callback which will trigger the renderer to wake up
-        // so it can be notified the screen scrolled.
-        // s.last_screen.selected = null;
-        self.search.as_mut().unwrap().last_screen.selected = None;
-
-        // Grab the current screen and see if this match is visible within
-        // the viewport already. If it is, we do nothing.
-        // const screen = self.opts.terminal.screens.get(
-        //     s.last_screen.key,
-        // ) orelse return;
-        let screen: *mut crate::screen::Screen =
-            match unsafe { (*self.opts.terminal).screens.get(last_key) } {
-                Some(s) => s,
-                None => return Ok(()),
-            };
-
-        // Grab the viewport. Viewports and selections are usually small
-        // so this check isn't very expensive, despite appearing O(N^2),
-        // both Ns are usually equal to 1.
-        // var it = screen.pages.pageIterator(
-        //     .right_down,
-        //     .{ .viewport = .{} },
-        //     null,
-        // );
-        let mut it = unsafe {
-            (*screen).pages.page_iterator(
-                crate::pagelist::iter::Direction::RightDown,
-                point::Point::Viewport(point::Coordinate { x: 0, y: 0 }),
-                None,
-            )
-        };
-        // const hl_chunks = flattened.chunks.slice();
-        let hl_chunks = &flattened.chunks;
-        // while (it.next()) |chunk| {
-        while let Some(chunk) = it.next() {
-            // for (0..hl_chunks.len) |i| {
-            for i in 0..hl_chunks.len() {
-                // const hl_chunk = hl_chunks.get(i);
-                let hl_chunk = &hl_chunks[i];
-                // if (chunk.overlaps(.{
-                //     .node = hl_chunk.node,
-                //     .start = hl_chunk.start,
-                //     .end = hl_chunk.end,
-                // })) return;
-                if chunk.overlaps(crate::pagelist::iter::Chunk {
-                    node: hl_chunk.node,
-                    start: hl_chunk.start,
-                    end: hl_chunk.end,
-                }) {
-                    return Ok(());
-                }
-            }
-        }
-
-        // screen.scroll(.{ .pin = flattened.startPin() });
-        unsafe { (*screen).scroll(crate::screen::Scroll::Pin(flattened.start_pin())) };
         Ok(())
     }
 
@@ -659,24 +603,26 @@ impl Thread {
         // if (self.search) |*s| {
         if self.search.is_some() {
             // If our search is unchanged, do nothing.
-            // if (std.ascii.eqlIgnoreCase(s.viewport.needle(), needle)) return;
-            if ascii_eql_ignore_case(self.search.as_ref().unwrap().viewport.needle(), needle) {
+            // if (std.ascii.eqlIgnoreCase(s.needle(), needle)) return;
+            if ascii_eql_ignore_case(self.search.as_ref().unwrap().needle(), needle) {
                 return Ok(());
             }
 
             // {
-            //     self.opts.mutex.lock();
-            //     defer self.opts.mutex.unlock();
+            //     self.opts.mutex.lockUncancelable(global.io());
+            //     defer self.opts.mutex.unlock(global.io());
             //     s.deinit(self.opts.terminal);
             // }
             // self.search = null;
+            // self.notify_state = .{};
             {
                 let mutex = self.opts.mutex;
                 let terminal = self.opts.terminal;
                 let _guard = lock_deferred(mutex);
-                self.search.as_mut().unwrap().deinit(terminal);
+                self.search.as_mut().unwrap().deinit(Some(terminal));
             }
             self.search = None;
+            self.notify_state = NotifyState::default();
 
             // When the search changes then we need to emit that it stopped.
             // if (self.opts.event_cb) |cb| {
@@ -707,17 +653,207 @@ impl Thread {
 
         // Setup our search state.
         // self.search = try .init(self.alloc, needle);
-        self.search = Some(Search::init(self.alloc, needle)?);
+        // self.notify_state = .{};
+        self.search = Some(TerminalSearch::init(self.alloc, needle)?);
+        self.notify_state = NotifyState::default();
 
         // We need to grab the terminal lock and do an initial feed.
-        // self.opts.mutex.lock();
-        // defer self.opts.mutex.unlock();
+        // self.opts.mutex.lockUncancelable(global.io());
+        // defer self.opts.mutex.unlock(global.io());
         let _guard = lock_deferred(self.opts.mutex);
-        // self.search.?.feed(self.alloc, self.opts.terminal);
-        let alloc = self.alloc;
-        let terminal = self.opts.terminal;
-        self.search.as_mut().unwrap().feed(alloc, terminal);
+        // self.feedLocked(&self.search.?);
+        Self::feed_locked(&self.opts, self.search.as_mut().unwrap());
         Ok(())
+    }
+
+    /// Notify about any changes to the search state by diffing against
+    /// the last-notified values.
+    ///
+    /// This doesn't require any locking as it only reads search-owned state.
+    // fn notify(
+    //     self: *Thread,
+    //     s: *TerminalSearch,
+    //     cb: EventCallback,
+    //     ud: ?*anyopaque,
+    // ) void {
+    //
+    // PORT NOTE: the reference takes `self: *Thread` only for
+    // `&self.notify_state`, and `s` always points INTO `self.search`. Taking
+    // the `NotifyState` directly (the field actually used) lets the caller
+    // borrow `self.notify_state` and `self.search` disjointly. The reference
+    // holds one `screen_search: *ScreenSearch` across the whole body; the
+    // borrow checker can't hold a `&mut ScreenSearch` (into `s.screens`)
+    // across the `s.viewportMatches()` call, so the searcher is re-fetched
+    // after it — `viewport_matches` never touches `screens`, so the entry is
+    // the same one.
+    fn notify(
+        state: &mut NotifyState,
+        s: &mut TerminalSearch,
+        cb: EventCallback,
+        ud: *mut core::ffi::c_void,
+    ) {
+        // const state = &self.notify_state;
+
+        // A screen switch makes all previously notified per-screen state
+        // stale, so reset it to force recalculations and notifications.
+        // if (state.key != s.active_key) {
+        //     state.key = s.active_key;
+        //     state.total = null;
+        //     state.selected = null;
+        // }
+        if state.key != s.active_key {
+            state.key = s.active_key;
+            state.total = None;
+            state.selected = None;
+        }
+
+        // const screen_search = s.activeScreenSearch() orelse return;
+        let screen_search: &mut ScreenSearch = match s.active_screen_search() {
+            Some(ss) => ss,
+            None => return,
+        };
+
+        // Check our total match data
+        // const total = screen_search.matchesLen();
+        let total = screen_search.matches_len();
+        // if (total != state.total) {
+        if Some(total) != state.total {
+            // log.debug("notifying total matches={}", .{total});
+            eprintln!("debug(search_thread): notifying total matches={}", total);
+            // state.total = total;
+            state.total = Some(total);
+            // cb(.{ .total_matches = total }, ud);
+            cb(Event::TotalMatches(total), ud);
+        }
+
+        // Check our viewport matches. If they're stale, we collect them
+        // now. We do this as part of notify and not tick because the
+        // viewport search is very fast and doesn't require ticked progress
+        // or feeds.
+        // if (s.stale_viewport_matches) viewport: {
+        if s.stale_viewport_matches {
+            'viewport: {
+                // const matches = s.viewportMatches() catch |err| {
+                //     log.warn("error collecting viewport matches err={}", .{err});
+                //     break :viewport;
+                // };
+                let matches = match s.viewport_matches() {
+                    Ok(m) => m,
+                    Err(err) => {
+                        eprintln!(
+                            "warn(search_thread): error collecting viewport matches err={:?}",
+                            err
+                        );
+                        break 'viewport;
+                    }
+                };
+
+                // log.debug("notifying viewport matches len={}", .{matches.len});
+                eprintln!(
+                    "debug(search_thread): notifying viewport matches len={}",
+                    matches.len()
+                );
+                // cb(.{ .viewport_matches = matches }, ud);
+                cb(Event::ViewportMatches(matches), ud);
+            }
+        }
+
+        // Re-fetch the searcher (see the PORT NOTE above): same entry.
+        let screen_search: &mut ScreenSearch = match s.active_screen_search() {
+            Some(ss) => ss,
+            None => return,
+        };
+
+        // Check our last selected match data.
+        // if (screen_search.selected) |m| match: {
+        if let Some(m_idx) = screen_search.selected.as_ref().map(|m| m.idx) {
+            'select_match: {
+                // const flattened = screen_search.selectedMatch() orelse break :match;
+                let flattened = match screen_search.selected_match() {
+                    Some(f) => f,
+                    None => break 'select_match,
+                };
+                // const untracked = flattened.untracked();
+                let untracked = flattened.untracked();
+                // if (state.selected) |prev| {
+                if let Some(prev) = state.selected.as_ref() {
+                    // if (prev.idx == m.idx and prev.highlight.eql(untracked)) {
+                    //     // Same selection, don't update it.
+                    //     break :match;
+                    // }
+                    //
+                    // PORT NOTE: `Untracked::eql` consumes its operands; the Rust
+                    // `Untracked` is not `Copy` (its `Pin`s use explicit
+                    // `pin_copy()`), so we compare via fresh `Untracked` copies
+                    // built from the pins rather than moving `prev.highlight`/
+                    // `untracked` (both are needed afterwards).
+                    let prev_copy = UntrackedHighlight {
+                        start: prev.highlight.start.pin_copy(),
+                        end: prev.highlight.end.pin_copy(),
+                    };
+                    let untracked_copy = UntrackedHighlight {
+                        start: untracked.start.pin_copy(),
+                        end: untracked.end.pin_copy(),
+                    };
+                    if prev.idx == m_idx && prev_copy.eql(untracked_copy) {
+                        // Same selection, don't update it.
+                        break 'select_match;
+                    }
+                }
+
+                // New selection, notify!
+                // state.selected = .{
+                //     .idx = m.idx,
+                //     .highlight = untracked,
+                // };
+                state.selected = Some(NotifyStateSelected {
+                    idx: m_idx,
+                    highlight: untracked,
+                });
+
+                // log.debug("notifying selection updated idx={}", .{m.idx});
+                eprintln!(
+                    "debug(search_thread): notifying selection updated idx={}",
+                    m_idx
+                );
+                // cb(
+                //     .{ .selected_match = .{
+                //         .idx = m.idx,
+                //         .highlight = flattened,
+                //     } },
+                //     ud,
+                // );
+                cb(
+                    Event::SelectedMatch(Some(SelectedMatch {
+                        idx: m_idx,
+                        highlight: flattened,
+                    })),
+                    ud,
+                );
+            }
+        // } else if (state.selected != null) {
+        } else if state.selected.is_some() {
+            // log.debug("notifying selection cleared", .{});
+            eprintln!("debug(search_thread): notifying selection cleared");
+            // state.selected = null;
+            state.selected = None;
+            // cb(
+            //     .{ .selected_match = null },
+            //     ud,
+            // );
+            cb(Event::SelectedMatch(None), ud);
+        }
+
+        // Send our complete notification if we just completed.
+        // if (!state.complete and s.isComplete()) {
+        if !state.complete && s.is_complete() {
+            // log.debug("notifying search complete", .{});
+            eprintln!("debug(search_thread): notifying search complete");
+            // state.complete = true;
+            state.complete = true;
+            // cb(.complete, ud);
+            cb(Event::Complete, ud);
+        }
     }
 
     // fn startRefreshTimer(self: *Thread) void {
@@ -821,16 +957,14 @@ impl Thread {
 
         // Run our feed if we have a search active.
         // if (self.search) |*s| {
-        //     self.opts.mutex.lock();
-        //     defer self.opts.mutex.unlock();
-        //     s.feed(self.alloc, self.opts.terminal);
+        //     self.opts.mutex.lockUncancelable(global.io());
+        //     defer self.opts.mutex.unlock(global.io());
+        //     self.feedLocked(s);
         // }
-        let alloc = self.alloc;
-        let terminal = self.opts.terminal;
         let mutex = self.opts.mutex;
         if let Some(s) = self.search.as_mut() {
             let _guard = lock_deferred(mutex);
-            s.feed(alloc, terminal);
+            Self::feed_locked(&self.opts, s);
         }
 
         // Only continue if we're still active
@@ -990,742 +1124,46 @@ pub struct SelectedMatch {
     pub highlight: FlattenedHighlight,
 }
 
-/// Search state.
-// const Search = struct {
-pub struct Search {
-    /// Active viewport search for the active screen.
-    // viewport: ViewportSearch,
-    pub viewport: ViewportSearch,
-
-    /// The searchers for all the screens.
-    // screens: std.EnumMap(ScreenSet.Key, ScreenSearch),
-    //
-    // PORT NOTE: the reference `std.EnumMap(ScreenSet.Key, ScreenSearch)` is
-    // ported to the per-key `Option<ScreenSearch>` array used elsewhere in this
-    // crate for `EnumMap` (see `ScreenSet.all`), keyed by `Key as usize`.
-    pub screens: ScreenSearchMap,
-
-    /// ScreenSet generations captured when each searcher was initialized.
-    /// Allocators may reuse a destroyed Screen address, so pointer equality
-    /// alone cannot distinguish replacement screens from stale handles.
-    // screen_generations: std.EnumMap(ScreenSet.Key, usize),
-    //
-    // PORT NOTE: `std.EnumMap(ScreenSet.Key, usize)` — an EnumMap entry can be
-    // ABSENT, and `screenIsValid` distinguishes absent from present, so this is
-    // a per-key `Option<usize>` array (NOT `[usize; COUNT]` like
-    // `ScreenSet.generations`, which is always populated).
-    pub screen_generations: [Option<usize>; Key::COUNT],
-
-    /// All state related to screen switches, collected so that when
-    /// we switch screens it makes everything related stale, too.
-    // last_screen: ScreenState,
-    pub last_screen: ScreenState,
-
-    /// True if we sent the complete notification yet.
-    // last_complete: bool,
-    pub last_complete: bool,
-
-    /// The last viewport matches we found.
-    // stale_viewport_matches: bool,
-    pub stale_viewport_matches: bool,
-}
-
-// const ScreenState = struct {
-pub struct ScreenState {
-    /// Last active screen key
-    // key: ScreenSet.Key,
+/// The last-notified values used by `notify` to diff search state
+/// into events.
+// const NotifyState = struct {
+pub struct NotifyState {
+    /// The active screen key the state below was captured against.
+    // key: ScreenSet.Key = .primary,
     pub key: ScreenSetKey,
 
     /// Last notified total matches count
     // total: ?usize = null,
     pub total: Option<usize>,
 
-    /// Last notified selected match index
-    // selected: ?SelectedMatch = null,
-    pub selected: Option<ScreenStateSelectedMatch>,
+    /// Last notified selected match
+    // selected: ?Selected = null,
+    pub selected: Option<NotifyStateSelected>,
+
+    /// True if we sent the complete notification yet.
+    // complete: bool = false,
+    pub complete: bool,
 }
 
-// const SelectedMatch = struct {
+// `NotifyState = .{}` — the field defaults.
+impl Default for NotifyState {
+    fn default() -> NotifyState {
+        NotifyState {
+            key: ScreenSetKey::Primary,
+            total: None,
+            selected: None,
+            complete: false,
+        }
+    }
+}
+
+// const Selected = struct {
 //     idx: usize,
 //     highlight: UntrackedHighlight,
 // };
-pub struct ScreenStateSelectedMatch {
+pub struct NotifyStateSelected {
     pub idx: usize,
     pub highlight: UntrackedHighlight,
-}
-
-/// `std.EnumMap(ScreenSet.Key, ScreenSearch)` ported as a per-key array.
-pub struct ScreenSearchMap {
-    entries: [Option<ScreenSearch>; Key::COUNT],
-}
-
-impl ScreenSearchMap {
-    // .init(.{})
-    fn init() -> ScreenSearchMap {
-        ScreenSearchMap {
-            entries: [None, None],
-        }
-    }
-
-    // self.screens.getPtr(key)
-    fn get_ptr(&mut self, key: ScreenSetKey) -> Option<&mut ScreenSearch> {
-        self.entries[key as usize].as_mut()
-    }
-
-    // self.screens.get(key)
-    fn get(&self, key: ScreenSetKey) -> Option<&ScreenSearch> {
-        self.entries[key as usize].as_ref()
-    }
-
-    // self.screens.contains(key)
-    fn contains(&self, key: ScreenSetKey) -> bool {
-        self.entries[key as usize].is_some()
-    }
-
-    // self.screens.put(key, value)
-    fn put(&mut self, key: ScreenSetKey, value: ScreenSearch) {
-        self.entries[key as usize] = Some(value);
-    }
-
-    // self.screens.remove(key)
-    fn remove(&mut self, key: ScreenSetKey) {
-        self.entries[key as usize] = None;
-    }
-}
-
-/// Result of `Search.tick`.
-// pub const Tick = enum {
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum Search_Tick {
-    /// All searches are complete.
-    // complete,
-    Complete,
-
-    /// Progress was made on at least one screen.
-    // progress,
-    Progress,
-
-    /// All incomplete searches are blocked on feed.
-    // blocked,
-    Blocked,
-}
-
-impl Search {
-    // pub fn init(
-    //     alloc: Allocator,
-    //     needle: []const u8,
-    // ) Allocator.Error!Search {
-    pub fn init(alloc: Allocator, needle: &[u8]) -> Result<Search, crate::pagelist::OutOfMemory> {
-        // var vp: ViewportSearch = try .init(alloc, needle);
-        // errdefer vp.deinit();
-        let mut vp: ViewportSearch = ViewportSearch::init(alloc, needle)?;
-
-        // We use dirty tracking for active area changes. Start with it
-        // dirty so the first change is re-searched.
-        // vp.active_dirty = true;
-        vp.active_dirty = Some(true);
-
-        // return .{
-        //     .viewport = vp,
-        //     .screens = .init(.{}),
-        //     .screen_generations = .init(.{}),
-        //     .last_screen = .{ .key = .primary },
-        //     .last_complete = false,
-        //     .stale_viewport_matches = true,
-        // };
-        Ok(Search {
-            viewport: vp,
-            screens: ScreenSearchMap::init(),
-            screen_generations: [None, None],
-            last_screen: ScreenState {
-                key: ScreenSetKey::Primary,
-                total: None,
-                selected: None,
-            },
-            last_complete: false,
-            stale_viewport_matches: true,
-        })
-    }
-
-    // pub fn deinit(self: *Search, t: *Terminal) void {
-    //
-    // PORT NOTE: dereferences the raw `*Terminal` to read its `ScreenSet`; the
-    // caller holds the shared mutex (see `Thread::deinit` /
-    // `Thread::change_needle`), matching the reference.
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub fn deinit(&mut self, t: *const Terminal) {
-        // self.viewport.deinit();
-        self.viewport.deinit();
-        // var it = self.screens.iterator();
-        // while (it.next()) |entry| {
-        //     if (self.screenIsValid(&t.screens, entry.key, entry.value)) {
-        //         entry.value.deinit();
-        //     } else {
-        //         entry.value.deinitScreenInvalid();
-        //     }
-        // }
-        // SB: raw `addr_of!` (reference `&t.screens`), NOT `&(*t).screens` — the
-        // searchers hold live raw aliases into these screens' PageLists, so no
-        // reference into the Terminal is formed here
-        // (rust-mut-args-strongly-protected).
-        let screens: *const crate::screen_set::ScreenSet =
-            unsafe { core::ptr::addr_of!((*t).screens) };
-        for key_i in 0..Key::COUNT {
-            let entry_key = Self::key_from_index(key_i);
-            // The reference's `screenIsValid` takes `*const ScreenSearch` only
-            // to read `search.screen`; passing that pointer directly keeps the
-            // `&self` borrow disjoint from the `&mut` entry borrow below.
-            let entry_screen = match self.screens.entries[key_i].as_ref() {
-                Some(ss) => ss.screen,
-                None => continue,
-            };
-            let valid = self.screen_is_valid(screens, entry_key, entry_screen);
-            let entry = self.screens.entries[key_i].as_mut().unwrap();
-            if valid {
-                entry.deinit();
-            } else {
-                entry.deinit_screen_invalid();
-            }
-        }
-    }
-
-    /// `std.EnumMap` iteration order — key index to key.
-    fn key_from_index(key_i: usize) -> ScreenSetKey {
-        match key_i {
-            0 => ScreenSetKey::Primary,
-            _ => ScreenSetKey::Alternate,
-        }
-    }
-
-    // fn screenIsValid(
-    //     self: *const Search,
-    //     screens: *const ScreenSet,
-    //     key: ScreenSet.Key,
-    //     search: *const ScreenSearch,
-    // ) bool {
-    //
-    // PORT NOTE: takes the searcher's `screen` pointer rather than the whole
-    // `*const ScreenSearch` — that field is all the reference reads, and this
-    // keeps the borrow disjoint from the caller's `&mut` on the same entry.
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    fn screen_is_valid(
-        &self,
-        screens: *const crate::screen_set::ScreenSet,
-        key: ScreenSetKey,
-        search_screen: *mut crate::screen::Screen,
-    ) -> bool {
-        // const generation = self.screen_generations.get(key) orelse return false;
-        let generation = match self.screen_generations[key as usize] {
-            Some(g) => g,
-            None => return false,
-        };
-        // if (generation != screens.generation(key)) return false;
-        if generation != unsafe { (*screens).generation(key) } {
-            return false;
-        }
-        // const actual = screens.get(key) orelse return false;
-        let actual = match unsafe { (*screens).get(key) } {
-            Some(a) => a,
-            None => return false,
-        };
-        // return actual == search.screen;
-        core::ptr::eq(actual, search_screen)
-    }
-
-    /// Returns true if all searches on all screens are complete.
-    // pub fn isComplete(self: *Search) bool {
-    pub fn is_complete(&self) -> bool {
-        // var it = self.screens.iterator();
-        // while (it.next()) |entry| {
-        //     if (!entry.value.state.isComplete()) return false;
-        // }
-        for s in self.screens.entries.iter().flatten() {
-            if !s.state.is_complete() {
-                return false;
-            }
-        }
-
-        // return true;
-        true
-    }
-
-    /// Tick the search forward as much as possible without acquiring
-    /// the big lock. Returns the overall tick progress.
-    // pub fn tick(self: *Search) Tick {
-    pub fn tick(&mut self) -> Search_Tick {
-        // var result: Tick = .complete;
-        let mut result: Search_Tick = Search_Tick::Complete;
-        // var it = self.screens.iterator();
-        // while (it.next()) |entry| {
-        for key_i in 0..Key::COUNT {
-            let entry_key = match key_i {
-                0 => ScreenSetKey::Primary,
-                _ => ScreenSetKey::Alternate,
-            };
-            let entry = match self.screens.entries[key_i].as_mut() {
-                Some(e) => e,
-                None => continue,
-            };
-            // if (entry.value.tick()) {
-            //     result = .progress;
-            // } else |err| switch (err) {
-            match entry.tick() {
-                Ok(()) => {
-                    result = Search_Tick::Progress;
-                }
-                // Ignore... nothing we can do.
-                // error.OutOfMemory => log.warn(
-                //     "error ticking screen search key={} err={}",
-                //     .{ entry.key, err },
-                // ),
-                Err(super::screen::TickError::OutOfMemory) => {
-                    eprintln!(
-                        "warn(search_thread): error ticking screen search key={:?} err={:?}",
-                        entry_key,
-                        super::screen::TickError::OutOfMemory
-                    );
-                }
-
-                // Ignore, good for us. State remains whatever it is.
-                // error.SearchComplete => {},
-                Err(super::screen::TickError::SearchComplete) => {}
-
-                // Ignore, too, progressed
-                // error.FeedRequired => switch (result) {
-                Err(super::screen::TickError::FeedRequired) => match result {
-                    // If we think we're complete, we're not because we're
-                    // blocked now (nothing made progress).
-                    // .complete => result = .blocked,
-                    Search_Tick::Complete => result = Search_Tick::Blocked,
-
-                    // If we made some progress, we remain in progress
-                    // since blocked means no progress at all.
-                    // .progress => {},
-                    Search_Tick::Progress => {}
-
-                    // If we're blocked already then we remain blocked.
-                    // .blocked => {},
-                    Search_Tick::Blocked => {}
-                },
-            }
-        }
-
-        // log.debug("tick result={}", .{result});
-        // return result;
-        result
-    }
-
-    /// Grab the mutex and update any state that requires it, such as
-    /// feeding additional data to the searches or updating the active screen.
-    // pub fn feed(
-    //     self: *Search,
-    //     alloc: Allocator,
-    //     t: *Terminal,
-    // ) void {
-    // PORT NOTE: `t` is a raw pointer (reference `*Terminal`); the body
-    // dereferences it under the held mutex, so the lint is allowed (the
-    // convention used across this crate for `*Terminal`/`*Screen` args).
-    #[allow(clippy::not_unsafe_ptr_arg_deref)]
-    pub fn feed(&mut self, alloc: Allocator, t: *mut Terminal) {
-        // Update our active screen
-        // if (t.screens.active_key != self.last_screen.key) {
-        if unsafe { (*t).screens.active_key } != self.last_screen.key {
-            // The default values will force resets of a bunch of other
-            // state too to force recalculations and notifications.
-            // self.last_screen = .{ .key = t.screens.active_key };
-            self.last_screen = ScreenState {
-                key: unsafe { (*t).screens.active_key },
-                total: None,
-                selected: None,
-            };
-        }
-
-        // Reconcile our screens with the terminal screens. Remove
-        // searchers for screens that no longer exist and add searchers
-        // for screens that do exist but we don't have yet.
-        {
-            // Remove screens we have that no longer exist or changed.
-            // var it = self.screens.iterator();
-            // while (it.next()) |entry| {
-            for key_i in 0..Key::COUNT {
-                let entry_key = Self::key_from_index(key_i);
-                let entry_screen = match self.screens.entries[key_i].as_ref() {
-                    Some(ss) => ss.screen,
-                    None => continue,
-                };
-                // const remove = !self.screenIsValid(
-                //     &t.screens,
-                //     entry.key,
-                //     entry.value,
-                // );
-                // SB: raw `addr_of!`, NOT `&(*t).screens` — see `Search::deinit`.
-                let remove: bool = !self.screen_is_valid(
-                    unsafe { core::ptr::addr_of!((*t).screens) },
-                    entry_key,
-                    entry_screen,
-                );
-
-                // if (remove) {
-                if remove {
-                    // entry.value.deinitScreenInvalid();
-                    // _ = self.screens.remove(entry.key);
-                    // _ = self.screen_generations.remove(entry.key);
-                    //
-                    // The screen this searcher was built on is gone or was
-                    // replaced, so its tracked pins were freed with that
-                    // screen's PageList pool and must not be untracked.
-                    self.screens.entries[key_i]
-                        .as_mut()
-                        .unwrap()
-                        .deinit_screen_invalid();
-                    self.screens.remove(entry_key);
-                    self.screen_generations[key_i] = None;
-                }
-            }
-        }
-        {
-            // Add screens that exist but we don't have yet.
-            // var it = t.screens.all.iterator();
-            // while (it.next()) |entry| {
-            for key_i in 0..Key::COUNT {
-                let entry_key = match key_i {
-                    0 => ScreenSetKey::Primary,
-                    _ => ScreenSetKey::Alternate,
-                };
-                let entry_value = match unsafe { (*t).screens.all[key_i] } {
-                    Some(v) => v,
-                    None => continue,
-                };
-                // if (self.screens.contains(entry.key)) continue;
-                if self.screens.contains(entry_key) {
-                    continue;
-                }
-                // const screen_search = ScreenSearch.init(
-                //     alloc,
-                //     entry.value.*,
-                //     self.viewport.needle(),
-                // ) catch |err| switch (err) {
-                let needle_owned: Vec<u8> = self.viewport.needle().to_vec();
-                match ScreenSearch::init(alloc, entry_value, &needle_owned) {
-                    // self.screens.put(entry.key, screen_search);
-                    // self.screen_generations.put(
-                    //     entry.key,
-                    //     t.screens.generation(entry.key),
-                    // );
-                    Ok(ss) => {
-                        self.screens.put(entry_key, ss);
-                        self.screen_generations[key_i] =
-                            Some(unsafe { (*t).screens.generation(entry_key) });
-                    }
-                    // error.OutOfMemory => {
-                    //     // OOM is probably going to sink the entire ship but
-                    //     // we can just ignore it and wait on the next
-                    //     // reconciliation to try again.
-                    //     log.warn(
-                    //         "error initializing screen search for key={} err={}",
-                    //         .{ entry.key, err },
-                    //     );
-                    //     continue;
-                    // },
-                    Err(err) => {
-                        eprintln!(
-                            "warn(search_thread): error initializing screen search for key={:?} err={:?}",
-                            entry_key, err
-                        );
-                        continue;
-                    }
-                }
-            }
-        }
-
-        // See the `search_viewport_dirty` flag on the terminal to know
-        // what exactly this is for. But, if this is set, we know the renderer
-        // found the viewport/active area dirty, so we should mark it as
-        // dirty in our viewport searcher so it forces a re-search.
-        // if (t.flags.search_viewport_dirty) {
-        if unsafe { (*t).flags.search_viewport_dirty } {
-            // t.flags.search_viewport_dirty = false;
-            unsafe { (*t).flags.search_viewport_dirty = false };
-
-            // Mark our viewport dirty so it researches the active
-            // self.viewport.active_dirty = true;
-            self.viewport.active_dirty = Some(true);
-
-            // Reload our active area for our active screen
-            // if (self.screens.getPtr(t.screens.active_key)) |screen_search| {
-            let active_key = unsafe { (*t).screens.active_key };
-            if let Some(screen_search) = self.screens.get_ptr(active_key) {
-                // screen_search.reloadActive() catch |err| switch (err) {
-                //     error.OutOfMemory => log.warn(
-                //         "error reloading active area for screen key={} err={}",
-                //         .{ t.screens.active_key, err },
-                //     ),
-                // };
-                if let Err(err) = screen_search.reload_active() {
-                    eprintln!(
-                        "warn(search_thread): error reloading active area for screen key={:?} err={:?}",
-                        active_key, err
-                    );
-                }
-            }
-        }
-
-        // Check our viewport for changes.
-        // if (self.viewport.update(&t.screens.active.pages)) |updated| {
-        //     if (updated) self.stale_viewport_matches = true;
-        // } else |err| switch (err) {
-        //     error.OutOfMemory => log.warn(
-        //         "error updating viewport search err={}",
-        //         .{err},
-        //     ),
-        // }
-        let active_pages: *const crate::pagelist::PageList =
-            unsafe { &(*(*t).screens.active).pages };
-        match self.viewport.update(unsafe { &*active_pages }) {
-            Ok(updated) => {
-                if updated {
-                    self.stale_viewport_matches = true;
-                }
-            }
-            Err(err) => {
-                eprintln!(
-                    "warn(search_thread): error updating viewport search err={:?}",
-                    err
-                );
-            }
-        }
-
-        // Feed data
-        // var it = self.screens.iterator();
-        // while (it.next()) |entry| {
-        for key_i in 0..Key::COUNT {
-            let entry_key = match key_i {
-                0 => ScreenSetKey::Primary,
-                _ => ScreenSetKey::Alternate,
-            };
-            let entry = match self.screens.entries[key_i].as_mut() {
-                Some(e) => e,
-                None => continue,
-            };
-            // if (entry.value.state.needsFeed()) {
-            if entry.state.needs_feed() {
-                // entry.value.feed() catch |err| switch (err) {
-                //     error.OutOfMemory => log.warn(
-                //         "error feeding screen search key={} err={}",
-                //         .{ entry.key, err },
-                //     ),
-                // };
-                if let Err(err) = entry.feed() {
-                    eprintln!(
-                        "warn(search_thread): error feeding screen search key={:?} err={:?}",
-                        entry_key, err
-                    );
-                }
-            }
-        }
-    }
-
-    /// Notify about any changes to the search state.
-    ///
-    /// This doesn't require any locking as it only reads internal state.
-    // pub fn notify(
-    //     self: *Search,
-    //     alloc: Allocator,
-    //     cb: EventCallback,
-    //     ud: ?*anyopaque,
-    // ) void {
-    pub fn notify(&mut self, alloc: Allocator, cb: EventCallback, ud: *mut core::ffi::c_void) {
-        let _ = alloc;
-        // const screen_search = self.screens.get(self.last_screen.key) orelse return;
-        let last_key = self.last_screen.key;
-        if self.screens.get(last_key).is_none() {
-            return;
-        }
-
-        // Check our total match data
-        // const total = screen_search.matchesLen();
-        let total = self.screens.get(last_key).unwrap().matches_len();
-        // if (total != self.last_screen.total) {
-        if Some(total) != self.last_screen.total {
-            // log.debug("notifying total matches={}", .{total});
-            eprintln!("debug(search_thread): notifying total matches={}", total);
-            // self.last_screen.total = total;
-            self.last_screen.total = Some(total);
-            // cb(.{ .total_matches = total }, ud);
-            cb(Event::TotalMatches(total), ud);
-        }
-
-        // Check our viewport matches. If they're stale, we do the
-        // viewport search now. We do this as part of notify and not
-        // tick because the viewport search is very fast and doesn't
-        // require ticked progress or feeds.
-        // if (self.stale_viewport_matches) viewport: {
-        if self.stale_viewport_matches {
-            'viewport: {
-                // We always make stale as false. Even if we fail below
-                // we require a re-feed to re-search the viewport. The feed
-                // process will make it stale again.
-                // self.stale_viewport_matches = false;
-                self.stale_viewport_matches = false;
-
-                // var arena: ArenaAllocator = .init(alloc);
-                // defer arena.deinit();
-                // const arena_alloc = arena.allocator();
-                // var results: std.ArrayList(FlattenedHighlight) = .empty;
-                //
-                // PORT NOTE: the reference allocates the cloned highlights in an
-                // arena freed on scope exit. The Rust `Flattened` owns its
-                // storage and drops, so the result `Vec` plays the arena's role;
-                // the callback receives the slice, then the `Vec` (and each
-                // `Flattened`) drops at scope exit — identical lifetime.
-                let mut results: Vec<FlattenedHighlight> = Vec::new();
-                // while (self.viewport.next()) |hl| {
-                while let Some(hl) = self.viewport.next() {
-                    // const hl_cloned = hl.clone(arena_alloc) catch continue;
-                    let hl_cloned = match hl.clone() {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    };
-                    // results.append(arena_alloc, hl_cloned) catch |err| switch (err) {
-                    //     error.OutOfMemory => {
-                    //         log.warn(
-                    //             "error collecting viewport matches err={}",
-                    //             .{err},
-                    //         );
-                    //         // Reset the viewport so we force an update on the
-                    //         // next feed.
-                    //         self.viewport.reset();
-                    //         break :viewport;
-                    //     },
-                    // };
-                    //
-                    // PORT NOTE: `Vec::push` cannot fail-with-OOM in the std
-                    // sense (it aborts on alloc failure), so the reference's
-                    // error branch (log + `viewport.reset()` + break) is
-                    // structurally unreachable; the success path is preserved.
-                    results.push(hl_cloned);
-                }
-
-                // log.debug("notifying viewport matches len={}", .{results.items.len});
-                eprintln!(
-                    "debug(search_thread): notifying viewport matches len={}",
-                    results.len()
-                );
-                // cb(.{ .viewport_matches = results.items }, ud);
-                cb(Event::ViewportMatches(&results), ud);
-                let _ = &mut results;
-                break 'viewport;
-            }
-        }
-
-        // Check our last selected match data.
-        // if (screen_search.selected) |m| match: {
-        if self.screens.get(last_key).unwrap().selected.is_some() {
-            'select_match: {
-                // const flattened = screen_search.selectedMatch() orelse break :match;
-                let flattened = match self.screens.get(last_key).unwrap().selected_match() {
-                    Some(f) => f,
-                    None => break 'select_match,
-                };
-                // const untracked = flattened.untracked();
-                let untracked = flattened.untracked();
-                // if (self.last_screen.selected) |prev| {
-                if let Some(prev) = self.last_screen.selected.as_ref() {
-                    // if (prev.idx == m.idx and prev.highlight.eql(untracked)) {
-                    //     // Same selection, don't update it.
-                    //     break :match;
-                    // }
-                    //
-                    // PORT NOTE: `Untracked::eql` consumes its operands; the Rust
-                    // `Untracked` is not `Copy` (its `Pin`s use explicit
-                    // `pin_copy()`), so we compare via fresh `Untracked` copies
-                    // built from the pins rather than moving `prev.highlight`/
-                    // `untracked` (both are needed afterwards).
-                    let m_idx = self
-                        .screens
-                        .get(last_key)
-                        .unwrap()
-                        .selected
-                        .as_ref()
-                        .unwrap()
-                        .idx;
-                    let prev_copy = UntrackedHighlight {
-                        start: prev.highlight.start.pin_copy(),
-                        end: prev.highlight.end.pin_copy(),
-                    };
-                    let untracked_copy = UntrackedHighlight {
-                        start: untracked.start.pin_copy(),
-                        end: untracked.end.pin_copy(),
-                    };
-                    if prev.idx == m_idx && prev_copy.eql(untracked_copy) {
-                        // Same selection, don't update it.
-                        break 'select_match;
-                    }
-                }
-
-                // New selection, notify!
-                // self.last_screen.selected = .{
-                //     .idx = m.idx,
-                //     .highlight = untracked,
-                // };
-                let m_idx = self
-                    .screens
-                    .get(last_key)
-                    .unwrap()
-                    .selected
-                    .as_ref()
-                    .unwrap()
-                    .idx;
-                self.last_screen.selected = Some(ScreenStateSelectedMatch {
-                    idx: m_idx,
-                    highlight: untracked,
-                });
-
-                // log.debug("notifying selection updated idx={}", .{m.idx});
-                eprintln!(
-                    "debug(search_thread): notifying selection updated idx={}",
-                    m_idx
-                );
-                // cb(
-                //     .{ .selected_match = .{
-                //         .idx = m.idx,
-                //         .highlight = flattened,
-                //     } },
-                //     ud,
-                // );
-                cb(
-                    Event::SelectedMatch(Some(SelectedMatch {
-                        idx: m_idx,
-                        highlight: flattened,
-                    })),
-                    ud,
-                );
-            }
-        // } else if (self.last_screen.selected != null) {
-        } else if self.last_screen.selected.is_some() {
-            // log.debug("notifying selection cleared", .{});
-            eprintln!("debug(search_thread): notifying selection cleared");
-            // self.last_screen.selected = null;
-            self.last_screen.selected = None;
-            // cb(
-            //     .{ .selected_match = null },
-            //     ud,
-            // );
-            cb(Event::SelectedMatch(None), ud);
-        }
-
-        // Send our complete notification if we just completed.
-        // if (!self.last_complete and self.isComplete()) {
-        if !self.last_complete && self.is_complete() {
-            // log.debug("notifying search complete", .{});
-            eprintln!("debug(search_thread): notifying search complete");
-            // self.last_complete = true;
-            self.last_complete = true;
-            // cb(.complete, ud);
-            cb(Event::Complete, ud);
-        }
-    }
 }
 
 // PORT NOTE: the in-crate `xev` event-loop seam. See the module-header PORT NOTE
@@ -2139,6 +1577,7 @@ mod tests {
     use crate::color::{DynamicPalette, DynamicRGB};
     use crate::kitty;
     use crate::modes as modespkg;
+    use crate::point;
     use crate::point::Point;
     use crate::terminal::{Colors, Options as TerminalOptions, Terminal};
 
@@ -2424,86 +1863,5 @@ mod tests {
         thread.deinit();
         t.deinit(alloc);
         drop(ud);
-    }
-
-    /// PORTS: oracle 73ac36fa5
-    /// `test "select after active screen removal"`
-    #[test]
-    fn select_after_active_screen_removal() {
-        // const alloc = testing.allocator;
-        let alloc = Allocator;
-        // var mutex: std.Thread.Mutex = .{};
-        let mutex = rustty_zigstd::thread::Mutex::new();
-        // var t: Terminal = try .init(alloc, .{ .cols = 20, .rows = 2 });
-        // defer t.deinit(alloc);
-        let mut t: Terminal = Terminal::init(alloc, terminal_opts(20, 2, 10_000)).unwrap();
-        // SB: the searcher and the `Thread` hold a raw `*mut Terminal` ACROSS the
-        // screen mutations below. Every mutation must therefore go through THIS
-        // pointer's own tag; a `&mut t` reborrow (`t.switch_screen(..)`) is a
-        // Unique retag that invalidates the stored alias, which Miri proves is
-        // Stacked-Borrows UB (memory: shaper-hook-sb-clean-interleave).
-        let t_ptr: *mut Terminal = core::ptr::addr_of_mut!(t);
-
-        // _ = try t.switchScreen(.alternate);
-        unsafe { (*t_ptr).switch_screen(ScreenSetKey::Alternate) }.unwrap();
-
-        // var search: Search = try .init(alloc, "needle");
-        // search.feed(alloc, &t);
-        let mut search: Search = Search::init(alloc, b"needle").unwrap();
-        search.feed(alloc, t_ptr);
-        // try testing.expectEqual(ScreenSet.Key.alternate, search.last_screen.key);
-        assert_eq!(search.last_screen.key, ScreenSetKey::Alternate);
-        // try testing.expect(search.screens.contains(.alternate));
-        assert!(search.screens.contains(ScreenSetKey::Alternate));
-
-        // var thread: Thread = undefined;
-        // thread.search = search;
-        // thread.opts = .{ .mutex = &mutex, .terminal = &t };
-        // defer if (thread.search) |*active| active.deinit(&t);
-        //
-        // PORT NOTE: the reference leaves the rest of `Thread` `undefined` because
-        // `select` only touches `search`/`opts`. Rust has no partially-initialized
-        // struct, so we build a real `Thread` with `Thread::init` (which only adds
-        // an idle xev loop + mailbox) and install the pre-fed `Search`. The extra
-        // `thread.deinit()` at the end also exercises 73ac36fa5's
-        // `Search::deinit(&t)` screen-validity split, which the reference's
-        // `defer active.deinit(&t)` covers separately.
-        let mut thread: Thread = Thread::init(
-            alloc,
-            Options {
-                mutex: &mutex as *const rustty_zigstd::thread::Mutex,
-                terminal: t_ptr,
-                event_cb: None,
-                event_userdata: core::ptr::null_mut(),
-            },
-        )
-        .unwrap();
-        thread.search = Some(search);
-
-        // _ = try t.switchScreen(.primary);
-        // t.screens.remove(alloc, .alternate);
-        unsafe { (*t_ptr).switch_screen(ScreenSetKey::Primary) }.unwrap();
-        unsafe { (*t_ptr).screens.remove(alloc, ScreenSetKey::Alternate) };
-
-        // try thread.select(.next);
-        thread.select(super::super::screen::Select::Next).unwrap();
-        // try testing.expectEqual(
-        //     ScreenSet.Key.primary,
-        //     thread.search.?.last_screen.key,
-        // );
-        assert_eq!(
-            thread.search.as_ref().unwrap().last_screen.key,
-            ScreenSetKey::Primary
-        );
-        // try testing.expect(!thread.search.?.screens.contains(.alternate));
-        assert!(!thread
-            .search
-            .as_ref()
-            .unwrap()
-            .screens
-            .contains(ScreenSetKey::Alternate));
-
-        thread.deinit();
-        unsafe { (*t_ptr).deinit(alloc) };
     }
 }
