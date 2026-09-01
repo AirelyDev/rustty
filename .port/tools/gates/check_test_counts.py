@@ -275,7 +275,7 @@ MAP = {
     # one zig file (vt=1 anon test + input=23 -> 24 >= 23).
     "input_key_mods":    (["/Users/gael/projects/ghostty/src/input/key_mods.zig"], [f"{RS}/input/key_mods.rs", f"{RS_ROOT}/crates/rustty-input/src/key_mods.rs"], 0),
     # vt-15 search/ (gated)
-    "search":            ([f"{GH}/search/Thread.zig", f"{GH}/search/active.zig", f"{GH}/search/pagelist.zig", f"{GH}/search/screen.zig", f"{GH}/search/sliding_window.zig", f"{GH}/search/viewport.zig"], [f"{RS}/search/*.rs"], 0),
+    "search":            ([f"{GH}/search/Thread.zig", f"{GH}/search/active.zig", f"{GH}/search/pagelist.zig", f"{GH}/search/screen.zig", f"{GH}/search/sliding_window.zig", f"{GH}/search/terminal.zig", f"{GH}/search/viewport.zig"], [f"{RS}/search/*.rs"], 0),
     # vt-16 tmux/ (control mode; oniguruma-gated control tests counted via static
     # #[test] text — the gate matches `#[test]` source lines regardless of cfg).
     # All four tmux modules are ported: control + layout + output parsers + viewer

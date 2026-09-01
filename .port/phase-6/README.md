@@ -17,13 +17,16 @@ to    20abdb50a6216c450d6d4d010c41c7edf5ab15b2   2026-08-31  Update VOUCHED list
 
 ## Gate arrival state (advance-first)
 
-- G1b **GREEN** at arrival (`w0/g1b-after-at-20abdb50a.txt`) — but ONLY because the gate's
-  pinned file list predates the two NEW oracle files. Hand count of the range's `+test "`
-  hunks: `c/search.zig` **17**, `search/terminal.zig` **6**, `kitty/graphics_image.zig` 2,
-  `ref_counted_set.zig` 1, `Terminal.zig` 1; `search/Thread.zig` −1 (moved to
-  `search/terminal.zig`). The gate's `search` row must gain `search/terminal.zig` and the vt-c
-  scope must gain `c/search.zig` as part of this phase (a gate that cannot see a new file is a
-  bookkeeping green — memory `derived-gate-green-can-be-bookkeeping`).
+- G1b **GREEN** at arrival (`w0/g1b-after-at-20abdb50a.txt`) — **by slack, not by coverage.**
+  The `vt_c` row globs `c/*.zig`, so it already sees the NEW `c/search.zig` (zig 416 → 433;
+  rust 470 stays ≥). The `search` row is an explicit list that did NOT include the NEW
+  `search/terminal.zig` (zig 67 → 66, the moved test); the coordinator extended it at
+  Phase-6 start (`check_test_counts.py`), after which `search` reads zig 72 / rust 72 — still
+  GREEN only because rustty carries surplus tests. Hand count of the range's `+test "` hunks is
+  therefore the honest meter: `c/search.zig` **17**, `search/terminal.zig` **6**,
+  `kitty/graphics_image.zig` 2, `ref_counted_set.zig` 1, `Terminal.zig` 1; `search/Thread.zig`
+  −1 (moved). The finale must show every one of those 27 tests ported BY NAME (G1
+  `check_tests_ported.py` per-test contract), not just the per-module floor.
 - G3b **RED** at arrival (`w0/g3b-after-at-20abdb50a.txt`): **51 missing** — vt 38, config 6,
   vt-c 4, lib 2, core 1. MUST be GREEN at the finale.
 
