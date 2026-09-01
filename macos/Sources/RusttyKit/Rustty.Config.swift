@@ -128,10 +128,10 @@ extension Rustty {
         /// due to the embedded library and Swift.
 
         var bellFeatures: BellFeatures {
-            guard let config = self.config else { return .init() }
+            guard let config = self.config else { return .defaultValue }
             var v: CUnsignedInt = 0
             let key = "bell-features"
-            guard rustty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return .init() }
+            guard rustty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return .defaultValue }
             return .init(rawValue: v)
         }
 
@@ -810,6 +810,8 @@ extension Rustty.Config {
         static let attention = BellFeatures(rawValue: 1 << 2)
         static let title = BellFeatures(rawValue: 1 << 3)
         static let border = BellFeatures(rawValue: 1 << 4)
+
+        static let defaultValue = BellFeatures([.attention, .title])
     }
 
     struct SplitPreserveZoom: OptionSet {
