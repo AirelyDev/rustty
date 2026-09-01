@@ -4969,6 +4969,7 @@ mod tests {
             blending: AlphaBlending::Native,
             background_blur: BackgroundBlur::False,
             scroll_to_bottom_on_output: false,
+            custom_shader_animation: crate::thread::CustomShaderAnimation::True,
         }
     }
 
