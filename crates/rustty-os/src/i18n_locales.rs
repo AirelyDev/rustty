@@ -47,5 +47,5 @@
 pub const locales: &[&str] = &[
     "zh_CN", "de", "fr", "ja", "nl", "nb", "ru", "uk", "pl", "ko_KR", "mk", "tr", "id", "es_BO",
     "es_AR", "es_ES", "pt_BR", "ca", "it", "bg", "ga", "hu", "he", "zh_TW", "hr", "lt", "lv", "vi",
-    "kk", "be", "eu",
+    "kk", "be", "eu", "da", "sr", "sr@latin",
 ];
