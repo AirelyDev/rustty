@@ -1343,6 +1343,19 @@ pub(crate) mod test_runtime {
     // reference create/init/deinit/destroy path incl. the grid-set-empty
     // assert and the field declaration defaults).
     #[test]
+    // `App::create` (unlike `App::init`, which the sibling tests use and which
+    // runs green under Miri) spawns the macOS CoreText font-discovery warmup
+    // thread; that reaches `CFStringCreateWithBytes`, a foreign function Miri
+    // cannot call. Same class as this crate's already-argued oniguruma
+    // exception — see .port/phase-2/MIRI_EXCEPTIONS.md, "rustty-core
+    // renderer_config_tests" — whose R6 verifier is the ASan lane. The
+    // create/destroy round trip runs in ci.sh's HARD `cargo test --workspace`
+    // step; every field assertion below is also covered from `init` by
+    // `add_and_delete_surface_drive_the_quit_timer`, which stays Miri-checked.
+    #[cfg_attr(
+        miri,
+        ignore = "App::create spawns the CoreText warmup thread (CFStringCreateWithBytes)"
+    )]
     fn app_create_and_destroy_empty() {
         let app = App::<TestApp>::create(Allocator).unwrap();
         assert!(app.surfaces.is_empty());

@@ -309,6 +309,15 @@ mod recover_tests {
     /// stored fd (the `main.zig:69-74` writeAll), byte-for-byte. Pipe-backed so it
     /// runs everywhere the TestTty tests run.
     #[test]
+    // `recover()` unconditionally restores the saved termios through
+    // `tcsetattr` (lib.rs:203) before writing the reset bundle, so even this
+    // pipe-backed variant reaches the same foreign function Miri cannot call.
+    // Same exception class as its two siblings; see
+    // .port/phase-2/MIRI_EXCEPTIONS.md, "rustty-vaxis Chunk 3b".
+    #[cfg_attr(
+        miri,
+        ignore = "recover() calls tcsetattr — see MIRI_EXCEPTIONS.md rustty-vaxis Chunk 3b"
+    )]
     fn recover_writes_exact_reset_bundle_to_stored_fd() {
         let _guard = GLOBAL_TTY_TEST_LOCK
             .lock()
@@ -344,6 +353,17 @@ mod recover_tests {
     /// on) — observed through the master, which shares the pty's termios and
     /// survives recover's close-on-linux of the slave fd.
     #[test]
+    // Real-pty FFI: `openpty` + `tcgetattr`/`tcsetattr`, which Miri cannot call
+    // ("can't call foreign function `tcsetattr` on OS `macos`") and has nothing
+    // to model — the subject IS the terminal driver's saved-termios state. This
+    // is the class `.port/phase-2/MIRI_EXCEPTIONS.md` already argues under
+    // "rustty-vaxis Chunk 3b — the `tty.rs` termios/ioctl/sigaction FFI"
+    // (R6 verifier: ASan/native); these two lib.rs tests simply never carried
+    // the annotation. Both run in ci.sh's HARD `cargo test --workspace` step.
+    #[cfg_attr(
+        miri,
+        ignore = "real pty + termios FFI (tcgetattr/tcsetattr) — see MIRI_EXCEPTIONS.md rustty-vaxis Chunk 3b"
+    )]
     fn recover_restores_saved_termios_on_a_pty() {
         let _guard = GLOBAL_TTY_TEST_LOCK
             .lock()
@@ -410,6 +430,17 @@ mod recover_tests {
     /// install_panic_recovery(): a panic runs recover() AND then the previously
     /// installed hook, in that order (`panic_handler`: `recover(); defaultPanic(...)`).
     #[test]
+    // Real-pty FFI: `openpty` + `tcgetattr`/`tcsetattr`, which Miri cannot call
+    // ("can't call foreign function `tcsetattr` on OS `macos`") and has nothing
+    // to model — the subject IS the terminal driver's saved-termios state. This
+    // is the class `.port/phase-2/MIRI_EXCEPTIONS.md` already argues under
+    // "rustty-vaxis Chunk 3b — the `tty.rs` termios/ioctl/sigaction FFI"
+    // (R6 verifier: ASan/native); these two lib.rs tests simply never carried
+    // the annotation. Both run in ci.sh's HARD `cargo test --workspace` step.
+    #[cfg_attr(
+        miri,
+        ignore = "real pty + termios FFI (tcsetattr) — see MIRI_EXCEPTIONS.md rustty-vaxis Chunk 3b"
+    )]
     fn install_panic_recovery_runs_recover_then_chains_previous_hook() {
         let _guard = GLOBAL_TTY_TEST_LOCK
             .lock()

@@ -562,6 +562,20 @@ mod hyperlink_dupe_tests {
     // `try_reserve_exact` of an impossible capacity is the only portable way to
     // drive a real allocator failure, and it is the same primitive `dupe` uses.
     #[test]
+    // MIRI EXCEPTION (rustty-vt hyperlink): the test's whole subject is a REAL
+    // allocator failure — `try_reserve_exact(isize::MAX)` must return `Err`
+    // rather than abort. Miri does not model a failing allocation: an
+    // impossible request is an interpreter-level hard error ("resource
+    // exhaustion: tried to allocate more memory than available to compiler"),
+    // which aborts the whole rustty-vt lib binary before the `is_err()` this
+    // test asserts is ever evaluated. There is no Miri-compatible variant: any
+    // request small enough for Miri to serve SUCCEEDS, making the assertion
+    // vacuous. Runs in ci.sh's HARD `cargo test --workspace` step, where the
+    // real allocator refuses the request and the reporting path is exercised.
+    #[cfg_attr(
+        miri,
+        ignore = "drives a REAL allocator failure; Miri hard-errors instead of failing the alloc"
+    )]
     fn try_dupe_bytes_reports_allocation_failure() {
         let mut v: Vec<u8> = Vec::new();
         assert!(v.try_reserve_exact(isize::MAX as usize).is_err());

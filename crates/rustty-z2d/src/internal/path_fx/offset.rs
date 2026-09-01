@@ -309,6 +309,28 @@ mod tests {
     /// geometry to the oracle's to the last bit rather than to hand-derived
     /// numbers.
     #[test]
+    // Miri's libm is not bit-faithful for the IMPRECISE math this path uses.
+    // `input_set.rs:320`'s `dx.hypot(dy)` differs from the host libm by 1-4 ULP
+    // under Miri, and the error propagates into every derived node: measured
+    // with a standalone probe, `hypot(3,4)` is `0x4014000000000001` under Miri
+    // where the host (and IEEE) give exactly 5.0 = `0x4014000000000000`, while
+    // `sqrt` — which IEEE requires to be correctly rounded, and which Miri
+    // implements exactly — agrees bit-for-bit on the same inputs. So the
+    // divergence is Miri's math library, not this port's arithmetic. It is also
+    // stable, not random: identical across repeated runs and across
+    // `-Zmiri-seed` values.
+    //
+    // These goldens are z2d 0.12.1's own recorded node sets (see the doc comment
+    // above), so loosening them to a tolerance would give up exactly the
+    // last-bit oracle agreement they exist to pin — the wrong trade. Neither
+    // test covers any unsafe: `grep -c unsafe` over all five `path_fx/*.rs` is
+    // 0, so removing them from the Miri lane forfeits no UB coverage. Both run
+    // in ci.sh's HARD `cargo test --workspace` step.
+    // See .port/phase-2/MIRI_EXCEPTIONS.md, "rustty-z2d path_fx offset e2e".
+    #[cfg_attr(
+        miri,
+        ignore = "Miri libm: hypot differs from the host by ULPs; goldens are bit-exact"
+    )]
     fn offset_e2e_inset() {
         let expected = vec![
             // Star
@@ -355,6 +377,28 @@ mod tests {
 
     /// Ported verbatim from the reference's `test "offset, e2e"` (outset half).
     #[test]
+    // Miri's libm is not bit-faithful for the IMPRECISE math this path uses.
+    // `input_set.rs:320`'s `dx.hypot(dy)` differs from the host libm by 1-4 ULP
+    // under Miri, and the error propagates into every derived node: measured
+    // with a standalone probe, `hypot(3,4)` is `0x4014000000000001` under Miri
+    // where the host (and IEEE) give exactly 5.0 = `0x4014000000000000`, while
+    // `sqrt` — which IEEE requires to be correctly rounded, and which Miri
+    // implements exactly — agrees bit-for-bit on the same inputs. So the
+    // divergence is Miri's math library, not this port's arithmetic. It is also
+    // stable, not random: identical across repeated runs and across
+    // `-Zmiri-seed` values.
+    //
+    // These goldens are z2d 0.12.1's own recorded node sets (see the doc comment
+    // above), so loosening them to a tolerance would give up exactly the
+    // last-bit oracle agreement they exist to pin — the wrong trade. Neither
+    // test covers any unsafe: `grep -c unsafe` over all five `path_fx/*.rs` is
+    // 0, so removing them from the Miri lane forfeits no UB coverage. Both run
+    // in ci.sh's HARD `cargo test --workspace` step.
+    // See .port/phase-2/MIRI_EXCEPTIONS.md, "rustty-z2d path_fx offset e2e".
+    #[cfg_attr(
+        miri,
+        ignore = "Miri libm: hypot differs from the host by ULPs; goldens are bit-exact"
+    )]
     fn offset_e2e_outset() {
         let expected = vec![
             // Star

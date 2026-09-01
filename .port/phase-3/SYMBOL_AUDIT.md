@@ -2,13 +2,20 @@
 
 Companion to `.port/tools/audit_symbol_coverage.py` (pass 2 of the systematic
 oracle→port audit). The tool checks every oracle `pub fn` for a counterpart token
-anywhere in `crates/`. **2554 symbols across 485 files were checked; 13 had no
-counterpart token, and all 13 resolved.** Each is recorded below with the reason,
-because an absence that is merely *believed* fine is indistinguishable from one
-nobody looked at.
+anywhere in `crates/`. At the `88f57ee66` pin it checks **2831 symbols across 530
+files**; every absence is recorded below with its reason, because an absence that
+is merely *believed* fine is indistinguishable from one nobody looked at.
 
 Format: `src/path.zig::symbolName` — reason. The tool parses the leading
 backticked token, so keep that shape.
+
+Two of the rows below (`DBus.zig::addParameter`, `hash_map.zig::keyIterator`) no
+longer reach this ledger: the port NAMES each in a comment — a PORT NOTE at
+`gtk/app.rs:218` and the ported `// var it = self.placements.keyIterator();` line
+at `graphics_storage.rs:1023` — and the tool's index is a token scan that cannot
+tell a mention from a definition. They stay listed because the absence each one
+explains is still real; deleting them would leave the next reader to re-derive it
+from scratch the first time either comment is reworded.
 
 ## Generated, not written — GObject properties (8)
 
@@ -42,6 +49,24 @@ them. This is a better port than hand-writing the pairs, not a worse one.
   this port's `*_adapted` forms were already identity wrappers (no adapted form
   exists here), so `fedd42e8d`'s consolidation removed the alias rather than
   porting a wrapper that wraps nothing.
+
+## A comptime type the model has no place for (1)
+
+- `src/lib/packed.zig::PackedTaggedUnionOptions` — a comptime **type
+  constructor**: given the union and tag types it *builds* a struct with one
+  `?Arm` field per tag enum field (`@Struct(.auto, null, &names, &types,
+  &attrs)`), which is then the `options` parameter of `PackedTaggedUnion`. Both
+  halves of that only exist to carry the tag→arm mapping into a comptime
+  reflection pass. `crates/rustty-lib/src/packed.rs` models the whole family as
+  `'static` descriptor tables (the file header states why: "Rust has no
+  reflection over the port's hand-rolled bitfields"), so the mapping the
+  generated options struct exists to hold is written directly as
+  `PackedTaggedUnionLayout.arms: &'static [PackedTaggedUnionArm]`, one entry per
+  tag in declaration order, `source: None` for the reference's `null` arm. The
+  observables are identical — `page.rs`'s `CONTENT` and `packed.rs`'s
+  `VALUE_LAYOUT` are the two live instances — and the reference's
+  `@compileError` checks survive as the const-evaluable `validate()`. A Rust
+  counterpart for the *generator* would have nothing to generate.
 
 ## Dead upstream — absence is correct (2)
 

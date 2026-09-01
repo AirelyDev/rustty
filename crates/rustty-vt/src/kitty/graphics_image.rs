@@ -1376,7 +1376,13 @@ fn realpath_of_handle(file: &std::fs::File) -> std::io::Result<Vec<u8>> {
 // `File.realPath` covers windows via the NT object path; the rustty windows
 // tier has no handle-path binding yet, so the kitty file/temporary-file medium
 // fails closed (`InvalidData` via `validatedFilePath`) there.
-// TODO(port): windows GetFinalPathNameByHandleW once a windows tier lands.
+//
+// DEFERRAL: the windows arm (`GetFinalPathNameByHandleW`) is registered in
+// `.port/phase-2/DEFERRALS.md` — "kitty file-medium handle-path on Windows" —
+// with its blast radius, the reason it is host-unverifiable from here, and its
+// reopen trigger. It is a named, owned ledger row rather than an in-code marker
+// precisely because a marker states the gap without ever forcing anyone to act
+// on it (detector D3, `check_constants_parity.py`, rule (a)).
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android")))]
 fn realpath_of_handle(_file: &std::fs::File) -> std::io::Result<Vec<u8>> {
     Err(std::io::Error::from(std::io::ErrorKind::Unsupported))

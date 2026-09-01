@@ -648,6 +648,32 @@ mod tests {
     }
 
     #[test]
+    // Same root cause as `path_fx::offset`'s two e2e tests: Miri's libm is not
+    // bit-faithful for `hypot`, which `Slope::normalize` (`slope.rs:243`) uses.
+    // Measured chain, not inferred — a probe on `Face::intersect` printed the
+    // exact operands under Miri:
+    //
+    //     det=0e0  in=(bfeda7d91c1e082a, 3fd80b8d70be677c)
+    //              out=(bfeda7d91c1e082c, 3fd80b8d70be677e)
+    //
+    // The two normalized slopes differ by 2 ULP per component, so the miter
+    // determinant `in.dx*out.dy - out.dx*in.dy` rounds to EXACTLY zero and the
+    // division yields 0/0 = NaN, which trips `polygon.rs`'s finite-point
+    // `debug_assert`. Natively the same probe never fires: the host `hypot`
+    // gives normalized components whose determinant stays non-zero. Runs green
+    // in ci.sh's HARD `cargo test --workspace` step.
+    //
+    // The latent fragility this exposes — `Face::intersect` guards on
+    // `Slope::compare(..) != 0`, which is not the same predicate as "the
+    // determinant is non-zero" — is recorded in `.port/phase-3/miri/FINDINGS.md`
+    // rather than fixed here: the miter math is z2d 0.12.1's (itself Cairo's
+    // `cairo-path-stroke-polygon.c`), and changing its numerics would be a
+    // deliberate divergence from the vendored reference (R1).
+    // See .port/phase-2/MIRI_EXCEPTIONS.md, "rustty-z2d path_fx offset e2e".
+    #[cfg_attr(
+        miri,
+        ignore = "Miri libm: hypot ULPs collapse the miter determinant to 0 (0/0 NaN)"
+    )]
     fn slope_difference_below_epsilon_does_not_produce_nan() {
         {
             // p1 -> p2 is equal

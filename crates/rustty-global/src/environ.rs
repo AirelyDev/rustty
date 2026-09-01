@@ -545,6 +545,17 @@ mod tests {
     }
 
     #[test]
+    // Miri runs with isolation on (the G6 lane deliberately does not pass
+    // `-Zmiri-disable-isolation`), so the interpreted process has an EMPTY
+    // environment and `PATH` is unset. The test would not merely fail there —
+    // it would be VACUOUS if softened to "compare whatever is set", because
+    // both sides would be empty. Runs natively in ci.sh's HARD
+    // `cargo test --workspace` step, where the environment is real.
+    // See .port/phase-2/MIRI_EXCEPTIONS.md, "rustty-global — real process state".
+    #[cfg_attr(
+        miri,
+        ignore = "real process environment: Miri isolation gives an empty environ"
+    )]
     fn global_environ_map_reflects_the_process() {
         // `environ_map()` must see the real process environment through the
         // lazy-capture fallback (the `builtin.is_test` arm's equivalent).

@@ -338,15 +338,36 @@ impl DiagnosticList {
     /// C. Returns `None` when precompute is disabled or `idx` is out of range.
     ///
     /// The returned slice is the reference's `[:0]const u8` VIEW: the trailing
-    /// NUL that `append` stores is excluded from the length (so the bytes equal
-    /// `Diagnostic::format`'s output) but is present one past the end, making
-    /// `slice.as_ptr()` a valid `[*:0]const u8` for C.
+    /// NUL that `append` stores is excluded from the length, so the bytes equal
+    /// `Diagnostic::format`'s output.
+    ///
+    /// **Do not hand this slice's `as_ptr()` to C** — use
+    /// [`Self::precompute_message_c`]. A pointer derived from this view carries
+    /// provenance for exactly `len` bytes while a C reader walks `len + 1` to
+    /// find the NUL, so the read of the sentinel is out of bounds *of the
+    /// pointer*, even though the byte is there and the bytes are correct. Miri
+    /// reports it as "attempting a read access ... that tag does not exist in
+    /// the borrow stack", and it is the same shape as the Bun Class-1 defects
+    /// this port's D-detectors exist for: right bytes, wrong provenance, no
+    /// compile error and no failing byte-comparison test.
     pub fn precompute_message(&self, idx: usize) -> Option<&[u8]> {
         self.precompute
             .messages
             .get(idx)
             // Every stored message ends with the `toOwnedSliceSentinel(0)` NUL.
             .map(|msg| &msg[..msg.len() - 1])
+    }
+
+    /// The same message as [`Self::precompute_message`], as the WHOLE stored
+    /// buffer — the formatted bytes *and* the `toOwnedSliceSentinel(0)` NUL.
+    ///
+    /// This is the accessor the C ABI must use: `as_ptr()` on the full buffer is
+    /// a `[*:0]const u8` whose provenance covers every byte a C reader will
+    /// touch, sentinel included. The reference gets this for free — Zig's
+    /// `[:0]const u8` `.ptr` is derived from the sentinel-carrying allocation,
+    /// not from a length-truncated reborrow of it.
+    pub fn precompute_message_c(&self, idx: usize) -> Option<&[u8]> {
+        self.precompute.messages.get(idx).map(Vec::as_slice)
     }
 
     /// Returns true if there are any diagnostics for the given
@@ -405,9 +426,17 @@ mod tests {
         let message = list.precompute_message(0).expect("precompute enabled");
         assert_eq!(message, expected.as_slice());
 
-        // Therefore the pointer handed to C is a valid `[*:0]const u8`.
-        // SAFETY: the buffer above is NUL-terminated at `message.len()`.
-        let as_c = unsafe { std::ffi::CStr::from_ptr(message.as_ptr().cast()) };
+        // The pointer handed to C comes from the WHOLE buffer, sentinel
+        // included — `precompute_message_c`, the accessor `c_api.rs`'s
+        // `rustty_config_get_diagnostic` uses. Reading the NUL through a
+        // pointer derived from the sentinel-FREE view is the provenance bug
+        // this arm exists to pin: same bytes, but the tag covers only
+        // `message.len()`, and Miri's G6 lane rejects the read of the sentinel.
+        let c_buf = list.precompute_message_c(0).expect("precompute enabled");
+        assert_eq!(c_buf.len(), message.len() + 1);
+        // SAFETY: `c_buf` is the stored buffer, NUL-terminated at its last byte,
+        // so the pointer is valid for every byte `CStr` will read.
+        let as_c = unsafe { std::ffi::CStr::from_ptr(c_buf.as_ptr().cast()) };
         assert_eq!(as_c.to_bytes(), expected.as_slice());
 
         // Out of range is `None` (the C ABI's empty-default arm).

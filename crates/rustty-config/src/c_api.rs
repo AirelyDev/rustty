@@ -237,12 +237,18 @@ pub unsafe extern "C" fn rustty_config_get_diagnostic(self_: *mut Config, idx: u
     //
     // PORT NOTE: the reference's precomputed message is a `[:0]const u8`; the
     // rustty precompute stores the same bytes in a `Vec<u8>` WITH a trailing
-    // NUL that `precompute_message` excludes from the returned slice (exactly
-    // the reference's `toOwnedSliceSentinel(0)` view), so `as_ptr()` is a valid
-    // `[*:0]const u8` for C. `None` (precompute disabled, i.e. a non-`.lib`
-    // artifact) keeps the empty default rather than the reference's
-    // comptime-impossible `void` field access.
-    match cfg._diagnostics.precompute_message(idx as usize) {
+    // NUL. `None` (precompute disabled, i.e. a non-`.lib` artifact) keeps the
+    // empty default rather than the reference's comptime-impossible `void`
+    // field access.
+    //
+    // `precompute_message_c`, NOT `precompute_message`: the pointer must be
+    // derived from the WHOLE stored buffer. The sentinel-free view is the right
+    // BYTES but the wrong PROVENANCE — a pointer taken from it covers `len`
+    // bytes while the C reader walks `len + 1` to find the NUL. Miri's G6 lane
+    // caught it through the test that performs the same read in Rust
+    // (`CStr::from_ptr`): "attempting a read access ... that tag does not exist
+    // in the borrow stack". Nothing about the bytes C sees changes here.
+    match cfg._diagnostics.precompute_message_c(idx as usize) {
         Some(message) => Diagnostic {
             message: message.as_ptr().cast(),
         },

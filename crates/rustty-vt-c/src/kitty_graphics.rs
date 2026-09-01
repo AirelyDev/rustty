@@ -3780,6 +3780,23 @@ mod tests {
 
     // test "image compression and format always report decoded data"
     #[test]
+    // MIRI EXCEPTION (rustty-vt-c kitty graphics): the test transmits a
+    // zlib-COMPRESSED image (`o=z`), so the decode path reaches the vendored
+    // zlib through `zlib-sys::inflate_zlib` (`graphics_image.rs:901`
+    // `decompressZlib`) and Miri hard-errors on the first foreign call
+    // ("can't call foreign function `inflateInit2_`"), aborting the whole
+    // rustty-vt-c lib binary. The compression IS the thing under test — the
+    // assertion is that the reported format/size describe the DECODED data —
+    // so a `cfg(miri)` stand-in would make it vacuous. Same class and same
+    // compensating controls as `rustty-cli` `boo`'s `decompress_frames_round_trip`
+    // and `rustty-zigimg/tests/codec.rs`; R6 verifier is the ASan lane
+    // (`rustty-wuffs`/`rustty-config` are FFI_CRATES rows in check_leaks.sh).
+    // Runs in ci.sh's HARD `cargo test --workspace` step.
+    #[cfg_attr(
+        miri,
+        ignore = "MIRI EXCEPTION (rustty-vt-c kitty): vendored zlib FFI \
+         (inflateInit2_) — runs natively + ASan; see MIRI_EXCEPTIONS.md"
+    )]
     fn image_compression_and_format_always_report_decoded_data() {
         if !KITTY_GRAPHICS {
             return;

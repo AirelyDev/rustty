@@ -57,6 +57,15 @@ unsafe impl GlobalAlloc for CountingAlloc {
     }
 }
 
+// D6-ALLOW(counting shim, not an allocator substitution): this lives in an
+// integration test target (`tests/`), so it exists only in this one test binary
+// and can never enter a shipped build. It does not blind ASan/LSan the way
+// oven-sh/bun#30875's mimalloc did: every arm forwards to `std::alloc::System`,
+// i.e. plain `malloc`/`realloc`/`free`, which the sanitizer interceptors still
+// see; it only bumps a counter first, and only while ARMED. Same shape and
+// rationale as the D6-ALLOW justifications in
+// `rustty-vt/tests/viewport_fingerprint_alloc.rs` and
+// `rustty-renderer/src/link.rs`.
 #[global_allocator]
 static ALLOCATOR: CountingAlloc = CountingAlloc;
 

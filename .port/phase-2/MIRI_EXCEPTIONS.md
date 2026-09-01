@@ -2351,3 +2351,93 @@ pass-through on non-Darwin) has no memory surface. (4) **The alternative is
 vacuity**: dropping `version`'s `git rev-parse` probe re-opens the exact hole WS19
 T12 closed (a `commit_hash()` that returns `None` unconditionally would pass), and
 an autorelease pool that is stubbed out cannot demonstrate that it drains.
+---
+
+## G6 lane completion (2026-08-29) — the crates the earlier triages never reached
+
+`.port/phase-3/miri/FINDINGS.md` closed its G6 section with "crates after
+`rustty-extra` in the lane order were never reached by any run in this triage and
+remain unverified", and `rustty-core` with "no verdict yet". This is that
+frontier, worked to a verdict. Miri aborts a whole test binary at the FIRST
+error, so each crate had to be re-run after every annotation to surface what was
+hiding behind it — the counts below are from the final green run of each lane.
+
+Two findings were REAL and are fixed in code, not excepted (written up in
+`.port/phase-3/miri/FINDINGS.md`): a Stacked-Borrows violation in
+`rustty-args`/`rustty-config`'s diagnostic C pointer, and a `const`-address
+assertion in `rustty-lib`. Everything below is a genuine
+Miri-cannot-model case.
+
+| crate | test(s) | class | final lane |
+|---|---|---|---|
+| `rustty-cli` | `ssh_cache::…run_inner_fails_cleanly_when_the_cache_is_unusable` | `mkdir` under isolation | 55 passed, 17 ignored |
+| `rustty-core` | `app::test_runtime::app_create_and_destroy_empty` | CoreText warmup thread → `CFStringCreateWithBytes` | see below |
+| `rustty-global` | `environ::…global_environ_map_reflects_the_process`, `rlimit_tests::restore_round_trips_nofile` | empty environ under isolation; `getrlimit` | 8 passed, 2 ignored |
+| `rustty-vaxis` | `recover_tests::{recover_writes_exact_reset_bundle_to_stored_fd, recover_restores_saved_termios_on_a_pty, install_panic_recovery_runs_recover_then_chains_previous_hook}` | real pty + `tcsetattr` | 98 passed, 3 ignored |
+| `rustty-vt` | `hyperlink::…try_dupe_bytes_reports_allocation_failure` | Miri hard-errors instead of failing an allocation | — |
+| `rustty-vt-c` | `kitty_graphics::…image_compression_and_format_always_report_decoded_data` | vendored zlib `inflateInit2_` | — |
+| `rustty-z2d` | `path_fx::offset::tests::offset_e2e_{inset,outset}`, `tess::stroke_plotter::…slope_difference_below_epsilon_does_not_produce_nan` | **Miri's libm is not bit-faithful** | 81 passed, 13 ignored |
+
+Each is annotated at its source with the reason, the convention this file already
+uses. The three interesting ones:
+
+### `rustty-global` — real process state
+
+Miri's isolation gives the interpreted process an **empty environment**, so
+`std::env::var_os("PATH")` is `None` and the test's premise cannot hold. Note the
+failure mode if this were "fixed" by softening the assertion to "compare whatever
+is set": both sides would be empty and the test would pass while asserting
+nothing — a vacuous green, which is worse than an honest exception. `getrlimit`
+is the ordinary foreign-function case; the value under test IS the live process
+rlimit, so there is nothing for Miri to model.
+
+### `rustty-z2d` — Miri's libm differs from the host's, and it propagates
+
+Not a tolerance question and not randomness. Measured with a standalone probe
+(`cargo miri run` vs `cargo run`, same source):
+
+| call | native (host libm) | Miri |
+|---|---|---|
+| `hypot(3, 4)` | `0x4014000000000000` (exactly 5.0) | `0x4014000000000001` |
+| `hypot(1, 2)` | `0x4001e3779b97f4a8` | `0x4001e3779b97f4a4` |
+| `hypot(0.1, 0.7)` | `0x3fe6a09e667f3bcc` | `0x3fe6a09e667f3bc8` |
+| `sqrt` of the same sums | identical | identical |
+
+`sqrt` agrees bit-for-bit because IEEE-754 requires it to be correctly rounded
+and Miri implements it exactly; `hypot` carries no such requirement, and Miri's
+differs by 1-4 ULP. It is stable, not random — identical across repeated runs and
+across `-Zmiri-seed` values, so it is a different implementation, not injected
+noise.
+
+`Slope::normalize` (`slope.rs:243`) uses `hypot`, so the error reaches every
+derived coordinate. Two consequences:
+
+1. the `offset_e2e_*` goldens are z2d 0.12.1's own recorded node sets and are
+   compared to the last bit, so they mismatch;
+2. `slope_difference_below_epsilon_does_not_produce_nan` goes further and
+   PANICS. Probed at `Face::intersect`, under Miri the two normalized slopes
+   arrive 2 ULP apart — `in=(bfeda7d91c1e082a, 3fd80b8d70be677c)`,
+   `out=(bfeda7d91c1e082c, 3fd80b8d70be677e)` — and the miter determinant
+   `in.dx*out.dy - out.dx*in.dy` rounds to **exactly 0**, so the division is
+   0/0 = NaN. The same probe never fires natively.
+
+Loosening the goldens to a tolerance would give up the last-bit oracle agreement
+they exist to pin, which is the wrong trade. None of the three tests touches any
+`unsafe` — `grep -c unsafe` over all five `path_fx/*.rs` is 0 — so removing them
+from the Miri lane forfeits no UB coverage at all.
+
+The latent fragility (2) exposes is recorded in `.port/phase-3/miri/FINDINGS.md`:
+`Face::intersect` guards on `Slope::compare(..) != 0`, which is not the same
+predicate as "the determinant is non-zero". It is NOT fixed here because the
+miter math is z2d 0.12.1's, itself Cairo's `cairo-path-stroke-polygon.c`, and
+changing its numerics would be a deliberate divergence from the vendored
+reference (R1).
+
+### `rustty-vt` — Miri cannot fail an allocation
+
+`try_dupe_bytes_reports_allocation_failure` exists to prove a real allocator
+failure REPORTS rather than aborts. Miri does not model a failing allocation: an
+impossible request is an interpreter-level hard error ("resource exhaustion"),
+which kills the binary before the `is_err()` is evaluated. There is no
+Miri-compatible variant — any request small enough for Miri to serve succeeds,
+and the assertion becomes vacuous.

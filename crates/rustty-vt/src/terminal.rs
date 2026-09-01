@@ -18595,6 +18595,48 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "Terminal: fullReset preserves kitty graphics limits"
+    //
+    #[test]
+    fn terminal_full_reset_preserves_kitty_graphics_limits() {
+        use crate::kitty::graphics_image::{Limits, TemporaryFileLimit};
+
+        // if (comptime !build_options.kitty_graphics) return error.SkipZigTest;
+        //
+        // PORT NOTE: the early return is this crate's idiom for
+        // `error.SkipZigTest` behind a build option (see `dcs.rs`'s
+        // `tmux_enter_and_implicit_exit`); `kitty_images` is only maintained
+        // when the option is on.
+        if !crate::options::KITTY_GRAPHICS {
+            return;
+        }
+
+        let temp_dir = b"/tmp/rustty-kitty-images";
+
+        let mut t = Terminal::init(Global, opts(10, 10)).unwrap();
+
+        t.set_kitty_graphics_loading_limits(Limits::all_with_temp_dir(temp_dir));
+        for total_limit in [1234_usize, 0] {
+            t.set_kitty_graphics_size_limit(Global, total_limit);
+            t.full_reset();
+
+            // SAFETY: `screens.active` is the live primary screen for the whole
+            // borrow; we only read its kitty storage.
+            let storage = unsafe { &(*t.screens.active).kitty_images };
+            assert_eq!(total_limit, storage.total_limit);
+            assert!(storage.image_limits.file);
+            assert!(storage.image_limits.shared_memory);
+            match &storage.image_limits.temporary_file {
+                TemporaryFileLimit::Enabled { directory } => {
+                    assert_eq!(temp_dir.as_slice(), directory.as_slice());
+                }
+                TemporaryFileLimit::Disabled => panic!("temporary file limit was reset"),
+            }
+        }
+
+        t.deinit(Global);
+    }
+
     // https://github.com/mitchellh/ghostty/issues/1607
     // test "Terminal: fullReset clears alt screen kitty keyboard state"
     #[test]

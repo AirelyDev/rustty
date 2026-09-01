@@ -149,6 +149,52 @@ non-compressing arm of `compress_incremental`) fails **both** of them on
 `assertion failed: unsafe { super::Node::is_compressed(second) }`. The
 allocation-shaped instance of that same claim is now asserted alongside them.
 
+## Third pass (2026-08-28) — at the `88f57ee66` pin
+
+The run reported 21 absences: 19 in `src/lib/TinyIo.zig`, one in `src/os/i18n.zig`
+and one in `src/terminal/Terminal.zig`. One was a real missed port.
+
+### `src/lib/TinyIo.zig` (19) — the TOOL was wrong, not the port
+
+`TinyIo.zig` is a **CONFIRMED non-port** with a written rationale and a reopen
+trigger — in `.port/phase-4/NON_PORTS.md`, because that is the phase that
+absorbed the commit which introduced it. The tool read
+`.port/phase-3/NON_PORTS.md` **only**, an accident of the phase it was written
+in, so it reported nineteen tests of a deliberately unported file as unexplained
+gaps. It now reads every phase's ledger. Nothing was excused that was not already
+argued in writing; the tool simply stopped ignoring where it was argued.
+
+### `src/terminal/Terminal.zig::Terminal: fullReset preserves kitty graphics limits` — REAL, now ported
+
+Upstream `bcbc93a6b` ("terminal/kitty: preserve image limits across full reset":
+*"RIS previously cleared configured storage limits and allowed mediums. We now
+retain this properly."*). The port was still at the pre-commit behaviour:
+`Screen::reset` rebuilt `kitty_images` from `ImageStorage::default()`, so a RIS
+threw away the configured `image_limits` and `total_limit` — configuration, not
+terminal state. Ported in `screen.rs` (carry both across the reset) with the
+oracle test as `terminal_full_reset_preserves_kitty_graphics_limits`.
+
+Mutation-proved: dropping the two carried fields again fails the test at
+`left: 1234, right: 320000000` — the default byte limit — so it keys on the
+preservation, not on incidental state.
+
+### Accepted absence (1) — `src/os/i18n.zig::_ returns msgid at comptime`
+
+The oracle test is `comptime @"_"("Ghostty")` compared against `"Ghostty"`: it
+exercises the `if (@inComptime()) return msgid;` arm of `_`. That arm has no Rust
+counterpart and `i18n.rs:134-137` already says why — `gettext_` is not a `const
+fn` and could not be (it calls `dgettext` through FFI), so there is no
+compile-time evaluation for the arm to guard.
+
+Its observable — an untranslated msgid comes back byte-identical — is asserted at
+run time by `crates/rustty-os/src/i18n.rs::gettext_resolves_from_vendored_libintl`
+(`assert_eq!(gettext_(msgid), msgid)`). That test is macOS-only, because its other
+job is proving the call resolves against rustty's *vendored* libintl rather than
+Homebrew's; on Linux libintl comes from libc and the vendored-archive question
+does not arise.
+
+- `src/os/i18n.zig::_ returns msgid at comptime`
+
 ## Note on the matcher — it was wrong five times
 
 Every reported "gap" in this pass was confirmed against the code before being

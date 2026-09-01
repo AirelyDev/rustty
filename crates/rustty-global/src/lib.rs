@@ -695,6 +695,11 @@ mod rlimit_tests {
     use super::ResourceLimits;
 
     #[test]
+    // Miri cannot call the foreign function `getrlimit`, and there is nothing
+    // for it to model: the value under test IS the live process rlimit. Runs
+    // natively in ci.sh's HARD `cargo test --workspace` step.
+    // See .port/phase-2/MIRI_EXCEPTIONS.md, "rustty-global — real process state".
+    #[cfg_attr(miri, ignore = "real-OS syscall: getrlimit(RLIMIT_NOFILE)")]
     fn restore_round_trips_nofile() {
         // Read the current limit, then restore() it — the call must succeed and
         // leave the limit unchanged (a self-inverse KAT that needs no privilege).

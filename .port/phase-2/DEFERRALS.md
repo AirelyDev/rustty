@@ -8280,3 +8280,48 @@ resolves).**
    linux only; on FreeBSD neither block runs, so the `renderer`/`libxev` lines go
    unasserted there. Harmless today (the test does not fail), noted so the gap is
    not rediscovered as a bug.
+
+## kitty file-medium handle-path on Windows — `realpath_of_handle` has no `GetFinalPathNameByHandleW` arm [D3 marker conversion, 2026-08-29]
+
+**Status: OPEN, owned by the `platform-linux-windows` workstream.** Registered
+here after detector **D3** (`check_constants_parity.py`, rule (a): zero surviving
+port-incompleteness markers in a claimed-done crate) reported the
+`TODO(port): windows GetFinalPathNameByHandleW once a windows tier lands.` that
+had sat in `crates/rustty-vt/src/kitty/graphics_image.rs` since the phase-4 par-2
+kitty bundle (`95beca86`). The marker was accurate; what it was not was
+*actionable* — nothing named an owner, a blast radius or a trigger, and D3 had
+been RED on `main` for as long as the marker existed. Converting it to a row is
+the point of the rule.
+
+**What is missing.** `Image.validatedFilePath` derives the canonical path from
+the OPEN HANDLE, never by re-resolving the submitted path — that is the whole
+point of the reference's `file.realPath(io, buf)`, and re-resolving would
+reintroduce the TOCTOU the check exists to close. Rust's std has no handle-based
+realpath, so the port reproduces it per platform: macOS `fcntl(F_GETPATH)`,
+Linux/Android `readlink("/proc/self/fd/N")`. Every other target — Windows
+included — takes the `Unsupported` arm.
+
+**Blast radius, precisely.** On Windows the kitty `f` (file) and `t`
+(temporary-file) transmission mediums fail closed: `realpath_of_handle` returns
+`Unsupported`, `validatedFilePath` maps it to `Error::InvalidData`, and the
+caller answers the client with the same `EINVAL` shape it uses for a blocklisted
+path. Direct (`d`) and shared-memory (`s`) transmission are unaffected, as is
+every non-Windows target. Nothing silently accepts an unvalidated path — the
+failure direction is the safe one.
+
+**Why it is not fixed in place here.** The Windows arm is
+`GetFinalPathNameByHandleW` plus the `\\?\` / volume-name handling Zig's
+`std.fs.File.realpath` does around it, and `rustty-os::windows` carries no
+binding for it today (`windows.rs`'s `exp` module stops at the memory and
+console APIs `page.rs` needs). It is writable from the reference, but it is
+**host-unverifiable from macOS**: the `x86_64-pc-windows-msvc` rust-std is not
+installed here and G-XTARGET skips that arm by name, so the only proof available
+would be "it compiles on CI" — and `ci.yml`'s `windows` job runs
+`cargo test -p rustty-vt`, which has no test that can reach this path without a
+real file transmission. Writing an unexercised NT-path parser to clear a marker
+is the trade D3 exists to prevent, not the one it asks for.
+
+**Reopen trigger.** Any of: the Windows tier gains a handle-path binding in
+`rustty-os::windows`; the `windows` CI job grows a kitty file-medium test; or
+upstream changes `validatedFilePath`'s contract. At that point this row is the
+place the work is claimed from.

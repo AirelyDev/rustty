@@ -972,6 +972,11 @@ mod tests {
 
     // test "runInner fails cleanly when the cache is unusable"
     #[test]
+    // The test's whole subject is a REAL directory standing where the cache
+    // file belongs, so it must create one; `mkdir` is unavailable under Miri's
+    // isolation. Same class and same wording as `list_themes.rs`'s file-opening
+    // tests. Runs natively in ci.sh's HARD `cargo test --workspace` step.
+    #[cfg_attr(miri, ignore = "creates a directory — Miri isolation")]
     fn run_inner_fails_cleanly_when_the_cache_is_unusable() {
         // A directory where the cache file belongs fails every operation.
         // var tmp = testing.tmpDir(.{});

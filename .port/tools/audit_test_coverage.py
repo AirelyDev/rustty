@@ -248,11 +248,20 @@ def main():
 
     files = subprocess.run(["git", "ls-files", "src"], cwd=ORACLE,
                            capture_output=True, text=True, check=True).stdout.split()
-    nonports_path = os.path.join(ROOT, ".port/phase-3/NON_PORTS.md")
+    # EVERY phase's non-port ledger, not just phase 3's. The ledgers are written
+    # per phase (`.port/phase-N/NON_PORTS.md`) and reading one of them was an
+    # accident of the phase this tool was written in: `src/lib/TinyIo.zig` — a
+    # CONFIRMED non-port with a written rationale and a reopen trigger in
+    # `.port/phase-4/NON_PORTS.md` — had its 19 tests reported as unexplained
+    # gaps, which is the opposite of what the ledger says about them. The
+    # standard is unchanged (an absence is acceptable when someone WROTE DOWN
+    # why); this just stops the tool from ignoring where they wrote it.
     nonported = set()
-    if os.path.exists(nonports_path):
-        nonported = set(re.findall(r"`(src/[\w/]+\.zig)`",
-                                   open(nonports_path, errors="ignore").read()))
+    for phase in sorted(os.listdir(os.path.join(ROOT, ".port"))):
+        p = os.path.join(ROOT, ".port", phase, "NON_PORTS.md")
+        if os.path.exists(p):
+            nonported |= set(re.findall(r"`(src/[\w/]+\.zig)`",
+                                        open(p, errors="ignore").read()))
     zig = [f for f in files if f.endswith(".zig")
            and not any(f.startswith(p) for p in SKIP_PREFIXES)
            and f not in nonported]

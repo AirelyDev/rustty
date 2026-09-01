@@ -13,7 +13,7 @@
 
 /// Metadata for a field in a packed layout.
 // pub const FieldOptions = struct { ... };
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldOptions {
     /// Public name for this field. The Zig field name is used by default.
     pub name: Option<&'static str>,
@@ -39,7 +39,7 @@ impl FieldOptions {
 }
 
 // pub const Encoding = union(enum) { scalar, @"packed": type, tagged_union: type };
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Encoding {
     Scalar,
     Packed(&'static PackedLayout),
@@ -52,7 +52,7 @@ pub enum Encoding {
 /// `@typeInfo(T).@"struct".fields` + `@bitOffsetOf`/`@bitSizeOf`; here they
 /// are spelled per field and cross-checked by `validate()` (contiguity and
 /// total width against the backing integer).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PackedField {
     /// The Zig-source field name (`field.name`).
     pub zig_name: &'static str,
@@ -69,7 +69,7 @@ pub struct PackedField {
 /// Create metadata for a packed struct. Physical layout information is always
 /// reflected from `T`; options only provide public names and relationships.
 // pub fn Packed(comptime T: type, comptime options: PackedOptions(T)) type { ... }
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct PackedLayout {
     /// `@sizeOf(Zig)`.
     pub size: usize,
@@ -241,7 +241,7 @@ impl PackedLayout {
 /// union field (`.number = Number`); the model stores the source field name
 /// beside the layout so `arm()` callers can still observe which source field
 /// an arm maps to.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PackedTaggedUnionArm {
     /// The tag enum field name this arm belongs to.
     pub tag_name: &'static str,
@@ -255,7 +255,7 @@ pub struct PackedTaggedUnionArm {
 /// arm layout. Multiple tags may map to the same source union field.
 // pub fn PackedTaggedUnion(comptime OwnerT: type, comptime union_field_value:
 // ..., comptime tag_field_value: ..., comptime options: ...) type { ... }
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct PackedTaggedUnionLayout {
     /// `@tagName(union_field)` — the owner field holding the packed union.
     pub union_field: &'static str,
@@ -500,13 +500,27 @@ mod tests {
         assert!(NUMBER.field_name(NUMBER.field_index("_pad")).is_none());
         // switch (ValueLayout.arm(.first).?) { .number => |ArmLayout|
         //     try testing.expect(ArmLayout == Number), else => ... }
+        // PORT NOTE: the reference's `ArmLayout == Number` is a comptime TYPE
+        // identity. Here the layouts are VALUES, and the arm must be compared
+        // by equality, not by address: a `const` item is inlined at each use
+        // site, so the `&NUMBER` in the arm table and the `&NUMBER` here are
+        // two independently promoted allocations that need not share an
+        // address. rustc happens to fold them together, Miri does not, and the
+        // G6 lane is where that showed up — `core::ptr::eq` was asserting a
+        // codegen coincidence rather than the reference's claim. Equality binds
+        // strictly more: it is false for `FLAGS`, which is what the reference's
+        // `else => TestUnexpectedResult` arm rules out, and it stays true under
+        // any promotion strategy.
         match VALUE_LAYOUT.arm("first") {
-            Some(("number", layout)) => assert!(core::ptr::eq(layout, &NUMBER)),
+            Some(("number", layout)) => {
+                assert_eq!(*layout, NUMBER);
+                assert_ne!(*layout, FLAGS);
+            }
             _ => panic!("TestUnexpectedResult"),
         }
         // switch (ValueLayout.arm(.second).?) { .number => ... }
         match VALUE_LAYOUT.arm("second") {
-            Some(("number", layout)) => assert!(core::ptr::eq(layout, &NUMBER)),
+            Some(("number", layout)) => assert_eq!(*layout, NUMBER),
             _ => panic!("TestUnexpectedResult"),
         }
         // try testing.expectEqual(@as(usize, 1),

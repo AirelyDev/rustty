@@ -895,21 +895,34 @@ impl Screen {
 
         // if (comptime build_options.kitty_graphics) {
         //     // Reset kitty graphics storage
+        //     const image_limits = self.kitty_images.image_limits;
+        //     const total_limit = self.kitty_images.total_limit;
         //     self.kitty_images.deinit(self.alloc, self);
-        //     self.kitty_images = .{ .dirty = true };
+        //     self.kitty_images = .{
+        //         .dirty = true,
+        //         .image_limits = image_limits,
+        //         .total_limit = total_limit,
+        //     };
         // }
         // PORT NOTE: the self-referential `&mut Screen` borrow (`deinit` takes both
         // `&mut self.kitty_images` and `self`) is avoided by MOVING the storage out
         // (default placeholder) and `deinit`-ing it against a clean `&mut *self`;
         // `deinit` only touches `s.pages`, disjoint from the empty slot. The
-        // `.{ .dirty = true }` reset is the `ImageStorage` default with `dirty` on.
+        // `.{ .dirty = true }` reset is the `ImageStorage` default with `dirty` on,
+        // carrying the CONFIGURED limits across (`bcbc93a6b`: RIS previously
+        // cleared the storage limits and allowed mediums; they are configuration,
+        // not terminal state, so a reset must retain them).
         if crate::options::KITTY_GRAPHICS {
             // Reset kitty graphics storage
             let alloc = self.alloc;
+            let image_limits = self.kitty_images.image_limits.clone();
+            let total_limit = self.kitty_images.total_limit;
             let mut images = core::mem::take(&mut self.kitty_images);
             images.deinit(alloc, self as *mut Screen);
             self.kitty_images = kitty::graphics_storage::ImageStorage {
                 dirty: true,
+                image_limits,
+                total_limit,
                 ..kitty::graphics_storage::ImageStorage::default()
             };
         }

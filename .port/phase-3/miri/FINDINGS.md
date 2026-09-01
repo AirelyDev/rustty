@@ -163,3 +163,88 @@ allocation-volume exception class, but that must be MEASURED with a bound
 (`.port/tools/miri-run.sh`) before anything is annotated. Crates after
 `rustty-extra` in the lane order were never reached by any run in this triage and
 remain unverified.
+
+---
+
+# G6 lane completion (2026-08-29) — two REAL findings
+
+The G6 section above ended with most crates unreached. Working that frontier to a
+verdict produced two findings that are code defects, not Miri artifacts. Both are
+fixed; the Miri-cannot-model cases found alongside them are argued in
+`.port/phase-2/MIRI_EXCEPTIONS.md` ("G6 lane completion").
+
+## F5. `rustty-args` diagnostics — REAL Stacked-Borrows UB, and it was in PRODUCTION code
+
+```
+error: Undefined Behavior: attempting a read access using <1748069> at
+       alloc519900[0x1e], but that tag does not exist in the borrow stack
+  core::ffi::c_str::strlen              (CStr::from_ptr)
+  diagnostics::tests::precomputed_message_is_nul_terminated_but_excludes_the_sentinel
+help: <1748069> was created by a SharedReadOnly retag at offsets [0x0..0x1e]
+  crates/rustty-args/src/diagnostics.rs:410
+```
+
+**Not a test-only defect.** `DiagnosticList::precompute_message` returns the
+reference's `[:0]const u8` VIEW — the formatted bytes with the
+`toOwnedSliceSentinel(0)` NUL *excluded* from the length. `c_api.rs:247`
+(`rustty_config_get_diagnostic`) then handed `message.as_ptr()` to C. A pointer
+derived from that view carries provenance for exactly `len` bytes, and every C
+reader walks `len + 1` to find the NUL. The bytes were right; the provenance was
+not — so no byte-comparison test could see it, and only the test that performed
+the same read in Rust (`CStr::from_ptr`) exposed it.
+
+This is the shape the D-detectors exist for: a divergence with no compile error,
+no failing assertion, and no wrong output. The reference gets it right for free —
+Zig's `[:0]const u8` `.ptr` is derived from the sentinel-carrying allocation, not
+from a length-truncated reborrow of it.
+
+**Fix.** A second accessor, `precompute_message_c`, returning the WHOLE stored
+buffer (sentinel included); `c_api.rs` uses it. `precompute_message` keeps its
+reference-faithful view for Rust callers and now documents why it must not be the
+C source. The test asserts through the C accessor, so it pins the real contract
+instead of reproducing the bug. Nothing about the bytes C sees changes.
+
+**Verified:** `cargo +nightly miri test -p rustty-args --lib` → 69 passed, 0
+failed (was: aborted at the first error).
+
+## F6. `rustty-lib` packed — an assertion on `const` ADDRESS identity
+
+`packed::tests::packed_reflected_fields_and_nested_tagged_union` asserted
+`core::ptr::eq(layout, &NUMBER)`. The reference's claim is
+`ArmLayout == Number`, a comptime TYPE identity; over rustty's data model the
+layouts are values, and a `const` item is inlined at each use site — the `&NUMBER`
+in the arm table and the `&NUMBER` in the assertion are two independently
+promoted allocations that need not share an address. rustc folds them together,
+Miri does not, so the assertion was pinning a codegen coincidence.
+
+**Fix.** `PartialEq`/`Eq` on the layout descriptors, and the assertion compares by
+VALUE (plus an explicit `assert_ne!` against `FLAGS`, which is what the
+reference's `else => TestUnexpectedResult` arm rules out). Equality binds strictly
+more than address identity here and holds under any promotion strategy.
+
+**Verified:** `cargo +nightly miri test -p rustty-lib --lib` → 27 passed, 0 failed.
+
+## F7. `rustty-z2d` `Face::intersect` — a latent divide-by-zero, RECORDED not fixed
+
+Surfaced by (not caused by) Miri's libm: see `MIRI_EXCEPTIONS.md` for the ULP
+evidence. `Face::intersect` (`tess/face.rs:138`) computes the miter join as
+
+```rust
+… / (in_slope.dx * out_slope.dy - out_slope.dx * in_slope.dy)
+```
+
+guarded only by `debug_assert!(in_.dev_slope.compare(out.dev_slope) != 0)`. Two
+slopes can compare as DIFFERENT while their normalized cross product rounds to
+exactly zero, and the division is then 0/0 = NaN. Miri's `hypot` produces exactly
+such a pair (2 ULP apart in each component) for the input
+`slope_difference_below_epsilon_does_not_produce_nan` already pins.
+
+**Why it is not fixed here.** The miter math is z2d 0.12.1's, itself derived from
+Cairo's `cairo-path-stroke-polygon.c`; changing its numerics would be a deliberate
+divergence from the vendored reference (R1), and the safe predicate ("the
+determinant is non-zero") belongs upstream rather than as a local patch. It is
+recorded so that the next platform whose libm rounds differently finds this entry
+instead of rediscovering a NaN.
+
+**Reopen trigger:** the assertion fires natively on any host, or z2d upstream
+changes the guard.

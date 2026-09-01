@@ -42,13 +42,22 @@ the verified symbol-worded (F7) forms are documented in _gatelib. Every
 many-to-one binding is printed as MULTI-BOUND (a candidate form may never
 silently fold two reference names onto one fn).
 
+CONTRACT DRIFT: the contract is frozen at `4749c4e93` and the oracle pin has
+advanced, so it still DEMANDS tests upstream has since deleted or renamed. Those
+entries are exempted only through `.port/phase-3/CONTRACT_DELETIONS.md`, and only
+when every claim the row makes is re-derived live on this run (arms and their
+rationale: `_gatelib.contract_deletions`; the port-side half of the rename arm is
+`unported_successors` below). Each consumed row is PRINTED — `CONTRACT-DELETED` /
+`CONTRACT-RENAMED` — a row that fails an arm is `LEDGER-REJECTED` and RED, and a
+row that excuses nothing is `LEDGER-STALE` and RED. `--self-test` demonstrates
+all seven arms refusing a row.
+
 This gate NEVER edits a contract or threshold (R5). The contract is
 tests-summary.json's per-crate test_blocks; the global floor is 3234.
 """
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 
@@ -88,6 +97,13 @@ def load_ref_names_per_crate(summary):
     return out
 
 
+def unported_successors(row, fn_index):
+    """Arm 4's port-side half: the successor names a RENAME row claims must each
+    resolve to a ported fn in the owning crate. Factored out so the self-test can
+    drive the exact predicate the gate uses (see ledger_self_test arm [l6])."""
+    return [s for s in row["successors"] if not G.resolve_ref_test(s, fn_index)]
+
+
 def run(args):
     G.banner("G1", "100% test blocks ported")
     try:
@@ -111,6 +127,12 @@ def run(args):
     total_ported = 0
     red = False
     rows = []
+    # The upstream-deleted/renamed contract ledger, verified live (arms 1-3 in
+    # _gatelib.contract_deletions; arm 4's port-side half is checked per crate
+    # below, where the ported fn index exists).
+    ledger, ledger_rejects = G.contract_deletions()
+    ledger_used = set()
+    diffed_crates = set()   # crates whose name-set diff ran this invocation
     for crate in crates:
         contract = cm[crate]["test_blocks"]
         ported_names = G.scan_rust_tests(crate)
@@ -127,6 +149,7 @@ def run(args):
         # for EVERY crate under --strict (DG3(a): strict requires MISSING == ∅
         # workspace-wide, done-claim or not).
         if (claimed_done or args.strict) and ref_names.get(crate):
+            diffed_crates.add(crate)
             ref_set = set()
             for fset in ref_names[crate].values():
                 ref_set |= fset
@@ -145,17 +168,28 @@ def run(args):
                         bound.setdefault(h, []).append(nm)
                 else:
                     missing.append(nm)
-            # Drop reference names upstream has since DELETED (verified against
-            # the live oracle on every run — see _deleted_upstream).
+            # Drop reference names upstream has since DELETED or RENAMED
+            # (every claim re-derived against the live oracle on every run —
+            # see _gatelib.contract_deletions). A RENAME row is honoured only
+            # when the successor it names also binds to a ported fn HERE, so the
+            # exemption can never stand in for an unported test.
             if missing:
-                gone = _deleted_upstream()
                 kept = []
                 for nm in missing:
                     key = f"{crate}::{nm}"
-                    if key in gone:
-                        deleted_hits.append((key, gone[key]))
-                    else:
+                    row = ledger.get(key)
+                    if row is None:
                         kept.append(nm)
+                        continue
+                    unported = unported_successors(row, fn_index)
+                    if unported:
+                        ledger_rejects.append(
+                            (key, "successor(s) not ported: "
+                                  + ", ".join(repr(s) for s in unported)))
+                        kept.append(nm)
+                        continue
+                    ledger_used.add(key)
+                    deleted_hits.append((key, row))
                 missing = kept
             missing = sorted(missing)
             extra = sorted(ported_set - set(bound))
@@ -203,6 +237,34 @@ def run(args):
                   + (" ..." if len(nms) > 4 else ""))
         if len(multi) > 10:
             print(f"    MULTI-BOUND: ... (+{len(multi) - 10} more)")
+
+    # ---- the contract-drift ledger: report it, and keep it honest -----------
+    # An exemption that is not printed is a subtraction nobody can audit, which
+    # is how a contract quietly shrinks. Every consumed row is named here.
+    for (key, row) in sorted(deleted_hits):
+        if row["successors"]:
+            print(f"    CONTRACT-RENAMED: {key} -> "
+                  + ", ".join(repr(s) for s in row["successors"])
+                  + f" ({row['sha']}); successor ported")
+        else:
+            print(f"    CONTRACT-DELETED: {key} — removed upstream in {row['sha']}")
+    for (key, why) in sorted(ledger_rejects):
+        print(f"    LEDGER-REJECTED: {key} — {why}")
+        red = True
+    # A row that excused nothing is STALE — either the name binds again or it was
+    # never needed. Same rule as G2's DRIFT-STALE: an unused row must not
+    # accumulate into a standing subtraction. Only meaningful workspace-wide.
+    if not args.crate:
+        rejected = {k for (k, _why) in ledger_rejects}
+        for key in sorted(ledger):
+            # Only a crate whose name-set diff actually RAN can retire a row; a
+            # stub crate's rows are simply not exercised yet.
+            if ledger[key]["crate"] not in diffed_crates:
+                continue
+            if key not in ledger_used and key not in rejected:
+                print(f"    LEDGER-STALE: {key} — ledger row excused nothing "
+                      f"this run; remove it")
+                red = True
 
     scope = args.crate if args.crate else "workspace"
     print(f"\nPROGRESS [{scope}]: {total_ported}/{total_contract} ported "
@@ -377,59 +439,117 @@ def self_test():
     ok &= (r.returncode != 0 and caught)
 
     shutil.rmtree(tmp, ignore_errors=True)
+    ok &= ledger_self_test()
     print("SELF-TEST:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
 
-
 # ---------------------------------------------------------------------------
-# UPSTREAM-DELETED CONTRACT ENTRIES
-# ---------------------------------------------------------------------------
-# The contract is frozen at 4749c4e93 and deliberately never regenerated. The
-# pin has since advanced to 6ad1fe7d8, so the contract now drifts in BOTH
-# directions: it cannot see the tests upstream added (CENSUS_DELTA.md, +316
-# blocks) and it still DEMANDS the tests upstream deleted. Demanding a test that
-# no longer exists upstream is not fidelity, it is the opposite.
+# Ledger self-test: prove every arm of the upstream-deleted/renamed exemption is
+# reachable-FAIL. An exemption mechanism nobody has seen refuse a row is
+# indistinguishable from an exemption that always says yes.
 #
-# THIS IS NOT A WEAKENING (R5). A ledger row is never trusted on its own; the
-# exemption is re-derived here on every run and honoured only when BOTH hold:
-#   1. the name is absent from the LIVE oracle tree, and
-#   2. the named commit that removed it is reachable in the pin range.
-# So a bogus row cannot hide a genuinely unported test — if the test still
-# exists upstream, (1) fails and the row is ignored.
-_ORACLE_SRC = os.path.join(
-    os.path.dirname(subprocess.run(
-        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-        cwd=G.RUSTTY_ROOT, capture_output=True, text=True).stdout.strip()
-        or G.RUSTTY_ROOT),
-    "..", "ghostty", "src")
+# The arms run against the REAL oracle (that is what they verify against), so
+# where no oracle exists they are reported SKIPPED — without one
+# `contract_deletions()` grants nothing at all, which is the fail-closed
+# direction, not a hidden pass.
+# ---------------------------------------------------------------------------
+def ledger_self_test():
+    import tempfile
+
+    print("=== G1 LEDGER SELF-TEST ===")
+    if not os.path.isdir(G._oracle_src()):
+        print("  SKIPPED: no oracle tree — no row can be excused here anyway")
+        return True
+
+    tmp = tempfile.mkdtemp(prefix="g1_ledger_")
+    real = G.CONTRACT_DELETIONS_MD
+    ok = True
+
+    def verdicts(rows_md):
+        """Point the loader at a synthetic ledger and return (rows, rejects)."""
+        path = os.path.join(tmp, "LEDGER.md")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("| contract entry | commit | successor | why |\n")
+            fh.write("| --- | --- | --- | --- |\n")
+            fh.write(rows_md)
+        G.CONTRACT_DELETIONS_MD = path
+        try:
+            return G.contract_deletions()
+        finally:
+            G.CONTRACT_DELETIONS_MD = real
+
+    def arm(tag, rows_md, want_accept, expect_sub=""):
+        nonlocal ok
+        rows, rejects = verdicts(rows_md)
+        got = bool(rows) and not rejects
+        why = rejects[0][1] if rejects else ""
+        good = (got == want_accept) and (expect_sub in why)
+        print(f"  {'ok  ' if good else 'FAIL'} {tag}"
+              + (f" -> rejected: {why}" if rejects else " -> accepted"))
+        ok &= good
+
+    # A row known-good on today's tree: the control, so a FAIL below is the arm
+    # firing and not the mechanism being broken.
+    good = ("| `vt::HashMap ensureUnusedCapacity with tombstones` | `fedd42e8d`"
+            " | — | control |\n")
+    arm("[l1] control (a real deletion) accepted", good, True)
+    # (1) a name that still exists upstream in that crate's own directories.
+    arm("[l2] name still exists upstream",
+        "| `vt::storage: delete all placements` | `fedd42e8d` | — | x |\n",
+        False, "still exists upstream")
+    # (2) a sha that is not an ancestor of the oracle HEAD.
+    arm("[l3] sha not an ancestor",
+        "| `vt::HashMap ensureUnusedCapacity with tombstones` | `0000000` | — | x |\n",
+        False, "not an ancestor")
+    # (3) a real ancestor sha that removed nothing of the kind.
+    arm("[l4] sha did not remove the declaration",
+        "| `vt::HashMap ensureUnusedCapacity with tombstones` | `88f57ee66` | — | x |\n",
+        False, "does not remove")
+    # (4) a successor that does not exist upstream.
+    arm("[l5] successor absent upstream",
+        "| `vt::HashMap ensureUnusedCapacity with tombstones` | `fedd42e8d` | "
+        "`no such upstream test` | x |\n",
+        False, "does not exist upstream")
+    # (4) a successor that exists but was not added by that commit.
+    arm("[l6] successor not added by that commit",
+        "| `vt::HashMap ensureUnusedCapacity with tombstones` | `fedd42e8d` | "
+        "`storage: delete all placements` | x |\n",
+        False, "does not add successor")
+
+    # (4, port side) the successor must resolve to a PORTED fn — the half that
+    # keeps a rename row from standing in for an unported test.
+    rows, _ = verdicts("| `lib::abi by removing a key` | `e77c2612e` | "
+                       "`stable values when removing a key` | x |\n")
+    row = rows.get("lib::abi by removing a key")
+    if row is None:
+        print("  FAIL [l7] port-side arm: control row did not load")
+        ok = False
+    else:
+        empty = unported_successors(row, G.build_fn_index(set()))
+        ported = unported_successors(
+            row, G.build_fn_index(set(G.scan_rust_tests("lib"))))
+        good7 = bool(empty) and not ported
+        print(f"  {'ok  ' if good7 else 'FAIL'} [l7] successor unported -> "
+              f"{'refused' if empty else 'ACCEPTED'}; ported -> "
+              f"{'excused' if not ported else 'REFUSED'}")
+        ok &= good7
+
+    import shutil as _shutil
+    _shutil.rmtree(tmp, ignore_errors=True)
+    return ok
 
 
-def _deleted_upstream():
-    """{contract entry -> commit}, only for rows that still verify."""
-    led = os.path.join(G.RUSTTY_ROOT, ".port/phase-3/CONTRACT_DELETIONS.md")
-    if not os.path.exists(led):
-        return {}
-    out = {}
-    src = os.path.abspath(_ORACLE_SRC)
-    for m in re.finditer(r"^\|\s*`([^`]+)`\s*\|\s*`([0-9a-f]{7,40})`\s*\|",
-                         open(led, errors="ignore").read(), re.M):
-        entry, sha = m.group(1), m.group(2)
-        name = entry.split("::", 1)[1] if "::" in entry else entry
-        base = name.split(": ", 1)[1] if ": " in name else name
-        # (1) STILL PRESENT upstream? then the row does not apply.
-        r = subprocess.run(["grep", "-rl", 'test "' + base, src],
-                           capture_output=True, text=True)
-        if r.returncode == 0 and r.stdout.strip():
-            continue
-        # (2) the named commit must actually be in the advanced range.
-        r = subprocess.run(
-            ["git", "-C", os.path.join(src, ".."), "merge-base",
-             "--is-ancestor", sha, "HEAD"], capture_output=True, text=True)
-        if r.returncode != 0:
-            continue
-        out[entry] = sha
-    return out
+
+# ---------------------------------------------------------------------------
+# UPSTREAM-DELETED / RENAMED CONTRACT ENTRIES
+# ---------------------------------------------------------------------------
+# The loader and its four verification arms now live in
+# `_gatelib.contract_deletions()` — G2 rebases its crate assertion total on the
+# same verified rows, and one ledger read by two gates cannot disagree with
+# itself. See that function's header for the arms and for the two matcher bugs
+# (prefix collision, ": "-splitting) that made the old local copy both too
+# strict and, for every `X: Y` name, vacuous.
 
 
 def main():

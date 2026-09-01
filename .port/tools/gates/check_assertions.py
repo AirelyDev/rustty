@@ -305,6 +305,15 @@ def run(args):
     drift_used = set()      # ledger rows actually consumed this run
     drift_notes = []        # (crate, name, verdict, message)
     blocked_rows = []
+    # The SAME verified contract-drift ledger G1 reads (arms and their proofs:
+    # _gatelib.contract_deletions). The crate TOTAL is measured against the
+    # frozen inventory, which still counts the assertions of tests upstream has
+    # since DELETED — 39 of `datastruct`'s 311 belong to `lru.zig` and
+    # `segmented_pool.zig`, files upstream removed whole and the port therefore
+    # never carried. RENAME rows are NOT subtracted: the port carries the
+    # successor, so its assertions are still owed and still compared.
+    contract_gone, _rejects = G.contract_deletions()
+    deleted_notes = []
     for crate in crates:
         rust_per_test = G.scan_rust_test_assertions(crate)
         rust_total = sum(sum(counts) for counts in rust_per_test.values())
@@ -353,7 +362,18 @@ def run(args):
         # total re-creates the false RED the per-test check just resolved. The
         # subtraction is EXACTLY the live-verified (frozen - live) delta, never
         # a round number and never a hand-set floor.
-        crate_bar = ref_crate_total - accepted_drift
+        # Assertions belonging to contract entries upstream DELETED outright
+        # (no successor). Verified live, exactly like `accepted_drift`.
+        deleted_assertions = 0
+        for key, lrow in contract_gone.items():
+            if lrow["crate"] != crate or lrow["successors"]:
+                continue
+            n = rt.get(lrow["name"])
+            if n:
+                deleted_assertions += n
+                deleted_notes.append((crate, lrow["name"], n, lrow["sha"]))
+
+        crate_bar = ref_crate_total - accepted_drift - deleted_assertions
         if claimed_done:
             # also a claimed-done crate must not have a lower crate total
             if rust_total < crate_bar:
@@ -378,6 +398,11 @@ def run(args):
         print(f"{crate:<16}{status:<10}{rust_total:>8}{ref_crate_total:>8}  {state}")
     for (crate, name, refc, rustc) in weakened_all:
         print(f"    WEAKENED: {crate}::{name} ref={refc} rust={rustc}")
+
+    # ---- contract entries upstream DELETED: name every subtraction ---------
+    for (crate, name, n, sha) in sorted(deleted_notes):
+        print(f"    CONTRACT-DELETED: {crate}::{name} — {n} assertion(s) off the "
+              f"crate bar; removed upstream in {sha}")
 
     # ---- upstream-shrink ledger: report, and keep the ledger itself honest --
     for (crate, name, verdict, msg) in drift_notes:

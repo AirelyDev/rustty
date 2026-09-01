@@ -34,7 +34,8 @@ local iteration.
 |---|---|---|---|
 | **G7** | `check_acyclic.sh` | `cargo_cycle_check.py` | **HARD-FAIL** |
 | **G4** | `run_differential.sh` | harness `gate_empty_divergence.sh`, `comparator.py` | **HARD-FAIL** |
-| **G1** | `check_tests_ported.py` | `_gatelib.py` | PROGRESS* |
+| **G1-SELF** | `check_tests_ported.py --self-test` | — | **HARD-FAIL** |
+| **G1** | `check_tests_ported.py` | `_gatelib.py`, `.port/phase-3/CONTRACT_DELETIONS.md` | PROGRESS* |
 | **G1b** | `check_test_counts.py` (oracle-probed by ci.sh + self-guarded: missing zig ref ⇒ exit 3, never a vacuous green) | ghostty oracle checkout (R3, local only) | PROGRESS* |
 | **G2** | `check_assertions.py` | `_gatelib.py` | PROGRESS* |
 | **G3** | `check_comments_fidelity.py` | `_gatelib.py` | PROGRESS* |
@@ -152,7 +153,7 @@ done` with 0 ported tests turns G1/G2/G3 RED and ci.sh exits 1; reverting to
 
 | Gate | DoP id | Contract (frozen) | Progress today | Goes binding when |
 |---|---|---|---|---|
-| `check_tests_ported.py` | G1 | **3234** test blocks, count == contract, names match | per-crate `0/contract`, workspace `0/3225` ported | a crate is `done` (then per-crate ported == contract, names match) |
+| `check_tests_ported.py` | G1 | **3234** test blocks, count == contract, names match — less only the contract entries upstream DELETED or RENAMED, each re-verified live against `.port/phase-3/CONTRACT_DELETIONS.md` (a rename is excused only when the port carries the successor; every subtraction is printed, a bad or unused row is RED) | per-crate `0/contract`, workspace `0/3225` ported | a crate is `done` (then per-crate ported == contract, names match) |
 | `check_test_counts.py` | G1b | per mapped module: rust `#[test]` `>=` zig `test{}` minus documented apc-deferred — the only fidelity net for the non-`src/` crates outside the 3234 contract (vaxis/zf/xev/wuffs/z2d/…) | binding NOW for every mapped module (no done-status grace) | **already binding** wherever the ghostty oracle checkout exists. It greps the oracle directly (R3: external, never on CI), so an absent oracle can never read green — two non-env-overridable defenses: ci.sh probes the **same hard-coded root the script greps** (one source of truth; absent ⇒ **BLOCKED (exit 3) ⇒ WARNING**), and the script **self-guards** — any explicitly listed zig ref file missing (absent/partial oracle or zig-cache dep checkout) ⇒ exit 3 BLOCKED from inside the gate, so no wrapper/probe mismatch can convert zig=0 into a vacuous green; oracle present ⇒ any dropped test is RED and fails CI |
 | `check_assertions.py` | G2 | assertion-for-assertion, per-test `rust >= ref` (floor **11975**) | per-crate `rust=0 / ref`, workspace `rust=0` | a `done` crate (then no weakened assertion) |
 | `check_comments_fidelity.py` | G3 | per-file comment delta `>= 0` after identity-rename (census **42069**) | per-crate `rust / ref` comment lines | a `done` crate (then delta `>= 0`, no DROPPED) |

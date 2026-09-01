@@ -691,6 +691,165 @@ def census_rust_comments(crate):
 
 
 # ---------------------------------------------------------------------------
+# CONTRACT DRIFT — entries upstream DELETED or RENAMED after the frozen pin
+# ---------------------------------------------------------------------------
+# The contract (.port/phase-0/inventory/) is frozen at 4749c4e93 and never
+# regenerated. The oracle pin has since advanced, so the contract drifts in both
+# directions: it cannot see the tests upstream WROTE (CENSUS_DELTA.md) and it
+# still DEMANDS the tests upstream DELETED or RENAMED. Demanding a test that no
+# longer exists upstream is not fidelity, it is the opposite.
+#
+# `.port/phase-3/CONTRACT_DELETIONS.md` is the ledger of those entries. It is
+# read by G1 (name-set diff) and G2 (crate assertion total), which is why the
+# loader lives here rather than in either gate.
+#
+# NOT A WEAKENING (R5). A row is never trusted: every claim it makes is
+# RE-DERIVED against the live oracle on every run, and a row that fails any arm
+# is REJECTED (the exemption is refused and the gate says so). The arms:
+#
+#   1. the contract name is ABSENT upstream, matched EXACTLY (`test "<name>" {`,
+#      leading whitespace allowed for a nested test). Exactness matters both
+#      ways: the old prefix match let `datastruct::get` collide with every
+#      `test "getSize"` in the tree (a false REJECT), while splitting the name
+#      at ": " searched for `test "scrollUp with…"` when the real declaration
+#      was `test "Terminal: scrollUp with…"` — a string that never existed, so
+#      the arm passed vacuously for every `X: Y` row (a false ACCEPT).
+#   2. the named commit is an ancestor of the oracle's HEAD, and
+#   3. that commit's own diff REMOVED that exact declaration. Arm 2 alone
+#      accepts any ancestor sha — which is how `os::args` came to cite
+#      `b5053153f`, a commit that never touched `src/os/args.zig`.
+#   4. if the row names successor test(s) — the rename case — each must exist
+#      upstream today, have been ADDED by that same commit, and (checked by the
+#      caller, which holds the crate's ported fn index) resolve to a ported
+#      Rust fn. So a rename row is honoured only when the port demonstrably
+#      carries the renamed test; it can never hide an unported one.
+CONTRACT_DELETIONS_MD = os.path.join(PORT_DIR, "phase-3", "CONTRACT_DELETIONS.md")
+
+# `| `crate::name` | `sha` | `succ`, `succ` (or an em dash) | prose |`
+_LEDGER_ROW = re.compile(
+    r"^\|\s*`([^`]+)`\s*\|\s*`([0-9a-f]{7,40})`\s*\|([^|]*)\|", re.M)
+
+
+def _oracle_src():
+    """`../ghostty/src` beside the MAIN checkout (correct inside a worktree)."""
+    import subprocess
+    common = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=RUSTTY_ROOT, capture_output=True, text=True).stdout.strip()
+    main_checkout = os.path.dirname(common) if common else RUSTTY_ROOT
+    return os.path.abspath(os.path.join(main_checkout, "..", "ghostty", "src"))
+
+
+def _test_decl_re(name, prefix=""):
+    """Match a zig test declaration for exactly `name`, any indentation.
+
+    Both Zig spellings count: the string form `test "name" {` and the
+    identifier form `test name {` (which the contract records under the same
+    name — `lib/string.zig`'s `test cutPrefix {` is one). `prefix` prepends a
+    diff marker (`-`/`+`) for the "this commit removed/added it" arms."""
+    alts = ["\"" + re.escape(name) + "\""]
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        alts.append(re.escape(name))
+    return re.compile("^" + prefix + r"[ \t]*test (?:" + "|".join(alts) + r") \{",
+                      re.M)
+
+
+def contract_deletions():
+    """Verified rows of CONTRACT_DELETIONS.md.
+
+    Returns (rows, rejects) where
+      rows    = {"crate::name": {"sha", "successors": [...], "crate", "name"}}
+                — every arm 1-3 verified against the LIVE oracle, and
+      rejects = [(entry, why)] for rows that failed an arm.
+    An unreadable/absent ledger or oracle yields ({}, []) — the caller then has
+    no exemptions at all, which is the fail-closed direction."""
+    import subprocess
+    if not os.path.exists(CONTRACT_DELETIONS_MD):
+        return {}, []
+    src = _oracle_src()
+    if not os.path.isdir(src):
+        return {}, []
+    oracle = os.path.dirname(src)
+
+    # One read of the oracle test corpus, kept per source DIRECTORY so arm 1 can
+    # be scoped to the crate the contract entry belongs to. Scope matters: a
+    # tree-wide name search rejects `datastruct::get` forever, because
+    # `src/terminal/c/key_event.zig` declares an unrelated `test "get"`.
+    by_dir = {}
+    for dirpath, _dirs, files in os.walk(src):
+        rel = os.path.relpath(dirpath, src)
+        rel = "" if rel == "." else rel
+        for fn in files:
+            if not fn.endswith(".zig"):
+                continue
+            try:
+                with open(os.path.join(dirpath, fn), encoding="utf-8",
+                          errors="replace") as fh:
+                    by_dir.setdefault(rel, []).append(fh.read())
+            except OSError:
+                continue
+    by_dir = {d: "\n".join(t) for d, t in by_dir.items()}
+    corpus = "\n".join(by_dir.values())
+
+    # crate -> the src/ directories its contract files live in.
+    try:
+        crate_dirs = {}
+        for cr, info in crate_map().items():
+            crate_dirs[cr] = {os.path.dirname(f) for f, _n in info["files"]}
+    except Exception:  # noqa: BLE001 — no map: fall back to the whole tree
+        crate_dirs = {}
+
+    rows, rejects = {}, []
+    text = open(CONTRACT_DELETIONS_MD, encoding="utf-8", errors="replace").read()
+    for m in _LEDGER_ROW.finditer(text):
+        entry, sha, succ_cell = m.group(1), m.group(2), m.group(3)
+        if "::" not in entry:
+            continue
+        crate, name = entry.split("::", 1)
+        successors = re.findall(r"`([^`]+)`", succ_cell)
+
+        # (1) exact absence from the crate's own upstream directories
+        scope = "\n".join(by_dir.get(d, "") for d in crate_dirs[crate]) \
+            if crate in crate_dirs else corpus
+        if _test_decl_re(name).search(scope):
+            rejects.append((entry, "the test still exists upstream"))
+            continue
+        # (2) the commit is reachable from the oracle's HEAD
+        if subprocess.run(["git", "-C", oracle, "merge-base", "--is-ancestor",
+                           sha, "HEAD"], capture_output=True).returncode != 0:
+            rejects.append((entry, f"{sha} is not an ancestor of the oracle HEAD"))
+            continue
+        # (3) that commit removed exactly this declaration
+        diff = subprocess.run(
+            ["git", "-C", oracle, "show", "--format=", "-U0", sha, "--", "src"],
+            capture_output=True, text=True).stdout
+        if not _test_decl_re(name, prefix="-").search(diff):
+            rejects.append((entry, f"{sha} does not remove `test \"{name}\"`"))
+            continue
+        # (3b) …and did not merely MOVE it: a commit that re-adds the same
+        # declaration elsewhere deleted nothing, and the entry is still owed.
+        if _test_decl_re(name, prefix=r"\+").search(diff):
+            rejects.append((entry, f"{sha} re-adds `test \"{name}\"` elsewhere "
+                                   f"(a move, not a deletion)"))
+            continue
+        # (4) every named successor exists now and was added by that commit
+        bad = None
+        for s in successors:
+            if not _test_decl_re(s).search(corpus):
+                bad = f"successor `{s}` does not exist upstream"
+                break
+            if not _test_decl_re(s, prefix=r"\+").search(diff):
+                bad = f"{sha} does not add successor `{s}`"
+                break
+        if bad:
+            rejects.append((entry, bad))
+            continue
+        rows[entry] = {"sha": sha, "successors": successors,
+                       "crate": crate, "name": name}
+    return rows, rejects
+
+
+# ---------------------------------------------------------------------------
 # Reporting helpers
 # ---------------------------------------------------------------------------
 GREEN = "GREEN"

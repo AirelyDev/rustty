@@ -670,6 +670,16 @@ GATE_REGISTRY=(
   # building, so this is cheap and host-agnostic; the macOS control arm keeps it
   # from passing merely because a target gate stopped gating.
   "G-WINPROTO-DEFAULT|HARD|bash $GATES/check_default_linux_winproto.sh"
+  # G1-SELF — G1's own flip proof, HARD for the same reason G-TESTS-SELF is:
+  # G1 subtracts the contract entries upstream DELETED or RENAMED
+  # (.port/phase-3/CONTRACT_DELETIONS.md), and an exemption mechanism nobody has
+  # watched REFUSE a row is indistinguishable from one that always says yes. The
+  # self-test drives all seven ledger arms (name still present upstream, sha not
+  # an ancestor, sha removed nothing, successor absent, successor not added by
+  # that commit, successor not ported) plus the original synthetic-crate arms.
+  # Arms 3/3b/4 were added after the first pass caught a wrong sha in the
+  # original twelve rows (`os::args` cited a commit that never touched the file).
+  "G1-SELF|HARD|$PY $GATES/check_tests_ported.py --self-test"
   "G1|PROGRESS|$PY $GATES/check_tests_ported.py"
   "G1b|PROGRESS|run_test_counts"
   "G2|PROGRESS|$PY $GATES/check_assertions.py"
