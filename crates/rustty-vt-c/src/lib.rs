@@ -22,6 +22,60 @@
 
 use std::os::raw::c_int;
 
+// ----- lib_vt.zig: `native_freestanding` / `std_options` / `debug_machinery` -----
+//
+// PORT NOTE (`3376153a4`, "build: support native freestanding libghostty-vt"):
+// the reference root module gained
+//
+//     const native_freestanding = builtin.target.os.tag == .freestanding and
+//         !builtin.target.cpu.arch.isWasm();
+//
+// and threads it through three root-level knobs. Rust has no `std_options`
+// (there is no `std.Options` struct to populate — page size, stack tracing and
+// the log sink are properties of the toolchain/`std`, not of the crate root),
+// so the faithful analog is the cfg-level predicate below plus, per knob, the
+// closest thing this crate controls:
+//
+//   * `options.page_size_min = 16; options.page_size_max = 16;` — "Freestanding
+//     targets don't have an OS page size. We still need an alignment for
+//     terminal page allocations, and 16 covers everything stored in a page
+//     without requiring 4 KiB-aligned embedded heaps." The port's page
+//     alignment is `rustty_os::page_allocator` (mmap, OS page size) — there is
+//     no freestanding page pool to align, so this knob has no consumer yet
+//     (assessment: `.port/phase-6/assessments/W1-vt-core.md`).
+//   * `options.allow_stack_tracing = false;` — rustty's equivalent is the
+//     panic/backtrace machinery of `std`, which a `target_os = "none"` build
+//     does not link at all (`#![no_std]` would be required; this crate is not
+//     no_std — see the assessment).
+//   * `debug_machinery = !native_freestanding and (is_test or Debug/ReleaseSafe)`
+//     — the reference keeps std's panic/stack-trace machinery (~160KB) only on
+//     development builds and never on native freestanding. `DEBUG_MACHINERY`
+//     below is the same predicate (`builtin.mode` → `debug_assertions`, R8:
+//     build-switchable, never folded) for any future consumer (a custom panic
+//     handler on a `none` OS); today the `std` panic handler is what runs.
+//
+// wasm32-freestanding is deliberately NOT native freestanding (the reference
+// `!isWasm()` guard): the wasm arms in `sys::log_fn`, `rustty-lib`'s wasm
+// allocator and `rustty_datastruct::wasm_page_pool` stay as they are.
+
+/// `const native_freestanding = builtin.target.os.tag == .freestanding and
+/// !builtin.target.cpu.arch.isWasm();` — Zig's `.freestanding` OS tag is Rust's
+/// `target_os = "none"`.
+#[allow(dead_code)]
+pub const NATIVE_FREESTANDING: bool = cfg!(target_os = "none") && !cfg!(target_arch = "wasm32");
+
+/// True for builds where we keep the full std debug machinery (stack
+/// traces on panic, std.debug.print, etc.). These builds are for
+/// development, where the roughly 160KB of binary size it costs is
+/// worth it.
+// const debug_machinery: bool = !native_freestanding and
+//     (builtin.is_test or switch (builtin.mode) {
+//         .Debug, .ReleaseSafe => true,
+//         .ReleaseFast, .ReleaseSmall => false,
+//     });
+#[allow(dead_code)]
+pub const DEBUG_MACHINERY: bool = !NATIVE_FREESTANDING && (cfg!(test) || cfg!(debug_assertions));
+
 // ----- terminal/c/main.zig: module hub -----
 //
 // PORT NOTE: the reference declares (this sub-batch's subset):

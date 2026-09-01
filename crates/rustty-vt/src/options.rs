@@ -155,10 +155,11 @@ pub const GLYPH_PROTOCOL: bool = cfg!(feature = "glyph-protocol");
 /// Whether the Kitty graphics protocol is enabled.
 // PORT NOTE: synthesized by `Options.add`'s feature loop (`1fdbb8c91`): the
 // `kitty_graphics` feature (default true) with the per-field override
-//   `!(target.cpu.arch == .wasm32 and target.os.tag == .freestanding)`
-// — always disabled on wasm32-freestanding (no way to get timestamps there).
-pub const KITTY_GRAPHICS: bool =
-    cfg!(feature = "kitty-graphics") && !(cfg!(target_arch = "wasm32") && cfg!(target_os = "none"));
+// `Options.kittyGraphics(target)` — `if (target.os.tag == .freestanding)
+// return false;` (`3376153a4`: ANY freestanding OS, not only
+// wasm32-freestanding; no way to get timestamps there). Zig's `.freestanding`
+// OS tag is Rust's `target_os = "none"`.
+pub const KITTY_GRAPHICS: bool = cfg!(feature = "kitty-graphics") && !cfg!(target_os = "none");
 
 /// Whether Tmux control mode is enabled.
 // PORT NOTE: synthesized by `Options.add`: `opts.addOption(bool,
@@ -258,10 +259,11 @@ mod tests {
 
     #[test]
     fn kitty_graphics_enabled_on_this_target() {
-        // This crate is not built for wasm32-freestanding, so kitty graphics is
-        // enabled (the only target the reference disables it on).
-        let wasm_freestanding = cfg!(target_arch = "wasm32") && cfg!(target_os = "none");
-        assert_eq!(!wasm_freestanding, KITTY_GRAPHICS);
+        // This test binary is never a freestanding target, so kitty graphics
+        // is enabled (freestanding — any arch since `3376153a4` — is the only
+        // OS the reference disables it on).
+        let freestanding = cfg!(target_os = "none");
+        assert_eq!(!freestanding, KITTY_GRAPHICS);
     }
 
     #[test]

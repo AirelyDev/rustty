@@ -81,8 +81,8 @@ glyph-protocol = []
 # The Kitty graphics protocol; C API `rustty_kitty_graphics_*`. NOTE this
 # feature is necessary but not sufficient: `options::KITTY_GRAPHICS` ANDs it
 # with a target check, because the protocol needs OS timestamps and is always
-# off on wasm32-freestanding regardless of the setting (the reference
-# `Options.kittyGraphics` override).
+# off on freestanding targets (`target_os = "none"`, any arch — `3376153a4`)
+# regardless of the setting (the reference `Options.kittyGraphics` override).
 kitty-graphics = []
 # ---------------------------------------------------------------------------
 # Whether Oniguruma regex support is available (reference `oniguruma`). Gates

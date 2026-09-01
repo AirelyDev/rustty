@@ -224,22 +224,35 @@ impl From<io::WriteFailed> for FinishError {
 /// memory is the largest record payload rather than the complete snapshot.
 ///
 /// PORT NOTE: the reference takes an `Allocator` for the scratch buffer; the
-/// port uses the global allocator (the crate-wide treatment). The destination
+/// port uses the global allocator (the crate-wide treatment) behind a
+/// stack-fallback scratch (see [`RECORD_SCRATCH_STACK_BYTES`]). The destination
 /// is generic (`W`) rather than `*std.Io.Writer` so tests can read a concrete
 /// `AllocatingWriter` destination back through `destination()` while this
 /// writer borrows it (the reference reads the destination directly; Rust
 /// borrow discipline routes those reads through the borrow holder).
 pub struct Writer<'d, W: io::Writer + ?Sized> {
     destination: &'d mut W,
-    scratch: io::AllocatingWriter,
+    scratch: io::StackFallbackWriter<RECORD_SCRATCH_STACK_BYTES>,
     active_tag: Option<Tag>,
 }
+
+/// The record scratch's stack-resident size.
+///
+/// PORT NOTE (`ee8095d37`, `snapshot.zig` `encode`): "A measured 512-byte
+/// buffer handles our smallest records on the stack before larger records
+/// fall back to the heap." The reference wraps the caller's allocator in
+/// `std.heap.stackFallback(512, alloc)` at the `snapshot.encode` call site
+/// only; the port's `Writer` has no allocator parameter to wrap, so the
+/// fallback is baked into every `Writer`'s scratch here (the other `Writer`
+/// constructors are tests and the C-API tier, where the only difference is
+/// where the first 512 bytes of a payload live).
+pub const RECORD_SCRATCH_STACK_BYTES: usize = 512;
 
 impl<'d, W: io::Writer + ?Sized> Writer<'d, W> {
     pub fn init(destination: &'d mut W) -> Writer<'d, W> {
         Writer {
             destination,
-            scratch: io::AllocatingWriter::new(),
+            scratch: io::StackFallbackWriter::new(),
             active_tag: None,
         }
     }

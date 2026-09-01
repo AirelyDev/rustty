@@ -278,6 +278,111 @@ impl Writer for AllocatingWriter {
     }
 }
 
+/// `std.Io.Writer.Allocating` over `std.heap.stackFallback(N, alloc)`: a
+/// growable byte writer whose first `N` bytes live inline (on the stack of
+/// whoever owns it) and which falls back to the heap only when a payload
+/// outgrows that buffer.
+///
+/// PORT NOTE (`ee8095d37`): the reference builds `record.Writer`'s scratch on
+/// `std.heap.stackFallback(512, alloc).get()` — an allocator whose first
+/// allocation is served from a 512-byte stack buffer and whose later (larger)
+/// allocations come from `alloc`. Rust has no swappable allocator behind
+/// `Vec`, so the observable property — no heap allocation for records that
+/// fit in 512 bytes, heap growth beyond — is reproduced by this writer with
+/// an inline `[u8; N]` plus a spill `Vec`. Once spilled, the payload stays on
+/// the heap for the life of the writer (the Zig stack-fallback allocator also
+/// never moves a grown buffer back to the stack; and `cancel`'s
+/// `shrinkRetainingCapacity(0)` retains the heap capacity exactly as the
+/// `AllocatingWriter` scratch did).
+pub struct StackFallbackWriter<const N: usize> {
+    inline: [u8; N],
+    len: usize,
+    /// `Some` once the payload has spilled to the heap; the inline buffer is
+    /// then unused.
+    heap: Option<Vec<u8>>,
+}
+
+impl<const N: usize> Default for StackFallbackWriter<N> {
+    fn default() -> StackFallbackWriter<N> {
+        StackFallbackWriter::new()
+    }
+}
+
+impl<const N: usize> StackFallbackWriter<N> {
+    /// `.init(stack_alloc.get())`
+    pub fn new() -> StackFallbackWriter<N> {
+        StackFallbackWriter {
+            inline: [0u8; N],
+            len: 0,
+            heap: None,
+        }
+    }
+
+    /// `allocating.written()`
+    pub fn written(&self) -> &[u8] {
+        match &self.heap {
+            Some(heap) => heap,
+            None => &self.inline[..self.len],
+        }
+    }
+
+    /// `allocating.writer.end`
+    pub fn end(&self) -> usize {
+        match &self.heap {
+            Some(heap) => heap.len(),
+            None => self.len,
+        }
+    }
+
+    /// `allocating.shrinkRetainingCapacity(n)`
+    pub fn shrink_retaining_capacity(&mut self, n: usize) {
+        match &mut self.heap {
+            Some(heap) => heap.truncate(n),
+            None => self.len = self.len.min(n),
+        }
+    }
+
+    /// `allocating.writer.buffer.len` — the retained allocation size: the
+    /// inline buffer until the first spill, the heap capacity after.
+    #[allow(dead_code)]
+    pub fn capacity(&self) -> usize {
+        match &self.heap {
+            Some(heap) => heap.capacity(),
+            None => N,
+        }
+    }
+
+    /// True while no heap allocation has been made (test observability of
+    /// the stack-fallback property).
+    #[allow(dead_code)]
+    pub fn on_stack(&self) -> bool {
+        self.heap.is_none()
+    }
+}
+
+impl<const N: usize> Writer for StackFallbackWriter<N> {
+    fn write_all(&mut self, bytes: &[u8]) -> Result<(), WriteFailed> {
+        if let Some(heap) = &mut self.heap {
+            heap.extend_from_slice(bytes);
+            return Ok(());
+        }
+        let new_len = self.len + bytes.len();
+        if new_len <= N {
+            self.inline[self.len..new_len].copy_from_slice(bytes);
+            self.len = new_len;
+            return Ok(());
+        }
+        // Spill: the stack-fallback allocator's first heap allocation copies
+        // the buffered prefix and continues on the heap.
+        let mut heap = Vec::with_capacity(new_len);
+        heap.extend_from_slice(&self.inline[..self.len]);
+        heap.extend_from_slice(bytes);
+        self.heap = Some(heap);
+        self.len = 0;
+        Ok(())
+    }
+}
+
 /// `std.Io.Reader.fixed(bytes)` — a reader whose buffer is the complete data.
 // PORT NOTE: constructed by tests today; the decode drivers take
 // `&mut dyn Reader`, so the benchmark/C-API tiers are its non-test
