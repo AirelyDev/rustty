@@ -66,7 +66,7 @@ const COPYRIGHT_HOLDER: &str = "Mitchell Hashimoto, Ghostty contributors, Rustty
 pub(crate) const LOCALES: &[&str] = &[
     "zh_CN", "de", "fr", "ja", "nl", "nb", "ru", "uk", "pl", "ko_KR", "mk", "tr", "id", "es_BO",
     "es_AR", "es_ES", "pt_BR", "ca", "it", "bg", "ga", "hu", "he", "zh_TW", "hr", "lt", "lv", "vi",
-    "kk", "be", "eu", "da",
+    "kk", "be", "eu", "da", "sr", "sr@latin",
 ];
 
 /// Recursively collect GTK-apprt source files (`.blp` + `.rs`) as paths

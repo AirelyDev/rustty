@@ -7,7 +7,7 @@
 #
 # ── WHAT THIS GATE CHECKS ────────────────────────────────────────────────────
 # Every `po/*.po` catalogue agrees with `po/io.airely.rustty.pot`: `msgcmp
-# --use-untranslated` each of the 32 catalogues against the template, so a
+# --use-untranslated` each of the 34 catalogues against the template, so a
 # msgid that was renamed or removed cannot leave a catalogue silently carrying
 # a string that no longer exists, and a msgid added to the template cannot go
 # unnoticed in a catalogue. `--use-untranslated` because an entry a translator
@@ -15,7 +15,7 @@
 #
 # This has had NO coverage. `cargo test -p rustty-apprt --test
 # i18n_msgid_coverage` checks the msgid SET against the sources; it never runs
-# msgcmp and never looks at the 32 catalogues. `xtask/src/translations.rs`
+# msgcmp and never looks at the 34 catalogues. `xtask/src/translations.rs`
 # mentions msgcmp only in a doc comment.
 #
 # ── WHAT IT DELIBERATELY DOES NOT CHECK, AND WHY ─────────────────────────────
