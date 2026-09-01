@@ -27,7 +27,7 @@
 //! the upstream set — see that dir's `README.md` for provenance). This module
 //! copies that vendored tree into `share/{APP}/themes/`, applying the SAME
 //! `.md` exclusion ghostty uses — which skips the vendored `README.md` and keeps
-//! the emitted count exactly equal to ghostty's shipped set (602 themes).
+//! the emitted count exactly equal to ghostty's shipped set (606 themes).
 //!
 //! R2 IDENTITY NOTE (CORRECTED, Task 14): this comment previously claimed the
 //! corpus must install to a hard-coded `share/ghostty/themes/` because the
@@ -56,7 +56,7 @@ const VENDORED_THEMES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../crates/ru
 /// Generate the theme resource subtree under `share_dir`:
 ///
 /// ```text
-/// share/{APP}/themes/<Theme Name>   (602 iTerm2-derived .conf theme files)
+/// share/{APP}/themes/<Theme Name>   (606 iTerm2-derived .conf theme files)
 /// ```
 ///
 /// Copies every vendored theme file verbatim, excluding `.md` files (mirroring
@@ -106,10 +106,13 @@ pub fn gen_themes(share_dir: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// The vendored corpus is exactly ghostty's shipped set: 602 theme files
+    /// The vendored corpus is exactly ghostty's shipped set: 606 theme files
     /// (upstream tarball minus `.md`), and the emitter reproduces that count.
-    /// Measured on `ghostty-themes-release-20260810-152212-0173c3c` (the
-    /// phase-4 oracle pin): 592 -> 602 (+10 themes, tighten-only bump).
+    /// Measured on `ghostty-themes-release-20260824-153547-75c93ee` (the
+    /// phase-6 oracle pin, `094d175ef`): 602 -> 606 (+4 themes, tighten-only
+    /// bump; the previous hop, `20260810-152212-0173c3c` at the phase-4 pin,
+    /// was 592 -> 602). The number is re-derived from the pinned tarball's
+    /// file count on every re-vendor — never hand-picked.
     ///
     /// A COUNT IS NOT A CONTENT CHECK. This assertion passes unchanged on a
     /// corpus where a theme body has been corrupted — proven by executing that
@@ -130,7 +133,7 @@ mod tests {
             .filter(|e| e.as_ref().unwrap().path().is_file())
             .count();
         assert_eq!(
-            count, 602,
+            count, 606,
             "emitted theme count must match ghostty's shipped set"
         );
 
@@ -157,7 +160,7 @@ mod tests {
 
     /// The vendored corpus carries the upstream MIT attribution in-repo
     /// (`LICENSE.md`, iTerm2-Color-Schemes). It is `.md` so the emitter's
-    /// exclusion keeps the SHIPPED set at exactly 602 files — parity with
+    /// exclusion keeps the SHIPPED set at exactly 606 files — parity with
     /// ghostty, whose bundle ships no license file either.
     #[test]
     fn vendored_corpus_carries_upstream_license() {

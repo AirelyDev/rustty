@@ -6,7 +6,7 @@
 # into build.zig.zon, mirrors it to its own R2 bucket, and the PR it opens
 # touches build.zig.zon + the four generated hash files + flatpak/zig-packages.json.
 #
-# rustty vendors the 604 theme files IN-TREE under crates/rustty-extra/themes/,
+# rustty vendors the 608 theme files IN-TREE under crates/rustty-extra/themes/,
 # guarded by a per-file SHA-256 manifest (crates/rustty-extra/themes.manifest,
 # gate G-THEMES). So the rustty flow is: download the upstream tarball, replace
 # the tree, regenerate the manifest with the gate's own `--write` mode, verify
@@ -73,7 +73,7 @@ jobs:
           # Anti-vacuity: an empty or near-empty extract must not silently wipe
           # the corpus and then be blessed by --write on the next step.
           if [ "$n" -lt 100 ]; then
-            echo "::error title=Suspicious theme corpus::extracted only $n files; refusing to replace 604"
+            echo "::error title=Suspicious theme corpus::extracted only $n files; refusing to replace 608"
             exit 1
           fi
           rm -rf crates/rustty-extra/themes
