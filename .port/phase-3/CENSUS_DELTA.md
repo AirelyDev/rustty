@@ -5,18 +5,19 @@ Read by `.port/tools/gates/check_census_staleness.py` (G-CENSUS). Keep the
 
 ## The numbers
 
-Measured 2026-08-28 by re-running the phase-0 tokenizer
+Measured 2026-09-01 by re-running the phase-0 tokenizer
 (`.port/phase-0/inventory/extract_tests.py`, the *same* script, so the two sides
-are comparable) against the live oracle tree at `88f57ee66`:
+are comparable) against the live oracle tree at `20abdb50a`:
 
-- `total_test_blocks`: 3234 -> 4262 (+1028)
-- `total_assertions`: 11975 -> 16926 (+4951)
-- `files_with_tests`: 279 -> 346 (+67)
+- `total_test_blocks`: 3234 -> 4288 (+1054)
+- `total_assertions`: 11975 -> 17127 (+5152)
+- `files_with_tests`: 279 -> 348 (+69)
 
 | measured | pin | test blocks | assertions | files with tests |
 | --- | --- | --- | --- | --- |
 | 2026-07-31 | `6ad1fe7d8` | 3550 (+316) | 13533 (+1558) | 296 (+17) |
 | 2026-08-28 | `88f57ee66` | 4262 (+1028) | 16926 (+4951) | 346 (+67) |
+| 2026-09-01 | `20abdb50a` | 4288 (+1054) | 17127 (+5152) | 348 (+69) |
 
 The jump is the phase-4 and phase-5 resyncs plus the gap-close advance
 (`6ad1fe7d8` → `12967b68f` → `683d8db64` → `88f57ee66`, `ORACLE_SYNC.md`). The
