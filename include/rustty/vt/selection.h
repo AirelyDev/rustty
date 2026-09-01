@@ -117,6 +117,29 @@ typedef struct {
 } RusttySelection;
 
 /**
+ * A caller-provided buffer of selections.
+ *
+ * This follows the same conventions as RusttyBuffer: ptr may be NULL with
+ * cap 0 to query the required capacity. APIs that fill this type set len to
+ * the number of entries written on RUSTTY_SUCCESS, or to the required entry
+ * capacity on RUSTTY_OUT_OF_SPACE.
+ *
+ * @ingroup selection
+ */
+typedef struct {
+  /** Destination buffer for selections. May be NULL when cap is 0 to query
+   * the required capacity. */
+  RusttySelection* ptr;
+
+  /** Capacity of ptr in entries. */
+  size_t cap;
+
+  /** Entries written on success, or required entry capacity on
+   * RUSTTY_OUT_OF_SPACE. */
+  size_t len;
+} RusttySelectionBuffer;
+
+/**
  * Options for deriving a word selection from a terminal grid reference.
  *
  * This is a sized struct. Use RUSTTY_INIT_SIZED() to initialize it.

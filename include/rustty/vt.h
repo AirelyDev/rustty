@@ -32,6 +32,7 @@
  * - @ref render "Render State" - Incremental render state updates for custom renderers
  * - @ref formatter "Formatter" - Format terminal content as plain text, VT sequences, or HTML
  * - @ref snapshot "Terminal Snapshot" - Encode and incrementally restore terminal state
+ * - @ref search "Search" - Search terminal contents, including scrollback
  * - @ref osc "OSC Parser" - Parse OSC (Operating System Command) sequences
  * - @ref sgr "SGR Parser" - Parse SGR (Select Graphic Rendition) sequences
  * - @ref paste "Paste" - Paste into a terminal, validate and encode paste data
@@ -60,6 +61,7 @@
  * - @ref c-vt-grid-traverse/src/main.c - Grid traversal example using grid refs
  * - @ref c-vt-grid-ref-tracked/src/main.c - Tracked grid ref example
  * - @ref c-vt-compression/src/main.c - Idle scrollback compression example
+ * - @ref c-vt-search/src/main.c - Terminal search example
  * - @ref c-vt-color-scheme/src/main.c - Color scheme report encoding example
  *
  */
@@ -132,6 +134,12 @@
  * encode a color scheme report escape sequence into a caller-provided buffer.
  */
 
+/** @example c-vt-search/src/main.c
+ * This example demonstrates how to search terminal contents for a
+ * string, navigate between the matches like a find bar, and read the
+ * viewport matches used to draw highlights.
+ */
+
 #ifndef RUSTTY_VT_H
 #define RUSTTY_VT_H
 
@@ -163,6 +171,7 @@ extern "C" {
 #include <rustty/vt/paste.h>
 #include <rustty/vt/point.h>
 #include <rustty/vt/screen.h>
+#include <rustty/vt/search.h>
 #include <rustty/vt/selection.h>
 #include <rustty/vt/size_report.h>
 #include <rustty/vt/snapshot.h>

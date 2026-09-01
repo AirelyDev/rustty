@@ -321,6 +321,29 @@ typedef enum {
 } RowCellsData;
 
 /**
+ * C: GhosttySearchStatus -> RusttySearchStatus (R2)
+ */
+typedef enum {
+    SEARCH_STATUS_SEARCH_STATUS_RUNNING = 0,
+    SEARCH_STATUS_SEARCH_STATUS_FEED_REQUIRED = 1,
+    SEARCH_STATUS_SEARCH_STATUS_COMPLETE = 2,
+} SearchStatus;
+
+/**
+ * C: GhosttySearchData -> RusttySearchData (R2)
+ */
+typedef enum {
+    SEARCH_DATA_SEARCH_DATA_STATUS = 0,
+    SEARCH_DATA_SEARCH_DATA_NEEDLE = 1,
+    SEARCH_DATA_SEARCH_DATA_TOTAL_MATCHES = 2,
+    SEARCH_DATA_SEARCH_DATA_SELECTED_INDEX = 3,
+    SEARCH_DATA_SEARCH_DATA_SELECTED_MATCH = 4,
+    SEARCH_DATA_SEARCH_DATA_MATCHES = 5,
+    SEARCH_DATA_SEARCH_DATA_VIEWPORT_MATCHES = 6,
+    SEARCH_DATA_SEARCH_DATA_SELECT_SCROLL = 7,
+} SearchData;
+
+/**
  * C: GhosttyTerminalData -> RusttyTerminalData (R2)
  */
 typedef enum {
@@ -428,6 +451,8 @@ typedef struct RenderStateWrapper RenderStateWrapper;
 typedef struct RowCellsWrapper RowCellsWrapper;
 
 typedef struct RowIteratorWrapper RowIteratorWrapper;
+
+typedef struct SearchWrapper SearchWrapper;
 
 /**
  * Wrapper around ZigTerminal that tracks additional state for C API usage,
@@ -827,6 +852,11 @@ typedef RowCellsWrapper *RowCells;
  * C: GhosttySelectionGesture -> RusttySelectionGesture (R2)
  */
 typedef GestureWrapper *Gesture;
+
+/**
+ * C: GhosttySearch -> RusttySearch (R2)
+ */
+typedef SearchWrapper *Search;
 
 /**
  * The C ABI compatible union value for `ScrollViewport`.
@@ -2347,6 +2377,81 @@ void rustty_selection_gesture_event_free(Event event);
  * `value`, if non-null, must point to a value of the type required by `option`.
  */
 int rustty_selection_gesture_event_set(Event event, int option, const void *value);
+
+/**
+ * C: rustty_search_new
+ *
+ * # Safety
+ * `alloc_`, if non-null, must point to a valid allocator; `out_search`, if
+ * non-null, must be a valid, writable pointer to a search handle; `terminal`,
+ * if non-null, must be a live terminal handle.
+ */
+int rustty_search_new(const Allocator *alloc_, Search *out_search, Terminal terminal);
+
+/**
+ * C: rustty_search_free
+ *
+ * # Safety
+ * `search`, if non-null, must be a handle returned by `_new` and not yet freed.
+ */
+void rustty_search_free(Search search);
+
+/**
+ * C: rustty_search_tick
+ *
+ * # Safety
+ * `search`, if non-null, must be a live handle; `out_status`, if non-null,
+ * must be writable.
+ */
+int rustty_search_tick(Search search, SearchStatus *out_status);
+
+/**
+ * C: rustty_search_feed
+ *
+ * # Safety
+ * `search`, if non-null, must be a live handle whose terminal the caller has
+ * exclusive access to.
+ */
+int rustty_search_feed(Search search);
+
+/**
+ * C: rustty_search_run
+ *
+ * # Safety
+ * `search`, if non-null, must be a live handle whose terminal the caller has
+ * exclusive access to for the whole call.
+ */
+int rustty_search_run(Search search);
+
+/**
+ * C: rustty_search_set
+ *
+ * # Safety
+ * `search`, if non-null, must be a live handle; `value`, if non-null, must
+ * point to a value of the type required by `option`.
+ */
+int rustty_search_set(Search search, int option, const void *value);
+
+/**
+ * C: rustty_search_get
+ *
+ * # Safety
+ * `search`, if non-null, must be a live handle; `value` must point to
+ * writable storage of the type required by `data`.
+ */
+int rustty_search_get(Search search, int data, void *value);
+
+/**
+ * C: rustty_search_get_multi
+ *
+ * # Safety
+ * `keys`/`values`/`out_written` validity is the caller's contract.
+ */
+int rustty_search_get_multi(Search search,
+                            uintptr_t count,
+                            const SearchData *keys,
+                            void **values,
+                            uintptr_t *out_written);
 
 /**
  * C: rustty_terminal_new

@@ -50,6 +50,7 @@ use crate::grid_ref_tracked::{CTrackedGridRef, TrackedGridRef};
 use crate::kitty_graphics::KittyGraphics as KittyGraphicsHandle;
 use crate::point::PointC;
 use crate::result::Result;
+use crate::search::SearchWrapper;
 use crate::writer::{CountingWriter, FixedWriter};
 use rustty_lib::allocator::Allocator as CAllocator;
 use rustty_lib::String as LibString;
@@ -179,7 +180,9 @@ pub const DEFAULT_CONTINUATION_MAX_BYTES: usize = 0;
 // provenance so the always-installed effect trampolines can recover it (see
 // `wrapper_from_handler`). `tracked_grid_refs` is the set of live
 // `*TrackedGridRef` so `free` can detach them safely (Zig
-// `AutoArrayHashMapUnmanaged(*TrackedGridRef, void)`).
+// `AutoArrayHashMapUnmanaged(*TrackedGridRef, void)`); `searches` (`f0c918fc4`)
+// is the same registry for live `*SearchWrapper`s, so a search and its
+// terminal can be freed in either order (`search.rs` module note).
 pub struct TerminalWrapper {
     pub terminal: *mut ZigTerminal,
 
@@ -230,6 +233,8 @@ pub struct TerminalWrapper {
     pub stream: Stream<'static>,
     pub effects: Effects,
     pub tracked_grid_refs: HashSet<*mut TrackedGridRef>,
+    // searches: std.AutoArrayHashMapUnmanaged(*search_c.SearchWrapper, void) = .{},
+    pub searches: HashSet<*mut SearchWrapper>,
 }
 
 /// C callback state for terminal effects. Most trampolines are always
@@ -1701,6 +1706,7 @@ unsafe fn wrap(
                 }),
                 effects: Effects::default(),
                 tracked_grid_refs: HashSet::new(),
+                searches: HashSet::new(),
             },
         )
     };
@@ -4392,6 +4398,8 @@ pub unsafe fn point_from_grid_ref(
 //     const alloc = t.gpa();
 //     for (wrapper.tracked_grid_refs.keys()) |ref| ref.terminal = null;
 //     wrapper.tracked_grid_refs.deinit(alloc);
+//     for (wrapper.searches.keys()) |search| search.terminal = null;
+//     wrapper.searches.deinit(alloc);
 //     wrapper.stream.deinit();
 //     t.deinit(alloc);
 //     alloc.destroy(t);
@@ -4437,6 +4445,21 @@ pub unsafe fn free(terminal_: Terminal) {
     // wrapper.tracked_grid_refs.deinit(alloc); — the HashSet frees when the
     // wrapper value drops below.
     unsafe { (*terminal_).tracked_grid_refs.clear() };
+
+    // for (wrapper.searches.keys()) |search| search.terminal = null;
+    // PORT NOTE (`f0c918fc4`): detach every registered search so a later
+    // `search::free` (or any search call that needs the terminal) sees a null
+    // terminal instead of this freed storage — the "free in any order"
+    // contract. Written through the registry's own copy of the raw pointer
+    // (no `&mut SearchWrapper` exists anywhere; `search.rs` SB note).
+    // SAFETY: each search pointer was inserted by `search::new` and is still
+    // live (a freed search unregisters itself first).
+    for &search in unsafe { (*terminal_).searches.iter() } {
+        unsafe { (*search).terminal = std::ptr::null_mut() };
+    }
+    // wrapper.searches.deinit(alloc); — the HashSet frees when the wrapper
+    // value drops below.
+    unsafe { (*terminal_).searches.clear() };
 
     // wrapper.stream.deinit();
     unsafe { (*terminal_).stream.deinit() };

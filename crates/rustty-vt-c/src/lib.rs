@@ -6,7 +6,7 @@
 //! `rustty_*` symbols (R2).
 //!
 //! PORT STATUS: done (flipped per VALIDATION_REPORT.md M3: all 34 c/
-//! modules are landed — terminal, render, kitty_graphics, selection*,
+//! modules are landed, plus `search` (P6-W3) — terminal, render, kitty_graphics, selection*,
 //! formatter, key/mouse, sgr, osc, cell, row, style, grid_ref, size_report,
 //! types included — with zero live todo!(); completion ledgered in
 //! DEFERRALS.md under "vt-c").
@@ -111,6 +111,9 @@ pub mod point;
 pub mod render;
 pub mod result;
 pub mod row;
+// pub const search = @import("search.zig");  (`32601cd79`; `test { _ = search; }`
+// is the module's own `#[cfg(test)] mod tests`)
+pub mod search;
 pub mod selection;
 pub mod selection_gesture;
 pub mod sgr;
@@ -2887,6 +2890,144 @@ fn selection_gesture_event_option_from_c_int(v: c_int) -> Option<selection_gestu
     } else {
         None
     }
+}
+
+// ----- search -----
+// PORT NOTE (`f9202919f`, `76d9fcefe` END STATE — no `GhosttySearchOptions`):
+// 1:1 with the 8 `@export(&c.search_*, ...)` lines in `lib_vt.zig`'s
+// `if (features.search)` block (`#[cfg(feature = "search")]`). The `c.zig`
+// aliases map `search_<name> -> search.<name>`. The `fromInt` runtime-safety
+// guards for `Option`/`Data` run on the raw `c_int` inside the module
+// (`search::set_checked` / `search::get_checked`), so `get_multi` reaches the
+// data guard per array element exactly as the reference does.
+
+// pub const search_new = search.new;
+/// C: rustty_search_new
+///
+/// # Safety
+/// `alloc_`, if non-null, must point to a valid allocator; `out_search`, if
+/// non-null, must be a valid, writable pointer to a search handle; `terminal`,
+/// if non-null, must be a live terminal handle.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_new(
+    alloc_: *const rustty_lib::allocator::Allocator,
+    out_search: *mut search::Search,
+    terminal: terminal::Terminal,
+) -> c_int {
+    // SAFETY: `alloc_`/`out_search`/`terminal` validity is the caller's contract.
+    unsafe { search::new(alloc_.as_ref(), out_search, terminal) }.to_c_int()
+}
+
+// pub const search_free = search.free;
+/// C: rustty_search_free
+///
+/// # Safety
+/// `search`, if non-null, must be a handle returned by `_new` and not yet freed.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_free(search: search::Search) {
+    // SAFETY: `search` validity is the caller's contract.
+    unsafe { search::free(search) }
+}
+
+// pub const search_tick = search.tick;
+/// C: rustty_search_tick
+///
+/// # Safety
+/// `search`, if non-null, must be a live handle; `out_status`, if non-null,
+/// must be writable.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_tick(
+    search: search::Search,
+    out_status: *mut search::SearchStatus,
+) -> c_int {
+    // SAFETY: `search`/`out_status` validity is the caller's contract.
+    unsafe { search::tick(search, out_status) }.to_c_int()
+}
+
+// pub const search_feed = search.feed;
+/// C: rustty_search_feed
+///
+/// # Safety
+/// `search`, if non-null, must be a live handle whose terminal the caller has
+/// exclusive access to.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_feed(search: search::Search) -> c_int {
+    // SAFETY: `search` validity is the caller's contract.
+    unsafe { search::feed(search) }.to_c_int()
+}
+
+// pub const search_run = search.run;
+/// C: rustty_search_run
+///
+/// # Safety
+/// `search`, if non-null, must be a live handle whose terminal the caller has
+/// exclusive access to for the whole call.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_run(search: search::Search) -> c_int {
+    // SAFETY: `search` validity is the caller's contract.
+    unsafe { search::run(search) }.to_c_int()
+}
+
+// pub const search_set = search.set;
+/// C: rustty_search_set
+///
+/// # Safety
+/// `search`, if non-null, must be a live handle; `value`, if non-null, must
+/// point to a value of the type required by `option`.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_set(
+    search: search::Search,
+    option: c_int,
+    value: *const std::ffi::c_void,
+) -> c_int {
+    // if (comptime std.debug.runtime_safety) { _ = fromInt(Option, ...) orelse { log.warn(...); return .invalid_value; }; }
+    // SAFETY: `search`/`value` validity is the caller's contract.
+    unsafe { search::set_checked(search, option, value) }.to_c_int()
+}
+
+// pub const search_get = search.get;
+/// C: rustty_search_get
+///
+/// # Safety
+/// `search`, if non-null, must be a live handle; `value` must point to
+/// writable storage of the type required by `data`.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_get(
+    search: search::Search,
+    data: c_int,
+    value: *mut std::ffi::c_void,
+) -> c_int {
+    // if (comptime std.debug.runtime_safety) { _ = fromInt(Data, ...) orelse { log.warn(...); return .invalid_value; }; }
+    // SAFETY: `search`/`value` validity is the caller's contract.
+    unsafe { search::get_checked(search, data, value) }.to_c_int()
+}
+
+// pub const search_get_multi = search.get_multi;
+/// C: rustty_search_get_multi
+///
+/// # Safety
+/// `keys`/`values`/`out_written` validity is the caller's contract.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_get_multi(
+    search: search::Search,
+    count: usize,
+    keys: *const search::SearchData,
+    values: *mut *mut std::ffi::c_void,
+    out_written: *mut usize,
+) -> c_int {
+    // PORT NOTE (W66-GETMULTI-RAW-01): the elements are read as raw `c_int` and
+    // range-checked per element (see `search::get_multi`).
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { search::get_multi(search, count, keys as *const c_int, values, out_written) }
+        .to_c_int()
 }
 
 // ----- terminal -----

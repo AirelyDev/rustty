@@ -275,6 +275,38 @@ impl CSelection {
     }
 }
 
+/// C: GhosttySelectionBuffer -> RusttySelectionBuffer (R2)
+///
+/// A caller-provided buffer of selections. This follows the same
+/// conventions as GhosttyBuffer: ptr may be NULL with cap 0 to query
+/// the required capacity, and len is set to the entries written on
+/// success or to the required capacity on GHOSTTY_OUT_OF_SPACE.
+// pub const CSelectionBuffer = extern struct {
+//     ptr: ?[*]CSelection = null,
+//     cap: usize = 0,
+//     len: usize = 0,
+// };
+// PORT NOTE (`32601cd79`, P6-W3): the selection analog of `lib.Buffer`
+// (`rustty_lib::Buffer`); filled by `search::get` for `.matches` /
+// `.viewport_matches`. `Default` carries the three field defaults.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CSelectionBuffer {
+    pub ptr: *mut CSelection,
+    pub cap: usize,
+    pub len: usize,
+}
+
+impl Default for CSelectionBuffer {
+    fn default() -> Self {
+        CSelectionBuffer {
+            ptr: std::ptr::null_mut(),
+            cap: 0,
+            len: 0,
+        }
+    }
+}
+
 /// C: GhosttyTerminalSelectWordOptions -> RusttyTerminalSelectWordOptions (R2)
 // pub const SelectWordOptions = extern struct {
 //     size: usize = @sizeOf(SelectWordOptions),

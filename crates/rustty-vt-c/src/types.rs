@@ -56,6 +56,9 @@ use core::mem::{align_of, offset_of, size_of};
 // `terminal.rs`.
 use crate::terminal::{CDeviceAttributes, CDeviceAttributesPrimary};
 use crate::terminal::{CDeviceAttributesSecondary, CDeviceAttributesTertiary};
+// const search = @import("search.zig");
+use crate::search::{SearchData, SearchOption, SearchScroll, SearchStatus};
+use crate::selection::CSelectionBuffer;
 
 use rustty_lib::packed::{Encoding, PackedLayout, PackedTaggedUnionLayout};
 
@@ -819,6 +822,20 @@ static DECLS: &[TypeDecl] = {
                     ("start", CGridRef, start, n("RusttyGridRef")),
                     ("end", CGridRef, end, n("RusttyGridRef")),
                     ("rectangle", bool, rectangle, n("bool")),
+                ]
+            )
+        ),
+        // .initStruct("GhosttySelectionBuffer", selection.CSelectionBuffer),
+        struct_decl!(
+            "RusttySelectionBuffer",
+            CSelectionBuffer,
+            fields!(
+                CSelectionBuffer,
+                [
+                    // ptr: ?[*]CSelection -> optional pointer -> nullable
+                    ("ptr", *mut CSelection, ptr, Ty::Pointer("RusttySelection", false, true)),
+                    ("cap", usize, cap, usize_ty()),
+                    ("len", usize, len, usize_ty()),
                 ]
             )
         ),
@@ -2033,6 +2050,57 @@ static DECLS: &[TypeDecl] = {
                 ]
             )
         ),
+        // .initEnum("GhosttySearchData", search.Data, "GHOSTTY_SEARCH_DATA_"),
+        enum_decl!(
+            "RusttySearchData",
+            "RUSTTY_SEARCH_DATA_",
+            enum_values!(
+                SearchData,
+                [
+                    ("status", Status),
+                    ("needle", Needle),
+                    ("total_matches", TotalMatches),
+                    ("selected_index", SelectedIndex),
+                    ("selected_match", SelectedMatch),
+                    ("matches", Matches),
+                    ("viewport_matches", ViewportMatches),
+                    ("select_scroll", SelectScroll),
+                ]
+            )
+        ),
+        // .initEnum("GhosttySearchOption", search.Option, "GHOSTTY_SEARCH_OPT_"),
+        enum_decl!(
+            "RusttySearchOption",
+            "RUSTTY_SEARCH_OPT_",
+            enum_values!(
+                SearchOption,
+                [
+                    ("needle", Needle),
+                    ("select_next", SelectNext),
+                    ("select_prev", SelectPrev),
+                    ("select_scroll", SelectScroll),
+                ]
+            )
+        ),
+        // .initEnum("GhosttySearchScroll", search.Scroll, "GHOSTTY_SEARCH_SCROLL_"),
+        enum_decl!(
+            "RusttySearchScroll",
+            "RUSTTY_SEARCH_SCROLL_",
+            enum_values!(SearchScroll, [("if_needed", IfNeeded), ("none", None)])
+        ),
+        // .initEnum("GhosttySearchStatus", search.Status, "GHOSTTY_SEARCH_STATUS_"),
+        enum_decl!(
+            "RusttySearchStatus",
+            "RUSTTY_SEARCH_STATUS_",
+            enum_values!(
+                SearchStatus,
+                [
+                    ("running", Running),
+                    ("feed_required", FeedRequired),
+                    ("complete", Complete),
+                ]
+            )
+        ),
         // .initEnum("GhosttySelectionAdjust", Selection.Adjustment, "GHOSTTY_SELECTION_ADJUST_"),
         enum_decl!(
             "RusttySelectionAdjust",
@@ -2545,6 +2613,10 @@ static DECLS: &[TypeDecl] = {
         },
         TypeDecl::Opaque {
             name: "RusttyRenderStateRowIterator",
+        },
+        // .initOpaque("GhosttySearch"),
+        TypeDecl::Opaque {
+            name: "RusttySearch",
         },
         TypeDecl::Opaque {
             name: "RusttySelectionGesture",
