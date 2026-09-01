@@ -402,9 +402,9 @@ _rustty() {
       --clipboard-paste-bracketed-safe) return ;;
       --title-report) return ;;
       --image-storage-limit) return ;;
-      --copy-on-select) _compreply compgen -W "false true clipboard" -- "$cur"; _add_spaces ;;
+      --copy-on-select) _compreply compgen -W "none primary clipboard both" -- "$cur"; _add_spaces ;;
       --right-click-action) _compreply compgen -W "ignore paste copy copy-or-paste context-menu" -- "$cur"; _add_spaces ;;
-      --middle-click-action) _compreply compgen -W "primary-paste ignore" -- "$cur"; _add_spaces ;;
+      --middle-click-action) _compreply compgen -W "primary-paste clipboard-paste ignore" -- "$cur"; _add_spaces ;;
       --click-repeat-interval) return ;;
       --config-file) _files ;;
       --config-default-files) return ;;

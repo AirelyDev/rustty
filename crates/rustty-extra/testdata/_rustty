@@ -153,9 +153,9 @@ _config() {
     "--clipboard-paste-bracketed-safe" \
     "--title-report" \
     "--image-storage-limit=-:::( )" \
-    "--copy-on-select=-:::(false true clipboard)" \
+    "--copy-on-select=-:::(none primary clipboard both)" \
     "--right-click-action=-:::(ignore paste copy copy-or-paste context-menu)" \
-    "--middle-click-action=-:::(primary-paste ignore)" \
+    "--middle-click-action=-:::(primary-paste clipboard-paste ignore)" \
     "--click-repeat-interval=-:::( )" \
     "--config-file=-:::_files" \
     "--config-default-files" \
