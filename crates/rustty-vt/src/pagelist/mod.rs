@@ -834,11 +834,33 @@ type PagePool = rustty_datastruct::wasm_page_pool::DynamicWasmPagePool<PageBacki
 static PAGE_FREE_LIST: rustty_datastruct::wasm_page_pool::FreeList =
     rustty_datastruct::wasm_page_pool::FreeList::new();
 
+/// Returns the allocator used for underlying page allocations.
+///
+/// `alloc` is the caller-provided allocator. It is used on native freestanding
+/// targets, where no OS page allocator is available. Other targets select a
+/// platform-specific allocator below.
+///
 /// Construct the page pool's backing (child) allocator. In a normal build this is
 /// just `page_allocator()`; under test (or the off-by-default `alloc-bench`
 /// feature) it is the same `page_allocator()` wrapped in a `TrackingAllocator`
 /// that records into the global [`page_tracking`] tracker (the faithful map of
 /// `pageAllocator()` returning `std.testing.allocator`).
+//
+// PORT NOTE (`028af92ce` + `a5423592c`, `pageAllocator(alloc)`): the reference
+// now threads the caller's general-purpose allocator through
+// `MemoryPool.init(alloc, pageAllocator(alloc), ...)` so that on NATIVE
+// freestanding targets (`os.tag == .freestanding and !arch.isWasm()`) —
+// "Native freestanding targets don't have an OS page allocator, so use the
+// allocator provided by the embedder." — pages come from the embedder's
+// allocator. The port has no caller allocator to thread: `MemoryPool::init`
+// takes only `preheat` (see its PORT NOTE — the Rust page allocator is a
+// process-wide fact), and `rustty_os::page_allocator` is `mmap`-backed, which
+// does not exist on `target_os = "none"`. The freestanding arm is therefore
+// NOT compiled here (this crate does not build for a `none` OS today; the
+// honest record of what such a build would need is in
+// `.port/phase-6/assessments/W1-vt-core.md`). The other three arms (test
+// tracking allocator, generic posix page allocator, Darwin tagged allocator)
+// are reproduced exactly as before.
 #[inline]
 fn page_backing_alloc() -> PageBackingAlloc {
     #[cfg(not(any(test, feature = "alloc-bench")))]
@@ -987,11 +1009,18 @@ pub struct MemoryPool {
 impl MemoryPool {
     // pub const ResetMode = std.heap.ArenaAllocator.ResetMode;
 
-    // /// This is the page allocator we'll use for all our underlying
-    // /// VM page allocations.
-    // inline fn pageAllocator() Allocator {
+    // /// Returns the allocator used for underlying page allocations.
+    // ///
+    // /// `alloc` is the caller-provided allocator. It is used on native freestanding
+    // /// targets, where no OS page allocator is available. Other targets select a
+    // /// platform-specific allocator below.
+    // inline fn pageAllocator(alloc: Allocator) Allocator {
     //     // In tests we use our testing allocator so we can detect leaks.
     //     if (builtin.is_test) return std.testing.allocator;
+    //
+    //     // Native freestanding targets don't have an OS page allocator, so use
+    //     // the allocator provided by the embedder.
+    //     if (native_freestanding) return alloc;
     //
     //     // On non-macOS we use our standard Zig page allocator.
     //     if (!builtin.target.os.tag.isDarwin()) return std.heap.page_allocator;

@@ -231,9 +231,62 @@ pub fn default(c_alloc_: Option<&Allocator>) -> Box<dyn ZigAllocator> {
 
     // Wasm
 
+    // Freestanding targets don't have a default heap. Using the failing
+    // allocator makes a missing allocator show up as out-of-memory.
+    //
+    // PORT NOTE (`a5423592c`): `builtin.os.tag == .freestanding` is
+    // `target_os = "none"`; the wasm arm above (`std.heap.wasm_allocator`) is
+    // selected FIRST in the reference, so wasm32-freestanding never reaches
+    // this arm — hence the `not(target_arch = "wasm32")` guard. The Rust global
+    // allocator is a process-wide fact and has no `#[global_allocator]` on a
+    // `none` OS target, so this arm is the only one that can be honest there.
+    #[cfg(all(target_os = "none", not(target_arch = "wasm32")))]
+    {
+        return Box::new(FailingZigAllocator);
+    }
+
     // No libc, use the preferred allocator for releases which is the
     // Zig SMP allocator.
-    Box::new(GlobalZigAllocator)
+    #[cfg(not(all(target_os = "none", not(target_arch = "wasm32"))))]
+    {
+        Box::new(GlobalZigAllocator)
+    }
+}
+
+/// `std.mem.Allocator.failing` — an allocator whose every allocation fails
+/// (`alloc`/`remap` return null, `resize` returns false, `free` is a no-op).
+/// It is the reference default on native freestanding targets (`a5423592c`),
+/// so a caller that forgot to pass an allocator observes plain out-of-memory
+/// rather than a missing-heap crash.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FailingZigAllocator;
+
+impl ZigAllocator for FailingZigAllocator {
+    fn alloc(&self, _len: usize, _alignment: Alignment, _ra: usize) -> *mut u8 {
+        std::ptr::null_mut()
+    }
+
+    fn resize(
+        &self,
+        _memory: ZigSlice,
+        _alignment: Alignment,
+        _new_len: usize,
+        _ra: usize,
+    ) -> bool {
+        false
+    }
+
+    fn remap(
+        &self,
+        _memory: ZigSlice,
+        _alignment: Alignment,
+        _new_len: usize,
+        _ra: usize,
+    ) -> *mut u8 {
+        std::ptr::null_mut()
+    }
+
+    fn free(&self, _memory: ZigSlice, _alignment: Alignment, _ra: usize) {}
 }
 
 /// The Allocator interface for custom memory allocation strategies

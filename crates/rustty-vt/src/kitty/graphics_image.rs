@@ -369,6 +369,15 @@ impl LoadingImage {
     ) -> Result<(), Error> {
         use std::os::raw::c_int;
 
+        // POSIX shared memory names must begin with a slash, contain at
+        // least one character after it, contain no other slashes, and fit
+        // within NAME_MAX. Some shm_open implementations accept names
+        // without the leading slash, but the Kitty protocol does not.
+        if !validSharedMemoryName(path, NAME_MAX) {
+            // log.warn("invalid shared memory name", .{});
+            return Err(Error::InvalidData);
+        }
+
         // Since we're only supporting posix then max_path_bytes should
         // be enough to stack allocate the path.
         // PORT NOTE: `std.fmt.bufPrintZ(&buf, "{s}", .{path})` — a NUL-terminated
@@ -1262,6 +1271,28 @@ impl Rect {
     }
 }
 
+/// `posix.NAME_MAX` — the longest single path component the shared memory
+/// name may be. Zig's `std.posix.NAME_MAX` is 255 on every POSIX target we
+/// reach `readSharedMemoryPosix` on (Linux, the BSDs and the Darwin family
+/// all define it as 255; `std/c.zig`), and the `libc` crate does not expose it
+/// uniformly across those targets, so the value is pinned here.
+#[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
+const NAME_MAX: usize = 255;
+
+/// Returns whether a name follows the POSIX shared memory name format.
+fn validSharedMemoryName(name: &[u8], name_max: usize) -> bool {
+    if name.len() < 2 || name.len() > name_max || name[0] != b'/' {
+        return false;
+    }
+    for &c in &name[1..] {
+        if c == b'/' || c == 0 {
+            return false;
+        }
+    }
+
+    true
+}
+
 /// Returns true if `path` is `dir` or is contained within it, requiring a
 /// path-separator boundary so similarly prefixed directories do not match.
 fn isPathInDir(dir: &[u8], path: &[u8]) -> bool {
@@ -1476,6 +1507,67 @@ mod tests {
             b"/custom/tmp",
             b"/custom/tmp-suffix/tty-graphics-protocol-image.data"
         ));
+    }
+
+    // test "shared memory names follow POSIX rules" (`090fca451`)
+    //
+    // NEGATIVE CONTROL: drop the `name[0] != b'/'` clause from
+    // `validSharedMemoryName` — the `!validSharedMemoryName("kitty", 8)`
+    // assertion fails.
+    #[test]
+    fn shared_memory_names_follow_POSIX_rules() {
+        assert!(validSharedMemoryName(b"/kitty", 8));
+        assert!(validSharedMemoryName(b"/1234567", 8));
+
+        assert!(!validSharedMemoryName(b"", 8));
+        assert!(!validSharedMemoryName(b"/", 8));
+        assert!(!validSharedMemoryName(b"kitty", 8));
+        assert!(!validSharedMemoryName(b"/kitty/image", 16));
+        assert!(!validSharedMemoryName(b"/kitty\x00image", 16));
+        assert!(!validSharedMemoryName(b"/12345678", 8));
+    }
+
+    // test "image load rejects invalid POSIX shared memory names" (`090fca451`)
+    //
+    // The reference skips on Android / Windows / no-libc (`return
+    // error.SkipZigTest`); the port gates the whole test on the same targets
+    // (`readSharedMemory`'s `UnsupportedMedium` arm — wasm stands in for
+    // `!builtin.link_libc`).
+    //
+    // NEGATIVE CONTROL: remove the `validSharedMemoryName` guard from
+    // `readSharedMemoryPosix` — `shm_open("kitty-without-leading-slash")`
+    // then decides the outcome: on macOS it fails with a different `errno`
+    // but still maps to `InvalidData` (so watch the name check itself via the
+    // unit test above), while on Linux a relative name is accepted and the
+    // load proceeds to `fstat`/size validation instead.
+    #[test]
+    #[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
+    fn image_load_rejects_invalid_POSIX_shared_memory_names() {
+        let cmd: command::Command = command::Command {
+            control: command::Control::Transmit(command::Transmission {
+                format: command::Format::Rgb,
+                medium: command::Medium::SharedMemory,
+                width: 1,
+                height: 1,
+                image_id: 31,
+                ..Default::default()
+            }),
+            quiet: command::Quiet::No,
+            data: b"kitty-without-leading-slash".to_vec(),
+        };
+
+        assert_eq!(
+            Err(Error::InvalidData),
+            LoadingImage::init(
+                &cmd,
+                &Limits {
+                    file: false,
+                    temporary_file: TemporaryFileLimit::Disabled,
+                    shared_memory: true,
+                },
+            )
+            .map(|_| ())
+        );
     }
 
     /// Test helper: the reference's `const loading: LoadingImage = .{ .image =
