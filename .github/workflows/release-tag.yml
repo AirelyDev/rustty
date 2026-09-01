@@ -373,7 +373,7 @@ jobs:
       # Sparkle through SwiftPM, so this is only for the signing tool.
       - name: Setup Sparkle
         env:
-          SPARKLE_VERSION: 2.9.0
+          SPARKLE_VERSION: 2.9.6
         run: |
           mkdir -p .action/sparkle
           cd .action/sparkle
