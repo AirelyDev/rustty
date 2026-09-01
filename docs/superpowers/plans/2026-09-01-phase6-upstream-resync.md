@@ -26,6 +26,7 @@
 ## Workstreams
 
 ### `P6-W1` — vt-core (rustty-vt, rustty-lib, rustty-vt-c/lib.rs freestanding half)
+
 - [ ] `5f5495826` RefCountedSet.addWithId living over-count (+1 test)
 - [ ] `eb722cb26` Screen/Terminal: mark previous row dirty when clearing its spacer head (+1 test)
 - [ ] `028af92ce` PageList: clarify page allocator fallback (comment; G3b vt)
@@ -35,16 +36,19 @@
 - [ ] `090fca451` kitty graphics_image: validate POSIX shared memory names (+2 tests)
 
 ### `P6-W2` — search vt-side (rustty-vt/src/search)
+
 - [ ] `149c9f562` extract whole-terminal search orchestration: NEW `search/terminal.rs` (6 tests), `Thread.zig` −560/+ (loses 1 test), `screen.zig` +23, `search.zig` re-export
 - [ ] `f0c918fc4` search/terminal.zig half (deinit ordering)
 - [ ] G1b: add `search/terminal.zig` to the `search` row in `check_test_counts.py` (coordinator)
 
 ### `P6-W3` — search C API (after W2; rustty-vt-c, include/rustty/vt, example)
+
 - [ ] `32601cd79` + `f9202919f` + `f0c918fc4` + `76d9fcefe` + `674abd8a1` END STATE: `c/search.zig` (17 tests), `c/selection.zig` (+12), `c/types.zig`, `c/terminal.zig`, `c/main.zig`, `lib_vt.zig` exports (+ feature gate), `include/ghostty/vt/{search.h NEW, selection.h, types.h}`, `vt.h`, `example/c-vt-search`
 - [ ] A5/CABI manifests, `oracle-ghostty-h.sha256`, discriminant/layout checks, G-VTFEAT expectations re-derived; symbol-manifest floor
 - [ ] G1b: add `c/search.zig` to the vt-c scope (coordinator)
 
 ### `P6-W4` — core tier (rustty-renderer, rustty-core, rustty-config, rustty bin, rustty-apprt gtk, rustty-os)
+
 - [ ] `97f57edcc` renderer: vsync unfocused surfaces while dirty; `6688aa072` park DisplayLink while idle (END STATE of generic.zig)
 - [ ] `dfccdb2d4`+`e80ce2ed4` #12600: `middle-click-action` gains `clipboard-paste` (keeps `primary-paste`), `copy-on-select` gains `both|none|primary` with true/false in the compatibility handler; Surface.zig arms; config docs (G3b config 6, core 1)
 - [ ] `caf48a41e` main: inverted allow_stack_tracing
@@ -52,6 +56,7 @@
 - [ ] `7aa476714` os/i18n_locales: sr + sr@latin
 
 ### `P6-W5` — macOS (macos/)
+
 - [ ] `6229d4eb6` AppleScript send key for non-control keys (sdef, ScriptKeyEventCommand, Input, Surface, SurfaceView_AppKit, String+Extension; tests: ScriptKeyEventCommandTests, NEW KeyEventSynthesizeTests)
 - [ ] `777929a8f` review windows when closing multiple tabs (AppDelegate, TerminalController, NSAlert+Extension)
 - [ ] `2de159611`+`1c3a4a831`+`07abbd1e7` normalize action working directory paths (NewTerminalIntent, ServiceProvider, URL+Extension; NEW URLTests)
@@ -61,13 +66,16 @@
 - [ ] xcodebuild test lane green
 
 ### `P6-W6` — platform tail
+
 - [ ] po: fr/ru/uk re-mirror; NEW sr.po + sr@latin.po (Phase-4 byte-mirror method, msgfmt gate; catalog headers = oracle)
 - [ ] `28b5bf905` Noto emoji fonts (binary byte-copy into `crates/rustty-font/res/`; any golden that pins glyph metrics re-derived)
 - [ ] `094d175ef` iTerm2 themes tarball `20260824-153547-75c93ee` (xtask res_themes vendored corpus + G-THEMES)
 - [ ] `.github`: milestone-action 3.2; freestanding CI lane analog (with W1's finding); CODEOWNERS sync (`74e0bfdf2`, `ec3e384d2`); VOUCHED.td N/A (rustty has none — say so)
 
 ### `P6-W7` — finale (coordinator)
+
 - [ ] G1b GREEN with extended file list; G3b GREEN; A5/A3/A4/G7/G-VTFEAT/G-THEMES/G-I18N; Miri search lane; macOS full + xcodebuild; ledgers + `ORACLE_SYNC.md` finale note; worktrees swept; merge to `main`.
 
 ## Self-review
+
 Every range file maps to a workstream (README table). G3b arrival map: vt 38 → W1/W2 (PageList/search/graphics_image/ref_counted_set/Terminal comments), config 6 → W4, vt-c 4 → W3, lib 2 → W1, core 1 → W4. Unseen tests: 17 → W3, 6 → W2.
