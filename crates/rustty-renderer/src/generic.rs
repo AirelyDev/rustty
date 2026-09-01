@@ -2644,15 +2644,31 @@ mod macos_impl {
         //           };
         //       }
         //
-        //       // If we're not visible, then we want to stop the display link
-        //       // because it is a waste of resources and we can move to pure
-        //       // change-driven updates.
-        //       if (self.visible and self.focused) {
-        //           display_link.start() catch {};
+        //       const should_run =
+        //           // Non-visible windows never vsync
+        //           self.visible and
+        //           // Only vsync if we have cell changes or animation
+        //           (self.cells_rebuilt or self.animationWake() != null);
+        //
+        //       if (should_run) {
+        //           if (!display_link.isRunning()) {
+        //               display_link.start() catch {};
+        //           }
         //       } else {
         //           display_link.stop() catch {};
         //       }
         //   }
+        //
+        // PORT NOTE (`97f57edcc` + `6688aa072`, phase-6): the start/stop predicate
+        // is no longer `visible and focused`. `97f57edcc` (vsync unfocused
+        // surfaces while dirty) dropped `focused` — an unfocused-but-visible
+        // surface with pending cell changes must still be presented on vsync —
+        // and `6688aa072` (park DisplayLink while idle) gates the link on
+        // `cells_rebuilt or animationWake() != null`, so an idle surface parks
+        // the link between frames; `updateFrame`'s tail and `drawFrame`'s
+        // no-redraw arm resync it. `set_focus` still calls this (the reference
+        // kept the call) — it now only matters through `animationWake`'s
+        // focus-gated custom-shader cadence.
         //
         // PORT NOTE: the reference's `orelse ... break :display_link result` labelled
         // block yields a `DisplayLink` VALUE (a `*DisplayLink` pointer in Zig, so the
@@ -2706,14 +2722,19 @@ mod macos_impl {
                 }
             }
 
-            // If we're not visible, then we want to stop the display link
-            // because it is a waste of resources and we can move to pure
-            // change-driven updates.
-            let _ = if self.visible && self.focused {
-                display_link.start() // catch {}
+            let should_run =
+                // Non-visible windows never vsync
+                self.visible &&
+                // Only vsync if we have cell changes or animation
+                (self.cells_rebuilt || self.animation_wake().is_some());
+
+            if should_run {
+                if !display_link.is_running() {
+                    let _ = display_link.start(); // catch {}
+                }
             } else {
-                display_link.stop() // catch {}
-            };
+                let _ = display_link.stop(); // catch {}
+            }
         }
 
         /// Callback when the window is visible or occluded.
@@ -5300,6 +5321,12 @@ mod macos_impl {
                 self.draw_mutex.unlock();
             }
 
+            // Start the display link now that the rebuilt frame is ready.
+            // (`6688aa072`: the link is parked while idle, so the rebuild that
+            // set `cells_rebuilt` is what un-parks it; runs before the deferred
+            // `font_shaper.endFrame()` below, as in the reference.)
+            self.sync_display_link(None, None);
+
             // Notify our shaper we're done for the frame. For some shapers,
             // such as CoreText, this triggers off-thread cleanup logic.
             self.font_shaper.end_frame();
@@ -6189,6 +6216,11 @@ mod macos_impl {
                 // if we don't draw something new.
                 // try self.api.presentLastTarget();
                 unsafe { (*self_ptr).api.present_last_target() }?;
+
+                // Resync the display link because we can probably pause
+                // the display link at this point.
+                // self.syncDisplayLink(null, null);
+                unsafe { (*self_ptr).sync_display_link(None, None) };
                 return Ok(());
             }
             // self.cells_rebuilt = false;
@@ -8076,8 +8108,10 @@ mod macos_impl {
             }
 
             /// `self.visible = visible;` — the field the pre-refactor port dropped.
-            /// `syncDisplayLink` gates start/stop on `visible and focused`, so
-            /// losing it silently degraded to focus-only gating.
+            /// `syncDisplayLink` gates start/stop on `visible` (since `97f57edcc` +
+            /// `6688aa072`: `visible and (cells_rebuilt or animationWake() != null)`;
+            /// before them `visible and focused`), so losing it silently degraded to
+            /// dirtiness-only (then focus-only) gating.
             #[test]
             fn set_visible_tracks_visibility_state() {
                 let mut r = match test_renderer(10, 3) {
@@ -8096,6 +8130,80 @@ mod macos_impl {
 
                 r.set_visible(true);
                 assert!(r.visible);
+                r.deinit();
+            }
+
+            /// PORT-SIDE REGRESSION (`97f57edcc` + `6688aa072`, phase-6): the
+            /// end-state predicate `should_run = visible and (cells_rebuilt or
+            /// animationWake() != null)`. The link runs only while a rebuilt frame
+            /// or an animation is pending, is parked (stopped) once idle, focus no
+            /// longer participates, and a hidden surface never runs it. The
+            /// reference added no `test {}` (it needs a real CoreVideo link), so
+            /// this one creates the link for real and skips when
+            /// `createWithActiveCGDisplays` fails (a headless/locked session).
+            ///
+            /// NEGATIVE CONTROL: restoring the pre-range `visible and focused`
+            /// predicate fails the first assertion (the idle-but-focused surface
+            /// keeps vsync spinning) or, with `focused == false`, the second (a
+            /// dirty unfocused surface never starts it).
+            #[test]
+            fn sync_parks_the_link_while_idle_and_runs_it_while_dirty() {
+                let mut r = match test_renderer(10, 3) {
+                    Some(r) => r,
+                    None => return, // skip w/o Metal
+                };
+                let running = |r: &Renderer| r.display_link.as_ref().map(|l| l.is_running());
+
+                r.config.vsync = true;
+                let draw_now = Async::init().expect("xev Async");
+                r.sync_display_link(None, Some(draw_now));
+                if r.display_link.is_none() {
+                    // No active display (headless / locked session): the
+                    // fallback-rendering arm, covered by the guard tests above.
+                    r.deinit();
+                    return;
+                }
+
+                // Freshly created, visible, nothing rebuilt, no animation
+                // (`test_renderer` has no custom shaders and no kitty clock):
+                // idle -> parked, whatever the focus state.
+                assert!(r.visible);
+                assert!(!r.cells_rebuilt);
+                assert!(r.animation_wake().is_none());
+                assert_eq!(running(&r), Some(false), "idle surface must park the link");
+
+                // A rebuilt frame un-parks it, focused or not.
+                r.cells_rebuilt = true;
+                r.sync_display_link(None, None);
+                assert_eq!(running(&r), Some(true), "dirty surface must run the link");
+
+                // `if (!display_link.isRunning()) start()` — a second sync while
+                // already running is a no-op, not a double start.
+                r.sync_display_link(None, None);
+                assert_eq!(running(&r), Some(true));
+
+                // Idle again (the draw consumed `cells_rebuilt`): parked.
+                r.cells_rebuilt = false;
+                r.sync_display_link(None, None);
+                assert_eq!(
+                    running(&r),
+                    Some(false),
+                    "idle surface must re-park the link"
+                );
+
+                // Non-visible windows never vsync, dirty or not.
+                r.cells_rebuilt = true;
+                r.set_visible(false);
+                assert_eq!(
+                    running(&r),
+                    Some(false),
+                    "hidden surface never runs the link"
+                );
+
+                // Visible again with the rebuilt frame still pending: runs.
+                r.set_visible(true);
+                assert_eq!(running(&r), Some(true));
+
                 r.deinit();
             }
         }
