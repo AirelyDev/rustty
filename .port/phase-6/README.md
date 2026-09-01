@@ -68,3 +68,31 @@ args for Page/Row/Cell/Screen re-read seams, the oracle tree IS the target.
 | W5 macos | 17 Swift files + Rustty.sdef + 3 test files (KeyEventSynthesizeTests NEW, URLTests NEW) + Sparkle 2.9.6 pin | macos/ |
 | W6 platform-tail | po/{fr,ru,uk}.po + NEW sr, sr@latin; font/res Noto emoji (binary); iTerm2 themes tarball; .github (milestone bump, freestanding CI lane); CODEOWNERS; build.zig.zon* (N/A except the themes hash) | po/, rustty-font/res, xtask res_themes, .github/workflows, CODEOWNERS |
 | W7 finale | G1b (file-list extension) + G3b GREEN, A5/A3/A4/G7/G-VTFEAT/G-THEMES/G-I18N, macOS full + xcodebuild, ledgers, ORACLE_SYNC finale note | — |
+
+## Finale (2026-09-01)
+
+| check | result |
+|---|---|
+| G1b (extended `search` row) | GREEN — search 72/77, vt_c 433/487, kitty 336/351, terminal 423/447 (`w0/g1b-finale-at-20abdb50a.txt`) |
+| G3b | GREEN — 0 missing (arrival 51) (`w0/g3b-finale-scan.txt`) |
+| live per-test audit | GREEN — 4,090 oracle test blocks, 0 unexplained (the 27 range tests present by name) |
+| A5 headers / symbol manifest / G-VTFEAT | GREEN — 203 exports both directions, 91 == 91, 10 features incl. `search` (W3 record) |
+| G-CENSUS | GREEN after the ledger moved to `20abdb50a` (`.port/phase-3/CENSUS_DELTA.md`) |
+| `cargo test -p rustty-vt` | 2,974 passed / 0 failed / 3 ignored (both scalar and `--features simd`; W1+W2 records) |
+| `cargo test -p rustty-vt-c` | 486 passed / 0 failed (469 + 17 `rustty_search_*` tests; W3) |
+| Miri, vt search lane | UB=0 (W2: 79/79, the 4 harness "UB" rows are documented false positives); vt-c `search::` 17/17 UB=0 (W3) |
+| macOS xcodebuild RusttyTests | 403 passed / 0 failed / 1 skipped (W5) |
+| menu-shortcut parity harness | 51 actions byte-identical (W5) |
+| Linux (`rvm`) early lane | workspace build GREEN; renderer/apprt(GTK)/os/config 418 passed / 0 failed — after fixing a PRE-EXISTING Linux test-target break (`6b8cbe67`: `linux_impl`'s DerivedConfig test helper lacked `custom_shader_animation` since phase-5 W7) |
+| macOS `ci.sh` run 1 (killed by a session restart during G6 Miri) | fmt/clippy/build/test-workspace PASS (5,406 tests); 21 gates PASS; G-REL FAIL on ONE load flake (`rustty-termio exec::tests::readthread_pipeline_sustains_saturated_producer`, a throughput floor — passes 3/3 debug + release in isolation); G-CENSUS FAIL (ledger, fixed `a964e142`); G-NIX/G-BLUEPRINT/G-VALGRIND/G-GTKFEAT BLOCKED (macOS host, as before) |
+| macOS `ci.sh` run 2 | _pending — see the commit that closes this row_ |
+| Linux `ci.sh` full lane | _pending — the UTM VM went unreachable after the session restart; see the commit that closes this row_ |
+
+Workstream records: `assessments/W1-vt-core.md`, `W2-search-vt.md`, `W3-search-capi.md`,
+`W4-core-tier.md`, `W5-macos.md`, `W6-platform-tail.md`. Open items carried out of the
+records: `cvt-parity.sh c-vt-search` is BLOCKED oracle-side (the oracle's `zig build run` at
+this pin needs zig 0.16 and panics on `ghostty-vt` artifact lookup — the sibling
+`c-vt-selection` fails identically, so it is the harness environment, not the port);
+G-I18N's extra-msgid direction is soft (`msgcmp` warns, exit 0) — hardening candidate;
+native-freestanding `rustty-vt` is out of reach without a `no_std` conversion (W1 §freestanding,
+W6 §freestanding-CI) — the source-side cfg arms are in place and reviewed for shape only.

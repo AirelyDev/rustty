@@ -60,6 +60,20 @@ menu-shortcut parity 51 actions byte-identical. Both platforms: macOS workspace 
 + xcodebuild RusttyTests 356/0; Linux (`rvm`) full lane 0 FAILED. G3b finale sweep recorded
 beside the advance evidence in `.port/phase-5/w0/`.
 
+**PHASE-6 FINALE (2026-09-01): re-greened.** G1b GREEN with the `search` row extended to the
+NEW `search/terminal.zig` (search zig 72 / rust 77; vt_c 433 / 487 — the NEW `c/search.zig`
+was already globbed). G3b GREEN (0 missing in every crate; arrival was 51). Live per-test audit
+(`audit_test_coverage.py`) GREEN: 4,090 live-oracle test blocks, 0 unexplained — the range's
+27 tests (c/search 17, search/terminal 6, graphics_image 2, ref_counted_set 1, Terminal 1) are
+all present by name. A5 headers GREEN (203 exports both directions, 0 residuals); G-VTFEAT
+GREEN with `search` as the 10th oracle feature; symbol manifest 91 == 91; menu-shortcut parity
+51 actions byte-identical. macOS xcodebuild RusttyTests **403 passed / 0 failed** (356 + 47
+new: KeyEventSynthesize 42, KeyboardShortcutTranslation 1, URLTests 4). Census ledger moved to
+`20abdb50a` (G-CENSUS was RED by design after the advance). Execution record:
+`docs/superpowers/plans/2026-09-01-phase6-upstream-resync.md` + `.port/phase-6/assessments/W1..W6`
++ the `phase-6/*` merge series. CI-lane results are recorded in `.port/phase-6/README.md`
+§"Finale".
+
 The previous pin, `4749c4e93`, was a **stale baseline**: work from beyond it had been ported by
 WS5–WS8 and tracked in an ad-hoc "beyond-pin series" table (BL-1…BL-7) that existed only because the
 pin had not moved. That table is **gone**. Its contents were either absorbed by the advance (the
