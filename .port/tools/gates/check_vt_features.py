@@ -8,10 +8,11 @@ API). Mechanically, every feature gates a block of `@export` lines in
 `src/lib_vt.zig`, so disabling one removes exactly that block's C API symbols
 from the artifact.
 
-rustty spells the same knob as nine cargo features on `rustty-vt` (driving the
-`options::*` consts) and `rustty-vt-c` (deciding which `#[no_mangle]` exports
-compile). All nine are in `default`, which is what makes an additive cargo
-feature set equivalent to the reference's subtract-from-all model.
+rustty spells the same knob as one cargo feature per `Features` field on
+`rustty-vt` (driving the `options::*` consts) and `rustty-vt-c` (deciding which
+`#[no_mangle]` exports compile). All of them are in `default`, which is what
+makes an additive cargo feature set equivalent to the reference's
+subtract-from-all model.
 
 This gate asserts, against the ORACLE rather than a hand-written list:
 
@@ -44,26 +45,42 @@ from pathlib import Path
 ORACLE = Path("/Users/gael/projects/ghostty")
 ROOT = Path(__file__).resolve().parents[3]
 
-# The `-Dvt-features` tokens. The reference's `eqlName` makes `-` and `_`
-# interchangeable, so the cargo-conventional hyphen spelling is the same token.
-FEATURES = [
-    "snapshot",
-    "formatter",
-    "selection",
-    "render-state",
-    "input-encode",
-    "color",
-    "grid-introspection",
-    "glyph-protocol",
-    "kitty-graphics",
-]
-
 failures = []
 
 
 def fail(msg):
     failures.append(msg)
     print(f"  FAIL: {msg}")
+
+
+def oracle_features():
+    """The `-Dvt-features` tokens, read FROM THE ORACLE.
+
+    `terminal/build_options.zig` declares `pub const Features = packed struct
+    { <name>: bool = true, ... }`; its field names ARE the accepted tokens
+    ("Field names are the accepted tokens for `-Dvt-features`"). The
+    reference's `eqlName` makes `-` and `_` interchangeable, so the
+    cargo-conventional hyphen spelling is the same token.
+
+    This used to be a hand-written nine-entry list. P6-W3 (`32601cd79`) added
+    a tenth feature (`search`) upstream, and a literal list would have kept
+    reporting the nine-feature matrix as complete — the export-set arm below
+    did catch the missing default-build exports, but the per-feature matrix
+    would never have tried `--features search` on its own. Deriving the list
+    from the oracle closes that: a new upstream feature is a new matrix row
+    (and a RED "not a cargo feature" until it is declared here). A floor of
+    nine guards against a parse that silently reads nothing (R5).
+    """
+    src = (ORACLE / "src" / "terminal" / "build_options.zig").read_text()
+    m = re.search(r"pub const Features = packed struct \{(.*?)\n    \};", src, re.S)
+    if not m:
+        fail("could not locate `pub const Features = packed struct` in the oracle")
+        return []
+    body = re.sub(r"(?m)^\s*///.*$", "", m.group(1))
+    names = re.findall(r"(?m)^\s*([a-z][a-z0-9_]*): bool = true,", body)
+    if len(names) < 9:
+        fail(f"oracle Features struct parsed to only {len(names)} field(s) — parser broke")
+    return [n.replace("_", "-") for n in names]
 
 
 def parse_lib_vt():
@@ -185,6 +202,8 @@ print(f"  oracle: {ORACLE}")
 
 exports = parse_lib_vt()
 print(f"  lib_vt.zig exports: {len(exports)}")
+FEATURES = oracle_features()
+print(f"  build_options.zig Features: {len(FEATURES)} ({', '.join(FEATURES)})")
 
 # --- 1. feature declarations -------------------------------------------------
 for crate in ("rustty-vt", "rustty-vt-c"):
