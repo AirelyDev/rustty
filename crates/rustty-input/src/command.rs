@@ -43,17 +43,84 @@ pub struct Command {
     pub description: Vec<u8>,
 }
 
-/// ghostty_command_s
+/// `rustty_command_s` — `ghostty_command_s`.
 //
 // PORT NOTE: `Command.C` is an `extern struct` of four `[*:0]const u8`
-// NUL-terminated C strings. Modeled as owned NUL-terminated byte buffers; the
-// `action_key`/`action` strings come from `@tagName`/the formatted action.
-#[derive(Clone, Debug, PartialEq)]
+// NUL-terminated C strings — i.e. four pointers, 32 bytes on LP64. It was
+// PREVIOUSLY modeled as four owned `Vec<u8>` (96 bytes, no `#[repr(C)]`), which
+// does not match `include/rustty-embed.h`'s `rustty_command_s` (4x
+// `const char*`): the macOS app iterates the header's view of this struct with
+// a 32-byte stride and reads each field with `String(cString:)`, which was a
+// wild read over the 96-byte Rust layout. `C` is now `#[repr(C)]` with four raw
+// `*const c_char` pointers matching the header exactly; see the A4 embed-ABI
+// gate (`check_embed_h_abi.sh`). The pointers borrow NUL-terminated storage
+// that must outlive them — see `CommandCStorage` below, which is rebuilt
+// alongside every `C` value so a `C` can never dangle.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct C {
-    pub action_key: Vec<u8>,
-    pub action: Vec<u8>,
-    pub title: Vec<u8>,
-    pub description: Vec<u8>,
+    pub action_key: *const std::os::raw::c_char,
+    pub action: *const std::os::raw::c_char,
+    pub title: *const std::os::raw::c_char,
+    pub description: *const std::os::raw::c_char,
+}
+
+const _: () =
+    assert!(std::mem::size_of::<C>() == 4 * std::mem::size_of::<*const std::os::raw::c_char>());
+
+/// Owns the NUL-terminated buffers that a `C` value's pointers borrow.
+///
+/// The oracle (`src/input/command.zig:23-29`) shares memory with the owning
+/// `Command` and arena-allocates the formatted action string; a bare
+/// `#[repr(C)]` struct of raw pointers has no way to express that lifetime in
+/// Rust, so `CommandCStorage` plays the arena's role explicitly: it owns the
+/// four `CString`s, and `as_c()` hands out a `C` borrowing them. Every call
+/// site that produces a `C` must keep the matching `CommandCStorage` alive at
+/// least as long — see `RepeatableCommand` in rustty-config's
+/// `value_types.rs`, which stores `storage: Vec<CommandCStorage>` alongside
+/// `value_c: Vec<C>` and rebuilds both together at every mutation site
+/// (`init`, `parse_cli`, `clone_in`).
+#[derive(Clone, Debug, Default)]
+pub struct CommandCStorage {
+    action_key: std::ffi::CString,
+    action: std::ffi::CString,
+    title: std::ffi::CString,
+    description: std::ffi::CString,
+}
+
+impl CommandCStorage {
+    /// Build the owned NUL-terminated storage for `cmd`. `action_key` is the
+    /// action's tag name (`@tagName`); `action` is the action formatted the
+    /// same way `Command.format` renders it (`std.fmt.comptimePrint`/
+    /// `std.Io.Writer.Allocating` in the oracle). A `[:0]const u8` in Zig is
+    /// not guaranteed free of interior NULs by its type alone; `CString::new`
+    /// rejects those, so we fall back to an empty string rather than panic
+    /// (matching the byte-slice fidelity policy: never silently truncate to a
+    /// lossy `String`, but also never let untrusted config content abort the
+    /// process).
+    pub fn new(cmd: &Command) -> Self {
+        let mut action_buf = AllocatingWriter::init();
+        // format is Infallible for our Writer impl.
+        let _ = cmd.action.format(&mut action_buf);
+        let cs = |v: &[u8]| std::ffi::CString::new(v.to_vec()).unwrap_or_default();
+        Self {
+            action_key: cs(cmd.action.tag_name().as_bytes()),
+            action: cs(action_buf.written()),
+            title: cs(&cmd.title),
+            description: cs(&cmd.description),
+        }
+    }
+
+    /// Borrow this storage as the raw-pointer `C` view. The returned `C` is
+    /// only valid for as long as `self` (and the `CString`s it owns) is alive.
+    pub fn as_c(&self) -> C {
+        C {
+            action_key: self.action_key.as_ptr(),
+            action: self.action.as_ptr(),
+            title: self.title.as_ptr(),
+            description: self.description.as_ptr(),
+        }
+    }
 }
 
 impl Command {
@@ -87,14 +154,21 @@ impl Command {
         true
     }
 
-    /// Convert this command to a C struct at comptime.
+    /// Convert this command to C-compatible storage at comptime.
     //
     // PORT NOTE: the reference `comptimeCval` asserts `@inComptime()` and uses
     // `std.fmt.comptimePrint("{f}", .{self.action})`. Rust has no comptime; this
     // produces the same C form at runtime by formatting the action via the
     // ported `Action::format`. The `@inComptime()` assert has no runtime analog
     // and is dropped (it is a build-context guard, not a behavioral check).
-    pub fn comptime_cval(&self) -> C {
+    //
+    // PORT NOTE (ABI FIX, S1-F1/S103-F1): the reference returns `C` directly
+    // because Zig's comptime data lives in the binary for `'static`-like
+    // duration. Rust's `C` is now a bare `#[repr(C)]` pointer struct (see the
+    // PORT NOTE on `C`) with nothing to own the pointees, so this returns the
+    // owning `CommandCStorage` instead; callers get the `C` view via
+    // `CommandCStorage::as_c()` and must keep the storage alive alongside it.
+    pub fn comptime_cval(&self) -> CommandCStorage {
         // assert(@inComptime());
         // (see PORT NOTE: no runtime analog)
 
@@ -104,18 +178,10 @@ impl Command {
         //     .title = self.title,
         //     .description = self.description,
         // };
-        let mut action = AllocatingWriter::init();
-        // format never fails (Infallible).
-        let _ = self.action.format(&mut action);
-        C {
-            action_key: cstr(self.action.tag_name().as_bytes()),
-            action: cstr(action.written()),
-            title: cstr(&self.title),
-            description: cstr(&self.description),
-        }
+        CommandCStorage::new(self)
     }
 
-    /// Convert this command to a C struct at runtime.
+    /// Convert this command to C-compatible storage at runtime.
     ///
     /// This shares memory with the original command.
     ///
@@ -126,29 +192,27 @@ impl Command {
     // PORT NOTE: the reference returns `Allocator.Error!C` (the `OutOfMemory`
     // path from `buf.toOwnedSliceSentinel`). The unit error preserves that
     // fallible signature; hence the `clippy::result_unit_err` allow.
+    //
+    // PORT NOTE (ABI FIX, S1-F1/S103-F1): see `comptime_cval` above — this
+    // returns the owning `CommandCStorage` rather than a bare `C`, so the
+    // pointers `C` exposes always have a live owner. Callers (e.g.
+    // `RepeatableCommand::init`/`parse_cli`/`clone_in` in rustty-config) must
+    // push the returned storage into their own storage list in the same
+    // motion they push the `C` view, so neither ever outlives the other.
     #[allow(clippy::result_unit_err)]
-    pub fn cval(&self) -> Result<C, ()> {
+    pub fn cval(&self) -> Result<CommandCStorage, ()> {
         // var buf: std.Io.Writer.Allocating = .init(alloc);
         // defer buf.deinit();
-        let mut buf = AllocatingWriter::init();
         // self.action.format(&buf.writer) catch return error.OutOfMemory;
         // (format is Infallible here)
-        let _ = self.action.format(&mut buf);
         // const action = try buf.toOwnedSliceSentinel(0);
-        let action = cstr(buf.written());
-
         // return .{
         //     .action_key = @tagName(self.action),
         //     .action = action.ptr,
         //     .title = self.title,
         //     .description = self.description,
         // };
-        Ok(C {
-            action_key: cstr(self.action.tag_name().as_bytes()),
-            action,
-            title: cstr(&self.title),
-            description: cstr(&self.description),
-        })
+        Ok(CommandCStorage::new(self))
     }
 
     // pub fn translated(self: Command) Command
@@ -246,15 +310,6 @@ fn translate(msgid: &[u8]) -> Vec<u8> {
     i18n::gettext_(&c).to_bytes().to_vec()
 }
 
-// PORT NOTE: `[:0]const u8` / `[*:0]const u8` — produce a NUL-terminated owned
-// copy of the given bytes.
-fn cstr(bytes: &[u8]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(bytes.len() + 1);
-    v.extend_from_slice(bytes);
-    v.push(0);
-    v
-}
-
 // PORT NOTE: `std.ascii.orderIgnoreCase` — compares two slices treating ASCII
 // letters case-insensitively; on a common prefix, the shorter slice orders
 // first.
@@ -320,13 +375,18 @@ pub fn defaults() -> Vec<Command> {
 
 /// Defaults in C-compatible form.
 //
-// PORT NOTE: the reference `defaultsC` mirrors `defaults` via `comptimeCval`.
-pub fn defaults_c() -> Vec<C> {
+// PORT NOTE: the reference `defaultsC` mirrors `defaults` via `comptimeCval`
+// and returns `[]const Command.C` directly (comptime data lives in the
+// binary). Rust's `C` is a bare pointer struct with no owner (see the PORT
+// NOTE on `C`/`CommandCStorage`), so this returns the owning
+// `CommandCStorage` list instead of `Vec<C>`; call `.as_c()` per element for
+// the pointer view, keeping the returned storage alive at least as long.
+pub fn defaults_c() -> Vec<CommandCStorage> {
     // @setEvalBranchQuota(100_000);
     // var result: [defaults.len]Command.C = undefined;
     // for (defaults, 0..) |cmd, i| result[i] = cmd.comptimeCval();
     let d = defaults();
-    let mut result: Vec<C> = Vec::with_capacity(d.len());
+    let mut result: Vec<CommandCStorage> = Vec::with_capacity(d.len());
     for cmd in d.iter() {
         result.push(cmd.comptime_cval());
     }
@@ -954,5 +1014,65 @@ mod tests {
         assert!(!defaults().is_empty());
         // try testing.expectEqual(defaults.len, defaultsC.len);
         assert_eq!(defaults().len(), defaults_c().len());
+    }
+
+    // S1-F1/S103-F1: `include/rustty-embed.h` declares `rustty_command_s` as
+    // four NUL-terminated `const char*` (32 bytes). `C` must match that layout
+    // exactly, or the macOS app's 32-byte-stride `UnsafeBufferPointer<rustty_command_s>`
+    // walk over `rustty_config_get(cfg, &list, "command-palette-entry", ..)`
+    // reads Vec headers as if they were char pointers.
+    #[test]
+    fn command_c_matches_the_header_abi() {
+        use std::os::raw::c_char;
+        // include/rustty-embed.h declares rustty_command_s as 4x const char*.
+        assert_eq!(
+            std::mem::size_of::<C>(),
+            4 * std::mem::size_of::<*const c_char>()
+        );
+        assert_eq!(
+            std::mem::align_of::<C>(),
+            std::mem::align_of::<*const c_char>()
+        );
+        assert_eq!(std::mem::offset_of!(C, action_key), 0);
+        assert_eq!(
+            std::mem::offset_of!(C, action),
+            std::mem::size_of::<*const c_char>()
+        );
+        assert_eq!(
+            std::mem::offset_of!(C, title),
+            2 * std::mem::size_of::<*const c_char>()
+        );
+        assert_eq!(
+            std::mem::offset_of!(C, description),
+            3 * std::mem::size_of::<*const c_char>()
+        );
+    }
+
+    // PORT NOTE (test adaptation): the task brief's sketch constructs
+    // `Command { action_key, action, title, description }` as four raw
+    // `Vec<u8>` literals ("key"/"act"/"ttl"/"desc"). The actual `Command` type
+    // in this file has only `action: Action, title: Vec<u8>, description:
+    // Vec<u8>` — there is no `action_key` field; `action_key` is derived from
+    // `Action::tag_name()` at `CommandCStorage::new` time, and `action` is the
+    // formatted `Action` (see `Action::format`), not a raw byte literal. This
+    // test uses a real `Action` variant (`Action::Reset`, a void/unit arm) so
+    // `tag_name()` and `format()` both yield `"reset"`, and checks all four
+    // fields independently (title/description are distinct literals) so the
+    // assertions are not tautological.
+    #[test]
+    fn command_c_fields_are_nul_terminated_and_readable() {
+        let cmd = Command {
+            action: Action::Reset,
+            title: b"ttl".to_vec(),
+            description: b"desc".to_vec(),
+        };
+        let owned = CommandCStorage::new(&cmd);
+        let c = owned.as_c();
+        unsafe {
+            assert_eq!(std::ffi::CStr::from_ptr(c.action_key).to_bytes(), b"reset");
+            assert_eq!(std::ffi::CStr::from_ptr(c.action).to_bytes(), b"reset");
+            assert_eq!(std::ffi::CStr::from_ptr(c.title).to_bytes(), b"ttl");
+            assert_eq!(std::ffi::CStr::from_ptr(c.description).to_bytes(), b"desc");
+        }
     }
 }

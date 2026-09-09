@@ -5941,10 +5941,26 @@ impl FormatEntry for RepeatableLink {
 
 /// See "command-palette-entry" for documentation.
 // pub const RepeatableCommand = struct { value: ArrayListUnmanaged(inputpkg.Command), value_c: ArrayListUnmanaged(inputpkg.Command.C) };
-#[derive(Debug, Clone, Default)]
+//
+// PORT NOTE (ABI FIX, S1-F1/S103-F1): `rustty_input::command::C` is now a bare
+// `#[repr(C)]` struct of raw `*const c_char` pointers (matching
+// `rustty_command_s` in `include/rustty-embed.h`) with nothing to own the
+// strings it points into. `storage` holds the owning `CommandCStorage` for
+// every `value_c` entry, index-for-index; it MUST be rebuilt in the same
+// motion as `value_c` at every mutation site (`init`, `parse_cli`, `clone_in`)
+// so a `C` in `value_c` never outlives the storage its pointers borrow.
+//
+// Deliberately NOT `#[derive(Clone)]`: a derived field-by-field clone would
+// clone `storage` (deep-copying the `CString`s into fresh allocations) and
+// `value_c` (a bitwise pointer copy, since `C: Copy`) independently, leaving
+// the clone's `value_c` pointers aliasing the ORIGINAL's `storage`, not its
+// own. Use `clone_in()`, which rebuilds `value_c`/`storage` together from the
+// cloned `value`.
+#[derive(Debug, Default)]
 pub struct RepeatableCommand {
     pub value: Vec<rustty_input::command::Command>,
     pub value_c: Vec<rustty_input::command::C>,
+    storage: Vec<rustty_input::command::CommandCStorage>,
 }
 
 /// ghostty_config_command_palette_entry_s -> rustty_config_command_palette_entry_s (R2) (the extern C view).
@@ -5984,11 +6000,13 @@ impl RepeatableCommand {
         // self.value_c = .empty;
         self.value = Vec::new();
         self.value_c = Vec::new();
+        self.storage = Vec::new();
         // try self.value.ensureUnusedCapacity(alloc, inputpkg.command.defaults.len);
         // try self.value_c.ensureUnusedCapacity(alloc, inputpkg.command.defaults.len);
         let defaults = rustty_input::command::defaults();
         self.value.reserve(defaults.len());
         self.value_c.reserve(defaults.len());
+        self.storage.reserve(defaults.len());
         // for (inputpkg.command.defaults) |cmd| {
         for cmd in defaults {
             // Translation is currently a GTK-only feature. In particular,
@@ -6011,10 +6029,18 @@ impl RepeatableCommand {
             //
             // PORT NOTE: `cval` is `!C` (OOM only); the Rust port aborts on
             // allocation failure, so the unit error is unreachable here.
-            let localized_c = localized.cval().expect("cval is infallible");
+            //
+            // PORT NOTE (ABI FIX, S1-F1/S103-F1): `cval()` now returns the
+            // owning `CommandCStorage`, not a bare `C`. Push the storage into
+            // `self.storage` in the SAME motion as pushing its `C` view into
+            // `self.value_c`, so the pointers in `value_c[i]` are always
+            // backed by `storage[i]`.
+            let localized_storage = localized.cval().expect("cval is infallible");
+            let localized_c = localized_storage.as_c();
             // self.value.appendAssumeCapacity(localized);
             self.value.push(localized);
             self.value_c.push(localized_c);
+            self.storage.push(localized_storage);
         }
     }
 
@@ -6039,6 +6065,9 @@ impl RepeatableCommand {
             self.value.clear();
             // self.value_c.clearRetainingCapacity();
             self.value_c.clear();
+            // PORT NOTE (ABI FIX, S1-F1/S103-F1): `storage` backs `value_c`
+            // index-for-index; clear it alongside so no stale entries remain.
+            self.storage.clear();
             // return;
             return Ok(());
         }
@@ -6048,6 +6077,7 @@ impl RepeatableCommand {
         self.value.reserve(1);
         // try self.value_c.ensureUnusedCapacity(alloc, 1);
         self.value_c.reserve(1);
+        self.storage.reserve(1);
 
         // const cmd = try cli.args.parseAutoStruct(inputpkg.Command, alloc, input, null);
         //
@@ -6066,24 +6096,47 @@ impl RepeatableCommand {
         // PORT NOTE: `cmd.cval(alloc)` is `!C` (the OOM path); the Rust `cval`
         // returns `Result<C, ()>` carrying that fallible signature. `catch return
         // error.OutOfMemory` -> map the unit error into the parse error set.
-        let cmd_c = cmd.cval().map_err(|()| Error::InvalidValue)?;
+        //
+        // PORT NOTE (ABI FIX, S1-F1/S103-F1): `cval()` now returns the owning
+        // `CommandCStorage`; push it into `self.storage` alongside its `C`
+        // view in `self.value_c` in the same motion.
+        let cmd_storage = cmd.cval().map_err(|()| Error::InvalidValue)?;
+        let cmd_c = cmd_storage.as_c();
         // self.value.appendAssumeCapacity(cmd);
         self.value.push(cmd);
         // self.value_c.appendAssumeCapacity(cmd_c);
         self.value_c.push(cmd_c);
+        self.storage.push(cmd_storage);
 
         Ok(())
     }
 
     /// Deep copy of the struct. Required by Config.
     // pub fn clone(self: *const Self, alloc: Allocator) Allocator.Error!Self
+    //
+    // PORT NOTE (ABI FIX, S1-F1/S103-F1): the reference clones `value_c`
+    // directly (`try self.value_c.clone(alloc)`), which is safe there because
+    // Zig's `Command.C` strings are independently heap-owned. Rust's `C` is a
+    // bare pointer struct borrowing `self.storage`; naively cloning `value_c`
+    // would copy pointers that alias INTO `self`'s storage, which dangle the
+    // moment either `RepeatableCommand` is dropped or reallocates. Instead,
+    // clone `value` and rebuild `value_c`/`storage` from the clone in the same
+    // motion, exactly like `init`/`parse_cli` do.
     pub fn clone_in(&self) -> RepeatableCommand {
-        // const value = try self.value.clone(alloc);
-        // for (value.items) |*item| { item.* = try item.clone(alloc); }
-        // return .{ .value = value, .value_c = try self.value_c.clone(alloc) };
+        let value: Vec<rustty_input::command::Command> =
+            self.value.iter().map(|item| item.clone_in()).collect();
+        let mut value_c: Vec<rustty_input::command::C> = Vec::with_capacity(value.len());
+        let mut storage: Vec<rustty_input::command::CommandCStorage> =
+            Vec::with_capacity(value.len());
+        for cmd in &value {
+            let cmd_storage = cmd.cval().expect("cval is infallible");
+            value_c.push(cmd_storage.as_c());
+            storage.push(cmd_storage);
+        }
         RepeatableCommand {
-            value: self.value.iter().map(|item| item.clone_in()).collect(),
-            value_c: self.value_c.clone(),
+            value,
+            value_c,
+            storage,
         }
     }
 
@@ -9588,30 +9641,47 @@ mod tests {
 
         // PORT NOTE: `cv.commands` is `*const Command.C`; view the `len` entries as
         // a slice. `std.mem.sliceTo(_, 0)` strips the NUL terminator the `C` fields
-        // carry — `cstr_to_slice` does the same.
+        // carry.
+        //
+        // PORT NOTE (ABI FIX, S1-F1/S103-F1): `C`'s fields are now raw
+        // `*const c_char` (not owned `Vec<u8>`), so each field is read via
+        // `CStr::from_ptr` rather than `slice_to_nul` over an owned byte
+        // slice. The pointers stay valid here because `list` (and its
+        // `storage`) outlives this scope.
         let commands: &[rustty_input::command::C] =
             unsafe { std::slice::from_raw_parts(cv.commands, cv.len) };
 
         // First entry
         // try testing.expectEqualStrings("Foo", std.mem.sliceTo(cv.commands[0].title, 0));
-        assert_eq!(b"Foo".as_slice(), slice_to_nul(&commands[0].title));
+        assert_eq!(b"Foo".as_slice(), unsafe {
+            std::ffi::CStr::from_ptr(commands[0].title).to_bytes()
+        });
         // try testing.expectEqualStrings("ignore", std.mem.sliceTo(cv.commands[0].action_key, 0));
-        assert_eq!(b"ignore".as_slice(), slice_to_nul(&commands[0].action_key));
+        assert_eq!(b"ignore".as_slice(), unsafe {
+            std::ffi::CStr::from_ptr(commands[0].action_key).to_bytes()
+        });
         // try testing.expectEqualStrings("ignore", std.mem.sliceTo(cv.commands[0].action, 0));
-        assert_eq!(b"ignore".as_slice(), slice_to_nul(&commands[0].action));
+        assert_eq!(b"ignore".as_slice(), unsafe {
+            std::ffi::CStr::from_ptr(commands[0].action).to_bytes()
+        });
 
         // Second entry
         // try testing.expectEqualStrings("Bar", std.mem.sliceTo(cv.commands[1].title, 0));
-        assert_eq!(b"Bar".as_slice(), slice_to_nul(&commands[1].title));
+        assert_eq!(b"Bar".as_slice(), unsafe {
+            std::ffi::CStr::from_ptr(commands[1].title).to_bytes()
+        });
         // try testing.expectEqualStrings("bobr", std.mem.sliceTo(cv.commands[1].description, 0));
-        assert_eq!(b"bobr".as_slice(), slice_to_nul(&commands[1].description));
+        assert_eq!(b"bobr".as_slice(), unsafe {
+            std::ffi::CStr::from_ptr(commands[1].description).to_bytes()
+        });
         // try testing.expectEqualStrings("text", std.mem.sliceTo(cv.commands[1].action_key, 0));
-        assert_eq!(b"text".as_slice(), slice_to_nul(&commands[1].action_key));
+        assert_eq!(b"text".as_slice(), unsafe {
+            std::ffi::CStr::from_ptr(commands[1].action_key).to_bytes()
+        });
         // try testing.expectEqualStrings("text:ale bydle", std.mem.sliceTo(cv.commands[1].action, 0));
-        assert_eq!(
-            b"text:ale bydle".as_slice(),
-            slice_to_nul(&commands[1].action)
-        );
+        assert_eq!(b"text:ale bydle".as_slice(), unsafe {
+            std::ffi::CStr::from_ptr(commands[1].action).to_bytes()
+        });
     }
 
     // test "RepeatableCommand cval cleared"
@@ -9627,15 +9697,6 @@ mod tests {
         list.parse_cli(Some(b"clear")).unwrap();
         // try testing.expectEqual(@as(usize, 0), list.cval().len);
         assert_eq!(0usize, list.cval().len);
-    }
-
-    // PORT NOTE: `std.mem.sliceTo(buf, 0)` — the bytes up to (excluding) the first
-    // NUL terminator the `Command.C` fields carry.
-    fn slice_to_nul(buf: &[u8]) -> &[u8] {
-        match buf.iter().position(|&b| b == 0) {
-            Some(i) => &buf[..i],
-            None => buf,
-        }
     }
 
     // -----------------------------------------------------------------------

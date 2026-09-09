@@ -8124,7 +8124,12 @@ impl Config {
         cv!(quick_terminal_keyboard_interactivity);
         cv!(shell_integration);
         cv!(shell_integration_features);
-        cv!(command_palette_entry);
+        // RepeatableCommand (no derived `Clone`; see the S1-F1/S103-F1 PORT
+        // NOTE on the struct — a derived field-by-field clone would leave
+        // `value_c`'s pointers aliasing the SOURCE's `storage`, not the
+        // clone's, so this must go through `clone_in()`, which rebuilds
+        // `value_c`/`storage` together from the cloned `value`).
+        ci!(command_palette_entry);
         cv!(osc_color_report_format);
         cv!(vt_kam_allowed);
         // RepeatablePath (no derived `Clone`)
