@@ -537,9 +537,14 @@ unsafe fn image_get_typed(image_: ImageHandle, data: ImageData, out: *mut c_void
         // .height => out.* = image.height,
         ImageData::Height => unsafe { *(out as *mut u32) = image.height },
         // .format => out.* = image.format,
-        ImageData::Format => unsafe { *(out as *mut ImageFormat) = image.format },
+        // The header declares this output as `enum : int` (4 bytes).
+        // rustty-vt's `Format` is a plain, repr-free Rust enum (1 byte), so
+        // write through `c_int` explicitly — a direct enum store would leave
+        // the caller's upper bytes untouched (closes S3-F1).
+        ImageData::Format => unsafe { *(out as *mut c_int) = image.format as c_int },
         // .compression => out.* = image.compression,
-        ImageData::Compression => unsafe { *(out as *mut ImageCompression) = image.compression },
+        // Same width mismatch as `Format` above; widen at the boundary.
+        ImageData::Compression => unsafe { *(out as *mut c_int) = image.compression as c_int },
         // For animated images this is the current animation frame's
         // data; the image generation changes whenever the current
         // frame does, so generation-keyed caches stay coherent.
@@ -2061,28 +2066,35 @@ mod tests {
             assert_eq!(2, h);
 
             // var fmt: ImageFormat = undefined;
-            let mut fmt: ImageFormat = ImageFormat::Rgb;
+            // PORT NOTE: the reference's `ImageFormat` is the C `enum : int`
+            // (4 bytes); rustty's `ImageFormat` is a plain, repr-free 1-byte
+            // Rust enum, so the out-parameter here must be the `c_int` the
+            // header actually declares (S3-F1) — a 1-byte-typed slot is not
+            // just narrower than the ABI, it can also be under-aligned for
+            // the 4-byte store `image_get` now performs.
+            let mut fmt: c_int = -1;
             assert_eq!(Result::Success, unsafe {
                 image_get(
                     img,
                     ImageData::Format,
-                    &mut fmt as *mut ImageFormat as *mut c_void,
+                    &mut fmt as *mut c_int as *mut c_void,
                 )
             });
             // try testing.expectEqual(.rgb, fmt);
-            assert_eq!(ImageFormat::Rgb, fmt);
+            assert_eq!(ImageFormat::Rgb as c_int, fmt);
 
             // var comp: ImageCompression = undefined;
-            let mut comp: ImageCompression = ImageCompression::None;
+            // Same width/alignment note as `fmt` above.
+            let mut comp: c_int = -1;
             assert_eq!(Result::Success, unsafe {
                 image_get(
                     img,
                     ImageData::Compression,
-                    &mut comp as *mut ImageCompression as *mut c_void,
+                    &mut comp as *mut c_int as *mut c_void,
                 )
             });
             // try testing.expectEqual(.none, comp);
-            assert_eq!(ImageCompression::None, comp);
+            assert_eq!(ImageCompression::None as c_int, comp);
 
             // var data_len: usize = undefined;
             let mut data_len: usize = 0;
@@ -3838,15 +3850,18 @@ mod tests {
 
             // Compression must report NONE: the data was inflated at
             // transmission time.
-            let mut comp: ImageCompression = ImageCompression::ZlibDeflate;
+            //
+            // PORT NOTE: `out` here must be `c_int`-shaped, not
+            // `ImageCompression`-shaped — see S3-F1 note above.
+            let mut comp: c_int = ImageCompression::ZlibDeflate as c_int;
             assert_eq!(Result::Success, unsafe {
                 image_get(
                     img,
                     ImageData::Compression,
-                    &mut comp as *mut ImageCompression as *mut c_void,
+                    &mut comp as *mut c_int as *mut c_void,
                 )
             });
-            assert_eq!(ImageCompression::None, comp);
+            assert_eq!(ImageCompression::None as c_int, comp);
 
             // Data is the decoded pixels: width * height * bpp.
             let mut data_len: usize = 0;
@@ -4043,6 +4058,84 @@ mod tests {
                 99,
                 core::ptr::null(),
             )
+        });
+    }
+
+    // PORT NOTE: not in the Zig reference — a rustty-only regression test for
+    // S3-F1. The header declares `RUSTTY_KITTY_IMAGE_DATA_FORMAT`/
+    // `_COMPRESSION` outputs as `enum : int` (4 bytes), but rustty-vt's
+    // `Format`/`Compression` are plain, repr-free Rust enums (1 byte); a
+    // direct enum store through `out` therefore only overwrites the low byte,
+    // leaving whatever garbage the caller's storage already held in the
+    // upper three. This poisons a `c_int` to `-1` (all four bytes `0xFF`)
+    // before each call, so any less-than-4-byte write is caught.
+    //
+    // Adaptation: the task brief's literal called
+    // `test_util::terminal_with_kitty_image()` / `t.image_ptr()`, neither of
+    // which exists. This instead builds the fixture the same way
+    // `image_get_handle_and_image_get_with_transmitted_image` above does — a
+    // real terminal, an APC-transmitted image, `image_get_handle` for the
+    // handle — and drives the real exported C entry point
+    // `rustty_kitty_graphics_image_get` (defined in `lib.rs`), which is what
+    // callers actually link against. `f=32` (32bpp) selects `Format::Rgba`;
+    // `s=1,v=3` keeps the raw payload (12 bytes) a multiple of 3 so the
+    // base64 body needs no `=` padding.
+    #[test]
+    fn image_get_writes_a_full_c_int_for_format_and_compression() {
+        if !KITTY_GRAPHICS {
+            return;
+        }
+        with_test_allocator(|ta| {
+            let mut t: terminal_c::Terminal = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::new(ta as *const CAllocator, &mut t, 80, 24)
+            });
+
+            // Transmit a 1x3 RGBA image with image_id=1.
+            let cmd = b"\x1b_Ga=T,t=d,f=32,i=1,p=1,s=1,v=3;////////////////\x1b\\";
+            vt_write(t, cmd);
+
+            let mut graphics: KittyGraphics = core::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::get(
+                    t,
+                    terminal_c::TerminalData::KittyGraphics,
+                    &mut graphics as *mut KittyGraphics as *mut c_void,
+                )
+            });
+
+            let img = unsafe { image_get_handle(graphics, 1) };
+            assert!(!img.is_null());
+
+            // Poison all four bytes: a 1-byte write leaves 0xFFFFFF in the
+            // top bytes.
+            let mut out: c_int = -1;
+            let rc = unsafe {
+                crate::rustty_kitty_graphics_image_get(
+                    img,
+                    ImageData::Format as c_int,
+                    &mut out as *mut c_int as *mut c_void,
+                )
+            };
+            assert_eq!(Result::Success.to_c_int(), rc);
+            assert_eq!(ImageFormat::Rgba as c_int, out, "upper bytes not written");
+
+            let mut cout: c_int = -1;
+            let rc = unsafe {
+                crate::rustty_kitty_graphics_image_get(
+                    img,
+                    ImageData::Compression as c_int,
+                    &mut cout as *mut c_int as *mut c_void,
+                )
+            };
+            assert_eq!(Result::Success.to_c_int(), rc);
+            assert_eq!(
+                ImageCompression::None as c_int,
+                cout,
+                "upper bytes not written"
+            );
+
+            unsafe { terminal_c::free(t) };
         });
     }
 }
