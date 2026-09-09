@@ -65,8 +65,19 @@ pub struct C {
     pub description: *const std::os::raw::c_char,
 }
 
+// @embed-abi rustty_command_s 32
 const _: () =
     assert!(std::mem::size_of::<C>() == 4 * std::mem::size_of::<*const std::os::raw::c_char>());
+const _: () =
+    assert!(std::mem::align_of::<C>() == std::mem::align_of::<*const std::os::raw::c_char>());
+// @embed-abi-field rustty_command_s action_key 0
+const _: () = assert!(std::mem::offset_of!(C, action_key) == 0);
+// @embed-abi-field rustty_command_s action 8
+const _: () = assert!(std::mem::offset_of!(C, action) == 8);
+// @embed-abi-field rustty_command_s title 16
+const _: () = assert!(std::mem::offset_of!(C, title) == 16);
+// @embed-abi-field rustty_command_s description 24
+const _: () = assert!(std::mem::offset_of!(C, description) == 24);
 
 /// Owns the NUL-terminated buffers that a `C` value's pointers borrow.
 ///

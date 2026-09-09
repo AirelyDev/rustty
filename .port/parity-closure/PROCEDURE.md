@@ -41,16 +41,28 @@ waiver is always accompanied by a written reason. **Never tick a box silently.**
 awk -F'\t' -v a="src/terminal" '$5==a && $11=="OPEN"' .port/parity-closure/LEDGER.tsv
 
 # close a row
+#
+# Edit the `state` cell IN PLACE by splitting each line on tab, rather than
+# round-tripping through csv.DictReader/DictWriter — the round-trip re-quotes
+# any untouched row whose fields contain a literal `"` (its own `csv.writer`
+# escaping the quote char), rewriting rows you did not touch even though the
+# checker reads them as unchanged. Only the `state` cell of the named row(s)
+# changes; every other byte in every other row is preserved.
 python3 - <<'EOF'
-import csv
+import io
 p=".port/parity-closure/LEDGER.tsv"
-rows=list(csv.DictReader(open(p), delimiter="\t"))
 CLOSE={"S151-F1"}
-for r in rows:
-    if r["id"] in CLOSE: r["state"]="CLOSED"
-w=csv.DictWriter(open(p,"w",newline=""), fieldnames=rows[0].keys(), delimiter="\t")
-w.writeheader(); w.writerows(rows)
+out=[]
+for i,line in enumerate(io.open(p, newline="")):
+    if i==0: out.append(line); continue
+    f=line.rstrip("\n").split("\t")
+    if f[0] in CLOSE: f[10]="CLOSED"      # state is the 11th column
+    out.append("\t".join(f)+"\n")
+io.open(p,"w",newline="").writelines(out)
 EOF
+
+# verify only the intended row(s) changed
+git diff --stat .port/parity-closure/LEDGER.tsv
 
 # verify
 python3 .port/tools/gates/check_parity_closure.py
