@@ -30,9 +30,10 @@ use objc2_core_foundation::{
     kCFTypeDictionaryKeyCallBacks, kCFTypeDictionaryValueCallBacks, CFDictionary, CFNumber,
     CFNumberType, CFRetained, CFString,
 };
+use objc2_core_graphics::{kCGColorSpaceDisplayP3, CGColorSpace};
 use objc2_io_surface::{
-    kIOSurfaceBytesPerElement, kIOSurfaceHeight, kIOSurfacePixelFormat, kIOSurfaceWidth,
-    IOSurfaceLockOptions, IOSurfaceRef,
+    kIOSurfaceBytesPerElement, kIOSurfaceColorSpace, kIOSurfaceHeight, kIOSurfacePixelFormat,
+    kIOSurfaceWidth, IOSurfaceLockOptions, IOSurfaceRef,
 };
 use objc2_metal::{MTLDevice, MTLTexture, MTLTextureDescriptor};
 
@@ -85,16 +86,22 @@ impl Target {
         // color space using converted colors, which reduces,
         // but does not fully eliminate blending artifacts.
         //
-        // R5 DEFERRED SEAM (`set_color_space`, offscreen scope [F12]): ghostty here
+        // PORTS (S118-F1, closes the R5 deferred seam): oracle
+        // `src/renderer/metal/Target.zig:45-60`
         //     const colorspace = try graphics.ColorSpace.createNamed(.displayP3);
         //     defer colorspace.release();
         //     ... .colorspace = colorspace ...            // (IOSurface.init property)
         //     if (properties.colorspace) |space| surface.setColorSpace(space);
-        // where `setColorSpace` = CGColorSpaceCopyPropertyList + IOSurfaceSetValue
-        // (kIOSurfaceColorSpace). The offscreen readback ignores this tag and the
-        // golden determinism pin requires colorspace != display-p3, so it is SKIPPED
-        // here and preserved as this deferred windowing-host seam (needs
-        // objc2-core-graphics, a Chunk-4 dep).
+        // where `setColorSpace` (`pkg/macos/iosurface/iosurface.zig:73-84`) =
+        // CGColorSpaceCopyPropertyList + IOSurfaceSetValue(kIOSurfaceColorSpace).
+        // `CGColorSpace::with_name` + `.property_list()` (objc2-core-graphics) map
+        // `createNamed`/`CGColorSpaceCopyPropertyList` 1:1; the `IOSurfaceRef::set_value`
+        // call below is applied to the already-created surface (ghostty applies it
+        // inside `IOSurface.init`, equivalent since nothing reads the surface between
+        // its creation and this call). Applied unconditionally: this only tags
+        // CoreAnimation's on-screen compositing colorspace — the offscreen golden's
+        // `read_bgra` reads raw BGRA bytes, which ignore the IOSurface colorspace tag,
+        // so this cannot perturb the golden's pinned byte output.
 
         // The IOSurface property dictionary (ghostty `IOSurface.init` /
         // `foundation.Dictionary.create`): a 4-key dict of `CFNumber(.int)` values.
@@ -145,6 +152,34 @@ impl Target {
         // keys → CFNumber(int) values).
         let surface: CFRetained<IOSurfaceRef> =
             unsafe { IOSurfaceRef::new(&props) }.ok_or(Error::MetalFailed)?;
+
+        // `set_color_space` (S118-F1): `CGColorSpaceCreateWithName(kCGColorSpaceDisplayP3)`
+        // + `CGColorSpaceCopyPropertyList` + `IOSurfaceSetValue(kIOSurfaceColorSpace, ..)`.
+        // ghostty's `graphics.ColorSpace.createNamed`/`.release()` map to
+        // `CGColorSpace::with_name`'s `CFRetained` (Drop CFReleases); its
+        // `orelse return error.OutOfMemory` maps to `.ok_or(Error::MetalFailed)?`
+        // (there is no untagged path — ghostty's `if (properties.colorspace) |space|`
+        // is always-Some at this call site, since `Target.init` always passes
+        // `colorspace` as `try graphics.ColorSpace.createNamed(.displayP3)`, never
+        // `null`).
+        // SAFETY: reading the `kCGColorSpaceDisplayP3` extern static; a valid
+        // `&'static CFString` whose address `CGColorSpaceCreateWithName` reads.
+        let displayp3 = unsafe { kCGColorSpaceDisplayP3 };
+        let colorspace = CGColorSpace::with_name(Some(displayp3)).ok_or(Error::MetalFailed)?;
+        // ghostty `CGColorSpaceCopyPropertyList` → `CGColorSpace::property_list`;
+        // its `defer foundation.CFRelease(@constCast(serialized_colorspace))` maps
+        // to the returned `CFRetained<CFType>`'s Drop.
+        let plist = colorspace.property_list().ok_or(Error::MetalFailed)?;
+        // SAFETY: `IOSurfaceSetValue` requires `value` be of the correct type for
+        // `key`; `plist` is exactly `CGColorSpaceCopyPropertyList`'s output, the
+        // type `kIOSurfaceColorSpace` expects (per `pkg/macos/iosurface/iosurface.zig`'s
+        // `setColorSpace`, which passes the identical property list unmodified).
+        unsafe {
+            // SAFETY: reading the `kIOSurfaceColorSpace` extern static; a valid
+            // `&'static CFString`.
+            let key = kIOSurfaceColorSpace;
+            surface.set_value(key, &plist);
+        }
 
         // Create our descriptor
         //
@@ -247,5 +282,60 @@ fn cf_number_int(value: i32) -> Option<CFRetained<CFNumber>> {
             CFNumberType::IntType,
             core::ptr::addr_of!(value).cast(),
         )
+    }
+}
+
+// =============================================================================
+// S118-F1 — the target IOSurface must carry the Display P3 colorspace tag (the
+// oracle `src/renderer/metal/Target.zig:45-60` `set_color_space`, mirrored by
+// `pkg/macos`'s `IOSurface.init`/`setColorSpace`). Before the fix, `Target::init`
+// never called `IOSurfaceSetValue(kIOSurfaceColorSpace, ..)`, so the surface
+// carried no colorspace tag at all — this test reads the tag back via
+// `IOSurfaceCopyValue`/`CGColorSpaceCreateWithPropertyList`/`CGColorSpaceCopyName`
+// (the same round-trip `pkg/macos`'s `setColorSpace` writes) and fails on a null
+// read, not on an unrelated harness failure (see the `device()` skip below).
+// =============================================================================
+#[cfg(all(test, target_os = "macos"))]
+mod p3_colorspace_tests {
+    use objc2_metal::MTLDevice;
+
+    use super::*;
+    use crate::metal::api;
+
+    fn device() -> Option<Retained<ProtocolObject<dyn MTLDevice>>> {
+        api::MTLCreateSystemDefaultDevice()
+    }
+
+    #[test]
+    fn target_surface_is_tagged_display_p3() {
+        let Some(dev) = device() else {
+            eprintln!("SKIP: no Metal device on this host");
+            return;
+        };
+
+        let t = Target::init(Options {
+            device: &dev,
+            width: 64,
+            height: 64,
+            pixel_format: api::MTLPixelFormat::BGRA8Unorm,
+            storage_mode: api::StorageMode::Shared,
+        })
+        .expect("Target::init");
+
+        // SAFETY: reading the `kIOSurfaceColorSpace` extern static; a valid
+        // `&'static CFString` whose address IOSurfaceCopyValue reads.
+        let key = unsafe { kIOSurfaceColorSpace };
+        let value = t.surface.value(key);
+        let Some(value) = value else {
+            panic!("IOSurface has no colorspace tag (kIOSurfaceColorSpace unset)");
+        };
+
+        // SAFETY: `value` is the exact CFPropertyList `setColorSpace` wrote
+        // (CGColorSpaceCopyPropertyList's output), so it is of the correct type
+        // for CGColorSpaceCreateWithPropertyList.
+        let cs = unsafe { CGColorSpace::with_property_list(&value) }
+            .expect("CGColorSpaceCreateWithPropertyList");
+        let name = CGColorSpace::name(Some(&cs)).expect("CGColorSpaceCopyName");
+        assert_eq!(name.to_string(), "kCGColorSpaceDisplayP3");
     }
 }

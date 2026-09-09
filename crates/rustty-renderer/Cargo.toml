@@ -129,8 +129,8 @@ objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSErro
 #                       present seam; pulls block2 + gates DispatchData::from_bytes).
 #   objc2-io-surface -> newTextureWithDescriptor:iosurface:plane: (Target's
 #                       IOSurface-backed MTLTexture; pulls objc2-io-surface).
-# Chunk 4 ADD (not yet): objc2-core-graphics (Target DisplayP3 setColorSpace, the
-# deferred on-screen seam), and the `png` dev-dep (golden-image decode).
+# Chunk 4 ADD: objc2-core-graphics (Target DisplayP3 setColorSpace — the
+# `set_color_space` seam, S118-F1), and the `png` dev-dep (golden-image decode).
 objc2-metal = { version = "0.3", default-features = false, features = [
     "MTLCommandBuffer",
     "MTLRenderPass",
@@ -166,6 +166,13 @@ objc2-io-surface = { version = "0.3", features = [
     "objc2-core-foundation",
     "libc",
 ] }
+
+# CGColorSpace (Target's Display P3 tag, S118-F1): ghostty `pkg/macos`'s
+# `graphics.ColorSpace.createNamed(.displayP3)` + `IOSurface.setColorSpace`'s
+# `CGColorSpaceCopyPropertyList`. Already a transitive dep (via objc2-metal, and
+# rustty-font-shaper depends on it directly for the CoreText face) — this just
+# names it directly with the one feature this crate's `target.rs` needs.
+objc2-core-graphics = { version = "0.3", features = ["CGColorSpace"] }
 
 # CoreFoundation: the IOSurface property dictionary (CFDictionary + CFNumber over
 # the `kIOSurface*` CFString keys) that Target.init hands to IOSurfaceCreate.
