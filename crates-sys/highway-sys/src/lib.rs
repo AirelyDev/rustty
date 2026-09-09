@@ -218,7 +218,10 @@ mod tests {
                 PPC2_ARCH_2_07 | PPC2_VEC_CRYPTO,
             )
         };
-        assert_eq!(mask, TGT_PPC8, "PPC8 not enabled with all required bits present");
+        assert_eq!(
+            mask, TGT_PPC8,
+            "PPC8 not enabled with all required bits present"
+        );
     }
 
     #[test]
@@ -234,9 +237,7 @@ mod tests {
 
         // ARCH_3_00 alone, without the PPC8 prerequisite bits: PPC9 must NOT
         // be reachable (the oracle nests it under the PPC8 `if`).
-        let mask = unsafe {
-            rustty_hwy_detect_targets_ppc_for_test(0, PPC2_ARCH_3_00)
-        };
+        let mask = unsafe { rustty_hwy_detect_targets_ppc_for_test(0, PPC2_ARCH_3_00) };
         assert_eq!(mask, 0, "PPC9 enabled without PPC8 prerequisites");
     }
 
@@ -246,10 +247,7 @@ mod tests {
         let mask = unsafe {
             rustty_hwy_detect_targets_ppc_for_test(
                 PPC_ALTIVEC | PPC_VSX,
-                PPC2_ARCH_2_07
-                    | PPC2_VEC_CRYPTO
-                    | PPC2_ARCH_3_00
-                    | PPC2_ARCH_3_1, // MMA missing
+                PPC2_ARCH_2_07 | PPC2_VEC_CRYPTO | PPC2_ARCH_3_00 | PPC2_ARCH_3_1, // MMA missing
             )
         };
         assert_eq!(mask, TGT_PPC8 | TGT_PPC9, "PPC10 enabled without MMA");
@@ -258,11 +256,7 @@ mod tests {
         let mask = unsafe {
             rustty_hwy_detect_targets_ppc_for_test(
                 PPC_ALTIVEC | PPC_VSX,
-                PPC2_ARCH_2_07
-                    | PPC2_VEC_CRYPTO
-                    | PPC2_ARCH_3_00
-                    | PPC2_ARCH_3_1
-                    | PPC2_MMA,
+                PPC2_ARCH_2_07 | PPC2_VEC_CRYPTO | PPC2_ARCH_3_00 | PPC2_ARCH_3_1 | PPC2_MMA,
             )
         };
         assert_eq!(
@@ -301,9 +295,8 @@ mod tests {
     #[test]
     fn z15_nests_inside_z14_plus_vxe2() {
         // Z14 tier complete + VXE2: Z15 set, Z14 still set.
-        let mask = unsafe {
-            rustty_hwy_detect_targets_s390x_for_test(S390_VX | S390_VXE | S390_VXE2)
-        };
+        let mask =
+            unsafe { rustty_hwy_detect_targets_s390x_for_test(S390_VX | S390_VXE | S390_VXE2) };
         assert_eq!(mask, TGT_Z14 | TGT_Z15, "Z15 tier mismatch");
 
         // VXE2 alone, without VX/VXE prerequisites: Z15 must NOT be reachable.
