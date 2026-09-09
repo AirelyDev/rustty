@@ -69,7 +69,15 @@ all present by name. A5 headers GREEN (203 exports both directions, 0 residuals)
 GREEN with `search` as the 10th oracle feature; symbol manifest 91 == 91; menu-shortcut parity
 51 actions byte-identical. macOS xcodebuild RusttyTests **403 passed / 0 failed** (356 + 47
 new: KeyEventSynthesize 42, KeyboardShortcutTranslation 1, URLTests 4). Census ledger moved to
-`20abdb50a` (G-CENSUS was RED by design after the advance). Execution record:
+`20abdb50a` (G-CENSUS was RED by design after the advance). **Both platforms
+exercised:** the Linux (`rvm`) lane ran `cargo test --workspace` GREEN and
+G-GTKFEAT GREEN (the GTK gate macOS can only report BLOCKED), with a post-fix
+G-REL of 5,477 passed / 0 failed; it also exposed three PRE-EXISTING
+Linux-only defects that macOS structurally cannot see — the 25 examples'
+`xcrun`/`set -e` abort, a `cfg(not(macos))` clippy break, and a G-REL
+false-RED on a passing test's stderr — all fixed and re-verified
+(`d38b014b`, `d591a985`; see `.port/phase-6/README.md`
+§"Linux-only defects found by this lane"). Execution record:
 `docs/superpowers/plans/2026-09-01-phase6-upstream-resync.md` + `.port/phase-6/assessments/W1..W6`
 + the `phase-6/*` merge series. CI-lane results are recorded in `.port/phase-6/README.md`
 §"Finale".

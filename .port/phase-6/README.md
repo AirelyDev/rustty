@@ -85,8 +85,10 @@ args for Page/Row/Cell/Screen re-read seams, the oracle tree IS the target.
 | menu-shortcut parity harness | 51 actions byte-identical (W5) |
 | Linux (`rvm`) early lane | workspace build GREEN; renderer/apprt(GTK)/os/config 418 passed / 0 failed — after fixing a PRE-EXISTING Linux test-target break (`6b8cbe67`: `linux_impl`'s DerivedConfig test helper lacked `custom_shader_animation` since phase-5 W7) |
 | macOS `ci.sh` run 1 (killed by a session restart during G6 Miri) | fmt/clippy/build/test-workspace PASS (5,406 tests); 21 gates PASS; G-REL FAIL on ONE load flake (`rustty-termio exec::tests::readthread_pipeline_sustains_saturated_producer`, a throughput floor — passes 3/3 debug + release in isolation); G-CENSUS FAIL (ledger, fixed `a964e142`); G-NIX/G-BLUEPRINT/G-VALGRIND/G-GTKFEAT BLOCKED (macOS host, as before) |
-| macOS `ci.sh` run 2 | _pending — see the commit that closes this row_ |
-| Linux `ci.sh` full lane | _pending — the UTM VM went unreachable after the session restart; see the commit that closes this row_ |
+| macOS `ci.sh` run 2 | fmt/clippy/build/`test --workspace` PASS (5,406 tests); 47 gates PASS; G-REL FAIL (the `rustty-termio` throughput flake — passes 3/3 in isolation, debug and release) and G-CENSUS FAIL (ledger, fixed `a964e142`). Killed by a session restart inside the G6 Miri sweep. |
+| macOS gates the run never reached | Run separately (`.port/tools/gates` D1–D11r, A3/A4/A5, G-LZ4, G-THEMES, G-VTFEAT, G-ABISCHEMA, G-KAITAI, G6b): **20 PASS, 0 FAIL, 1 BLOCKED** (G-KAITAI, missing tooling). **G6/G6c did not complete**: the `rustty-core` Miri lane burned **26.5 h of CPU** (~30 h wall, still `R`) without finishing and was killed — the same crate the run-2 sweep was on. G6/G6c are PROGRESS gates; every HARD gate in that set (G-THEMES, D11, D11r, G6b) passed. Miri intractability in this codebase is a known, documented class. |
+| Linux (`rvm`) `ci.sh` full lane | **35 PASS, 5 FAIL, 12 BLOCKED** on the first run. `cargo fmt`, `cargo build --workspace` and **`cargo test --workspace` all PASS**, and **G-GTKFEAT PASSES** — the GTK gate the macOS host can only report BLOCKED, so the W4 GTK work is verified on the platform that compiles it. All 5 FAILs are now resolved (below); the 12 BLOCKED are tooling absent from the VM (zig, cmake, nix, valgrind, doxygen, …), surfaced as WARNINGs, never as silent greens. |
+| Linux failures, after triage | **3 were real defects, all pre-existing and invisible on macOS, all fixed and re-verified GREEN here**; **2 were missing rustup targets**, installed on the VM, after which `G-WINCHK` and `G-XEV-IOS` both exit 0. Post-fix Linux evidence: `cargo clippy --workspace --all-targets -D warnings` → 0; `G-EXAMPLES` → GREEN, 25 built; `G-REL` → **GREEN, 5,477 passed / 102 ignored / 0 failed**. |
 
 Workstream records: `assessments/W1-vt-core.md`, `W2-search-vt.md`, `W3-search-capi.md`,
 `W4-core-tier.md`, `W5-macos.md`, `W6-platform-tail.md`. Open items carried out of the
@@ -96,3 +98,43 @@ this pin needs zig 0.16 and panics on `ghostty-vt` artifact lookup — the sibli
 G-I18N's extra-msgid direction is soft (`msgcmp` warns, exit 0) — hardening candidate;
 native-freestanding `rustty-vt` is out of reach without a `no_std` conversion (W1 §freestanding,
 W6 §freestanding-CI) — the source-side cfg arms are in place and reviewed for shape only.
+
+## Linux-only defects found by this lane (2026-09-08)
+
+The Linux lane is the reason to run more than one host: three HARD-gate failures
+that macOS structurally cannot see. None is phase-6 fallout — all three predate
+the resync — and each was fixed with its own negative control.
+
+1. **`d38b014b` — all 25 C/C++ examples were unbuildable on Linux.** Under
+   `set -e`, `SDK="$(xcrun --show-sdk-path 2>/dev/null)"` takes the exit status
+   of the command substitution, so on a host without `xcrun` the script died
+   with **127 before its first compile**, emitting nothing — which is why
+   G-EXAMPLES could only print a bare `FAIL` per example and the cause stayed
+   hidden. The sibling `CC=` line already had an `|| echo` fallback; `SDK=` did
+   not, and the `${SDK:+-isysroot "$SDK"}` use site already tolerated an empty
+   value, so `|| true` is the entire fix. `LD_LIBRARY_PATH` is now exported
+   beside the macOS-only `DYLD_LIBRARY_PATH` so the built example can find
+   `librustty_vt_c.so` at run time. Verified: 25 built on Linux, 29 on macOS.
+
+2. **`d38b014b` — `cargo clippy -D warnings` was RED on Linux only.**
+   `field_reassign_with_default` in `derived_config_carries_the_configured_flags`
+   (`crates/rustty-core/src/surface.rs`), a test gated
+   `cfg(not(any(target_os = "macos", target_arch = "wasm32")))` — macOS never
+   compiles it. Rewritten in clippy's own suggested struct-update form.
+
+3. **`d591a985` — G-REL reported "failed to build" after a clean, fully green
+   run.** `verdict()` scanned the cargo **test** log with a bare
+   `^error(\[|:)`, but that log interleaves cargo diagnostics with the tests'
+   own stderr: the GTK-only `rustty_init_invalid_action_returns_1` prints its
+   expected `error: failed to initialize rustty error=InvalidAction` and tripped
+   a HARD gate. The fix is **net-new coverage, not a relaxation** — the BUILD
+   log (previously overwritten by the test run before `verdict()` ever saw it,
+   so structurally unreachable) is now scanned with the original broad pattern,
+   while the test log matches only `^error[` / `^error: could not compile`, the
+   shapes cargo and rustc alone emit. The self-test grew from 2 arms to 5, each
+   negative-controlled.
+
+**Standing lesson for the next resync: run the Linux lane EARLY.** It also
+caught a pre-existing Linux-only build break before any of this
+(`6b8cbe67`, `linux_impl`'s `DerivedConfig` test helper missing
+`custom_shader_animation`), and a macOS-only run cannot substitute for it.
