@@ -488,18 +488,24 @@ impl Thread {
             match cb {
                 // wakeupCallback
                 xev::Callback::Wakeup => {
+                    let gen_before = self.wakeup_c.generation();
                     let action = self.wakeup_callback();
-                    self.loop_.apply_action(&mut self.wakeup_c, action);
+                    self.loop_
+                        .apply_action(&mut self.wakeup_c, action, gen_before);
                 }
                 // stopCallback
                 xev::Callback::Stop => {
+                    let gen_before = self.stop_c.generation();
                     let action = self.stop_callback();
-                    self.loop_.apply_action(&mut self.stop_c, action);
+                    self.loop_
+                        .apply_action(&mut self.stop_c, action, gen_before);
                 }
                 // refreshCallback
                 xev::Callback::Refresh => {
+                    let gen_before = self.refresh_c.generation();
                     let action = self.refresh_callback();
-                    self.loop_.apply_action(&mut self.refresh_c, action);
+                    self.loop_
+                        .apply_action(&mut self.refresh_c, action, gen_before);
                 }
             }
         }
@@ -1229,6 +1235,22 @@ pub mod xev {
     pub struct Completion {
         active: bool,
         callback: Option<Callback>,
+        // Bumped every time this completion is (re)submitted (`Timer::run` /
+        // `Async::wait`). libxev's per-backend loop resets a fired
+        // completion's bookkeeping (state -> dead, active count -=1) BEFORE
+        // invoking its callback (see e.g. backend/kqueue.zig's timer-expiry
+        // loop), so a subsequent `.disarm` returned by that callback is a
+        // literal no-op (`.disarm => {}`) — it does nothing to whatever the
+        // callback already did. If the callback resubmitted the completion
+        // (calling `Timer.run`/`Async.wait` again before returning), that
+        // resubmission stands untouched. We don't have libxev's separate
+        // pre/post-callback bookkeeping split in this seam, so we detect
+        // "the callback already resubmitted this completion" via
+        // `generation` instead: `apply_action` compares the generation
+        // captured before the callback ran against the completion's current
+        // generation, and skips clobbering the re-armed state when they
+        // differ. See `run_loop` (dispatch) and `apply_action`.
+        generation: u64,
     }
 
     impl Completion {
@@ -1237,7 +1259,14 @@ pub mod xev {
             Completion {
                 active: false,
                 callback: None,
+                generation: 0,
             }
+        }
+
+        // Snapshot used by the dispatcher to detect an in-callback resubmit;
+        // see the `generation` field doc comment.
+        pub fn generation(&self) -> u64 {
+            self.generation
         }
 
         // self.refresh_c.state()
@@ -1383,10 +1412,30 @@ pub mod xev {
 
         // Apply the callback action to the completion (re-arm / disarm), the
         // analogue of xev consuming the `.rearm`/`.disarm` return value.
-        pub fn apply_action(&mut self, c: &mut Completion, action: CallbackAction) {
+        //
+        // `dispatch_generation` is `c.generation()` captured by the caller
+        // BEFORE invoking the callback that produced `action`. libxev's
+        // per-backend loop resets a fired completion's own bookkeeping
+        // (state -> `.dead`, active count -=1) BEFORE calling back, so a
+        // `.disarm` returned by a callback that resubmitted the completion
+        // (`Timer.run`/`Async.wait` again) is a no-op — see
+        // backend/kqueue.zig's timer-expiry loop, `.disarm => {}`. We mirror
+        // that by comparing generations: if the callback bumped it (i.e. it
+        // resubmitted), a trailing `Disarm` must not clobber that resubmit.
+        pub fn apply_action(
+            &mut self,
+            c: &mut Completion,
+            action: CallbackAction,
+            dispatch_generation: u64,
+        ) {
             match action {
                 CallbackAction::Rearm => {
                     // Stays armed; nothing to do (level-triggered wait persists).
+                }
+                CallbackAction::Disarm if c.generation() != dispatch_generation => {
+                    // The callback resubmitted this completion (bumped its
+                    // generation) before returning `Disarm`. Per libxev this
+                    // stale `Disarm` is inert — the resubmission stands.
                 }
                 CallbackAction::Disarm => {
                     c.active = false;
@@ -1469,6 +1518,7 @@ pub mod xev {
             self.which = Some(which);
             c.active = true;
             c.callback = Some(which);
+            c.generation = c.generation.wrapping_add(1);
             let shared = self.shared.as_ref().unwrap();
             match which {
                 Callback::Wakeup => shared.wakeup_armed.store(true, Ordering::SeqCst),
@@ -1566,6 +1616,7 @@ pub mod xev {
             shared.timer_armed.store(true, Ordering::SeqCst);
             c.active = true;
             c.callback = Some(which);
+            c.generation = c.generation.wrapping_add(1);
             shared.signal();
         }
     }
@@ -1860,6 +1911,71 @@ mod tests {
 
         // defer thread.deinit(); defer t.deinit(alloc); defer ud.deinit();
         drop(vp);
+        thread.deinit();
+        t.deinit(alloc);
+        drop(ud);
+    }
+
+    // Regression test for S198-F1: the refresh timer must re-arm itself on
+    // every dispatch, not just the first one.
+    //
+    // The oracle's `refreshCallback` (src/terminal/search/Thread.zig:468-499)
+    // calls `self.refresh.run(...)` to resubmit the timer and THEN returns
+    // `.disarm`. In libxev this is safe: the per-backend loop's timer-expiry
+    // handling (e.g. backend/kqueue.zig) already reset the completion's
+    // bookkeeping to `.dead`/decremented `active` BEFORE invoking the
+    // callback, so the post-callback `.disarm => {}` branch for a timer is a
+    // literal no-op — it does not touch whatever the callback itself did.
+    // The bug this test catches: rustty's seam dispatcher
+    // (`Thread::run_loop`) instead called `apply_action(Disarm)`
+    // unconditionally after the callback, which (before this fix)
+    // unconditionally cleared `c.active` and `shared.timer_armed` — undoing
+    // the callback's resubmission and leaving the timer armed for exactly
+    // one shot.
+    //
+    // This drives the REAL dispatch path (`Thread::run_loop`, which is what
+    // `thread_main_`'s loop calls), not an isolated call to
+    // `refresh_callback`/`apply_action` — the bug is specifically in how the
+    // dispatcher composes the two.
+    #[test]
+    fn refresh_timer_rearms_itself_every_interval() {
+        let alloc = Allocator;
+        let mutex = rustty_zigstd::thread::Mutex::new();
+        let mut t: Terminal = Terminal::init(alloc, terminal_opts(20, 2, 10_000)).unwrap();
+        let ud: Box<TestUserData> = Box::new(TestUserData::new());
+        let ud_ptr: *const TestUserData = &*ud;
+
+        let mut thread: Thread = Thread::init(
+            alloc,
+            Options {
+                mutex: &mutex as *const rustty_zigstd::thread::Mutex,
+                terminal: &mut t as *mut Terminal,
+                event_cb: Some(TestUserData::callback),
+                event_userdata: ud_ptr as *mut core::ffi::c_void,
+            },
+        )
+        .unwrap();
+
+        // No search is started and wakeup/stop are never armed (that only
+        // happens inside `thread_main_`, which we don't run here) — so
+        // `run_loop(.once)` will only ever have the refresh timer to
+        // dispatch, isolating exactly the behavior under test.
+        thread.start_refresh_timer();
+        assert_eq!(
+            thread.refresh_c.state(),
+            xev::CompletionState::Active,
+            "refresh timer must be armed immediately after start_refresh_timer"
+        );
+
+        for tick in 0..3 {
+            thread.run_loop(xev::RunMode::Once).unwrap();
+            assert_eq!(
+                thread.refresh_c.state(),
+                xev::CompletionState::Active,
+                "refresh timer disarmed after dispatch {tick}; it must re-arm like libxev"
+            );
+        }
+
         thread.deinit();
         t.deinit(alloc);
         drop(ud);
