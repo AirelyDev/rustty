@@ -14895,8 +14895,10 @@ mod freetype_load_flags_tests {
     #[test]
     #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
     fn derived_config_carries_the_configured_flags() {
-        let mut config = configpkg::Config::default();
-        config.freetype_load_flags = all_flipped();
+        let config = configpkg::Config {
+            freetype_load_flags: all_flipped(),
+            ..Default::default()
+        };
 
         let derived = font_shared_grid_set_derived_config(&config);
         assert_eq!(
