@@ -27,7 +27,30 @@ extern "C" {
     /// `rustty_hwy_detect_targets`; vendored `cpp/detect.c`). Returns the
     /// Highway target bitmask for the running CPU.
     pub fn rustty_hwy_detect_targets() -> c_longlong;
+
+    /// Test seam (S34-F1): the x86 AVX2 gate (`x86_avx2_enabled` in
+    /// `cpp/detect.c`), ported from the reference's `x86.zig:63-94`, driven
+    /// with synthetic CPUID/XCR0 leaf values. Pure function of its arguments
+    /// (no CPU instructions), so it is callable and meaningful on every host
+    /// this crate builds on — including non-x86 hosts, where
+    /// `rustty_hwy_detect_targets`'s real x86 branch cannot execute at all.
+    ///
+    /// Returns `TGT_AVX2` (bit 9, i.e. `1 << 9`) if the synthetic inputs
+    /// would enable AVX2, else `0`.
+    pub fn rustty_hwy_detect_targets_x86_avx2_for_test(
+        max_leaf: u32,
+        leaf1_ecx: u32,
+        leaf7_ebx: u32,
+        ext_leaf1_ecx: u32,
+        xcr0: u32,
+    ) -> c_longlong;
 }
+
+/// Bit position of `TGT_AVX2` in the Highway target mask (from the reference's
+/// `pkg/highway/src/targets.zig` comptime asserts; mirrored in
+/// `cpp/detect.c`'s `TGT_AVX2` define).
+#[cfg(test)]
+const TGT_AVX2: c_longlong = 1 << 9;
 
 #[cfg(test)]
 mod tests {
@@ -53,5 +76,70 @@ mod tests {
     fn detect_targets_links() {
         // SAFETY: no arguments; pure CPU-feature probing.
         let _ = unsafe { rustty_hwy_detect_targets() };
+    }
+
+    // -- S34-F1: AVX2 must not be enabled without OS xsave support, or without
+    // BMI2. Drives cpp/detect.c's x86_avx2_enabled() (the exact gate the real
+    // x86 detector calls) via the synthetic-leaf test seam
+    // rustty_hwy_detect_targets_x86_avx2_for_test — pure integer logic, no CPU
+    // instructions, so this runs and is meaningful on every host (including
+    // this crate's aarch64 CI/dev hosts, where the real x86 detection branch
+    // in rustty_hwy_detect_targets() cannot execute at all).
+
+    const XSAVE: u32 = 1 << 27; // CPUID.1:ECX OSXSAVE
+    const AVX: u32 = 1 << 28; // CPUID.1:ECX AVX
+    const FMA: u32 = 1 << 12; // CPUID.1:ECX FMA
+    const F16C: u32 = 1 << 29; // CPUID.1:ECX F16C
+    const AVX2: u32 = 1 << 5; // CPUID.7.0:EBX AVX2
+    const BMI: u32 = 1 << 3; // CPUID.7.0:EBX BMI1
+    const BMI2: u32 = 1 << 8; // CPUID.7.0:EBX BMI2
+    const LZCNT: u32 = 1 << 5; // CPUID.80000001H:ECX LZCNT
+
+    #[test]
+    fn avx2_requires_os_xsave_and_bmi() {
+        // AVX2+FMA+F16C+XSAVE+AVX+BMI+BMI2+LZCNT all present in CPUID, but the
+        // OS does NOT report saving AVX state (xcr0 = 0). Per x86.zig:70,79
+        // (has_avx_save gate), AVX2 must stay off.
+        let mask = unsafe {
+            rustty_hwy_detect_targets_x86_avx2_for_test(
+                /* max_leaf */ 7,
+                /* leaf1_ecx */ XSAVE | AVX | FMA | F16C,
+                /* leaf7_ebx */ AVX2 | BMI | BMI2,
+                /* ext_leaf1_ecx */ LZCNT,
+                /* xcr0 */ 0x0,
+            )
+        };
+        assert_eq!(mask & TGT_AVX2, 0, "AVX2 enabled without OS xsave support");
+
+        // Same, but BMI2 missing while the OS does save SSE+AVX state
+        // (xcr0 & 0x6 == 0x6). Per x86.zig:86-93, AVX2 must stay off.
+        let mask = unsafe {
+            rustty_hwy_detect_targets_x86_avx2_for_test(
+                /* max_leaf */ 7,
+                /* leaf1_ecx */ XSAVE | AVX | FMA | F16C,
+                /* leaf7_ebx */ AVX2 | BMI,
+                /* ext_leaf1_ecx */ LZCNT,
+                /* xcr0 */ 0x6,
+            )
+        };
+        assert_eq!(mask & TGT_AVX2, 0, "AVX2 enabled without BMI2");
+
+        // Positive control: same inputs, but with the OS-save bit AND BMI2
+        // both present — AVX2 must now be reported, proving the seam isn't
+        // vacuously returning 0.
+        let mask = unsafe {
+            rustty_hwy_detect_targets_x86_avx2_for_test(
+                /* max_leaf */ 7,
+                /* leaf1_ecx */ XSAVE | AVX | FMA | F16C,
+                /* leaf7_ebx */ AVX2 | BMI | BMI2,
+                /* ext_leaf1_ecx */ LZCNT,
+                /* xcr0 */ 0x6,
+            )
+        };
+        assert_eq!(
+            mask & TGT_AVX2,
+            TGT_AVX2,
+            "AVX2 not enabled with all required bits present"
+        );
     }
 }

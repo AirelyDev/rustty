@@ -7,7 +7,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## High (4)
 
-- [ ] **S34-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S34-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** x86 AVX2 gate drops the XCR0 (xgetbv) OS-support check and the LZCNT/BMI/BMI2 requirements
   - **Oracle:** `pkg/highway/src/detect/x86.zig:63-94` → **Rustty:** `crates-sys/highway-sys/cpp/detect.c:172-183`
   - **Audit's suggested fix:** Port x86.zig:63-94 literally: read XCR0 with `_xgetbv(0)` (or inline asm) when OSXSAVE&&AVX, require (xcr0&0x6)==0x6, then require leaf 0x80000001 ecx bit5 and leaf7 ebx bits 3 and 8 before setting TGT_AVX2; gate the whole block on has_avx_save && max_leaf>=7 as the oracle does.
