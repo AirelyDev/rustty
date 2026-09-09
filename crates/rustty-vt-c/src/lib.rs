@@ -6,7 +6,7 @@
 //! `rustty_*` symbols (R2).
 //!
 //! PORT STATUS: done (flipped per VALIDATION_REPORT.md M3: all 34 c/
-//! modules are landed — terminal, render, kitty_graphics, selection*,
+//! modules are landed, plus `search` (P6-W3) — terminal, render, kitty_graphics, selection*,
 //! formatter, key/mouse, sgr, osc, cell, row, style, grid_ref, size_report,
 //! types included — with zero live todo!(); completion ledgered in
 //! DEFERRALS.md under "vt-c").
@@ -21,6 +21,60 @@
 //! they forward to the ported module functions.
 
 use std::os::raw::c_int;
+
+// ----- lib_vt.zig: `native_freestanding` / `std_options` / `debug_machinery` -----
+//
+// PORT NOTE (`3376153a4`, "build: support native freestanding libghostty-vt"):
+// the reference root module gained
+//
+//     const native_freestanding = builtin.target.os.tag == .freestanding and
+//         !builtin.target.cpu.arch.isWasm();
+//
+// and threads it through three root-level knobs. Rust has no `std_options`
+// (there is no `std.Options` struct to populate — page size, stack tracing and
+// the log sink are properties of the toolchain/`std`, not of the crate root),
+// so the faithful analog is the cfg-level predicate below plus, per knob, the
+// closest thing this crate controls:
+//
+//   * `options.page_size_min = 16; options.page_size_max = 16;` — "Freestanding
+//     targets don't have an OS page size. We still need an alignment for
+//     terminal page allocations, and 16 covers everything stored in a page
+//     without requiring 4 KiB-aligned embedded heaps." The port's page
+//     alignment is `rustty_os::page_allocator` (mmap, OS page size) — there is
+//     no freestanding page pool to align, so this knob has no consumer yet
+//     (assessment: `.port/phase-6/assessments/W1-vt-core.md`).
+//   * `options.allow_stack_tracing = false;` — rustty's equivalent is the
+//     panic/backtrace machinery of `std`, which a `target_os = "none"` build
+//     does not link at all (`#![no_std]` would be required; this crate is not
+//     no_std — see the assessment).
+//   * `debug_machinery = !native_freestanding and (is_test or Debug/ReleaseSafe)`
+//     — the reference keeps std's panic/stack-trace machinery (~160KB) only on
+//     development builds and never on native freestanding. `DEBUG_MACHINERY`
+//     below is the same predicate (`builtin.mode` → `debug_assertions`, R8:
+//     build-switchable, never folded) for any future consumer (a custom panic
+//     handler on a `none` OS); today the `std` panic handler is what runs.
+//
+// wasm32-freestanding is deliberately NOT native freestanding (the reference
+// `!isWasm()` guard): the wasm arms in `sys::log_fn`, `rustty-lib`'s wasm
+// allocator and `rustty_datastruct::wasm_page_pool` stay as they are.
+
+/// `const native_freestanding = builtin.target.os.tag == .freestanding and
+/// !builtin.target.cpu.arch.isWasm();` — Zig's `.freestanding` OS tag is Rust's
+/// `target_os = "none"`.
+#[allow(dead_code)]
+pub const NATIVE_FREESTANDING: bool = cfg!(target_os = "none") && !cfg!(target_arch = "wasm32");
+
+/// True for builds where we keep the full std debug machinery (stack
+/// traces on panic, std.debug.print, etc.). These builds are for
+/// development, where the roughly 160KB of binary size it costs is
+/// worth it.
+// const debug_machinery: bool = !native_freestanding and
+//     (builtin.is_test or switch (builtin.mode) {
+//         .Debug, .ReleaseSafe => true,
+//         .ReleaseFast, .ReleaseSmall => false,
+//     });
+#[allow(dead_code)]
+pub const DEBUG_MACHINERY: bool = !NATIVE_FREESTANDING && (cfg!(test) || cfg!(debug_assertions));
 
 // ----- terminal/c/main.zig: module hub -----
 //
@@ -57,6 +111,9 @@ pub mod point;
 pub mod render;
 pub mod result;
 pub mod row;
+// pub const search = @import("search.zig");  (`32601cd79`; `test { _ = search; }`
+// is the module's own `#[cfg(test)] mod tests`)
+pub mod search;
 pub mod selection;
 pub mod selection_gesture;
 pub mod sgr;
@@ -2833,6 +2890,144 @@ fn selection_gesture_event_option_from_c_int(v: c_int) -> Option<selection_gestu
     } else {
         None
     }
+}
+
+// ----- search -----
+// PORT NOTE (`f9202919f`, `76d9fcefe` END STATE — no `GhosttySearchOptions`):
+// 1:1 with the 8 `@export(&c.search_*, ...)` lines in `lib_vt.zig`'s
+// `if (features.search)` block (`#[cfg(feature = "search")]`). The `c.zig`
+// aliases map `search_<name> -> search.<name>`. The `fromInt` runtime-safety
+// guards for `Option`/`Data` run on the raw `c_int` inside the module
+// (`search::set_checked` / `search::get_checked`), so `get_multi` reaches the
+// data guard per array element exactly as the reference does.
+
+// pub const search_new = search.new;
+/// C: rustty_search_new
+///
+/// # Safety
+/// `alloc_`, if non-null, must point to a valid allocator; `out_search`, if
+/// non-null, must be a valid, writable pointer to a search handle; `terminal`,
+/// if non-null, must be a live terminal handle.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_new(
+    alloc_: *const rustty_lib::allocator::Allocator,
+    out_search: *mut search::Search,
+    terminal: terminal::Terminal,
+) -> c_int {
+    // SAFETY: `alloc_`/`out_search`/`terminal` validity is the caller's contract.
+    unsafe { search::new(alloc_.as_ref(), out_search, terminal) }.to_c_int()
+}
+
+// pub const search_free = search.free;
+/// C: rustty_search_free
+///
+/// # Safety
+/// `search`, if non-null, must be a handle returned by `_new` and not yet freed.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_free(search: search::Search) {
+    // SAFETY: `search` validity is the caller's contract.
+    unsafe { search::free(search) }
+}
+
+// pub const search_tick = search.tick;
+/// C: rustty_search_tick
+///
+/// # Safety
+/// `search`, if non-null, must be a live handle; `out_status`, if non-null,
+/// must be writable.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_tick(
+    search: search::Search,
+    out_status: *mut search::SearchStatus,
+) -> c_int {
+    // SAFETY: `search`/`out_status` validity is the caller's contract.
+    unsafe { search::tick(search, out_status) }.to_c_int()
+}
+
+// pub const search_feed = search.feed;
+/// C: rustty_search_feed
+///
+/// # Safety
+/// `search`, if non-null, must be a live handle whose terminal the caller has
+/// exclusive access to.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_feed(search: search::Search) -> c_int {
+    // SAFETY: `search` validity is the caller's contract.
+    unsafe { search::feed(search) }.to_c_int()
+}
+
+// pub const search_run = search.run;
+/// C: rustty_search_run
+///
+/// # Safety
+/// `search`, if non-null, must be a live handle whose terminal the caller has
+/// exclusive access to for the whole call.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_run(search: search::Search) -> c_int {
+    // SAFETY: `search` validity is the caller's contract.
+    unsafe { search::run(search) }.to_c_int()
+}
+
+// pub const search_set = search.set;
+/// C: rustty_search_set
+///
+/// # Safety
+/// `search`, if non-null, must be a live handle; `value`, if non-null, must
+/// point to a value of the type required by `option`.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_set(
+    search: search::Search,
+    option: c_int,
+    value: *const std::ffi::c_void,
+) -> c_int {
+    // if (comptime std.debug.runtime_safety) { _ = fromInt(Option, ...) orelse { log.warn(...); return .invalid_value; }; }
+    // SAFETY: `search`/`value` validity is the caller's contract.
+    unsafe { search::set_checked(search, option, value) }.to_c_int()
+}
+
+// pub const search_get = search.get;
+/// C: rustty_search_get
+///
+/// # Safety
+/// `search`, if non-null, must be a live handle; `value` must point to
+/// writable storage of the type required by `data`.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_get(
+    search: search::Search,
+    data: c_int,
+    value: *mut std::ffi::c_void,
+) -> c_int {
+    // if (comptime std.debug.runtime_safety) { _ = fromInt(Data, ...) orelse { log.warn(...); return .invalid_value; }; }
+    // SAFETY: `search`/`value` validity is the caller's contract.
+    unsafe { search::get_checked(search, data, value) }.to_c_int()
+}
+
+// pub const search_get_multi = search.get_multi;
+/// C: rustty_search_get_multi
+///
+/// # Safety
+/// `keys`/`values`/`out_written` validity is the caller's contract.
+#[cfg(feature = "search")]
+#[no_mangle]
+pub unsafe extern "C" fn rustty_search_get_multi(
+    search: search::Search,
+    count: usize,
+    keys: *const search::SearchData,
+    values: *mut *mut std::ffi::c_void,
+    out_written: *mut usize,
+) -> c_int {
+    // PORT NOTE (W66-GETMULTI-RAW-01): the elements are read as raw `c_int` and
+    // range-checked per element (see `search::get_multi`).
+    // SAFETY: pointer validity is the caller's contract.
+    unsafe { search::get_multi(search, count, keys as *const c_int, values, out_written) }
+        .to_c_int()
 }
 
 // ----- terminal -----

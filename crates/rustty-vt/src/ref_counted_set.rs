@@ -670,14 +670,32 @@ where
 
         if id < self.next_id {
             if unsafe { (*items.add(id.to_usize())).meta.ref_count } == RefCount::ZERO {
+                // Requested ID is dead, but if the value exists not under
+                // another ID then ref count that and increase the ID.
+                if let Some(existing_id) = unsafe { self.lookup_context(base, value) } {
+                    // Notify the context that the value is "deleted"
+                    // because we're reusing the existing value in the
+                    // set. This allows callers to clean up any
+                    // resources associated with the value.
+                    self.context.deleted(unsafe { *value });
+
+                    unsafe {
+                        (*items.add(existing_id.to_usize())).meta.ref_count = (*items
+                            .add(existing_id.to_usize()))
+                        .meta
+                        .ref_count
+                        .add(RefCount::ONE);
+                    }
+                    return Ok(Some(existing_id));
+                }
+
                 // See comment in `addContext` for details.
                 if self.psl_stats[self.psl_stats.len() - 1] > Id::ZERO {
                     return Err(AddError::OutOfMemory);
                 }
 
                 unsafe { self.delete_item(base, id) };
-
-                let added_id = unsafe { self.upsert(base, value, id) };
+                let added_id = unsafe { self.insert(base, value, id) };
 
                 unsafe {
                     (*items.add(added_id.to_usize())).meta.ref_count = (*items
@@ -1038,25 +1056,11 @@ where
         None
     }
 
-    /// Find the provided value in the hash table, or add a new item
-    /// for it if not present. If a new item is added, `new_id` will
-    /// be used as the ID. If an existing item is found, the `new_id`
-    /// is ignored and the existing item's ID is returned.
-    ///
-    /// # Safety: `base` must be the true base of the backing buffer.
-    unsafe fn upsert<B: IntFromBase + Copy>(&mut self, base: B, value: *const T, new_id: Id) -> Id {
-        // If the item already exists, return it.
-        if let Some(id) = unsafe { self.lookup_context(base, value) } {
-            // Notify the context that the value is "deleted" because
-            // we're reusing the existing value in the set. This allows
-            // callers to clean up any resources associated with the value.
-            self.context.deleted(unsafe { *value });
-
-            return id;
-        }
-
-        unsafe { self.insert(base, value, new_id) }
-    }
+    // PORT NOTE (`5f5495826`): the reference deleted `upsert` here. Its
+    // lookup-then-insert split now lives inline in `addWithIdContext`, where the
+    // existing-value branch must ref-count the found item and RETURN before the
+    // dead slot is deleted and `living` is bumped (the over-count bug: `upsert`
+    // resolving to an existing ID still incremented `living`).
 
     /// Insert the given value into the hash table with the given ID.
     ///
@@ -1432,6 +1436,71 @@ mod tests {
 
     // const TestSet = RefCountedSet(u32, u16, u16, ...);
     type TestSet = RefCountedSet<u32, u16, u16, TestContext>;
+
+    // ref: test "addWithId dead id resolving to an existing value" (`5f5495826`)
+    //
+    // NEGATIVE CONTROL: restore the pre-fix `upsert` path in `add_with_id_ptr`
+    // (delete the dead slot, then lookup-or-insert, then `living += 1`
+    // unconditionally): `set.count()` reads 3 after the resolving `add_with_id`
+    // while the iterator still visits 2, so the two `count()` asserts fail.
+    #[test]
+    fn add_with_id_dead_id_resolving_to_an_existing_value() {
+        // const layout: TestSet.Layout = .init(8);
+        let layout: Layout<u16> = Layout::init::<u32, u16>(8);
+        // const buf = try alloc.alignedAlloc(u8, TestSet.base_align, layout.total_size);
+        // defer alloc.free(buf);
+        let alloc_layout =
+            core::alloc::Layout::from_size_align(layout.total_size, TestSet::base_align()).unwrap();
+        // SAFETY: `total_size` for a cap-8 layout is non-zero.
+        let buf = unsafe { std::alloc::alloc(alloc_layout) };
+        assert!(!buf.is_null());
+        let base = OffsetBuf::init(buf);
+
+        // var set: TestSet = .init(.init(buf), layout, .{});
+        //
+        // SAFETY: `buf` is a live `base_align`-aligned allocation of
+        // `layout.total_size` bytes, used as the base for every call below.
+        unsafe {
+            let mut set: TestSet = TestSet::init(base, layout, TestContext);
+
+            // Create a dead item between two live ones so that it can't
+            // be reaped by the trim loop in `add`, then release it. This
+            // mirrors a page style set after a styled run is erased.
+            let live = set.add(base, 11).unwrap();
+            let released = set.add(base, 22).unwrap();
+            let last = set.add(base, 33).unwrap();
+            set.release(base, released);
+            assert_eq!(2usize, set.count());
+
+            // Request the dead ID for a value that is already live under
+            // a different ID: we must resolve to the existing item and
+            // take a reference, without changing the living count.
+            let resolved = set.add_with_id(base, 11, released).unwrap().unwrap();
+            assert_eq!(live, resolved);
+            assert_eq!(2u16, set.ref_count(base, live));
+            assert_eq!(2usize, set.count());
+
+            // The living count must agree with the iterator.
+            let mut it = set.iterator(base);
+            let mut iterated: usize = 0;
+            while it.next().is_some() {
+                iterated += 1;
+            }
+            assert_eq!(set.count(), iterated);
+
+            // The dead slot is still reusable for a value that is not
+            // in the set: the requested ID must be used (null return).
+            assert_eq!(None, set.add_with_id(base, 44, released).unwrap());
+            assert_eq!(1u16, set.ref_count(base, released));
+            assert_eq!(3usize, set.count());
+
+            // _ = last;
+            let _ = last;
+
+            // defer alloc.free(buf);
+            std::alloc::dealloc(buf, alloc_layout);
+        }
+    }
 
     // ref: test "iterator visits live entries in ID order"
     #[test]

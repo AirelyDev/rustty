@@ -465,8 +465,36 @@ fn log_fn(level: LogLevel, message: &str, logging: &Logging) {
 //         .Debug => .debug,
 //         else => .info,
 //     },
+//
 //     .logFn = logFn,
+//
+//     // If are building for a non-MacOS Darwin target (e.g., iOS), we need to
+//     // disable stack tracing for the time being. This is due to the fact that
+//     // Zig switched to using _dyld_get_image_header_containing_address and some
+//     // other (deprecated) calls to speed up stack unwinding; these calls are
+//     // available on MacOS, but not on other platforms.
+//     //
+//     // A fix has already been submitted to exempt non-MacOS (but still Darwin)
+//     // targets, so this can likely be removed in Zig 0.17.0, or a 0.16.x patch
+//     // version if it releases beforehand.
+//     //
+//     // More details:
+//     //   https://codeberg.org/ziglang/zig/commit/89f86e46d278a35a613bbc662cdd3f65ffc76ed7
+//     //
+//     .allow_stack_tracing = if (builtin.target.os.tag.isDarwin() and builtin.target.os.tag != .macos)
+//         false
+//     else
+//         !builtin.strip_debug_info,
 // };
+//
+// PORT NOTE (`caf48a41e`, phase-6): `.allow_stack_tracing` is N/A — it is a
+// Zig `std.Options` switch over Zig's own unwinder (`.port/phase-3/NON_PORTS.md`
+// E36); Rust backtraces are governed by `RUST_BACKTRACE`/the panic hook and
+// carry no build-time strip toggle. The range fixed the non-iOS arm from
+// `builtin.strip_debug_info` (inverted: tracing allowed only in STRIPPED
+// builds) to `!builtin.strip_debug_info`; the fix changes nothing here for the
+// same reason the option itself did not — the reference block above is
+// carried at its end state so the projection stays complete.
 //
 // PORT NOTE: Rust has no `std.Options` global to register. The compile-time log
 // level is preserved as `LOG_LEVEL` (the `logFn` above enforces the same

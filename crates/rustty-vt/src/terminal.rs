@@ -11586,6 +11586,49 @@ mod tests {
         t.deinit(Global);
     }
 
+    // test "Terminal: eraseChars clearing wrapped wide char marks spacer head row dirty"
+    // (`eb722cb26`)
+    //
+    // NEGATIVE CONTROL: drop the `p_row.mark_dirty()` that `split_cell_boundary`
+    // now issues after clearing the previous row's spacer head — the
+    // `is_dirty(screen_pt(0, 0))` assertion fails (row 0 stays clean).
+    #[test]
+    fn terminal_erase_chars_clearing_wrapped_wide_char_marks_spacer_head_row_dirty() {
+        let mut t = Terminal::init(Global, opts(5, 3)).unwrap();
+
+        // The wide char doesn't fit so it wraps, leaving a spacer head at
+        // the end of the first row.
+        t.print_string("ABCD字".as_bytes()).unwrap();
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(4, 0)).unwrap();
+            assert_eq!(pagepkg::Wide::SpacerHead, unsafe {
+                (*list_cell.cell).wide()
+            });
+            assert!(unsafe { (*list_cell.row).wrap() });
+        }
+
+        t.set_cursor_pos(2, 1);
+        t.clear_dirty();
+        t.erase_chars(1);
+        unsafe {
+            (*crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node))
+                .assert_integrity()
+        };
+
+        // Erasing the wide char also clears the spacer head on the previous
+        // row, so that row must be dirty too.
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        assert!(t.is_dirty(screen_pt(0, 1)));
+        assert!(!t.is_dirty(screen_pt(0, 2)));
+
+        {
+            let list_cell = t.active_mut().pages.get_cell(screen_pt(4, 0)).unwrap();
+            assert_eq!(pagepkg::Wide::Narrow, unsafe { (*list_cell.cell).wide() });
+        }
+
+        t.deinit(Global);
+    }
+
     // test "Terminal: deleteChars"
     #[test]
     fn terminal_delete_chars() {
@@ -12037,11 +12080,18 @@ mod tests {
         }
 
         t.set_cursor_pos(2, 2);
+        t.clear_dirty();
         t.delete_chars(3);
         unsafe {
             (*crate::pagelist::Node::page((*(*t.screens.active).cursor.page_pin).node))
                 .assert_integrity()
         };
+
+        // Deleting the wide char also clears the spacer head on the previous
+        // row, so that row must be dirty too.
+        assert!(t.is_dirty(screen_pt(0, 0)));
+        assert!(t.is_dirty(screen_pt(0, 1)));
+        assert!(!t.is_dirty(screen_pt(0, 2)));
 
         {
             let str = t.plain_string(Global).unwrap();

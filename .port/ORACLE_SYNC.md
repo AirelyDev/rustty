@@ -6,9 +6,9 @@ R3 forbids any build-time dependency on it).
 ## Pinned baseline
 
 ```
-commit  88f57ee66eeaad4da77b414b245f7b6693348985   (short: 88f57ee66 / 88f57ee)
-date    2026-08-25
-subject terminal: ignore UTF-8-decoded C1 controls in the ground state (#14023)
+commit  20abdb50a6216c450d6d4d010c41c7edf5ab15b2   (short: 20abdb50a / 20abdb50)
+date    2026-08-31
+subject Update VOUCHED list (#14101)
 ```
 
 There is **one** sync point. The oracle working tree is checked out (detached) at this commit, and
@@ -18,7 +18,7 @@ it is the SHA referenced by `.port/PORT_RULES.md` (R12 main-parity tracking) and
 Verify with:
 
 ```sh
-git -C ../ghostty rev-parse HEAD          # 88f57ee66eeaad4da77b414b245f7b6693348985
+git -C ../ghostty rev-parse HEAD          # 20abdb50a6216c450d6d4d010c41c7edf5ab15b2
 git -C ../ghostty status --porcelain      # empty
 ```
 
@@ -37,6 +37,7 @@ at an empty tree and every gate finds zero reference sentences, i.e. vacuous gre
 | 2026-08-17 | `6ad1fe7d8` (2026-07-29) | `12967b68f` (2026-08-17) | Phase 4 upstream resync (advance-first by explicit user direction; before/after gate states in `.port/phase-4/w0/`) |
 | 2026-08-25 | `12967b68f` (2026-08-17) | `683d8db64` (2026-08-25) | Phase 5 upstream resync (advance-first, same doctrine; before/after gate states in `.port/phase-5/w0/`) |
 | 2026-08-26 | `683d8db64` (2026-08-25) | `88f57ee66` (2026-08-25) | Gap-close drift absorb (advance-first): the 2-commit `stream.zig` ground-state tail — `0f35043c9` (execute C0 0x10-0x1F) + `40a40f848` (ignore UTF-8-decoded C1). See `.port/gap-close/`. |
+| 2026-09-01 | `88f57ee66` (2026-08-25) | `20abdb50a` (2026-08-31) | Phase 6 upstream resync (advance-first, same doctrine; before/after gate states in `.port/phase-6/w0/`). 121 commits, 74 non-merge, 75 files, +6,261/−1,269. |
 
 **Phase-4 note on ordering.** Unlike `P3-W10`, this advance happened at the *start* of the
 resync (explicit user direction: update the oracle, then port the whole range). The
@@ -58,6 +59,28 @@ waves). A5 all arms GREEN (195 exports, 613 discriminants). A3/A4/D11/D11r GREEN
 menu-shortcut parity 51 actions byte-identical. Both platforms: macOS workspace 5,343 tests
 + xcodebuild RusttyTests 356/0; Linux (`rvm`) full lane 0 FAILED. G3b finale sweep recorded
 beside the advance evidence in `.port/phase-5/w0/`.
+
+**PHASE-6 FINALE (2026-09-01): re-greened.** G1b GREEN with the `search` row extended to the
+NEW `search/terminal.zig` (search zig 72 / rust 77; vt_c 433 / 487 — the NEW `c/search.zig`
+was already globbed). G3b GREEN (0 missing in every crate; arrival was 51). Live per-test audit
+(`audit_test_coverage.py`) GREEN: 4,090 live-oracle test blocks, 0 unexplained — the range's
+27 tests (c/search 17, search/terminal 6, graphics_image 2, ref_counted_set 1, Terminal 1) are
+all present by name. A5 headers GREEN (203 exports both directions, 0 residuals); G-VTFEAT
+GREEN with `search` as the 10th oracle feature; symbol manifest 91 == 91; menu-shortcut parity
+51 actions byte-identical. macOS xcodebuild RusttyTests **403 passed / 0 failed** (356 + 47
+new: KeyEventSynthesize 42, KeyboardShortcutTranslation 1, URLTests 4). Census ledger moved to
+`20abdb50a` (G-CENSUS was RED by design after the advance). **Both platforms
+exercised:** the Linux (`rvm`) lane ran `cargo test --workspace` GREEN and
+G-GTKFEAT GREEN (the GTK gate macOS can only report BLOCKED), with a post-fix
+G-REL of 5,477 passed / 0 failed; it also exposed three PRE-EXISTING
+Linux-only defects that macOS structurally cannot see — the 25 examples'
+`xcrun`/`set -e` abort, a `cfg(not(macos))` clippy break, and a G-REL
+false-RED on a passing test's stderr — all fixed and re-verified
+(`d38b014b`, `d591a985`; see `.port/phase-6/README.md`
+§"Linux-only defects found by this lane"). Execution record:
+`docs/superpowers/plans/2026-09-01-phase6-upstream-resync.md` + `.port/phase-6/assessments/W1..W6`
++ the `phase-6/*` merge series. CI-lane results are recorded in `.port/phase-6/README.md`
+§"Finale".
 
 The previous pin, `4749c4e93`, was a **stale baseline**: work from beyond it had been ported by
 WS5–WS8 and tracked in an ad-hoc "beyond-pin series" table (BL-1…BL-7) that existed only because the
@@ -94,10 +117,12 @@ before/after reports, the per-crate delta table, and the per-file attribution of
 
 ## Upstream beyond this pin
 
-At the time of the Phase-5 advance (2026-08-25) the pin IS `origin/main` — there is no
-beyond-pin gap. Phase 5 absorbs `12967b68f..683d8db64` (245 commits, 169 non-merge, 155
-files, +25,534/−3,360; artifacts in `.port/phase-5/`); Phase 4 absorbed `6ad1fe7d8..12967b68f`
-(`.port/phase-4/`). Any future upstream movement is the seed of the next resync.
+At the time of the Phase-6 advance (2026-09-01) the pin IS `origin/main` — there is no
+beyond-pin gap. Phase 6 absorbs `88f57ee66..20abdb50a` (121 commits, 74 non-merge, 75 files,
++6,261/−1,269; artifacts in `.port/phase-6/`); the gap-close absorbed `683d8db64..88f57ee66`
+(`.port/gap-close/`); Phase 5 absorbed `12967b68f..683d8db64` (`.port/phase-5/`); Phase 4
+absorbed `6ad1fe7d8..12967b68f` (`.port/phase-4/`). Any future upstream movement is the seed
+of the next resync.
 
 ```sh
 git -C ../ghostty fetch origin main          # once

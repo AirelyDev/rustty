@@ -67,6 +67,7 @@ done
 # ---------------------------------------------------------------------------
 verdict() {
   local log="$1"
+  local build_log="${2:-}"
   local failed_targets ignored passed
 
   # `cargo test` prints one `test result: FAILED.` line per failing target and a
@@ -84,9 +85,27 @@ verdict() {
     return 1
   fi
 
-  if grep -qE '^error(\[|:)' "$log"; then
+  # Build errors. The BUILD log is scanned with the broad `^error:`/`^error[`
+  # pattern: it is pure cargo/rustc output, so anything shaped like a diagnostic
+  # there IS one. (Before 2026-09-08 this log was overwritten by the test run
+  # before verdict() ever saw it, so it was never scanned at all — this arm is
+  # net-new coverage, not a relaxation.)
+  if [ -n "$build_log" ] && [ -f "$build_log" ] && grep -qE '^error(\[|:)' "$build_log"; then
     echo "RED: release lane failed to build"
-    grep -E '^error(\[|:)' "$log" | head -20
+    grep -E '^error(\[|:)' "$build_log" | head -20
+    return 1
+  fi
+
+  # The TEST log interleaves cargo diagnostics with the tests' own stderr, so a
+  # bare `^error:` is NOT proof of a build failure: a PASSING test may print one.
+  # `rustty_init_invalid_action_returns_1` does exactly that on Linux —
+  # "error: failed to initialize rustty error=InvalidAction" is its expected
+  # output — and it made this HARD gate report "failed to build" after a clean
+  # build and a fully green run (found by the phase-6 Linux lane; macOS never
+  # runs that GTK-only test). Match only the shapes cargo/rustc alone emit.
+  if grep -qE '^error\[|^error: could not compile' "$log"; then
+    echo "RED: release lane failed to build"
+    grep -E '^error\[|^error: could not compile' "$log" | head -20
     return 1
   fi
 
@@ -119,15 +138,48 @@ error: 1 target failed:
     `-p rustty-vt --lib`
 EOF
 
-  local rc_green rc_red
+  # A PASSING test whose own stderr starts with `error:`. This is real output
+  # from rustty_init_invalid_action_returns_1 on Linux; before 2026-09-08 the
+  # bare `^error:` scan called it a build failure. Must be GREEN.
+  cat > "$tmp/green_test_stderr.log" <<'EOF'
+running 12 tests
+error: failed to initialize rustty error=InvalidAction
+test tests::rustty_init_invalid_action_returns_1 ... ok
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+EOF
+
+  # A genuine compile failure in the TEST build. Must stay RED.
+  cat > "$tmp/red_compile.log" <<'EOF'
+   Compiling rustty-core v0.1.0
+error[E0432]: unresolved import `nope`
+error: could not compile `rustty-core` (lib test) due to 1 previous error
+EOF
+
+  # A genuine compile failure in the BUILD log (the net-new arm). Must be RED
+  # even though the test log alone looks clean.
+  cat > "$tmp/red_build.log" <<'EOF'
+   Compiling rustty-vt v0.1.0
+error: could not compile `rustty-vt` (lib) due to 1 previous error
+EOF
+
+  local rc_green rc_red rc_stderr rc_compile rc_build
   verdict "$tmp/green.log" >/dev/null; rc_green=$?
   verdict "$tmp/red.log"   >/dev/null; rc_red=$?
+  verdict "$tmp/green_test_stderr.log" >/dev/null; rc_stderr=$?
+  verdict "$tmp/red_compile.log" >/dev/null; rc_compile=$?
+  verdict "$tmp/green.log" "$tmp/red_build.log" >/dev/null; rc_build=$?
   rm -rf "$tmp"
 
-  echo "  clean output  -> exit $rc_green (expect 0)"
-  echo "  failing output-> exit $rc_red (expect 1)"
-  if [ "$rc_green" -eq 0 ] && [ "$rc_red" -eq 1 ]; then
-    echo "SELF-TEST GREEN: the gate flips RED on a failing release run."
+  echo "  clean output          -> exit $rc_green (expect 0)"
+  echo "  failing output        -> exit $rc_red (expect 1)"
+  echo "  passing test w/ stderr-> exit $rc_stderr (expect 0)"
+  echo "  test-build compile err-> exit $rc_compile (expect 1)"
+  echo "  build-log compile err -> exit $rc_build (expect 1)"
+  if [ "$rc_green" -eq 0 ] && [ "$rc_red" -eq 1 ] && [ "$rc_stderr" -eq 0 ] \
+     && [ "$rc_compile" -eq 1 ] && [ "$rc_build" -eq 1 ]; then
+    echo "SELF-TEST GREEN: the gate flips RED on a failing release run, on a"
+    echo "  compile error in either log, and stays GREEN on a passing test that"
+    echo "  prints \`error:\` to stderr."
     return 0
   fi
   echo "SELF-TEST RED: the gate did not flip." >&2
@@ -146,6 +198,7 @@ SCOPE_ARGS=(--workspace)
 # NOTE: macOS `mktemp` requires the X's to be the LAST characters of the
 # template — no `.log` suffix.
 LOG="$(mktemp "${TMPDIR:-/tmp}/release_lane_XXXXXX")"
+LOG_BUILD="$(mktemp "${TMPDIR:-/tmp}/release_lane_build_XXXXXX")"
 
 # perl alarm, not coreutils `timeout` (absent on stock macOS).
 run_watchdogged() {
@@ -153,7 +206,7 @@ run_watchdogged() {
 }
 
 echo "=== G-REL: cargo build --release ${SCOPE_ARGS[*]} ==="
-run_watchdogged cargo build --release "${SCOPE_ARGS[@]}" 2>&1 | tee "$LOG"
+run_watchdogged cargo build --release "${SCOPE_ARGS[@]}" 2>&1 | tee "$LOG_BUILD"
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then
   echo "RED: release build failed (or exceeded ${TIMEOUT_SECS}s)" >&2
   exit 1
@@ -167,5 +220,5 @@ if [ "$rc" -ge 128 ]; then
   exit 1
 fi
 
-verdict "$LOG"
+verdict "$LOG" "$LOG_BUILD"
 exit $?

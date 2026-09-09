@@ -1,0 +1,76 @@
+ .github/VOUCHED.td                                 |    7 +
+ .github/workflows/milestone.yml                    |    4 +-
+ .github/workflows/release-tag.yml                  |    4 +-
+ .github/workflows/release-tip.yml                  |    6 +-
+ .github/workflows/test.yml                         |   40 +
+ CODEOWNERS                                         |    2 +
+ build.zig                                          |   35 +-
+ build.zig.zon                                      |    4 +-
+ build.zig.zon.json                                 |    6 +-
+ build.zig.zon.nix                                  |    6 +-
+ build.zig.zon.txt                                  |    2 +-
+ example/c-vt-search/README.md                      |   19 +
+ example/c-vt-search/build.zig                      |   42 +
+ example/c-vt-search/build.zig.zon                  |   24 +
+ example/c-vt-search/src/main.c                     |  117 ++
+ flatpak/zig-packages.json                          |    6 +-
+ include/ghostty/vt.h                               |    9 +
+ include/ghostty/vt/allocator.h                     |   13 +-
+ include/ghostty/vt/search.h                        |  501 +++++++++
+ include/ghostty/vt/selection.h                     |   23 +
+ include/ghostty/vt/types.h                         |   13 +
+ macos/Ghostty.sdef                                 |    2 +-
+ macos/Ghostty.xcodeproj/project.pbxproj            |    4 +-
+ .../xcshareddata/swiftpm/Package.resolved          |    4 +-
+ macos/Sources/App/AppDelegate.swift                |   10 +-
+ .../Features/App Intents/NewTerminalIntent.swift   |    2 +-
+ .../AppleScript/ScriptKeyEventCommand.swift        |    7 +-
+ .../Features/Services/ServiceProvider.swift        |    2 +-
+ .../Features/Terminal/TerminalController.swift     |   55 +-
+ .../Terminal/Window Styles/TerminalWindow.swift    |    2 +-
+ .../TitlebarTabsVenturaTerminalWindow.swift        |   49 +-
+ macos/Sources/Ghostty/Ghostty.Config.swift         |    6 +-
+ macos/Sources/Ghostty/Ghostty.Input.swift          |   60 ++
+ macos/Sources/Ghostty/Ghostty.Surface.swift        |   11 +
+ .../Ghostty/Surface View/SurfaceView_AppKit.swift  |    7 +-
+ .../Helpers/Extensions/NSAlert+Extension.swift     |   19 +
+ .../Helpers/Extensions/String+Extension.swift      |   11 +
+ .../Sources/Helpers/Extensions/URL+Extension.swift |    9 +
+ .../AppleScript/ScriptKeyEventCommandTests.swift   |   91 +-
+ macos/Tests/Ghostty/KeyEventSynthesizeTests.swift  |  115 ++
+ macos/Tests/URLTests.swift                         |   25 +
+ po/fr.po                                           |  405 +++----
+ po/ru.po                                           |  405 +++----
+ po/sr.po                                           | 1054 ++++++++++++++++++
+ po/sr@latin.po                                     | 1135 ++++++++++++++++++++
+ po/uk.po                                           |  382 ++++---
+ src/Surface.zig                                    |   56 +-
+ src/apprt/gtk/class/surface.zig                    |   26 +-
+ src/apprt/gtk/class/surface_scrolled_window.zig    |   12 +-
+ src/build/Config.zig                               |    7 +-
+ src/build/GhosttyLibVt.zig                         |    4 +-
+ src/config/Config.zig                              |   87 +-
+ src/font/res/NotoColorEmoji.ttf                    |  Bin 9867108 -> 10673480 bytes
+ src/font/res/NotoEmoji-Regular.ttf                 |  Bin 868608 -> 880860 bytes
+ src/lib/allocator.zig                              |    4 +
+ src/lib_vt.zig                                     |   31 +-
+ src/main_ghostty.zig                               |    2 +-
+ src/os/i18n_locales.zig                            |    2 +
+ src/renderer/generic.zig                           |   22 +-
+ src/terminal/PageList.zig                          |   21 +-
+ src/terminal/Screen.zig                            |    5 +
+ src/terminal/Terminal.zig                          |   39 +
+ src/terminal/build_options.zig                     |   12 +-
+ src/terminal/c/main.zig                            |   10 +
+ src/terminal/c/search.zig                          | 1009 +++++++++++++++++
+ src/terminal/c/selection.zig                       |   12 +
+ src/terminal/c/terminal.zig                        |    4 +
+ src/terminal/c/types.zig                           |    7 +
+ src/terminal/kitty/graphics_image.zig              |   66 ++
+ src/terminal/ref_counted_set.zig                   |   93 +-
+ src/terminal/search.zig                            |    1 +
+ src/terminal/search/Thread.zig                     |  560 +++-------
+ src/terminal/search/screen.zig                     |   23 +-
+ src/terminal/search/terminal.zig                   |  655 +++++++++++
+ src/terminal/snapshot/snapshot.zig                 |    5 +-
+ 75 files changed, 6261 insertions(+), 1269 deletions(-)

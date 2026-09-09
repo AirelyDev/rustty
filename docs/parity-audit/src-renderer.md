@@ -1,0 +1,312 @@
+# Parity audit — src/renderer
+
+Five shards audited the whole `src/renderer` tree of the oracle (pin `20abdb50a`): the renderer thread, the generic `Renderer(GraphicsAPI)` (both halves), cell/cursor/row/link/message/image/shadertoy/size, and both GPU backends (`metal/`, `opengl/`). **11,567 oracle lines read**, covering every unit in scope with no partial reads (24 oracle units / file-ranges, all fully read).
+
+**20 candidate findings**: 13 CONFIRMED, 1 DISPUTED, 6 REFUTED. By corrected severity across the 14 surviving findings: **2 high, 3 medium, 9 low** (8 of the low are the crate-wide "no logging facade wired" class). The most important gap is **S117-F1**: `shadertoy::Uniforms` lost the oracle's per-field `align(16)`, so the std140 uniform block uploaded to custom shaders is byte-shifted from `channel_time` onward (size 4472 vs 4496) — every custom shader reads garbage for `iChannelTime`, `iMouse`, `iDate`, cursor, focus and palette. **S118-F1** (Display P3 colorspace never set on the Metal render target) is the other high.
+
+## Coverage
+
+| Oracle unit (path:lines) | rustty counterpart(s) | Status | Note |
+| --- | --- | --- | --- |
+| `src/renderer/Thread.zig` [1-857] | `crates/rustty-core/src/renderer_seam.rs`, `crates/rustty-renderer/src/thread.rs`, `crates/rustty-os/src/autorelease.rs` | ported | R4-relocated: struct/fields/defaults, init (explicit LIFO errdefer chain), deinit, threadMain, setQosClass, armAnimationTimer, drainMailbox + autoreleasepool (all 12 message arms), changeConfig, drawFrame, all callbacks, `CURSOR_BLINK_INTERVAL=600`, `Compression{idle=250,step=1,…}`. Mailbox = `BlockingQueue<Message,64>`; DerivedConfig in `thread.rs:41,85-114`. Oracle has 0 tests; rustty adds 3 compression tests. |
+| `src/renderer/WebGL.zig` [1-2] | `crates/rustty-renderer/src/webgl.rs` | ported | 2-line placeholder type → unit struct `WebGL` (`webgl.rs:23`); no logic in the oracle. |
+| `src/renderer/backend.zig` [1-23] | `crates/rustty-build-config/src/renderer.rs` | ported | `Backend{Opengl,Metal,Webgl}` + `const fn default(target, wasm_target)` with identical arms; `Arch::is_wasm` matches only `Wasm32` (= oracle `cpu.arch == .wasm32`). |
+| `src/renderer/cell.zig` [1-706] | `crates/rustty-renderer/src/cell.rs` | ported | Key, Contents (default/deinit/resize/reset/setCursor/getCursorGlyph/bgCell/add/clear), all predicates and Unicode ranges (box drawing, block elements, legacy computing, powerline) with identical constants; all 6 tests ported, test strings verified byte-wise. |
+| `src/renderer/cursor.zig` [1-158] | `crates/rustty-renderer/src/cursor.rs` | ported | `Style{Block,BlockHollow,Bar,Underline,Lock}`, `from_terminal`, StyleOptions defaults, identical priority chain (`cursor.rs:57-98`); all 4 tests with the same 4/4/4/8 assertions. |
+| `generic.zig:83-257` (Renderer fields/defaults) | `generic.rs:1405-1580`, `generic.rs:2233-2291` | ported | Monomorphized twice (macos/Metal, linux_impl/OpenGL). All fields present; `bg_image_changed` starts false vs Zig default true, but the field is never read in the oracle tree. |
+| `generic.zig:258-261` HighlightTag | `generic.rs:1345-1350` | ported | `repr(u8)`, same discriminants/order. |
+| `generic.zig:265-314` SwapChain | `generic.rs:1622-1715`, `generic/linux_impl.rs:473-540` | ported | init/deinit/nextFrame/releaseFrame; semaphore of `SWAP_CHAIN_COUNT` permits; frame deinit is field Drop. |
+| `generic.zig:325-444` FrameState | `generic.rs:1732-1866`, `generic/linux_impl.rs:569-660` | ported | init/resize identical; deinit is Drop. Throwaway atlas size 2 instead of 1 (resized on first sync). |
+| `generic.zig:447-543` CustomShaderState | `generic.rs:1873-1946` | ported | swap/init/resize identical. |
+| `generic.zig:548-670` DerivedConfig/init/deinit | `generic.rs:308-561`, `crates/rustty-config/src/renderer_config.rs` | ported | Config reads via the `RendererConfig` accessor trait; every field/clamp/ceil/`!= .false` mapping verified. |
+| `generic.zig:672-803` init | `generic.rs:2099-2304`, `generic/linux_impl.rs:844-1030` | ported | Same field literals, same init_shaders/update_*/prepBackgroundImage tail. `GraphicsAPI.init(options)` split into `init_offscreen` + `attach_host_view` (documented R4 divergence). |
+| `generic.zig:805-866` deinit/deinitShaders/initShaders | `generic.rs:2342-2409`, `:5752-5754`, `:5874-5915` | ported | Same teardown order; initShaders load-failure → empty set matches. |
+| `generic.zig:868-929` surfaceInit/finalizeSurfaceInit/threadEnter/threadExit/loopEnter/loopExit | `generic.rs:2423-2533`, `generic/linux_impl.rs:1193-1256` | ported | `@hasDecl` probes folded per leaf (Metal: loopEnter only; OpenGL: the other four). |
+| `generic.zig:934-983` displayRealized/displayUnrealized | `generic/linux_impl.rs:1725-1840` | partial | OpenGL twin only (GTK-only callers); absent from the Metal twin (unreachable there, see refuted S115-F3). Linux twin propagates a GL prepare error the oracle swallows → **S115-F2**. |
+| `generic.zig:985-993` displayLinkCallback | `crates/rustty-renderer/src/metal/cvdisplaylink.rs:270-295` | ported | Inlined into the CoreVideo output_callback trampoline; notify error swallowed without the `log.err`. |
+| `generic.zig:996-1087` markDirty/setMacOSDisplayID/draw_interval_ms/animationWake/hasVsync | `generic.rs:2846-2848`, `:2562-2578`, `:1588-1612`, `:5809-5872`, `generic/linux_impl.rs:1101-1190` | ported | Same shader/kitty delay computation, saturating_sub, `max` with `DRAW_INTERVAL_MS=8`, update-wins-ties. |
+| `generic.zig:1092-1207` setFocus/setVisible/releaseGpuResources/syncDisplayLink | `generic.rs:2591-2839`, `generic/linux_impl.rs:1285-1350` | ported | `should_run` predicate, lazy link creation, `must_draw_from_app_thread` folded per apprt. |
+| `generic.zig:1212-1263` setFontGrid/updateFontGridUniforms | `generic.rs:2859-2916`, `:5347-5360` | ported | Identical sequence incl. modified-counter reset and markDirty. |
+| `generic.zig:1266-1604` updateFrame | `generic.rs:4873-5339`, `generic/linux_impl.rs:3508-3845` | partial | Critical section, scroll-to-bottom, kitty animation tick, links, highlights, bg_color/glass, overlay, syncDisplayLink all match; `defer font_shaper.endFrame()` is not run on early returns → **S115-F1**. |
+| `generic.zig:1610-1781` drawFrame (first half) | `generic.rs:6057-6492`, `generic/linux_impl.rs:4242-4500` | ported | Defer order, swap-chain rebuild, needs_redraw predicate, presentLastTarget+resync, errdefer releaseFrame, shader reinit, resize, uploads, both atlas syncs match. |
+| `generic.zig:1782-1918` drawFrame tail | `generic.rs:6440-6746`, `generic/linux_impl.rs:4655-4830` | ported | Same step ordering, buffers/textures/samplers per step, clear color, target selection, defer order. |
+| `generic.zig:1921-1942` frameCompleted | `generic.rs:5995-6021`, `generic/linux_impl.rs:4180-4200` | ported | Health compare+store, health push on transition only, release_frame always. Covered by `frame_completed_pushes_renderer_health_on_transition_only`. |
+| `generic.zig:1947-2031` prepBackgroundImage | `generic.rs:3077-3204`, `generic/linux_impl.rs:1553-1680`, `generic.rs:212-245` | ported | All open/detect/decode/unknown/markForReplace/markForUnload arms; 4 GiB cap applied post-read (observably identical). |
+| `generic.zig:2033-2043` uploadBackgroundImage | `generic.rs:5963-5983`, `generic/linux_impl.rs:4153-4175` | ported | Unloading → deinit+None+return; pending → upload. Upload error mapped to the aggregate `Error::MetalFailed`. |
+| `generic.zig:2046-2121` changeConfig | `generic.rs:2954-3071`, `generic/linux_impl.rs:1440-1540` | ported | Shaper re-init, cache reset, uniforms, bg-image matrices, custom_shaders_changed, blending_changed → reinit + `target_config_modified +%= 1`. Tested. |
+| `generic.zig:2124-2138` setScreenSize | `generic.rs:2921-2935` | ported | Padding copy + uniforms under draw_mutex; `log.debug` kept as comment. Tested. |
+| `generic.zig:2143-2176` updateScreenSizeUniforms | `generic.rs:5363-5400`, `generic/linux_impl.rs:1858-1895` | ported | `blankPadding(...).add(padding)`, ortho2d args, grid_padding order, screen_size. Tested. |
+| `generic.zig:2184-2210` updateBgImageBuffer | `generic.rs:5410-5438`, `generic/linux_impl.rs:1898-1925` | ported | All 9 position arms, 4 fit arms, repeat, opacity, wrapping increment. Tested in both twins. |
+| `generic.zig:2215-2302` updateCustomShaderUniformsFromState | `generic.rs:5446-5561`, `generic/linux_impl.rs:3854-3975` | ported | Palette/bg/fg/cursor/visibility/style arms identical; Zig safe-mode tag assert replicated as `unreachable!()` (refuted S116-F1). |
+| `generic.zig:2307-2427` updateCustomShaderUniformsForFrame | `generic.rs:5572-5689`, `generic/linux_impl.rs:3978-4095` | ported | Frame timing, resolution/channel_resolution, cursor pixel math incl. both `custom_shader_y_is_down` branches, cursor_changed compare, focus/time_focus. Tested. |
+| `generic.zig:2431-2487` rebuildOverlay | `generic.rs:4771-4851`, `generic/linux_impl.rs:3414-3500` | ported | Empty → deinit+None; size/cell-size mismatch → reinit; else reset; apply_features. Tested in both twins. |
+| `generic.zig:2489-2493` PreeditRange | `generic.rs:3217-3221`, `generic/linux_impl.rs:738-742` | ported | Same three fields. |
+| `generic.zig:2502-2795` rebuildCells | `generic.rs:3284-3664`, `generic/linux_impl.rs:1941-2350` | ported | grid resize, full-rebuild reset, preedit range, per-row dirty/clear/catch, complete cursor colour ladder, preedit cell loop, cells_rebuilt. Tested. |
+| `generic.zig:2797-3243` rebuildRow | `generic.rs:3702-4315`, `generic/linux_impl.rs:2355-2960` | ported | padding_extend heuristics, run options, preedit skip/catch-up, Selected precedence, full 4×3 bg/fg colour matrices, faint alpha, bg_alpha ladder, link underlines, ordering, monotonic assert, strikethrough last. |
+| `generic.zig:3246-3346` addUnderline/addOverline/addStrikethrough | `generic.rs:4327-4467`, `generic/linux_impl.rs:2968-3115` | ported | 5 underline kinds, sprite render with cell_width 1, grayscale atlas, colour+alpha, glyph geometry. |
+| `generic.zig:3349-3409` addGlyph | `generic.rs:4477-4559`, `generic/linux_impl.rs:3118-3210` | ported | thicken, gridWidth, getConstraint fallback, constraintWidth, 0-size early return, emoji→color atlas, bearings. |
+| `generic.zig:3411-3498` addCursor | `generic.rs:4572-4689`, `generic/linux_impl.rs:3213-3330` | ported | wide_tail shift, alpha ladder, sprite arms, lock glyph `0xF023` with both error returns, `set_cursor`. |
+| `generic.zig:3500-3540` addPreeditCell | `generic.rs:4693-4765`, `generic/linux_impl.rs:3334-3410` | ported | render errors, text cell alpha 255, single underline, wide second underline. |
+| `generic.zig:3545-3559` syncAtlasTexture | `generic.rs:5934-5960`, `generic/linux_impl.rs:4118-4150` | ported | Reinit-on-grow then `replaceRegion(0,0,size,size,data)`. |
+| `src/renderer/image.zig` | `image.rs`, `image/macos_impl.rs`, `image/linux_impl.rs` | ported | Monomorphic Metal/OpenGL twin pair; all State methods, Origin, Placement, DrawPlacements, ImageMap, Image union, Pending + PixelFormat conversions, constants and signed i64 math match. 6/6 tests in the Metal twin, 5/6 in the Linux twin → **S117-F2**. |
+| `src/renderer/link.zig` | `crates/rustty-renderer/src/link.rs` | ported | Link/Set with fast path, any-active pre-check, per-link search loop, hover containment, defer region cleanup. All 4 tests (FailingAllocator replaced by a counting global allocator asserting zero allocations). |
+| `src/renderer/message.zig` | `crates/rustty-renderer/src/message.rs` | ported | All 12 Message variants, SearchMatches/SearchMatch (arena → owned), initChangeConfig init order, deinit order. Oracle has 0 tests; port adds 2. |
+| `src/renderer/row.zig` | `crates/rustty-renderer/src/row.rs` | ported | `neverExtendBg` early return, style-bg checks, the exact powerline codepoint ranges, default-background checks. No oracle tests; TODO preserved. |
+| `src/renderer/shadertoy.zig` | `crates/rustty-renderer/src/shadertoy.rs` | partial | Target, loadFromFiles/loadFromFile (4 MB cap, NUL sentinel), glslFromShader, spirvFromGlsl (13 fields, error paths), SpirvLog, mslFromSpv, glslFromSpv, spvCross all match; 4 tests ported. The `Uniforms` extern-struct layout does **not** match → **S117-F1**. |
+| `src/renderer/size.zig` | `crates/rustty-render-types/src/lib.rs` | ported | PaddingBalance, Size, Coordinate, CellSize, ScreenSize, GridSize, Padding line-for-line incl. saturating subs and `@max(1,..)` clamps. All 6 tests with identical assertions. |
+| `src/renderer/metal/Frame.zig` | `metal/frame.rs`, `generic.rs:5707-5737` | ported | Options/buffer/block/begin/render_pass/complete match; `bufferCompleted` body relocated to `generic.rs`. Present-failure `log.err` dropped (S118-F4). |
+| `src/renderer/metal/IOSurfaceLayer.zig` | `metal/iosurface_layer.rs` | ported | Subclass singleton, init, release, set_surface (+sync/callback), size check, display callback all match. Wrong-size `log.debug` dropped (S118-F4). Extra rustty-only tests. |
+| `src/renderer/metal/Pipeline.zig` | `metal/pipeline.rs` | ported | Function lookup, vertex descriptor via precomputed layout tables, colour attachments with premultiplied blend factors, pipeline state creation. `checkError` log dropped (S118-F4); nil function → Err (refuted S118-F2). |
+| `src/renderer/metal/RenderPass.zig` | `metal/render_pass.rs` | ported | Options/Attachment/Step/Draw, begin, step (early return, buffer indices, uniforms idx1, textures/samplers, drawPrimitives), complete. Nil encoder → panic (refuted S118-F3). |
+| `src/renderer/metal/Sampler.zig` | `metal/sampler.rs` | ported | Options, Error, init with 4 setters, nil → MetalFailed, deinit → Drop. |
+| `src/renderer/metal/Target.zig` | `metal/target.rs` | partial | IOSurface/descriptor/texture creation match; the Display P3 colorspace on the IOSurface is missing → **S118-F1**. |
+| `src/renderer/metal/Texture.zig` | `metal/texture.rs` | ported | Options, init, replace_region geometry, `bpp_of` table incl. the faithful 128 quirk and both panics. |
+| `src/renderer/metal/api.zig` | `metal/api.rs` | replaced | Hand-declared enums/extern decls replaced by objc2-metal 0.3.2 re-exports; `MTLResourceOptions`/`MTLTextureUsage` kept ghostty-shaped with `resolve()` composing identical bit values. Use-sites verified. |
+| `src/renderer/metal/buffer.zig` | `metal/buffer.rs` | ported | Options, Buffer<T>, init/init_fill/deinit/sync (2× grow, didModifyRange when managed)/sync_from_array_lists. Extra rustty-only tests. |
+| `src/renderer/metal/shaders.zig` [1-448] | `metal/shaders.rs`, `shaders.rs`, `metal/gpu_abi.rs` | ported | pipeline_descs (5), initPipeline, PipelineCollection, init/deinit (defunct guard), initLibrary, post pipelines, checkError. `@sizeOf(CellText)==32` test is a const assert. Log sites + eager release differ (S119-F1, refuted S119-F2). |
+| `src/renderer/opengl/Frame.zig` [1-71] | `opengl/frame.rs`, `generic/linux_impl.rs` | ported | begin/renderPass/complete; the gl.finish + health + present + frameCompleted tail is the installed `opengl_frame_completed` CompletionFn. Extra `owns_context` gate + dropped log (disputed S119-F3). |
+| `src/renderer/opengl/Pipeline.zig` [1-164] | `opengl/pipeline.rs`, `opengl/shaders.rs` | ported | init (createVF, fbo/vao, autoAttribute, stride), deinit destroys only the program. Comptime reflection → hand-written `AttribDesc` tables with matching sizes/types/offsets/divisors and call order. |
+| `src/renderer/opengl/RenderPass.zig` [1-144] | `opengl/render_pass.rs` | ported | begin/step/complete incl. fbo resolution, first-step clear, UBO/texture/sampler/vbo/storage binds, blend factors, drawArraysInstanced, defer fan-out. `@intCast` saturation differs (refuted S119-F4). |
+| `src/renderer/opengl/Sampler.zig` [1-45] | `opengl/sampler.rs` | ported | Identical, incl. parameter order and errdefer destroy. |
+| `src/renderer/opengl/Target.zig` [1-60] | `opengl/target.rs` | ported | rbo/fbo creation and destroy order identical; `read_rgba`/`read_bgra` are rustty-only test helpers. |
+| `src/renderer/opengl/Texture.zig` [1-104] | `opengl/texture.rs` | ported | init (4 parameters, image2D level 0, unbind-before-errdefer order), deinit, replaceRegion — identical. |
+| `src/renderer/opengl/buffer.zig` [1-126] | `opengl/buffer.rs` | ported | Options defaults, init/initFill (byte-count quirk preserved)/deinit/sync (double grow)/syncFromArrayLists — identical. |
+| `src/renderer/opengl/shaders.zig` [1-370] | `opengl/shaders.rs`, `opengl/gpu_abi.rs`, `crates/rustty-renderer/build.rs` | ported | pipeline_descs (5), PipelineCollection, init/deinit unwind, post pipelines; GPU structs with const drift guards; `loadShaderCode`/`processIncludes` reimplemented in build.rs with the same algorithm, embedded as NUL-terminated `include_bytes!`. |
+
+**Partial units.** Three, each with an explicit reason: `generic.zig:934-983` (Metal twin has no display_realized/display_unrealized — GTK-only callers, cleared as refuted S115-F3; the Linux twin's error propagation is S115-F2); `generic.zig:1266-1604` updateFrame (missing `endFrame` on early returns, S115-F1); `metal/Target.zig` (missing Display P3 colorspace, S118-F1); plus `shadertoy.zig`, marked partial solely for the `Uniforms` layout (S117-F1). No unit was left unread or only skimmed — `units_partial` was empty in every shard.
+
+## Findings
+
+### High
+
+#### S117-F1 — shadertoy::Uniforms drops the per-field align(16); GPU byte layout differs from the std140 block the custom shaders read
+
+- **Status:** ✅ CONFIRMED (both lenses, high confidence)
+- **Kind:** behavioral-difference · **Severity:** high
+- **Oracle:** `src/renderer/shadertoy.zig:14-42`
+- **rustty:** `crates/rustty-renderer/src/shadertoy.rs:63-101` (upload sites `generic.rs:6668-6671`, `generic/linux_impl.rs:673`)
+
+The oracle declares `Uniforms` as an `extern struct` with `align(16)` on every vec3/vec4/array member and `align(4)` on scalars, producing the std140 layout of the `Globals` uniform block in `shadertoy_prefix.glsl` (binding 1). The Rust port is a plain `#[repr(C)]` struct with natural (4-byte) alignment and no padding fields, so every field after `frame` lands at a different offset: `channel_time` at 28 instead of 32, `current_cursor` at 192 instead of 208, `palette` at 280 instead of 304, total size 4472 instead of 4496. The struct **is** consumed by the live GPU path: `generic.rs:1893` holds `Buffer<shadertoy::Uniforms>` and `generic.rs:6668-6672` does `state.uniforms.sync(&[self.custom_shader_uniforms])`, a raw `size_of_val` byte copy (`metal/buffer.rs:138-160`) with no ABI serializer — unlike `crate::shaders::Uniforms`, which has `metal/gpu_abi.rs::UniformsGpu` with offset asserts. The `shadertoy.rs` PORT NOTE at lines 65-70 says the exact std140 layout "is pinned when the GPU draw path actually consumes this struct" — that has since happened without the pinning. Result: custom shaders receive shifted/garbage `iChannelTime`, `iMouse`, `iDate`, cursor position/colour/style, focus, palette and terminal colours; only `iResolution`/`iTime`/`iTimeDelta`/`iFrameRate`/`iFrame` are correct.
+
+**Evidence.** `shadertoy.zig:15` `resolution: [3]f32 align(16)`, `:20` `channel_time: [4][4]f32 align(16)`, `:25` `current_cursor: [4]f32 align(16)`, `:35` `palette: [256][4]f32 align(16)` vs `shadertoy.rs:71-101` `#[repr(C)] pub struct Uniforms { pub resolution: [f32; 3], pub time: f32, … }` with `// align(16)` only as comments. Computed offsets (Zig/Rust): channel_time 32/28, channel_resolution 96/92, mouse 160/156, date 176/172, sample_rate 192/188, current_cursor 208/192, palette 304/280, size 4496/4472. The consuming GLSL block (`shadertoy_prefix.glsl`, byte-identical in both trees) is `layout(binding = 1, std140) uniform Globals { … }`.
+
+**Suggested fix.** Give the struct the std140 layout explicitly: wrap the `align(16)` members in `#[repr(C, align(16))]` newtypes (e.g. `Vec4([f32;4])`, padded `Vec3`) or insert explicit `_pad` fields, then add `const _: () = assert!(offset_of!(Uniforms, channel_time) == 32 && offset_of!(Uniforms, current_cursor) == 208 && offset_of!(Uniforms, palette) == 304 && size_of::<Uniforms>() == 4496)` mirroring `gpu_abi.rs`; keep the field names so `generic.rs`'s writers are untouched.
+
+#### S118-F1 — IOSurface Display P3 colorspace never set on the render target
+
+- **Status:** ✅ CONFIRMED (both lenses, high confidence)
+- **Kind:** missing-branch · **Severity:** high
+- **Oracle:** `src/renderer/metal/Target.zig:45-60`
+- **rustty:** `crates/rustty-renderer/src/metal/target.rs:81-97`
+
+Ghostty creates the target IOSurface with `.colorspace = CGColorSpace.createNamed(.displayP3)` so that CoreAnimation composites the layer contents in Display P3 (ghostty's comment: gives "Apple-style" alpha blending / reduces blending artifacts). rustty's `Target::init` explicitly skips this ("R5 DEFERRED SEAM … SKIPPED here") and no other file in the workspace sets `kIOSurfaceColorSpace`/`CGColorSpace` on the surface — a workspace-wide grep for `displayP3|kIOSurfaceColorSpace|setColorSpace|CGColorSpace` finds only comments, the `use_display_p3` shader uniform, and the unrelated CoreText glyph path. Because the windowed `Metal::init` path is live (`metal_impl.rs:379`, reaching `Target::init` at `metal_impl.rs:693`), every on-screen frame is composited with the default (sRGB) colorspace tag instead of Display P3 — a user-visible colour/blending difference on macOS. The dictionary actually built at `target.rs:105-140` has exactly four keys (Width/Height/PixelFormat/BytesPerElement).
+
+**Evidence.** `Target.zig:51` `const colorspace = try graphics.ColorSpace.createNamed(.displayP3);` and `:59` `.colorspace = colorspace` vs `target.rs:88-97` comment "it is SKIPPED here and preserved as this deferred windowing-host seam"; `crates/rustty-renderer/Cargo.toml:132` `# Chunk 4 ADD (not yet): objc2-core-graphics (Target DisplayP3 setColorSpace`.
+
+**Suggested fix.** Add `objc2-core-graphics`, create the Display P3 `CGColorSpace`, and set `kIOSurfaceColorSpace` on the surface (`CGColorSpaceCopyPropertyList` + `IOSurfaceSetValue`) in `Target::init`, matching `pkg/macos` `IOSurface.init`'s `setColorSpace`.
+
+### Medium
+
+#### S115-F1 — updateFrame: font_shaper.endFrame() is skipped on the early-return / error paths
+
+- **Status:** ✅ CONFIRMED (both lenses, high confidence)
+- **Kind:** missing-branch · **Severity:** medium
+- **Oracle:** `src/renderer/generic.zig:1271-1274, 1319-1322, 1349-1352`
+- **rustty:** `crates/rustty-renderer/src/generic.rs:4976-4979, 5018-5019, 5332` (mirror `generic/linux_impl.rs:3574, 3838`)
+
+The oracle registers `defer self.font_shaper.endFrame()` as the FIRST statement of `updateFrame` with the explicit comment "Always flush those objects, including when rebuilding the frame fails due to memory pressure". The Rust port calls `self.font_shaper.end_frame()` only as a plain statement at the end of the success path (`generic.rs:5332`). The synchronized-output early `return Ok(())` (`generic.rs:4978`) and the `begin_update(...)?` propagation (`generic.rs:5019`) both leave the function without calling `end_frame`, so CoreText's deferred-release objects accumulate across every frame skipped under synchronized output (mode 2026 is commonly toggled dozens of times per second by TUIs). The only RAII guard at function entry is `Unlock` for the state mutex. `end_frame` is a real operation for CoreText (`rustty-font-shaper/src/shaper/coretext.rs:511`); harfbuzz/noop are no-ops, so Linux is unaffected. The presence lens additionally noted that the same defer-collapse drops the `terminal_state.dirty = .false` reset on those early exits.
+
+**Evidence.** Oracle `generic.zig:1274` `defer self.font_shaper.endFrame();`; a crate-wide grep for `end_frame` returns exactly `generic.rs:5242` (comment), `generic.rs:5332` (the sole call) and `generic/linux_impl.rs:3838` — no Drop guard, no other call site.
+
+**Suggested fix.** Wrap `end_frame` in a drop guard created at function entry (like the existing `Unlock` guard), or call it explicitly before both early exits.
+
+#### S115-F2 — displayRealized (OpenGL twin) fails and skips the swap-chain/shader rebuild when GL context prep fails; the oracle only logs
+
+- **Status:** ✅ CONFIRMED (both lenses, high confidence)
+- **Kind:** missing-error-path · **Severity:** medium
+- **Oracle:** `src/renderer/generic.zig:934-959` (with `src/renderer/OpenGL.zig:236-249`)
+- **rustty:** `crates/rustty-renderer/src/generic/linux_impl.rs:1725-1760`
+
+The oracle's `self.api.displayRealized()` is a `void` call: `OpenGL.zig:237-250` does `prepareContext(null) catch |err| log.warn(...)` and continues, so `generic.zig` always proceeds to lock the draw mutex, re-init shaders, rebuild the swap chain and set `display_realized = true`. The Rust twin returns `Err(Error::GlFailed)` from `prepare_context_windowed()` **before** the lock, so on that failure `display_realized` stays false and `swap_chain` stays `None` forever — `drawFrame`'s `if !display_realized return` (`generic.rs:6164-6165`) makes the surface never draw again, where the oracle would retry drawing with the previously loaded GL bindings. The GTK caller (`src/apprt/gtk/class/surface.zig:3341-3343`) only logs the error, so nothing upstream recovers; no compensating retry exists (the `renderer_seam.rs:520-546` forwarders do not retry).
+
+**Evidence.** `linux_impl.rs:1749-1751` `if !self.api.owns_context() && crate::opengl::gl::sys::prepare_context_windowed().is_err() { return Err(Error::GlFailed); }` vs `OpenGL.zig:240-245` `prepareContext(null) catch |err| { log.warn(...) }` and `generic.zig:936-938` `if (@hasDecl(GraphicsAPI, "displayRealized")) self.api.displayRealized();` (no `try`).
+
+**Suggested fix.** Swallow the prepare error (log/ignore) and continue with the lock + `initShaders` + `SwapChain::init` sequence, matching the void semantics.
+
+#### S117-F2 — OpenGL image twin omits test "kitty renderer ignores pending payloads and removes replaced placements"
+
+- **Status:** ✅ CONFIRMED (both lenses, high confidence)
+- **Kind:** missing-test · **Severity:** medium
+- **Oracle:** `src/renderer/image.zig:1155-1214`
+- **rustty:** `crates/rustty-renderer/src/image/linux_impl.rs:2575-2599` (gap; Metal twin at `image/macos_impl.rs:2244-2367`)
+
+`image.zig` has 6 test blocks. The Metal twin (`macos_impl.rs`) ports all 6, but the Linux/FreeBSD twin (`linux_impl.rs`), which is the only `crate::image` compiled on those targets, ports only 5: `kitty_renderer_ignores_pending_payloads_and_removes_replaced_placements` — asserting `placements.count()==1` / `kitty_placements.len==0` / `images.get(kitty 1)==null` before completion, `len==1` + generation equality after `pending.complete`, and `placements.count()==0` / tracked-pin count unchanged / `kitty_placements.len==0` / `image.isUnloading()` after a newer pending replacement — has no counterpart. The test is pure (touches no GL), so nothing prevents it from running there; on Linux CI the pending-image unload arm of `kitty_update` (mirroring `image.zig:280-288`) is untested. Unlike the neighbouring tests, the gap carries no PORT NOTE explaining the omission.
+
+**Evidence.** `grep -rn ignores_pending_payloads --include=*.rs crates` matches only `image/macos_impl.rs:2244-2246`. Present Linux ports: `uses_the_intersected_source_rectangle` (:2599), `positions_relative_placements_from_the_parent_pin` (:2674), `relative_placement_with_negative_offsets` (:2780), `positions_relative_placements_from_virtual_parent_placeholders` (:2901), `uploads_the_current_animation_frame` (:3002).
+
+**Suggested fix.** Copy `macos_impl.rs:2244-2367` verbatim into `linux_impl.rs`'s tests module (it uses only rustty-vt + State/Id/CellSize, so no adaptation is needed).
+
+### Low
+
+#### S114-F1 — cursorBlinkInterval Valgrind ×5 branch is inert
+
+- **Status:** ✅ CONFIRMED (both lenses, high confidence)
+- **Kind:** missing-branch · **Severity:** low
+- **Oracle:** `src/renderer/Thread.zig:735-748`
+- **rustty:** `crates/rustty-core/src/renderer_seam.rs:1868-1887`
+
+The oracle returns `CURSOR_BLINK_INTERVAL * 5` (3000 ms) when `std.valgrind.runningOnValgrind() > 0`; the port always returns 600 because no valgrind probe exists in rustty (a workspace-wide grep finds only comments — `rustty-config/src/formatter_file.rs:115`, `rustty-apprt/src/gtk/class/inspector_window.rs:20-127`, `rustty-font/src/sprite/face.rs:1274-1277`). Observable only when running under Valgrind.
+
+**Evidence.** `Thread.zig:736-745` `if (std.valgrind.runningOnValgrind() > 0) return CURSOR_BLINK_INTERVAL * 5;` vs `renderer_seam.rs:1880-1886` PORT NOTE "the valgrind `* 5` branch above is inert (never taken)" followed by a bare `CURSOR_BLINK_INTERVAL`.
+
+**Suggested fix.** Add a `rustty_os::valgrind::running_on_valgrind()` probe (RUNNING_ON_VALGRIND client-request sequence) and re-arm the branch.
+
+#### S114-F2 — cursorCancelCallback swallows non-Canceled/NotFound cancel errors instead of `unreachable`
+
+- **Status:** ✅ CONFIRMED (presence high, semantic medium)
+- **Kind:** missing-error-path · **Severity:** low
+- **Oracle:** `src/renderer/Thread.zig:698-723`
+- **rustty:** `crates/rustty-core/src/renderer_seam.rs:1811-1835`
+
+The oracle treats `error.Canceled` and `error.NotFound` as success and hits `log.warn` + `unreachable` (i.e. crashes in safe modes) on any other cancel error. The port ignores every `Err` variant unconditionally. On the macOS kqueue backend rustty's `CancelError` is only `{Canceled}` (`kqueue.rs:2709`) and epoll is `{NotFound}` (`epoll.rs:1893`), so behaviour is identical there; on Linux io_uring (`CancelError{NotFound, ExpirationInProgress, Unexpected}`, `rustty-xev/src/io_uring.rs:2459-2465`, merged in `dynamic.rs:866-996`) an `Unexpected`/`ExpirationInProgress` result is silently ignored where the oracle would trap. The port's PORT NOTE asserting the error set is `error{Canceled}` holds only for kqueue.
+
+**Evidence.** `Thread.zig:712-721` `error.Canceled => {}, error.NotFound => {}, else => { log.warn(...); unreachable; }` vs `renderer_seam.rs:1829-1831` `if let Err(_err) = r { // error.Canceled => {} (success) }`.
+
+**Suggested fix.** Match on the concrete error: `Canceled | NotFound => ()`, other `=> unreachable!()` (cfg'd per backend error set).
+
+#### S114-F3 — All std.log calls in the renderer thread are ported as comments (no log output)
+
+- **Status:** ✅ CONFIRMED (both lenses, high confidence)
+- **Kind:** other · **Severity:** low
+- **Oracle:** `src/renderer/Thread.zig:203, 210, 300-303, 340, 462-463, 480, 501, 522, 573, 599, 656, 684-686, 719, 822`
+- **rustty:** `crates/rustty-core/src/renderer_seam.rs:1025-1029, 1034, 1136-1137, 1177-1178, 1255, 1551-1553, 1578, 1588, 1627, 1689, 1723, 1776, 2064`
+
+Every `log.warn`/`log.err`/`log.debug` in `Thread.zig` (thread exit, "starting renderer thread", mailbox message trace, QoS class set/failed, "error in renderer", "error drawing", "error in wakeup", "error draining mailbox", "error rendering", "error in draw now", "error in cursor timer callback", "error in compression timer") is preserved only as a `// log.…` comment; the error values are computed then discarded (`let _ = &_err;`). Control flow is identical; only the diagnostic output is missing. `rustty-core` as a whole emits no logs and declares no `log`/`tracing` dependency, so this is a crate-wide convention rather than a Thread-specific omission.
+
+**Evidence.** `Thread.zig:203` `log.warn("error in renderer err={}", .{err});` vs `renderer_seam.rs:1025-1029`; `Thread.zig:340` `log.debug("mailbox message={}", .{message});` vs `renderer_seam.rs:1255` (bare comment). 12 `// log.` sites in the file.
+
+**Suggested fix.** Wire the module's commented log calls to the workspace logging facility once one exists (single sweep).
+
+#### S115-F4 — All log.warn/info/debug/err statements in generic.zig:852-1595 are commented out
+
+- **Status:** ✅ CONFIRMED (both lenses, high confidence)
+- **Kind:** other · **Severity:** low
+- **Oracle:** `src/renderer/generic.zig:852, 991, 1169, 1177, 1183, 1188, 1190, 1320, 1436, 1472, 1506, 1517, 1533, 1558, 1595`
+- **rustty:** `crates/rustty-renderer/src/generic.rs:2698-2721, 4977, 5137, 5186, 5214-5229, 5248, 5273, 5316, 5898`
+
+Every diagnostic in the oracle range (custom-shader load failure, display-link create/configure/set-display failures, "created display link", synchronized-output skip, OSC8/regex link search errors, highlight update errors, overlay rebuild error, GPU cell rebuild OOM, overlay image update error, `displayLinkCallback` notify error) is present only as a `// log.…` comment; the crate contains no `log`/`tracing` calls at all (the only runtime diagnostics are the eprintln-based `log_err`/`log_warn` macros local to `src/opengl/gl.rs:55-69` and test-only skips). Error-swallowing control flow is preserved (`let _ = self.rebuild_overlay(...)`, `let _ = self.images.overlay_update(...)`), only the log text is lost.
+
+**Evidence.** `grep -rn 'log::\|tracing::' crates/rustty-renderer/src` returns nothing; e.g. `generic.rs:2698` `// log.warn("error creating display link; using fallback rendering err={}", err);`, `cvdisplaylink.rs:291` `// reference: log.err("error notifying draw_now err={}", .{err});`. 75 commented reference sites remain.
+
+**Suggested fix.** Route these through the workspace logging facade once one is chosen for `rustty-renderer`.
+
+#### S116-F2 — log.warn/log.debug sites are comments or eprintln (no logging facade); open/read warnings merged
+
+- **Status:** ✅ CONFIRMED (both lenses, medium confidence)
+- **Kind:** other · **Severity:** low (corrected from the shard's low; both lenses affirmed low)
+- **Oracle:** `src/renderer/generic.zig:1960-2007, 2137, 2627, 2777-2781, 2912-2916, 3143-3154, 3181-3185, 3222-3226, 3237-3241, 3461, 3476, 3481, 3514, 3518`
+- **rustty:** `crates/rustty-renderer/src/generic.rs:2932, 3126-3131, 3157-3168, 3473, 3648-3650, 4200-4202, 4210-4212, 4294-4296, 4308-4310, 4633, 4659-4665, 4713-4718`
+
+Every `log.warn`/`log.debug` in the range is preserved only as a comment (row-build failure, preedit cell, underline/overline/glyph/strikethrough add failures, cursor glyph render failure, lock-symbol not found, preedit glyph errors, shaping-cache put failure, `setScreenSize` debug). `prepBackgroundImage` instead uses `eprintln!` and merges the two distinct oracle messages ("error opening background image file" / "error reading background image file") into one "error opening/reading" line, and the `Unsupported file type {}` message formats the enum with `{:?}`. Control flow is identical at every site. The finding also flagged `upload_background_image` mapping the upload error to `Error::MetalFailed`; both lenses noted this sub-claim is **not** a defect — `Error::MetalFailed` is the port's documented aggregate for the whole Zig `!void` inferred error union (`generic.rs:1206-1296`) and no caller branches on the variant, so only the eventual log text would differ.
+
+**Evidence.** `generic.zig:1960-1963` vs `generic.rs:3126-3131`; `generic.zig:2627` `log.warn("error building row y={} err={}")` vs `generic.rs:3473` (comment, same `self.cells.clear(y)`); `generic.zig:3461` vs `generic.rs:4633`. `grep -c '// log.warn' crates/rustty-renderer/src/generic.rs` = 17.
+
+**Suggested fix.** When the logging facade lands, wire these sites with the oracle's exact messages (two separate open/read messages).
+
+#### S117-F3 — All log.warn/log.info diagnostics in image.zig and shadertoy.zig are elided (comment-only)
+
+- **Status:** ✅ CONFIRMED (semantic high, presence medium)
+- **Kind:** behavioral-difference · **Severity:** low
+- **Oracle:** `src/renderer/image.zig:85,122,132,165,365,378-381,396,423,447,486,646-649,660,747`; `src/renderer/shadertoy.zig:71,117-121,296-299`
+- **rustty:** `crates/rustty-renderer/src/image/macos_impl.rs:218,257,266,289,696,723,738,773,895,1200,1215,1339`; `src/shadertoy.rs:170,249-250,708-710`; same elision in `image/linux_impl.rs`
+
+Every `log.warn` in `image.zig` (upload failure, image not found/not ready, vertex buffer error, deferring relative placement, missing image, kitty placement prep error, virtual origin tracking error, virtual render error, prepare-for-upload error) and the `log.info("loaded custom shader path=…")`, `log.warn("spirv error path=… info=… debug=…")` and spirv-cross error-callback `std.log.warn` in `shadertoy.zig` are preserved only as comments. Notably the shadertoy `error_callback` (`shadertoy.rs:708-710`) discards `msg_ptr` entirely, so a user with a broken custom shader gets **no** compiler diagnostics on stderr, which the oracle prints. Control flow is otherwise identical.
+
+**Evidence.** `macos_impl.rs:218` `// log.warn("error uploading image to GPU err={}", .{err});`, `:1339` `// log.warn("error preparing image for upload err={}", .{err});`; `shadertoy.rs:170` `// log.info("loaded custom shader path={s}", .{path});   // no logging facade (comment)`; `:249-250` `// log.warn("spirv error path={s} …` + `let _ = &errlog;`; `:708-710` `unsafe extern "C" fn error_callback(_userdata, msg_ptr) { let _ = msg_ptr; }`. `grep -c '// log\.'` = 11 in each image twin.
+
+**Suggested fix.** Wire a `log`/`tracing` facade (scoped `renderer_image` / `shadertoy`) and emit the same messages at the same sites; at minimum forward the spirv-cross callback message and the glslang info/debug logs so shader compile errors reach the user.
+
+#### S118-F4 — Dropped log sites: Pipeline checkError, Frame present failure, IOSurfaceLayer wrong-size discard
+
+- **Status:** ✅ CONFIRMED (presence high, semantic medium)
+- **Kind:** behavioral-difference · **Severity:** low
+- **Oracle:** `src/renderer/metal/Pipeline.zig:195-204`; `metal/Frame.zig:80-88`; `metal/IOSurfaceLayer.zig:110-118`
+- **rustty:** `crates/rustty-renderer/src/metal/pipeline.rs:182-194`; `generic.rs:5725-5733`; `metal/iosurface_layer.rs:234-243`
+
+Three oracle log emissions are preserved only as comments because no logging facade is wired into `rustty-renderer`: (1) `Pipeline.zig:202` `log.err("metal error={s}", localizedDescription)` on pipeline-state failure — the NSError description is discarded by `map_err(|_nserr| …)`; (2) `Frame.zig:86` `log.err("Failed to present render target: err={}")` — `generic.rs:5731-5733` swallows the `Err`; (3) `IOSurfaceLayer.zig:115-118` `log.debug("setSurfaceCallback(): surface is wrong size for layer, discarding…")` — comment only, with the same early `return`. Control flow and returned errors are identical in all three; only the diagnostic output the user/developer would see in ghostty is absent.
+
+**Evidence.** `pipeline.rs:191-194` `.map_err(|_nserr| Error::MetalFailed)?`; `generic.rs:5731-5733` `if let Err(_e) = … { // log.err(…) — no facade }`; `iosurface_layer.rs:238-242` commented `log.debug`. A grep for `log::error|log::warn|log::debug|tracing::` across `crates/rustty-renderer/src` returns nothing and `Cargo.toml` declares no `log` dependency.
+
+**Suggested fix.** Wire the renderer to the workspace log facade (or the `log` crate) and emit the three messages with the same text/level.
+
+#### S119-F1 — Metal shader log sites (checkError log.err, post-shader log.warn, library-load log.debug) are not emitted
+
+- **Status:** ✅ CONFIRMED (both lenses, high confidence)
+- **Kind:** behavioral-difference · **Severity:** low
+- **Oracle:** `src/renderer/metal/shaders.zig:151, 350, 439-447`
+- **rustty:** `crates/rustty-renderer/src/metal/shaders.rs:40-42, 374-382, 419-452, 505-507`
+
+The oracle logs `metal error={s}` with the NSError `localizedDescription` in `checkError` (which is what tells a user why a custom shader failed to compile), warns `error initializing postprocess shaders err=…`, and debug-logs the library load time. The port preserves them only as comments and maps NSError to `Error::MetalFailed` without reading `localizedDescription`; no logging facade exists in the crate (no `log`/`tracing` dependency in any workspace `Cargo.toml`, and "no logging facade" appears as a PORT NOTE in ~20 renderer files). Control flow and return values are identical.
+
+**Evidence.** `shaders.zig:439-447` `log.err("metal error={s}", .{str.cstringPtr(.ascii).?}); return error.MetalFailed;` vs `shaders.rs:505-507` `.map_err(|_nserr| Error::MetalFailed)?` and `:379` `// log.warn(...)`; `shaders.rs:40-42` states no facade is wired.
+
+**Suggested fix.** Wire the crate's log facade (once available) and emit the three messages, extracting `localizedDescription` from the NSError in the `map_err` closures.
+
+#### S119-F3 — OpenGL Frame.complete tail skips api.present when the API owns the context (offscreen) and drops the present-failure log.err
+
+- **Status:** ⚠️ DISPUTED (one lens refuted) · **Severity:** low
+- **Kind:** missing-branch
+- **Oracle:** `src/renderer/opengl/Frame.zig:62-70`
+- **rustty:** `crates/rustty-renderer/src/generic/linux_impl.rs:790-822`
+
+The oracle always calls `renderer.api.present(target)` on a healthy frame and logs `Failed to present render target: err=…` on failure. The installed `CompletionFn` additionally gates present on `!api.owns_context()` (a rustty-only offscreen/golden path) and swallows the error silently (comment only). Windowed behaviour is unchanged.
+
+**Evidence.** `Frame.zig:63-67` `if (health == .healthy) { self.renderer.api.present(self.target.*) catch |err| { log.err(...) }; }` vs `linux_impl.rs:812-817` `if health == Healthy && !unsafe { (*renderer).api.owns_context() } { if let Err(_err) = … { /* log.err comment */ } }`.
+
+**Refuting lens — presence (medium confidence), verbatim:** "The extra gate cannot fire in any oracle-supported configuration. `owns_context` has no counterpart in the oracle at all (grep of src/renderer/OpenGL.zig and src/renderer/opengl/*.zig for `ownsContext`/`owns_context` returns nothing) — it is true only in rustty's own surfaceless offscreen golden harness, which ghostty does not have; on the windowed GDK path it is false, so linux_impl.rs:812-817 calls present_to_default exactly like Frame.zig:63-67. The finding itself concedes windowed behaviour is unchanged, and the divergence is documented at linux_impl.rs:790-802. The remaining delta is the swallowed `log.err(\"Failed to present render target\")`, which is the same crate-wide missing-facade class already reported as S119-F1 (no log/tracing dependency exists anywhere in the workspace), so it is duplicative rather than a separate branch difference."
+
+**Surviving lens — semantic (medium confidence):** kept the finding at low **on the log ground only**; it likewise refuted the `owns_context` gate as documented and offscreen-only.
+
+**Suggested fix.** Emit the `log.err` once a facade exists; keep the `owns_context` gate documented as the rustty-only offscreen harness path.
+
+## Performance-only differences (not findings)
+
+- `cell.rs` `Contents::resize` uses `Vec::resize` + `shrink_to_fit` / `vec![…]` / `with_capacity` instead of `alloc.realloc`/`alloc.alloc`; OOM aborts instead of returning `Allocator.Error`. The post-swap `reset()` re-zeroes the buffer exactly as the oracle.
+- `renderer_seam.rs` `Compression::wake`/`step` hoist the `defer mutex.unlock()` explicitly before each return (guard-less mutex); lock/unlock pairing and the activity-token compare/assign order are identical.
+- `renderer_seam.rs` `Thread::init` reproduces the oracle errdefer chain by hand (rustty-xev handles have no Drop); same cleanup order.
+- `cursor.rs` keeps the oracle's `== null` assertion form as `== None` (`allow(clippy::partialeq_to_none)`); assertions are count- and meaning-identical.
+- `FrameState::init` creates throwaway font atlases at size 2 instead of 1 (rustty `Atlas::init` would underflow at 1); resized on the first atlas sync.
+- `Renderer::init` builds a base `Shaders` set with an empty custom-shader list before `init_shaders()` rebuilds from config; one extra pipeline build at startup.
+- `updateFrame`'s per-frame `ArenaAllocator` is collapsed into Drop-freed Global allocations (preedit clone, link CellSet, overlay features).
+- `drawFrame`'s `syncFromArrayLists` zero-copy memcpy is replaced by a per-frame transient `Vec<CellTextGpu>` fusing row concatenation with ABI serialization (documented OPEN RISK #4); same bytes reach the GPU.
+- `SwapChain` `frame_index` is `u8` instead of `IntFittingRange(0,3)`; identical modulo arithmetic.
+- `prep_background_image` reads the whole file with `std::fs::read` and applies the 4 GiB cap after the read instead of as a `readToEndAlloc` limit; identical observable outcome.
+- `rebuild_cells` copy-hoists terminal_state scalars before the row loop for Stacked-Borrows safety (`rebuild_row` never mutates row_data), and reads row columns per-row (AoS) where the oracle projects MultiArrayList SoA slices once.
+- `font_shaper_cache.put` is infallible in Rust (the oracle catches and logs allocation failure).
+- `add_glyph`/`add_underline` bearings use `as i16` truncation where the oracle uses `@intCast`; differs only on values that are UB/panic in the oracle.
+- `update_custom_shader_uniforms_for_frame` uses `std::time::Instant` instead of `std.Io.Timestamp(.awake)`; same monotonic-seconds semantics.
+- image `State::upload`/`kitty_update` snapshot HashMap keys before mutating instead of Zig's remove-during-iteration; identical visit set and outcomes.
+- wuffs swizzle calls are re-homed as pure-Rust per-pixel loops in `swizzle_to_rgba` with the same premul/nonpremul channel semantics; byte-identical output. `convertReplace`/`convertCopy` share one helper.
+- `image/linux_impl.rs` factors `draw`'s band-slicing into `placements_for` (same expression) so it can be unit-tested without a GL context.
+- `shadertoy.rs` serializes glslang/spirv-cross FFI behind a process-global mutex (parallel `cargo test`); `spv_cross` copies SPIR-V bytes into a `Vec<u32>` for alignment, so `loadFromFile` skips the oracle's aligned re-pack.
+- `link.rs` `Set::render_cell_map` is `&mut self` (oni::Regex::search is `&mut`) where Zig is `*const`; observably identical.
+- `message.rs` collapses `alloc` + two `alloc.create` pointers into Box ownership and the SearchMatches/SearchMatch arenas into owned `Vec`/value.
+- `Pipeline.autoAttribute` comptime reflection replaced by precomputed `VertexLayoutRef`/`AttribDesc` tables with const drift guards; descriptor-setting tails identical.
+- `metal/api.zig` hand-written enums replaced by objc2-metal re-exports; `MTLResourceOptions`/`MTLTextureUsage` keep ghostty's field shape with `resolve()` OR-composing the same bits.
+- Manual ObjC retain/release dissolves into `Retained`/`CFRetained` Drop — identical refcount outcome; Metal errdefer partial-init unwinding dissolves into `?` + Drop.
+- `IOSurfaceLayer` ivars stored as `AtomicPtr` (SeqCst) instead of plain ObjC ivars — no observable change on the main-thread schedule.
+- `buffer.rs` `Buffer::raw()` and `Target::read_bgra()`/`read_rgba()` are rustty-only test/plumbing additions.
+- `metal/shaders.rs` `initLibrary` has a `cfg(not(rustty_metallib))` fallback compiling `shaders.metal` at runtime instead of loading the embedded metallib; build-plumbing only.
+- Zig comptime `@Type` PipelineCollection synthesis and `inline for` loops are hand-unrolled per field in both shader modules; same five pipelines in the same order.
+- `opengl/shaders.rs` adds rustty-only tests (GLSL asset byte-hash pin, five-pipeline init smoke) beyond the reference's commented-out size test.
+
+## Refuted candidates
+
+Six candidates were checked and cleared by both verification lenses:
+
+- **S115-F3 — displayRealized/displayUnrealized absent from the Metal (macOS) twin.** The only callers anywhere in the oracle are the GTK apprt (`src/apprt/gtk/class/surface.zig:3341/3382`), and `OpenGL.zig:248` even has `else => @compileError("only GTK should be calling displayRealized")`; the Metal instantiation is never semantically analysed, and `renderer_seam.rs:512-545` compiles to a no-op on macOS. Method-surface symmetry with no reachable caller.
+- **S116-F1 — Custom-shader uniform update panics in release for cursor-text/selection-* specials.** The port's `unreachable!()` reproduces Zig's *defined* (safety-checked) inactive-tag-access behaviour; the finding's baseline was ReleaseFast, where that access is undefined behaviour, not a specifiable oracle behaviour. Same defined semantics on both sides.
+- **S118-F2 — Missing shader function: Zig panics on `ptr.?`, rustty returns Err(MetalFailed).** `newFunctionWithName:` returning nil for a compile-time-fixed literal in the same binary's embedded library is unreachable; both sides abort pipeline creation, `Pipeline::init` is fallible in both trees, and the deviation is documented inline.
+- **S118-F3 — nil render command encoder: rustty panics where Zig continues with a nil object.** Both nil cases require an already-invalid command queue/descriptor; the Zig path would render nothing anyway. Difference confined to an unreachable error path (the finder proposed no change).
+- **S119-F2 — Metal `Shaders::deinit` does not release pipelines/library eagerly.** Both live callers reassign or drop immediately (`generic.rs:6254-6262` → `init_shaders`'s `self.shaders = …` at `:5911`; the metal_impl warmup drops at scope end), so release happens at the same effective point as the oracle; the `defunct` guard plus the `assert(!shaders.defunct)` invariant means a defunct `Shaders` is never drawn with. Resource-timing only.
+- **S119-F4 — RenderPass.step saturates stride/vertex_count/instance_count to `GLsizei::MAX` instead of trapping.** Requires counts > 2^31−1, unreachable for cell-derived buffers; and in ghostty's shipped ReleaseFast build the oracle's `@intCast` is not a defined trap either. Style inconsistency only.

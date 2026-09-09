@@ -9,14 +9,22 @@ self-contained) and no network fetch of the upstream tarball.
 
 Vendored byte-for-byte from ghostty's `iterm2_themes` build dependency:
 
-- Upstream tarball: `ghostty-themes-release-20260810-152212-0173c3c.tgz`
+- Upstream tarball: `ghostty-themes-release-20260824-153547-75c93ee.tgz`
   (`https://deps.files.ghostty.org/`), pinned in ghostty's `build.zig.zon`
   under the `iterm2_themes` dependency
-  (hash `N-V-__8AAPpcBAD4_75xLBbLiYqdojOwQP74eoWmpL3jPrBl` — reproduced
-  byte-for-byte by `zig fetch` on the downloaded tarball; the tarball file's
-  own SHA-256 is
-  `ea9878471420ee5b12e7f2ff480099c954ea50e573a1bdf83f43e105c9be63f0`).
-  Re-vendored by phase-4 `w8-themes` (reconciliation orphan O7, oracle range
+  (zig hash `N-V-__8AAGZkBACH0haGC9R-hfNPYWxu16hr-ydEsolad9GV`; the tarball
+  file's own SHA-256 is
+  `b1fd1f31057f97c1274db03c6ce44960837a1a41f52275cbc64aee2e6e34eb9e`,
+  which is exactly the `sha256` ghostty records for it in
+  `flatpak/zig-packages.json` — verified on the downloaded file with
+  `shasum -a 256`; `zig fetch` was not run, so the zig hash is cited from the
+  oracle, not reproduced).
+  Re-vendored by phase-6 `w6-platform-tail` (oracle `094d175ef`, range
+  `88f57ee66..20abdb50a`) from `…20260810-152212-0173c3c`: **+4 themes**
+  (`Grok Day`, `Grok Night`, `Warm Burnout Dark`, `Warm Burnout Light`),
+  **0 content updates**, 0 removals (602 -> 606; the G-THEMES gate reported
+  exactly those four `ADDED` rows against the old manifest before `--write`).
+  Previous hop, phase-4 `w8-themes` (reconciliation orphan O7, oracle range
   `6ad1fe7d8..12967b68f`) from `…20260720-153658-97e244c`: **+10 themes**
   (`CRT Amber`, `Cassette Tape`, `Midnight Arcade`, `Outrun Electric`,
   `Purple Portal`, `Terminal Green 1999`, `Vaporwave Sunset`, `Y2K Chrome`,
@@ -27,13 +35,13 @@ Vendored byte-for-byte from ghostty's `iterm2_themes` build dependency:
   4 content updates (the four `Catppuccin *` files), 0 removals.
 - Ghostty installs it via `src/build/GhosttyResources.zig` (the `emit_themes`
   block) into `share/ghostty/themes`, `exclude_extensions = &.{".md"}`.
-- **602** theme files, byte-identical to the upstream set (`README.md` and
+- **606** theme files, byte-identical to the upstream set (`README.md` and
   `LICENSE.md` are the only non-theme files here and are **excluded on emit** —
-  mirroring ghostty's `.md` exclusion, so the shipped count stays exactly 602).
+  mirroring ghostty's `.md` exclusion, so the shipped count stays exactly 606).
 
 ## The digest gate (`G-THEMES`) — read this before re-vendoring
 
-`xtask/src/res_themes.rs` asserts the emitted corpus has exactly 602 files.
+`xtask/src/res_themes.rs` asserts the emitted corpus has exactly 606 files.
 That catches an added or deleted theme and **nothing else** — content drift
 inside an existing theme file is invisible to a count, and only ONE theme body
 is ever read by a test (`0x96f`, spot-checked for `palette = 0=`). Content
@@ -69,7 +77,7 @@ single R2 filename rename below), then regenerate the digest manifest.
 `Rustty Default Style Dark`, contents byte-identical. It is the only identity
 token anywhere in the corpus — no theme BODY contains one (proven by the
 byte-compare in `.port/phase-3/w9-themes-diff.py` on the `20260720` corpus,
-and re-proven on the `20260810` corpus by a case-insensitive
+and re-proven on the `20260810` and `20260824` corpora by a case-insensitive
 `grep -rIl 'ghostty|rustty'` over the extracted tarball: filenames matched
 only `Ghostty Default Style Dark`, bodies matched nothing).
 
@@ -78,6 +86,6 @@ only `Ghostty Default Style Dark`, bodies matched nothing).
 The corpus derives from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)
 (MIT); the upstream license text is vendored verbatim in `LICENSE.md` in this
 directory (repo-side attribution — excluded from the app bundle by the `.md`
-emit filter, keeping the shipped set exactly 602 files like ghostty's).
+emit filter, keeping the shipped set exactly 606 files like ghostty's).
 Per-theme copyright belongs to each theme's author (see the upstream license's
 final clause).

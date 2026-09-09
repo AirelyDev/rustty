@@ -27,6 +27,34 @@ asserts in each KAT are load-bearing: `assert_eq!` pins the target, and `assert_
 against the source strike size makes a regression back to an identity resize FAIL
 rather than quietly turn the KAT vacuous again.
 
+**Phase-6 regold of the two BGRA fixtures (oracle `28b5bf905` "font: update embedded
+Noto emoji fonts", range `88f57ee66..20abdb50a`).** The embedded `NotoColorEmoji.ttf`
+was byte-replaced (sha256 `bf2a8506…` -> `72a635cb…`, 9,867,108 -> 10,673,480 bytes),
+and with it the U+1F600 136×128 BGRA strike that is the INPUT of these two KATs:
+measured with the same pre-resize dump, old vs new strike = **5988/69632 bytes differ,
+max delta 42**. The resampler, its vendored header, its build flags and the constraint
+math did not change. Consequences, all measured on the phase-6 host (macOS aarch64,
+Apple clang, zig 0.16.0):
+
+| check                                                            | 16×15                        | 8×7                          |
+| ---------------------------------------------------------------- | ---------------------------- | ---------------------------- |
+| OLD fixture vs OLD-font pipeline output (sanity: fixture = font) | 0/960 differ, maxdelta=0     | 0/224 differ, maxdelta=0     |
+| OLD fixture vs NEW-font pipeline output (why the regold)         | 67/960 differ (7.0 %), max 1 | 14/224 differ (6.3 %), max 1 |
+| NEW fixture vs consensus (`run.sh --expect`, host cc -O0…-Os)    | 0 differ, EXACT ×5           | 0 differ, EXACT ×5           |
+| NEW fixture vs ghostty Debug / ReleaseSafe / ReleaseSmall recipe | 0 differ, EXACT ×3           | 0 differ, EXACT ×3           |
+| NEW fixture vs ghostty ReleaseFast                               | 0 differ                     | 0 differ                     |
+
+The 7 % / 6 % moves exceed the ≤ 3 % codegen envelope in the delta budget below, which
+is exactly the budget's "investigate before regolding" trigger — and the investigation
+is the first two rows: the fixture still reproduced the old font byte-for-byte, and the
+strike itself moved, so the cause is the input, not the resampler. The regold followed
+the Regeneration recipe verbatim (temporary env-gated dumps, then `run.sh --expect` on
+each new fixture, then the dumps removed); the grayscale (Terminus) fixtures are
+untouched. A delta of max 1 on 7 % of bytes is, for the record, still an order of
+magnitude below what a wrong resampler produces (see the discrimination tables above),
+and `stb_resize_kat_rejects_nearest_and_bilinear` re-measures those margins against
+the NEW 16×15 fixture on every run.
+
 ### TRAP 1 — the grid metrics for the BGRA cases must come from the PRIMARY face
 
 Deriving them from the emoji face itself (`Metrics::calc(emoji.get_metrics())`) makes

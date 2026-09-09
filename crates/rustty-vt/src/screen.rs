@@ -2904,6 +2904,11 @@ impl Screen {
                             1,
                         );
                         self.clear_cells(p_page, p_rac.row, slice);
+
+                        // `clearCells` does not mark rows dirty, and our
+                        // callers only mark the cursor row, so mark the
+                        // previous row here.
+                        p_row.mark_dirty();
                     }
                 }
             }

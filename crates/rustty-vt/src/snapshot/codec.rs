@@ -225,6 +225,13 @@ pub fn encode(
     // Continuation errors must not emit even the snapshot envelope.
     continuation::validate(&options.continuation)?;
 
+    // A measured 512-byte buffer handles our smallest records on the stack
+    // before larger records fall back to the heap.
+    //
+    // PORT NOTE (`ee8095d37`): `var stack_alloc = std.heap.stackFallback(512,
+    // alloc); var stream: record.Writer = .init(stack_alloc.get(), destination);`
+    // — the port's `record::Writer` carries the 512-byte stack scratch itself
+    // (`record::RECORD_SCRATCH_STACK_BYTES`), so no allocator is threaded here.
     let mut stream = record::Writer::init(destination);
     // defer stream.deinit(); — the writer's scratch frees on drop at every
     // early return; the success path deinits explicitly below.

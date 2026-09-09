@@ -27,7 +27,7 @@ workspace = true
 # primarily so size-conscious embedders (e.g. wasm) can trim the binary. The
 # Ghostty application itself always builds with every feature enabled."
 #
-# The nine names below are the accepted `-Dvt-features` tokens (the reference's
+# The ten names below are the accepted `-Dvt-features` tokens (the reference's
 # `eqlName` makes `-` and `_` interchangeable, so the cargo-conventional hyphen
 # spelling is the same token). They are ALL in `default`, which is what makes an
 # additive cargo feature set equivalent to the reference's subtract-from-all
@@ -48,6 +48,7 @@ default = [
     "snapshot",
     "formatter",
     "selection",
+    "search",
     "render-state",
     "input-encode",
     "color",
@@ -65,6 +66,12 @@ formatter = []
 # `rustty_terminal_select_*`, `rustty_terminal_selection_*`,
 # `rustty_selection_gesture_*`.
 selection = []
+# Terminal search: find matches for a string in the active area and scrollback
+# (ASCII case-insensitive), with results that survive primary/alternate screen
+# switches, resize, and scrollback pruning, plus match selection with
+# wrap-around and viewport scrolling; C API `rustty_search_*` (oracle
+# `32601cd79`/`f9202919f`, `build_options.zig` `Features.search`).
+search = []
 # The render state API (the primary embedder read path); C API
 # `rustty_render_state_*`.
 render-state = []
@@ -81,8 +88,8 @@ glyph-protocol = []
 # The Kitty graphics protocol; C API `rustty_kitty_graphics_*`. NOTE this
 # feature is necessary but not sufficient: `options::KITTY_GRAPHICS` ANDs it
 # with a target check, because the protocol needs OS timestamps and is always
-# off on wasm32-freestanding regardless of the setting (the reference
-# `Options.kittyGraphics` override).
+# off on freestanding targets (`target_os = "none"`, any arch — `3376153a4`)
+# regardless of the setting (the reference `Options.kittyGraphics` override).
 kitty-graphics = []
 # ---------------------------------------------------------------------------
 # Whether Oniguruma regex support is available (reference `oniguruma`). Gates

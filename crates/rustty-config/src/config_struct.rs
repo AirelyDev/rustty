@@ -3486,23 +3486,27 @@ pub struct Config {
     pub image_storage_limit: u32,
 
     // @"copy-on-select": CopyOnSelect = switch (builtin.os.tag) {
-    //     .linux => .true, .macos => .true, else => .false,
+    //     .linux => .primary, else => .none,
     // },
-    /// Whether to automatically copy selected text to the clipboard. `true`
-    /// will prefer to copy to the selection clipboard, otherwise it will copy to
-    /// the system clipboard.
+    /// Whether to automatically copy selected text to the clipboard.
     ///
-    /// The value `clipboard` will always copy text to the selection clipboard
-    /// as well as the system clipboard.
+    /// Valid values:
     ///
-    /// Middle-click primary paste (see `middle-click-action`) is enabled by
-    /// default even if this is `false`. The clipboard it pastes from follows
-    /// this setting: with `true` (or `false`) it reads from the selection
-    /// clipboard (falling back to the system clipboard on platforms without a
-    /// selection clipboard); with `clipboard` it reads from the system
-    /// clipboard.
+    /// * `none` - Do not copy selected text automatically.
     ///
-    /// The default value is true on Linux and macOS.
+    /// * `primary` - On Linux, copy to the selection clipboard only. This has no
+    ///   effect on macOS. (Available since: 1.4.0)
+    ///
+    /// * `clipboard` - Copy text to the system clipboard only.
+    ///
+    /// * `both` - Copy to both clipboards on Linux, and only the system clipboard
+    ///   on macOS. (Available since: 1.4.0)
+    ///
+    /// For backward compatibility and convenience, a value of `true` is the same as
+    /// `primary` on Linux and `clipboard` on macOS, and `false` is an alias for
+    /// `none`.
+    ///
+    /// The default value is `primary` on Linux and `none` otherwise.
     pub copy_on_select: CopyOnSelect,
 
     // @"right-click-action": RightClickAction = .@"context-menu",
@@ -3525,8 +3529,9 @@ pub struct Config {
     /// The action to take when the user middle-clicks on the terminal surface.
     ///
     /// Valid values:
-    ///   * `primary-paste` - Paste from the selection (or system) clipboard per
-    ///      `copy-on-select`.
+    ///   * `primary-paste` - Paste from the selection clipboard on Linux.
+    ///      Does nothing on macOS.
+    ///   * `clipboard-paste` - Paste from the system clipboard.
     ///   * `ignore` - Do nothing, ignore the middle click.
     ///
     /// The default value is `primary-paste`.
@@ -5142,11 +5147,11 @@ impl Default for Config {
             clipboard_paste_bracketed_safe: true,
             title_report: false,
             image_storage_limit: 320 * 1000 * 1000,
-            // switch (builtin.os.tag) { .linux => .true, .macos => .true, else => .false }
-            copy_on_select: if cfg!(target_os = "linux") || cfg!(target_os = "macos") {
-                CopyOnSelect::True
+            // switch (builtin.os.tag) { .linux => .primary, else => .none }
+            copy_on_select: if cfg!(target_os = "linux") {
+                CopyOnSelect::Primary
             } else {
-                CopyOnSelect::False
+                CopyOnSelect::None
             },
             right_click_action: RightClickAction::ContextMenu,
             middle_click_action: MiddleClickAction::PrimaryPaste,
@@ -6442,6 +6447,44 @@ impl Config {
         if value.unwrap_or(b"") == b"window" {
             // self.@"macos-dock-drop-behavior" = .@"new-window";
             self.macos_dock_drop_behavior = MacOSDockDropBehavior::NewWindow;
+            // return true;
+            return true;
+        }
+
+        // return false;
+        false
+    }
+
+    // fn compatCopyOnSelect(
+    //     self: *Config,
+    //     alloc: Allocator,
+    //     key: []const u8,
+    //     value: ?[]const u8,
+    // ) bool {
+    fn compat_copy_on_select(&mut self, key: &[u8], value: Option<&[u8]>) -> bool {
+        // _ = alloc;
+        // assert(std.mem.eql(u8, key, "copy-on-select"));
+        assert!(key == b"copy-on-select");
+
+        // if (std.mem.eql(u8, value orelse "", "true")) {
+        if value.unwrap_or(b"") == b"true" {
+            // self.@"copy-on-select" = switch (builtin.os.tag) {
+            //     .linux, .freebsd => .primary,
+            //     else => .clipboard,
+            // };
+            self.copy_on_select = if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+                CopyOnSelect::Primary
+            } else {
+                CopyOnSelect::Clipboard
+            };
+            // return true;
+            return true;
+        }
+
+        // if (std.mem.eql(u8, value orelse "", "false")) {
+        if value.unwrap_or(b"") == b"false" {
+            // self.@"copy-on-select" = .none;
+            self.copy_on_select = CopyOnSelect::None;
             // return true;
             return true;
         }
@@ -9576,6 +9619,15 @@ impl Target for Config {
                 }))
             }
 
+            // Ghostty 1.4 updated "copy-on-select", allow copying to the selection
+            // clipboard (on supported operating systems), the system clipboard, or
+            // both. The semantics also changed but this is the correct mapping.
+            // See: https://github.com/ghostty-org/ghostty/pull/12604
+            // .{ "copy-on-select", compatCopyOnSelect },
+            b"copy-on-select" => Some(Box::new(|dst: &mut Config, k: &[u8], v: Option<&[u8]>| {
+                dst.compat_copy_on_select(k, v)
+            })),
+
             _ => None,
         }
     }
@@ -12565,6 +12617,93 @@ mod integration_tests {
 
         // try testing.expectEqual(std.math.maxInt(usize), cfg.@"scrollback-limit-bytes".value);
         assert_eq!(usize::MAX, cfg.scrollback_limit_bytes.value);
+    }
+
+    // PORT-SIDE REGRESSION (`dfccdb2d4` + `e80ce2ed4`, #12600, phase-6): the
+    // reference added `compatCopyOnSelect` without a `test {}`. `true`/`false`
+    // are no longer variants of `CopyOnSelect`, so a bare enum parse of them
+    // fails and the compatibility handler is what maps them onto the new
+    // values — `true` -> `primary` on Linux/FreeBSD and `clipboard` elsewhere
+    // (the "correct mapping" the reference's table comment names), `false` ->
+    // `none`. NEGATIVE CONTROL: removing the `copy-on-select` row from
+    // `compatibility()` (or the handler's `true` arm) leaves the field at its
+    // default and records an `InvalidValue` diagnostic, failing the
+    // `cfg._diagnostics.empty()` assertions below.
+    #[test]
+    fn compatibility_copy_on_select_true_false() {
+        // `true` maps to the platform's old "prefer the selection clipboard"
+        // behaviour.
+        {
+            let mut cfg = Config::default_config();
+            let mut it = TestIterator::new(&[b"--copy-on-select=true"]);
+            cfg.load_iter(&mut it).unwrap();
+            assert!(cfg._diagnostics.empty());
+            let want = if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+                CopyOnSelect::Primary
+            } else {
+                CopyOnSelect::Clipboard
+            };
+            assert_eq!(want, cfg.copy_on_select);
+        }
+
+        // `false` is an alias for `none`.
+        {
+            let mut cfg = Config::default_config();
+            let mut it = TestIterator::new(&[b"--copy-on-select=false"]);
+            cfg.load_iter(&mut it).unwrap();
+            assert!(cfg._diagnostics.empty());
+            assert_eq!(CopyOnSelect::None, cfg.copy_on_select);
+        }
+
+        // The new spellings parse as plain enum values (no handler involved).
+        for (arg, want) in [
+            (&b"--copy-on-select=none"[..], CopyOnSelect::None),
+            (&b"--copy-on-select=primary"[..], CopyOnSelect::Primary),
+            (&b"--copy-on-select=clipboard"[..], CopyOnSelect::Clipboard),
+            (&b"--copy-on-select=both"[..], CopyOnSelect::Both),
+        ] {
+            let mut cfg = Config::default_config();
+            let mut it = TestIterator::new(&[arg]);
+            cfg.load_iter(&mut it).unwrap();
+            assert!(cfg._diagnostics.empty());
+            assert_eq!(want, cfg.copy_on_select);
+        }
+
+        // The handler only rescues `true`/`false`: anything else is still an
+        // invalid value (recorded as a diagnostic, field left at its default).
+        {
+            let mut cfg = Config::default_config();
+            let before = cfg.copy_on_select;
+            let mut it = TestIterator::new(&[b"--copy-on-select=bogus"]);
+            cfg.load_iter(&mut it).unwrap();
+            assert!(!cfg._diagnostics.empty());
+            assert_eq!(before, cfg.copy_on_select);
+        }
+
+        // The direct handler contract (`compatCopyOnSelect`): `true`/`false`
+        // handled, anything else `false` (unhandled) and untouched.
+        {
+            let mut cfg = Config::default_config();
+            assert!(cfg.compat_copy_on_select(b"copy-on-select", Some(b"false")));
+            assert_eq!(CopyOnSelect::None, cfg.copy_on_select);
+            assert!(!cfg.compat_copy_on_select(b"copy-on-select", Some(b"primary")));
+            assert_eq!(CopyOnSelect::None, cfg.copy_on_select);
+            assert!(!cfg.compat_copy_on_select(b"copy-on-select", None));
+        }
+    }
+
+    // PORT-SIDE REGRESSION (`dfccdb2d4`, #12600, phase-6): `middle-click-action`
+    // gains `clipboard-paste` and keeps `primary-paste` (still the default).
+    #[test]
+    fn middle_click_action_clipboard_paste() {
+        let cfg = Config::default_config();
+        assert_eq!(MiddleClickAction::PrimaryPaste, cfg.middle_click_action);
+
+        let mut cfg = Config::default_config();
+        let mut it = TestIterator::new(&[b"--middle-click-action=clipboard-paste"]);
+        cfg.load_iter(&mut it).unwrap();
+        assert!(cfg._diagnostics.empty());
+        assert_eq!(MiddleClickAction::ClipboardPaste, cfg.middle_click_action);
     }
 
     // test "compatibility: gtk-single-instance desktop" {

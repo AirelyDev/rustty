@@ -223,7 +223,10 @@ if [ -n "$missing" ]; then echo "  MISMATCH — declared+cbindgen but NOT export
 # P5-W6 Bundle P (+1): `rustty_terminal_paste` (oracle 60a1ae2df) — measured
 # 195 on 2026-08-25 with the phase-5 C-API bundles landed; floor re-pinned to
 # the measurement (arm (d) tracks the oracle side, which also reads 195).
-VT_BOTH_FLOOR=195
+# P6-W3 (+8): `rustty_search_{new,free,tick,feed,run,set,get,get_multi}`
+# (oracle `f9202919f`/`76d9fcefe`) — measured 203 on 2026-09-01 with the
+# search C API landed; floor re-pinned to the measurement (arm (d) reads 203).
+VT_BOTH_FLOOR=203
 both_n=$(wc -l < "$T/vt_both.txt" | tr -d ' ')
 if [ "$both_n" -lt "$VT_BOTH_FLOOR" ]; then
   echo "  VACUOUS SHRINK — the (vt.h ∩ cbindgen) intersection is $both_n, below the"

@@ -1,0 +1,146 @@
+# Parity audit — src/datastruct
+
+Area `src/datastruct` was audited across 4 shards covering 18 oracle units (11 `src/datastruct/*.zig` files plus the 5 `src/extra/*.zig` and 2 `src/font/*.zig` units that fell into the same shard sweep), with 7,421 oracle lines read against a scope of 7,421 lines — every unit was read in full, none partial.
+Of the 11 raised candidates: **3 CONFIRMED**, **2 DISPUTED**, **6 REFUTED**, 0 UNVERIFIED. By severity (corrected where a lens revised it), all 5 surviving (confirmed + disputed) findings are **low**; there are no high or medium findings in this area.
+The single most important gap is **S81-F1** — the `log.warn("error loading regular entry={d} err={}")` diagnostic at the `Collection.autoItalicize` face-load failure path is dropped in the Rust port, so a real font-loading failure now fails silently (control flow is otherwise identical). Everything else is generator/test-harness or diagnostic-text-only.
+
+## Coverage
+
+| Oracle unit | Rustty counterpart(s) | Status | Note |
+| --- | --- | --- | --- |
+| `src/datastruct/blocking_queue.zig` | `crates/rustty-datastruct/src/blocking_queue.rs` | ported | `BlockingQueue<T, CAPACITY>`: Size=u32, Timeout{Instant,Forever,Ns}, create/destroy (Box), push (+ additive `push_or_return` handing the value back on failure, mirroring Zig by-copy semantics), pop, drain/`DrainIterator{next,deinit}`, `full()`. Push wait paths (instant→0, forever→cond wait then re-check full, ns→wait_timeout then timed_out→0 then re-check) match `blocking_queue.zig:102-147`; `not_full_waiters` inc/dec and signal-on-pop/deinit match. Tests "basic push and pop" (`blocking_queue.rs:294-324`) and "timed push" (`367-379`) carry identical assertions; one extra rustty-only test. |
+| `src/datastruct/cache_table.zig` | `crates/rustty-datastruct/src/cache_table.rs` | ported | `CacheTable<K,V,C,BUCKET_COUNT,BUCKET_SIZE>` with a `Context` trait (hash/eql required, `evicted` defaulted no-op = the `@hasDecl` optional hook). put (append-if-space else `fastmem::rotateIn` + evicted hook + return evicted), get (reverse scan, read value then `rotateOnce` of `[i..len]` = the Zig `defer`), clear (evicted per live kv, lengths zeroed), power-of-two assert. Test `CacheTable` (`cache_table.rs:204-231`) has the same 6 assertions as `cache_table.zig:147-181`. `AutoContext` is a documented no-op (unused by reference tests and callers). |
+| `src/datastruct/circ_buf.zig` | `crates/rustty-datastruct/src/circ_buf.rs`, `crates/rustty-vt/src/search/sliding_window.rs` | ported | `CircBuf<T: Clone>` with `default` supplied at init (Zig comptime default). init, append, appendAssumeCapacity, appendSliceAssumeCapacity, clear, iterator/`Iterator{next,seekBy,reset}`, first/last, ensureUnusedCapacity, resize, rotateToZero, empty, capacity, len, deleteOldest, getPtrSlice, advance, storageOffset — all line-for-line against `circ_buf.zig:27-309`. All 26 reference tests (`circ_buf.zig:313-921`) present at `circ_buf.rs:424-1001` with identical assertions. `Iterator.next` returns `&T` instead of `*T`; the only mutating oracle use-site (deinit-through-iterator) is covered by `Drop`. `sliding_window.rs` additionally carries a private non-`Copy` `MetaBuf` subset port (see refuted S80-F3). |
+| `src/datastruct/comparison.zig` | `crates/rustty-datastruct/src/comparison.rs`, `crates/rustty-config/src/deep_equal.rs` | ported | `deepEqual` → `DeepEqual` trait + `deep_equal()`: impls for `()`, bool/ints/floats, `[u8]` (both `[]const u8` and `[:0]const u8` arms), `Vec<u8>`, `[&[u8]]`, `Option`, `[T;N]`; struct/union/enum arms are per-type impls (config, input, font, render-types, vt). `expectApproxEqual` → `ApproxEqual` trait: f32/f64 `approxEqRel` with `sqrt(EPSILON)`, `[T;N]` covering the `.array`/`.vector` arms with the reference's swapped `(actual, expected)` recursion and diff_index computation, `Option` for `.optional`, i32/u32 exact fallback, struct/union per type. All 26 reference tests (`comparison.zig:202-432`) present at `comparison.rs:357-815` with the same assertion counts and literals. |
+| `src/datastruct/intrusive_linked_list.zig` | `crates/rustty-datastruct/src/intrusive_linked_list.rs` | ported | `DoublyLinkedList<T: Node>` with raw `*mut` first/last; insert_after, insert_before, append, prepend, remove, pop, pop_first branch-for-branch identical to `intrusive_linked_list.zig:26-130`. Test "basic DoublyLinkedList test" (`intrusive_linked_list.rs:263-325`) has the same operations and 4 assertion groups; nodes heap-boxed for Miri only. |
+| `src/datastruct/limited_allocator.zig` | `crates/rustty-datastruct/src/limited_allocator.rs` | ported | `LimitedAllocator<A: RawAllocator>{child, limit, limit_exceeded: Cell<bool>}`; init, `allocator()`, check, raw_alloc/raw_resize/raw_remap gated by check, raw_free passthrough — matches `limited_allocator.zig:15-83`. A local `RawAllocator` trait stands in for `std.mem.Allocator`'s vtable (crate is below rustty-lib). All 3 reference tests (`limited_allocator.zig:86-124`) ported with identical assertions incl. `FailingAllocator(fail_index=0).has_induced_failure == false`. |
+| `src/datastruct/main.zig` | `crates/rustty-datastruct/src/lib.rs`, `crates/rustty-datastruct/src/main_mod.rs` | ported | `lib.rs` re-exports BlockingQueue, CacheTable, CircBuf, IntrusiveDoublyLinkedList, LimitedAllocator, MessageData, SplitTree, WasmPagePool exactly as `main.zig:10-17`; `main_mod.rs` carries the module doc and a marker test standing in for `refAllDecls` + `_ = @import("comparison.zig")`. |
+| `src/datastruct/message_data.zig` | `crates/rustty-datastruct/src/message_data.rs` | ported | `MessageData<'a, Elem, SMALL_SIZE>{Small{data,len}, Stable(&[Elem]), Alloc{Box<[Elem]>}}`; init (len ≤ MAX → Small copy, else heap dupe → Alloc), `slice()` per variant, deinit as `Drop`. All 3 reference tests ported with identical assertions. |
+| `src/datastruct/segmented_list.zig:1-533` | `crates/rustty-vt/src/osc/parsers/color.rs:410-422`, `crates/rustty-vt/src/osc/mod.rs:96-112,836-846`, `crates/rustty-font-shaper/src/collection.rs:896-977`, `.port/phase-3/NON_PORTS.md:777-797` | replaced | Zig-std shim (`std.segmented_list` vendored from Zig 0.15.2 because 0.16 removed it) — a legitimately REPLACED unit. Only two oracle consumers: `osc/parsers/color.zig:333` (`SegmentedList(Request,2)` → `Vec<Request>`; default-init/addOne/count/at/deinit → new/push/len/index/Drop) and `font/Collection.zig:698` (`SegmentedList(EntryOrAlias,0)` → `Vec<Box<EntryOrAlias>>`, preserving the `alias: *Entry` pointer-stability guarantee across appends; `count()` via `SegmentedListExt`; bounds check → `IndexOutOfBounds`). The two container-level oracle tests exercise operations (pop, writeToSlice, shrinkCapacity, setCapacity, prev-iteration, prealloc variants) that no oracle consumer uses, so they have no counterpart by construction. Stale doc pointer: `.port/phase-3/assessments/F-ui-tiers.md:121` cites a non-existent `crates/rustty-datastruct/src/segmented_pool.rs`. |
+| `src/datastruct/split_tree.zig` | `crates/rustty-datastruct/src/split_tree.rs`, `crates/rustty-datastruct/src/f16.rs`, `crates/rustty-apprt/src/gtk/class/split_tree.rs` | ported | Full port. `SplitTree(comptime V)` → `SplitTree<V: View>` (trait carries ref/unref/eql + optional `splitTreeLabel` via `HAS_SPLIT_TREE_LABEL`). Every method checked line-by-line: empty/init/deinit/clone/isEmpty/isSplit/locate/iterator/zoom/goto/deepest/previous/next/backtrack variants/nearest(+Wrapped)/resizeInPlace/split (u16 OOM guard, handle offsetting, layout table, zoom reset)/remove/removeNode/countAfterRemoval/refNodes (incl. the `errdefer 0..reffed` accounting)/equalize/weight/resize/findParentSplit/spatial+Slot/fillSpatialSlots/dimensions/format/formatText/formatTextInner/formatDiagram/viewRef/viewUnref. f16 arithmetic reproduced via a software `F16` (per-op round through f32). `getGObjectType` `.gtk` arm relocated to `rustty-apprt`: `#[glib::Boxed] Tree(DsTree<Surface>)` named `"GhosttySplitTreeSurface"`; `.none` arm is a documented no-op. All 18 `test "SplitTree: ..."` blocks have counterparts with the same assertions and expected diagram/text strings. |
+| `src/datastruct/wasm_page_pool.zig` | `crates/rustty-datastruct/src/wasm_page_pool.rs` | ported | `WasmPagePool<Item, A>` (per-Item-type shared free list via a `WasmPageItem::free_list()` static, mirroring Zig per-monomorphization `var free_list`), init_capacity (no-op preheat), deinit (retains items), reset, create (pop_first else `memory_grow`, `usize::MAX` → OutOfMemory, addr = page_index*PAGE_SIZE_MIN), destroy. Comptime invariant block ported as a wasm32-only const block; `builtin.single_threaded` documented not asserted. Test `WasmPagePool` ported (skipped off-wasm exactly like `SkipZigTest`; same 4 assertions on wasm32). Extra `DynamicWasmPagePool` is additive. |
+| `src/extra/bash.zig` | `crates/rustty-extra/src/bash.rs`, `crates/rustty-config/src/config_struct.rs`, `crates/rustty-cli/src/rustty.rs`, `crates/rustty-extra/testdata/rustty.bash`, `xtask/src/main_build_data.rs` | ported | `writeBashCompletions` transcribed line-for-line (pad1..pad5, header, config list with bool/`?bool` space-flag form, per-key case arms, `_handle_actions` locals with `-`→`_`, per-action arms incl. the `config-file` `return ;;` vs `return;;` split, topLevel list, main logic, complete line). The golden's 209 per-key arms are in exact oracle `Config.zig` declaration order; enum/packed value lists match the oracle switch. Comptime const → runtime fn returning `Vec<u8>`. |
+| `src/extra/fish.zig` | `crates/rustty-extra/src/fish.rs`, `crates/rustty-config/src/help_strings.rs`, `crates/rustty-extra/testdata/rustty.fish` | ported | `writeCompletions` (commands list, `-f`, `-s e -l help`, `--version`, per-field line with ` -r` iff type ≠ bool, family/theme/working-directory special cases, `-f` vs `-F` for RepeatablePath, enum `-a` lists, packed-no-parseCLI lists, `-d` descriptions, `+action` list, per-action options skipping help/version with the `config-file -F` case) and `getDescription` (all four arms) ported; the `getDescription` test carries the same expected string. The 16 oracle fields without a doc comment are exactly the golden's fields lacking `-d`. |
+| `src/extra/sublime.zig` | `crates/rustty-extra/src/sublime.rs`, `crates/rustty-extra/testdata/rustty.sublime-syntax` | ported | Template header/footer and `generateKeywords` (`\|`-joined non-underscore Config field names) ported; `isInternal` subsumed by the pre-filtered `config_fields()` table. Header identity tokens rebranded per the naming transform. |
+| `src/extra/vim.zig` | `crates/rustty-extra/src/vim.rs`, `crates/rustty-extra/testdata/vim-*.vim` | ported | syntax (`writeSyntax` with `\n\t\\ name` per field), ftdetect, ftplugin, compiler ported; `test { _ = syntax; }` ported as `syntax_generates` plus golden tests. Only divergence: the Maintainer URL (S83-F1). |
+| `src/extra/zsh.zig` | `crates/rustty-extra/src/zsh.rs`, `crates/rustty-extra/testdata/_rustty` | ported | `equals_required` constant, header with `_fonts`/`_themes`, `_config _arguments` block (all seven arms incl. struct-with-parseCLI `'( )'`), `_ghostty` body, actions list, per-action `_arguments` arms, trailer. Golden `_config` entries verified in oracle field order (211 = `--help`, `--version` + 209 fields). |
+| `src/font/Atlas.zig` | `crates/rustty-font/src/atlas.rs`, `crates/rustty-wasm/src/lib.rs`, `crates/rustty-os/src/wasm/host_owned.rs`, `crates/rustty-util/src/fastmem.rs`, `crates/rustty-util/src/tripwire.rs` | ported | Format(+depth), Node, `Error::AtlasFull`, Region (`repr(C)`), node_prealloc=64, init (tripwire alloc_data/alloc_nodes, errdefer via drop, clear), deinit, reserve (0×0 early return, best-fit loop with identical tie-break, insert_node tripwire, node-shrink/remove with saturating sub, merge), fit, merge, set, setFromLarger, grow, clear, dump. Wasm block ported under the `wasm` feature (zig-js replaced by `rustty_wc_*` env imports — see refuted S83-F5). All 12 native tests ported with equal assertion counts; wasm "happy path" ported with 4 asserts (S83-F2, refuted). |
+| `src/font/CodepointMap.zig` | `crates/rustty-font/src/codepoint_map.rs`, `crates/rustty-font-shaper/src/discovery.rs`, `crates/rustty-font-shaper/src/codepoint_resolver.rs` | ported | Entry (`[u32;2]` range + Descriptor), deinit, clone (deep-clones each descriptor), add (assert `range[0] <= range[1]`, append), get (reverse linear scan, later entries win), hash, hashcode; test "codepointmap" ported with all 7 assertions. `discovery.Descriptor` is seamed to a 2-field (family, monospace) struct in rustty-font and bridged to the full shaper Descriptor via `From` with defaults (S83-F4, refuted). |
+
+**Partial units:** none. Every unit listed above was read in full (`units_partial` was empty in all four shards).
+
+## Findings
+
+No high-severity findings. No medium-severity findings.
+
+### Low
+
+### S80-F2 — Mismatch diagnostics (`print(...)`) of expectApproxEqual are silenced in the Rust port
+
+- **Status:** ✅ CONFIRMED (both lenses failed to refute)
+- **Kind:** other
+- **Severity:** low (unchanged by both lenses)
+- **Oracle:** `src/datastruct/comparison.zig:113,128,137-139,192-199`
+- **Rustty:** `crates/rustty-datastruct/src/comparison.rs:165,215,308-317`
+
+**Description.** The reference prints `expected approximately {any}, found {any}`, `slices not approximately equal. first significant difference occurs at index {d} (0x{X})` and `index {d} incorrect. ...` to stderr (via `testing.backend_can_print`) before returning `error.TestExpectedApproxEqual`. The Rust `print` is an empty no-op shim (`comparison.rs:317`) and the diff index is computed but discarded (`let _diff_index`). The `Result` outcome is identical; only the test-failure diagnostic text is lost (cosmetic).
+
+**Evidence.** `comparison.zig:113` `print("expected approximately {any}, found {any}\n", .{ expected, actual });` / `:128` / `:137` vs `comparison.rs:165` (comment only), `:214` `let _diff_index = diff.unwrap();`, `:317` `fn print(_fmt: &str) {}`. Grep for `eprintln!`/`println!` in `comparison.rs` returns nothing, so the diagnostics exist nowhere else in the workspace.
+
+**Suggested fix.** Emit the same messages with `eprintln!` (gated on `cfg(test)` or an equivalent of `testing.backend_can_print`) in the f32/f64 and `[T;N]` failure paths.
+
+### S81-F1 — Use-site: `log.warn("error loading regular entry={d} err={}")` dropped at the SegmentedList iterator consumer in `Collection.autoItalicize`
+
+- **Status:** ✅ CONFIRMED (both lenses failed to refute, both high confidence)
+- **Kind:** behavioral-difference
+- **Severity:** low (both lenses confirmed low)
+- **Oracle:** `src/font/Collection.zig:343-357`
+- **Rustty:** `crates/rustty-font-shaper/src/collection.rs:475-482`
+
+**Description.** The only place an oracle consumer reads the SegmentedList `Iterator`'s `index` field is `Collection.zig:346-349`, which logs a warning (entry index = `it.index - 1`, plus the error) when a regular face fails to load during auto-italicize/bold synthesis, then continues. The rustty port keeps the `continue` control flow but leaves the log as a comment and binds the error as `_err`, so no warning is emitted. Cross-area (font/Collection) — reported in this shard because it is the one use-site behaviour depending on the replaced container's iterator state.
+
+**Evidence.** Oracle `Collection.zig:345-351`: `var it = list.iterator(0); while (it.next()) |entry_or_alias| { ... catch |err| { log.warn("error loading regular entry={d} err={}", .{ it.index - 1, err }); continue; }`. Rustty `collection.rs:475-482`: `Err(_err) => { // log.warn("error loading regular entry={d} err={}", ...); index += 1; continue; }`. Grepping all crates for the literal `error loading regular` yields exactly one hit — that comment — so no relocated/renamed emission exists.
+
+**Suggested fix.** Emit `log::warn!("error loading regular entry={} err={:?}", index, err)` (the loop `index` equals `it.index - 1` at that point) before `continue`.
+
+### S83-F6 — Stale PORT NOTE claims the `+gen-*` consumers are DEFERRED although xtask consumes the generators
+
+- **Status:** ✅ CONFIRMED (both lenses failed to refute, both high confidence)
+- **Kind:** other
+- **Severity:** low
+- **Oracle:** `src/extra/bash.zig:17-31`
+- **Rustty:** `crates/rustty-extra/src/lib.rs:21-25` (corrected: `:24-25`)
+
+**Description.** `rustty-extra/src/lib.rs` states "The `+gen-*` CLI actions + `build.rs` file-emit stay DEFERRED (task scope) — this crate provides the generator fns + fidelity tests only", but `xtask/src/main_build_data.rs:117-124` already dispatches Bash/Fish/Zsh/Sublime/VimSyntax/VimFtdetect/VimFtplugin/VimCompiler to these fns. Doc-only staleness (the `stale-deferral-docs-fake-gaps` class); no runtime effect.
+
+**Evidence.** `crates/rustty-extra/src/lib.rs:24-25` vs `xtask/src/main_build_data.rs:117-124` `Action::Bash => rustty_extra::bash::completions()` etc.
+
+**Suggested fix.** Update the `lib.rs` PORT NOTE to point at `xtask/src/main_build_data.rs`.
+
+### S83-F1 — Vim file Maintainer URL is not the mechanical brand rename
+
+- **Status:** ⚠️ DISPUTED (presence lens confirmed; semantic lens refuted)
+- **Kind:** other
+- **Severity:** low
+- **Oracle:** `src/extra/vim.zig:9,19,48,82`
+- **Rustty:** `crates/rustty-extra/src/vim.rs:22,32,61,80`
+
+**Description.** The four generated Vim files carry `" Maintainer: Ghostty <https://github.com/ghostty-org/ghostty>`; the port emits `" Maintainer: Rustty <https://github.com/AirelyDev/rustty>`. The per-token transform would yield `rustty-org/rustty`; `bash.rs:335` meanwhile keeps the untransformed `ghostty-org/ghostty/discussions/2994` URL verbatim, so the tree is internally inconsistent. Comment-only text in generated files; almost certainly a deliberate product-identity choice, recorded for completeness.
+
+**Evidence.** `ghostty src/extra/vim.zig:9` `" Maintainer: Ghostty <https://github.com/ghostty-org/ghostty>` vs `crates/rustty-extra/src/vim.rs:22` `" Maintainer: Rustty <https://github.com/AirelyDev/rustty>`; goldens `crates/rustty-extra/testdata/vim-*.vim` carry the same. `webgen.rs:27` also references the untransformed ghostty-org URL.
+
+**Suggested fix.** None required if the AirelyDev URL is the intended identity; otherwise apply the per-token rename consistently (`bash.rs` keeps the ghostty-org URL).
+
+**Refuting lens — semantic (confidence: medium), verbatim:**
+
+> Verified ghostty/src/extra/vim.zig:9,19 (`" Maintainer: Ghostty <https://github.com/ghostty-org/ghostty>`) vs rustty crates/rustty-extra/src/vim.rs:22,32 (`" Maintainer: Rustty <https://github.com/AirelyDev/rustty>`). This is a Vim comment line in a generated file; no parser, ftdetect rule, or config behaviour depends on it (the functional lines, `au BufRead,BufNewFile */rustty/config...`, are transformed correctly). It is a deliberate product-identity URL for the actual port repo, not a mechanical-rename miss with observable effect. Not a functional difference.
+
+### S83-F3 — Tripwire fail-point tests are `ignore`d in release-mode test runs
+
+- **Status:** ⚠️ DISPUTED (presence lens confirmed; semantic lens refuted)
+- **Kind:** missing-test
+- **Severity:** low
+- **Oracle:** `src/font/Atlas.zig:826-889`
+- **Rustty:** `crates/rustty-font/src/atlas.rs:1649,1683,1715` (+ `crates/rustty-font/Cargo.toml`, no `tripwire-test` dev-feature wiring)
+
+**Description.** `init_error`, `reserve_error`, `grow_error` carry `#[cfg_attr(not(debug_assertions), ignore)]`. `rustty_util::tripwire::Module::enabled()` is `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, but `crates/rustty-font/Cargo.toml` has no tripwire feature wiring, so for these tests it collapses to `debug_assertions` and a `cargo test --release` run skips all three. Zig's tripwire is gated on `builtin.is_test`, so the reference tests run in every test build regardless of optimisation. The test bodies themselves are faithful (same loop over every FailPoint, same expectError, same state-unchanged/data-preserved asserts in the grow-error case).
+
+**Evidence.** `atlas.rs:1649` `#[cfg_attr(not(debug_assertions), ignore)]` (and `:1683`, `:1715`); `Atlas.zig:829-837` runs unconditionally under `zig build test`; `crates/rustty-util/src/tripwire.rs:198` `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`.
+
+**Suggested fix.** Enable `rustty-util/tripwire-test` as a dev-dependency feature of `rustty-font` (or gate tripwire on `cfg!(test)`) and drop the `ignore` so the tests run in release test builds.
+
+**Refuting lens — semantic (confidence: medium), verbatim:**
+
+> Read crates/rustty-util/src/tripwire.rs:198-199 `cfg!(any(test, debug_assertions, feature = "tripwire-test"))` and atlas.rs:1649/1683/1715. The three tests themselves are faithful (same loop over every FailPoint, same expectError, same state-unchanged/data-preserved asserts as Atlas.zig:826-889) — no assertion is fewer or looser. The reference's own default test lane (`zig build test`, Debug) enables tripwire via `builtin.is_test`, and the port's default `cargo test` (debug_assertions on) runs them identically; only a non-default `--release` test invocation skips them, and a `tripwire-test` feature (rustty-util/Cargo.toml:27) exists to re-enable. Harness gating, not an observable behaviour or assertion difference.
+
+## Performance-only differences (not findings)
+
+- `blocking_queue.rs` stores the ring as `Vec<Option<T>>` behind a std `Mutex<State>` + `Condvar` instead of an inline `[T; N]` with `std.Io.Mutex`/`Condition`; push semantics (return len or 0, waiter accounting, signal on pop/drain deinit) are identical.
+- `cache_table.rs` default-initializes bucket KVs (requires `K: Default, V: Default`) instead of leaving them `undefined`; slots beyond `lengths[idx]` are never read in either implementation.
+- `circ_buf.rs` `get_ptr_slice` derives its two raw slices via `split_at_mut` for Stacked-Borrows provenance; the returned `(ptr,len)` pairs are the same regions as the Zig `[2][]T`. `resize` uses `Vec::resize` then re-fills `[prev_cap..]` with the default (a double write of the same value).
+- `circ_buf.rs` `Iterator` borrows `&CircBuf` rather than copying the whole struct by value (Zig `buf: Self`); iteration indices/results are identical.
+- `message_data.rs` stores `Small.len` as `usize` rather than `IntFittingRange(0, small_size)`; no byte layout is observed.
+- `color.zig:333` `SegmentedList(Request, 2)` (2 inline prealloc slots, no allocation for the common 1–2 request OSC) → `color.rs:422` `Vec<Request>` (heap-allocates on first push). Element order/contents identical; `PERF_FIX_PLAN.md` item 10 (`fix-color-list-prealloc`) tracks restoring the inline prealloc.
+- `Collection.zig:698` `SegmentedList(EntryOrAlias, 0)` (pointer-stable power-of-two shelves, mostly contiguous) → `collection.rs:921` `Vec<Box<EntryOrAlias>>` (one heap allocation per entry; the pointer array relocates on growth but boxed elements do not). Same pointer-stability guarantee for `alias: *mut Entry`; differs only in allocation count/locality.
+- Oracle's `requests.deinit(alloc)` at `osc.zig:430` is an explicit free gated on `self.alloc != null`; rustty relies on `Vec` `Drop` when `self.command` is overwritten (`osc/mod.rs:836-846`). Observable behaviour (no leak, list unusable after reset) is identical.
+- Per-tree `ArenaAllocator` + `[]const Node` in split_tree is replaced by an owned `Vec<Node<V>>` (single allocation, freed on `Drop`) — same lifetime/ownership behaviour, no arena field.
+- split_tree `split` checks `self.nodes.len + insert.nodes.len + 1 > u16::MAX` before allocating rather than after (`nodes.len > maxInt(Backing)` post-alloc in the oracle); same `Error::OutOfMemory` result.
+- split_tree `remove` pre-fills the new node `Vec` with `Node::Leaf(null)` placeholders (the oracle leaves the arena slice undefined) before `removeNode` writes every slot; asserted identical (`written != 0`).
+- split_tree `locate` uses `V: PartialEq` instead of raw leaf-pointer equality because rustty leaves are per-ref boxed clones; for the only live View (gtk `Surface` glib wrapper) `PartialEq` is GObject pointer identity, so results are identical.
+- split_tree f16 math is a software `F16` (f32 op then round-to-half per operation), bit-identical to Zig's f16 arithmetic for `+ - * /` and `sqrt`.
+- `CodepointMap`: Zig `std.MultiArrayList(Entry)` (struct-of-arrays) → array-of-structs `Vec<Entry, A>`; the reverse linear scan and priority semantics are identical (`codepoint_map.rs:120-130`).
+- `Atlas::init`/`grow`: the port zero-fills the new buffer twice (`resize(n, 0)` then `clear()`/`fill(0)`) where Zig allocs undefined memory and memsets once (`atlas.rs:238-241, 609-612, 637`). Unobservable.
+- Atlas nodes: `std.ArrayList(Node)` with `initCapacity(64)`/`ensureUnusedCapacity`/`appendAssumeCapacity` maps to `Vec<Node, A>` with `try_reserve_exact`/`try_reserve`/`push`; capacity growth policy may differ but node contents/order are identical.
+- bash/fish/zsh/vim/sublime generators: the Zig comptime two-pass (Discarding counter then `.fixed(&buf)`) build of a `pub const` byte string collapses to a single runtime `Vec<u8>` growable writer; output bytes are the same (golden-tested).
+- `WasmPagePool`: `DynamicWasmPagePool` adds a runtime-`item_size` instantiation (caller-supplied `&'static FreeList`) for PageList; the typed `WasmPagePool` is the direct port and behaves identically.
+
+## Refuted candidates
+
+Six candidates were raised and cleared by both verification lenses:
+
+- **S80-F1 — `expectApproxEqual` has no counterpart for the `.error_union` arm (`Result<T,E>`) and untagged-union bitwise fallback.** The Zig comptime switch maps onto an open, user-extensible trait whose arms materialize per concrete type (the `.@"struct"`/`.@"union"` arms are likewise per-type impls); a PORT NOTE at `comparison.rs:241-247` records the `.error_union` → `Result` mapping, no caller in either tree passes a `Result`, and Rust enums are always tagged — a hypothetical `Result` caller would be a compile error, never a wrong result.
+- **S80-F3 — Private `MetaBuf` re-port of CircBuf in `sliding_window.rs` diverges on `init(size==0).full`, resize-shrink fix-up and `deleteOldest(n>len)`.** The actual port of `circ_buf.zig` (`circ_buf.rs:69, 170-193, 247-261`) is faithful on all three points; `MetaBuf` is a private helper whose divergent branches are provably unreachable (resize is reached only via growth, `init(0)` makes `full` indistinguishable, all `delete_oldest` callers pass `n <= len`). Worth a code-hygiene note (its comment quotes an older resize shape), not a parity finding.
+- **S82-F1 — Debug formatters run `splitTreeLabel` bytes through `String::from_utf8_lossy`.** The label is copied into the byte grid as raw bytes on both sides, so width arithmetic and every ASCII/valid-UTF-8 rendering is byte-identical; no View in either tree (production or test) declares a non-UTF-8 `splitTreeLabel`, and the affected output is debug/diagnostic only.
+- **S83-F2 — Wasm "happy path" test asserts a generation increase instead of the reference's bool-shaped `!modified`/`modified`.** At the pin `modified` is a `std.atomic.Value(usize)` that `clear()` (called from `init`) increments, so the oracle's `!atlas.modified` is neither type-correct nor satisfiable; the port's `after > before` is exactly the shape the pinned `test "writing data"` uses, with the same assertion count.
+- **S83-F4 — CodepointMap stores a 2-field Descriptor seam; hash/hashcode differ from the reference's full-descriptor Wyhash.** The only producer in either tree (`Config.zig` `RepeatableCodepointMap.parseCLI`) sets exactly `.family` and `.monospace = false`, and the `From` bridge in `rustty-font-shaper/src/discovery.rs:753` refills the remaining fields with the same defaults; the hash is an in-process grid-cache key, never persisted or oracle-compared. Latent seam narrowing only.
+- **S83-F5 — `atlas_debug_canvas` returns a `rustty_wc_*` glue handle instead of a zig-js ref id.** zig-js is a Zig-side JS binding layer with no Rust analog, i.e. a legitimately replaced area; the port performs the same BGRA-swap / A8→RGBA conversion and the same DOM sequence through declared `env` imports, producing identical pixels. Only the host-glue freeing symbol differs, and that is documented at `atlas.rs:1156-1160`.

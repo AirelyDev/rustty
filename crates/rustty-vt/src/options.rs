@@ -107,7 +107,7 @@ pub const SLOW_RUNTIME_SAFETY: bool = cfg!(debug_assertions);
 // resolved from `Options.features` (see `build_options::Features`).
 //
 // Each is `cfg!(feature = ...)`-driven, exactly like `SIMD` above, over the
-// nine cargo features named for the `-Dvt-features` tokens (hyphen spelling:
+// ten cargo features named for the `-Dvt-features` tokens (hyphen spelling:
 // `render-state`, `input-encode`, `grid-introspection`, `glyph-protocol`,
 // `kitty-graphics`; `eqlName` treats `-` and `_` as interchangeable, and cargo
 // feature names conventionally use `-`).
@@ -115,7 +115,7 @@ pub const SLOW_RUNTIME_SAFETY: bool = cfg!(debug_assertions);
 // MAPPING THE DEFAULT-ON SET ONTO ADDITIVE CARGO FEATURES. `-Dvt-features`
 // starts from the all-enabled set and SUBTRACTS (`-all,+render-state`); cargo
 // features only ever ADD. The equivalence is the crate's `default` feature
-// list, which names all nine: an ordinary build — every application-tier
+// list, which names all ten: an ordinary build — every application-tier
 // consumer, every workspace `cargo test` — therefore compiles with the
 // reference's default `Features{}`, and "the Ghostty application itself always
 // builds with every feature enabled" (the `Features` doc) holds by
@@ -134,6 +134,16 @@ pub const FORMATTER: bool = cfg!(feature = "formatter");
 
 /// Whether text selection is enabled.
 pub const SELECTION: bool = cfg!(feature = "selection");
+
+/// Whether terminal search is enabled.
+// PORT NOTE (`32601cd79`/`f9202919f`, P6-W3): `build_options::Features.search`
+// ("Terminal search: find matches for a string in the active area and
+// scrollback ... Used to implement find bars. C API: `ghostty_search_*`").
+// Like `selection`, this gates C API exports only (`lib_vt.zig`'s
+// `if (features.search)` block, ported as `#[cfg(feature = "search")]` on the
+// `rustty_search_*` exports in `rustty-vt-c`); the reference terminal module
+// has no `options.search` branch of its own.
+pub const SEARCH: bool = cfg!(feature = "search");
 
 /// Whether the render state API is enabled.
 pub const RENDER_STATE: bool = cfg!(feature = "render-state");
@@ -155,10 +165,11 @@ pub const GLYPH_PROTOCOL: bool = cfg!(feature = "glyph-protocol");
 /// Whether the Kitty graphics protocol is enabled.
 // PORT NOTE: synthesized by `Options.add`'s feature loop (`1fdbb8c91`): the
 // `kitty_graphics` feature (default true) with the per-field override
-//   `!(target.cpu.arch == .wasm32 and target.os.tag == .freestanding)`
-// — always disabled on wasm32-freestanding (no way to get timestamps there).
-pub const KITTY_GRAPHICS: bool =
-    cfg!(feature = "kitty-graphics") && !(cfg!(target_arch = "wasm32") && cfg!(target_os = "none"));
+// `Options.kittyGraphics(target)` — `if (target.os.tag == .freestanding)
+// return false;` (`3376153a4`: ANY freestanding OS, not only
+// wasm32-freestanding; no way to get timestamps there). Zig's `.freestanding`
+// OS tag is Rust's `target_os = "none"`.
+pub const KITTY_GRAPHICS: bool = cfg!(feature = "kitty-graphics") && !cfg!(target_os = "none");
 
 /// Whether Tmux control mode is enabled.
 // PORT NOTE: synthesized by `Options.add`: `opts.addOption(bool,
@@ -258,10 +269,11 @@ mod tests {
 
     #[test]
     fn kitty_graphics_enabled_on_this_target() {
-        // This crate is not built for wasm32-freestanding, so kitty graphics is
-        // enabled (the only target the reference disables it on).
-        let wasm_freestanding = cfg!(target_arch = "wasm32") && cfg!(target_os = "none");
-        assert_eq!(!wasm_freestanding, KITTY_GRAPHICS);
+        // This test binary is never a freestanding target, so kitty graphics
+        // is enabled (freestanding — any arch since `3376153a4` — is the only
+        // OS the reference disables it on).
+        let freestanding = cfg!(target_os = "none");
+        assert_eq!(!freestanding, KITTY_GRAPHICS);
     }
 
     #[test]

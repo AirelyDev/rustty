@@ -309,10 +309,11 @@ the divergence is decided explicitly per site, never inherited silently:
 
 - A standing main-parity workflow (`.port/phase-2/wf-main-parity.js`, lands via
   plan Task 19; ledger `.port/phase-2/MAIN_PARITY.md`) enumerates every
-  upstream ghostty commit (since the pinned reference SHA, `683d8db64` — advanced
+  upstream ghostty commit (since the pinned reference SHA, `20abdb50a` — advanced
   from `4749c4e9` by `P3-W10 T3` on 2026-07-31, from `6ad1fe7d8` by the
-  Phase-4 resync on 2026-08-17, then from `12967b68f` by the Phase-5 resync on
-  2026-08-25; see `.port/ORACLE_SYNC.md`)
+  Phase-4 resync on 2026-08-17, from `12967b68f` by the Phase-5 resync on
+  2026-08-25, from `683d8db64` by the gap-close on 2026-08-26, then from
+  `88f57ee66` by the Phase-6 resync on 2026-09-01; see `.port/ORACLE_SYNC.md`)
   touching ported files; each gets a verdict
   ported/missing/partial/not-applicable with file:line evidence and 2-vote adversarial
   verification; missing ones are ported WITH the same commit's test hunks. It

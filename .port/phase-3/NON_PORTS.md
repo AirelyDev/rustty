@@ -129,6 +129,14 @@ indistinguishable from an oversight:
 4. **What holds the line.** Nothing needs to — but the fact is worth
    remembering **if rustty ever targets iOS**, which is why it is written down
    rather than merely omitted.
+5. **Phase-6 follow-up (`caf48a41e` "main: fix inverted allow_stack_tracing
+   condition").** The non-iOS arm was `builtin.strip_debug_info` (tracing
+   allowed only in *stripped* builds — inverted) and is now
+   `!builtin.strip_debug_info`. Same verdict, same reason: it is the Zig
+   unwinder's switch and Rust has no build-time strip toggle to project it
+   onto. The reference block is carried at its end state in
+   `crates/rustty/src/main_rustty.rs` (`std_options` PORT NOTE) so the
+   projection stays complete; see `.port/phase-6/assessments/W4-core-tier.md`.
 
 ## E35 — `src/main.zig`'s `std.testing.log_level = .err` — N/A
 

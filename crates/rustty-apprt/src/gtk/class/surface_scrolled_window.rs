@@ -102,10 +102,14 @@ mod imp {
             }
         }
 
-        /// PORTS: `surface_scrolled_window.zig:88-110` `dispose`.
+        /// PORTS: `surface_scrolled_window.zig:88-111` `dispose`.
         fn dispose(&self) {
-            // Release our ref on the config binding (`:91-94`).
-            self.config_binding.borrow_mut().take();
+            // Unbind, then release our ref on the config binding (`:91-95`;
+            // `6cd684d5d` added the `unbind()` — the binding's own ref goes with
+            // it, ours with the drop).
+            if let Some(binding) = self.config_binding.borrow_mut().take() {
+                binding.unbind();
+            }
             // Unref the config (`:96-99`).
             self.config.borrow_mut().take();
             self.dispose_template();
@@ -215,17 +219,26 @@ impl SurfaceScrolledWindow {
         imp.scrolled_window
             .set_child(surface.as_ref().map(|s| s.upcast_ref::<gtk4::Widget>()));
 
-        // Unbind the old config binding if any (`:170-173`). We release our ref
-        // (drop) without calling `unbind`, matching the reference's bare
-        // `binding.unref()`.
-        imp.config_binding.borrow_mut().take();
+        // Unbind old config binding if it exists (`:170-175`): `unbind()` then
+        // release our ref (the drop) — `6cd684d5d` added the `unbind()`.
+        if let Some(binding) = imp.config_binding.borrow_mut().take() {
+            binding.unbind();
+        }
 
-        // Bind config from the surface to our config property (`:176-183`).
+        // Bind config from surface to our config property (`:178-189`).
         if let Some(surface) = surface {
             let binding = surface
                 .bind_property("config", this, "config")
                 .sync_create()
                 .build();
+            // Keep another ref, otherwise the binding would be freed and
+            // our pointer become stale if the surface gets finalized.
+            //
+            // PORT NOTE (`6cd684d5d`): the reference's explicit `binding.ref()`
+            // is what gtk-rs's `build()` already does (`from_glib_none` over the
+            // (transfer none) `g_object_bind_property` result), so the strong
+            // `glib::Binding` stored here IS that extra ref — see
+            // `Surface::bind_is_split`.
             *imp.config_binding.borrow_mut() = Some(binding);
         }
     }

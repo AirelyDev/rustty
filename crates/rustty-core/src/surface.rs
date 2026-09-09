@@ -5756,50 +5756,46 @@ where
         // try self.setSelection(sel);
         self.setSelection(Some(sel))?;
 
-        // If copy on select is false then exit early.
-        // if (self.config.copy_on_select == .false) return;
-        if self.config.copy_on_select == configpkg::value_types::CopyOnSelect::False {
-            return Ok(());
-        }
-
         // switch (self.config.copy_on_select) {
         match self.config.copy_on_select {
-            // .false => unreachable, // handled above with an early exit
-            configpkg::value_types::CopyOnSelect::False => unreachable!(), // handled above with an early exit
+            // .none => {},
+            configpkg::value_types::CopyOnSelect::None => {}
 
-            // Both standard and selection clipboards are set.
+            // The selection clipboard is set if supported, otherwise nothing is copied.
+            // .primary => try self.copySelectionToClipboards(
+            //     sel,
+            //     &.{.selection},
+            //     .mixed,
+            // ),
+            configpkg::value_types::CopyOnSelect::Primary => self.copySelectionToClipboards(
+                sel,
+                &[apprt::Clipboard::Selection],
+                binding::CopyToClipboard::Mixed,
+            )?,
+
+            // Only the standard clipboard is set.
             // .clipboard => try self.copySelectionToClipboards(
             //     sel,
-            //     &.{ .standard, .selection },
+            //     &.{.standard},
             //     .mixed,
             // ),
             configpkg::value_types::CopyOnSelect::Clipboard => self.copySelectionToClipboards(
                 sel,
-                &[apprt::Clipboard::Standard, apprt::Clipboard::Selection],
+                &[apprt::Clipboard::Standard],
                 binding::CopyToClipboard::Mixed,
             )?,
 
-            // The selection clipboard is set if supported, otherwise the standard.
-            // .true => {
-            configpkg::value_types::CopyOnSelect::True => {
-                // const clipboard: apprt.Clipboard = if (self.rt_surface.supportsClipboard(.selection))
-                //     .selection
-                // else
-                //     .standard;
-                let clipboard: apprt::Clipboard = if unsafe { &*self.rt_surface }
-                    .supports_clipboard(apprt::Clipboard::Selection)
-                {
-                    apprt::Clipboard::Selection
-                } else {
-                    apprt::Clipboard::Standard
-                };
-                // try self.copySelectionToClipboards(
-                //     sel,
-                //     &.{clipboard},
-                //     .mixed,
-                // );
-                self.copySelectionToClipboards(sel, &[clipboard], binding::CopyToClipboard::Mixed)?;
-            }
+            // Both standard and selection clipboards are set.
+            // .both => try self.copySelectionToClipboards(
+            //     sel,
+            //     &.{ .standard, .selection },
+            //     .mixed,
+            // ),
+            configpkg::value_types::CopyOnSelect::Both => self.copySelectionToClipboards(
+                sel,
+                &[apprt::Clipboard::Standard, apprt::Clipboard::Selection],
+                binding::CopyToClipboard::Mixed,
+            )?,
         }
 
         Ok(())
@@ -8525,8 +8521,8 @@ where
             // The selection clipboard is only updated for left-click drag when
             // the left button is released. This is to avoid the clipboard
             // being updated on every mouse move which would be noisy.
-            // if (self.config.copy_on_select != .false) {
-            if self.config.copy_on_select != configpkg::value_types::CopyOnSelect::False {
+            // if (self.config.copy_on_select != .none) {
+            if self.config.copy_on_select != configpkg::value_types::CopyOnSelect::None {
                 // const prev_ = self.io.terminal.screens.active.selection;
                 let prev_ = unsafe { (*self.io.terminal.screens.active).selection };
                 // if (prev_) |prev| {
@@ -8885,45 +8881,34 @@ where
             }
         }
 
-        // Middle-click paste source follows copy-on-select: when copy-on-select
-        // targets the selection clipboard, middle-click reads from it; when
-        // copy-on-select targets the system clipboard, middle-click reads from
-        // that instead. Falls back to the standard clipboard on platforms that
-        // do not support the selection clipboard.
+        // Middle-click action, either ignore, or paste from clipboard or paste from the selection clipboard if supported.
         // if (button == .middle and action == .press) switch (self.config.middle_click_action) {
         if button == input_mouse::Button::Middle && action == input_mouse::ButtonState::Press {
             match self.config.middle_click_action {
                 // .ignore => {},
                 configpkg::value_types::MiddleClickAction::Ignore => {}
-                // .@"primary-paste" => {
-                configpkg::value_types::MiddleClickAction::PrimaryPaste => {
-                    // const clipboard: apprt.Clipboard = switch (self.config.copy_on_select) {
-                    //     .clipboard => .standard,
-                    //     .true, .false => if (self.rt_surface.supportsClipboard(.selection))
-                    //         .selection
-                    //     else
-                    //         .standard,
-                    // };
-                    let clipboard: apprt::Clipboard = match self.config.copy_on_select {
-                        configpkg::value_types::CopyOnSelect::Clipboard => {
-                            apprt::Clipboard::Standard
-                        }
-                        configpkg::value_types::CopyOnSelect::True
-                        | configpkg::value_types::CopyOnSelect::False => {
-                            if unsafe { &*self.rt_surface }
-                                .supports_clipboard(apprt::Clipboard::Selection)
-                            {
-                                apprt::Clipboard::Selection
-                            } else {
-                                apprt::Clipboard::Standard
-                            }
-                        }
-                    };
-                    // _ = try self.startClipboardRequest(clipboard, .{ .paste = clipboard });
+                // .@"clipboard-paste" => {
+                //     _ = try self.startClipboardRequest(.standard, .{ .paste = .standard });
+                // },
+                configpkg::value_types::MiddleClickAction::ClipboardPaste => {
                     let _ = self.startClipboardRequest(
-                        clipboard,
-                        apprt::ClipboardRequest::Paste(clipboard),
+                        apprt::Clipboard::Standard,
+                        apprt::ClipboardRequest::Paste(apprt::Clipboard::Standard),
                     )?;
+                }
+                // .@"primary-paste" => {
+                //     if (self.rt_surface.supportsClipboard(.selection)) {
+                //         _ = try self.startClipboardRequest(.selection, .{ .paste = .selection });
+                //     }
+                // },
+                configpkg::value_types::MiddleClickAction::PrimaryPaste => {
+                    if unsafe { &*self.rt_surface }.supports_clipboard(apprt::Clipboard::Selection)
+                    {
+                        let _ = self.startClipboardRequest(
+                            apprt::Clipboard::Selection,
+                            apprt::ClipboardRequest::Paste(apprt::Clipboard::Selection),
+                        )?;
+                    }
                 }
             }
         }
@@ -14910,8 +14895,10 @@ mod freetype_load_flags_tests {
     #[test]
     #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
     fn derived_config_carries_the_configured_flags() {
-        let mut config = configpkg::Config::default();
-        config.freetype_load_flags = all_flipped();
+        let config = configpkg::Config {
+            freetype_load_flags: all_flipped(),
+            ..Default::default()
+        };
 
         let derived = font_shared_grid_set_derived_config(&config);
         assert_eq!(

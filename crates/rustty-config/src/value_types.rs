@@ -444,18 +444,30 @@ pub enum LinkPreviews {
     Osc8,
 }
 
-/// See copy-on-select
-// pub const CopyOnSelect = enum { false, true, clipboard };
+/// Options for copy on select behavior.
+// pub const CopyOnSelect = enum { none, primary, clipboard, both };
+//
+// PORT NOTE (`dfccdb2d4` + `e80ce2ed4`, #12600, phase-6): the reference RENAMED
+// `false`/`true` to `none`/`primary`, kept `clipboard` (now "system clipboard
+// ONLY") and added `both` (the old `clipboard` meaning). `true`/`false` survive
+// only as spellings in the `copy-on-select` compatibility handler
+// (`Config::compat_copy_on_select`), never as variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyOnSelect {
-    /// Disables copy on select entirely.
-    False,
+    /// Disables copy on select entirely. This is the default on macOS.
+    None,
+
     /// Copy on select is enabled, but goes to the selection clipboard.
-    /// This is not supported on platforms such as macOS. This is the default.
-    True,
+    /// This is not supported on platforms such as macOS. This is the default
+    /// on Linux.
+    Primary,
+
+    /// Copy on select is enabled and goes to the system clipboard.
+    Clipboard,
+
     /// Copy on select is enabled and goes to both the system clipboard
     /// and the selection clipboard (for Linux).
-    Clipboard,
+    Both,
 }
 
 // pub const RightClickAction = enum { ignore, paste, copy, "copy-or-paste", "context-menu" };
@@ -475,11 +487,14 @@ pub enum RightClickAction {
 }
 
 /// Options for middle-click actions.
-// pub const MiddleClickAction = enum { "primary-paste", ignore };
+// pub const MiddleClickAction = enum { "primary-paste", "clipboard-paste", ignore };
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MiddleClickAction {
-    /// Paste from the selection/standard clipboard per `copy-on-select`.
+    /// Paste from the selection clipboard.
     PrimaryPaste,
+    /// Paste from the standard clipboard.
+    ClipboardPaste,
+
     /// No action is taken on middle click.
     Ignore,
 }
@@ -969,11 +984,12 @@ bare_enum_names!(LinkPreviews {
     Osc8 => b"osc8",
 });
 
-// pub const CopyOnSelect = enum { false, true, clipboard };
+// pub const CopyOnSelect = enum { none, primary, clipboard, both };
 bare_enum_names!(CopyOnSelect {
-    False => b"false",
-    True => b"true",
+    None => b"none",
+    Primary => b"primary",
     Clipboard => b"clipboard",
+    Both => b"both",
 });
 
 // pub const RightClickAction = enum { ignore, paste, copy, "copy-or-paste", "context-menu" };
@@ -985,9 +1001,10 @@ bare_enum_names!(RightClickAction {
     ContextMenu => b"context-menu",
 });
 
-// pub const MiddleClickAction = enum { "primary-paste", ignore };
+// pub const MiddleClickAction = enum { "primary-paste", "clipboard-paste", ignore };
 bare_enum_names!(MiddleClickAction {
     PrimaryPaste => b"primary-paste",
+    ClipboardPaste => b"clipboard-paste",
     Ignore => b"ignore",
 });
 

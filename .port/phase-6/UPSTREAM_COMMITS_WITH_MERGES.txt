@@ -1,0 +1,121 @@
+20abdb50a Update VOUCHED list (#14101)
+81681158b Add Serbian translation (#13842)
+4b51f521d libghostty: add terminal search API (#14097)
+76d9fcefe libghostty: set the search needle via ghostty_search_set, drop GhosttySearchOptions
+674abd8a1 example: add c-vt-search demonstrating the terminal search C API
+f9202919f libghostty: add ghostty_search_* terminal search C API
+f0c918fc4 terminal/c: allow freeing a search and its terminal in any order
+cdef14a1f Remove X-Generator from the sr.po file
+32601cd79 terminal/c: add search wrapper implementing the whole-terminal search API
+149c9f562 terminal: extract whole-terminal search orchestration from the search thread
+2c854a1aa freestanding support (#14076)
+458f079f1 Use the informal form
+5e02d0014 ci: require freestanding libghostty-vt builds
+8bf7e517f Regenerate sr@latin.po from sr.po
+90f775976 Fix HTML/URL acronyms as agreed
+e8709b1f9 Merge remote-tracking branch 'upstream/main' into add-serbian-translation
+c2906398b terminal: fix living item over-count in RefCountedSet.addWithId (#14081)
+f6113ea2f Implement needed modifications for issue #12600, more flexible copy-on-select and middle-click-action (#12604)
+028af92ce terminal: clarify page allocator fallback
+fc7bfa60b ci: move freestanding build into test workflow
+d4d8f6226 i18n: adjust and extend Ukrainian translation (#13854)
+e80ce2ed4 Fix build error
+dfccdb2d4 Implement needed modifications for issue #12600
+0254a7f06 Merge branch 'ghostty-org:main' into main
+e8aa09867 Update VOUCHED list (#14092)
+ec3e384d2 Sync CODEOWNERS vouch list (#14090)
+0dc2032e6 Merge branch 'ghostty-org:main' into main
+7fd93e09c build: update Sparkle to 2.9.6 and pin SPM (#14082)
+10b7158e8 ci: cross-compile freestanding libghostty-vt
+abac4c2cb Merge branch 'ghostty-org:main' into main
+8af6897c0 gtk: do not warn when gtk-xft-dpi is -1 (#14085)
+860cfb1d7 Address review feedback
+3e2c0fa2d gtk: do not warn when gtk-xft-dpi is -1
+6d850fef7 Update VOUCHED list (#14084)
+c18198325 build: update Sparkle to 2.9.6 and pin SPM
+83c567157 renderer: vsync unfocused surfaces while dirty (#14068)
+ec7929c9c terminal/kitty: validate POSIX shared memory names (#14080)
+5f5495826 terminal: fix living item over-count in RefCountedSet.addWithId
+70356472f build: update Sparkle to 2.9.4 (#14072)
+090fca451 terminal/kitty: validate POSIX shared memory names
+81d28beaa Merge branch 'ghostty-org:main' into main
+98cd670c0 Update VOUCHED list (#14079)
+0a76c3115 Update iTerm2 colorschemes (#14077)
+094d175ef deps: Update iTerm2 color schemes
+3376153a4 build: support native freestanding libghostty-vt
+a5423592c libghostty: use caller allocation on native freestanding
+7b47213f9 Update VOUCHED list (#14074)
+166d2fe34 build: update Sparkle to 2.9.4
+3baff3a06 main: fix inverted allow_stack_tracing condition (#14069)
+069497e0c gtk: fix stale pointers to property bindings (#14065)
+caf48a41e main: fix inverted allow_stack_tracing condition
+97f57edcc renderer: vsync unfocused surfaces while dirty
+84c8e7d82 Align translation for Focus
+e3969ab49 Align translations for current and to left/right
+17a24746c Use the correct accusative form for inanimata
+2a0371b28 Apply batched suggestions from code review
+1ae448c23 Fix translation of sequences
+e8ba5d2c2 Standardize how config/setting/preference is translated
+6cd684d5d gtk: fix stale pointers to property bindings
+635abb7ee Update po/sr.po
+7aa476714 Add new translations to locales file
+74e0bfdf2 Register code ownership
+300a0dfcb Add the Serbian and Serbian Latin translations
+c8c4526e4 Merge branch 'ghostty-org:main' into main
+4540d499a macOS: review windows when closing multiple tabs (#14062)
+777929a8f macOS: review windows when closing multiple tabs
+58f43d562 Merge branch 'ghostty-org:main' into main
+76e568b47 terminal: mark the previous row dirty when clearing its spacer head (#14054)
+eb722cb26 terminal: mark the previous row dirty when clearing its spacer head
+9af934813 Merge from upstream
+5aeb693b7 i18n: Russian translation for 1.4 (#13809)
+fac595c74 macos: normalize action working directory paths (#14051)
+1c3a4a831 Update macos/Sources/Helpers/Extensions/URL+Extension.swift
+07abbd1e7 Update macos/Sources/Helpers/Extensions/URL+Extension.swift
+2de159611 macos: normalize action working directory paths
+4f4589f31 macOS: use the same default BellFeatures as config (#14049)
+572fd5837 macOS: use the same default BellFeatures as config
+890aa63db font: update embedded Noto emoji fonts (#14047)
+28b5bf905 font: update embedded Noto emoji fonts
+e9ad4b1d6 macOS: fix non control keys are not working for AppleScript (#13205)
+278b4e2fc i18n(ru): refine Russian translation
+f2d5758f6 terminal/snapshot: use stack fallback for record scratch (#14018)
+f349d1084 build(deps): bump hustcer/milestone-action from 3.1 to 3.2 (#14040)
+522ebdd0a build(deps): bump hustcer/milestone-action from 3.1 to 3.2
+915977a48 i18n(ru): equalize splits
+b69f61267 macOS: update note about tab accessory view (#14038)
+0a9f47cae macOS: update note about tab accessory view
+b6ac6e1d4 Revert "macOS: use same ResetZoomAccessoryView (#14028)"
+d9840f3c8 renderer: park DisplayLink while idle (#14035)
+6688aa072 renderer: park DisplayLink while idle
+84dff76b1 Update po/ru.po
+6244458a1 Update po/ru.po
+15ff186f6 macOS: use same ResetZoomAccessoryView (#14028)
+1abd53ee5 macOS: clean up deprecated toolbar button (#14027)
+7a15898bc macOS: use same ResetZoomAccessoryView
+5f5b988c5 i18n: update fr_FR translations (#13971)
+851751a11 macOS: clean up deprecated toolbar button
+73e53ceea i18n: update fr_FR translations
+ee8095d37 terminal/snapshot: use stack fallback for record scratch
+6229d4eb6 macOS: fix AppleScript send key for non-control keys
+ba3574637 i18n(ru): improve Russian translation
+0a396b43d i18n(ru): context menu fix in Russian translation
+4c696b90c Merge branch 'ghostty-org:main' into main
+768bc2ed4 Merge branch 'ghostty-org:main' into main
+32159b6fe i18n(ru): small fix in Russian translation
+3f87b2e58 i18n(ru): second part of Russian translation
+675825163 Merge branch 'ghostty-org:main' into main
+1054be4b6 Merge branch 'ghostty-org:main' into main
+320ba75dc Merge branch 'ghostty-org:main' into main
+f6244f7d7 Merge branch 'ghostty-org:main' into main
+b5817a35a Merge branch 'ghostty-org:main' into main
+1510d2b42 Merge branch 'ghostty-org:main' into main
+5546750a7 Merge branch 'ghostty-org:main' into main
+80b8e4957 Merge branch 'ghostty-org:main' into main
+d23af9e39 Merge branch 'ghostty-org:main' into main
+1026a00c1 i18n: adjust Ukrainian translations
+2a51bdf12 i18n: return Ghostty to Ukrainian translation
+c50288c35 i18n: address comments for Ukrainian translation
+0525c18f6 i18n: adjust and extend Ukrainian translation
+1dd31f9e9 i18n(ru): work in progress on Russian translation
+4bb135e2d i18n(ru): start updating Russian translation

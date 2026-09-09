@@ -259,6 +259,18 @@ pub struct Features {
     /// `ghostty_terminal_selection_*`, `ghostty_selection_gesture_*`.
     pub selection: bool,
 
+    /// Terminal search: find matches for a string in the active
+    /// area and scrollback (ASCII case-insensitive), with results
+    /// that survive primary/alternate screen switches, resize, and
+    /// scrollback pruning, plus match selection with wrap-around
+    /// and viewport scrolling. Used to implement find bars.
+    ///
+    /// C API: `ghostty_search_*`.
+    // PORT NOTE (`32601cd79`, P6-W1 carries the build-options MODEL only): the
+    // cargo `search` feature, `options::SEARCH`, and the `rustty_search_*`
+    // exports it gates are the P6-W3 search-C-API workstream's.
+    pub search: bool,
+
     /// The render state API: a coherent, update-in-place view of
     /// the visible screen (rows, cells, styles, cursor, colors,
     /// palette) designed to drive a renderer at frame rates. This
@@ -342,6 +354,7 @@ macro_rules! for_each_feature {
         $m!($features, snapshot, $($args)*);
         $m!($features, formatter, $($args)*);
         $m!($features, selection, $($args)*);
+        $m!($features, search, $($args)*);
         $m!($features, render_state, $($args)*);
         $m!($features, input_encode, $($args)*);
         $m!($features, color, $($args)*);
@@ -358,6 +371,7 @@ impl Default for Features {
             snapshot: true,
             formatter: true,
             selection: true,
+            search: true,
             render_state: true,
             input_encode: true,
             color: true,
@@ -377,6 +391,7 @@ impl Features {
         snapshot: false,
         formatter: false,
         selection: false,
+        search: false,
         render_state: false,
         input_encode: false,
         color: false,
@@ -494,6 +509,7 @@ pub struct Resolved {
     pub snapshot: bool,
     pub formatter: bool,
     pub selection: bool,
+    pub search: bool,
     pub render_state: bool,
     pub input_encode: bool,
     pub color: bool,
@@ -511,22 +527,24 @@ pub struct Resolved {
 /// The build target an [`Options::add`] call resolves its synthesized options
 /// against.
 // PORT NOTE: the reference reads `m.resolved_target.?.result` to learn the CPU
-// arch / OS tag (used to disable kitty graphics on wasm32-freestanding). The Rust
-// port has no build module, so `add` takes the resolved target explicitly via
-// this faithful subset (the only fields `add` inspects).
+// arch / OS tag (used to disable kitty graphics on freestanding targets). The
+// Rust port has no build module, so `add` takes the resolved target explicitly
+// via this faithful subset (the fields `add` has inspected).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Target {
     pub cpu_arch: CpuArch,
     pub os_tag: OsTag,
 }
 
-/// The CPU architecture of a build [`Target`], the subset [`Options::add`]
-/// inspects. Mirrors the reference `target.cpu.arch` values it compares against.
+/// The CPU architecture of a build [`Target`]. Mirrors the reference
+/// `target.cpu.arch` values [`Options::kitty_graphics`] compared against
+/// before `3376153a4` (it now inspects only the OS tag; the field is kept so a
+/// caller can still describe a full target).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CpuArch {
     /// `.wasm32`
     Wasm32,
-    /// Any other architecture (the reference compares only against `.wasm32`).
+    /// Any other architecture (the reference compared only against `.wasm32`).
     Other,
 }
 
@@ -541,6 +559,23 @@ pub enum OsTag {
 }
 
 impl Options {
+    /// Whether the Kitty graphics feature is effectively enabled for
+    /// the given target. Kitty graphics requires the ability to get
+    /// timestamps and there is no way to do that on freestanding
+    /// targets, so it is always disabled there regardless of the
+    /// feature setting.
+    // PORT NOTE (`3376153a4`): the reference condition was
+    // `target.cpu.arch == .wasm32 and target.os.tag == .freestanding`; native
+    // freestanding libghostty-vt made it ANY freestanding OS. The arch is no
+    // longer inspected (the `Target.cpu_arch` field stays for callers that
+    // describe a full target; nothing here reads it any more).
+    pub fn kitty_graphics(self, target: Target) -> bool {
+        if target.os_tag == OsTag::Freestanding {
+            return false;
+        }
+        self.features.kitty_graphics
+    }
+
     /// Add the required build options for the terminal module.
     ///
     /// The memory referenced by self is expected to stick around (it isn't
@@ -573,11 +608,9 @@ impl Options {
         // per-field override, exactly like the reference's `comptime
         // std.mem.eql` name check.
         let features = self.features;
-        // Kitty graphics requires the ability to get timestamps and
-        // there is no way to do that on freestanding targets, so it
-        // is always disabled there regardless of the feature setting.
-        let kitty_graphics = features.kitty_graphics
-            && !(target.cpu_arch == CpuArch::Wasm32 && target.os_tag == OsTag::Freestanding);
+        // Kitty graphics is force-disabled on some targets; see
+        // kittyGraphics for details.
+        let kitty_graphics = self.kitty_graphics(target);
 
         Resolved {
             artifact: self.artifact,
@@ -592,6 +625,7 @@ impl Options {
             snapshot: features.snapshot,
             formatter: features.formatter,
             selection: features.selection,
+            search: features.search,
             render_state: features.render_state,
             input_encode: features.input_encode,
             color: features.color,
@@ -684,13 +718,43 @@ mod tests {
         assert!(resolved.kitty_graphics);
     }
 
+    // PORT NOTE (`3376153a4`): this test was `kitty_graphics_enabled_on_
+    // freestanding_non_wasm32` asserting `resolved.kitty_graphics` TRUE — the
+    // reference's `kittyGraphics` compared `cpu.arch == .wasm32 and os.tag ==
+    // .freestanding`, so a non-wasm freestanding target kept the feature. The
+    // native freestanding libghostty-vt build changed that to ANY freestanding
+    // OS, so the expectation is now FALSE and the test is renamed to say so.
+    // These four are Rust-only tests of `Options::add`/`kitty_graphics` (the
+    // reference has no test for `kittyGraphics`); they pin the exact truth
+    // table of the reference's one-line condition.
     #[test]
-    fn kitty_graphics_enabled_on_freestanding_non_wasm32() {
+    fn kitty_graphics_disabled_on_freestanding_non_wasm32() {
         let resolved = base_options().add(Target {
             cpu_arch: CpuArch::Other,
             os_tag: OsTag::Freestanding,
         });
-        assert!(resolved.kitty_graphics);
+        assert!(!resolved.kitty_graphics);
+    }
+
+    #[test]
+    fn kitty_graphics_method_ignores_feature_on_freestanding() {
+        // `kittyGraphics` is "always disabled there regardless of the feature
+        // setting": the feature bit does not matter on a freestanding target.
+        let mut opts = base_options();
+        opts.features.kitty_graphics = true;
+        assert!(!opts.kitty_graphics(Target {
+            cpu_arch: CpuArch::Other,
+            os_tag: OsTag::Freestanding,
+        }));
+        assert!(opts.kitty_graphics(Target {
+            cpu_arch: CpuArch::Other,
+            os_tag: OsTag::Other,
+        }));
+        opts.features.kitty_graphics = false;
+        assert!(!opts.kitty_graphics(Target {
+            cpu_arch: CpuArch::Other,
+            os_tag: OsTag::Other,
+        }));
     }
 
     #[test]

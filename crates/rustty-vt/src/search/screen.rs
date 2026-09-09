@@ -1377,39 +1377,51 @@ impl ScreenSearch {
         Ok(())
     }
 
-    /// Return the selected match.
+    /// Return the match at the given index in newest-to-oldest order
+    /// (0 = most recent match). Returns null if the index is out of
+    /// range.
     ///
     /// This does not require read/write access to the underlying screen.
-    // pub fn selectedMatch(self: *const ScreenSearch) ?FlattenedHighlight {
+    // pub fn matchAt(self: *const ScreenSearch, idx: usize) ?FlattenedHighlight {
     //
-    // PORT NOTE: the reference returns a (shallow, aliasing) `FlattenedHighlight`
-    // by value. The Rust `Flattened` is not `Copy`, so this returns a `clone()`
-    // (an independent copy of the same chunks). Tests use it transiently for
-    // `untracked()`; observably identical. Returns `None` on the no-match path
-    // exactly as the reference returns `null`.
-    pub fn selected_match(&self) -> Option<FlattenedHighlight> {
-        // const sel = self.selected orelse return null;
-        let sel = self.selected.as_ref()?;
+    // PORT NOTE (oracle `149c9f562`): the reference returns a (shallow,
+    // aliasing) `FlattenedHighlight` by value. The Rust `Flattened` is not
+    // `Copy`, so this returns a `clone()` (an independent copy of the same
+    // chunks). Callers use it transiently (`untracked()`, `startPin()`);
+    // observably identical. Returns `None` on the out-of-range path exactly as
+    // the reference returns `null`.
+    pub fn match_at(&self, idx: usize) -> Option<FlattenedHighlight> {
         // const active_len = self.active_results.items.len;
         let active_len = self.active_results.len();
-        // if (sel.idx < active_len) {
-        //     return self.active_results.items[active_len - 1 - sel.idx];
+        // if (idx < active_len) {
+        //     return self.active_results.items[active_len - 1 - idx];
         // }
-        if sel.idx < active_len {
-            return self.active_results[active_len - 1 - sel.idx].clone().ok();
+        if idx < active_len {
+            return self.active_results[active_len - 1 - idx].clone().ok();
         }
 
         // const history_len = self.history_results.items.len;
         let history_len = self.history_results.len();
-        // if (sel.idx < active_len + history_len) {
-        //     return self.history_results.items[sel.idx - active_len];
+        // if (idx < active_len + history_len) {
+        //     return self.history_results.items[idx - active_len];
         // }
-        if sel.idx < active_len + history_len {
-            return self.history_results[sel.idx - active_len].clone().ok();
+        if idx < active_len + history_len {
+            return self.history_results[idx - active_len].clone().ok();
         }
 
         // return null;
         None
+    }
+
+    /// Return the selected match.
+    ///
+    /// This does not require read/write access to the underlying screen.
+    // pub fn selectedMatch(self: *const ScreenSearch) ?FlattenedHighlight {
+    pub fn selected_match(&self) -> Option<FlattenedHighlight> {
+        // const sel = self.selected orelse return null;
+        let sel = self.selected.as_ref()?;
+        // return self.matchAt(sel.idx);
+        self.match_at(sel.idx)
     }
 
     /// Select the next or previous search result. This requires read/write

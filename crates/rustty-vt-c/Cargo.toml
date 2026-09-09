@@ -41,7 +41,7 @@ default = ["simd", "vt-features-default"]
 # See the block below and `crates/rustty-vt/Cargo.toml`.
 #
 # Named as an AGGREGATE rather than spelled into `default` so that "all VT
-# features, SIMD off" is expressible without restating the nine. That
+# features, SIMD off" is expressible without restating the ten. That
 # combination is not hypothetical: CMakeLists.txt's `RUSTTY_VT_SIMD=OFF` path
 # is exactly it, and example/c-vt-cmake-static sets that option. When the nine
 # were inline in `default`, that path passed a bare `--no-default-features` and
@@ -51,6 +51,7 @@ vt-features-default = [
     "snapshot",
     "formatter",
     "selection",
+    "search",
     "render-state",
     "input-encode",
     "color",
@@ -79,7 +80,7 @@ simd = ["rustty-vt/simd"]
 # from the artifact, which is the whole point: "size-conscious embedders (e.g.
 # wasm) can trim the binary".
 #
-# All nine are in `default`, so a plain `cargo build -p rustty-vt-c` is the
+# All ten are in `default`, so a plain `cargo build -p rustty-vt-c` is the
 # reference's default all-enabled lib. The reference's
 # `-Dvt-features=-all,+render-state` (its "read-only viewer subset" example) is:
 #
@@ -91,6 +92,7 @@ simd = ["rustty-vt/simd"]
 snapshot = ["rustty-vt/snapshot"]
 formatter = ["rustty-vt/formatter"]
 selection = ["rustty-vt/selection"]
+search = ["rustty-vt/search"]
 render-state = ["rustty-vt/render-state"]
 input-encode = ["rustty-vt/input-encode"]
 color = ["rustty-vt/color"]
@@ -100,7 +102,7 @@ kitty-graphics = ["rustty-vt/kitty-graphics"]
 # ---------------------------------------------------------------------------
 
 [dependencies]
-# `default-features = false`: the nine `-Dvt-features` gates are re-declared as
+# `default-features = false`: the ten `-Dvt-features` gates are re-declared as
 # this crate's own features (above) and forwarded explicitly, so a trimmed
 # `--no-default-features` build of THIS crate actually reaches `rustty-vt`
 # instead of being re-enabled by the dependency's defaults.
@@ -111,7 +113,7 @@ kitty-graphics = ["rustty-vt/kitty-graphics"]
 # `default-features` (it warns, and says it may become a hard error) — inherited
 # dependencies can only ADD features, never subtract. Setting
 # `default-features = false` on the workspace entry instead would silently strip
-# the nine features from all 15 crates that inherit it, which is the opposite of
+# the ten features from all 15 crates that inherit it, which is the opposite of
 # the intent: every application-tier consumer must keep the reference's
 # all-enabled default. A direct path dep here is the narrow, local escape, and
 # it is the only crate that ever needs a trimmed build.

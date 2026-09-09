@@ -1,0 +1,140 @@
+# Phase 6 — upstream resync (pin → oracle head, 2026-09-01)
+
+Phase 6 closes `88f57ee66..20abdb50a` with **no deferrals**, advance-first (the phase-4/5
+doctrine; both tree-reading gates were GREEN at `88f57ee66` minutes before this advance —
+`w0/*-before-at-88f57ee66.txt`).
+
+## Range
+
+```
+from  88f57ee66eeaad4da77b414b245f7b6693348985   2026-08-25  terminal: ignore UTF-8-decoded C1 controls in the ground state (#14023)
+to    20abdb50a6216c450d6d4d010c41c7edf5ab15b2   2026-08-31  Update VOUCHED list (#14101)
+```
+
+121 commits (74 non-merge). **75 files, +6,261 / −1,269.** Upstream deleted
+`.github/workflows/freestanding.yml` inside the range (created by `10b7158e8`, folded into
+`test.yml` by `fc7bfa60b`) — END STATE is: no freestanding.yml, freestanding job in test.yml.
+
+## Gate arrival state (advance-first)
+
+- G1b **GREEN** at arrival (`w0/g1b-after-at-20abdb50a.txt`) — **by slack, not by coverage.**
+  The `vt_c` row globs `c/*.zig`, so it already sees the NEW `c/search.zig` (zig 416 → 433;
+  rust 470 stays ≥). The `search` row is an explicit list that did NOT include the NEW
+  `search/terminal.zig` (zig 67 → 66, the moved test); the coordinator extended it at
+  Phase-6 start (`check_test_counts.py`), after which `search` reads zig 72 / rust 72 — still
+  GREEN only because rustty carries surplus tests. Hand count of the range's `+test "` hunks is
+  therefore the honest meter: `c/search.zig` **17**, `search/terminal.zig` **6**,
+  `kitty/graphics_image.zig` 2, `ref_counted_set.zig` 1, `Terminal.zig` 1; `search/Thread.zig`
+  −1 (moved). The finale must show every one of those 27 tests ported BY NAME (G1
+  `check_tests_ported.py` per-test contract), not just the per-module floor.
+- G3b **RED** at arrival (`w0/g3b-after-at-20abdb50a.txt`): **51 missing** — vt 38, config 6,
+  vt-c 4, lib 2, core 1. MUST be GREEN at the finale.
+
+## Artifacts (generated, do not hand-edit)
+
+| File | What |
+|---|---|
+| `UPSTREAM_DIFF.patch` | the complete range diff, 10,967 lines |
+| `UPSTREAM_DIFF_STAT.txt` | per-file `--stat` |
+| `UPSTREAM_COMMITS.txt` | 74 non-merge commits, oldest-last |
+| `UPSTREAM_COMMITS_WITH_MERGES.txt` | all 121, for PR-boundary context |
+| `w0/` | before/after gate states for the pin advance |
+| `assessments/*.md` | per-workstream assess+port records (verdict per commit, evidence, negative control) |
+
+Regenerate with (oracle working tree is AT the pin = origin/main = 20abdb50a):
+
+```sh
+cd ../ghostty
+git diff  88f57ee66..20abdb50a            > ../rustty/.port/phase-6/UPSTREAM_DIFF.patch
+git diff  --stat 88f57ee66..20abdb50a     > ../rustty/.port/phase-6/UPSTREAM_DIFF_STAT.txt
+git log   --oneline --no-merges 88f57ee66..20abdb50a > ../rustty/.port/phase-6/UPSTREAM_COMMITS.txt
+git log   --oneline            88f57ee66..20abdb50a > ../rustty/.port/phase-6/UPSTREAM_COMMITS_WITH_MERGES.txt
+```
+
+## Binding rules
+
+`.port/phase-4/README.md` §"Binding rules" applies verbatim: port from the RANGE DIFF (end
+state), re-vet don't assume, every task names its NEGATIVE CONTROL, R1/R5/R7/R9/DG5, raw-ptr
+args for Page/Row/Cell/Screen re-read seams, the oracle tree IS the target.
+
+## Area breakdown → workstreams (plan: `docs/superpowers/plans/2026-09-01-phase6-upstream-resync.md`)
+
+| WS | oracle files | rustty home |
+|---|---|---|
+| W1 vt-core | ref_counted_set.zig, Screen.zig, Terminal.zig, PageList.zig, snapshot/snapshot.zig, kitty/graphics_image.zig, terminal/build_options.zig, lib/allocator.zig, lib_vt.zig (std_options/freestanding half) | rustty-vt, rustty-lib, rustty-vt-c/lib.rs |
+| W2 search-vt | search.zig, search/Thread.zig, search/screen.zig, search/terminal.zig (NEW) | rustty-vt/src/search |
+| W3 search-capi (after W2) | c/search.zig (NEW), c/selection.zig, c/types.zig, c/terminal.zig, c/main.zig, lib_vt.zig exports, include/ghostty/vt/{search,selection,types}.h + vt.h, example/c-vt-search | rustty-vt-c, include/rustty/vt, example/c-vt-search, A5 manifests |
+| W4 core-tier | renderer/generic.zig, Surface.zig, config/Config.zig, main_ghostty.zig, apprt/gtk/class/{surface,surface_scrolled_window}.zig, os/i18n_locales.zig | rustty-renderer, rustty-core, rustty-config, rustty bin, rustty-apprt, rustty-os |
+| W5 macos | 17 Swift files + Rustty.sdef + 3 test files (KeyEventSynthesizeTests NEW, URLTests NEW) + Sparkle 2.9.6 pin | macos/ |
+| W6 platform-tail | po/{fr,ru,uk}.po + NEW sr, sr@latin; font/res Noto emoji (binary); iTerm2 themes tarball; .github (milestone bump, freestanding CI lane); CODEOWNERS; build.zig.zon* (N/A except the themes hash) | po/, rustty-font/res, xtask res_themes, .github/workflows, CODEOWNERS |
+| W7 finale | G1b (file-list extension) + G3b GREEN, A5/A3/A4/G7/G-VTFEAT/G-THEMES/G-I18N, macOS full + xcodebuild, ledgers, ORACLE_SYNC finale note | — |
+
+## Finale (2026-09-01)
+
+| check | result |
+|---|---|
+| G1b (extended `search` row) | GREEN — search 72/77, vt_c 433/487, kitty 336/351, terminal 423/447 (`w0/g1b-finale-at-20abdb50a.txt`) |
+| G3b | GREEN — 0 missing (arrival 51) (`w0/g3b-finale-scan.txt`) |
+| live per-test audit | GREEN — 4,090 oracle test blocks, 0 unexplained (the 27 range tests present by name) |
+| A5 headers / symbol manifest / G-VTFEAT | GREEN — 203 exports both directions, 91 == 91, 10 features incl. `search` (W3 record) |
+| G-CENSUS | GREEN after the ledger moved to `20abdb50a` (`.port/phase-3/CENSUS_DELTA.md`) |
+| `cargo test -p rustty-vt` | 2,974 passed / 0 failed / 3 ignored (both scalar and `--features simd`; W1+W2 records) |
+| `cargo test -p rustty-vt-c` | 486 passed / 0 failed (469 + 17 `rustty_search_*` tests; W3) |
+| Miri, vt search lane | UB=0 (W2: 79/79, the 4 harness "UB" rows are documented false positives); vt-c `search::` 17/17 UB=0 (W3) |
+| macOS xcodebuild RusttyTests | 403 passed / 0 failed / 1 skipped (W5) |
+| menu-shortcut parity harness | 51 actions byte-identical (W5) |
+| Linux (`rvm`) early lane | workspace build GREEN; renderer/apprt(GTK)/os/config 418 passed / 0 failed — after fixing a PRE-EXISTING Linux test-target break (`6b8cbe67`: `linux_impl`'s DerivedConfig test helper lacked `custom_shader_animation` since phase-5 W7) |
+| macOS `ci.sh` run 1 (killed by a session restart during G6 Miri) | fmt/clippy/build/test-workspace PASS (5,406 tests); 21 gates PASS; G-REL FAIL on ONE load flake (`rustty-termio exec::tests::readthread_pipeline_sustains_saturated_producer`, a throughput floor — passes 3/3 debug + release in isolation); G-CENSUS FAIL (ledger, fixed `a964e142`); G-NIX/G-BLUEPRINT/G-VALGRIND/G-GTKFEAT BLOCKED (macOS host, as before) |
+| macOS `ci.sh` run 2 | fmt/clippy/build/`test --workspace` PASS (5,406 tests); 47 gates PASS; G-REL FAIL (the `rustty-termio` throughput flake — passes 3/3 in isolation, debug and release) and G-CENSUS FAIL (ledger, fixed `a964e142`). Killed by a session restart inside the G6 Miri sweep. |
+| macOS gates the run never reached | Run separately (`.port/tools/gates` D1–D11r, A3/A4/A5, G-LZ4, G-THEMES, G-VTFEAT, G-ABISCHEMA, G-KAITAI, G6b): **20 PASS, 0 FAIL, 1 BLOCKED** (G-KAITAI, missing tooling). **G6/G6c did not complete**: the `rustty-core` Miri lane burned **26.5 h of CPU** (~30 h wall, still `R`) without finishing and was killed — the same crate the run-2 sweep was on. G6/G6c are PROGRESS gates; every HARD gate in that set (G-THEMES, D11, D11r, G6b) passed. Miri intractability in this codebase is a known, documented class. |
+| Linux (`rvm`) `ci.sh` full lane | **35 PASS, 5 FAIL, 12 BLOCKED** on the first run. `cargo fmt`, `cargo build --workspace` and **`cargo test --workspace` all PASS**, and **G-GTKFEAT PASSES** — the GTK gate the macOS host can only report BLOCKED, so the W4 GTK work is verified on the platform that compiles it. All 5 FAILs are now resolved (below); the 12 BLOCKED are tooling absent from the VM (zig, cmake, nix, valgrind, doxygen, …), surfaced as WARNINGs, never as silent greens. |
+| Linux failures, after triage | **3 were real defects, all pre-existing and invisible on macOS, all fixed and re-verified GREEN here**; **2 were missing rustup targets**, installed on the VM, after which `G-WINCHK` and `G-XEV-IOS` both exit 0. Post-fix Linux evidence: `cargo clippy --workspace --all-targets -D warnings` → 0; `G-EXAMPLES` → GREEN, 25 built; `G-REL` → **GREEN, 5,477 passed / 102 ignored / 0 failed**. |
+
+Workstream records: `assessments/W1-vt-core.md`, `W2-search-vt.md`, `W3-search-capi.md`,
+`W4-core-tier.md`, `W5-macos.md`, `W6-platform-tail.md`. Open items carried out of the
+records: `cvt-parity.sh c-vt-search` is BLOCKED oracle-side (the oracle's `zig build run` at
+this pin needs zig 0.16 and panics on `ghostty-vt` artifact lookup — the sibling
+`c-vt-selection` fails identically, so it is the harness environment, not the port);
+G-I18N's extra-msgid direction is soft (`msgcmp` warns, exit 0) — hardening candidate;
+native-freestanding `rustty-vt` is out of reach without a `no_std` conversion (W1 §freestanding,
+W6 §freestanding-CI) — the source-side cfg arms are in place and reviewed for shape only.
+
+## Linux-only defects found by this lane (2026-09-08)
+
+The Linux lane is the reason to run more than one host: three HARD-gate failures
+that macOS structurally cannot see. None is phase-6 fallout — all three predate
+the resync — and each was fixed with its own negative control.
+
+1. **`d38b014b` — all 25 C/C++ examples were unbuildable on Linux.** Under
+   `set -e`, `SDK="$(xcrun --show-sdk-path 2>/dev/null)"` takes the exit status
+   of the command substitution, so on a host without `xcrun` the script died
+   with **127 before its first compile**, emitting nothing — which is why
+   G-EXAMPLES could only print a bare `FAIL` per example and the cause stayed
+   hidden. The sibling `CC=` line already had an `|| echo` fallback; `SDK=` did
+   not, and the `${SDK:+-isysroot "$SDK"}` use site already tolerated an empty
+   value, so `|| true` is the entire fix. `LD_LIBRARY_PATH` is now exported
+   beside the macOS-only `DYLD_LIBRARY_PATH` so the built example can find
+   `librustty_vt_c.so` at run time. Verified: 25 built on Linux, 29 on macOS.
+
+2. **`d38b014b` — `cargo clippy -D warnings` was RED on Linux only.**
+   `field_reassign_with_default` in `derived_config_carries_the_configured_flags`
+   (`crates/rustty-core/src/surface.rs`), a test gated
+   `cfg(not(any(target_os = "macos", target_arch = "wasm32")))` — macOS never
+   compiles it. Rewritten in clippy's own suggested struct-update form.
+
+3. **`d591a985` — G-REL reported "failed to build" after a clean, fully green
+   run.** `verdict()` scanned the cargo **test** log with a bare
+   `^error(\[|:)`, but that log interleaves cargo diagnostics with the tests'
+   own stderr: the GTK-only `rustty_init_invalid_action_returns_1` prints its
+   expected `error: failed to initialize rustty error=InvalidAction` and tripped
+   a HARD gate. The fix is **net-new coverage, not a relaxation** — the BUILD
+   log (previously overwritten by the test run before `verdict()` ever saw it,
+   so structurally unreachable) is now scanned with the original broad pattern,
+   while the test log matches only `^error[` / `^error: could not compile`, the
+   shapes cargo and rustc alone emit. The self-test grew from 2 arms to 5, each
+   negative-controlled.
+
+**Standing lesson for the next resync: run the Linux lane EARLY.** It also
+caught a pre-existing Linux-only build break before any of this
+(`6b8cbe67`, `linux_impl`'s `DerivedConfig` test helper missing
+`custom_shader_animation`), and a macOS-only run cannot substitute for it.
