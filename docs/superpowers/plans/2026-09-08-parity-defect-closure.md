@@ -942,40 +942,480 @@ Missing tests, weakened assertions, and tests that exist but are `#[ignore]`d or
 
 ## Phase 3 — Medium tail, per area (the `INDIV` medium rows)
 
-One task per area, largest first. **Each is an independently shippable sub-plan.** They share one procedure, so it is written once here and referenced by each task; the per-row specifics live in the checklist and audit files, which carry oracle file:line, rustty file:line, description, evidence and a suggested fix for every row.
+One task per area, largest first. **Each is an independently shippable sub-plan.** Every row's evidence is already written in `docs/parity-audit/<area>.md`; the shared per-row loop is `.port/parity-closure/PROCEDURE.md`, which each task below names as binding.
 
-**The per-row procedure (apply to every row in the area's checklist):**
+### Task 20: src/terminal — medium rows
 
-1. Open the row's entry in `docs/parity-audit/<area>.md` and read the **oracle** region and the **rustty** region directly. Do not fix from the summary.
-2. Write the failing test first, at the smallest scope that observes the difference. If the reference has a test for this behaviour, port that test verbatim (same name, same assertions) rather than inventing one.
-3. Run it; confirm it fails **for the stated reason**. A test that fails for a different reason is not yet the right test.
-4. Make the minimal change.
-5. Run the test; run the crate's suite.
-6. Negative control: revert the fix, confirm the test fails, re-apply.
-7. Tick the checklist box, set the ledger row to `CLOSED`, commit naming the id.
+**Files:** driven by the checklist(s) — `.port/parity-closure/src-terminal.md`. Each row names the exact rustty file:line to change.
 
-If a row turns out not to be a defect, set it `WAIVED` with the reason in `owner` — never tick it silently.
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
 
-- [ ] **Task 20:** `src/terminal` — 36 medium. Checklist: `.port/parity-closure/src-terminal.md`. Re-run `.port/tools/miri-run.sh rustty-vt` for any `pagelist`/`search`/`page` change.
-- [ ] **Task 21:** `src/apprt` — 16 medium. Checklist: `.port/parity-closure/src-apprt.md`. GTK rows compile only on Linux: verify on `ssh rvm`.
-- [ ] **Task 22:** `src/build` — 16 medium. Checklist: `.port/parity-closure/src-build.md`. Mostly xtask/packaging parity; verify with `G-DIST`, `G-XTASK`, `G-FEATMATRIX`.
-- [ ] **Task 23:** `src/cli` — 13 medium. Checklist: `.port/parity-closure/src-cli.md`.
-- [ ] **Task 24:** `src/font` — 8 medium. Checklist: `.port/parity-closure/src-font.md`. Re-run `G-D10` (stb resize parity) for any resize/bitmap change.
-- [ ] **Task 25:** `src/config` — 7 medium. Checklist: `.port/parity-closure/src-config.md`. `G9` (full surface coverage) must stay GREEN.
-- [ ] **Task 26:** `src` and `pkg` — 7 medium each. Checklists: `.port/parity-closure/src.md`, `pkg.md`.
-- [ ] **Task 27:** `src/benchmark` 5, `macos` 4, `include` 4, `src/termio` 4 medium. macOS rows re-run the xcodebuild lane.
-- [ ] **Task 28:** `src/lib` 3, `src/renderer` 3, `src/os` 2, `src/input` 2, `src/inspector` 1, `src/simd` 1, `src/stb` 1 medium.
-- [ ] **Task 29: Phase 3 checkpoint** — both lanes green; `G-PARITY` open count reduced by exactly the medium total; commit the ledger.
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src/terminal"; do
+  awk -F'\t' -v a="$a" -v t="medium" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** Re-run `.port/tools/miri-run.sh rustty-vt <filter>` for any `pagelist`/`search`/`page` change; UB must stay 0.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 21: src/apprt — medium rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src-apprt.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src/apprt"; do
+  awk -F'\t' -v a="$a" -v t="medium" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** GTK rows compile only on Linux — verify on `ssh rvm` per PROCEDURE.md's Linux note.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 22: src/build — medium rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src-build.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src/build"; do
+  awk -F'\t' -v a="$a" -v t="medium" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** xtask/packaging parity; re-run `G-DIST`, `G-XTASK`, `G-FEATMATRIX` after each group.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 23: src/cli — medium rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src-cli.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src/cli"; do
+  awk -F'\t' -v a="$a" -v t="medium" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** Re-run `cargo test -p rustty-cli`.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 24: src/font — medium rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src-font.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src/font"; do
+  awk -F'\t' -v a="$a" -v t="medium" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** Re-run `D10` (`.port/tools/gates/check_stb_resize_parity.sh`) for any resize/bitmap change.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 25: src/config — medium rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src-config.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src/config"; do
+  awk -F'\t' -v a="$a" -v t="medium" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** `G9` (`check_parity_surface`) must stay GREEN; config keys are a pinned surface.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 26: src and pkg — medium rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src and pkg.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src and pkg"; do
+  awk -F'\t' -v a="$a" -v t="medium" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** Two areas, 7 medium each. Checklists: `.port/parity-closure/src.md` and `.port/parity-closure/pkg.md`.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 27: src/benchmark, macos, include, src/termio — medium rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src-benchmark.md`, `.port/parity-closure/macos.md`, `.port/parity-closure/include.md`, `.port/parity-closure/src-termio.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src/benchmark" "macos" "include" "src/termio"; do
+  awk -F'\t' -v a="$a" -v t="medium" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** macOS rows re-run the xcodebuild lane (`macos/` + `xcodebuild test`). Checklists: `src-benchmark.md`, `macos.md`, `include.md`, `src-termio.md`.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 28: src/lib, src/renderer, src/os, src/input, src/inspector, src/simd, src/stb — medium rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src-lib.md`, `.port/parity-closure/src-renderer.md`, `.port/parity-closure/src-os.md`, `.port/parity-closure/src-input.md`, `.port/parity-closure/src-inspector.md`, `.port/parity-closure/src-simd.md`, `.port/parity-closure/src-stb.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src/lib" "src/renderer" "src/os" "src/input" "src/inspector" "src/simd" "src/stb"; do
+  awk -F'\t' -v a="$a" -v t="medium" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** Checklists: `src-lib.md`, `src-renderer.md`, `src-os.md`, `src-input.md`, `src-inspector.md`, `src-simd.md`, `src-stb.md`.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 29: Phase 3 checkpoint
+
+- [ ] Full `ci.sh` on macOS and on `ssh rvm`; no gate regressions.
+- [ ] `G-PARITY` open count reduced by exactly the medium total closed in Tasks 20-28.
+- [ ] Commit the ledger.
 
 ---
 
 ## Phase 4 — Low tail, per area (345 rows)
 
-Same per-row procedure as Phase 3. The low tier is dominated by the LOG class (already handled in Task 14) plus stale comments, cosmetic divergences, and test-name mismatches — so start each area by re-checking how many of its low rows are still `OPEN` after Phase 2.
+Same binding procedure (`.port/parity-closure/PROCEDURE.md`). The low tier is dominated by the LOG class, which Task 14 already resolved per the Task 13 ruling — so each task starts by re-counting what is still `OPEN`.
 
-- [ ] **Task 30:** Re-count per area — `awk -F'\t' '$3=="low" && $11=="OPEN"{print $5}' .port/parity-closure/LEDGER.tsv | sort | uniq -c | sort -rn`
-- [ ] **Task 31:** `src/terminal` low. **Task 32:** `src/apprt` low. **Task 33:** `src/font` low. **Task 34:** `src/config` low. **Task 35:** `pkg` low. **Task 36:** `src/cli` low. **Task 37:** `src/build`, `src/os`, `src/lib` low. **Task 38:** `src`, `src/renderer`, `src/termio`, `include`, `src/input` low. **Task 39:** `macos`, `src/datastruct`, `src/inspector`, `src/benchmark`, `src/simd`, `src/stb`, `src/unicode` low.
-- [ ] **Task 40: Phase 4 checkpoint** — both lanes green; every ledger row now `CLOSED` or `WAIVED`.
+### Task 30: Re-count the low tail after Phase 2
+
+- [ ] Run: `awk -F'\t' '$3=="low" && $11=="OPEN"{print $5}' .port/parity-closure/LEDGER.tsv | sort | uniq -c | sort -rn`
+- [ ] Record the per-area counts in the ledger so Tasks 31-39 are sized against reality, not against the pre-Phase-2 numbers.
+
+### Task 31: src/terminal — low rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src-terminal.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src/terminal"; do
+  awk -F'\t' -v a="$a" -v t="low" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** Run the owning crate's test suite; for GTK rows use the Linux lane.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 32: src/apprt — low rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src-apprt.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src/apprt"; do
+  awk -F'\t' -v a="$a" -v t="low" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** Run the owning crate's test suite; for GTK rows use the Linux lane.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 33: src/font — low rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src-font.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src/font"; do
+  awk -F'\t' -v a="$a" -v t="low" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** Run the owning crate's test suite; for GTK rows use the Linux lane.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 34: src/config — low rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src-config.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src/config"; do
+  awk -F'\t' -v a="$a" -v t="low" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** Run the owning crate's test suite; for GTK rows use the Linux lane.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 35: pkg — low rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/pkg.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "pkg"; do
+  awk -F'\t' -v a="$a" -v t="low" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** Run the owning crate's test suite; for GTK rows use the Linux lane.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 36: src/cli — low rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src-cli.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src/cli"; do
+  awk -F'\t' -v a="$a" -v t="low" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** Run the owning crate's test suite; for GTK rows use the Linux lane.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 37: src/build, src/os, src/lib — low rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src-build.md`, `.port/parity-closure/src-os.md`, `.port/parity-closure/src-lib.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src/build" "src/os" "src/lib"; do
+  awk -F'\t' -v a="$a" -v t="low" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** Run the owning crate's test suite; for GTK rows use the Linux lane.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 38: src, src/renderer, src/termio, include, src/input — low rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/src.md`, `.port/parity-closure/src-renderer.md`, `.port/parity-closure/src-termio.md`, `.port/parity-closure/include.md`, `.port/parity-closure/src-input.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "src" "src/renderer" "src/termio" "include" "src/input"; do
+  awk -F'\t' -v a="$a" -v t="low" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** Run the owning crate's test suite; for GTK rows use the Linux lane.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 39: macos, src/datastruct, src/inspector, src/benchmark, src/simd, src/stb, src/unicode — low rows
+
+**Files:** driven by the checklist(s) — `.port/parity-closure/macos.md`, `.port/parity-closure/src-datastruct.md`, `.port/parity-closure/src-inspector.md`, `.port/parity-closure/src-benchmark.md`, `.port/parity-closure/src-simd.md`, `.port/parity-closure/src-stb.md`, `.port/parity-closure/src-unicode.md`. Each row names the exact rustty file:line to change.
+
+**Procedure:** `.port/parity-closure/PROCEDURE.md` is binding — read it first. It defines the per-row loop (read both sides, failing test first, minimal change, negative control, close the ledger row) and the constraints that bind every row.
+
+- [ ] **Step 1: List this task's open rows**
+
+```bash
+for a in "macos" "src/datastruct" "src/inspector" "src/benchmark" "src/simd" "src/stb" "src/unicode"; do
+  awk -F'\t' -v a="$a" -v t="low" '$5==a && $3==t && $11=="OPEN"{print $1"\t"$3"\t"$8"\t"$9}' .port/parity-closure/LEDGER.tsv
+done
+```
+
+- [ ] **Step 2: Work each row through PROCEDURE.md**, in the order printed. Commit per row or per tight group of same-shape rows, naming the ids closed.
+
+- [ ] **Step 3: Area gates.** Run the owning crate's test suite; for GTK rows use the Linux lane.
+
+- [ ] **Step 4: Verify the ledger moved**
+
+Run: `python3 .port/tools/gates/check_parity_closure.py`
+Expected: the open count has dropped by exactly the number of rows this task closed; no row of another area changed state.
+
+- [ ] **Step 5: Commit the ledger** with a message naming the id range closed.
+
+### Task 40: Phase 4 checkpoint
+
+- [ ] Full `ci.sh` on both lanes.
+- [ ] Every ledger row is now `CLOSED` or `WAIVED`; `G-PARITY` prints GREEN.
+- [ ] Commit the ledger.
 
 ---
 
