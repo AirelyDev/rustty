@@ -686,6 +686,15 @@ GATE_REGISTRY=(
   "G3|PROGRESS|$PY $GATES/check_comments_fidelity.py"
   "G3b|PROGRESS|$PY $GATES/check_comment_coverage.py"
   "G9|PROGRESS|$PY $GATES/check_parity_surface.py"
+  # G-PARITY (phase-6-W1) — every audited parity finding is closed, waived-with-
+  # reason, or open. The ledger in .port/parity-closure/LEDGER.tsv is the single
+  # source of truth; this gate is the only thing that reads its `state` column.
+  # RED by design until the closure plan finishes (497 open on landing). The
+  # self-test is HARD and covers all three RED arms (open row, unjustified waiver,
+  # unknown state) so the gate cannot rot into a vacuous green. Flip to HARD in
+  # Task 41 when all findings are closed.
+  "G-PARITY-SELF|HARD|$PY $GATES/check_parity_closure.py --self-test"
+  "G-PARITY|PROGRESS|$PY $GATES/check_parity_closure.py"
   # G8b — the real perf regression fence (paired, same-session, vs a stored
   # binary). BLOCKS (2/3) rather than passing when the box is loaded or the
   # untracked oracle binary/corpora are absent. MUST precede G8: it emits the
