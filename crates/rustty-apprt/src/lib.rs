@@ -331,8 +331,19 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
 
     // We need to make sure the process locale is set properly. Locale
     // affects a lot of behaviors in a shell.
+    //
+    // We need to re-sync the environment after this completes.
     // try internal_os.ensureLocale(self.alloc);
+    // syncEnviron();
+    // (oracle: src/global.zig:204-209, :307-322 — S43-F1: `ensureLocale`
+    // mutates LANG/LC_* via setenv/unsetenv, so the process-global captured
+    // `ENVIRON` (already lazily captured earlier in this same init, for the
+    // tmp_dir_path discovery / RUSTTY_LOG read above) must be re-published or
+    // every later `environ()`/`environ_map()` consumer — termio child-process
+    // environments, the crash env snapshot — keeps seeing the pre-locale-fix
+    // block.)
     rustty_os::ensureLocale().map_err(InitError::Locale)?;
+    rustty_global::sync_environ();
 
     // Initialize glslang for shader compilation
     // try glslang.init();
