@@ -60,45 +60,103 @@ static SHADER_FFI_LOCK: Mutex<()> = Mutex::new(());
 // `log.warn` call sites are preserved as comments (mirrors the tree-wide
 // `std.log.scoped` handling in e.g. rustty-config path.rs).
 
+/// S117-F1: an align(16)-carrying newtype over `[f32; 4]`.
+///
+/// std140 requires every vec4 (and every std140-array element — GLSL rounds an
+/// array element's stride up to a vec4 multiple, which is exactly why the oracle
+/// spells e.g. `channel_time`/`palette` as `[N][4]f32` rather than `[N][3]f32` or
+/// `[N]f32`) onto a 16-byte boundary. The oracle expresses this as a per-field
+/// `align(16)` on an `extern struct` (ghostty src/renderer/shadertoy.zig:14-42);
+/// Rust has no per-field alignment, so where Rust's own natural (4-byte, from the
+/// `f32`/`i32` element types) field placement would NOT already land the next
+/// `align(16)` member on a 16-byte offset, the alignment has to ride on the
+/// member's own type instead.
+///
+/// Deriving the std140 offsets field-by-field (see the task-5 report for the
+/// full working) shows this is load-bearing for exactly THREE members of
+/// `Uniforms`: `channel_time` (natural offset 28, needs 32), `current_cursor`
+/// (natural 196, needs 208), and `palette` (natural 296, needs 304). Every other
+/// `align(16)` member in the oracle already lands on a 16-byte offset under plain
+/// natural alignment, because the preceding same-alignment run's total size is
+/// itself a multiple of 16 (e.g. `mouse`/`date` follow two back-to-back 64-byte
+/// `[4][4]f32` groups). `previous_cursor` is ALSO given this type — not because
+/// its own offset (224) needs forcing, but so it stays the same type as
+/// `current_cursor`, which `generic.rs`'s `u.previous_cursor = u.current_cursor`
+/// assignment requires.
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Vec4(pub [f32; 4]);
+
+impl From<[f32; 4]> for Vec4 {
+    fn from(v: [f32; 4]) -> Self {
+        Vec4(v)
+    }
+}
+
+impl PartialEq for Vec4 {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+// So call sites (and the `generic.rs` unit tests) can compare/construct against a
+// bare `[f32; 4]` literal without an explicit `.into()`/`Vec4(..)` wrap everywhere.
+impl PartialEq<[f32; 4]> for Vec4 {
+    fn eq(&self, other: &[f32; 4]) -> bool {
+        self.0 == *other
+    }
+}
+
 /// The uniform struct used for shadertoy shaders.
 //
 // PORT NOTE: the reference is an `extern struct` with per-field `align(16)`
 // (vec3/vec4/matrix members) and `align(4)` (scalar members) matching the
-// std140 GPU-uniform layout. Rust cannot express per-field alignment, so this
-// is `#[repr(C)]` with every field declared in order; the EXACT std140 layout
-// (with const-asserts) is pinned when the GPU draw path (R-d/Phase 3) actually
-// consumes this struct. It is unused by this milestone's transpile path.
+// std140 GPU-uniform layout. Rust cannot express per-field alignment, so the
+// three members that actually need a forced 16-byte offset jump (see the `Vec4`
+// doc above) are retyped through `Vec4`; every other field keeps its natural
+// `[f32; N]`/scalar type because natural alignment already puts it at the
+// correct std140 offset. The const-asserts below pin the layout the GPU draw
+// path (`generic.rs:1893`/`6668-6672`) memcpy's straight to the GPU.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Uniforms {
-    pub resolution: [f32; 3],                 // align(16)
-    pub time: f32,                            // align(4)
-    pub time_delta: f32,                      // align(4)
-    pub frame_rate: f32,                      // align(4)
-    pub frame: i32,                           // align(4)
-    pub channel_time: [[f32; 4]; 4],          // align(16)
-    pub channel_resolution: [[f32; 4]; 4],    // align(16)
-    pub mouse: [f32; 4],                      // align(16)
-    pub date: [f32; 4],                       // align(16)
-    pub sample_rate: f32,                     // align(4)
-    pub current_cursor: [f32; 4],             // align(16)
-    pub previous_cursor: [f32; 4],            // align(16)
-    pub current_cursor_color: [f32; 4],       // align(16)
-    pub previous_cursor_color: [f32; 4],      // align(16)
-    pub current_cursor_style: i32,            // align(4)
-    pub previous_cursor_style: i32,           // align(4)
-    pub cursor_visible: i32,                  // align(4)
-    pub cursor_change_time: f32,              // align(4)
-    pub time_focus: f32,                      // align(4)
-    pub focus: i32,                           // align(4)
-    pub palette: [[f32; 4]; 256],             // align(16)
-    pub background_color: [f32; 4],           // align(16)
-    pub foreground_color: [f32; 4],           // align(16)
-    pub cursor_color: [f32; 4],               // align(16)
-    pub cursor_text: [f32; 4],                // align(16)
-    pub selection_background_color: [f32; 4], // align(16)
-    pub selection_foreground_color: [f32; 4], // align(16)
+    pub resolution: [f32; 3],    // align(16); offset 0 needs no forcing
+    pub time: f32,               // align(4)
+    pub time_delta: f32,         // align(4)
+    pub frame_rate: f32,         // align(4)
+    pub frame: i32,              // align(4)
+    pub channel_time: [Vec4; 4], // align(16) — FORCED: 28 -> 32
+    pub channel_resolution: [[f32; 4]; 4], // align(16); offset 96 needs no forcing
+    pub mouse: [f32; 4],         // align(16); offset 160 needs no forcing
+    pub date: [f32; 4],          // align(16); offset 176 needs no forcing
+    pub sample_rate: f32,        // align(4)
+    pub current_cursor: Vec4,    // align(16) — FORCED: 196 -> 208
+    pub previous_cursor: Vec4,   // align(16); offset 224 needs no forcing (see Vec4 doc)
+    pub current_cursor_color: [f32; 4], // align(16); offset 240 needs no forcing
+    pub previous_cursor_color: [f32; 4], // align(16); offset 256 needs no forcing
+    pub current_cursor_style: i32, // align(4)
+    pub previous_cursor_style: i32, // align(4)
+    pub cursor_visible: i32,     // align(4)
+    pub cursor_change_time: f32, // align(4)
+    pub time_focus: f32,         // align(4)
+    pub focus: i32,              // align(4)
+    pub palette: [Vec4; 256],    // align(16) — FORCED: 296 -> 304
+    pub background_color: [f32; 4], // align(16); offset 4400 needs no forcing
+    pub foreground_color: [f32; 4], // align(16); offset 4416 needs no forcing
+    pub cursor_color: [f32; 4],  // align(16); offset 4432 needs no forcing
+    pub cursor_text: [f32; 4],   // align(16); offset 4448 needs no forcing
+    pub selection_background_color: [f32; 4], // align(16); offset 4464 needs no forcing
+    pub selection_foreground_color: [f32; 4], // align(16); offset 4480 needs no forcing
 }
+
+// S117-F1 layout pins: compile-time freeze so the std140 offsets/size can never
+// silently drift back to natural alignment. Derived field-by-field from the
+// oracle's `align(16)` annotations (ghostty src/renderer/shadertoy.zig:14-42);
+// cross-checked against the `Globals` block in shaders/shadertoy_prefix.glsl.
+const _: () = assert!(std::mem::offset_of!(Uniforms, channel_time) == 32);
+const _: () = assert!(std::mem::offset_of!(Uniforms, current_cursor) == 208);
+const _: () = assert!(std::mem::offset_of!(Uniforms, palette) == 304);
+const _: () = assert!(std::mem::size_of::<Uniforms>() == 4496);
 
 /// The target to load shaders for.
 // pub const Target = enum { glsl, msl };
@@ -929,5 +987,21 @@ mod tests {
         // glslang_initialize_process is refcounted/thread-safe; repeated calls
         // are safe (see the ensureInit PORT NOTE above).
         crate::shadertoy::init().expect("glslang init");
+    }
+
+    // S117-F1: the std140 layout the GLSL `Globals` uniform block (binding 1,
+    // shaders/shadertoy_prefix.glsl) expects, hand-derived field-by-field from the
+    // oracle's `align(16)`/`align(4)` annotations (ghostty src/renderer/shadertoy.zig:
+    // 14-42) — see the task-5 report for the full per-field working. Offsets/size
+    // confirmed against the brief's audit numbers (32 / 208 / 304 / 4496) by
+    // independent derivation.
+    #[test]
+    fn uniforms_match_the_std140_block_in_shadertoy_prefix_glsl() {
+        use std::mem::{align_of, offset_of, size_of};
+        assert_eq!(offset_of!(Uniforms, channel_time), 32);
+        assert_eq!(offset_of!(Uniforms, current_cursor), 208);
+        assert_eq!(offset_of!(Uniforms, palette), 304);
+        assert_eq!(size_of::<Uniforms>(), 4496);
+        assert_eq!(align_of::<Uniforms>(), 16);
     }
 }

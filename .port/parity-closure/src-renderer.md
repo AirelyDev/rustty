@@ -7,7 +7,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## High (2)
 
-- [ ] **S117-F1** · CONFIRMED · `ABI` · behavioral-difference
+- [x] **S117-F1** · CONFIRMED · `ABI` · behavioral-difference
   - **What:** shadertoy::Uniforms drops the per-field align(16); GPU byte layout differs from the std140 block the custom shaders read
   - **Oracle:** `src/renderer/shadertoy.zig:14-42` → **Rustty:** `crates/rustty-renderer/src/shadertoy.rs:63-101`
   - **Audit's suggested fix:** Give the struct the std140 layout explicitly: either wrap the align(16) members in `#[repr(C, align(16))]` newtypes (e.g. `Vec4([f32;4])`, `Vec3([f32;3])` padded) or insert explicit `_pad` fields, then add `const _: () = assert!(offset_of!(Uniforms, channel_time) == 32 && offset_of!(Uniforms, current_cursor) == 208 && offset_of!(Uniforms, palette) == 304 && size_of::<Uniforms>() == 4496)` mirroring gpu_abi.rs; keep the field names so generic.rs's writers are untouched.

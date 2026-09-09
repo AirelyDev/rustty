@@ -5459,12 +5459,14 @@ mod macos_impl {
 
             // 256-color palette
             for (i, color) in colors.palette.iter().enumerate() {
-                uniforms.palette[i] = [
+                // S117-F1: `palette` is `[shadertoy::Vec4; 256]` (std140-forcing
+                // newtype — see shadertoy.rs), hence the explicit wrap.
+                uniforms.palette[i] = shadertoy::Vec4([
                     color.r as f32 / 255.0,
                     color.g as f32 / 255.0,
                     color.b as f32 / 255.0,
                     1.0,
-                ];
+                ]);
             }
 
             // Background color
@@ -5651,7 +5653,11 @@ mod macos_impl {
                     pixel_y += cursor.bearings[1] as f32;
                 }
 
-                let new_cursor: [f32; 4] = [pixel_x, pixel_y, cursor_width, cursor_height];
+                // S117-F1: `current_cursor`/`previous_cursor` are `shadertoy::Vec4`
+                // (the std140-forcing newtype — see shadertoy.rs), so this local is
+                // typed the same for the comparisons/assignments below to compile.
+                let new_cursor: shadertoy::Vec4 =
+                    shadertoy::Vec4([pixel_x, pixel_y, cursor_width, cursor_height]);
                 let cursor_color: [f32; 4] = [
                     cursor.color[0] as f32 / 255.0,
                     cursor.color[1] as f32 / 255.0,
