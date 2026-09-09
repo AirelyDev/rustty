@@ -847,7 +847,7 @@ impl<'a> TerminalFormatter<'a> {
         // the trailing pass reconstructs an identical formatter, carrying the
         // same pin_map reborrow.
         let mut screen_formatter: ScreenFormatter =
-            ScreenFormatter::init(terminal.screens.active, copy_options(&self.opts));
+            ScreenFormatter::init(terminal.screens.active, clone_options(&self.opts));
         screen_formatter.content = Content::None;
         screen_formatter.extra = self.extra.screen;
         if let Some(m) = self.pin_map.as_mut() {
@@ -1192,7 +1192,7 @@ impl<'a> ScreenFormatter<'a> {
             let mut discarding = Discarding::new();
             let mut extra_formatter: ScreenFormatter = ScreenFormatter {
                 screen: self.screen,
-                opts: copy_options(&self.opts),
+                opts: clone_options(&self.opts),
                 content: Content::None,
                 extra: self.extra,
                 pin_map: None,
@@ -1235,27 +1235,41 @@ fn write_fmt_result(
 // PORT NOTE: `Options` holds a `Vec<CodepointMap>` and is therefore not `Copy`.
 // The reference copies the `Options` struct freely (it is a Zig value type),
 // including `codepoint_map`, at EVERY delegation site
-// (src/terminal/formatter.zig:486, 675, 726, 897). Rust `Options` owning the
-// map means a blanket "shallow copy" helper is unsafe to use everywhere: it
-// must be reserved for the passes below that provably never reach
-// PageFormatter's content-emitting path, and `clone_options` (below) used
-// everywhere else.
+// (src/terminal/formatter.zig:486, 675, 726, 897). `copy_options` below is a
+// narrow optimization reserved for the SPECIFIC passes proven never to reach
+// a codepoint lookup; `clone_options` (below it) is the default-safe choice
+// and MUST be used everywhere else — including passes with `content ==
+// Content::None`, see next paragraph.
 //
-// `copy_options` drops the map and MUST ONLY be used for a pass whose
-// `content` is `Content::None` — i.e. a pass that emits ONLY "extras" state
-// (palette/modes/tabstops/scrolling-region/keyboard/pwd/cursor-position/
-// style/hyperlink/protection/kitty-keyboard/charsets) and never calls into
-// PageListFormatter/PageFormatter, so no codepoint lookup ever runs against
-// it. Concretely: the `pin_map` byte-counting "discarding writer" replay
-// passes in `TerminalFormatter::format` and `ScreenFormatter::format`, and
-// the trailing "extra screen state" `ScreenFormatter` built in
-// `TerminalFormatter::format` (content = `Content::None`).
+// `content == Content::None` is NOT by itself a sufficient condition for
+// `copy_options`. A `ScreenFormatter` with `content: Content::None` still
+// reaches `PageFormatter` if its `extra.cursor` is set and the cursor has a
+// pending wrap: `ScreenFormatter::format`'s `extra.cursor` block builds a
+// single-cell `PageFormatter` to reformat the cursor's cell, and the oracle
+// passes `self.opts` (map included) into it (formatter.zig:724-726) exactly
+// like every other delegation hop. The actually-sufficient condition is:
+// every formatter this pass constructs, transitively, is provably free of
+// any `PageListFormatter`/`PageFormatter` construction — in practice,
+// `content == Content::None` AND no `ScreenExtra::cursor` is ever set on any
+// `ScreenFormatter` reachable from this pass.
 //
-// Every other delegation hop — anything that reaches PageListFormatter or
-// PageFormatter, including the single-cell cursor reformat in
-// `ScreenFormatter::format` — MUST use `clone_options` instead, or the
-// `codepoint_map` a caller set (e.g. the `clipboard-codepoint-map` config
-// option via `Surface::copySelectionToClipboards`) silently stops applying.
+// `copy_options` is safe ONLY for the `TerminalFormatter::format` `pin_map`
+// byte-counting "discarding writer" replays at the palette/modes/tabstops/
+// scrolling-region+keyboard+pwd sites: each builds a fresh formatter with
+// `extra: TerminalExtra::NONE` plus exactly one non-`screen` flag set, so the
+// `ScreenFormatter` it in turn constructs (in its own `TerminalFormatter::
+// format` trailing pass) always gets `extra.screen == ScreenExtra::NONE` and
+// returns before ever reaching `extra.cursor`.
+//
+// Every other site — including `ScreenFormatter::format`'s OWN trailing
+// "extra screen state" pass and its `pin_map` byte-counting replay, both of
+// which inherit the CALLER's `extra` (cursor included), and obviously every
+// hop that reaches `PageListFormatter`/`PageFormatter` directly — MUST use
+// `clone_options` instead, or the `codepoint_map` a caller set (e.g. the
+// `clipboard-codepoint-map` config option via
+// `Surface::copySelectionToClipboards`) silently stops applying, or (worse)
+// applies inconsistently between a formatter's real output and its own
+// `pin_map` byte-count replay of that same output.
 fn copy_options(opts: &Options) -> Options {
     Options {
         emit: opts.emit,

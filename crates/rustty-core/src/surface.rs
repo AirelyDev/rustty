@@ -14982,8 +14982,12 @@ mod queue_io_readonly_tests {
 // established fabrication recipe: a heap-pinned `Surface<TestApp>` in
 // `MaybeUninit` with ONLY the fields `copySelectionToClipboards` reads
 // written (`io.terminal`, `config`, `rt_surface`) — sound because the method
-// never touches any other field, and `MaybeUninit` never drops the untouched
-// ones.
+// never touches any other field, and `MaybeUninit` never drops fields that
+// were never initialized. The three fields that WERE written (unlike, say,
+// `surface_visibility_kat.rs`'s `bool`/pointer fields) own heap memory —
+// `Terminal` and `DerivedConfig` both need their own explicit `deinit`, and
+// `rt_surface` its own `Box::from_raw` + drop — so the test's teardown frees
+// all three explicitly rather than relying on any implicit drop.
 #[cfg(test)]
 mod clipboard_codepoint_map_e2e {
     use super::*;
@@ -15084,11 +15088,43 @@ mod clipboard_codepoint_map_e2e {
     }
 
     #[test]
+    // Same Miri FFI limit as `renderer_config_tests` above (`DerivedConfig::
+    // init` compiles the default `Config`'s link regex through the
+    // non-thread-safe oniguruma C FFI, `extern static OnigEncodingUTF8`, which
+    // Miri hard-errors on): "unsupported operation", not a soundness verdict.
+    // Covered natively by `cargo test --workspace` (CI HARD step 4) and by
+    // the rustty-config/rustty-oniguruma ASan G6 lanes. The raw-pointer
+    // fixture logic this test exists to verify (the field-projected
+    // `MaybeUninit<Surface>` writes and the post-copySelectionToClipboards
+    // teardown ordering) has NO oniguruma dependency of its own — proven by
+    // `clipboard_codepoint_map_fixture_is_miri_clean` below, which runs the
+    // identical fixture and IS Miri-covered; see MIRI_EXCEPTIONS.md
+    // ("rustty-core clipboard_codepoint_map_e2e").
+    #[cfg_attr(
+        miri,
+        ignore = "DerivedConfig::init compiles the default config's link regex through oniguruma C FFI (extern static OnigEncodingUTF8) — un-executable under Miri; ASan + native lanes cover it; see clipboard_codepoint_map_fixture_is_miri_clean for the Miri-covered variant"
+    )]
     fn clipboard_codepoint_map_reaches_copy_selection_to_clipboards() {
-        // A real Config, with `clipboard-codepoint-map` set through its real
-        // CLI parser exactly the way the user's config file would (map 'a',
-        // 0x61, to 'Z', 0x5A).
-        let mut full_config = configpkg::Config::default_config();
+        run(configpkg::Config::default_config());
+    }
+
+    // Miri-covered twin of the test above: identical fixture and assertions,
+    // but built on a `Config` with `link.links` cleared so `DerivedConfig::
+    // init` never reaches oniguruma — the ONLY difference from the real
+    // `Surface::init` path, and irrelevant to what this test verifies (the
+    // codepoint-map plumbing and the raw-pointer fixture's Stacked-Borrows
+    // soundness, neither of which touches links). This is what actually
+    // exercises the fixture's `unsafe` under Miri, per S151-F1 review.
+    #[test]
+    fn clipboard_codepoint_map_fixture_is_miri_clean() {
+        let mut config = configpkg::Config::default_config();
+        config.link.links.clear();
+        run(config);
+    }
+
+    fn run(mut full_config: configpkg::Config) {
+        // `clipboard-codepoint-map` set through its real CLI parser exactly
+        // the way the user's config file would (map 'a', 0x61, to 'Z', 0x5A).
         full_config
             .clipboard_codepoint_map
             .parse_cli(Some(b"U+0061=U+005A"))
@@ -15161,7 +15197,17 @@ mod clipboard_codepoint_map_e2e {
             )
             .expect("copySelectionToClipboards");
 
-        let rt_surface_ref: &TestRtSurface = unsafe { &*surface.rt_surface };
+        // Capture the `rt_surface` pointer into a LOCAL now, before any
+        // further write through `sp` — under Stacked Borrows, a write
+        // through the parent raw pointer `sp` (the `io.terminal.deinit` /
+        // `(*sp).config` writes in teardown below) pops the tag `surface`
+        // (`&mut *sp`) was derived with, so reading `surface.rt_surface`
+        // AFTER such a write is a use of an invalidated reference. Reading
+        // the field now, while `surface`'s tag is still live, and using only
+        // this raw-pointer local afterward avoids that.
+        let rt_surface_ptr: *mut TestRtSurface = surface.rt_surface;
+
+        let rt_surface_ref: &TestRtSurface = unsafe { &*rt_surface_ptr };
         let captured = rt_surface_ref.captured.lock().unwrap();
         assert_eq!(
             1,
@@ -15181,13 +15227,33 @@ mod clipboard_codepoint_map_e2e {
         // are about to `Box::from_raw` + drop.
         drop(captured);
 
-        // Teardown: free everything we allocated above (`Terminal` uses the
-        // manual `deinit` convention, not `Drop`; the raw-ptr `rt_surface`
-        // Box; and `rt_app`). `mu` never drops (`MaybeUninit`; the untouched
-        // fields were never initialized).
+        // Teardown: free everything we allocated above via raw-pointer
+        // writes. `io.terminal` uses the manual `deinit` convention, not
+        // `Drop` (matches `surface_visibility_kat.rs`'s `TestSurface::drop`).
+        // `config` is a real `DerivedConfig`: its `.deinit()` frees ONLY the
+        // link regexes' oniguruma C handles (`Regex` has no `Drop` of its
+        // own — see `DerivedConfig::deinit` above, "the owned fields free on
+        // drop"); the REST of its fields (`keybind`, `selection_word_chars`,
+        // `title`, `font`, ...) are plain owned `Vec`/`String`/`Option` data
+        // that only free through a normal Rust `Drop`, which `MaybeUninit`
+        // never runs for an untouched-by-Drop field. So `.deinit()` alone
+        // leaks them (caught by `cargo miri test ... --
+        // clipboard_codepoint_map_fixture_is_miri_clean`, which reports a
+        // leaked `Vec<u32>` and two leaked `Vec<u8>`s originating exactly at
+        // `DerivedConfig::init`'s `keybind`/`selection_word_chars` clones);
+        // `drop_in_place` after `.deinit()` runs that Drop safely (the FFI
+        // `Regex.value` raw pointer was already freed and has no Drop impl
+        // of its own, so this can't double-free it). Finally the raw-ptr
+        // `rt_surface` Box and `rt_app`. `mu` itself never drops
+        // (`MaybeUninit`; every field besides the three written above was
+        // never initialized). All writes/reads below go through `sp` (the
+        // raw pointer), never through `surface`, for the Stacked-Borrows
+        // reason noted above.
         unsafe {
             (*sp).io.terminal.deinit(Allocator);
-            drop(Box::from_raw(surface.rt_surface));
+            (*sp).config.deinit();
+            std::ptr::drop_in_place(std::ptr::addr_of_mut!((*sp).config));
+            drop(Box::from_raw(rt_surface_ptr));
         }
         drop(rt_app);
         let _ = &mu;

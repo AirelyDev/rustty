@@ -1077,6 +1077,47 @@ Both tests are individually annotated at source with this reason
 (`crates/rustty-core/src/surface.rs`, `#[cfg_attr(miri, ignore = ...)]`), the
 same convention as the 58 pre-existing real-OS-state in-lib ignores.
 
+## rustty-core `clipboard_codepoint_map_e2e` (S151-F1 production-path test) — in-lib `cfg_attr(miri, ignore)`
+
+`surface.rs` `clipboard_codepoint_map_e2e::clipboard_codepoint_map_reaches_
+copy_selection_to_clipboards` — the S151-F1 closure's production-path proof
+that `Surface::copySelectionToClipboards` actually applies the
+`clipboard-codepoint-map` config option end to end. It builds a real
+`Config` via `Config::default_config()` (which always compiles a default URL
+link), then a real `DerivedConfig::init(...)` off it — same shape as
+`renderer_config_tests` above.
+
+1. **Structurally impossible under Miri, same root cause as
+   `renderer_config_tests`.** `DerivedConfig::init` -> `Link::oni_regex` ->
+   `Encoding::utf8` reaches the same non-thread-safe oniguruma `extern static
+   OnigEncodingUTF8` Miri cannot model (2026-09-08 close run).
+2. **Passes natively** — `cargo test -p rustty-core clipboard_codepoint_map`:
+   `test result: ok. 2 passed; 0 failed` (this change).
+3. **No uncovered unsafe path — proved, not asserted.** Unlike
+   `renderer_config_tests`, this test's very purpose is a hand-fabricated
+   `MaybeUninit<Surface<TestApp>>` with field-projected raw-pointer writes
+   (`io.terminal`/`config`/`rt_surface`) plus a manual teardown ordering —
+   exactly the kind of `unsafe` this project's Miri lane exists to catch, and
+   which an earlier draft of this test in fact got wrong twice (a
+   `MutexGuard`-outlives-the-freed-`Box` use-after-free found by SIGSEGV
+   bisection, and a Stacked-Borrows read of `surface.rt_surface` after a
+   write through the parent pointer `sp` invalidated its tag — both fixed,
+   see the S151-F1 review). So this exception carries a SECOND, Miri-clean
+   twin test, `clipboard_codepoint_map_fixture_is_miri_clean`, which runs the
+   IDENTICAL fixture and assertions on a `Config` with `link.links` cleared
+   (the only field `DerivedConfig::init` needs oniguruma for) — proving the
+   fixture's raw-pointer/Stacked-Borrows/leak soundness under Miri without
+   touching the oniguruma FFI at all:
+   `.port/tools/miri-run.sh rustty-core clipboard_codepoint_map_fixture_is_miri_clean 1 15 10`
+   -> `VERDICT: ALL-1-MIRI-CLEAN` (0 UB, 0 leaks; 2026-09-08). The two tests
+   share a `fn run(config)` body so they cannot drift apart.
+4. **The blocker is the foreign static, not logic.** A Miri-compatible
+   variant of the *ignored* test specifically would need a `Config` without
+   compiled links and would no longer prove the real
+   `Config::default_config()` path `Surface::init` actually uses — which is
+   exactly why the Miri-clean twin exists as a SEPARATE test rather than a
+   replacement.
+
 ## rustty-vt — full-sweep Miri exceptions (2026-07-11)
 
 The first exhaustive `rustty-vt` Miri sweep (all 2037 lib tests; see
