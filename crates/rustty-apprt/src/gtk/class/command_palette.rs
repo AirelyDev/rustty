@@ -571,7 +571,7 @@ mod imp_command {
                 return Some(k.clone());
             }
             let c = r.command.cval().ok()?;
-            let s = String::from_utf8_lossy(&c.action)
+            let s = String::from_utf8_lossy(c.action())
                 .trim_end_matches('\0')
                 .to_string();
             r.action_key = Some(s.clone());

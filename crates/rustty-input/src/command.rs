@@ -132,6 +132,27 @@ impl CommandCStorage {
             description: self.description.as_ptr(),
         }
     }
+
+    /// Borrow the formatted-action string's bytes (NUL-terminated, matching
+    /// the pre-ABI-fix `Vec<u8>` shape).
+    //
+    // PORT NOTE (regression fix, task-12 checkpoint): `action`/`action_key`/
+    // `title`/`description` were made private fields when `C` was tightened
+    // to a bare `#[repr(C)]` pointer struct (commit 5073fbfe, S1-F1/S103-F1).
+    // That tightening closed a real dangling-pointer hazard: `C`'s raw
+    // pointers must never be exposed or cloned independently of the
+    // `CommandCStorage` that owns their backing `CString`s (see the
+    // `RepeatableCommand` PORT NOTE above `as_c` for the aliasing bug this
+    // prevents). The hazard lives in the *pointer* struct, not the *owned
+    // string* — borrowing a `&[u8]` out of `CommandCStorage` cannot outlive
+    // `self` (ordinary borrow-checked lifetime, no raw pointer involved), so
+    // it does not reopen that hole. `crates/rustty-apprt/src/gtk/class/
+    // command_palette.rs`'s `prop_get_action_key` is the one consumer that
+    // needs the formatted action's bytes (not the pointer view); this is the
+    // narrowest accessor that serves it.
+    pub fn action(&self) -> &[u8] {
+        self.action.as_bytes_with_nul()
+    }
 }
 
 impl Command {
