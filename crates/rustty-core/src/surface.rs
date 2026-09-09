@@ -14961,3 +14961,235 @@ mod queue_io_readonly_tests {
         );
     }
 }
+
+// S151-F1 production-path regression: `Surface::copySelectionToClipboards` is
+// the ONLY place the `clipboard-codepoint-map` config option reaches a
+// formatter (built with `codepoint_map: Some(config.clipboard_codepoint_map
+// .map.list.clone())` a few lines above). The bug lived entirely inside
+// `rustty_vt::formatter`'s internal `copy_options` helper, which every
+// delegation hop (`ScreenFormatter` -> `PageListFormatter` -> `PageFormatter`)
+// used and which hard-coded `codepoint_map: Some(Vec::new())` — so the config
+// option compiled, parsed, and did nothing. `formatter.rs`'s own unit test
+// (`codepoint_map_survives_the_screen_formatter_delegation`) proves the vt
+// crate's delegation chain in isolation; this test proves the actual
+// production call: a real `Config` with `clipboard-codepoint-map` set, run
+// through the real `copySelectionToClipboards`, landing in the runtime's
+// `setClipboard`.
+//
+// `Surface::init` itself is untestable (it spawns a live pty/renderer/io
+// thread — see the `renderer_config_tests` module doc above and
+// `surface_visibility_kat.rs`'s V21 note), so this follows that file's
+// established fabrication recipe: a heap-pinned `Surface<TestApp>` in
+// `MaybeUninit` with ONLY the fields `copySelectionToClipboards` reads
+// written (`io.terminal`, `config`, `rt_surface`) — sound because the method
+// never touches any other field, and `MaybeUninit` never drops the untouched
+// ones.
+#[cfg(test)]
+mod clipboard_codepoint_map_e2e {
+    use super::*;
+    use std::mem::MaybeUninit;
+    use std::sync::Mutex;
+
+    struct TestApp {
+        config: configpkg::Config,
+    }
+
+    impl apprt::App for TestApp {
+        type Surface = TestRtSurface;
+
+        fn perform_action<C: apprt::CoreSurfaceHandle>(
+            &self,
+            _target: apprt::Target<'_, C>,
+            _action: apprt::Action<'_>,
+        ) -> Result<bool, apprt::ApprtError> {
+            unimplemented!("S151-F1 KAT: not driven")
+        }
+
+        fn perform_ipc(
+            &self,
+            _target: apprt::ipc::Target<'_>,
+            _action: apprt::ipc::Action<'_>,
+        ) -> Result<bool, apprt::ipc::Errors> {
+            unimplemented!("S151-F1 KAT: not driven")
+        }
+
+        fn wakeup(&self) {}
+
+        fn config(&self) -> &configpkg::Config {
+            &self.config
+        }
+
+        fn keyboard_layout(&self) -> rustty_input::keyboard::Layout {
+            rustty_input::keyboard::Layout::Unknown
+        }
+    }
+
+    /// Captures every `setClipboard` call so the test can assert on the
+    /// bytes the production formatter actually produced.
+    struct TestRtSurface {
+        core: *mut Surface<TestApp>,
+        app: *mut TestApp,
+        captured: Mutex<Vec<(Vec<u8>, Vec<u8>)>>,
+    }
+
+    impl apprt::Surface for TestRtSurface {
+        type App = TestApp;
+        type Core = Surface<TestApp>;
+
+        fn core(&self) -> *mut Surface<TestApp> {
+            self.core
+        }
+        fn rt_app(&self) -> *mut TestApp {
+            self.app
+        }
+        fn close(&self, _process_alive: bool) {}
+        fn deinit(&mut self) {}
+        fn get_content_scale(&self) -> Result<apprt::ContentScale, apprt::ApprtError> {
+            unimplemented!("S151-F1 KAT: not driven")
+        }
+        fn get_size(&self) -> Result<apprt::SurfaceSize, apprt::ApprtError> {
+            unimplemented!("S151-F1 KAT: not driven")
+        }
+        fn get_title(&self) -> Option<&std::ffi::CStr> {
+            None
+        }
+        fn supports_clipboard(&self, _clipboard_type: apprt::Clipboard) -> bool {
+            unimplemented!("S151-F1 KAT: not driven")
+        }
+        fn clipboard_request(
+            &self,
+            _clipboard_type: apprt::Clipboard,
+            _state: apprt::ClipboardRequest,
+        ) -> Result<apprt::ClipboardReadResult, apprt::ApprtError> {
+            unimplemented!("S151-F1 KAT: not driven")
+        }
+        fn set_clipboard(
+            &self,
+            _clipboard_type: apprt::Clipboard,
+            contents: &[apprt::ClipboardContent<'_>],
+            _confirm: bool,
+        ) -> Result<(), apprt::ApprtError> {
+            let mut captured = self.captured.lock().unwrap();
+            for c in contents {
+                captured.push((c.mime.to_vec(), c.data.to_vec()));
+            }
+            Ok(())
+        }
+        fn get_cursor_pos(&self) -> Result<apprt::CursorPos, apprt::ApprtError> {
+            unimplemented!("S151-F1 KAT: not driven")
+        }
+        fn default_termio_env(&self) -> Result<rustty_global::EnvMap, apprt::ApprtError> {
+            unimplemented!("S151-F1 KAT: not driven")
+        }
+    }
+
+    #[test]
+    fn clipboard_codepoint_map_reaches_copy_selection_to_clipboards() {
+        // A real Config, with `clipboard-codepoint-map` set through its real
+        // CLI parser exactly the way the user's config file would (map 'a',
+        // 0x61, to 'Z', 0x5A).
+        let mut full_config = configpkg::Config::default_config();
+        full_config
+            .clipboard_codepoint_map
+            .parse_cli(Some(b"U+0061=U+005A"))
+            .unwrap();
+
+        // The Surface-level `DerivedConfig` clones `clipboard_codepoint_map`
+        // out of the real `Config` exactly as `Surface::init` does.
+        let derived_config =
+            DerivedConfig::init(Allocator, &full_config).expect("DerivedConfig::init");
+
+        // A terminal with "ab" printed to it (same fixture shape as
+        // `surface_visibility_kat.rs`'s `TestSurface::build`).
+        let mut terminal = rustty_vt::terminal::Terminal::init(
+            Allocator,
+            rustty_vt::terminal::Options {
+                cols: 80,
+                rows: 24,
+                max_scrollback_bytes: Some(1000),
+                max_scrollback_lines: None,
+                colors: rustty_vt::terminal::Colors::default(),
+                default_modes: rustty_vt::modes::ModePacked::default(),
+                default_cursor_style: rustty_vt::screen::CursorStyle::Block,
+                default_cursor_blink: Some(false),
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .expect("Terminal::init");
+        {
+            let mut s = terminal.vt_stream();
+            s.next_slice(b"ab");
+        }
+
+        let mut mu: Box<MaybeUninit<Surface<TestApp>>> = Box::new(MaybeUninit::uninit());
+        let sp = mu.as_mut_ptr();
+
+        let mut rt_app = Box::new(TestApp {
+            config: full_config,
+        });
+        let rt_surface = Box::new(TestRtSurface {
+            core: sp,
+            app: &raw mut *rt_app,
+            captured: Mutex::new(Vec::new()),
+        });
+
+        // Field-projected raw-pointer writes: only the three fields
+        // `copySelectionToClipboards` reads (`io.terminal`, `config`,
+        // `rt_surface`) — see the module doc above.
+        unsafe {
+            std::ptr::addr_of_mut!((*sp).io.terminal).write(terminal);
+            std::ptr::addr_of_mut!((*sp).config).write(derived_config);
+            std::ptr::addr_of_mut!((*sp).rt_surface).write(Box::into_raw(rt_surface));
+        }
+
+        let surface = unsafe { &mut *sp };
+        let pages = unsafe { &(*surface.io.terminal.screens.active).pages };
+        let sel = terminal::selection::Selection::init(
+            pages.get_top_left(terminal::point::Tag::Screen),
+            pages
+                .get_bottom_right(terminal::point::Tag::Screen)
+                .unwrap(),
+            false,
+        );
+
+        surface
+            .copySelectionToClipboards(
+                sel,
+                &[apprt::Clipboard::Standard],
+                binding::CopyToClipboard::Plain,
+            )
+            .expect("copySelectionToClipboards");
+
+        let rt_surface_ref: &TestRtSurface = unsafe { &*surface.rt_surface };
+        let captured = rt_surface_ref.captured.lock().unwrap();
+        assert_eq!(
+            1,
+            captured.len(),
+            "expected exactly one text/plain clipboard write"
+        );
+        assert_eq!(b"text/plain".as_slice(), captured[0].0.as_slice());
+        let text = String::from_utf8_lossy(&captured[0].1);
+        assert_eq!(
+            text.trim_end_matches('\0').trim_end(),
+            "Zb",
+            "clipboard-codepoint-map did not reach copySelectionToClipboards's output \
+             (S151-F1 regression: the config option is silently inert)"
+        );
+        // MUST drop before freeing `rt_surface` below — it borrows through
+        // `rt_surface_ref`, which points into the boxed `TestRtSurface` we
+        // are about to `Box::from_raw` + drop.
+        drop(captured);
+
+        // Teardown: free everything we allocated above (`Terminal` uses the
+        // manual `deinit` convention, not `Drop`; the raw-ptr `rt_surface`
+        // Box; and `rt_app`). `mu` never drops (`MaybeUninit`; the untouched
+        // fields were never initialized).
+        unsafe {
+            (*sp).io.terminal.deinit(Allocator);
+            drop(Box::from_raw(surface.rt_surface));
+        }
+        drop(rt_app);
+        let _ = &mu;
+    }
+}

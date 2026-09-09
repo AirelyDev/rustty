@@ -764,7 +764,7 @@ impl<'a> TerminalFormatter<'a> {
         }
 
         let mut screen_formatter: ScreenFormatter =
-            ScreenFormatter::init(terminal.screens.active, copy_options(&self.opts));
+            ScreenFormatter::init(terminal.screens.active, clone_options(&self.opts));
         screen_formatter.content = match &self.content {
             Content::None => Content::None,
             Content::Selection(sel) => Content::Selection(*sel),
@@ -998,7 +998,7 @@ impl<'a> ScreenFormatter<'a> {
             Content::Selection(selection_) => {
                 // Emit our pagelist contents according to our selection.
                 let mut list_formatter: PageListFormatter =
-                    PageListFormatter::init(&screen.pages, copy_options(&self.opts));
+                    PageListFormatter::init(&screen.pages, clone_options(&self.opts));
                 // PORT NOTE: the reference copies `self.pin_map` (a struct whose
                 // `map` field is a pointer to a shared `ArrayList`) into the list
                 // formatter. In Rust the equivalent is a *reborrow* of the
@@ -1069,7 +1069,7 @@ impl<'a> ScreenFormatter<'a> {
                 let page_pin = unsafe { *cursor.page_pin };
                 let mut cell_formatter: PageFormatter = PageFormatter::init(
                     unsafe { crate::pagelist::Node::page(page_pin.node) } as *const Page,
-                    copy_options(&self.opts),
+                    clone_options(&self.opts),
                 );
                 cell_formatter.start_x = cursor.x;
                 cell_formatter.end_x = Some(cursor.x);
@@ -1233,10 +1233,29 @@ fn write_fmt_result(
 }
 
 // PORT NOTE: `Options` holds a `Vec<CodepointMap>` and is therefore not `Copy`.
-// The reference copies the `Options` struct freely (it is a Zig value type). For
-// the rare "extra formatter on a discarding writer" path we need a shallow copy
-// with the same fields; `codepoint_map` does not affect extras emission, so we
-// clone the simple fields and carry an empty map.
+// The reference copies the `Options` struct freely (it is a Zig value type),
+// including `codepoint_map`, at EVERY delegation site
+// (src/terminal/formatter.zig:486, 675, 726, 897). Rust `Options` owning the
+// map means a blanket "shallow copy" helper is unsafe to use everywhere: it
+// must be reserved for the passes below that provably never reach
+// PageFormatter's content-emitting path, and `clone_options` (below) used
+// everywhere else.
+//
+// `copy_options` drops the map and MUST ONLY be used for a pass whose
+// `content` is `Content::None` — i.e. a pass that emits ONLY "extras" state
+// (palette/modes/tabstops/scrolling-region/keyboard/pwd/cursor-position/
+// style/hyperlink/protection/kitty-keyboard/charsets) and never calls into
+// PageListFormatter/PageFormatter, so no codepoint lookup ever runs against
+// it. Concretely: the `pin_map` byte-counting "discarding writer" replay
+// passes in `TerminalFormatter::format` and `ScreenFormatter::format`, and
+// the trailing "extra screen state" `ScreenFormatter` built in
+// `TerminalFormatter::format` (content = `Content::None`).
+//
+// Every other delegation hop — anything that reaches PageListFormatter or
+// PageFormatter, including the single-cell cursor reformat in
+// `ScreenFormatter::format` — MUST use `clone_options` instead, or the
+// `codepoint_map` a caller set (e.g. the `clipboard-codepoint-map` config
+// option via `Surface::copySelectionToClipboards`) silently stops applying.
 fn copy_options(opts: &Options) -> Options {
     Options {
         emit: opts.emit,
@@ -1246,6 +1265,19 @@ fn copy_options(opts: &Options) -> Options {
         background: opts.background,
         foreground: opts.foreground,
         palette: opts.palette,
+    }
+}
+
+/// Options for a CONTENT delegation hop: the codepoint map must reach
+/// `PageFormatter`, which is the only place it is applied (oracle
+/// src/terminal/formatter.zig:486,675,726,897 pass `self.opts` by value).
+/// `copy_options` above deliberately drops it and is for the extras-only
+/// passes documented on its own doc comment — never for a hop that reaches
+/// PageListFormatter/PageFormatter.
+fn clone_options(opts: &Options) -> Options {
+    Options {
+        codepoint_map: opts.codepoint_map.clone(),
+        ..copy_options(opts)
     }
 }
 
@@ -1307,7 +1339,7 @@ impl<'a> PageListFormatter<'a> {
             // PORT NOTE: `&chunk.node.data` — the page lives in the node; deref
             // the raw `*mut Node` to take a `*const Page`.
             let page: *const Page = unsafe { &(*crate::pagelist::Node::page(chunk.node)) };
-            let mut formatter: PageFormatter = PageFormatter::init(page, copy_options(&self.opts));
+            let mut formatter: PageFormatter = PageFormatter::init(page, clone_options(&self.opts));
             formatter.start_y = chunk.start;
             formatter.end_y = Some(chunk.end - 1);
             formatter.trailing_state = page_state;
@@ -6726,6 +6758,41 @@ mod tests {
         formatter.format(&mut builder).unwrap();
         let output = builder.as_slice();
         assert_eq!(output, b"hello world");
+        t.deinit(Global);
+    }
+
+    // Regression test for S151-F1: `codepoint_map` set on a `ScreenFormatter`
+    // (the shape `Surface::copySelectionToClipboards` uses for the
+    // `clipboard-codepoint-map` config option) must survive the
+    // ScreenFormatter -> PageListFormatter -> PageFormatter delegation chain
+    // and actually apply the replacement. Every hop in the reference passes
+    // `self.opts` by value (src/terminal/formatter.zig:486,675,897); a
+    // Rust `copy_options` helper that drops the map on any *content* hop
+    // silently makes the config option inert.
+    #[test]
+    fn codepoint_map_survives_the_screen_formatter_delegation() {
+        let mut builder: Vec<u8> = Vec::new();
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+        {
+            let mut s = t.vt_stream();
+            s.next_slice(b"ab");
+        }
+        // map 'a' (0x61) -> 'Z' (0x5A), the same shape config uses.
+        let map = vec![CodepointMap {
+            range: ['a' as u21, 'a' as u21],
+            replacement: Replacement::Codepoint('Z' as u21),
+        }];
+        let mut o = Options::plain();
+        o.codepoint_map = Some(map);
+        let mut formatter: ScreenFormatter = ScreenFormatter::init(t.screens.active, o);
+        formatter.content = Content::Selection(None);
+        formatter.format(&mut builder).unwrap();
+        let output = String::from_utf8_lossy(&builder);
+        assert_eq!(
+            output.trim_end(),
+            "Zb",
+            "codepoint_map was dropped on the way down to PageFormatter"
+        );
         t.deinit(Global);
     }
 
