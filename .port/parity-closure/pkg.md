@@ -11,15 +11,15 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** x86 AVX2 gate drops the XCR0 (xgetbv) OS-support check and the LZCNT/BMI/BMI2 requirements
   - **Oracle:** `pkg/highway/src/detect/x86.zig:63-94` → **Rustty:** `crates-sys/highway-sys/cpp/detect.c:172-183`
   - **Audit's suggested fix:** Port x86.zig:63-94 literally: read XCR0 with `_xgetbv(0)` (or inline asm) when OSXSAVE&&AVX, require (xcr0&0x6)==0x6, then require leaf 0x80000001 ecx bit5 and leaf7 ebx bits 3 and 8 before setting TGT_AVX2; gate the whole block on has_avx_save && max_leaf>=7 as the oracle does.
-- [ ] **S34-F4** · CONFIRMED · `INDIV` · missing-file
+- [x] **S34-F4** · CONFIRMED · `INDIV` · missing-file
   - **What:** PowerPC target detection (ppc8/ppc9/ppc10) has no counterpart; powerpc falls to `return 0`
   - **Oracle:** `pkg/highway/src/detect/ppc.zig:1-43` → **Rustty:** `crates-sys/highway-sys/cpp/detect.c:188-190`
   - **Audit's suggested fix:** Add an `#elif defined(__powerpc__) || defined(__powerpc64__)` branch to detect.c porting ppc.zig with TGT_PPC10 (1<<47), TGT_PPC9 (1<<48), TGT_PPC8 (1<<49), gated on __linux__.
-- [ ] **S34-F5** · CONFIRMED · `INDIV` · missing-file
+- [x] **S34-F5** · CONFIRMED · `INDIV` · missing-file
   - **What:** s390x target detection (z14/z15) has no counterpart; s390x falls to `return 0`
   - **Oracle:** `pkg/highway/src/detect/s390x.zig:1-29` → **Rustty:** `crates-sys/highway-sys/cpp/detect.c:188-190`
   - **Audit's suggested fix:** Add `#elif defined(__s390x__)` branch porting s390x.zig with TGT_Z15 (1<<50), TGT_Z14 (1<<51).
-- [ ] **S34-F6** · CONFIRMED · `INDIV` · missing-file
+- [x] **S34-F6** · CONFIRMED · `INDIV` · missing-file
   - **What:** RISC-V target detection (rvv) has no counterpart; riscv falls to `return 0`
   - **Oracle:** `pkg/highway/src/detect/riscv.zig:1-22` → **Rustty:** `crates-sys/highway-sys/cpp/detect.c:188-190`
   - **Audit's suggested fix:** Add `#elif defined(__riscv)` branch porting riscv.zig with TGT_RVV (1<<37).

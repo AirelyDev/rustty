@@ -27,6 +27,15 @@
 #define TGT_NEON_BF16  (1LL << 26)
 #define TGT_NEON       (1LL << 28)
 #define TGT_NEON_NO_AES (1LL << 29)
+// risc-v
+#define TGT_RVV        (1LL << 37)
+// IBM Power / s390x (targets.zig bitPos asserts: ppc10=47, ppc9=48, ppc8=49,
+// z15=50, z14=51)
+#define TGT_PPC10      (1LL << 47)
+#define TGT_PPC9       (1LL << 48)
+#define TGT_PPC8       (1LL << 49)
+#define TGT_Z15        (1LL << 50)
+#define TGT_Z14        (1LL << 51)
 
 static inline int bit_set(unsigned int val, int pos) {
   return ((val >> pos) & 1u) != 0;
@@ -88,6 +97,99 @@ int64_t rustty_hwy_detect_targets_x86_avx2_for_test(unsigned int max_leaf,
   return x86_avx2_enabled(max_leaf, leaf1_ecx, leaf7_ebx, ext_leaf1_ecx, xcr0)
              ? TGT_AVX2
              : 0;
+}
+
+// -- PowerPC target gate (portable, no CPU instructions) --------------------
+//
+// Ports pkg/highway/src/detect/ppc.zig:16-40 bit-for-bit: PPC8 requires
+// AT_HWCAP ALTIVEC + VSX and AT_HWCAP2 ARCH_2_07 + VEC_CRYPTO; PPC9 adds
+// AT_HWCAP2 ARCH_3_00; PPC10 adds AT_HWCAP2 ARCH_3_1 + MMA (each tier nested
+// inside the previous, exactly as the oracle nests them).
+//
+// Kept free of `#if defined(__powerpc__)` so
+// `rustty_hwy_detect_targets_ppc_for_test` below can drive it with synthetic
+// hwcap/hwcap2 values on ANY host (including this non-PowerPC dev machine),
+// and so the real ppc detector (further down, under the ppc `#elif`) calls
+// this exact logic instead of a duplicate.
+static int64_t ppc_targets_enabled(uint64_t hwcap, uint64_t hwcap2) {
+  const uint64_t PPC_FEATURE_HAS_ALTIVEC = 0x10000000;
+  const uint64_t PPC_FEATURE_HAS_VSX = 0x00000080;
+  const uint64_t PPC_FEATURE2_ARCH_2_07 = 0x80000000; // POWER8
+  const uint64_t PPC_FEATURE2_VEC_CRYPTO = 0x02000000;
+  const uint64_t PPC_FEATURE2_ARCH_3_00 = 0x00800000; // POWER9
+  const uint64_t PPC_FEATURE2_ARCH_3_1 = 0x00040000;  // POWER10
+  const uint64_t PPC_FEATURE2_MMA = 0x00020000;
+
+  int64_t t = 0;
+  if ((hwcap & PPC_FEATURE_HAS_ALTIVEC) && (hwcap & PPC_FEATURE_HAS_VSX) &&
+      (hwcap2 & PPC_FEATURE2_ARCH_2_07) &&
+      (hwcap2 & PPC_FEATURE2_VEC_CRYPTO)) {
+    t |= TGT_PPC8;
+
+    if (hwcap2 & PPC_FEATURE2_ARCH_3_00) {
+      t |= TGT_PPC9;
+
+      if ((hwcap2 & PPC_FEATURE2_ARCH_3_1) && (hwcap2 & PPC_FEATURE2_MMA)) {
+        t |= TGT_PPC10;
+      }
+    }
+  }
+  return t;
+}
+
+// Test seam (S34-F4): exposes ppc_targets_enabled() to Rust tests with
+// synthetic AT_HWCAP/AT_HWCAP2 inputs, callable on every host this crate
+// builds on.
+int64_t rustty_hwy_detect_targets_ppc_for_test(uint64_t hwcap,
+                                                uint64_t hwcap2) {
+  return ppc_targets_enabled(hwcap, hwcap2);
+}
+
+// -- s390x target gate (portable, no CPU instructions) -----------------------
+//
+// Ports pkg/highway/src/detect/s390x.zig:9-25 bit-for-bit: Z14 requires
+// AT_HWCAP VX + VXE; Z15 adds VXE2 (nested inside VX + VXE, as the oracle
+// nests it). Note the oracle also requires VX to be set even though Z14/Z15
+// checks are nested under it — mirrored here via the outer `hwcap & HWCAP_VX`
+// guard.
+static int64_t s390x_targets_enabled(uint64_t hwcap) {
+  const uint64_t HWCAP_VX = (uint64_t)1 << 11;
+  const uint64_t HWCAP_VXE = (uint64_t)1 << 13;  // z14
+  const uint64_t HWCAP_VXE2 = (uint64_t)1 << 15; // z15
+
+  int64_t t = 0;
+  if (hwcap & HWCAP_VX) {
+    if (hwcap & HWCAP_VXE) {
+      t |= TGT_Z14;
+
+      if (hwcap & HWCAP_VXE2) {
+        t |= TGT_Z15;
+      }
+    }
+  }
+  return t;
+}
+
+// Test seam (S34-F5): exposes s390x_targets_enabled() to Rust tests with a
+// synthetic AT_HWCAP input, callable on every host this crate builds on.
+int64_t rustty_hwy_detect_targets_s390x_for_test(uint64_t hwcap) {
+  return s390x_targets_enabled(hwcap);
+}
+
+// -- RISC-V target gate (portable, no CPU instructions) ----------------------
+//
+// Ports pkg/highway/src/detect/riscv.zig:9-17 bit-for-bit: RVV requires
+// AT_HWCAP bit ('V' - 'A') == 21.
+static int64_t riscv_targets_enabled(uint64_t hwcap) {
+  const uint64_t HWCAP_V = (uint64_t)1 << ('V' - 'A'); // bit 21
+
+  return (hwcap & HWCAP_V) ? TGT_RVV : 0;
+}
+
+// Test seam (S34-F6): exposes riscv_targets_enabled() to Rust tests with a
+// synthetic AT_HWCAP input, callable on every host this crate builds on.
+int64_t rustty_hwy_detect_targets_riscv_for_test(uint64_t hwcap) {
+  return riscv_targets_enabled(hwcap);
 }
 
 #if defined(__aarch64__) || defined(_M_ARM64)
@@ -257,6 +359,76 @@ int64_t rustty_hwy_detect_targets(void) {
 
   return t;
 }
+
+// -- PowerPC ------------------------------------------------------------
+#elif defined(__powerpc__) || defined(__powerpc64__)
+
+#if defined(__linux__)
+#include <sys/auxv.h>
+
+int64_t rustty_hwy_detect_targets(void) {
+  // From Linux arch/powerpc/include/uapi/asm/cputable.h, read via
+  // getauxval(AT_HWCAP / AT_HWCAP2) exactly as ppc.zig:9-13 does.
+  const unsigned long AT_HWCAP_ = 16;
+  const unsigned long AT_HWCAP2_ = 26;
+
+  uint64_t hwcap = getauxval(AT_HWCAP_);
+  uint64_t hwcap2 = getauxval(AT_HWCAP2_);
+
+  return ppc_targets_enabled(hwcap, hwcap2);
+}
+
+#else
+int64_t rustty_hwy_detect_targets(void) {
+  // Non-Linux: the oracle's ppc.zig returns the zero target struct.
+  return 0;
+}
+#endif
+
+// -- s390x ----------------------------------------------------------------
+#elif defined(__s390x__)
+
+#if defined(__linux__)
+#include <sys/auxv.h>
+
+int64_t rustty_hwy_detect_targets(void) {
+  // From Linux arch/s390/include/asm/elf.h, read via getauxval(AT_HWCAP)
+  // exactly as s390x.zig:9-12 does.
+  const unsigned long AT_HWCAP_ = 16;
+
+  uint64_t hwcap = getauxval(AT_HWCAP_);
+
+  return s390x_targets_enabled(hwcap);
+}
+
+#else
+int64_t rustty_hwy_detect_targets(void) {
+  // Non-Linux: the oracle's s390x.zig returns the zero target struct.
+  return 0;
+}
+#endif
+
+// -- RISC-V -----------------------------------------------------------------
+#elif defined(__riscv)
+
+#if defined(__linux__)
+#include <sys/auxv.h>
+
+int64_t rustty_hwy_detect_targets(void) {
+  // Read via getauxval(AT_HWCAP) exactly as riscv.zig:9-12 does.
+  const unsigned long AT_HWCAP_ = 16;
+
+  uint64_t hwcap = getauxval(AT_HWCAP_);
+
+  return riscv_targets_enabled(hwcap);
+}
+
+#else
+int64_t rustty_hwy_detect_targets(void) {
+  // Non-Linux: the oracle's riscv.zig returns the zero target struct.
+  return 0;
+}
+#endif
 
 #else
 int64_t rustty_hwy_detect_targets(void) { return 0; }
