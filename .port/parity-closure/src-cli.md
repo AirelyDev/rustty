@@ -1,0 +1,148 @@
+# Parity closure checklist — src/cli
+
+34 open finding(s): 0 high, 13 medium, 21 low. Full evidence per row is in [`docs/parity-audit/src-cli.md`](../../docs/parity-audit/src-cli.md).
+
+A row is CLOSED only when its fix has a test that fails without it (or a written, reviewed justification for why no test is possible).
+
+
+## Medium (13)
+
+- [ ] **S67-F1** · CONFIRMED · `INDIV` · missing-branch
+  - **What:** formatValues enum suffix (', valid values are: ...') is never emitted: Target::format_values default is empty and no implementor overrides it
+  - **Oracle:** `src/cli/args.zig:240-286` → **Rustty:** `crates/rustty-args/src/args.rs:292-294, 762-800`
+  - **Audit's suggested fix:** Implement format_values in Config's Target impl (and other diagnostic-tracking Targets) to enumerate the enum field's variant names for `key`, matching formatValues.
+- [ ] **S67-F2** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** LineIterator: a line longer than MAX_LINE_SIZE-2 (4094) bytes is silently truncated and parsing continues, whereas the reference logs a warning and stops iteration
+  - **Oracle:** `src/cli/args.zig:1437-1447` → **Rustty:** `crates/rustty-args/src/args.rs:1790-1806`
+  - **Audit's suggested fix:** When content.len() > MAX_LINE_SIZE - 2, log the 'cannot read from "{filepath}": WriteFailed' warning and return None (and keep returning None), matching the fixed-writer overflow path.
+- [ ] **S67-F3** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Integer fields reject '_' digit separators that std.fmt.parseInt(T, v, 0) accepts
+  - **Oracle:** `src/cli/args.zig:418-435` → **Rustty:** `crates/rustty-args/src/args.rs:1239-1274`
+  - **Audit's suggested fix:** In parse_int_auto, reject leading/trailing '_' on the digit string, strip interior '_' characters, then call from_str_radix.
+- [ ] **S67-F4** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Float fields reject '_' separators and hexadecimal floats that std.fmt.parseFloat accepts
+  - **Oracle:** `src/cli/args.zig:436-442` → **Rustty:** `crates/rustty-args/src/args.rs:1187-1191`
+  - **Audit's suggested fix:** Add a small std.fmt.parseFloat-compatible front end: validate/strip underscores per validUnderscores and handle 0x hex-float mantissa/exponent before delegating to f64::from_str.
+- [ ] **S67-F6** · CONFIRMED · `TEST` · weakened-assertion
+  - **What:** Six parseIntoField tests exercise test-local re-implementations of parseIntoField's generic rules rather than library code
+  - **Oracle:** `src/cli/args.zig:893-908, 719-737, 910-931, 1121-1140, 1142-1187` → **Rustty:** `crates/rustty-args/src/args/tests.rs:626-649, 241-300, 651-690, 1008-1040, 1042-1118`
+  - **Audit's suggested fix:** Provide library-level helpers for the generic rules (e.g. a `parse_field_with_default(value, default, parser)` / `parse_optional_field` and an underscore-key guard used by every Target) and make these tests drive those helpers so the assertions constrain shared code.
+- [ ] **S68-F1** · CONFIRMED · `INDIV` · missing-error-path
+  - **What:** list_colors pretty_print: early `?` returns skip tty.deinit/vx.deinit (terminal left in raw mode)
+  - **Oracle:** `src/cli/list_colors.zig:81-105` → **Rustty:** `crates/rustty-cli/src/list_colors.rs:195-225`
+  - **Audit's suggested fix:** Capture the results of the unicode_set write and winsize_for into a Result (as is already done for render_colors) and run the three cleanup steps unconditionally before propagating; or give PosixTty a Drop that restores termios.
+- [ ] **S68-F2** · CONFIRMED · `INDIV` · missing-error-path
+  - **What:** list_keybinds pretty_print: early `?` returns skip tty.deinit/vx.deinit (terminal left in raw mode)
+  - **Oracle:** `src/cli/list_keybinds.zig:226-251` → **Rustty:** `crates/rustty-cli/src/list_keybinds.rs:440-472`
+  - **Audit's suggested fix:** Same as list_colors: fold the pre-render fallible steps into the captured `res` so the cleanup block runs on every exit.
+- [ ] **S69-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Search box does not use TextInput.drawWithStyle: no cursor, no horizontal scroll/ellipsis
+  - **Oracle:** `src/cli/list_themes.zig:823-836` → **Rustty:** `crates/rustty-cli/src/list_themes.rs:1345-1370`
+  - **Audit's suggested fix:** Restructure lifetimes so `text_input` is `'a`-lived (e.g. hold it outside DrawState next to tty/vx, or give DrawState a `&'a mut TextInput` slot for the frame) and call `draw_with_style(child, ui_standard(scheme))` as the reference does.
+- [ ] **S70-F1** · CONFIRMED · `DOC` · missing-branch
+  - **What:** +version omits the entire GTK block (kernel, desktop env, GTK/libadwaita versions, libX11/libwayland) on the GTK build
+  - **Oracle:** `src/cli/version.zig:49-75` → **Rustty:** `crates/rustty-cli/src/version.rs:189-223`
+  - **Audit's suggested fix:** Add a `#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "gtk"))]` block (guarded at runtime on `build_config::app_runtime() == Runtime::Gtk`) that prints the kernel line (Linux only, with the exact fallback string), `desktop env` tag from rustty_os::desktopEnvironment(&environ_map), GTK/libadwaita build (BASELINE) and runtime versions formatted as `{major}.{minor}.{micro}`, and `libX11`/`libwayland` enabled/disabled from `cfg!(feature = "x11")`/`cfg!(feature = "wayland")` passed through rustty-cli's Cargo features.
+- [ ] **S70-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** +ssh does not implement the `--flag=` (set-but-empty) reset-to-default rule for its five flags
+  - **Oracle:** `src/cli/ssh.zig:30-48` → **Rustty:** `crates/rustty-cli/src/ssh.rs:127-159`
+  - **Audit's suggested fix:** In ssh.rs parse_into_field, before delegating, check `if let Some(v) = value { if v.is_empty() { <field> = <default>; return Ok(()); } }` for each of the five flags (true/true/true/b"ssh"/false), as show_face.rs does.
+- [ ] **S70-F3** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** +ssh-cache `--clear=` (empty value) errors instead of resetting to false
+  - **Oracle:** `src/cli/ssh_cache.zig:13` → **Rustty:** `crates/rustty-cli/src/ssh_cache.rs:60-63`
+  - **Audit's suggested fix:** Add the same empty-value guard to the `clear` arm: `if let Some(v) = value { if v.is_empty() { self.clear = false; return Ok(()); } }`.
+- [ ] **S71-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** isValidHost total-length limit: oracle accepts up to 255 bytes, rustty rejects above 253
+  - **Oracle:** `src/cli/ssh-cache/DiskCache.zig:432-449` → **Rustty:** `crates/rustty-cli/src/ssh_cache/disk_cache.rs:665-681`
+  - **Audit's suggested fix:** Port std HostName.validate's limit (255) for the DiskCache validator — either bump rustty_os::hostname::isValid to 255 (the oracle's os/hostname.zig no longer has isValid at this pin, so nothing else pins 253) or add a `validate`-faithful helper in rustty-os and call it from is_valid_host.
+- [ ] **S71-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Entry.parse timestamp: Zig parseInt accepts '_' digit separators, Rust parse rejects them
+  - **Oracle:** `src/cli/ssh-cache/Entry.zig:21-27` → **Rustty:** `crates/rustty-cli/src/ssh_cache/entry.rs:153-161`
+  - **Audit's suggested fix:** In parse_int_i64, reject a leading/trailing '_' and strip interior '_' before calling parse (or hand-roll the base-10 accumulate loop mirroring parseIntWithSign, including overflow -> error).
+
+## Low (21)
+
+- [ ] **S67-F11** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Editor is exec'd via std::process::Command::exec instead of a raw execve, changing the inherited signal state
+  - **Oracle:** `src/cli/edit_config.zig:129-136` → **Rustty:** `crates/rustty-cli/src/edit_config.rs:234-243`
+  - **Audit's suggested fix:** Call execve directly (via the crate's existing raw-syscall shim) or use `Command` with the signal-reset behaviour disabled.
+- [ ] **S67-F12** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** exec-failure message: command bytes printed lossily and errno name falls back to a number outside the transcribed execve table
+  - **Oracle:** `src/cli/edit_config.zig:138-156` → **Rustty:** `crates/rustty-cli/src/edit_config.rs:253-266, 283-306, 379-382`
+  - **Audit's suggested fix:** Write the command bytes with write_all like the path lines, and extend the errno table (or derive names from the platform's full E enum).
+- [ ] **S67-F5** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** parse_auto_struct collapses CommaSplitter errors into InvalidValue; the reference propagates them as distinct errors
+  - **Oracle:** `src/cli/args.zig:540-542` → **Rustty:** `crates/rustty-args/src/args.rs:942`
+  - **Audit's suggested fix:** Widen ParseError with the three CommaSplitter variants (or a Splitter(comma_splitter::Error) variant) and propagate them; render them through the 'unknown error {err}' diagnostic arm in parse/parse_self.
+- [ ] **S67-F8** · DISPUTED · `INDIV` · weakened-assertion
+  - **What:** 'parse: compatibility renamed' does not exercise the library compatibility_renamed helper
+  - **Oracle:** `src/cli/args.zig:866-891` → **Rustty:** `crates/rustty-args/src/args/tests.rs:560-624`
+  - **Audit's suggested fix:** Return `Some(compatibility_renamed(b"a"))` from the test's compatibility() so the library closure is what runs.
+- [ ] **S67-F9** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** Three log messages are dropped (compat-handler info, renamed-field warn, LineIterator read-failure warn)
+  - **Oracle:** `src/cli/args.zig:144-147, 222-225, 1442` → **Rustty:** `crates/rustty-args/src/args.rs:509-510, 752, 1790`
+  - **Audit's suggested fix:** Emit the messages through the crate's logging facade (as other rustty crates do for std.log.scoped).
+- [ ] **S68-F3** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** list_colors plain path flushes stdout; oracle never flushes its buffered writer
+  - **Oracle:** `src/cli/list_colors.zig:58-73` → **Rustty:** `crates/rustty-cli/src/list_colors.rs:148-166`
+  - **Audit's suggested fix:** None required (keep the flush); optionally note it in DEFERRALS/PORT NOTES as an intentional oracle-bug deviation.
+- [ ] **S68-F4** · CONFIRMED · `LOG` · other
+  - **What:** list_fonts drops the two `log.err` messages on familyName/name failure
+  - **Oracle:** `src/cli/list_fonts.zig:122-131` → **Rustty:** `crates/rustty-cli/src/list_fonts.rs:311-331`
+  - **Audit's suggested fix:** eprintln!("[error] [list_fonts] failed to get font family name: {err:?}") (and the name variant) before `continue`, matching the ssh.rs convention.
+- [ ] **S68-F5** · CONFIRMED · `LOG` · other
+  - **What:** help-text write/flush failure warning lacks the std.log level/scope prefix
+  - **Oracle:** `src/cli/ghostty.zig:134-141` → **Rustty:** `crates/rustty-cli/src/rustty.rs:372-381`
+  - **Audit's suggested fix:** Use the crate's `[warn] [...]` stderr convention (ssh.rs) or a shared log helper.
+- [ ] **S69-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Save-pane instruction lines 12 and 14 reworded beyond the Ghostty->Rustty token rename
+  - **Oracle:** `src/cli/list_themes.zig:866-880` → **Rustty:** `crates/rustty-cli/src/list_themes.rs:1393-1416`
+  - **Audit's suggested fix:** Restore 'visit the Rustty documentation:' (token rename only) and decide explicitly on the docs URL.
+- [ ] **S69-F3** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Theme-load error pane prints Debug repr instead of the reference `{}` error name
+  - **Oracle:** `src/cli/list_themes.zig:952-966` → **Rustty:** `crates/rustty-cli/src/list_themes.rs:1508-1516`
+  - **Audit's suggested fix:** Implement Display for LoadError producing `error.<Name>` (or map to the Zig error-name string) and use it here.
+- [ ] **S69-F4** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Port flushes stderr; reference never flushes its buffered stderr writer in run()
+  - **Oracle:** `src/cli/list_themes.zig:120-127,171-174` → **Rustty:** `crates/rustty-cli/src/list_themes.rs:281-299,356-364`
+  - **Audit's suggested fix:** Keep the port behaviour (it is the intended one) but record the deliberate divergence in the PORT NOTE; or, for strict parity, drop the flush.
+- [ ] **S69-F5** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** 'Error parsing args' message formats the error differently (Debug/Display vs Zig `{}` error name)
+  - **Oracle:** `src/cli/new_tab.zig:208-214` → **Rustty:** `crates/rustty-cli/src/new_tab.rs:425-441`
+  - **Audit's suggested fix:** Format as `error.<ZigName>` for each variant (map io::Error kinds to the Zig RealPathFileError names) to match the reference text.
+- [ ] **S69-F7** · DISPUTED · `INDIV` · other
+  - **What:** Port adds empty-filter guards where the reference indexes out of bounds (Debug panic / ReleaseFast UB)
+  - **Oracle:** `src/cli/list_themes.zig:484-495,839-863,407-425` → **Rustty:** `crates/rustty-cli/src/list_themes.rs:900-916,1381-1391,2318-2325`
+  - **Audit's suggested fix:** No change required; keep the PORT NOTEs (issue 4) documenting the UB resolution.
+- [ ] **S70-F4** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** +version Build Config line formats differ from the reference `{}` enum rendering
+  - **Oracle:** `src/cli/version.zig:43-46` → **Rustty:** `crates/rustty-cli/src/version.rs:159-184`
+  - **Audit's suggested fix:** Emit `.{snake_tag}` for runtime/font backend (add a `tag()` accessor returning the reference @tagName strings) and `.Debug`/`.ReleaseFast` for build mode; keep the Rust-version relabel only if the fork is an accepted R2 decision.
+- [ ] **S70-F5** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** +show-face drops the user's `freetype-load-flags` on freetype targets when building the font DerivedConfig
+  - **Oracle:** `src/cli/show_face.zig:175-178` → **Rustty:** `crates/rustty-cli/src/show_face.rs:701-707`
+  - **Audit's suggested fix:** Replace the constant with a cfg-split helper mirroring rustty-core's `derived_freetype_load_flags` (call `rustty_core::surface::freetype_load_flags_from_config(&config.freetype_load_flags)` on non-macOS/non-wasm targets).
+- [ ] **S70-F6** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Install-failure warning text differs: reference prints the error tag `InstallFailed`, port prints ad-hoc sentences
+  - **Oracle:** `src/cli/ssh.zig:281-283,530-545` → **Rustty:** `crates/rustty-cli/src/ssh.rs:525-531,903-923`
+  - **Audit's suggested fix:** Return a single `InstallFailed`-named error (Display = "InstallFailed") from install_remote_terminfo, and format reference `{}`-printed errors as `error.<Name>` in show_face.rs.
+- [ ] **S70-F7** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** toggle_quick_terminal Options.class lacks the empty-value reset (not reachable at runtime)
+  - **Oracle:** `src/cli/toggle_quick_terminal.zig:9` → **Rustty:** `crates/rustty-cli/src/toggle_quick_terminal.rs:57-60`
+  - **Audit's suggested fix:** Add the `if v.is_empty() { self.class = None; return Ok(()); }` guard and use parse_field_sentinel_string for the `[:0]` type, matching validate_config.rs:49-55.
+- [ ] **S71-F3** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** IPv6 fallback accepts embedded-IPv4 forms the oracle rejects
+  - **Oracle:** `src/cli/ssh-cache/DiskCache.zig:442-448` → **Rustty:** `crates/rustty-cli/src/ssh_cache/disk_cache.rs:676-681`
+  - **Audit's suggested fix:** Add a pre-check in is_valid_host: if the text contains '.', accept it as IPv6 only when it starts (case-insensitively) with `::ffff:` and the remainder parses as IPv4; otherwise return false.
+- [ ] **S71-F4** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** add() opens an existing cache file via create_new + open + chmod instead of a plain O_CREAT open
+  - **Oracle:** `src/cli/ssh-cache/DiskCache.zig:72-92` → **Rustty:** `crates/rustty-cli/src/ssh_cache/disk_cache.rs:200-208`
+  - **Audit's suggested fix:** Open with OpenOptions::new().read(true).write(true).create(true).mode(0o600) (no create_new, no fixup) to match the oracle's effective behaviour.
+- [ ] **S71-F5** · DISPUTED · `ALLOC` · weakened-assertion
+  - **What:** FailingAllocator tests collapsed to a single success assertion
+  - **Oracle:** `src/cli/ssh-cache/DiskCache.zig:640-717` → **Rustty:** `crates/rustty-cli/src/ssh_cache/disk_cache.rs:1174-1261`
+  - **Audit's suggested fix:** None required functionally; if desired, run these two tests under Miri (leak check) to preserve the no-leak intent, and keep the PORT NOTE explaining the collapse.
+- [ ] **S71-F7** · DISPUTED · `LOG` · behavioral-difference
+  - **What:** Log sink/format differs: std.log.warn / log.err replaced by eprintln! with ad-hoc prefixes
+  - **Oracle:** `src/cli/ssh-cache/Entry.zig:22-25` → **Rustty:** `crates/rustty-cli/src/ssh_cache/entry.rs:62-67, 166-168`
+  - **Audit's suggested fix:** Route through the workspace's scoped log facility (if one exists for cli/config) with the same message text and error-name formatting.

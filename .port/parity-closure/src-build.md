@@ -1,0 +1,132 @@
+# Parity closure checklist — src/build
+
+30 open finding(s): 0 high, 16 medium, 14 low. Full evidence per row is in [`docs/parity-audit/src-build.md`](../../docs/parity-audit/src-build.md).
+
+A row is CLOSED only when its fix has a test that fails without it (or a written, reviewed justification for why no test is possible).
+
+
+## Medium (16)
+
+- [ ] **S63-F1** · CONFIRMED · `INDIV` · missing-branch
+  - **What:** update-translations drops the command-palette source and the N_ keyword from xgettext
+  - **Oracle:** `src/build/GhosttyI18n.zig:64-71, 152-155` → **Rustty:** `xtask/src/translations.rs:79-92, 196-219`
+  - **Audit's suggested fix:** Add `crates/rustty-input/src/command.rs` (and `--keyword=N_`) to the GTK xgettext leg in translations.rs, matching GhosttyI18n.zig:152-155.
+- [ ] **S63-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Version pre-release/build are never derived from git, so dev builds report the `stable` release channel
+  - **Oracle:** `src/build/Config.zig:276-339, 693-701` → **Rustty:** `crates/rustty-build-config/src/lib.rs:93-103, 131-141, 159-181`
+  - **Audit's suggested fix:** In a build.rs (identity or build-config) detect git branch/short hash like GitVersion.detect, expose `VERSION_STRING` as `X.Y.Z-<branch>+<hash>` (or `-dev+0000000` without git) and derive ReleaseChannel from it; keep bare X.Y.Z only for `vX.Y.Z` tags / an explicit override.
+- [ ] **S63-F3** · CONFIRMED · `INDIV` · missing-branch
+  - **What:** No universal (aarch64 + x86_64) macOS library; xcframework_target default `.universal` not honoured
+  - **Oracle:** `src/build/GhosttyLib.zig:181-211` → **Rustty:** `xtask/src/main.rs:363-364, 496-524`
+  - **Audit's suggested fix:** Build the staticlib for both `aarch64-apple-darwin` and `x86_64-apple-darwin`, `lipo -create` the combined archives, and expose an `--xcframework-target universal|native` switch mirroring the option.
+- [ ] **S63-F4** · CONFIRMED · `INDIV` · missing-function
+  - **What:** patchelf interp/rpath step for NixOS native builds is absent
+  - **Oracle:** `src/build/Config.zig:371-406, 642-656` → **Rustty:** `nix/devShell.nix:206-208`
+  - **Audit's suggested fix:** Add an xtask (or devShell `shellHook`/cargo runner) post-link step that, when `IN_NIX_SHELL` is set on native Linux, runs patchelf with `--set-interpreter` from `ld.so` and `--set-rpath $LD_LIBRARY_PATH`, with explicit overrides.
+- [ ] **S63-F6** · CONFIRMED · `INDIV` · missing-error-path
+  - **What:** checkNixShell NixOS-outside-nix-shell build error is not ported
+  - **Oracle:** `src/build/GhosttyExe.zig:36-37, 66-106` → **Rustty:** `crates/rustty/Cargo.toml:1-40`
+  - **Audit's suggested fix:** Add the same check (Linux, non-cross, `/etc/NIXOS` present, `IN_NIX_SHELL` unset) to a build.rs of the `rustty` bin crate, emitting the same guidance (`nix develop -c cargo build`) as a hard error.
+- [ ] **S63-F7** · CONFIRMED · `INDIV` · missing-test
+  - **What:** No distcheck for the lib-vt tarball (test-lib-vt run + CMake configure/build inside the extracted tree)
+  - **Oracle:** `src/build/GhosttyDist.zig:126-147, 156-171` → **Rustty:** `xtask/src/dist.rs:223-283`
+  - **Audit's suggested fix:** Add `distcheck-lib-vt` to xtask: extract `dist/librustty-vt-<v>.tar.gz`, run `cargo test -p rustty-vt -p rustty-vt-c --offline --locked` and `cmake -B cmake-build && cmake --build cmake-build` inside it.
+- [ ] **S63-F8** · CONFIRMED · `TEST` · weakened-assertion
+  - **What:** Workspace distcheck builds the extracted tarball instead of running the test suite
+  - **Oracle:** `src/build/GhosttyDist.zig:128-131` → **Rustty:** `xtask/src/dist.rs:264-279`
+  - **Audit's suggested fix:** Run `cargo test --workspace --offline --locked` (at least `--no-run` plus the fast lanes) in the extracted tree.
+- [ ] **S64-F1** · CONFIRMED · `INDIV` · missing-function
+  - **What:** GitVersion.detect not ported: branch/tag/dirty detection and the derived pre-release version are absent
+  - **Oracle:** `src/build/GitVersion.zig:19-86` → **Rustty:** `crates/rustty-cli/build.rs:49-94`
+  - **Audit's suggested fix:** Add a build-time git probe (in rustty-build-config's build.rs) that reproduces detect(): sanitised branch, short hash, exact tag, and the Config.zig composition rules (tag must equal v<manifest>, `dev+0000000` fallback), exposing VERSION/VERSION_STRING with the `-<branch>+<hash>` pre-release so release_channel() becomes Tip on untagged builds.
+- [ ] **S64-F2** · CONFIRMED · `INDIV` · missing-branch
+  - **What:** metal compile omits -mmacos-version-min=<os_version_min>
+  - **Oracle:** `src/build/MetallibStep.zig:36-56` → **Rustty:** `crates/rustty-renderer/build.rs:70-79`
+  - **Audit's suggested fix:** Add `.arg("-mmacos-version-min=13.0")` (read MACOSX_DEPLOYMENT_TARGET when set, defaulting to the 13.0 floor xtask already pins) to the metal compile command.
+- [ ] **S64-F3** · CONFIRMED · `INDIV` · missing-branch
+  - **What:** XCFramework `.universal` target (arm64 + x86_64 via lipo) not built; app/xcframework are aarch64-only
+  - **Oracle:** `src/build/GhosttyXCFramework.zig:18-57` → **Rustty:** `xtask/src/main.rs:363-364,500-522`
+  - **Audit's suggested fix:** Build both `aarch64-apple-darwin` and `x86_64-apple-darwin` staticlibs (each normalised + libtool-combined), `lipo -create -output` them, and hand the universal archive to `-create-xcframework`; keep a `--native` opt-out mirroring xcframework_target.
+- [ ] **S64-F4** · CONFIRMED · `ABI` · missing-branch
+  - **What:** lib-vt xcframework lacks the macOS universal slice and the iOS device/simulator slices
+  - **Oracle:** `src/build/GhosttyLibVt.zig:146-215,547-586,631-659` → **Rustty:** `xtask/src/main.rs:455-471,500-522`
+  - **Audit's suggested fix:** Extend build_xcframework with a slice list: macOS universal (lipo of aarch64/x86_64), plus `aarch64-apple-ios` and `aarch64-apple-ios-sim` when `xcrun --sdk iphoneos --show-sdk-path` succeeds; pass each `-library` to `-create-xcframework`.
+- [ ] **S64-F5** · CONFIRMED · `ABI` · behavioral-difference
+  - **What:** Shared/static library install layout differs: no versioned real name, soname symlinks, compatibility_version, or libghostty-vt-style basenames
+  - **Oracle:** `src/build/GhosttyLibVt.zig:384-490` → **Rustty:** `CMakeLists.txt:122-145,267-274`
+  - **Audit's suggested fix:** In the CMake install step (and xtask), rename/copy the cargo artifacts to `librustty-vt.<X.Y.Z>.{dylib,so}` + `.<X>` + unversioned symlinks (install_name_tool -id @rpath/librustty-vt.dylib, or `-C link-arg=-Wl,-install_name,...,-compatibility_version,1.0.0` in a cargo config), install the static archive as `librustty-vt.a` / `rustty-vt-static.lib`, and point the .pc `Libs` at `-lrustty-vt`.
+- [ ] **S64-F6** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** pkg-config Libs.private/Requires.private differ: rustty's static archive requires libc++ and (on macOS) an external libintl; the .pc files hardcode a Homebrew gettext path
+  - **Oracle:** `src/build/GhosttyLibVt.zig:493-499,509-556,565-576` → **Rustty:** `CMakeLists.txt:231-249,329-346`
+  - **Audit's suggested fix:** Drop the i18n object from the rustty-vt-c static archive (gate rustty-os's gettext bindings behind a feature that rustty-vt-c does not enable) so no libintl is needed; build simdutf/highway with `-nostdlib++`/no-libcxx flags (or link libc++ statically into the archive) so Libs.private can be empty like the oracle; never bake absolute Homebrew paths into an installed .pc.
+- [ ] **S65-F1** · CONFIRMED · `INDIV` · missing-function
+  - **What:** `case_folding_full` runtime table not ported; non-ASCII key case folding falls back to identity
+  - **Oracle:** `src/build/uucode_config.zig:31-38` → **Rustty:** `crates/rustty-input/src/binding.rs:3390-3410`
+  - **Audit's suggested fix:** Generate a case_folding_full table into rustty-unicode (same harness pipeline as props/symbols) and use it in folded_codepoint for single-codepoint folds.
+- [ ] **S65-F2** · DISPUTED · `ABI` · missing-branch
+  - **What:** addSimd MSVC-only C++ flags not applied (`-D_Avx2WmemEnabledWeakValue=_Avx2WmemEnabled`, `-fno-autolink`)
+  - **Oracle:** `src/build/SharedDeps.zig:995-999` → **Rustty:** `crates/rustty-simd/build.rs:120-127`
+  - **Audit's suggested fix:** Add `if target_env == "msvc" { build.define("_Avx2WmemEnabledWeakValue", Some("_Avx2WmemEnabled")); build.flag_if_supported("-fno-autolink"); }`.
+- [ ] **S65-F3** · CONFIRMED · `INDIV` · missing-branch
+  - **What:** xcframework `universal` target (x86_64 slice + lipo) not implemented; only native aarch64 built
+  - **Oracle:** `src/build/xcframework.zig:1-3` → **Rustty:** `xtask/src/main.rs:363-364, 499-500`
+  - **Audit's suggested fix:** Add a `--universal` mode building both targets and lipo-ing the archives before `-create-xcframework`.
+
+## Low (14)
+
+- [ ] **S63-F10** · CONFIRMED · `INDIV` · missing-branch
+  - **What:** lib-vt tarball does not apply the lib_vt_excludes pathspecs
+  - **Oracle:** `src/build/GhosttyDist.zig:95-102, 184-209` → **Rustty:** `xtask/src/dist.rs:285-427`
+  - **Audit's suggested fix:** Remove the equivalent directories (macos, images, po, example, test, flatpak, snap, dist/{doxygen,linux,macos,windows}, crates/*/assets large binaries) from the staged tree in `prune_to_lib_vt`, mirroring lib_vt_excludes.
+- [ ] **S63-F12** · CONFIRMED · `INDIV` · different-constant
+  - **What:** The `ghostty-gen` data generator binary is named `rustty-synthetic`, not `rustty-gen`
+  - **Oracle:** `src/build/GhosttyBench.zig:16-31` → **Rustty:** `crates/rustty-synthetic/Cargo.toml:31-34`
+  - **Audit's suggested fix:** Rename the bin to `rustty-gen` (or add a second [[bin]] alias) so the bench docs and the oracle name line up.
+- [ ] **S63-F5** · CONFIRMED · `INDIV` · missing-branch
+  - **What:** Windows build lacks the GUI subsystem and the .rc resource (icon/manifest) embedding
+  - **Oracle:** `src/build/GhosttyExe.zig:43-52` → **Rustty:** `crates/rustty/Cargo.toml:1-40`
+  - **Audit's suggested fix:** Add `#![cfg_attr(windows, windows_subsystem = "windows")]` to crates/rustty/src/main.rs and a build.rs that compiles dist/windows/rustty.rc (e.g. via embed-resource) on `target_os = "windows"`.
+- [ ] **S63-F9** · CONFIRMED · `INDIV` · missing-function
+  - **What:** Non-Darwin `ghostty-internal` shared/static library, header install and pkg-config files are not produced
+  - **Oracle:** `src/build/GhosttyLib.zig:83-179, 213-300` → **Rustty:** `xtask/src/main.rs:496-599`
+  - **Audit's suggested fix:** Add an xtask `install-lib` step for Linux/Windows that installs the rustty-apprt-c cdylib/staticlib, `include/rustty-embed.h`, and emits `rustty-internal.pc` / `rustty-internal-static.pc` with the same fields.
+- [ ] **S64-F7** · CONFIRMED · `INDIV` · missing-branch
+  - **What:** `zig build run` open step and `copy app bundle` step have no counterpart
+  - **Oracle:** `src/build/GhosttyXcodebuild.zig:127-178` → **Rustty:** `macos/build-rustty.sh:35-54`
+  - **Audit's suggested fix:** Add an `xtask run-macos` (or a `macos/run-rustty.sh`) that applies the PlistBuddy tweak, sets RUSTTY_LOG=stderr,macos and RUSTTY_MAC_LAUNCH_SOURCE=zig_run, and execs the app binary with forwarded args; scrub env in build-rustty.sh like build.nu.
+- [ ] **S64-F8** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** emit_terminfo / emit_termcap / emit_themes build gates are unconditional in xtask
+  - **Oracle:** `src/build/GhosttyResources.zig:43-53,60-77,125-136` → **Rustty:** `xtask/src/res_terminfo.rs:132-141,168-170`
+  - **Audit's suggested fix:** Add `--emit-terminfo/--emit-termcap/--emit-themes` flags to `xtask resources` defaulting to the oracle's profile-dependent values (true for debug, false for release; themes true).
+- [ ] **S64-F9** · CONFIRMED · `ABI` · missing-branch
+  - **What:** Android lib-vt arm (16 KiB max page size, NDK paths) not represented
+  - **Oracle:** `src/build/GhosttyLibVt.zig:261-266` → **Rustty:** `CMakeLists.txt:391-552`
+  - **Audit's suggested fix:** Add an Android arm to rustty_vt_add_target that passes `-C link-arg=-Wl,-z,max-page-size=16384` via CARGO_TARGET_<T>_RUSTFLAGS.
+- [ ] **S65-F5** · DISPUTED · `INDIV` · missing-file
+  - **What:** Cross-platform MRI `ar -M` archive combiner not ported; static libghostty-vt equivalent is not self-contained off macOS
+  - **Oracle:** `src/build/combine_archives.zig:14-55` → **Rustty:** `xtask/src/main.rs:598-616`
+  - **Audit's suggested fix:** Port combine_archives as an xtask subcommand driving `ar -M` (llvm-ar / zig ar) and use it for the CMake static rustty-vt-c and Linux libs.
+- [ ] **S65-F6** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** GTK x11/wayland target defaults are static (both on) instead of probed from `pkg-config --variable=targets gtk4`
+  - **Oracle:** `src/build/gtk.zig:9-27` → **Rustty:** `crates/rustty/Cargo.toml:38-59`
+  - **Audit's suggested fix:** Probe `pkg-config --variable=targets gtk4` in rustty-apprt/build.rs and emit cfgs (`rustty_gtk_x11`/`rustty_gtk_wayland`) that gate the winproto arms when the features are default-selected.
+- [ ] **S65-F7** · CONFIRMED · `INDIV` · missing-error-path
+  - **What:** wasm patcher accepts extra trailing arguments instead of failing the `args.len != 3` usage check
+  - **Oracle:** `src/build/wasm_patch_growable_table.zig:21-26` → **Rustty:** `xtask/src/main.rs:772-781`
+  - **Audit's suggested fix:** After taking input/output, `if args.next().is_some() { return Err(usage) }`.
+- [ ] **S65-F8** · CONFIRMED · `INDIV` · stub-or-unimplemented
+  - **What:** jetbrains_mono_bold / _italic / _bold_italic anonymous imports left as a DEFERRED comment
+  - **Oracle:** `src/build/SharedDeps.zig:623-635` → **Rustty:** `crates/rustty-font/src/embedded.rs:62-65`
+  - **Audit's suggested fix:** Vendor JetBrainsMono-Bold/Italic/BoldItalic.ttf into crates/rustty-font/res and add the three `include_bytes!` consts.
+- [ ] **S65-F9** · DISPUTED · `INDIV` · missing-branch
+  - **What:** dcimgui `backend-osx` (imgui_impl_osx.mm) not compiled on macOS
+  - **Oracle:** `src/build/SharedDeps.zig:597-614` → **Rustty:** `crates-sys/dcimgui-sys/build.rs:165-185`
+  - **Audit's suggested fix:** Add a second ObjC++ cc::Build for backends/imgui_impl_osx.mm on macOS if symbol-set parity of the shipped library is required.
+- [ ] **S66-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** mdgen section headers emit one extra trailing newline
+  - **Oracle:** `src/build/mdgen/mdgen.zig:22-27, 52-57, 87-92` → **Rustty:** `crates/rustty-extra/src/mdgen.rs:103, 129, 155`
+  - **Audit's suggested fix:** Change the three header literals to end with "\n\n" instead of "\n\n\n".
+- [ ] **S66-F2** · DISPUTED · `INDIV` · behavioral-difference
+  - **What:** config.mdx preamble drops a paragraph and adds an extra blank line
+  - **Oracle:** `src/build/webgen/main_config.zig:14-31` → **Rustty:** `crates/rustty-extra/src/webgen.rs:38-44`
+  - **Audit's suggested fix:** If the paragraph stays dropped, end CONFIG_HEADER with "for.\n\n"; otherwise restore the paragraph.

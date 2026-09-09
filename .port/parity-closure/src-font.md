@@ -1,0 +1,196 @@
+# Parity closure checklist — src/font
+
+46 open finding(s): 0 high, 8 medium, 38 low. Full evidence per row is in [`docs/parity-audit/src-font.md`](../../docs/parity-audit/src-font.md).
+
+A row is CLOSED only when its fix has a test that fails without it (or a written, reviewed justification for why no test is possible).
+
+
+## Medium (8)
+
+- [ ] **S85-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Modifier::parse rejects '_' digit separators (and hex floats) that Zig's std.fmt.parseInt/parseFloat accept
+  - **Oracle:** `src/font/Metrics.zig:464-484` → **Rustty:** `crates/rustty-font/src/metrics.rs:700-727`
+  - **Audit's suggested fix:** Port Zig's parseInt/parseFloat underscore rules (reject leading/trailing/double '_', strip interior '_' between digits) before delegating to Rust's parsers, or add a small faithful parseInt/parseFloat shim in rustty-util and use it here.
+- [ ] **S85-F2** · CONFIRMED · `INDIV` · missing-branch
+  - **What:** CoreText familyName lacks the `orelse return "unknown"` NULL fallback — objc2 family_name() panics instead
+  - **Oracle:** `src/font/DeferredFace.zig:151-159` → **Rustty:** `crates/rustty-font-shaper/src/deferred_face.rs:280-299`
+  - **Audit's suggested fix:** Declare a raw `CTFontCopyFamilyName(font: &CTFont) -> *mut CFString` (as done for CTFontCopyDisplayName at deferred_face.rs:240-244), map NULL to `Ok(b"unknown")` copied into `buf`.
+- [ ] **S86-F1** · CONFIRMED · `ALLOC` · missing-error-path
+  - **What:** face.name() error is swallowed in collection() instead of propagating
+  - **Oracle:** `src/font/SharedGridSet.zig:197-211, 228-242` → **Rustty:** `crates/rustty-font-shaper/src/shared_grid_set.rs:372-386, 406-420`
+  - **Audit's suggested fix:** Replace `let _ = face.name(&mut name_buf);` with `let _name = face.name(&mut name_buf)?;` (mapping FaceError into shared_grid_set::Error::Face) at both sites so the error propagates as in the reference.
+- [ ] **S91-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** web_canvas context(): CSS font size formatted with integer truncation instead of `{d}` float formatting
+  - **Oracle:** `src/font/face/web_canvas.zig:301-327` → **Rustty:** `crates/rustty-font-shaper/src/face/web_canvas.rs:596-604`
+  - **Audit's suggested fix:** Format points as Zig `{d}` would for f32 (shortest round-trip decimal without trailing zeros, e.g. via ryu/`format!("{}", points as f32)` normalizing "14" for 14.0) so fractional sizes reach the canvas unchanged.
+- [ ] **S91-F3** · DISPUTED · `LOG` · behavioral-difference
+  - **What:** web_canvas initNamed rejects inputs with a new InvalidFontStr error path the reference accepts
+  - **Oracle:** `src/font/face/web_canvas.zig:48-77` → **Rustty:** `crates/rustty-font-shaper/src/face/web_canvas.rs:260-296, 748-772`
+  - **Audit's suggested fix:** Either drop the up-front validation (keeping only the reference's post-set read-back warning) or document it as an intentional hardening divergence in the parity ledger.
+- [ ] **S94-F1** · DISPUTED · `LOG` · other
+  - **What:** CFReleaseThread replaced by an mpsc stand-in under a stale 'deferred seam' PORT NOTE while rustty-os ships the real port
+  - **Oracle:** `src/font/shaper/coretext.zig:76-81, 208-233, 255-262, 264-297` → **Rustty:** `crates/rustty-font-shaper/src/shaper/coretext.rs:36-55, 191-205, 421-449, 496-507, 511-563, 1381-1421`
+  - **Audit's suggested fix:** Add `rustty-os` as a macOS dependency of rustty-font-shaper and port init/deinit/endFrame against `rustty_os::cf_release_thread::Thread` (Box<Thread>, `std::thread::Builder::name("cf_release").spawn(threadMain)`, `mailbox.push(Message::Release{refs}, forever)` + `wakeup.notify()`, `stop.notify()` + join + `deinit`), removing the `cf_release` stand-in module and the stale deferral notes.
+- [ ] **S97-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Sprite golden U+2500...U+25FF-9x17+1.png regenerated from rustty output; differs from oracle testdata by 1 pixel
+  - **Oracle:** `src/font/sprite/Face.zig:563-591` → **Rustty:** `crates/rustty-font/src/sprite/face.rs:990-1040`
+  - **Audit's suggested fix:** Fix the 1-pixel divergence in rustty-z2d (inner stroke of the U+25FA outline at line_width 1) and restore the oracle's byte-identical golden; until then, mark the KAT as knowingly weakened for this file.
+- [ ] **S100-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Action numeric parameter parsing rejects inputs Zig std.fmt.parseInt/parseFloat accept ('_' separators, '-0' for unsigned, hex floats)
+  - **Oracle:** `src/input/Binding.zig:1224-1230` → **Rustty:** `crates/rustty-input/src/binding.rs:1959-1990`
+  - **Audit's suggested fix:** Port Zig's parseIntWithSign semantics (strip '_' between digits, reject leading/trailing '_', accept sign for unsigned when the accumulated value fits) and a parseFloat wrapper that strips valid underscores and handles the 0x hex-float prefix before delegating to str::parse (or port std.fmt.parseFloat into rustty-zigstd).
+
+## Low (38)
+
+- [ ] **S84-F1** · CONFIRMED · `LOG` · other
+  - **What:** All log.warn/info/debug statements in both files are dropped (kept only as comments)
+  - **Oracle:** `src/font/CodepointResolver.zig:138-140, 176, 195-199, 218, 265-268, 290-293 (and Collection.zig 342-345, 375, 384, 392, 405, 413, 421, 428, 438, 450, 458, 483-485, 506-508)` → **Rustty:** `crates/rustty-font-shaper/src/codepoint_resolver.rs:180-182, 205, 273-276, 303, 336-339, 448, 494 (and collection.rs 476, 511, 522, 533, 549, 565, 574, 588, 602, 616, 621, 691-692, 719-720)`
+  - **Audit's suggested fix:** Route the commented log lines through whatever logging facility rustty adopts (scoped .font_codepoint_resolver / .font_collection), or record the crate-wide log-elision as an accepted deviation.
+- [ ] **S85-F3** · CONFIRMED · `INDIV` · missing-error-path
+  - **What:** load_coretext drops the `errdefer face.deinit()` — HarfBuzz font handle leaks when set_variations fails
+  - **Oracle:** `src/font/DeferredFace.zig:248-258` → **Rustty:** `crates/rustty-font-shaper/src/deferred_face.rs:355-362`
+  - **Audit's suggested fix:** Match the fontconfig/Windows arms: `match face.set_variations(..) { Ok(()) => Ok(face), Err(e) => { face.deinit(); Err(e) } }`.
+- [ ] **S85-F4** · CONFIRMED · `INDIV` · weakened-assertion
+  - **What:** formatConfig percent/absolute tests assert only the value, not the full formatted entry line
+  - **Oracle:** `src/font/Metrics.zig:561-585` → **Rustty:** `crates/rustty-font/src/metrics.rs:944-978`
+  - **Audit's suggested fix:** Add a rustty-config (or rustty-cfg-fmt) test that formats `Some(MetricModifier::parse_cli(Some(b"24%")))` under key "a" through the real entry formatter and asserts `b"a = 24%\n"` (and `b"a = -30\n"`); update the stale PORT NOTE.
+- [ ] **S85-F5** · DISPUTED · `ALLOC` · behavioral-difference
+  - **What:** Fontconfig name/familyName/load map pattern.get failures to FaceError::OutOfMemory instead of propagating the fontconfig error
+  - **Oracle:** `src/font/DeferredFace.zig:153,183,226-229` → **Rustty:** `crates/rustty-font-shaper/src/deferred_face.rs:643-647,680-684,713-722`
+  - **Audit's suggested fix:** Add a `Fontconfig(fc::Error)` variant to the freetype `FaceError` (or a wrapping DeferredFace error) so the fontconfig atom survives as in the oracle.
+- [ ] **S85-F6** · CONFIRMED · `ALLOC` · behavioral-difference
+  - **What:** CoreText name/familyName always copy into `buf` (OutOfMemory if the name exceeds buf.len), dropping the cstringPtr zero-copy path that has no length limit
+  - **Oracle:** `src/font/DeferredFace.zig:154-157,180-190` → **Rustty:** `crates/rustty-font-shaper/src/deferred_face.rs:286-296,317-327`
+  - **Audit's suggested fix:** Accept as a documented lifetime-unification choice, or expose an owned-`Vec<u8>` name accessor so long names cannot fail.
+- [ ] **S85-F7** · DISPUTED · `ABI` · other
+  - **What:** Stale comment: `cursor_thickness` is at field index 10, not 11
+  - **Oracle:** `src/font/Metrics.zig:590-608` → **Rustty:** `crates/rustty-font/src/metrics.rs:887`
+  - **Audit's suggested fix:** Change the comment to index 10.
+- [ ] **S86-F2** · CONFIRMED · `LOG` · other
+  - **What:** All log output of SharedGridSet is dropped (no logging in the shaper crate)
+  - **Oracle:** `src/font/SharedGridSet.zig:109, 120, 182-185, 199-202, 230-233, 246-249` → **Rustty:** `crates/rustty-font-shaper/src/shared_grid_set.rs:189, 202, 355, 374, 408, 425`
+  - **Audit's suggested fix:** Add a `log` dependency (scoped target `font_shared_grid_set`) and emit the five messages with the same levels and text.
+- [ ] **S86-F3** · CONFIRMED · `TEST` · weakened-assertion
+  - **What:** getIndex test no longer proves the second pass is served from the cache only
+  - **Oracle:** `src/font/SharedGrid.zig:565-574` → **Rustty:** `crates/rustty-font-shaper/src/shared_grid.rs:815-832`
+  - **Audit's suggested fix:** Swap in a poisoned resolver (e.g. `std::mem::replace(&mut grid.resolver, empty_collection_resolver)`) with an empty Collection so any resolver hit returns None/fails, then restore it after the loop.
+- [ ] **S86-F4** · CONFIRMED · `DEBUGONLY` · missing-test
+  - **What:** Tripwire-based tests are #[ignore]d in release-profile test runs
+  - **Oracle:** `src/font/SharedGrid.zig:576-656` → **Rustty:** `crates/rustty-font-shaper/src/shared_grid.rs:838-846, 909-917`
+  - **Audit's suggested fix:** Gate the tripwire on cfg!(test) (or a `tripwire` cargo feature enabled for tests) instead of debug_assertions so the tests run in all test profiles.
+- [ ] **S87-F1** · DISPUTED · `ALLOC` · missing-error-path
+  - **What:** CoreText allocation failures panic instead of returning an error / zero score
+  - **Oracle:** `src/font/discovery.zig:681-690, 967-973, 1027-1035, 244` → **Rustty:** `crates/rustty-font-shaper/src/discovery.rs:1587-1593, 2054-2071, 1137-1138`
+  - **Audit's suggested fix:** Declare the three raw CoreText symbols in the existing `sys` extern block (like CTFontCreateForString/CTFontCreateWithName) and map NULL to `return this` in Score::score and to `Err(Error::OutOfMemory)` in DiscoverIterator::next / to_core_text_descriptor.
+- [ ] **S87-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** discoverExactFamily: family names >= 256 bytes are rejected by the oracle but accepted by the port
+  - **Oracle:** `src/font/discovery.zig:429-441` → **Rustty:** `crates/rustty-font-shaper/src/discovery.rs:1275-1291`
+  - **Audit's suggested fix:** Add `if actual_s.len() >= 256 { false } else { actual_s.as_bytes() == family }` to mirror the buffer-size arm (the same pattern the port already uses for the 64-byte LastResort buffer at 1476-1478 and the 128/1024-byte buffers in Score::score).
+- [ ] **S87-F3** · CONFIRMED · `INDIV` · stub-or-unimplemented
+  - **What:** embedded.bold / italic / bold_italic left as a PORT NOTE deferral
+  - **Oracle:** `src/font/embedded.zig:15-18` → **Rustty:** `crates/rustty-font/src/embedded.rs:66-69`
+  - **Audit's suggested fix:** Vendor JetBrainsMono-Bold.ttf / -Italic.ttf / -BoldItalic.ttf into crates/rustty-font/res and add `pub const BOLD/ITALIC/BOLD_ITALIC: &[u8] = include_bytes!(...)`.
+- [ ] **S87-F4** · CONFIRMED · `INDIV` · different-constant
+  - **What:** GTK boxed GType for DesiredSize registered as 'GhosttyFontSizeRequest' instead of 'GhosttyFontDesiredSize'
+  - **Oracle:** `src/font/face.zig:63-72` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:160-166`
+  - **Audit's suggested fix:** Rename the boxed_type name to "GhosttyFontDesiredSize" (kept as the ghostty name per the ghostty_* alias policy) so the GType registered for the property matches the oracle.
+- [ ] **S88-F1** · DISPUTED · `TEST` · other
+  - **What:** diffAtlas failure-path diagnostic files (glyf_rasterize_test.png, glyf_rasterize_diff.png) are not written
+  - **Oracle:** `src/font/glyf_rasterize_png_test.zig:116-142, 156-196` → **Rustty:** `crates/rustty-font/src/glyf_rasterize/glyf_rasterize_png_test.rs:149-163, 404-405, 432-452`
+  - **Audit's suggested fix:** Optional: on failure, write the generated PNG bytes to `<cwd>/glyf_rasterize_test.png` and emit a red(ref)/green(generated) RGB diff PNG via the `png` encoder to `./glyf_rasterize_diff.png`, logging the three paths as the oracle does.
+- [ ] **S88-F2** · DISPUTED · `LOG` · other
+  - **What:** Added RUSTTY_REGEN_FONT_KAT_PNGS arm makes the KAT pass (and rewrite the reference) where the oracle fails
+  - **Oracle:** `src/font/glyf_rasterize_png_test.zig:138, 180-187, 302` → **Rustty:** `crates/rustty-font/src/glyf_rasterize/glyf_rasterize_png_test.rs:409-420`
+  - **Audit's suggested fix:** Acceptable as a dev affordance; if strict test-behaviour parity is wanted, move regeneration into an xtask/ignored test rather than an env-gated pass arm inside the KAT.
+- [ ] **S88-F3** · DISPUTED · `ABI` · other
+  - **What:** Stale crate doc claims face/web_canvas.zig is unported although face/web_canvas.rs and shaper/web_canvas.rs exist
+  - **Oracle:** `src/font/main.zig:34-41` → **Rustty:** `crates/rustty-font-shaper/src/lib.rs:11-21`
+  - **Audit's suggested fix:** Update the rustty-font-shaper module doc to drop the 'web_canvas unported' residual (or point at the remaining true residual, if any).
+- [ ] **S90-F2** · CONFIRMED · `LOG` · other
+  - **What:** All log output (Debug-mode variation-axes dump, atlas-depth warn, table-parse warns, ic_width discard warn) is ported as comments / no-ops
+  - **Oracle:** `src/font/face/coretext.zig:119-162, 435-441, 830-841, 632-635/645-648/658-661/671-674` → **Rustty:** `crates/rustty-font-shaper/src/face/coretext.rs:281-320, 664-668, 1152-1158, 833-837/845/856/866`
+  - **Audit's suggested fix:** Wire the crate's logging facade (as the rest of rustty does) and emit the same messages; keep the Debug-only gating via cfg(debug_assertions).
+- [ ] **S90-F3** · CONFIRMED · `ALLOC` · behavioral-difference
+  - **What:** Face::name errors on family names longer than `buf` even when CoreFoundation could return them without copying
+  - **Oracle:** `src/font/face/coretext.zig:210-219` → **Rustty:** `crates/rustty-font-shaper/src/face/coretext.rs:383-395`
+  - **Audit's suggested fix:** Try `CFStringGetCStringPtr` first and return it (copying only if it fits is not required by the oracle); fall back to the buffer copy only when the pointer path returns null.
+- [ ] **S90-F4** · DISPUTED · `INDIV` · behavioral-difference
+  - **What:** u32→CGGlyph conversion silently truncates (`as CGGlyph`) where the oracle uses checked `@intCast`
+  - **Oracle:** `src/font/face/coretext.zig:297, 808-819` → **Rustty:** `crates/rustty-font-shaper/src/face/coretext.rs:496, 1122`
+  - **Audit's suggested fix:** Use `u16::try_from(glyph_index).expect(...)` / `debug_assert!` to keep the safe-build trap semantics.
+- [ ] **S90-F5** · CONFIRMED · `TEST` · missing-test
+  - **What:** test "emoji" setup deviates: base CTFont is created at 18pt instead of 12pt
+  - **Oracle:** `src/font/face/coretext.zig:1010-1027` → **Rustty:** `crates/rustty-font-shaper/src/face/coretext.rs:1419-1436`
+  - **Audit's suggested fix:** Call `named_font("Apple Color Emoji", 12.0)` and keep `opts(18.0)` for the copy.
+- [ ] **S91-F10** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** freetype renderGlyph/getMetrics: log.err/log.warn messages dropped (unsupported glyph format tag, pixel-mode panic warning, ic_width discard)
+  - **Oracle:** `src/font/face/freetype.zig:690-706, 721-724, 1109-1116` → **Rustty:** `crates/rustty-font-shaper/src/face/freetype.rs:843-859, 876-878, 1244-1252`
+  - **Audit's suggested fix:** Wire a logging facade into rustty-font-shaper and emit the same messages.
+- [ ] **S91-F5** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** web_canvas context(): font read-back check truncates at 256 bytes
+  - **Oracle:** `src/font/face/web_canvas.zig:316-324` → **Rustty:** `crates/rustty-font-shaper/src/face/web_canvas.rs:605-611`
+  - **Audit's suggested fix:** Size the read-back buffer from the returned length (call once to get length, then allocate) or use a Vec sized to font_val.len()+1 so the comparison is exact.
+- [ ] **S91-F6** · DISPUTED · `INDIV` · behavioral-difference
+  - **What:** face_new: presentation u16 mapped nonzero=>emoji instead of @enumFromInt on a u1 enum
+  - **Oracle:** `src/font/face/web_canvas.zig:494-511` → **Rustty:** `crates/rustty-font-shaper/src/face/web_canvas.rs:961-980`
+  - **Audit's suggested fix:** Return null (the `catch null` path) for presentation > 1 to mirror the reference's rejection of invalid values.
+- [ ] **S91-F7** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** web_canvas log.debug/log.warn calls dropped (face initialized, metrics, error rendering glyph, error adding debug canvas)
+  - **Oracle:** `src/font/face/web_canvas.zig:76, 296, 518-524, 528-531` → **Rustty:** `crates/rustty-font-shaper/src/face/web_canvas.rs:297, 565, 1005-1008, 1061-1063`
+  - **Audit's suggested fix:** Route through rustty_os::wasm::log::freestanding::log like font_did_not_set does, if log parity is desired.
+- [ ] **S91-F8** · CONFIRMED · `LOG` · missing-branch
+  - **What:** freetype initFace: Debug-mode variation-axes diagnostic block omitted
+  - **Oracle:** `src/font/face/freetype.zig:116-135` → **Rustty:** `crates/rustty-font-shaper/src/face/freetype.rs:255-282`
+  - **Audit's suggested fix:** None required for release parity; optionally re-enable under `#[cfg(debug_assertions)]` with a logging facade.
+- [ ] **S91-F9** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** freetype name(): family string is copied into buf with truncation; UTF-16 overflow falls back instead of asserting
+  - **Oracle:** `src/font/face/freetype.zig:158-183` → **Rustty:** `crates/rustty-font-shaper/src/face/freetype.rs:307-353, 972-990`
+  - **Audit's suggested fix:** Accept as a lifetime-driven idiom, or return a Cow so uncopied names keep full length.
+- [ ] **S92-F1** · CONFIRMED · `ABI` · behavioral-difference
+  - **What:** OS2.init: unsupported-version check happens after all field reads, so short tables with version>5 return EndOfStream instead of OS2VersionNotSupported
+  - **Oracle:** `src/font/opentype/os2.zig:351-357, 566` → **Rustty:** `crates/rustty-font/src/opentype/os2.rs:286-358`
+  - **Audit's suggested fix:** Move the `if version > 5 { return Err(InitError::OS2VersionNotSupported) }` check to immediately after reading `version` (before the prefix reads).
+- [ ] **S92-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** SVG.init rejects a record count that does not fully fit in the table; the oracle accepts it as long as the first/last records' 4-byte glyph-range prefix is readable
+  - **Oracle:** `src/font/opentype/svg.zig:41-50, 84-90` → **Rustty:** `crates/rustty-font/src/opentype/svg.rs:69-79`
+  - **Audit's suggested fix:** Either accept the divergence as a deliberate, documented safety guard (recommend recording it in the port decision log), or relax the guard to only require that the 4-byte glyph-range prefix of records[0] and records[len-1] be in bounds and represent `records` as a bounds-checked byte view rather than a full `&[[u8;12]]` slice.
+- [ ] **S92-F3** · DISPUTED · `INDIV` · behavioral-difference
+  - **What:** SVG.init with numEntries == 0 returns EndOfStream in rustty; the oracle hits a u16 underflow (`len - 1`) safety panic
+  - **Oracle:** `src/font/opentype/svg.zig:41-44` → **Rustty:** `crates/rustty-font/src/opentype/svg.rs:75-77`
+  - **Audit's suggested fix:** No change required; document as intentional.
+- [ ] **S92-F4** · DISPUTED · `INDIV` · missing-function
+  - **What:** FixedPoint.format, OffsetSubtable.format and TableRecord.format have no Display/Debug-format counterpart
+  - **Oracle:** `src/font/opentype/sfnt.zig:105-115, 175-196, 209-227` → **Rustty:** `crates/rustty-font/src/opentype/sfnt.rs:102-201, 330-360`
+  - **Audit's suggested fix:** Add `impl fmt::Display` for FixedPoint (print `to_f64()`), OffsetSubtable and TableRecord with the exact reference strings.
+- [ ] **S94-F2** · CONFIRMED · `INDIV` · missing-error-path
+  - **What:** Shaper::init panics on thread-spawn failure instead of returning an error
+  - **Oracle:** `src/font/shaper/coretext.zig:224-229` → **Rustty:** `crates/rustty-font-shaper/src/shaper/coretext.rs:434-438`
+  - **Audit's suggested fix:** Map the `io::Error` from `spawn` into the `Error` enum (e.g. `Error::ThreadSpawn`/`OutOfMemory`) and return `Err` from `init`.
+- [ ] **S94-F3** · CONFIRMED · `ALLOC` · missing-error-path
+  - **What:** getFont: NULL from CTFontDescriptorCreateWithAttributes / CTFontCreateCopyWithAttributes panics instead of returning OutOfMemory
+  - **Oracle:** `src/font/shaper/coretext.zig:602-609` → **Rustty:** `crates/rustty-font-shaper/src/shaper/coretext.rs:1063-1071`
+  - **Audit's suggested fix:** Declare the two raw CoreText symbols returning `Option<NonNull<..>>` (as done for `CTTypesetterCreateLine`) and map `None` to `Error::OutOfMemory`.
+- [ ] **S94-F4** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** deinit/endFrame diagnostics not emitted (BUG: CFRelease pool was not empty; stop/wakeup notify errors)
+  - **Oracle:** `src/font/shaper/coretext.zig:242-252, 259-260, 270-273, 287-292` → **Rustty:** `crates/rustty-font-shaper/src/shaper/coretext.rs:486-507, 521-563`
+  - **Audit's suggested fix:** Route these through the workspace log facade (rustty-os's cf_release_thread.rs already uses one) gated on `cfg!(not(test))` for the BUG warning.
+- [ ] **S95-F1** · CONFIRMED · `LOG` · missing-error-path
+  - **What:** FeatureList.appendFromString drops the `log.warn` for unparseable feature settings
+  - **Oracle:** `src/font/shaper/feature.zig:245-259` → **Rustty:** `crates/rustty-font-shaper/src/shaper/feature.rs:421-436`
+  - **Audit's suggested fix:** Wire a workspace logging facade (e.g. `log` crate scoped to `font_shaper`) and emit `log::warn!("failed to parse font feature setting: \"{}\"", String::from_utf8_lossy(&fbs.buf[i..fbs.pos]))` in the else branch; same treatment for the other `log.warn` comment sites in collection.rs / codepoint_resolver.rs.
+- [ ] **S97-F2** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** wasm `shaper_test` drops its log output and shapes one run per row instead of iterating RunIterator runs
+  - **Oracle:** `src/font/shaper/web_canvas.zig:261-304` → **Rustty:** `crates/rustty-font-shaper/src/shaper/web_canvas.rs:444-596`
+  - **Audit's suggested fix:** Route the warn/info messages through rustty_os::wasm::log (scope font_shaper) and drive the modern RunIterator over the terminal's RenderState cells so runs are split as the shaper would split them.
+- [ ] **S97-F3** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** testDiffAtlas omits the on-failure artifacts (test PNG copy into cwd and red/green diff PNG)
+  - **Oracle:** `src/font/sprite/Face.zig:287-296, 307-321, 361-395` → **Rustty:** `crates/rustty-font/src/sprite/face.rs:952-1060`
+  - **Audit's suggested fix:** Write the encoded test atlas and a diff PNG next to the reference on failure (the `png` dev-dependency already encodes), and include their paths in the error message.
+- [ ] **S98-F1** · DISPUTED · `DOC` · other
+  - **What:** Stale PORT NOTE in draw/mod.rs claims box.zig is deferred / only partially carried
+  - **Oracle:** `src/font/sprite/draw/box.zig:1-929` → **Rustty:** `crates/rustty-font/src/sprite/draw/mod.rs:3-11`
+  - **Audit's suggested fix:** Rewrite the mod.rs header to state that every draw/*.zig module is ported; drop the 'deferred to later batches' list.
+- [ ] **S100-F2** · DISPUTED · `ABI` · stub-or-unimplemented
+  - **What:** Action.getGObjectType (GTK boxed GObject type) is a PORT NOTE deferral
+  - **Oracle:** `src/input/Binding.zig:998-1008` → **Rustty:** `crates/rustty-input/src/binding.rs:1386-1398`
+  - **Audit's suggested fix:** When the GTK apprt lands, register the boxed GType named GhosttyBindingAction (aliased RusttyBindingAction) for Action in the GTK binding crate; no action needed for the macOS/embedded runtime.

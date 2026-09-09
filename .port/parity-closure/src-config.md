@@ -1,0 +1,144 @@
+# Parity closure checklist — src/config
+
+33 open finding(s): 0 high, 7 medium, 26 low. Full evidence per row is in [`docs/parity-audit/src-config.md`](../../docs/parity-audit/src-config.md).
+
+A row is CLOSED only when its fix has a test that fails without it (or a written, reviewed justification for why no test is possible).
+
+
+## Medium (7)
+
+- [ ] **S74-F1** · CONFIRMED · `INDIV` · missing-error-path
+  - **What:** loadDefaultFiles swallows XDG/app-support path resolution errors and then panics on an empty path
+  - **Oracle:** `src/config/Config.zig:4172-4175, 4191-4194` → **Rustty:** `crates/rustty-config/src/config_struct.rs:6045-6048, 6083-6089, 5918`
+  - **Audit's suggested fix:** Map the FileLoadError into LoadError and use `?` for all four path lookups, matching the oracle's `try`.
+- [ ] **S74-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** xdg-terminal-exec argv is read via std::env::args() (panics on non-UTF-8 argv, lossy &str) instead of raw argv bytes
+  - **Oracle:** `src/config/Config.zig:4265-4285` → **Rustty:** `crates/rustty-config/src/config_struct.rs:6580-6612`
+  - **Audit's suggested fix:** Use `std::env::args_os()` and `OsStrExt::as_bytes`, and make `parseTerminalExec` take `&[&[u8]]`.
+- [ ] **S74-F3** · CONFIRMED · `INDIV` · missing-error-path
+  - **What:** loadCliArgs ignores cwd realpath failure and expands CLI paths against an empty base
+  - **Oracle:** `src/config/Config.zig:4331-4336` → **Rustty:** `crates/rustty-config/src/config_struct.rs:6712-6717`
+  - **Audit's suggested fix:** Propagate the io::Error as LoadError::Io instead of defaulting.
+- [ ] **S75-F1** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** RepeatableFontVariation.parseCLI rejects float syntaxes std.fmt.parseFloat accepts (digit separators, hex floats)
+  - **Oracle:** `src/config/Config.zig:6437-6447` → **Rustty:** `crates/rustty-config/src/value_types.rs:3229-3233, 6296-6302`
+  - **Audit's suggested fix:** Make parse_float_f64 a faithful port of std.fmt.parseFloat: strip well-placed '_' separators (validUnderscores rules) before parsing, and add a hex-float path (0x mantissa with optional 'p' exponent), or port parse_float from Zig std into rustty-zigstd.
+- [ ] **S78-F1** · CONFIRMED · `ALLOC` · missing-error-path
+  - **What:** Command.direct formatEntry drops the [4096]u8 fixed-buffer OutOfMemory bound
+  - **Oracle:** `src/config/command.zig:182-196` → **Rustty:** `crates/rustty-config/src/command.rs:283-295`
+  - **Audit's suggested fix:** Before/while building `buf`, return `Err(FormatError::OutOfMemory)` once `7 + sum(arg.len() + 1)` exceeds 4096 (mirror the bound check used in io.rs:260 and add a boundary test like readable_io_format_entry_fixed_buffer_boundary).
+- [ ] **S78-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Limit.parseCLI rejects '_' digit separators that std.fmt.parseInt(T, input, 0) accepts
+  - **Oracle:** `src/config/limit.zig:21-31` → **Rustty:** `crates/rustty-config/src/value_types.rs:114-131`
+  - **Audit's suggested fix:** In rustty-args parse_int_auto, reproduce parseWithSign: reject a leading/trailing '_', strip interior '_' before from_str_radix, and accept '-0' for unsigned types (or route unsigned negatives through a checked-sub loop as Zig does). Add a Limit test for `1_000` and `0x1_0`.
+- [ ] **S79-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** macOS cacheDir XDG_CACHE_HOME condition is deliberately inverted relative to the oracle at pin
+  - **Oracle:** `src/crash/sentry.zig:188-208` → **Rustty:** `crates/rustty-crash/src/sentry.rs:436-480`
+  - **Audit's suggested fix:** Decide explicitly: either match the oracle as-written (swap the branch: return NSCachesDirectory when XDG_CACHE_HOME is set and non-empty) or keep the ratified fix and record the deviation in the parity exception ledger so audits don't re-flag it; if kept, consider filing/monitoring the upstream fix so the pin can be re-aligned.
+
+## Low (26)
+
+- [ ] **S72-F1** · CONFIRMED · `DOC` · other
+  - **What:** Stale module-header PORT STATUS claims the per-field doc comments are NOT ported and the G3b gate is RED
+  - **Oracle:** `src/config/Config.zig:116-1879` → **Rustty:** `crates/rustty-config/src/config_struct.rs:19-26`
+  - **Audit's suggested fix:** Update the module header's PORT STATUS paragraph to state the field docs are ported and drop the 'G3b RED' claim (or point to the actual gate record).
+- [ ] **S73-F1** · CONFIRMED · `INDIV` · other
+  - **What:** Three doc-comment casing drifts vs the per-token Ghostty->Rustty transform (user-visible help text)
+  - **Oracle:** `src/config/Config.zig:3493, 3564, 3707` → **Rustty:** `crates/rustty-config/src/config_struct.rs:4472, 4543, 4687`
+  - **Audit's suggested fix:** Change config_struct.rs:4472 to `Rustty > Secure Keyboard Entry`, :4543 to `~/.config/rustty/Rustty.icns`, :4687 to `each new rustty process`; regenerate help strings if they are derived from these comments.
+- [ ] **S74-F4** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** config-file diagnostics render Rust io::Error / a reduced kind set instead of Zig error and File.Kind tag names
+  - **Oracle:** `src/config/Config.zig:4413-4426, 4432-4448` → **Rustty:** `crates/rustty-config/src/config_struct.rs:6811-6818, 6836-6848, 5424-5434`
+  - **Audit's suggested fix:** Map io::ErrorKind to the Zig error names and use the unix FileTypeExt to name fifo/char/block devices.
+- [ ] **S74-F5** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** finalize log lines drop their formatted values
+  - **Oracle:** `src/config/Config.zig:4680, 4844-4849` → **Rustty:** `crates/rustty-config/src/config_struct.rs:7290, 7514-7518`
+  - **Audit's suggested fix:** Include the Command's Display/format and the Duration formatter output in the messages.
+- [ ] **S74-F6** · CONFIRMED · `INDIV` · missing-error-path
+  - **What:** Windows arm: internal_os.home error is swallowed into .inherit instead of propagating
+  - **Oracle:** `src/config/Config.zig:4722-4730` → **Rustty:** `crates/rustty-config/src/config_struct.rs:7367-7376`
+  - **Audit's suggested fix:** Match on the Result and return LoadError on Err.
+- [ ] **S74-F7** · DISPUTED · `INDIV` · missing-branch
+  - **What:** wasm: SHELL-env/flatpak lookup in finalize is not gated off like the oracle's isWasm guard
+  - **Oracle:** `src/config/Config.zig:4671-4674` → **Rustty:** `crates/rustty-config/src/config_struct.rs:7276-7278, 7315-7332`
+  - **Audit's suggested fix:** Add `#[cfg(not(target_family = "wasm"))]` to the outer block.
+- [ ] **S75-F2** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** Keybinds.parseCLI drops the three std.log messages (keybind =, keybind = clear, table cleared)
+  - **Oracle:** `src/config/Config.zig:7355, 7365, 7397` → **Rustty:** `crates/rustty-config/src/value_types.rs:4798-4815, 4850-4856`
+  - **Audit's suggested fix:** Expose the config_struct.rs log_info helper (plus a log_debug variant) to value_types.rs and emit the three messages at the same points.
+- [ ] **S75-F3** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** RepeatableFontVariation.formatEntry prints NaN as 'NaN' instead of Zig's 'nan'
+  - **Oracle:** `src/config/Config.zig:6474-6481` → **Rustty:** `crates/rustty-config/src/value_types.rs:3283-3293, 6304-6308`
+  - **Audit's suggested fix:** In fmt_float special-case v.is_nan() -> "nan" (and confirm inf/-inf spelling) to match Zig's {d} output.
+- [ ] **S76-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Keybinds.formatEntryDocs docs=true emits per-action help text where the oracle emits only a blank line
+  - **Oracle:** `src/config/Config.zig:7560-7576` → **Rustty:** `crates/rustty-config/src/value_types.rs:5119-5145, 5198-5214`
+  - **Audit's suggested fix:** Either reproduce the oracle literally (tag name of the Value union, i.e. never match) or record this as an intentional, documented divergence in the port ledger; currently the PORT NOTE at 5066-5079 describes it as emitting real doc text without acknowledging the oracle never does.
+- [ ] **S76-F2** · CONFIRMED · `INDIV` · missing-error-path
+  - **What:** RepeatableLink.parseCLI returns InvalidValue instead of NotImplemented, changing the diagnostic text
+  - **Oracle:** `src/config/Config.zig:8719-8724` → **Rustty:** `crates/rustty-config/src/value_types.rs:5874-5887`
+  - **Audit's suggested fix:** Add a NotImplemented (or generic 'unknown error') variant to the args error set, or special-case the link key so the diagnostic reads `unknown error error.NotImplemented`.
+- [ ] **S76-F3** · CONFIRMED · `ALLOC` · missing-error-path
+  - **What:** RepeatableCodepointMap.formatEntry drops the 1024-byte fixed buffer bound (OutOfMemory on overlong family)
+  - **Oracle:** `src/config/Config.zig:8214-8253` → **Rustty:** `crates/rustty-config/src/value_types.rs:5359-5395`
+  - **Audit's suggested fix:** Use the same `buf_print_parts(&mut [0u8;1024], ...)` -> `FormatError::OutOfMemory` path as the clipboard map.
+- [ ] **S76-F4** · CONFIRMED · `ALLOC` · missing-error-path
+  - **What:** RepeatableCommand.formatEntry drops the 4096-byte fixed writer bound
+  - **Oracle:** `src/config/Config.zig:9002-9033` → **Rustty:** `crates/rustty-config/src/value_types.rs:6104-6157`
+  - **Audit's suggested fix:** Bound the accumulated entry at 4096 bytes and return FormatError::OutOfMemory when exceeded.
+- [ ] **S76-F5** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** RepeatableCodepointMap.equal compares family by content; oracle std.meta.eql compares the slice by pointer identity
+  - **Oracle:** `src/config/Config.zig:8199-8210` → **Rustty:** `crates/rustty-config/src/value_types.rs:5317-5343, 8472-8515`
+  - **Audit's suggested fix:** Keep as documented divergence (it is the intended semantics) but record it in the deferral/divergence ledger; no code change recommended.
+- [ ] **S76-F6** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** MouseScrollMultiplier float parsing uses Rust str::parse::<f64> instead of std.fmt.parseFloat (hex floats and '_' separators rejected)
+  - **Oracle:** `src/config/Config.zig:9296-9309` → **Rustty:** `crates/rustty-config/src/value_types.rs:6208-6240, 6264-6284, 6298-6304`
+  - **Audit's suggested fix:** Implement a parse_float port that accepts Zig's grammar (optional sign, inf/nan/infinity, hex floats with p-exponent, '_' separators) and share it with rustty-args' float field parsing.
+- [ ] **S77-F1** · CONFIRMED · `ALLOC` · missing-error-path
+  - **What:** Theme.formatEntry drops the fixed 4096-byte buffer OutOfMemory bound
+  - **Oracle:** `src/config/Config.zig:10093-10108` → **Rustty:** `crates/rustty-config/src/value_types.rs:6852-6875`
+  - **Audit's suggested fix:** Return `FormatError::OutOfMemory` when `6 + light.len() + 6 + dark.len() > 4096` before formatting, mirroring the RepeatableStringMap 256-byte guard.
+- [ ] **S77-F2** · CONFIRMED · `TEST` · weakened-assertion
+  - **What:** 'clone default' / 'clone preserves conditional state' / 'changed' use the bare field-default fixture instead of Config.default(alloc)
+  - **Oracle:** `src/config/Config.zig:10591-10635, 10777-10790` → **Rustty:** `crates/rustty-config/src/config_struct.rs:11583-11660`
+  - **Audit's suggested fix:** Switch the three tests to `Config::default_config()` so the fixture matches the reference.
+- [ ] **S78-F3** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Path.expand no longer fails when the base directory cannot be opened
+  - **Oracle:** `src/config/path.zig:204-234` → **Rustty:** `crates/rustty-config/src/path.rs:332-378`
+  - **Audit's suggested fix:** Open/stat `base` first (std::fs::read_dir or metadata().is_dir()) and return its io::Error before attempting canonicalize, matching the `try openDirAbsolute` ordering.
+- [ ] **S78-F4** · CONFIRMED · `INDIV` · other
+  - **What:** Path.expand diagnostics render the error with Rust Debug instead of Zig's `error.Name` form
+  - **Oracle:** `src/config/path.zig:176-190, 218-231` → **Rustty:** `crates/rustty-config/src/path.rs:296-304, 361-369`
+  - **Audit's suggested fix:** Render errors in the reference's `error.<CamelName>` shape (e.g. a small helper mapping io::ErrorKind -> Zig error names, and `error.HomeDetectionFailed` for ExpandError) so the diagnostic bytes match.
+- [ ] **S78-F5** · CONFIRMED · `INDIV` · other
+  - **What:** theme diagnostics: file-kind tag names collapsed to 'unknown' and errors rendered via io::Error Display
+  - **Oracle:** `src/config/theme.zig:129-153, 177-201, 211-222, 259-277` → **Rustty:** `crates/rustty-config/src/theme.rs:334, 430, 489, 586, 638-650`
+  - **Audit's suggested fix:** Extend kind_name using std::os::unix::fs::FileTypeExt (is_fifo -> named_pipe, is_socket -> unix_domain_socket, is_block_device -> block_device, is_char_device -> character_device) and render io errors in the `error.<Name>` form.
+- [ ] **S78-F6** · CONFIRMED · `LOG` · other
+  - **What:** file_load.open drops both log.warn calls
+  - **Oracle:** `src/config/file_load.zig:150-167` → **Rustty:** `crates/rustty-config/src/file_load.rs:319-340`
+  - **Audit's suggested fix:** Emit the two warnings through the crate's logging path (config_struct.rs log_warn or the rustty log facade).
+- [ ] **S78-F7** · CONFIRMED · `LOG` · other
+  - **What:** Path.expand drops the two log.debug traces
+  - **Oracle:** `src/config/path.zig:192-195, 236-239` → **Rustty:** `crates/rustty-config/src/path.rs:316, 380`
+  - **Audit's suggested fix:** Emit the two debug lines through the crate's logging facade.
+- [ ] **S78-F8** · DISPUTED · `INDIV` · behavioral-difference
+  - **What:** edit.rs dirname helper is not std.fs.path.dirname (trailing-slash / root inputs)
+  - **Oracle:** `src/config/edit.zig:31` → **Rustty:** `crates/rustty-config/src/edit.rs:244-255`
+  - **Audit's suggested fix:** Port dirnamePosix's trailing-separator stripping and null-for-root behaviour (or reuse a shared std.fs.path port) and dispatch to a Windows arm as crate::path does for is_absolute/basename.
+- [ ] **S79-F2** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** All five sentry.zig log lines are elided (comments only), including the user-facing 'crash report written to disk path=' warning
+  - **Oracle:** `src/crash/sentry.zig:185, 239, 307, 338, 362` → **Rustty:** `crates/rustty-crash/src/sentry.rs:424, 559, 706-709, 752, 793`
+  - **Audit's suggested fix:** Route these through whatever logging facility the port adopts (at minimum the two `log.warn` sites), keeping the oracle's scoped-logger name `sentry` and message text.
+- [ ] **S79-F3** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Header JSON parser edge cases differ: duplicate keys and out-of-i64-range integers
+  - **Oracle:** `src/crash/sentry_envelope.zig:72-77, 123-128` → **Rustty:** `crates/rustty-crash/src/sentry_envelope.rs:146, 195`
+  - **Audit's suggested fix:** If exact parity is wanted: reject duplicate keys in a post-parse walk (or a custom Visitor), and in the `length` arm require `n.as_i64().is_some()` before the u64 cast so > i64::MAX values map to EnvelopeItemLengthMalformed like the oracle's `.number_string` arm.
+- [ ] **S79-F4** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Serialized header float/number formatting relies on serde_json rather than std.json Stringify (minified)
+  - **Oracle:** `src/crash/sentry_envelope.zig:229-234, 244-251, 505-511` → **Rustty:** `crates/rustty-crash/src/sentry_envelope.rs:302-304, 320-322, 507-516`
+  - **Audit's suggested fix:** Add a rustty-only round-trip test with a float-valued header to pin the expected text, and if it diverges from Zig's output, format `serde_json::Number` floats explicitly to match std.json.
+- [ ] **S79-F5** · CONFIRMED · `INDIV` · missing-branch
+  - **What:** Init-thread self-naming is gated on macOS only, not the full Darwin family
+  - **Oracle:** `src/crash/sentry.zig:112-114` → **Rustty:** `crates/rustty-crash/src/sentry.rs:290-296`
+  - **Audit's suggested fix:** Widen the cfg to `any(target_os = "macos", target_os = "ios", target_os = "tvos", target_os = "watchos", target_os = "visionos")` once rustty-os exposes pthread_setname_np for those targets (or use libc::pthread_setname_np directly under `target_vendor = "apple"`).

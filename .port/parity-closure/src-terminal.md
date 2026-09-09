@@ -1,0 +1,455 @@
+# Parity closure checklist — src/terminal
+
+110 open finding(s): 2 high, 36 medium, 72 low. Full evidence per row is in [`docs/parity-audit/src-terminal.md`](../../docs/parity-audit/src-terminal.md).
+
+A row is CLOSED only when its fix has a test that fails without it (or a written, reviewed justification for why no test is possible).
+
+
+## High (2)
+
+- [ ] **S151-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** codepoint_map is discarded when Terminal/Screen/PageList formatters delegate downward (clipboard-codepoint-map has no effect)
+  - **Oracle:** `src/terminal/formatter.zig:486-489 (TerminalFormatter → ScreenFormatter.init(..., self.opts)), 691-698 (ScreenFormatter → PageListFormatter.init(&self.screen.pages, self.opts)), 899 (PageListFormatter → PageFormatter.init(chunk.node.page(), self.opts))` → **Rustty:** `crates/rustty-vt/src/formatter.rs:766-767, 1000-1001, 1310, 1240-1250 (copy_options)`
+  - **Audit's suggested fix:** At the three content-delegation sites (formatter.rs:767, :1001, :1310) pass an Options copy that clones `codepoint_map` (e.g. add `fn clone_options(&Options) -> Options` with `codepoint_map: opts.codepoint_map.clone()`, or move the map into the child since `self` is consumed); keep the map-less copy only for the discarding extras passes. Add a Screen/Terminal-level test asserting replacement happens through ScreenFormatter.
+- [ ] **S198-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Search refresh timer is one-shot in rustty: the callback's re-arm is immediately cancelled by apply_action(Disarm)
+  - **Oracle:** `src/terminal/search/Thread.zig:468-499` → **Rustty:** `crates/rustty-vt/src/search/thread.rs:499-503, 946-989, 1386-1406`
+  - **Audit's suggested fix:** Make `apply_action` not clobber a re-arm performed inside the callback: e.g. snapshot the completion's armed state before invoking the callback and only clear it on Disarm if the callback did not re-submit (mirroring libxev, where `.disarm` is a no-op for a completion already re-added), or have `Timer::run` mark the completion as "re-submitted this dispatch" and have `apply_action` skip the disarm in that case.
+
+## Medium (36)
+
+- [ ] **S127-F1** · CONFIRMED · `INDIV` · weakened-assertion
+  - **What:** clone test compares only line-limit fields instead of the whole Limits struct
+  - **Oracle:** `src/terminal/PageList.zig:11390-11395` → **Rustty:** `crates/rustty-vt/src/pagelist/tests.rs:6969-6978`
+  - **Audit's suggested fix:** Replace the three line-only asserts with `assert_eq!(s.limits, cloned.limits);` (Limits already derives PartialEq/Eq).
+- [ ] **S131-F1** · CONFIRMED · `TEST` · weakened-assertion
+  - **What:** reset-invalidates-stale-refs test drops the node-address-reuse loop and both nodeIsValid assertions
+  - **Oracle:** `src/terminal/PageList.zig:18921-18967` → **Rustty:** `crates/rustty-vt/src/pagelist/tests.rs:1693-1719`
+  - **Audit's suggested fix:** Port the oracle loop faithfully: keep arrays of up to PAGE_PREHEAT*4 (node ptr, serial) pairs, reset() until s.pages.first matches a recorded pointer, then assert reuse occurred, ptr::eq(old_node, new_node), old_serial < s.page_serial_epoch, !s.node_is_valid(old_node, old_serial), s.node_is_valid(new_node, new_serial), and the new-serial range checks.
+- [ ] **S133-F1** · CONFIRMED · `TEST` · missing-branch
+  - **What:** Screen.clearCells does not clear the row's kitty_virtual_placeholder flag
+  - **Oracle:** `src/terminal/Screen.zig:1818-1828` → **Rustty:** `crates/rustty-vt/src/screen.rs:2739-2742`
+  - **Audit's suggested fix:** Add after the styled block in Screen::clear_cells: `if crate::options::KITTY_GRAPHICS && unsafe{(*row).kitty_virtual_placeholder()} && cells_len == unsafe{(*page).size.cols} as usize { let found = (0..cells_len).any(|i| unsafe{(*cells_base.add(i)).codepoint()} == kitty::graphics_unicode::PLACEHOLDER); if !found { unsafe{(*row).set_kitty_virtual_placeholder(false)} } }` (mirror page_impl.rs:1975-1990), and delete the stale deferral note.
+- [ ] **S133-F2** · CONFIRMED · `INDIV` · different-constant
+  - **What:** Screen.Options.default uses kitty_image_storage_limit = 0 instead of 320MB (ghostty artifact) / 10MB (lib)
+  - **Oracle:** `src/terminal/Screen.zig:273-293` → **Rustty:** `crates/rustty-vt/src/screen.rs:400-423`
+  - **Audit's suggested fix:** Set `kitty_image_storage_limit: 320 * 1000 * 1000` (or select by an artifact/`lib` build option matching `build_options.artifact`) in `Options::default()`, and remove the stale vt-12 deferral note.
+- [ ] **S133-F3** · CONFIRMED · `ALLOC` · missing-error-path
+  - **What:** cursorCopy does not restore the old cursor when manualStyleUpdate fails; error set collapsed to OutOfMemory
+  - **Oracle:** `src/terminal/Screen.zig:1430-1451` → **Rustty:** `crates/rustty-vt/src/screen.rs:2341-2380`
+  - **Audit's suggested fix:** Capture `let old = self.cursor;` (Cursor is Copy) before the overwrite and on `Err(e)` from manual_style_update do `self.cursor = old; return Err(e)`; change the return type to `Result<(), IncreaseCapacityError>` (or keep the mapping but document it) so OutOfSpace is not reported as OutOfMemory.
+- [ ] **S141-F1** · CONFIRMED · `INDIV` · different-constant
+  - **What:** libghostty-vt default kitty_image_storage_limit is 320MB instead of the .lib artifact's 10MB
+  - **Oracle:** `src/terminal/Terminal.zig:266-274` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:1547-1560`
+  - **Audit's suggested fix:** Add an `Options` constructor/`Default` in rustty-vt carrying the reference field defaults (max_scrollback_bytes=Some(10_000), max_scrollback_lines=None, colors=default, default_modes=default, Block/Some(false), storage limit per artifact, loading_limits=DIRECT) and have rustty-vt-c use 10 * 1000 * 1000 for the lib artifact.
+- [ ] **S143-F1** · CONFIRMED · `INDIV` · weakened-assertion
+  - **What:** resize failure-path test compares only subsets of flags, tabstops and cursor
+  - **Oracle:** `src/terminal/Terminal.zig:4528-4569` → **Rustty:** `crates/rustty-vt/src/terminal.rs:19136-19306`
+  - **Audit's suggested fix:** Snapshot `t.flags` (derive/impl PartialEq on Flags), clone the full `Tabstops` table (or compare all `get(i)` for i in 0..cols), and compare the full `Cursor` value (derive PartialEq or compare every field) before/after the failed resize.
+- [ ] **S149-F1** · CONFIRMED · `INDIV` · missing-branch
+  - **What:** apc Handler does not gate the glyph protocol on build_options.glyph_protocol
+  - **Oracle:** `src/terminal/apc.zig:84-97, 134-140, 200-207, 237-246, 280-283, 294-297, 432-435, 446-449, 661, 727` → **Rustty:** `crates/rustty-vt/src/apc/mod.rs:174-191, 255-261, 355-362, 427-433, 477, 502, 722, 749, 1069-1086, 1152-1163`
+  - **Audit's suggested fix:** Mirror the kitty gating: in feed (identify `;` arm, Glyph arm), feed_slice (Glyph arm), end (Glyph arm), State::deinit and Command::deinit, wrap with `if crate::options::GLYPH_PROTOCOL { ... } else { self.state = State::Ignore / unreachable!() }` exactly as the oracle does; add `if !crate::options::GLYPH_PROTOCOL { return; }` to valid_glyph_command and feed_slice_valid_glyph_command.
+- [ ] **S150-F1** · CONFIRMED · `TEST` · weakened-assertion
+  - **What:** test "RGB.parse" port drops 6 of the reference assertions
+  - **Oracle:** `src/terminal/color.zig:927-976` → **Rustty:** `crates/rustty-vt/src/color.rs:1930-2044`
+  - **Audit's suggested fix:** Add to `rgb_parse`: assert_eq!(Ok(RGB{r:34,g:139,b:34}), RGB::parse(b"\tForestGreen\t")); and assert_eq!(Err(InvalidFormat), RGB::parse(b"")) / b"  " / b"#12345" / b"12345" / b"nosuchcolor".
+- [ ] **S150-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** clipboard.Location is a closed enum; reference is non-exhaustive enum(c_int){_}
+  - **Oracle:** `src/terminal/clipboard.zig:4-9` → **Rustty:** `crates/rustty-vt/src/clipboard.rs:14-23`
+  - **Audit's suggested fix:** Either model Location like WriteStatus/ReadStatus (a #[repr(transparent)] i32 newtype with associated consts) so unknown values round-trip, or explicitly accept the D11 divergence and document it in clipboard.rs next to the type.
+- [ ] **S156-F1** · CONFIRMED · `INDIV` · weakened-assertion
+  - **What:** ghostty.h ProgressReport.State check never reads the C header (tautological lookup)
+  - **Oracle:** `src/terminal/osc.zig:249-253` → **Rustty:** `crates/rustty-vt/src/osc/mod.rs:406-434`
+  - **Audit's suggested fix:** Reuse mouse.rs's `parse_header_enum` (hoist it into rustty-lib or a shared test helper) and look the values up in `include/rustty-embed.h`'s `rustty_action_progress_report_state_e` block, plus a probe-can-fail test as in mouse.rs.
+- [ ] **S156-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Shape.getGObjectType (GhosttyMouseShape GObject enum) stripped; GTK mouse-shape property is a plain int
+  - **Oracle:** `src/terminal/mouse.zig:77-92` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:247-257`
+  - **Audit's suggested fix:** Register a `RusttyMouseShape` glib enum type (glib::Enum derive over rustty_vt::mouse::Shape or a wrapper) and type the `mouse-shape` property with it, matching surface.zig:222-240.
+- [ ] **S170-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** parse_u21/parse_u32 reject interior '_' digit separators that Zig std.fmt.parseInt accepts
+  - **Oracle:** `src/terminal/apc/glyph/request.zig:106, 217, 220-222, 372` → **Rustty:** `crates/rustty-vt/src/apc/glyph/request.rs:1051-1064`
+  - **Audit's suggested fix:** In parse_u21/parse_u32, reject leading/trailing '_' then strip interior '_' bytes before from_str_radix (mirroring parseIntWithSign), and add a test such as `r;cp=e0_a0;QQ==` -> get_cp()==Some(0xE0A0).
+- [ ] **S171-F1** · CONFIRMED · `ALLOC` · behavioral-difference
+  - **What:** format_alloc with empty output invokes a zero-length raw alloc callback and can return out_of_memory
+  - **Oracle:** `src/terminal/c/formatter.zig:220-240` → **Rustty:** `crates/rustty-vt-c/src/formatter.rs:578-626`
+  - **Audit's suggested fix:** In format_alloc, when `buf_vec.is_empty()` skip the allocator entirely and write `*out_ptr = <non-null dangling ptr>` / `*out_len = 0` and return Success (or at minimum use `allocator.alloc_bytes(len)` so the zero-length request short-circuits to the non-null sentinel without invoking the C callback).
+- [ ] **S174-F1** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** mouse_encode setopt warnings bypass the C API log sink (eprintln! instead of sys::log_fn)
+  - **Oracle:** `src/terminal/c/mouse_encode.zig:110-171` → **Rustty:** `crates/rustty-vt-c/src/mouse_encode.rs:320, 355, 374, 395, 406`
+  - **Audit's suggested fix:** Replace the five `eprintln!` calls with `sys::log_fn(sys::StdLevel::Warn, "mouse_encode", format_args!(...))`, keeping the message text identical.
+- [ ] **S174-F2** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** osc commandData warning bypasses the C API log sink (eprintln! instead of sys::log_fn)
+  - **Oracle:** `src/terminal/c/osc.zig:72-78` → **Rustty:** `crates/rustty-vt-c/src/osc.rs:235`
+  - **Audit's suggested fix:** Route through `sys::log_fn(sys::StdLevel::Warn, "osc", format_args!("commandData invalid data value={data}"))`.
+- [ ] **S174-F3** · DISPUTED · `INDIV` · behavioral-difference
+  - **What:** C-created OSC parser does not use the caller-supplied allocator for its dynamic payloads
+  - **Oracle:** `src/terminal/c/osc.zig:18-36` → **Rustty:** `crates/rustty-vt-c/src/osc.rs:34, 66-89`
+  - **Audit's suggested fix:** Apply the terminal.rs F-008 pattern: heap-hold the resolved C allocator (Box::into_raw of a dyn ZigAllocator) inside OscParserWrapper, build the parser's ZigAllocatorRef from that pointee, and reclaim it last in `free`.
+- [ ] **S174-F4** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** terminal_paste rejects an out-of-range clipboard location that the oracle accepts
+  - **Oracle:** `src/terminal/c/paste.zig:70-73` → **Rustty:** `crates/rustty-vt-c/src/paste.rs:159-175`
+  - **Audit's suggested fix:** Model the C-boundary location as an open value (a c_int newtype threaded through to the paste path, or an Unknown(c_int) variant) so an unrecognized location behaves like the oracle's open enum instead of failing the paste.
+- [ ] **S175-F1** · CONFIRMED · `ABI` · behavioral-difference
+  - **What:** RenderState contents (update/begin_update/deinit) bypass the caller-supplied C allocator
+  - **Oracle:** `src/terminal/c/render.zig:194-227` → **Rustty:** `crates/rustty-vt-c/src/render.rs:630-720`
+  - **Audit's suggested fix:** Complete F-008 Tier 2: parameterize `rustty_vt::render::RenderState` over the allocator (as `Terminal`/`Screen`/`PageList` must also be) so `free`/`update`/`begin_update` can pass `&*state.alloc` instead of `Global`, and extend the existing `CountingCAllocator` proving tests to assert that an `update` on a fresh 80x24 terminal drives caller alloc calls > 0 and that `free` returns live_bytes to 0.
+- [ ] **S176-F1** · CONFIRMED · `ALLOC` · behavioral-difference
+  - **What:** Search engine internals are allocated through the Rust global allocator instead of the embedder-supplied C allocator
+  - **Oracle:** `src/terminal/c/search.zig:253-257` → **Rustty:** `crates/rustty-vt-c/src/search.rs:682-685`
+  - **Audit's suggested fix:** Thread the wrapper's resolved C allocator into `TerminalSearch::init` (an allocator_api2 `Allocator` adapter over `rustty_lib::allocator::ZigAllocator`, as done for the wrapper storage) so search-internal allocations route through the embedder allocator and its failures surface as `Result::OutOfMemory`.
+- [ ] **S177-F1** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** sgr set_params separator-overflow warning writes to stderr instead of the C log callback
+  - **Oracle:** `src/terminal/c/sgr.zig:9,68-74` → **Rustty:** `crates/rustty-vt-c/src/sgr.rs:33,584-591`
+  - **Audit's suggested fix:** Replace the `eprintln!` with `crate::sys::log_fn(crate::sys::StdLevel::Warn, "sgr", format_args!("rustty_sgr_set_params: separators length {len} exceeds max supported length {SEP_BIT_LENGTH}"))`, adding a module-level `LOG_SCOPE: &str = "sgr"` mirroring `selection_gesture.rs:41`, and extend the lib.rs log-scope test (lib.rs:3934-3948) with an `sgr` row.
+- [ ] **S177-F2** · DISPUTED · `INDIV` · behavioral-difference
+  - **What:** instant_from_ns can panic on a large time_ns value where the reference cannot
+  - **Oracle:** `src/terminal/c/selection_gesture.zig:739-741` → **Rustty:** `crates/rustty-vt-c/src/selection_gesture.rs:1758-1764`
+  - **Audit's suggested fix:** Use `base.checked_add(Duration::from_nanos(ns)).unwrap_or(base)` (or saturate to `base + Duration::MAX`-clamped value) so the conversion is total, matching the reference's inability to fail.
+- [ ] **S179-F1** · CONFIRMED · `INDIV` · different-constant
+  - **What:** C-API terminal_new uses the 320MB app kitty-image storage limit instead of the 10MB lib default
+  - **Oracle:** `src/terminal/Terminal.zig:289-298 (default used by src/terminal/c/terminal.zig:856-901 `new_`)` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:1548-1562`
+  - **Audit's suggested fix:** In `crates/rustty-vt-c/src/terminal.rs::new_`, pass `10 * 1000 * 1000` (the `.lib` artifact default) — or derive it from an artifact constant — so a C-created terminal matches libghostty-vt.
+- [ ] **S179-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Terminal internals are not allocated through the caller-supplied C allocator (F-008 Tier-2 residual)
+  - **Oracle:** `src/terminal/c/terminal.zig:875-884` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:1538-1546`
+  - **Audit's suggested fix:** Thread the resolved C allocator into `ZigTerminal::init` (make rustty-vt's Terminal generic over the allocator, as its `deinit(alloc)` signature already suggests), or record the divergence as an accepted, header-documented limitation.
+- [ ] **S182-F1** · CONFIRMED · `ABI` · missing-branch
+  - **What:** ABI manifest omits RUSTTY_REJECTED (-7) from the RusttyResult enum values
+  - **Oracle:** `src/terminal/c/types.zig:244 (row) / src/terminal/c/result.zig:2-11` → **Rustty:** `crates/rustty-vt-c/src/types.rs:1418-1435`
+  - **Audit's suggested fix:** Add `("rejected", Rejected),` to the RusttyResult enum_values! row.
+- [ ] **S182-F2** · CONFIRMED · `ABI` · missing-branch
+  - **What:** ABI manifest omits RUSTTY_SYS_OPT_RANDOM_SECURE (3) from RusttySysOption
+  - **Oracle:** `src/terminal/c/types.zig:310 (row) / src/terminal/c/sys.zig:61-66` → **Rustty:** `crates/rustty-vt-c/src/types.rs:2338-2350`
+  - **Audit's suggested fix:** Add `("random_secure", RandomSecure),` to the RusttySysOption row.
+- [ ] **S182-F3** · CONFIRMED · `ABI` · missing-branch
+  - **What:** ABI manifest omits CLIPBOARD_READ (38) and CLIPBOARD_WRITE_MAX_BYTES (39) from RusttyTerminalOption
+  - **Oracle:** `src/terminal/c/types.zig:315 (row) / src/terminal/c/terminal.zig:1222-1223` → **Rustty:** `crates/rustty-vt-c/src/types.rs:2437-2484`
+  - **Audit's suggested fix:** Append `("clipboard_read", ClipboardRead),` and `("clipboard_write_max_bytes", ClipboardWriteMaxBytes),` to the RusttyTerminalOption enum_values! row.
+- [ ] **S182-F4** · CONFIRMED · `ABI` · missing-branch
+  - **What:** ABI manifest omits CLIPBOARD_WRITE_MAX_BYTES (40) from RusttyTerminalData
+  - **Oracle:** `src/terminal/c/types.zig:314 (row) / src/terminal/c/terminal.zig:1595` → **Rustty:** `crates/rustty-vt-c/src/types.rs:2387-2436`
+  - **Audit's suggested fix:** Append `("clipboard_write_max_bytes", ClipboardWriteMaxBytes),` to the RusttyTerminalData enum_values! row.
+- [ ] **S186-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Integer control values containing '_' digit separators are rejected where the reference accepts them
+  - **Oracle:** `src/terminal/kitty/graphics_command.zig:318-324` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_command.rs:437-499`
+  - **Audit's suggested fix:** Port Zig's `_`-separator handling to the non-negative branches of `parse_int_u32` and `parse_int_i32` (skip interior `_`, reject a leading or trailing `_` with InvalidFormat before the digit scan), mirroring what `parse_int_u32_negative_magnitude` already does, and add table rows for `"1_0" -> Ok(10)`, `"-1_0" -> Ok(-10)` (i32), `"_10"/"10_" -> InvalidFormat`.
+- [ ] **S189-F1** · CONFIRMED · `TEST` · missing-test
+  - **What:** Missing test "image load: rgb, not compressed, relative regular file"
+  - **Oracle:** `src/terminal/kitty/graphics_image.zig:1440-1470` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:1872-2601`
+  - **Audit's suggested fix:** Add a `image_load_rgb_not_compressed_relative_regular_file` test that writes the fixture into a scratch dir under the crate's CWD and passes a relative path as `Command.data`, asserting `complete()` succeeds with `Compression::None`.
+- [ ] **S189-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** readFile with no `s=` size silently TRUNCATES at max_size instead of failing
+  - **Oracle:** `src/terminal/kitty/graphics_image.zig:420-443` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:660-670`
+  - **Audit's suggested fix:** Read `MAX_SIZE + 1` bytes (or check `managed.len() >= MAX_SIZE` after the take) and return `Error::InvalidData` when the limit was reached, mirroring `error.StreamTooLong`.
+- [ ] **S194-F2** · CONFIRMED · `INDIV` · weakened-assertion
+  - **What:** test "OSC 52: get/set clipboard with allocator" ported without an allocator, making it a duplicate of the non-allocator test
+  - **Oracle:** `src/terminal/osc/parsers/clipboard_operation.zig:94-107` → **Rustty:** `crates/rustty-vt/src/osc/parsers/clipboard_operation.rs:130-152`
+  - **Audit's suggested fix:** Construct the parser with an allocator (ZigAllocatorRef) in this test so the allocating capture backing is actually covered, restoring the distinction from the preceding test.
+- [ ] **S194-F3** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** parse_int_u9 rejects the '_' digit separators that Zig's std.fmt.parseInt accepts
+  - **Oracle:** `src/terminal/osc/parsers/color.zig:177-181, 250-254` → **Rustty:** `crates/rustty-vt/src/osc/parsers/color.rs:482-488`
+  - **Audit's suggested fix:** Mirror std.fmt.parseInt's separator handling: strip '_' characters that are neither leading nor trailing (and reject a leading/trailing or doubled '_') before the numeric parse.
+- [ ] **S195-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** OSC 5522 Option_::read hand-rolls prefix key matching instead of using the ported ValueIterator (exact-key, skip-field) semantics
+  - **Oracle:** `src/terminal/osc/parsers/kitty_clipboard_protocol.zig:97-115 (Option.read) + src/terminal/osc/kitty_metadata.zig:39-72 (ValueIterator.next)` → **Rustty:** `crates/rustty-vt/src/osc/parsers/kitty_clipboard_protocol.rs:226-292`
+  - **Audit's suggested fix:** Replace the hand-rolled scan in `Option_::read` with `kitty_metadata::ValueIterator::init(self.tag_name(), None, metadata).next()` (mirroring kitty_desktop_notification.rs:376-395), delete the now-dead local `trim_whitespace`, and add the prefix-key regression case (e.g. `5522;password=A:pw=B`) as a test.
+- [ ] **S195-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** OSC 66 update() rejects '_' digit separators that Zig's std.fmt.parseInt accepts
+  - **Oracle:** `src/terminal/osc/parsers/kitty_text_sizing.zig:49-54` → **Rustty:** `crates/rustty-vt/src/osc/parsers/kitty_text_sizing.rs:95-105`
+  - **Audit's suggested fix:** Strip/accept '_' digit separators the way Zig's parseInt does before `parse::<u8>()` in `OSC::update` (or share a small `parse_int_zig` helper), so `n=1_2` parses to 12 as in the oracle.
+- [ ] **S206-F1** · CONFIRMED · `ALLOC` · weakened-assertion
+  - **What:** Allocation-failure transactionality test sweeps 8 tripwire indices instead of every decode allocation, and drops the allocation_count > 0 assertion
+  - **Oracle:** `src/terminal/snapshot/snapshot.zig:1626-1694` → **Rustty:** `crates/rustty-vt/src/snapshot/codec.rs:2586-2635`
+  - **Audit's suggested fix:** Instrument the remaining decode allocation sites (screen/page/pagelist/grapheme paths) with `tw::check(SnapshotFp::Alloc)`, derive the sweep upper bound from a baseline run that counts tripwire hits rather than hardcoding 8, and assert that count is greater than zero, so the sweep covers every decode allocation the way the reference FailingAllocator does.
+
+## Low (72)
+
+- [ ] **S122-F1** · CONFIRMED · `LOG` · other
+  - **What:** All log.err/log.warn diagnostics in this range are commented out (rustty-vt has no logging facility)
+  - **Oracle:** `src/terminal/PageList.zig:186, 278, 820-823, 831-834, 845-848, 871-874, 880-883, 891-894, 1828` → **Rustty:** `crates/rustty-vt/src/pagelist/mod.rs:572, 625, 1985-1988, 1996-1999, 2010-2013, 2040-2043, 2049-2052, 2060-2063; crates/rustty-vt/src/pagelist/resize.rs:1587`
+  - **Audit's suggested fix:** Route these through the crate's chosen diagnostics seam (e.g. a `log`/`tracing` facade) so the same messages are observable under a `page_list` scope.
+- [ ] **S123-F1** · CONFIRMED · `LOG` · other
+  - **What:** All log.err/log.warn diagnostics in this range are commented out (rustty-vt has no logging facility)
+  - **Oracle:** `src/terminal/PageList.zig:2282, 2311, 2352, 2373, 2401, 2481, 2555, 3111, 3665, 3742` → **Rustty:** `crates/rustty-vt/src/pagelist/resize.rs:2065, 2105, 2158, 2186-2189, 2210-2213, 2291-2294, 2380-2383, 1060-1068; grow.rs 117-120, 873`
+  - **Audit's suggested fix:** Wire a `log`/`tracing` facade into rustty-vt (feature-gated if desired) and replace the commented-out lines with `log::error!`/`log::warn!` calls carrying the same text.
+- [ ] **S123-F2** · CONFIRMED · `TEST` · missing-branch
+  - **What:** `defer assert(self.total_rows == old_total_rows)` not evaluated on the error exit of the cols branch
+  - **Oracle:** `src/terminal/PageList.zig:2802-2803` → **Rustty:** `crates/rustty-vt/src/pagelist/resize.rs:596-597, 674-675`
+  - **Audit's suggested fix:** Also assert (or debug_assert) `self.total_rows == old_total_rows` before the early `return Err(e)` at resize.rs:663-667, or wrap the block in a scope guard.
+- [ ] **S124-F1** · CONFIRMED · `LOG` · other
+  - **What:** log.info/log.err calls in increaseCapacity and eraseRows are elided (commented out)
+  - **Oracle:** `src/terminal/PageList.zig:4317, 4336, 5580` → **Rustty:** `crates/rustty-vt/src/pagelist/grow.rs:767, 784; crates/rustty-vt/src/pagelist/erase.rs:616`
+  - **Audit's suggested fix:** Wire the crate's logging facade (whatever rustty-vt uses for scoped `terminal` logs) and emit the three messages at the same points.
+- [ ] **S124-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** diagram() panics on an unencodable codepoint where Zig `{u}` writes U+FFFD
+  - **Oracle:** `src/terminal/PageList.zig:5926-5931` → **Rustty:** `crates/rustty-vt/src/pagelist/access.rs:199-207`
+  - **Audit's suggested fix:** Use `char::from_u32(cp).unwrap_or(char::REPLACEMENT_CHARACTER)` at both sites.
+- [ ] **S126-F1** · CONFIRMED · `TEST` · weakened-assertion
+  - **What:** cold-compression-after-incompressible-page test drops the decommitted_raw_bytes == second page len assertion
+  - **Oracle:** `src/terminal/PageList.zig:9224-9227` → **Rustty:** `crates/rustty-vt/src/pagelist/tests.rs:2600-2632`
+  - **Audit's suggested fix:** Add `assert_eq!(unsafe { (*super::Node::metadata(second)).memory_len() }, memory.decommitted_raw_bytes);` after the compressed_pages assertion and use `Options::new(80, 24)` to match the oracle setup.
+- [ ] **S132-F1** · CONFIRMED · `LOG` · other
+  - **What:** Parser log.warn diagnostics dropped (invalid intermediates count; CSI colon/mixed separator on non-'m')
+  - **Oracle:** `src/terminal/Parser.zig:319-328, 412-424` → **Rustty:** `crates/rustty-vt/src/parser.rs:707-717, 820-838`
+  - **Audit's suggested fix:** If/when a log facade is wired into rustty-vt, emit the two warnings at the same points (cold/noinline helper for the CSI one, as the oracle does).
+- [ ] **S133-F4** · CONFIRMED · `ALLOC` · behavioral-difference
+  - **What:** Screen.clone maps PageList CloneFrom errors to OutOfMemory
+  - **Oracle:** `src/terminal/Screen.zig:480-498` → **Rustty:** `crates/rustty-vt/src/screen.rs:994-998`
+  - **Audit's suggested fix:** Return `pagelist::access::CloneError` (or an enum wrapping it) from `Screen::clone` and propagate with `?` instead of collapsing.
+- [ ] **S133-F5** · CONFIRMED · `LOG` · other
+  - **What:** log.warn / log.err calls in increaseCapacity, cursorChangePin and cursorCopy are elided
+  - **Oracle:** `src/terminal/Screen.zig:649-652, 671-674, 1473, 1541, 1562` → **Rustty:** `crates/rustty-vt/src/screen.rs:1258-1260, 1279-1281, 2295, 2318, 2410`
+  - **Audit's suggested fix:** Route these through whatever logging seam rustty-vt adopts (e.g. the `log` crate scoped `screen`) so the warnings are observable as in the oracle.
+- [ ] **S134-F1** · CONFIRMED · `LOG` · other
+  - **What:** Seven log.err/log.warn diagnostics in the resize/style/hyperlink degrade paths are commented out, not emitted
+  - **Oracle:** `src/terminal/Screen.zig:2133, 2172, 2264, 2298, 2529, 2542, 2650` → **Rustty:** `crates/rustty-vt/src/screen.rs:3159, 3210, 3323, 3366, 3639, 3647, 3790`
+  - **Audit's suggested fix:** Add a logging seam to rustty-vt (e.g. the `log` facade) and emit the seven messages at the marked sites with the same text.
+- [ ] **S134-F2** · CONFIRMED · `ALLOC` · behavioral-difference
+  - **What:** testWriteString flattens cursorSetHyperlink's OutOfSpace into OutOfMemory
+  - **Oracle:** `src/terminal/Screen.zig:3796, 3813, 3826, 3836` → **Rustty:** `crates/rustty-vt/src/screen.rs:5221, 5238, 5259, 5274`
+  - **Audit's suggested fix:** Add an `OutOfSpace` variant to `PrintStringError` (or a dedicated `TestWriteStringError`) and propagate `IncreaseCapacityError` unchanged.
+- [ ] **S139-F1** · CONFIRMED · `DOC` · other
+  - **What:** Stale header comment says '18 Selection tests' but 20 are ported
+  - **Oracle:** `src/terminal/Selection.zig:513-1676` → **Rustty:** `crates/rustty-vt/src/selection.rs:7-8`
+  - **Audit's suggested fix:** Update the header comment to say 20 tests (or drop the count).
+- [ ] **S140-F1** · CONFIRMED · `TEST` · behavioral-difference
+  - **What:** StringMap tests build the line selection with non-default SelectLine options
+  - **Oracle:** `src/terminal/StringMap.zig:142-147, 199-204, 264-266` → **Rustty:** `crates/rustty-vt/src/string_map.rs:472-481, 563-572, 661-667`
+  - **Audit's suggested fix:** Use `whitespace: Some(&crate::selection_codepoints::DEFAULT_LINE_WHITESPACE), semantic_prompt_boundary: true` in the three test fixtures (and the additive test) to match the Zig defaults.
+- [ ] **S140-F2** · DISPUTED · `TEST` · behavioral-difference
+  - **What:** Alternate-screen test fixtures use max_scrollback_bytes=10_000 instead of the Screen.Options default 0
+  - **Oracle:** `src/terminal/SelectionGesture.zig:1635-1638, 1769-1772, 1826-1829, 2065-2068, 2084-2087` → **Rustty:** `crates/rustty-vt/src/selection_gesture.rs:1916-1919, 2094-2097, 2174-2177, 2493-2496, 2522-2525`
+  - **Audit's suggested fix:** Pass `screen_opts(cols, rows, 0)` in the five get_init call sites to mirror the Zig Screen.Options default.
+- [ ] **S141-F3** · CONFIRMED · `ALLOC` · missing-error-path
+  - **What:** Tabstops.resize aborts on a real allocation failure instead of returning OutOfMemory and preserving cols
+  - **Oracle:** `src/terminal/Tabstops.zig:151-155` → **Rustty:** `crates/rustty-vt/src/tabstops.rs:283-291`
+  - **Audit's suggested fix:** Use `try_reserve_exact(dynamic_count - old_len).map_err(|_| OutOfMemory)?` before `resize`, so the error propagates and `cols` stays unchanged.
+- [ ] **S141-F4** · CONFIRMED · `LOG` · other
+  - **What:** log.warn diagnostics in print (zero-width), printCell (hyperlink realloc) and restoreCursor are dropped
+  - **Oracle:** `src/terminal/Terminal.zig:1467, 1480, 1958, 1975` → **Rustty:** `crates/rustty-vt/src/terminal.rs:2452, 2468, 2722, 3199`
+  - **Audit's suggested fix:** Wire the crate's log facility (or `log` crate) and emit the same warnings.
+- [ ] **S142-F1** · CONFIRMED · `LOG` · other
+  - **What:** All log.warn/log.err diagnostics in this range are dropped (commented out) in the port
+  - **Oracle:** `src/terminal/Terminal.zig:2288, 3012-3013, 3232-3233, 3524, 3598, 4086, 4149-4152` → **Rustty:** `crates/rustty-vt/src/terminal.rs:3572-3573, 4591-4593, 4847-4849, 5348-5349, 5431, 6192, 6247-6248`
+  - **Audit's suggested fix:** If/when rustty-vt adopts a logging facade (e.g. the `log` crate), restore these seven warn/err calls with the oracle's message text; otherwise document the crate-wide no-logging policy once so these are not re-audited.
+- [ ] **S143-F2** · CONFIRMED · `LOG` · other
+  - **What:** resize() drops the two log.warn diagnostics on alternate-screen failure
+  - **Oracle:** `src/terminal/Terminal.zig:4108, 4149-4152` → **Rustty:** `crates/rustty-vt/src/terminal.rs:6192, 6246-6250`
+  - **Audit's suggested fix:** If/when rustty-vt gains a log facade, emit these two warnings at the same points.
+- [ ] **S145-F1** · DISPUTED · `TEST` · different-constant
+  - **What:** hyperlink-dense insertLines test initialised with max_scrollback_bytes=10_000 instead of 1024
+  - **Oracle:** `src/terminal/Terminal.zig:8442-8444` → **Rustty:** `crates/rustty-vt/src/terminal.rs:16124`
+  - **Audit's suggested fix:** Use `opts_sb(10, 5, 1024)` at terminal.rs:16124 (and likewise check the deleteLines twin at 16238 which is outside this shard).
+- [ ] **S146-F1** · DISPUTED · `TEST` · different-constant
+  - **What:** deleteLines hyperlink-dense test inits with 10_000 scrollback bytes instead of oracle's 1024
+  - **Oracle:** `src/terminal/Terminal.zig:11463-11466` → **Rustty:** `crates/rustty-vt/src/terminal.rs:16248`
+  - **Audit's suggested fix:** Change terminal.rs:16248 to `Terminal::init(Global, opts_sb(10, 5, 1024))` (and likewise terminal.rs:16124 for the insertLines sibling).
+- [ ] **S148-F2** · DISPUTED · `TEST` · behavioral-difference
+  - **What:** printSlice differential fuzz uses a 64-bit LCG instead of std.Random.DefaultPrng (xoshiro256++), so the 1700 exercised op sequences differ from the oracle's
+  - **Oracle:** `src/terminal/Terminal.zig:14489-14501` → **Rustty:** `crates/rustty-vt/src/terminal.rs:17462-17742`
+  - **Audit's suggested fix:** Port xoshiro256++ (std.Random.Xoshiro256 with SplitMix64 seeding) and Zig's intRangeAtMost/intRangeLessThan (Lemire-style `uintLessThan`) so the same seed yields the oracle's exact op sequence.
+- [ ] **S149-F2** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** The six `log.warn("kitty graphics protocol error" / "glyph protocol error")` sites are dropped
+  - **Oracle:** `src/terminal/apc.zig:8, 128, 136, 193, 202, 230, 241` → **Rustty:** `crates/rustty-vt/src/apc/mod.rs:23, 238, 257, 344, 357, 414, 430`
+  - **Audit's suggested fix:** Route the warnings through whatever logging seam rustty-vt adopts (or at least a `#[cfg(feature = "log")]`-gated `log::warn!`) so the diagnostic text is preserved.
+- [ ] **S149-F3** · DISPUTED · `LOG` · missing-function
+  - **What:** Private debug helper dumpBitmaps is omitted
+  - **Oracle:** `src/terminal/bitmap_allocator.zig:211-217` → **Rustty:** `crates/rustty-vt/src/bitmap_allocator.rs:322-333`
+  - **Audit's suggested fix:** Add a `#[allow(dead_code)] fn dump_bitmaps(&self, base)` that formats each word as binary with its index (eprintln! or the crate's log seam).
+- [ ] **S155-F1** · DISPUTED · `ALLOC` · behavioral-difference
+  - **What:** PageEntry.hash uses std SipHash DefaultHasher instead of seed-0 Wyhash autoHash/autoHashStrat
+  - **Oracle:** `src/terminal/hyperlink.zig:143-160` → **Rustty:** `crates/rustty-vt/src/hyperlink.rs:355-377`
+  - **Audit's suggested fix:** Use `rustty_zigstd::wyhash::Wyhash::init(0)` and feed exactly what Zig autoHash/autoHashStrat(.Deep) write: the tag as its enum integer (u1/u8 per Zig's autoHash of an enum: it hashes @intFromEnum as the tag's backing int), the implicit u32 bytes, the explicit slice bytes with the slice length prefix that autoHashStrat(.Deep) on a []const u8 emits, then the uri likewise — and pin it with a golden test like HashMap_auto_context_matches_reference_wyhash_layout.
+- [ ] **S155-F2** · CONFIRMED · `INDIV` · missing-function
+  - **What:** KeyIterator/ValueIterator (FieldIterator) and keyIterator()/valueIterator() not ported
+  - **Oracle:** `src/terminal/hash_map.zig:313-336, 415-445` → **Rustty:** `crates/rustty-vt/src/hash_map.rs:642-644`
+  - **Audit's suggested fix:** Add `FieldIterator<T>` with `next(&mut self) -> Option<*mut T>` plus `key_iterator()`/`value_iterator()` on HashMapUnmanaged mirroring lines 316-336 and 415-445.
+- [ ] **S155-F3** · DISPUTED · `ABI` · behavioral-difference
+  - **What:** removeByPtr zero-sized-key fallback scans for the used slot instead of using index 0 (deliberate divergence)
+  - **Oracle:** `src/terminal/hash_map.zig:901-912` → **Rustty:** `crates/rustty-vt/src/hash_map.rs:1119-1160`
+  - **Audit's suggested fix:** Keep as documented divergence (it is a strict correctness improvement on an unreachable path) or restore `0` for strict fidelity; either way record it in the deferral/divergence ledger.
+- [ ] **S155-F4** · CONFIRMED · `DEBUGONLY` · weakened-assertion
+  - **What:** expectCanonical ported as cfg(debug_assertions)-gated debug_assert_canonical, a no-op in release test runs
+  - **Oracle:** `src/terminal/hash_map.zig:1028-1046, 1476, 1527, 1564, 1616` → **Rustty:** `crates/rustty-vt/src/hash_map.rs:1187-1217, 1951, 1999, 2039, 2104`
+  - **Audit's suggested fix:** Add a test-module `expect_canonical` helper that always asserts (plain assert!/assert_eq!) and call it from the four tests, keeping debug_assert_canonical for the production invariant.
+- [ ] **S155-F5** · CONFIRMED · `TEST` · other
+  - **What:** Randomized tests use different PRNGs (LCG / splitmix64) than std.Random.DefaultPrng (xoshiro256++), and the PORT NOTE misdescribes the replacement
+  - **Oracle:** `src/terminal/hash_map.zig:1280-1316, 1567-1617` → **Rustty:** `crates/rustty-vt/src/hash_map.rs:1718-1729, 2044-2070`
+  - **Audit's suggested fix:** Either port xoshiro256++ with Zig's DefaultPrng seeding (splitmix64 seed expansion) so the sequence matches, or correct the PORT NOTE to say splitmix64.
+- [ ] **S155-F6** · CONFIRMED · `ALLOC` · missing-error-path
+  - **What:** Flattened.init/clone return Result<_, OutOfMemory> but can never yield Err (Vec::push/with_capacity abort on OOM)
+  - **Oracle:** `src/terminal/highlight.zig:141-172` → **Rustty:** `crates/rustty-vt/src/highlight.rs:168-214`
+  - **Audit's suggested fix:** Use `try_reserve`/`try_reserve_exact` before pushing (mapping TryReserveError to OutOfMemory) as hyperlink.rs's try_dupe_bytes does.
+- [ ] **S155-F7** · CONFIRMED · `DOC` · other
+  - **What:** Verbatim comment blocks for main.zig's root test and lib.zig are stale (omit compress/fraction/mem and TinyIo lines)
+  - **Oracle:** `src/terminal/main.zig:93-104` → **Rustty:** `crates/rustty-vt/src/lib.rs:330-341, 288-296`
+  - **Audit's suggested fix:** Refresh the two verbatim comment blocks to the pinned oracle text.
+- [ ] **S156-F3** · CONFIRMED · `INDIV` · other
+  - **What:** madvise failure warnings not logged
+  - **Oracle:** `src/terminal/mem.zig:109,129,169` → **Rustty:** `crates/rustty-vt/src/mem.rs:189,214,262`
+  - **Audit's suggested fix:** Wire a logging facade (e.g. the `log` crate) into rustty-vt and emit the three warnings, including the errno.
+- [ ] **S156-F4** · CONFIRMED · `INDIV` · other
+  - **What:** ensureAllocator warning not logged
+  - **Oracle:** `src/terminal/osc.zig:439-444` → **Rustty:** `crates/rustty-vt/src/osc/mod.rs:895-906`
+  - **Audit's suggested fix:** Emit the warning through a logging facade once one is wired into rustty-vt.
+- [ ] **S157-F1** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** verifyIntegrity log.warn diagnostics (with y/x/id/expected/actual details) are dropped
+  - **Oracle:** `src/terminal/page.zig:405-611` → **Rustty:** `crates/rustty-vt/src/page_impl.rs:586-746`
+  - **Audit's suggested fix:** Emit the equivalent `log::warn!` lines (with y, x, id, expected, actual) before each `return Err(...)` and a `log::error!` in assert_integrity before the panic.
+- [ ] **S158-F1** · CONFIRMED · `ABI` · other
+  - **What:** Cell doc comment states a stale bit layout that contradicts the constants
+  - **Oracle:** `src/terminal/page.zig:2087-2130` → **Rustty:** `crates/rustty-vt/src/page.rs:574-586`
+  - **Audit's suggested fix:** Rewrite the doc block to the 26/42/44/45/46/48 offsets (or delete the duplicated table and point at the CELL_* constants and cell_field_bit_offsets test).
+- [ ] **S161-F1** · CONFIRMED · `TEST` · missing-branch
+  - **What:** Pin/serial skip test omits the last-row serial comparison
+  - **Oracle:** `src/terminal/render.zig:599-615` → **Rustty:** `crates/rustty-vt/src/render.rs:1037-1055`
+  - **Audit's suggested fix:** Add `|| self.row_data[y + take - 1].serial != node_serial` to the condition at render.rs:1038-1044.
+- [ ] **S161-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** string() writes surrogate codepoints as WTF-8 bytes instead of U+FFFD
+  - **Oracle:** `src/terminal/render.zig:991-999` → **Rustty:** `crates/rustty-vt/src/render.rs:1524-1548`
+  - **Audit's suggested fix:** In `write_codepoint`'s `None` arm, emit `[0xEF, 0xBF, 0xBD]` when `utf8_codepoint_sequence_length(cp)` is Some(3) (surrogate), keeping the Err for out-of-range.
+- [ ] **S163-F1** · DISPUTED · `ALLOC` · missing-error-path
+  - **What:** vtRaw error arm (`catch` -> warn + skip) has no channel in the Rust `vt_raw` hook
+  - **Oracle:** `src/terminal/stream.zig:1289-1301` → **Rustty:** `crates/rustty-vt/src/stream.rs:1978-1989`
+  - **Audit's suggested fix:** Either make `vt_raw` return `Result<bool, E>` and map `Err` to skip=true (matching the oracle), or document the folded semantic on the trait and have the inspector return `true` on its internal failure paths.
+- [ ] **S163-F2** · CONFIRMED · `LOG` · other
+  - **What:** All `log.warn`/`log.info` diagnostics in the stream fast paths and CSI dispatch are dropped (no log facade in rustty-vt)
+  - **Oracle:** `src/terminal/stream.zig:1352-1356, 1372, 1435, 1441-1444, 1456, 1462, 1478, 1484, 1499, 1505, 1520, 1528, 1543, 1551, 1566, 1572, 1590, 1597, 1610, 1615, 1630, 1641, 1665, 1677, 1688, 1700, 1705, 1718, 1723, 1735, 1740, 1753, 1758, 1770, 1775, 1807, 1816` → **Rustty:** `crates/rustty-vt/src/stream.rs:2072, 2093, 2173-2620`
+  - **Audit's suggested fix:** Wire a `log` facade (e.g. the `log` crate scoped `stream`) and emit the same messages at the same points; make `log_unsupported_once` callers emit under the returned bool.
+- [ ] **S163-F3** · DISPUTED · `ABI` · missing-function
+  - **What:** Action C-ABI projections (Tag/Value/C/CValue/cval and per-payload `.C`/`cval`) have no Rust counterpart
+  - **Oracle:** `src/terminal/stream.zig:237-249, 252-262, 272-283, 285-296, 322-330, 332-340, 352-360, 362-370, 372-380, 382-397, 399-414, 416-432, 439-449` → **Rustty:** `crates/rustty-vt/src/stream.rs:102-128`
+  - **Audit's suggested fix:** Either add the `Action` C projection to rustty-vt-c when a C consumer appears, or correct the PORT NOTE to state that the projection is intentionally not ported because no use-site exists.
+- [ ] **S164-F1** · CONFIRMED · `LOG` · other
+  - **What:** All log.warn/log.err/log.debug emissions in csi/osc/esc dispatch and logUnsupportedOnce are dropped (no logging facade)
+  - **Oracle:** `src/terminal/stream.zig:1785-3079` → **Rustty:** `crates/rustty-vt/src/stream.rs:2577-4242`
+  - **Audit's suggested fix:** Wire a logging facade (e.g. the `log` crate) into rustty-vt and emit the preserved messages at the same levels; emit under the boolean returned by log_unsupported_once.
+- [ ] **S165-F1** · DISPUTED · `ALLOC` · weakened-assertion
+  - **What:** 'stream: continuation lifecycle' is wholly #[ignore]d in release builds, not just its FailingAllocator arm
+  - **Oracle:** `src/terminal/stream.zig:4850-4906` → **Rustty:** `crates/rustty-vt/src/stream.rs:6845-6932`
+  - **Audit's suggested fix:** Drop the cfg_attr ignore and keep only the `#[cfg(debug_assertions)]` block guard on the failing-allocator arm so the other four assertions run in every configuration.
+- [ ] **S166-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Clipboard read/write reply side effects are applied after the effect callback returns instead of inside `reply`
+  - **Oracle:** `src/terminal/stream_terminal.zig:738-760, 927-960, 1206-1234` → **Rustty:** `crates/rustty-vt/src/stream_terminal.rs:907-951, 1083-1118, 1261-1339, 2922-3184`
+  - **Audit's suggested fix:** Document the deferral as an intentional contract in the Effects doc comment, or apply the grant/pty write from inside `reply` via a raw handler pointer in the state (as the oracle does) if the SB/Miri harness allows it.
+- [ ] **S166-F2** · CONFIRMED · `DEBUGONLY` · missing-test
+  - **What:** Two oracle tests only run in debug builds (ignored / cfg'd out in release)
+  - **Oracle:** `src/terminal/stream_terminal.zig:2075-2109, 2178-2209` → **Rustty:** `crates/rustty-vt/src/stream_terminal.rs:4153-4155, 4279-4286`
+  - **Audit's suggested fix:** Make the tripwire modules available under a `cfg(test)` (not `debug_assertions`) gate so both tests run under `cargo test --release` too.
+- [ ] **S166-F3** · CONFIRMED · `LOG` · other
+  - **What:** All `log.warn` diagnostics in the handler are dropped (commented out)
+  - **Oracle:** `src/terminal/stream_terminal.zig:344-347, 470-477, 506, 512, 675, 726, 741, 756-757, 930, 952, 957, 1209, 1228, 1445, 1471, 1489, 1530` → **Rustty:** `crates/rustty-vt/src/stream_terminal.rs:674-680, 879, 2508, 2530, 2564, 2642, 2931, 3030, 3164, 3844, 3887, 3899`
+  - **Audit's suggested fix:** Emit the warnings via the workspace `log` crate (`log::warn!`) at each site with the same message text.
+- [ ] **S167-F1** · CONFIRMED · `TEST` · weakened-assertion
+  - **What:** DCS command memory-release test has no leak check outside Miri
+  - **Oracle:** `src/terminal/stream_terminal.zig:2607-2625` → **Rustty:** `crates/rustty-vt/src/stream_terminal.rs:4763-4791`
+  - **Audit's suggested fix:** Wrap the handler's DCS command buffer allocations in the crate's tripwire/alloc-counting seam (as done for CLIPBOARD_CONTENTS_TW) and assert the live-allocation count returns to zero after both the completed command and Handler::deinit, so the leak is caught in the normal test lane.
+- [ ] **S170-F2** · DISPUTED · `INDIV` · behavioral-difference
+  - **What:** format_wire panics on non-UTF-8 `.other`/clear reason bytes instead of writing them through
+  - **Oracle:** `src/terminal/apc/glyph/response.zig:124, 199-211` → **Rustty:** `crates/rustty-vt/src/apc/glyph/response.rs:174, 184-186, 319-321`
+  - **Audit's suggested fix:** Make format_wire write to a byte sink (e.g. `&mut impl std::io::Write` or `&mut Vec<u8>`) and emit the reason bytes directly, or fall back to a lossy write instead of expect().
+- [ ] **S172-F1** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** setopt invalid-value warnings bypass the C log callback and print unconditionally to stderr
+  - **Oracle:** `src/terminal/c/key_encode.zig:82-87, 115-120` → **Rustty:** `crates/rustty-vt-c/src/key_encode.rs:171-175, 239-243`
+  - **Audit's suggested fix:** Replace both eprintln! calls with `crate::sys::log_fn(sys::StdLevel::Warn, "key_encode", format_args!(...))` as done for key_event in lib.rs.
+- [ ] **S174-F5** · CONFIRMED · `ALLOC` · missing-error-path
+  - **What:** terminal_paste mimes-array allocation failure aborts instead of returning out_of_memory
+  - **Oracle:** `src/terminal/c/paste.zig:62-67` → **Rustty:** `crates/rustty-vt-c/src/paste.rs:138-147`
+  - **Audit's suggested fix:** Use a fallible allocation (try_reserve / Vec::try_with_capacity equivalent) and return Result::OutOfMemory on failure, or record the DG5 exemption explicitly on this line.
+- [ ] **S176-F2** · DISPUTED · `ALLOC` · missing-error-path
+  - **What:** `search::new` drops the registry-insert out-of-memory path
+  - **Oracle:** `src/terminal/c/search.zig:135-145` → **Rustty:** `crates/rustty-vt-c/src/search.rs:389-400`
+  - **Audit's suggested fix:** Use a fallible insert (e.g. `try_reserve` before `insert`, or the allocator-aware hashbrown API) so a registry allocation failure destroys the wrapper and returns `Result::OutOfMemory` as the oracle does.
+- [ ] **S178-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** log_stderr renders scope/message through String::from_utf8_lossy instead of raw bytes
+  - **Oracle:** `src/terminal/c/sys.zig:249-285` → **Rustty:** `crates/rustty-vt-c/src/sys.rs:600-660`
+  - **Audit's suggested fix:** Write the raw bytes: `lock.write_all(b"[")`, `write_all(level_text.as_bytes())`, `write_all(b"](")`, `write_all(scope)`, `write_all(b"): ")`, `write_all(message)`, `write_all(b"\n")` — or build the line into a stack `[u8; 2048+128]` buffer and issue one `write_all`, matching the reference's single-write path exactly.
+- [ ] **S178-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** log_stderr no longer emits each line with a single write; the doc-comment guarantee is unbacked
+  - **Oracle:** `src/terminal/c/sys.zig:219-285` → **Rustty:** `crates/rustty-vt-c/src/sys.rs:586-660`
+  - **Audit's suggested fix:** Format into a `[u8; LogEmitter::buffer_size + 128]` stack buffer and emit it with a single `write_all`, falling back to piecewise writes when the line does not fit — restoring both the single-write property and the reference's two-path structure. (Fixing this and the lossy-UTF-8 finding together is one change.)
+- [ ] **S179-F3** · CONFIRMED · `ALLOC` · behavioral-difference
+  - **What:** grid_ref_track allocates the TrackedGridRef on the Rust global heap instead of the caller's allocator
+  - **Oracle:** `src/terminal/c/terminal.zig:1809-1834` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:4306-4340`
+  - **Audit's suggested fix:** Allocate the TrackedGridRef through the wrapper's stored C allocator (`rustty_lib::allocator::create_raw`) and keep the `untrack_pin` + `RUSTTY_OUT_OF_MEMORY` unwind, matching the oracle's cleanup order.
+- [ ] **S180-F1** · CONFIRMED · `INDIV` · weakened-assertion
+  - **What:** `scroll_viewport null` drops the `.row` tag call
+  - **Oracle:** `src/terminal/c/terminal.zig:2394-2397` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:5218-5232`
+  - **Audit's suggested fix:** Add the second call: `scroll_viewport(std::ptr::null_mut(), ScrollViewportC { tag: ScrollViewportTag::Row as c_int, value: ScrollViewportCValue { row: 1 } })`.
+- [ ] **S180-F2** · DISPUTED · `DEBUGONLY` · missing-test
+  - **What:** `get vt_processing_error` counterpart is compiled out of release builds
+  - **Oracle:** `src/terminal/c/terminal.zig:3035-3073` → **Rustty:** `crates/rustty-vt-c/src/terminal.rs:6252-6316`
+  - **Audit's suggested fix:** Either expose a release-visible fail point (or a failing-allocator equivalent) for the terminal-owned string update path so the test can be unconditional, or accept the gap explicitly in the census ledger.
+- [ ] **S185-F1** · CONFIRMED · `INDIV` · other
+  - **What:** Stale "DEFERRED to vt-12 / compiling stub" PORT NOTE on graphics_storage re-export
+  - **Oracle:** `src/terminal/kitty/graphics.zig:18-27` → **Rustty:** `crates/rustty-vt/src/kitty/graphics.rs:27-30`
+  - **Audit's suggested fix:** Delete or reword the stale deferral note in crates/rustty-vt/src/kitty/graphics.rs:27-30.
+- [ ] **S189-F3** · CONFIRMED · `TEST` · missing-function
+  - **What:** `LoadingImage.debugDump` not ported (carried as a comment)
+  - **Oracle:** `src/terminal/kitty/graphics_image.zig:563-586` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:854-880`
+  - **Audit's suggested fix:** Optionally add a `#[cfg(debug_assertions)] pub fn debug_dump(&self) -> std::io::Result<()>` with the same filename format, or leave as-is and record it as an accepted cosmetic gap.
+- [ ] **S189-F4** · CONFIRMED · `INDIV` · stub-or-unimplemented
+  - **What:** Windows has no handle-based realpath, so the kitty file/temporary-file media fail closed there
+  - **Oracle:** `src/terminal/kitty/graphics_image.zig:451-465` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:1407-1420`
+  - **Audit's suggested fix:** Add a Windows arm using `GetFinalPathNameByHandleW` (stripping the `\\?\` prefix) so `validatedFilePath` can apply the blocklist to the opened handle, then close the deferral row.
+- [ ] **S190-F1** · CONFIRMED · `LOG` · other
+  - **What:** All log.info/log.warn/log.debug diagnostics in ImageStorage are carried as comments, never emitted
+  - **Oracle:** `src/terminal/kitty/graphics_storage.zig:224-226, 302-311, 369, 576, 1025-1033, 1252, 1271, 1294, 1312, 1495-1505` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_storage.rs:363-367, 452-458, 468, 530, 810-816, 1315-1322, 1607, 1631, 1655, 1682, 1935, 1944`
+  - **Audit's suggested fix:** Optional: none required for functional parity; if diagnostics are wanted later, introduce a vt-level logging shim and restore these call sites verbatim.
+- [ ] **S190-F2** · DISPUTED · `LOG` · missing-error-path
+  - **What:** Two documented allocation-failure degradation paths cannot be reached in the port (abort instead)
+  - **Oracle:** `src/terminal/kitty/graphics_storage.zig:570-579, 977-988` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_storage.rs:806-822, 1268-1300`
+  - **Audit's suggested fix:** None practical; the port-wide OOM=abort policy makes these arms dead code. If a fallible allocator is ever adopted for vt, restore `try_reserve`/`push` fallbacks at these two sites.
+- [ ] **S194-F4** · CONFIRMED · `TEST` · weakened-assertion
+  - **What:** isSafeUtf8 test's 8-bit-escape case changed from a raw 0x9F byte (invalid UTF-8) to a valid U+009F, so the invalid-UTF-8 rejection branch is no longer covered
+  - **Oracle:** `src/terminal/osc/encoding.zig:37` → **Rustty:** `crates/rustty-vt/src/osc/encoding.rs:49-51`
+  - **Audit's suggested fix:** Use a raw byte literal, e.g. `assert!(!is_safe_utf8(b"\x9f8-bit escapes are clever, but no"));`, to restore the invalid-UTF-8 input, and optionally keep the U+009F case as an extra assertion.
+- [ ] **S196-F1** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** rxvt_extension scoped logger and its two warn() calls are commented out
+  - **Oracle:** `src/terminal/osc/parsers/rxvt_extension.zig:6,27-32` → **Rustty:** `crates/rustty-vt/src/osc/parsers/rxvt_extension.rs:7-11,34,41`
+  - **Audit's suggested fix:** If/when a logging facade is wired into rustty-vt, restore both warnings with the same message text and the `osc_rxvt_extension` scope.
+- [ ] **S197-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** exit_code parsing: Zig std.fmt.parseInt accepts '_' digit separators, Rust str::parse does not
+  - **Oracle:** `src/terminal/osc/parsers/semantic_prompt.zig:160-166` → **Rustty:** `crates/rustty-vt/src/osc/parsers/semantic_prompt.rs:323-333`
+  - **Audit's suggested fix:** Strip interior `_` separators (rejecting leading/trailing `_` and an all-`_`/empty remainder) before calling `parse::<i32>()`, mirroring Zig's parseIntWithSign, and add a regression assertion to `option_read_exit_code`.
+- [ ] **S204-F1** · DISPUTED · `ALLOC` · missing-error-path
+  - **What:** Decode-time temporary allocations abort instead of returning OutOfMemory
+  - **Oracle:** `src/terminal/snapshot/page.zig:252-253, 373-381` → **Rustty:** `crates/rustty-vt/src/snapshot/page.rs:457, 561-573`
+  - **Audit's suggested fix:** If the port wants full parity on this error path, use a fallible allocation (e.g. `Vec::try_reserve`) for the staged payload and remap tables and map failure to `PayloadDecodeError::OutOfMemory`; otherwise record the deviation in a PORT NOTE next to the staged allocation.
+- [ ] **S205-F1** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** Two decode tests use unlimited scrollback where the reference uses the Options default of zero
+  - **Oracle:** `src/terminal/snapshot/screen.zig:2371-2377, 2444-2450` → **Rustty:** `crates/rustty-vt/src/snapshot/screen.rs:2971, 3050`
+  - **Audit's suggested fix:** Change both call sites to `screen_options(1, 1, Some(0))` so the decode options match the reference's `Options` default.
+- [ ] **S207-F1** · DISPUTED · `INDIV` · different-constant
+  - **What:** Restored alternate screen gets kitty_image_storage_limit 0 instead of the Screen.Options default (320MB)
+  - **Oracle:** `src/terminal/snapshot/terminal.zig:992-999` → **Rustty:** `crates/rustty-vt/src/snapshot/terminal.rs:1236-1251`
+  - **Audit's suggested fix:** Spell out `kitty_image_storage_limit: 320 * 1000 * 1000` and `kitty_image_loading_limits: Limits::DIRECT` (the artifact defaults, as done for the primary Terminal::init options at line 1219) instead of spreading `Options::default()`, or add an `Options::field_defaults()` helper that mirrors the reference struct-field defaults rather than the `Options.default` constant.
+- [ ] **S207-F2** · DISPUTED · `ABI` · other
+  - **What:** PORT NOTE states ModePacked::BITS is 42; it is 43
+  - **Oracle:** `src/terminal/snapshot/terminal.zig:247-249` → **Rustty:** `crates/rustty-vt/src/snapshot/terminal.rs:285-291`
+  - **Audit's suggested fix:** Change the parenthetical to 43.
+- [ ] **S208-F1** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** Notification format/Display output text differs from the reference's comptime-reflected format
+  - **Oracle:** `src/terminal/tmux/control.zig:568-590` → **Rustty:** `crates/rustty-vt/src/tmux/control.rs:878-975`
+  - **Audit's suggested fix:** Emit `terminal.tmux.control.Notification` as the type name, print `void` for the payload-less tags, and render the struct payloads the way Zig's `{any}` does (byte-array members), or accept the divergence explicitly in the PORT NOTE since the only consumer is a log line.
+- [ ] **S208-F2** · CONFIRMED · `INDIV` · behavioral-difference
+  - **What:** tmux output delimiter is treated as a Unicode char rather than a byte
+  - **Oracle:** `src/terminal/tmux/output.zig:17-36, 57-66` → **Rustty:** `crates/rustty-vt/src/tmux/output.rs:104-119, 383-405`
+  - **Audit's suggested fix:** Split/emit on the raw byte (operate on `&[u8]`, or assert/restrict the delimiter to ASCII) so a >=0x80 delimiter behaves as in the reference.
+- [ ] **S208-F3** · CONFIRMED · `DOC` · other
+  - **What:** Stale PORT NOTE claims the oniguruma binding crate does not exist
+  - **Oracle:** `src/terminal/tmux/control.zig:1-10` → **Rustty:** `crates/rustty-vt/src/tmux/control.rs:11-22`
+  - **Audit's suggested fix:** Rewrite the note to state the real (and correct) rationale — the feature mirrors the reference `oniguruma` build option, is enabled by rustty-core for the app tier, and `cargo test -p rustty-vt --features oniguruma` is required to run the eight gated tests.
+- [ ] **S209-F1** · DISPUTED · `ABI` · behavioral-difference
+  - **What:** Pane terminal dimension overflow: Zig @intCast traps, Rust `as` silently truncates
+  - **Oracle:** `src/terminal/tmux/viewer.zig:1131-1140` → **Rustty:** `crates/rustty-vt/src/tmux/viewer.rs:935-950`
+  - **Audit's suggested fix:** Use a checked conversion that reproduces the trap (e.g. `size::CellCountInt::try_from(d.width).expect(...)`, matching the @intCast safety check) or explicitly document/handle the overflow as the TODO suggests.
+- [ ] **S209-F2** · CONFIRMED · `LOG` · behavioral-difference
+  - **What:** All log.info/log.warn diagnostics in the viewer are dropped in the port
+  - **Oracle:** `src/terminal/tmux/viewer.zig:16, 305, 397, 419-421, 461-472, 501, 505, 566, 654, 828, 855, 878, 900, 1027, 1049, 1063, 1075` → **Rustty:** `crates/rustty-vt/src/tmux/viewer.rs:66-69, 455-460, 621-627, 749-753, 1140-1146, 1600-1607`
+  - **Audit's suggested fix:** None required for functional parity; if/when a logging seam exists in rustty-vt, re-instate these messages verbatim.
+- [ ] **S209-F3** · CONFIRMED · `TEST` · behavioral-difference
+  - **What:** Action formatting text differs slightly from the reference's reflection-based format
+  - **Oracle:** `src/terminal/tmux/viewer.zig:207-229` → **Rustty:** `crates/rustty-vt/src/tmux/viewer.rs:311-333`
+  - **Audit's suggested fix:** Cosmetic; align the exit/windows rendering text if exact diagnostic parity is desired.
