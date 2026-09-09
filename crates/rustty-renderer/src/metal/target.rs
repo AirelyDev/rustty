@@ -15,12 +15,14 @@
 //! `CFRetained<IOSurfaceRef>` whose `Drop` CFReleases; the MTLTexture becomes a
 //! `Retained` whose `Drop` releases.
 //!
-//! PORT NOTE (R5 deferred seam, offscreen scope [F12]): ghostty sets the surface's
-//! color space to Display P3 (see the `set_color_space` comment in `init`). The
-//! offscreen golden reads RAW BGRA bytes — which ignore the IOSurface colorspace
-//! tag — and the golden's determinism pin requires `colorspace != display-p3`, so
-//! the colorspace-set is SKIPPED offscreen and R5-preserved as a deferred
-//! windowing-host seam (it needs `objc2-core-graphics`, a Chunk-4 dep).
+//! PORT NOTE (S118-F1, CLOSED): ghostty sets the surface's color space to
+//! Display P3 (oracle `src/renderer/metal/Target.zig:45-60`; see the
+//! `set_color_space` comment in `init` for the exact port mapping). `init` now
+//! applies this unconditionally, including offscreen: the offscreen golden
+//! reads RAW BGRA bytes, which ignore the IOSurface colorspace tag, so tagging
+//! the surface cannot perturb the golden's pinned byte output. This was
+//! previously a deferred windowing-host seam pending `objc2-core-graphics`;
+//! that dependency is now present (see `Cargo.toml`).
 
 use core::ffi::c_void;
 
@@ -308,10 +310,15 @@ mod p3_colorspace_tests {
 
     #[test]
     fn target_surface_is_tagged_display_p3() {
-        let Some(dev) = device() else {
-            eprintln!("SKIP: no Metal device on this host");
-            return;
-        };
+        // This test is the SOLE evidence backing the CLOSED S118-F1 ledger row
+        // (.port/parity-closure/LEDGER.tsv). A silent skip-on-no-device (a bare
+        // `return` from a #[test] fn reports as a pass) would make the ledger
+        // row look verified when it isn't. This is `#[cfg(target_os = "macos")]`
+        // code and the macOS CI lane runs on a real Metal-capable host, so a
+        // `None` device here is an environment regression worth failing loudly
+        // on, not hiding.
+        let dev =
+            device().expect("Metal device required: this test is the sole evidence for S118-F1");
 
         let t = Target::init(Options {
             device: &dev,
