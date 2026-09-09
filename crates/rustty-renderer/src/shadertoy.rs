@@ -150,13 +150,35 @@ pub struct Uniforms {
 }
 
 // S117-F1 layout pins: compile-time freeze so the std140 offsets/size can never
-// silently drift back to natural alignment. Derived field-by-field from the
-// oracle's `align(16)` annotations (ghostty src/renderer/shadertoy.zig:14-42);
-// cross-checked against the `Globals` block in shaders/shadertoy_prefix.glsl.
+// silently drift — not just for the three FORCED members, but for every member
+// the oracle marks `align(16)`. This matters because the three forced members
+// (`channel_time`/`current_cursor`/`palette`) act as *absorbers*: an unrelated
+// layout break inserted anywhere between two forced members (e.g. widening a
+// scalar, reordering a field) would shift every *unforced* member's offset
+// while still leaving the forced offsets — and even `size_of` — unchanged,
+// so pinning only those 3 lets a broken layout pass silently. Pinning all 16
+// `align(16)` members' offsets (plus size and struct alignment) closes that
+// gap. Derived field-by-field from the oracle's `align(16)` annotations
+// (ghostty src/renderer/shadertoy.zig:14-42); cross-checked against the
+// `Globals` block in shaders/shadertoy_prefix.glsl.
+const _: () = assert!(std::mem::offset_of!(Uniforms, resolution) == 0);
 const _: () = assert!(std::mem::offset_of!(Uniforms, channel_time) == 32);
+const _: () = assert!(std::mem::offset_of!(Uniforms, channel_resolution) == 96);
+const _: () = assert!(std::mem::offset_of!(Uniforms, mouse) == 160);
+const _: () = assert!(std::mem::offset_of!(Uniforms, date) == 176);
 const _: () = assert!(std::mem::offset_of!(Uniforms, current_cursor) == 208);
+const _: () = assert!(std::mem::offset_of!(Uniforms, previous_cursor) == 224);
+const _: () = assert!(std::mem::offset_of!(Uniforms, current_cursor_color) == 240);
+const _: () = assert!(std::mem::offset_of!(Uniforms, previous_cursor_color) == 256);
 const _: () = assert!(std::mem::offset_of!(Uniforms, palette) == 304);
+const _: () = assert!(std::mem::offset_of!(Uniforms, background_color) == 4400);
+const _: () = assert!(std::mem::offset_of!(Uniforms, foreground_color) == 4416);
+const _: () = assert!(std::mem::offset_of!(Uniforms, cursor_color) == 4432);
+const _: () = assert!(std::mem::offset_of!(Uniforms, cursor_text) == 4448);
+const _: () = assert!(std::mem::offset_of!(Uniforms, selection_background_color) == 4464);
+const _: () = assert!(std::mem::offset_of!(Uniforms, selection_foreground_color) == 4480);
 const _: () = assert!(std::mem::size_of::<Uniforms>() == 4496);
+const _: () = assert!(std::mem::align_of::<Uniforms>() == 16);
 
 /// The target to load shaders for.
 // pub const Target = enum { glsl, msl };
