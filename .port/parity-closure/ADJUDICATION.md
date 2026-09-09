@@ -200,3 +200,133 @@ summaries.
 - Refuting lens said: "the oracle's noop.zig updateConfigEvent is an empty body and, as the finder itself states, has no dispatcher in winproto.zig and no wayland/x11 implementation — it is unreachable dead code on the oracle side ... omitting an empty never-called function changes nothing."
 - Verified: `grep -rn "updateConfigEvent" /Users/gael/projects/ghostty/src/apprt/gtk/winproto/*.zig /Users/gael/projects/ghostty/src/apprt/gtk/*.zig` returns exactly one hit — the empty definition itself at `noop.zig:64-67` — confirming `winproto.zig`'s `Window` union type has no dispatcher for it and neither `wayland.zig` nor `x11.zig` implements a matching method. `grep -rn "update_config_event"` across `crates/rustty-apprt/src` returns nothing, consistent with omitting genuinely dead, uncalled API surface on both sides.
 - Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s60-f4
+
+### S91-F3 — WAIVED (not a defect)
+- Refuting lens said: "The finding's own suggested fix is 'document it as an intentional hardening divergence' — which is already done, explicitly, at web_canvas.rs:44-58 ... The guard exists only because the port adds a modern-surface `Face::init(lib, source, opts)` shim ... The reference's initNamed is unreachable with non-CSS bytes by construction (its only caller is Wasm.face_new_, web_canvas.zig:497-503, which is fed a CSS string by the JS glue)."
+- Verified: read oracle `src/font/face/web_canvas.zig:50-77` (`initNamed` copies `raw` with no validation) and confirmed via `grep -n initNamed` that its only caller in the oracle tree is `Wasm.face_new_` at `web_canvas.zig:497-503` (`export fn face_new(ptr, len, pts, p)` from JS). Read rustty `crates/rustty-font-shaper/src/face/web_canvas.rs:260-296` — the added `validate_css_font_str(raw)?` is stricter than the oracle only for non-CSS byte inputs (font-file magic bytes, non-UTF8, control chars), none of which the sole real caller (browser JS glue passing a CSS `font` string) can produce. This is opt-in hardening on a browser-only, non-macOS-first target, not a fidelity loss on any reachable input.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s91-f3
+
+### S94-F1 — UPHELD (real defect)
+- Refuting lens said: "The observable behaviour the oracle's CFReleaseThread provides ... IS present ... I also confirmed the real port exists and is complete at crates/rustty-os/src/cf_release_thread.rs:8 ('PORT STATUS: ported') ... the coretext.rs:41-53 note claiming the xev seam is 'all unimplemented!()' is stale documentation only (rustty-global has no seam.rs any more), which is at most a low/doc-level issue, not the medium functional finding described."
+- Why that is wrong: the refutation itself concedes the two things that matter — (1) the PORT NOTE at `crates/rustty-font-shaper/src/shaper/coretext.rs:36-45` is stale: I grepped the whole workspace for `seam.rs` and found no `rustty_global::seam::Xev` (only an unrelated `crates/rustty-apprt-api/src/seam.rs`), and (2) `crates/rustty-os/src/cf_release_thread.rs:1-20` is a genuinely complete, tested-by-inventory port ("PORT STATUS: ported ... every line, comment, and test{} ported ... PARITY (SEAM SATISFIED, R4): ... backend is now the real rustty-xev kqueue Loop/Async") sitting directly below rustty-font-shaper in the dependency graph. The lens tries to reclassify this down to "at most a low/doc-level issue" but that is exactly the concedes-and-relocates pattern this batch is instructed to uphold on: a real, already-ported implementation is sitting unused while the shaper crate ships a hand-rolled stand-in under a doc comment that is factually false about why. No other ledger row (checked `S94-F4`, `S111-F4` — both about dropped log calls only) covers the stale-doc/unused-real-port gap itself.
+- Disposition: state=OPEN, owner= (unchanged), flows into its severity phase
+
+### S31-F2 — WAIVED (not a defect)
+- Refuting lens said: "This is a compiler-diagnostic flag: it changes whether a warning becomes an error, not generated code or runtime behaviour. Moreover the oracle itself already passes -Wno-implicit-function-declaration globally ... No input/state yields a different observable result; the finder's own text concedes 'no runtime behaviour changes'."
+- Verified: read oracle `pkg/fontconfig/build.zig:122-124` (global `-Wno-implicit-function-declaration`) and `:215-228` (Windows+libxml2 arm adds `-Werror=implicit-function-declaration`) against rustty `crates-sys/fontconfig-sys/build.rs:227-234` (defines added, flag omitted). Windows is not a rustty target (macOS-first locked fork); the flag only affects whether an implicit-function-declaration diagnostic is promoted to a hard error during compilation, never generated code.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s31-f2
+
+### S31-F3 — WAIVED (not a defect)
+- Refuting lens said: "grep -rn ImplOSX over /Users/gael/projects/ghostty/src and /pkg returns zero hits, so no oracle use-site ever calls these symbols ... A never-called extern declaration plus an uncompiled backend .mm produces no observable behavioural difference."
+- Verified: `grep -rn "ImplOSX" /Users/gael/projects/ghostty` returns only the three declarations at `pkg/dcimgui/main.zig:30-32` themselves — no caller anywhere in `src/`. Rustty `crates-sys/dcimgui-sys/src/lib.rs:154-330` correctly omits them; the macOS inspector path goes through the Metal backend that IS present.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s31-f3
+
+### S31-F4 — WAIVED (not a defect)
+- Refuting lens said: "Grepping the oracle src/ for DockBuilder ... shows exactly those 6 are ever called; the other 10 are declaration-only in the oracle. Missing unused extern declarations in a bindings shim change no runtime behaviour at any use-site."
+- Verified: `grep -n DockBuilder src/inspector/widgets.zig src/inspector/widgets/surface.zig src/inspector/widgets/screen.zig` in the oracle shows only `SplitNode`, `DockWindow`, `Finish`, `GetNode`, `AddNodeEx`, `SetNodeSize` are ever invoked — exactly the 6 rustty declares at `crates-sys/dcimgui-sys/src/lib.rs:110-148`. The other 10 are unused in both trees.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s31-f4
+
+### S31-F5 — WAIVED (not a defect)
+- Refuting lens said: "Oracle grep shows only ImGuiDockNodeFlagsPrivate.DockSpace is referenced (widgets/surface.zig:165, widgets/screen.zig:140). Unused constant declarations produce no observable difference."
+- Verified: `grep -n "DockNodeFlagsPrivate" src/inspector/widgets/surface.zig src/inspector/widgets/screen.zig` confirms only `.DockSpace` is used anywhere in the oracle tree; rustty `crates-sys/dcimgui-sys/src/lib.rs:164-172` defines exactly that one constant with the matching bit value `1 << 10`.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s31-f5
+
+### S33-F2 — WAIVED (not a defect)
+- Refuting lens said: "the finder itself concedes the compiled behaviour matches the oracle's `enable-coretext = hasCoretext()`. This is an internal doc-comment inaccuracy in rustty, not a divergence from the oracle."
+- Verified: read `crates-sys/harfbuzz-sys/src/lib.rs:1-11` (stale "CoreText is off" claim) against `crates-sys/harfbuzz-sys/build.rs:87-91` (`build.define("HAVE_CORETEXT", Some("1"))` on macOS) and `wrapper.h:14-21` (correctly includes `hb-coretext.h` under `__APPLE__`, with an accurate comment right next to the stale one). The compiled artifact matches the oracle; only the top-of-file doc comment lies about it.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s33-f2
+
+### S34-F7 — WAIVED (not a defect)
+- Refuting lens said: "The oracle's loongarch.detect() is unreachable in this package's actual build ... LoongArch is therefore never a runtime-dispatch arch, so `ghostty_hwy_detect_targets` is not called there and DetectTargets takes the `bits |= HWY_ENABLED_BASELINE` arm identically in both trees (rustty's cpp/targets.cpp is byte-identical to the oracle's apart from the symbol rename — verified by diff)."
+- Verified: independently diffed `pkg/highway/src/cpp/targets.cpp` against `crates-sys/highway-sys/cpp/targets.cpp` — identical apart from the `ghostty_hwy_detect_targets`→`rustty_hwy_detect_targets` rename. Read `hwy/detect_targets.h:760-767` (extracted from the oracle's zig-cache) confirming `HWY_HAVE_RUNTIME_DISPATCH_LINUX` is defined `1` only for `HWY_ARCH_ARM || HWY_ARCH_PPC || HWY_ARCH_S390X`, never LoongArch, and `HWY_HAVE_RUNTIME_DISPATCH` (targets.cpp:28-30) gates the call on `HWY_ARCH_X86 || ... || HWY_HAVE_RUNTIME_DISPATCH_LINUX` — LoongArch never reaches `ghostty_hwy_detect_targets`/`rustty_hwy_detect_targets` in either tree. Confirmed dead code on both sides.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s34-f7
+
+### S35-F1 — UPHELD (real defect, narrowed scope)
+- Refuting lens said: "the wrapper types have no in-tree counterpart and tests of a third-party crate's own API are not required parity artifacts ... The only genuinely in-tree re-implementation traced from these files is string_get_surrogate_pair_for_long_character ... which is a 6-line pure-Rust decomposition with no test ... That single low-value smoke assertion against a replaced binding layer does not clear the bar for a defensible finding."
+- Why that is wrong: the lens's own text concedes a real, narrower gap survives inside the exact files already cited — `string_get_surrogate_pair_for_long_character` is hand-ported (not a third-party-crate API) in four places I verified by grep: `crates/rustty-font-shaper/src/deferred_face.rs:191`, `face/coretext.rs:94`, `shaper/coretext.rs:1273`, `discovery.rs:1025`, and none of the four copies carries a `#[test]`, while the oracle's `string.zig` "unichar" test (`!stringGetSurrogatePairForLongCharacter('A')`) exercises exactly this logic. Per the batch's binding precedent, a refutation that narrows-but-concedes a residual gap in the same cited region is UPHELD rather than waived, letting the fix task rescope from "16 test blocks" down to "one surrogate-pair helper test" (15 of the 16 oracle test blocks genuinely test a replaced third-party wrapper and are correctly not-applicable).
+- Disposition: state=OPEN, owner= (unchanged), flows into its severity phase
+
+### S36-F4 — WAIVED (not a defect)
+- Refuting lens said: "os_log_create is documented never to return NULL ... in ReleaseFast the Zig `.?` is itself unreachable/UB rather than a checked error. The difference is therefore confined to unreachable code with no input producing a different observable result."
+- Verified: read oracle `pkg/macos/os/log.zig:7-15` (`@ptrCast(c.os_log_create(...).?)`) against rustty `crates/rustty-os/src/macos.rs:296-302` (stores the raw pointer, SAFETY comment: "os_log_create never returns NULL (the reference unwraps with `.?`)"). rustty reproduces the reference's own assumption (an unchecked unwrap) rather than adding a defensive check the reference lacks; both sides trust the same documented Apple contract.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s36-f4
+
+### S37-F1 — WAIVED (not a defect)
+- Refuting lens said: "Program.zig:90-125 setUniform is dead code in the oracle: `grep -rn setUniform` over /Users/gael/projects/ghostty/src and /pkg returns only its own definition ... No input or state can reach the missing dispatch."
+- Verified: `grep -rn "setUniform" src pkg` in the oracle checkout returns only the definition at `pkg/opengl/Program.zig:91` — zero callers anywhere. rustty `crates/rustty-renderer/src/opengl/gl/program.rs:12-28` correctly has no `set_uniform`; the live uniform path is the UBO one.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s37-f1
+
+### S37-F2 — WAIVED (not a defect)
+- Refuting lens said: "grep for PixelFormat across ghostty/src and ghostty/macos finds no use of macos.video.PixelFormat ... It is an unused constant table in a pkg/* Apple binding layer ... every use-site behaviour the oracle relies on (CVDisplayLink create/start/stop/...) is present in cvdisplaylink.rs."
+- Verified: `grep -rn "PixelFormat" src` in the oracle shows only unrelated renderer enums (`OpenGL.zig`, `Metal.zig`, `image.zig`'s own `PixelFormat`, `metal/api.zig`'s `MTLPixelFormat`) — no use of `macos.video.PixelFormat`/`CVPixelFormatType`. Rustty's `crates/rustty-renderer/src/metal/cvdisplaylink.rs:1-87` covers every actually-used CVDisplayLink function; the 83-member enum is genuinely unreferenced.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s37-f2
+
+### S38-F1 — WAIVED (not a defect)
+- Refuting lens said: "the test behaviour is equivalent: png.zig:148-151 / jpeg.zig:148-151 assert only `expectError(error.Overflow)`, and png.rs:256-261 / jpeg.rs:250-254 assert `Err(Error::Overflow)` on inputs whose IHDR/SOF0 declare the same 32769x32768 dimensions ... this is a comment/provenance inaccuracy only."
+- Verified: `ls -la pkg/wuffs/src/too_big.png too_big.jpg` in the oracle confirms both blobs exist (1.0MB / 12.5MB), contradicting rustty's PORT NOTE at `crates/rustty-wuffs/src/test_fixtures.rs:3-4` ("ABSENT from the ghostty checkout"). Read oracle `pkg/wuffs/src/png.zig:148-151` and rustty `crates/rustty-wuffs/src/png.rs:245-261` — both assert only `Overflow` on an input whose declared dimensions (32769×32768) hit the same size guard; the synthetic minimal fixture discriminates the guard exactly as well as the real blob. Doc-only inaccuracy, not a behavioral gap.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s38-f1
+
+### S38-F6 — WAIVED (not a defect)
+- Refuting lens said: "`b.systemIntegrationOption` is a zig-build packaging switch with no Cargo analogue, and the finding itself concedes it can 'never' change observable behaviour for the same library version ... Every use-site behaviour the oracle relied on (the spirv_cross_* C entry points) is present."
+- Verified: `grep -rn "system_integration\|systemIntegration\|spirv-cross-c-shared" crates-sys/spirv-cross-sys xtask` returns nothing, confirming the absence; `crates-sys/spirv-cross-sys/build.rs:57-98` compiles the vendored sources providing the identical `spirv_cross_*` C API the oracle's dynamic-link arm would also expose. Packaging-only choice.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s38-f6
+
+### S85-F5 — WAIVED (not a defect)
+- Refuting lens said: "The control flow is identical (success value vs a failure return); only the error atom's identity differs, and no caller inspects it ... There is no input for which the two trees produce a different observable result."
+- Verified: read oracle `src/font/DeferredFace.zig:150-153` (`return (try fc.pattern.get(.family, 0)).string;`) and its caller `src/font/CodepointResolver.zig:205` (`deferred_face.name(&buf) catch "<error>"`) against rustty `crates/rustty-font-shaper/src/deferred_face.rs:643-647` (collapses to `FaceError::OutOfMemory`) whose current callers likewise discard the error value. No caller on either side inspects the specific error atom.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s85-f5
+
+### S85-F7 — WAIVED (not a defect)
+- Refuting lens said: "the actual enum discriminants match the oracle exactly for all 17 keys. The only defect is the PORT NOTE text ... a rustty-internal comment with no oracle counterpart and no observable behaviour."
+- Verified: read `crates/rustty-font/src/metrics.rs:887` (comment says index 11) against `:899-900` (`CursorThickness = 10, CursorHeight = 11`, i.e. discriminants ARE correct at index 10). The oracle's own field order (`Metrics.zig` 11th field, 0-based index 10) matches rustty's discriminant, not its comment. Comment-only defect with zero behavioral effect.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s85-f7
+
+### S87-F1 — WAIVED (not a defect)
+- Refuting lens said: "Those three CoreText symbols are annotated `nonnull` in Apple's headers (that's why objc2 generates non-optional returns), and the oracle's own comment ... reflects the same contract; the Zig wrapper's NULL->error.OutOfMemory arm is purely defensive."
+- Verified: read objc2-core-text 0.3.2 `CTFont.rs:273-289` (`with_font_descriptor`) — the generated extern already declares `Option<NonNull<CTFont>>` and does `.expect("function was marked as returning non-null, but actually returned NULL")`, with the Apple doc comment directly above it stating "A best match font will always be returned". Grepped oracle `src/font/discovery.zig` and confirmed the `catch return self` arm at line 700 (`Score.score`) and the plain `try` at line 244 (`FontDescriptor.createWithAttributes`) are exactly the defensive arms described; both rely on the same underlying Apple contract that objc2's codegen also trusts. No reachable input produces NULL.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s87-f1
+
+### S88-F1 — WAIVED (not a defect)
+- Refuting lens said: "Every decision arm is preserved with identical pass/fail outcome ... The only delta is on-disk debugging artifacts ... plus log text. No input/state yields a different test result."
+- Verified: read rustty `crates/rustty-font/src/glyf_rasterize/glyf_rasterize_png_test.rs:404-452` — missing reference panics (matches oracle's `return true` failure), `BytesDifferPixelsMatch` panics, and `PixelsDiffer` runs a per-pixel `assert_eq!` loop ending in a fail; all four oracle decision arms (byte-equal, missing-ref, bytes-differ-pixels-match, pixel-diff) map to an equivalent pass/fail outcome. Only the red/green diff PNG and the copied test PNG are not written.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s88-f1
+
+### S88-F2 — WAIVED (not a defect)
+- Refuting lens said: "with the var unset (the state of every CI/default run) the flow is byte-for-byte the oracle's ... The added arm cannot loosen any assertion on the default path and, being gated on decoded-pixel equality, cannot mask a visual change."
+- Verified: read `crates/rustty-font/src/glyf_rasterize/glyf_rasterize_png_test.rs:409-431` — the regen arm requires BOTH `RUSTTY_REGEN_FONT_KAT_PNGS` set AND `outcome == AtlasDiff::BytesDifferPixelsMatch` (decoded pixels already match); `AtlasDiff::PixelsDiffer` always falls through to the failure arm at `:432-452` regardless of the env var. Cannot mask a real visual regression.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s88-f2
+
+### S88-F3 — WAIVED (not a defect)
+- Refuting lens said: "the oracle behaviour IS ported; the only defect is a stale sentence in a rustty-internal module doc that has no oracle counterpart text. Nothing in the ported code, tests, or observable behaviour differs from the oracle."
+- Verified: read `crates/rustty-font-shaper/src/lib.rs:11-21` (claims `face/web_canvas.zig` "unported") against the filesystem: `crates/rustty-font-shaper/src/face/web_canvas.rs` and `crates/rustty-font-shaper/src/shaper/web_canvas.rs` both exist and are non-empty ports. Doc-only staleness.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s88-f3
+
+### S90-F4 — WAIVED (not a defect)
+- Refuting lens said: "The difference only materializes for a glyph id >= 2^16, and every producer of these ids is glyph_index() ... which returns a CGGlyph-derived u16 ... So the divergence is confined to an unreachable/invalid-input path."
+- Verified: read `crates/rustty-font-shaper/src/face/coretext.rs:483-498` (`glyph_index` returns `Option<u32>` populated from a `[CGGlyph; 2]` array, i.e. always ≤ `u16::MAX`) and its two call sites feeding `render_glyph`/the ic_width block (`:1099` and `codepoint_resolver.rs:552-563`, whose own doc says the glyph index must come from `glyphIndex`/HarfBuzz-over-CTFont, both u16-bounded on this backend). The `as CGGlyph` truncation at `:517`/`:1106` cannot be reached with an out-of-range value from any real producer.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s90-f4
+
+### S91-F6 — WAIVED (not a defect)
+- Refuting lens said: "The reference behaviour for presentation > 1 is not defined behaviour to match ... a safety-check panic in Debug/ReleaseSafe and illegal behaviour in the ReleaseFast/ReleaseSmall builds the wasm artifact uses ... The only caller is the JS glue, which passes 0/1."
+- Verified: read oracle `src/font/face/web_canvas.zig:494-511` (`Wasm.face_new_`, the sole caller of `initNamed`/this mapping) and confirmed (same grep as S91-F3) it is the only production caller, fed by JS glue with a 0/1 presentation value. rustty `crates/rustty-font-shaper/src/face/web_canvas.rs:961-980` matches the oracle for both defined inputs; the divergence only exists for an input the reference itself cannot safely accept (a safety panic / UB).
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s91-f6
+
+### S92-F3 — WAIVED (not a defect)
+- Refuting lens said: "the oracle behaviour being replaced is a Zig safety panic / undefined behaviour, not defined observable behaviour. Parity cannot require reproducing a panic-or-UB, no caller can distinguish it from an error result in any defined way, and the finder itself states 'no change required'."
+- Verified: read oracle `src/font/opentype/svg.zig:41-44` (`records[(len - 1)]` with `len: u16 == 0` → integer-underflow safety panic/UB) against rustty `crates/rustty-font/src/opentype/svg.rs:75-77` (`if len == 0 { return Err(InitError::EndOfStream) }`). The oracle has no defined behavior on this input for rustty to match; returning a clean error is strictly safer, not a fidelity loss.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s92-f3
+
+### S92-F4 — WAIVED (not a defect)
+- Refuting lens said: "`grep -rn \"OffsetSubtable|TableRecord\" /Users/gael/projects/ghostty/src` outside sfnt.zig returns nothing, and the FixedPoint use sites ... only convert values, never format them ... The difference is therefore confined to code no caller reaches, and is purely cosmetic string formatting."
+- Verified: read oracle `src/font/opentype/sfnt.zig:105-115, 175-196, 209-227` (the three custom `format` methods) and confirmed via grep that `OffsetSubtable`/`TableRecord` are private nested types with no external caller, and `FixedPoint`'s use sites (`face/coretext.zig:97`, `face/freetype.zig:567-568,795`) only read the numeric value. rustty `crates/rustty-font/src/opentype/sfnt.rs:102,329,350` derives `Debug` only; no `Display` use site exists to diverge from.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s92-f4
+
+### S98-F1 — WAIVED (not a defect)
+- Refuting lens said: "box.rs: 2519 lines, single dispatch entry `pub fn draw2500_257F` ... matching oracle box.zig:48 ... no unimplemented!/todo! anywhere in the file ... So the comment is factually stale but purely doc-level."
+- Verified: `wc -l crates/rustty-font/src/sprite/draw/box.rs` = 2519 lines; `grep -c "unimplemented!\|todo!"` = 0. `crates/rustty-font/src/sprite/draw/mod.rs:8-11` still claims `box` "currently carries only the diagonal helpers ... plus arc" and lists the symbols modules as deferred, but `mod.rs:21-23` already declares `symbols_for_legacy_computing`/`symbols_for_legacy_computing_supplement` as present modules. Doc-only staleness.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s98-f1
+
+### S100-F2 — WAIVED (not a defect)
+- Refuting lens said: "the sole consumer in the oracle GTK tree is command_palette.zig:54-64 ... grep for GhosttyBindingAction across src/apprt/gtk returns only the defineBoxed site — nothing ... looks the type up by name ... rustty covers this at crates/rustty-apprt/src/gtk/class/command_palette.rs ... This is the expected R4 relocation ... The only residue is the GType's registered name string, which nothing reads."
+- Verified: `grep -rn "GhosttyBindingAction" /Users/gael/projects/ghostty/src/apprt/gtk` returns nothing (only the `defineBoxed` declaration site itself, per the oracle's own `Binding.zig:998-1005`), confirming the name string is never looked up by any `.blp` template or GObject property spec. rustty `crates/rustty-apprt/src/gtk/class/command_palette.rs:71-72,137,161,351` carries the equivalent boxed-type crossing (`ActionBoxed`/`GhosttyCommandPaletteAction`) at the real (and only) use site, satisfying the R4 relocation (rustty-input cannot depend on glib). Unlike `S87-F4` (a GObject *property* type whose registered name IS introspectable via the property spec), this GType's name has no consumer anywhere.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s100-f2
