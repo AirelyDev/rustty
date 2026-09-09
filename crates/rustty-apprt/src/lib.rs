@@ -335,13 +335,55 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     // We need to re-sync the environment after this completes.
     // try internal_os.ensureLocale(self.alloc);
     // syncEnviron();
+    //
     // (oracle: src/global.zig:204-209, :307-322 — S43-F1: `ensureLocale`
-    // mutates LANG/LC_* via setenv/unsetenv, so the process-global captured
-    // `ENVIRON` (already lazily captured earlier in this same init, for the
-    // tmp_dir_path discovery / RUSTTY_LOG read above) must be re-published or
-    // every later `environ()`/`environ_map()` consumer — termio child-process
-    // environments, the crash env snapshot — keeps seeing the pre-locale-fix
-    // block.)
+    // mutates LANG/LC_* via setenv/unsetenv (directly, or on macOS via
+    // `setLangFromCocoa`'s `setenv("LANG", ...)`), so the process-global
+    // captured `ENVIRON` — already lazily captured earlier in this same init,
+    // for the `tmp_dir_path` discovery / `RUSTTY_LOG` read above — must be
+    // re-published, or every later `environ()`/`environ_map()` consumer
+    // (termio child-process environments, a later `sync_environ()` caller)
+    // keeps seeing the pre-locale-fix block.
+    //
+    // Regression-test note: an EARLIER version of this fix left
+    // `rustty_core::GlobalState::new((), resources_dir)` below (now
+    // `new_with_environ`) grabbing its OWN fresh `Environ::from_process()`
+    // capture — a second, independent divergence from the oracle (which
+    // reuses the caller-supplied environ; see that call site's comment) that
+    // happened to republish the corrected environment as a side effect on
+    // the one reachable success path, masking whether THIS line did anything
+    // observable. Two divergences cancelling out is not parity: fixing only
+    // this line left the masking in place and an end-to-end test below
+    // vacuous, so the `GlobalState::new` call was changed to
+    // `new_with_environ` in the same commit that added the regression test
+    // below (recorded as finding N1, `.port/parity-closure/NEW-FINDINGS.md`).
+    //
+    // The regression test itself
+    // (`crates/rustty-apprt/tests/global_init_resyncs_environ.rs`) is a
+    // single-`#[test]` file of its own, for two independent reasons:
+    //   * `init_with_action` is guarded by a process-wide `INIT_DONE`
+    //     once-flag — the body runs at most once per process, and this
+    //     crate's own `bootstrap_tests::full_init_populates_state_and_is_idempotent`
+    //     unit test already calls it. `cargo test`'s unit-test harness runs
+    //     every `#[test]` in that binary on shared threads with no defined
+    //     ordering, so a test placed in that same binary would only exercise
+    //     the `sync_environ()` call if it won the race to be the FIRST
+    //     caller.
+    //   * `std::env::set_var`/`remove_var` are process-global and `unsafe`,
+    //     and race every concurrent `getenv` in a shared test binary
+    //     (`parallel-cargo-test-exposes-c-init-races` /
+    //     `rustty-vt/tests/kitty_temp_dir_security.rs`'s `TMPDIR` lesson); a
+    //     file containing exactly one `#[test]` is this workspace's
+    //     established pattern for making that sound (that file,
+    //     `rustty-global/tests/env_non_utf8.rs`).
+    //   The test is macOS-gated: an empty/unset `LANG` unconditionally
+    //   routes `ensureLocale` through `setLangFromCocoa`, which `setenv`s
+    //   `LANG` from `NSLocale.currentLocale` deterministically. Off Darwin,
+    //   whether `ensureLocale` touches `LANG` at all depends on whether
+    //   `setlocale(LC_ALL, "")` fails first — a property of the host's
+    //   installed locales, not of this code path — making a bare `LANG=""`
+    //   an unreliable trigger there; rustty is macOS-first (see
+    //   `rustty-completion-plan`).
     rustty_os::ensureLocale().map_err(InitError::Locale)?;
     rustty_global::sync_environ();
 
@@ -395,7 +437,30 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     // reference `pub var state: GlobalState = undefined;` set at init — the
     // rustty STATE is a OnceLock; construct the fully-populated state and set
     // it (ignore the already-set Err, keeping the bootstrap idempotent).
-    let mut state = rustty_core::GlobalState::new((), resources_dir);
+    //
+    // PORT NOTE (S43-F1 follow-up, N1): `GlobalState::new` grabs a FRESH
+    // `Environ::from_process()` internally, which is itself an unfaithful
+    // extra capture the oracle never performs — the oracle's `.main` arm
+    // (`global.zig` `InitOpts`) reuses the ALREADY-captured environ, never
+    // re-reads the process here. Threading the already-captured (and, by
+    // this point, already `ensureLocale`-resynced) block through
+    // `new_with_environ` instead matches that arm exactly, and stops this
+    // construction from silently republishing over whatever `sync_environ()`
+    // above just published (see `rustty-global/src/lib.rs:415-424`'s own doc
+    // comment on `new_with_environ`, which already says this is how `.main`
+    // should behave).
+    // Bind the clone in its OWN statement rather than inline as an argument
+    // expression: `rustty_global::environ()` returns a guard (`EnvironRef`)
+    // wrapping a live `RwLock` READ lock, and Rust's temporary-lifetime rule
+    // keeps a temporary alive until the end of its ENCLOSING statement — if
+    // `.clone()` were called inline as an argument to `new_with_environ`
+    // below, that read guard would still be held (not yet dropped) for the
+    // full duration of the call, and `new_with_environ` takes a WRITE lock on
+    // the very same `RwLock` internally (`environ::set_environ`). Since
+    // `std::sync::RwLock` is not reentrant, that is a same-thread self-
+    // deadlock — hit and diagnosed while wiring this fix.
+    let env = rustty_global::environ().clone();
+    let mut state = rustty_core::GlobalState::new_with_environ((), resources_dir, env);
     state.action = if action_detected { Some(()) } else { None };
     state.logging = logging;
     state.rlimits = rlimits;
