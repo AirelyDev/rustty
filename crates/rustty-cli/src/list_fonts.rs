@@ -29,6 +29,10 @@ use rustty_font_shaper as font;
 use std::io::Write;
 
 // const log = std.log.scoped(.list_fonts);
+//
+// PORT NOTE: the reference's scope tag, carried through the `log` facade as
+// `target: LOG_SCOPE` (DECISION-logging.md §6r4).
+const LOG_SCOPE: &str = "list_fonts";
 //   PORT NOTE: no logging facade is wired into this crate; the two `log.err`
 //   calls (on `familyName`/`name` failures) are ported as verbatim comments and
 //   are no-ops, matching the discovery.rs `log.*`-as-comment convention.
@@ -310,8 +314,13 @@ fn run_discovery(
             // };
             let family_buf = match face.family_name(&mut buf) {
                 Ok(name) => name,
-                Err(_err) => {
-                    // log.err("failed to get font family name: {}", .{err}); (no-op)
+                Err(err) => {
+                    // log.err("failed to get font family name: {}", .{err});
+                    //
+                    // PORT NOTE (N11): Zig's `{}` on an error renders
+                    // `error.<Name>`; `{err:?}` renders the Rust error's own
+                    // Debug. Workspace-dominant rendering; N11's scope.
+                    log::error!(target: LOG_SCOPE, "failed to get font family name: {err:?}");
                     continue;
                 }
             };
@@ -324,8 +333,9 @@ fn run_discovery(
             // };
             let full_name_buf = match face.name(&mut buf) {
                 Ok(name) => name,
-                Err(_err) => {
-                    // log.err("failed to get font name: {}", .{err}); (no-op)
+                Err(err) => {
+                    // log.err("failed to get font name: {}", .{err});
+                    log::error!(target: LOG_SCOPE, "failed to get font name: {err:?}");
                     continue;
                 }
             };
@@ -399,5 +409,61 @@ fn run_discovery(
 
         // return 0;
         Ok(0)
+    }
+}
+
+#[cfg(test)]
+mod log_site_tests {
+    //! task-14e-2 / S68-F4 — `cli/list_fonts.zig:123,129`.
+    //!
+    //! STRUCTURAL, and deliberately so. Both diagnostics sit on
+    //! `DeferredFace::{familyName,name}` failure arms inside a loop driven by a
+    //! live `font::discovery::DiscoverIterator`. On the CoreText path those
+    //! calls fail only when the font's own name exceeds the reference's
+    //! `[1024]u8` buffer, and the iterator yields faces from the SYSTEM font
+    //! collection — there is no seam to inject one. Lifting the loop body the
+    //! way `rustty.rs`'s `write_help_text` was lifted would not help either:
+    //! the failure is in the face, not in a writer the caller supplies.
+    //!
+    //! So this test pins what it can actually observe: that the two emissions
+    //! exist, at the reference's level, under the reference's scope, with the
+    //! reference's message text. It is a weaker statement than a behavioural
+    //! test and is reported as such.
+    //!
+    //! The macro/level tokens are ASSEMBLED FROM FRAGMENTS rather than written
+    //! as literals: a literal `log::error!` in this file would be a live-looking
+    //! facade call to `check_log_reconcile.py`'s scanner and to its LIVE-TREE
+    //! self-test arm (the lesson task-14e-1 recorded after doing exactly that).
+
+    const SRC: &str = include_str!("list_fonts.rs");
+
+    fn emission(message: &str) -> String {
+        let macro_name = ["log", "::", "error", "!"].concat();
+        format!("{macro_name}(target: LOG_SCOPE, \"{message}\")")
+    }
+
+    #[test]
+    fn both_reference_diagnostics_are_live_at_the_reference_level_and_scope() {
+        // `const log = std.log.scoped(.list_fonts);`
+        assert_eq!(
+            1,
+            SRC.matches("const LOG_SCOPE: &str = \"list_fonts\";")
+                .count(),
+            "the reference's scope tag is not declared exactly once"
+        );
+
+        // log.err("failed to get font family name: {}", .{err});
+        // log.err("failed to get font name: {}", .{err});
+        for message in [
+            "failed to get font family name: {err:?}",
+            "failed to get font name: {err:?}",
+        ] {
+            let wanted = emission(message);
+            assert_eq!(
+                1,
+                SRC.matches(&wanted).count(),
+                "expected exactly one live emission `{wanted}`"
+            );
+        }
     }
 }

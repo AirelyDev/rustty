@@ -51,7 +51,12 @@
 // reference `cli.*` surface.
 
 pub mod action;
+
+// TEST-ONLY `log::Log` capture backend for the restored `log.*` sites
+// (task-14e-2, S68-F4/S68-F5). See the module header.
 pub mod help_strings;
+#[cfg(test)]
+pub(crate) mod log_capture;
 pub mod rustty;
 
 // The action impls. `help`/`version` (C1), the C2 config/introspection actions,

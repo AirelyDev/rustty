@@ -1317,6 +1317,7 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "libc",
+ "log",
  "rustty-apprt",
  "rustty-apprt-api",
  "rustty-args",

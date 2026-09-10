@@ -287,6 +287,41 @@ impl action::Action for Action {
     }
 }
 
+// The `help_error` arm's writer half, lifted out of [`Action::run`] so its two
+// failure diagnostics have a driver.
+//
+// PORT NOTE (S68-F5): the reference writes these two arms INLINE inside
+// `run`'s `inline for`. They are lifted here for one reason only: both arms
+// are IO-failure arms on the process's real stdout, and a test cannot make
+// `std::io::stdout()` fail. The control flow, the messages, the levels and the
+// exit codes are the reference's, unchanged; `run` passes the same
+// `BufWriter<StdoutLock>` it built inline before.
+fn write_help_text<W: std::io::Write>(stdout: &mut W, text: &str) -> u8 {
+    // stdout.writeAll(text) catch |write_err| { ... break :err 1; };
+    if let Err(write_err) = writeln!(stdout, "{text}") {
+        // std.log.warn("failed to write help text: {}\n", .{write_err});
+        //
+        // PORT NOTE (S68-F5): `std.log.warn` is the UNSCOPED logger, i.e. the
+        // reference's `.default` scope — the facade's carrier for that is the
+        // EMPTY target (DECISION-logging.md §6r4). The port used a bare
+        // `eprintln!`, which reaches stderr without the level or scope prefix
+        // `logFn` renders and ignores `Logging.stderr` entirely. The trailing
+        // `\n` is the reference's own and is reproduced verbatim.
+        log::warn!(target: "", "failed to write help text: {write_err}\n");
+        // break :err 1;
+        return 1;
+    }
+    // stdout.flush() catch |flush_err| { ... break :err 1; };
+    if let Err(flush_err) = stdout.flush() {
+        // std.log.warn("failed to flush help text: {}\n", .{flush_err});
+        log::warn!(target: "", "failed to flush help text: {flush_err}\n");
+        // break :err 1;
+        return 1;
+    }
+    // break :err 0;
+    0
+}
+
 impl Action {
     /// All actions in declaration order — the reference `@typeInfo(Action)
     /// .@"enum".fields` iteration order. Kept EXACT (help/completions/C-enum
@@ -360,7 +395,6 @@ impl Action {
             // preserved verbatim.
             // help_error => err: {
             Err(Error::ActionHelpRequested) => {
-                use std::io::Write;
                 // Future note: for now we just output the help text directly
                 // to stdout. In the future we can style this much prettier
                 // for all commands by just changing this one place.
@@ -368,21 +402,7 @@ impl Action {
                 let mut stdout = std::io::BufWriter::new(std::io::stdout().lock());
                 // const text = @field(help_strings.Action, field.name) ++ "\n";
                 let text = self.help_text();
-                // stdout.writeAll(text) catch |write_err| { log.warn(...); break :err 1; };
-                if let Err(write_err) = writeln!(stdout, "{text}") {
-                    // std.log.warn("failed to write help text: {}\n", ...)
-                    eprintln!("failed to write help text: {write_err}");
-                    // break :err 1;
-                    return Ok(1);
-                }
-                // stdout.flush() catch |flush_err| { log.warn(...); break :err 1; };
-                if let Err(flush_err) = stdout.flush() {
-                    eprintln!("failed to flush help text: {flush_err}");
-                    return Ok(1);
-                }
-
-                // break :err 0;
-                Ok(0)
+                Ok(write_help_text(&mut stdout, text))
             }
             // else => err,
             other => other,
@@ -814,5 +834,110 @@ mod tests {
             );
             iter.deinit();
         }
+    }
+}
+
+#[cfg(test)]
+mod help_text_log_tests {
+    //! task-14e-2 / S68-F5 — `cli/ghostty.zig:135,139`.
+    //!
+    //! Both diagnostics sit on IO-failure arms over the process's real stdout,
+    //! which a test cannot make fail; [`super::write_help_text`] exists so they
+    //! have a driver. Every assertion is `assert_eq!` on the full captured
+    //! record vector.
+    use super::write_help_text;
+    use crate::log_capture::CapturedRecord;
+    use std::io::Write;
+
+    /// A writer whose `write` fails immediately.
+    struct FailingWrite;
+    impl Write for FailingWrite {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from_raw_os_error(libc::EPIPE))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A writer that accepts everything and fails only on `flush`.
+    struct FailingFlush(Vec<u8>);
+    impl Write for FailingFlush {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::from_raw_os_error(libc::ENOSPC))
+        }
+    }
+
+    #[test]
+    fn a_write_failure_warns_under_the_default_scope_and_exits_1() {
+        let cap = crate::log_capture::start();
+        let code = write_help_text(&mut FailingWrite, "help");
+        let messages = cap.messages();
+        drop(cap);
+
+        // Positive reach: the reference's arm is `break :err 1`.
+        assert_eq!(1, code);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                // `std.log.warn` is UNSCOPED — the reference's `.default`
+                // scope, carried by the facade as the EMPTY target.
+                String::new(),
+                format!(
+                    "failed to write help text: {}\n",
+                    std::io::Error::from_raw_os_error(libc::EPIPE)
+                ),
+            )],
+            messages
+        );
+    }
+
+    #[test]
+    fn a_flush_failure_warns_under_the_default_scope_and_exits_1() {
+        let cap = crate::log_capture::start();
+        let mut w = FailingFlush(Vec::new());
+        let code = write_help_text(&mut w, "help");
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(1, code);
+        // Positive reach: the write half really succeeded, so the flush arm is
+        // what fired.
+        assert_eq!(b"help\n".to_vec(), w.0);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                String::new(),
+                format!(
+                    "failed to flush help text: {}\n",
+                    std::io::Error::from_raw_os_error(libc::ENOSPC)
+                ),
+            )],
+            messages
+        );
+    }
+
+    /// The absence half: a writer that succeeds emits nothing and exits 0.
+    /// Positive reach is the written bytes — they only exist if the body ran.
+    #[test]
+    fn a_successful_help_write_is_silent() {
+        let cap = crate::log_capture::start();
+        let mut out: Vec<u8> = Vec::new();
+        let code = write_help_text(&mut out, "help");
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(0, code);
+        assert_eq!(
+            b"help\n".to_vec(),
+            out,
+            "write_help_text did not write, so this test never reached the \
+             code whose silence it asserts"
+        );
+        assert_eq!(Vec::<CapturedRecord>::new(), messages);
     }
 }

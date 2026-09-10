@@ -32,6 +32,12 @@ doctest = false
 gtk = ["rustty-apprt/gtk"]
 
 [dependencies]
+# The `LOG`-class facade (DECISION-logging.md §6r4, call shape 2 — §6r
+# IMPORTANT 5's "rustty-cli calls logging::log directly" prescription was
+# superseded; no crate ever adopted it). `cli/list_fonts.zig`'s two `log.err`
+# sites and `cli/ghostty.zig`'s two unscoped `std.log.warn` sites emit through
+# it. Plain and unconditional (§8r).
+log = { workspace = true }
 rustty-config = { workspace = true }
 rustty-vt = { workspace = true }
 rustty-font = { workspace = true }
