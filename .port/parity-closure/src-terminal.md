@@ -393,7 +393,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Windows has no handle-based realpath, so the kitty file/temporary-file media fail closed there
   - **Oracle:** `src/terminal/kitty/graphics_image.zig:451-465` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_image.rs:1407-1420`
   - **Audit's suggested fix:** Add a Windows arm using `GetFinalPathNameByHandleW` (stripping the `\\?\` prefix) so `validatedFilePath` can apply the blocklist to the opened handle, then close the deferral row.
-- [ ] **S190-F1** · CONFIRMED · `LOG` · other
+- [x] **S190-F1** · CONFIRMED · `LOG` · other
   - **What:** All log.info/log.warn/log.debug diagnostics in ImageStorage are carried as comments, never emitted
   - **Oracle:** `src/terminal/kitty/graphics_storage.zig:224-226, 302-311, 369, 576, 1025-1033, 1252, 1271, 1294, 1312, 1495-1505` → **Rustty:** `crates/rustty-vt/src/kitty/graphics_storage.rs:363-367, 452-458, 468, 530, 810-816, 1315-1322, 1607, 1631, 1655, 1682, 1935, 1944`
   - **Audit's suggested fix:** Optional: none required for functional parity; if diagnostics are wanted later, introduce a vt-level logging shim and restore these call sites verbatim.
@@ -445,7 +445,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Pane terminal dimension overflow: Zig @intCast traps, Rust `as` silently truncates
   - **Oracle:** `src/terminal/tmux/viewer.zig:1131-1140` → **Rustty:** `crates/rustty-vt/src/tmux/viewer.rs:935-950`
   - **Audit's suggested fix:** Use a checked conversion that reproduces the trap (e.g. `size::CellCountInt::try_from(d.width).expect(...)`, matching the @intCast safety check) or explicitly document/handle the overflow as the TODO suggests.
-- [ ] **S209-F2** · CONFIRMED · `LOG` · behavioral-difference
+- [x] **S209-F2** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** All log.info/log.warn diagnostics in the viewer are dropped in the port
   - **Oracle:** `src/terminal/tmux/viewer.zig:16, 305, 397, 419-421, 461-472, 501, 505, 566, 654, 828, 855, 878, 900, 1027, 1049, 1063, 1075` → **Rustty:** `crates/rustty-vt/src/tmux/viewer.rs:66-69, 455-460, 621-627, 749-753, 1140-1146, 1600-1607`
   - **Audit's suggested fix:** None required for functional parity; if/when a logging seam exists in rustty-vt, re-instate these messages verbatim.

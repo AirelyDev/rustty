@@ -544,6 +544,7 @@ impl Viewer {
                     Ok(()) => &self.actions,
                     Err(OutOfMemory) => {
                         // log.warn("failed to queue command, becoming defunct", .{});
+                        log::warn!(target: LOG_SCOPE, "failed to queue command, becoming defunct");
                         self.defunct()
                     }
                 }
@@ -605,6 +606,10 @@ impl Viewer {
                 // };
                 if self.received_command_output(&content, false).is_err() {
                     // log.warn("failed to process command output, becoming defunct", .{});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to process command output, becoming defunct"
+                    );
                     return self.defunct();
                 }
                 // Command is consumed since a block end/err is the output
@@ -613,7 +618,15 @@ impl Viewer {
                 command_consumed = true;
             }
             control::Notification::BlockErr(content) => {
+                // PORT NOTE: the reference handles `.block_end` and `.block_err`
+                // in a single `inline` switch prong, so this arm carries the
+                // same diagnostic as the `BlockEnd` arm above.
+                // log.warn("failed to process command output, becoming defunct", .{});
                 if self.received_command_output(&content, true).is_err() {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to process command output, becoming defunct"
+                    );
                     return self.defunct();
                 }
                 command_consumed = true;
@@ -640,6 +653,10 @@ impl Viewer {
                 // };
                 if self.session_changed(id).is_err() {
                     // log.warn("failed to handle session change, becoming defunct", .{});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to handle session change, becoming defunct"
+                    );
                     return self.defunct();
                 }
                 // Command is consumed because sessionChanged resets
@@ -660,6 +677,10 @@ impl Viewer {
                     // here with a fallback to remove this one window, list
                     // windows again, and try again.
                     // log.warn("failed to handle layout change, becoming defunct", .{});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to handle layout change, becoming defunct"
+                    );
                     return self.defunct();
                 }
             }
@@ -669,6 +690,7 @@ impl Viewer {
             control::Notification::WindowAdd { id } => {
                 if self.window_add(id).is_err() {
                     // log.warn("failed to handle window add, becoming defunct", .{});
+                    log::warn!(target: LOG_SCOPE, "failed to handle window add, becoming defunct");
                     return self.defunct();
                 }
             }
@@ -766,6 +788,7 @@ impl Viewer {
             Some(idx) => idx,
             None => {
                 // log.info("layout change for unknown window id={}", .{window_id});
+                log::info!(target: LOG_SCOPE, "layout change for unknown window id={window_id}");
                 return Ok(());
             }
         };
@@ -788,7 +811,14 @@ impl Viewer {
         let new_layout = match Layout::parse_with_checksum(layout_str_s) {
             Ok(l) => l,
             Err(_err) => {
-                // log.info("failed to parse window layout id={} layout={s}", ...);
+                // log.info(
+                //     "failed to parse window layout id={} layout={s}",
+                //     .{ window_id, layout_str },
+                // );
+                log::info!(
+                    target: LOG_SCOPE,
+                    "failed to parse window layout id={window_id} layout={layout_str_s}"
+                );
                 return Err(VtError::SyntaxError);
             }
         };
@@ -1226,6 +1256,7 @@ impl Viewer {
             Ok(d) => d,
             Err(_err) => {
                 // log.info("failed to parse tmux version: {s}", .{line});
+                log::info!(target: LOG_SCOPE, "failed to parse tmux version: {line_s}");
                 return Err(VtError::FormatError);
             }
         };
@@ -1291,6 +1322,7 @@ impl Viewer {
                 Ok(d) => d,
                 Err(_err) => {
                     // log.info("failed to parse list-windows line: {s}", .{line});
+                    log::info!(target: LOG_SCOPE, "failed to parse list-windows line: {line_s}");
                     errored = Some(VtError::FormatError);
                     break 'parse;
                 }
@@ -1311,7 +1343,15 @@ impl Viewer {
             let layout: Layout = match Layout::parse_with_checksum(window_layout) {
                 Ok(l) => l,
                 Err(_err) => {
-                    // log.info("failed to parse window layout id={} layout={s}", ...);
+                    // log.info(
+                    //     "failed to parse window layout id={} layout={s}",
+                    //     .{ data.window_id, data.window_layout },
+                    // );
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "failed to parse window layout id={} layout={window_layout}",
+                        value_usize(&data[1]),
+                    );
                     errored = Some(VtError::SyntaxError);
                     break 'parse;
                 }
@@ -1376,6 +1416,7 @@ impl Viewer {
                 Ok(d) => d,
                 Err(_err) => {
                     // log.info("failed to parse list-panes line: {s}", .{line});
+                    log::info!(target: LOG_SCOPE, "failed to parse list-panes line: {line_s}");
                     return Err(VtError::FormatError);
                 }
             };
@@ -1392,6 +1433,11 @@ impl Viewer {
                 Some(p) => p,
                 None => {
                     // log.info("received pane state for untracked pane id={}", .{data.pane_id});
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "received pane state for untracked pane id={}",
+                        data.pane_id,
+                    );
                     continue;
                 }
             };
@@ -1684,6 +1730,7 @@ impl Viewer {
             Some(p) => p,
             None => {
                 // log.info("received pane visible for untracked pane id={}", .{id});
+                log::info!(target: LOG_SCOPE, "received pane visible for untracked pane id={id}");
                 return Ok(());
             }
         };
@@ -1720,6 +1767,7 @@ impl Viewer {
             Some(p) => p,
             None => {
                 // log.info("received output for untracked pane id={}", .{id});
+                log::info!(target: LOG_SCOPE, "received output for untracked pane id={id}");
                 return Ok(());
             }
         };
@@ -2570,6 +2618,19 @@ mod tests {
         //         return err;
         //     };
         // }
+        //
+        // PORT NOTE (logging facade, S209-F2): this is the ONE `log.*` call in
+        // `viewer.zig` that has no restorable counterpart here, and it is
+        // deliberately left as a comment. Two independent reasons, either one
+        // sufficient: (1) `TestStep::run` returns `()` and reports a failed step
+        // by panicking (the port of the reference's `!void` + `try`-assertions),
+        // so there is no error value to catch and log before propagating —
+        // Rust's panic message already carries the diagnostic the reference's
+        // `log.warn` exists to add; (2) `step={}` formats the `TestStep` value
+        // itself, and `TestStep` holds `Box<dyn Fn>` check closures, which have
+        // no `Debug`/`Display` — producing that argument would mean inventing a
+        // representation the reference does not define. This is a test-only
+        // helper (`#[cfg(test)]`); no production diagnostic is lost.
         for step in steps {
             step.run(viewer);
         }
@@ -3312,6 +3373,61 @@ mod tests {
                     && target == "terminal_tmux_viewer"
                     && *msg == "received pane history for untracked pane id=999"),
             "expected the untracked-pane-history diagnostic, got: {messages:?}"
+        );
+        drop(cap);
+    }
+
+    // S209-F2: a `layout_change` whose layout string does not parse drives the
+    // viewer into the defunct state, and the reference warns on the way
+    // (`log.warn("failed to handle layout change, becoming defunct", .{})`,
+    // viewer.zig:502) as well as logging the parse failure that caused it
+    // (`log.info("failed to parse window layout id={} layout={s}", ...)`,
+    // viewer.zig:594).
+    #[test]
+    fn layout_change_failure_becomes_defunct_and_logs() {
+        let mut viewer = Viewer::init(Global).unwrap();
+
+        // Drive the standard startup handshake so window @0 exists and the
+        // viewer is in the `command_queue` state.
+        test_viewer(
+            &mut viewer,
+            vec![
+                TestStep::new(tmux(block_end(""))),
+                TestStep::new(tmux(control::Notification::SessionChanged {
+                    id: 1,
+                    name: b"test".to_vec(),
+                })),
+                TestStep::new(tmux(block_end("3.5a"))),
+                TestStep::new(tmux(block_end("$0 @0 83 44 b7dd,83x44,0,0,0"))),
+            ],
+        );
+        assert_eq!(1, viewer.windows.len());
+        assert_eq!(State::CommandQueue, viewer.state);
+
+        let cap = crate::log_capture::start();
+        let _ = viewer.next(tmux(control::Notification::LayoutChange {
+            window_id: 0,
+            layout: b"not-a-layout".to_vec(),
+            visible_layout: b"not-a-layout".to_vec(),
+            raw_flags: b"*".to_vec(),
+        }));
+        let messages = cap.messages();
+        assert_eq!(State::Defunct, viewer.state);
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "terminal_tmux_viewer"
+                    && *msg == "failed to handle layout change, becoming defunct"),
+            "expected the becoming-defunct warning, got: {messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Info
+                    && target == "terminal_tmux_viewer"
+                    && *msg == "failed to parse window layout id=0 layout=not-a-layout"),
+            "expected the layout parse-failure diagnostic, got: {messages:?}"
         );
         drop(cap);
     }

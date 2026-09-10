@@ -2191,6 +2191,7 @@ impl ImageStorage {
             // const image_len = entry.value_ptr.storageSize();
             let image_len = self.images.get(&c.id).unwrap().storage_size();
             // log.info("evicting image id={} bytes={}", .{ c.id, image_len });
+            log::info!(target: LOG_SCOPE, "evicting image id={} bytes={image_len}", c.id);
 
             evicted += image_len;
             self.total_bytes -= image_len;
@@ -4066,6 +4067,51 @@ mod tests {
         );
         drop(cap);
         assert!(!s.dirty);
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // S190-F1: `evictImageExcept` logs each image it evicts
+    // (`log.info("evicting image id={} bytes={}", .{ c.id, image_len })`,
+    // graphics_storage.zig:1691) — both interpolated values are asserted.
+    #[test]
+    fn eviction_logs_the_evicted_image_id_and_size() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+
+        let mut s: ImageStorage = ImageStorage {
+            total_limit: 192,
+            ..ImageStorage::default()
+        };
+        s.add_image(
+            alloc,
+            t.screens.active,
+            Image {
+                id: 7,
+                data: Data::Complete(vec![b'*'; 64]),
+                ..Image::default()
+            },
+        )
+        .unwrap();
+        let image_len = s.images.get(&7).unwrap().storage_size();
+
+        let cap = crate::log_capture::start();
+        assert!(s.evict_image(alloc, t.screens.active, 1));
+        let messages = cap.messages();
+        assert!(!s.images.contains_key(&7));
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Info
+                    && target == "kitty_gfx"
+                    && *msg == format!("evicting image id=7 bytes={image_len}")),
+            "expected the eviction diagnostic, got: {messages:?}"
+        );
+        // Guard against `image_len` being a vacuous 0 that would make the
+        // interpolated-size half of the assertion unfalsifiable.
+        assert_eq!(64, image_len);
+        drop(cap);
 
         s.deinit(alloc, t.screens.active);
         t.deinit(alloc);
