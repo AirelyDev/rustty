@@ -3052,6 +3052,15 @@ pub unsafe extern "C" fn rustty_terminal_new(
     cols: u16,
     rows: u16,
 ) -> c_int {
+    // task-14a (`sys::install_log_backend`): the `log` facade backend has no
+    // oracle-comptime analog (see its own PORT NOTE) — it must be installed at
+    // runtime before any `log`-macro call site beneath this crate can reach
+    // `sys::log_fn`. `rustty_terminal_new` is the one C export every embedder
+    // is contractually required to call before any other terminal
+    // functionality (see this function's own doc + the `sys` module doc's
+    // "must be set at startup" note), so it is the earliest guaranteed point.
+    // Idempotent: safe even though later `rustty_terminal_new` calls re-run it.
+    crate::sys::install_log_backend();
     // SAFETY: `alloc`/`result` validity is the caller's contract.
     unsafe { terminal::new(alloc, result, cols, rows) }.to_c_int()
 }

@@ -31,6 +31,14 @@ use std::mem::{align_of, size_of};
 use std::os::raw::c_int;
 
 // const log = std.log.scoped(.sgr);
+//
+// S177-F1/S5-F1: the sgr_set_params separator-overflow warning below used to
+// bypass the C-ABI log sink with a raw, unconditional `eprintln!`, which an
+// embedder that installed a log callback via
+// `rustty_sys_set(RUSTTY_SYS_OPT_LOG, ...)` never saw. Routed through
+// `sys::log_fn` under this scope constant, the `@tagName` of the reference's
+// `std.log.scoped(.sgr)`.
+pub(crate) const LOG_SCOPE: &str = "sgr";
 
 // =====================================================================
 // C ABI projection of sgr.Attribute (the `lib.TaggedUnion` surface).
@@ -583,8 +591,12 @@ pub unsafe fn set_params(
         if len > SEP_BIT_LENGTH {
             // log.warn("ghostty_sgr_set_params: separators length {} exceeds max
             //   supported length {}", .{ len, @TypeOf(parser.params_sep).bit_length });
-            eprintln!(
-                "rustty_sgr_set_params: separators length {len} exceeds max supported length {SEP_BIT_LENGTH}"
+            crate::sys::log_fn(
+                crate::sys::StdLevel::Warn,
+                LOG_SCOPE,
+                format_args!(
+                    "rustty_sgr_set_params: separators length {len} exceeds max supported length {SEP_BIT_LENGTH}"
+                ),
             );
             // return .invalid_value;
             return Result::InvalidValue;
@@ -783,5 +795,71 @@ mod tests {
 
             unsafe { free(p) };
         });
+    }
+
+    // task-14a (rustty-only proving test, NOT a reference test —
+    // S177-F1/S5-F1): the separator-overflow warning used to bypass
+    // `sys::log_fn` with an unconditional `eprintln!`. Proves it now reaches
+    // the sink under the `sgr` scope.
+    #[test]
+    fn set_params_separator_overflow_warns_through_the_scoped_log_sink() {
+        use crate::test_util::with_test_allocator as with_ta;
+        use std::os::raw::c_void;
+        let _guard = crate::sys::tests::reset_global();
+
+        static CAPTURED: std::sync::Mutex<Vec<(crate::sys::LogLevel, String, String)>> =
+            std::sync::Mutex::new(Vec::new());
+        extern "C" fn log_cb(
+            _userdata: *mut c_void,
+            level: crate::sys::LogLevel,
+            scope_ptr: *const u8,
+            scope_len: usize,
+            message_ptr: *const u8,
+            message_len: usize,
+        ) {
+            // SAFETY: the sink hands us the scope/message byte ranges.
+            let scope = unsafe { std::slice::from_raw_parts(scope_ptr, scope_len) };
+            // SAFETY: as above.
+            let message = unsafe { std::slice::from_raw_parts(message_ptr, message_len) };
+            CAPTURED.lock().unwrap().push((
+                level,
+                String::from_utf8_lossy(scope).into_owned(),
+                String::from_utf8_lossy(message).into_owned(),
+            ));
+        }
+        CAPTURED.lock().unwrap().clear();
+
+        with_ta(|ta| {
+            let mut p: Parser = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe { new(Some(ta), &mut p) });
+
+            assert_eq!(Result::Success, unsafe {
+                crate::sys::set(crate::sys::Option_::Log, log_cb as *const c_void)
+            });
+
+            // 25 separators exceeds the SepList::MAX_PARAMS (24) bit length.
+            let params: [u16; 25] = [1; 25];
+            let seps: [u8; 25] = [b':'; 25];
+            assert_eq!(Result::InvalidValue, unsafe {
+                set_params(p, params.as_ptr(), seps.as_ptr(), 25)
+            });
+
+            assert_eq!(Result::Success, unsafe {
+                crate::sys::set(crate::sys::Option_::Log, std::ptr::null())
+            });
+
+            unsafe { free(p) };
+        });
+
+        assert_eq!(
+            *CAPTURED.lock().unwrap(),
+            vec![(
+                crate::sys::LogLevel::Warning,
+                "sgr".to_string(),
+                "rustty_sgr_set_params: separators length 25 exceeds max supported length 24"
+                    .to_string(),
+            )],
+            "the S177-F1/S5-F1 warning was not routed through sys::log_fn"
+        );
     }
 }

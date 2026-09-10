@@ -24,6 +24,14 @@
 // const ZigTerminal = @import("../Terminal.zig");
 //
 // const log = std.log.scoped(.mouse_encode);
+//
+// S174-F1: the setopt/setopt_typed warnings below used to bypass the C-ABI
+// log sink with a raw `eprintln!`, which an embedder that registered a log
+// callback via `rustty_sys_set(RUSTTY_SYS_OPT_LOG, ...)` never saw (they went
+// to the process's stderr instead). Routed through `sys::log_fn` — the sink
+// these warnings were always meant to reach — under this scope constant, the
+// `@tagName` of the reference's `std.log.scoped(.mouse_encode)`.
+pub(crate) const LOG_SCOPE: &str = "mouse_encode";
 use crate::mouse_event::{self, Event};
 use crate::result::Result;
 use crate::terminal as terminal_c;
@@ -317,7 +325,11 @@ pub unsafe fn setopt(encoder_: Encoder, option: c_int, value: *const c_void) {
         4 => Option_::TrackLastCell,
         _ => {
             // log.warn("setopt invalid option value={d}", .{@intFromEnum(option)});
-            eprintln!("setopt invalid option value={option}");
+            crate::sys::log_fn(
+                crate::sys::StdLevel::Warn,
+                LOG_SCOPE,
+                format_args!("setopt invalid option value={option}"),
+            );
             return;
         }
     };
@@ -352,7 +364,11 @@ unsafe fn setopt_typed(encoder_: Encoder, option: Option_, value: *const c_void)
             let mode = match TrackingMode::from_int(raw) {
                 Some(m) => m.to_zig(),
                 None => {
-                    eprintln!("setopt invalid TrackingMode value={raw}");
+                    crate::sys::log_fn(
+                        crate::sys::StdLevel::Warn,
+                        LOG_SCOPE,
+                        format_args!("setopt invalid TrackingMode value={raw}"),
+                    );
                     return;
                 }
             };
@@ -371,7 +387,11 @@ unsafe fn setopt_typed(encoder_: Encoder, option: Option_, value: *const c_void)
             let fmt = match MouseFormat::from_int(raw) {
                 Some(f) => f.to_zig(),
                 None => {
-                    eprintln!("setopt invalid Format value={raw}");
+                    crate::sys::log_fn(
+                        crate::sys::StdLevel::Warn,
+                        LOG_SCOPE,
+                        format_args!("setopt invalid Format value={raw}"),
+                    );
                     return;
                 }
             };
@@ -392,10 +412,14 @@ unsafe fn setopt_typed(encoder_: Encoder, option: Option_, value: *const c_void)
             let value: &Size = unsafe { &*(value as *const Size) };
             // if (value.size < @sizeOf(Size)) { ...; return; }
             if value.size < std::mem::size_of::<Size>() {
-                eprintln!(
-                    "setopt size struct too small size={} expected>={}",
-                    value.size,
-                    std::mem::size_of::<Size>()
+                crate::sys::log_fn(
+                    crate::sys::StdLevel::Warn,
+                    LOG_SCOPE,
+                    format_args!(
+                        "setopt size struct too small size={} expected>={}",
+                        value.size,
+                        std::mem::size_of::<Size>()
+                    ),
                 );
                 return;
             }
@@ -403,8 +427,12 @@ unsafe fn setopt_typed(encoder_: Encoder, option: Option_, value: *const c_void)
             match value.to_renderer() {
                 Some(s) => wrapper.size = s,
                 None => {
-                    eprintln!(
-                        "setopt invalid size values (cell width and height must be non-zero)"
+                    crate::sys::log_fn(
+                        crate::sys::StdLevel::Warn,
+                        LOG_SCOPE,
+                        format_args!(
+                            "setopt invalid size values (cell width and height must be non-zero)"
+                        ),
                     );
                     return;
                 }
@@ -982,5 +1010,134 @@ mod tests {
             unsafe { mouse_event::free(event) };
             unsafe { free(encoder) };
         });
+    }
+
+    // task-14a (rustty-only proving test, NOT a reference test — S174-F1):
+    // the five setopt/setopt_typed invalid-value diagnostics used to bypass
+    // `sys::log_fn` with a raw `eprintln!` to the process's stderr, which an
+    // embedder that installed a log callback via
+    // `rustty_sys_set(RUSTTY_SYS_OPT_LOG, ...)` never received. Installs a
+    // capturing callback (the established pattern from
+    // `terminal.rs::terminal_invalid_selector_warns_through_the_scoped_log_sink`)
+    // and drives every one of the five sites, asserting each message actually
+    // reaches the sink under the `mouse_encode` scope.
+    #[test]
+    fn setopt_invalid_value_warnings_reach_the_scoped_log_sink() {
+        let _guard = crate::sys::tests::reset_global();
+
+        static CAPTURED: std::sync::Mutex<Vec<(crate::sys::LogLevel, String, String)>> =
+            std::sync::Mutex::new(Vec::new());
+        extern "C" fn log_cb(
+            _userdata: *mut c_void,
+            level: crate::sys::LogLevel,
+            scope_ptr: *const u8,
+            scope_len: usize,
+            message_ptr: *const u8,
+            message_len: usize,
+        ) {
+            // SAFETY: the sink hands us the scope/message byte ranges.
+            let scope = unsafe { std::slice::from_raw_parts(scope_ptr, scope_len) };
+            // SAFETY: as above.
+            let message = unsafe { std::slice::from_raw_parts(message_ptr, message_len) };
+            CAPTURED.lock().unwrap().push((
+                level,
+                String::from_utf8_lossy(scope).into_owned(),
+                String::from_utf8_lossy(message).into_owned(),
+            ));
+        }
+        CAPTURED.lock().unwrap().clear();
+
+        with_test_allocator(|calloc| {
+            let mut e: Encoder = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut e) });
+
+            assert_eq!(Result::Success, unsafe {
+                crate::sys::set(crate::sys::Option_::Log, log_cb as *const c_void)
+            });
+
+            // setopt: invalid option discriminant.
+            unsafe { setopt(e, 999, std::ptr::null()) };
+            // setopt_typed via setopt: invalid TrackingMode.
+            let bad: c_int = 999;
+            unsafe {
+                setopt(
+                    e,
+                    Option_::Event as c_int,
+                    &bad as *const c_int as *const c_void,
+                )
+            };
+            // invalid Format.
+            unsafe {
+                setopt(
+                    e,
+                    Option_::Format as c_int,
+                    &bad as *const c_int as *const c_void,
+                )
+            };
+            // Size struct too small (a real, aligned `Size` whose `size` field
+            // under-reports itself).
+            let mut tiny_size = test_size();
+            tiny_size.size = 1;
+            unsafe {
+                setopt(
+                    e,
+                    Option_::Size as c_int,
+                    &tiny_size as *const Size as *const c_void,
+                )
+            };
+            // Size with a zero cell dimension (valid struct size, invalid values).
+            let mut zero_size = test_size();
+            zero_size.cell_width = 0;
+            unsafe {
+                setopt(
+                    e,
+                    Option_::Size as c_int,
+                    &zero_size as *const Size as *const c_void,
+                )
+            };
+
+            assert_eq!(Result::Success, unsafe {
+                crate::sys::set(crate::sys::Option_::Log, std::ptr::null())
+            });
+
+            unsafe { free(e) };
+        });
+
+        let captured = CAPTURED.lock().unwrap().clone();
+        assert_eq!(
+            captured,
+            vec![
+                (
+                    crate::sys::LogLevel::Warning,
+                    "mouse_encode".to_string(),
+                    "setopt invalid option value=999".to_string(),
+                ),
+                (
+                    crate::sys::LogLevel::Warning,
+                    "mouse_encode".to_string(),
+                    "setopt invalid TrackingMode value=999".to_string(),
+                ),
+                (
+                    crate::sys::LogLevel::Warning,
+                    "mouse_encode".to_string(),
+                    "setopt invalid Format value=999".to_string(),
+                ),
+                (
+                    crate::sys::LogLevel::Warning,
+                    "mouse_encode".to_string(),
+                    format!(
+                        "setopt size struct too small size=1 expected>={}",
+                        std::mem::size_of::<Size>()
+                    ),
+                ),
+                (
+                    crate::sys::LogLevel::Warning,
+                    "mouse_encode".to_string(),
+                    "setopt invalid size values (cell width and height must be non-zero)"
+                        .to_string(),
+                ),
+            ],
+            "the five S174-F1 warnings were not routed through sys::log_fn"
+        );
     }
 }

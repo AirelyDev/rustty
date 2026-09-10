@@ -255,6 +255,17 @@ wuffs-sys = { path = "crates-sys/wuffs-sys" }
 # `decode` API over the `wuffs-sys` FFI leaf. Consumed by the renderer's
 # background-image decode path.
 rustty-wuffs = { path = "crates/rustty-wuffs" }
+# The `LOG` findings-class facade (task-14/DECISION-logging.md, Option A,
+# ratified). The reference's `std.log.scoped(.foo)` call sites (rustty-vt and
+# 15 sibling crates below `rustty-core`'s R4 layer, which cannot reach
+# `rustty-core::logging` or `rustty-vt-c::sys` without a cycle) restore onto
+# `log::{warn,error,info,debug}!(target: "<scope>", ...)`; `rustty-vt-c`
+# installs itself as the single `log::Log` backend, forwarding into its
+# existing `sys::log_fn` C-ABI sink (see `crates/rustty-vt-c/src/sys.rs`'s
+# `Logger`). Version pinned to what `Cargo.lock` already carries as a
+# transitive `bindgen` build-dependency (through `dcimgui-sys`) — this makes
+# it a first runtime dependency of a shipped artifact, not a new resolver edge.
+log = "0.4.33"
 # The six-operation zigimg surface `libvaxis` 0.5.1 instantiates, re-homed onto
 # ghostty's own vendored codecs (WS12 Decision 2 / Option Z-C). Consumed by
 # rustty-vaxis's kitty-graphics image tier (`transmit_image`/`load_image`).

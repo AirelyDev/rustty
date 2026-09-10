@@ -311,3 +311,115 @@ Record all 79 open rows (86 total) as intentional divergence, written once.
   reentrancy/lock-ordering hazard calling into `GLOBAL.lock()` from those
   specific call paths) — that would still argue for fixing the bypass, just
   not by routing through the existing lock-based sink unchanged.
+
+## §6 — Task 14a: the wiring pattern (RATIFIED, executed)
+
+Executed 2026-09-09. Adds the `log` facade crate and fixes the `eprintln!`
+bypass in `rustty-vt-c` (the 6 ledger rows S174-F1, S174-F2, S177-F1, S5-F1,
+S7-F1, S172-F1). Documents the mechanical pattern stages 14b-14e follow for
+the other 73 rows across 15 crates.
+
+### Two call shapes, chosen by layering position, not by preference
+
+R4's acyclic layering puts `rustty-vt-c` ABOVE `rustty-vt` and its siblings
+(`rustty-font-shaper`, `rustty-renderer`, `rustty-config`, `rustty-args`,
+`rustty-cli`, `rustty-crash`, `rustty-os`, `rustty-termio`, `rustty-simd`,
+`rustty-wuffs`, `rustty-bench`, `rustty-core`). That single fact decides which
+of two call shapes a restored site uses — there is no independent facade
+decision left to make per crate:
+
+1. **Inside `rustty-vt-c` itself** (this stage's 6 rows): call
+   `crate::sys::log_fn(sys::StdLevel::<Level>, LOG_SCOPE, format_args!(...))`
+   directly. This is not new — it is the pattern already used by
+   `render.rs`/`lib.rs`/`terminal.rs`/`selection.rs`/`selection_gesture.rs`/
+   `search.rs` before this stage. `rustty-vt-c` has direct access to its own
+   sink; going through `log`'s macro/backend indirection here would add a
+   dependency edge for no reason. Each restored file gets a
+   `pub(crate) const LOG_SCOPE: &str = "<scope>";` — the `@tagName` of the
+   reference's `std.log.scoped(.scope)` — placed where the commented-out
+   `const log = std.log.scoped(...)` line already sits.
+
+2. **Everywhere below `rustty-vt-c`** (14b-14e's 73 rows): these crates
+   cannot depend on `rustty-vt-c` (that would invert R4 into a cycle), so they
+   call the `log` crate's macros instead:
+   `log::warn!(target: "<scope>", "<format string>", ...)` (`error!`/`info!`/
+   `debug!` for the other three oracle levels). `target: "<scope>"` is the
+   facade's carrier for `std.log.scoped(.scope)` — pass `""` for the
+   reference's `.default` scope, matching `log_fn`'s existing "callers pass
+   `\"\"` for the default scope" convention (`sys.rs:566`). Do **not** rely on
+   `log`'s default target (the call site's module path) — it has no oracle
+   analog and would silently diverge from the restored scope tag.
+
+### The backend: `rustty-vt-c::sys::Logger`
+
+`crates/rustty-vt-c/src/sys.rs` now has, immediately after `log_fn_c_abi`:
+
+- `struct Logger;` + `impl log::Log for Logger` — `log()` maps
+  `record.level()` through `std_level_from_log` (the 5-level `log::Level` →
+  the reference's 4-level `StdLevel`; `Trace` folds into `Debug`, unreachable
+  in practice since `install_log_backend` caps the max level at `Debug`) and
+  forwards `record.target()` + `*record.args()` straight into `log_fn` — the
+  SAME funnel this crate's own direct call sites use. One sink, reached two
+  ways, matching the oracle's single global `std_options.logFn` swap.
+- `pub fn install_log_backend()` — idempotent (`log::set_logger`'s "already
+  installed" error is swallowed, the same shape as `log_fn_c_abi`'s
+  formatting-error `catch {}`); calls `log::set_logger(&LOGGER)` +
+  `log::set_max_level(LevelFilter::Debug)`, EXCEPT on `wasm32` when
+  `!debug_assertions`, where it caps `max_level` to `Off` and returns before
+  touching `set_logger` at all — mirroring `lib_vt.zig`'s own
+  `options.logFn = ... .noop` size guard (§2) at the filter level: `Off`
+  means the crates below never even construct a `log::Record` at their
+  `log::warn!` call sites, so none of the restored message-formatting code
+  those 73 sites bring in links into a release wasm build.
+- Installed from `rustty_terminal_new` (`lib.rs`) — the one C export every
+  embedder is contractually required to call before any other terminal
+  functionality (see that function's own doc + the `sys` module's "must be
+  set at startup" note). This is the closest Rust runtime analog to the
+  oracle's comptime `std_options` swap, which has no explicit "install" call
+  at all because Zig resolves it at compile time; Rust's `log` crate requires
+  an explicit registration, so the earliest guaranteed-first C entry point is
+  the natural substitute. 14b-14e do not need to revisit this — the backend
+  is already live for any crate that adds the `log` dependency and calls the
+  macros.
+
+### Dependency wiring
+
+- `[workspace.dependencies]` gained `log = "0.4.33"` (pinned to what
+  `Cargo.lock` already carried transitively through `bindgen`/`dcimgui-sys`,
+  per §3 — this makes it a genuine first RUNTIME dependency, not reuse of an
+  already-linked artifact).
+- `rustty-vt-c/Cargo.toml` gained `log = { workspace = true }`. 14b-14e add
+  the same line to each of the other 15 crates as they restore sites; no
+  further workspace-level change is needed.
+
+### Measured wasm cost this stage — net NEGATIVE (smaller, not larger)
+
+`rustty-vt` is untouched in this stage (no site restored there yet; 14b is
+first). The crate this stage DOES touch — `rustty-vt-c` — is also the crate
+`.port/tools/build-vt-wasm.sh` builds, so it was measured directly rather than
+estimated:
+
+| build (`--no-default-features --features render-state`, `wasm32-unknown-unknown`, release) | `rustty-vt.wasm` |
+|---|---|
+| before (git-stashed: no `log` dep, 4 sites still `eprintln!`) | 892,220 bytes |
+| after (this stage's diff) | 885,927 bytes |
+
+**Delta: −6,293 bytes.** Reproduced twice (identical byte count both times).
+The `log` crate's own linkage cost stays at the ~26-byte floor §3 already
+measured (no call site here is reachable in the wasm-release configuration —
+`install_log_backend`'s `Off` cap sees to that); what dominates is the
+REMOVAL of 4 `eprintln!` call sites, each of which pulled in
+`std::io::Stdio`/formatting machinery that `sys::log_fn`'s existing
+stack-buffer `LogEmitter` path does not need. Net effect: fixing the bypass
+made the wasm module smaller even after paying for the facade dependency.
+This is a below-the-noise-floor, favorable result — not a reason to revisit
+Option A, but also not representative of what 14b-14e will measure once
+`rustty-vt` itself carries live (non-wasm-release-gated) `log::warn!` sites;
+re-measure at that point per §3's own "what would need to be wrong" caveat.
+
+Two harmless `#[cfg_attr(all(target_arch = "wasm32", not(debug_assertions)),
+allow(dead_code))]` annotations were added to `Logger`/`std_level_from_log`/
+`LOGGER` — in that one configuration they are genuinely unreferenced (the
+`Off` cap means no macro call site ever reaches them), which is by design,
+not a defect; the annotation prevents that expected condition from being a
+build warning.

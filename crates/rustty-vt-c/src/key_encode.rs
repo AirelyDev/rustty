@@ -20,6 +20,13 @@
 // const ZigTerminal = @import("../Terminal.zig");
 //
 // const log = std.log.scoped(.key_encode);
+//
+// S7-F1/S172-F1: the setopt invalid-option/invalid-OptionAsAlt warnings below
+// used to bypass the C-ABI log sink with a raw `eprintln!`, unreachable by an
+// embedder's installed log callback. Routed through `sys::log_fn` under this
+// scope constant, the `@tagName` of the reference's
+// `std.log.scoped(.key_encode)`.
+pub(crate) const LOG_SCOPE: &str = "key_encode";
 use crate::key_event::{self, Event as KeyEvent};
 use crate::result::Result;
 use crate::terminal as terminal_c;
@@ -170,7 +177,11 @@ pub unsafe fn setopt(encoder_: Encoder, option: c_int, value: *const c_void) {
         7 => Option_::BackarrowKeyMode,
         _ => {
             // log.warn("setopt invalid option value={d}", .{@intFromEnum(option)});
-            eprintln!("setopt invalid option value={option}");
+            crate::sys::log_fn(
+                crate::sys::StdLevel::Warn,
+                LOG_SCOPE,
+                format_args!("setopt invalid option value={option}"),
+            );
             return;
         }
     };
@@ -238,7 +249,11 @@ unsafe fn setopt_typed(encoder_: Encoder, option: Option_, value: *const c_void)
                 3 => OptionAsAlt::right,
                 _ => {
                     // log.warn("setopt invalid OptionAsAlt value={d}", .{@intFromEnum(value.*)});
-                    eprintln!("setopt invalid OptionAsAlt value={raw}");
+                    crate::sys::log_fn(
+                        crate::sys::StdLevel::Warn,
+                        LOG_SCOPE,
+                        format_args!("setopt invalid OptionAsAlt value={raw}"),
+                    );
                     return;
                 }
             };
@@ -718,5 +733,82 @@ mod tests {
             unsafe { key_event::free(event) };
             unsafe { free(encoder) };
         });
+    }
+
+    // task-14a (rustty-only proving test, NOT a reference test —
+    // S7-F1/S172-F1): the setopt invalid-option/invalid-OptionAsAlt warnings
+    // used to bypass `sys::log_fn` with a raw `eprintln!`, unreachable by an
+    // embedder's installed log callback. Proves both now reach the sink under
+    // the `key_encode` scope.
+    #[test]
+    fn setopt_invalid_value_warnings_reach_the_scoped_log_sink() {
+        use std::os::raw::c_void;
+        let _guard = crate::sys::tests::reset_global();
+
+        static CAPTURED: std::sync::Mutex<Vec<(crate::sys::LogLevel, String, String)>> =
+            std::sync::Mutex::new(Vec::new());
+        extern "C" fn log_cb(
+            _userdata: *mut c_void,
+            level: crate::sys::LogLevel,
+            scope_ptr: *const u8,
+            scope_len: usize,
+            message_ptr: *const u8,
+            message_len: usize,
+        ) {
+            // SAFETY: the sink hands us the scope/message byte ranges.
+            let scope = unsafe { std::slice::from_raw_parts(scope_ptr, scope_len) };
+            // SAFETY: as above.
+            let message = unsafe { std::slice::from_raw_parts(message_ptr, message_len) };
+            CAPTURED.lock().unwrap().push((
+                level,
+                String::from_utf8_lossy(scope).into_owned(),
+                String::from_utf8_lossy(message).into_owned(),
+            ));
+        }
+        CAPTURED.lock().unwrap().clear();
+
+        with_test_allocator(|calloc| {
+            let mut e: Encoder = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe { new(Some(calloc), &mut e) });
+
+            assert_eq!(Result::Success, unsafe {
+                crate::sys::set(crate::sys::Option_::Log, log_cb as *const c_void)
+            });
+
+            // setopt: invalid option discriminant.
+            unsafe { setopt(e, 999, std::ptr::null()) };
+            // setopt_typed: invalid OptionAsAlt value.
+            let bad: c_int = 999;
+            unsafe {
+                setopt(
+                    e,
+                    Option_::MacosOptionAsAlt as c_int,
+                    &bad as *const c_int as *const c_void,
+                )
+            };
+
+            assert_eq!(Result::Success, unsafe {
+                crate::sys::set(crate::sys::Option_::Log, std::ptr::null())
+            });
+
+            unsafe { free(e) };
+        });
+
+        assert_eq!(
+            *CAPTURED.lock().unwrap(),
+            vec![
+                (
+                    crate::sys::LogLevel::Warning,
+                    "key_encode".to_string(),
+                    "setopt invalid option value=999".to_string(),
+                ),
+                (
+                    crate::sys::LogLevel::Warning,
+                    "key_encode".to_string(),
+                    "setopt invalid OptionAsAlt value=999".to_string(),
+                ),
+            ],
+            "the S7-F1/S172-F1 warnings were not routed through sys::log_fn"
+        );
     }
 }

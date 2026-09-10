@@ -586,6 +586,111 @@ fn log_fn_c_abi(level: StdLevel, scope: &str, args: core::fmt::Arguments) {
     ctx.flush();
 }
 
+// =====================================================================
+// The `log` facade backend (task-14a, `.port/parity-closure/DECISION-logging.md`
+// Option A, ratified).
+//
+// PORT NOTE: this has no reference analog to comment against — the oracle's
+// `std_options.logFn` is a COMPTIME function-pointer swap (`terminal.options.
+// c_abi` picks `terminal/c/sys.zig`'s `logFn` at build time; see `sys::log_fn`'s
+// own PORT NOTE), so every `std.log.scoped(...)` call in the whole `libghostty-
+// vt` C-ABI artifact — including deep-internal ones in crates below this one in
+// R4's acyclic layering (rustty-vt, rustty-font-shaper, rustty-renderer, ...) —
+// already reaches this exact sink with no wiring of its own. Rust has no
+// comptime `std.log` hook, and those crates cannot depend on `rustty-vt-c`
+// (that would invert R4's layering into a cycle), so a runtime facade is the
+// substitute: those crates call `log::warn!(target: "<scope>", "<format
+// string>", ...)` (the ported call sites, restored verbatim by task 14b-14e),
+// and THIS crate — the top of the C-ABI stack, exactly where the oracle installs
+// `std_options.logFn` — registers itself as the single process-wide `log::Log`
+// backend, forwarding every record into `log_fn` above. This makes `log_fn`'s
+// existing wasm/non-wasm arch branching (and the embedder-callback gate in
+// `log_fn_c_abi`) the funnel for BOTH this crate's own direct `log_fn` call
+// sites and every `log`-macro call site in the crates beneath it — matching the
+// oracle's "one global sink for the whole library" shape.
+// `#[cfg_attr(... wasm32 release ..., allow(dead_code))]` on this section:
+// `install_log_backend`'s wasm-release arm never calls `log::set_logger`
+// (it caps `max_level` to `Off` instead, see that function's PORT NOTE), so
+// `Logger`/`std_level_from_log`/`LOGGER` are genuinely unreferenced in that
+// one configuration until a real call site exists to trip the `Off` filter
+// check before reaching here — that's the point, not a bug. Every other
+// configuration (including this crate's own `log_facade_backend_reaches_the_
+// c_sink` test) exercises them.
+#[cfg_attr(all(target_arch = "wasm32", not(debug_assertions)), allow(dead_code))]
+struct Logger;
+
+/// Map a `log::Level` onto the reference's 4-level `std.log.Level`
+/// (`StdLevel`). The facade crate has a 5th level, `Trace`, that `std.log`
+/// does not; `install_log_backend` never enables it (max level caps at
+/// `Debug`), so this arm is unreachable in practice — mapped to `Debug` rather
+/// than panicking, since a filter-level mismatch is not a per-message defect.
+#[cfg_attr(all(target_arch = "wasm32", not(debug_assertions)), allow(dead_code))]
+fn std_level_from_log(level: log::Level) -> StdLevel {
+    match level {
+        log::Level::Error => StdLevel::Err,
+        log::Level::Warn => StdLevel::Warn,
+        log::Level::Info => StdLevel::Info,
+        log::Level::Debug | log::Level::Trace => StdLevel::Debug,
+    }
+}
+
+impl log::Log for Logger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        // `log::set_max_level` (in `install_log_backend`) already gates which
+        // records reach here at all (including the wasm-release `Off` cap that
+        // mirrors the oracle's `os/wasm/log.zig` `noop` sink); this sink itself
+        // has no independent filter, matching `log_fn`'s own unconditional
+        // dispatch once a record arrives.
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        // `record.target()` is the facade's carrier for the oracle's
+        // `std.log.scoped(.foo)` tag: restored call sites pass
+        // `target: "<scope>"` explicitly (`""` for the reference's `.default`
+        // scope, matching `log_fn`'s existing "callers pass \"\" for the
+        // default scope" convention above) rather than relying on the crate's
+        // module path, which has no oracle analog.
+        log_fn(
+            std_level_from_log(record.level()),
+            record.target(),
+            *record.args(),
+        );
+    }
+
+    fn flush(&self) {}
+}
+
+#[cfg_attr(all(target_arch = "wasm32", not(debug_assertions)), allow(dead_code))]
+static LOGGER: Logger = Logger;
+
+/// Register [`Logger`] as the process-wide `log` backend and set the max
+/// level. Idempotent (safe to call from every crate-entry C export); the
+/// second and later calls are no-ops (`log::set_logger` errors are the
+/// expected "already installed" case, not a fault — swallowed exactly like
+/// `log_fn_c_abi`'s formatting-error `catch {}` above).
+///
+/// PORT NOTE: the wasm-release arm mirrors `lib_vt.zig`'s own size guard
+/// (see `log_fn`'s PORT NOTE) — `options.log_level = .err` there still passes
+/// `.err`-and-above to the (no-op) sink; capping to `Off` here goes one step
+/// further and matches what actually matters (`logFn = ... .noop`): a
+/// non-debug wasm build must not link ANY of the restored message-formatting
+/// code the facade's call sites bring in, which `Off` guarantees by never
+/// constructing a `log::Record` at the call site's `log::warn!` macro
+/// expansion (the crate's own filter check short-circuits first).
+pub fn install_log_backend() {
+    #[cfg(all(target_arch = "wasm32", not(debug_assertions)))]
+    {
+        log::set_max_level(log::LevelFilter::Off);
+        return;
+    }
+    #[cfg(not(all(target_arch = "wasm32", not(debug_assertions))))]
+    {
+        let _ = log::set_logger(&LOGGER);
+        log::set_max_level(log::LevelFilter::Debug);
+    }
+}
+
 /// Built-in log callback that writes to stderr.
 ///
 /// Formats each message as "[level](scope): message\n". Can be passed
@@ -1029,6 +1134,63 @@ pub(crate) mod tests {
         });
         // try std.testing.expect(global.userdata == null);
         assert!(GLOBAL.lock().unwrap().userdata.is_null());
+    }
+
+    // task-14a (rustty-only proving test, NOT a reference test — the `log`
+    // facade backend has no oracle analog; see `install_log_backend`'s PORT
+    // NOTE): proves the whole chain end to end — `log::warn!` (the mechanical
+    // shape 14b-14e's restored call sites will use) reaches an embedder's
+    // installed C callback via `install_log_backend`'s `Logger` and the
+    // existing `log_fn` sink, with no direct call to `sys::log_fn` at the call
+    // site. This is the infrastructure task 14a establishes for stages that
+    // restore sites in crates below this one (rustty-vt, rustty-font-shaper,
+    // ...), which cannot call `sys::log_fn` directly (R4 layering).
+    #[test]
+    fn log_facade_backend_reaches_the_c_sink() {
+        let _guard = reset_global();
+        install_log_backend();
+
+        static CALLED: Mutex<Vec<(LogLevel, String, String)>> = Mutex::new(Vec::new());
+        extern "C" fn cb(
+            _u: *mut std::ffi::c_void,
+            level: LogLevel,
+            scope_ptr: *const u8,
+            scope_len: usize,
+            msg_ptr: *const u8,
+            msg_len: usize,
+        ) {
+            // SAFETY: the sink hands us the scope/message byte ranges.
+            let scope = unsafe { std::slice::from_raw_parts(scope_ptr, scope_len) };
+            // SAFETY: as above.
+            let msg = unsafe { std::slice::from_raw_parts(msg_ptr, msg_len) };
+            CALLED.lock().unwrap().push((
+                level,
+                String::from_utf8_lossy(scope).into_owned(),
+                String::from_utf8_lossy(msg).into_owned(),
+            ));
+        }
+        CALLED.lock().unwrap().clear();
+
+        assert_eq!(Result::Success, unsafe {
+            set(Option_::Log, cb as *const std::ffi::c_void)
+        });
+
+        // The mechanical shape a restored `log.warn("...", .{...})` site takes
+        // under Option A: `log::warn!(target: "<scope>", "<format>", ...)`.
+        log::warn!(target: "facade_test_scope", "facade proving message {}", 42);
+
+        GLOBAL.lock().unwrap().log = None;
+
+        let captured = CALLED.lock().unwrap().clone();
+        assert_eq!(
+            captured,
+            vec![(
+                LogLevel::Warning,
+                "facade_test_scope".to_string(),
+                "facade proving message 42".to_string(),
+            )],
+            "log::warn! did not reach the C-ABI log sink through the facade backend"
+        );
     }
 
     // PORT NOTE (rustty-only leak regression, NOT a reference test — VALIDATION_REPORT

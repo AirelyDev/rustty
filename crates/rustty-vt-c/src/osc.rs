@@ -13,6 +13,13 @@
 // const Result = @import("result.zig").Result;
 //
 // const log = std.log.scoped(.osc);
+//
+// S174-F2: the commandData warning below used to bypass the C-ABI log sink
+// with a raw `eprintln!`, which an embedder that registered a log callback
+// via `rustty_sys_set(RUSTTY_SYS_OPT_LOG, ...)` never saw. Routed through
+// `sys::log_fn` under this scope constant, the `@tagName` of the reference's
+// `std.log.scoped(.osc)`.
+pub(crate) const LOG_SCOPE: &str = "osc";
 use crate::result::Result;
 use rustty_lib::allocator::{Allocator as CAllocator, GlobalZigAllocator, ZigAllocatorRef};
 use rustty_vt::osc;
@@ -232,7 +239,11 @@ pub unsafe fn command_data(command_: Command, data: c_int, out: *mut c_void) -> 
         1 => CommandData::ChangeWindowTitleStr,
         _ => {
             // log.warn("commandData invalid data value={d}", .{@intFromEnum(data)});
-            eprintln!("commandData invalid data value={data}");
+            crate::sys::log_fn(
+                crate::sys::StdLevel::Warn,
+                LOG_SCOPE,
+                format_args!("commandData invalid data value={data}"),
+            );
             return false;
         }
     };
@@ -365,5 +376,57 @@ mod tests {
             // defer free(p);
             unsafe { free(p) };
         });
+    }
+
+    // task-14a (rustty-only proving test, NOT a reference test — S174-F2):
+    // the commandData invalid-data-value warning used to bypass `sys::log_fn`
+    // with a raw `eprintln!`, unreachable by an embedder's installed log
+    // callback. Proves the message now reaches the sink under the `osc` scope.
+    #[test]
+    fn command_data_invalid_value_warns_through_the_scoped_log_sink() {
+        let _guard = crate::sys::tests::reset_global();
+
+        static CAPTURED: std::sync::Mutex<Vec<(crate::sys::LogLevel, String, String)>> =
+            std::sync::Mutex::new(Vec::new());
+        extern "C" fn log_cb(
+            _userdata: *mut c_void,
+            level: crate::sys::LogLevel,
+            scope_ptr: *const u8,
+            scope_len: usize,
+            message_ptr: *const u8,
+            message_len: usize,
+        ) {
+            // SAFETY: the sink hands us the scope/message byte ranges.
+            let scope = unsafe { std::slice::from_raw_parts(scope_ptr, scope_len) };
+            // SAFETY: as above.
+            let message = unsafe { std::slice::from_raw_parts(message_ptr, message_len) };
+            CAPTURED.lock().unwrap().push((
+                level,
+                String::from_utf8_lossy(scope).into_owned(),
+                String::from_utf8_lossy(message).into_owned(),
+            ));
+        }
+        CAPTURED.lock().unwrap().clear();
+
+        assert_eq!(Result::Success, unsafe {
+            crate::sys::set(crate::sys::Option_::Log, log_cb as *const c_void)
+        });
+
+        // An out-of-range `CommandData` discriminant on a valid command.
+        assert!(!unsafe { command_data(std::ptr::null_mut(), 999, std::ptr::null_mut()) });
+
+        assert_eq!(Result::Success, unsafe {
+            crate::sys::set(crate::sys::Option_::Log, std::ptr::null())
+        });
+
+        assert_eq!(
+            *CAPTURED.lock().unwrap(),
+            vec![(
+                crate::sys::LogLevel::Warning,
+                "osc".to_string(),
+                "commandData invalid data value=999".to_string(),
+            )],
+            "the S174-F2 warning was not routed through sys::log_fn"
+        );
     }
 }

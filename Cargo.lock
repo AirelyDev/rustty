@@ -1675,6 +1675,7 @@ name = "rustty-vt-c"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "log",
  "rustty-lib",
  "rustty-os",
  "rustty-render-types",

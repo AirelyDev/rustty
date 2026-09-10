@@ -124,6 +124,17 @@ rustty-unicode = { workspace = true }
 rustty-lib = { workspace = true }
 rustty-render-types = { workspace = true }
 allocator-api2 = { workspace = true }
+# The `log` facade backend (task-14a/DECISION-logging.md §"the wiring
+# pattern"): rustty-vt-c installs a `log::Log` impl (`sys::Logger`) that
+# forwards every restored `log::warn!`/etc. call site — in this crate AND, once
+# 14b-14e restore them, in `rustty-vt`/`rustty-font-shaper`/`rustty-renderer`/
+# etc. — into the existing `sys::log_fn` C-ABI sink. This crate's OWN internal
+# sites (mouse_encode.rs/osc.rs/sgr.rs/key_encode.rs) call `sys::log_fn`
+# directly (the established pattern already used by render.rs/lib.rs/
+# terminal.rs/selection.rs/selection_gesture.rs/search.rs) and do not need the
+# macro layer — this dependency exists to BACK the facade for crates below
+# this one, which cannot reach `sys::log_fn` directly without a layering cycle.
+log = { workspace = true }
 
 # Wasm-only: the `os/wasm/log.zig` sink that `lib_vt.zig`'s `std_options`
 # installs for wasm Debug builds (`d61920d80`; see `sys::log_fn`). rustty-os is
