@@ -39,18 +39,28 @@
 //   * `Feature`/`FeatureList`/`default_features` are `crate::shape::feature::*`.
 //   * `SharedGrid` is `crate::shared_grid::SharedGrid`; `Collection.Index` is
 //     `crate::collection::Index`.
-//   * `os.CFReleaseThread` (the dedicated CFRelease thread) is a `rustty-os`
-//     type built on the libxev event-loop backend, which in rustty is a DEFERRED
+//   * `os.CFReleaseThread` (the dedicated CFRelease thread) is
+//     `rustty_os::CFReleaseThread` (`crates/rustty-os/src/cf_release_thread.rs`).
+//     This file does NOT use it: it wires a behavior-equivalent release thread
+//     built on `std::thread` + an `mpsc` channel (see `cf_release` below) — a
+//     dedicated thread that `CFRelease`s the pools shipped to it, stopped and
+//     joined on `deinit`.
+//
+//     STALE-CLAIM CORRECTION (task-14c-4, ledger row S94-F1): the justification
+//     that used to stand here — "the libxev event-loop backend is a DEFERRED
 //     SEAM (`rustty_global::seam::Xev`, all `unimplemented!()`), so that thread
-//     cannot spawn/run yet. The release thread is a pure performance optimization
-//     with NO parity surface (it only changes WHERE/WHEN `CFRelease` runs; the 27
-//     tests assert only glyph metrics and never call `endFrame`). To keep the
-//     crate runnable, this file wires a BEHAVIOR-EQUIVALENT release thread built
-//     on `std::thread` + an `mpsc` channel (see `cf_release` below): a dedicated
-//     thread that `CFRelease`s the pools shipped to it, stopped+joined on
-//     `deinit` — identical observable behavior, to be swapped for
-//     `os.CFReleaseThread` when the libxev seam lands. No reference logic,
-//     comment, or test is dropped or weakened (R1/R4/R6).
+//     cannot spawn/run yet" — is FALSE on macOS, the only target this file
+//     compiles for. `rustty-xev`'s no-backend seam is `cfg`-gated to
+//     freestanding wasm only (`crates/rustty-xev/src/lib.rs:745-790`, which
+//     `compile_error!`s if it is ever active for a non-wasm target), and
+//     `rustty_os::cf_release_thread::Thread::{init,deinit,threadMain}` are real,
+//     inhabited ports against the real kqueue backend. The stand-in is therefore
+//     a CHOICE that is no longer blocked, not a consequence of a missing seam.
+//     Row S94-F1 stays OPEN for the swap itself; this note no longer asserts a
+//     blocker that does not exist. The release thread remains a performance
+//     optimization with no parity surface (it only changes WHERE/WHEN
+//     `CFRelease` runs), so no reference logic, comment, or test is dropped or
+//     weakened (R1/R4/R6).
 //   * `unicode.table`/`Group`/`GroupCache`/`DeferredFace`/`Library`/`Style` are
 //     referenced only by the (diagnostic, commented-out) `debugPositions`; their
 //     imports are preserved as comments above.
@@ -196,12 +206,13 @@ pub struct Shaper {
     // cf_release_thread: *CFReleaseThread,
     // cf_release_thr: std.Thread,
     //
-    // PORT NOTE (deferred-seam release thread): see the module-level import note.
-    // The reference's heap `*CFReleaseThread` + its `std.Thread` handle are
-    // modeled by the `mpsc::Sender` used to ship release pools + the spawned
-    // thread's `JoinHandle`. `cf_release` (below) is the behavior-equivalent
-    // stand-in for `os.CFReleaseThread` while the libxev backend is a deferred
-    // seam.
+    // PORT NOTE (stand-in release thread): see the module-level import note,
+    // including its STALE-CLAIM CORRECTION. The reference's heap
+    // `*CFReleaseThread` + its `std.Thread` handle are modeled by the
+    // `mpsc::Sender` used to ship release pools + the spawned thread's
+    // `JoinHandle`. `cf_release` (below) is the behavior-equivalent stand-in for
+    // `os.CFReleaseThread`; it is NOT blocked on a deferred libxev seam (row
+    // S94-F1).
     cf_release_tx: std::sync::mpsc::Sender<cf_release::Msg>,
     cf_release_handle: Option<std::thread::JoinHandle<()>>,
 }

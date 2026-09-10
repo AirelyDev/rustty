@@ -42,7 +42,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Low (38)
 
-- [ ] **S84-F1** · CONFIRMED · `LOG` · other
+- [x] **S84-F1** · CONFIRMED · `LOG` · other
   - **What:** All log.warn/info/debug statements in both files are dropped (kept only as comments)
   - **Oracle:** `src/font/CodepointResolver.zig:138-140, 176, 195-199, 218, 265-268, 290-293 (and Collection.zig 342-345, 375, 384, 392, 405, 413, 421, 428, 438, 450, 458, 483-485, 506-508)` → **Rustty:** `crates/rustty-font-shaper/src/codepoint_resolver.rs:180-182, 205, 273-276, 303, 336-339, 448, 494 (and collection.rs 476, 511, 522, 533, 549, 565, 574, 588, 602, 616, 621, 691-692, 719-720)`
   - **Audit's suggested fix:** Route the commented log lines through whatever logging facility rustty adopts (scoped .font_codepoint_resolver / .font_collection), or record the crate-wide log-elision as an accepted deviation.
@@ -66,7 +66,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Stale comment: `cursor_thickness` is at field index 10, not 11
   - **Oracle:** `src/font/Metrics.zig:590-608` → **Rustty:** `crates/rustty-font/src/metrics.rs:887`
   - **Audit's suggested fix:** Change the comment to index 10.
-- [ ] **S86-F2** · CONFIRMED · `LOG` · other
+- [x] **S86-F2** · CONFIRMED · `LOG` · other
   - **What:** All log output of SharedGridSet is dropped (no logging in the shaper crate)
   - **Oracle:** `src/font/SharedGridSet.zig:109, 120, 182-185, 199-202, 230-233, 246-249` → **Rustty:** `crates/rustty-font-shaper/src/shared_grid_set.rs:189, 202, 355, 374, 408, 425`
   - **Audit's suggested fix:** Add a `log` dependency (scoped target `font_shared_grid_set`) and emit the five messages with the same levels and text.
@@ -106,7 +106,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Stale crate doc claims face/web_canvas.zig is unported although face/web_canvas.rs and shaper/web_canvas.rs exist
   - **Oracle:** `src/font/main.zig:34-41` → **Rustty:** `crates/rustty-font-shaper/src/lib.rs:11-21`
   - **Audit's suggested fix:** Update the rustty-font-shaper module doc to drop the 'web_canvas unported' residual (or point at the remaining true residual, if any).
-- [ ] **S90-F2** · CONFIRMED · `LOG` · other
+- [x] **S90-F2** · CONFIRMED · `LOG` · other
   - **What:** All log output (Debug-mode variation-axes dump, atlas-depth warn, table-parse warns, ic_width discard warn) is ported as comments / no-ops
   - **Oracle:** `src/font/face/coretext.zig:119-162, 435-441, 830-841, 632-635/645-648/658-661/671-674` → **Rustty:** `crates/rustty-font-shaper/src/face/coretext.rs:281-320, 664-668, 1152-1158, 833-837/845/856/866`
   - **Audit's suggested fix:** Wire the crate's logging facade (as the rest of rustty does) and emit the same messages; keep the Debug-only gating via cfg(debug_assertions).
@@ -122,7 +122,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** test "emoji" setup deviates: base CTFont is created at 18pt instead of 12pt
   - **Oracle:** `src/font/face/coretext.zig:1010-1027` → **Rustty:** `crates/rustty-font-shaper/src/face/coretext.rs:1419-1436`
   - **Audit's suggested fix:** Call `named_font("Apple Color Emoji", 12.0)` and keep `opts(18.0)` for the copy.
-- [ ] **S91-F10** · CONFIRMED · `LOG` · behavioral-difference
+- [x] **S91-F10** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** freetype renderGlyph/getMetrics: log.err/log.warn messages dropped (unsupported glyph format tag, pixel-mode panic warning, ic_width discard)
   - **Oracle:** `src/font/face/freetype.zig:690-706, 721-724, 1109-1116` → **Rustty:** `crates/rustty-font-shaper/src/face/freetype.rs:843-859, 876-878, 1244-1252`
   - **Audit's suggested fix:** Wire a logging facade into rustty-font-shaper and emit the same messages.
@@ -134,11 +134,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** face_new: presentation u16 mapped nonzero=>emoji instead of @enumFromInt on a u1 enum
   - **Oracle:** `src/font/face/web_canvas.zig:494-511` → **Rustty:** `crates/rustty-font-shaper/src/face/web_canvas.rs:961-980`
   - **Audit's suggested fix:** Return null (the `catch null` path) for presentation > 1 to mirror the reference's rejection of invalid values.
-- [ ] **S91-F7** · CONFIRMED · `LOG` · behavioral-difference
+- [x] **S91-F7** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** web_canvas log.debug/log.warn calls dropped (face initialized, metrics, error rendering glyph, error adding debug canvas)
   - **Oracle:** `src/font/face/web_canvas.zig:76, 296, 518-524, 528-531` → **Rustty:** `crates/rustty-font-shaper/src/face/web_canvas.rs:297, 565, 1005-1008, 1061-1063`
   - **Audit's suggested fix:** Route through rustty_os::wasm::log::freestanding::log like font_did_not_set does, if log parity is desired.
-- [ ] **S91-F8** · CONFIRMED · `LOG` · missing-branch
+- [x] **S91-F8** · CONFIRMED · `LOG` · missing-branch
   - **What:** freetype initFace: Debug-mode variation-axes diagnostic block omitted
   - **Oracle:** `src/font/face/freetype.zig:116-135` → **Rustty:** `crates/rustty-font-shaper/src/face/freetype.rs:255-282`
   - **Audit's suggested fix:** None required for release parity; optionally re-enable under `#[cfg(debug_assertions)]` with a logging facade.
@@ -170,11 +170,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** getFont: NULL from CTFontDescriptorCreateWithAttributes / CTFontCreateCopyWithAttributes panics instead of returning OutOfMemory
   - **Oracle:** `src/font/shaper/coretext.zig:602-609` → **Rustty:** `crates/rustty-font-shaper/src/shaper/coretext.rs:1063-1071`
   - **Audit's suggested fix:** Declare the two raw CoreText symbols returning `Option<NonNull<..>>` (as done for `CTTypesetterCreateLine`) and map `None` to `Error::OutOfMemory`.
-- [ ] **S94-F4** · CONFIRMED · `LOG` · behavioral-difference
+- [x] **S94-F4** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** deinit/endFrame diagnostics not emitted (BUG: CFRelease pool was not empty; stop/wakeup notify errors)
   - **Oracle:** `src/font/shaper/coretext.zig:242-252, 259-260, 270-273, 287-292` → **Rustty:** `crates/rustty-font-shaper/src/shaper/coretext.rs:486-507, 521-563`
   - **Audit's suggested fix:** Route these through the workspace log facade (rustty-os's cf_release_thread.rs already uses one) gated on `cfg!(not(test))` for the BUG warning.
-- [ ] **S95-F1** · CONFIRMED · `LOG` · missing-error-path
+- [x] **S95-F1** · CONFIRMED · `LOG` · missing-error-path
   - **What:** FeatureList.appendFromString drops the `log.warn` for unparseable feature settings
   - **Oracle:** `src/font/shaper/feature.zig:245-259` → **Rustty:** `crates/rustty-font-shaper/src/shaper/feature.rs:421-436`
   - **Audit's suggested fix:** Wire a workspace logging facade (e.g. `log` crate scoped to `font_shaper`) and emit `log::warn!("failed to parse font feature setting: \"{}\"", String::from_utf8_lossy(&fbs.buf[i..fbs.pos]))` in the else branch; same treatment for the other `log.warn` comment sites in collection.rs / codepoint_resolver.rs.

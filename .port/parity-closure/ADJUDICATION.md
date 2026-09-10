@@ -517,3 +517,101 @@ matter how well documented") they are `WAIVED`, not `CLOSED`.
   `crates/rustty-renderer/src/generic.rs`); before this stage neither site had so
   much as a comment marking the dropped diagnostic.
 - Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s116-f2
+
+## Batch 14c-4 — src/font `LOG` waivers and narrowed residuals (task-14c-4, 2026-09-10)
+
+The eleven `class=LOG` rows in `src/font` (`S84-F1`, `S86-F2`, `S90-F2`,
+`S91-F3`, `S91-F7`, `S91-F8`, `S91-F10`, `S94-F1`, `S94-F4`, `S95-F1`,
+`S97-F2`). Six closed outright; `S91-F3` was already waived; the four below are
+the ones that needed a written disposition.
+
+Per-file inventory (reference live `log.*` call sites : live `log::` emissions
+after this stage). A reference site that is COMMENTED OUT UPSTREAM is not a live
+site and is excluded — the counts below say so where it matters.
+
+| reference file | live sites | emissions after | note |
+|---|---|---|---|
+| `CodepointResolver.zig` | 7 | 7 | 8 grep hits; `:347` is a comment upstream |
+| `Collection.zig` | 13 | 13 | |
+| `SharedGridSet.zig` | 6 | 6 | |
+| `face/coretext.zig` | 8 | 8 | 9 grep hits; `:195` is a comment upstream |
+| `face/freetype.zig` | 5 | 5 | |
+| `face/web_canvas.zig` | 5 | 7 | 5 unique; 2 are emitted twice because the port has both a `rustty_wc_*` and a `ghostty-wasm-abi` unprefixed export of the same reference `export fn` |
+| `shaper/coretext.zig` | 4 | 2 + 2 waived | 8 grep hits; 4 are inside `debugPositions`, whose only call site is commented out upstream |
+| `shaper/feature.zig` | 1 | 1 | |
+| `shaper/web_canvas.zig` | 2 | 2 | |
+| `shaper/harfbuzz.zig` | 0 | 0 | 7 grep hits, all inside the never-called `debugPositions` |
+| `DeferredFace.zig` | 3 | 2 + 1 waived | **no ledger row names this file** |
+
+### S94-F4 — PARTIALLY RESTORED, WAIVED (two cited anchors unreachable)
+- 2 of the row's 4 cited oracle anchors are now live `log::` emissions with the
+  `font_shaper` target: `shaper/coretext.zig:254` (`BUG: CFRelease pool was not
+  empty`, under `#[cfg(not(test))]` — the faithful analogue of the reference's
+  `comptime !builtin.is_test`, which means this site is deliberately not
+  observable from this crate's own test binary, exactly as it is not observable
+  from the reference's) and `:264` (`error notifying cf release thread to stop`).
+- **Residual 1:** `:277` `log.warn("error converting release pool to owned
+  slice, slow release err={}")`. It sits in the `catch` arm of `toOwnedSlice`,
+  which REALLOCATES and can fail. The port uses `std::mem::take`, which moves
+  the existing `Vec` out and leaves an empty one: it allocates nothing and
+  returns no `Result`. There is no failure arm; emitting would fire on the
+  success path.
+- **Residual 2:** `:291` `log.warn("error notifying cf release thread to wake
+  up, may stall err={}")`. The reference performs a SEPARATE `wakeup.notify()`
+  after a successful mailbox push. An mpsc `send` IS the wakeup — the channel
+  unparks the receiver as part of the same infallible operation — so the port's
+  `Ok(())` arm has no second fallible step. Emitting would fire on every
+  successful frame end.
+- Both carry the reference's `log.warn` as an R1 comment plus a PORT NOTE at the
+  code site (search `WAIVED site 1 of 2` / `WAIVED site 2 of 2` in
+  `crates/rustty-font-shaper/src/shaper/coretext.rs`).
+- Same shape as `#s115-f4` / `#s116-f2` / `#s190-f2`.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s94-f4
+
+### N4 — `deferred_face_new`'s dropped warn (no ledger row; WAIVED)
+- `DeferredFace.zig` has THREE live `log.warn` sites and NOT ONE of the four
+  `src/font` rows that name the file (`S85-F2/F3/F5/F6`) is `class=LOG`. This is
+  the under-count shape PROCEDURE.md blind spot 3 was written for: the sites were
+  found by enumerating the reference's own calls per file, not by trusting the
+  rows' cited anchors.
+- `:403` (`failed to init face for codepoint check`) and `:463` (`error loading
+  deferred face`) are now live emissions with the `deferred_face` target.
+- **Waived:** `:430` `log.warn("error creating deferred face err={}")` in
+  `deferred_face_new`. The reference's only failure mode there is OOM from
+  `alloc.dupeZ`/`alloc.create`; Rust's `Vec`/`Box` ABORT on allocation failure
+  rather than returning an error, so the port has no reachable failure arm and no
+  `null` return. The emission could only sit on the success path.
+- PORT NOTE at `crates/rustty-font-shaper/src/deferred_face.rs` (search
+  `WAIVED site`).
+
+### S97-F2 — LOG HALF CLOSED, ROW STAYS OPEN (narrowed residual)
+- The row makes TWO claims. The logging one is now closed: `shaper/web_canvas.zig
+  :269` (`error during shaper test`) and `:296` (the per-run `y=.. run=..
+  shape=.. idx=..` info) are live emissions with the `font_shaper` target. Doing
+  so surfaced a second defect: `shaper_test_` returned `Result<(), ()>`, so the
+  restored message would have read `err=()` — invisible while the log was a
+  comment. Replaced with a `ShaperTestError` enum whose `Display` renders the
+  reference's own `error.Name` at each site.
+- **Residual, unfixed:** the row's other claim — the port "shapes one run per row
+  instead of iterating RunIterator runs" — is real and remains. Reaching the
+  modern `RunIterator` needs a `shape::RunOptions` carrying a
+  `rustty_vt::render::CellSlice`, i.e. a reconstructed RenderState, which the
+  wasm harness does not build. This is unported work, NOT an unreachable arm, so
+  the row is NOT waived: it stays OPEN with a narrowed `owner`.
+- Its old `owner` (`NOT-CLOSABLE YET: ... Needs a rustty_wc_* install site
+  first`) is now false and has been replaced — that install site landed in this
+  stage.
+
+### S94-F1 — STALE CLAIM CORRECTED, ROW STAYS OPEN
+- The row's complaint is that `shaper/coretext.rs` uses an `mpsc` stand-in for
+  `os.CFReleaseThread` "under a stale 'deferred seam' PORT NOTE while rustty-os
+  ships the real port". The stale claim is now corrected in place: the note used
+  to assert the libxev backend is "a DEFERRED SEAM ... all `unimplemented!()`",
+  which is FALSE on macOS (the only target this file compiles for) —
+  `rustty-xev`'s no-backend seam is `cfg`-gated to freestanding wasm and
+  `compile_error!`s if it is ever active for a non-wasm target, and
+  `rustty_os::cf_release_thread::Thread::{init,deinit,threadMain}` are real,
+  inhabited ports against the real kqueue backend.
+- **The swap itself was NOT done** — it is a runtime refactor, not a logging
+  change, and out of this stage's scope. The row stays OPEN with an `owner`
+  recording that the blocker it rested on does not exist.
