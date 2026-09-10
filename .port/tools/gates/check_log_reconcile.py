@@ -160,13 +160,29 @@ MACRO_DEF = re.compile(r"\bmacro_rules!\s+(log_[A-Za-z0-9_]*)")
 FN_DEF = re.compile(r"\bfn\s+(log_[A-Za-z0-9_]*)\s*[(<]")
 
 
-def rust_strip(src):
-    """Blank out comments and string bodies in Rust source, preserving offsets.
+def _rust_scan(src, keep_strings):
+    """Blank out Rust comments (and, unless `keep_strings`, string bodies).
+
+    Offsets and line numbers are preserved: every removed byte becomes a space,
+    every newline survives. ONE scanner serves both variants on purpose — this
+    file previously carried two near-identical copies and the char-literal branch
+    was missing from both, which is how the bug below got in.
 
     Reference calls reproduced as R1 comments (`// log.warn("...")`) are the
     dominant shape in this port — `stream.rs` alone carried ~120 at one point —
     so a scanner that cannot tell a comment from code would report a port that
     emits nothing as fully reconciled.
+
+    CHAR AND BYTE LITERALS ARE NOT OPTIONAL, and getting them wrong is not a
+    local error. `crates/rustty-vt/src/stream.rs:3428` is `b'"' => {` — the DEC
+    intermediate. A scanner without this branch sees a bare `"`, opens a phantom
+    string, blanks everything up to the next `"` anywhere in the file, and stays
+    desynchronised to EOF: ~1200 lines of real code erased, 59 live emissions
+    invisible, and the gate reporting a 49-site deficit that did not exist. It
+    fails FALSE-GREEN in the general case. The Zig side (`zig_strip`) always had
+    this branch; a Zig desync also cannot escape its line, while this one runs to
+    end of file. Lifetimes (`'a`, `'static`) are NOT char literals and must fall
+    through to the code path — hence the two-character lookahead.
     """
     out = []
     i, n = 0, len(src)
@@ -194,6 +210,33 @@ def rust_strip(src):
             out.append("".join(ch if ch == "\n" else " " for ch in src[i:j]))
             i = j
             continue
+        if c == "'":
+            # `'\n'`, `'\''`, `'\\'`, `'\u{1f600}'`. A char literal holds EXACTLY
+            # one escape sequence, so consume it positionally — a "scan to the
+            # next quote, skipping escapes" loop mis-handles `b'\\'` (the ESC
+            # dispatch's backslash) by treating the literal's own second
+            # backslash as an escape and swallowing the closing quote.
+            if i + 1 < n and src[i + 1] == "\\":
+                j = i + 2
+                if j < n and src[j] == "u" and j + 1 < n and src[j + 1] == "{":
+                    j = src.find("}", j + 2)
+                    j = n if j < 0 else j + 1
+                else:
+                    j += 1
+                if j < n and src[j] == "'":
+                    j += 1
+                out.append("".join(ch if ch == "\n" else " " for ch in src[i:j]))
+                i = j
+                continue
+            # `'x'` / `b'"'` — exactly one character, then the close quote.
+            if i + 2 < n and src[i + 2] == "'":
+                out.append("   ")
+                i += 3
+                continue
+            # Anything else beginning with `'` is a LIFETIME. Emit it as code.
+            out.append(c)
+            i += 1
+            continue
         if (
             c == "r"
             and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] == "_"))
@@ -208,7 +251,10 @@ def rust_strip(src):
                 term = '"' + "#" * hashes
                 k = src.find(term, j + 1)
                 k = n if k < 0 else k + len(term)
-                out.append("".join(ch if ch == "\n" else " " for ch in src[i:k]))
+                if keep_strings:
+                    out.append(src[i:k])
+                else:
+                    out.append("".join(ch if ch == "\n" else " " for ch in src[i:k]))
                 i = k
                 continue
         if c == '"':
@@ -221,81 +267,31 @@ def rust_strip(src):
                     j += 1
                     break
                 j += 1
-            out.append("".join(ch if ch == "\n" else " " for ch in src[i:j]))
+            j = min(j, n)
+            if keep_strings:
+                out.append(src[i:j])
+            else:
+                out.append("".join(ch if ch == "\n" else " " for ch in src[i:j]))
             i = j
             continue
         out.append(c)
         i += 1
     return "".join(out)
+
+
+def rust_strip(src):
+    """Comments AND string bodies blanked. What brace matching needs."""
+    return _rust_scan(src, keep_strings=False)
 
 
 def rust_strip_comments_only(src):
-    """Blank out comments but KEEP string bodies, preserving offsets.
+    """Comments blanked, string bodies KEPT — offset-identical to `rust_strip`.
 
-    `rust_strip` blanks string contents too, which is what brace matching needs
-    but destroys the one thing the `eprintln!` arm must read: the `logFn` prefix
-    inside the format string. Both variants are offset-identical, so a match
-    found in one can be tested at the same offset in the other.
+    `rust_strip` destroys the one thing the `eprintln!` arm must read: the
+    `logFn` prefix inside the format string. Both variants are offset-identical,
+    so a match found in one is testable at the same offset in the other.
     """
-    out = []
-    i, n = 0, len(src)
-    while i < n:
-        c = src[i]
-        if c == "/" and i + 1 < n and src[i + 1] == "/":
-            j = i
-            while j < n and src[j] != "\n":
-                j += 1
-            out.append(" " * (j - i))
-            i = j
-            continue
-        if c == "/" and i + 1 < n and src[i + 1] == "*":
-            depth, j = 1, i + 2
-            while j < n and depth:
-                if src[j] == "/" and j + 1 < n and src[j + 1] == "*":
-                    depth += 1
-                    j += 2
-                    continue
-                if src[j] == "*" and j + 1 < n and src[j + 1] == "/":
-                    depth -= 1
-                    j += 2
-                    continue
-                j += 1
-            out.append("".join(ch if ch == "\n" else " " for ch in src[i:j]))
-            i = j
-            continue
-        if (
-            c == "r"
-            and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] == "_"))
-            and i + 1 < n
-            and src[i + 1] in '#"'
-        ):
-            j, hashes = i + 1, 0
-            while j < n and src[j] == "#":
-                hashes += 1
-                j += 1
-            if j < n and src[j] == '"':
-                term = '"' + "#" * hashes
-                k = src.find(term, j + 1)
-                k = n if k < 0 else k + len(term)
-                out.append(src[i:k])
-                i = k
-                continue
-        if c == '"':
-            j = i + 1
-            while j < n:
-                if src[j] == "\\":
-                    j += 2
-                    continue
-                if src[j] == '"':
-                    j += 1
-                    break
-                j += 1
-            out.append(src[i:j])
-            i = j
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out)
+    return _rust_scan(src, keep_strings=True)
 
 
 def _brace_body(src, start):
@@ -345,14 +341,16 @@ def rust_definitions(src):
 def discover_emitters(sources):
     """Names of log_* macros/fns whose body really reaches the log facade.
 
-    THIS IS THE POINT OF THE PASS. Three emission shapes coexist in this port and
+    THIS IS THE POINT OF THE PASS. Four emission shapes coexist in this port and
     a gate that knows only the first reads two whole crates as emitting nothing:
       1. `log::warn!(target: LOG_SCOPE, ...)`               — the common form;
       2. `log_warn!(...)`, a macro_rules facade            — `opengl/gl.rs`;
-      3. `log_warn(...)`, a fn facade                       — `config_struct.rs`.
+      3. `log_warn(...)`, a fn facade                       — `config_struct.rs`;
+      4. `sys::log_fn(...)`, ending in a C callback pointer — `rustty-vt-c`.
     A log_* fn or macro whose body does NOT reach the facade is a NO-OP STUB —
-    `rustty-os/src/locale.rs`'s fourteen are literally empty — and its call sites
-    are dropped diagnostics, so it deliberately does NOT become an emitter.
+    `rustty-os/src/locale.rs` has six and `cf_release_thread.rs` eight, all
+    literally empty; 17 are reported tree-wide — and its call sites are dropped
+    diagnostics, so it deliberately does NOT become an emitter.
 
     `sources` maps path -> (code, nc): `code` has comments AND string bodies
     blanked (so brace matching is exact), `nc` has only comments blanked (so the
@@ -374,9 +372,15 @@ def discover_emitters(sources):
                 # `sys::log_fn` ends in a C callback pointer, not in `log::` or
                 # `eprintln!`, and a rule that demanded a known write primitive
                 # read that whole crate as emitting nothing. A `log_*` fn that
-                # RETURNS a value is a helper, not a sink (`stream.rs`'s
-                # `log_unsupported_once` is a dedup predicate), so it qualifies
-                # only on a real primitive.
+                # RETURNS a value is a helper, not a sink, so it qualifies only
+                # on a real primitive. This is load-bearing:
+                # `stream.rs:4671`'s `log_unsupported_once` is a dedup PREDICATE
+                # called immediately before three real `log::warn!`s, and
+                # counting its call sites would inflate that file by 3. (It is
+                # correctly the 17th entry in the no-op NOTE. Before the
+                # char-literal fix of 2026-09-10 this branch was unreachable —
+                # the definition sat inside the phantom-string region and
+                # `rust_definitions` never saw it.)
                 thin_sink = _kind == "fn" and body.strip("{} \t\r\n") != ""
                 if (
                     has_primitive(body, body_nc)
@@ -684,6 +688,84 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
 
 
 # ---------------------------------------------------------------------------
+# Ground truth: the scanner against a naive grep, on the LIVE tree
+# ---------------------------------------------------------------------------
+def scanner_violations(raw, code):
+    """Raw `log::` occurrences the scanner dropped that are NOT in a comment.
+
+    WHY THIS EXISTS. Synthetic fixtures cannot catch a scanner DESYNC, because a
+    desync depends on real file content: one unhandled `b'"'` in
+    `crates/rustty-vt/src/stream.rs` blanked ~1200 lines below it, hid 59 live
+    emissions, and made the gate report — and freeze into the baseline — a
+    49-site deficit that did not exist. Every synthetic arm stayed green through
+    all of it. The scanner was never once checked against a plain `grep -c` on
+    the file with the largest deficit, and one such check would have caught it
+    immediately.
+
+    So: a live-tree arm. Every raw occurrence the scanner removes must be
+    accounted for by a comment marker earlier on its own line or by an open block
+    comment. Anything else is the scanner eating code, which fails FALSE-GREEN.
+    """
+    bad = []
+    for m in FACADE_CALL.finditer(raw):
+        if code[m.start() : m.end()] == m.group(0):
+            continue  # survived the strip — live code, fine
+        line_start = raw.rfind("\n", 0, m.start()) + 1
+        prefix = raw[line_start : m.start()]
+        if "//" in prefix or "/*" in prefix or prefix.lstrip().startswith("*"):
+            continue  # dropped because it is commented out — correct
+        # Could still be inside a multi-line block comment opened earlier.
+        before = raw[:line_start]
+        if before.rfind("/*") > before.rfind("*/"):
+            continue
+        bad.append((raw.count("\n", 0, m.start()) + 1, raw[line_start : m.end()].strip()))
+    return bad
+
+
+def live_scanner_check():
+    """(ok, lines) — run `scanner_violations` over every mapped port file."""
+    out, ok = [], True
+    try:
+        portmap = load_portmap(PORTMAP)
+    except (OSError, ValueError) as exc:
+        return False, [f"  [FAIL] live-tree arm could not load the portmap: {exc}"]
+    paths = sorted({f for r in portmap for arm in r["arms"] for f in arm})
+    if not paths:
+        return False, ["  [FAIL] live-tree arm: portmap declares no port files"]
+    scanned, total_live, worst = 0, 0, ("", 0)
+    for rel in paths:
+        full = os.path.join(ROOT, rel)
+        if not os.path.isfile(full):
+            continue
+        with open(full, encoding="utf-8", errors="replace") as fh:
+            raw = fh.read()
+        code = rust_strip(raw)
+        if len(code) != len(raw):
+            ok = False
+            out.append(f"  [FAIL] {rel}: strip changed the file length — offsets desynced")
+            continue
+        scanned += 1
+        live = len(FACADE_CALL.findall(code))
+        total_live += live
+        if live > worst[1]:
+            worst = (rel, live)
+        for lineno, text in scanner_violations(raw, code):
+            ok = False
+            out.append(f"  [FAIL] {rel}:{lineno} live `log::` eaten by the scanner: {text}")
+    if scanned == 0:
+        return False, ["  [FAIL] live-tree arm scanned no files — cannot validate"]
+    if total_live == 0:
+        return False, ["  [FAIL] live-tree arm found zero live emissions tree-wide"]
+    out.insert(
+        0,
+        f"  [{'ok ' if ok else 'FAIL'}] live tree: {scanned} port file(s), {total_live} live "
+        f"`log::` site(s), every dropped occurrence accounted for by a comment\n"
+        f"         (busiest: {worst[0]} = {worst[1]})",
+    )
+    return ok, out
+
+
+# ---------------------------------------------------------------------------
 # Self-test
 # ---------------------------------------------------------------------------
 SELF_ZIG_OK = 'const log = std.log.scoped(.x);\nfn a() void { log.warn("a", .{}); }\n'
@@ -836,7 +918,10 @@ def self_test():
              {}, lambda p: "fn a() void {}\n", rt)[0], 1)
     )
 
-    ok = True
+    live_ok, live_lines = live_scanner_check()
+    ok = live_ok
+    for line in live_lines:
+        print(line)
     for name, got, want in cases:
         mark = "ok " if got == want else "FAIL"
         if got != want:
@@ -845,7 +930,8 @@ def self_test():
     print(
         "SELF-TEST GREEN: the gate flips RED on a short file, an unreasoned or stale\n"
         "allowance, a short PLATFORM TWIN that summing would have hidden, a no-op\n"
-        "log stub, an undeclared file, a missing port file, and a vacuous scan."
+        "log stub, an undeclared file, a missing port file, and a vacuous scan —\n"
+        "and the scanner agrees with a naive grep on every mapped port file."
         if ok
         else "SELF-TEST RED: the gate did not flip."
     )

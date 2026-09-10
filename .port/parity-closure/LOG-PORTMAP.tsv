@@ -86,7 +86,7 @@ src/terminal/c/sgr.zig	crates/rustty-vt-c/src/sgr.rs	0
 src/terminal/kitty/graphics_storage.zig	crates/rustty-vt/src/kitty/graphics_storage.rs	1	N12: rows S190-F1, S190-F2; includes waived residuals - see ADJUDICATION.md.
 src/terminal/osc/parsers/rxvt_extension.zig	crates/rustty-vt/src/osc/parsers/rxvt_extension.rs	0	
 src/terminal/page.zig	crates/rustty-vt/src/page_impl.rs	1	N12: rows S157-F1 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
-src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	49	N12, LARGEST single instance: S163-F2 and S164-F1 are both CLOSED yet 49 sites are short - repeated messages (each 'unimplemented CSI callback' etc. fires from several reference arms) collapsed to one port site.
+src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	0	RECONCILES (128 reference / 138 port). The 49 first frozen here was a PHANTOM: the scanner had no char-literal branch, so `b'"' => {` at stream.rs:3428 opened a phantom string and blanked ~1200 lines below it. Fixed 2026-09-10 (task 14gate fix round 1); the ratchet caught the stale allowance.
 src/terminal/stream_terminal.zig	crates/rustty-vt/src/stream_terminal.rs	7	N12: rows S166-F3 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
 src/terminal/tmux/viewer.zig	crates/rustty-vt/src/tmux/viewer.rs	0	
 src/termio/mailbox.zig	crates/rustty-termio/src/mailbox.rs	2	N12: rows S212-F5 are still OPEN; restoring these sites is that row's work.

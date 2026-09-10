@@ -212,6 +212,13 @@ worktree and merge, rather than sharing one tree.
      this file", not "every individual site is live". Where two reference files port into
      one Rust file the arm is credited with that file's whole count; the portmap's `reason`
      column records every such overlap. Blind spot 3 still applies inside a row.
+   - **Validate the scanner against the live tree, not only against fixtures.** The gate's
+     own Rust stripper shipped without a char-literal branch: one `b'"'` in
+     `crates/rustty-vt/src/stream.rs` opened a phantom string, blanked ~1200 lines below it,
+     hid 59 live emissions and froze a 49-site deficit that did not exist — while all 16
+     synthetic self-test arms stayed green, because a desync depends on real file content.
+     `--self-test` now carries a LIVE-TREE arm that checks the scanner against a naive grep
+     over every mapped port file. Keep it, and add one for any new scanner.
    - **Four emission shapes exist in this port** and the gate knows all four:
      `log::warn!`, a `macro_rules! log_warn!` facade (`opengl/gl.rs`), a `fn log_warn(msg)`
      facade (`config_struct.rs`, most of `rustty-os`), and `eprintln!("warn(scope): …")`

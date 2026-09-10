@@ -750,7 +750,7 @@ GATE_REGISTRY=(
   # (.port/parity-closure/LOG-PORTMAP.tsv), so hardening costs nothing today and
   # buys the only thing that matters: a new dropped diagnostic, or a Linux twin
   # that silently stops emitting what its macOS twin emits, turns the branch red
-  # the same run. The declared debt (232 sites, NEW-FINDINGS N12) is tracked as a
+  # the same run. The declared debt (183 sites, NEW-FINDINGS N12) is tracked as a
   # finding, not as gate noise — `--report` prints the whole table on demand.
   # The allowances are a RATCHET: one that exceeds the measured deficit is RED,
   # so restoring a site must tighten it in the same commit. Nothing here is

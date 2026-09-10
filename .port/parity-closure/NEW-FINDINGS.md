@@ -600,14 +600,13 @@ found, and current state.
   `ci.sh` from day one.
 
 - **what the gate measured, and this is the tracked debt**: 63 reference files, 894 live
-  reference log sites, 694 live port emissions on the thinnest platform arm —
-  **a deficit of 232 sites over 34 files**, frozen as the portmap's allowances. Full table:
-  `python3 .port/tools/gates/check_log_reconcile.py --report`. The largest, and the ones
-  that are NOT explained by an already-OPEN row:
+  reference log sites, 753 live port emissions on the thinnest platform arm —
+  **a deficit of 183 sites over 33 files**, frozen as the portmap's allowances. Full table:
+  `python3 .port/tools/gates/check_log_reconcile.py --report`. The ones that are NOT
+  explained by an already-OPEN row:
 
   | deficit | oracle file | rows | note |
   |---|---|---|---|
-  | 49 | `src/terminal/stream.zig` | S163-F2, S164-F1 — **both CLOSED** | repeated reference messages (each "unimplemented CSI callback" etc. fires from several reference arms) collapsed onto one port site |
   | 7 | `src/terminal/stream_terminal.zig` | S166-F3 — **CLOSED** | the clipboard reply/grant family |
   | 3 | `src/terminal/Terminal.zig` | S141-F4, S142-F1, S143-F2 — **all CLOSED** | `cursor copy failed entering alt screen`, the grapheme-attach debug |
   | 2 | `src/font/face/coretext.zig` | S90-F2 — **CLOSED** | |
@@ -617,6 +616,37 @@ found, and current state.
   A `CLOSED` row sitting above a live deficit is exactly PROCEDURE.md blind spot 2 ("the
   gate counts rows, not sites") measured for the first time. These are **not** closed by
   this entry.
+
+- **CORRECTION, 2026-09-10 (task 14gate fix round 1).** The figures first written here were
+  **232 over 34 files**, with `src/terminal/stream.zig` as the largest single instance at
+  **49**, attributed to "repeated message families collapsed onto one port site". **That
+  defect does not exist.** `stream.zig` reconciles: 128 reference sites against **138** port
+  emissions. The 49 was a scanner defect, not a port defect.
+
+  `check_log_reconcile.py`'s Rust stripper had no char/byte-literal branch.
+  `crates/rustty-vt/src/stream.rs:3428` is `b'"' => {` — the DEC intermediate. That quote
+  opened a phantom string, everything to the next `"` was blanked as string body, and the
+  desync ran to end of file: ~1200 lines of real code erased before the scan, 59 live
+  emissions invisible, all of them at line 3446 or later. The Zig side always handled char
+  literals correctly (`zig_strip`); only the Rust side forgot, and Rust is where it matters,
+  because that stripper is whole-file while a Zig desync cannot escape its line.
+
+  Two things worked and one did not.
+  - **The ratchet worked.** With the scanner fixed, the gate went RED by itself:
+    `src/terminal/stream.zig: allowance=49, measured deficit=0`. The stale-allowance arm is
+    what surfaced the phantom, exactly as designed.
+  - **The synthetic self-test did not, and could not.** All 16 arms stayed green through
+    the whole thing, because a scanner desync depends on real file content. The gate now
+    carries a **live-tree arm** that checks the scanner against a naive grep over every
+    mapped port file and fails if any raw `log::` occurrence is dropped without a comment
+    marker to account for it. Reverting the fix makes that arm fail, first violation at
+    `stream.rs:3446`.
+  - **Blast radius, verified independently by running every mapped port file through both
+    the old and the fixed stripper**: 33 of 68 files' stripped TEXT differs (any file with a
+    char literal), but only `stream.rs` differs in emission COUNT — 79 -> 138. The other 32
+    files' counts and allowances were and are correct. The bug was latent and general
+    though: any port file that later gains an odd number of quote-bearing char literals
+    would silently zero everything below it, and it fails FALSE-GREEN.
 
 - **three port-side facts a naive scanner gets wrong**, all found while building the gate
   and all of which cause a FALSE report if missed:
@@ -648,9 +678,10 @@ found, and current state.
 
 - **how found**: a review swept every LOG row's minimum anchor and counted above it; task
   14gate reproduced the sweep, then built the gate and measured the whole-file picture.
-- **state**: **OPEN.** The gate and the frozen baseline are landed; the 232-site debt is
-  not. Next step is a per-file adjudication pass in deficit order — `stream.zig` first,
-  since it alone is 49 and both its rows are CLOSED — tightening the portmap allowance in
+- **state**: **OPEN.** The gate and the corrected baseline are landed; the 183-site debt is
+  not. Next step is a per-file adjudication pass in deficit order — `embedded.zig` (54, all
+  54 reference calls survive only as R1 comments) first, then `application.zig` (15),
+  `locale.zig` (14) and `cf_release_thread.zig` (9) — tightening the portmap allowance in
   the same commit as each restoration (the gate is a ratchet and goes RED on slack).
 
 ## N13 — two `self_.?` elisions turn a Zig safe-build panic into silent UB on an ABI-nullable pointer
@@ -688,3 +719,49 @@ found, and current state.
   sites for the G-LOGFILE portmap.
 - **state**: **OPEN.** Not fixed here — this task is a gate, and adding assertions to two
   callbacks is a code change outside its scope.
+## N14 — the GTK subtree writes ~199 diagnostics straight to stderr, bypassing the log facade entirely
+
+- **id**: N14 (next free id checked 2026-09-10: N1-N13 taken, N12/N13 by this same task.)
+- **severity**: medium (a whole subtree's diagnostics cannot be silenced, levelled, scoped
+  or captured; no state or rendering difference)
+- **kind**: facade bypass / cross-cutting
+- **oracle**: every `log.*` in `src/apprt/gtk/**` — `class/application.zig` (111 sites),
+  `class/surface.zig` (63), `class/window.zig` (20), `portal/OpenURI.zig` (19),
+  `winproto/x11.zig` (11) and the rest of the subtree — all of which the reference routes
+  through `std.log`, i.e. through `main_ghostty.zig`'s `logFn`.
+- **rustty**: `crates/rustty-apprt/src/gtk/**`. **199 raw `eprintln!` calls shaped as log
+  lines** (157 `"warn(…"`, 22 `"debug(…"`, 9 `"err(…"`, 6 `"info(…"`, 5 `"error(…"`),
+  reproducing the reference's `logFn` OUTPUT — `level(scope): message` — inline, character
+  for character. 98 of them are in `class/application.rs` alone.
+- **description**: the reference's `logFn` (`src/main_ghostty.zig`) is a real funnel. Its
+  port is `crates/rustty-core/src/logging.rs::log_with(level, scope, message, &Logging)`,
+  and it does three things these sites do not:
+  1. **it honours `Logging.stderr`** (`crates/rustty-core/src/logging.rs:88` returns early
+     when it is false) — and `rustty_global::Logging`'s own doc says stderr logging is
+     **disabled by default in lib mode**. So an embedder that has switched stderr logging
+     off still gets all 199 of these on its stderr;
+  2. **it routes to macOS unified logging** when `Logging.macos` is set
+     (`logging.rs:56`) — these sites never reach it, so on macOS the GTK subtree is absent
+     from `log stream` entirely;
+  3. **it is the single point where level and scope filtering can ever be applied.**
+     A raw `eprintln!` has no level to filter on and no scope to route by.
+
+  The facade is not merely available, it is **already imported by the same crate**:
+  `crates/rustty-apprt/src/lib.rs:189` does `use rustty_core::logging::{log_with, Level};`
+  and `global.zig`'s eleven sites go through it correctly. The GTK subtree simply does not,
+  and `rustty-apprt/Cargo.toml` does not list `log` as a dependency at all, so the
+  `log::warn!` shape used by every other crate is not even reachable from there.
+- **why this is a finding and not part of N12**: N12 is about diagnostics that are MISSING
+  (`gtk/class/application.zig` is 15 sites short of the reference's 111). This is about the
+  96 that are PRESENT and go to the wrong place. Restoring the missing 15 as further
+  `eprintln!`s would close N12's arithmetic for that file and make this defect worse. The
+  two must be fixed in one pass or the wrong one will be done first.
+- **how found**: task 14gate. The gate had to learn the `eprintln!("warn(gtk): …")` shape
+  in order to count these as emissions at all — a `log::`-anchored scan reads
+  `class/application.rs` as emitting **zero** when it emits 96 — and recognising the shape
+  is what exposed what the shape costs.
+- **state**: **OPEN.** Scope: route the GTK subtree through `rustty_core::logging::log_with`
+  (or add `log` to `rustty-apprt` and use `log::warn!(target: …)` as the rest of the
+  workspace does), preserving each message verbatim, in the same pass that restores the
+  sites N12 counts as missing. G-LOGFILE counts both shapes, so the fix is count-neutral and
+  the gate will not move — this one needs a reviewer, not a gate.
