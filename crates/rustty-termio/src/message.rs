@@ -266,3 +266,57 @@ mod tests {
         assert_eq!(56, core::mem::size_of::<Message>());
     }
 }
+
+#[cfg(test)]
+mod tag_name_tests {
+    use super::*;
+
+    /// task-14e-1: `Thread.zig:313` prints `@tagName(message)`, i.e. the
+    /// reference union's own snake_case FIELD name. The Rust variants are
+    /// PascalCase (R2 naming), so a `Debug`-derived stand-in would put the wrong
+    /// bytes on the wire and no other test in this crate would notice. Every
+    /// variant is listed, transcribed from `src/termio/message.zig` at pin
+    /// 20abdb50a; adding a variant without a name breaks compilation (the match
+    /// is exhaustive), and renaming one breaks this.
+    #[test]
+    fn message_tag_names_are_the_reference_field_names() {
+        let rows: Vec<(Message<'static>, &str)> = vec![
+            (
+                Message::ColorSchemeReport { force: false },
+                "color_scheme_report",
+            ),
+            (
+                Message::VisibilityReport {
+                    visible: true,
+                    force: false,
+                },
+                "visibility_report",
+            ),
+            (Message::Crash, "crash"),
+            (Message::Inspector(true), "inspector"),
+            (
+                Message::StartSynchronizedOutput,
+                "start_synchronized_output",
+            ),
+            (Message::LinefeedMode(true), "linefeed_mode"),
+            (Message::Focused(true), "focused"),
+            (Message::SelectionScroll(true), "selection_scroll"),
+            (Message::JumpToPrompt(1), "jump_to_prompt"),
+            (Message::ClearScreen { history: true }, "clear_screen"),
+            (Message::WriteStable(b"x"), "write_stable"),
+        ];
+        let actual: Vec<&str> = rows.iter().map(|(m, _)| m.tagName()).collect();
+        let expected: Vec<&str> = rows.iter().map(|(_, n)| *n).collect();
+        assert_eq!(expected, actual);
+
+        // The bytes must be snake_case, never the PascalCase Rust identifier.
+        for (m, _) in &rows {
+            let n = m.tagName();
+            assert!(
+                !n.chars().next().unwrap().is_uppercase(),
+                "tagName {n:?} looks like a Rust variant identifier, not the \
+                 reference field name"
+            );
+        }
+    }
+}

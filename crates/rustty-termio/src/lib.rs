@@ -139,6 +139,12 @@ pub use command::Command;
 // of the shared `rustty-xev` crate.
 pub mod xev_seam;
 
+// task-14e-1: process-wide capture `log::Log` for the restored `LOG`-class
+// diagnostics (DECISION-logging.md §6/§6r4). Test-only — never compiled into
+// the production library.
+#[cfg(test)]
+pub(crate) mod log_capture;
+
 /// PORT NOTE (GROWTH POINT, Rust-only glue): the reference termio methods
 /// return `!void`/`!T` — error unions whose error SETS are *inferred* from the
 /// concrete backend (`termio.Exec`, stage 4) and the xev loop (D6). Until they

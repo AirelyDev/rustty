@@ -884,3 +884,101 @@ rows: the `Fatal: ` and `X11: ` prefixes in `x11.rs`; `gtk-x11` for the referenc
 `this is a common cause of this issue: <url>`; six `open uri ` prefixes and six
 `global shortcuts ` prefixes the reference does not use; and a `token={x}` suffix on four
 OpenURI messages. All restored verbatim.
+
+## task 14e-1 — `rustty-termio` (and `rustty-inspector`'s termio widget)
+
+Seven reference files, 129 live sites, both crates starting from **no `log` dependency at
+all**. 120 sites restored, 9 not — the 9 are enumerated below, each with a PORT NOTE at its
+own code site and an `LOG-PORTMAP.tsv` allowance ratcheted to exactly that count.
+
+**One audit row (`S212-F5`, `mailbox.zig`, 2 sites) — CLOSED.** The other six files are
+pure `G-LOGFILE` findings: no row names them, because the portmap was rebuilt from the
+REFERENCE tree (N15) rather than from the audit, and the audit never looked at them. The
+brief said "seven reference files map into `rustty-termio`"; six do. The seventh,
+`src/inspector/widgets/termio.zig`, maps into **`rustty-inspector`**, which is not in
+`DECISION-logging.md` §6r IMPORTANT 5's crate table at all — it gained its `log`
+dependency here.
+
+### The 9 sites NOT restored — all one shape, all WAIVED for the same reason
+
+Every one of them is a reference diagnostic whose failure the PORT CANNOT PRODUCE. There
+is no arm to hang it on, and emitting it unconditionally would put a diagnostic on a
+SUCCESS path — the bug this project shipped once (a warning outside its `catch` firing on
+every successful scroll). Understating completion costs nothing; a false record does not.
+
+| reference site | message | why there is no arm |
+|---|---|---|
+| `Exec.zig:731` | `error building XDG_DATA_DIRS; err={}` | hangs off `std.fmt.bufPrint`'s `NoSpaceLeft` into a fixed `[max_path_bytes]u8`; the port formats into a growable `Vec` |
+| `Exec.zig:748` | `error building MANPATH; man pages may not be available; err={}` | same |
+| `Exec.zig:840` | `failed to allocate space for command args, falling back to basic shell` | the `error.OutOfMemory` arm; Rust allocation here is infallible (OOM aborts) |
+| `Exec.zig:1078` | `error killing command during cleanup err={}` | lives inside an `errdefer` with no reachable error return between its registration and the success return |
+| `Exec.zig:1469` | `read thread exiting, failed to spawn gather thread err={}` | `std::thread::scope` has no fallible spawn |
+| `Termio.zig:705` | `error recording pty read in inspector err={}` | `Inspector::recordPtyRead` is infallible in the port (Task 16 — the OSC parser allocator collapses under Rust's global allocator) |
+| `stream_handler.zig:1547` | `error notifying surface of pwd change err={}` | `WriteReq::init` is infallible; a live call fires on every SUCCESSFUL pwd change |
+| `widgets/termio.zig:358` | `failed to format terminal IO events for copy err={}` | `Stream::formatEvents` is infallible in the port |
+| `widgets/termio.zig:378` | `failed to format terminal IO events for export err={}` | same |
+
+None of these falls inside `S212-F5`'s cited anchors, so no row's state rests on them.
+
+### Three EMPTY `log_*` stub helpers removed
+
+`mailbox.rs` carried `log_warn_notify_failed` / `log_warn_wake_failed` and
+`termio_impl.rs` carried `log_warn_input_open_failed`, each an empty-bodied function
+holding a commented reference call. G-LOGFILE lists exactly this shape under its own
+`NOTE:` line: an empty `log_*` helper is a DROPPED diagnostic, not a facade. All three are
+gone and the calls are back inline where the reference has them. (11 such stubs remain in
+`rustty-os`; out of scope here.)
+
+### Zig constructs that needed a named shim, not an approximation
+
+- **`@tagName(message)`** (`Thread.zig:313`) → `Message::tagName()`. The Rust variants are
+  PascalCase (R2 naming), so `{:?}` would have put the wrong bytes on the wire.
+- **`@tagName(dynamic)`** (six `stream_handler.zig` color sites) → `color::Dynamic::tag_name`
+  in `rustty-vt`, same reason.
+- **`@tagName(posix.errno(...))`** (`Exec.zig:213, :1759, :1770`, all `err=E{s}`) →
+  `errno_tag_name`. Its test asserts the transcribed numbers against the HOST's own
+  `strerror` rather than trusting them, per the `rustty-cli` `errno_suffix` precedent — and
+  that test earned its keep immediately, catching two wrong `strerror` fragments on Darwin.
+- **`{x}` on a `[]const u8`** (two response sites) → a `HexBytes` Display wrapper; Rust's
+  `{:x}` has no slice impl.
+- **`defer log.debug(...)`** (`Thread.zig:229, :238, :278`) → three DIFFERENT things, and
+  conflating them would have been wrong. `:238` must fire on `threadEnter(...)?`'s early
+  return, so it is a `Drop` guard. `:278` is registered LAST, so Zig's LIFO order fires it
+  FIRST on exit, before the teardown — written inline right after `loop.run` returns.
+  `:229` scopes an `if` block with no early exit — its last statement.
+
+### `stream_handler.zig:186` — the `vt` funnel had dropped half its message
+
+The reference's `vt` takes a COMPTIME `Stream.Action.Tag` and logs
+`action={} err={}`. The port collapses that dispatcher into one trait method per action,
+so the tag is not a value at the site, and the port had dropped `action=` entirely. Each
+of the 38 callers now passes its own reference `Action.Tag` field name; all 38 were checked
+against the oracle's own `Action` tag list. The type-name prefix Zig's `{}` puts on an
+exhaustive enum is not reproduced — N11's class.
+
+### Two stale pre-resync Zig comments found, and deliberately NOT emitted
+
+Both reproduce an OLDER upstream shape that no longer exists at pin `20abdb50a`. Emitting
+either would be an emission the reference does not make — the inverse defect, caught before
+it was introduced rather than after.
+
+- `stream_handler.rs`'s OSC 7 `UriHostTooLong` arm carries
+  `failed to get full hostname for OSC 7 validation: {}`. At the pin, `uri.getHost`'s error
+  set is `error{UriMissingHost}` ONLY — there is no such site. The arm is left alone
+  (removing it is a behavioural change, out of scope) with a note; no live call added.
+- `exec.rs`'s `setNonblock` carried `read thread failed to get flags err={}` plus a second
+  line, `this isn't a fatal error, but may cause performance issues`. At the pin the
+  message renders the ERRNO NAME (`err=E{s}`) and there is no second line. The live calls
+  follow the pin, and the comments were corrected to the pin.
+
+A third, `termio_impl.rs`'s `failed to get current time err={}`, is stale the same way
+(`Termio.zig` has no such site at the pin) and likewise got no emission. It is left in
+place as a comment; see `NEW-FINDINGS.md` N20.
+
+### The count is +122 for 120 sites, and that is expected
+
+`G-LOGFILE` counts, it does not attribute. `exec.rs` carries several reference sites twice
+under mutually-exclusive `cfg` arms (`started subcommand path=…` on the posix and windows
+arms; the flatpak spawn under `#[cfg(feature = "flatpak")]`), so the textual scan credits
+more emissions than there are reference sites. The per-file allowances are set from the
+SITE inventory above, not from the delta.

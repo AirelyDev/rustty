@@ -2658,3 +2658,32 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod dynamic_tag_name_tests {
+    use super::Dynamic;
+
+    /// task-14e-1: `termio/stream_handler.zig`'s six
+    /// "setting/resetting/reporting dynamic color {s} not implemented" sites
+    /// print `@tagName(dynamic)`. Transcribed from `src/terminal/color.zig:498`
+    /// at pin 20abdb50a. A `Debug`-derived stand-in would emit the PascalCase
+    /// Rust identifier instead.
+    #[test]
+    fn dynamic_tag_names_are_the_reference_field_names() {
+        let rows: &[(Dynamic, &str)] = &[
+            (Dynamic::Foreground, "foreground"),
+            (Dynamic::Background, "background"),
+            (Dynamic::Cursor, "cursor"),
+            (Dynamic::PointerForeground, "pointer_foreground"),
+            (Dynamic::PointerBackground, "pointer_background"),
+            (Dynamic::TektronixForeground, "tektronix_foreground"),
+            (Dynamic::TektronixBackground, "tektronix_background"),
+            (Dynamic::HighlightBackground, "highlight_background"),
+            (Dynamic::TektronixCursor, "tektronix_cursor"),
+            (Dynamic::HighlightForeground, "highlight_foreground"),
+        ];
+        let actual: Vec<&str> = rows.iter().map(|(d, _)| d.tag_name()).collect();
+        let expected: Vec<&str> = rows.iter().map(|(_, n)| *n).collect();
+        assert_eq!(expected, actual);
+    }
+}

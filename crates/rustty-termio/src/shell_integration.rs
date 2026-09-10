@@ -1975,4 +1975,78 @@ mod tests {
              this path: {bytes:?}"
         );
     }
+    // ---- task-14e-1: the restored `shell_integration` diagnostics ----------
+
+    /// `shell_integration.zig:644` — the `unable to open {s}: {}` warn on the
+    /// XDG data-dirs path. Exact record vector, with the payload built from an
+    /// independently-obtained `io::Error` for the SAME path so the assertion is
+    /// host-portable rather than pinning one platform's `strerror`.
+    #[test]
+    fn setup_xdg_data_dirs_warns_when_the_integration_dir_is_missing() {
+        let tmp = TempDir::init().unwrap();
+        let base = tmp.dir().realpath(".").unwrap();
+        let resource_dir = base.as_os_str().as_encoded_bytes().to_vec();
+        // Deliberately do NOT create `<base>/shell-integration`.
+        let integ_path = cat(&[&resource_dir, b"/shell-integration"]);
+        let expected_err = std::fs::read_dir(byte_path(&integ_path)).unwrap_err();
+        let expected = format!(
+            "unable to open {}: {expected_err:?}",
+            String::from_utf8_lossy(&integ_path)
+        );
+
+        let cap = crate::log_capture::start();
+        let mut env: EnvMap = EnvMap::new();
+        let ok = setupXdgDataDirs(&resource_dir, &mut env);
+        let messages = cap.messages();
+        drop(cap);
+
+        assert!(!ok, "a missing integration dir must return false");
+        assert_eq!(
+            vec![(log::Level::Warn, "shell_integration".to_string(), expected)],
+            messages
+        );
+    }
+
+    /// The ABSENCE arm, with the positive assertion PROCEDURE.md requires.
+    ///
+    /// A PRESENT `shell-integration` dir must produce NO record — the reference
+    /// only logs in the `catch`. An empty record vector alone cannot tell
+    /// "the success path ran and stayed silent" apart from "the function bailed
+    /// out before ever reaching the `openDirAbsolute`", so the test also asserts
+    /// positively that it got PAST that call: `setupXdgDataDirs` returns true
+    /// and puts `<APP>_SHELL_INTEGRATION_XDG_DIR` into the env, both of which
+    /// happen only on the far side of the arm whose silence is being asserted.
+    ///
+    /// NEGATIVE CONTROL RUN (task-14e-1): hoisting the `log::warn!` out of the
+    /// `Err(err)` arm to just above the `match` — the exact "diagnostic on a
+    /// success path" bug this project shipped once — fails THIS test with
+    /// `left: [] right: [(Warn, "shell_integration", "unable to open …")]`.
+    /// The control fails, and it fails for the stated reason: the record is
+    /// present where the test asserts none. (The hoist has to synthesize an
+    /// error value, so it also fails the warn test above on the rendered
+    /// payload — expected, and not what this control is measuring.)
+    #[test]
+    fn setup_xdg_data_dirs_is_silent_when_the_integration_dir_exists() {
+        let tmp = TempDir::init().unwrap();
+        let base = tmp.dir().realpath(".").unwrap();
+        std::fs::create_dir_all(base.join("shell-integration")).unwrap();
+        let resource_dir = base.as_os_str().as_encoded_bytes().to_vec();
+
+        let cap = crate::log_capture::start();
+        let mut env: EnvMap = EnvMap::new();
+        let ok = setupXdgDataDirs(&resource_dir, &mut env);
+        let messages = cap.messages();
+        let reached = env.getv(&env_name("SHELL_INTEGRATION_XDG_DIR")).is_some();
+        drop(cap);
+
+        // POSITIVE: we are past the `openDirAbsolute` whose failure arm holds
+        // the diagnostic this test asserts the absence of.
+        assert!(ok, "a present integration dir must return true");
+        assert!(
+            reached,
+            "the XDG_DIR env var was not set, so this test never reached the \
+             arm whose silence it is asserting"
+        );
+        assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
+    }
 }

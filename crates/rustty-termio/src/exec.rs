@@ -87,8 +87,73 @@ use rustty_datastruct::blocking_queue::Timeout;
 
 // const log = std.log.scoped(.io_exec);
 //
-// PORT NOTE: the reference's log call sites are preserved verbatim as comments at
-// each site (termio stage-2 precedent).
+// PORT NOTE (DECISION-logging.md §6/§6r4): `LOG_SCOPE` is the `@tagName` of the
+// reference's `std.log.scoped(.io_exec)`; restored sites call the `log` facade
+// with `target: LOG_SCOPE`. This supersedes the earlier "preserved verbatim as
+// comments at each site" note — the Zig comment stays (R1) and the live call is
+// added beneath it.
+//
+// `Exec.zig` is the single largest log-bearing file in the whole reference (58
+// live sites at pin 20abdb50a). FIVE of them have no live counterpart here, and
+// each says so at its own code site. In every case the reference's diagnostic
+// hangs off a failure the PORT CANNOT PRODUCE, so restoring it would put a
+// diagnostic on a success path:
+//   :731  `error building XDG_DATA_DIRS`      — the `bufPrint` NoSpaceLeft arm;
+//   :748  `error building MANPATH`            — the same, growable format.
+//   :840  `failed to allocate space for ...`  — the OOM arm; Rust allocation
+//                                               here is infallible.
+//   :1078 `error killing command during ...`  — an `errdefer` with no reachable
+//                                               error return between its
+//                                               registration and the success
+//                                               return.
+//   :1469 `failed to spawn gather thread`     — `std::thread::scope` has no
+//                                               fallible spawn.
+// The `LOG-PORTMAP.tsv` allowance is held at 5 for exactly those.
+const LOG_SCOPE: &str = "io_exec";
+
+/// PORT NOTE (Zig-std shim, task-14e-1): `@tagName(posix.errno(...))` — the
+/// reference renders three of this file's diagnostics as `err=E{s}` where `{s}`
+/// is the errno's NAME with the leading `E` stripped (`EBADF` -> `BADF`), so the
+/// message reads `err=EBADF`. Rust's std has no errno-name table, so the set is
+/// transcribed here; anything outside it falls back to the number, which still
+/// round-trips to a name via `errno(3)` and is never a WRONG name. This is a
+/// diagnostic string, not a control-flow input.
+///
+/// The `rustty-cli` `errno_suffix` helper is the precedent, including its
+/// lesson: the numbers differ per target (its first draft had Linux's `EAGAIN`,
+/// which is `EDEADLK` on Darwin), so the table is asserted against the HOST's
+/// own `strerror` by `errno_tests` below rather than trusted.
+#[cfg(not(windows))]
+fn errno_tag_name(code: i32) -> std::borrow::Cow<'static, str> {
+    // The errnos `write(2)` and `fcntl(2)` can set, per POSIX.1-2024.
+    const ERRNOS: &[(i32, &str)] = &[
+        (libc::EACCES, "ACCES"),
+        (libc::EAGAIN, "AGAIN"),
+        (libc::EBADF, "BADF"),
+        (libc::EDEADLK, "DEADLK"),
+        (libc::EDQUOT, "DQUOT"),
+        (libc::EFAULT, "FAULT"),
+        (libc::EFBIG, "FBIG"),
+        (libc::EINTR, "INTR"),
+        (libc::EINVAL, "INVAL"),
+        (libc::EIO, "IO"),
+        (libc::EMFILE, "MFILE"),
+        (libc::ENOLCK, "NOLCK"),
+        (libc::ENOSPC, "NOSPC"),
+        (libc::EOVERFLOW, "OVERFLOW"),
+        (libc::EPERM, "PERM"),
+        (libc::EPIPE, "PIPE"),
+        (libc::ERANGE, "RANGE"),
+        (libc::ESPIPE, "SPIPE"),
+        (libc::ESRCH, "SRCH"),
+    ];
+    for (n, name) in ERRNOS {
+        if *n == code {
+            return std::borrow::Cow::Borrowed(name);
+        }
+    }
+    std::borrow::Cow::Owned(code.to_string())
+}
 
 /// The termios poll rate in milliseconds.
 //
@@ -189,8 +254,9 @@ impl Exec {
         //     log.warn("error setting initial pwd err={}", .{err});
         // };
         if let Some(cwd) = &self.subprocess.cwd {
-            if term.set_pwd(cwd.to_bytes()).is_err() {
+            if let Err(err) = term.set_pwd(cwd.to_bytes()) {
                 // log.warn("error setting initial pwd err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error setting initial pwd err={err:?}");
             }
         }
 
@@ -739,8 +805,24 @@ impl Exec {
             )
         };
         if rc < 0 {
-            // error.BrokenPipe => {} ; else => log.warn(...)
-            // (either way nothing else to do here — the read thread is exiting.)
+            // .SUCCESS => {}, .PIPE => {},
+            // else => |e| log.warn(
+            //     "error writing to read thread quit pipe err=E{s}",
+            //     .{@tagName(e)},
+            // ),
+            //
+            // PORT NOTE: the port's earlier Zig comment here reproduced an OLDER
+            // upstream shape (`error.BrokenPipe` + `err={}`); at pin 20abdb50a the
+            // reference switches on the ERRNO and renders `err=E{s}` from
+            // `@tagName`. The live call below follows the pin.
+            let e = errno();
+            if e != libc::EPIPE {
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "error writing to read thread quit pipe err=E{}",
+                    errno_tag_name(e)
+                );
+            }
         }
 
         // if (comptime builtin.os.tag == .windows) {
@@ -761,7 +843,15 @@ impl Exec {
                 )
             } == 0
             {
-                // switch (GetLastError()) { .NOT_FOUND => {}, else => log.warn(...) }
+                // switch (GetLastError()) {
+                //     .NOT_FOUND => {},
+                //     else => |err| log.warn("error interrupting read thread err={}", .{err}),
+                // }
+                let err = unsafe { rustty_os::windows::kernel32::GetLastError() };
+                const ERROR_NOT_FOUND: u32 = 1168;
+                if err != ERROR_NOT_FOUND {
+                    log::warn!(target: LOG_SCOPE, "error interrupting read thread err={err}");
+                }
             }
         }
 
@@ -1072,6 +1162,12 @@ impl Exec {
             Some((runtime_ns.as_nanos() / 1_000_000) as u64)
         };
         // log.debug("child process exited status={} runtime={}ms", .{ exit_code, runtime_ms orelse 0 });
+        log::debug!(
+            target: LOG_SCOPE,
+            "child process exited status={} runtime={}ms",
+            exit_code,
+            runtime_ms.unwrap_or(0)
+        );
 
         // We always notify the surface immediately that the child has
         // exited and some metadata about the exit.
@@ -1168,8 +1264,9 @@ impl Exec {
             Ok(()) => {}
             // This is sent when our timer is canceled. That's fine.
             Err(xev::TimerRunError::Canceled) => return xev::CallbackAction::Disarm,
-            Err(_err) => {
+            Err(err) => {
                 // log.warn("error in termios timer callback err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error in termios timer callback err={err:?}");
                 panic!("crash in termios timer callback");
             }
         }
@@ -1199,8 +1296,9 @@ impl Exec {
         #[allow(clippy::manual_unwrap_or_default)]
         let mode: ptypkg::Mode = match Pty::init_master_only(master).getMode() {
             Ok(m) => m,
-            Err(_) => {
+            Err(err) => {
                 // log.warn("error getting termios mode err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error getting termios mode err={err:?}");
                 // break :err .{};
                 ptypkg::Mode::default()
             }
@@ -1211,6 +1309,7 @@ impl Exec {
         if mode != unsafe { (*exec).termios_mode } {
             'mode_change: {
                 // log.debug("termios change mode={}", .{mode});
+                log::debug!(target: LOG_SCOPE, "termios change mode={mode:?}");
                 // exec.termios_mode = mode;
                 unsafe {
                     (*exec).termios_mode = mode;
@@ -1566,8 +1665,9 @@ impl Exec {
         // const d = r catch |err| { log.err("write error: {}", .{err}); return .disarm; };
         let _d = match r {
             Ok(d) => d,
-            Err(_err) => {
+            Err(err) => {
                 // log.err("write error: {}", .{err});
+                log::error!(target: LOG_SCOPE, "write error: {err:?}");
                 return xev::CallbackAction::Disarm;
             }
         };
@@ -1908,8 +2008,18 @@ fn subprocess_pre_exec(cmd: &mut Command) -> Option<u8> {
     // const sp = cmd.getData(Subprocess) orelse unreachable;
     let sp = cmd.getData::<Subprocess>().expect("getData(Subprocess)");
     // sp.childPreExec() catch |err| log.err("error initializing child: {}", .{err});
-    if unsafe { (*sp).childPreExec() }.is_err() {
+    if let Err(err) = unsafe { (*sp).childPreExec() } {
         // log.err("error initializing child: {}", .{err});
+        //
+        // PORT NOTE (async-signal safety): this runs in the FORKED CHILD, after
+        // `fork()` and before `execve()`. It is nevertheless the FACADE and not a
+        // raw `write` — unlike `rustty-os`'s post-fork sites, because the
+        // reference itself calls `log.err` here, through the same global `logFn`
+        // its other sites use, and reproducing that call is the port's job. If a
+        // future stage decides this path must be async-signal-safe, the change
+        // belongs on BOTH sides of the seam at once and must be argued against
+        // the reference, not introduced here unilaterally.
+        log::error!(target: LOG_SCOPE, "error initializing child: {err:?}");
     }
     // return null;
     None
@@ -1940,6 +2050,14 @@ impl Subprocess {
         // }
         if let Some(dir) = &cfg.resources_dir {
             // log.info("found Ghostty resources dir: {s}", .{dir});
+            //
+            // (R2 identity: `Ghostty` in the reference's literal is the product name.)
+            log::info!(
+                target: LOG_SCOPE,
+                "found {} resources dir: {}",
+                rustty_identity::APP_NAME_TITLECASE,
+                String::from_utf8_lossy(dir)
+            );
             env.put(&env_name("RESOURCES_DIR"), dir);
         }
 
@@ -1972,6 +2090,18 @@ impl Subprocess {
             //     log.warn("the terminfo SHOULD exist on macos, please ensure", .{});
             //     log.warn("you're using a valid app bundle.", .{});
             // }
+            //
+            // (R2 identity: `ghostty` in the first literal is the product name.)
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            {
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "{} terminfo not found, using xterm-256color",
+                    rustty_identity::APP_NAME
+                );
+                log::warn!(target: LOG_SCOPE, "the terminfo SHOULD exist on macos, please ensure");
+                log::warn!(target: LOG_SCOPE, "you're using a valid app bundle.");
+            }
 
             // try env.put("TERM", "xterm-256color");
             env.put(b"TERM", b"xterm-256color");
@@ -1999,8 +2129,15 @@ impl Subprocess {
             // };
             let exe_bin_path = match std::env::current_exe() {
                 Ok(p) => p,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("failed to get ghostty exe path err={}", .{err});
+                    //
+                    // (R2 identity: `ghostty` is the product name.)
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to get {} exe path err={err:?}",
+                        rustty_identity::APP_NAME
+                    );
                     break 'rustty_path;
                 }
             };
@@ -2015,6 +2152,14 @@ impl Subprocess {
             };
             let exe_dir: &[u8] = exe_dir_path.as_os_str().as_encoded_bytes();
             // log.debug("appending ghostty bin to path dir={s}", .{exe_dir});
+            //
+            // (R2 identity: `ghostty` is the product name.)
+            log::debug!(
+                target: LOG_SCOPE,
+                "appending {} bin to path dir={}",
+                rustty_identity::APP_NAME,
+                String::from_utf8_lossy(exe_dir)
+            );
 
             // We always set this so that if the shell overwrites the path
             // scripts still have a way to find the Ghostty binary when
@@ -2082,6 +2227,12 @@ impl Subprocess {
             // }
             // (PORT NOTE: the bufPrint NoSpaceLeft error branch collapses with the
             // growable format.)
+            //
+            // PORT NOTE (G-LOGFILE / task-14e-1): the reference's
+            // `log.warn("error building {s}; err={}", ...)` hangs off that
+            // `bufPrint` error, which the growable format cannot produce, so
+            // there is no failure arm here. See the `MANPATH` sibling below and
+            // the file-header note.
             let mut data_dir = resources_dir.clone();
             data_dir.extend_from_slice(b"/..");
             let current = env
@@ -2107,6 +2258,10 @@ impl Subprocess {
             // } else |err| {
             //     log.warn("error building {s}; man pages may not be available; err={}", .{ manpath_key, err });
             // }
+            // PORT NOTE (G-LOGFILE / task-14e-1): as with `XDG_DATA_DIRS` above,
+            // the reference's
+            // `log.warn("error building {s}; man pages may not be available; err={}", ...)`
+            // hangs off a `bufPrint` failure the growable format cannot produce.
             let mut man_dir = resources_dir.clone();
             man_dir.extend_from_slice(b"/../man");
             let current = env.getv(manpath_key).unwrap_or(b"").to_vec();
@@ -2168,6 +2323,7 @@ impl Subprocess {
                     // opt-in since it results in some Ghostty features not
                     // working. We always want to log it.
                     // log.info("shell integration disabled by configuration", .{});
+                    log::info!(target: LOG_SCOPE, "shell integration disabled by configuration");
                     break 'shell default_shell_command;
                 }
 
@@ -2203,6 +2359,10 @@ impl Subprocess {
                 Some(d) => d,
                 None => {
                     // log.warn("no resources dir set, shell integration disabled", .{});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "no resources dir set, shell integration disabled"
+                    );
                     break 'shell default_shell_command;
                 }
             };
@@ -2217,21 +2377,34 @@ impl Subprocess {
             //     log.warn("shell could not be detected, no automatic shell integration will be injected", .{});
             //     break :shell default_shell_command;
             // };
-            let integration =
-                match shell_integration::setup(dir, &default_shell_command, &mut env, force)
-                    .map_err(InitError::ShellIntegration)?
-                {
-                    Some(i) => i,
-                    None => {
-                        // log.warn("shell could not be detected, no automatic shell integration will be injected", .{});
-                        break 'shell default_shell_command;
-                    }
-                };
+            let integration = match shell_integration::setup(
+                dir,
+                &default_shell_command,
+                &mut env,
+                force,
+            )
+            .map_err(InitError::ShellIntegration)?
+            {
+                Some(i) => i,
+                None => {
+                    // log.warn("shell could not be detected, no automatic shell integration will be injected", .{});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "shell could not be detected, no automatic shell integration will be injected"
+                    );
+                    break 'shell default_shell_command;
+                }
+            };
 
             // log.info(
             //     "shell integration automatically injected shell={}",
             //     .{integration.shell},
             // );
+            log::info!(
+                target: LOG_SCOPE,
+                "shell integration automatically injected shell={:?}",
+                integration.shell
+            );
 
             // break :shell integration.command;
             integration.command
@@ -2277,6 +2450,10 @@ impl Subprocess {
         //
         // (PORT NOTE: the OutOfMemory arm collapses with Rust's infallible-
         // allocation model — preserved verbatim above; SystemError propagates.)
+        //
+        // PORT NOTE (G-LOGFILE / task-14e-1): so the reference's
+        // `log.warn("failed to allocate space for command args, falling back to
+        // basic shell", .{})` has no arm to hang on. See the file-header note.
         let args: Vec<CString> = match execCommand::<OsPasswd>(&shell_command) {
             Ok(args) => args,
             Err(ExecCommandError::SystemError) => return Err(InitError::SystemError),
@@ -2647,6 +2824,16 @@ impl Subprocess {
                     Some(bytes)
                 } else {
                     // log.warn("cannot access cwd, ignoring: {}", .{err});
+                    //
+                    // PORT NOTE (log text): the reference's `err` is
+                    // `std.fs.Dir.access`'s error value; this arm reaches the same
+                    // decision through a `Path::exists()` predicate, which carries
+                    // no error value, so the errno is read back for the payload.
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "cannot access cwd, ignoring: {}",
+                        std::io::Error::last_os_error()
+                    );
                     None
                 }
             } else {
@@ -2698,6 +2885,12 @@ impl Subprocess {
                     // (no reachable error return between here and the success
                     // return below — same as the posix arm.)
                     // log.info("started subcommand path={s} pid={?}", .{ self.args[0], cmd.pid });
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "started subcommand path={} pid={:?}",
+                        String::from_utf8_lossy(self.args[0].to_bytes()),
+                        cmd.pid
+                    );
                     let pid = cmd.pid;
 
                     // self.process = .{ .fork_exec = cmd };
@@ -2810,6 +3003,11 @@ impl Subprocess {
             let self_ptr: *mut Subprocess = std::ptr::addr_of_mut!(*self);
 
             // log.debug("starting command command={f}", .{ArgsFormatter{ .args = self.args }});
+            log::debug!(
+                target: LOG_SCOPE,
+                "starting command command={}",
+                ArgsFormatter { args: &self.args }
+            );
 
             // If we can't access the cwd, then don't set any cwd and inherit.
             // This is important because our cwd can be set by the shell (OSC 7)
@@ -2847,6 +3045,10 @@ impl Subprocess {
                 #[cfg(feature = "flatpak")]
                 let flatpak_cwd: Option<Option<&[u8]>> = if rustty_os::flatpak::isFlatpak() {
                     // log.info("flatpak detected, will use host command to verify cwd access", .{});
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "flatpak detected, will use host command to verify cwd access"
+                    );
                     // const dev_null = try ... openFile("/dev/null", .{ .mode = .read_write });
                     let dev_null = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDWR) };
                     let mut cmd = rustty_os::flatpak::FlatpakHostCommand::default();
@@ -2856,7 +3058,17 @@ impl Subprocess {
                     cmd.stdout = dev_null;
                     cmd.stderr = dev_null;
                     // _ = cmd.spawn(alloc) catch |err| { ...; break :cwd null; };
-                    let spawned = cmd.spawn().is_ok();
+                    let spawned = match cmd.spawn() {
+                        Ok(_) => true,
+                        Err(err) => {
+                            // log.warn("cannot spawn command at cwd, ignoring: {}", .{err});
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "cannot spawn command at cwd, ignoring: {err:?}"
+                            );
+                            false
+                        }
+                    };
                     // _ = try cmd.wait();
                     if spawned {
                         let _ = cmd.wait();
@@ -2890,6 +3102,11 @@ impl Subprocess {
                     Some(proposed.to_bytes())
                 } else {
                     // log.warn("cannot access cwd, ignoring: {}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "cannot access cwd, ignoring: {}",
+                        std::io::Error::last_os_error()
+                    );
                     None
                 }
             } else {
@@ -2907,6 +3124,8 @@ impl Subprocess {
                 // (PORT NOTE (WS20): `comptime !build_config.flatpak` is
                 // `#[cfg(not(feature = "flatpak"))]`; with the option OFF this is
                 // the warn + break, with it ON the HostCommand spawn below.)
+                #[cfg(not(feature = "flatpak"))]
+                log::warn!(target: LOG_SCOPE, "flatpak detected, but flatpak support not built-in");
 
                 // Flatpak command must have a stable pointer.
                 // self.process = .{ .flatpak = .{ .argv = self.args, .cwd = cwd,
@@ -2937,8 +3156,13 @@ impl Subprocess {
                         unreachable!()
                     };
                     match cmd.spawn() {
-                        Ok(_pid) => {
-                            // log.info("started subcommand on host via flatpak API ...");
+                        Ok(pid) => {
+                            // log.info("started subcommand on host via flatpak API path={s} pid={}", .{ self.args[0], pid });
+                            log::info!(
+                                target: LOG_SCOPE,
+                                "started subcommand on host via flatpak API path={} pid={pid}",
+                                String::from_utf8_lossy(self.args[0].to_bytes())
+                            );
                         }
                         Err(_) => {
                             // errdefer killCommandFlatpak(cmd);
@@ -3031,7 +3255,18 @@ impl Subprocess {
                 // (PORT NOTE: there is no reachable error return between here and the
                 // success `return` below — the straight-line body never triggers
                 // this errdefer — so no cleanup is registered for it.)
+                //
+                // PORT NOTE (G-LOGFILE / task-14e-1): so `Exec.zig:1078`'s
+                // `log.warn("error killing command during cleanup err={}", ...)`,
+                // which lives INSIDE that errdefer, has no arm to hang on. See the
+                // file-header note.
                 // log.info("started subcommand path={s} pid={?}", .{ self.args[0], cmd.pid });
+                log::info!(
+                    target: LOG_SCOPE,
+                    "started subcommand path={} pid={:?}",
+                    String::from_utf8_lossy(self.args[0].to_bytes()),
+                    cmd.pid
+                );
 
                 // (the ONLY field alive past here)
                 let pid = cmd.pid;
@@ -3174,8 +3409,12 @@ impl Subprocess {
                     // DO NOT call cmd.wait
                     // killCommand(cmd) catch |err|
                     //     log.err("error sending SIGHUP to command, may hang: {}", .{err});
-                    if killCommand(cmd).is_err() {
+                    if let Err(err) = killCommand(cmd) {
                         // log.err("error sending SIGHUP to command, may hang: {}", .{err});
+                        log::error!(
+                            target: LOG_SCOPE,
+                            "error sending SIGHUP to command, may hang: {err:?}"
+                        );
                     }
                 }
 
@@ -3191,11 +3430,16 @@ impl Subprocess {
                 // body is compiled out exactly as Zig's lazy compilation leaves it.)
                 #[cfg(feature = "flatpak")]
                 Process::Flatpak(cmd) => {
-                    if killCommandFlatpak(cmd).is_err() {
+                    if let Err(err) = killCommandFlatpak(cmd) {
                         // log.err("error sending SIGHUP to command, may hang: {}", .{err});
+                        log::error!(
+                            target: LOG_SCOPE,
+                            "error sending SIGHUP to command, may hang: {err:?}"
+                        );
                     }
-                    if cmd.wait().is_err() {
+                    if let Err(err) = cmd.wait() {
                         // log.err("error waiting for command to exit: {}", .{err});
+                        log::error!(target: LOG_SCOPE, "error waiting for command to exit: {err:?}");
                     }
                 }
                 #[cfg(not(feature = "flatpak"))]
@@ -3544,6 +3788,7 @@ fn killPid(pid: libc::pid_t) -> Result<(), KillError> {
         let rc = unsafe { libc::killpg(pgid, libc::SIGHUP) };
         if rc == 0 {
             // log.debug("process group killed pgid={}", .{pgid});
+            log::debug!(target: LOG_SCOPE, "process group killed pgid={pgid}");
         } else {
             'killpg: {
                 let err = errno();
@@ -3561,11 +3806,19 @@ fn killPid(pid: libc::pid_t) -> Result<(), KillError> {
                 const IS_DARWIN: bool = cfg!(any(target_os = "macos", target_os = "ios"));
                 if IS_DARWIN && err == libc::EPERM {
                     // log.debug("killpg failed with EPERM, expected on Darwin and ignoring", .{});
+                    log::debug!(
+                        target: LOG_SCOPE,
+                        "killpg failed with EPERM, expected on Darwin and ignoring"
+                    );
                     break 'killpg;
                 }
 
                 // log.warn("error killing process group pgid={} err={}", .{ pgid, err });
-                let _ = err;
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "error killing process group pgid={pgid} err={}",
+                    std::io::Error::from_raw_os_error(err)
+                );
                 return Err(KillError::KillFailed);
             }
         }
@@ -3589,6 +3842,7 @@ fn killPid(pid: libc::pid_t) -> Result<(), KillError> {
             break;
         };
         // log.debug("waitpid result={}", .{res.pid});
+        log::debug!(target: LOG_SCOPE, "waitpid result={}", res.pid);
         // if (res.pid != 0) break;
         if res.pid != 0 {
             break;
@@ -3636,6 +3890,7 @@ fn getpgid(pid: libc::pid_t) -> Option<libc::pid_t> {
         // if (pgid == my_pgid) {
         if pgid == my_pgid {
             // log.warn("pgid is our own, retrying", .{});
+            log::warn!(target: LOG_SCOPE, "pgid is our own, retrying");
             std::thread::sleep(std::time::Duration::from_millis(10));
             continue;
         }
@@ -3659,6 +3914,7 @@ fn getpgid(pid: libc::pid_t) -> Option<libc::pid_t> {
         // }
         if pgid < 0 {
             // log.warn("error getting pgid for kill", .{});
+            log::warn!(target: LOG_SCOPE, "error getting pgid for kill");
             return None;
         }
 
@@ -4164,6 +4420,7 @@ impl ReadThread {
         // }
         if !Self::setNonblock(fd) {
             // log.err("read thread exiting, pty fd must be non-blocking", .{});
+            log::error!(target: LOG_SCOPE, "read thread exiting, pty fd must be non-blocking");
             return;
         }
 
@@ -4198,6 +4455,11 @@ impl ReadThread {
             pipeline.idle_write_fd = idle_fds[1];
         } else {
             // log.warn("read thread failed to create idle pipe err={}", .{err});
+            log::warn!(
+                target: LOG_SCOPE,
+                "read thread failed to create idle pipe err={}",
+                std::io::Error::last_os_error()
+            );
         }
         // defer if (pipeline.idle_read_fd >= 0) { close both };
         struct IdlePipeCloser(std::os::fd::RawFd, std::os::fd::RawFd);
@@ -4230,6 +4492,10 @@ impl ReadThread {
         // `std::thread::scope` has no fallible spawn, so the failure mode it
         // guards against surfaces as the same abort Rust already uses for
         // thread-spawn failure.
+        //
+        // PORT NOTE (G-LOGFILE / task-14e-1): so `Exec.zig:1469`'s
+        // `log.err("read thread exiting, failed to spawn gather thread err={}", ...)`
+        // has no arm to hang on. See the file-header note.
         let pipeline = &pipeline;
         std::thread::scope(|scope| {
             let gather_fd = fd;
@@ -4535,6 +4801,11 @@ impl ReadThread {
                                 continue 'gather;
                             }
                             // log.warn("bridge poll failed err={}", .{poll_err});
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "bridge poll failed err={}",
+                                std::io::Error::from_raw_os_error(pe)
+                            );
                             break 'gather;
                         }
                         // clearBridging(pipeline);
@@ -4549,6 +4820,7 @@ impl ReadThread {
                         // On a quit signal we deliver what we have and stop.
                         if pollfds[1].revents & libc::POLLIN != 0 {
                             // log.info("read thread got quit signal", .{});
+                            log::info!(target: LOG_SCOPE, "read thread got quit signal");
                             fatal = true;
                             break 'gather;
                         }
@@ -4591,11 +4863,17 @@ impl ReadThread {
                     // error.NotOpenForReading, error.InputOutput =>
                     if e == libc::EBADF || e == libc::EIO {
                         // log.info("io gather exiting", .{});
+                        log::info!(target: LOG_SCOPE, "io gather exiting");
                         fatal = true;
                         break 'gather;
                     }
 
                     // else => { log.err("io gather error err={}", .{err}); unreachable; }
+                    log::error!(
+                        target: LOG_SCOPE,
+                        "io gather error err={}",
+                        std::io::Error::from_raw_os_error(e)
+                    );
                     unreachable!("io gather error");
                 }
                 let n = rc as usize;
@@ -4650,6 +4928,11 @@ impl ReadThread {
                     continue;
                 }
                 // log.warn("poll failed on read thread, exiting early err={}", .{err});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "poll failed on read thread, exiting early err={}",
+                    std::io::Error::last_os_error()
+                );
                 return;
             }
 
@@ -4657,6 +4940,7 @@ impl ReadThread {
             // if (pollfds[1].revents & posix.POLL.IN != 0) { ... return; }
             if pollfds[1].revents & libc::POLLIN != 0 {
                 // log.info("read thread got quit signal", .{});
+                log::info!(target: LOG_SCOPE, "read thread got quit signal");
                 return;
             }
 
@@ -4665,6 +4949,7 @@ impl ReadThread {
             // if (pollfds[0].revents & posix.POLL.HUP != 0) { ... return; }
             if pollfds[0].revents & libc::POLLHUP != 0 {
                 // log.info("pty fd closed, read thread exiting", .{});
+                log::info!(target: LOG_SCOPE, "pty fd closed, read thread exiting");
                 return;
             }
         }
@@ -4689,10 +4974,36 @@ impl ReadThread {
     fn setNonblock(fd: std::os::fd::RawFd) -> bool {
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL, 0) };
         if flags == -1 {
-            // log.warn("read thread failed to get flags err={}", .{err});
+            // log.warn("read thread failed to get flags err=E{s}", .{@tagName(posix.errno(-1))});
+            //
+            // PORT NOTE: the port's earlier Zig comment here reproduced an OLDER
+            // upstream shape (`err={}` plus a "this isn't a fatal error" second
+            // line); at pin 20abdb50a the reference renders the ERRNO NAME as
+            // `err=E{s}` and has no second line. The live call follows the pin.
+            log::warn!(
+                target: LOG_SCOPE,
+                "read thread failed to get flags err=E{}",
+                errno_tag_name(errno())
+            );
             return false;
         }
-        unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) != -1 }
+        // switch (posix.errno(posix.system.fcntl(fd, F.SETFL, flags | NONBLOCK))) {
+        //     .SUCCESS => {},
+        //     else => |e| {
+        //         log.warn("read thread failed to set flags err=E{s}", .{@tagName(e)});
+        //         return false;
+        //     },
+        // }
+        // return true;
+        if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+            log::warn!(
+                target: LOG_SCOPE,
+                "read thread failed to set flags err=E{}",
+                errno_tag_name(errno())
+            );
+            return false;
+        }
+        true
     }
 
     /// Sets the QoS class of the calling thread for the read pipeline
@@ -4725,8 +5036,10 @@ impl ReadThread {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     #[allow(non_snake_case)]
     fn setQosClass() {
-        if rustty_os::macos::setQosClass(rustty_os::macos::QosClass::user_initiated).is_err() {
+        if let Err(err) = rustty_os::macos::setQosClass(rustty_os::macos::QosClass::user_initiated)
+        {
             // log.warn("error setting QoS class err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error setting QoS class err={err:?}");
         }
     }
 
@@ -4844,6 +5157,7 @@ impl ReadThread {
                         break;
                     }
                     // log.err("io reader error err={}", .{err});
+                    log::error!(target: LOG_SCOPE, "io reader error err={err}");
                     unreachable!("io reader error");
                 }
 
@@ -4881,11 +5195,14 @@ impl ReadThread {
             {
                 // const err = windows.GetLastError();
                 // log.err("quit pipe reader error err={}", .{err});
+                let err = unsafe { win::kernel32::GetLastError() };
+                log::error!(target: LOG_SCOPE, "quit pipe reader error err={err}");
                 unreachable!("quit pipe reader error");
             }
 
             // if (quit_bytes > 0) { log.info("read thread got quit signal", .{}); return; }
             if quit_bytes > 0 {
+                log::info!(target: LOG_SCOPE, "read thread got quit signal");
                 return;
             }
         }
@@ -4898,7 +5215,11 @@ impl ReadThread {
 /// associated type (the tests substitute their own impls exactly as the
 /// reference passes anonymous structs). The `Allocator` param collapses.
 pub trait PasswdPkg {
-    type Error;
+    // PORT NOTE (task-14e-1): `Debug` is required by the restored
+    // `Exec.zig:1853` `log.warn("failed to read passwd, ... err={}", .{err})` —
+    // the reference prints the caught error value, so the associated error type
+    // has to be renderable. Every implementor's error already derives it.
+    type Error: core::fmt::Debug;
     fn get() -> Result<rustty_os::passwd::Entry, Self::Error>;
 }
 
@@ -4959,8 +5280,12 @@ fn execCommand<P: PasswdPkg>(
         // };
         let passwd = match P::get() {
             Ok(p) => p,
-            Err(_err) => {
+            Err(err) => {
                 // log.warn("failed to read passwd, not using a login shell err={}", .{err});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "failed to read passwd, not using a login shell err={err:?}"
+                );
                 break 'darwin;
             }
         };
@@ -4973,6 +5298,7 @@ fn execCommand<P: PasswdPkg>(
             Some(n) => n,
             None => {
                 // log.warn("failed to get username, not using a login shell", .{});
+                log::warn!(target: LOG_SCOPE, "failed to get username, not using a login shell");
                 break 'darwin;
             }
         };
@@ -4991,8 +5317,15 @@ fn execCommand<P: PasswdPkg>(
                 let home_path = std::path::Path::new(os_str_from_bytes(home.to_bytes()));
                 match std::fs::read_dir(home_path) {
                     Ok(dir) => drop(dir), // defer dir.close();
-                    Err(_err) => {
-                        // log.warn("failed to open home dir, not checking for hushlogin err={}", .{err});
+                    Err(err) => {
+                        // log.warn(
+                        //     "failed to open home dir, not checking for hushlogin err={}",
+                        //     .{err},
+                        // );
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "failed to open home dir, not checking for hushlogin err={err:?}"
+                        );
                         break 'hush false;
                     }
                 }
@@ -5615,6 +5948,7 @@ mod tests {
             //         }
             //     },
             // );
+            #[derive(Debug)]
             struct Fail;
             struct TestPasswd;
             impl PasswdPkg for TestPasswd {
@@ -5659,6 +5993,7 @@ mod tests {
             //         return error.Fail;
             //     }
             // });
+            #[derive(Debug)]
             struct Fail;
             struct TestPasswd;
             impl PasswdPkg for TestPasswd {
@@ -5702,6 +6037,7 @@ mod tests {
                 configpkg::command::Command::Direct(vec![b"foo".to_vec(), b"bar baz".to_vec()])
                     .clone();
 
+            #[derive(Debug)]
             struct Fail;
             struct TestPasswd;
             impl PasswdPkg for TestPasswd {
@@ -7155,5 +7491,67 @@ mod tests {
             );
             let _ = Instant::now();
         }
+    }
+}
+
+/// task-14e-1: the `err=E{s}` wire form of `Exec.zig:213`, `:1759` and `:1770`.
+#[cfg(all(test, not(windows)))]
+mod errno_tests {
+    use super::errno_tag_name;
+
+    /// The reference gets these names from `@tagName(std.posix.E)`, i.e. from
+    /// the target's own libc. rustty transcribes the numbers, so the
+    /// transcription MUST be re-derived from the running platform rather than
+    /// trusted — the `rustty-cli` `errno_suffix` precedent's first draft had
+    /// LINUX's `EAGAIN`, which is `EDEADLK` on Darwin, so a would-block error
+    /// would have printed `EDEADLK` and vice versa.
+    ///
+    /// `std::io::Error::from_raw_os_error(n).to_string()` is `strerror(n)` on
+    /// unix, so this asserts each constant against the host's real message.
+    #[test]
+    fn errno_table_matches_the_host_libc() {
+        // (constant, a distinctive lowercase fragment of the host strerror)
+        let rows: &[(i32, &str)] = &[
+            (libc::EPERM, "not permitted"),
+            (libc::EBADF, "bad file"),
+            (libc::EINTR, "interrupted"),
+            (libc::EIO, "input/output error"),
+            (libc::EAGAIN, "temporarily unavailable"),
+            (libc::EDEADLK, "deadlock"),
+            (libc::EACCES, "permission denied"),
+            (libc::EFAULT, "bad address"),
+            (libc::EINVAL, "invalid argument"),
+            (libc::EMFILE, "too many open files"),
+            (libc::ENOSPC, "no space left"),
+            (libc::EPIPE, "broken pipe"),
+            (libc::ESPIPE, "seek"),
+            (libc::ESRCH, "no such process"),
+            (libc::EFBIG, "file too large"),
+            (libc::ERANGE, "too large"),
+            (libc::EOVERFLOW, "value too large"),
+            (libc::ENOLCK, "locks"),
+        ];
+        for (code, fragment) in rows {
+            let msg = std::io::Error::from_raw_os_error(*code)
+                .to_string()
+                .to_lowercase();
+            assert!(
+                msg.contains(fragment),
+                "errno {code} is {msg:?} on this host, expected it to contain \
+                 {fragment:?} — the hand-transcribed table is wrong for this target"
+            );
+        }
+    }
+
+    /// The rendered suffix is the errno NAME with the leading `E` stripped, so
+    /// the site's `err=E{}` reads `err=EBADF`. An unknown code falls back to
+    /// the NUMBER, never to a wrong name.
+    #[test]
+    fn errno_tag_name_renders_the_name_not_the_number() {
+        assert_eq!("BADF", errno_tag_name(libc::EBADF));
+        assert_eq!("PIPE", errno_tag_name(libc::EPIPE));
+        assert_eq!("INVAL", errno_tag_name(libc::EINVAL));
+        // 4095 is not a real errno on any supported target.
+        assert_eq!("4095", errno_tag_name(4095));
     }
 }

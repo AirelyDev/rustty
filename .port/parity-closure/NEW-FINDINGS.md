@@ -1088,3 +1088,45 @@ found, and current state.
   reference, never from the audit") is right and incomplete: the port side of the same
   mapping is still audit-derived, and it inherits exactly the blind spots N15 was written
   to remove.
+
+## N20 — stale pre-resync Zig comments reproduce reference log calls that no longer exist at the pin
+
+- **id**: N20 (next free id checked 2026-09-10 against `NEW-FINDINGS.md`, `ADJUDICATION.md`
+  and the plan's `progress.md`: N1-N19 taken, N17/N18/N19 by task-14d-3 the same day.)
+- **severity**: low individually, medium as a class — each one is a standing invitation to
+  introduce the INVERSE DEFECT (an emission the reference does not make), and the class is
+  invisible to every gate the plan has.
+- **kind**: fidelity / stale-comment
+- **state**: **OPEN** as a class. The three instances found are each annotated at their code
+  site and none of them received a live emission.
+- **how found**: task-14e-1, restoring `rustty-termio`. The task's method is "read the Zig
+  comment, add the live call beneath it" — which silently manufactures a wrong emission
+  whenever the comment is stale. Enumerating the ORACLE's own `log.*` calls through the
+  gate's scanner (`zig_sites`) rather than reading the port's comments is what separated
+  them: each of the three has a comment in the port and NO counterpart in the reference.
+- **instances**:
+  - `crates/rustty-termio/src/stream_handler.rs`, the OSC 7 `UriHostTooLong` arm —
+    `log.warn("failed to get full hostname for OSC 7 validation: {}", .{err})`. At pin
+    `20abdb50a`, `std.Uri.getHost`'s error set is `error{UriMissingHost}` only; the arm and
+    its message are from a superseded revision. The ARM still exists in the port (removing
+    it is a behavioural change), so the port has a code path the reference does not.
+  - `crates/rustty-termio/src/exec.rs`, `setNonblock` — the port's comment carried
+    `read thread failed to get flags err={}` plus a second line,
+    `this isn't a fatal error, but may cause performance issues`. At the pin the message
+    renders the errno NAME (`err=E{s}`) and there is no second line at all. Corrected to
+    the pin in this task.
+  - `crates/rustty-termio/src/termio_impl.rs`, `processOutput`'s cursor-reset block —
+    `log.warn("failed to get current time err={}", .{err})`. No such site in `Termio.zig`
+    at the pin. Left as a comment (the surrounding `Instant::now()` is infallible in Rust
+    regardless, so it could never have been emitted).
+- **why this is recorded separately**: it is not a defect any row introduced or can close,
+  and it is not confined to `rustty-termio` — the Phase 6 resync moved the pin under a
+  tree whose Zig comments were transcribed against the OLD pin, so any file the resync
+  touched can carry one. The three above were found in seven files; the reference has 173.
+- **what to do about it**: the check is mechanical and belongs in `check_log_reconcile.py`
+  as net-new coverage (R5): for every mapped port file, extract the message STRING out of
+  each commented `log.*` line and assert it appears in the declared oracle file. A comment
+  quoting a message the reference does not contain is either stale or invented, and both
+  are worth a RED. Scoped as its own task, not folded into a restoration stage — the fix
+  for a hit is a judgement call (correct the comment, or delete the arm) and should not be
+  made under time pressure inside another task.

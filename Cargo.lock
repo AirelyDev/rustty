@@ -1493,6 +1493,7 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "dcimgui-sys",
+ "log",
  "rustty-datastruct",
  "rustty-font",
  "rustty-input",
@@ -1616,6 +1617,7 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "libc",
+ "log",
  "rustty-apprt-api",
  "rustty-args",
  "rustty-build-config",

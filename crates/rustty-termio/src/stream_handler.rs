@@ -3961,6 +3961,114 @@ mod tests {
         term.deinit(Global);
     }
 
+    // ---- task-14e-1: the restored `io_handler` diagnostics -----------------
+
+    /// `stream_handler.zig:186` — the `vt`/`vtFallible` funnel. This is the
+    /// highest-risk shape in the file: the port collapses the reference's
+    /// COMPTIME `switch (action)` into one trait method per action, so the
+    /// `action=` half of the message is not a value at the site and had been
+    /// DROPPED entirely. Each of the 38 callers now passes its own reference
+    /// `Action.Tag` field name; this pins the rendered form for two of them.
+    #[test]
+    fn vt_funnel_emits_the_action_name_and_the_error() {
+        let cap = crate::log_capture::start();
+        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mut h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
+
+        h.vt("print", Err(crate::Error));
+        h.vt("kitty_keyboard_query", Err(crate::Error));
+        // The SUCCESS arm must stay silent — the reference only logs in `catch`.
+        h.vt("print", Ok(()));
+
+        let messages = cap.messages();
+        drop(cap);
+        h.renderer_wakeup.deinit();
+        term.deinit(Global);
+
+        assert_eq!(
+            vec![
+                (
+                    log::Level::Warn,
+                    "io_handler".to_string(),
+                    "error handling VT action action=print err=Error".to_string(),
+                ),
+                (
+                    log::Level::Warn,
+                    "io_handler".to_string(),
+                    "error handling VT action action=kitty_keyboard_query err=Error".to_string(),
+                ),
+            ],
+            messages
+        );
+    }
+
+    /// `stream_handler.zig:946` — the over-long window title warn. Drives a real
+    /// call path rather than the funnel, and pins the exact record vector.
+    #[test]
+    fn window_title_warns_when_the_title_exceeds_the_buffer() {
+        let cap = crate::log_capture::start();
+        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mut h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
+
+        // The reference guards on `title.len >= buf.len` with `buf: [256]u8`.
+        let too_long = vec![b'x'; 256];
+        h.windowTitle(&too_long).unwrap();
+
+        let messages = cap.messages();
+        drop(cap);
+        h.renderer_wakeup.deinit();
+        term.deinit(Global);
+
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "io_handler".to_string(),
+                "change title requested larger than our buffer size, ignoring".to_string(),
+            )],
+            messages
+        );
+    }
+
+    /// The ABSENCE arm of the test above, with the positive assertion
+    /// PROCEDURE.md requires: a title that FITS must produce NO record, and the
+    /// test must prove it actually reached the code the absence is about rather
+    /// than bailing out somewhere earlier.
+    ///
+    /// The positive proof is the terminal's title itself. `windowTitle` sets it
+    /// on the way past the guard, so a set title is evidence the guard was
+    /// evaluated and NOT taken — which an assertion on the empty record vector
+    /// alone cannot distinguish from "the function returned before the guard".
+    ///
+    /// NEGATIVE CONTROL RUN (task-14e-1): moving the `log::warn!` out of the
+    /// `if title.len() >= buf.len()` block — the exact "diagnostic on a success
+    /// path" bug this project shipped once — fails THIS test with
+    /// `left: [] right: [(Warn, "io_handler", "change title requested ...")]`,
+    /// and leaves `window_title_warns_when_the_title_exceeds_the_buffer`
+    /// PASSING. So the control fails here, and it fails for the stated reason.
+    #[test]
+    fn window_title_is_silent_when_the_title_fits() {
+        let cap = crate::log_capture::start();
+        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mut h = handler_for(&raw mut term, std::ptr::null_mut(), std::ptr::null_mut());
+
+        h.windowTitle(b"a short title").unwrap();
+
+        let messages = cap.messages();
+        // POSITIVE: we got past the length guard and through `set_title`.
+        let title_after = term.get_title().map(<[u8]>::to_vec);
+        drop(cap);
+        h.renderer_wakeup.deinit();
+        term.deinit(Global);
+
+        assert_eq!(
+            Some(b"a short title".to_vec()),
+            title_after,
+            "the title was not set, so this test never reached the guard whose \
+             silence it is asserting"
+        );
+        assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
+    }
+
     // Pops one message from the SPSC termio mailbox (the queue the handler's
     // `messageWriter` pushes into).
     fn mailbox_pop(mailbox: *mut Mailbox) -> Option<Message<'static>> {
