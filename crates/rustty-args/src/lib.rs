@@ -9,3 +9,8 @@
 pub mod args;
 pub mod comma_splitter;
 pub mod diagnostics;
+
+// TEST-ONLY `log::Log` capture backend for the restored `log.*` sites
+// (task-14e-2, S67-F2/S67-F9). See the module header.
+#[cfg(test)]
+pub(crate) mod log_capture;

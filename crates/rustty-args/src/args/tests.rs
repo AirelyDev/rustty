@@ -1570,3 +1570,194 @@ fn zig_string_escape_port_helper() {
     // The format string wraps with quotes; the escaped body is:
     assert_eq!(out, b" \\\\ hi \\x07 \\x11 \\\" derp '");
 }
+
+// ===========================================================================
+// task-14e-2 — the three restored `cli/args.zig` diagnostics (S67-F2, S67-F9)
+//
+// `assert_eq!` on the full captured record vector throughout; never `.any()`.
+// ===========================================================================
+
+use crate::log_capture::CapturedRecord;
+
+/// `args.zig:144` — the compatibility-handler info line.
+///
+/// Drives the SAME path `parse_compatibility_handler` above drives: `--a=yuh`
+/// fails `parseIntoField` (`"yuh"` is not a bool), the compat handler then
+/// handles it and returns true, which is the arm that logs.
+#[test]
+fn compat_handler_success_logs_the_deprecated_field_notice() {
+    #[derive(Default)]
+    struct Data {
+        a: bool,
+    }
+    impl Data {
+        #[allow(clippy::collapsible_if)]
+        fn compat(&mut self, key: &[u8], value: Option<&[u8]>) -> bool {
+            if key == b"a" {
+                if value == Some(b"yuh".as_slice()) {
+                    self.a = true;
+                    return true;
+                }
+            }
+            false
+        }
+    }
+    impl Target for Data {
+        fn arena_available(&self) -> bool {
+            true
+        }
+        fn parse_into_field(&mut self, key: &[u8], value: Option<&[u8]>) -> Result<(), ParseError> {
+            match key {
+                b"a" => {
+                    self.a = parse_field_bool(value)?;
+                    Ok(())
+                }
+                _ => Err(Error::InvalidField),
+            }
+        }
+        fn compatibility(&self, key: &[u8]) -> Option<BoxedCompatibilityHandler<Self>> {
+            if key == b"a" {
+                Some(Box::new(Data::compat))
+            } else {
+                None
+            }
+        }
+    }
+
+    let cap = crate::log_capture::start();
+    let mut data = Data::default();
+    let mut iter = ArgIteratorGeneral::init(b"--a=yuh");
+    parse(&mut data, &mut iter).unwrap();
+    iter.deinit();
+    let messages = cap.messages();
+    drop(cap);
+
+    // Positive reach: the handler ran and set the field, which only happens on
+    // the arm that logs.
+    assert!(
+        data.a,
+        "the compatibility handler never ran, so this test never \
+                     reached the code whose diagnostic it asserts"
+    );
+    assert_eq!(
+        vec![(
+            log::Level::Info,
+            "cli".to_string(),
+            "compatibility handler for a handled error, you may be using a deprecated field: InvalidValue"
+                .to_string(),
+        )],
+        messages
+    );
+}
+
+/// `args.zig:222` — `compatibilityRenamed`'s parse-failure warning.
+///
+/// Calls the real `compatibility_renamed` generator (the tests above build
+/// their own closure instead, so this arm had no driver at all).
+#[test]
+fn compatibility_renamed_warns_when_the_target_field_fails_to_parse() {
+    #[derive(Default)]
+    struct Data {
+        a: bool,
+    }
+    impl Target for Data {
+        fn arena_available(&self) -> bool {
+            true
+        }
+        fn parse_into_field(&mut self, key: &[u8], value: Option<&[u8]>) -> Result<(), ParseError> {
+            match key {
+                b"a" => {
+                    self.a = parse_field_bool(value)?;
+                    Ok(())
+                }
+                _ => Err(Error::InvalidField),
+            }
+        }
+    }
+
+    let handler = compatibility_renamed::<Data>(b"a");
+
+    let cap = crate::log_capture::start();
+    let mut data = Data::default();
+    let handled = handler(&mut data, b"old", Some(b"nope"));
+    let messages = cap.messages();
+    drop(cap);
+
+    // Positive reach: the reference's arm returns false.
+    assert!(!handled);
+    assert_eq!(
+        vec![(
+            log::Level::Warn,
+            "cli".to_string(),
+            "error parsing renamed field a: InvalidValue".to_string(),
+        )],
+        messages
+    );
+
+    // The success arm stays silent — the "diagnostic on a success path" guard.
+    // Positive reach: the field really was set, so the code past the `match`
+    // arm ran.
+    let cap = crate::log_capture::start();
+    let mut data = Data::default();
+    let handled = handler(&mut data, b"old", Some(b"true"));
+    let messages = cap.messages();
+    drop(cap);
+    assert!(handled);
+    assert!(
+        data.a,
+        "the renamed field was not parsed, so this test never \
+                     reached the code whose silence it asserts"
+    );
+    assert_eq!(Vec::<CapturedRecord>::new(), messages);
+}
+
+/// `args.zig:1442` (S67-F2 + S67-F9) — a line longer than the entry buffer.
+///
+/// The reference writes through a `std.Io.Writer.fixed` over `entry[2..]`, so
+/// an over-long line makes `streamDelimiterEnding` fail, log, and STOP
+/// iteration. The port clamped the copy instead: silent truncation, parsing on.
+#[test]
+fn line_iterator_warns_and_stops_on_a_line_longer_than_the_buffer() {
+    let mut src = Vec::new();
+    src.extend_from_slice(&vec![b'a'; LineIterator::MAX_LINE_SIZE]);
+    src.push(b'\n');
+    src.extend_from_slice(b"after=1\n");
+
+    let cap = crate::log_capture::start();
+    let mut it = LineIterator::with_filepath(&src, b"/tmp/config");
+    let first = it.next().map(|v| v.to_vec());
+    let messages = cap.messages();
+    drop(cap);
+
+    // Positive reach, and the S67-F2 behavioural half: iteration STOPS. Before
+    // the fix this returned a truncated `--aaa…` entry and the NEXT call
+    // returned `--after=1`.
+    assert_eq!(None, first);
+    assert_eq!(
+        vec![(
+            log::Level::Warn,
+            "cli".to_string(),
+            "cannot read from \"/tmp/config\": error.WriteFailed".to_string(),
+        )],
+        messages
+    );
+}
+
+/// The absence half: lines that fit emit nothing, and the iterator yields them.
+#[test]
+fn line_iterator_is_silent_on_lines_that_fit() {
+    let cap = crate::log_capture::start();
+    let mut it = LineIterator::with_filepath(b"a=1\nb=2\n", b"/tmp/config");
+    let a = it.next().map(|v| v.to_vec());
+    let b = it.next().map(|v| v.to_vec());
+    let end = it.next().map(|v| v.to_vec());
+    let messages = cap.messages();
+    drop(cap);
+
+    // Positive reach: the iterator really produced both entries, so it ran the
+    // whole body whose silence is asserted.
+    assert_eq!(Some(b"--a=1".to_vec()), a);
+    assert_eq!(Some(b"--b=2".to_vec()), b);
+    assert_eq!(None, end);
+    assert_eq!(Vec::<CapturedRecord>::new(), messages);
+}

@@ -35,6 +35,10 @@ use crate::diagnostics::{Diagnostic, DiagnosticList, Location, LocationError, Lo
 // this crate no longer needs a `rustty-os` edge for it.
 
 // const log = std.log.scoped(.cli);
+//
+// PORT NOTE: the reference's scope tag, carried through the `log` facade as
+// `target: LOG_SCOPE` (DECISION-logging.md §6r4).
+pub(crate) const LOG_SCOPE: &str = "cli";
 
 // TODO:
 //   - Only `--long=value` format is accepted. Do we want to allow
@@ -506,8 +510,16 @@ where
                 // }
                 if let Some(handler) = dst.compatibility(key) {
                     if handler(dst, key, value) {
-                        // log.info("compatibility handler for {s} handled error,
-                        //   you may be using a deprecated field: {}", .{ key, err });
+                        // log.info("compatibility handler for {s} handled error, you may be using a deprecated field: {}", .{ key, err });
+                        //
+                        // PORT NOTE (N11): Zig's `{}` on an error renders
+                        // `error.<Name>`; `{err:?}` renders the bare variant
+                        // name. Workspace-dominant rendering; N11's scope.
+                        log::info!(
+                            target: LOG_SCOPE,
+                            "compatibility handler for {} handled error, you may be using a deprecated field: {err:?}",
+                            String::from_utf8_lossy(key),
+                        );
                         break 'err;
                     }
                 }
@@ -748,8 +760,15 @@ pub fn compatibility_renamed<T: Target>(to: &'static [u8]) -> BoxedCompatibility
             // parseIntoField(T, alloc, dst, to, value) catch |err| {
             match dst.parse_into_field(to, value) {
                 Ok(()) => {}
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("error parsing renamed field {s}: {}", .{ to, err });
+                    //
+                    // PORT NOTE (N11): see the `{err:?}` note in `parse`.
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error parsing renamed field {}: {err:?}",
+                        String::from_utf8_lossy(to),
+                    );
                     // return false;
                     return false;
                 }
@@ -1692,6 +1711,28 @@ pub fn arg_bytes(arg: &std::ffi::OsStr) -> Vec<u8> {
     arg.as_encoded_bytes().to_vec()
 }
 
+/// The one error `LineIterator::next`'s ported `catch` arm can report.
+///
+/// PORT NOTE (S67-F2): the reference's arm catches whatever
+/// `std.Io.Reader.streamDelimiterEnding` returns and renders it with Zig's
+/// `{}`, which prints `error.<Name>`. The port's reader is the whole in-memory
+/// source slice, so the ONLY failure reachable there is the fixed writer
+/// overflowing `entry[2..]` — `error.WriteFailed`. Spelled as a named type with
+/// the reference's own rendering rather than as a bare string, so the wire text
+/// is pinned by the type and not by the call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineIteratorError {
+    WriteFailed,
+}
+
+impl std::fmt::Display for LineIteratorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WriteFailed => f.write_str("error.WriteFailed"),
+        }
+    }
+}
+
 /// Returns an iterator (implements "next") that reads CLI args by line.
 /// Each CLI arg is expected to be a single line. This is used to implement
 /// configuration files.
@@ -1786,8 +1827,12 @@ impl<'a> LineIterator<'a> {
             }
 
             // Reset write head; collect bytes up to (not including) '\n'.
-            // _ = self.r.streamDelimiterEnding(&writer, '\n') catch {...};
-            // _ = self.r.discardDelimiterInclusive('\n') catch {};
+            //
+            //     _ = self.r.streamDelimiterEnding(&writer, '\n') catch |e| {
+            //         log.warn("cannot read from \"{s}\": {}", .{ self.filepath, e });
+            //         return null;
+            //     };
+            //     _ = self.r.discardDelimiterInclusive('\n') catch {};
             let line_start = self.seek;
             let mut line_end = self.seek;
             while line_end < self.r.len() && self.r[line_end] != b'\n' {
@@ -1795,7 +1840,30 @@ impl<'a> LineIterator<'a> {
             }
             // Copy the line content into entry[2..].
             let content = &self.r[line_start..line_end];
-            let n = content.len().min(Self::MAX_LINE_SIZE - 2);
+            // S67-F2: the reference writes through a `std.Io.Writer.fixed`
+            // over `entry[2..]`, so a line longer than `MAX_LINE_SIZE - 2`
+            // makes `streamDelimiterEnding` fail with `error.WriteFailed` —
+            // which lands in the SAME `catch` as a read failure, logs, and
+            // STOPS iteration. The port had clamped the copy instead, silently
+            // truncating the line and parsing on. The reference's behaviour is
+            // restored here, diagnostic included.
+            if content.len() > Self::MAX_LINE_SIZE - 2 {
+                // log.warn("cannot read from \"{s}\": {}", .{ self.filepath, e });
+                //
+                // PORT NOTE: the port's reader is the whole in-memory source
+                // slice, so the only failure `streamDelimiterEnding` can report
+                // here is the fixed writer's overflow; the rendered error token
+                // is that one error's name.
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "cannot read from \"{}\": {}",
+                    String::from_utf8_lossy(&self.filepath),
+                    LineIteratorError::WriteFailed,
+                );
+                // return null;
+                return None;
+            }
+            let n = content.len();
             self.entry[2..2 + n].copy_from_slice(&content[..n]);
             // discard the delimiter inclusive
             self.seek = if line_end < self.r.len() {

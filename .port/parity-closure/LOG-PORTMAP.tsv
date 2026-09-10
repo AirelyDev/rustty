@@ -120,7 +120,7 @@ src/build/Config.zig	crates/rustty-build-config/src/build.rs	2	0	N15: this file 
 src/build/GhosttyDist.zig	xtask/src/dist.rs	1	0	N15: this file was OUTSIDE the portmap until 2026-09-10 — the portmap was seeded from the audit's LOG rows and inherited its blind spots, so no row names it. Measured, not adjudicated: deficit 1.
 src/build/combine_archives.zig	xtask/src/main.rs+xtask/src/archives.rs	2	0	N15: outside the portmap until 2026-09-10. ARM WIDENED 2026-09-11 to match docs/parity-audit/src-build.md:48, which maps this file to `xtask/src/main.rs` AND `xtask/src/archives.rs`; archives.rs's own header says it ports GhosttyLib.zig and LibtoolStep.zig, NOT this file, so the narrow arm named a file that does not claim it. Deficit is 2 either way — nothing under xtask/ emits diagnostics of any shape — so this is an accuracy fix, not a numeric one.
 src/build/wasm_patch_growable_table.zig	xtask/src/wasm_patch_growable_table.rs	1	0	N15: this file was OUTSIDE the portmap until 2026-09-10 — the portmap was seeded from the audit's LOG rows and inherited its blind spots, so no row names it. Measured, not adjudicated: deficit 1.
-src/cli/args.zig	crates/rustty-args/src/args.rs	3	0	N12: rows S67-F2, S67-F9 are still OPEN; restoring these sites is that row's work.
+src/cli/args.zig	crates/rustty-args/src/args.rs	0	0	task-14e-2: closes S67-F2, S67-F9 — all 3 sites live.
 src/cli/ghostty.zig	crates/rustty-cli/src/rustty.rs	2	0	N12: rows S68-F5 are still OPEN; restoring these sites is that row's work.
 src/cli/list_fonts.zig	crates/rustty-cli/src/list_fonts.rs	2	0	N12: rows S68-F4 are still OPEN; restoring these sites is that row's work.
 src/cli/ssh-cache/Entry.zig	crates/rustty-cli/src/ssh_cache/entry.rs	0	0	

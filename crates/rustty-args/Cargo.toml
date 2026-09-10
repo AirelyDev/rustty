@@ -16,6 +16,12 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# The `LOG`-class facade (DECISION-logging.md §6r4, call shape 2). `rustty-args`
+# sits below `rustty-vt-c`/`rustty-core` in R4's layering, so `cli/args.zig`'s
+# three `log.{info,warn}` sites restore onto
+# `log::{info,warn}!(target: "cli", ..)` and reach whichever `log::Log` backend
+# the running binary installed. Plain and unconditional (§8r).
+log = { workspace = true }
 rustty-os = { workspace = true }
 rustty-util = { workspace = true }
 rustty-build-config = { workspace = true }
