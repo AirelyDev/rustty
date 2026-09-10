@@ -375,12 +375,25 @@ decision left to make per crate:
   installed" error is swallowed, the same shape as `log_fn_c_abi`'s
   formatting-error `catch {}`); calls `log::set_logger(&LOGGER)` +
   `log::set_max_level(LevelFilter::Debug)`, EXCEPT on `wasm32` when
-  `!debug_assertions`, where it caps `max_level` to `Off` and returns before
-  touching `set_logger` at all — mirroring `lib_vt.zig`'s own
-  `options.logFn = ... .noop` size guard (§2) at the filter level: `Off`
-  means the crates below never even construct a `log::Record` at their
-  `log::warn!` call sites, so none of the restored message-formatting code
-  those 73 sites bring in links into a release wasm build.
+  `!debug_assertions`, where it caps `max_level` to `Off` — mirroring
+  `lib_vt.zig`'s own `options.logFn = ... .noop` size guard (§2) at the
+  filter level.
+  **CORRECTED by task-14wasm (2026-09-09) — see §8: the claim that
+  originally followed here ("`Off` means ... none of the restored
+  message-formatting code those 73 sites bring in links into a release wasm
+  build") is FALSE and must not be relied on.** `log::set_max_level` sets an
+  `AtomicUsize` (`log`'s `MAX_LOG_LEVEL_FILTER`) that every `log::warn!`
+  expansion loads and compares AT RUNTIME (`log::max_level()`); the format
+  string, the `Debug`/`Display` impls the arguments need, and the
+  `log::Record` construction machinery are all still compiled into the
+  binary regardless of what that runtime value is — only the *call* is
+  skipped when the check fails. This is a *runtime* gate, not a *comptime*
+  one, and it is not the oracle's `.log_level = .err` analog: that field is
+  read by Zig's `comptime` `std.log` machinery and erases the guarded
+  `std.log.warn`/etc. call sites from the binary entirely. §8 records the
+  actual comptime-equivalent mechanism (the `log` crate's own
+  `release_max_level_*` Cargo features, wasm32-target-gated) and measures
+  its effect.
 - Installed from `rustty_terminal_new` (`lib.rs`) — the one C export every
   embedder is contractually required to call before any other terminal
   functionality (see that function's own doc + the `sys` module's "must be
@@ -1056,3 +1069,129 @@ compile, instantiate and call into rustty wasm artifacts, so the earlier "no run
 was under-researched and a ~40-line sibling harness is the right shape; (b) the stale comment at
 `crates/rustty/src/main_rustty.rs:131-137`, which still says bootstrap sites read
 `Logging::default()` — superseded by the round-3 fix.
+
+## §8 — task-14wasm: comptime-equivalent gate for the wasm release build (2026-09-09)
+
+**Blocks stage 14c. Closes no ledger rows.** A review of stage 14b found that §6's claim (quoted and
+struck through above) — that `sys::install_log_backend`'s `log::set_max_level(Off)` cap on
+`wasm32`+`!debug_assertions` keeps the restored diagnostic strings out of a release wasm build — is
+false, and that the restored strings were in fact linking into the artifact as dead weight.
+
+### Diagnosis, verified against `log` 0.4.33's own source
+
+- `log::warn!`/etc. expand to (`log-0.4.33/src/macros.rs:123`): `if lvl <= $crate::STATIC_MAX_LEVEL
+  && lvl <= $crate::max_level() { /* build a Record, format args, dispatch */ }`.
+- `log::max_level()` reads `MAX_LOG_LEVEL_FILTER`, an `AtomicUsize` — a RUNTIME value.
+  `log::set_max_level` (what `install_log_backend` calls) writes that atomic. This check can only
+  ever skip the *call*, at *runtime*; the compiler cannot fold it away because the atomic's value is
+  not known until the process runs, so the format-string/`Record`-construction/`Debug`-impl code the
+  `if` body needs is always compiled in and linked.
+- `STATIC_MAX_LEVEL` (`log-0.4.33/src/lib.rs:1637-1643`) is a `const`, resolved entirely at COMPILE
+  TIME from `cfg!(debug_assertions)` and the crate's own `release_max_level_*` Cargo features
+  (`off`/`error`/`warn`/`info`/`debug`/`trace`; unset defaults to `Trace`, i.e. no compile-time cap).
+  Because `lvl` at each call site is also a compile-time literal (`Level::Warn`, etc.), `lvl <=
+  STATIC_MAX_LEVEL` is a fully-const comparison; when it folds to `false` the entire guarded body —
+  including the argument-formatting and `Record`-construction code — is dead code the compiler is
+  free to (and does, in a release build) strip. This is the genuine analog of the oracle's comptime
+  `options.log_level = .err` gate (`ghostty/src/lib_vt.zig:447-455`), which similarly erases guarded
+  `std.log.warn`/etc. call sites from the binary at compile time.
+- `grep -rn "release_max_level" .` returned **no matches** anywhere in this workspace before this
+  stage — confirmed with `grep -rn "release_max_level" . --include="*.toml" --include="*.rs"
+  --include="*.sh" --include="*.mjs"`. The compile-time gate the oracle actually relies on had no
+  Rust equivalent wired up; only the runtance one existed.
+
+**Diagnosis confirmed in full** — the runtime/comptime distinction is real, `release_max_level_off`
+was genuinely unset, and §6's claim was false. No refutation found.
+
+### The mechanism chosen: a wasm32-target-gated `log` dependency feature
+
+`release_max_level_off` is a *global* switch on `log`'s own compilation unit: Cargo's feature
+unification means every crate in a given target's dependency graph shares ONE compiled `log` crate
+with the UNION of features anyone requested for that target. Turning it on in `[workspace.
+dependencies]`, or unconditionally on any crate's `log = { workspace = true }` line, would therefore
+also silence `rustty-core::logging::AppLogger` — the native `rustty` app binary's own sink — the
+first time that binary itself gets a `!debug_assertions` (release) build. That is exactly the
+"silently mutes the app build" outcome the task ruled out; it would undo everything stages 14a/14b
+are restoring for the real embedder use case.
+
+The workspace already has an established mechanism for exactly this shape of problem —
+target-conditioned dependency tables — used one line above the fix (`rustty-os` is pulled in only
+`[target.'cfg(target_arch = "wasm32")'.dependencies]` for the `os/wasm/log.zig` sink). The same table
+in `crates/rustty-vt-c/Cargo.toml` now also carries:
+
+```toml
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rustty-os = { workspace = true }
+log = { workspace = true, features = ["release_max_level_off"] }
+```
+
+Cargo only activates a `[target.'cfg(...)'.dependencies]` table when the ACTUAL compilation target
+matches the cfg predicate — not the host, not some other crate's target — so this feature is only
+ever requested when something is being compiled `--target wasm32-unknown-unknown`. The native
+`rustty` binary (built for `x86_64`/`aarch64`, never `wasm32`) never touches this table, so `log`'s
+`STATIC_MAX_LEVEL` stays at its unset default (`Trace`, i.e. no compile-time cap) for that build
+regardless of debug/release profile. Verified directly:
+
+- `cargo tree -p rustty-vt-c --target wasm32-unknown-unknown -e features -i log | grep release_max_level`
+  → `log feature "release_max_level_off"` (present).
+- `cargo tree -p rustty --target x86_64-apple-darwin -e features -i log | grep release_max_level`
+  → no output (absent).
+
+Combined with `log`'s own `cfg!(debug_assertions)` outer branch, the net effect is: `STATIC_MAX_LEVEL
+== Off` only for a `wasm32` target compiled `!debug_assertions` (i.e. `--release`) — precisely the
+one configuration the oracle's own guard targets (`lib_vt.zig`'s `.log_level = .err` is itself only
+reached by the non-debug wasm build arm), and no other configuration is touched. One declaration
+covers every crate reachable from a `rustty-vt-c`-rooted wasm artifact (feature unification does the
+rest for `rustty-vt` today and whatever 14c-14e add below it), so 14c-14e do not need to repeat this
+per crate — only a NEW wasm-artifact root crate that does not already depend on `rustty-vt-c` would
+need its own such table.
+
+The runtime `set_max_level(Off)` cap in `install_log_backend` is left in place — it is not wrong, just
+insufficient on its own; it remains useful defense-in-depth (e.g. a debug-build wasm host, where the
+compile-time gate does not apply, still gets the runtime filter) and its own doc comment in
+`crates/rustty-vt-c/src/sys.rs` no longer claims it prevents linking.
+
+### Measured: `.port/tools/build-vt-wasm.sh --no-default-features --features render-state`
+
+| build | `rustty-vt.wasm` |
+|---|---|
+| before (this stage's Cargo.toml edit reverted, working tree otherwise at `23702ea0`) | 911,987 bytes |
+| after (this stage's `[target.'cfg(target_arch = "wasm32")'.dependencies]` feature line) | 884,786 bytes |
+
+**Delta: −27,201 bytes (≈3.0%).** Reproduced twice with `cargo clean -p rustty-vt-c --release --target
+wasm32-unknown-unknown` between runs; identical byte count (884,786) both times. This is larger than
+the `+18,253` bytes stage 14b added, i.e. this fix alone recovers more than 14b cost and leaves the
+artifact smaller than it was even before 14b's restored `rustty-vt` sites — confirming the restored
+strings really were the dead weight diagnosed, not the `log` crate's own baseline linkage cost (which
+§3/§6 already measured at ~26 bytes).
+
+### Proof the native build still logs
+
+`cargo test -p rustty-core --lib logging::` — 5/5 pass, including
+`app_log_backend_installs_and_dispatches_without_panicking`, which installs `AppLogger` and drives a
+real `log::warn!`-shaped record through it end to end. `cargo test -p rustty-vt-c --lib sys::` — 11/11
+pass (non-wasm/native target), including `log_facade_backend_reaches_the_c_sink`, which installs
+`Logger` and asserts a `log::warn!` call is captured by the C-ABI sink. Both tests build for the host
+target (`x86_64-apple-darwin`), which — per the `cargo tree -i log` check above — never carries
+`release_max_level_off`, so both prove the native/non-wasm path is unaffected by this stage.
+
+### Concerns
+
+- The runtime `Off` cap's own doc comments inside `crates/rustty-vt-c/src/sys.rs` (around
+  `install_log_backend`) still contain language close to §6's original false claim ("which `Off`
+  guarantees by never constructing a `log::Record` ... short-circuits first") — accurate about
+  runtime dispatch, misleading about linking. Not corrected in this stage (out of the stated scope,
+  which is the pattern fix + the decision doc); whichever stage next touches that function should
+  update its comment to point at this section instead of re-deriving the runtime/comptime
+  distinction.
+- Checked (not just assumed): `cargo tree -p rustty-web-canvas --target wasm32-unknown-unknown -e
+  features -i log` also shows `release_max_level_off` active, because `rustty-web-canvas` depends on
+  `rustty-vt-c` (`build-web-canvas-wasm.sh` builds `-p rustty-web-canvas --target
+  wasm32-unknown-unknown`) and Cargo evaluates a `[target.'cfg(...)']` table against the actual
+  compile target, not the crate that declared it — so this one declaration already covers that
+  artifact too. Not independently re-measured by BYTE COUNT in this stage (only `build-vt-wasm.sh`'s
+  artifact was, per the task's scope); worth a size re-check once `rustty-font-shaper`'s own `LOG`
+  rows are restored, since that crate's sites are the ones actually reachable from
+  `rustty_web_canvas.wasm` (§7's font-shaper gap notes) and were not touched by 14a/14b.
+  `build-main-wasm.sh`'s artifact was not checked at all this stage — do a `cargo tree ... -i log`
+  pass on it before assuming coverage.

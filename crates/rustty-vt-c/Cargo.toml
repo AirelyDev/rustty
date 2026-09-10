@@ -139,8 +139,41 @@ log = { workspace = true }
 # Wasm-only: the `os/wasm/log.zig` sink that `lib_vt.zig`'s `std_options`
 # installs for wasm Debug builds (`d61920d80`; see `sys::log_fn`). rustty-os is
 # already below rustty-vt (R4 acyclic) and builds on wasm32.
+#
+# task-14wasm: `log`'s `release_max_level_off` feature is the actual analog of
+# the oracle's comptime `options.log_level = .err` wasm guard
+# (`lib_vt.zig:447-455`) — it sets the facade's `STATIC_MAX_LEVEL` const to
+# `Off` for `!debug_assertions` builds (`log-0.4.33/src/lib.rs:1637-1643`),
+# which makes every `log::warn!`/etc. call site's `if lvl <= STATIC_MAX_LEVEL
+# && ...` check foldable to `if false { .. }` AT COMPILE TIME — the compiler
+# then has license to strip the format-string/`Debug`-impl/`Record`-
+# construction code the call site brings in, matching Zig's comptime erasure.
+# This is NOT what `sys::install_log_backend`'s `set_max_level(Off)` runtime
+# cap does (see its own corrected PORT NOTE and DECISION-logging.md §6-CORR):
+# that is an `AtomicUsize` load checked at call time, so the surrounding
+# machinery is still compiled in and only the call is skipped — it cannot,
+# by itself, keep the restored strings out of a release wasm binary.
+#
+# Declared here, target-gated to `wasm32`, rather than in
+# `[workspace.dependencies]` or unconditionally on the `log = { workspace =
+# true }` line above: `release_max_level_off` is a global, crate-wide switch
+# on the ONE `log` crate compilation every crate in the dependency graph
+# shares (feature unification), so enabling it unconditionally would also
+# silence `rustty-core::logging::AppLogger`'s native `rustty` app-binary sink
+# under any `!debug_assertions` build — exactly the outcome task-14wasm rules
+# out. Gating it on this crate's own `[target.'cfg(target_arch =
+# "wasm32")'.dependencies]` table means the feature is only ever activated
+# when the compilation's target is `wasm32-unknown-unknown` — the native app
+# binary compiles for `x86_64`/`aarch64` and never sees this table at all, so
+# its own release build keeps logging live. Feature unification then carries
+# the effect to every OTHER crate's `log` call sites compiled into the SAME
+# wasm artifact (`rustty-vt`, and whichever of `rustty-font-shaper`/
+# `rustty-renderer`/etc. 14c-14e restore into crates reachable from a wasm
+# build) for free — one declaration, one artifact class, no per-crate repeat
+# needed as later stages add sites.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 rustty-os = { workspace = true }
+log = { workspace = true, features = ["release_max_level_off"] }
 
 [dev-dependencies]
 # Test-only: the `rustty_util::tripwire` reset mode used by the
