@@ -72,6 +72,11 @@ use rustty_font::metrics::FaceMetrics;
 // const js = @import("zig-js");
 // const font = @import("../main.zig");
 // const log = std.log.scoped(.font_face);
+//
+// The reference's `std.log.scoped(.font_face)` tag, carried through the `log`
+// facade's `target:` (`.port/parity-closure/DECISION-logging.md` §6). Same scope
+// as `face/coretext.rs` and `face/freetype.rs` — the reference's own choice.
+const LOG_SCOPE: &str = "font_face";
 use rustty_util::quirks::inlineAssert as assert;
 
 /// The error set of the web_canvas `Face`.
@@ -296,6 +301,14 @@ impl Face {
         result.calc_metrics()?;
 
         // log.debug("face initialized: {s}", .{raw});
+        //
+        // PORT NOTE: `{s}` renders the raw CSS font-string bytes; the lossy
+        // UTF-8 conversion is confined to the diagnostic.
+        log::debug!(
+            target: LOG_SCOPE,
+            "face initialized: {}",
+            String::from_utf8_lossy(raw)
+        );
         Ok(result)
     }
 
@@ -554,7 +567,21 @@ impl Face {
             ic_width: None,
         };
 
-        // log.debug("metrics font={s} value={}", …);
+        // log.debug("metrics font={s} value={}", .{ self.font_str, self.metrics });
+        //
+        // PORT NOTE: the reference's `{}` on `self.metrics` is Zig's default
+        // struct formatting; `{:?}` is the Rust analogue. `{s}` on `font_str`
+        // renders raw bytes (lossy conversion confined to the diagnostic).
+        //
+        // PORT NOTE (divergence 2, already recorded on `calc_metrics`): the port
+        // stores `FaceMetrics`, not the reference's derived `font.Metrics`, so
+        // the VALUE rendered here is the port's own metrics struct.
+        log::debug!(
+            target: LOG_SCOPE,
+            "metrics font={} value={:?}",
+            String::from_utf8_lossy(&self.font_str),
+            self.face_metrics
+        );
         Ok(())
     }
 
@@ -842,30 +869,23 @@ fn validate_css_font_str(raw: &[u8]) -> Result<(), Error> {
 /// The reference's `log.warn("canvas font didn't set, fonts may be broken,
 /// expected={s} got={s}", …)` (`web_canvas.zig:316-321`).
 ///
-/// PORT NOTE: the reference logs through `std.log`, which on the freestanding
-/// wasm target is `os/wasm/log.zig`'s `extern "env" fn log` sink. That import is
-/// only present in the Ghostty-ABI artifact (`rustty_wasm.wasm`, which installs
-/// the `rustty-os` wasm log fn); the standalone `rustty_web_canvas.wasm`
-/// deliverable deliberately imports ONLY the `rustty_wc_*` Canvas ops, so it has
-/// no host log sink and the message is dropped there. The mismatch is no longer
-/// silently discarded at the check site either way, and the payload that used to
-/// reach this path from the modern loader (font FILE bytes) is now rejected up
-/// front by `validate_css_font_str`.
+/// PORT NOTE (task-14c-4): this used to reach `rustty-os`'s freestanding wasm
+/// sink DIRECTLY, and only under the `ghostty-wasm-abi` feature — so in the
+/// standalone `rustty_web_canvas.wasm` deliverable the message was dropped. It
+/// now goes through the `log` facade like every other restored site in this
+/// crate, and `rustty_wc_*`'s entry points install
+/// `rustty_os::wasm::log::WasmLogger` (see `install_wasm_log_backend` below), so
+/// BOTH wasm artifacts now carry it. `{s}` renders raw bytes; the lossy UTF-8
+/// conversion is confined to the diagnostic.
 #[cold]
 #[inline(never)]
 fn font_did_not_set(expected: &[u8], got: &[u8]) {
-    #[cfg(feature = "ghostty-wasm-abi")]
-    {
-        let mut msg = String::from("canvas font didn't set, fonts may be broken, expected=");
-        msg.push_str(&String::from_utf8_lossy(expected));
-        msg.push_str(" got=");
-        msg.push_str(&String::from_utf8_lossy(got));
-        rustty_os::wasm::log::freestanding::log("warning", "font_face", &msg);
-    }
-    #[cfg(not(feature = "ghostty-wasm-abi"))]
-    {
-        let _ = (expected, got);
-    }
+    log::warn!(
+        target: LOG_SCOPE,
+        "canvas font didn't set, fonts may be broken, expected={} got={}",
+        String::from_utf8_lossy(expected),
+        String::from_utf8_lossy(got)
+    );
 }
 
 /// Append the base-10 ASCII of a non-negative integer to `out` (the `{d}` in the
@@ -893,6 +913,34 @@ fn push_int(out: &mut Vec<u8>, mut v: i64) {
 // render glyphs against a real (offscreen) Canvas.
 // ---------------------------------------------------------------------------
 
+/// RUSTTY-ONLY (no oracle analogue): install `rustty-os`'s wasm `log::Log`
+/// backend for the `rustty_web_canvas.wasm` artifact.
+///
+/// `.port/parity-closure/DECISION-logging.md` §6r3 finding 3 established the
+/// rule — a restored `log::` site emits nothing unless the RUNNING ARTIFACT has
+/// registered a backend, and the registration belongs at the artifact's first
+/// JS-callable entry point. `rustty_web_canvas.wasm` had none: it is rooted at
+/// `rustty-web-canvas`, whose only entry points are the `rustty_wc_*` exports,
+/// and a JS host that drives the FONT surface (`rustty_wc_face_*`,
+/// `rustty_wc_shaper_*`) never touches `rustty-vt-c`'s `rustty_terminal_*`
+/// exports, which are where the other backend install calls live. That is
+/// exactly why the S91-F7 / S97-F2 ledger rows carried
+/// `owner=NOT-CLOSABLE YET: ... Needs a rustty_wc_* install site first`.
+///
+/// Called from EVERY `rustty_wc_*` entry point in this crate (a host may call
+/// any of them first). `install_log_backend` is `Once`-guarded and leaves an
+/// already-installed logger's filter alone, so the repetition is free and
+/// cannot clobber an embedder's own backend (§6r CRITICAL 1).
+///
+/// Non-wasm targets get a no-op: `rustty-os`'s wasm log module does not exist
+/// there, and the native builds of this crate already have a backend installed
+/// by their own binary.
+#[inline]
+pub(crate) fn install_wasm_log_backend() {
+    #[cfg(target_arch = "wasm32")]
+    rustty_os::wasm::log::install_log_backend();
+}
+
 /// `export fn face_new(ptr, len, pts, p) ?*Face`
 #[no_mangle]
 pub extern "C" fn rustty_wc_face_new(
@@ -901,6 +949,7 @@ pub extern "C" fn rustty_wc_face_new(
     pts: f32,
     presentation: u16,
 ) -> *mut Face {
+    install_wasm_log_backend();
     // fn face_new_(...) !*Face { … } catch null
     let raw = unsafe { core::slice::from_raw_parts(ptr, len) };
     let pres = if presentation == 0 {
@@ -922,6 +971,7 @@ pub extern "C" fn rustty_wc_face_new(
 /// `export fn face_free(ptr: ?*Face) void`
 #[no_mangle]
 pub extern "C" fn rustty_wc_face_free(ptr: *mut Face) {
+    install_wasm_log_backend();
     if !ptr.is_null() {
         let mut face = unsafe { Box::from_raw(ptr) };
         face.deinit();
@@ -941,6 +991,7 @@ pub extern "C" fn rustty_wc_face_render_glyph(
     codepoint: u32,
     out_glyph: *mut Glyph,
 ) -> i32 {
+    install_wasm_log_backend();
     if face.is_null() || atlas.is_null() || out_glyph.is_null() {
         return -1;
     }
@@ -956,7 +1007,14 @@ pub extern "C" fn rustty_wc_face_render_glyph(
             unsafe { *out_glyph = glyph };
             0
         }
-        Err(_) => -1,
+        // return face_render_glyph_(face, atlas, codepoint) catch |err| {
+        //     log.warn("error rendering glyph err={}", .{err});
+        //     return null;
+        // };
+        Err(err) => {
+            log::warn!(target: LOG_SCOPE, "error rendering glyph err={err:?}");
+            -1
+        }
     }
 }
 
@@ -968,11 +1026,26 @@ pub extern "C" fn rustty_wc_face_debug_canvas(
     id_ptr: *const u8,
     id_len: usize,
 ) -> i32 {
+    install_wasm_log_backend();
     if face.is_null() {
         return -1;
     }
     let face = unsafe { &*face };
-    unsafe { ffi::rustty_wc_debug_append(face.canvas.handle, id_ptr, id_len) }
+    // face_debug_canvas_(face) catch |err| {
+    //     log.warn("error adding debug canvas err={}", .{err});
+    // };
+    //
+    // PORT NOTE: the JS glue owns the `getElementById` + `append`, and returns
+    // -1 for the reference's `error.CanvasContainerNotFound` — a REAL failure
+    // arm, so this is not a diagnostic on a success path.
+    let rc = unsafe { ffi::rustty_wc_debug_append(face.canvas.handle, id_ptr, id_len) };
+    if rc != 0 {
+        log::warn!(
+            target: LOG_SCOPE,
+            "error adding debug canvas err=error.CanvasContainerNotFound"
+        );
+    }
+    rc
 }
 
 // ---------------------------------------------------------------------------
@@ -1065,7 +1138,10 @@ mod ghostty_wasm_abi {
             RenderOptions::default(),
         ) {
             Ok(glyph) => glyph,
-            Err(_err) => return core::ptr::null_mut(),
+            Err(err) => {
+                log::warn!(target: super::LOG_SCOPE, "error rendering glyph err={err:?}");
+                return core::ptr::null_mut();
+            }
         };
 
         // const result = try alloc.create(font.Glyph);
@@ -1102,6 +1178,12 @@ mod ghostty_wasm_abi {
         let face = unsafe { &*face };
         const ID: &[u8] = b"face-canvas";
         // face_debug_canvas_(face) catch |err| { log.warn("error adding debug canvas err={}", …); };
-        let _ = unsafe { ffi::rustty_wc_debug_append(face.canvas.handle, ID.as_ptr(), ID.len()) };
+        let rc = unsafe { ffi::rustty_wc_debug_append(face.canvas.handle, ID.as_ptr(), ID.len()) };
+        if rc != 0 {
+            log::warn!(
+                target: super::LOG_SCOPE,
+                "error adding debug canvas err=error.CanvasContainerNotFound"
+            );
+        }
     }
 }

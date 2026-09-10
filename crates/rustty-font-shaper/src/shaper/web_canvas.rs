@@ -48,6 +48,12 @@ mod wasm {
     // const unicode = @import("../../unicode/main.zig");
     // const uucode = @import("uucode");
     // const log = std.log.scoped(.font_shaper);
+    //
+    // The reference's `std.log.scoped(.font_shaper)` tag, carried through the
+    // `log` facade's `target:`
+    // (`.port/parity-closure/DECISION-logging.md` §6).
+    const LOG_SCOPE: &str = "font_shaper";
+
     use rustty_unicode::grapheme::{grapheme_break, BreakState};
     use rustty_util::quirks::inlineAssert as assert;
 
@@ -304,6 +310,7 @@ mod wasm {
     /// `export fn shaper_new(cap: usize) ?*Shaper`
     #[no_mangle]
     pub extern "C" fn rustty_wc_shaper_new(cap: usize) -> *mut Shaper {
+        crate::face::web_canvas::install_wasm_log_backend();
         match Shaper::init(shape::Options::default()) {
             Ok(mut shaper) => {
                 // The reference allocates a `cell_buf` of `cap` cells; our cell_buf
@@ -319,6 +326,7 @@ mod wasm {
     /// `export fn shaper_free(ptr: ?*Shaper) void`
     #[no_mangle]
     pub extern "C" fn rustty_wc_shaper_free(ptr: *mut Shaper) {
+        crate::face::web_canvas::install_wasm_log_backend();
         if !ptr.is_null() {
             let mut shaper = unsafe { Box::from_raw(ptr) };
             shaper.deinit();
@@ -353,6 +361,7 @@ mod wasm {
         out_cells: *mut shape::Cell,
         out_cap: usize,
     ) -> isize {
+        crate::face::web_canvas::install_wasm_log_backend();
         if shaper.is_null() || (n > 0 && (cps.is_null() || clusters.is_null())) {
             return -1;
         }
@@ -411,6 +420,44 @@ mod wasm {
         use rustty_vt::point::{Coordinate, Point};
         use rustty_vt::size::CellCountInt;
         use rustty_vt::terminal::{Colors, Options as TerminalOptions, Terminal};
+
+        /// The error `shaper_test_` hands to `shaper_test`'s `catch |err|`.
+        ///
+        /// PORT NOTE (task-14c-4): the reference `shaper_test_` returns an
+        /// inferred error union and the caught `err` is rendered with `{}`, i.e.
+        /// the ERROR NAME. The port had collapsed every failure to `()`, which
+        /// was invisible while the log was a comment but would have made the
+        /// restored message read `err=()`. These variants carry the reference's
+        /// own error name at each site so the diagnostic says what the reference
+        /// would have said.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub(super) enum ShaperTestError {
+            /// `try terminal.Terminal.init(...)` / `try term.print(c)`.
+            OutOfMemory,
+            /// `try std.unicode.Utf8View.init(str)`.
+            InvalidUtf8,
+            /// `try self.shape(run)`.
+            ShapeFailed,
+            /// PORT-ONLY: the modern growable `cell_buf` can have zero reserved
+            /// capacity, where the reference's `cell_buf` was a fixed `cap`
+            /// allocation and `Terminal.init` would have been given 0 columns.
+            /// The reference has no analogue; named so the message is not silent
+            /// about which arm fired.
+            ZeroCellBuf,
+        }
+
+        impl core::fmt::Display for ShaperTestError {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                // Zig renders a caught error as `error.Name` under `{}`.
+                let name = match self {
+                    Self::OutOfMemory => "OutOfMemory",
+                    Self::InvalidUtf8 => "InvalidUtf8",
+                    Self::ShapeFailed => "ShapeFailed",
+                    Self::ZeroCellBuf => "ZeroCellBuf",
+                };
+                write!(f, "error.{name}")
+            }
+        }
 
         /// `export fn shaper_new(cap: usize) ?*Shaper`
         #[no_mangle]
@@ -473,13 +520,22 @@ mod wasm {
             let shaper = unsafe { &mut *self_ };
             let bytes = unsafe { core::slice::from_raw_parts(str, len) };
             // shaper_test_(self, group, str[0..len]) catch |err| {
-            //     log.warn("error during shaper test err={}", .{err});   // log-as-comment
+            //     log.warn("error during shaper test err={}", .{err});
             // };
-            let _ = shaper_test_(shaper, grid, bytes);
+            if let Err(err) = shaper_test_(shaper, grid, bytes) {
+                log::warn!(
+                    target: super::LOG_SCOPE,
+                    "error during shaper test err={err}"
+                );
+            }
         }
 
         // fn shaper_test_(self: *Shaper, group: *font.GroupCache, str: []const u8) !void {
-        fn shaper_test_(shaper: &mut Shaper, grid: *mut SharedGrid, s: &[u8]) -> Result<(), ()> {
+        fn shaper_test_(
+            shaper: &mut Shaper,
+            grid: *mut SharedGrid,
+            s: &[u8],
+        ) -> Result<(), ShaperTestError> {
             // Create a terminal and print all our characters into it.
             // var term = try terminal.Terminal.init(alloc, self.cell_buf.len, 80);
             // defer term.deinit(alloc);
@@ -495,7 +551,7 @@ mod wasm {
                 .capacity()
                 .min(usize::from(CellCountInt::MAX));
             if cols == 0 {
-                return Err(());
+                return Err(ShaperTestError::ZeroCellBuf);
             }
             const ROWS: u16 = 80;
             let mut term = Terminal::init(
@@ -513,7 +569,7 @@ mod wasm {
                     kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
                 },
             )
-            .map_err(|_| ())?;
+            .map_err(|_| ShaperTestError::OutOfMemory)?;
 
             let result = shaper_test_rows(shaper, grid, &mut term, s);
             // defer term.deinit(alloc);
@@ -528,14 +584,15 @@ mod wasm {
             grid: *mut SharedGrid,
             term: &mut Terminal,
             s: &[u8],
-        ) -> Result<(), ()> {
+        ) -> Result<(), ShaperTestError> {
             // Iterate over unicode codepoints and add to terminal
             // const view = try std.unicode.Utf8View.init(str);
             // var iter = view.iterator();
             // while (iter.nextCodepoint()) |c| { try term.print(c); }
-            let text = core::str::from_utf8(s).map_err(|_| ())?;
+            let text = core::str::from_utf8(s).map_err(|_| ShaperTestError::InvalidUtf8)?;
             for c in text.chars() {
-                term.print(c as u32).map_err(|_| ())?;
+                term.print(c as u32)
+                    .map_err(|_| ShaperTestError::OutOfMemory)?;
             }
 
             // Iterate over the rows and print out all the runs we get.
@@ -587,9 +644,25 @@ mod wasm {
                     grid,
                     font_index: collection::Index::new(crate::Style::Regular, 0),
                 };
+                let font_index = run.font_index;
+                let run_cells = run.cells;
+                let cells = shaper.shape(run).map_err(|_| ShaperTestError::ShapeFailed)?;
                 // log.info("y={} run={d} shape={any} idx={}", .{ y, run.cells,
-                //     cells, run.font_index });   // log-as-comment
-                let _cells = shaper.shape(run).map_err(|_| ())?;
+                //     cells, run.font_index });
+                //
+                // PORT NOTE: Zig's `{any}` on a slice of structs is its default
+                // aggregate rendering; `{:?}` is the Rust analogue. `run.cells`
+                // and `run.font_index` are read BEFORE `shape` because `run` is
+                // moved into it (the reference's `run` is a value the call does
+                // not consume).
+                log::info!(
+                    target: super::LOG_SCOPE,
+                    "y={} run={} shape={:?} idx={:?}",
+                    y,
+                    run_cells,
+                    cells,
+                    font_index
+                );
             }
             Ok(())
         }

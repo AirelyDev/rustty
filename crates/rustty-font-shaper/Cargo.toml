@@ -94,6 +94,24 @@ allocator-api2 = { workspace = true }
 # excluded from the wasm dependency graph. The `Face`/`Shaper`/`Library`
 # selectors resolve to the browser Canvas backend on wasm (see `face`/`shape`/
 # `library`/`backend`). Native/other targets are untouched.
+# wasm32: the `log::Log` BACKEND for the wasm artifacts
+# (`.port/parity-closure/DECISION-logging.md` §6r3 finding 3, §8r).
+#
+# The `rustty-os` entry in `[dependencies]` above is OPTIONAL (feature
+# `ghostty-wasm-abi`, for the `toHostOwned` tracker). That is not enough here:
+# `rustty_web_canvas.wasm` does NOT enable that feature, and its only entry
+# points are this crate's `rustty_wc_*` exports — so without an unconditional
+# wasm32 edge there is no backend to install and every restored `log::` site in
+# the `web_canvas` face/shaper would emit into `log`'s no-op default. Declared
+# on the TARGET table so the native builds are untouched.
+#
+# NOTE (§8r): NO `release_max_level_*` feature on the `log` line in
+# `[dependencies]`. That compile-time gate is declared by the wasm ARTIFACT ROOT
+# crates (`rustty-vt-c`, `rustty-wasm`), and feature unification carries it down
+# to this crate for those builds.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rustty-os = { workspace = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 freetype-sys = { path = "../../crates-sys/freetype-sys" }
 harfbuzz-sys = { path = "../../crates-sys/harfbuzz-sys" }
