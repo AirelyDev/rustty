@@ -1019,3 +1019,40 @@ bytes** net against the pre-14a baseline. Reproduced twice, identical.
   --features wasm-host-owned`: clean (confirms the new wasm-only module
   type-checks for the real target).
 - No ledger row touched; the six `CLOSED` rows are unchanged.
+
+---
+
+## §7 — Reachability constraints binding stages 14b–14e (controller, after round-3 review)
+
+The logging pattern is **settled**; three rows are nevertheless **not closable** and are annotated in
+`LEDGER.tsv`'s `owner` column so a later stage cannot mark them green by mistake.
+
+| row | crate | why |
+|---|---|---|
+| `S62-F2` | rustty-bench | Site is `cli.rs:201-208 pub fn main()`, reached only from the standalone `[[bin]]` (`main_bench.rs`), never from `rustty_benchmark_cli`. No artifact installs a backend there. (The bench *library* IS linked into libghostty via `rustty-apprt-c/src/lib.rs:160`; only this row's own site is bin-only.) |
+| `S91-F7` | rustty-font-shaper | Only artifact is `rustty_web_canvas.wasm`, which has **no** `log::Log` backend and no `install_log_backend` call site anywhere in `rustty-web-canvas` or `rustty-font-shaper`. |
+| `S97-F2` | rustty-font-shaper | Same artifact, same gap. |
+
+**Whichever stage owns `rustty-font-shaper` (11 rows) must first add an install call to the
+`rustty_wc_*` entry points**, then S91-F7/S97-F2 become closable. The demo's real call order
+(`example/wasm-web-canvas/index.html`) is `rustty_wc_alloc:86` → `_face_new:94` → `_atlas_new:98` →
+`_face_render_glyph:103` → `_shaper_new:153` → `_shape:162` → and only at `:168`
+`rustty_terminal_new`, the vt-c installer — so everything before line 168 runs unlogged today. The
+dependency edges already exist (`rustty-web-canvas` → `rustty-vt-c` → `rustty-os`;
+`rustty-font-shaper`'s own optional `rustty-os` edge at `Cargo.toml:53`).
+
+**Per-row check required for the other font-shaper rows** (S81-F1, S84-F1, S86-F2, S95-F1): each is
+closable on the native app path via `AppLogger`, but if its file is also reached from
+`rustty_wc_shaper_shape`, that artifact mutes it. Check per row rather than assuming.
+
+**Six stateless vt-c exports still do not install** — `rustty_paste_encode` (`lib.rs:519`),
+`rustty_color_parse`/`_x11`/`_palette_entry` (`:214/228/242`), `rustty_alloc` (`:413`),
+`rustty_wasm_alloc` (`:2016`). No shipped example reaches only those, so no row is muted today; close
+whenever convenient.
+
+**Carried to the finale:** (a) a Node-based end-to-end proof that a `log::` macro reaches the wasm
+sink — `node` v25.6.0 is on PATH and `.port/tools/wasm-parity.mjs` / `wasm-vt-roundtrip.mjs` already
+compile, instantiate and call into rustty wasm artifacts, so the earlier "no runtime available" note
+was under-researched and a ~40-line sibling harness is the right shape; (b) the stale comment at
+`crates/rustty/src/main_rustty.rs:131-137`, which still says bootstrap sites read
+`Logging::default()` — superseded by the round-3 fix.
