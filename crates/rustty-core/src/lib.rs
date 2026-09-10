@@ -42,6 +42,14 @@ pub mod surface;
 // hosted at the core wiring tier (below apprt/apprt-c/bin, above os/global).
 pub mod logging;
 
+// Minimal `#[cfg(test)]` `log::Log` backend so tests can observe the restored
+// `log::` diagnostics (DECISION-logging.md §6 call shape 2). Test-only — never
+// compiled into the production library. NOTE: in this crate's test binary it,
+// not `logging::install_app_log_backend`, owns `log`'s single process-wide
+// registration; see the module header.
+#[cfg(test)]
+pub(crate) mod log_capture;
+
 // PORT NOTE: Surface.zig:38 `const SurfaceMouse = @import("surface_mouse.zig");`
 // — the future surface.rs (C5+) reaches the module as `crate::surface_mouse`.
 pub mod surface_mouse;

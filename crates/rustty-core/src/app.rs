@@ -60,7 +60,14 @@ use rustty_font_shaper::SharedGridSet;
 
 // const log = std.log.scoped(.app);
 // PORT NOTE: the reference `log.debug/info/warn` sites are preserved verbatim
-// as comments at each site (termio precedent — no Rust logging shim).
+// as comments at each site, with the LIVE emission added directly beneath each
+// one (task 14d-1, `.port/parity-closure/DECISION-logging.md` §6 call shape 2 —
+// `rustty-core` is below `rustty-vt-c` in R4's layering, so restored sites go
+// through the `log` facade and reach whichever backend the running binary
+// installed: `rustty-core::logging::AppLogger` for the app/libghostty
+// artifacts, `rustty-vt-c::sys::Logger` for the standalone library).
+// `LOG_SCOPE` is the `@tagName` of the reference's `std.log.scoped(.app)`.
+const LOG_SCOPE: &str = "app";
 
 // const SurfaceList = std.ArrayListUnmanaged(*apprt.Surface);
 //
@@ -218,11 +225,12 @@ where
         // two-case-fold precedent). Detach == dropping the `JoinHandle`.
         #[cfg(target_os = "macos")]
         {
-            if let Err(_err) = std::thread::Builder::new()
+            if let Err(err) = std::thread::Builder::new()
                 .spawn(rustty_font_shaper::discovery::Discover::warmup)
                 .map(drop)
             {
                 // log.warn("font warmup thread spawn failed err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "font warmup thread spawn failed err={err:?}");
             }
         }
 
@@ -243,11 +251,12 @@ where
         // OpenGL/WebGL do not), so the probe folds to the same macOS cfg.
         #[cfg(target_os = "macos")]
         {
-            if let Err(_err) = std::thread::Builder::new()
+            if let Err(err) = std::thread::Builder::new()
                 .spawn(rustty_renderer::metal::Metal::warmup)
                 .map(drop)
             {
                 // log.warn("renderer warmup thread spawn failed err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "renderer warmup thread spawn failed err={err:?}");
             }
         }
 
@@ -357,8 +366,12 @@ where
             match config.change_conditional_state(self.config_conditional_state) {
                 Ok(applied) => applied,
                 // catch |err| err: { ... break :err null; }
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("failed to apply conditional state to config err={}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to apply conditional state to config err={err:?}"
+                    );
                     None
                 }
             };
@@ -401,11 +414,12 @@ where
         //
         // _ = rt_surface.rtApp().performAction(.app, .quit_timer, .stop) catch ...
         let rt_app = unsafe { &*rt_surface }.rt_app();
-        if let Err(_err) = unsafe { &*rt_app }.perform_action(
+        if let Err(err) = unsafe { &*rt_app }.perform_action(
             apprt::Target::<Surface<A>>::App,
             apprt::Action::QuitTimer(QuitTimer::Stop),
         ) {
             // log.warn("error stopping quit timer err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error stopping quit timer err={err:?}");
         }
     }
 
@@ -439,11 +453,12 @@ where
         //     .app, .quit_timer, .start) catch ...
         if self.surfaces.is_empty() {
             let rt_app = unsafe { &*rt_surface }.rt_app();
-            if let Err(_err) = unsafe { &*rt_app }.perform_action(
+            if let Err(err) = unsafe { &*rt_app }.perform_action(
                 apprt::Target::<Surface<A>>::App,
                 apprt::Action::QuitTimer(QuitTimer::Start),
             ) {
                 // log.warn("error starting quit timer err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error starting quit timer err={err:?}");
             }
         }
     }
@@ -488,6 +503,27 @@ where
             //         else => log.debug("mailbox message={t}", .{message}),
             //     }
             // }
+            //
+            // PORT NOTE (task 14d-1): `std.log.logEnabled(.debug, .app)` is a
+            // COMPTIME query of the build's `std_options.log_level` in the
+            // reference; `log`'s nearest analog is the runtime
+            // `log_enabled!`, which reads the same max-level the backend
+            // installed (`install_app_log_backend`: `Debug` on a debug build,
+            // `Info` otherwise — the direct port of `main_ghostty.zig`'s
+            // `.Debug => .debug, else => .info`). The gate exists to avoid
+            // paying for `@tagName`/formatting when debug logging is off, and
+            // `log_enabled!` preserves exactly that property.
+            if log::log_enabled!(target: LOG_SCOPE, log::Level::Debug) {
+                match &message {
+                    // these tend to be way too verbose for normal debugging
+                    Message::RedrawSurface(_) => {}
+                    _ => log::debug!(
+                        target: LOG_SCOPE,
+                        "mailbox message={}",
+                        message.tag_name()
+                    ),
+                }
+            }
             match message {
                 // .open_config => |v| try self.performAction(
                 //     rt_app,
@@ -519,6 +555,10 @@ where
                 // can try to quit as quickly as possible.
                 Message::Quit => {
                     // log.info("quit message received, short circuiting mailbox drain", .{});
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "quit message received, short circuiting mailbox drain"
+                    );
                     self.performAction(rt_app, ScopedApp::Quit)?;
                     return Ok(());
                 }
@@ -588,6 +628,7 @@ where
         }
 
         // log.debug("focus event focused={}", .{focused});
+        log::debug!(target: LOG_SCOPE, "focus event focused={focused}");
         self.focused = focused;
     }
 
@@ -658,11 +699,16 @@ where
         }
         for action in actions {
             // self.performAction(rt_app, action.scoped(.app).?) catch |err| {...};
-            if let Err(_err) = self.performAction(rt_app, action.scoped_app().unwrap()) {
+            if let Err(err) = self.performAction(rt_app, action.scoped_app().unwrap()) {
                 // log.warn("error performing app keybind action action={s} err={}", .{
                 //     @tagName(action),
                 //     err,
                 // });
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "error performing app keybind action action={} err={err:?}",
+                    action.tag_name()
+                );
             }
         }
 
@@ -796,11 +842,16 @@ where
         for action in actions {
             // self.performAllAction(rt_app, action) catch |err| {...};
             // PORT NOTE: Zig copies the action by value per call -> `clone()`.
-            if let Err(_err) = self.performAllAction(rt_app, action.clone()) {
+            if let Err(err) = self.performAllAction(rt_app, action.clone()) {
                 // log.warn("error performing chained action action={s} err={}", .{
                 //     @tagName(action),
                 //     err,
                 // });
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "error performing chained action action={} err={err:?}",
+                    action.tag_name()
+                );
             }
         }
     }
@@ -824,11 +875,23 @@ where
                 for &surface in self.surfaces.iter() {
                     // _ = surface.core().performBindingAction(action) catch |err| {...};
                     let core = unsafe { &*surface }.core();
-                    if let Err(_err) = unsafe { &mut *core }.performBindingAction(action.clone()) {
-                        // log.warn("error performing binding action on surface ptr={X} err={}", .{
-                        //     @intFromPtr(surface),
+                    // PORT NOTE (task 14d-1): the surface id is READ BEFORE the
+                    // call, not inside the error arm as the reference does.
+                    // Raw-pointer discipline (`PROCEDURE.md`): taking `&*core`
+                    // inside the `if let` body while the scrutinee's
+                    // `&mut *core` is still live is Stacked-Borrows UB here,
+                    // and `id` is immutable for the lifetime of the surface, so
+                    // the value logged is identical either way.
+                    let id = unsafe { &*core }.id;
+                    if let Err(err) = unsafe { &mut *core }.performBindingAction(action.clone()) {
+                        // log.warn("error performing binding action on surface id={x} err={}", .{
+                        //     surface.core().id,
                         //     err,
                         // });
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "error performing binding action on surface id={id:x} err={err:?}"
+                        );
                     }
                 }
             }
@@ -987,6 +1050,24 @@ pub enum Message<A: apprt::App + 'static> {
     /// wake up the renderer thread. The renderer thread will send this
     /// message if it needs to.
     RedrawSurface(*mut A::Surface),
+}
+
+impl<A: apprt::App + 'static> Message<A> {
+    /// PORT NOTE (task 14d-1): the image of Zig's `{t}` / `@tagName` on this
+    /// `union(enum)`, needed by `drainMailbox`'s restored
+    /// `log.debug("mailbox message={t}", ...)` site (`App.zig:271`). The
+    /// strings are the reference's own field names, not the Rust variant
+    /// spellings.
+    fn tag_name(&self) -> &'static str {
+        match self {
+            Message::OpenConfig(_) => "open_config",
+            Message::NewWindow(_) => "new_window",
+            Message::Close(_) => "close",
+            Message::Quit => "quit",
+            Message::SurfaceMessage(_) => "surface_message",
+            Message::RedrawSurface(_) => "redraw_surface",
+        }
+    }
 }
 
 // Cross-thread queue of raw pointers — the reference threading contract as a
@@ -1707,5 +1788,124 @@ pub(crate) mod test_runtime {
             .unwrap();
 
         app.deinit();
+    }
+
+    // ===================================================================
+    // task 14d-1 (S39-F6): the restored `App.zig` diagnostics.
+    //
+    // Three tests, chosen for shapes that break INDEPENDENTLY of each
+    // other rather than one per site: a plain interpolated argument, the
+    // `logEnabled` gate + `{t}`/`@tagName` rendering + the `redraw_surface`
+    // exclusion, and a failure-arm site carrying both `@tagName(action)`
+    // and the error payload. Every assertion is a full-vector `assert_eq!`
+    // on the captured records, so a wrong level, a wrong scope, an extra
+    // record or a dropped/renamed payload all fail.
+    // ===================================================================
+
+    /// `App.zig:349` — `log.debug("focus event focused={}", .{focused})`.
+    /// Also pins the redundant-focus-event early return staying SILENT:
+    /// the reference logs only when the state actually changes, and a
+    /// diagnostic above that `if` would fire on every no-op focus event
+    /// (the success-path-diagnostic bug class this plan exists to catch).
+    #[test]
+    fn focus_event_emits_the_debug_diagnostic_only_on_a_real_change() {
+        let mut app = App::<TestApp>::init(Allocator).unwrap();
+        // `init` leaves `focused = true`.
+        let cap = crate::log_capture::start();
+
+        // Redundant: same value, must not log.
+        app.focusEvent(true);
+        // A real change: must log.
+        app.focusEvent(false);
+
+        let messages = cap.messages();
+        drop(cap);
+        app.deinit();
+
+        assert_eq!(
+            vec![(
+                log::Level::Debug,
+                "app".to_string(),
+                "focus event focused=false".to_string()
+            )],
+            messages
+        );
+    }
+
+    /// `App.zig:271` + `App.zig:294` — the `logEnabled(.debug, .app)`
+    /// switch (which skips `.redraw_surface` as "way too verbose") and the
+    /// quit short-circuit `log.info`. Asserts the `{t}` rendering uses the
+    /// REFERENCE tag names (`quit`, not `Quit`).
+    #[test]
+    fn drain_mailbox_logs_message_tags_but_skips_redraw_surface() {
+        let mut rt_app = TestApp::new();
+        let mut app = App::<TestApp>::init(Allocator).unwrap();
+
+        // An unregistered rt-surface pointer: `redrawSurface` rejects it
+        // through `hasRtSurface` before any dereference, so this is only
+        // ever compared, never read.
+        let unknown: *mut TestSurface = std::ptr::NonNull::dangling().as_ptr();
+        {
+            let mailbox = Mailbox::<TestApp> {
+                rt_app: &mut rt_app,
+                mailbox: &mut app.mailbox,
+            };
+            mailbox.push(Message::RedrawSurface(unknown), Timeout::Instant);
+            mailbox.push(Message::Quit, Timeout::Instant);
+        }
+
+        let cap = crate::log_capture::start();
+        app.drainMailbox(&rt_app).unwrap();
+        let messages = cap.messages();
+        drop(cap);
+        app.deinit();
+
+        assert_eq!(
+            vec![
+                (
+                    log::Level::Debug,
+                    "app".to_string(),
+                    "mailbox message=quit".to_string()
+                ),
+                (
+                    log::Level::Info,
+                    "app".to_string(),
+                    "quit message received, short circuiting mailbox drain".to_string()
+                ),
+            ],
+            messages
+        );
+    }
+
+    /// `App.zig:491` — `log.warn("error performing chained action
+    /// action={s} err={}", .{ @tagName(action), err })`. The failing action
+    /// is first, so the test also pins that the diagnostic sits on the
+    /// FAILURE arm only: the second (succeeding) action emits nothing.
+    #[test]
+    fn perform_all_chained_action_warns_on_the_failing_action_only() {
+        let mut rt_app = TestApp::new();
+        rt_app.fail_key = Some(ActionKey::Quit);
+        let mut app = App::<TestApp>::init(Allocator).unwrap();
+
+        let cap = crate::log_capture::start();
+        app.performAllChainedAction(
+            &rt_app,
+            &[
+                BindingAction::Quit,
+                BindingAction::OpenConfig(rustty_input::binding::OpenConfig::DEFAULT),
+            ],
+        );
+        let messages = cap.messages();
+        drop(cap);
+        app.deinit();
+
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "app".to_string(),
+                "error performing chained action action=quit err=Apprt(ApprtError)".to_string()
+            )],
+            messages
+        );
     }
 }

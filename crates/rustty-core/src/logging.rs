@@ -274,16 +274,46 @@ mod tests {
 
     #[test]
     fn app_log_backend_installs_and_dispatches_without_panicking() {
+        // CORRECTED (task 14d-1): this crate now also has a `#[cfg(test)]`
+        // capture logger (`crate::log_capture`), and `log::set_logger`
+        // succeeds exactly ONCE per process. Whichever of the two called
+        // `set_logger` first used to win, at random, which would make either
+        // this test's install or every capture test's install lose. The
+        // capture module is declared the registrar for this binary, so this
+        // test installs it FIRST and then exercises the arm that actually
+        // matters here — §6r CRITICAL 1's "a logger is already installed:
+        // leave it AND its max_level alone" containment behaviour.
+        crate::log_capture::install();
+        let before = log::max_level();
         install_app_log_backend();
         // A second call must be a genuine no-op (the Once guard), not a
         // double-install panic or a re-touched max_level.
         install_app_log_backend();
+        assert_eq!(before, log::max_level());
+
         // Exercises the full `AppLogger::log` -> `level_from_log` ->
         // `logging::log` -> `logging::log_with` chain end to end; a panic
         // anywhere in that chain (e.g. a `CString::new` on a scope containing
-        // an interior NUL) would fail this test.
-        log::error!(target: "task14a_app_logger_test", "proving message {}", 1);
-        log::warn!(target: "", "default-scope proving message");
+        // an interior NUL) would fail this test. Dispatched through
+        // `AppLogger` DIRECTLY rather than through a `log::error!` macro,
+        // because the macro now reaches the capture logger instead — this
+        // keeps the real sink chain covered regardless of who owns the
+        // process-wide registration.
+        use log::Log as _;
+        APP_LOGGER.log(
+            &log::Record::builder()
+                .level(log::Level::Error)
+                .target("task14a_app_logger_test")
+                .args(format_args!("proving message {}", 1))
+                .build(),
+        );
+        APP_LOGGER.log(
+            &log::Record::builder()
+                .level(log::Level::Warn)
+                .target("")
+                .args(format_args!("default-scope proving message"))
+                .build(),
+        );
     }
 
     #[test]
