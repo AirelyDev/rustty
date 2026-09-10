@@ -91,6 +91,11 @@ use super::surface_child_exited::SurfaceChildExited;
 /// B6 DnD call sites (`calcDropDirection`/`moveSplit`).
 use rustty_datastruct::split_tree::Direction as SplitDirection;
 
+/// `const log = std.log.scoped(.gtk_ghostty_surface)` (`surface.zig:42`).
+/// REBRANDED per the task-14d-2 precedent (`.port/tools/PARITY_NAMING.md`); the
+/// GType registered NAME in this file is deliberately NOT rebranded.
+const LOG_SCOPE: &str = "gtk_rustty_surface";
+
 /// The core surface backing a GTK `Surface`. PORTS: `surface.zig:20`
 /// `const CoreSurface = @import("../../../Surface.zig")`; here the apprt backend's
 /// core is `rustty_core::surface::Surface<App>` (the faithful analogue of
@@ -1037,7 +1042,7 @@ fn remove_source_id(id: Option<glib::SourceId>, what: &str) {
         // it to `g_source_remove` is always valid (returns FALSE if already gone).
         let removed = unsafe { glib::ffi::g_source_remove(id.as_raw()) };
         if removed == glib::ffi::GFALSE {
-            eprintln!("warn(gtk): unable to remove {what}");
+            log::warn!(target: LOG_SCOPE, "unable to remove {what}");
         }
     }
 }
@@ -1299,7 +1304,8 @@ impl Surface {
 
         // "We can only set a parent before surface realization." (`:788-793`).
         if !imp.core_surface.load(Ordering::Acquire).is_null() {
-            eprintln!("setParent called after surface is already realized");
+            // log.warn("setParent called after surface is already realized", .{});
+            log::warn!(target: LOG_SCOPE, "setParent called after surface is already realized");
             return;
         }
 
@@ -1519,6 +1525,11 @@ impl Surface {
         // Config gate: `progress-style` off => hide + return (`:1045-1051`).
         if let Some(config) = imp.config.borrow().as_ref() {
             if !config.get().progress_style {
+                // log.debug("progress_report action blocked by config", .{});
+                //
+                // S54-F4: this was dropped entirely. It is the only signal a
+                // user gets that a `progress_report` OSC was ignored on purpose.
+                log::debug!(target: LOG_SCOPE, "progress_report action blocked by config");
                 imp.progress_bar_overlay.set_visible(false);
                 return;
             }
@@ -1741,9 +1752,7 @@ impl Surface {
         // The GTK widget scale factor (`:1536-1546`).
         let scale = imp.gl_area.scale_factor();
         let gtk_scale: f32 = if scale <= 0 {
-            eprintln!(
-                "warn(gtk): gtk_widget_get_scale_factor returned a non-positive number: {scale}"
-            );
+            log::warn!(target: LOG_SCOPE, "gtk_widget_get_scale_factor returned a non-positive number: {scale}");
             1.0
         } else {
             scale as f32
@@ -1753,14 +1762,14 @@ impl Surface {
         // DPI × 1024; divide by 1024 then by the 96 default to derive a scale.
         let xft_dpi_scale: f32 = match gsettings::get_c_int(gsettings::Key::GtkXftDpi) {
             None => {
-                eprintln!("warn(gtk): gtk-xft-dpi was not set, using default value");
+                log::warn!(target: LOG_SCOPE, "gtk-xft-dpi was not set, using default value");
                 1.0
             }
             Some(dpi) if dpi <= 0 => {
                 // -1 is a valid value which specifies default scale.
                 // https://docs.gtk.org/gtk4/property.Settings.gtk-xft-dpi.html
                 if dpi != -1 {
-                    eprintln!("warn(gtk): gtk-xft-dpi has invalid value ({dpi}), using default");
+                    log::warn!(target: LOG_SCOPE, "gtk-xft-dpi has invalid value ({dpi}), using default");
                 }
                 1.0
             }
@@ -1879,7 +1888,7 @@ impl Surface {
         // (`:1751-1754`).
         let core = imp.core_surface.load(Ordering::Acquire);
         if core.is_null() {
-            eprintln!("warn(gtk): can't send notification because there is no core surface");
+            log::warn!(target: LOG_SCOPE, "can't send notification because there is no core surface");
             return;
         }
         // SAFETY: a non-null pointer is a live, heap-stable `CoreSurface` (the pin;
@@ -2186,7 +2195,7 @@ impl Surface {
         if matches!(state, ClipboardRequest::Paste(_))
             && !clipboard.formats().contains_type(String::static_type())
         {
-            eprintln!("debug(gtk): clipboard has no text format, not starting paste request");
+            log::debug!(target: LOG_SCOPE, "clipboard has no text format, not starting paste request");
             // return .unavailable;
             return Ok(ClipboardReadResult::Unavailable);
         }
@@ -2205,7 +2214,7 @@ impl Surface {
                 // No text on the clipboard — nothing to deliver.
                 Ok(None) => return,
                 Err(err) => {
-                    eprintln!("warn(gtk): failed to read clipboard err={err}");
+                    log::warn!(target: LOG_SCOPE, "failed to read clipboard err={err}");
                     return;
                 }
             };
@@ -2244,7 +2253,7 @@ impl Surface {
                 }
 
                 Err(err) => {
-                    eprintln!("warn(gtk): failed to complete clipboard request err={err}");
+                    log::warn!(target: LOG_SCOPE, "failed to complete clipboard request err={err}");
                 }
             }
         });
@@ -2299,7 +2308,7 @@ impl Surface {
 
             let all = gdk4::ContentProvider::new_union(&providers);
             if let Err(err) = clipboard.set_content(Some(&all)) {
-                eprintln!("warn(gtk): failed to set clipboard content err={err}");
+                log::warn!(target: LOG_SCOPE, "failed to set clipboard content err={err}");
             }
 
             // `Surface.signals.@"clipboard-write".impl.emit(...)` with
@@ -2455,7 +2464,7 @@ impl Surface {
                 ..rustty_core::surface::CompleteClipboard::default()
             },
         ) {
-            eprintln!("warn(gtk): failed to complete clipboard request err={err}");
+            log::warn!(target: LOG_SCOPE, "failed to complete clipboard request err={err}");
         }
     }
 
@@ -2488,7 +2497,7 @@ impl Surface {
                 | ClipboardRequest::List(_)
                 | ClipboardRequest::KittyRead(_)
                 | ClipboardRequest::KittyWrite(_) => {
-                    eprintln!("warn(gtk): request should not be able to be remembered");
+                    log::warn!(target: LOG_SCOPE, "request should not be able to be remembered");
                 }
             }
         }
@@ -2564,8 +2573,12 @@ impl Surface {
         // Window class, and says the right fix is a signal whose handler mutates the
         // EnvMap; it punts because boxing the EnvMap is awkward. Ported as-is (R1).
         if let Some(window) = crate::gtk::ext::ancestor::<crate::gtk::class::window::Window>(self) {
-            if let Err(_err) = window.winproto_mut().add_subprocess_env(&mut env) {
-                eprintln!("warn(gtk): winproto failed to add subprocess env");
+            if let Err(err) = window.winproto_mut().add_subprocess_env(&mut env) {
+                // log.warn("winproto failed to add subprocess env err={}", .{err});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "winproto failed to add subprocess env err={err:?}"
+                );
             }
 
             if window.is_quick_terminal() {
@@ -2824,8 +2837,15 @@ impl Surface {
         // on the app/main thread from the key controller.
         let effect = match unsafe { (*core).keyCallback(core_event) } {
             Ok(effect) => effect,
-            Err(_err) => {
-                eprintln!("warn(gtk): error in key callback");
+            Err(err) => {
+                // log.err("error in key callback err={}", .{err});
+                //
+                // S54-F6: this was `log.warn` with NO error value. The
+                // reference uses `log.err` HERE specifically
+                // (`surface.zig:1454`) while its three sibling
+                // `error in key callback` sites (`:2898 :2959 :3313`) are
+                // `log.warn` — the level is per-site, not per-message.
+                log::error!(target: LOG_SCOPE, "error in key callback err={err:?}");
                 return false;
             }
         };
@@ -2883,11 +2903,9 @@ impl Surface {
             };
             // SAFETY: `core` points at this widget's boxed, initialized core
             // surface (pinned in the imp); the idle source runs on the app thread.
-            if unsafe { &mut *core }
-                .focusCallback(obj.imp().focused.get())
-                .is_err()
-            {
-                eprintln!("warn(gtk): error in focus callback");
+            if let Err(err) = unsafe { &mut *core }.focusCallback(obj.imp().focused.get()) {
+                // log.warn("error in focus callback err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error in focus callback err={err:?}");
             }
         });
 
@@ -2926,8 +2944,9 @@ impl Surface {
         // SAFETY: `core` is the widget's boxed, initialized core surface; called
         // on the app thread from map/unmap or from the window's
         // `notify::suspended` handler.
-        if unsafe { &mut *core }.occlusionCallback(visible).is_err() {
-            eprintln!("warn(gtk): error in occlusion callback");
+        if let Err(err) = unsafe { &mut *core }.occlusionCallback(visible) {
+            // log.warn("error in occlusion callback err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error in occlusion callback err={err:?}");
         }
     }
 
@@ -2993,9 +3012,13 @@ impl Surface {
         // Make the context current so we can call GL functions (`:3416-3424`).
         imp.gl_area.make_current();
         if let Some(err) = imp.gl_area.error() {
-            eprintln!("warn(gtk): failed to make GL context current: {err}");
-            eprintln!("warn(gtk): this error is usually due to a driver or gtk bug");
-            eprintln!("warn(gtk): common cause: https://gitlab.gnome.org/GNOME/gtk/-/issues/4950");
+            log::warn!(target: LOG_SCOPE, "failed to make GL context current: {err}");
+            log::warn!(target: LOG_SCOPE, "this error is usually due to a driver or gtk bug");
+            // log.warn("this is a common cause of this issue: https://gitlab.gnome.org/GNOME/gtk/-/issues/4950", .{});
+            log::warn!(
+                target: LOG_SCOPE,
+                "this is a common cause of this issue: https://gitlab.gnome.org/GNOME/gtk/-/issues/4950"
+            );
             return Err(InitError::GlArea);
         }
 
@@ -3007,11 +3030,11 @@ impl Surface {
         // unbound (widget tests) we cannot construct a surface — bail (the lazy
         // init simply doesn't complete, leaving `core_surface` None).
         let Some(core_app) = app_core_ptr() else {
-            eprintln!("warn(gtk): core app not bound; cannot initialize surface");
+            log::warn!(target: LOG_SCOPE, "core app not bound; cannot initialize surface");
             return Err(InitError::Surface);
         };
         let Some(rt_app) = app_rt_ptr() else {
-            eprintln!("warn(gtk): rt app not bound; cannot initialize surface");
+            log::warn!(target: LOG_SCOPE, "rt app not bound; cannot initialize surface");
             return Err(InitError::Surface);
         };
 
@@ -3095,8 +3118,9 @@ impl Surface {
             unsafe { CoreSurface::init(surface_ptr, alloc, &config, core_app, rt_app, rt_surface) };
         drop(config);
 
-        if init_res.is_err() {
-            eprintln!("warn(gtk): failed to initialize surface");
+        if let Err(ref err) = init_res {
+            // log.warn("failed to initialize surface err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "failed to initialize surface err={err:?}");
             // Un-publish the slot before freeing it — `init` failed, so no live
             // `CoreSurface` backs the pointer (and any late startup read must see
             // null again, restoring **invariant 3**).
@@ -3162,7 +3186,7 @@ fn action_prompt_title(
     if let Err(err) = unsafe { &mut *core }
         .performBindingAction(rustty_input::binding::Action::PromptSurfaceTitle)
     {
-        eprintln!("warn(gtk): unable to perform prompt title action err={err:?}");
+        log::warn!(target: LOG_SCOPE, "unable to perform prompt title action err={err:?}");
     }
 }
 
@@ -3335,8 +3359,9 @@ impl Surface {
         let consumed =
             match unsafe { (*core).mouseButtonCallback(ButtonState::Press, button, mods) } {
                 Ok(consumed) => consumed,
-                Err(_err) => {
-                    eprintln!("warn(gtk): error in mouse button callback");
+                Err(err) => {
+                    // log.warn("error in key callback err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error in key callback err={err:?}");
                     false
                 }
             };
@@ -3385,8 +3410,9 @@ impl Surface {
         let consumed =
             match unsafe { (*core).mouseButtonCallback(ButtonState::Release, button, mods) } {
                 Ok(consumed) => consumed,
-                Err(_err) => {
-                    eprintln!("warn(gtk): error in mouse button callback");
+                Err(err) => {
+                    // log.warn("error in key callback err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error in key callback err={err:?}");
                     return;
                 }
             };
@@ -3401,7 +3427,7 @@ impl Surface {
             && !unsafe { (*core).hasSelection() }
             && !this.show_on_screen_keyboard(Some(&event))
         {
-            eprintln!("warn(gtk): failed to activate the on-screen keyboard");
+            log::warn!(target: LOG_SCOPE, "failed to activate the on-screen keyboard");
         }
     }
 
@@ -3449,8 +3475,9 @@ impl Surface {
         if let Some(core) = this.core() {
             let mods = key::translate_mods(event.modifier_state());
             // SAFETY: `core` is the widget's boxed, initialized core surface.
-            if unsafe { (*core).cursorPosCallback(pos, Some(mods)) }.is_err() {
-                eprintln!("warn(gtk): error in cursor pos callback");
+            if let Err(err) = unsafe { (*core).cursorPosCallback(pos, Some(mods)) } {
+                // log.warn("error in cursor pos callback err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error in cursor pos callback err={err:?}");
             }
         }
     }
@@ -3467,8 +3494,9 @@ impl Surface {
             let mods = key::translate_mods(event.modifier_state());
             let pos = CursorPos { x: -1.0, y: -1.0 };
             // SAFETY: `core` is the widget's boxed, initialized core surface.
-            if unsafe { (*core).cursorPosCallback(pos, Some(mods)) }.is_err() {
-                eprintln!("warn(gtk): error in cursor pos callback");
+            if let Err(err) = unsafe { (*core).cursorPosCallback(pos, Some(mods)) } {
+                // log.warn("error in cursor pos callback err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error in cursor pos callback err={err:?}");
             }
         }
     }
@@ -3495,10 +3523,11 @@ impl Surface {
         // We invert (`* -1`) because we apply natural scrolling to the values
         // (`:3009-3016`); written `-x * m` to satisfy clippy::neg_multiply.
         // SAFETY: `core` is the widget's boxed, initialized core surface.
-        if unsafe { (*core).scrollCallback(-sx * multiplier, -sy * multiplier, scroll_mods) }
-            .is_err()
+        if let Err(err) =
+            unsafe { (*core).scrollCallback(-sx * multiplier, -sy * multiplier, scroll_mods) }
         {
-            eprintln!("warn(gtk): error in scroll callback");
+            // log.warn("error in scroll callback err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error in scroll callback err={err:?}");
             return false;
         }
 
@@ -3560,8 +3589,9 @@ impl Surface {
             // to satisfy clippy::neg_multiply, as in `scroll_vertical`.
             //
             // SAFETY: `core` is the widget's boxed, initialized core surface.
-            if unsafe { (*core).scrollCallback(-sx, 0.0, ScrollMods::default()) }.is_err() {
-                eprintln!("warn(gtk): error in scroll callback");
+            if let Err(err) = unsafe { (*core).scrollCallback(-sx, 0.0, ScrollMods::default()) } {
+                // log.warn("error in scroll callback err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error in scroll callback err={err:?}");
                 return false;
             }
             return true;
@@ -3661,15 +3691,14 @@ impl Surface {
                     let Some(path) = file.path() else {
                         continue;
                     };
-                    if shell_escape_writer
-                        .writeAll(path.as_os_str().as_bytes())
-                        .is_err()
-                    {
-                        eprintln!("err(gtk): unable to write path to buffer");
+                    if let Err(err) = shell_escape_writer.writeAll(path.as_os_str().as_bytes()) {
+                        // log.err("unable to write path to buffer: {}", .{err});
+                        log::error!(target: LOG_SCOPE, "unable to write path to buffer: {err:?}");
                         continue;
                     }
-                    if shell_escape_writer.writeAll(b"\n").is_err() {
-                        eprintln!("err(gtk): unable to write to buffer");
+                    if let Err(err) = shell_escape_writer.writeAll(b"\n") {
+                        // log.err("unable to write to buffer: {}", .{err});
+                        log::error!(target: LOG_SCOPE, "unable to write to buffer: {err:?}");
                         continue;
                     }
                 }
@@ -3694,15 +3723,14 @@ impl Surface {
             let mut stream = AllocatingWriter::init();
             {
                 let mut shell_escape_writer = ShellEscapeWriter::init(&mut stream);
-                if shell_escape_writer
-                    .writeAll(path.as_os_str().as_bytes())
-                    .is_err()
-                {
-                    eprintln!("err(gtk): unable to write path to buffer");
+                if let Err(err) = shell_escape_writer.writeAll(path.as_os_str().as_bytes()) {
+                    // log.err("unable to write path to buffer: {}", .{err});
+                    log::error!(target: LOG_SCOPE, "unable to write path to buffer: {err:?}");
                     return false;
                 }
-                if shell_escape_writer.writeAll(b"\n").is_err() {
-                    eprintln!("err(gtk): unable to write to buffer");
+                if let Err(err) = shell_escape_writer.writeAll(b"\n") {
+                    // log.err("unable to write to buffer: {}", .{err});
+                    log::error!(target: LOG_SCOPE, "unable to write to buffer: {err:?}");
                     return false;
                 }
             }
@@ -3765,7 +3793,7 @@ impl Surface {
             }
 
             Err(err) => {
-                eprintln!("warn(gtk): failed to complete clipboard request err={err}");
+                log::warn!(target: LOG_SCOPE, "failed to complete clipboard request err={err}");
             }
         }
     }
@@ -3780,18 +3808,25 @@ impl Surface {
     /// PORTS: `surface.zig:3228-3263` `glareaRealize`.
     #[template_callback]
     fn gl_realize(&self, _area: &gtk4::GLArea) {
-        eprintln!("debug(gtk): realize");
+        log::debug!(target: LOG_SCOPE, "realize");
         let imp = self.imp();
 
         // Make the GL area current so we can detect any OpenGL errors; on error
         // we can't render and switch to the error state (`:3234-3245`).
         imp.gl_area.make_current();
         if let Some(err) = imp.gl_area.error() {
-            eprintln!("warn(gtk): failed to make GL context current: {err}");
-            eprintln!(
-                "warn(gtk): this error is almost always due to a library, driver, or GTK issue"
+            log::warn!(target: LOG_SCOPE, "failed to make GL context current: {err}");
+            log::warn!(target: LOG_SCOPE, "this error is almost always due to a library, driver, or GTK issue");
+            // log.warn("this is a common cause of this issue: https://ghostty.org/docs/help/gtk-opengl-context", .{});
+            //
+            // PORT NOTE: the URL is the REFERENCE PROJECT's own documentation
+            // page, not a rustty runtime identity string, so it is NOT rebranded
+            // (PARITY_NAMING: only identity strings become rustty; a link to
+            // upstream docs still has to resolve).
+            log::warn!(
+                target: LOG_SCOPE,
+                "this is a common cause of this issue: https://ghostty.org/docs/help/gtk-opengl-context"
             );
-            eprintln!("warn(gtk): common cause: https://ghostty.org/docs/help/gtk-opengl-context");
             self.set_error(true);
             return;
         }
@@ -3805,7 +3840,10 @@ impl Surface {
                 rustty_core::renderer_seam::Renderer::displayRealized(&raw mut (*core).renderer)
             } {
                 Ok(()) => self.redraw(),
-                Err(_err) => eprintln!("warn(gtk): core displayRealized failed"),
+                Err(err) => {
+                    // log.warn("core displayRealized failed err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "core displayRealized failed err={err:?}");
+                }
             }
         }
 
@@ -3817,15 +3855,15 @@ impl Surface {
     /// PORTS: `surface.zig:3265-3297` `glareaUnrealize`.
     #[template_callback]
     fn gl_unrealize(&self, _area: &gtk4::GLArea) {
-        eprintln!("debug(gtk): unrealize");
+        log::debug!(target: LOG_SCOPE, "unrealize");
         let imp = self.imp();
 
         if let Some(core) = self.core() {
             // No guarantee the context is current on unrealize (`:3274-3276`).
             imp.gl_area.make_current();
             if let Some(err) = imp.gl_area.error() {
-                eprintln!("warn(gtk): gl_area_make_current failed in unrealize msg={err}");
-                eprintln!("warn(gtk): OpenGL resources and memory likely leaked");
+                log::warn!(target: LOG_SCOPE, "gl_area_make_current failed in unrealize msg={err}");
+                log::warn!(target: LOG_SCOPE, "OpenGL resources and memory likely leaked");
                 return;
             }
             // SAFETY: `core` is the widget's boxed, initialized core surface;
@@ -3877,8 +3915,9 @@ impl Surface {
             rustty_core::renderer_seam::Renderer::drawFrame(&raw mut (*core).renderer, true)
         } {
             Ok(()) => true,
-            Err(_err) => {
-                eprintln!("warn(gtk): failed to draw frame");
+            Err(err) => {
+                // log.warn("failed to draw frame err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "failed to draw frame err={err:?}");
                 false
             }
         }
@@ -3902,10 +3941,8 @@ impl Surface {
 
         // Debug output to understand what GTK is telling us (`:3352-3369`). The
         // window (gdk-surface) scale is elided from the log here.
-        eprintln!(
-            "debug(gtk): gl resize width={width} height={height} scale={}",
-            imp.gl_area.scale_factor(),
-        );
+        log::debug!(target: LOG_SCOPE, "gl resize width={width} height={height} scale={}",
+            imp.gl_area.scale_factor(),);
 
         // Store our cached size (`:3371-3379`).
         let new_size = SurfaceSize {
@@ -3921,17 +3958,16 @@ impl Surface {
             // content-scale change and it seems to trigger a resize event
             // (`:3383-3387`) — this note is load-bearing.
             // SAFETY: `core` is the widget's boxed, initialized core surface.
-            if unsafe { &mut *core }
-                .contentScaleCallback(self.get_content_scale())
-                .is_err()
-            {
-                eprintln!("warn(gtk): error in content scale callback");
+            if let Err(err) = unsafe { &mut *core }.contentScaleCallback(self.get_content_scale()) {
+                // log.warn("error in content scale callback err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error in content scale callback err={err:?}");
             }
 
             if changed {
                 // SAFETY: as above.
-                if unsafe { &mut *core }.sizeCallback(new_size).is_err() {
-                    eprintln!("warn(gtk): error in size callback");
+                if let Err(err) = unsafe { &mut *core }.sizeCallback(new_size) {
+                    // log.warn("error in size callback err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error in size callback err={err:?}");
                 }
                 self.resize_overlay_schedule();
             }
@@ -3940,8 +3976,9 @@ impl Surface {
         }
 
         // If we don't have a surface, then we initialize it (`:3400-3403`).
-        if self.init_surface().is_err() {
-            eprintln!("warn(gtk): surface failed to initialize");
+        if let Err(err) = self.init_surface() {
+            // log.warn("surface failed to initialize err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "surface failed to initialize err={err:?}");
         }
     }
 
@@ -3973,8 +4010,9 @@ impl Surface {
 
         // Update our preedit state in Ghostty core (`:3118-3125`).
         // SAFETY: `core` is the widget's boxed, initialized core surface.
-        if unsafe { (*core).preeditCallback(Some(preedit.as_bytes())) }.is_err() {
-            eprintln!("warn(gtk): error in preedit callback");
+        if let Err(err) = unsafe { (*core).preeditCallback(Some(preedit.as_bytes())) } {
+            // log.warn("error in preedit callback err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error in preedit callback err={err:?}");
         }
     }
     /// PORTS: `surface.zig:3128-3143` `imPreeditEnd`.
@@ -3989,8 +4027,9 @@ impl Surface {
             return;
         };
         // SAFETY: `core` is the widget's boxed, initialized core surface.
-        if unsafe { (*core).preeditCallback(None) }.is_err() {
-            eprintln!("warn(gtk): error in preedit callback");
+        if let Err(err) = unsafe { (*core).preeditCallback(None) } {
+            // log.warn("error in preedit callback err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error in preedit callback err={err:?}");
         }
     }
     /// PORTS: `surface.zig:3145-3226` `imCommit`. **Invariant 9**: how a commit
@@ -4026,7 +4065,7 @@ impl Surface {
             ImKeyEvent::True => {
                 let mut ime = imp.ime.borrow_mut();
                 if str_bytes.len() > ime.im_buf.len() {
-                    eprintln!("warn(gtk): not enough buffer space for input method commit");
+                    log::warn!(target: LOG_SCOPE, "not enough buffer space for input method commit");
                     return;
                 }
 
@@ -4054,8 +4093,9 @@ impl Surface {
             // triggering a preedit-end event but some do not (ibus 1.5.29)
             // (`:3207-3211`).
             // SAFETY: `core` is the widget's boxed, initialized core surface.
-            if unsafe { (*core).preeditCallback(None) }.is_err() {
-                eprintln!("warn(gtk): error in preedit callback");
+            if let Err(err) = unsafe { (*core).preeditCallback(None) } {
+                // log.warn("error in preedit callback err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error in preedit callback err={err:?}");
             }
 
             // Send the text to the core surface, associated with no key (an
@@ -4070,8 +4110,9 @@ impl Surface {
                 unshifted_codepoint: 0,
             };
             // SAFETY: `core` is the widget's boxed, initialized core surface.
-            if unsafe { (*core).keyCallback(event) }.is_err() {
-                eprintln!("warn(gtk): error in key callback");
+            if let Err(err) = unsafe { (*core).keyCallback(event) } {
+                // log.warn("error in key callback err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error in key callback err={err:?}");
             }
         }
     }
@@ -4282,7 +4323,7 @@ impl Surface {
                 if let Err(err) = unsafe { &mut *core }
                     .performBindingAction(rustty_input::binding::Action::ScrollToRow(row))
                 {
-                    eprintln!("warn(gtk): error performing scroll_to_row action err={err:?}");
+                    log::warn!(target: LOG_SCOPE, "error performing scroll_to_row action err={err:?}");
                 }
                 None
             });
@@ -4326,7 +4367,9 @@ impl Surface {
             return false;
         }
         let Some(config) = config else {
-            eprintln!(
+            // log.warn("config unavailable for computing whether border should be shown, likely bug", .{});
+            log::warn!(
+                target: LOG_SCOPE,
                 "config unavailable for computing whether border should be shown, likely bug"
             );
             return false;
@@ -4367,7 +4410,7 @@ impl Surface {
         if let Err(err) =
             unsafe { &mut *core }.performBindingAction(rustty_input::binding::Action::EndSearch)
         {
-            eprintln!("warn(gtk): unable to perform end_search action err={err:?}");
+            log::warn!(target: LOG_SCOPE, "unable to perform end_search action err={err:?}");
         }
         // `self.private().gl_area.as(gtk.Widget).grabFocus()` (`:3557`).
         this.grab_focus();
@@ -4387,7 +4430,7 @@ impl Surface {
         if let Err(err) = unsafe { &mut *core }
             .performBindingAction(rustty_input::binding::Action::Search(needle_bytes))
         {
-            eprintln!("warn(gtk): unable to perform search action err={err:?}");
+            log::warn!(target: LOG_SCOPE, "unable to perform search action err={err:?}");
         }
     }
 
@@ -4404,7 +4447,7 @@ impl Surface {
                 rustty_input::binding::NavigateSearch::Next,
             ),
         ) {
-            eprintln!("warn(gtk): unable to perform navigate_search action err={err:?}");
+            log::warn!(target: LOG_SCOPE, "unable to perform navigate_search action err={err:?}");
         }
     }
 
@@ -4421,7 +4464,7 @@ impl Surface {
                 rustty_input::binding::NavigateSearch::Previous,
             ),
         ) {
-            eprintln!("warn(gtk): unable to perform navigate_search action err={err:?}");
+            log::warn!(target: LOG_SCOPE, "unable to perform navigate_search action err={err:?}");
         }
     }
 
@@ -4498,7 +4541,7 @@ impl Surface {
         } else {
             // The scaling process somehow failed.
             // Use the original paintable as a fail-safe
-            eprintln!("warn(gtk): preview scaling failed - falling back to original paintable");
+            log::warn!(target: LOG_SCOPE, "preview scaling failed - falling back to original paintable");
             src.set_icon(Some(&paintable), mid_x as i32, mid_y as i32);
         }
     }
@@ -4527,7 +4570,7 @@ impl Surface {
         };
 
         let Some(st) = ext::ancestor::<SplitTree>(this) else {
-            eprintln!("warn(gtk): surface is not placed in a split tree");
+            log::warn!(target: LOG_SCOPE, "surface is not placed in a split tree");
             return;
         };
 
