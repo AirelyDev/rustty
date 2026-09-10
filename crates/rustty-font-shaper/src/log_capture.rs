@@ -143,7 +143,7 @@ fn lock_state() -> MutexGuard<'static, CaptureState> {
 fn install() {
     INSTALL.call_once(|| {
         log::set_logger(&LOGGER)
-            .expect("no other logger installed in the rustty-renderer test binary");
+            .expect("no other logger installed in the rustty-font-shaper test binary");
         log::set_max_level(log::LevelFilter::Trace);
     });
 }
