@@ -333,3 +333,49 @@ found, and current state.
   is what makes every other `{err:?}` site in this crate unverifiable against the
   oracle's rendering (task-14c-1 fix round, concern 1); this row is simply the one
   case where the collapse is total and therefore provable without a ruling.
+
+---
+
+## N9 — the Linux twins of `generic.zig` and `image.zig` are still logging-dead, while their macOS twins are live and their rows are CLOSED
+
+- **id**: N9
+- **severity**: medium (a Linux/FreeBSD build is silent on ~30 diagnostics the reference
+  emits and the macOS build now emits; no state or rendering difference)
+- **kind**: uncited-site / twin drift
+- **oracle**: `src/renderer/generic.zig` (the `rebuildCells`/`rebuildRow`/preedit/cursor/
+  overlay/background-image `log.warn` family) and `src/renderer/image.zig` (the kitty
+  placement / upload family).
+- **rustty**: `crates/rustty-renderer/src/generic/linux_impl.rs` and
+  `crates/rustty-renderer/src/image/linux_impl.rs`.
+- **description**: stage 14c restored these call sites in the **macOS** twins only.
+  Measured at the end of task-14c-3:
+
+  | file | live `log::` emissions | remaining commented reference calls |
+  |---|---|---|
+  | `generic.rs` (macOS twin) | 31 | 44 |
+  | `generic/linux_impl.rs` | **1** | 16 |
+  | `image/macos_impl.rs` | 11 | 20 |
+  | `image/linux_impl.rs` | **0** | 19 |
+
+  (The "commented" column counts comment ANCHORS, not sites — a multi-line block comment
+  reproducing one reference call and its one-line stub both match, so it roughly
+  double-counts. PROCEDURE.md blind spot 3.) The macOS numbers are the correct ones; the
+  Linux twins are the same reference calls, not ported.
+- **how found**: task-14c-3, enumerating the oracle's own `log.*` calls across the
+  Linux-only files it was in (PROCEDURE.md blind spot 3). The stage restored the OpenGL
+  ones it owned (`OpenGL.zig`, `opengl/Frame.zig`, `opengl/shaders.zig`, and the
+  `pkg/opengl` logger's routing) and deliberately did NOT take on the two big twins —
+  they are a different unit of work, they are Linux-only (no local typecheck), and one of
+  them (`image/linux_impl.rs`) already has an OPEN row of its own, `S117-F2`.
+- **why this is recorded separately**: several rows closed by tasks 14c-2 and 14c-4 —
+  `S113-F2`, `S117-F3`, `S119-F1` among them — name only the macOS twin in their `rustty`
+  column, so their `CLOSED`/`WAIVED` state does not rest on these sites and the blind-spot-1
+  carve-out is not in play. But a reader of those rows would reasonably believe the
+  diagnostics are restored, and on Linux they are not. This entry is so the finale
+  re-audit meets that as a tracked item.
+- **state**: **OPEN.** Scheduling note for whoever takes it: it is mechanical (the macOS
+  twin is the patch), it needs `const LOG_SCOPE: &str = "generic_renderer";` in
+  `generic/linux_impl.rs` and `"renderer_image"` in `image/linux_impl.rs`, several arms
+  currently discard their payload with `.is_err()` / `Err(_err)` and must bind it, and
+  **it cannot be typechecked on macOS** — the VM lane (`PROCEDURE.md`, Linux rows) is
+  mandatory, not optional.

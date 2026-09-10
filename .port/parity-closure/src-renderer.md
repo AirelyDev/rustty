@@ -22,10 +22,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** updateFrame: font_shaper.endFrame() is skipped on the early-return / error paths
   - **Oracle:** `src/renderer/generic.zig:1271-1274, 1319-1322, 1349-1352` → **Rustty:** `crates/rustty-renderer/src/generic.rs:4976-4979, 5018-5019, 5332`
   - **Audit's suggested fix:** Wrap end_frame in a drop guard created at function entry (like the existing `Unlock` guard), or call end_frame explicitly before both early exits.
-- [ ] **S115-F2** · CONFIRMED · `LOG` · missing-error-path
+- [x] **S115-F2** · CONFIRMED · `LOG` · missing-error-path
   - **What:** displayRealized (OpenGL twin) fails and skips the swap-chain/shader rebuild when GL context prep fails; the oracle only logs
   - **Oracle:** `src/renderer/generic.zig:934-959` → **Rustty:** `crates/rustty-renderer/src/generic/linux_impl.rs:1725-1760`
   - **Audit's suggested fix:** Swallow the prepare error (log/ignore) and continue with the lock + initShaders + SwapChain::init sequence, matching the void semantics.
+  - **Disposition (task-14c-3):** CLOSED — `generic/linux_impl.rs::display_realized` now calls `self.api.display_realized()` (void) and ALWAYS proceeds to the draw-mutex lock, `init_shaders`, `SwapChain::init` and the flag resets, matching `generic.zig:934-961`. What the code after the warning assumes is documented at the site: the rebuild is now reached with GL possibly not (re-)loaded, which IS the reference's state, and a genuinely dead context fails at the `try` sites (`init_shaders`/`SwapChain::init`) with the leaf GL error instead of being pre-empted by a `GlFailed` that hid it. Test: `generic::linux_impl::tests::linux_opengl_display_realized_rebuilds_even_when_context_prep_fails` asserts the REBUILD (Ok + `swap_chain.is_some()` + `!shaders.defunct` + `!reinitialize_shaders` + `target_config_modified == 1`), not a log line. Negative-controlled twice: once by deleting the emission, once by re-instating the abort while leaving the warning in place. Verified on the VM under `RUSTTY_REQUIRE_GL=1`.
 - [ ] **S117-F2** · CONFIRMED · `TEST` · missing-test
   - **What:** OpenGL image twin omits test "kitty renderer ignores pending payloads and removes replaced placements"
   - **Oracle:** `src/renderer/image.zig:1155-1214` → **Rustty:** `crates/rustty-renderer/src/image/linux_impl.rs:2596-2599`

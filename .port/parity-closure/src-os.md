@@ -11,13 +11,14 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** GHOSTTY_RESOURCES_DIR read as UTF-8 String; non-UTF-8 value becomes an error instead of the raw path
   - **Oracle:** `src/os/resourcesdir.zig:51-58, 113-120` → **Rustty:** `crates/rustty-os/src/resourcesdir.rs:95-110, 169-184, 288-291`
   - **Audit's suggested fix:** Read the variable as bytes (`std::env::var_os` / rustty_global environ map), make `app_path`/`host_path` `Vec<u8>`/`OsString`, treat NotPresent as missing and never fail on non-UTF-8.
-- [ ] **S113-F1** · CONFIRMED · `LOG` · behavioral-difference
+- [x] **S113-F1** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** displayRealized: prepareContext failure aborts re-realize instead of warn-and-continue
   - **Oracle:** `src/renderer/OpenGL.zig:237-250` → **Rustty:** `crates/rustty-renderer/src/generic/linux_impl.rs:1725-1748`
   - **Audit's suggested fix:** Match the oracle: on the windowed path, call `prepare_context_windowed()`, log a warning on `Err` and fall through to the draw_mutex lock + rebuild instead of returning `Err(GlFailed)`.
 
 ## Low (15)
 
+  - **Disposition (task-14c-3):** CLOSED — the reference body now lives where the reference puts it, as `OpenGL::display_realized(&self) -> ()` (`opengl/opengl_impl.rs`), warning on `target: LOG_SCOPE` (`"opengl"`, OpenGL.zig:34) and CONTINUING; `generic/linux_impl.rs::display_realized` calls it unconditionally and no longer returns `Err(GlFailed)`. The ledger's oracle anchor `OpenGL.zig:237-250` is exact at pin `20abdb50a`. `{err:?}` renders the payload, per this crate's convention for the reference's `{}`-on-an-error. Tests: `opengl_impl::tests::display_realized_warns_and_continues_when_context_prep_fails` (the warn + the `()` return) and `display_realized_is_silent_on_the_offscreen_path` (no diagnostic on the success path). Verified on the Fedora aarch64 VM under `RUSTTY_REQUIRE_GL=1`; negative-controlled.
 - [ ] **S112-F10** · DISPUTED · `INDIV` · missing-function
   - **What:** Several windows.zig declarations are omitted or relocated out of the bridge module
   - **Oracle:** `src/os/windows.zig:12-15, 23-36, 44-55, 80, 105-109, 216-223, 240-254, 257-260` → **Rustty:** `crates/rustty-os/src/windows.rs:15-22, 183-189, 214-220, 349-353`
@@ -72,10 +73,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **Oracle:** `src/renderer/Overlay.zig:195-197,245-247,291-293` → **Rustty:** `crates/rustty-renderer/src/overlay.rs:329-341,461-470,509-518`
   - **Audit's suggested fix:** Emit the three warnings through the crate's log macros with the oracle text and the `OverlayError` Display.
   - **Disposition (task-14c-2):** CLOSED — all three cited anchors are live in `overlay.rs`. The ledger is RIGHT and this task's brief was wrong to say there were two: `Overlay.zig:196` is a `std.log.warn`, i.e. the `.default` scope, so it emits with `target: ""` per DECISION-logging.md §6r while `:246`/`:292` use `renderer_overlay`. `OverlayError` has no `Display` impl (the audit's suggestion assumed one); the payloads render through the derived `Debug`, and `#[allow(dead_code)]` stays because rustc does not count a `Debug` field read as a use.
-- [ ] **S113-F4** · CONFIRMED · `LOG` · missing-branch
+- [x] **S113-F4** · CONFIRMED · `LOG` · missing-branch
   - **What:** present: re-enable GL_FRAMEBUFFER_SRGB failure is swallowed without the oracle's log.err
   - **Oracle:** `src/renderer/OpenGL.zig:307-309` → **Rustty:** `crates/rustty-renderer/src/opengl/opengl_impl.rs:406-410,499-501`
   - **Audit's suggested fix:** Call `log_err!("Error re-enabling GL_FRAMEBUFFER_SRGB, err={err}")` in the `is_err()` arm.
+  - **Disposition (task-14c-3):** CLOSED — both cited rustty anchors are live. The audit's suggested `log_err!` was the eprintln stand-in; this stage routed those macros through the `log` facade first, and these two sites emit `log::error!(target: LOG_SCOPE, ...)` directly. Both arms had discarded the payload with `.is_err()`; they bind it now. Test: `opengl_impl::tests::present_logs_when_the_srgb_re_enable_fails`, whose fixture is real GL — a blit into a surfaceless context's incomplete FBO 0 raises GL_INVALID_FRAMEBUFFER_OPERATION, which the very next `draw::enable` collects. NOTE for the re-audit: `present` returns `Ok` in that case, because `glBlitFramebuffer` is unchecked on BOTH sides (OpenGL.zig:316-327 has no `try`) — the restored `log.err` is the only report the failure ever gets.
 - [ ] **S113-F5** · CONFIRMED · `ALLOC` · behavioral-difference
   - **What:** wasm log: allocation-failure path returns silently in Zig but the Rust port always heap-formats
   - **Oracle:** `src/os/wasm/log.zig:32-50` → **Rustty:** `crates/rustty-os/src/wasm/log.rs:58-87`
