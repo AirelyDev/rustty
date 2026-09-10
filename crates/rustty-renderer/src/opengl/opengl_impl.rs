@@ -1041,4 +1041,66 @@ mod tests {
         assert_eq!(records, Vec::new());
         api.deinit();
     }
+
+    /// PARITY (S113-F4) — `present`'s `defer gl.enable(GL_FRAMEBUFFER_SRGB) catch
+    /// |err| log.err(...)` (OpenGL.zig:307-309). The port had
+    /// `if draw::enable(...).is_err() { }` — payload discarded, arm dead.
+    ///
+    /// FIXTURE, and why it is honest rather than injected: `present_to_default`
+    /// blits into the CURRENTLY BOUND draw framebuffer. Under a SURFACELESS offscreen
+    /// EGL context that is FBO 0, which has no attachments and is therefore
+    /// INCOMPLETE, so `glBlitFramebuffer` raises GL_INVALID_FRAMEBUFFER_OPERATION and
+    /// leaves it pending — and the very next `draw::enable` collects it through
+    /// `errors::get_error`. That is the real failure arm, reached by real GL, with no
+    /// fault injection.
+    ///
+    /// Asserts the full record vector (exactly one, level/target/message), and that
+    /// the blit's own error still reaches the caller — the reference `defer` LOGS and
+    /// swallows, it must not mask the `present` result.
+    #[test]
+    fn present_logs_when_the_srgb_re_enable_fails() {
+        let _guard = test_support::gl_lock();
+
+        let api = match OpenGL::init_offscreen(AlphaBlending::Native, 32, 32) {
+            Ok(o) => o,
+            Err(e) => {
+                test_support::require_gl_or_skip("present_logs_when_the_srgb_re_enable_fails", &e);
+                eprintln!(
+                    "no headless OpenGL {}.{} core context ({e}); skipping \
+                     present_logs_when_the_srgb_re_enable_fails",
+                    sys::MIN_VERSION_MAJOR,
+                    sys::MIN_VERSION_MINOR,
+                );
+                return;
+            }
+        };
+        let target = api.init_target(16, 16).expect("init_target");
+
+        let capture = crate::log_capture::start();
+        let res = api.present_to_default(&target);
+        let records = capture.messages();
+        drop(capture);
+
+        target.deinit();
+        api.deinit();
+
+        // If some driver DOES give a surfaceless context a complete default
+        // framebuffer, the blit succeeds, the re-enable succeeds and there is nothing
+        // to log — say so instead of asserting a wrong thing.
+        assert!(
+            res.is_err(),
+            "fixture precondition: the blit into an incomplete FBO 0 must fail; \
+             got Ok, so this host's surfaceless default framebuffer is complete \
+             and the S113-F4 arm cannot be exercised this way"
+        );
+        assert_eq!(
+            records,
+            vec![(
+                log::Level::Error,
+                LOG_SCOPE.to_string(),
+                "Error re-enabling GL_FRAMEBUFFER_SRGB, err=InvalidFramebufferOperation"
+                    .to_string(),
+            )]
+        );
+    }
 }
