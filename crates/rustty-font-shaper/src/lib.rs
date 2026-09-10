@@ -23,6 +23,12 @@
 //! Carved leaves-first (R1: every line/comment/test{} ported as the crate is
 //! carved, under the acyclicity gate per R4).
 
+// RUSTTY-ONLY, TEST-ONLY (task-14c-4): the capture logger that proves this
+// crate's restored `log::` call sites actually emit. Never compiled into the
+// production library. See the module header.
+#[cfg(test)]
+mod log_capture;
+
 pub mod backend;
 pub mod codepoint_resolver;
 pub mod collection;

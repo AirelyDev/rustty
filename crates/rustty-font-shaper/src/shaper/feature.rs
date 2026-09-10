@@ -596,4 +596,58 @@ mod tests {
 
         feats.deinit();
     }
+
+    // -----------------------------------------------------------------------
+    // task-14c-4 (S95-F1): the restored `log.warn` for an unparseable feature
+    // setting. RUSTTY-ONLY tests — the reference has no test for this warn (it
+    // has no way to observe `std.log` from a test) — but they observe the
+    // reference's OWN message text and level.
+    // -----------------------------------------------------------------------
+
+    /// The positive control: exactly ONE warn, carrying the reference's message
+    /// and the offending slice, at the reference's `.font_shaper` scope.
+    ///
+    /// Asserts on the FULL captured vector (`assert_eq!`), never `.any()` /
+    /// `.contains()`: a `.any()` here would still pass if the port emitted the
+    /// warn three times, or emitted an extra record for a setting that parses.
+    #[test]
+    fn append_from_string_warns_once_for_an_unparseable_setting() {
+        let cap = crate::log_capture::start();
+        let mut feats = FeatureList::default();
+        // `!!!` is not a valid feature setting; `liga` and `kern` are.
+        feats.append_from_string(b"liga, !!!, kern");
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "font_shaper".to_string(),
+                // The slice INCLUDES the trailing `,`: the reference's error
+                // recovery is `readSkipUntilDelimiterOrEof(reader, ',')`, which
+                // CONSUMES the delimiter, so `reader.buffer[i..reader.seek]`
+                // runs past it. The port's `ByteReader` reproduces that, and
+                // this golden pins it.
+                "failed to parse font feature setting: \" !!!,\"".to_string()
+            )],
+            messages
+        );
+        feats.deinit();
+    }
+
+    /// The negative control: a string in which every setting parses must emit
+    /// NOTHING. Without this, the test above could pass against a port that
+    /// warned unconditionally.
+    #[test]
+    fn append_from_string_is_silent_when_every_setting_parses() {
+        let cap = crate::log_capture::start();
+        let mut feats = FeatureList::default();
+        feats.append_from_string(b"liga, kern, -calt");
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
+        assert_eq!(3, feats.features.len());
+        feats.deinit();
+    }
 }

@@ -2517,4 +2517,81 @@ mod tests {
         lib.deinit();
         Ok(())
     }
+
+    // -----------------------------------------------------------------------
+    // task-14c-4 (S91-F8): the restored `if (comptime builtin.mode == .Debug)`
+    // variation-axes dump. RUSTTY-ONLY tests (the reference cannot observe
+    // `std.log` from a test), but they observe the reference's OWN message
+    // text, level and `.font_face` scope.
+    //
+    // No device or environment is required: both drive embedded font BYTES
+    // through FreeType, so there is no skip arm to make vacuous and no
+    // `RUSTTY_REQUIRE_*` strict-mode pivot is needed here.
+    // -----------------------------------------------------------------------
+
+    /// The RELEASE arm. `debug_mode == false` is the port of
+    /// `comptime builtin.mode == .Debug` being false, and it must emit NOTHING
+    /// even for a font that HAS variation axes — otherwise a release build of
+    /// rustty would log where the reference is silent.
+    #[test]
+    fn log_variation_axes_is_silent_when_not_debug_mode() -> Result<(), Error> {
+        let mut lib: Library = Library::init()?;
+        let mut face: Face = Face::init(
+            lib,
+            embedded::VARIABLE,
+            opts(size(14.0, super::super::DEFAULT_DPI, super::super::DEFAULT_DPI)),
+        )?;
+
+        let cap = crate::log_capture::start();
+        face.log_variation_axes(false)?;
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
+
+        face.deinit();
+        lib.deinit();
+        Ok(())
+    }
+
+    /// The DEBUG arm, positive control: a variable font emits the header debug
+    /// plus exactly one debug per axis, in the reference's order and wording.
+    ///
+    /// Asserts the FULL captured vector. A `.any()`/`.contains()` assertion here
+    /// would still pass if the port emitted the header twice, dropped every
+    /// axis but one, or emitted at the wrong level.
+    #[test]
+    fn log_variation_axes_emits_the_header_and_one_record_per_axis() -> Result<(), Error> {
+        let mut lib: Library = Library::init()?;
+        let mut face: Face = Face::init(
+            lib,
+            embedded::VARIABLE,
+            opts(size(14.0, super::super::DEFAULT_DPI, super::super::DEFAULT_DPI)),
+        )?;
+
+        let cap = crate::log_capture::start();
+        face.log_variation_axes(true)?;
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(
+            vec![
+                (
+                    log::Level::Debug,
+                    "font_face".to_string(),
+                    "variation axes font=JetBrains Mono".to_string()
+                ),
+                (
+                    log::Level::Debug,
+                    "font_face".to_string(),
+                    "variation axis: name=Weight id=wght min=100 max=800 def=400".to_string()
+                ),
+            ],
+            messages
+        );
+
+        face.deinit();
+        lib.deinit();
+        Ok(())
+    }
 }
