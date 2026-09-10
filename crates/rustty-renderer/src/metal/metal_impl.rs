@@ -77,9 +77,14 @@ use core::ffi::c_void;
 // const Allocator = std.mem.Allocator;
 // const builtin = @import("builtin");                    → #[cfg(target_os = "macos")]
 // const log = std.log.scoped(.metal);
-// PORT NOTE: no logging facade is wired in the port yet, so the `log.debug`
-// call sites (in `init`) are preserved as comments (mirrors the tree-wide
-// `std.log.scoped` handling in e.g. `shadertoy.rs`).
+// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
+// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
+// `log.*` sites are simply NOT RESTORED YET — the `metal` group's 14c stage owns them, and will
+// add `const LOG_SCOPE: &str = "metal";` here alongside the first live
+// emission. Until then each site stays a comment at its location. Scheduled
+// work, not a missing dependency.
+// The `log.debug` sites in `init` are among the ones it will fill.
 
 /// Names the anonymous `struct { width: u32, height: u32 }` that `surfaceSize`
 /// returns.
@@ -922,7 +927,8 @@ unsafe extern "C" fn display_callback(ctx: *mut c_void) {
         let renderer = ctx.cast::<Renderer>();
         if let Err(_err) = unsafe { Renderer::draw_frame_raw(renderer, true) } {
             // log.warn("Error drawing frame in display callback, err={}", .{err});
-            // (no logging facade wired in the port yet — tree-wide `log.*`-as-comment.)
+            // (not restored yet — the `metal` group's 14c stage; the facade itself IS
+            // wired, see `generic.rs`'s `macos_impl`.)
         }
     })
 }
@@ -1024,7 +1030,12 @@ mod tests {
             Ok(m) => m,
             // `init_offscreen` only ever yields `NoMetalDevice`; the `ObjCFailed`
             // arm (W1-3) is unreachable here but keeps the match exhaustive.
-            Err(Error::NoMetalDevice | Error::ObjCFailed) => {
+            Err(e @ (Error::NoMetalDevice | Error::ObjCFailed)) => {
+                // F5 strict-mode pivot (metal::test_support).
+                crate::metal::test_support::require_metal_or_skip(
+                    "metal_offscreen_construct_and_begin_frame",
+                    &format!("{e:?}"),
+                );
                 eprintln!("no Metal device; skipping");
                 return;
             }

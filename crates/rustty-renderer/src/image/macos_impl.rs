@@ -70,8 +70,14 @@ use crate::size::CellSize;
 use crate::overlay::Overlay;
 
 // const log = std.log.scoped(.renderer_image);
-// PORT NOTE: no logging facade is wired in the port yet (see the metal leaves);
-// every `log.warn(...)` call site is preserved as a comment at its location.
+// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
+// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
+// `log.*` sites are simply NOT RESTORED YET — row S117-F3's stage owns them, and will
+// add `const LOG_SCOPE: &str = "renderer_image";` here alongside the first live
+// emission. Until then each site stays a comment at its location. Scheduled
+// work, not a missing dependency.
+// Every `log.warn(...)` call site is preserved as a comment at its location.
 
 /// Generic image rendering state for the renderer. This stores all
 /// images and their placements and exposes only a limited public API
@@ -2110,9 +2116,17 @@ mod tests {
         let alloc = Global;
         // Need a live `Metal` for `upload`'s signature; the empty-map loop body
         // never touches it. Skip cleanly on headless CI.
-        let Ok(metal) = Metal::init_offscreen(AlphaBlending::Native, 4, 4) else {
-            eprintln!("no Metal device available; skipping image_empty_lifecycle");
-            return;
+        let metal = match Metal::init_offscreen(AlphaBlending::Native, 4, 4) {
+            Ok(m) => m,
+            Err(e) => {
+                // F5 strict-mode pivot (metal::test_support).
+                crate::metal::test_support::require_metal_or_skip(
+                    "image_empty_lifecycle",
+                    &format!("{e:?}"),
+                );
+                eprintln!("no Metal device available; skipping image_empty_lifecycle");
+                return;
+            }
         };
 
         let mut s = State::empty();

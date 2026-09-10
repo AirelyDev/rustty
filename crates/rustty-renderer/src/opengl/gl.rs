@@ -40,10 +40,18 @@ pub mod vertex_array;
 
 // PORT NOTE (`const log = std.log.scoped(.opengl);`): EVERY file in `pkg/opengl`
 // that logs declares that same line and shares the ONE `.opengl` scope
-// (`Shader.zig:5`, `Program.zig:5`, `OpenGL.zig:34`). This crate has no log facade
-// and R3 permits no new dependency for one, so the scoped logger is reproduced by
-// these macros, which emit `std.log`'s own wire format (`error(opengl): …`) — so
+// (`Shader.zig:5`, `Program.zig:5`, `OpenGL.zig:34`). These macros reproduce that
+// scoped logger by emitting `std.log`'s own wire format (`error(opengl): …`), so
 // every reference call site ports as a one-for-one textual match.
+//
+// CORRECTED (task-14c-1): the original note claimed "this crate has no log facade
+// and R3 permits no new dependency for one". Both halves are now false — the `log`
+// facade IS a dependency of this crate (`Cargo.toml`'s `log = { workspace = true }`,
+// DECISION-logging.md Option A, ratified), so these `eprintln!` bodies are exactly
+// the `eprintln!`-stand-in class that stage 14c is converting elsewhere. Rewriting
+// them to `log::error!(target: "opengl", …)` etc. is the OpenGL 14c stage's work,
+// not this one's; the macro NAMES and call sites do not have to change when it
+// happens, only the bodies here.
 //
 // They live HERE, at the package root, rather than in each leaf, because the
 // reference's logger is likewise one shared thing rather than a per-file one.

@@ -33,9 +33,15 @@ use crate::metal::render_pass::{Attachment, Options as RpOptions, RenderPass};
 use crate::metal::target::Target;
 
 // const log = std.log.scoped(.metal);
-// PORT NOTE: no logging facade is wired in the port yet (see `buffer.rs`); the
-// `log.err("Failed to present render target: err={}", ...)` call site lives in the
-// deferred Chunk-3 completion body below, preserved as a comment.
+// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
+// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
+// `log.*` sites are simply NOT RESTORED YET — row S118-F4's stage owns them, and will
+// add `const LOG_SCOPE: &str = "metal";` here alongside the first live
+// emission. Until then each site stays a comment at its location. Scheduled
+// work, not a missing dependency.
+// The `log.err("Failed to present render target: err={}", ...)` site lives in
+// the completion body (its live copy is in `generic.rs`'s completion trampoline).
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Error {

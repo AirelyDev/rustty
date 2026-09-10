@@ -27,9 +27,15 @@ use crate::metal::target::Target;
 use crate::metal::texture::Texture;
 
 // const log = std.log.scoped(.metal);
-// PORT NOTE: no logging facade is wired in the port yet (see `buffer.rs`);
-// `RenderPass.zig` has no `log` call sites, but the scoped-log declaration is
-// preserved as this comment for inventory parity.
+// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
+// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
+// `log.*` sites are simply NOT RESTORED YET — the `metal` group's 14c stage owns them, and will
+// add `const LOG_SCOPE: &str = "metal";` here alongside the first live
+// emission. Until then each site stays a comment at its location. Scheduled
+// work, not a missing dependency.
+// (`RenderPass.zig` has no `log` call sites, but the scoped-log declaration is
+// preserved above for inventory parity.)
 
 /// Where a color attachment renders to (RenderPass.zig `Options.Attachment.target`
 /// `union(enum)`). Per §A.3 the variants borrow (`&…`) rather than owning a

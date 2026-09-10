@@ -392,7 +392,18 @@ activate the gate was rejected as dishonest. See `GPU_RD_CHUNK5_DESIGN.md`.
   CLT). Mitigated by the `newLibraryWithSource` fallback (§3) — same pixels, no toolchain.
 - **Headless Metal device**: `MTLCreateSystemDefaultDevice()` works on a mac with any GPU incl.
   headless CI runners; it returns null on a truly GPU-less box → the test must `skip` (not fail)
-  when no device, guarded in `ci.sh`. No display/window needed (IOSurface offscreen).
+  when no device. No display/window needed (IOSurface offscreen).
+  **CORRECTED 2026-09-09 (task-14c-1):** this bullet previously said that skip was "guarded in
+  `ci.sh`". It was not — `grep -in metal .port/tools/ci.sh` returned nothing, so risk **F5**
+  above (a skip-on-nil golden is VACUOUS on a Metal-less runner) had no mitigation at all and a
+  green macOS leg proved nothing about live-Metal execution. F5's mitigation is now IMPLEMENTED,
+  and not in `ci.sh`: `crates/rustty-renderer/src/metal/test_support.rs` provides
+  `RUSTTY_REQUIRE_METAL=1` (`metal_required` / `require_metal_or_skip`, a direct sibling of the
+  `RUSTTY_REQUIRE_GL` precedent in `opengl/gl/test_support.rs`), EVERY "no Metal device" skip arm
+  in the crate calls the pivot immediately before printing its skip line, and
+  `.github/workflows/ci.yml` exports the variable on the macOS leg. Default (unset) behaviour is
+  unchanged: local dev without a GPU still skips cleanly. `ci.sh` stays the check SEQUENCE only;
+  the strict-mode switch is environment, matching how the GL lane already does it.
 - **Golden nondeterminism across GPU families** (Apple silicon vs Intel/discrete text AA, sRGB/
   P3 conversion). Mitigated by pinning to the non-sRGB grayscale-text path for the first golden
   and allowing ≤1-LSB tolerance; pin the CI runner GPU class if exact. Commit-time human review

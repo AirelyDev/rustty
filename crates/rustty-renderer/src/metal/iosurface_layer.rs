@@ -298,7 +298,12 @@ mod tests {
             Ok(m) => m,
             // `init_offscreen` only ever yields `NoMetalDevice`; the `ObjCFailed`
             // arm (W1-3) is unreachable here but keeps the match exhaustive.
-            Err(MetalError::NoMetalDevice | MetalError::ObjCFailed) => {
+            Err(e @ (MetalError::NoMetalDevice | MetalError::ObjCFailed)) => {
+                // F5 strict-mode pivot (metal::test_support).
+                crate::metal::test_support::require_metal_or_skip(
+                    "iosurface_layer_sets_surface_as_contents",
+                    &format!("{e:?}"),
+                );
                 eprintln!("no Metal device; skipping");
                 return;
             }

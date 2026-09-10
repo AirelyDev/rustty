@@ -762,8 +762,13 @@ enum Selected {
 /// is the macOS shaper); the Linux backend is `harfbuzz::Shaper`
 /// (`rustty_font_shaper::shape::Shaper` cfg-selects `harfbuzz` off macOS), so the arm
 /// is `shape::harfbuzz::Error` here. The payloads carry the faithful error value the
-/// reference logs (`log.warn`); rustty has no logging facade wired, so those sites
-/// are comments and the payload is unread — `#[allow(dead_code)]` until logging lands.
+/// reference logs (`log.warn`). UPDATED (task-14c-1): the `log` facade IS wired for
+/// this crate now, and the `macos_impl` twin's site is live
+/// (`log::warn!(target: LOG_SCOPE, "error building row y={y} err={err:?}")`); this
+/// OpenGL arm is simply not restored yet — the Linux 14c stage owns it and will add
+/// `const LOG_SCOPE: &str = "generic_renderer";` here. `#[allow(dead_code)]` records
+/// that the payload is carried-but-unread until then. Scheduled work, not a missing
+/// dependency.
 #[derive(Debug)]
 #[allow(dead_code)]
 enum RebuildRowError {
@@ -823,7 +828,8 @@ unsafe fn opengl_frame_completed(renderer: *mut (), target: *mut Target, health:
     if health == crate::Health::Healthy && !unsafe { (*renderer).api.owns_context() } {
         if let Err(_err) = unsafe { (*renderer).api.present_to_default(&*target) } {
             // log.err("Failed to present render target: err={}", .{err});
-            // (no logging facade wired; swallow — the reference `catch` logs + swallows.)
+            // (not restored yet — the Linux 14c stage; the facade itself IS wired as of
+            // task-14c-1. Swallow, as the reference `catch` logs + swallows.)
         }
     }
     // block.renderer.frameCompleted(health);

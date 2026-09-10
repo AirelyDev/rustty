@@ -23,7 +23,15 @@ use rustty_util::quirks::inlineAssert as assert;
 use crate::metal::api;
 
 // const log = std.log.scoped(.metal);
-// PORT NOTE: no logging facade is wired in the port yet (see `shadertoy.rs`).
+// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
+// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
+// `log.*` sites are simply NOT RESTORED YET — the `metal` group's 14c stage owns them, and will
+// add `const LOG_SCOPE: &str = "metal";` here alongside the first live
+// emission. Until then each site stays a comment at its location. Scheduled
+// work, not a missing dependency.
+// (`Texture.zig` has no `log` call site of its own — the scoped-log declaration
+// is kept above for inventory parity.)
 
 /// Options for initializing a texture.
 //

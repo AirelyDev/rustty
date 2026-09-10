@@ -28,9 +28,11 @@ use crate::Health;
 use super::target::Target;
 
 // const log = std.log.scoped(.opengl);
-// PORT NOTE: `Frame.zig`'s `log.err("Failed to present render target: err={}", …)`
-// call site lives in the deferred completion body (the renderer task authors it),
-// preserved as a comment there; no logging facade is wired in the port yet.
+// PORT NOTE (updated task-14c-1): `Frame.zig`'s
+// `log.err("Failed to present render target: err={}", …)` call site lives in the
+// completion body (`generic/linux_impl.rs`), preserved as a comment there. It is
+// NOT RESTORED YET — the OpenGL 14c stage owns it; the `log` facade itself IS wired
+// for this crate now. Scheduled work, not a missing dependency.
 
 /// The present + report tail of `Frame.complete` (`Frame.zig:62-70`), type-erased
 /// so `Frame` compiles before `GenericRenderer(OpenGL)` exists. The renderer task

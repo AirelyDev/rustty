@@ -33,9 +33,14 @@ use objc2_metal::{
 use crate::metal::api;
 
 // const log = std.log.scoped(.metal);
-// PORT NOTE: no logging facade is wired in the port yet, so the `log.err` call
-// site (in `checkError`) is preserved as a comment (mirrors the tree-wide
-// `std.log.scoped` handling in e.g. `buffer.rs`/`shadertoy.rs`).
+// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
+// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
+// `log.*` sites are simply NOT RESTORED YET — row S118-F4's stage owns them, and will
+// add `const LOG_SCOPE: &str = "metal";` here alongside the first live
+// emission. Until then each site stays a comment at its location. Scheduled
+// work, not a missing dependency.
+// The `log.err` site in `checkError` is the one it will fill.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Error {
@@ -185,7 +190,7 @@ impl Pipeline {
         //     log.err("metal error={s}", .{str.cstringPtr(.ascii).?});
         // objc2's `newRenderPipelineStateWithDescriptor:error:_` returns a `Result`
         // whose `Err` carries the same `NSError`; the log site is preserved above
-        // (no logging facade is wired in the port yet), and the `errdefer
+        // (not restored yet — row S118-F4; the facade itself IS wired), and the `errdefer
         // pipeline_state.release()` dissolves into `?` early-return + `Retained`
         // Drop (a failed return drops nothing — the state is not yet stored).
         let state = opts

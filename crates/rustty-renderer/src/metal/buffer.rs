@@ -35,9 +35,14 @@ use objc2_metal::{MTLBuffer, MTLDevice};
 use crate::metal::api;
 
 // const log = std.log.scoped(.metal);
-// PORT NOTE: no logging facade is wired in the port yet, so the `log.warn` call
-// site (in `sync`) is preserved as a comment (mirrors the tree-wide
-// `std.log.scoped` handling in e.g. `shadertoy.rs`).
+// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
+// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
+// `log.*` sites are simply NOT RESTORED YET — the `metal` group's 14c stage owns them, and will
+// add `const LOG_SCOPE: &str = "metal";` here alongside the first live
+// emission. Until then each site stays a comment at its location. Scheduled
+// work, not a missing dependency.
+// The `log.warn` site in `sync` is the one it will fill.
 
 /// The error set for buffer operations.
 //
@@ -300,6 +305,11 @@ mod p3_buffer_alloc_tests {
     #[test]
     fn sync_grows_by_element_count_not_by_size_of_squared() {
         let Some(dev) = device() else {
+            // F5 strict-mode pivot (metal::test_support).
+            crate::metal::test_support::require_metal_or_skip(
+                "sync_grows_by_element_count_not_by_size_of_squared",
+                &"MTLCreateSystemDefaultDevice() returned nil",
+            );
             eprintln!("SKIP: no Metal device on this host");
             return;
         };
@@ -347,6 +357,11 @@ mod p3_buffer_alloc_tests {
     #[test]
     fn sync_from_array_lists_grows_by_element_count() {
         let Some(dev) = device() else {
+            // F5 strict-mode pivot (metal::test_support).
+            crate::metal::test_support::require_metal_or_skip(
+                "sync_from_array_lists_grows_by_element_count",
+                &"MTLCreateSystemDefaultDevice() returned nil",
+            );
             eprintln!("SKIP: no Metal device on this host");
             return;
         };

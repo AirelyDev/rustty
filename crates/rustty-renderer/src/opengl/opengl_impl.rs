@@ -405,8 +405,8 @@ impl OpenGL {
         // defer gl.enable(GL_FRAMEBUFFER_SRGB) catch |err| log.err(...);
         if draw::enable(gl::FRAMEBUFFER_SRGB).is_err() {
             // log.err("Error re-enabling GL_FRAMEBUFFER_SRGB, err={}", .{err});
-            // (no logging facade wired in the port yet — swallow, as the reference
-            // defer does after logging.)
+            // (not restored yet — the OpenGL 14c stage; the facade itself IS wired as
+            // of task-14c-1. Swallow, as the reference `defer` does after logging.)
         }
 
         blit?;
@@ -497,7 +497,8 @@ impl OpenGL {
         })();
 
         if draw::enable(gl::FRAMEBUFFER_SRGB).is_err() {
-            // (no logging facade wired; swallow as the reference `defer` does.)
+            // (not restored yet — the OpenGL 14c stage; the facade itself IS wired as
+            // of task-14c-1. Swallow, as the reference `defer` does.)
         }
 
         blit?;

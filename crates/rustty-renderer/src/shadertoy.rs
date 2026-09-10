@@ -56,9 +56,14 @@ use crate::generic::{Path, RepeatablePath};
 static SHADER_FFI_LOCK: Mutex<()> = Mutex::new(());
 
 // const log = std.log.scoped(.shadertoy);
-// PORT NOTE: no logging facade is wired in the port yet, so the `log.info`/
-// `log.warn` call sites are preserved as comments (mirrors the tree-wide
-// `std.log.scoped` handling in e.g. rustty-config path.rs).
+// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
+// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
+// `log.*` sites are simply NOT RESTORED YET — row S117-F3's stage owns them, and will
+// add `const LOG_SCOPE: &str = "shadertoy";` here alongside the first live
+// emission. Until then each site stays a comment at its location. Scheduled
+// work, not a missing dependency.
+// The `log.info`/`log.warn` sites below are the ones it will fill.
 
 /// S117-F1: an align(16)-carrying newtype over `[f32; 4]`.
 ///
@@ -247,7 +252,7 @@ pub fn load_from_files(paths: &RepeatablePath, target: Target) -> Result<Vec<CSt
             Err(Error::FileNotFound) if optional => continue,
             Err(err) => return Err(err),
         };
-        // log.info("loaded custom shader path={s}", .{path});   // no logging facade (comment)
+        // log.info("loaded custom shader path={s}", .{path});   // not restored yet (S117-F3)
         // try list.append(alloc_gpa, shader);
         list.push(shader);
     }
@@ -326,7 +331,7 @@ pub fn load_from_file(path: &CStr, target: Target) -> Result<CString, Error> {
     let mut spirv: Vec<u8> = Vec::new();
     let mut errlog = SpirvLog::default();
     if let Err(err) = spirv_from_glsl(&mut spirv, Some(&mut errlog), &glsl) {
-        // log.warn("spirv error path={s} info={s} debug={s}", ...);   // no facade
+        // log.warn("spirv error path={s} info={s} debug={s}", ...);   // not restored yet (S117-F3)
         let _ = &errlog; // (info/debug observed only by the elided log.warn)
         return Err(err);
     }
@@ -780,7 +785,9 @@ fn spv_cross(
 const SPVC_TRUE: spvc::spvc_bool = 1;
 
 // PORT NOTE: the reference's inline spirv-cross error callback. `msg` logging is
-// elided (no logging facade); the callback signature matches `spvc_error_callback`.
+// still elided — not because there is no facade (there is, as of task-14c-1) but
+// because this site is row S117-F3's, not this stage's. The callback signature
+// matches `spvc_error_callback`.
 // fn callback(_: ?*anyopaque, msg_ptr: [*c]const u8) callconv(.c) void {
 //     const msg = std.mem.sliceTo(msg_ptr, 0);
 //     std.log.warn("spirv-cross error message={s}", .{msg});

@@ -56,8 +56,14 @@ use crate::image::{Pending, PixelFormat};
 use crate::size::{CellSize, Size};
 
 // const log = std.log.scoped(.renderer_overlay);
-// PORT NOTE: no logging facade is wired in the port yet (see the metal leaves);
-// every `log.warn(...)` call site is preserved as a comment at its location.
+// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
+// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
+// `log.*` sites are simply NOT RESTORED YET — row S117-F3's stage owns them, and will
+// add `const LOG_SCOPE: &str = "renderer_overlay";` here alongside the first live
+// emission. Until then each site stays a comment at its location. Scheduled
+// work, not a missing dependency.
+// Every `log.warn(...)` call site is preserved as a comment at its location.
 
 /// The colors we use for overlays.
 // pub const Color = enum { hyperlink, semantic_prompt, semantic_input };
@@ -335,9 +341,10 @@ impl Overlay {
                     fill_color,
                 ) {
                     // std.log.warn("Error drawing hyperlink border: {}", .{err});
-                    // PORT NOTE: no logging facade wired (see overlay.rs top);
-                    // the reference `catch |err| log.warn(...)` collapses to
-                    // swallowing the error, preserved as this comment.
+                    // PORT NOTE (updated task-14c-1): the facade is wired; this
+                    // site is not restored yet (see overlay.rs top). The reference
+                    // `catch |err| log.warn(...)` still collapses to swallowing the
+                    // error, preserved as this comment.
                 }
             }
         }
@@ -764,8 +771,8 @@ impl Overlay {
 //
 // PORT NOTE: the `Fill`/`Stroke` payloads carry the faithful z2d error set; the
 // reference consumes them via `log.warn("... {}", .{err})` at each rect-helper
-// call site, but no logging facade is wired in the port yet (see the file-top
-// PORT NOTE), so those sites swallow the error (`if let Err(_err)`) and the
+// call site, which is not restored yet (see the file-top PORT NOTE — the facade
+// itself IS wired), so those sites swallow the error (`if let Err(_err)`) and the
 // payloads are carried-but-unread. `#[allow(dead_code)]` records that — the
 // variants ARE constructed (via `map_err`); only the inner error is not yet
 // read.

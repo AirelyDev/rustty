@@ -3167,12 +3167,14 @@ mod macos_impl {
                     match std::io::Read::read_to_end(&mut file, &mut buf) {
                         Ok(_) if buf.len() <= u32::MAX as usize => buf,
                         // Over the reference's `maxInt(u32)` cap: the reference's
-                        // `readToEndAlloc` fails with `error.StreamTooLong`, which its
-                        // `{}` renders as that name.
+                        // `readToEndAlloc` fails with `error.StreamTooLong`. Zig's `{}`
+                        // on an error value prints `error.` + the name, so the oracle's
+                        // rendering of this arm is `...: error.StreamTooLong` — the
+                        // prefix is part of the message text, not decoration.
                         Ok(_) => {
                             log::warn!(
                                 target: LOG_SCOPE,
-                                "error reading background image file \"{path_display}\": StreamTooLong"
+                                "error reading background image file \"{path_display}\": error.StreamTooLong"
                             );
                             break 'load_background None;
                         }
@@ -5880,13 +5882,15 @@ mod macos_impl {
         if health == crate::Health::Healthy {
             // block.renderer.api.present(block.target.*, block.sync) catch |err|
             //     log.err("Failed to present render target: err={}", .{err});   (Frame.zig:82-88)
-            // No logging facade is wired in the port yet (see the tree-wide `log.*`-as-
-            // comment convention); the present-failure `log.err` stays the R1 comment
-            // above. We still consume the now-fallible Result faithfully (the layer path
-            // can fail; W1-3). `&mut api` reborrow through the raw ptr; `&*ctx.target` is
-            // the `*mut Target` back to `&Target`.
+            // NOT RESTORED YET (updated task-14c-1): the `log` facade IS wired for this
+            // crate now, but this site's oracle is `renderer/metal/Frame.zig:82-88`, which
+            // belongs to row S118-F4 (the `metal` group's 14c stage) rather than to
+            // S115-F4/S116-F2 — so the present-failure `log.err` stays the R1 comment
+            // above until that stage runs. We still consume the now-fallible Result
+            // faithfully (the layer path can fail; W1-3). `&mut api` reborrow through the
+            // raw ptr; `&*ctx.target` is the `*mut Target` back to `&Target`.
             if let Err(_e) = unsafe { (*renderer).api.present(&*ctx.target, ctx.sync) } {
-                // log.err("Failed to present render target: err={}", .{_e}); — no facade
+                // log.err("Failed to present render target: err={}", .{_e});  (S118-F4)
             }
         }
         // block.renderer.frameCompleted(health);
@@ -7020,7 +7024,13 @@ mod macos_impl {
             // Headless CI may lack a Metal device → skip cleanly.
             let api = match Metal::init_offscreen(AlphaBlending::Native, 256, 256) {
                 Ok(m) => m,
-                Err(_) => {
+                Err(e) => {
+                    // F5 strict-mode pivot (metal::test_support): a no-op by
+                    // default, a panic under `RUSTTY_REQUIRE_METAL=1`.
+                    crate::metal::test_support::require_metal_or_skip(
+                        "test_renderer",
+                        &format!("{e:?}"),
+                    );
                     eprintln!("no Metal device; skipping");
                     return None;
                 }
@@ -7236,7 +7246,12 @@ mod macos_impl {
             // the (Metal-independent) font-grid build. `init_offscreen` returns
             // `Err(NoMetalDevice)` on a headless host (the `metal.rs` / `test_renderer`
             // precedent).
-            if Metal::init_offscreen(AlphaBlending::Native, 1, 1).is_err() {
+            if let Err(e) = Metal::init_offscreen(AlphaBlending::Native, 1, 1) {
+                // F5 strict-mode pivot (metal::test_support).
+                crate::metal::test_support::require_metal_or_skip(
+                    "golden_renderer",
+                    &format!("{e:?}"),
+                );
                 eprintln!("no Metal device; skipping golden");
                 return None;
             }
@@ -7337,6 +7352,9 @@ mod macos_impl {
                 let Some((records, path_display)) =
                     prep_with_bg_file("xyz", b"not an image at all")
                 else {
+                    // `golden_renderer` already ran the F5 strict-mode pivot; on a
+                    // host without a device we say so rather than skipping silently.
+                    eprintln!("no Metal device; skipping unknown_file_type_warns");
                     return;
                 };
 
@@ -7371,6 +7389,11 @@ mod macos_impl {
                 let Some((records, path_display)) =
                     prep_with_bg_file("gif", b"GIF89a\x01\x00\x01\x00\x00\x00\x00;")
                 else {
+                    // `golden_renderer` already ran the F5 strict-mode pivot.
+                    eprintln!(
+                        "no Metal device; skipping \
+                         unsupported_file_type_warns_with_the_full_oracle_message"
+                    );
                     return;
                 };
 
@@ -7400,6 +7423,11 @@ mod macos_impl {
             #[test]
             fn missing_background_image_file_warns_through_the_facade() {
                 let Some(mut r) = golden_renderer(4, 2) else {
+                    // `golden_renderer` already ran the F5 strict-mode pivot.
+                    eprintln!(
+                        "no Metal device; skipping \
+                         missing_background_image_file_warns_through_the_facade"
+                    );
                     return;
                 };
 
@@ -7460,7 +7488,12 @@ mod macos_impl {
             #[test]
             fn windowed_renderer_init_then_deinit_round_trips() {
                 // Probe: skip cleanly on hosts with no Metal device (headless CI).
-                if Metal::init_offscreen(AlphaBlending::Native, 1, 1).is_err() {
+                if let Err(e) = Metal::init_offscreen(AlphaBlending::Native, 1, 1) {
+                    // F5 strict-mode pivot (metal::test_support).
+                    crate::metal::test_support::require_metal_or_skip(
+                        "windowed_renderer_init_then_deinit_round_trips",
+                        &format!("{e:?}"),
+                    );
                     eprintln!("no Metal device; skipping windowed_lifecycle");
                     return;
                 }

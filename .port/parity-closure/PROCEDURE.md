@@ -124,6 +124,30 @@ python3 .port/tools/gates/check_parity_closure.py
    the line a site falls on, it is inside — `WAIVED` is the safe answer, and understating
    completion costs nothing.
 
+3. **The ledger's cited anchors are approximate — enumerate the oracle yourself.** Found
+   2026-09-10, while closing the font-shaper rows. Three defects, all in the audit's own
+   citations, all verified against the pin:
+
+   - **Line drift.** `S84-F1` cites `CodepointResolver.zig:138-140, 176, 195-199, 218,
+     265-268, 290-293`; the pin's actual calls are at `136, 171, 186, 203, 217, 261, 290`.
+     A consistent 6-9 line drift, and the same drift runs through all thirteen of
+     `Collection.zig`'s anchors. The audit was written against a slightly different tree.
+   - **Under-count.** That same row lists **six** anchors for **seven** real calls — the
+     `found codepoint 0x{X} in fallback face={s}` site at `:203` belongs to no row at all.
+     `S91-F7` under-counts the same way: four anchors, five live calls in
+     `face/web_canvas.zig`, with `:317` unclaimed.
+   - **Comment counts are not site counts.** A grep for commented `log.` lines counts both
+     the multi-line block comment reproducing a reference call AND its one-line stub, so it
+     reports roughly double. Three tasks were briefed with such a count; all three had to
+     correct it, and one would have emitted ~15 duplicate log lines had it obeyed.
+
+   **So: the anchors locate a region, they do not enumerate the work.** For any row citing a
+   range, enumerate the ORACLE's own calls in that region and confirm each has a live
+   counterpart. Expect sites the port dropped leaving no comment; expect a reference call
+   inlined into a different Rust function than the file layout implies. Report the inventory
+   as oracle-sites-found versus live-sites-after, per file, and explain every difference. A
+   site you find that no row claims still gets restored — say so under its own heading.
+
 2. **The gate counts rows, not sites.** A row citing twenty sites closes on the same single
    `state` cell as a row citing one. Closing a multi-site row therefore requires checking every
    cited anchor is actually live, not just that the row's *theme* was addressed. The 14b review

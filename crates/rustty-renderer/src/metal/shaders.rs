@@ -38,8 +38,14 @@ use crate::metal::pipeline::{
 use crate::shaders::Image;
 
 // const log = std.log.scoped(.metal);
-// PORT NOTE: no logging facade is wired in the port yet (see `buffer.rs`); the
-// `log.debug`/`log.warn`/`log.err` call sites are preserved as comments.
+// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
+// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
+// `log.*` sites are simply NOT RESTORED YET — row S119-F1's stage owns them, and will
+// add `const LOG_SCOPE: &str = "metal";` here alongside the first live
+// emission. Until then each site stays a comment at its location. Scheduled
+// work, not a missing dependency.
+// The `log.debug`/`log.warn`/`log.err` sites below are the ones it will fill.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Error {

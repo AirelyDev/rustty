@@ -43,9 +43,12 @@ use super::pipeline::{
 };
 
 // const log = std.log.scoped(.opengl);
-// PORT NOTE: no logging facade is wired in the port yet (see `buffer.rs`); the
-// reference's `log.warn` call site (in `Shaders.init`'s post-pipeline recovery) is
-// preserved as a comment at that site.
+// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// (`Cargo.toml`'s `log = { workspace = true }`). The reference's `log.warn` call
+// site (in `Shaders.init`'s post-pipeline recovery) is simply NOT RESTORED YET —
+// the OpenGL 14c stage owns it and will add `const LOG_SCOPE: &str = "opengl";`
+// here. Until then it is preserved as a comment at that site. Scheduled work, not
+// a missing dependency.
 
 /// PORTS: the inferred error set of `Shaders.init` — a pipeline compile/link
 /// failure surfacing through [`Pipeline::init`]. Rust has no globally-interned

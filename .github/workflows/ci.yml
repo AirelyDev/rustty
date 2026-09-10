@@ -135,6 +135,23 @@ jobs:
           echo "RUSTTY_REQUIRE_GL=1" >> "$GITHUB_ENV"
           echo "LIBGL_ALWAYS_SOFTWARE=1" >> "$GITHUB_ENV"
 
+      # GPU_RD_BLUEPRINT risk F5, implemented by task-14c-1: the Metal-backed
+      # renderer tests (goldens, resource leaves, draw plumbing, the windowed
+      # lifecycle KAT, the restored-diagnostics tests) clean-skip when
+      # `MTLCreateSystemDefaultDevice()` returns nil, so a green macOS run proved
+      # nothing about live-Metal execution. The blueprint's mitigation is "pin a
+      # known-Metal runner AND make the job fail-if-skipped"; its :392-395 claimed
+      # that was "guarded in ci.sh", but `grep -in metal .port/tools/ci.sh`
+      # returned nothing — it had never been implemented. RUSTTY_REQUIRE_METAL=1
+      # flips every clean-skip arm into a hard failure (`metal::test_support`
+      # docs, the RUSTTY_REQUIRE_GL sibling above), so those tests are EXECUTED
+      # evidence on this leg, and a runner image that silently loses its Metal
+      # device turns the job RED instead of green. Env setup, not a check — the
+      # check sequence stays solely in ci.sh.
+      - name: Require live Metal (macOS only, GPU_RD_BLUEPRINT F5)
+        if: runner.os == 'macOS'
+        run: echo "RUSTTY_REQUIRE_METAL=1" >> "$GITHUB_ENV"
+
       - name: Cache cargo registry + target
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:

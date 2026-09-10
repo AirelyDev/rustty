@@ -45,6 +45,11 @@ pub mod render_pass;
 pub mod sampler;
 pub mod shaders;
 pub mod target;
+// RUSTTY-ONLY `#[cfg(test)]` strict-mode pivot for every "no Metal device ⇒ skip"
+// arm in this crate (GPU_RD_BLUEPRINT risk F5). Sibling of
+// `opengl::gl::test_support`'s `RUSTTY_REQUIRE_GL`.
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod texture;
 
 // The `Metal` graphics-API wrapper (ports `src/renderer/Metal.zig`). Re-exported
@@ -76,6 +81,12 @@ mod tests {
     fn creates_buffer_texture_sampler_without_panic() {
         // Headless CI may lack a Metal device; skip cleanly if so.
         let Some(device) = MTLCreateSystemDefaultDevice() else {
+            // F5 strict-mode pivot: no-op by default, panics under
+            // `RUSTTY_REQUIRE_METAL=1` (metal::test_support).
+            super::test_support::require_metal_or_skip(
+                "creates_buffer_texture_sampler_without_panic",
+                &"MTLCreateSystemDefaultDevice() returned nil",
+            );
             eprintln!("no Metal device available; skipping Metal resource-leaf smoke test");
             return;
         };
@@ -180,6 +191,11 @@ mod tests {
         use super::target::{Options as TargetOptions, Target};
 
         let Some(device) = MTLCreateSystemDefaultDevice() else {
+            // F5 strict-mode pivot (metal::test_support).
+            super::test_support::require_metal_or_skip(
+                "draw_plumbing_smoke",
+                &"MTLCreateSystemDefaultDevice() returned nil",
+            );
             eprintln!("no Metal device available; skipping Metal draw-plumbing smoke test");
             return;
         };

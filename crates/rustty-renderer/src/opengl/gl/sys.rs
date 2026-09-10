@@ -19,9 +19,12 @@
 //! path. It is the Rust analogue of "whatever made a context current before
 //! `prepareContext` ran", not a port of anything.
 //!
-//! PORT NOTE (`const log = std.log.scoped(.opengl);`, `OpenGL.zig:34`): this
-//! crate has no log facade and R3 permits no new dependency for one, so the
-//! scoped logger is reproduced by the `log_*!` macros in the parent module. They
+//! PORT NOTE (`const log = std.log.scoped(.opengl);`, `OpenGL.zig:34`): the
+//! scoped logger is reproduced by the `log_*!` macros in the parent module. (The
+//! original note's "this crate has no log facade and R3 permits no new dependency
+//! for one" is false as of task-14c-1 — see the CORRECTED paragraph on those
+//! macros in `gl.rs`; routing them through `log::` is the OpenGL 14c stage's
+//! work.) They
 //! emit `std.log`'s own wire format (`error(opengl): …`), so every reference call
 //! site ports as a one-for-one textual match. Task 1 declared them privately here
 //! (this was then the only file in the package that logged); Task 3 hoisted them

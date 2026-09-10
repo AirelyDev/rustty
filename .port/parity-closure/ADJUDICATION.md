@@ -504,7 +504,7 @@ matter how well documented") they are `WAIVED`, not `CLOSED`.
 - 16 of the row's 18 cited oracle anchors are now live `log::` emissions with the
   `generic_renderer` target: `generic.zig:1960, 1974, 1995, 2002, 2137, 2627,
   2777, 3143, 3150, 3222, 3237, 3461, 3476, 3481, 3514, 3518`. This includes the
-  four `eprintln!` stand-ins on the `prepBackgroundImage` path, and the row's own
+  three `eprintln!` stand-ins on the `prepBackgroundImage` path, and the row's own
   "open/read warnings merged" complaint: the port had collapsed the reference's
   two distinct messages into one invented string over a single `std::fs::read`;
   that is now `File::open` + `read_to_end` with the oracle's two messages verbatim.
