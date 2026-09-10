@@ -13,7 +13,7 @@
 //   const env = makeWebCanvasEnv({ memory: () => inst.exports.memory, createCanvas });
 //   inst = await WebAssembly.instantiate(mod, { env });
 
-export function makeWebCanvasEnv({ memory, createCanvas }) {
+export function makeWebCanvasEnv({ memory, createCanvas, log }) {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
 
@@ -26,6 +26,21 @@ export function makeWebCanvasEnv({ memory, createCanvas }) {
   const readStr = (ptr, len) => decoder.decode(u8().subarray(ptr, ptr + len));
 
   return {
+    // `rustty-os::wasm::log::freestanding::log`'s sink. NOT a Canvas op: the
+    // wasm artifacts import `env.log` because `install_wasm_log_backend()`
+    // registers `WasmLogger` as the `log` facade backend, and the debug build
+    // keeps the restored `log::warn!`/`log::debug!` call sites (the release
+    // build strips the bodies but the import survives). It is therefore a
+    // REQUIRED import of both builds — without it `WebAssembly.instantiate`
+    // throws LinkError — so the glue supplies a discarding default. Pass `log`
+    // to observe records instead (`.port/tools/wasm-log-emission.mjs`).
+    log:
+      log ??
+      ((ptr, len) => {
+        void ptr;
+        void len;
+      }),
+
     // document.createElement("canvas") -> handle
     rustty_wc_canvas_new() {
       const h = nextCanvas++;

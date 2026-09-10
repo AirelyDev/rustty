@@ -1070,6 +1070,43 @@ was under-researched and a ~40-line sibling harness is the right shape; (b) the 
 `crates/rustty/src/main_rustty.rs:131-137`, which still says bootstrap sites read
 `Logging::default()` — superseded by the round-3 fix.
 
+> **(a) is DONE (task-14wasm-proof, 2026-09-10).** The harness is
+> **`.port/tools/wasm-log-emission.mjs`**. It compiles the DEBUG
+> `rustty_web_canvas.wasm`, instantiates it with an `env.log` that decodes the `(ptr, len)` string
+> out of `ex.memory.buffer` — that import IS the terminal end of
+> `log::warn!` → `WasmLogger::log` → `freestanding::log` → `js::log` — and drives
+> `rustty_wc_alloc` → `rustty_wc_deferred_new` → `rustty_wc_deferred_has_codepoint` with an invalid
+> CSS font value. It CAPTURES, verbatim:
+>
+> ```
+> warning(deferred_face): failed to init face for codepoint check face=OTTOgarbage-font-bytes err=InvalidFontStr
+> ```
+>
+> Those three exports are `rustty-web-canvas`-owned and were among the twelve that did NOT install a
+> backend before the artifact-wide installer fix (`3a90678c`), so this is the exact host that used to
+> lose the record. A counterfactual artifact built with the twelve install calls deleted captures
+> NOTHING through the same drive (`--expect-silence`), and each build is RED under the other's
+> expectation — the installer fix is proven to have mattered at RUNTIME, not merely in the source
+> scan the two `install_contract_tests` perform. Two negative controls guard the positive arm (the
+> presentation fast path emits zero records; a well-formed font emits the success-path
+> `debug(font_face): face initialized: monospace` and its `metrics font=… value=FaceMetrics {…}`
+> sibling, and zero failure warns). DEBUG-only is asserted in the harness, since `release` strips the
+> call sites. Wired into `ci.sh`'s opt-in `--webgl` lane (which already requires the wasm32 target),
+> ahead of the Chrome-dependent gate; it exits 3 BLOCKED rather than skipping green when the artifact
+> or `node` is absent.
+>
+> Two brief-vs-code corrections found while building it, recorded here because they outlive the task:
+> 1. **A well-formed input through this path does NOT produce zero log calls.** `Face::init_named`'s
+>    success arm emits `face initialized: {}` and `calc_metrics` emits `metrics font=… value=…`, both
+>    at DEBUG, and `install_log_backend` sets `LevelFilter::Debug` under `debug_assertions`. The
+>    negative control has to be the presentation FAST PATH (which never initializes a face); the
+>    well-formed case is asserted by its exact records instead.
+> 2. **`.port/tools/web-canvas-glue.mjs` did not supply `env.log`,** so
+>    `web-canvas-instantiate.mjs` had been failing with `LinkError: Import #14 "env" "log"` ever
+>    since `install_wasm_log_backend()` put that import into the artifact — an unnoticed regression
+>    from this plan's own work, in a script no gate runs. The glue now supplies a discarding default
+>    (overridable), and that script passes again.
+
 ## §8 — task-14wasm: comptime-equivalent gate for the wasm release build (2026-09-09)
 
 **Blocks stage 14c. Closes no ledger rows.** A review of stage 14b found that §6's claim (quoted and

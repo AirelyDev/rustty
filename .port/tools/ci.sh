@@ -202,11 +202,14 @@
 # OPT-IN LANES (never part of the default run):
 #   --webgl  WS14's wasm+browser lane — builds the freestanding
 #            `rustty_wasm.wasm` cdylib and runs the WebGL2 pixel gate in headless
-#            Chrome. Opt-in because it is heavyweight relative to everything above
-#            (a second full target's artifacts + a browser process) and needs two
-#            things CI boxes do not all have: the `wasm32-unknown-unknown` rustup
-#            target and a Chrome/Chromium binary. Missing either is exit 3
-#            (BLOCKED/env-missing) — NEVER a silent green.
+#            Chrome, plus the wasm LOG-EMISSION gate (task-14wasm-proof: the only
+#            EXECUTED evidence that a restored wasm logging site actually reaches
+#            a sink — everything else in that class is compile-only). Opt-in
+#            because it is heavyweight relative to everything above (a second full
+#            target's artifacts + a browser process) and needs things CI boxes do
+#            not all have: the `wasm32-unknown-unknown` rustup target, `node`, and
+#            a Chrome/Chromium binary. Missing any is exit 3 (BLOCKED/env-missing)
+#            — NEVER a silent green.
 #
 # Usage:
 #   bash .port/tools/ci.sh                   # full run (what CI runs)
@@ -323,6 +326,35 @@ run_webgl_lane() {
     echo ">> FAIL: the freestanding rustty_wasm.wasm cdylib did not build" >&2
     return 1
   fi
+  # task-14wasm-proof. Ordered BEFORE the Chrome gate: it needs no browser, so on
+  # a box with the wasm target but no Chrome its verdict is still reported before
+  # the lane blocks. It lives in THIS lane rather than the default run because it
+  # needs a DEBUG wasm build — `log`'s `release_max_level_off` strips the restored
+  # call sites in release, so a release artifact would pass while observing an
+  # emission that does not exist — and the default run neither builds wasm nor
+  # requires the wasm32 target. It is the ONLY executed evidence for the whole
+  # class of wasm logging restorations; the two `install_contract_tests` that run
+  # in the default lane check the source WIRING, not runtime behaviour.
+  if ! command -v node >/dev/null 2>&1; then
+    echo "BLOCKED: node is not on PATH; the wasm log-emission gate cannot run." >&2
+    echo "         Exiting 3 (environment missing) rather than passing vacuously." >&2
+    return 3
+  fi
+  echo "--- .port/tools/build-web-canvas-wasm.sh   (DEBUG — no --release, deliberately)"
+  if ! sh "$ROOT/.port/tools/build-web-canvas-wasm.sh"; then
+    echo ">> FAIL: the DEBUG rustty_web_canvas.wasm cdylib did not build" >&2
+    return 1
+  fi
+  echo "--- node .port/tools/wasm-log-emission.mjs"
+  node "$ROOT/.port/tools/wasm-log-emission.mjs"
+  rc_log=$?
+  if [ "$rc_log" -ne 0 ]; then
+    # 3 = artifact absent. The build above just produced it, so an absent artifact
+    # here is a real failure of this lane, not a missing environment: fail loudly.
+    echo ">> FAIL: the wasm log-emission gate exited $rc_log" >&2
+    return 1
+  fi
+
   echo "--- .port/tools/gates/ws14_webgl_browser_gate.sh"
   sh "$GATES/ws14_webgl_browser_gate.sh"
 }
