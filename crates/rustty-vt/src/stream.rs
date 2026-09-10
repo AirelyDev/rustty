@@ -1148,7 +1148,12 @@ impl<'a, H: Handler> Stream<'a, H> {
                         //     .{cp},
                         //     0x80,
                         // );
-                        log_unsupported_once(&SEEN_UTF8_DECODED_C1, 0x80);
+                        if log_unsupported_once(&SEEN_UTF8_DECODED_C1, 0x80) {
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "ignoring UTF-8-decoded C1 controls, first: 0x{cp:x}"
+                            );
+                        }
                     }
                     i += 1;
                     continue;
@@ -1839,7 +1844,12 @@ impl<'a, H: Handler> Stream<'a, H> {
                 //     .{c},
                 //     0x80,
                 // );
-                log_unsupported_once(&SEEN_UTF8_DECODED_C1, 0x80);
+                if log_unsupported_once(&SEEN_UTF8_DECODED_C1, 0x80) {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring UTF-8-decoded C1 controls, first: 0x{c:x}"
+                    );
+                }
                 return;
             }
 
@@ -2080,7 +2090,11 @@ impl<'a, H: Handler> Stream<'a, H> {
         }
 
         if DEBUG {
-            log::info!(target: LOG_SCOPE, "action: {:?}", parser::Action::CsiDispatch(Box::new(action.clone())));
+            log::info!(
+                target: LOG_SCOPE,
+                "action: {:?}",
+                parser::Action::CsiDispatch(Box::new(action.clone()))
+            );
         }
         self.csi_dispatch(action);
     }
@@ -2097,6 +2111,13 @@ impl<'a, H: Handler> Stream<'a, H> {
         // which is strictly equivalent to `ESC` plus `c - 0x40`.
         // if (c > 0x7F) { ... self.escDispatch(.{ .intermediates = &.{}, .final = c - 0x40 }); return; }
         if c > 0x7F {
+            // @branchHint(.unlikely);
+            // log.info("executing C1 0x{x} as ESC {c}", .{ c, c - 0x40 });
+            log::info!(
+                target: LOG_SCOPE,
+                "executing C1 0x{c:x} as ESC {}",
+                char::from(c - 0x40)
+            );
             self.esc_dispatch(parser::ESC {
                 intermediates: parser::InlineVec::new(),
                 final_: c - 0x40,
@@ -2133,7 +2154,9 @@ impl<'a, H: Handler> Stream<'a, H> {
 
             // else => logUnsupportedOnce("invalid C0 character, ignoring: 0x{x}", .{c}, c),
             _ => {
-                log_unsupported_once(&SEEN_INVALID_C0, u16::from(c));
+                if log_unsupported_once(&SEEN_INVALID_C0, u16::from(c)) {
+                    log::warn!(target: LOG_SCOPE, "invalid C0 character, ignoring: 0x{c:x}");
+                }
             }
         }
     }
@@ -2180,13 +2203,23 @@ impl<'a, H: Handler> Stream<'a, H> {
                             _ => {
                                 // @branchHint(.unlikely);
                                 // log.warn("invalid cursor up command: {f}", .{input});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "invalid cursor up command: {input:?}"
+                                );
                                 return;
                             }
                         },
                     }),
 
                     // else => log.warn("ignoring unimplemented CSI A with intermediates: {s}", ...),
-                    _ => {}
+                    _ => {
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "ignoring unimplemented CSI A with intermediates: {}",
+                            String::from_utf8_lossy(&input.intermediates)
+                        );
+                    }
                 }
             }
 
@@ -2200,13 +2233,20 @@ impl<'a, H: Handler> Stream<'a, H> {
                         _ => {
                             // @branchHint(.unlikely);
                             // log.warn("invalid cursor down command: {f}", .{input});
+                            log::warn!(target: LOG_SCOPE, "invalid cursor down command: {input:?}");
                             return;
                         }
                     },
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI B with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI B with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // CUF - Cursor Right
@@ -2222,13 +2262,23 @@ impl<'a, H: Handler> Stream<'a, H> {
                             _ => {
                                 // @branchHint(.unlikely);
                                 // log.warn("invalid cursor right command: {f}", .{input});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "invalid cursor right command: {input:?}"
+                                );
                                 return;
                             }
                         },
                     }),
 
                     // else => log.warn("ignoring unimplemented CSI C with intermediates: {s}", ...),
-                    _ => {}
+                    _ => {
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "ignoring unimplemented CSI C with intermediates: {}",
+                            String::from_utf8_lossy(&input.intermediates)
+                        );
+                    }
                 }
             }
 
@@ -2242,13 +2292,20 @@ impl<'a, H: Handler> Stream<'a, H> {
                         _ => {
                             // @branchHint(.unlikely);
                             // log.warn("invalid cursor left command: {f}", .{input});
+                            log::warn!(target: LOG_SCOPE, "invalid cursor left command: {input:?}");
                             return;
                         }
                     },
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI D with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI D with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // CNL - Cursor Next Line
@@ -2262,6 +2319,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                             _ => {
                                 // @branchHint(.unlikely);
                                 // log.warn("invalid cursor up command: {f}", .{input});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "invalid cursor up command: {input:?}"
+                                );
                                 return;
                             }
                         },
@@ -2270,7 +2331,13 @@ impl<'a, H: Handler> Stream<'a, H> {
                 }
 
                 // else => log.warn("ignoring unimplemented CSI E with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI E with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // CPL - Cursor Previous Line
@@ -2284,6 +2351,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                             _ => {
                                 // @branchHint(.unlikely);
                                 // log.warn("invalid cursor down command: {f}", .{input});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "invalid cursor down command: {input:?}"
+                                );
                                 return;
                             }
                         },
@@ -2292,7 +2363,13 @@ impl<'a, H: Handler> Stream<'a, H> {
                 }
 
                 // else => log.warn("ignoring unimplemented CSI F with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI F with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // HPA - Cursor Horizontal Position Absolute
@@ -2306,13 +2383,20 @@ impl<'a, H: Handler> Stream<'a, H> {
                         _ => {
                             // @branchHint(.unlikely);
                             // log.warn("invalid HPA command: {f}", .{input});
+                            log::warn!(target: LOG_SCOPE, "invalid HPA command: {input:?}");
                             return;
                         }
                     },
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI G with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI G with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // CUP - Set Cursor Position.
@@ -2337,6 +2421,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                             _ => {
                                 // @branchHint(.unlikely);
                                 // log.warn("invalid CUP command: {f}", .{input});
+                                log::warn!(target: LOG_SCOPE, "invalid CUP command: {input:?}");
                                 return;
                             }
                         };
@@ -2344,7 +2429,13 @@ impl<'a, H: Handler> Stream<'a, H> {
                     }
 
                     // else => log.warn("ignoring unimplemented CSI H with intermediates: {s}", ...),
-                    _ => {}
+                    _ => {
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "ignoring unimplemented CSI H with intermediates: {}",
+                            String::from_utf8_lossy(&input.intermediates)
+                        );
+                    }
                 }
             }
 
@@ -2356,12 +2447,19 @@ impl<'a, H: Handler> Stream<'a, H> {
                     1 => input.params[0],
                     _ => {
                         // log.warn("invalid horizontal tab command: {f}", .{input});
+                        log::warn!(target: LOG_SCOPE, "invalid horizontal tab command: {input:?}");
                         return;
                     }
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI I with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI I with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // Erase Display
@@ -2385,6 +2483,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                     Some(p) => p,
                     None => {
                         // log.warn("invalid erase display command: {f}", .{input});
+                        log::warn!(target: LOG_SCOPE, "invalid erase display command: {input:?}");
                         return;
                     }
                 };
@@ -2409,6 +2508,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                     Some(m) => m,
                     None => {
                         // log.warn("invalid erase display command: {f}", .{input});
+                        log::warn!(target: LOG_SCOPE, "invalid erase display command: {input:?}");
                         return;
                     }
                 };
@@ -2450,6 +2550,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                     None => {
                         // @branchHint(.unlikely);
                         // log.warn("invalid erase line command: {f}", .{input});
+                        log::warn!(target: LOG_SCOPE, "invalid erase line command: {input:?}");
                         return;
                     }
                 };
@@ -2479,6 +2580,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                     None => {
                         // @branchHint(.unlikely);
                         // log.warn("invalid erase line command: {f}", .{input});
+                        log::warn!(target: LOG_SCOPE, "invalid erase line command: {input:?}");
                         return;
                     }
                 };
@@ -2495,6 +2597,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                     csi::EraseLine::Other(_) => {
                         // @branchHint(.unlikely);
                         // log.warn("invalid erase line mode: {}", .{mode});
+                        log::warn!(target: LOG_SCOPE, "invalid erase line mode: {mode:?}");
                     }
                 }
             }
@@ -2508,12 +2611,19 @@ impl<'a, H: Handler> Stream<'a, H> {
                     1 => input.params[0] as usize,
                     _ => {
                         // log.warn("invalid IL command: {f}", .{input});
+                        log::warn!(target: LOG_SCOPE, "invalid IL command: {input:?}");
                         return;
                     }
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI L with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI L with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // DL - Delete Lines
@@ -2525,12 +2635,19 @@ impl<'a, H: Handler> Stream<'a, H> {
                     1 => input.params[0] as usize,
                     _ => {
                         // log.warn("invalid DL command: {f}", .{input});
+                        log::warn!(target: LOG_SCOPE, "invalid DL command: {input:?}");
                         return;
                     }
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI M with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI M with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // Delete Character (DCH)
@@ -2541,12 +2658,22 @@ impl<'a, H: Handler> Stream<'a, H> {
                     1 => input.params[0] as usize,
                     _ => {
                         // log.warn("invalid delete characters command: {f}", .{input});
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "invalid delete characters command: {input:?}"
+                        );
                         return;
                     }
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI P with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI P with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // Scroll Up (SD)
@@ -2557,12 +2684,19 @@ impl<'a, H: Handler> Stream<'a, H> {
                     1 => input.params[0] as usize,
                     _ => {
                         // log.warn("invalid scroll up command: {f}", .{input});
+                        log::warn!(target: LOG_SCOPE, "invalid scroll up command: {input:?}");
                         return;
                     }
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI S with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI S with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // Scroll Down (SD)
@@ -2573,12 +2707,19 @@ impl<'a, H: Handler> Stream<'a, H> {
                     1 => input.params[0] as usize,
                     _ => {
                         // log.warn("invalid scroll down command: {f}", .{input});
+                        log::warn!(target: LOG_SCOPE, "invalid scroll down command: {input:?}");
                         return;
                     }
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI T with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI T with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // Cursor Tabulation Control
@@ -2614,6 +2755,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                     }
 
                     // log.warn("invalid cursor tabulation control: {f}", .{input});
+                    log::warn!(target: LOG_SCOPE, "invalid cursor tabulation control: {input:?}");
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -2625,12 +2767,23 @@ impl<'a, H: Handler> Stream<'a, H> {
                         && input.params[0] == 5
                     {
                         self.handler.tab_reset();
+                    } else {
+                        // else log.warn("invalid cursor tabulation control: {f}", .{input});
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "invalid cursor tabulation control: {input:?}"
+                        );
                     }
-                    // else log.warn("invalid cursor tabulation control: {f}", .{input});
                 }
 
                 // else => log.warn("ignoring unimplemented CSI W with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI W with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // Erase Characters (ECH)
@@ -2645,12 +2798,22 @@ impl<'a, H: Handler> Stream<'a, H> {
                         _ => {
                             // @branchHint(.unlikely);
                             // log.warn("invalid erase characters command: {f}", .{input});
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "invalid erase characters command: {input:?}"
+                            );
                             return;
                         }
                     }),
 
                     // else => log.warn("ignoring unimplemented CSI X with intermediates: {s}", ...),
-                    _ => {}
+                    _ => {
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "ignoring unimplemented CSI X with intermediates: {}",
+                            String::from_utf8_lossy(&input.intermediates)
+                        );
+                    }
                 }
             }
 
@@ -2662,12 +2825,22 @@ impl<'a, H: Handler> Stream<'a, H> {
                     1 => input.params[0],
                     _ => {
                         // log.warn("invalid horizontal tab back command: {f}", .{input});
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "invalid horizontal tab back command: {input:?}"
+                        );
                         return;
                     }
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI Z with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI Z with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // HPR - Cursor Horizontal Position Relative
@@ -2679,13 +2852,20 @@ impl<'a, H: Handler> Stream<'a, H> {
                         1 => input.params[0],
                         _ => {
                             // log.warn("invalid HPR command: {f}", .{input});
+                            log::warn!(target: LOG_SCOPE, "invalid HPR command: {input:?}");
                             return;
                         }
                     },
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI a with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI a with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // Repeat Previous Char (REP)
@@ -2697,12 +2877,19 @@ impl<'a, H: Handler> Stream<'a, H> {
                     1 => usize::from(input.params[0]),
                     _ => {
                         // log.warn("invalid print repeat command: {f}", .{input});
+                        log::warn!(target: LOG_SCOPE, "invalid print repeat command: {input:?}");
                         return;
                     }
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI b with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI b with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // c - Device Attributes (DA1)
@@ -2728,14 +2915,19 @@ impl<'a, H: Handler> Stream<'a, H> {
                     //     .{input},
                     //     if (input.params.len > 0) input.params[0] else 0,
                     // );
-                    log_unsupported_once(
+                    if log_unsupported_once(
                         &SEEN_INVALID_DEVICE_ATTRIBUTES,
                         if input.params.len() > 0 {
                             input.params[0]
                         } else {
                             0
                         },
-                    );
+                    ) {
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "invalid device attributes command: {input:?}"
+                        );
+                    }
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -2750,13 +2942,20 @@ impl<'a, H: Handler> Stream<'a, H> {
                         1 => input.params[0],
                         _ => {
                             // log.warn("invalid VPA command: {f}", .{input});
+                            log::warn!(target: LOG_SCOPE, "invalid VPA command: {input:?}");
                             return;
                         }
                     },
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI d with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI d with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // VPR - Cursor Vertical Position Relative
@@ -2768,13 +2967,20 @@ impl<'a, H: Handler> Stream<'a, H> {
                         1 => input.params[0],
                         _ => {
                             // log.warn("invalid VPR command: {f}", .{input});
+                            log::warn!(target: LOG_SCOPE, "invalid VPR command: {input:?}");
                             return;
                         }
                     },
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI e with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI e with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // TBC - Tab Clear
@@ -2793,11 +2999,17 @@ impl<'a, H: Handler> Stream<'a, H> {
                             },
                             Err(_) => {
                                 // log.warn("invalid tab clear mode: {}", .{input.params[0]});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "invalid tab clear mode: {}",
+                                    input.params[0]
+                                );
                                 return;
                             }
                         },
                         _ => {
                             // log.warn("invalid tab clear command: {f}", .{input});
+                            log::warn!(target: LOG_SCOPE, "invalid tab clear command: {input:?}");
                             return;
                         }
                     };
@@ -2806,12 +3018,20 @@ impl<'a, H: Handler> Stream<'a, H> {
                         csi::TabClear::Current => self.handler.tab_clear_current(),
                         csi::TabClear::All => self.handler.tab_clear_all(),
                         // _ => log.warn("unknown tab clear mode: {}", .{mode}),
-                        csi::TabClear::Other(_) => {}
+                        csi::TabClear::Other(_) => {
+                            log::warn!(target: LOG_SCOPE, "unknown tab clear mode: {mode:?}");
+                        }
                     }
                 }
 
                 // else => log.warn("ignoring unimplemented CSI g with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI g with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // SM - Set Mode
@@ -2828,6 +3048,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                     }
 
                     // log.warn("invalid set mode command: {f}", .{input});
+                    log::warn!(target: LOG_SCOPE, "invalid set mode command: {input:?}");
                     break 'mode;
                 };
 
@@ -2838,7 +3059,9 @@ impl<'a, H: Handler> Stream<'a, H> {
                         self.handler.set_mode(Mode { mode });
                     } else {
                         // logUnsupportedOnce("unimplemented mode: {}", .{mode_int}, mode_int);
-                        log_unsupported_once(&SEEN_UNIMPLEMENTED_MODE, mode_int);
+                        if log_unsupported_once(&SEEN_UNIMPLEMENTED_MODE, mode_int) {
+                            log::warn!(target: LOG_SCOPE, "unimplemented mode: {mode_int}");
+                        }
                     }
                 }
             }
@@ -2857,6 +3080,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                     }
 
                     // log.warn("invalid set mode command: {f}", .{input});
+                    log::warn!(target: LOG_SCOPE, "invalid set mode command: {input:?}");
                     break 'mode;
                 };
 
@@ -2867,7 +3091,9 @@ impl<'a, H: Handler> Stream<'a, H> {
                         self.handler.reset_mode(Mode { mode });
                     } else {
                         // logUnsupportedOnce("unimplemented mode: {}", .{mode_int}, mode_int);
-                        log_unsupported_once(&SEEN_UNIMPLEMENTED_MODE, mode_int);
+                        if log_unsupported_once(&SEEN_UNIMPLEMENTED_MODE, mode_int) {
+                            log::warn!(target: LOG_SCOPE, "unimplemented mode: {mode_int}");
+                        }
                     }
                 }
             }
@@ -2930,6 +3156,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                                 _ => {
                                     // @branchHint(.unlikely);
                                     // log.warn("invalid setModifyKeyFormat: {f}", .{input});
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "invalid setModifyKeyFormat: {input:?}"
+                                    );
                                     break 'blk;
                                 }
                             };
@@ -2938,6 +3168,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                             if input.params.len() > 2 {
                                 // @branchHint(.unlikely);
                                 // log.warn("invalid setModifyKeyFormat: {f}", .{input});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "invalid setModifyKeyFormat: {input:?}"
+                                );
                                 break 'blk;
                             }
 
@@ -2970,10 +3204,16 @@ impl<'a, H: Handler> Stream<'a, H> {
                         //     input.intermediates[0],
                         // ),
                         _ => {
-                            log_unsupported_once(
+                            if log_unsupported_once(
                                 &SEEN_UNKNOWN_CSI_M_INTERMEDIATE,
                                 u16::from(input.intermediates[0]),
-                            );
+                            ) {
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "unknown CSI m with intermediate: {}",
+                                    input.intermediates[0]
+                                );
+                            }
                         }
                     },
 
@@ -2983,6 +3223,11 @@ impl<'a, H: Handler> Stream<'a, H> {
                         // `vim --clean` uses `CSI ? 4 m` and I don't know what
                         // that means.
                         // log.warn("ignoring unimplemented CSI m with intermediates: {s}", ...);
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "ignoring unimplemented CSI m with intermediates: {}",
+                            String::from_utf8_lossy(&input.intermediates)
+                        );
                     }
                 }
             }
@@ -2996,6 +3241,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                     // if (input.params.len != 1) { ... }
                     if input.params.len() != 1 {
                         // log.warn("invalid device status report command: {f}", .{input});
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "invalid device status report command: {input:?}"
+                        );
                         return;
                     }
 
@@ -3009,6 +3258,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                         }
 
                         // log.warn("invalid set mode command: {f}", .{input});
+                        log::warn!(target: LOG_SCOPE, "invalid set mode command: {input:?}");
                         return;
                     };
 
@@ -3017,6 +3267,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                         Some(req) => req,
                         None => {
                             // log.warn("invalid device status report command: {f}", .{input});
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "invalid device status report command: {input:?}"
+                            );
                             return;
                         }
                     };
@@ -3043,11 +3297,23 @@ impl<'a, H: Handler> Stream<'a, H> {
                         }
 
                         // else => log.warn("unknown CSI n with intermediate: {}", ...),
-                        _ => {}
+                        _ => {
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "unknown CSI n with intermediate: {}",
+                                input.intermediates[0]
+                            );
+                        }
                     },
 
                     // else => log.warn("ignoring unimplemented CSI n with intermediates: {s}", ...),
-                    _ => {}
+                    _ => {
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "ignoring unimplemented CSI n with intermediates: {}",
+                            String::from_utf8_lossy(&input.intermediates)
+                        );
+                    }
                 }
             }
 
@@ -3075,12 +3341,18 @@ impl<'a, H: Handler> Stream<'a, H> {
                         }
 
                         // log.warn("ignoring unimplemented CSI p with intermediates: {s}", ...);
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "ignoring unimplemented CSI p with intermediates: {}",
+                            String::from_utf8_lossy(&input.intermediates)
+                        );
                         break 'decrqm;
                     };
 
                     // if (input.params.len != 1) { ... }
                     if input.params.len() != 1 {
                         // log.warn("invalid DECRQM command: {f}", .{input});
+                        log::warn!(target: LOG_SCOPE, "invalid DECRQM command: {input:?}");
                         break 'decrqm;
                     }
 
@@ -3100,7 +3372,13 @@ impl<'a, H: Handler> Stream<'a, H> {
                 }
 
                 // else => log.warn("ignoring unimplemented CSI p with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI p with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // 'q' => switch (input.intermediates.len) { ... }
@@ -3125,11 +3403,20 @@ impl<'a, H: Handler> Stream<'a, H> {
                                 6 => ansi::CursorStyle::SteadyBar,
                                 _ => {
                                     // log.warn("invalid cursor style value: {}", .{input.params[0]});
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "invalid cursor style value: {}",
+                                        input.params[0]
+                                    );
                                     return;
                                 }
                             },
                             _ => {
                                 // log.warn("invalid set cursor style command: {f}", .{input});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "invalid set cursor style command: {input:?}"
+                                );
                                 return;
                             }
                         };
@@ -3156,6 +3443,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                             Some(m) => m,
                             None => {
                                 // log.warn("invalid set protected mode command: {f}", .{input});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "invalid set protected mode command: {input:?}"
+                                );
                                 return;
                             }
                         };
@@ -3172,11 +3463,22 @@ impl<'a, H: Handler> Stream<'a, H> {
                     b'>' => self.handler.xtversion(),
                     _ => {
                         // log.warn("ignoring unimplemented CSI q with intermediates: {s}", ...);
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "ignoring unimplemented CSI q with intermediates: {}",
+                            String::from_utf8_lossy(&input.intermediates)
+                        );
                     }
                 },
 
                 // else => log.warn("ignoring unimplemented CSI p with intermediates: {s}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI p with intermediates: {}",
+                        String::from_utf8_lossy(&input.intermediates)
+                    );
+                }
             },
 
             // 'r' => { ... }
@@ -3202,6 +3504,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                         _ => {
                             // @branchHint(.unlikely);
                             // log.warn("invalid DECSTBM command: {f}", .{input});
+                            log::warn!(target: LOG_SCOPE, "invalid DECSTBM command: {input:?}");
                         }
                     },
 
@@ -3216,16 +3519,30 @@ impl<'a, H: Handler> Stream<'a, H> {
                                     self.handler.restore_mode(Mode { mode });
                                 } else {
                                     // log.warn("unimplemented restore mode: {}", .{mode_int});
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "unimplemented restore mode: {mode_int}"
+                                    );
                                 }
                             }
                         }
 
                         // else => log.warn("unknown CSI s with intermediate: {f}", .{input}),
-                        _ => {}
+                        _ => {
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "unknown CSI s with intermediate: {input:?}"
+                            );
+                        }
                     },
 
                     // else => log.warn("ignoring unimplemented CSI s with intermediates: {f}", ...),
-                    _ => {}
+                    _ => {
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "ignoring unimplemented CSI s with intermediates: {input:?}"
+                        );
+                    }
                 }
             }
 
@@ -3248,7 +3565,9 @@ impl<'a, H: Handler> Stream<'a, H> {
                         bottom_right: input.params[1],
                     }),
                     // else => log.warn("invalid DECSLRM command: {f}", .{input}),
-                    _ => {}
+                    _ => {
+                        log::warn!(target: LOG_SCOPE, "invalid DECSLRM command: {input:?}");
+                    }
                 },
 
                 // 1 => switch (input.intermediates[0]) {
@@ -3261,6 +3580,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                                 self.handler.save_mode(Mode { mode });
                             } else {
                                 // log.warn("unimplemented save mode: {}", .{mode_int});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "unimplemented save mode: {mode_int}"
+                                );
                             }
                         }
                     }
@@ -3277,11 +3600,19 @@ impl<'a, H: Handler> Stream<'a, H> {
                                 1 => true,
                                 _ => {
                                     // log.warn("invalid XTSHIFTESCAPE command: {f}", .{input});
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "invalid XTSHIFTESCAPE command: {input:?}"
+                                    );
                                     break 'capture;
                                 }
                             },
                             _ => {
                                 // log.warn("invalid XTSHIFTESCAPE command: {f}", .{input});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "invalid XTSHIFTESCAPE command: {input:?}"
+                                );
                                 break 'capture;
                             }
                         };
@@ -3290,11 +3621,18 @@ impl<'a, H: Handler> Stream<'a, H> {
                     }
 
                     // else => log.warn("unknown CSI s with intermediate: {f}", .{input}),
-                    _ => {}
+                    _ => {
+                        log::warn!(target: LOG_SCOPE, "unknown CSI s with intermediate: {input:?}");
+                    }
                 },
 
                 // else => log.warn("ignoring unimplemented CSI s with intermediates: {f}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI s with intermediates: {input:?}"
+                    );
+                }
             },
 
             // XTWINOPS
@@ -3310,32 +3648,52 @@ impl<'a, H: Handler> Stream<'a, H> {
                                 if input.params.len() == 1 {
                                     // report the text area size in pixels
                                     self.handler.size_report(csi::SizeReportStyle::Csi14T);
+                                } else {
+                                    // else log.warn("ignoring CSI 14 t with extra parameters: {f}", ...),
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "ignoring CSI 14 t with extra parameters: {input:?}"
+                                    );
                                 }
-                                // else log.warn("ignoring CSI 14 t with extra parameters: {f}", ...),
                             }
                             // 16 => if (input.params.len == 1) { ... } else log.warn(...),
                             16 => {
                                 if input.params.len() == 1 {
                                     // report cell size in pixels
                                     self.handler.size_report(csi::SizeReportStyle::Csi16T);
+                                } else {
+                                    // else log.warn("ignoring CSI 16 t with extra parameters: {f}", ...),
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "ignoring CSI 16 t with extra parameters: {input:?}"
+                                    );
                                 }
-                                // else log.warn("ignoring CSI 16 t with extra parameters: {f}", ...),
                             }
                             // 18 => if (input.params.len == 1) { ... } else log.warn(...),
                             18 => {
                                 if input.params.len() == 1 {
                                     // report screen size in characters
                                     self.handler.size_report(csi::SizeReportStyle::Csi18T);
+                                } else {
+                                    // else log.warn("ignoring CSI 18 t with extra parameters: {f}", ...),
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "ignoring CSI 18 t with extra parameters: {input:?}"
+                                    );
                                 }
-                                // else log.warn("ignoring CSI 18 t with extra parameters: {f}", ...),
                             }
                             // 21 => if (input.params.len == 1) { ... } else log.warn(...),
                             21 => {
                                 if input.params.len() == 1 {
                                     // report window title
                                     self.handler.size_report(csi::SizeReportStyle::Csi21T);
+                                } else {
+                                    // else log.warn("ignoring CSI 21 t with extra parameters: {f}", ...),
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "ignoring CSI 21 t with extra parameters: {input:?}"
+                                    );
                                 }
-                                // else log.warn("ignoring CSI 21 t with extra parameters: {f}", ...),
                             }
                             // inline 22, 23 => |number| if (...) { ... } else log.warn(...),
                             number @ (22 | 23) => {
@@ -3363,10 +3721,13 @@ impl<'a, H: Handler> Stream<'a, H> {
                                 //     .{input},
                                 //     input.params[0],
                                 // ),
-                                else {
-                                    log_unsupported_once(
-                                        &SEEN_CSI_22_23_T_EXTRA_PARAMS,
-                                        input.params[0],
+                                else if log_unsupported_once(
+                                    &SEEN_CSI_22_23_T_EXTRA_PARAMS,
+                                    input.params[0],
+                                ) {
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "ignoring CSI 22/23 t with extra parameters: {input:?}"
                                     );
                                 }
                             }
@@ -3376,17 +3737,32 @@ impl<'a, H: Handler> Stream<'a, H> {
                             //     input.params[0],
                             // ),
                             _ => {
-                                log_unsupported_once(
+                                if log_unsupported_once(
                                     &SEEN_CSI_T_UNIMPLEMENTED_PARAM,
                                     input.params[0],
-                                );
+                                ) {
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "ignoring CSI t with unimplemented parameter: {input:?}"
+                                    );
+                                }
                             }
                         }
+                    } else {
+                        // else log.err("ignoring CSI t with no parameters: {f}", .{input});
+                        log::error!(
+                            target: LOG_SCOPE,
+                            "ignoring CSI t with no parameters: {input:?}"
+                        );
                     }
-                    // else log.err("ignoring CSI t with no parameters: {f}", .{input});
                 }
                 // else => log.warn("ignoring unimplemented CSI t with intermediates: {f}", ...),
-                _ => {}
+                _ => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring unimplemented CSI t with intermediates: {input:?}"
+                    );
+                }
             },
 
             // 'u' => switch (input.intermediates.len) { ... }
@@ -3406,6 +3782,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                                 Some(v) => v,
                                 None => {
                                     // log.warn("invalid pushKittyKeyboard command: {f}", .{input});
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "invalid pushKittyKeyboard command: {input:?}"
+                                    );
                                     break 'push;
                                 }
                             }
@@ -3438,6 +3818,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                                 Some(v) => v,
                                 None => {
                                     // log.warn("invalid setKittyKeyboard command: {f}", .{input});
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "invalid setKittyKeyboard command: {input:?}"
+                                    );
                                     break 'set;
                                 }
                             }
@@ -3471,17 +3855,25 @@ impl<'a, H: Handler> Stream<'a, H> {
                             3 => self.handler.kitty_keyboard_set_not(kitty_flags),
                             _ => {
                                 // log.warn("invalid setKittyKeyboard command: {f}", .{input});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "invalid setKittyKeyboard command: {input:?}"
+                                );
                                 break 'set;
                             }
                         }
                     }
 
                     // else => log.warn("unknown CSI s with intermediate: {f}", .{input}),
-                    _ => {}
+                    _ => {
+                        log::warn!(target: LOG_SCOPE, "unknown CSI s with intermediate: {input:?}");
+                    }
                 },
 
                 // else => log.warn("ignoring unimplemented CSI u: {f}", .{input}),
-                _ => {}
+                _ => {
+                    log::warn!(target: LOG_SCOPE, "ignoring unimplemented CSI u: {input:?}");
+                }
             },
 
             // ICH - Insert Blanks
@@ -3493,12 +3885,15 @@ impl<'a, H: Handler> Stream<'a, H> {
                     _ => {
                         // @branchHint(.unlikely);
                         // log.warn("invalid ICH command: {f}", .{input});
+                        log::warn!(target: LOG_SCOPE, "invalid ICH command: {input:?}");
                         return;
                     }
                 }),
 
                 // else => log.warn("ignoring unimplemented CSI @: {f}", .{input}),
-                _ => {}
+                _ => {
+                    log::warn!(target: LOG_SCOPE, "ignoring unimplemented CSI @: {input:?}");
+                }
             },
 
             // DECSASD - Select Active Status Display
@@ -3508,11 +3903,13 @@ impl<'a, H: Handler> Stream<'a, H> {
                 // if (input.intermediates.len != 1 or input.intermediates[0] != '$') { ... }
                 if input.intermediates.len() != 1 || input.intermediates[0] != b'$' {
                     // log.warn("unimplemented CSI callback: {f}", .{input});
+                    log::warn!(target: LOG_SCOPE, "unimplemented CSI callback: {input:?}");
                     break 'decsasd;
                 }
                 // if (input.params.len != 1) { ... }
                 if input.params.len() != 1 {
                     // log.warn("unimplemented CSI callback: {f}", .{input});
+                    log::warn!(target: LOG_SCOPE, "unimplemented CSI callback: {input:?}");
                     break 'decsasd;
                 }
 
@@ -3522,6 +3919,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                     1 => ansi::StatusDisplay::StatusLine,
                     _ => {
                         // log.warn("unimplemented CSI callback: {f}", .{input});
+                        log::warn!(target: LOG_SCOPE, "unimplemented CSI callback: {input:?}");
                         break 'decsasd;
                     }
                 };
@@ -3530,7 +3928,9 @@ impl<'a, H: Handler> Stream<'a, H> {
             }
 
             // else => log.warn("unimplemented CSI action: {f}", .{input}),
-            _ => {}
+            _ => {
+                log::warn!(target: LOG_SCOPE, "unimplemented CSI action: {input:?}");
+            }
         }
     }
 
@@ -3573,6 +3973,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                 if std::str::from_utf8(&title).is_err() {
                     // @branchHint(.unlikely);
                     // log.warn("change title request: invalid utf-8, ignoring request", .{});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "change title request: invalid utf-8, ignoring request"
+                    );
                     return;
                 }
 
@@ -3580,7 +3984,7 @@ impl<'a, H: Handler> Stream<'a, H> {
             }
 
             // .change_window_icon => |icon| { ... }
-            osc::Command::ChangeWindowIcon(_icon) => {
+            osc::Command::ChangeWindowIcon(icon) => {
                 // @branchHint(.likely);
                 // logUnsupportedOnce(
                 //     "OSC 1 (change icon) received and ignored icon={s}",
@@ -3592,7 +3996,13 @@ impl<'a, H: Handler> Stream<'a, H> {
                 // `logUnsupportedOnce` (warn) family. The key is a literal 0, so
                 // this message is emitted at most ONCE per process regardless of
                 // the icon value.
-                log_unsupported_once(&SEEN_OSC1_CHANGE_ICON, 0);
+                if log_unsupported_once(&SEEN_OSC1_CHANGE_ICON, 0) {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "OSC 1 (change icon) received and ignored icon={}",
+                        String::from_utf8_lossy(&icon)
+                    );
+                }
             }
 
             // .clipboard_contents => |clip| { ... }
@@ -3622,6 +4032,11 @@ impl<'a, H: Handler> Stream<'a, H> {
                     None => {
                         // @branchHint(.unlikely);
                         // log.warn("unknown cursor shape: {s}", .{v.value});
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "unknown cursor shape: {}",
+                            String::from_utf8_lossy(&value)
+                        );
                         return;
                     }
                 };
@@ -3709,6 +4124,7 @@ impl<'a, H: Handler> Stream<'a, H> {
             | osc::Command::KittyDesktopNotification(_)
             | osc::Command::ContextSignal(_) => {
                 // log.debug("unimplemented OSC callback: {}", .{cmd});
+                log::debug!(target: LOG_SCOPE, "unimplemented OSC callback: {cmd:?}");
             }
 
             // .invalid => { ... }
@@ -3717,6 +4133,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                 // This is an invalid internal state, not an invalid OSC
                 // string being parsed. We shouldn't see this.
                 // log.warn("invalid OSC, should never happen", .{});
+                log::warn!(target: LOG_SCOPE, "invalid OSC, should never happen");
             }
         }
     }
@@ -3726,6 +4143,7 @@ impl<'a, H: Handler> Stream<'a, H> {
         // if (intermediates.len != 1) { ... }
         if intermediates.len() != 1 {
             // log.warn("invalid charset intermediate: {any}", .{intermediates});
+            log::warn!(target: LOG_SCOPE, "invalid charset intermediate: {intermediates:?}");
             return;
         }
 
@@ -3739,6 +4157,7 @@ impl<'a, H: Handler> Stream<'a, H> {
             _ => {
                 // @branchHint(.unlikely);
                 // log.warn("invalid charset intermediate: {any}", .{intermediates});
+                log::warn!(target: LOG_SCOPE, "invalid charset intermediate: {intermediates:?}");
                 return;
             }
         };
@@ -3798,6 +4217,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                     _ => {
                         // @branchHint(.unlikely);
                         // log.warn("invalid command: {f}", .{action});
+                        log::warn!(target: LOG_SCOPE, "invalid command: {action:?}");
                         #[allow(clippy::needless_return)]
                         return;
                     }
@@ -3834,7 +4254,9 @@ impl<'a, H: Handler> Stream<'a, H> {
                 //     .{action},
                 //     action.final,
                 // );
-                log_unsupported_once(&SEEN_UNIMPLEMENTED_ESC_ACTION, u16::from(action.final_));
+                if log_unsupported_once(&SEEN_UNIMPLEMENTED_ESC_ACTION, u16::from(action.final_)) {
+                    log::warn!(target: LOG_SCOPE, "unimplemented ESC action: {action:?}");
+                }
             }
 
             // IND - Index
@@ -3844,6 +4266,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                 _ => {
                     // @branchHint(.unlikely);
                     // log.warn("invalid index command: {f}", .{action});
+                    log::warn!(target: LOG_SCOPE, "invalid index command: {action:?}");
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -3856,6 +4279,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                 _ => {
                     // @branchHint(.unlikely);
                     // log.warn("invalid next line command: {f}", .{action});
+                    log::warn!(target: LOG_SCOPE, "invalid next line command: {action:?}");
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -3868,6 +4292,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                 _ => {
                     // @branchHint(.unlikely);
                     // log.warn("invalid tab set command: {f}", .{action});
+                    log::warn!(target: LOG_SCOPE, "invalid tab set command: {action:?}");
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -3883,6 +4308,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                     _ => {
                         // @branchHint(.unlikely);
                         // log.warn("invalid reverse index command: {f}", .{action});
+                        log::warn!(target: LOG_SCOPE, "invalid reverse index command: {action:?}");
                         #[allow(clippy::needless_return)]
                         return;
                     }
@@ -3900,6 +4326,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                 _ => {
                     // @branchHint(.unlikely);
                     // log.warn("invalid single shift 2 command: {f}", .{action});
+                    log::warn!(target: LOG_SCOPE, "invalid single shift 2 command: {action:?}");
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -3916,6 +4343,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                 _ => {
                     // @branchHint(.unlikely);
                     // log.warn("invalid single shift 3 command: {f}", .{action});
+                    log::warn!(target: LOG_SCOPE, "invalid single shift 3 command: {action:?}");
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -3926,7 +4354,9 @@ impl<'a, H: Handler> Stream<'a, H> {
             b'V' => match action.intermediates.len() {
                 0 => self.handler.protected_mode_iso(),
                 // else => log.warn("unimplemented ESC callback: {f}", .{action}),
-                _ => {}
+                _ => {
+                    log::warn!(target: LOG_SCOPE, "unimplemented ESC callback: {action:?}");
+                }
             },
 
             // EPA - End of Guarded Area
@@ -3934,7 +4364,9 @@ impl<'a, H: Handler> Stream<'a, H> {
             b'W' => match action.intermediates.len() {
                 0 => self.handler.protected_mode_off(),
                 // else => log.warn("unimplemented ESC callback: {f}", .{action}),
-                _ => {}
+                _ => {
+                    log::warn!(target: LOG_SCOPE, "unimplemented ESC callback: {action:?}");
+                }
             },
 
             // DECID
@@ -3943,8 +4375,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                 if action.intermediates.len() == 0 {
                     self.handler
                         .device_attributes(device_attributes::Req::Primary);
+                } else {
+                    // else log.warn("unimplemented ESC callback: {f}", .{action});
+                    log::warn!(target: LOG_SCOPE, "unimplemented ESC callback: {action:?}");
                 }
-                // else log.warn("unimplemented ESC callback: {f}", .{action});
             }
 
             // RIS - Full Reset
@@ -3953,6 +4387,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                 0 => self.handler.full_reset(),
                 _ => {
                     // log.warn("invalid full reset command: {f}", .{action});
+                    log::warn!(target: LOG_SCOPE, "invalid full reset command: {action:?}");
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -3969,6 +4404,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                 _ => {
                     // @branchHint(.unlikely);
                     // log.warn("invalid single shift 2 command: {f}", .{action});
+                    log::warn!(target: LOG_SCOPE, "invalid single shift 2 command: {action:?}");
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -3985,6 +4421,7 @@ impl<'a, H: Handler> Stream<'a, H> {
                 _ => {
                     // @branchHint(.unlikely);
                     // log.warn("invalid single shift 3 command: {f}", .{action});
+                    log::warn!(target: LOG_SCOPE, "invalid single shift 3 command: {action:?}");
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -4001,6 +4438,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                 _ => {
                     // @branchHint(.unlikely);
                     // log.warn("invalid locking shift 1 right command: {f}", .{action});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "invalid locking shift 1 right command: {action:?}"
+                    );
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -4017,6 +4458,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                 _ => {
                     // @branchHint(.unlikely);
                     // log.warn("invalid locking shift 2 right command: {f}", .{action});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "invalid locking shift 2 right command: {action:?}"
+                    );
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -4033,6 +4478,10 @@ impl<'a, H: Handler> Stream<'a, H> {
                 _ => {
                     // @branchHint(.unlikely);
                     // log.warn("invalid locking shift 3 right command: {f}", .{action});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "invalid locking shift 3 right command: {action:?}"
+                    );
                     #[allow(clippy::needless_return)]
                     return;
                 }
@@ -4048,7 +4497,9 @@ impl<'a, H: Handler> Stream<'a, H> {
                         mode: modes::Mode::KeypadKeys,
                     }),
                     // else => log.warn("unimplemented setMode: {f}", .{action}),
-                    _ => {}
+                    _ => {
+                        log::warn!(target: LOG_SCOPE, "unimplemented setMode: {action:?}");
+                    }
                 }
             }
 
@@ -4062,7 +4513,9 @@ impl<'a, H: Handler> Stream<'a, H> {
                         mode: modes::Mode::KeypadKeys,
                     }),
                     // else => log.warn("unimplemented setMode: {f}", .{action}),
-                    _ => {}
+                    _ => {
+                        log::warn!(target: LOG_SCOPE, "unimplemented setMode: {action:?}");
+                    }
                 }
             }
 
@@ -4079,7 +4532,9 @@ impl<'a, H: Handler> Stream<'a, H> {
             //     action.final,
             // ),
             _ => {
-                log_unsupported_once(&SEEN_UNIMPLEMENTED_ESC_ACTION, u16::from(action.final_));
+                if log_unsupported_once(&SEEN_UNIMPLEMENTED_ESC_ACTION, u16::from(action.final_)) {
+                    log::warn!(target: LOG_SCOPE, "unimplemented ESC action: {action:?}");
+                }
             }
         }
     }
@@ -4099,17 +4554,17 @@ impl<'a, H: Handler> Stream<'a, H> {
 // and it is observable: under the reference, setting then resetting the same
 // unimplemented mode logs ONCE, not twice.
 //
-// PORT NOTE (logging facade): the port carries NO logging facade — every
-// `log.*` call in the tree is preserved as a comment (see e.g.
-// `.port/phase-2/W1_DESIGN.md`'s "no logging facade is wired in the port yet"),
-// and `rustty-vt` does not depend on the `log` crate at all. So the ONE line of
-// this commit that cannot land is its tail, `log.warn(format, args)`. Everything
-// else — the table, the lock-free claim scan, the atomic orderings, the
-// table-full suppression, the per-site key choice, and the call-site
-// conversions — is live code and is exercised by
-// `stream_logs_unsupported_once_per_value`. The claim is performed at each site
-// exactly as the reference performs it, so when a facade is eventually wired the
-// only edit is to emit the message under the returned boolean.
+// PORT NOTE (logging facade): the `log` facade IS wired now
+// (DECISION-logging.md §6/§6r/§6r2, call shape 3 for `rustty-vt`), so the
+// commit's tail — `log.warn(format, args)` — lands too, but at each CALL SITE
+// rather than inside the helper: `log_unsupported_once` keeps its `-> bool`
+// signature and every site emits `log::warn!(target: LOG_SCOPE, ...)` under the
+// returned decision. See that function's doc comment for why the format string
+// cannot be pushed back into the helper in Rust. Everything else — the table,
+// the lock-free claim scan, the atomic orderings, the table-full suppression,
+// the per-site key choice, and the call-site conversions — is live code and is
+// exercised by `stream_logs_unsupported_once_per_value` and
+// `stream_unsupported_once_emits_once_per_key`.
 //
 // Consequence for the commit's PERF claim: upstream measured +3.2% on a 2.6 GB
 // real-session corpus, all of it eliminated `writev`. rustty issues no `writev`
@@ -4190,9 +4645,16 @@ impl UnsupportedOnceTable {
 /// log already shows this class of problem and unbounded distinct
 /// values would flood it anyway.
 ///
-/// Returns whether the caller should emit the message. The reference emits it
-/// directly (`log.warn(format, args)`); the port has no facade to emit it to,
-/// so the decision is returned instead — see the PORT NOTE above.
+/// Returns whether the caller should emit the message; each call site emits
+/// `log::warn!(target: LOG_SCOPE, ...)` under that boolean. The reference emits
+/// it internally (`log.warn(format, args)`) because Zig's `comptime format:
+/// []const u8` + `args: anytype` costs nothing until the message is actually
+/// written. Rust has no comptime-generic equivalent: a signature taking the
+/// format string would have to accept `fmt::Arguments`, which forces the caller
+/// to format EAGERLY on every call — destroying the whole point of the
+/// once-table, which is to avoid formatting work on the repeat path. Returning
+/// the decision keeps the reference's "format only when we will actually emit"
+/// property exactly. See the PORT NOTE above.
 fn log_unsupported_once(table: &UnsupportedOnceTable, key: u16) -> bool {
     use core::sync::atomic::Ordering;
 
@@ -4384,6 +4846,108 @@ mod tests {
             "expected the CSI-sep-mismatch diagnostic, got: {messages:?}"
         );
         drop(cap);
+    }
+
+    // ------------------------------------------------------------------
+    // Task 14r-a (S163-F2 / S164-F1): the three shapes a restored `log.*`
+    // site in this file can independently get wrong. One test per shape;
+    // each was mutation-proven (emission reverted -> test fails; re-applied
+    // -> test passes) before being committed.
+    // ------------------------------------------------------------------
+
+    // SHAPE 1 — a plain single-argument site whose Zig comment already carried
+    // its full argument list: `log.warn("invalid cursor up command: {f}",
+    // .{input})` (stream.zig:1435), reached when CUU arrives with more than one
+    // parameter. Asserts level, target AND the exact message text.
+    #[test]
+    fn stream_logs_invalid_cursor_up_command() {
+        struct H;
+        impl Handler for H {}
+
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H));
+        let cap = crate::log_capture::start();
+        s.next_slice(b"\x1b[1;2;3A"); // CUU with 3 params -> the invalid arm
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "stream".to_string(),
+                "invalid cursor up command: CSI { intermediates: [], params: [1, 2, 3], params_sep: SepList { bits: 0 }, final_: 65 }"
+                    .to_string(),
+            )],
+            messages
+        );
+    }
+
+    // SHAPE 2 — an ELIDED comment. The port's fidelity comment for this site
+    // reads `// else => log.warn("ignoring unimplemented CSI A with
+    // intermediates: {s}", ...),` — the arguments are `...`, so they had to be
+    // recovered from the oracle (stream.zig:1441-1444: `.{input.intermediates}`,
+    // NOT `.{input}`). This test fails if the site were restored from the
+    // comment with `{input:?}`, because the message would then carry the whole
+    // CSI struct instead of just the intermediates.
+    #[test]
+    fn stream_logs_unimplemented_csi_a_with_intermediates() {
+        struct H;
+        impl Handler for H {}
+
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H));
+        let cap = crate::log_capture::start();
+        s.next_slice(b"\x1b[?1A"); // CUU with a '?' intermediate
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "stream".to_string(),
+                "ignoring unimplemented CSI A with intermediates: ?".to_string(),
+            )],
+            messages
+        );
+    }
+
+    // SHAPE 3 — a `log_unsupported_once` site. The helper returns the decision
+    // and the CALL SITE emits (see its doc comment for why the format string
+    // cannot move back into the helper in Rust), so this asserts the emission
+    // follows the dedup: first sighting of a key emits, a repeat of the SAME key
+    // does not, a DIFFERENT key does.
+    //
+    // The mode numbers are deliberately absurd (60001/60002) so no other test in
+    // this binary can have claimed their slots in the process-wide
+    // `SEEN_UNIMPLEMENTED_MODE` table first.
+    #[test]
+    fn stream_unsupported_once_emits_once_per_key() {
+        struct H;
+        impl Handler for H {}
+
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H));
+        let cap = crate::log_capture::start();
+
+        // First sighting of 60001: emits.
+        s.next_slice(b"\x1b[?60001h");
+        // Same key again: suppressed.
+        s.next_slice(b"\x1b[?60001h");
+        // A different key: emits.
+        s.next_slice(b"\x1b[?60002h");
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(
+            vec![
+                (
+                    log::Level::Warn,
+                    "stream".to_string(),
+                    "unimplemented mode: 60001".to_string(),
+                ),
+                (
+                    log::Level::Warn,
+                    "stream".to_string(),
+                    "unimplemented mode: 60002".to_string(),
+                ),
+            ],
+            messages
+        );
     }
 
     // ------------------------------------------------------------------
