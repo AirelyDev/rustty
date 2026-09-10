@@ -313,7 +313,14 @@ impl Path {
                         }
                     };
 
-                    // log.debug("expanding file path from home directory: path={s}", .{expanded});
+                    // log.debug(
+                    //     "expanding file path from home directory: path={s}",
+                    //     .{expanded},
+                    // );
+                    crate::config_struct::log_debug(format!(
+                        "expanding file path from home directory: path={}",
+                        String::from_utf8_lossy(expanded)
+                    ));
 
                     // switch (self.*) {
                     //     .optional, .required => |*p| p.* = try arena_alloc.dupeZ(u8, expanded),
@@ -377,7 +384,15 @@ impl Path {
             }
         };
 
-        // log.debug("expanding file path relative={s} abs={s}", .{ path, abs });
+        // log.debug(
+        //     "expanding file path relative={s} abs={s}",
+        //     .{ path, abs },
+        // );
+        crate::config_struct::log_debug(format!(
+            "expanding file path relative={} abs={}",
+            String::from_utf8_lossy(&path),
+            String::from_utf8_lossy(&abs)
+        ));
 
         // switch (self.*) {
         //     .optional, .required => |*p| p.* = try arena_alloc.dupeZ(u8, abs),
@@ -1443,6 +1458,41 @@ fn path_to_bytes(p: &std::path::Path) -> Vec<u8> {
 mod tests {
     use super::*;
     use rustty_cfg_fmt::{entry_formatter, AllocatingWriter};
+
+    // No reference `test {}` — PROVING test for S78-F7. `Path.expand`'s two
+    // `log.debug` traces (`config/path.zig:192-195` home-expansion,
+    // `:236-239` relative->absolute) were carried as inert comments. The
+    // relative arm is the one reachable without a home directory, so it is
+    // asserted end to end; both traces go through the same
+    // `config_struct::log_debug` helper, so a regression in the helper breaks
+    // this too.
+    #[test]
+    fn expand_relative_emits_the_reference_debug_trace() {
+        // An absolute base is `assert`ed by `expand`; a path under it that does
+        // NOT exist takes the `error.FileNotFound` -> `std.fs.path.resolve`
+        // arm, which is the arm whose trace this asserts.
+        let base_dir = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        let base = path_to_bytes(&base_dir);
+
+        let mut p = Path::Required(b"rustty-s78f7-does-not-exist.conf".to_vec());
+        let mut diags = DiagnosticList::default();
+
+        crate::config_struct::log_capture::arm();
+        p.expand(&base, &mut diags).unwrap();
+        let records = crate::config_struct::log_capture::take();
+
+        let abs = match &p {
+            Path::Optional(v) | Path::Required(v) => v.clone(),
+        };
+        assert!(diags.empty());
+        assert_eq!(
+            records,
+            vec![format!(
+                "debug(config): expanding file path relative=rustty-s78f7-does-not-exist.conf abs={}",
+                String::from_utf8_lossy(&abs)
+            )],
+        );
+    }
 
     /// PORTS: `std.meta.Tag(Path)` discriminant comparison helper for the tests.
     fn tag_required(p: &Path) -> bool {

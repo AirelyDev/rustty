@@ -5402,14 +5402,85 @@ fn format_log(kind: &str, msg: &str, logging: rustty_global::Logging) -> Option<
     Some(format!("{kind}(config): {msg}"))
 }
 
-fn log_info(msg: String) {
+/// Test-only recorder for the three `log_*` helpers below.
+///
+/// The crate's diagnostics go to stderr through `eprintln!`, which a unit test
+/// cannot read. `format_log` is already asserted directly (see
+/// `config_log_gate_honors_logging_stderr`), but that proves only the
+/// FORMATTING — not that a given reference call site still fires, at the right
+/// level, with the right text. This records exactly `format_log`'s output shape
+/// (`level_txt ++ "(config): " ++ msg`) at the helper's entry, BEFORE the
+/// `Logging.stderr` gate, so a restored site is observable without a test
+/// touching the `rustty_global` process-global that
+/// `config_log_gate_reads_published_global` owns.
+///
+/// Thread-local and opt-in: a test calls `arm()`, exercises the site, then
+/// `take()`. Untouched threads record nothing, so this cannot leak between the
+/// parallel test threads libtest runs.
+#[cfg(test)]
+pub(crate) mod log_capture {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static RECORDS: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    }
+
+    /// Start recording on THIS thread, discarding anything already buffered.
+    pub(crate) fn arm() {
+        RECORDS.with(|r| *r.borrow_mut() = Some(Vec::new()));
+    }
+
+    /// Stop recording on this thread and return everything recorded since
+    /// `arm()`, in emission order.
+    pub(crate) fn take() -> Vec<String> {
+        RECORDS.with(|r| r.borrow_mut().take().unwrap_or_default())
+    }
+
+    pub(crate) fn push(kind: &str, msg: &str) {
+        RECORDS.with(|r| {
+            if let Some(v) = r.borrow_mut().as_mut() {
+                v.push(format!("{kind}(config): {msg}"));
+            }
+        });
+    }
+}
+
+pub(crate) fn log_info(msg: String) {
+    #[cfg(test)]
+    log_capture::push("info", &msg);
     if let Some(line) = format_log("info", &msg, rustty_global::logging()) {
         eprintln!("{line}");
     }
 }
 
-fn log_warn(msg: String) {
+pub(crate) fn log_warn(msg: String) {
+    #[cfg(test)]
+    log_capture::push("warning", &msg);
     if let Some(line) = format_log("warning", &msg, rustty_global::logging()) {
+        eprintln!("{line}");
+    }
+}
+
+/// `std.log.debug` scoped `.config` — the sibling of [`log_info`]/[`log_warn`]
+/// for the reference's `log.debug` sites (`config/path.zig:192, 236`). `debug`
+/// is `std.log.Level.debug.asText()`, the same `level_txt` `logFn` prefixes
+/// with.
+///
+/// PORT NOTE: unlike info/warn this one carries a LEVEL gate as well as the
+/// `stderr` gate. `main_ghostty.zig`'s `std_options.log_level` is
+/// `switch (builtin.mode) { .Debug => .debug, else => .info }`, so Zig's
+/// comptime `std.log` machinery erases every `log.debug` call in a release
+/// build. `cfg!(debug_assertions)` is the direct analogue, and it is the same
+/// default `rustty_core::logging::install_app_log_backend` ports
+/// (`DECISION-logging.md` §6r CRITICAL 2 / IMPORTANT 4). Without it the port
+/// would print debug traces where the reference prints nothing.
+pub(crate) fn log_debug(msg: String) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    #[cfg(test)]
+    log_capture::push("debug", &msg);
+    if let Some(line) = format_log("debug", &msg, rustty_global::logging()) {
         eprintln!("{line}");
     }
 }

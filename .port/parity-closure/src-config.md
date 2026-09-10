@@ -118,7 +118,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** file_load.open drops both log.warn calls
   - **Oracle:** `src/config/file_load.zig:150-167` → **Rustty:** `crates/rustty-config/src/file_load.rs:319-340`
   - **Audit's suggested fix:** Emit the two warnings through the crate's logging path (config_struct.rs log_warn or the rustty log facade).
-- [ ] **S78-F7** · CONFIRMED · `LOG` · other
+- [x] **S78-F7** · CONFIRMED · `LOG` · other
   - **What:** Path.expand drops the two log.debug traces
   - **Oracle:** `src/config/path.zig:192-195, 236-239` → **Rustty:** `crates/rustty-config/src/path.rs:316, 380`
   - **Audit's suggested fix:** Emit the two debug lines through the crate's logging facade.
