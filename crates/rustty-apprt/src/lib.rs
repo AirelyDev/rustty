@@ -56,6 +56,11 @@ pub mod embedded;
 pub mod gtk;
 pub mod none;
 
+// TEST-ONLY: the capture `log::Log` the restored `LOG`-row sites are asserted
+// against (stage 14d-3). Not part of any published surface.
+#[cfg(test)]
+mod log_capture;
+
 use rustty_core::Logging;
 
 /// PARITY: `cli.args.parsePackedStruct(Logging, v.value)` (global.zig init).
