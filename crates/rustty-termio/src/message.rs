@@ -144,6 +144,39 @@ pub enum Message<'a> {
 }
 
 impl Message<'_> {
+    /// PORT NOTE (Zig-builtin shim, task-14e-1): `@tagName(message)` — the
+    /// reference union's own snake_case FIELD name, as `Thread.zig:313`'s
+    /// `log.debug("mailbox message={s}", .{@tagName(message)})` prints it. The
+    /// Rust variant identifiers are PascalCase (R2 naming), so a derived
+    /// `Debug` would emit the wrong bytes; the mapping is spelled out and
+    /// pinned by a test (`rustty-xev` `Backend::tag_name` precedent).
+    #[allow(non_snake_case)] // faithful Zig builtin name (R1)
+    pub fn tagName(&self) -> &'static str {
+        match self {
+            Message::ColorSchemeReport { .. } => "color_scheme_report",
+            Message::VisibilityReport { .. } => "visibility_report",
+            Message::Crash => "crash",
+            Message::ChangeConfig { .. } => "change_config",
+            Message::Inspector(_) => "inspector",
+            Message::Resize(_) => "resize",
+            Message::SizeReport(_) => "size_report",
+            Message::ClearScreen { .. } => "clear_screen",
+            Message::ScrollViewport(_) => "scroll_viewport",
+            Message::SelectionScroll(_) => "selection_scroll",
+            Message::JumpToPrompt(_) => "jump_to_prompt",
+            Message::StartSynchronizedOutput => "start_synchronized_output",
+            Message::LinefeedMode(_) => "linefeed_mode",
+            Message::Focused(_) => "focused",
+            Message::KittyClipboardGrantRead(_) => "kitty_clipboard_grant_read",
+            Message::KittyClipboardGrantWrite(_) => "kitty_clipboard_grant_write",
+            Message::WriteSmall(_) => "write_small",
+            Message::WriteStable(_) => "write_stable",
+            Message::WriteAlloc(_) => "write_alloc",
+        }
+    }
+}
+
+impl Message<'_> {
     /// Return a write request for the given data. This will use
     /// write_small if it fits or write_alloc otherwise. This should NOT
     /// be used for stable pointers which can be manually set to write_stable.

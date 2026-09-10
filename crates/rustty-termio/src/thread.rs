@@ -39,6 +39,11 @@
 // const Allocator = std.mem.Allocator;
 // const log = std.log.scoped(.io_thread);
 //
+// PORT NOTE (DECISION-logging.md §6/§6r4): `LOG_SCOPE` is the `@tagName` of the
+// reference's `std.log.scoped(.io_thread)`; restored sites call the `log` facade
+// with `target: LOG_SCOPE`. Declared just below the imports, where the reference
+// puts the alias.
+//
 // PORT NOTE: `crash`/`internal_os` (the sentry thread-state + Darwin thread
 // naming) and `ArenaAllocator` are only used by the deferred run-loop bodies
 // below; no `use` is bound for them yet.
@@ -48,6 +53,21 @@ use rustty_datastruct::blocking_queue::Timeout;
 use rustty_renderer::size::Size;
 use rustty_vt::csi;
 use rustty_vt::modes::Mode;
+
+const LOG_SCOPE: &str = "io_thread";
+
+/// PORT NOTE (Zig-`defer` shim, task-14e-1): `defer log.debug(msg, .{})` — emits
+/// on scope exit, including an early `return`/`?`. Rust has no `defer`, so the
+/// firing point is a `Drop`. Used only where a plain call at the tail would
+/// MISS an exit path; where the scope has a single exit the emission is written
+/// inline at that exit instead, with a note saying so.
+struct DeferLog(&'static str);
+
+impl Drop for DeferLog {
+    fn drop(&mut self) {
+        log::debug!(target: LOG_SCOPE, "{}", self.0);
+    }
+}
 
 use crate::mailbox::Mailbox;
 use crate::message::Message;
@@ -334,7 +354,7 @@ impl Thread {
         // self.threadMain_(io) catch |err| {
         if let Err(err) = unsafe { Self::threadMain_(self_, io) } {
             // log.warn("error in io thread err={}", .{err});
-            let _ = &err;
+            log::warn!(target: LOG_SCOPE, "error in io thread err={err:?}");
 
             // Use an arena to simplify memory management below
             // var arena = ArenaAllocator.init(self.alloc);
@@ -409,13 +429,29 @@ impl Thread {
         // if (!self.loop.stopped()) {
         if !unsafe { (*self_).loop_.stopped() } {
             // log.warn("abrupt io thread exit detected, starting xev to drain mailbox", .{});
+            log::warn!(
+                target: LOG_SCOPE,
+                "abrupt io thread exit detected, starting xev to drain mailbox"
+            );
             // defer log.debug("io thread fully exiting after abnormal failure", .{});
+            //
+            // PORT NOTE: this `defer` is registered at the TOP of the `if` block and
+            // fires at its END. The block has no early exit, so the faithful Rust
+            // placement is the last statement of the block (see the emission after
+            // `loop.run` below), not a scope guard.
             // self.flags.drain = true;
             unsafe { (*self_).flags.drain = true };
             // self.loop.run(.until_done) catch |err| {
             //     log.err("failed to start xev loop for draining err={}", .{err});
             // };
-            let _ = unsafe { (*self_).loop_.run(xev::RunMode::UntilDone) };
+            if let Err(err) = unsafe { (*self_).loop_.run(xev::RunMode::UntilDone) } {
+                log::error!(
+                    target: LOG_SCOPE,
+                    "failed to start xev loop for draining err={err:?}"
+                );
+            }
+            // (the `defer log.debug(...)` above, at its firing point.)
+            log::debug!(target: LOG_SCOPE, "io thread fully exiting after abnormal failure");
         }
     }
 
@@ -737,6 +773,11 @@ impl Thread {
         io: *mut Termio<M>,
     ) -> Result<(), crate::Error> {
         // defer log.debug("IO thread exited", .{});
+        //
+        // PORT NOTE: a real `defer` — it must fire on the `threadEnter(...)?`
+        // early return below as well as on the normal exit, so it is a scope
+        // guard rather than a call at the tail (`DeferLog`, bottom of file).
+        let _exited = DeferLog("IO thread exited");
 
         // Right now, on Darwin, `std.Thread.setName` can only name the current
         // thread, and we have no way to get the current thread from within it,
@@ -828,9 +869,17 @@ impl Thread {
 
         // Run
         // log.debug("starting IO thread", .{});
+        log::debug!(target: LOG_SCOPE, "starting IO thread");
         // defer log.debug("starting IO thread shutdown", .{});
+        //
+        // PORT NOTE: registered LAST, so under Zig's LIFO defer order it fires
+        // FIRST on exit — before `io.threadExit`/`cb.data.deinit` and before the
+        // `IO thread exited` guard above. The port's teardown is explicit and
+        // this function has no exit between here and it, so the faithful
+        // placement is immediately after `loop.run` returns.
         // try self.loop.run(.until_done);
         let run_result = unsafe { (*self_).loop_.run(xev::RunMode::UntilDone) };
+        log::debug!(target: LOG_SCOPE, "starting IO thread shutdown");
 
         // defer io.threadExit(&cb.data);  (runs first)
         // defer cb.data.deinit();          (runs second)
@@ -895,6 +944,7 @@ impl Thread {
             redraw = true;
 
             // log.debug("mailbox message={s}", .{@tagName(message)});
+            log::debug!(target: LOG_SCOPE, "mailbox message={}", message.tagName());
             // switch (message) {
             //
             // (PORT NOTE: each `io.method(data, ...)` forms a transient `&mut *io` +
@@ -1070,8 +1120,9 @@ impl Thread {
         match r {
             Ok(()) => {}
             Err(xev::TimerRunError::Canceled) => {}
-            Err(_err) => {
+            Err(err) => {
                 // log.warn("error during sync reset callback err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error during sync reset callback err={err:?}");
                 return xev::CallbackAction::Disarm;
             }
         }
@@ -1101,8 +1152,9 @@ impl Thread {
         match r {
             Ok(()) => {}
             Err(xev::TimerRunError::Canceled) => {}
-            Err(_err) => {
+            Err(err) => {
                 // log.warn("error during coalesce callback err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error during coalesce callback err={err:?}");
                 return xev::CallbackAction::Disarm;
             }
         }
@@ -1123,8 +1175,9 @@ impl Thread {
         if let Some(v) = unsafe { (*self_).coalesce_data.resize.take() } {
             let io = unsafe { (*cb).io };
             let data = unsafe { (*cb).data.as_mut_ptr() };
-            if unsafe { (*io).resize(&mut *data, v) }.is_err() {
+            if let Err(err) = unsafe { (*io).resize(&mut *data, v) } {
                 // log.warn("error during resize err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error during resize err={err:?}");
             }
         }
 
@@ -1140,8 +1193,9 @@ impl Thread {
         r: core::result::Result<(), xev::WaitError>,
     ) -> xev::CallbackAction {
         // _ = r catch |err| { log.err("error in wakeup err={}", .{err}); return .rearm; };
-        if r.is_err() {
+        if let Err(err) = r {
             // log.err("error in wakeup err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error in wakeup err={err:?}");
             return xev::CallbackAction::Rearm;
         }
 
@@ -1154,8 +1208,9 @@ impl Thread {
         let cb = cb_;
         // cb.self.drainMailbox(cb) catch |err| log.err("error draining mailbox err={}", .{err});
         let self_ = unsafe { (*cb).self_ };
-        if unsafe { Self::drainMailbox(self_, cb) }.is_err() {
+        if let Err(err) = unsafe { Self::drainMailbox(self_, cb) } {
             // log.err("error draining mailbox err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error draining mailbox err={err:?}");
         }
 
         // return .rearm;
@@ -1230,8 +1285,12 @@ impl Thread {
         match r {
             Ok(()) => {}
             Err(xev::TimerRunError::Canceled) => {}
-            Err(_err) => {
+            Err(err) => {
                 // log.warn("error during selection scroll callback err={}", .{err});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "error during selection scroll callback err={err:?}"
+                );
                 return xev::CallbackAction::Disarm;
             }
         }
