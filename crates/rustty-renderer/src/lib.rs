@@ -90,6 +90,12 @@ pub mod thread;
 #[cfg(test)]
 mod test_support;
 
+// Minimal `#[cfg(test)]` `log::Log` backend so tests can observe the restored
+// `log::` diagnostics (DECISION-logging.md §6r call shape 3). Test-only — never
+// compiled into the production library.
+#[cfg(test)]
+pub(crate) mod log_capture;
+
 // PORT STATUS (GPU R-d, macOS-only): the Metal graphics-API backend. Chunk 0
 // lands only the Metal API vocabulary (`metal::api`, ghostty `metal/api.zig`
 // re-exported over `objc2-metal`) + the shader build infra (`build.rs` compiles

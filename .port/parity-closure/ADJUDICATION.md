@@ -474,3 +474,46 @@ summaries.
 - Refuting lens said: "The extra gate cannot fire in any oracle-supported configuration. `owns_context` has no counterpart in the oracle at all ... on the windowed GDK path it is false, so linux_impl.rs:812-817 calls present_to_default exactly like Frame.zig:63-67 ... The remaining delta is the swallowed `log.err`, which is the same crate-wide missing-facade class already reported as S119-F1 ... duplicative rather than a separate branch difference."
 - Verified: `grep -rn "ownsContext\|owns_context" ghostty/src/renderer/OpenGL.zig ghostty/src/renderer/opengl` returns nothing — `owns_context` is a rustty-only addition for its offscreen/golden-image test harness, which the oracle doesn't have; on the real windowed GDK path the gate evaluates false and `crates/rustty-renderer/src/generic/linux_impl.rs:812-822` calls present exactly like the oracle. The only surviving delta (the swallowed `log.err`) is the same workspace-wide "no logging facade" gap already CONFIRMED (not disputed) as `S119-F1` elsewhere in this same audit file — this row is duplicative of an already-tracked finding, not an independent branch-behavior difference.
 - Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s119-f3
+
+## Batch 14c-1 — src/renderer `LOG` partial waivers (task-14c-1, 2026-09-09)
+
+Two rows whose diagnostics were restored ALMOST completely. Neither is "not a
+defect" — the bulk of each row was a real gap and is now fixed — but each retains
+one cited oracle anchor whose emission has no reachable `catch` arm in rustty, so
+per `PROCEDURE.md` ("a site inside the cited anchors still forces `WAIVED`, no
+matter how well documented") they are `WAIVED`, not `CLOSED`.
+
+### S115-F4 — PARTIALLY RESTORED, WAIVED (one cited anchor unreachable)
+- 14 of the row's 15 cited oracle anchors are now live `log::` emissions with the
+  `generic_renderer` target: `generic.zig:852, 991, 1169, 1177, 1183, 1188, 1190,
+  1320, 1436, 1472, 1506, 1517, 1533, 1595`. (`:991`'s emission lives in
+  `crates/rustty-renderer/src/metal/cvdisplaylink.rs` because the port inlines
+  `displayLinkCallback`'s body into the CoreVideo `extern "C"` trampoline — a
+  `Self` method cannot be one. It keeps the `generic_renderer` scope of the
+  function it ports.)
+- **Residual:** `generic.zig:1558` `log.warn("error rebuilding GPU cells err={}",
+  .{err})`. Rustty's `rebuild_cells` is INFALLIBLE — its only OOM source aborts
+  through the `Global` allocator — so the reference's `catch` arm does not exist
+  and emitting the warn unconditionally would put a diagnostic on the SUCCESS
+  path. PORT NOTE at `crates/rustty-renderer/src/generic.rs` (search
+  `error rebuilding GPU cells`). Same shape as the `graphics_storage` OOM waiver
+  (`#s190-f2`).
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s115-f4
+
+### S116-F2 — PARTIALLY RESTORED, WAIVED (two cited anchors unreachable)
+- 16 of the row's 18 cited oracle anchors are now live `log::` emissions with the
+  `generic_renderer` target: `generic.zig:1960, 1974, 1995, 2002, 2137, 2627,
+  2777, 3143, 3150, 3222, 3237, 3461, 3476, 3481, 3514, 3518`. This includes the
+  four `eprintln!` stand-ins on the `prepBackgroundImage` path, and the row's own
+  "open/read warnings merged" complaint: the port had collapsed the reference's
+  two distinct messages into one invented string over a single `std::fs::read`;
+  that is now `File::open` + `read_to_end` with the oracle's two messages verbatim.
+- **Residual:** `generic.zig:2912` and `:3181`, both
+  `log.warn("error caching font shaping results err={}", .{err})`. Rustty's
+  `ShaperCache::put` (`crates/rustty-font-shaper/src/shaper/cache.rs:136`) is
+  INFALLIBLE — it allocates through `Box`/`Global` — so, again, there is no
+  `catch` arm. Both sites now carry the reference's `log.warn` as an R1 comment
+  plus a PORT NOTE (search `error caching font shaping results` in
+  `crates/rustty-renderer/src/generic.rs`); before this stage neither site had so
+  much as a comment marking the dropped diagnostic.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s116-f2

@@ -49,10 +49,12 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** All log.warn/info/debug/err statements in this range are commented out (no logging in rustty-renderer)
   - **Oracle:** `src/renderer/generic.zig:852, 991, 1169, 1177, 1183, 1188, 1190, 1320, 1436, 1472, 1506, 1517, 1533, 1558, 1595` → **Rustty:** `crates/rustty-renderer/src/generic.rs:2698-2721, 4977, 5137, 5186, 5214-5229, 5248, 5273, 5316, 5898`
   - **Audit's suggested fix:** Route these through the workspace logging facade once one is chosen for rustty-renderer.
+  - **Disposition (task-14c-1):** WAIVED — 14/15 cited anchors restored as live `log::` sites; `generic.zig:1558` has no reachable `catch` arm (rustty `rebuild_cells` is infallible). See `ADJUDICATION.md#s115-f4`.
 - [ ] **S116-F2** · CONFIRMED · `LOG` · other
   - **What:** log.warn/log.debug sites are comments or eprintln (no logging facade); open/read warnings merged
   - **Oracle:** `src/renderer/generic.zig:1960-2007, 2137, 2627, 2777-2781, 2912-2916, 3143-3154, 3181-3185, 3222-3226, 3237-3241, 3461, 3476, 3481, 3514, 3518` → **Rustty:** `crates/rustty-renderer/src/generic.rs:2932, 3126-3131, 3157-3168, 3473, 3648-3650, 4200-4202, 4210-4212, 4294-4296, 4308-4310, 4633, 4659-4665, 4713-4718`
   - **Audit's suggested fix:** When the logging facade lands, wire these sites with the oracle's exact messages (two separate open/read messages) and carry the upload error through instead of collapsing it to MetalFailed.
+  - **Disposition (task-14c-1):** WAIVED — 16/18 cited anchors restored as live `log::` sites (including the four `eprintln!` stand-ins and the un-merged open/read messages); `generic.zig:2912`/`:3181` have no reachable `catch` arm (rustty `ShaperCache::put` is infallible). See `ADJUDICATION.md#s116-f2`.
 - [ ] **S117-F3** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** All log.warn/log.info diagnostics in image.zig and shadertoy.zig are elided (comment-only), no logging facade
   - **Oracle:** `src/renderer/image.zig:85,122,132,165,365,378-381,396,423,447,486,646-649,660,747` → **Rustty:** `crates/rustty-renderer/src/image/macos_impl.rs:218,257,266,289,696,723,738,773,895,1200,1215,1339`

@@ -17,6 +17,14 @@ use core::ffi::c_void;
 use core::ptr::NonNull;
 use rustty_xev::Async;
 
+// const log = std.log.scoped(.generic_renderer);   (generic.zig:46)
+//
+// This file's ONE diagnostic is `generic.zig:991`'s `log.err`, whose body is
+// inlined here (`output_callback` — a CoreVideo `extern "C"` callback cannot be a
+// `Self` method), so it keeps the `generic_renderer` scope of the function it
+// ports, NOT a cvdisplaylink-local one. DECISION-logging.md §6r call shape 3.
+const LOG_SCOPE: &str = "generic_renderer";
+
 // ---------------------------------------------------------------------------
 // The CoreVideo C symbols (exact signatures — from `<CoreVideo/CVDisplayLink.h>`).
 // Framework-linked via `#[link(name = "CoreVideo", kind = "framework")]` on the
@@ -287,9 +295,9 @@ unsafe extern "C" fn output_callback(
     // before the box drops). `Async` is `Copy`; read by value, no aliasing `&mut`.
     // `notify()` only sends to the mach port.
     let draw_now: Async = unsafe { *ud };
-    if let Err(_err) = draw_now.notify() {
+    if let Err(err) = draw_now.notify() {
         // reference: log.err("error notifying draw_now err={}", .{err});
-        // (rustty log seam — mirror the existing `log`/`tracing` usage in generic.rs)
+        log::error!(target: LOG_SCOPE, "error notifying draw_now err={err:?}");
     }
     kCVReturnSuccess // reference `return c.kCVReturnSuccess;`
 }

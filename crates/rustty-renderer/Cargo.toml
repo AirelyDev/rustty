@@ -16,6 +16,17 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# The `LOG` findings-class facade (DECISION-logging.md, Option A, ratified).
+# `rustty-renderer` sits BELOW `rustty-vt-c` in R4's acyclic layering, so its
+# restored `std.log.scoped(...)` call sites use call shape 3 —
+# `log::{warn,error,info,debug}!(target: LOG_SCOPE, ...)` — reaching whichever
+# process-wide `log::Log` backend the running binary installs
+# (`rustty-vt-c::sys::Logger` or `rustty-core::logging::AppLogger`).
+#
+# Plain and unconditional: NO `release_max_level_*` feature here. That
+# compile-time gate belongs only on wasm ARTIFACT ROOT crates (§8r); declaring
+# it here would silently mute the native app build.
+log = { workspace = true }
 rustty-vt = { workspace = true }
 rustty-os = { workspace = true }
 rustty-datastruct = { workspace = true }
