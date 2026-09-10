@@ -49,6 +49,22 @@ use rustty_font::metrics::{self, Modifier, ModifierSet};
 use std::collections::HashMap;
 
 // const log = std.log.scoped(.font_shared_grid_set);
+//
+// The reference's `std.log.scoped(.font_shared_grid_set)` tag, carried through
+// the `log` facade's `target:` (`.port/parity-closure/DECISION-logging.md` §6).
+const LOG_SCOPE: &str = "font_shared_grid_set";
+
+/// The reference logs `field.name` from `@typeInfo(Style).@"enum".fields`, i.e.
+/// the Zig enum tag spelling. Rust's `Style` variants are `CamelCase`, so the
+/// oracle's exact tag text is reproduced here rather than derived from `Debug`.
+fn style_field_name(style: Style) -> &'static str {
+    match style {
+        Style::Regular => "regular",
+        Style::Bold => "bold",
+        Style::Italic => "italic",
+        Style::BoldItalic => "bold_italic",
+    }
+}
 
 /// SharedGridSet: see the module doc comment.
 // PORT NOTE: generic over the allocator `A` the grids/atlases use (`= Global`);
@@ -200,6 +216,7 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
         // if (gop.found_existing) { ... }
         if let Some(reffed) = self.map.get_mut(&hashcode) {
             // log.debug("found cached grid for font config", .{});
+            log::debug!(target: LOG_SCOPE, "found cached grid for font config");
 
             // We can deinit the key because we found a cached value.
             // key.deinit(); — the local key is returned instead (see PORT NOTE).
@@ -214,6 +231,7 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
         // errdefer self.map.removeByPtr(gop.key_ptr);
 
         // log.debug("initializing new grid for font config", .{});
+        log::debug!(target: LOG_SCOPE, "initializing new grid for font config");
 
         // A new font config, initialize the cache.
         // const grid = try self.alloc.create(SharedGrid);
@@ -346,6 +364,10 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
                 Some(d) => d,
                 None => {
                     // log.warn("font discovery not available, cannot search for fonts", .{});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "font discovery not available, cannot search for fonts"
+                    );
                     break 'discover;
                 }
             };
@@ -372,7 +394,15 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
                         // if (try disco_it.next()) |face| { ... continue; }
                         if let Some(face) = disco_it.next()? {
                             // log.info("font {s}: {s}", .{ field.name, try face.name(&name_buf) });
-                            let _ = face.name(&mut name_buf);
+                            //
+                            // PORT NOTE: `{s}` renders the raw name bytes; the
+                            // lossy UTF-8 conversion is confined to the message.
+                            log::info!(
+                                target: LOG_SCOPE,
+                                "font {}: {}",
+                                style_field_name(style),
+                                String::from_utf8_lossy(face.name(&mut name_buf)?)
+                            );
 
                             // _ = try c.addDeferred(self.alloc, face, .{ .style, .fallback=false, .size_adjustment=.none });
                             c.add_deferred(
@@ -406,7 +436,15 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
                         // if (try disco_it.next()) |face| { ... continue; }
                         if let Some(face) = disco_it.next()? {
                             // log.info("font {s}: {s}", .{ field.name, try face.name(&name_buf) });
-                            let _ = face.name(&mut name_buf);
+                            //
+                            // PORT NOTE: `{s}` renders the raw name bytes; the
+                            // lossy UTF-8 conversion is confined to the message.
+                            log::info!(
+                                target: LOG_SCOPE,
+                                "font {}: {}",
+                                style_field_name(style),
+                                String::from_utf8_lossy(face.name(&mut name_buf)?)
+                            );
 
                             c.add_deferred(
                                 face,
@@ -423,6 +461,19 @@ impl<A: Allocator + Copy> SharedGridSet<A> {
                     }
 
                     // log.warn("font-family {s} not found: {s}", .{ field.name, desc.family.? });
+                    //
+                    // PORT NOTE: `desc.family.?` unwraps unconditionally in the
+                    // reference; `expect` reproduces that (this arm is only
+                    // reachable for a family-bearing descriptor). `{s}` renders
+                    // raw bytes; the lossy conversion is message-only.
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "font-family {} not found: {}",
+                        style_field_name(style),
+                        String::from_utf8_lossy(
+                            desc.family.as_deref().expect("desc.family.?")
+                        )
+                    );
                 }
             }
         }

@@ -44,6 +44,10 @@ use crate::{Presentation, Style};
 use rustty_font::metrics::{FaceMetrics, Metrics, ModifierSet};
 
 // const log = std.log.scoped(.font_collection);
+//
+// The reference's `std.log.scoped(.font_collection)` tag, carried through the
+// `log` facade's `target:` (`.port/parity-closure/DECISION-logging.md` §6).
+const LOG_SCOPE: &str = "font_collection";
 
 /// The metric modifiers to use for this collection. The memory
 /// for this is owned by the user and is not freed by the collection.
@@ -477,6 +481,16 @@ impl Collection {
                     Ok(f) => f,
                     Err(_err) => {
                         // log.warn("error loading regular entry={d} err={}", .{ it.index - 1, err });
+                        //
+                        // PORT NOTE: the reference's `it.index - 1` is the index
+                        // of the entry `it.next()` just yielded; `index` here IS
+                        // that entry's index (it is bumped after this arm).
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "error loading regular entry={} err={:?}",
+                            index,
+                            _err
+                        );
                         index += 1;
                         continue;
                     }
@@ -509,6 +523,10 @@ impl Collection {
             'italic: {
                 if !synthetic_config.italic {
                     // log.info("italic style not available and synthetic italic disabled", .{});
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "italic style not available and synthetic italic disabled"
+                    );
                     self.faces
                         .get_mut(Style::Italic)
                         .push(Box::new(EntryOrAlias::Alias(regular_entry)));
@@ -519,6 +537,11 @@ impl Collection {
                     Ok(s) => s,
                     Err(_err) => {
                         // log.warn("failed to create synthetic italic, italic style will not be available err={}", .{err});
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "failed to create synthetic italic, italic style will not be available err={:?}",
+                            _err
+                        );
                         self.faces
                             .get_mut(Style::Italic)
                             .push(Box::new(EntryOrAlias::Alias(regular_entry)));
@@ -533,6 +556,7 @@ impl Collection {
                     scale_factor: ScaleFactor::Scale(1.0),
                 };
                 // log.info("synthetic italic face created", .{});
+                log::info!(target: LOG_SCOPE, "synthetic italic face created");
                 self.faces
                     .get_mut(Style::Italic)
                     .push(Box::new(EntryOrAlias::Entry(synthetic_entry)));
@@ -545,6 +569,10 @@ impl Collection {
             'bold: {
                 if !synthetic_config.bold {
                     // log.info("bold style not available and synthetic bold disabled", .{});
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "bold style not available and synthetic bold disabled"
+                    );
                     self.faces
                         .get_mut(Style::Bold)
                         .push(Box::new(EntryOrAlias::Alias(regular_entry)));
@@ -555,6 +583,11 @@ impl Collection {
                     Ok(s) => s,
                     Err(_err) => {
                         // log.warn("failed to create synthetic bold, bold style will not be available err={}", .{err});
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "failed to create synthetic bold, bold style will not be available err={:?}",
+                            _err
+                        );
                         self.faces
                             .get_mut(Style::Bold)
                             .push(Box::new(EntryOrAlias::Alias(regular_entry)));
@@ -568,6 +601,7 @@ impl Collection {
                     scale_factor: ScaleFactor::Scale(1.0),
                 };
                 // log.info("synthetic bold face created", .{});
+                log::info!(target: LOG_SCOPE, "synthetic bold face created");
                 self.faces
                     .get_mut(Style::Bold)
                     .push(Box::new(EntryOrAlias::Entry(synthetic_entry)));
@@ -580,6 +614,10 @@ impl Collection {
             'bold_italic: {
                 if !synthetic_config.bold_italic {
                     // log.info("bold italic style not available and synthetic bold italic disabled", .{});
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "bold italic style not available and synthetic bold italic disabled"
+                    );
                     self.faces
                         .get_mut(Style::BoldItalic)
                         .push(Box::new(EntryOrAlias::Alias(regular_entry)));
@@ -592,6 +630,10 @@ impl Collection {
                     let base_entry: *mut Entry = self.faces.get_mut(Style::Bold)[0].get_entry();
                     if let Ok(synthetic) = self.synthetic_italic(base_entry) {
                         // log.info("synthetic bold italic face created from bold", .{});
+                        log::info!(
+                            target: LOG_SCOPE,
+                            "synthetic bold italic face created from bold"
+                        );
                         let synthetic_entry = Entry {
                             face: AnyFace::Loaded(synthetic),
                             fallback: false,
@@ -610,6 +652,10 @@ impl Collection {
                 let base_entry: *mut Entry = self.faces.get_mut(Style::Italic)[0].get_entry();
                 if let Ok(synthetic) = self.synthetic_bold(base_entry) {
                     // log.info("synthetic bold italic face created from italic", .{});
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "synthetic bold italic face created from italic"
+                    );
                     let synthetic_entry = Entry {
                         face: AnyFace::Loaded(synthetic),
                         fallback: false,
@@ -622,6 +668,10 @@ impl Collection {
                 }
 
                 // log.warn("bold italic style not available, using italic font", .{});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "bold italic style not available, using italic font"
+                );
                 self.faces
                     .get_mut(Style::BoldItalic)
                     .push(Box::new(EntryOrAlias::Alias(base_entry)));
@@ -664,7 +714,17 @@ impl Collection {
 
         let mut buf = [0u8; 256];
         // if (face.name(&buf)) |name| { log.info("font synthetic bold created family={s}", .{name}); } else |_| {}
-        let _ = face.name(&mut buf);
+        //
+        // PORT NOTE: the reference's `{s}` renders the raw name bytes; the lossy
+        // UTF-8 conversion is confined to the diagnostic (memory
+        // `zig-byteslice-to-rust-rawbytes` is about data, not messages).
+        if let Ok(name) = face.name(&mut buf) {
+            log::info!(
+                target: LOG_SCOPE,
+                "font synthetic bold created family={}",
+                String::from_utf8_lossy(name)
+            );
+        }
 
         Ok(face)
     }
@@ -695,7 +755,15 @@ impl Collection {
 
         let mut buf = [0u8; 256];
         // if (face.name(&buf)) |name| { log.info("font synthetic italic created family={s}", .{name}); } else |_| {}
-        let _ = face.name(&mut buf);
+        //
+        // PORT NOTE: `{s}` renders raw name bytes; see `synthetic_bold`.
+        if let Ok(name) = face.name(&mut buf) {
+            log::info!(
+                target: LOG_SCOPE,
+                "font synthetic italic created family={}",
+                String::from_utf8_lossy(name)
+            );
+        }
 
         Ok(face)
     }

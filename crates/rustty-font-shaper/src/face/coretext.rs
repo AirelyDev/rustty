@@ -29,11 +29,26 @@
 //     `coretext_harfbuzz` backend's Harfbuzz font lands with that backend).
 //   * `font.*` shared types (`Atlas`, `Glyph`, `Metrics`, glyph `RenderOptions`)
 //     and the `opentype.*` table parsers live in the PURE `rustty-font` leaf.
-//   * `log` is a scoped logger; rustty has no logging facade wired into this crate,
-//     so all `log.*` calls are ported as verbatim comments and are no-ops.
+//   * `log` is a scoped logger; it maps onto the `log` facade crate with the
+//     reference's `std.log.scoped` tag carried as `target: LOG_SCOPE`
+//     (`.port/parity-closure/DECISION-logging.md` §6). Reference `log.*` calls
+//     are kept as verbatim comments (R1) with the live emission beneath them.
 
 use allocator_api2::alloc::Allocator;
 use core::ffi::c_void;
+
+// const log = std.log.scoped(.font_face);
+//
+// The reference's `std.log.scoped(.font_face)` tag, carried through the `log`
+// facade's `target:`. `face/coretext.zig`, `face/freetype.zig` and
+// `face/web_canvas.zig` all use this ONE scope in the reference; that is the
+// reference's own choice and is ported as-is.
+const LOG_SCOPE: &str = "font_face";
+
+/// The reference guards its variation-axes dump with
+/// `comptime builtin.mode == .Debug`; `cfg!(debug_assertions)` is the direct
+/// Rust analog.
+const DEBUG_MODE: bool = cfg!(debug_assertions);
 use core::ptr::{self, NonNull};
 
 use objc2_core_foundation::{kCFAllocatorNull, CFData, CFNumber, CFNumberType, CFRetained};
@@ -290,42 +305,13 @@ impl Face {
         // In debug mode, we output information about available variation axes,
         // if they exist.
         //
-        // PORT NOTE (log-as-comment): this `if (comptime builtin.mode == .Debug)`
-        // block is purely diagnostic (it logs the font's variation axes via
-        // `log.debug`, reading them through `copyAttribute(.variation_axes)` and a
-        // `Dictionary`/`FontVariationAxisKey` walk) and has no behavioral effect.
-        // Ported verbatim as a comment:
+        // if (comptime builtin.mode == .Debug) { ... }
         //
-        // if (comptime builtin.mode == .Debug) {
-        //     if (ct_font.copyAttribute(.variation_axes)) |axes| {
-        //         defer axes.release();
-        //         var buf: [1024]u8 = undefined;
-        //         log.debug("variation axes font={s}", .{try result.name(&buf)});
-        //         const len = axes.getCount();
-        //         for (0..len) |i| {
-        //             const dict = axes.getValueAtIndex(macos.foundation.Dictionary, i);
-        //             const Key = macos.text.FontVariationAxisKey;
-        //             const cf_name = dict.getValue(Key.name.Value(), Key.name.key()).?;
-        //             const cf_id = dict.getValue(Key.identifier.Value(), Key.identifier.key()).?;
-        //             const cf_min = dict.getValue(Key.minimum_value.Value(), Key.minimum_value.key()).?;
-        //             const cf_max = dict.getValue(Key.maximum_value.Value(), Key.maximum_value.key()).?;
-        //             const cf_def = dict.getValue(Key.default_value.Value(), Key.default_value.key()).?;
-        //             const namestr = cf_name.cstring(&buf, .utf8) orelse "";
-        //             var id_raw: c_int = 0;
-        //             _ = cf_id.getValue(.int, &id_raw);
-        //             const id: font.face.Variation.Id = @bitCast(id_raw);
-        //             var min: f64 = 0;
-        //             _ = cf_min.getValue(.double, &min);
-        //             var max: f64 = 0;
-        //             _ = cf_max.getValue(.double, &max);
-        //             var def: f64 = 0;
-        //             _ = cf_def.getValue(.double, &def);
-        //             log.debug("variation axis: name={s} id={s} min={} max={} def={}", .{
-        //                 namestr, id.str(), min, max, def,
-        //             });
-        //         }
-        //     }
-        // }
+        // Ported live (S90-F2 / S91-F8): the body is `log_variation_axes`, which
+        // takes the mode flag as a parameter so the release arm is testable; the
+        // ONLY production call site passes `DEBUG_MODE`, the direct port of
+        // `comptime builtin.mode == .Debug`.
+        result.log_variation_axes(DEBUG_MODE)?;
 
         Ok(result)
     }
@@ -375,6 +361,140 @@ impl Face {
         face.synthetic_bold = Some(line_width);
 
         Ok(face)
+    }
+
+    /// The reference's `if (comptime builtin.mode == .Debug)` variation-axes
+    /// dump from `init` (`face/coretext.zig:118-162`), extracted into a method
+    /// so its two arms are independently testable. `debug_mode` is the port of
+    /// `comptime builtin.mode == .Debug`; production passes `DEBUG_MODE`.
+    ///
+    /// Purely diagnostic: it emits `log.debug` records and has no effect on the
+    /// face. The `try result.name(&buf)` in the reference propagates, so this
+    /// returns `Result` and `init` uses `?` on it, matching that.
+    fn log_variation_axes(&self, debug_mode: bool) -> Result<(), Error> {
+        if !debug_mode {
+            return Ok(());
+        }
+
+        // if (ct_font.copyAttribute(.variation_axes)) |axes| { ... }
+        // defer axes.release(); — `CFRetained` releases on drop.
+        let axes = match unsafe {
+            self.font
+                .attribute(objc2_core_text::kCTFontVariationAxesAttribute)
+        } {
+            Some(a) => a,
+            None => return Ok(()),
+        };
+        let axes = match axes.downcast::<objc2_core_foundation::CFArray>() {
+            Ok(a) => a,
+            // The attribute is documented as an array of dictionaries; anything
+            // else is not something the reference's typed `getValueAtIndex`
+            // would produce, so there is nothing to dump.
+            Err(_) => return Ok(()),
+        };
+
+        // var buf: [1024]u8 = undefined;
+        let mut buf = [0u8; 1024];
+        // log.debug("variation axes font={s}", .{try result.name(&buf)});
+        //
+        // PORT NOTE: `{s}` renders the raw name bytes; the lossy UTF-8
+        // conversion is confined to the diagnostic.
+        log::debug!(
+            target: LOG_SCOPE,
+            "variation axes font={}",
+            String::from_utf8_lossy(self.name(&mut buf)?)
+        );
+
+        // const len = axes.getCount();
+        let len = axes.count();
+        for i in 0..len {
+            // const dict = axes.getValueAtIndex(macos.foundation.Dictionary, i);
+            let dict = unsafe { axes.value_at_index(i) }
+                as *const objc2_core_foundation::CFDictionary;
+            if dict.is_null() {
+                continue;
+            }
+            // SAFETY: the array is retained for the body of this loop and CF
+            // guarantees its elements outlive it.
+            let dict = unsafe { &*dict };
+
+            // const Key = macos.text.FontVariationAxisKey;
+            // const cf_* = dict.getValue(Key.*.Value(), Key.*.key()).?;
+            //
+            // PORT NOTE: the reference's `.?` asserts each of the five keys is
+            // present. CoreText documents all five on every axis dictionary; a
+            // malformed dictionary skips the axis here rather than panicking,
+            // since this is a diagnostic-only path.
+            let get = |key: &objc2_core_foundation::CFString| -> *const c_void {
+                unsafe { dict.value(key as *const _ as *const c_void) }
+            };
+            let cf_name = get(unsafe { objc2_core_text::kCTFontVariationAxisNameKey });
+            let cf_id = get(unsafe { objc2_core_text::kCTFontVariationAxisIdentifierKey });
+            let cf_min = get(unsafe { objc2_core_text::kCTFontVariationAxisMinimumValueKey });
+            let cf_max = get(unsafe { objc2_core_text::kCTFontVariationAxisMaximumValueKey });
+            let cf_def = get(unsafe { objc2_core_text::kCTFontVariationAxisDefaultValueKey });
+            if cf_name.is_null()
+                || cf_id.is_null()
+                || cf_min.is_null()
+                || cf_max.is_null()
+                || cf_def.is_null()
+            {
+                continue;
+            }
+
+            // const namestr = cf_name.cstring(&buf, .utf8) orelse "";
+            let namestr =
+                unsafe { &*(cf_name as *const objc2_core_foundation::CFString) }.to_string();
+
+            // var id_raw: c_int = 0;
+            // _ = cf_id.getValue(.int, &id_raw);
+            // const id: font.face.Variation.Id = @bitCast(id_raw);
+            let mut id_raw: core::ffi::c_int = 0;
+            let _ = unsafe {
+                (*(cf_id as *const CFNumber)).value(
+                    CFNumberType::IntType,
+                    &mut id_raw as *mut core::ffi::c_int as *mut c_void,
+                )
+            };
+            // `Variation.Id` is `packed struct(u32) { d, c, b, a }`, so `d` is
+            // the LEAST significant byte (see `face::Variation::Id::to_u32`).
+            let id_bits = id_raw as u32;
+            let id = crate::face::Id {
+                d: (id_bits & 0xff) as u8,
+                c: ((id_bits >> 8) & 0xff) as u8,
+                b: ((id_bits >> 16) & 0xff) as u8,
+                a: ((id_bits >> 24) & 0xff) as u8,
+            };
+
+            let read_double = |p: *const c_void| -> f64 {
+                let mut v: f64 = 0.0;
+                let _ = unsafe {
+                    (*(p as *const CFNumber))
+                        .value(CFNumberType::DoubleType, &mut v as *mut f64 as *mut c_void)
+                };
+                v
+            };
+            // var min/max/def: f64 = 0; _ = cf_*.getValue(.double, &*);
+            let min = read_double(cf_min);
+            let max = read_double(cf_max);
+            let def = read_double(cf_def);
+
+            // log.debug("variation axis: name={s} id={s} min={} max={} def={}", ...);
+            //
+            // PORT NOTE: `id.str()` is a `[4]u8` tag rendered by `{s}` as raw
+            // bytes; the lossy conversion is confined to the diagnostic.
+            log::debug!(
+                target: LOG_SCOPE,
+                "variation axis: name={} id={} min={} max={} def={}",
+                namestr,
+                String::from_utf8_lossy(&id.str()),
+                min,
+                max,
+                def
+            );
+        }
+
+        Ok(())
     }
 
     /// Returns the font name. If allocation is required, buf will be used,
@@ -673,6 +793,12 @@ impl Face {
             // log.warn("font atlas color depth doesn't equal font color depth atlas={} font={}", .{
             //     atlas.format.depth(), color.depth,
             // });
+            log::warn!(
+                target: LOG_SCOPE,
+                "font atlas color depth doesn't equal font color depth atlas={} font={}",
+                atlas.format().depth(),
+                depth
+            );
             return Err(Error::InvalidAtlasFormat);
         }
 
@@ -830,10 +956,14 @@ impl Face {
                 None => None,
                 Some(data) => {
                     let slice = unsafe { data.as_bytes_unchecked() };
-                    // PORT NOTE (log-as-comment): the reference
-                    // `catch |err| { log.warn("error parsing head table: {}", .{err}); break :head null; }`
-                    // discards a parse failure as `null`; the warning is a no-op here.
-                    Head::init(slice).ok()
+                    // catch |err| { log.warn("error parsing head table: {}", .{err}); break :head null; }
+                    match Head::init(slice) {
+                        Ok(v) => Some(v),
+                        Err(err) => {
+                            log::warn!(target: LOG_SCOPE, "error parsing head table: {err:?}");
+                            None
+                        }
+                    }
                 }
             }
         };
@@ -843,8 +973,14 @@ impl Face {
             None => None,
             Some(data) => {
                 let slice = unsafe { data.as_bytes_unchecked() };
-                // PORT NOTE (log-as-comment): `catch |err| { log.warn("error parsing post table: {}", .{err}); break :post null; }`.
-                Post::init(slice).ok()
+                // catch |err| { log.warn("error parsing post table: {}", .{err}); break :post null; }
+                match Post::init(slice) {
+                    Ok(v) => Some(v),
+                    Err(err) => {
+                        log::warn!(target: LOG_SCOPE, "error parsing post table: {err:?}");
+                        None
+                    }
+                }
             }
         };
 
@@ -853,8 +989,14 @@ impl Face {
             None => None,
             Some(data) => {
                 let slice = unsafe { data.as_bytes_unchecked() };
-                // PORT NOTE (log-as-comment): `catch |err| { log.warn("error parsing OS/2 table: {}", .{err}); break :os2 null; }`.
-                OS2::init(slice).ok()
+                // catch |err| { log.warn("error parsing OS/2 table: {}", .{err}); break :os2 null; }
+                match OS2::init(slice) {
+                    Ok(v) => Some(v),
+                    Err(err) => {
+                        log::warn!(target: LOG_SCOPE, "error parsing OS/2 table: {err:?}");
+                        None
+                    }
+                }
             }
         };
 
@@ -863,8 +1005,14 @@ impl Face {
             None => None,
             Some(data) => {
                 let slice = unsafe { data.as_bytes_unchecked() };
-                // PORT NOTE (log-as-comment): `catch |err| { log.warn("error parsing hhea table: {}", .{err}); break :hhea null; }`.
-                Hhea::init(slice).ok()
+                // catch |err| { log.warn("error parsing hhea table: {}", .{err}); break :hhea null; }
+                match Hhea::init(slice) {
+                    Ok(v) => Some(v),
+                    Err(err) => {
+                        log::warn!(target: LOG_SCOPE, "error parsing hhea table: {err:?}");
+                        None
+                    }
+                }
             }
         };
 
@@ -1137,6 +1285,21 @@ impl Face {
                 //     "(getMetrics) Width of glyph '水' for font \"{s}\" is greater than its advance ({d} > {d}), discarding ic_width metric.",
                 //     .{ font_name, bounds.size.width, advance },
                 // );
+                //
+                // PORT NOTE: `{s}` renders the raw name bytes; the lossy UTF-8
+                // conversion is confined to the diagnostic.
+                let mut buf = [0u8; 1024];
+                let font_name = self
+                    .name(&mut buf)
+                    .map(String::from_utf8_lossy)
+                    .unwrap_or(std::borrow::Cow::Borrowed("<Error getting font name>"));
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "(getMetrics) Width of glyph '水' for font \"{}\" is greater than its advance ({} > {}), discarding ic_width metric.",
+                    font_name,
+                    bounds.size.width,
+                    advance
+                );
                 break 'ic_width None;
             }
 

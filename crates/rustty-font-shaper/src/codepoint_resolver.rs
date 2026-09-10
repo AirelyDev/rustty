@@ -39,6 +39,11 @@ use rustty_font::sprite::Face as SpriteFace;
 use std::collections::HashMap;
 
 // const log = std.log.scoped(.font_codepoint_resolver);
+//
+// The reference's `std.log.scoped(.font_codepoint_resolver)` tag, carried
+// through the `log` facade's `target:`
+// (`.port/parity-closure/DECISION-logging.md` §6).
+const LOG_SCOPE: &str = "font_codepoint_resolver";
 
 /// CodepointResolver: see the module doc comment.
 // PORT NOTE: the reference is a file-struct initialized `.{}`-style with the
@@ -191,6 +196,12 @@ impl CodepointResolver {
             }
             Err(_err) => {
                 // log.warn("codepoint override failed codepoint={} err={}", .{ cp, err });
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "codepoint override failed codepoint={} err={:?}",
+                    cp,
+                    _err
+                );
             }
         }
 
@@ -246,6 +257,7 @@ impl CodepointResolver {
         // short-circuits before any real discovery is performed.
         if style == Style::Regular {
             // log.debug("searching for a fallback font for cp={X}", .{cp});
+            log::debug!(target: LOG_SCOPE, "searching for a fallback font for cp={cp:X}");
             'discover: {
                 if let Some(disco) = self.discover {
                     // SAFETY: `disco` is an externally-owned discoverer pointer.
@@ -278,6 +290,10 @@ impl CodepointResolver {
                     // e.g. the `break 'discover`s above; the explicit call below
                     // stays valid because `deinit` is idempotent.)
                     let mut found = None;
+                    // Set when the port takes the exit that the reference spells
+                    // `break :discover` from inside the loop (the `addDeferred`
+                    // catch arm), which skips the "no fallback face found" debug.
+                    let mut broke_discover = false;
 
                     // PORT NOTE (WS20): the faithful shape of the reference's
                     // `while (true) { const deferred_face = (disco_it.next() catch
@@ -292,6 +308,11 @@ impl CodepointResolver {
                             Ok(v) => v,
                             Err(_err) => {
                                 // log.warn("fallback search failed with error err={}", .{err});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "fallback search failed with error err={:?}",
+                                    _err
+                                );
                                 break;
                             }
                         };
@@ -327,7 +348,18 @@ impl CodepointResolver {
 
                         let mut buf = [0u8; 256];
                         // log.info("found codepoint 0x{X} in fallback face={s}", .{ cp, deferred_face.name(&buf) catch "<error>" });
-                        let _ = deferred_face.name(&mut buf);
+                        //
+                        // PORT NOTE: the reference's `{s}` renders the raw name
+                        // bytes; the lossy UTF-8 conversion is confined to the
+                        // diagnostic, not to any data path.
+                        log::info!(
+                            target: LOG_SCOPE,
+                            "found codepoint 0x{cp:X} in fallback face={}",
+                            deferred_face
+                                .name(&mut buf)
+                                .map(String::from_utf8_lossy)
+                                .unwrap_or(std::borrow::Cow::Borrowed("<error>"))
+                        );
                         // return self.collection.addDeferred(...) catch { ... };
                         //   The `match` keeps the reference's two arms (and the
                         //   `catch` body's comment) visible; `.ok()` would erase
@@ -344,6 +376,11 @@ impl CodepointResolver {
                             Ok(idx) => Some(idx),
                             Err(_) => {
                                 // deferred_face.deinit(); break :discover;
+                                //
+                                // The reference's `break :discover` also SKIPS
+                                // the "no fallback face found" debug below; the
+                                // flag reproduces that (see its declaration).
+                                broke_discover = true;
                                 //   The deferred face was moved into
                                 //   `add_deferred`, which deinits it on its error
                                 //   arms (W9F-02) — reproducing the reference's
@@ -364,9 +401,13 @@ impl CodepointResolver {
                     }
 
                     // log.debug("no fallback face found for cp={X}", .{cp});
-                    //   (The reference's `break :discover` skips this log; it is
-                    //   a comment here, so the merged fall-through is behavior
-                    //   -identical.)
+                    //   The reference's `break :discover` (the `addDeferred`
+                    //   catch arm) skips this log; the port merges that exit
+                    //   into this fall-through, so `broke_discover` reproduces
+                    //   the skip now that the emission is live.
+                    if !broke_discover {
+                        log::debug!(target: LOG_SCOPE, "no fallback face found for cp={cp:X}");
+                    }
                 }
             }
         }
@@ -445,6 +486,10 @@ impl CodepointResolver {
                     Ok(Some(f)) => f,
                     Ok(None) => {
                         // log.warn("font lookup for codepoint map failed codepoint={} err=FontNotFound", .{cp});
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "font lookup for codepoint map failed codepoint={cp} err=FontNotFound"
+                        );
                         // Add null to the cache so we don't do a lookup again later.
                         self.descriptor_cache.put(desc, None);
                         disco_it.deinit();
@@ -472,7 +517,11 @@ impl CodepointResolver {
                         return Err(OverrideError::Add);
                     }
                 };
-                self.descriptor_cache.put(desc, Some(idx));
+                // PORT NOTE: the reference's `put` takes `desc` BY VALUE (a
+                // struct copy; its `family` slice points at caller-owned
+                // memory), and `desc` stays live for the `log.debug` below.
+                // `Clone` reproduces that copy so the diagnostic can read it.
+                self.descriptor_cache.put(desc.clone(), Some(idx));
 
                 disco_it.deinit();
                 Some(idx)
@@ -493,6 +542,18 @@ impl CodepointResolver {
             .has_codepoint(idx, cp, PresentationMode::Any)
         {
             // log.debug("codepoint override based on config codepoint={} family={s}", .{ cp, desc.family orelse "" });
+            //
+            // PORT NOTE: `{s}` renders the raw family bytes; the lossy UTF-8
+            // conversion is confined to the diagnostic.
+            log::debug!(
+                target: LOG_SCOPE,
+                "codepoint override based on config codepoint={} family={}",
+                cp,
+                desc.family
+                    .as_deref()
+                    .map(String::from_utf8_lossy)
+                    .unwrap_or(std::borrow::Cow::Borrowed(""))
+            );
             let _ = alloc;
             return Ok(Some(idx));
         }

@@ -1440,6 +1440,7 @@ dependencies = [
  "fontconfig-sys",
  "freetype-sys",
  "harfbuzz-sys",
+ "log",
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-core-text",

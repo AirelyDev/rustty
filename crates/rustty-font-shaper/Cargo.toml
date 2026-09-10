@@ -45,6 +45,18 @@ doctest = false
 ghostty-wasm-abi = ["dep:rustty-os"]
 
 [dependencies]
+# The `log` facade (`.port/parity-closure/DECISION-logging.md` §6/§6r): every
+# restored `log.warn`/`log.err`/`log.info`/`log.debug` reference call site in
+# this crate emits through `log::warn!(target: LOG_SCOPE, ...)`, reaching
+# whichever process-wide `log::Log` backend the running binary installed
+# (`rustty-core::logging::AppLogger` in the app/libghostty artifacts,
+# `rustty-vt-c::sys::Logger` in the standalone library, and
+# `rustty-os::wasm::log::WasmLogger` in the wasm artifacts).
+#
+# Plain and unconditional: NO `release_max_level_*` feature here. That
+# compile-time gate belongs only on wasm ARTIFACT ROOT crates (§8r); declaring
+# it here would silently mute the native app build.
+log = { workspace = true }
 # Optional (feature `ghostty-wasm-abi` only): the resurrected pre-`9dc2e5978`
 # `os/wasm.zig` host-ownership tracker (`toHostOwned`), which the reference
 # `face_render_glyph` uses to hand a heap `*Glyph` to the JS host for the
