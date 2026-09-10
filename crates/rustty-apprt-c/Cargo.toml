@@ -66,6 +66,11 @@ simd = ["rustty-vt/simd"]
 # name the Action type — the BREAK #1 generic stays `()` there); this TOP-SINK
 # crate legitimately deps cli (no crate deps apprt-c) — acyclic (G7), the same
 # ADV-FIX 2 shape as the `rustty` bin.
+# The `log` facade (DECISION-logging.md §6r4): this crate carries `embedded.zig`'s
+# `CAPI` block and `main_c.zig`, whose restored `log.*` sites emit through
+# `log::{error,warn,info}!`. `rustty_init` installs the backend
+# (`rustty_core::logging::install_app_log_backend`) before any of them can run.
+log = { workspace = true }
 rustty-cli = { workspace = true }
 rustty-apprt = { workspace = true }
 # The `identity-oracle` feature above flips this crate's string identity directly

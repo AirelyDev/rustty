@@ -55,6 +55,21 @@
 use core::ffi::{c_void, CStr};
 use std::mem::ManuallyDrop;
 
+/// `const log = std.log.scoped(.embedded_window)` (`embedded.zig:26`).
+///
+/// This crate carries the reference's `CAPI` block, which lives INSIDE
+/// `embedded.zig` and therefore logs through that file's scoped alias — so the
+/// scope tag here is `embedded_window`, not a name of this crate's own. Carried
+/// as the `log::` facade's `target:` per `DECISION-logging.md` §6r4; the backend
+/// is installed by [`rustty_init`] (`rustty_core::logging::install_app_log_backend`)
+/// before any export that can log runs.
+const LOG_SCOPE: &str = "embedded_window";
+
+/// The `.default` scope — `src/main_c.zig`'s three sites call `std.log.*`
+/// directly rather than through a scoped alias, so they carry NO scope tag.
+/// `""` is the facade convention for it (`DECISION-logging.md` §6).
+const DEFAULT_LOG_SCOPE: &str = "";
+
 use allocator_api2::alloc::Global;
 
 use libc::{c_char, c_int};
@@ -239,8 +254,6 @@ fn detect_from_argv(
 /// argv), as the reference `ghostty_init` requires.
 #[no_mangle]
 pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_int {
-    use rustty_core::logging::{log, Level};
-
     // task-14a review round 2 (CRITICAL 2 item 1): `rustty_init` is the port
     // of `main_c.zig`'s `ghostty_init`, the process init for the LIBRARY
     // artifact — `main_c.zig:32`'s `pub const std_options = main.std_options;`
@@ -283,9 +296,8 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
     // debt — compiling it everywhere is the most this host can do.
     if cfg!(windows) {
         // std.log.err("failed to initialize ghostty error={}", .{err});
-        log(
-            Level::Err,
-            "default",
+        log::error!(
+            target: DEFAULT_LOG_SCOPE,
             "failed to initialize rustty error=UnsupportedOSForCApi",
         );
         return 1;
@@ -320,11 +332,7 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
         Ok(action) => action,
         Err(err) => {
             // std.log.err("failed to initialize ghostty error={}", .{err});
-            log(
-                Level::Err,
-                "default",
-                &format!("failed to initialize rustty error={err:?}"),
-            );
+            log::error!(target: DEFAULT_LOG_SCOPE, "failed to initialize rustty error={err:?}");
             return 1;
         }
     };
@@ -338,11 +346,7 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
         Ok(_) => 0,
         Err(err) => {
             // std.log.err("failed to initialize ghostty error={}", .{err});
-            log(
-                Level::Err,
-                "default",
-                &format!("failed to initialize rustty error={err:?}"),
-            );
+            log::error!(target: DEFAULT_LOG_SCOPE, "failed to initialize rustty error={err:?}");
             1
         }
     }
@@ -380,8 +384,6 @@ pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_i
 /// reference `ghostty_init` → `ghostty_cli_try_action` ordering).
 #[no_mangle]
 pub unsafe extern "C" fn rustty_cli_try_action() {
-    use rustty_core::logging::{log, Level};
-
     // const action = state.action orelse return;
     //   Presence lives in core STATE (`Option<()>`); the concrete value lives
     //   in the top-sink CLI_ACTION stash (see its doc) — set together by
@@ -397,11 +399,7 @@ pub unsafe extern "C" fn rustty_cli_try_action() {
     };
 
     // std.log.info("executing CLI action={}", .{action});
-    log(
-        Level::Info,
-        "default",
-        &format!("executing CLI action={action:?}"),
-    );
+    log::info!(target: DEFAULT_LOG_SCOPE, "executing CLI action={action:?}");
 
     // posix.exit(action.run(state.alloc) catch |err| {
     //     std.log.err("CLI action failed error={}", .{err});
@@ -414,11 +412,7 @@ pub unsafe extern "C" fn rustty_cli_try_action() {
     std::process::exit(match action.run() {
         Ok(code) => i32::from(code),
         Err(err) => {
-            log(
-                Level::Err,
-                "default",
-                &format!("CLI action failed error={err:?}"),
-            );
+            log::error!(target: DEFAULT_LOG_SCOPE, "CLI action failed error={err:?}");
             std::process::exit(1);
         }
     });
@@ -481,8 +475,7 @@ pub unsafe extern "C" fn rustty_app_new(opts: *const Options, config: *const Con
     match unsafe { app_new_(opts, config) } {
         Ok(app) => app,
         Err(err) => {
-            // no scoped-log sink in this leaf (vt-c precedent): emit to stderr.
-            eprintln!("error initializing app err={err:?}");
+            log::error!(target: LOG_SCOPE, "error initializing app err={err:?}");
             core::ptr::null_mut()
         }
     }
@@ -551,7 +544,7 @@ pub unsafe extern "C" fn rustty_app_tick(v: *mut App) {
     // SAFETY: `v` validity is the caller's contract.
     let core_app = unsafe { (*v).core_app };
     if let Err(err) = unsafe { (*core_app).tick(&*v) } {
-        eprintln!("error app tick err={err:?}");
+        log::error!(target: LOG_SCOPE, "error app tick err={err:?}");
     }
 }
 
@@ -626,7 +619,7 @@ pub unsafe extern "C" fn rustty_app_key(app: *mut App, event: KeyEvent) -> bool 
     let kev = match unsafe { event.keyEvent() } {
         Some(v) => v,
         None => {
-            eprintln!("error processing key event: action out of range");
+            log::warn!(target: LOG_SCOPE, "error processing key event: action out of range");
             return false;
         }
     };
@@ -634,7 +627,7 @@ pub unsafe extern "C" fn rustty_app_key(app: *mut App, event: KeyEvent) -> bool 
     match unsafe { (*app).keyEvent(KeyTarget::App, kev) } {
         Ok(v) => v,
         Err(err) => {
-            eprintln!("error processing key event err={err:?}");
+            log::warn!(target: LOG_SCOPE, "error processing key event err={err:?}");
             false
         }
     }
@@ -665,7 +658,7 @@ pub unsafe extern "C" fn rustty_config_key_is_binding(
     let core_event = match unsafe { event.keyEvent() }.and_then(|e| e.core()) {
         Some(v) => v,
         None => {
-            eprintln!("error processing key event");
+            log::warn!(target: LOG_SCOPE, "error processing key event");
             return false;
         }
     };
@@ -693,7 +686,7 @@ pub unsafe extern "C" fn rustty_app_keyboard_changed(v: *mut App) {
     // };
     // SAFETY: `v` validity is the caller's contract.
     if let Err(err) = unsafe { (*v).reloadKeymap() } {
-        eprintln!("error reloading keyboard map err={err:?}");
+        log::error!(target: LOG_SCOPE, "error reloading keyboard map err={err:?}");
     }
 }
 
@@ -723,7 +716,7 @@ pub unsafe extern "C" fn rustty_app_open_config(v: *mut App) {
             Action::OpenConfig(rustty_apprt_api::action::OpenConfig::NewWindow),
         )
     } {
-        eprintln!("error reloading config err={err:?}");
+        log::error!(target: LOG_SCOPE, "error reloading config err={err:?}");
     }
 }
 
@@ -744,7 +737,7 @@ pub unsafe extern "C" fn rustty_app_update_config(v: *mut App, config: *const Co
     // SAFETY: `v`/`config` validity is the caller's contract.
     let core_app = unsafe { (*v).core_app };
     if let Err(err) = unsafe { (*core_app).updateConfig(&*v, &*config) } {
-        eprintln!("error updating config err={err:?}");
+        log::error!(target: LOG_SCOPE, "error updating config err={err:?}");
     }
 }
 
@@ -792,17 +785,21 @@ pub unsafe extern "C" fn rustty_app_set_color_scheme(v: *mut App, scheme_raw: c_
     //
     // PORT NOTE: `apprt.ColorScheme` is `enum(u2) { light = 0, dark = 1 }`; the
     // `intToEnum` guard lives here on the raw `c_int` crossing the C boundary (vt-c
-    // `rustty_build_info` precedent). The reference warn string names
-    // `ghostty_surface_set_color_scheme` (a ghostty copy-paste quirk inside the
-    // app-scoped fn) — preserved verbatim in the comment above; the emitted line
-    // uses the fn's own rustty symbol.
+    // `rustty_build_info` precedent).
+    //
+    // PORT NOTE (task-14d-3, INVERSE PARITY DEFECT — a rustty-ONLY emission,
+    // now REMOVED): the commented reference call above is from a SUPERSEDED
+    // oracle revision. At pin 20abdb50a this guard reads
+    // `const scheme = std.enums.fromInt(apprt.ColorScheme, scheme_raw) orelse
+    // return;` (embedded.zig:1788) — SILENT. The port emitted a warning here that no
+    // pinned oracle revision emits, which is the same defect shape S50-F4
+    // records and the same one this file's `rustty_surface_mouse_pressure`
+    // already had removed for exactly this reason. The comment above is kept
+    // (R1) as the record of what upstream used to do.
     let scheme = match scheme_raw {
         0 => ColorScheme::Light,
         1 => ColorScheme::Dark,
-        _ => {
-            eprintln!("invalid color scheme to rustty_app_set_color_scheme value={scheme_raw}");
-            return;
-        }
+        _ => return,
     };
 
     // v.core_app.colorSchemeEvent(v, scheme) catch |err| {
@@ -812,7 +809,7 @@ pub unsafe extern "C" fn rustty_app_set_color_scheme(v: *mut App, scheme_raw: c_
     // SAFETY: `v` validity is the caller's contract.
     let core_app = unsafe { (*v).core_app };
     if let Err(err) = unsafe { (*core_app).colorSchemeEvent(&*v, scheme) } {
-        eprintln!("error setting color scheme err={err:?}");
+        log::error!(target: LOG_SCOPE, "error setting color scheme err={err:?}");
     }
 }
 
@@ -1210,8 +1207,7 @@ pub unsafe extern "C" fn rustty_surface_new(
     match unsafe { surface_new_(app, opts) } {
         Ok(surface) => surface,
         Err(err) => {
-            // no scoped-log sink in this leaf (vt-c precedent): emit to stderr.
-            eprintln!("error initializing surface err={err:?}");
+            log::error!(target: LOG_SCOPE, "error initializing surface err={err:?}");
             core::ptr::null_mut()
         }
     }
@@ -1314,7 +1310,7 @@ pub unsafe extern "C" fn rustty_surface_update_config(
     // };
     // SAFETY: `surface`/`config` validity is the caller's contract.
     if let Err(err) = unsafe { (*surface).core_surface.updateConfig(&*config) } {
-        eprintln!("error updating config err={err:?}");
+        log::error!(target: LOG_SCOPE, "error updating config err={err:?}");
     }
 }
 
@@ -1477,7 +1473,7 @@ unsafe fn readTextLocked(
         Ok(text) => text,
         Err(err) => {
             // log.warn("error reading text err={}", .{err});
-            eprintln!("error reading text err={err:?}");
+            log::warn!(target: LOG_SCOPE, "error reading text err={err:?}");
             return false;
         }
     };
@@ -1686,13 +1682,20 @@ pub unsafe extern "C" fn rustty_surface_set_color_scheme(surface: *mut Surface, 
     // PORT NOTE: `apprt.ColorScheme` is `enum(u2) { light = 0, dark = 1 }`; the
     // `intToEnum` guard lives here on the raw `c_int` crossing the C boundary (the
     // E6 `rustty_app_set_color_scheme` precedent).
+    //
+    // PORT NOTE (task-14d-3, INVERSE PARITY DEFECT — a rustty-ONLY emission,
+    // now REMOVED): the commented reference call above is from a SUPERSEDED
+    // oracle revision. At pin 20abdb50a this guard reads
+    // `const scheme = std.enums.fromInt(apprt.ColorScheme, scheme_raw) orelse
+    // return;` (embedded.zig:1992) — SILENT. The port emitted a warning here that no
+    // pinned oracle revision emits, which is the same defect shape S50-F4
+    // records and the same one this file's `rustty_surface_mouse_pressure`
+    // already had removed for exactly this reason. The comment above is kept
+    // (R1) as the record of what upstream used to do.
     let scheme = match scheme_raw {
         0 => ColorScheme::Light,
         1 => ColorScheme::Dark,
-        _ => {
-            eprintln!("invalid color scheme to rustty_surface_set_color_scheme value={scheme_raw}");
-            return;
-        }
+        _ => return,
     };
 
     // surface.colorSchemeCallback(scheme);
@@ -1821,7 +1824,7 @@ pub unsafe extern "C" fn rustty_surface_key(surface: *mut Surface, event: KeyEve
     let kev = match unsafe { event.keyEvent() } {
         Some(v) => v,
         None => {
-            eprintln!("error processing key event: action out of range");
+            log::warn!(target: LOG_SCOPE, "error processing key event: action out of range");
             return false;
         }
     };
@@ -1829,7 +1832,7 @@ pub unsafe extern "C" fn rustty_surface_key(surface: *mut Surface, event: KeyEve
     match unsafe { (*(*surface).app).keyEvent(KeyTarget::Surface(surface), kev) } {
         Ok(v) => v,
         Err(err) => {
-            eprintln!("error processing key event err={err:?}");
+            log::warn!(target: LOG_SCOPE, "error processing key event err={err:?}");
             false
         }
     }
@@ -1862,7 +1865,7 @@ pub unsafe extern "C" fn rustty_surface_key_is_binding(
     let core_event = match unsafe { event.keyEvent() }.and_then(|e| e.core()) {
         Some(v) => v,
         None => {
-            eprintln!("error processing key event");
+            log::warn!(target: LOG_SCOPE, "error processing key event");
             return false;
         }
     };
@@ -2175,7 +2178,7 @@ pub unsafe extern "C" fn rustty_surface_split(ptr: *mut Surface, direction: Spli
             Action::NewSplit(direction),
         )
     } {
-        eprintln!("error creating new split err={err:?}");
+        log::error!(target: LOG_SCOPE, "error creating new split err={err:?}");
     }
 }
 
@@ -2205,7 +2208,7 @@ pub unsafe extern "C" fn rustty_surface_split_focus(ptr: *mut Surface, direction
             Action::GotoSplit(direction),
         )
     } {
-        eprintln!("error creating new split err={err:?}");
+        log::error!(target: LOG_SCOPE, "error creating new split err={err:?}");
     }
 }
 
@@ -2242,7 +2245,7 @@ pub unsafe extern "C" fn rustty_surface_split_resize(
             Action::ResizeSplit(ResizeSplit { direction, amount }),
         )
     } {
-        eprintln!("error resizing split err={err:?}");
+        log::error!(target: LOG_SCOPE, "error resizing split err={err:?}");
     }
 }
 
@@ -2272,7 +2275,7 @@ pub unsafe extern "C" fn rustty_surface_split_equalize(ptr: *mut Surface) {
             Action::EqualizeSplits,
         )
     } {
-        eprintln!("error equalizing splits err={err:?}");
+        log::error!(target: LOG_SCOPE, "error equalizing splits err={err:?}");
     }
 }
 
@@ -2300,7 +2303,8 @@ pub unsafe extern "C" fn rustty_surface_binding_action(
     let action = match binding::Action::parse(action_str) {
         Ok(action) => action,
         Err(err) => {
-            eprintln!(
+            log::error!(
+                target: LOG_SCOPE,
                 "error parsing binding action action={} err={err:?}",
                 // PORT NOTE: fully-qualified — the crate-local C-API `String` (the
                 // `main_c.zig` heap-string type) shadows `std::string::String` here.
@@ -2325,7 +2329,7 @@ pub unsafe extern "C" fn rustty_surface_binding_action(
     match unsafe { (*ptr).core_surface.performBindingAction(action.clone()) } {
         Ok(v) => v,
         Err(err) => {
-            eprintln!("error performing binding action action={action:?} err={err:?}");
+            log::error!(target: LOG_SCOPE, "error performing binding action action={action:?} err={err:?}");
             false
         }
     }
@@ -2418,7 +2422,7 @@ pub unsafe extern "C" fn rustty_surface_inspector(ptr: *mut Surface) -> *mut Ins
     match unsafe { (*ptr).initInspector() } {
         Ok(v) => v,
         Err(err) => {
-            eprintln!("error initializing inspector err={err:?}");
+            log::error!(target: LOG_SCOPE, "error initializing inspector err={err:?}");
             core::ptr::null_mut()
         }
     }
@@ -2564,7 +2568,7 @@ pub unsafe extern "C" fn rustty_inspector_key(
     let (action, key) = match (key::Action::from_c_int(action), key::Key::from_c_int(key)) {
         (Some(a), Some(k)) => (a, k),
         _ => {
-            eprintln!("error processing key event: action/key out of range");
+            log::error!(target: LOG_SCOPE, "error processing key event: action/key out of range");
             return;
         }
     };
@@ -2587,7 +2591,7 @@ pub unsafe extern "C" fn rustty_inspector_key(
             Mods::from_int(c_mods as core::ffi::c_uint as ModsBacking),
         )
     } {
-        eprintln!("error processing key event err={err:?}");
+        log::error!(target: LOG_SCOPE, "error processing key event err={err:?}");
     }
 }
 
@@ -3127,7 +3131,7 @@ pub unsafe extern "C" fn rustty_inspector_metal_render(
     // };
     // SAFETY: `ptr` validity is the caller's contract.
     if let Err(err) = unsafe { (*ptr).renderMetal(command_buffer, descriptor) } {
-        eprintln!("error rendering inspector err={err:?}");
+        log::error!(target: LOG_SCOPE, "error rendering inspector err={err:?}");
     }
 }
 

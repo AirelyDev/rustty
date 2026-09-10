@@ -178,14 +178,45 @@ impl log::Log for AppLogger {
         // this sink's own `message: &str` signature — `log`/`log_with` were
         // ported before this facade existed and are not being changed to
         // accommodate it.
+        //
+        // DEFECT FIX (task-14d-3): `""` must be NORMALIZED to `"default"` here.
+        // `log`/`log_with` port the reference's `logFn`, whose `scope` is a Zig
+        // ENUM and whose default arm tests `scope == .default`; the port spells
+        // that arm `scope == "default"`. So an un-normalized `target: ""` fell
+        // through to the NON-default branch and rendered the reference's
+        //   `warning: Error drawing hyperlink border: ...`
+        // as
+        //   `warning(): Error drawing hyperlink border: ...`
+        // — an empty parenthesised scope the reference never prints, on macOS
+        // additionally creating an empty unified-logging category. Two live
+        // sites already had it (`rustty-renderer` `overlay.rs:349`,
+        // `shadertoy.rs:833`), and every future `.default`-scope restoration
+        // would have inherited it. Normalizing at THIS seam — the facade's own
+        // adapter — rather than inside `log_with` keeps `log_with` a faithful
+        // port of `logFn` (whose `scope` can never be empty) and confines the
+        // Rust-only spelling mismatch to the Rust-only bridge.
         log(
             level_from_log(record.level()),
-            record.target(),
+            scope_from_target(record.target()),
             &record.args().to_string(),
         );
     }
 
     fn flush(&self) {}
+}
+
+/// Maps a `log` facade `target` onto the scope spelling [`log_with`] expects.
+///
+/// The facade convention for the reference's `.default` scope is the EMPTY
+/// string (`DECISION-logging.md` §6); `log_with`'s port of `logFn`'s
+/// `scope == .default` arm tests for the literal `"default"`. This is the only
+/// place the two spellings meet.
+fn scope_from_target(target: &str) -> &str {
+    if target.is_empty() {
+        "default"
+    } else {
+        target
+    }
 }
 
 static APP_LOGGER: AppLogger = AppLogger;
@@ -270,6 +301,30 @@ mod tests {
         // `Trace` has no `std.log` equivalent; folds into `Debug` (see
         // `level_from_log`'s own doc).
         assert_eq!(Level::Debug, level_from_log(log::Level::Trace));
+    }
+
+    /// task-14d-3 defect fix. The facade spells the reference's `.default`
+    /// scope as the EMPTY target (`DECISION-logging.md` §6); `log_with` — the
+    /// port of `logFn` — spells it `"default"`. Before this, `target: ""` fell
+    /// through to the scoped branch and printed `warning(): msg` where the
+    /// reference prints `warning: msg`.
+    ///
+    /// This asserts the mapping itself rather than the rendered line, for the
+    /// reason the module's other tests already state: `log_with` writes
+    /// straight to process stderr / macOS unified logging with no injectable
+    /// capture point. The prefix branches it feeds both test the exact string
+    /// this function returns, so a regression here is a regression there.
+    #[test]
+    fn empty_facade_target_maps_onto_the_reference_default_scope() {
+        assert_eq!("default", scope_from_target(""));
+        // Every non-empty target is passed through untouched — including the
+        // literal `"default"`, which restored sites in this crate already use.
+        assert_eq!("default", scope_from_target("default"));
+        assert_eq!("app", scope_from_target("app"));
+        assert_eq!(
+            "gtk_rustty_surface",
+            scope_from_target("gtk_rustty_surface")
+        );
     }
 
     #[test]
