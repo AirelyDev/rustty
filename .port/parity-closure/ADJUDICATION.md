@@ -484,8 +484,17 @@ per `PROCEDURE.md` ("a site inside the cited anchors still forces `WAIVED`, no
 matter how well documented") they are `WAIVED`, not `CLOSED`.
 
 ### S115-F4 — PARTIALLY RESTORED, WAIVED (one cited anchor unreachable)
+- **NARROWED (task-14c-3 fix round 1): the restoration below is the macOS TWIN
+  ONLY.** `generic.zig` has two Rust twins — `generic.rs`'s
+  `#[cfg(target_os = "macos")] mod macos_impl` (from `generic.rs:1095`) and
+  `generic/linux_impl.rs`, mutually exclusive per build. Every count in this entry
+  is a count in a **macOS** build. In a Linux/FreeBSD build the twin carries **one**
+  live emission in total, so essentially none of what follows is emitted. That gap is
+  tracked as `NEW-FINDINGS.md` **N9** (OPEN, ~43 sites across both Linux twins); it is
+  NOT what this row is waived for and it does not change the waiver below, but this row
+  must not be read as "the diagnostics are restored" without the platform qualifier.
 - 14 of the row's 15 cited oracle anchors are now live `log::` emissions with the
-  `generic_renderer` target: `generic.zig:852, 991, 1169, 1177, 1183, 1188, 1190,
+  `generic_renderer` target, **in the macOS twin**: `generic.zig:852, 991, 1169, 1177, 1183, 1188, 1190,
   1320, 1436, 1472, 1506, 1517, 1533, 1595`. (`:991`'s emission lives in
   `crates/rustty-renderer/src/metal/cvdisplaylink.rs` because the port inlines
   `displayLinkCallback`'s body into the CoreVideo `extern "C"` trampoline — a
@@ -501,8 +510,14 @@ matter how well documented") they are `WAIVED`, not `CLOSED`.
 - Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s115-f4
 
 ### S116-F2 — PARTIALLY RESTORED, WAIVED (two cited anchors unreachable)
+- **NARROWED (task-14c-3 fix round 1): the restoration below is the macOS TWIN
+  ONLY** — same qualifier, same reason, same tracking entry as `#s115-f4` above:
+  `generic.zig`'s Linux twin `generic/linux_impl.rs` carries one live emission in
+  total, so a Linux/FreeBSD build emits essentially none of the sixteen. Tracked as
+  `NEW-FINDINGS.md` **N9**; the waiver below is unchanged and still valid, it was
+  merely incomplete.
 - 16 of the row's 18 cited oracle anchors are now live `log::` emissions with the
-  `generic_renderer` target: `generic.zig:1960, 1974, 1995, 2002, 2137, 2627,
+  `generic_renderer` target, **in the macOS twin**: `generic.zig:1960, 1974, 1995, 2002, 2137, 2627,
   2777, 3143, 3150, 3222, 3237, 3461, 3476, 3481, 3514, 3518`. This includes the
   three `eprintln!` stand-ins on the `prepBackgroundImage` path, and the row's own
   "open/read warnings merged" complaint: the port had collapsed the reference's
@@ -521,8 +536,16 @@ matter how well documented") they are `WAIVED`, not `CLOSED`.
 ## Batch 14c-2 — renderer macOS-backend `LOG` waivers (task-14c-2, 2026-09-10)
 
 ### S117-F3 — PARTIALLY RESTORED, WAIVED (two cited anchors unreachable)
+- **NARROWED (task-14c-3 fix round 1): the restoration below is the macOS TWIN
+  ONLY.** `image.zig` has two Rust twins, `image/macos_impl.rs` and
+  `image/linux_impl.rs`, mutually exclusive per build. In a Linux/FreeBSD build
+  **zero of the thirteen** cited anchors are live — `image/linux_impl.rs` has no
+  `log::` emission at all. Tracked as `NEW-FINDINGS.md` **N9** (OPEN); the waiver
+  below is unchanged and still valid, it was merely incomplete. (`shadertoy.rs` is
+  platform-neutral, so the three `shadertoy.zig` sites named below ARE live on every
+  platform.)
 - 11 of the row's 13 cited `image.zig` anchors are now live `log::` emissions with
-  the `renderer_image` target: `image.zig:85, 122, 132, 165, 378, 396, 423, 486,
+  the `renderer_image` target, **in the macOS twin**: `image.zig:85, 122, 132, 165, 378, 396, 423, 486,
   646, 660, 747`. The row's title also covers `shadertoy.zig`, and ALL of its live
   sites are restored: `:71` (`loaded custom shader path={s}`), `:117` (the
   spirv-error warn, whose arguments the port's comment had elided behind `...`) and

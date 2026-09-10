@@ -367,18 +367,36 @@ found, and current state.
   `pkg/opengl` logger's routing) and deliberately did NOT take on the two big twins —
   they are a different unit of work, they are Linux-only (no local typecheck), and one of
   them (`image/linux_impl.rs`) already has an OPEN row of its own, `S117-F2`.
-- **why this is recorded separately**: several rows closed by tasks 14c-2 and 14c-4 —
-  `S113-F2`, `S117-F3`, `S119-F1` among them — name only the macOS twin in their `rustty`
-  column, so their `CLOSED`/`WAIVED` state does not rest on these sites and the blind-spot-1
-  carve-out is not in play. But a reader of those rows would reasonably believe the
-  diagnostics are restored, and on Linux they are not. This entry is so the finale
-  re-audit meets that as a tracked item.
+- **affected rows**: exactly three — **`S115-F4`**, **`S116-F2`** (both
+  `src/renderer/generic.zig`, task-14c-4) and **`S117-F3`** (`src/renderer/image.zig`,
+  task-14c-2). All three are `WAIVED` with `owner=.port/parity-closure/ADJUDICATION.md#…`,
+  and their adjudication text now says explicitly that the restoration is macOS-twin only
+  and points here.
+  *(Corrected in fix round 1. The first version of this entry named `S113-F2`, `S117-F3`
+  and `S119-F1`. `S113-F2` (`renderer/Metal.zig`) and `S119-F1` (`renderer/metal/
+  shaders.zig`) are Metal-ORACLE rows: there is no Linux twin of those oracle files at
+  all, so they are unaffected. `S115-F4` and `S116-F2` were omitted and are affected —
+  their oracle IS `generic.zig`, whose Linux twin is `generic/linux_impl.rs`.)*
+- **why this is recorded separately**: those three rows name only the macOS twin in their
+  `rustty` column, so their `WAIVED` state does not rest on these sites and the
+  blind-spot-1 carve-out is not in play. But a reader of those rows would reasonably
+  believe the diagnostics are restored, and on Linux they are not. This entry is so the
+  finale re-audit meets that as a tracked item.
+- **size**: roughly **43 genuinely unported call sites** across the two files (the
+  reviewer's count in the 14c-3 fix round). That is a task, not a fix round; narrowing the
+  three dispositions is the honest interim state.
 - **state**: **OPEN.** Scheduling note for whoever takes it: it is mechanical (the macOS
   twin is the patch), it needs `const LOG_SCOPE: &str = "generic_renderer";` in
   `generic/linux_impl.rs` and `"renderer_image"` in `image/linux_impl.rs`, several arms
   currently discard their payload with `.is_err()` / `Err(_err)` and must bind it, and
   **it cannot be typechecked on macOS** — the VM lane (`PROCEDURE.md`, Linux rows) is
   mandatory, not optional.
+- **why the two twins really are mutually exclusive** (checked in fix round 1, because it
+  was disputed and the disputing read stopped one level too early): `generic.rs` is not
+  itself platform-gated, but all 32 of its `log::` emissions sit inside its
+  `#[cfg(target_os = "macos")] mod macos_impl` (which begins at `generic.rs:1095`), and
+  `generic/linux_impl.rs` is reached only through
+  `#[cfg(any(target_os = "linux", target_os = "freebsd"))]`. Never both in one build.
 
 ---
 
@@ -435,3 +453,46 @@ found, and current state.
   log-emission gate that now runs there, using the RELEASE artifact that lane already
   builds. Judged out of scope for task-14wasm-proof by its reviewer; recorded here so
   whoever next touches that lane trips over it.
+
+---
+
+## N11 — restored `log` sites render `{err:?}` where Zig's `{}` renders `error.<Name>`, crate-wide across ~35 sites
+
+- **id**: N11 (next free id checked at the time of writing: N1-N10 taken, N10 by another
+  worker — ids have collided twice on this branch)
+- **severity**: low (message-text divergence in a diagnostic; no state, control-flow or
+  rendering difference)
+- **kind**: log-text divergence / cross-cutting
+- **oracle**: every `log.*("… err={}", .{err})` in `src/renderer` and `pkg/opengl` — e.g.
+  `generic.zig:852, 1436, 1558, 2627, 3461`, `renderer/Metal.zig`, `renderer/image.zig`,
+  `renderer/opengl/Frame.zig:65`, `renderer/OpenGL.zig:242, 308`.
+- **rustty**: `crates/rustty-renderer/src/**` — 31 sites in `generic.rs`, plus `metal/*`,
+  `image/macos_impl.rs`, `overlay.rs`, `opengl/opengl_impl.rs`, `generic/linux_impl.rs`,
+  `opengl/shaders.rs`. ~35 in total at the time of writing.
+- **description**: Zig's `{}` applied to an error VALUE prints `error.` **plus** the name
+  (`std.fmt`'s error-set arm), so the oracle emits e.g. `… err=error.OpenGLOutdated`. The
+  port's uniform convention is `err={err:?}`, i.e. the Rust error's `Debug`, which prints
+  `OpenGLOutdated` — or, for a tuple variant, `EglUnavailable("…")`. The prefix, and
+  sometimes the shape, differ. Task-14c-1 already hit and fixed this for ONE site where
+  the rendering was knowable and hard-codeable (`error.StreamTooLong`, its fix round 1);
+  every other site formats an arbitrary error value and was left as `{err:?}`.
+- **the pattern already exists in this tree**: `crates/rustty-font-shaper/src/shaper/
+  web_canvas.rs:455-466` gives its error type a small `Display` impl that writes
+  `error.{name}` with the comment "Zig renders a caught error as `error.Name` under
+  `{}`". `rustty-termio/src/command.rs:180` and `:1511` and
+  `rustty-apprt/src/gtk/cgroup.rs:51` do the same. Applying that shape to the renderer's
+  error types and switching the sites from `{err:?}` to `{err}` is the fix.
+- **how found**: task-14c-3, restoring `OpenGL.zig:242`/`:308` and noticing its own two
+  new sites inherit the divergence. Raised in that task's report; recorded here in its
+  fix round 1 at the coordinator's instruction, because it is crate-wide and does not
+  belong inside any one closed row.
+- **why this is recorded separately**: it is not a defect any single row introduced or can
+  close. No row's `CLOSED`/`WAIVED` state rests on it, and churning ~35 sites inside a fix
+  round is exactly the kind of unscoped change this plan avoids.
+- **state**: **OPEN**, scheduled as its own task. Scope: give the renderer's error types
+  (`opengl::opengl_impl::Error`, `opengl::gl::errors::Error`, `metal::*`, the shaper and
+  collection errors that reach a log site) the `error.{name}` `Display` impl, switch the
+  sites to `{err}`, and update the handful of tests that assert on a rendered payload —
+  `opengl_impl::tests::display_realized_warns_and_continues_when_context_prep_fails` and
+  `present_logs_when_the_srgb_re_enable_fails` both pin the current `Debug` form and will
+  need their expected strings changed with it.

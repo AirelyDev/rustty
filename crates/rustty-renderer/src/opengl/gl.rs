@@ -54,12 +54,25 @@ pub mod vertex_array;
 // happens, only the bodies here.
 //
 // DONE (task-14c-3, the OpenGL 14c stage): the bodies below now route through the
-// `log` facade with `target: LOG_SCOPE` (`"opengl"`), so every one of the eleven
-// `pkg/opengl` + `OpenGL.zig` call sites reaches whichever `log::Log` backend the
-// running binary installed, exactly like the `metal`-scope sites 14c-2 converted.
+// `log` facade with `target: LOG_SCOPE` (`"opengl"`), so every one of the FIFTEEN
+// call sites — 8 in `gl/sys.rs`, 3 in `gl/shader.rs`, 4 in `gl/program.rs` —
+// reaches whichever `log::Log` backend the running binary installed, exactly like
+// the `metal`-scope sites 14c-2 converted. (14 of the 15 port a reference call:
+// 7 from `OpenGL.zig`, 3 from `Shader.zig`, 4 from `Program.zig`. The 15th,
+// `sys.rs`'s `initialized EGL …`, is RUSTTY-ONLY offscreen scaffolding with no
+// oracle. Count corrected in the 14c-3 fix round — it read "eleven".)
 // The macro NAMES and the call sites are unchanged, as that note predicted. No row
 // in `LEDGER.tsv` claims these — they were never DEAD, only mis-routed — but the
 // note above scheduled them here explicitly, so they are done here.
+//
+// CONSEQUENCE, stated so it is findable: a binary that installs NO `log::Log`
+// backend now prints NOTHING here, where the `eprintln!` bodies printed to stderr
+// unconditionally. That is correct parity — `std.log.scoped(.opengl)` likewise
+// goes nowhere without a `logFn` — and all seven ported message texts are
+// byte-identical to before; but it IS a user-visible change to a Linux build's
+// output. `rustty-vt-c::sys::Logger` / `rustty-core::logging::AppLogger` install
+// one for the real binaries; `cargo test -p rustty-renderer` installs
+// `log_capture`'s.
 //
 // They live HERE, at the package root, rather than in each leaf, because the
 // reference's logger is likewise one shared thing rather than a per-file one.
