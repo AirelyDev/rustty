@@ -96,13 +96,22 @@ pub fn rt_pre_exec(cmd: &mut Command<'_>) -> Option<u8> {
 }
 
 /// `log.err("gtk-single-instance is set to detect", .{})` (`pre_exec.zig:39`).
+///
+/// The `error(` prefix is `Level::asText()`, NOT the level's tag name: Zig's
+/// `std.log.Level.asText` maps `.err` to the string **`"error"`**
+/// (`lib/std/log.zig:45`), and this port agrees at
+/// `rustty_core::logging::Level::as_text` — which its own
+/// `level_as_text_matches_reference` test pins. These two constants hand-render
+/// what `logFn` would have written, so they must hand-render it exactly; they
+/// said `err(` until task-14d-3 fix round 1.
 const ERR_SINGLE_INSTANCE_DETECT: &[u8] =
-    b"err(gtk_pre_exec): gtk-single-instance is set to detect\n";
+    b"error(gtk_pre_exec): gtk-single-instance is set to detect\n";
 
 /// `log.err("transition to new transient systemd scope took too long", .{})`
-/// (`pre_exec.zig:58`).
+/// (`pre_exec.zig:58`). See [`ERR_SINGLE_INSTANCE_DETECT`] for why the prefix is
+/// `error(`, not `err(`.
 const ERR_TOO_LONG: &[u8] =
-    b"err(gtk_pre_exec): transition to new transient systemd scope took too long\n";
+    b"error(gtk_pre_exec): transition to new transient systemd scope took too long\n";
 
 /// "If we are expecting to be moved to a transient systemd scope, wait to see if
 /// that happens by checking for the correct name of the current cgroup. Wait at
@@ -337,6 +346,39 @@ fn log_err_raw(msg: &'static [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// task-14d-3 fix round 1 (F1). These two constants are the ONLY place in
+    /// the port that hand-renders `logFn`'s output instead of going through it —
+    /// the post-`fork` async-signal-safety constraint (see [`log_err_raw`])
+    /// forbids the facade here. Hand-rendered bytes drift silently: they said
+    /// `err(gtk_pre_exec): ...` for the whole life of this file, where Zig's
+    /// `Level.asText()` maps `.err` to `"error"` (`lib/std/log.zig:45`).
+    ///
+    /// Pinned against `rustty_core::logging::Level::as_text` rather than against
+    /// a hard-coded `"error"`, so this is a genuine cross-check of the two
+    /// renderings and not a restatement of the literal above it. `as_text` has
+    /// its own `level_as_text_matches_reference` test against the reference.
+    #[test]
+    fn raw_prefix_matches_the_facade_rendering_of_the_same_level() {
+        let expected = format!(
+            "{}({}): ",
+            rustty_core::logging::Level::Err.as_text(),
+            "gtk_pre_exec",
+        );
+
+        for msg in [ERR_SINGLE_INSTANCE_DETECT, ERR_TOO_LONG] {
+            let text = std::str::from_utf8(msg).expect("the constants are ASCII");
+            assert!(
+                text.starts_with(&expected),
+                "raw post-fork write must render exactly what logFn would: \
+                 expected prefix {expected:?}, got {text:?}"
+            );
+            assert!(
+                text.ends_with('\n'),
+                "logFn terminates every line with a newline; got {text:?}"
+            );
+        }
+    }
 
     /// `.never` short-circuits before any syscall (`pre_exec.zig:35`).
     #[test]
