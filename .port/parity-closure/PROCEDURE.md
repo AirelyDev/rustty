@@ -212,13 +212,27 @@ worktree and merge, rather than sharing one tree.
      this file", not "every individual site is live". Where two reference files port into
      one Rust file the arm is credited with that file's whole count; the portmap's `reason`
      column records every such overlap. Blind spot 3 still applies inside a row.
+   - **A count ratchet needs a SHAPE ratchet beside it.** `G-LOGFILE` counts a
+     `eprintln!("warn(gtk): …")` as an emission, because the reference's diagnostic does
+     reach a human — so without a second constraint a stage could close a count deficit by
+     adding MORE facade-bypassing direct prints and the gate would call it an improvement.
+     `LOG-PORTMAP.tsv`'s `bypass_cap` column is that constraint (finding N14). Whenever a
+     gate counts two things that are not equally good, cap the worse one separately.
+   - **Count through the instrument, not beside it.** N14 was first filed with numbers from
+     a line-oriented `grep` — 199, where the gate's own regex says 244 — because a
+     line-oriented grep cannot see a multi-line `eprintln!(`. A finding written to document
+     a measurement problem was itself measured informally. If a gate can produce the number,
+     the finding quotes the gate.
    - **Validate the scanner against the live tree, not only against fixtures.** The gate's
      own Rust stripper shipped without a char-literal branch: one `b'"'` in
      `crates/rustty-vt/src/stream.rs` opened a phantom string, blanked ~1200 lines below it,
      hid 59 live emissions and froze a 49-site deficit that did not exist — while all 16
      synthetic self-test arms stayed green, because a desync depends on real file content.
      `--self-test` now carries a LIVE-TREE arm that checks the scanner against a naive grep
-     over every mapped port file. Keep it, and add one for any new scanner.
+     over every mapped port file, plus a LITERAL-SHAPE arm pinning every Rust literal that
+     can desync it (char, byte, raw, raw-byte, lifetime, doc-comment apostrophe). Two of
+     those are regression pins for bugs that shipped: `b'"'` and `br"…\\"`. Keep both arms,
+     and add them for any new scanner.
    - **Four emission shapes exist in this port** and the gate knows all four:
      `log::warn!`, a `macro_rules! log_warn!` facade (`opengl/gl.rs`), a `fn log_warn(msg)`
      facade (`config_struct.rs`, most of `rustty-os`), and `eprintln!("warn(scope): …")`

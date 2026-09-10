@@ -719,7 +719,7 @@ found, and current state.
   sites for the G-LOGFILE portmap.
 - **state**: **OPEN.** Not fixed here — this task is a gate, and adding assertions to two
   callbacks is a code change outside its scope.
-## N14 — the GTK subtree writes ~199 diagnostics straight to stderr, bypassing the log facade entirely
+## N14 — the GTK subtree writes 244 diagnostics straight to stderr, bypassing the log facade entirely
 
 - **id**: N14 (next free id checked 2026-09-10: N1-N13 taken, N12/N13 by this same task.)
 - **severity**: medium (a whole subtree's diagnostics cannot be silenced, levelled, scoped
@@ -729,10 +729,25 @@ found, and current state.
   `class/surface.zig` (63), `class/window.zig` (20), `portal/OpenURI.zig` (19),
   `winproto/x11.zig` (11) and the rest of the subtree — all of which the reference routes
   through `std.log`, i.e. through `main_ghostty.zig`'s `logFn`.
-- **rustty**: `crates/rustty-apprt/src/gtk/**`. **199 raw `eprintln!` calls shaped as log
-  lines** (157 `"warn(…"`, 22 `"debug(…"`, 9 `"err(…"`, 6 `"info(…"`, 5 `"error(…"`),
-  reproducing the reference's `logFn` OUTPUT — `level(scope): message` — inline, character
-  for character. 98 of them are in `class/application.rs` alone.
+- **rustty**: `crates/rustty-apprt/src/gtk/**`. **244 raw `eprintln!` calls shaped as log
+  lines** (189 `"warn(…"`, 30 `"debug(…"`, 13 `"err(…"`, 7 `"info(…"`, 5 `"error(…"`)
+  across 19 files, reproducing the reference's `logFn` OUTPUT — `level(scope): message` —
+  inline, character for character. **94** of them are in `class/application.rs` alone, 59
+  in `class/surface.rs`, 18 in `class/window.rs`, 13 in `portal/open_uri.rs`, 12 in
+  `class/global_shortcuts.rs`, 10 in `class/split_tree.rs`, 9 in `post_fork.rs`.
+
+  One further bypass exists outside the GTK tree:
+  `crates/rustty-font/src/glyf_rasterize/glyf_rasterize_png_test.rs:418`
+  (`eprintln!("info(glyf_rasterize): …")`). It is the only one, and it is capped too.
+
+  **These figures were corrected in fix round 2 and the correction is instructive.** They
+  were first filed as 199 / 157-22-9-6-5, with 98 in `application.rs`, from a line-oriented
+  `grep`. The real numbers come from running **the gate's own `EPRINTLN_LOGFN` regex**,
+  which matches multi-line call sites (`eprintln!(` with the format string on the next
+  line) because `\s*` spans newlines. So a finding filed to document a facade bypass was
+  itself counted informally rather than through the instrument built to stop informal
+  counting — the same class of error as the scanner bug in fix round 1. The qualitative
+  finding is unaffected and was understated: the bypass is 23% larger than reported.
 - **description**: the reference's `logFn` (`src/main_ghostty.zig`) is a real funnel. Its
   port is `crates/rustty-core/src/logging.rs::log_with(level, scope, message, &Logging)`,
   and it does three things these sites do not:
@@ -760,8 +775,23 @@ found, and current state.
   in order to count these as emissions at all — a `log::`-anchored scan reads
   `class/application.rs` as emitting **zero** when it emits 96 — and recognising the shape
   is what exposed what the shape costs.
+- **the gate now enforces it (fix round 2).** `LOG-PORTMAP.tsv` gained a **`bypass_cap`**
+  column: how many of a file's emissions may bypass the facade, frozen at today's
+  measurement, MAX over platform arms (a bypass on any arm is a bypass), with the same
+  ratchet as the allowances — a cap larger than what is measured is RED, so routing sites
+  through the facade must tighten it in the same commit. **188 sites are capped**: 187 in
+  the six GTK files a `LOG` row cites, plus the `rustty-font` one. The remaining 57 sit in
+  GTK files no `LOG` row names, so they are outside the portmap and outside the gate — a
+  direct consequence of scoping the portmap to audited files, and worth widening if this
+  finding is worked.
+
+  This exists because *"restore the missing sites"* and *"stop bypassing the facade"* pull
+  in opposite directions. G-LOGFILE counts a logFn-shaped `eprintln!` as an emission, so
+  before this column a stage could have closed `application.zig`'s 15-site deficit by adding
+  fifteen more direct prints and the gate would have reported an improvement.
 - **state**: **OPEN.** Scope: route the GTK subtree through `rustty_core::logging::log_with`
   (or add `log` to `rustty-apprt` and use `log::warn!(target: …)` as the rest of the
   workspace does), preserving each message verbatim, in the same pass that restores the
-  sites N12 counts as missing. G-LOGFILE counts both shapes, so the fix is count-neutral and
-  the gate will not move — this one needs a reviewer, not a gate.
+  sites N12 counts as missing. The count-based half of the gate is neutral to the fix (both
+  shapes count as emissions); the `bypass_cap` half is what will move, downward, and the
+  ratchet forces it to.

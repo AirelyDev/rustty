@@ -16,77 +16,89 @@
 # allowance     how many reference sites the port is PERMITTED to be short by. A RATCHET:
 #               an allowance LARGER than the measured deficit is RED, so restoring a site
 #               must tighten this number in the same commit. Never env-settable.
-# reason        mandatory whenever allowance > 0, the same rule G-PARITY applies to a
-#               WAIVED row's `owner`. An allowance with no reason is RED.
+# bypass_cap    how many of this file's emissions are permitted to BYPASS the log facade
+#               - raw `eprintln!("warn(scope): ...")` reproducing logFn's OUTPUT but not
+#               its behaviour (it ignores Logging.stderr, never reaches macOS unified
+#               logging, and has no level or scope to filter on). Finding N14. Its own
+#               RATCHET, MAX over arms not min - a bypass on any platform arm is a bypass.
+#               It exists because "restore the missing sites" and "stop bypassing the
+#               facade" pull in opposite directions: without this cap a stage could close
+#               a count deficit by adding MORE direct prints and the gate would read it
+#               as an improvement.
+# reason        mandatory whenever allowance > 0 OR bypass_cap > 0, the same rule G-PARITY
+#               applies to a WAIVED row's `owner`. One with no reason is RED.
 #
 # The mapping is DECLARED, not inferred. Filename guessing gets at least five of these
 # wrong: global.zig -> rustty-apprt/src/lib.rs, renderer/Thread.zig -> rustty-core/src/
 # renderer_seam.rs (a different crate), OpenGL.zig's head -> opengl/gl/sys.rs,
 # main_ghostty.zig -> rustty-core/src/logging.rs, and both renderer platform-twin pairs.
 #
-# Baselined 2026-09-10 against oracle pin 20abdb50a (task 14gate). The allowances are the
-# measured debt, frozen; the debt itself is tracked as NEW-FINDINGS.md N12.
-oracle_file	port_arms	allowance	reason
-pkg/macos/foundation/string.zig	crates/rustty-renderer/src/metal/pipeline.rs	0	
-pkg/macos/video/display_link.zig	crates/rustty-renderer/src/metal/cvdisplaylink.rs	0	
-pkg/wuffs/src/swizzle.zig	crates/rustty-wuffs/src/swizzle.rs	1	N12: rows S38-F2 are still OPEN; restoring these sites is that row's work.
-src/App.zig	crates/rustty-core/src/app.rs	0	
-src/Surface.zig	crates/rustty-core/src/surface.rs	3	S41-F1 (WAIVED) residuals. The 38 head sites ABOVE this row's first anchor (2193) were restored by task 14d-1; the 3 left are inspector/title arms the port does not reach.
-src/apprt/embedded.zig	crates/rustty-apprt/src/embedded.rs	54	S46-F5 (OPEN). All 54 reference calls survive only as R1 comments; the port emits nothing at all from this file.
-src/apprt/gtk/class/application.zig	crates/rustty-apprt/src/gtk/class/application.rs	15	S49-F5, S50-F4 (both OPEN). The port DOES emit 96 through the eprintln!("warn(gtk): ...") facade - 15 short, not zero.
-src/apprt/gtk/class/config.zig	crates/rustty-apprt/src/gtk/class/config.rs	1	N12: rows S51-F2 are still OPEN; restoring these sites is that row's work.
-src/apprt/gtk/class/surface.zig	crates/rustty-apprt/src/gtk/class/surface.rs	4	N12: rows S54-F4, S54-F6 are still OPEN; restoring these sites is that row's work.
-src/apprt/gtk/class/window.zig	crates/rustty-apprt/src/gtk/class/window.rs	2	N12: rows S58-F6 are still OPEN; restoring these sites is that row's work.
-src/apprt/gtk/portal/OpenURI.zig	crates/rustty-apprt/src/gtk/portal/open_uri.rs	6	N12: rows S59-F6 are still OPEN; restoring these sites is that row's work.
-src/apprt/gtk/winproto/x11.zig	crates/rustty-apprt/src/gtk/winproto/x11.rs	8	N12: rows S60-F6 are still OPEN; restoring these sites is that row's work.
-src/benchmark/cli.zig	crates/rustty-bench/src/cli.rs	0	
-src/cli/args.zig	crates/rustty-args/src/args.rs	3	N12: rows S67-F2, S67-F9 are still OPEN; restoring these sites is that row's work.
-src/cli/ghostty.zig	crates/rustty-cli/src/rustty.rs	2	N12: rows S68-F5 are still OPEN; restoring these sites is that row's work.
-src/cli/list_fonts.zig	crates/rustty-cli/src/list_fonts.rs	2	N12: rows S68-F4 are still OPEN; restoring these sites is that row's work.
-src/cli/ssh-cache/Entry.zig	crates/rustty-cli/src/ssh_cache/entry.rs	0	
-src/config/Config.zig	crates/rustty-config/src/config_struct.rs+crates/rustty-config/src/value_types.rs	8	N12: rows S74-F5, S75-F1, S75-F2 are still OPEN; restoring these sites is that row's work.
-src/config/file_load.zig	crates/rustty-config/src/file_load.rs	2	N12: rows S78-F6 are still OPEN; restoring these sites is that row's work.
-src/config/path.zig	crates/rustty-config/src/path.rs	2	N12: rows S78-F7 are still OPEN; restoring these sites is that row's work.
-src/crash/sentry.zig	crates/rustty-crash/src/sentry.rs	5	N12: rows S79-F2 are still OPEN; restoring these sites is that row's work.
-src/font/CodepointResolver.zig	crates/rustty-font-shaper/src/codepoint_resolver.rs	0	
-src/font/Collection.zig	crates/rustty-font-shaper/src/collection.rs	0	
-src/font/SharedGridSet.zig	crates/rustty-font-shaper/src/shared_grid_set.rs	0	
-src/font/face/coretext.zig	crates/rustty-font-shaper/src/face/coretext.rs	2	N12: rows S90-F2 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
-src/font/face/freetype.zig	crates/rustty-font-shaper/src/face/freetype.rs	2	N12: rows S91-F10, S91-F8 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
-src/font/face/web_canvas.zig	crates/rustty-font-shaper/src/face/web_canvas.rs	0	
-src/font/glyf_rasterize_png_test.zig	crates/rustty-font/src/glyf_rasterize/glyf_rasterize_png_test.rs	3	N12: rows S88-F2; includes waived residuals - see ADJUDICATION.md.
-src/font/shaper/coretext.zig	crates/rustty-font-shaper/src/shaper/coretext.rs	6	N12: rows S94-F1, S94-F4; includes waived residuals - see ADJUDICATION.md.
-src/font/shaper/feature.zig	crates/rustty-font-shaper/src/shaper/feature.rs	0	
-src/font/shaper/web_canvas.zig	crates/rustty-font-shaper/src/shaper/web_canvas.rs	0	
-src/global.zig	crates/rustty-apprt/src/lib.rs	0	
-src/input/mouse_encode.zig	crates/rustty-vt/src/input/mouse_encode.rs	0	
-src/main_ghostty.zig	crates/rustty-core/src/logging.rs	3	S44-F4 (WAIVED). main_ghostty.zig's logFn IS rustty-core's logging backend; 3 of its 5 sites are the sentry/crash arms the port routes elsewhere.
-src/os/cf_release_thread.zig	crates/rustty-os/src/cf_release_thread.rs	9	S111-F4 (OPEN). Every site is a NO-OP log_* stub - the diagnostic is dropped, not routed.
-src/os/locale.zig	crates/rustty-os/src/locale.rs	14	S111-F5 (OPEN). Every site is a NO-OP log_* stub - the diagnostic is dropped, not routed. See the gate's no-op-stub NOTE.
-src/renderer/Metal.zig	crates/rustty-renderer/src/metal/metal_impl.rs	0	
-src/renderer/OpenGL.zig	crates/rustty-renderer/src/opengl/opengl_impl.rs+crates/rustty-renderer/src/opengl/gl/sys.rs	0	Arm sums opengl_impl.rs and opengl/gl/sys.rs: OpenGL.zig's head (the GL debug-callback switch and prepareContext) ports to sys.rs, not to the file its name suggests.
-src/renderer/Overlay.zig	crates/rustty-renderer/src/overlay.rs	0	
-src/renderer/Thread.zig	crates/rustty-core/src/renderer_seam.rs	0	
-src/renderer/generic.zig	crates/rustty-renderer/src/generic.rs|crates/rustty-renderer/src/generic/linux_impl.rs	7	N12/N9: 6 of the 33 are DisplayLink-gated and cannot exist on the Linux arm at all, + 3 waived residuals (S115-F4, S116-F2 - rebuild_cells and ShaperCache::put are infallible in Rust). See task-14c-5.
-src/renderer/image.zig	crates/rustty-renderer/src/image/macos_impl.rs|crates/rustty-renderer/src/image/linux_impl.rs	2	S117-F3 (WAIVED): the same 2 residuals on BOTH twins - Vec::push and HashMap::entry are infallible where the reference's ArrayList.append/getOrPut are not.
-src/renderer/metal/Pipeline.zig	crates/rustty-renderer/src/metal/pipeline.rs	0	
-src/renderer/metal/shaders.zig	crates/rustty-renderer/src/metal/shaders.rs	0	
-src/renderer/opengl/Frame.zig	crates/rustty-renderer/src/generic/linux_impl.rs	0	OVERLAP: Frame.zig:65's one site is inlined into generic/linux_impl.rs, which also holds generic.zig's sites; this arm is credited with that whole file's count.
-src/simd/base64.zig	crates/rustty-simd/src/base64.rs	1	N12: rows S120-F2 are still OPEN; restoring these sites is that row's work.
-src/terminal/PageList.zig	crates/rustty-vt/src/pagelist/erase.rs+crates/rustty-vt/src/pagelist/grow.rs+crates/rustty-vt/src/pagelist/mod.rs+crates/rustty-vt/src/pagelist/resize.rs	1	N12: rows S122-F1, S123-F1, S124-F1 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
-src/terminal/Parser.zig	crates/rustty-vt/src/parser.rs	0	
-src/terminal/Screen.zig	crates/rustty-vt/src/screen.rs	0	
-src/terminal/Terminal.zig	crates/rustty-vt/src/terminal.rs	3	N12: rows S141-F4, S142-F1, S143-F2 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
-src/terminal/apc.zig	crates/rustty-vt/src/apc/mod.rs	0	
-src/terminal/bitmap_allocator.zig	crates/rustty-vt/src/bitmap_allocator.rs	1	N12: rows S149-F3; includes waived residuals - see ADJUDICATION.md.
-src/terminal/c/key_encode.zig	crates/rustty-vt-c/src/key_encode.rs	0	
-src/terminal/c/mouse_encode.zig	crates/rustty-vt-c/src/mouse_encode.rs	0	
-src/terminal/c/osc.zig	crates/rustty-vt-c/src/osc.rs	0	
-src/terminal/c/sgr.zig	crates/rustty-vt-c/src/sgr.rs	0	
-src/terminal/kitty/graphics_storage.zig	crates/rustty-vt/src/kitty/graphics_storage.rs	1	N12: rows S190-F1, S190-F2; includes waived residuals - see ADJUDICATION.md.
-src/terminal/osc/parsers/rxvt_extension.zig	crates/rustty-vt/src/osc/parsers/rxvt_extension.rs	0	
-src/terminal/page.zig	crates/rustty-vt/src/page_impl.rs	1	N12: rows S157-F1 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
-src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	0	RECONCILES (128 reference / 138 port). The 49 first frozen here was a PHANTOM: the scanner had no char-literal branch, so `b'"' => {` at stream.rs:3428 opened a phantom string and blanked ~1200 lines below it. Fixed 2026-09-10 (task 14gate fix round 1); the ratchet caught the stale allowance.
-src/terminal/stream_terminal.zig	crates/rustty-vt/src/stream_terminal.rs	7	N12: rows S166-F3 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
-src/terminal/tmux/viewer.zig	crates/rustty-vt/src/tmux/viewer.rs	0	
-src/termio/mailbox.zig	crates/rustty-termio/src/mailbox.rs	2	N12: rows S212-F5 are still OPEN; restoring these sites is that row's work.
+# Baselined 2026-09-10 against oracle pin 20abdb50a (task 14gate; allowances corrected in
+# fix round 1, bypass_cap added in fix round 2). The allowances are the measured deficit,
+# frozen, tracked as NEW-FINDINGS.md N12; the bypass caps are the measured facade bypass,
+# frozen, tracked as N14. Both are ratchets: a declared number LARGER than what is measured
+# is RED, so an improvement must tighten it in the same commit.
+oracle_file	port_arms	allowance	bypass_cap	reason
+pkg/macos/foundation/string.zig	crates/rustty-renderer/src/metal/pipeline.rs	0	0	
+pkg/macos/video/display_link.zig	crates/rustty-renderer/src/metal/cvdisplaylink.rs	0	0	
+pkg/wuffs/src/swizzle.zig	crates/rustty-wuffs/src/swizzle.rs	1	0	N12: rows S38-F2 are still OPEN; restoring these sites is that row's work.
+src/App.zig	crates/rustty-core/src/app.rs	0	0	
+src/Surface.zig	crates/rustty-core/src/surface.rs	3	0	S41-F1 (WAIVED) residuals. The 38 head sites ABOVE this row's first anchor (2193) were restored by task 14d-1; the 3 left are inspector/title arms the port does not reach.
+src/apprt/embedded.zig	crates/rustty-apprt/src/embedded.rs	54	0	S46-F5 (OPEN). All 54 reference calls survive only as R1 comments; the port emits nothing at all from this file.
+src/apprt/gtk/class/application.zig	crates/rustty-apprt/src/gtk/class/application.rs	15	94	S49-F5, S50-F4 (both OPEN). The port DOES emit 96 through the eprintln!("warn(gtk): ...") facade - 15 short, not zero.
+src/apprt/gtk/class/config.zig	crates/rustty-apprt/src/gtk/class/config.rs	1	0	N12: rows S51-F2 are still OPEN; restoring these sites is that row's work.
+src/apprt/gtk/class/surface.zig	crates/rustty-apprt/src/gtk/class/surface.rs	4	59	N12: rows S54-F4, S54-F6 are still OPEN; restoring these sites is that row's work.
+src/apprt/gtk/class/window.zig	crates/rustty-apprt/src/gtk/class/window.rs	2	18	N12: rows S58-F6 are still OPEN; restoring these sites is that row's work.
+src/apprt/gtk/portal/OpenURI.zig	crates/rustty-apprt/src/gtk/portal/open_uri.rs	6	13	N12: rows S59-F6 are still OPEN; restoring these sites is that row's work.
+src/apprt/gtk/winproto/x11.zig	crates/rustty-apprt/src/gtk/winproto/x11.rs	8	3	N12: rows S60-F6 are still OPEN; restoring these sites is that row's work.
+src/benchmark/cli.zig	crates/rustty-bench/src/cli.rs	0	0	
+src/cli/args.zig	crates/rustty-args/src/args.rs	3	0	N12: rows S67-F2, S67-F9 are still OPEN; restoring these sites is that row's work.
+src/cli/ghostty.zig	crates/rustty-cli/src/rustty.rs	2	0	N12: rows S68-F5 are still OPEN; restoring these sites is that row's work.
+src/cli/list_fonts.zig	crates/rustty-cli/src/list_fonts.rs	2	0	N12: rows S68-F4 are still OPEN; restoring these sites is that row's work.
+src/cli/ssh-cache/Entry.zig	crates/rustty-cli/src/ssh_cache/entry.rs	0	0	
+src/config/Config.zig	crates/rustty-config/src/config_struct.rs+crates/rustty-config/src/value_types.rs	8	0	N12: rows S74-F5, S75-F1, S75-F2 are still OPEN; restoring these sites is that row's work.
+src/config/file_load.zig	crates/rustty-config/src/file_load.rs	2	0	N12: rows S78-F6 are still OPEN; restoring these sites is that row's work.
+src/config/path.zig	crates/rustty-config/src/path.rs	2	0	N12: rows S78-F7 are still OPEN; restoring these sites is that row's work.
+src/crash/sentry.zig	crates/rustty-crash/src/sentry.rs	5	0	N12: rows S79-F2 are still OPEN; restoring these sites is that row's work.
+src/font/CodepointResolver.zig	crates/rustty-font-shaper/src/codepoint_resolver.rs	0	0	
+src/font/Collection.zig	crates/rustty-font-shaper/src/collection.rs	0	0	
+src/font/SharedGridSet.zig	crates/rustty-font-shaper/src/shared_grid_set.rs	0	0	
+src/font/face/coretext.zig	crates/rustty-font-shaper/src/face/coretext.rs	2	0	N12: rows S90-F2 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
+src/font/face/freetype.zig	crates/rustty-font-shaper/src/face/freetype.rs	2	0	N12: rows S91-F10, S91-F8 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
+src/font/face/web_canvas.zig	crates/rustty-font-shaper/src/face/web_canvas.rs	0	0	
+src/font/glyf_rasterize_png_test.zig	crates/rustty-font/src/glyf_rasterize/glyf_rasterize_png_test.rs	3	1	N12: rows S88-F2; includes waived residuals - see ADJUDICATION.md.
+src/font/shaper/coretext.zig	crates/rustty-font-shaper/src/shaper/coretext.rs	6	0	N12: rows S94-F1, S94-F4; includes waived residuals - see ADJUDICATION.md.
+src/font/shaper/feature.zig	crates/rustty-font-shaper/src/shaper/feature.rs	0	0	
+src/font/shaper/web_canvas.zig	crates/rustty-font-shaper/src/shaper/web_canvas.rs	0	0	
+src/global.zig	crates/rustty-apprt/src/lib.rs	0	0	
+src/input/mouse_encode.zig	crates/rustty-vt/src/input/mouse_encode.rs	0	0	
+src/main_ghostty.zig	crates/rustty-core/src/logging.rs	3	0	S44-F4 (WAIVED). main_ghostty.zig's logFn IS rustty-core's logging backend; 3 of its 5 sites are the sentry/crash arms the port routes elsewhere.
+src/os/cf_release_thread.zig	crates/rustty-os/src/cf_release_thread.rs	9	0	S111-F4 (OPEN). Every site is a NO-OP log_* stub - the diagnostic is dropped, not routed.
+src/os/locale.zig	crates/rustty-os/src/locale.rs	14	0	S111-F5 (OPEN). Every site is a NO-OP log_* stub - the diagnostic is dropped, not routed. See the gate's no-op-stub NOTE.
+src/renderer/Metal.zig	crates/rustty-renderer/src/metal/metal_impl.rs	0	0	
+src/renderer/OpenGL.zig	crates/rustty-renderer/src/opengl/opengl_impl.rs+crates/rustty-renderer/src/opengl/gl/sys.rs	0	0	Arm sums opengl_impl.rs and opengl/gl/sys.rs: OpenGL.zig's head (the GL debug-callback switch and prepareContext) ports to sys.rs, not to the file its name suggests.
+src/renderer/Overlay.zig	crates/rustty-renderer/src/overlay.rs	0	0	
+src/renderer/Thread.zig	crates/rustty-core/src/renderer_seam.rs	0	0	
+src/renderer/generic.zig	crates/rustty-renderer/src/generic.rs|crates/rustty-renderer/src/generic/linux_impl.rs	7	0	N12/N9: 6 of the 33 are DisplayLink-gated and cannot exist on the Linux arm at all, + 3 waived residuals (S115-F4, S116-F2 - rebuild_cells and ShaperCache::put are infallible in Rust). See task-14c-5.
+src/renderer/image.zig	crates/rustty-renderer/src/image/macos_impl.rs|crates/rustty-renderer/src/image/linux_impl.rs	2	0	S117-F3 (WAIVED): the same 2 residuals on BOTH twins - Vec::push and HashMap::entry are infallible where the reference's ArrayList.append/getOrPut are not.
+src/renderer/metal/Pipeline.zig	crates/rustty-renderer/src/metal/pipeline.rs	0	0	
+src/renderer/metal/shaders.zig	crates/rustty-renderer/src/metal/shaders.rs	0	0	
+src/renderer/opengl/Frame.zig	crates/rustty-renderer/src/generic/linux_impl.rs	0	0	OVERLAP: Frame.zig:65's one site is inlined into generic/linux_impl.rs, which also holds generic.zig's sites; this arm is credited with that whole file's count.
+src/simd/base64.zig	crates/rustty-simd/src/base64.rs	1	0	N12: rows S120-F2 are still OPEN; restoring these sites is that row's work.
+src/terminal/PageList.zig	crates/rustty-vt/src/pagelist/erase.rs+crates/rustty-vt/src/pagelist/grow.rs+crates/rustty-vt/src/pagelist/mod.rs+crates/rustty-vt/src/pagelist/resize.rs	1	0	N12: rows S122-F1, S123-F1, S124-F1 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
+src/terminal/Parser.zig	crates/rustty-vt/src/parser.rs	0	0	
+src/terminal/Screen.zig	crates/rustty-vt/src/screen.rs	0	0	
+src/terminal/Terminal.zig	crates/rustty-vt/src/terminal.rs	3	0	N12: rows S141-F4, S142-F1, S143-F2 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
+src/terminal/apc.zig	crates/rustty-vt/src/apc/mod.rs	0	0	
+src/terminal/bitmap_allocator.zig	crates/rustty-vt/src/bitmap_allocator.rs	1	0	N12: rows S149-F3; includes waived residuals - see ADJUDICATION.md.
+src/terminal/c/key_encode.zig	crates/rustty-vt-c/src/key_encode.rs	0	0	
+src/terminal/c/mouse_encode.zig	crates/rustty-vt-c/src/mouse_encode.rs	0	0	
+src/terminal/c/osc.zig	crates/rustty-vt-c/src/osc.rs	0	0	
+src/terminal/c/sgr.zig	crates/rustty-vt-c/src/sgr.rs	0	0	
+src/terminal/kitty/graphics_storage.zig	crates/rustty-vt/src/kitty/graphics_storage.rs	1	0	N12: rows S190-F1, S190-F2; includes waived residuals - see ADJUDICATION.md.
+src/terminal/osc/parsers/rxvt_extension.zig	crates/rustty-vt/src/osc/parsers/rxvt_extension.rs	0	0	
+src/terminal/page.zig	crates/rustty-vt/src/page_impl.rs	1	0	N12: rows S157-F1 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
+src/terminal/stream.zig	crates/rustty-vt/src/stream.rs	0	0	RECONCILES (128 reference / 138 port). The 49 first frozen here was a PHANTOM: the scanner had no char-literal branch, so `b'"' => {` at stream.rs:3428 opened a phantom string and blanked ~1200 lines below it. Fixed 2026-09-10 (task 14gate fix round 1); the ratchet caught the stale allowance.
+src/terminal/stream_terminal.zig	crates/rustty-vt/src/stream_terminal.rs	7	0	N12: rows S166-F3 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
+src/terminal/tmux/viewer.zig	crates/rustty-vt/src/tmux/viewer.rs	0	0	
+src/termio/mailbox.zig	crates/rustty-termio/src/mailbox.rs	2	0	N12: rows S212-F5 are still OPEN; restoring these sites is that row's work.

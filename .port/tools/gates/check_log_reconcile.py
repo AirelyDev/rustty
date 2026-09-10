@@ -37,6 +37,11 @@ count, so the arm can read greener than a per-site audit would. The portmap
 records every such overlap in its `reason` column. A green here means "no
 diagnostic mass was lost", not "every individual site is live".
 
+SECOND RATCHET: counting alone is not enough. A logFn-shaped `eprintln!` counts as
+an emission (the diagnostic does reach a human), so a stage could close a count
+deficit by adding more of them. `LOG-PORTMAP.tsv`'s `bypass_cap` column caps the
+facade-BYPASSING subset per file, on the same ratchet — finding N14.
+
 EXIT: 0 green, 1 red, 3 blocked. `--self-test` runs the gate's own arms;
 `--report` additionally prints the full per-reference-file deficit table (the
 actionable artifact — the pass/fail verdict alone is a ratchet and stays quiet
@@ -153,6 +158,37 @@ def primitive_sites(code, nc):
 
 def has_primitive(code, nc):
     return bool(primitive_sites(code, nc))
+
+
+def direct_print_sites(code, nc):
+    """Offsets of emissions that BYPASS the log facade entirely.
+
+    A `eprintln!("warn(gtk): …")` reproduces `logFn`'s OUTPUT but not its
+    behaviour: it cannot be silenced by `Logging.stderr` (disabled by default in
+    lib mode), never reaches macOS unified logging, and offers no level or scope
+    to filter on. `rustty-apprt`'s GTK subtree does this 244 times — finding N14.
+
+    They ARE counted as emissions above, because the reference's diagnostic does
+    reach a human. That is exactly why they need their own ratchet: "restore the
+    missing sites" and "stop bypassing the facade" pull in opposite directions,
+    and without this a stage could close a count deficit by adding MORE direct
+    prints and the gate would read it as an improvement.
+    """
+    return [
+        m.start()
+        for m in EPRINTLN_LOGFN.finditer(nc)
+        if code[m.start() : m.start() + 9] == "eprintln!"
+    ]
+
+
+def rust_direct_prints(paths, sources):
+    """[(path, line)] facade-bypassing emission sites across `paths`."""
+    hits = []
+    for path in paths:
+        code, nc = sources[path]
+        for pos in direct_print_sites(code, nc):
+            hits.append((path, code.count("\n", 0, pos) + 1))
+    return hits
 # Inside a `log_*` definition the shape of the write no longer matters: the name
 # says it is the diagnostic path, so any stderr write makes it an emitter.
 WRAPPER_WRITE = re.compile(r"\beprintln!|\beprint!|\bwrite!|\bwriteln!")
@@ -237,13 +273,28 @@ def _rust_scan(src, keep_strings):
             out.append(c)
             i += 1
             continue
-        if (
-            c == "r"
-            and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] == "_"))
-            and i + 1 < n
-            and src[i + 1] in '#"'
-        ):
-            j, hashes = i + 1, 0
+        # Raw string literals: `r"..."`, `r#"..."#`, and the BYTE forms `br"..."`
+        # / `br#"..."#`. The byte prefix is not cosmetic here: a `br` literal
+        # reaching the plain `"` scanner below would have its `\"` honoured as an
+        # escape, which raw strings do not process, and `br"foo\"` then desyncs
+        # the rest of the file — the same false-green failure class as the char
+        # literal above. No mapped port file contains one today; the branch is
+        # here so that stays true by construction rather than by luck.
+        if c == "b" and i + 1 < n and src[i + 1] == "r":
+            if (i == 0 or not (src[i - 1].isalnum() or src[i - 1] == "_")) and (
+                i + 2 < n and src[i + 2] in '#"'
+            ):
+                raw_start, scan = i, i + 2
+            else:
+                raw_start, scan = None, None
+        elif c == "r" and (
+            i == 0 or not (src[i - 1].isalnum() or src[i - 1] == "_")
+        ) and i + 1 < n and src[i + 1] in '#"':
+            raw_start, scan = i, i + 1
+        else:
+            raw_start, scan = None, None
+        if raw_start is not None:
+            j, hashes = scan, 0
             while j < n and src[j] == "#":
                 hashes += 1
                 j += 1
@@ -434,7 +485,7 @@ def rust_emissions(paths, sources, emitters, defs):
 def load_portmap(path):
     """Rows of the declared reference -> port mapping.
 
-    Columns: oracle_file, port_arms, allowance, reason.
+    Columns: oracle_file, port_arms, allowance, bypass_cap, reason.
     `port_arms` is `|`-separated ARMS; each arm is `+`-separated FILES.
     Files inside one arm are SUMMED (a reference file split across several Rust
     files). Arms are compared INDEPENDENTLY and the file's actual is the MINIMUM
@@ -451,8 +502,11 @@ def load_portmap(path):
             parts = line.split("\t")
             if parts[0].strip() == "oracle_file":  # header, wherever it sits
                 continue
-            if len(parts) < 4:
-                raise ValueError(f"{path}:{lineno}: expected 4 tab-separated columns")
+            if len(parts) < 5:
+                raise ValueError(
+                    f"{path}:{lineno}: expected 5 tab-separated columns "
+                    "(oracle_file, port_arms, allowance, bypass_cap, reason)"
+                )
             arms = [
                 [f.strip() for f in arm.split("+") if f.strip()]
                 for arm in parts[1].split("|")
@@ -462,7 +516,8 @@ def load_portmap(path):
                     "oracle": parts[0].strip(),
                     "arms": [a for a in arms if a],
                     "allowance": parts[2].strip(),
-                    "reason": parts[3].strip(),
+                    "bypass_cap": parts[3].strip(),
+                    "reason": parts[4].strip(),
                     "lineno": lineno,
                 }
             )
@@ -519,7 +574,7 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
     defs = {p: wide_defs[p] for p in pool}
     stubs = {p: v for p, v in stubs.items() if p in pool}
 
-    rows, total_expected, total_actual = [], 0, 0
+    rows, total_expected, total_actual, total_bypass = [], 0, 0, 0
     missing_oracle = []
     for r in portmap:
         txt = zig_text(r["oracle"])
@@ -528,16 +583,20 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
             continue
         expected = len(zig_sites(txt))
         total_expected += expected
-        arm_counts = []
+        arm_counts, arm_bypass = [], []
         for arm in r["arms"]:
             present = [f for f in arm if f in pool]
             arm_counts.append(
                 len(rust_emissions(present, pool, emitters, defs)) if present else 0
             )
+            arm_bypass.append(len(rust_direct_prints(present, pool)) if present else 0)
         actual = min(arm_counts) if arm_counts else 0
+        # MAX over arms, not min: a bypass on ANY platform arm is a bypass.
+        bypass = max(arm_bypass) if arm_bypass else 0
         total_actual += actual
+        total_bypass += bypass
         deficit = max(0, expected - actual)
-        rows.append((r, expected, arm_counts, actual, deficit))
+        rows.append((r, expected, arm_counts, actual, deficit, bypass))
 
     # --- vacuity defenses (exit 3 territory is handled by main; these are RED) --
     if not rows:
@@ -556,12 +615,13 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
         out.append("")
         out.append("--- per reference file (deficit = reference - thinnest arm) ---")
         out.append(f"{'deficit':>7}  {'ref':>4} {'port':>5}  oracle file / arms / rows")
-        for r, expected, arm_counts, actual, deficit in sorted(
+        for r, expected, arm_counts, actual, deficit, bypass in sorted(
             rows, key=lambda x: (-x[4], x[0]["oracle"])
         ):
             out.append(
                 f"{deficit:>7}  {expected:>4} {actual:>5}  {r['oracle']}"
                 f"   allowance={r['allowance']}"
+                + (f"   bypass={bypass}/{r['bypass_cap']}" if bypass or r["bypass_cap"] not in ("0", "") else "")
             )
             out.append(
                 "                       arms: "
@@ -573,32 +633,44 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
             )
         out.append(
             f"--- total deficit {sum(x[4] for x in rows)} over "
-            f"{sum(1 for x in rows if x[4])} file(s) ---"
+            f"{sum(1 for x in rows if x[4])} file(s); "
+            f"{sum(x[5] for x in rows)} facade-BYPASSING emission(s) over "
+            f"{sum(1 for x in rows if x[5])} file(s) ---"
         )
         out.append("")
         out = []
 
     shortfalls, stale, unreasoned, bad = [], [], [], []
-    for r, expected, arm_counts, actual, deficit in rows:
+    bypass_over, bypass_stale = [], []
+    for r, expected, arm_counts, actual, deficit, bypass in rows:
         try:
             allowance = int(r["allowance"])
+            cap = int(r["bypass_cap"])
         except ValueError:
-            bad.append(f"{r['oracle']}: allowance={r['allowance']!r} is not an integer")
+            bad.append(
+                f"{r['oracle']}: allowance={r['allowance']!r} / "
+                f"bypass_cap={r['bypass_cap']!r} is not an integer"
+            )
             continue
-        if allowance < 0:
-            bad.append(f"{r['oracle']}: allowance={allowance} is negative")
+        if allowance < 0 or cap < 0:
+            bad.append(f"{r['oracle']}: allowance/bypass_cap must not be negative")
             continue
-        if allowance and not r["reason"]:
+        if (allowance or cap) and not r["reason"]:
             unreasoned.append(r["oracle"])
         if deficit > allowance:
             shortfalls.append((r, expected, arm_counts, actual, deficit, allowance))
         elif deficit < allowance:
             stale.append((r["oracle"], allowance, deficit))
+        if bypass > cap:
+            bypass_over.append((r["oracle"], bypass, cap))
+        elif bypass < cap:
+            bypass_stale.append((r["oracle"], cap, bypass))
 
     out.append(
         f"G-LOGFILE: {len(rows)} reference file(s) — "
         f"{total_expected} live reference log site(s), {total_actual} live port "
-        f"emission(s) on the thinnest arm, {len(emitters)} log facade name(s) resolved"
+        f"emission(s) on the thinnest arm ({total_bypass} of them BYPASSING the "
+        f"facade — N14), {len(emitters)} log facade name(s) resolved"
     )
     out.extend(report_lines)
 
@@ -626,7 +698,8 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
         rc = 1
     if unreasoned:
         out.append(
-            "RED: a non-zero allowance MUST name its justification in the `reason` "
+            "RED: a non-zero allowance or bypass_cap MUST name its justification in "
+            "the `reason` "
             f"column (G-PARITY's WAIVED-owner rule); missing on: {unreasoned[:5]}"
         )
         rc = 1
@@ -638,6 +711,26 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
         )
         for f, allowance, deficit in stale[:10]:
             out.append(f"       {f}: allowance={allowance}, measured deficit={deficit}")
+        rc = 1
+    if bypass_over:
+        out.append(
+            f"RED: {len(bypass_over)} file(s) emit MORE facade-bypassing direct prints "
+            "than declared. `eprintln!(\"warn(scope): ...\")` reproduces logFn's output "
+            "but not its behaviour — it ignores Logging.stderr, never reaches macOS "
+            "unified logging, and has no level or scope to filter on (N14). Adding one "
+            "is not a way to close a count deficit:"
+        )
+        for f, got, cap in bypass_over[:10]:
+            out.append(f"       {f}: {got} direct print(s), cap {cap}")
+        rc = 1
+    if bypass_stale:
+        out.append(
+            f"RED: {len(bypass_stale)} bypass cap(s) now exceed the measured count — "
+            "the same RATCHET as the allowances: tighten them in the commit that routed "
+            "the sites through the facade."
+        )
+        for f, cap, got in bypass_stale[:10]:
+            out.append(f"       {f}: cap={cap}, measured={got}")
         rc = 1
     if shortfalls:
         out.append(
@@ -720,6 +813,64 @@ def scanner_violations(raw, code):
             continue
         bad.append((raw.count("\n", 0, m.start()) + 1, raw[line_start : m.end()].strip()))
     return bad
+
+
+LITERAL_SHAPES = [
+    # (name, source, expected live `log::` sites)
+    ("b'\"' — the DEC intermediate that started all this",
+     'fn a() { match x { b\'"\' => {} }; log::warn!(target: S, "live"); }\n', 1),
+    ("b'\\\\' — a char literal whose content IS a backslash",
+     'fn a() { match x { b\'\\\\\' => {} }; log::warn!(target: S, "live"); }\n', 1),
+    ("'\\u{1f600}' — a unicode escape",
+     'fn a() { let c = \'\\u{1f600}\'; log::warn!(target: S, "live"); }\n', 1),
+    ("a lifetime is not a char literal",
+     'fn a<\'x>(v: &\'x str) { log::warn!(target: S, "live"); }\n', 1),
+    ("an apostrophe in a doc comment",
+     '/// don\'t do this\nfn a() { log::warn!(target: S, "live"); }\n', 1),
+    ("an escaped quote inside a normal string",
+     'fn a() { let s = "he said \\"hi\\""; log::warn!(target: S, "live"); }\n', 1),
+    ("r\"...\\\" — a raw string ending in a backslash",
+     'fn a() { let x = r"foo\\"; log::warn!(target: S, "live"); }\n', 1),
+    ("br\"...\\\" — a RAW BYTE string ending in a backslash",
+     'fn a() { let x = br"foo\\"; log::warn!(target: S, "live"); }\n', 1),
+    ("br#\"...\"# — a hashed raw byte string",
+     'fn a() { let x = br#"a"b\\"#; log::warn!(target: S, "live"); }\n', 1),
+    ("b\"...\" — a byte string, where escapes DO apply",
+     'fn a() { let x = b"foo\\""; log::warn!(target: S, "live"); }\n', 1),
+    ("an identifier ending in `br` is not a raw literal",
+     'fn a() { let abr = 1; log::warn!(target: S, "live"); }\n', 1),
+    ("a `log::` inside a raw byte string is NOT code",
+     'fn a() { let x = br"log::warn!(x)"; }\n', 0),
+]
+
+
+def literal_shape_check():
+    """(ok, lines) — every Rust literal shape that can desync a naive scanner.
+
+    Two entries here are regression pins for bugs that shipped: `b'"'` (fix round
+    1, which blanked ~1200 lines of `stream.rs` and froze a phantom 49-site
+    deficit) and `br"...\\"` (fix round 2, dormant — no mapped port file has one —
+    but the identical failure class, and a dormant scanner desync fails
+    FALSE-GREEN). Both are cheap to hold onto and expensive to rediscover.
+    """
+    out, ok = [], True
+    for name, src, want in LITERAL_SHAPES:
+        code, nc = rust_strip(src), rust_strip_comments_only(src)
+        offsets = len(code) == len(src) and len(nc) == len(src)
+        got = len(primitive_sites(code, nc))
+        good = got == want and offsets
+        if not good:
+            ok = False
+            out.append(
+                f"  [FAIL] literal shape: {name} -> {got} live (expected {want}), "
+                f"offsets preserved={offsets}"
+            )
+    out.insert(
+        0,
+        f"  [{'ok ' if ok else 'FAIL'}] {len(LITERAL_SHAPES)} Rust literal shape(s) "
+        "parsed correctly (char, byte, raw, raw-byte, lifetime, doc comment)",
+    )
+    return ok, out
 
 
 def live_scanner_check():
@@ -825,18 +976,23 @@ def self_test():
     rt = lambda p: rs.get(p)
 
     def run(portmap_rows, claims=None):
-        pm = [
-            {
-                "oracle": o,
-                "arms": [
-                    [f.strip() for f in arm.split("+")] for arm in arms.split("|")
-                ],
-                "allowance": a,
-                "reason": r,
-                "lineno": 0,
-            }
-            for o, arms, a, r in portmap_rows
-        ]
+        # rows are (oracle, arms, allowance, reason) or (…, allowance, cap, reason)
+        pm = []
+        for row in portmap_rows:
+            o, arms, a = row[0], row[1], row[2]
+            cap, r = ("0", row[3]) if len(row) == 4 else (row[3], row[4])
+            pm.append(
+                {
+                    "oracle": o,
+                    "arms": [
+                        [f.strip() for f in arm.split("+")] for arm in arms.split("|")
+                    ],
+                    "allowance": a,
+                    "bypass_cap": cap,
+                    "reason": r,
+                    "lineno": 0,
+                }
+            )
         return verdict(pm, claims or {}, zt, rt)
 
     cases = []
@@ -893,11 +1049,35 @@ def self_test():
     # 10b. the eprintln!("warn(scope): ...") facade counts, and only WITH the prefix
     cases.append(
         ("eprintln! logFn facade counts (1 of the 2 in the file)",
-         run([("src/eprint.zig", "c/eprint.rs", "0", "")])[0], 0)
+         run([("src/eprint.zig", "c/eprint.rs", "0", "1", "N14: declared bypass")])[0], 0)
     )
     cases.append(
         ("a bare eprintln! is NOT an emission",
-         run([("src/eprint2.zig", "c/eprint.rs", "0", "")])[0], 1)
+         run([("src/eprint2.zig", "c/eprint.rs", "0", "1", "N14")])[0], 1)
+    )
+    # 10c. the BYPASS ratchet: a direct print over the declared cap is RED, and a
+    #      cap larger than what is measured is RED too (same ratchet as allowances).
+    #      `c/eprint.rs` carries exactly one facade-bypassing print.
+    cases.append(
+        ("facade bypass over the declared cap",
+         run([("src/eprint.zig", "c/eprint.rs", "0", "0", "")])[0], 1)
+    )
+    cases.append(
+        ("facade bypass within a reasoned cap",
+         run([("src/eprint.zig", "c/eprint.rs", "0", "1", "N14: GTK subtree")])[0], 0)
+    )
+    cases.append(
+        ("stale (too-large) bypass cap",
+         run([("src/eprint.zig", "c/eprint.rs", "0", "2", "N14")])[0], 1)
+    )
+    cases.append(
+        ("bypass cap with no reason",
+         run([("src/eprint.zig", "c/eprint.rs", "0", "1", "")])[0], 1)
+    )
+    # 10d. a facade emission is NOT a bypass — `c/ok.rs` uses `log::warn!`.
+    cases.append(
+        ("a log:: emission is not counted as a bypass",
+         run([("src/ok.zig", "c/ok.rs", "0", "0", "")])[0], 0)
     )
     # 11. a LOG row citing a file with no portmap entry
     cases.append(
@@ -918,9 +1098,10 @@ def self_test():
              {}, lambda p: "fn a() void {}\n", rt)[0], 1)
     )
 
+    lit_ok, lit_lines = literal_shape_check()
     live_ok, live_lines = live_scanner_check()
-    ok = live_ok
-    for line in live_lines:
+    ok = lit_ok and live_ok
+    for line in lit_lines + live_lines:
         print(line)
     for name, got, want in cases:
         mark = "ok " if got == want else "FAIL"
@@ -930,8 +1111,9 @@ def self_test():
     print(
         "SELF-TEST GREEN: the gate flips RED on a short file, an unreasoned or stale\n"
         "allowance, a short PLATFORM TWIN that summing would have hidden, a no-op\n"
-        "log stub, an undeclared file, a missing port file, and a vacuous scan —\n"
-        "and the scanner agrees with a naive grep on every mapped port file."
+        "log stub, an undeclared file, a missing port file, a vacuous scan, and a\n"
+        "facade-BYPASSING direct print over its declared cap — and the scanner agrees\n"
+        "with a naive grep on every mapped port file and on every Rust literal shape."
         if ok
         else "SELF-TEST RED: the gate did not flip."
     )

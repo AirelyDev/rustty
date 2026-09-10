@@ -753,7 +753,11 @@ GATE_REGISTRY=(
   # the same run. The declared debt (183 sites, NEW-FINDINGS N12) is tracked as a
   # finding, not as gate noise — `--report` prints the whole table on demand.
   # The allowances are a RATCHET: one that exceeds the measured deficit is RED,
-  # so restoring a site must tighten it in the same commit. Nothing here is
+  # so restoring a site must tighten it in the same commit. A SECOND ratchet
+  # (`bypass_cap`) caps the facade-BYPASSING subset — 188 raw `eprintln!` sites
+  # reproducing logFn's output, N14 — because a logFn-shaped print counts as an
+  # emission, so without it a stage could close a count deficit by adding more of
+  # them and the gate would call that an improvement. Nothing here is
   # env-settable (R5); an absent or off-pin oracle checkout is 3 BLOCKED, never a
   # vacuous green.
   "G-LOGFILE-SELF|HARD|$PY $GATES/check_log_reconcile.py --self-test"
