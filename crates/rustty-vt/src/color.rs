@@ -1078,6 +1078,27 @@ impl Dynamic {
     ///
     /// "Each successive parameter changes the next color in the list.  The
     /// value of Ps tells the starting point in the list."
+    // PORT NOTE (Zig-builtin shim, task-14e-1): `@tagName(dynamic)` — the
+    // reference enum's own snake_case FIELD name, as `termio/stream_handler.zig`'s
+    // "setting/resetting/reporting dynamic color {s} not implemented" sites print
+    // it. The Rust variants are PascalCase (R2 naming), so a derived `Debug` would
+    // emit the wrong bytes; the mapping is spelled out (the sibling
+    // `kitty::color::Special::tag_name` is the precedent).
+    pub fn tag_name(self) -> &'static str {
+        match self {
+            Dynamic::Foreground => "foreground",
+            Dynamic::Background => "background",
+            Dynamic::Cursor => "cursor",
+            Dynamic::PointerForeground => "pointer_foreground",
+            Dynamic::PointerBackground => "pointer_background",
+            Dynamic::TektronixForeground => "tektronix_foreground",
+            Dynamic::TektronixBackground => "tektronix_background",
+            Dynamic::HighlightBackground => "highlight_background",
+            Dynamic::TektronixCursor => "tektronix_cursor",
+            Dynamic::HighlightForeground => "highlight_foreground",
+        }
+    }
+
     pub fn next(self) -> Option<Dynamic> {
         // PORT NOTE: `std.meta.intToEnum(Dynamic, @intFromEnum(self) + 1) catch null`.
         match (self as u8) + 1 {

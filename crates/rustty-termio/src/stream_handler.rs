@@ -64,8 +64,27 @@ use core::fmt::Write as _;
 
 // const log = std.log.scoped(.io_handler);
 //
-// PORT NOTE: the reference's log call sites are preserved verbatim as comments at
-// each site (termio stage-2 precedent).
+// PORT NOTE (DECISION-logging.md §6/§6r4): `LOG_SCOPE` is the `@tagName` of the
+// reference's `std.log.scoped(.io_handler)`; restored sites call the `log`
+// facade with `target: LOG_SCOPE`. This supersedes the earlier
+// "preserved verbatim as comments at each site" note — the Zig comment stays
+// (R1) and the live call is added beneath it.
+const LOG_SCOPE: &str = "io_handler";
+
+/// PORT NOTE (Zig-format shim, task-14e-1): `{x}` applied to a `[]const u8` in
+/// Zig prints the bytes as concatenated lowercase hex with no separator. Rust's
+/// `{:x}` has no slice impl, so this wrapper reproduces it for the two
+/// `log.debug("... response: {x}", .{final})` sites.
+struct HexBytes<'b>(&'b [u8]);
+
+impl core::fmt::Display for HexBytes<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for b in self.0 {
+            write!(f, "{b:02x}")?;
+        }
+        Ok(())
+    }
+}
 
 /// `pub const Stream = terminal.Stream(StreamHandler);`
 //
@@ -346,7 +365,7 @@ impl<M: AppMailbox> StreamHandler<M> {
         // (guard-less zigstd Mutex — the `defer` relock is the explicit re-lock
         // after the blocking push below, the sole exit.)
         // self.renderer_wakeup.notify() catch |err| {
-        if self.renderer_wakeup.notify().is_err() {
+        if let Err(err) = self.renderer_wakeup.notify() {
             // This is an EXTREMELY unlikely case. We still don't return
             // and attempt to send the message because its most likely
             // that everything is fine, but log in case a freeze happens.
@@ -354,6 +373,7 @@ impl<M: AppMailbox> StreamHandler<M> {
             //     "failed to notify renderer, may deadlock err={}",
             //     .{err},
             // );
+            log::warn!(target: LOG_SCOPE, "failed to notify renderer, may deadlock err={err:?}");
         }
         // _ = self.renderer_mailbox.push(msg, .{ .forever = {} });
         let _ = unsafe { &*self.renderer_mailbox }.push(msg, Timeout::Forever);
@@ -377,10 +397,19 @@ impl<M: AppMailbox> StreamHandler<M> {
     // per-action trait methods directly, so each `vtFallible` arm becomes the
     // corresponding trait-method body, funneled through this helper for the
     // `catch |err| log.warn(...)` behavior.
+    //
+    // PORT NOTE (log text): the reference's `action` is the COMPTIME
+    // `Stream.Action.Tag` value and Zig's `{}` on an exhaustive enum prints
+    // `<typename>.<tag>`. The port's dispatch is one trait method PER action, so
+    // the tag is not a value here at all; each caller passes its own
+    // `Action.Tag` FIELD NAME as a literal and the site renders that bare name.
+    // The information is the same, the type-name prefix is not reproduced —
+    // NEW-FINDINGS N11's class (Rust standing in for Zig's builtin formatter).
     #[inline]
-    fn vt(&mut self, r: Result<(), crate::Error>) {
-        if r.is_err() {
+    fn vt(&mut self, action: &'static str, r: Result<(), crate::Error>) {
+        if let Err(err) = r {
             // log.warn("error handling VT action action={} err={}", .{ action, err });
+            log::warn!(target: LOG_SCOPE, "error handling VT action action={action} err={err:?}");
         }
     }
 
@@ -490,6 +519,7 @@ impl<M: AppMailbox> StreamHandler<M> {
                     break 'tmux;
                 }
                 // log.info("tmux control mode event cmd={f}", .{tmux});
+                log::info!(target: LOG_SCOPE, "tmux control mode event cmd={tmux}");
 
                 // switch (tmux) {
                 match tmux {
@@ -553,6 +583,10 @@ impl<M: AppMailbox> StreamHandler<M> {
                     //     "received tmux control mode command without viewer: {f}",
                     //     .{tmux},
                     // );
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "received tmux control mode command without viewer: {tmux}"
+                    );
                     //
                     // break :tmux;
                     break 'tmux;
@@ -565,6 +599,7 @@ impl<M: AppMailbox> StreamHandler<M> {
                 // for (viewer.next(.{ .tmux = tmux })) |action| {
                 for action in viewer.next(rustty_vt::tmux::viewer::Input::Tmux(notification)) {
                     // log.info("tmux viewer action={f}", .{action});
+                    log::info!(target: LOG_SCOPE, "tmux viewer action={action}");
                     // switch (action) {
                     match action {
                         // .exit => {
@@ -680,6 +715,11 @@ impl<M: AppMailbox> StreamHandler<M> {
                     // if (final.len > 2) {
                     if final_.len() > 2 {
                         // log.debug("kitty graphics response: {x}", .{final});
+                        log::debug!(
+                            target: LOG_SCOPE,
+                            "kitty graphics response: {}",
+                            HexBytes(final_)
+                        );
                         // self.messageWriter(try termio.Message.writeReq(self.alloc, final));
                         let msg = Message::writeReq(final_);
                         self.messageWriter(msg);
@@ -714,6 +754,11 @@ impl<M: AppMailbox> StreamHandler<M> {
                     // const final = writer.buffered();
                     let final_ = buf.as_bytes();
                     // log.debug("glyph protocol response: {x}", .{final});
+                    log::debug!(
+                        target: LOG_SCOPE,
+                        "glyph protocol response: {}",
+                        HexBytes(final_)
+                    );
                     // self.messageWriter(try termio.Message.writeReq(self.alloc, final));
                     let msg = Message::writeReq(final_);
                     self.messageWriter(msg);
@@ -851,8 +896,9 @@ impl<M: AppMailbox> StreamHandler<M> {
         //     log.err("error encoding mode report err={}", .{err});
         //     return;
         // };
-        if report.encode(&mut writer).is_err() {
+        if let Err(err) = report.encode(&mut writer) {
             // log.err("error encoding mode report err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error encoding mode report err={err:?}");
             return;
         }
         let len = writer.pos;
@@ -1012,19 +1058,16 @@ impl<M: AppMailbox> StreamHandler<M> {
                 // only restores the grid dimensions, so the terminal's existing
                 // pixel geometry is left alone.
                 let alloc = self.alloc;
-                if self
-                    .term()
-                    .resize(
-                        alloc,
-                        rustty_vt::terminal::Resize {
-                            cols: grid_size.columns,
-                            rows: grid_size.rows,
-                            cell_size_px: None,
-                        },
-                    )
-                    .is_err()
-                {
+                if let Err(err) = self.term().resize(
+                    alloc,
+                    rustty_vt::terminal::Resize {
+                        cols: grid_size.columns,
+                        rows: grid_size.rows,
+                        cell_size_px: None,
+                    },
+                ) {
                     // log.err("error updating terminal size: {}", .{err});
+                    log::error!(target: LOG_SCOPE, "error updating terminal size: {err:?}");
                 }
             }
 
@@ -1238,6 +1281,7 @@ impl<M: AppMailbox> StreamHandler<M> {
             // else => log.warn("unimplemented device attributes req: {}", .{req}),
             _ => {
                 // log.warn("unimplemented device attributes req: {}", .{req});
+                log::warn!(target: LOG_SCOPE, "unimplemented device attributes req: {req:?}");
             }
         }
         Ok(())
@@ -1351,6 +1395,11 @@ impl<M: AppMailbox> StreamHandler<M> {
     // pub fn enquiry(self: *StreamHandler) !void {
     pub fn enquiry(&mut self) -> Result<(), crate::Error> {
         // log.debug("sending enquiry response={s}", .{self.enquiry_response});
+        log::debug!(
+            target: LOG_SCOPE,
+            "sending enquiry response={}",
+            String::from_utf8_lossy(&self.enquiry_response)
+        );
         // self.messageWriter(try termio.Message.writeReq(self.alloc, self.enquiry_response));
         let msg = Message::writeReq(&self.enquiry_response);
         self.messageWriter(msg);
@@ -1578,6 +1627,10 @@ impl<M: AppMailbox> StreamHandler<M> {
         // throw away. Later wdata packets are ignored.
         if self.clipboard_write == ClipboardAccess::Deny {
             // log.info("application attempted to write clipboard, but 'clipboard-write' is set to deny", .{});
+            log::info!(
+                target: LOG_SCOPE,
+                "application attempted to write clipboard, but 'clipboard-write' is set to deny"
+            );
             self.kittyClipboardWriteStatus(kitty_clipboard::Status::Eperm, &meta.id, terminator)?;
             return Ok(());
         }
@@ -1876,6 +1929,7 @@ impl<M: AppMailbox> StreamHandler<M> {
     // pub fn queryKittyKeyboard(self: *StreamHandler) !void {
     pub fn queryKittyKeyboard(&mut self) -> Result<(), crate::Error> {
         // log.debug("querying kitty keyboard mode", .{});
+        log::debug!(target: LOG_SCOPE, "querying kitty keyboard mode");
         // var data: termio.Message.WriteReq.Small.Array = undefined;
         // const resp = try std.fmt.bufPrint(&data, "\x1b[?{}u", .{
         //     self.terminal.screens.active.kitty_keyboard.current().int(),
@@ -1901,6 +1955,14 @@ impl<M: AppMailbox> StreamHandler<M> {
     // ) !void {
     pub fn reportXtversion(&mut self) -> Result<(), crate::Error> {
         // log.debug("reporting XTVERSION: ghostty {s}", .{build_config.version_string});
+        //
+        // (R2 identity: `ghostty` in the reference's literal is the product name.)
+        log::debug!(
+            target: LOG_SCOPE,
+            "reporting XTVERSION: {} {}",
+            rustty_identity::XTVERSION_NAME,
+            rustty_build_config::VERSION_STRING
+        );
         // var buf: [288]u8 = undefined;
         // const resp = try std.fmt.bufPrint(
         //     &buf,
@@ -1941,6 +2003,10 @@ impl<M: AppMailbox> StreamHandler<M> {
         // }
         if title.len() >= buf.len() {
             // log.warn("change title requested larger than our buffer size, ignoring", .{});
+            log::warn!(
+                target: LOG_SCOPE,
+                "change title requested larger than our buffer size, ignoring"
+            );
             return Ok(());
         }
 
@@ -1949,8 +2015,9 @@ impl<M: AppMailbox> StreamHandler<M> {
         // self.terminal.setTitle(title) catch |err| {
         //     log.warn("error setting title in terminal state: {}", .{err});
         // };
-        if self.term().set_title(title).is_err() {
+        if let Err(err) = self.term().set_title(title) {
             // log.warn("error setting title in terminal state: {}", .{err});
+            log::warn!(target: LOG_SCOPE, "error setting title in terminal state: {err:?}");
         }
 
         // @memcpy(buf[0..title.len], title);
@@ -2155,6 +2222,7 @@ impl<M: AppMailbox> StreamHandler<M> {
         // }
         if cfg!(windows) {
             // log.warn("reportPwd unimplemented on windows", .{});
+            log::warn!(target: LOG_SCOPE, "reportPwd unimplemented on windows");
             return Ok(());
         }
 
@@ -2176,8 +2244,9 @@ impl<M: AppMailbox> StreamHandler<M> {
             },
         ) {
             Ok(uri) => uri,
-            Err(_e) => {
+            Err(e) => {
                 // log.warn("invalid url in OSC 7: {}", .{e});
+                log::warn!(target: LOG_SCOPE, "invalid url in OSC 7: {e:?}");
                 return Ok(());
             }
         };
@@ -2190,6 +2259,11 @@ impl<M: AppMailbox> StreamHandler<M> {
         // }
         if uri.scheme != b"file" && uri.scheme != b"kitty-shell-cwd" {
             // log.warn("OSC 7 scheme must be file or kitty-shell-cwd, got: {s}", .{uri.scheme});
+            log::warn!(
+                target: LOG_SCOPE,
+                "OSC 7 scheme must be file or kitty-shell-cwd, got: {}",
+                String::from_utf8_lossy(uri.scheme)
+            );
             return Ok(());
         }
 
@@ -2207,12 +2281,21 @@ impl<M: AppMailbox> StreamHandler<M> {
         let mut host_buffer = [0u8; URI_HOST_NAME_MAX];
         let host = match uri_get_host(&uri, &mut host_buffer) {
             Ok(host) => host,
-            Err(GetHostError::UriMissingHost) => {
+            Err(err @ GetHostError::UriMissingHost) => {
                 // log.warn("OSC 7 uri must contain a hostname: {}", .{err});
+                log::warn!(target: LOG_SCOPE, "OSC 7 uri must contain a hostname: {err:?}");
                 return Ok(());
             }
+            // PORT NOTE (task-14e-1, 2026-09-10): this arm and its
+            // `failed to get full hostname for OSC 7 validation` message are
+            // NOT in the oracle at pin 20abdb50a — `uri.getHost`'s error set
+            // there is `error{UriMissingHost}` only. The Zig comment is a stale
+            // pre-resync artifact, so NO live emission is added here; adding one
+            // would be an emission the reference does not make. The arm itself
+            // is left alone (removing it is a behavioural change, out of this
+            // task's scope) and is filed in the report as a finding.
             Err(GetHostError::UriHostTooLong) => {
-                // log.warn("failed to get full hostname for OSC 7 validation: {}", .{err});
+                // (no reference counterpart at the pin — see the note above.)
                 return Ok(());
             }
         };
@@ -2231,10 +2314,14 @@ impl<M: AppMailbox> StreamHandler<M> {
         let host_valid = match rustty_os::hostname::isLocal(host) {
             Ok(v) => v,
             Err(
-                rustty_os::hostname::LocalHostnameValidationError::PermissionDenied
-                | rustty_os::hostname::LocalHostnameValidationError::Unexpected,
+                err @ (rustty_os::hostname::LocalHostnameValidationError::PermissionDenied
+                | rustty_os::hostname::LocalHostnameValidationError::Unexpected),
             ) => {
                 // log.warn("failed to get hostname for OSC 7 validation: {}", .{err});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "failed to get hostname for OSC 7 validation: {err:?}"
+                );
                 return Ok(());
             }
         };
@@ -2244,6 +2331,11 @@ impl<M: AppMailbox> StreamHandler<M> {
         // }
         if !host_valid {
             // log.warn("OSC 7 host ({s}) must be local", .{host});
+            log::warn!(
+                target: LOG_SCOPE,
+                "OSC 7 host ({}) must be local",
+                String::from_utf8_lossy(host)
+            );
             return Ok(());
         }
 
@@ -2262,6 +2354,11 @@ impl<M: AppMailbox> StreamHandler<M> {
         };
 
         // log.debug("terminal pwd: {s}", .{path});
+        log::debug!(
+            target: LOG_SCOPE,
+            "terminal pwd: {}",
+            String::from_utf8_lossy(&path)
+        );
         // try self.terminal.setPwd(path);
         self.term().set_pwd(&path).map_err(|_| crate::Error)?;
 
@@ -2275,6 +2372,14 @@ impl<M: AppMailbox> StreamHandler<M> {
         //
         // (PORT NOTE: `WriteReq.init` is infallible in Rust's allocation model —
         // the error branch collapses, preserved verbatim above.)
+        //
+        // PORT NOTE (G-LOGFILE / task-14e-1, 2026-09-10): this is
+        // `stream_handler.zig:1547`, the ONE site of this file's 41 that stays
+        // UNRESTORED. There is no failure arm to hang it on and emitting it
+        // unconditionally would put a diagnostic on a SUCCESS path — the bug this
+        // project already shipped once. `LOG-PORTMAP.tsv`'s
+        // `src/termio/stream_handler.zig` allowance is held at 1 for exactly this
+        // site, with the reason in its `reason` column; see `ADJUDICATION.md`.
         let req = rustty_apprt_api::surface::WriteReq::init(&path);
         self.surfaceMessageWriter(SurfaceMessage::PwdChange(req));
 
@@ -2369,11 +2474,20 @@ impl<M: AppMailbox> StreamHandler<M> {
                             | color::Dynamic::TektronixCursor
                             | color::Dynamic::HighlightForeground => {
                                 // log.info("setting dynamic color {s} not implemented", ...);
+                                log::info!(
+                                    target: LOG_SCOPE,
+                                    "setting dynamic color {} not implemented",
+                                    dynamic.tag_name()
+                                );
                             }
                         },
                         // .special => log.info("setting special colors not implemented", .{}),
                         osc::color::Target::Special(_) => {
                             // log.info("setting special colors not implemented", .{});
+                            log::info!(
+                                target: LOG_SCOPE,
+                                "setting special colors not implemented"
+                            );
                         }
                     }
 
@@ -2473,11 +2587,17 @@ impl<M: AppMailbox> StreamHandler<M> {
                         | color::Dynamic::TektronixCursor
                         | color::Dynamic::HighlightForeground => {
                             // log.warn("resetting dynamic color {s} not implemented", ...);
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "resetting dynamic color {} not implemented",
+                                dynamic.tag_name()
+                            );
                         }
                     },
                     // .special => log.info("resetting special colors not implemented", .{}),
                     osc::color::Target::Special(_) => {
                         // log.info("resetting special colors not implemented", .{});
+                        log::info!(target: LOG_SCOPE, "resetting special colors not implemented");
                     }
                 },
 
@@ -2517,6 +2637,10 @@ impl<M: AppMailbox> StreamHandler<M> {
                 // ),
                 osc::color::Request::ResetSpecial => {
                     // log.warn("resetting all special colors not implemented", .{});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "resetting all special colors not implemented"
+                    );
                 }
 
                 // .query => |kind| report: {
@@ -2573,6 +2697,11 @@ impl<M: AppMailbox> StreamHandler<M> {
                             | color::Dynamic::TektronixCursor
                             | color::Dynamic::HighlightForeground => {
                                 // log.info("reporting dynamic color {s} not implemented", ...);
+                                log::info!(
+                                    target: LOG_SCOPE,
+                                    "reporting dynamic color {} not implemented",
+                                    dynamic.tag_name()
+                                );
                                 break 'report;
                             }
                         },
@@ -2582,6 +2711,7 @@ impl<M: AppMailbox> StreamHandler<M> {
                         // },
                         osc::color::Target::Special(_) => {
                             // log.info("reporting special colors not implemented", .{});
+                            log::info!(target: LOG_SCOPE, "reporting special colors not implemented");
                             break 'report;
                         }
                     };
@@ -2777,6 +2907,10 @@ impl<M: AppMailbox> StreamHandler<M> {
                             // },
                             _ => {
                                 // log.warn("ignoring unsupported kitty color protocol key: {f}", .{key});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "ignoring unsupported kitty color protocol key: {key}"
+                                );
                                 continue;
                             }
                         },
@@ -2839,6 +2973,10 @@ impl<M: AppMailbox> StreamHandler<M> {
                         // },
                         _ => {
                             // log.warn("ignoring unsupported kitty color protocol key: {f}", .{v.key});
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "ignoring unsupported kitty color protocol key: {key}"
+                            );
                             continue;
                         }
                     },
@@ -2874,6 +3012,10 @@ impl<M: AppMailbox> StreamHandler<M> {
                         // },
                         _ => {
                             // log.warn("ignoring unsupported kitty color protocol key: {f}", .{key});
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "ignoring unsupported kitty color protocol key: {key}"
+                            );
                             continue;
                         }
                     },
@@ -2945,7 +3087,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // },
     fn print(&mut self, cp: u32) {
         let r = self.term().print(cp).map_err(|_| crate::Error);
-        self.vt(r);
+        self.vt("print", r);
     }
 
     // .print_slice => { @branchHint(.likely); try self.terminal.printSlice(value.cps); },
@@ -2970,13 +3112,13 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     //     so it is not silently skipped in a non-SIMD build.
     fn print_slice(&mut self, cps: &[u32]) {
         let r = self.term().print_slice(cps).map_err(|_| crate::Error);
-        self.vt(r);
+        self.vt("print_slice", r);
     }
 
     // .print_repeat => try self.terminal.printRepeat(value),
     fn print_repeat(&mut self, count: usize) {
         let r = self.term().print_repeat(count).map_err(|_| crate::Error);
-        self.vt(r);
+        self.vt("print_repeat", r);
     }
 
     // .bell => self.bell(),
@@ -3005,7 +3147,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // },
     fn linefeed(&mut self) {
         let r = StreamHandler::linefeed(self);
-        self.vt(r);
+        self.vt("linefeed", r);
     }
 
     // .carriage_return => {
@@ -3019,7 +3161,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // .enquiry => try self.enquiry(),
     fn enquiry(&mut self) {
         let r = StreamHandler::enquiry(self);
-        self.vt(r);
+        self.vt("enquiry", r);
     }
 
     // .invoke_charset => self.terminal.invokeCharset(value.bank, value.charset, value.locking),
@@ -3178,7 +3320,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // .scroll_up => try self.terminal.scrollUp(value),
     fn scroll_up(&mut self, count: usize) {
         let r = self.term().scroll_up(count).map_err(|_| crate::Error);
-        self.vt(r);
+        self.vt("scroll_up", r);
     }
 
     // .scroll_down => self.terminal.scrollDown(value),
@@ -3209,37 +3351,37 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // .index => try self.index(),
     fn index(&mut self) {
         let r = StreamHandler::index(self);
-        self.vt(r);
+        self.vt("index", r);
     }
 
     // .next_line => try self.nextLine(),
     fn next_line(&mut self) {
         let r = self.nextLine();
-        self.vt(r);
+        self.vt("next_line", r);
     }
 
     // .reverse_index => try self.reverseIndex(),
     fn reverse_index(&mut self) {
         let r = self.reverseIndex();
-        self.vt(r);
+        self.vt("reverse_index", r);
     }
 
     // .full_reset => try self.fullReset(),
     fn full_reset(&mut self) {
         let r = self.fullReset();
-        self.vt(r);
+        self.vt("full_reset", r);
     }
 
     // .set_mode => try self.setMode(value.mode, true),
     fn set_mode(&mut self, v: stream::Mode) {
         let r = self.setMode(v.mode, true);
-        self.vt(r);
+        self.vt("set_mode", r);
     }
 
     // .reset_mode => try self.setMode(value.mode, false),
     fn reset_mode(&mut self, v: stream::Mode) {
         let r = self.setMode(v.mode, false);
-        self.vt(r);
+        self.vt("reset_mode", r);
     }
 
     // .save_mode => self.terminal.modes.save(value.mode),
@@ -3260,19 +3402,19 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
         // side effects and we want to make sure we process those.
         let restored = self.term().modes.restore(v.mode);
         let r = self.setMode(v.mode, restored);
-        self.vt(r);
+        self.vt("restore_mode", r);
     }
 
     // .request_mode => try self.requestMode(value.mode),
     fn request_mode(&mut self, v: stream::Mode) {
         let r = self.requestMode(v.mode);
-        self.vt(r);
+        self.vt("request_mode", r);
     }
 
     // .request_mode_unknown => try self.requestModeUnknown(value.mode, value.ansi),
     fn request_mode_unknown(&mut self, v: stream::RawMode) {
         let r = self.requestModeUnknown(v.mode, v.ansi);
-        self.vt(r);
+        self.vt("request_mode_unknown", r);
     }
 
     // .top_and_bottom_margin => self.terminal.setTopAndBottomMargin(value.top_left, value.bottom_right),
@@ -3305,19 +3447,19 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // .save_cursor => try self.saveCursor(),
     fn save_cursor(&mut self) {
         let r = self.saveCursor();
-        self.vt(r);
+        self.vt("save_cursor", r);
     }
 
     // .restore_cursor => try self.restoreCursor(),
     fn restore_cursor(&mut self) {
         let r = self.restoreCursor();
-        self.vt(r);
+        self.vt("restore_cursor", r);
     }
 
     // .modify_key_format => try self.setModifyKeyFormat(value),
     fn modify_key_format(&mut self, v: ansi::ModifyKeyFormat) {
         let r = self.setModifyKeyFormat(v);
-        self.vt(r);
+        self.vt("modify_key_format", r);
     }
 
     // .protected_mode_off => self.terminal.setProtectedMode(.off),
@@ -3352,25 +3494,25 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // .xtversion => try self.reportXtversion(),
     fn xtversion(&mut self) {
         let r = self.reportXtversion();
-        self.vt(r);
+        self.vt("xtversion", r);
     }
 
     // .device_attributes => try self.deviceAttributes(value),
     fn device_attributes(&mut self, req: device_attributes::Req) {
         let r = self.deviceAttributes(req);
-        self.vt(r);
+        self.vt("device_attributes", r);
     }
 
     // .device_status => try self.deviceStatusReport(value.request),
     fn device_status(&mut self, v: stream::DeviceStatus) {
         let r = self.deviceStatusReport(v.request);
-        self.vt(r);
+        self.vt("device_status", r);
     }
 
     // .kitty_keyboard_query => try self.queryKittyKeyboard(),
     fn kitty_keyboard_query(&mut self) {
         let r = self.queryKittyKeyboard();
-        self.vt(r);
+        self.vt("kitty_keyboard_query", r);
     }
 
     // .kitty_keyboard_push => {
@@ -3379,6 +3521,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // },
     fn kitty_keyboard_push(&mut self, v: stream::KittyKeyboardFlags) {
         // log.debug("pushing kitty keyboard mode: {}", .{value.flags});
+        log::debug!(target: LOG_SCOPE, "pushing kitty keyboard mode:{:?}", v.flags);
         self.term().active_mut().kitty_keyboard.push(v.flags);
     }
 
@@ -3388,6 +3531,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // },
     fn kitty_keyboard_pop(&mut self, v: u16) {
         // log.debug("popping kitty keyboard mode n={}", .{value});
+        log::debug!(target: LOG_SCOPE, "popping kitty keyboard mode n={v}");
         self.term().active_mut().kitty_keyboard.pop(v as usize);
     }
 
@@ -3397,6 +3541,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // },
     fn kitty_keyboard_set(&mut self, v: stream::KittyKeyboardFlags) {
         // log.debug("setting kitty keyboard mode: set {}", .{value.flags});
+        log::debug!(target: LOG_SCOPE, "setting kitty keyboard mode: set{:?}", v.flags);
         self.term()
             .active_mut()
             .kitty_keyboard
@@ -3409,6 +3554,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // },
     fn kitty_keyboard_set_or(&mut self, v: stream::KittyKeyboardFlags) {
         // log.debug("setting kitty keyboard mode: or {}", .{value.flags});
+        log::debug!(target: LOG_SCOPE, "setting kitty keyboard mode: or{:?}", v.flags);
         self.term()
             .active_mut()
             .kitty_keyboard
@@ -3421,6 +3567,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // },
     fn kitty_keyboard_set_not(&mut self, v: stream::KittyKeyboardFlags) {
         // log.debug("setting kitty keyboard mode: not {}", .{value.flags});
+        log::debug!(target: LOG_SCOPE, "setting kitty keyboard mode: not{:?}", v.flags);
         self.term()
             .active_mut()
             .kitty_keyboard
@@ -3430,19 +3577,19 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // .kitty_color_report => try self.kittyColorReport(value),
     fn kitty_color_report(&mut self, v: kitty::color::OSC) {
         let r = self.kittyColorReport(v);
-        self.vt(r);
+        self.vt("kitty_color_report", r);
     }
 
     // .color_operation => try self.colorOperation(value.op, &value.requests, value.terminator),
     fn color_operation(&mut self, v: stream::ColorOperation) {
         let r = self.colorOperation(v.op, &v.requests, v.terminator);
-        self.vt(r);
+        self.vt("color_operation", r);
     }
 
     // .end_hyperlink => try self.endHyperlink(),
     fn end_hyperlink(&mut self) {
         let r = self.endHyperlink();
-        self.vt(r);
+        self.vt("end_hyperlink", r);
     }
 
     // .active_status_display => self.terminal.status_display = value,
@@ -3453,25 +3600,25 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // .decaln => try self.decaln(),
     fn decaln(&mut self) {
         let r = StreamHandler::decaln(self);
-        self.vt(r);
+        self.vt("decaln", r);
     }
 
     // .window_title => try self.windowTitle(value.title),
     fn window_title(&mut self, v: stream::WindowTitle) {
         let r = self.windowTitle(v.title);
-        self.vt(r);
+        self.vt("window_title", r);
     }
 
     // .report_pwd => try self.reportPwd(value.url),
     fn report_pwd(&mut self, v: stream::ReportPwd) {
         let r = self.reportPwd(v.url);
-        self.vt(r);
+        self.vt("report_pwd", r);
     }
 
     // .show_desktop_notification => try self.showDesktopNotification(value.title, value.body),
     fn show_desktop_notification(&mut self, v: stream::ShowDesktopNotification) {
         let r = self.showDesktopNotification(v.title, v.body);
-        self.vt(r);
+        self.vt("show_desktop_notification", r);
     }
 
     // .progress_report => self.progressReport(value),
@@ -3482,25 +3629,25 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // .start_hyperlink => try self.startHyperlink(value.uri, value.id),
     fn start_hyperlink(&mut self, v: stream::StartHyperlink) {
         let r = self.startHyperlink(v.uri, v.id);
-        self.vt(r);
+        self.vt("start_hyperlink", r);
     }
 
     // .clipboard_contents => try self.clipboardContents(value.kind, value.data),
     fn clipboard_contents(&mut self, v: stream::ClipboardContents) {
         let r = self.clipboardContents(v.kind, v.data);
-        self.vt(r);
+        self.vt("clipboard_contents", r);
     }
 
     // .semantic_prompt => try self.semanticPrompt(value),
     fn semantic_prompt(&mut self, v: stream::SemanticPrompt) {
         let r = self.semanticPrompt(v);
-        self.vt(r);
+        self.vt("semantic_prompt", r);
     }
 
     // .mouse_shape => try self.setMouseShape(value),
     fn mouse_shape(&mut self, v: rustty_vt::mouse::Shape) {
         let r = self.setMouseShape(v);
-        self.vt(r);
+        self.vt("mouse_shape", r);
     }
 
     // .configure_charset => self.configureCharset(value.slot, value.charset),
@@ -3528,14 +3675,22 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // },
     fn set_attribute(&mut self, attr: rustty_vt::sgr::Attribute) {
         match attr {
-            rustty_vt::sgr::Attribute::Unknown(_unk) => {
+            rustty_vt::sgr::Attribute::Unknown(unk) => {
                 // We optimize for the happy path scenario here, since
                 // unknown/invalid SGRs aren't that common in the wild.
                 // log.warn("unimplemented or unknown SGR attribute: {any}", .{unk});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "unimplemented or unknown SGR attribute: {unk:?}"
+                );
             }
             _ => {
-                if self.term().set_attribute(attr).is_err() {
+                if let Err(err) = self.term().set_attribute(attr) {
                     // log.warn("error setting attribute {}: {}", .{ value, err });
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error setting attribute {attr:?}: {err:?}"
+                    );
                 }
             }
         }
@@ -3544,19 +3699,19 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // .dcs_hook => try self.dcsHook(value),
     fn dcs_hook(&mut self, dcs: rustty_vt::parser::DCS) {
         let r = self.dcsHook(dcs);
-        self.vt(r);
+        self.vt("dcs_hook", r);
     }
 
     // .dcs_put => try self.dcsPut(value),
     fn dcs_put(&mut self, byte: u8) {
         let r = self.dcsPut(byte);
-        self.vt(r);
+        self.vt("dcs_put", r);
     }
 
     // .dcs_unhook => try self.dcsUnhook(),
     fn dcs_unhook(&mut self) {
         let r = self.dcsUnhook();
-        self.vt(r);
+        self.vt("dcs_unhook", r);
     }
 
     // .apc_start => self.apc.start(),
@@ -3567,7 +3722,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // .apc_end => try self.apcEnd(),
     fn apc_end(&mut self, _v: rustty_vt::stream::ApcEnd) {
         let r = self.apcEnd();
-        self.vt(r);
+        self.vt("apc_end", r);
     }
 
     // .apc_put => self.apc.feed(self.alloc, value),
@@ -3592,7 +3747,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // .kitty_clipboard => try self.kittyClipboard(value),
     fn kitty_clipboard(&mut self, v: osc::KittyClipboardProtocol) {
         let r = StreamHandler::kittyClipboard(self, &v);
-        self.vt(r);
+        self.vt("kitty_clipboard", r);
     }
 
     // Unimplemented
@@ -3623,6 +3778,7 @@ fn xtgettcapMap() -> &'static std::collections::HashMap<Vec<u8>, Vec<u8>> {
 const URI_HOST_NAME_MAX: usize = 255;
 
 /// PORT NOTE (Zig-std shim): the error set of `std.Uri.getHost`.
+#[derive(Debug)]
 enum GetHostError {
     UriMissingHost,
     UriHostTooLong,
