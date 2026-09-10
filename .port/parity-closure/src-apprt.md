@@ -158,7 +158,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** rustty-only extra log lines in on_response(BindShortcuts) and dispatch_activation
   - **Oracle:** `src/apprt/gtk/class/global_shortcuts.zig:323,558-564` → **Rustty:** `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs:410-418,613-620`
   - **Audit's suggested fix:** None; cosmetic.
-- [ ] **S51-F2** · CONFIRMED · `LOG` · behavioral-difference
+- [x] **S51-F2** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** diagnosticsBuffer: no 4095-byte truncation / skip-on-overflow of a single diagnostic
   - **Oracle:** `src/apprt/gtk/class/config.zig:110-134` → **Rustty:** `crates/rustty-apprt/src/gtk/class/config.rs:96-115`
   - **Audit's suggested fix:** Either keep as a recorded divergence (strictly more informative) or cap at 4095 bytes and skip+warn to match.

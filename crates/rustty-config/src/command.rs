@@ -44,6 +44,22 @@ use rustty_cfg_fmt::{FormatEntry, FormatError, Writer};
 // numeric elements). Rust's derived `Debug` is the port's crate-wide stand-in
 // for that formatter (`Shell([47, 98, ...])`); the spelling difference is
 // tracked as N11 and swept crate-wide there, not here.
+//
+// PUBLIC-SURFACE JUDGMENT (task-14d-2, asked and answered rather than left
+// open): this does NOT widen the surface in a way that matters.
+//   * It is semver-additive. Adding a trait impl to a local type cannot break a
+//     downstream build here: `Command` has no inherent `fmt`, so there is no
+//     method-resolution collision, and nothing depends on `Command: !Debug`.
+//   * It changes no layout, alignment or discriminant. `Command` carries no
+//     `repr` attribute and crosses no C-ABI boundary; nothing in
+//     `crates-sys`/`rustty-*-c` names it.
+//   * The one new CAPABILITY it grants is printing a user's command line into a
+//     diagnostic — which is exactly what the reference does at
+//     `Config.zig:4746`, the call site this derive exists to serve. It exposes
+//     nothing the oracle keeps private.
+//   * It matches the crate's existing additive-glue convention: the `Clone`
+//     immediately below is the same kind of Rust-only derive with the same kind
+//     of PORT NOTE.
 #[derive(Clone, Debug)]
 pub enum Command {
     /// Execute a command directly, e.g. via `exec`. The format here

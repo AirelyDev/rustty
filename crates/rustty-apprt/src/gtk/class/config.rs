@@ -34,10 +34,30 @@ use glib::subclass::prelude::*;
 use rustty_config::Config as CoreConfig;
 
 /// `const log = std.log.scoped(.gtk_ghostty_config)` (`config.zig:11`).
-/// The scope tag is a runtime identity string, so it is rebranded per
-/// `.port/tools/PARITY_NAMING.md` ("runtime identity strings ... become
-/// rustty"); the GType NAME below is deliberately NOT, because it is a
-/// registered type identity the reference's `.name = "GhosttyConfig"` fixes.
+///
+/// NAMING CALL (task-14d-2). This is the FIRST `LOG_SCOPE` in the port whose
+/// oracle spelling contains the product name — the other ~45 carry no brand
+/// token — so it sets the precedent. It is REBRANDED, for three reasons:
+///
+///   1. `.port/tools/PARITY_NAMING.md` lists "runtime identity strings" under
+///      "Becomes rustty". A scope tag is emitted into user-visible diagnostic
+///      text (`warning(gtk_rustty_config): ...`), which is precisely that; a
+///      hardcoded `ghostty` literal in new code is also what the plan's
+///      residual-grep rule targets.
+///   2. Byte-parity with the oracle's scope tag is not held in this subtree
+///      anyway and is not lost here: the surrounding GTK files print
+///      `warn(gtk)` where the oracle scope is `gtk_ghostty_surface` /
+///      `gtk_ghostty_window`. There is no `identity-oracle` hook for log scopes
+///      anywhere in the workspace, so nothing that flips strings for
+///      oracle comparison is being bypassed.
+///   3. The GType NAME below is deliberately NOT rebranded, and the two are not
+///      in tension: `"GhosttyConfig"` is a REGISTERED TYPE IDENTITY that must
+///      match the reference's `.name` for the type system to line up, while a
+///      log scope is a label with no consumer that keys off it.
+///
+/// If a later stage decides scope tags should flow through `rustty-identity`
+/// so `--features identity-oracle` can flip them back, this constant is the
+/// place to start and the change is one line.
 const LOG_SCOPE: &str = "gtk_rustty_config";
 
 /// `var buf: [4095:0]u8` (`config.zig:117`). The reference formats EACH
