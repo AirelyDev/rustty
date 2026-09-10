@@ -44,11 +44,16 @@
 // `NSApplicationMain`) AND it was lossy. The consumer seam moved to
 // `rustty_args::args::OsArgIterator`.
 pub mod autorelease;
+
+// TEST-ONLY `log::Log` capture backend for the restored `log.*` sites
+// (task-14e-2, S111-F4/S111-F5). See the module header.
 pub mod cf_release_thread;
 pub mod cgroup;
 pub mod dbus;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod desktop;
+#[cfg(test)]
+pub(crate) mod log_capture;
 // PORT NOTE: `os/main.zig:22` `pub const edit = @import("edit.zig");`. Ungated:
 // `edit` reaches only `rustty-global`'s `environ()` and the crate-local
 // `shell`/`string_encoding` writers, all of which are available on every target.

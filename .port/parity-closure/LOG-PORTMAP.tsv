@@ -155,12 +155,12 @@ src/lib/enum.zig	crates/rustty-lib/src/enum.rs	2	0	N15: this file was OUTSIDE th
 src/main_c.zig	crates/rustty-apprt-c/src/lib.rs	0	0	task-14d-3: all 3 sites are LIVE. They were previously `rustty_core::logging::log(Level, "default", ...)` DIRECT calls - call shape 2, which DECISION-logging.md §6r4 reported as having zero adherents (its grep looked for `logging::log(`; these were imported as bare `log(`). G-LOGFILE cannot see that shape, so the file read as 3-short while emitting all 3. Converted to `log::{error,info}!(target: "")` per §6r4. Note this file's arm is shared with src/apprt/embedded.zig (declared overlap). VERIFIED NOT OVER-EMITTING (task-14d-3 VM round): the arm measures 30, but only 5 emissions carry this file's scope - the other 25 are src/apprt/embedded.zig's CAPI half, credited here because the arm is shared (declared overlap). Of those 5, main_c.zig:130's SINGLE `std.log.err("failed to initialize ghostty error={}")` sits in one `catch` around the whole `global.init(...)`; the port splits that into three separate fallible steps (the windows guard, detect_from_argv, init_with_action), each logging the same message and each returning immediately - a 1-to-3 control-flow expansion, mutually exclusive at runtime. 5 = 3 + `executing CLI action` + `CLI action failed`.
 src/main_ghostty.zig	crates/rustty-core/src/logging.rs	3	0	S44-F4 (WAIVED). main_ghostty.zig's logFn IS rustty-core's logging backend; 3 of its 5 sites are the sentry/crash arms the port routes elsewhere.
 src/os/TempDir.zig	crates/rustty-os/src/tempdir.rs	0	0	
-src/os/cf_release_thread.zig	crates/rustty-os/src/cf_release_thread.rs	9	0	S111-F4 (OPEN). Every site is a NO-OP log_* stub - the diagnostic is dropped, not routed.
+src/os/cf_release_thread.zig	crates/rustty-os/src/cf_release_thread.rs	0	0	task-14e-2: closes S111-F4 — all 9 sites live; the eight EMPTY log_* stubs are removed.
 src/os/edit.zig	crates/rustty-os/src/edit.rs	0	0	
 src/os/file.zig	crates/rustty-os/src/file.rs	0	0	
 src/os/flatpak.zig	crates/rustty-os/src/flatpak.rs	0	0	
 src/os/i18n.zig	crates/rustty-os/src/i18n.rs	0	0	
-src/os/locale.zig	crates/rustty-os/src/locale.rs	14	0	S111-F5 (OPEN). Every site is a NO-OP log_* stub - the diagnostic is dropped, not routed. See the gate's no-op-stub NOTE.
+src/os/locale.zig	crates/rustty-os/src/locale.rs	0	0	task-14e-2: closes S111-F5 — all 14 sites live; the six EMPTY log_* stubs are removed.
 src/os/mouse.zig	crates/rustty-os/src/mouse.rs	0	0	
 src/os/open.zig	crates/rustty-os/src/open.rs	0	0	
 src/os/passwd.zig	crates/rustty-os/src/passwd.rs	0	0	

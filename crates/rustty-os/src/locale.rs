@@ -28,8 +28,10 @@ use rustty_util::quirks::inlineAssert as assert;
 #[cfg(target_os = "macos")]
 use crate::i18n;
 
-// PORT NOTE: `const log = std.log.scoped(.os_locale);`. Routed through the log facade
-// where used.
+// PORT NOTE: `const log = std.log.scoped(.os_locale);`. The reference's scope tag,
+// carried through the `log` facade as `target: LOG_SCOPE`
+// (DECISION-logging.md §6r4).
+const LOG_SCOPE: &str = "os_locale";
 
 /// Ensure that the locale is set.
 pub fn ensureLocale() -> std::io::Result<()> {
@@ -78,7 +80,8 @@ pub fn ensureLocale() -> std::io::Result<()> {
 
     // Set the locale to whatever is set in env vars.
     if let Some(v) = setlocale(LC_ALL, c"") {
-        log_info_setlocale_env(v);
+        // log.info("setlocale from env result={s}", .{v});
+        log::info!(target: LOG_SCOPE, "setlocale from env result={}", v.to_string_lossy());
         return Ok(());
     }
 
@@ -97,7 +100,8 @@ pub fn ensureLocale() -> std::io::Result<()> {
     // `en_US.UTF-8` fallback, neither of which means anything there.
     #[cfg(windows)]
     {
-        log_info_setlocale_windows_todo();
+        // log.info("TODO: setlocale failed on Windows, implement better fallbacks", .{});
+        log::info!(target: LOG_SCOPE, "TODO: setlocale failed on Windows, implement better fallbacks");
         return Ok(());
     }
 
@@ -113,7 +117,8 @@ pub fn ensureLocale() -> std::io::Result<()> {
             let _ = c_unsetenv(c"LANG");
 
             if let Some(v) = setlocale(LC_ALL, c"") {
-                log_info_setlocale_unset(v);
+                // log.info("setlocale after unset lang result={s}", .{v});
+                log::info!(target: LOG_SCOPE, "setlocale after unset lang result={}", v.to_string_lossy());
 
                 // If we try to setlocale to an unsupported locale it'll return "C"
                 // as the POSIX/C fallback, if that's the case we want to not use
@@ -126,39 +131,29 @@ pub fn ensureLocale() -> std::io::Result<()> {
     }
 
     // Failure again... fallback to en_US.UTF-8
-    log_warn_fallback();
+    // log.warn("setlocale failed with LANG and system default. Falling back to en_US.UTF-8", .{});
+    log::warn!(
+        target: LOG_SCOPE,
+        "setlocale failed with LANG and system default. Falling back to en_US.UTF-8"
+    );
     if let Some(v) = setlocale(LC_ALL, c"en_US.UTF-8") {
         let _ = c_setenv(c"LANG", c"en_US.UTF-8", 1);
-        log_info_setlocale_default(v);
+        // log.info("setlocale default result={s}", .{v});
+        log::info!(target: LOG_SCOPE, "setlocale default result={}", v.to_string_lossy());
         Ok(())
     } else {
-        log_warn_fallback_failed();
+        // } else log.warn("setlocale failed even with the fallback, uncertain results", .{});
+        log::warn!(target: LOG_SCOPE, "setlocale failed even with the fallback, uncertain results");
         Ok(())
     }
 }
 
-// PORT NOTE: the `log.info`/`log.warn` calls in `ensureLocale`. Routed to the log
-// facade; reproduced as named no-op helpers preserving the reference's log sites
-// and messages.
-fn log_info_setlocale_env(_v: &std::ffi::CStr) {
-    // log.info("setlocale from env result={s}", .{v});
-}
-fn log_info_setlocale_unset(_v: &std::ffi::CStr) {
-    // log.info("setlocale after unset lang result={s}", .{v});
-}
-fn log_warn_fallback() {
-    // log.warn("setlocale failed with LANG and system default. Falling back to en_US.UTF-8", .{});
-}
-fn log_info_setlocale_default(_v: &std::ffi::CStr) {
-    // log.info("setlocale default result={s}", .{v});
-}
-fn log_warn_fallback_failed() {
-    // log.warn("setlocale failed even with the fallback, uncertain results", .{});
-}
-#[cfg_attr(not(windows), allow(dead_code))]
-fn log_info_setlocale_windows_todo() {
-    // log.info("TODO: setlocale failed on Windows, implement better fallbacks", .{});
-}
+// PORT NOTE (task-14e-2, S111-F5): the six EMPTY `log_*` helpers that used to
+// stand here are gone. A named, empty-bodied helper reads as an emitter and is
+// exactly as silent as no call at all — `check_log_reconcile.py` counts such a
+// call site as a DROPPED diagnostic, which is the correct reading. Each
+// reference call is now emitted inline where the reference emits it, with the
+// reference call preserved as the comment above it.
 
 // PORT NOTE (P3-W7 T3 / area-E `E18`): the file-local libc environment
 // bindings. Upstream's `locale.zig` declares its own
@@ -234,12 +229,24 @@ fn setLangFromCocoa() {
 
     objc2::rc::autoreleasepool(|_pool| {
         // The classes we're going to need.
-        // PORT NOTE: `objc.getClass("NSLocale") orelse { log.warn(...); return; }`.
-        // The `objc2-foundation` `NSLocale` binding always resolves the class, so
-        // the "class not found" warning branch is unreachable here; it is
-        // preserved as the comment below.
+        // const NSLocale = objc.getClass("NSLocale") orelse {
+        //     log.warn("NSLocale class not found. Locale may be incorrect.", .{});
+        //     return;
+        // };
         //
-        // log.warn("NSLocale class not found. Locale may be incorrect.", .{});
+        // PORT NOTE (task-14e-2, S111-F5): the reference does a RUNTIME class
+        // lookup and has a real failure arm for it. An earlier note here
+        // claimed the arm was unreachable because the `objc2-foundation`
+        // `NSLocale` binding always resolves — true of the binding, but it is
+        // not what the reference does, and it turned a live diagnostic into a
+        // comment. The reference's own lookup is performed here (same runtime,
+        // same class name, same failure arm); the typed binding below then
+        // talks to that same class.
+        if objc2::runtime::AnyClass::get(c"NSLocale").is_none() {
+            // log.warn("NSLocale class not found. Locale may be incorrect.", .{});
+            log::warn!(target: LOG_SCOPE, "NSLocale class not found. Locale may be incorrect.");
+            return;
+        }
 
         // Get our current locale and extract the language code ("en") and
         // country code ("US")
@@ -259,6 +266,10 @@ fn setLangFromCocoa() {
             Some(c) => c,
             None => {
                 // log.warn("languageCode or countryCode not found. Locale may be incorrect.", .{});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "languageCode or countryCode not found. Locale may be incorrect."
+                );
                 return;
             }
         };
@@ -282,16 +293,27 @@ fn setLangFromCocoa() {
             );
             let env_value = match std::ffi::CString::new(env_value) {
                 Ok(v) => v,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("error setting locale from system. err={}", .{err});
+                    //
+                    // PORT NOTE (N11): Zig's `{}` on an error renders
+                    // `error.<Name>`; `{err:?}` renders the Rust error's own
+                    // Debug. Workspace-dominant rendering; N11's scope.
+                    log::warn!(target: LOG_SCOPE, "error setting locale from system. err={err:?}");
                     return;
                 }
             };
             // log.info("detected system locale={s}", .{env_value});
+            log::info!(
+                target: LOG_SCOPE,
+                "detected system locale={}",
+                env_value.to_string_lossy()
+            );
 
             // Set it onto our environment
             if c_setenv(c"LANG", &env_value, 1) < 0 {
                 // log.warn("error setting locale env var", .{});
+                log::warn!(target: LOG_SCOPE, "error setting locale env var");
                 return;
             }
         }
@@ -302,8 +324,9 @@ fn setLangFromCocoa() {
             let mut buf = [0u8; 1024];
             let pref_ = match preferredLanguageFromCocoa(&mut buf) {
                 Ok(v) => v,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("error getting preferred languages. err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error getting preferred languages. err={err:?}");
                     break 'language;
                 }
             };
@@ -313,6 +336,11 @@ fn setLangFromCocoa() {
                 None => break 'language,
             };
             // log.debug("setting LANGUAGE from preferred languages value={s}", .{pref});
+            log::debug!(
+                target: LOG_SCOPE,
+                "setting LANGUAGE from preferred languages value={}",
+                String::from_utf8_lossy(&pref)
+            );
             let pref_c = match std::ffi::CString::new(pref) {
                 Ok(v) => v,
                 Err(_) => break 'language,
@@ -362,6 +390,7 @@ fn preferredLanguageFromCocoa(buf: &mut [u8]) -> Result<Option<Vec<u8>>, NoSpace
             // I don't think this can happen but if it does then I want
             // to know about it if a user has translation issues.
             // log.warn("failed to convert a preferred language to UTF-8", .{});
+            log::warn!(target: LOG_SCOPE, "failed to convert a preferred language to UTF-8");
             continue;
         }
         let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
@@ -510,10 +539,103 @@ mod tests {
     /// and do exactly what the tripwire exists to prevent — mutate `LANG` out
     /// from under every other test in the process. So the test must not merely
     /// be skipped in release, it must not be BUILT to run there.
+
     #[test]
     #[cfg(debug_assertions)]
     #[should_panic(expected = "assertion failed")]
     fn ensure_locale_refuses_to_run_under_test() {
         let _ = super::ensureLocale();
+    }
+
+    /// task-14e-2 / S111-F5 — all fourteen `os/locale.zig` diagnostics.
+    ///
+    /// STRUCTURAL, and reported as such. `ensureLocale` is TRIPWIRED against
+    /// running under `cfg(test)` — the test directly above this one exists to
+    /// prove that — because it mutates the process environment; six of the
+    /// fourteen sites are inside it. `setLangFromCocoa` is the same hazard
+    /// unguarded (it `setenv`s LANG/LANGUAGE), and this repository has a
+    /// `check_no_test_setenv.sh` gate. The remaining arms need a null
+    /// `-[NSString UTF8String]`, a CoreFoundation class lookup to fail, or an
+    /// interior NUL in a system locale string — none provokable in-process.
+    ///
+    /// So this pins what can be observed: that every one of the fourteen
+    /// emissions is live, at the reference's level, under the reference's
+    /// scope, with the reference's message text.
+    #[test]
+    fn all_fourteen_reference_diagnostics_are_live_at_the_reference_level_and_scope() {
+        const SRC: &str = include_str!("locale.rs");
+        let src = crate::log_capture::collapse_ws(SRC);
+
+        assert_eq!(
+            1,
+            src.matches("const LOG_SCOPE: &str = \"os_locale\";")
+                .count(),
+            "the reference's scope tag is not declared exactly once"
+        );
+
+        for (level, message) in [
+            // :31  log.info("setlocale from env result={s}", .{v});
+            ("info", "setlocale from env result={}"),
+            // :45  log.info("TODO: setlocale failed on Windows, implement better fallbacks", .{});
+            (
+                "info",
+                "TODO: setlocale failed on Windows, implement better fallbacks",
+            ),
+            // :60  log.info("setlocale after unset lang result={s}", .{v});
+            ("info", "setlocale after unset lang result={}"),
+            // :71  log.warn("setlocale failed with LANG and system default. Falling back to en_US.UTF-8", .{});
+            (
+                "warn",
+                "setlocale failed with LANG and system default. Falling back to en_US.UTF-8",
+            ),
+            // :74  log.info("setlocale default result={s}", .{v});
+            ("info", "setlocale default result={}"),
+            // :76  log.warn("setlocale failed even with the fallback, uncertain results", .{});
+            (
+                "warn",
+                "setlocale failed even with the fallback, uncertain results",
+            ),
+            // :87  log.warn("NSLocale class not found. Locale may be incorrect.", .{});
+            ("warn", "NSLocale class not found. Locale may be incorrect."),
+            // :98  log.warn("languageCode or countryCode not found. Locale may be incorrect.", .{});
+            (
+                "warn",
+                "languageCode or countryCode not found. Locale may be incorrect.",
+            ),
+            // :114 log.warn("error setting locale from system. err={}", .{err});
+            ("warn", "error setting locale from system. err={err:?}"),
+            // :117 log.info("detected system locale={s}", .{env_value});
+            ("info", "detected system locale={}"),
+            // :121 log.warn("error setting locale env var", .{});
+            ("warn", "error setting locale env var"),
+            // :134 log.warn("error getting preferred languages. err={}", .{err});
+            ("warn", "error getting preferred languages. err={err:?}"),
+            // :139 log.debug("setting LANGUAGE from preferred languages value={s}", .{pref});
+            (
+                "debug",
+                "setting LANGUAGE from preferred languages value={}",
+            ),
+            // :188 log.warn("failed to convert a preferred language to UTF-8", .{});
+            ("warn", "failed to convert a preferred language to UTF-8"),
+        ] {
+            let wanted = crate::log_capture::emission_fragment(level, message);
+            assert_eq!(
+                1,
+                src.matches(&wanted).count(),
+                "expected exactly one live emission `{wanted}`"
+            );
+        }
+    }
+
+    /// The `NSLocale class not found` guard is a REAL runtime lookup, not a
+    /// tautology: assert the reference's own `objc.getClass("NSLocale")`
+    /// resolves here, so the `is_none()` arm is a genuine failure arm rather
+    /// than dead code. (A misspelt class name would make it fire on every
+    /// launch; this is the control against that.)
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn the_nslocale_class_lookup_resolves() {
+        assert!(objc2::runtime::AnyClass::get(c"NSLocale").is_some());
+        assert!(objc2::runtime::AnyClass::get(c"NSLocaleTypoGuard").is_none());
     }
 }

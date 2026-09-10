@@ -40,8 +40,14 @@ use rustty_datastruct::BlockingQueue;
 #[cfg(target_os = "macos")]
 use rustty_xev as xev;
 
-// PORT NOTE: `const log = std.log.scoped(.cf_release_thread);`. Routed through the
-// log facade where used; the call sites preserve the reference's messages.
+// PORT NOTE: `const log = std.log.scoped(.cf_release_thread);`. The reference's
+// scope tag, carried through the `log` facade as `target: LOG_SCOPE`
+// (DECISION-logging.md §6r4).
+//
+// macOS-gated for the same reason the `Thread` logic below is: every call site
+// is inside it.
+#[cfg(target_os = "macos")]
+const LOG_SCOPE: &str = "cf_release_thread";
 
 pub enum Message {
     /// Release a slice of CFTypeRefs. Uses alloc to free the slice after
@@ -157,20 +163,35 @@ impl Thread {
         let self_: *mut Thread = self;
         // Call child function so we can use errors...
         if let Err(err) = unsafe { Self::threadMain_(self_) } {
-            log_warn_thread_err(&err);
+            // log.warn("error in cf release thread err={}", .{err});
+            //
+            // PORT NOTE (N11): Zig's `{}` on an error renders `error.<Name>`;
+            // `{err:?}` renders the Rust error's own Debug. Workspace-dominant
+            // rendering; N11's scope, not this site's.
+            log::warn!(target: LOG_SCOPE, "error in cf release thread err={err:?}");
         }
 
         // If our loop is not stopped, then we need to keep running so that
         // messages are drained and we can wait for the surface to send a stop
         // message.
         if !unsafe { (*self_).loop_.stopped() } {
-            log_warn_abrupt_exit();
+            // log.warn("abrupt cf release thread exit detected, starting xev to drain mailbox", .{});
+            log::warn!(
+                target: LOG_SCOPE,
+                "abrupt cf release thread exit detected, starting xev to drain mailbox"
+            );
             // defer log.debug("cf release thread fully exiting after abnormal failure", .{});
+            //   (fires at the END of this block — written inline below.)
             unsafe { (*self_).flags.drain = true };
             if let Err(err) = unsafe { (*self_).loop_.run(xev::RunMode::UntilDone) } {
-                log_err_drain_failed(&err);
+                // log.err("failed to start xev loop for draining err={}", .{err});
+                log::error!(target: LOG_SCOPE, "failed to start xev loop for draining err={err:?}");
             }
-            log_debug_fully_exiting();
+            // log.debug("cf release thread fully exiting after abnormal failure", .{});
+            log::debug!(
+                target: LOG_SCOPE,
+                "cf release thread fully exiting after abnormal failure"
+            );
         }
     }
 
@@ -212,10 +233,18 @@ impl Thread {
         }
 
         // Run
-        log_debug_starting();
+        // log.debug("starting cf release thread", .{});
+        log::debug!(target: LOG_SCOPE, "starting cf release thread");
         // defer log.debug("starting cf release thread shutdown", .{});
         let result = unsafe { (*self_).loop_.run(xev::RunMode::UntilDone) };
-        log_debug_shutdown();
+        // log.debug("starting cf release thread shutdown", .{});
+        log::debug!(target: LOG_SCOPE, "starting cf release thread shutdown");
+        // defer log.debug("cf release thread exited", .{});
+        //
+        // PORT NOTE: registered FIRST in the reference, so Zig's LIFO order
+        // fires it LAST — after the shutdown line above, on both the success
+        // and the error return.
+        log::debug!(target: LOG_SCOPE, "cf release thread exited");
         result
     }
 
@@ -261,7 +290,8 @@ fn wakeupCallback(
     r: core::result::Result<(), xev::MachPortError>,
 ) -> xev::CallbackAction {
     if let Err(err) = r {
-        log_err_wakeup(&err);
+        // log.err("error in wakeup err={}", .{err});
+        log::error!(target: LOG_SCOPE, "error in wakeup err={err:?}");
         return xev::CallbackAction::Rearm;
     }
 
@@ -271,7 +301,8 @@ fn wakeupCallback(
     // When we wake up, we check the mailbox. Mailbox producers should
     // wake up our thread after publishing.
     if let Err(err) = unsafe { Thread::drainMailbox(self_) } {
-        log_err_drain_mailbox(&err);
+        // log.err("error draining mailbox err={}", .{err});
+        log::error!(target: LOG_SCOPE, "error draining mailbox err={err:?}");
     }
 
     xev::CallbackAction::Rearm
@@ -290,42 +321,13 @@ fn stopCallback(
     xev::CallbackAction::Disarm
 }
 
-// PORT NOTE: the `log.*` call sites in the reference, routed to the log facade and
-// reproduced as named helpers that preserve the reference's messages verbatim.
-// macOS-gated: several name `xev::Error`/`xev::MachPortError`, and all are only
-// reached from the macOS-gated `Thread` logic above.
-#[cfg(target_os = "macos")]
-fn log_warn_thread_err(_err: &xev::Error) {
-    // log.warn("error in cf release thread err={}", .{err});
-}
-#[cfg(target_os = "macos")]
-fn log_warn_abrupt_exit() {
-    // log.warn("abrupt cf release thread exit detected, starting xev to drain mailbox", .{});
-}
-#[cfg(target_os = "macos")]
-fn log_debug_fully_exiting() {
-    // log.debug("cf release thread fully exiting after abnormal failure", .{});
-}
-#[cfg(target_os = "macos")]
-fn log_err_drain_failed(_err: &xev::Error) {
-    // log.err("failed to start xev loop for draining err={}", .{err});
-}
-#[cfg(target_os = "macos")]
-fn log_debug_starting() {
-    // log.debug("starting cf release thread", .{});
-}
-#[cfg(target_os = "macos")]
-fn log_debug_shutdown() {
-    // log.debug("starting cf release thread shutdown", .{});
-}
-#[cfg(target_os = "macos")]
-fn log_err_wakeup(_err: &xev::MachPortError) {
-    // log.err("error in wakeup err={}", .{err});
-}
-#[cfg(target_os = "macos")]
-fn log_err_drain_mailbox(_err: &xev::Error) {
-    // log.err("error draining mailbox err={}", .{err});
-}
+// PORT NOTE (task-14e-2, S111-F4): the eight EMPTY `log_*` helpers that used to
+// stand here are gone. A named, empty-bodied helper reads as an emitter and is
+// exactly as silent as no call at all — `check_log_reconcile.py` counts such a
+// call site as a DROPPED diagnostic, which is the correct reading. Each of the
+// reference's NINE calls is now emitted inline where the reference emits it
+// (the ninth, `defer log.debug("cf release thread exited")`, had no helper at
+// all — only a comment), with the reference call preserved above it.
 
 // PORT NOTE: `macos.foundation.CFRelease`. CoreFoundation's `CFRelease` declared as
 // `extern "C"` (R3 binding to the SAME framework). It takes a CFTypeRef
@@ -340,3 +342,133 @@ extern "C" {
 // type-checks on all targets (the `Release` path is Darwin-only in practice).
 #[cfg(not(target_os = "macos"))]
 unsafe fn CFRelease(_cf: *mut std::ffi::c_void) {}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    //! task-14e-2 / S111-F4 — `os/cf_release_thread.zig`'s nine diagnostics.
+    use super::*;
+    use crate::log_capture::CapturedRecord;
+
+    /// Runs the REAL xev loop on THIS thread (the same shape as
+    /// `tests/cf_release_live.rs`, which is an integration test and so cannot
+    /// reach the crate-private capture logger), and pins the three debug lines
+    /// a CLEAN run emits — in the reference's order — plus the absence of the
+    /// six failure lines.
+    ///
+    /// The ORDER is the point. `threadMain_` registers
+    /// `defer log.debug("cf release thread exited")` FIRST and
+    /// `defer log.debug("starting cf release thread shutdown")` LAST, so Zig's
+    /// LIFO fires "shutdown" and then "exited". Writing both defers as one
+    /// mechanism, or in source order, reverses them.
+    #[test]
+    fn a_clean_run_emits_the_three_debug_lines_in_the_reference_order() {
+        let cap = crate::log_capture::start();
+        let mut t = Thread::init().expect("Thread::init on real xev");
+        let stop = t.stop;
+
+        let notifier = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            stop.notify().expect("stop.notify");
+        });
+
+        // Runs on THIS thread, so its records are admitted by the capture.
+        t.threadMain();
+        notifier.join().expect("notifier join");
+
+        let messages = cap.messages();
+        drop(cap);
+        t.deinit();
+
+        assert_eq!(
+            vec![
+                (
+                    log::Level::Debug,
+                    "cf_release_thread".to_string(),
+                    "starting cf release thread".to_string(),
+                ),
+                (
+                    log::Level::Debug,
+                    "cf_release_thread".to_string(),
+                    "starting cf release thread shutdown".to_string(),
+                ),
+                (
+                    log::Level::Debug,
+                    "cf_release_thread".to_string(),
+                    "cf release thread exited".to_string(),
+                ),
+            ],
+            messages
+        );
+    }
+
+    /// task-14e-2 / S111-F4 — the six diagnostics a CLEAN run cannot reach.
+    ///
+    /// STRUCTURAL, and reported as such. Each hangs off a real `xev` failure —
+    /// `Loop::run` returning an error, an `Async::wait` completion reporting
+    /// `MachPortError`, `drainMailbox` failing — none of which a test can
+    /// provoke on a live kqueue loop without an injection seam this file does
+    /// not have. Level, scope and message text are pinned from the source; the
+    /// macro tokens are ASSEMBLED FROM FRAGMENTS so no live-looking facade call
+    /// enters this file.
+    #[test]
+    fn the_six_failure_diagnostics_are_live_at_the_reference_level_and_scope() {
+        const SRC: &str = include_str!("cf_release_thread.rs");
+        let src = crate::log_capture::collapse_ws(SRC);
+
+        assert_eq!(
+            1,
+            src.matches("const LOG_SCOPE: &str = \"cf_release_thread\";")
+                .count(),
+            "the reference's scope tag is not declared exactly once"
+        );
+
+        for (level, message) in [
+            // log.warn("error in cf release thread err={}", .{err});
+            ("warn", "error in cf release thread err={err:?}"),
+            // log.warn("abrupt cf release thread exit detected, starting xev to drain mailbox", .{});
+            (
+                "warn",
+                "abrupt cf release thread exit detected, starting xev to drain mailbox",
+            ),
+            // log.err("failed to start xev loop for draining err={}", .{err});
+            ("error", "failed to start xev loop for draining err={err:?}"),
+            // log.debug("cf release thread fully exiting after abnormal failure", .{});
+            (
+                "debug",
+                "cf release thread fully exiting after abnormal failure",
+            ),
+            // log.err("error in wakeup err={}", .{err});
+            ("error", "error in wakeup err={err:?}"),
+            // log.err("error draining mailbox err={}", .{err});
+            ("error", "error draining mailbox err={err:?}"),
+        ] {
+            let wanted = crate::log_capture::emission_fragment(level, message);
+            assert_eq!(
+                1,
+                src.matches(&wanted).count(),
+                "expected exactly one live emission `{wanted}`"
+            );
+        }
+    }
+
+    /// Guards the absence assertion in the clean-run test above: prove the
+    /// capture would have SEEN a `cf_release_thread`-scoped record emitted on
+    /// this thread, so the empty tail of that vector means "not emitted" and
+    /// not "not observable".
+    #[test]
+    fn the_capture_observes_this_scope_on_this_thread() {
+        let cap = crate::log_capture::start();
+        log::warn!(target: LOG_SCOPE, "probe");
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "cf_release_thread".to_string(),
+                "probe".to_string(),
+            )],
+            messages
+        );
+        let _: Vec<CapturedRecord> = Vec::new();
+    }
+}

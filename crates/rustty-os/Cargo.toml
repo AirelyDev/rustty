@@ -39,6 +39,9 @@ flatpak = ["dep:rustty-xev"]
 wasm-host-owned = []
 
 [dependencies]
+# The `LOG`-class facade (DECISION-logging.md §6r4, call shape 2). See the
+# task-14e-2 note below for why this is unconditional rather than wasm-gated.
+log = { workspace = true }
 rustty-datastruct = { workspace = true }
 rustty-util = { workspace = true }
 rustty-global = { workspace = true }
@@ -92,8 +95,13 @@ rustty-xev = { workspace = true }
 # a dependency of every crate that needs to call the install fn from an actual
 # JS-callable entry point (`rustty-config`'s wasm-feature `config_new`,
 # `rustty-wasm`'s own atlas exports) without a layering cycle.
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-log = { workspace = true }
+#
+# task-14e-2: PROMOTED from `[target.'cfg(target_arch = "wasm32")'.dependencies]`
+# to an unconditional dependency (moved to `[dependencies]` above). `os/
+# locale.zig` and `os/cf_release_thread.zig` restore 23 `log.*` sites that are
+# NATIVE-only code (the cf release thread is macOS-gated); with the dependency
+# wasm-gated they could not compile. The wasm registration above is unaffected —
+# `wasm32` still gets the same crate, now via the unconditional line.
 
 [build-dependencies]
 # R3: compile the vendored `pty.c` standalone with the host C compiler.
