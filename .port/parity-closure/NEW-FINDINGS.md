@@ -736,9 +736,26 @@ found, and current state.
   in `class/surface.rs`, 18 in `class/window.rs`, 13 in `portal/open_uri.rs`, 12 in
   `class/global_shortcuts.rs`, 10 in `class/split_tree.rs`, 9 in `post_fork.rs`.
 
-  One further bypass exists outside the GTK tree:
-  `crates/rustty-font/src/glyf_rasterize/glyf_rasterize_png_test.rs:418`
-  (`eprintln!("info(glyf_rasterize): …")`). It is the only one, and it is capped too.
+  **The bypass is NOT confined to the GTK tree, and an earlier revision of this entry said
+  it was.** It claimed one further site outside that tree
+  (`crates/rustty-font/src/glyf_rasterize/glyf_rasterize_png_test.rs:418`) and that "it is
+  the only one". **False.** That sweep only searched `crates/rustty-apprt/src/gtk/**` plus
+  whatever the portmap already declared, and the portmap at the time covered 63 of the
+  reference's 172 log-bearing files — so the claim was scoped to what had been looked at and
+  written as if it were scoped to the tree. 31 further sites exist across five files, all
+  verified by hand:
+
+  | sites | port file | reference |
+  |---|---|---|
+  | 16 | `crates/rustty-vt/src/search/thread.rs` | `src/terminal/search/Thread.zig` |
+  | 5 | `crates/rustty-vt/src/search/terminal.rs` | `src/terminal/search/terminal.zig` |
+  | 4 | `crates/rustty-vt/src/search/screen.rs` | `src/terminal/search/screen.zig` |
+  | 5 | `crates/rustty-font/src/sprite/face.rs` | `src/font/sprite/Face.zig` |
+  | 1 | `crates/rustty-font/src/atlas.rs` | `src/font/Atlas.zig` |
+
+  With the portmap completed (finding N15) the gate now measures **276 facade-bypassing
+  emissions across 25 reference files' ports**, all capped. That is the honest total for the
+  declared universe, and it is 39% larger than the GTK-only figure this entry first carried.
 
   **These figures were corrected in fix round 2 and the correction is instructive.** They
   were first filed as 199 / 157-22-9-6-5, with 98 in `application.rs`, from a line-oriented
@@ -779,11 +796,9 @@ found, and current state.
   column: how many of a file's emissions may bypass the facade, frozen at today's
   measurement, MAX over platform arms (a bypass on any arm is a bypass), with the same
   ratchet as the allowances — a cap larger than what is measured is RED, so routing sites
-  through the facade must tighten it in the same commit. **188 sites are capped**: 187 in
-  the six GTK files a `LOG` row cites, plus the `rustty-font` one. The remaining 57 sit in
-  GTK files no `LOG` row names, so they are outside the portmap and outside the gate — a
-  direct consequence of scoping the portmap to audited files, and worth widening if this
-  finding is worked.
+  through the facade must tighten it in the same commit. **276 sites are capped across 25
+  files** once the portmap was completed (N15). Before that completion only 188 were, in six
+  files, because the portmap covered only what the audit's `LOG` rows named.
 
   This exists because *"restore the missing sites"* and *"stop bypassing the facade"* pull
   in opposite directions. G-LOGFILE counts a logFn-shaped `eprintln!` as an emission, so
@@ -795,3 +810,80 @@ found, and current state.
   sites N12 counts as missing. The count-based half of the gate is neutral to the fix (both
   shapes count as emissions); the `bypass_cap` half is what will move, downward, and the
   ratchet forces it to.
+## N15 — the portmap was seeded from the audit's LOG rows, so it inherited the audit's blind spots: 112 reference files and 523 diagnostics were outside the gate entirely
+
+- **id**: N15 (next free id checked 2026-09-10 against `NEW-FINDINGS.md` headings, a
+  workspace grep for `\bN[0-9]+\b`, and the plan's `progress.md`: N1-N14 taken.)
+- **severity**: high (not a defect in the port, a defect in the INSTRUMENT — the gate built
+  to stop the audit's blind spots was reproducing them one level up)
+- **kind**: gate coverage / audit-inheritance
+- **oracle**: the whole reference tree at pin `20abdb50a`.
+- **rustty**: `.port/parity-closure/LOG-PORTMAP.tsv`, `.port/tools/gates/check_log_reconcile.py`.
+- **description**: `G-LOGFILE` reconciles the reference files listed in its portmap, and the
+  portmap was seeded from the reference files cited by `LOG`-class ledger rows. **So the
+  gate could only ever see what the audit had already looked at.** N12 records the
+  unaudited-HEAD problem — regions of covered files that no row's line range claims. This is
+  the same failure at FILE granularity, and it is much larger.
+
+  Measured 2026-09-10 by walking the reference tree directly:
+
+  | | before | after |
+  |---|---|---|
+  | reference files with live `log.*` sites | **172** | 172 |
+  | live reference sites in them | **1417** | 1417 |
+  | declared in `LOG-PORTMAP.tsv` | 60 (+3 with zero sites) | **170 (+2 excluded)** |
+  | **undeclared** | **112** | **0** |
+  | live sites the gate could not see | **523 (37%)** | **2** |
+  | site coverage | **63%** | **99%** |
+
+  The largest single log-bearing file in the entire reference — `src/termio/Exec.zig`, 58
+  live sites — was not in the portmap. Nor were `termio/stream_handler.zig` (41),
+  `terminal/tmux/control.zig` (19), `terminal/kitty/graphics_image.zig` (18),
+  `terminal/search/Thread.zig` (18), `apprt/gtk/class/split_tree.zig` (15),
+  `apprt/gtk/class/global_shortcuts.zig` (14), `termio/Thread.zig` (14).
+
+  **And silence was indistinguishable from coverage.** Nothing in the gate's output
+  distinguished "this file reconciles" from "this file was never looked at". A green
+  G-LOGFILE read as "diagnostics reconcile" when it meant "the 63% we declared reconcile".
+
+- **why the numbers here differ slightly from the review's**: the review reported 180 files
+  / 120 undeclared / 550 sites, and `Exec.zig` at 61. This entry says 172 / 112 / 523 and
+  58. The gap is **calls commented out in the reference itself**, which this gate
+  deliberately does not count — demanding an emission the reference does not make would be a
+  false positive, and the same definition is what reproduced the review's own head table
+  (38/20/14/8/7/5) and its `generic.zig` inventory (33) exactly. The conclusion is identical
+  either way.
+
+- **the fix (task 14gate fix round 3)**: three parts.
+  1. **The gate now enumerates the reference tree itself** rather than trusting the portmap
+     to be complete. Any reference file with live `log.*` sites that is neither declared nor
+     excluded is **RED**, with the count of sites it hides. A coverage hole is now a finding,
+     not a silence.
+  2. **The portmap declares all 172.** 170 with their port arms — resolved from PORT_PLAN's
+     `crate_map`, then corroborated file by file (91 of 93 auto-resolved candidates confirmed
+     by the port file naming the reference file or reproducing its message text; the
+     remainder resolved by hand against the reference's own log strings, which is how
+     `pkg/opengl/Program.zig` -> `opengl/gl/program.rs`, `src/main_c.zig` ->
+     `rustty-apprt-c/src/lib.rs` and `src/build/*` -> `xtask/src/*` were pinned).
+  3. **Two are declared EXCLUDED**, and an exclusion must name a category from a closed set
+     (`no-port`, `build-tooling`, `vendored`, `unresolved`) or the gate is RED — a free-text
+     excuse is how a coverage hole becomes permanent, whereas a category can be counted and
+     argued. They are `pkg/sentry/build.zig` (`build-tooling`) and
+     `pkg/macos/text/font_collection.zig` (`unresolved` — one debug dump in a vendored
+     CoreText binding whose port target is not established; declared so the gap is counted
+     rather than invisible).
+
+- **the baseline grew, and that is the gate becoming truthful**: deficit **183 over 33 files
+  -> 536 over 114 files**; facade bypass (N14) **188 over 6 files -> 276 over 25 files**;
+  port emissions seen **753 -> 919**. **No diagnostic was lost and nothing regressed.** The
+  353 additional deficit sites were always missing; the gate simply could not see the files
+  they were missing from. Anyone comparing the two baselines must compare coverage first.
+- **NOT fixed here, deliberately**: none of the 536 sites were restored. That is stage work
+  and far larger than a fix round. The gate measures it, the portmap declares it, and the
+  ratchet forces each restoration to tighten its row.
+- **how found**: the fix-round-2 review, chasing N14's false completeness claim, asked why
+  five obviously log-bearing files were not capped — and the answer was that they were not in
+  the portmap at all, because no `LOG` row names them.
+- **state**: **OPEN.** The instrument is fixed and the debt is declared. Working it down is a
+  per-file adjudication pass in deficit order, starting with `termio/Exec.zig` (58),
+  `termio/stream_handler.zig` (41) and `apprt/embedded.zig` (54).

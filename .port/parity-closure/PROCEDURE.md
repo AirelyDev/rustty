@@ -212,6 +212,15 @@ worktree and merge, rather than sharing one tree.
      this file", not "every individual site is live". Where two reference files port into
      one Rust file the arm is credited with that file's whole count; the portmap's `reason`
      column records every such overlap. Blind spot 3 still applies inside a row.
+   - **A gate seeded from the audit inherits the audit's blind spots.** `LOG-PORTMAP.tsv`
+     was built from the reference files that `LOG`-class rows cite, so `G-LOGFILE` could
+     only ever see what the audit had already looked at: 112 reference files holding 523
+     live diagnostics — 37% of the reference's total, including its single largest
+     log-bearing file — were outside the gate, and nothing in its output distinguished
+     "reconciles" from "never looked at". Fixed 2026-09-10 (N15): the gate enumerates the
+     reference tree itself and goes RED on any log-bearing file that is neither declared nor
+     EXCLUDED-with-a-category. **Whenever you build a gate to catch an audit's blind spots,
+     derive its universe from the reference, never from the audit.**
    - **A count ratchet needs a SHAPE ratchet beside it.** `G-LOGFILE` counts a
      `eprintln!("warn(gtk): …")` as an emission, because the reference's diagnostic does
      reach a human — so without a second constraint a stage could close a count deficit by

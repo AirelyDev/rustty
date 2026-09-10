@@ -37,6 +37,13 @@ count, so the arm can read greener than a per-site audit would. The portmap
 records every such overlap in its `reason` column. A green here means "no
 diagnostic mass was lost", not "every individual site is live".
 
+COVERAGE: the gate enumerates the REFERENCE TREE, not the portmap. This file was
+first seeded from the audit's LOG rows and so inherited the audit's blind spots —
+112 reference files holding 523 live diagnostics, 37% of the total, sat outside it
+with nothing in the output to distinguish "reconciles" from "never looked at"
+(N15). Every log-bearing reference file must now be declared or EXCLUDED with a
+category, or the gate is RED.
+
 SECOND RATCHET: counting alone is not enough. A logFn-shaped `eprintln!` counts as
 an emission (the diagnostic does reach a human), so a stage could close a count
 deficit by adding more of them. `LOG-PORTMAP.tsv`'s `bypass_cap` column caps the
@@ -507,14 +514,23 @@ def load_portmap(path):
                     f"{path}:{lineno}: expected 5 tab-separated columns "
                     "(oracle_file, port_arms, allowance, bypass_cap, reason)"
                 )
-            arms = [
-                [f.strip() for f in arm.split("+") if f.strip()]
-                for arm in parts[1].split("|")
-            ]
+            # `-` in port_arms marks an EXCLUSION: a reference file with live log
+            # sites that this port deliberately does not carry. It still has to be
+            # DECLARED, because silence is indistinguishable from coverage.
+            excluded = parts[1].strip() == "-"
+            arms = (
+                []
+                if excluded
+                else [
+                    [f.strip() for f in arm.split("+") if f.strip()]
+                    for arm in parts[1].split("|")
+                ]
+            )
             rows.append(
                 {
                     "oracle": parts[0].strip(),
                     "arms": [a for a in arms if a],
+                    "excluded": excluded,
                     "allowance": parts[2].strip(),
                     "bypass_cap": parts[3].strip(),
                     "reason": parts[4].strip(),
@@ -522,6 +538,30 @@ def load_portmap(path):
                 }
             )
     return rows
+
+
+# An exclusion must say WHICH KIND it is, from a closed set. A free-text excuse is
+# how a coverage hole becomes permanent; a category can be counted and argued.
+EXCLUSION_KINDS = ("no-port", "build-tooling", "vendored", "unresolved")
+
+
+def oracle_files_with_log_sites(zig_walk):
+    """{reference path: live log site count} over the WHOLE reference tree.
+
+    THE POINT: the portmap was originally seeded from the audit's LOG rows, so it
+    inherited exactly the audit's blind spots — the unaudited-head problem one
+    level up, at FILE granularity. Measured 2026-09-10: 172 reference files carry
+    live `log.*` sites and only 60 of them were declared, leaving 523 sites in
+    112 files that the gate could not see and would never mention. Enumerating the
+    reference directly is the only way a missing file can be a finding rather than
+    a silence.
+    """
+    out = {}
+    for rel, text in zig_walk():
+        n = len(zig_sites(text))
+        if n:
+            out[rel] = n
+    return out
 
 
 def ledger_log_files(path):
@@ -543,7 +583,8 @@ def ledger_log_files(path):
 # ---------------------------------------------------------------------------
 # Verdict
 # ---------------------------------------------------------------------------
-def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=False):
+def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=False,
+            oracle_log_files=None):
     """Return (rc, lines). rc 0 GREEN, 1 RED. Pure — all I/O is in the callers.
 
     `zig_text(path)` / `rust_text(path)` return source text or None if absent.
@@ -575,8 +616,11 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
     stubs = {p: v for p, v in stubs.items() if p in pool}
 
     rows, total_expected, total_actual, total_bypass = [], 0, 0, 0
-    missing_oracle = []
+    missing_oracle, excluded_rows = [], []
     for r in portmap:
+        if r.get("excluded"):
+            excluded_rows.append(r)
+            continue
         txt = zig_text(r["oracle"])
         if txt is None:
             missing_oracle.append(r["oracle"])
@@ -672,6 +716,26 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
         f"emission(s) on the thinnest arm ({total_bypass} of them BYPASSING the "
         f"facade — N14), {len(emitters)} log facade name(s) resolved"
     )
+    if excluded_rows:
+        kinds = {}
+        for r in excluded_rows:
+            k = r["reason"].split(":", 1)[0].strip()
+            kinds[k] = kinds.get(k, 0) + 1
+        out.append(
+            f"           {len(excluded_rows)} reference file(s) DECLARED-EXCLUDED: "
+            + ", ".join(f"{v} {k}" for k, v in sorted(kinds.items()))
+        )
+    if oracle_log_files:
+        total_ref = sum(oracle_log_files.values())
+        live_rows = set(oracle_log_files) & {x[0]["oracle"] for x in rows}
+        live_excl = set(oracle_log_files) & {r["oracle"] for r in excluded_rows}
+        out.append(
+            f"           coverage: {len(live_rows)} of {len(oracle_log_files)} reference "
+            f"file(s) with live log sites reconciled"
+            + (f" (+{len(live_excl)} excluded)" if live_excl else "")
+            + f", {total_expected} of {total_ref} site(s) "
+            f"({100 * total_expected // max(1, total_ref)}%)"
+        )
     out.extend(report_lines)
 
     if missing_oracle:
@@ -711,6 +775,36 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
         )
         for f, allowance, deficit in stale[:10]:
             out.append(f"       {f}: allowance={allowance}, measured deficit={deficit}")
+        rc = 1
+    # --- COVERAGE: every reference file with live log sites is declared or excluded
+    if oracle_log_files:
+        known = {r["oracle"] for r in portmap}
+        uncovered = sorted(set(oracle_log_files) - known)
+        if uncovered:
+            n = sum(oracle_log_files[f] for f in uncovered)
+            out.append(
+                f"RED: {len(uncovered)} reference file(s) carry live `log.*` sites and are "
+                f"neither declared nor excluded ({n} site(s) invisible to this gate). "
+                "Silence is not coverage — declare the port arms or record an exclusion:"
+            )
+            for f in sorted(uncovered, key=lambda x: -oracle_log_files[x])[:12]:
+                out.append(f"       {oracle_log_files[f]:>4}  {f}")
+            if len(uncovered) > 12:
+                out.append(f"       ... and {len(uncovered) - 12} more")
+            rc = 1
+    bad_excl = []
+    for r in excluded_rows:
+        kind = r["reason"].split(":", 1)[0].strip()
+        if kind not in EXCLUSION_KINDS:
+            bad_excl.append((r["oracle"], r["reason"][:40]))
+    if bad_excl:
+        out.append(
+            f"RED: {len(bad_excl)} exclusion(s) do not name a category from "
+            f"{EXCLUSION_KINDS}. A free-text excuse is how a coverage hole becomes "
+            "permanent; a category can be counted and argued:"
+        )
+        for f, why in bad_excl[:8]:
+            out.append(f"       {f}: reason starts {why!r}")
         rc = 1
     if bypass_over:
         out.append(
@@ -974,8 +1068,9 @@ def self_test():
     }
     zt = lambda p: zig.get(p)
     rt = lambda p: rs.get(p)
+    olf = {"src/ok.zig": 1, "src/two.zig": 2}  # the "reference tree" for coverage arms
 
-    def run(portmap_rows, claims=None):
+    def run(portmap_rows, claims=None, coverage=None):
         # rows are (oracle, arms, allowance, reason) or (…, allowance, cap, reason)
         pm = []
         for row in portmap_rows:
@@ -984,16 +1079,22 @@ def self_test():
             pm.append(
                 {
                     "oracle": o,
-                    "arms": [
-                        [f.strip() for f in arm.split("+")] for arm in arms.split("|")
-                    ],
+                    "excluded": arms.strip() == "-",
+                    "arms": (
+                        []
+                        if arms.strip() == "-"
+                        else [
+                            [f.strip() for f in arm.split("+")]
+                            for arm in arms.split("|")
+                        ]
+                    ),
                     "allowance": a,
                     "bypass_cap": cap,
                     "reason": r,
                     "lineno": 0,
                 }
             )
-        return verdict(pm, claims or {}, zt, rt)
+        return verdict(pm, claims or {}, zt, rt, oracle_log_files=coverage)
 
     cases = []
     # 1. reconciles exactly
@@ -1079,6 +1180,29 @@ def self_test():
         ("a log:: emission is not counted as a bypass",
          run([("src/ok.zig", "c/ok.rs", "0", "0", "")])[0], 0)
     )
+    # 10e. COVERAGE: a reference file with live log sites that the portmap neither
+    #      declares nor excludes is RED. This is the hole that let 112 files and 523
+    #      sites sit outside the gate entirely — the portmap was seeded from the
+    #      audit's LOG rows, so it inherited the audit's blind spots.
+    cases.append(
+        ("a reference file with log sites and no portmap row",
+         run([("src/ok.zig", "c/ok.rs", "0", "0", "")], None, olf)[0], 1)
+    )
+    cases.append(
+        ("...covered once both files are declared",
+         run([("src/ok.zig", "c/ok.rs", "0", "0", ""),
+              ("src/two.zig", "c/mac.rs", "0", "0", "")], None, olf)[0], 0)
+    )
+    cases.append(
+        ("...or once the second is EXCLUDED with a category",
+         run([("src/ok.zig", "c/ok.rs", "0", "0", ""),
+              ("src/two.zig", "-", "0", "0", "no-port: nothing implements this")], None, olf)[0], 0)
+    )
+    cases.append(
+        ("an exclusion with no category is RED",
+         run([("src/ok.zig", "c/ok.rs", "0", "0", ""),
+              ("src/two.zig", "-", "0", "0", "we did not get to it")], None, olf)[0], 1)
+    )
     # 11. a LOG row citing a file with no portmap entry
     cases.append(
         ("undeclared reference file",
@@ -1112,7 +1236,8 @@ def self_test():
         "SELF-TEST GREEN: the gate flips RED on a short file, an unreasoned or stale\n"
         "allowance, a short PLATFORM TWIN that summing would have hidden, a no-op\n"
         "log stub, an undeclared file, a missing port file, a vacuous scan, and a\n"
-        "facade-BYPASSING direct print over its declared cap — and the scanner agrees\n"
+        "facade-BYPASSING direct print over its declared cap, an UNDECLARED reference\n"
+        "file with live log sites and an uncategorised exclusion — and the scanner agrees\n"
         "with a naive grep on every mapped port file and on every Rust literal shape."
         if ok
         else "SELF-TEST RED: the gate did not flip."
@@ -1184,7 +1309,29 @@ def main():
         with open(p, encoding="utf-8", errors="replace") as fh:
             return fh.read()
 
-    # Every .rs in the crates that own a mapped port file, for facade discovery.
+    def zig_walk():
+        for root in ("src", "pkg"):
+            base = os.path.join(ORACLE, root)
+            for dirpath, _dirs, names in os.walk(base):
+                for name in names:
+                    if not name.endswith(".zig"):
+                        continue
+                    full = os.path.join(dirpath, name)
+                    with open(full, encoding="utf-8", errors="replace") as fh:
+                        yield os.path.relpath(full, ORACLE), fh.read()
+
+    oracle_log_files = oracle_files_with_log_sites(zig_walk)
+    if not oracle_log_files:
+        print(
+            "BLOCKED: the oracle tree yielded no files with live log sites — the "
+            "reference scanner is not binding",
+            file=sys.stderr,
+        )
+        return 3
+
+    # Every .rs in the source root that owns a mapped port file, for facade
+    # discovery: `opengl/gl.rs` defines the macros `opengl/gl/sys.rs` emits
+    # through, and `xtask/` is a source root that is not under `crates/`.
     facade = {}
     crates_seen = set()
     for r in portmap:
@@ -1193,6 +1340,8 @@ def main():
                 parts = f.split("/")
                 if len(parts) > 2 and parts[0] == "crates":
                     crates_seen.add(os.path.join(parts[0], parts[1], "src"))
+                elif len(parts) > 1:
+                    crates_seen.add(os.path.join(parts[0], "src"))
     for rel in sorted(crates_seen):
         base = os.path.join(ROOT, rel)
         for dirpath, _dirs, names in os.walk(base):
@@ -1206,7 +1355,13 @@ def main():
                 facade[key] = (rust_strip(raw), rust_strip_comments_only(raw))
 
     rc, lines = verdict(
-        portmap, claims, zig_text, rust_text, facade, report="--report" in sys.argv
+        portmap,
+        claims,
+        zig_text,
+        rust_text,
+        facade,
+        report="--report" in sys.argv,
+        oracle_log_files=oracle_log_files,
     )
     print("\n".join(lines))
     return rc

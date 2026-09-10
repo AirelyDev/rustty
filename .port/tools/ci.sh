@@ -750,14 +750,18 @@ GATE_REGISTRY=(
   # (.port/parity-closure/LOG-PORTMAP.tsv), so hardening costs nothing today and
   # buys the only thing that matters: a new dropped diagnostic, or a Linux twin
   # that silently stops emitting what its macOS twin emits, turns the branch red
-  # the same run. The declared debt (183 sites, NEW-FINDINGS N12) is tracked as a
+  # the same run. The declared debt (536 sites, NEW-FINDINGS N12/N15) is tracked as a
   # finding, not as gate noise — `--report` prints the whole table on demand.
   # The allowances are a RATCHET: one that exceeds the measured deficit is RED,
   # so restoring a site must tighten it in the same commit. A SECOND ratchet
   # (`bypass_cap`) caps the facade-BYPASSING subset — 188 raw `eprintln!` sites
   # reproducing logFn's output, N14 — because a logFn-shaped print counts as an
   # emission, so without it a stage could close a count deficit by adding more of
-  # them and the gate would call that an improvement. Nothing here is
+  # them and the gate would call that an improvement. A THIRD check enumerates the
+  # reference tree itself: any .zig with live log sites that the portmap neither
+  # declares nor EXCLUDES-with-a-category is RED (N15 — the portmap was first
+  # seeded from the audit's LOG rows and inherited its blind spots, leaving 112
+  # files and 523 diagnostics invisible). Nothing here is
   # env-settable (R5); an absent or off-pin oracle checkout is 3 BLOCKED, never a
   # vacuous green.
   "G-LOGFILE-SELF|HARD|$PY $GATES/check_log_reconcile.py --self-test"
