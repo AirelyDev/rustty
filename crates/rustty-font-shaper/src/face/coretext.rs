@@ -1767,4 +1767,84 @@ mod tests {
         face.deinit();
         Ok(())
     }
+
+    // -----------------------------------------------------------------------
+    // task-14c-4 (S90-F2, and fix round 1 F7): the restored
+    // `if (comptime builtin.mode == .Debug)` variation-axes dump at
+    // `face/coretext.zig:118-162`. This is THE site the ledger row named as
+    // elided; the freetype sibling test covers the other backend's copy.
+    //
+    // No device or environment is required (CoreText is always present on the
+    // macOS host these tests build for), so neither has a skip arm and no
+    // `RUSTTY_REQUIRE_*` strict-mode pivot applies.
+    // -----------------------------------------------------------------------
+
+    /// The RELEASE arm. `debug_mode == false` is the port of
+    /// `comptime builtin.mode == .Debug` being false, and it must emit NOTHING
+    /// even for a font that HAS variation axes.
+    #[test]
+    fn log_variation_axes_is_silent_when_not_debug_mode() -> Result<(), Error> {
+        let mut face = Face::init(
+            crate::library::Library::init().unwrap(),
+            embedded::VARIABLE,
+            opts(14.0),
+        )?;
+
+        let cap = crate::log_capture::start();
+        face.log_variation_axes(false)?;
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
+        face.deinit();
+        Ok(())
+    }
+
+    /// The DEBUG arm, positive control: the header debug plus exactly one debug
+    /// per axis, at the reference's `.font_face` scope.
+    ///
+    /// Asserts the FULL captured vector. The per-axis payload is checked
+    /// STRUCTURALLY rather than as a byte-for-byte golden: CoreText resolves an
+    /// axis's `name` through the OS's localized font-name tables, so pinning the
+    /// literal string would make this test a hostage to the host's locale and
+    /// macOS version. The record COUNT, the level, the target, and the message
+    /// PREFIX are all pinned, which is what the restoration is actually about.
+    #[test]
+    fn log_variation_axes_emits_the_header_and_one_record_per_axis() -> Result<(), Error> {
+        let mut face = Face::init(
+            crate::library::Library::init().unwrap(),
+            embedded::VARIABLE,
+            opts(14.0),
+        )?;
+
+        let cap = crate::log_capture::start();
+        face.log_variation_axes(true)?;
+        let messages = cap.messages();
+        drop(cap);
+
+        // The header, byte for byte.
+        assert_eq!(
+            (
+                log::Level::Debug,
+                "font_face".to_string(),
+                "variation axes font=JetBrains Mono".to_string()
+            ),
+            messages[0],
+            "captured: {messages:?}"
+        );
+        // JetBrainsMono-Variable has exactly one axis (`wght`), the same count
+        // the freetype sibling test pins.
+        assert_eq!(2, messages.len(), "captured: {messages:?}");
+        for record in &messages[1..] {
+            assert_eq!(log::Level::Debug, record.0);
+            assert_eq!("font_face", record.1);
+            assert!(
+                record.2.starts_with("variation axis: name=") && record.2.contains(" id=wght "),
+                "unexpected axis record: {record:?}"
+            );
+        }
+
+        face.deinit();
+        Ok(())
+    }
 }

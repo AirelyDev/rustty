@@ -24,6 +24,8 @@
 //   const Presentation = @import("main.zig").Presentation;
 //   const Variation = @import("main.zig").face.Variation;
 //   const log = std.log.scoped(.discovery);
+//     -> `LOG_SCOPE` below, carried through the `log` facade's `target:`
+//        (`.port/parity-closure/DECISION-logging.md` §6).
 // Mapped per memory `apc-glyf-font-layering-d1` + the F3 kickoff:
 //   * `macos.foundation.*` -> `objc2_core_foundation`
 //     (CFString/CFNumber/CFDictionary/CFArray/CFCharacterSet/CFRange),
@@ -34,6 +36,16 @@
 //   * `assert`             -> `rustty_util::quirks::inlineAssert`,
 //   * `log`                -> no logging facade wired into this crate; every
 //     `log.*` call is ported as a verbatim comment and is a no-op.
+
+/// The reference's `std.log.scoped(.discovery)` tag, carried through the `log`
+/// facade's `target:` (`.port/parity-closure/DECISION-logging.md` §6).
+///
+/// NOTE (task-14c-4 fix round 1, F4): no LEDGER row named this file. Its two
+/// live reference `log.warn` sites were found by enumerating the reference's own
+/// calls per file (PROCEDURE.md blind spot 3), not from a row's cited anchors.
+/// Recorded as finding **N6** in `.port/parity-closure/NEW-FINDINGS.md`.
+#[cfg(target_os = "macos")]
+const LOG_SCOPE: &str = "discovery";
 
 use crate::face::Variation;
 
@@ -1754,10 +1766,15 @@ mod coretext_impl {
                 // }
                 let head_: Option<Head> = match copy_table_data(&font, b"head") {
                     None => None,
-                    // PORT NOTE (log-as-comment): the reference's
-                    // `catch |err| { log.warn("error parsing head table: {}", .{err}); break :head null; }`
-                    // discards a parse failure as `null`; the warning is a no-op here.
-                    Some(data) => Head::init(unsafe { data.as_bytes_unchecked() }).ok(),
+                    // break :head opentype.Head.init(ptr[0..len]) catch |err| {
+                    //     log.warn("error parsing head table: {}", .{err});
+                    //     break :head null;
+                    // };
+                    //
+                    // `Head::init` returns `Result`, so this IS a reachable
+                    // failure arm — the `.ok()` that used to stand here silently
+                    // discarded both the error and the reference's diagnostic.
+                    Some(data) => crate::discovery::parse_head_table(unsafe { data.as_bytes_unchecked() }),
                 };
                 if let Some(head) = head_ {
                     is_bold = is_bold || (head.macStyle & 1 == 1);
@@ -1771,8 +1788,14 @@ mod coretext_impl {
                 // }
                 let os2_: Option<OS2> = match copy_table_data(&font, b"OS/2") {
                     None => None,
-                    // PORT NOTE (log-as-comment): `catch |err| { log.warn("error parsing OS/2 table: {}", .{err}); break :os2 null; }`.
-                    Some(data) => OS2::init(unsafe { data.as_bytes_unchecked() }).ok(),
+                    // break :os2 opentype.OS2.init(ptr[0..len]) catch |err| {
+                    //     log.warn("error parsing OS/2 table: {}", .{err});
+                    //     break :os2 null;
+                    // };
+                    //
+                    // Same shape as the `head` arm above: a reachable failure
+                    // arm, not a success path.
+                    Some(data) => crate::discovery::parse_os2_table(unsafe { data.as_bytes_unchecked() }),
                 };
                 if let Some(os2) = os2_ {
                     is_bold = is_bold || os2.fsSelection.bold;
@@ -2553,6 +2576,34 @@ mod windows_impl {
     }
 }
 
+/// The reference's `break :head opentype.Head.init(ptr[0..len]) catch |err| {
+/// log.warn("error parsing head table: {}", .{err}); break :head null; }`
+/// (`discovery.zig:756-764`), extracted into a free fn so the FAILURE arm is
+/// testable without needing a CoreText font whose `head` table is malformed.
+/// The production call site passes the copied table bytes verbatim.
+#[cfg(target_os = "macos")]
+fn parse_head_table(bytes: &[u8]) -> Option<rustty_font::opentype::head::Head> {
+    match rustty_font::opentype::head::Head::init(bytes) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            log::warn!(target: LOG_SCOPE, "error parsing head table: {err:?}");
+            None
+        }
+    }
+}
+
+/// The `OS/2` sibling of [`parse_head_table`] (`discovery.zig:773-781`).
+#[cfg(target_os = "macos")]
+fn parse_os2_table(bytes: &[u8]) -> Option<rustty_font::opentype::os2::OS2> {
+    match rustty_font::opentype::os2::OS2::init(bytes) {
+        Ok(v) => Some(v),
+        Err(err) => {
+            log::warn!(target: LOG_SCOPE, "error parsing OS/2 table: {err:?}");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3057,5 +3108,92 @@ mod tests {
             win.deinit();
             lib.deinit();
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // task-14c-4 fix round 1 (F4): the two live reference `log.warn` sites in
+    // `discovery.zig` (`:762`, `:779`) that NO ledger row named. Recorded as
+    // finding N6.
+    //
+    // The production call sites feed these helpers bytes copied out of a
+    // CoreText font table, and manufacturing a CTFont with a MALFORMED `head`
+    // or `OS/2` table is not something this suite can do — which is why the arms
+    // were extracted into free fns. The helpers take `&[u8]`, so the failure arm
+    // is driven directly with bytes the parser must reject.
+    // -----------------------------------------------------------------------
+
+    /// Positive control: a malformed `head` table emits exactly ONE warn with
+    /// the reference's message, at the reference's `.discovery` scope, and the
+    /// parse still degrades to `None` (the reference's `break :head null`).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_head_table_warns_once_on_a_malformed_table() {
+        let cap = crate::log_capture::start();
+        // Far too short to be a `head` table (54 bytes).
+        let parsed = super::parse_head_table(&[0u8; 3]);
+        let messages = cap.messages();
+        drop(cap);
+
+        assert!(parsed.is_none());
+        assert_eq!(1, messages.len(), "captured: {messages:?}");
+        assert_eq!(log::Level::Warn, messages[0].0);
+        assert_eq!("discovery", messages[0].1);
+        assert!(
+            messages[0].2.starts_with("error parsing head table: "),
+            "unexpected message: {:?}",
+            messages[0].2
+        );
+    }
+
+    /// Negative control: a WELL-FORMED `head` table must emit nothing. Without
+    /// this, the test above would still pass against a port that warned
+    /// unconditionally — the success-path bug this stage is guarding against.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_head_table_is_silent_on_a_well_formed_table() {
+        // A `head` table is 54 bytes of fixed-width big-endian fields with no
+        // magic the parser validates, so a correctly SIZED buffer is a
+        // well-formed one as far as `Head::init` is concerned. That is exactly
+        // the discrimination under test: length, not content.
+        let cap = crate::log_capture::start();
+        let parsed = super::parse_head_table(&[0u8; 54]);
+        let messages = cap.messages();
+        drop(cap);
+
+        assert!(parsed.is_some());
+        assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
+    }
+
+    /// The `OS/2` sibling of the positive control above.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_os2_table_warns_once_on_a_malformed_table() {
+        let cap = crate::log_capture::start();
+        let parsed = super::parse_os2_table(&[0u8; 3]);
+        let messages = cap.messages();
+        drop(cap);
+
+        assert!(parsed.is_none());
+        assert_eq!(1, messages.len(), "captured: {messages:?}");
+        assert_eq!(log::Level::Warn, messages[0].0);
+        assert_eq!("discovery", messages[0].1);
+        assert!(
+            messages[0].2.starts_with("error parsing OS/2 table: "),
+            "unexpected message: {:?}",
+            messages[0].2
+        );
+    }
+
+    /// The `OS/2` sibling of the negative control above.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_os2_table_is_silent_on_a_well_formed_table() {
+        let cap = crate::log_capture::start();
+        let parsed = super::parse_os2_table(&[0u8; 128]);
+        let messages = cap.messages();
+        drop(cap);
+
+        assert!(parsed.is_some());
+        assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
     }
 }
