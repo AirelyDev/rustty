@@ -1364,6 +1364,7 @@ name = "rustty-core"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "log",
  "rustty-apprt-api",
  "rustty-config",
  "rustty-crash",

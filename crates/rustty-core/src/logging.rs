@@ -112,10 +112,152 @@ pub fn log(level: Level, scope: &str, message: &str) {
     }
 }
 
+// =====================================================================
+// The `log` facade backend, app-build side (task-14a review CRITICAL 2,
+// `.port/parity-closure/DECISION-logging.md` §6).
+//
+// PORT NOTE: no reference analog — `main_ghostty.zig`'s `std_options.logFn`
+// is a comptime function-pointer swap reaching every `std.log.scoped(...)`
+// call in the whole app binary. Rust has no such hook, so crates below this
+// one that restore a `log.warn(...)` site as `log::warn!(target: "<scope>",
+// ...)` (14b-14e; R4 forbids them depending on `rustty-core` directly) need a
+// process-wide `log::Log` registration to reach ANYWHERE. This is that
+// registration for the actual `rustty` application binary (which does NOT
+// link `rustty-vt-c` — `cargo tree -p rustty` confirms no such edge — so
+// `rustty-vt-c::sys::Logger`, task 14a's other backend, never runs there).
+// `AppLogger` forwards into the SAME `log`/`log_with` sink immediately above,
+// which is already a faithful port of the reference's `logFn`.
+struct AppLogger;
+
+/// Map a `log::Level` onto the reference's 4-level `std.log.Level` (`Level`).
+/// The facade crate's 5th level, `Trace`, has no `std.log` equivalent;
+/// `install_app_log_backend` never enables it (max level caps at `Debug`),
+/// so this arm is unreachable in practice — mapped to `Debug` rather than
+/// panicking, matching `rustty-vt-c::sys::std_level_from_log`'s identical
+/// choice.
+fn level_from_log(level: log::Level) -> Level {
+    match level {
+        log::Level::Error => Level::Err,
+        log::Level::Warn => Level::Warn,
+        log::Level::Info => Level::Info,
+        log::Level::Debug | log::Level::Trace => Level::Debug,
+    }
+}
+
+impl log::Log for AppLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        // `log::set_max_level` (in `install_app_log_backend`) already gates
+        // which records reach here; this sink has no independent filter,
+        // matching `log`/`log_with`'s own unconditional dispatch once a
+        // level/sink-flag check upstream of this passes.
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        // `record.target()` carries the restored call site's oracle scope
+        // (`target: "<scope>"`, `""` for `.default` — see the facade
+        // pattern's own convention in DECISION-logging.md §6). Formatting
+        // `record.args()` to an owned `String` here (rather than plumbing
+        // `core::fmt::Arguments` through, as the vt-c backend does) matches
+        // this sink's own `message: &str` signature — `log`/`log_with` were
+        // ported before this facade existed and are not being changed to
+        // accommodate it.
+        log(
+            level_from_log(record.level()),
+            record.target(),
+            &record.args().to_string(),
+        );
+    }
+
+    fn flush(&self) {}
+}
+
+static APP_LOGGER: AppLogger = AppLogger;
+
+/// Register [`AppLogger`] as the process-wide `log` backend for the actual
+/// application binary. `std::sync::Once`-guarded: idempotent, and — like
+/// `rustty-vt-c::sys::install_log_backend` — never touches `max_level` when
+/// `log::set_logger` fails (an embedder/host already owns the registration),
+/// only on success.
+///
+/// Level default ports `main_ghostty.zig`'s own `std_options.log_level`
+/// exactly (`.Debug => .debug, else => .info` — the app is deliberately NEVER
+/// lowered to `.debug` outside a Debug build, "our debug logs are very
+/// expensive to calculate"): `cfg!(debug_assertions) ? Debug : Info`. This is
+/// intentionally a different default than `rustty-vt-c::sys`'s `Debug`/`Error`
+/// split — that crate is porting `lib_vt.zig`'s C-ABI arm, a different
+/// `std_options` block in the reference with its own (lower) release default.
+///
+/// KNOWN LIMITATION (documented, not fixed here — out of scope for a
+/// logging-facade review): `log()` above reads `rustty_core::STATE`, which
+/// the real `rustty` bin (`crates/rustty/src/main_rustty.rs`) never
+/// populates — ADV-FIX 2 gives the bin its own `GlobalState<Action>`
+/// (`Action` bound to the CLI action type) separate from `rustty_core::STATE`
+/// (bound `Action = ()`), specifically so cli-dependent code never has to
+/// live in `rustty-core`/`rustty-apprt`. So until that split is revisited,
+/// `AppLogger`-forwarded records fall back to `Logging::default()` rather
+/// than the bin's own resolved `RUSTTY_LOG`/action-derived flags — the SAME
+/// fallback `log()` already documents for any caller before `STATE` is set,
+/// just permanent for this path rather than transient at boot.
+pub fn install_app_log_backend() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        if log::set_logger(&APP_LOGGER).is_ok() {
+            let level = if cfg!(debug_assertions) {
+                log::LevelFilter::Debug
+            } else {
+                log::LevelFilter::Info
+            };
+            log::set_max_level(level);
+        }
+        // else: a logger (an embedder's own, or another instance of this
+        // one) is already installed — leave its max_level filter alone.
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rustty_global::Logging;
+
+    // task-14a review CRITICAL 2 (rustty-only proving tests, NOT reference
+    // tests — `AppLogger` has no oracle analog, see its own PORT NOTE).
+    //
+    // `level_from_log` is exhaustively, deterministically tested below — a
+    // real assertion that fails if the mapping is ever wrong. Proving that a
+    // `log::warn!` call reaches the REAL sink end-to-end is not available
+    // the way `rustty-vt-c`'s C-callback capture is: `log`/`log_with` write
+    // directly to process stderr / macOS unified logging with no injectable
+    // capture point, and the file's own pre-existing
+    // `log_with_gates_on_stderr_flag` test already accepts "no panic, no
+    // observable side effect we can assert on" as this sink's testing bar —
+    // `app_log_backend_installs_and_dispatches_without_panicking` follows the
+    // same convention rather than inventing a fake assertion that cannot
+    // fail.
+    #[test]
+    fn level_from_log_matches_the_reference_mapping() {
+        assert_eq!(Level::Err, level_from_log(log::Level::Error));
+        assert_eq!(Level::Warn, level_from_log(log::Level::Warn));
+        assert_eq!(Level::Info, level_from_log(log::Level::Info));
+        assert_eq!(Level::Debug, level_from_log(log::Level::Debug));
+        // `Trace` has no `std.log` equivalent; folds into `Debug` (see
+        // `level_from_log`'s own doc).
+        assert_eq!(Level::Debug, level_from_log(log::Level::Trace));
+    }
+
+    #[test]
+    fn app_log_backend_installs_and_dispatches_without_panicking() {
+        install_app_log_backend();
+        // A second call must be a genuine no-op (the Once guard), not a
+        // double-install panic or a re-touched max_level.
+        install_app_log_backend();
+        // Exercises the full `AppLogger::log` -> `level_from_log` ->
+        // `logging::log` -> `logging::log_with` chain end to end; a panic
+        // anywhere in that chain (e.g. a `CString::new` on a scope containing
+        // an interior NUL) would fail this test.
+        log::error!(target: "task14a_app_logger_test", "proving message {}", 1);
+        log::warn!(target: "", "default-scope proving message");
+    }
 
     #[test]
     fn log_with_gates_on_stderr_flag() {

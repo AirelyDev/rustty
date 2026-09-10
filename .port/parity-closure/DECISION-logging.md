@@ -314,6 +314,16 @@ Record all 79 open rows (86 total) as intentional divergence, written once.
 
 ## §6 — Task 14a: the wiring pattern (RATIFIED, executed)
 
+**SUPERSEDED IN PART — see §6r below.** Task 14a's first review round found
+two Criticals (a max-level clobber of a host's own logger; no backend at all
+for the actual `rustty` app binary, which would have closed 73 rows on
+bookkeeping) and three Importants (a factually wrong install-point claim, a
+non-reference-matching level default, and a wrong/incomplete crate list) in
+the text below. §6r is the fix; read it alongside this section, not instead
+of it — this section's mechanics (the two call shapes, the `LOG_SCOPE`
+convention, the dependency wiring) are still accurate, only the backend
+implementation, install points, level defaults, and crate list changed.
+
 Executed 2026-09-09. Adds the `log` facade crate and fixes the `eprintln!`
 bypass in `rustty-vt-c` (the 6 ledger rows S174-F1, S174-F2, S177-F1, S5-F1,
 S7-F1, S172-F1). Documents the mechanical pattern stages 14b-14e follow for
@@ -423,3 +433,252 @@ allow(dead_code))]` annotations were added to `Logger`/`std_level_from_log`/
 `Off` cap means no macro call site ever reaches them), which is by design,
 not a defect; the annotation prevents that expected condition from being a
 build warning.
+
+## §6r — Task 14a review-round fixes (supersedes parts of §6)
+
+Fixed 2026-09-09, same day as §6, in response to the first review of task
+14a. Two Criticals and three Importants; all five addressed before any of
+14b-14e may proceed. None of the six already-`CLOSED` ledger rows are
+reopened or touched by this section — the review confirmed those six rows
+correct against the oracle (byte-identical scope/level/message text) and
+found the defects entirely in the PATTERN this section documents, which would
+have replicated into the other 73 rows if left as originally written.
+
+### CRITICAL 1 — `install_log_backend` clobbered a host's own log filter
+
+**The bug:** `log::set_max_level(LevelFilter::Debug)` ran unconditionally,
+even when `log::set_logger` returned `Err` (an embedder, or an earlier call,
+already owns the registration). An embedder that installed its own `log`
+backend and deliberately set its own filter would have that filter silently
+raised to `Debug` by rustty — on every single `rustty_terminal_new` call, so
+the host could not even work around it by calling `set_max_level` again
+afterward.
+
+**The fix:** `crates/rustty-vt-c/src/sys.rs::install_log_backend` now:
+1. Wraps the whole body in a `std::sync::Once`, so repeated calls (from any
+   of the crate's `*_new` entry points — see IMPORTANT 3) are genuine no-ops,
+   not merely cheap-but-real re-executions.
+2. Calls `log::set_max_level` **only inside the `if log::set_logger(&LOGGER)
+   .is_ok() { ... }` success arm.** If `set_logger` fails, the function now
+   does nothing else at all — it leaves the existing logger AND its filter
+   completely alone. Containment, not clobber, is the correct behavior when a
+   host already owns the `log` crate's single global registration.
+
+The identical fix (Once-guard + max-level-only-on-success) is applied to the
+new `rustty-core::logging::install_app_log_backend` (see CRITICAL 2) from
+the start, so it never had this bug.
+
+### CRITICAL 2 — 73 rows would have closed onto no backend in the real app
+
+**The bug:** `crates/rustty` (the actual application binary; `cargo tree -p
+rustty` confirms it) does not, and structurally cannot, depend on
+`rustty-vt-c` — R4 puts `rustty-vt-c` in the standalone-library-embedding
+tier, not the app tier. `rustty-vt-c::sys::Logger` — task 14a's only backend
+as originally written — therefore never runs in the process that matters
+most: the actual terminal application. The moment 14b restores a
+`log::warn!` site in `rustty-vt`/`rustty-renderer`/`rustty-font-shaper`/
+`rustty-config`/etc., that diagnostic would emit into the void in the real
+app, while the oracle's `main_ghostty.zig` `std_options.logFn` reaches every
+one of those call sites. Marking those rows `CLOSED` on that basis would be
+exactly the "derived gate rests on nothing" failure this project already has
+scar tissue about (see memory: `derived-gate-green-can-be-bookkeeping`).
+
+**The fix:** a second backend, hosted in `rustty-core` (which the app binary
+DOES link), forwarding into `rustty-core::logging`'s existing, already-
+faithful sink (the direct Rust port of `main_ghostty.zig`'s `logFn`):
+
+- `crates/rustty-core/src/logging.rs` gained `struct AppLogger` (`impl
+  log::Log`), `fn level_from_log` (the same 5-to-4-level mapping as
+  `rustty-vt-c::sys::std_level_from_log`), and `pub fn
+  install_app_log_backend()` — Once-guarded, success-arm-only `set_max_level`
+  (see CRITICAL 1), calling the existing `log()`/`log_with` functions in the
+  SAME file, unchanged.
+- `crates/rustty-core/Cargo.toml` gained `log = { workspace = true }`.
+- Installed from `crates/rustty/src/main_rustty.rs::main()`, immediately
+  after `state_init()` succeeds — the actual, already-ported process-init
+  entrypoint (the direct port of `main_ghostty.zig`'s `main()`/`state.init()`
+  sequence), not a hypothetical future one. `rustty-core` itself has NO
+  ported process-init entrypoint yet (its own `lib.rs` doc says so —
+  "the entrypoint (`main()` / `rustty_init()`, unported)"), so the install
+  call could not live inside `rustty-core`; it lives at the one real call
+  site that exists today.
+- Level default ports `main_ghostty.zig`'s ACTUAL `std_options.log_level`
+  for the app (`.Debug => .debug, else => .info`) — see IMPORTANT 4 below for
+  why this differs from `rustty-vt-c`'s default.
+
+**Known, documented (not fixed here) limitation:** `AppLogger` forwards into
+`logging::log()`, the STATE-reading variant, which reads
+`rustty_core::STATE`. ADV-FIX 2 (see `main_rustty.rs`'s own comments) means
+the real `rustty` bin builds its OWN `GlobalState<Action>` and never
+populates `rustty_core::STATE` (which is bound `Action = ()`) — this is a
+pre-existing architectural split, not something introduced or owed to this
+logging stage. Until ADV-FIX 2 is revisited, `AppLogger`-forwarded records
+use `Logging::default()` rather than the bin's `RUSTTY_LOG`/action-resolved
+flags — the exact fallback `log()` already documents for any caller before
+`STATE` is set, just permanent on this path instead of transient at boot. A
+future stage that wants byte-parity on which records the app actually emits
+(not just that they reach a real sink, which is what this stage guarantees)
+needs to close that gap; it is out of scope for a logging-facade pattern
+fix.
+
+**Two backends, one rule:** which one runs is decided ENTIRELY by which
+binary is running — `rustty-vt-c::sys::Logger` in the standalone
+library/wasm artifacts, `rustty-core::logging::AppLogger` in the `rustty`
+app binary — because `log::set_logger` is a single process-wide
+registration and the two artifacts never coexist in one process. Neither
+14b-14e nor any later stage needs to choose between them; a crate that calls
+`log::warn!(target: "...", ...)` reaches whichever backend its own binary
+installed, with no crate-level wiring difference.
+
+### IMPORTANT 3 — the install-point claim was factually wrong
+
+**The bug:** §6 (and the code comment on `rustty_terminal_new`) claimed it
+was "the one C export every embedder is contractually required to call
+before any other terminal functionality." Checked against the actual shipped
+examples: `example/c-vt-sgr`, `example/c-vt-encode-key`, `example/wasm-sgr`,
+and `example/wasm-key-encode` never call `rustty_terminal_new` at all — they
+call `rustty_sgr_new`/`rustty_key_encoder_new`/`rustty_key_event_new`
+directly. Neither cited doc says what the comment claimed either (the `sys`
+module's "must be set at startup" note is about `rustty_sys_set`, a
+different function).
+
+**The fix:** `install_log_backend()` is now called from the top of **every**
+top-level `*_new` C-ABI constructor in `crates/rustty-vt-c/src/lib.rs` (15
+of them: `rustty_key_event_new`, `rustty_key_encoder_new`,
+`rustty_mouse_event_new`, `rustty_mouse_encoder_new`, `rustty_sgr_new`,
+`rustty_osc_new`, `rustty_formatter_terminal_new`,
+`rustty_snapshot_decoder_new`,
+`rustty_kitty_graphics_placement_iterator_new`, `rustty_render_state_new`,
+`rustty_render_state_row_iterator_new`, `rustty_render_state_row_cells_new`,
+`rustty_selection_gesture_new`, `rustty_selection_gesture_event_new`,
+`rustty_search_new`, plus the original `rustty_terminal_new`), not just the
+one. This is cheap and correct BECAUSE of the Once-guard from CRITICAL 1:
+whichever constructor an embedder happens to call first wins, and every
+other constructor's call — in that process or a later one — is a genuine
+no-op. `rustty_terminal_new`'s own comment is corrected to state this
+honestly instead of the disproven "contractually required" claim.
+
+### IMPORTANT 4 — level default did not match the reference
+
+**The bug:** `install_log_backend` hardcoded `LevelFilter::Debug` on every
+non-wasm config. `lib_vt.zig`'s `std_options` does NOT set `log_level` for
+the `terminal.options.c_abi` arm (only the wasm arm sets it explicitly), so
+Zig's build-mode default applies: `.debug` in Debug, `.info` (unrelated to
+this crate's C-ABI arm) is the DEFAULT `std.Options.log_level`, but the
+actually-relevant fact is Zig's own default resolves to `.err` in
+`ReleaseFast` (rustty-vt-c's shipped release configuration) when no
+`log_level` override is present. A release embedder was receiving warn/info/
+debug records the reference itself suppresses.
+
+**The fix:** `install_log_backend`'s success arm now computes `let level =
+if cfg!(debug_assertions) { LevelFilter::Debug } else { LevelFilter::Error
+};` — the direct port of that default, not an independent choice. Documented
+in the function's own doc comment with the port-note reasoning above.
+
+`rustty-core::logging::install_app_log_backend` (CRITICAL 2) uses a
+DIFFERENT default — `Debug`/`Info` — because it ports a DIFFERENT
+`std_options` block: `main_ghostty.zig`'s own (the actual app), which
+explicitly sets `.log_level = switch (builtin.mode) { .Debug => .debug, else
+=> .info }` and documents WHY it never lowers further ("our debug logs are
+very expensive to calculate and we want to make sure they're optimized out
+in builds"). Two backends, two different oracle `std_options` blocks, two
+different (both correct) defaults — this is not an inconsistency to
+reconcile.
+
+### IMPORTANT 5 — §6's crate list was wrong; `rustty-core`/`rustty-apprt`/`rustty-cli` need a THIRD call shape
+
+**The bug:** §6 listed 12 crates for the `log`-facade side; the open `LOG`
+rows actually span **14** crates (`awk -F'\t' '$4=="LOG" && $11=="OPEN"'
+.port/parity-closure/LEDGER.tsv`, grouped by crate path):
+
+| crate | open LOG rows |
+|---|---|
+| rustty-vt | 19 |
+| rustty-renderer | 12 |
+| rustty-font-shaper | 11 |
+| rustty-apprt | 10 |
+| rustty-core | 5 |
+| rustty-config | 5 |
+| rustty-os | 2 |
+| rustty-cli | 2 |
+| rustty-args | 2 |
+| rustty-wuffs | 1 |
+| rustty-termio | 1 |
+| rustty-simd | 1 |
+| rustty-crash | 1 |
+| rustty-bench | 1 |
+| **total** | **73** |
+
+`rustty-apprt` (10 rows) was missing entirely. Worse: §6 prescribed the
+`log::warn!` facade for `rustty-core`'s own 5 rows — but `rustty-core`
+**already owns the real sink** (`logging.rs`); routing its own internal
+diagnostics out through a facade whose only backend is installed FROM
+`rustty-core`'s own consumer would be circular indirection for no reason,
+and a strict regression risk (a bug in `AppLogger` would silently break
+`rustty-core`'s own logging, which worked before this stage touched
+anything).
+
+**The fix — three call shapes, not two, chosen by "does this crate already
+depend on the crate that owns a real sink":**
+
+1. **`rustty-vt-c` itself** (this stage's 6 rows, unchanged from §6): direct
+   `sys::log_fn(...)`.
+2. **`rustty-core` (5 rows), `rustty-apprt` (10 rows), and `rustty-cli` (2
+   rows)** — all three already depend on `rustty-core` directly (`rustty-cli`
+   and `rustty-apprt` both carry a real `rustty-core = { workspace = true }`
+   edge; `rustty-core` obviously depends on itself). Their restored sites
+   call `rustty_core::logging::log(level, scope, message)` (or `log_with`
+   where an explicit `Logging` is already in scope) DIRECTLY — the exact same
+   "you already have the edge, don't add a facade indirection" rule
+   `rustty-vt-c`'s own sites follow. **17 rows, no `log` dependency added to
+   any of these three crates for this purpose.**
+3. **Everywhere else — 11 crates, 56 rows** (`rustty-vt`, `rustty-renderer`,
+   `rustty-font-shaper`, `rustty-config`, `rustty-os`, `rustty-args`,
+   `rustty-wuffs`, `rustty-termio`, `rustty-simd`, `rustty-crash`,
+   `rustty-bench`) — none of these can depend on `rustty-core` (R4: core
+   depends on all of them, not the reverse) or `rustty-vt-c`, so they use the
+   `log::warn!(target: "<scope>", ...)` facade from §6, reaching whichever of
+   the two backends (§6 / CRITICAL 2) the running binary installed.
+
+17 + 56 = 73. 14b-14e should read a row's crate off this table, not
+re-derive the call shape from first principles each time.
+
+### wasm cost, re-measured after this round's fixes
+
+The `Once` guard (CRITICAL 1) and 14 additional `install_log_backend()` call
+sites (IMPORTANT 3) touch `rustty-vt-c` again, so §6's wasm measurement was
+re-taken the same way (`.port/tools/build-vt-wasm.sh --no-default-features
+--features render-state`, `wasm32-unknown-unknown` release):
+
+| build | `rustty-vt.wasm` |
+|---|---|
+| before task 14a (git-stashed baseline) | 892,220 bytes |
+| after §6 (task 14a, before this review round) | 885,927 bytes |
+| after §6r (this round's fixes) | 886,918 bytes |
+
+Delta from §6: **+991 bytes** (the `Once` machinery plus 14 more call sites
+to the now-idempotent `install_log_backend`), still **−5,302 bytes** overall
+against the pre-14a baseline — the `eprintln!` removal (§3/§6) still
+dominates. Reproduced twice, identical byte count both times.
+
+### Re-verification after this round's fixes
+
+- `cargo test -p rustty-vt-c --all-features`: 492 passed, 0 failed (no
+  ledger-row test changed by this round; `install_log_backend`'s own
+  behavior is exercised by the existing `log_facade_backend_reaches_the_
+  c_sink` test, still green).
+- `cargo test -p rustty-core --lib logging::`: 5 passed, 0 failed —
+  `level_from_log_matches_the_reference_mapping` (exhaustive, deterministic)
+  and `app_log_backend_installs_and_dispatches_without_panicking` (new;
+  see that test's own doc comment for why an end-to-end real-sink capture
+  is not available for this crate's sink, matching the pre-existing
+  `log_with_gates_on_stderr_flag` test's own accepted bar) plus the 3
+  pre-existing tests, unchanged.
+- `cargo check -p rustty` (the actual app binary) and `cargo check -p
+  rustty-vt-c --no-default-features`: both clean.
+- `cargo check --workspace --all-targets`, `cargo clippy -p rustty-vt-c
+  --all-targets --all-features -- -D warnings`, `cargo clippy -p rustty-core
+  --all-targets --all-features -- -D warnings`, `cargo fmt --check` (both
+  crates): all clean.
+- No ledger row touched by this round; the six `CLOSED` rows from §6 are
+  unchanged.

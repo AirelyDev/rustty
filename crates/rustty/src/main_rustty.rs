@@ -168,6 +168,16 @@ pub fn main() {
             std::process::exit(1);
         }
     };
+    // task-14a review CRITICAL 2 (rustty-core::logging::install_app_log_backend,
+    // see its own PORT NOTE): registers the `log` facade backend for the
+    // ACTUAL application binary, so restored `log::warn!` sites in
+    // rustty-vt/rustty-renderer/rustty-font-shaper/etc. (14b-14e) reach the
+    // real `logging::log`/`log_with` sink instead of nowhere — this binary
+    // does not link `rustty-vt-c`, so task 14a's `sys::Logger` backend never
+    // runs here. Installed once state_init() has succeeded (analogous to
+    // the reference's `std_options` being active for the whole of `main()`'s
+    // body, which runs after `state.init()` in `main_ghostty.zig` too).
+    rustty_core::logging::install_app_log_backend();
     // defer state.deinit();
     //   PORT NOTE: every path below ends in `std::process::exit` (or the diverging
     //   GUI leaf), which — like the reference `posix.exit` — does NOT run deferred

@@ -599,6 +599,12 @@ pub unsafe extern "C" fn rustty_key_event_new(
     alloc: *const rustty_lib::allocator::Allocator,
     result: *mut key_event::Event,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // SAFETY: `alloc`/`result` validity is the caller's contract.
     unsafe { key_event::new(alloc.as_ref(), result) }.to_c_int()
 }
@@ -897,6 +903,12 @@ pub unsafe extern "C" fn rustty_key_encoder_new(
     alloc: *const rustty_lib::allocator::Allocator,
     result: *mut key_encode::Encoder,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // SAFETY: `alloc`/`result` validity is the caller's contract.
     unsafe { key_encode::new(alloc.as_ref(), result) }.to_c_int()
 }
@@ -983,6 +995,12 @@ pub unsafe extern "C" fn rustty_mouse_event_new(
     alloc: *const rustty_lib::allocator::Allocator,
     result: *mut mouse_event::Event,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // SAFETY: `alloc`/`result` validity is the caller's contract.
     unsafe { mouse_event::new(alloc.as_ref(), result) }.to_c_int()
 }
@@ -1161,6 +1179,12 @@ pub unsafe extern "C" fn rustty_mouse_encoder_new(
     alloc: *const rustty_lib::allocator::Allocator,
     result: *mut mouse_encode::Encoder,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // SAFETY: `alloc`/`result` validity is the caller's contract.
     unsafe { mouse_encode::new(alloc.as_ref(), result) }.to_c_int()
 }
@@ -1398,6 +1422,12 @@ pub unsafe extern "C" fn rustty_sgr_new(
     alloc: *const rustty_lib::allocator::Allocator,
     result: *mut sgr::Parser,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // SAFETY: `alloc`/`result` validity is the caller's contract.
     unsafe { sgr::new(alloc.as_ref(), result) }.to_c_int()
 }
@@ -1518,6 +1548,12 @@ pub unsafe extern "C" fn rustty_osc_new(
     alloc: *const rustty_lib::allocator::Allocator,
     result: *mut osc::Parser,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // SAFETY: `alloc`/`result` validity is the caller's contract.
     unsafe { osc::new(alloc.as_ref(), result) }.to_c_int()
 }
@@ -1614,6 +1650,12 @@ pub unsafe extern "C" fn rustty_formatter_terminal_new(
     terminal: terminal::Terminal,
     opts: formatter::TerminalOptions,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // SAFETY: pointer validity is the caller's contract.
     unsafe { formatter::terminal_new(alloc.as_ref(), result, terminal, opts) }.to_c_int()
 }
@@ -1758,6 +1800,12 @@ pub unsafe extern "C" fn rustty_snapshot_decoder_new(
     decoder: *mut snapshot::Decoder,
     reader: io::Reader,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // SAFETY: pointer/callback validity is the caller's contract.
     unsafe { snapshot::decoder_new(alloc.as_ref(), decoder, reader) }.to_c_int()
 }
@@ -2061,6 +2109,12 @@ pub unsafe extern "C" fn rustty_kitty_graphics_placement_iterator_new(
     alloc_: *const rustty_lib::allocator::Allocator,
     out: *mut kitty_graphics::PlacementIterator,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // SAFETY: `alloc_`/`out` validity is the caller's contract.
     unsafe { kitty_graphics::placement_iterator_new(alloc_.as_ref(), out) }.to_c_int()
 }
@@ -2297,6 +2351,12 @@ pub unsafe extern "C" fn rustty_render_state_new(
     alloc_: *const rustty_lib::allocator::Allocator,
     result: *mut render::RenderState,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // SAFETY: `alloc_`/`result` validity is the caller's contract.
     unsafe { render::new(alloc_.as_ref(), result) }.to_c_int()
 }
@@ -2453,6 +2513,12 @@ pub unsafe extern "C" fn rustty_render_state_row_iterator_new(
     alloc_: *const rustty_lib::allocator::Allocator,
     result: *mut render::RowIterator,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // SAFETY: `alloc_`/`result` validity is the caller's contract.
     unsafe { render::row_iterator_new(alloc_.as_ref(), result) }.to_c_int()
 }
@@ -2582,6 +2648,12 @@ pub unsafe extern "C" fn rustty_render_state_row_cells_new(
     alloc_: *const rustty_lib::allocator::Allocator,
     result: *mut render::RowCells,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // SAFETY: `alloc_`/`result` validity is the caller's contract.
     unsafe { render::row_cells_new(alloc_.as_ref(), result) }.to_c_int()
 }
@@ -2692,6 +2764,12 @@ pub unsafe extern "C" fn rustty_selection_gesture_new(
     alloc_: *const rustty_lib::allocator::Allocator,
     out_gesture: *mut selection_gesture::Gesture,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // SAFETY: `alloc_`/`out_gesture` validity is the caller's contract.
     unsafe { selection_gesture::new(alloc_.as_ref(), out_gesture) }.to_c_int()
 }
@@ -2816,6 +2894,12 @@ pub unsafe extern "C" fn rustty_selection_gesture_event_new(
     out_event: *mut selection_gesture::Event,
     event_type: c_int,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // _ = std.meta.intToEnum(EventType, ...) catch return .invalid_value;
     let Some(et) = selection_gesture_event_type_from_c_int(event_type) else {
         return result::Result::InvalidValue.to_c_int();
@@ -2915,6 +2999,12 @@ pub unsafe extern "C" fn rustty_search_new(
     out_search: *mut search::Search,
     terminal: terminal::Terminal,
 ) -> c_int {
+    // task-14a review (IMPORTANT 3): install the `log` facade backend from
+    // every constructor a C/wasm embedder might call first — several shipped
+    // examples (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call
+    // `rustty_terminal_new` at all. `install_log_backend` is `Once`-guarded, so
+    // this is a no-op after whichever constructor runs first.
+    crate::sys::install_log_backend();
     // SAFETY: `alloc_`/`out_search`/`terminal` validity is the caller's contract.
     unsafe { search::new(alloc_.as_ref(), out_search, terminal) }.to_c_int()
 }
@@ -3055,11 +3145,14 @@ pub unsafe extern "C" fn rustty_terminal_new(
     // task-14a (`sys::install_log_backend`): the `log` facade backend has no
     // oracle-comptime analog (see its own PORT NOTE) — it must be installed at
     // runtime before any `log`-macro call site beneath this crate can reach
-    // `sys::log_fn`. `rustty_terminal_new` is the one C export every embedder
-    // is contractually required to call before any other terminal
-    // functionality (see this function's own doc + the `sys` module doc's
-    // "must be set at startup" note), so it is the earliest guaranteed point.
-    // Idempotent: safe even though later `rustty_terminal_new` calls re-run it.
+    // `sys::log_fn`. IMPORTANT 3 (task-14a review): `rustty_terminal_new` is
+    // NOT the one guaranteed-first C export — several shipped examples
+    // (c-vt-sgr, c-vt-encode-key, wasm-sgr, wasm-key-encode) never call it at
+    // all, only a narrower `*_new` (e.g. `rustty_sgr_new`). So every other
+    // top-level `*_new` constructor in this file also calls
+    // `install_log_backend()` (see each one); it is `Once`-guarded, so
+    // whichever constructor an embedder calls first wins and every later call
+    // — from this function or any other — is a genuine no-op.
     crate::sys::install_log_backend();
     // SAFETY: `alloc`/`result` validity is the caller's contract.
     unsafe { terminal::new(alloc, result, cols, rows) }.to_c_int()

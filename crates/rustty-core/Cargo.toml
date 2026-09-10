@@ -16,6 +16,14 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# The `LOG` findings-class facade (task-14a review CRITICAL 2,
+# `.port/parity-closure/DECISION-logging.md` §6): the app-build counterpart of
+# `rustty-vt-c::sys::Logger` — `logging::AppLogger` forwards restored
+# `log::warn!` sites in `rustty-vt`/`rustty-renderer`/`rustty-font-shaper`/
+# `rustty-termio`/etc. (14b-14e) into this crate's OWN already-faithful
+# `logging::log` sink, so the actual `rustty` application binary (which does
+# NOT link `rustty-vt-c`) has a real backend once those sites are restored.
+log = { workspace = true }
 # Core C13 (`linkAtPin`, Surface.zig:4347): `strmap.searchIterator(link.regex)`
 # is vt's `build_options.oniguruma`-gated StringMap search surface — the
 # reference build compiles Ghostty WITH oniguruma, so core (the reference

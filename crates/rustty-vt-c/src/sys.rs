@@ -665,10 +665,11 @@ impl log::Log for Logger {
 static LOGGER: Logger = Logger;
 
 /// Register [`Logger`] as the process-wide `log` backend and set the max
-/// level. Idempotent (safe to call from every crate-entry C export); the
-/// second and later calls are no-ops (`log::set_logger` errors are the
-/// expected "already installed" case, not a fault — swallowed exactly like
-/// `log_fn_c_abi`'s formatting-error `catch {}` above).
+/// level. `std::sync::Once`-guarded: every call after the first (from any of
+/// the crate's `*_new` entry points, all of which call this) is a genuine
+/// no-op — it neither re-installs nor re-touches the max-level filter, so a
+/// host that has since changed its own filter is never overridden by a later
+/// `rustty_terminal_new`.
 ///
 /// PORT NOTE: the wasm-release arm mirrors `lib_vt.zig`'s own size guard
 /// (see `log_fn`'s PORT NOTE) — `options.log_level = .err` there still passes
@@ -678,17 +679,46 @@ static LOGGER: Logger = Logger;
 /// code the facade's call sites bring in, which `Off` guarantees by never
 /// constructing a `log::Record` at the call site's `log::warn!` macro
 /// expansion (the crate's own filter check short-circuits first).
+///
+/// Non-wasm level (IMPORTANT 4, task-14a review): `lib_vt.zig`'s `std_options`
+/// does NOT set `log_level` for the `terminal.options.c_abi` arm, so Zig's
+/// build-mode default applies — `.debug` in Debug, `.err` in ReleaseFast (the
+/// shipped configuration). `cfg!(debug_assertions) ? Debug : Error` is the
+/// direct port of that default, not an independent choice; a release
+/// embedder must not receive warn/info/debug records the reference itself
+/// suppresses.
+///
+/// CRITICAL 1 fix (task-14a review): `log::set_max_level` used to run
+/// unconditionally, even when `log::set_logger` returned `Err` (an embedder
+/// or an earlier call already installed a logger) — clobbering that host's
+/// own filter back up to this crate's level on every `rustty_terminal_new`.
+/// It now runs ONLY inside the success arm. If `set_logger` fails, this
+/// function leaves the existing global logger AND its max-level filter
+/// completely alone — the correct behavior when a host/embedder already
+/// owns the `log` crate's global registration is containment, not clobber.
 pub fn install_log_backend() {
-    #[cfg(all(target_arch = "wasm32", not(debug_assertions)))]
-    {
-        log::set_max_level(log::LevelFilter::Off);
-        return;
-    }
-    #[cfg(not(all(target_arch = "wasm32", not(debug_assertions))))]
-    {
-        let _ = log::set_logger(&LOGGER);
-        log::set_max_level(log::LevelFilter::Debug);
-    }
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        #[cfg(all(target_arch = "wasm32", not(debug_assertions)))]
+        {
+            log::set_max_level(log::LevelFilter::Off);
+        }
+        #[cfg(not(all(target_arch = "wasm32", not(debug_assertions))))]
+        {
+            if log::set_logger(&LOGGER).is_ok() {
+                let level = if cfg!(debug_assertions) {
+                    log::LevelFilter::Debug
+                } else {
+                    log::LevelFilter::Error
+                };
+                log::set_max_level(level);
+            }
+            // else: a logger (an embedder's own, or another instance of this
+            // one) is already installed. Leave its max_level filter as-is —
+            // touching it here would be exactly the embedder-visible
+            // regression this fix addresses.
+        }
+    });
 }
 
 /// Built-in log callback that writes to stderr.
