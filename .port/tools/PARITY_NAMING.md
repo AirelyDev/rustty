@@ -28,6 +28,33 @@ rebrand never makes the port look divergent from the oracle.
 - runtime identity strings (routed through rustty-identity)
 - shell-integration scripts + GHOSTTY_* env vars -> RUSTTY_*
 - trace files: main_ghostty.rs -> main_rustty.rs, cli/ghostty.rs -> cli/rustty.rs
+- **log SCOPE TAGS**: `std.log.scoped(.gtk_ghostty_*)` -> `LOG_SCOPE =
+  "gtk_rustty_*"`. Ruled by task-14d-2 (which introduced `gtk_rustty_config`)
+  and applied to the other 7 by task-14d-3 (`gtk_rustty_application`,
+  `_surface`, `_window`, `_split_tree`, `_command_palette`, `_resize_overlay`,
+  `_global_shortcuts`). Three reasons, recorded here rather than in one file's
+  code comment:
+    1. a scope tag IS a runtime identity string — it is emitted into
+       user-visible diagnostic text (`warning(gtk_rustty_surface): ...`), which
+       is exactly what the line above this one covers, and a hardcoded
+       `ghostty` literal in new code is what the residual-grep rule targets;
+    2. no oracle byte-parity is lost. Nothing in the workspace compares scope
+       tags against the oracle, and there is no `identity-oracle` hook for
+       them, so nothing that flips strings for oracle comparison is bypassed;
+    3. it does NOT conflict with the GType registered `NAME = "GhosttyConfig"`
+       / `"GhosttySurface"` / ... kept verbatim a few lines away in the same
+       files. A GType name is a REGISTERED TYPE IDENTITY the reference's `.name`
+       fixes and the type system keys off; a log scope is a label with no
+       consumer.
+  **Two things in this family are NOT rebranded**, and both have live examples:
+  a URL into ghostty's own documentation inside a diagnostic message
+  (`gtk/class/surface.rs`'s `https://ghostty.org/docs/help/gtk-opengl-context`)
+  is upstream's page and still has to resolve; and a scope with no brand token
+  (`gtk`, `openuri`, `gtk_x11`, `winproto_wayland`, `embedded_window`, ...) is
+  carried verbatim, there being nothing to rename.
+  If a later stage wants both spellings, route scope tags through
+  `rustty-identity` so `--features identity-oracle` can flip them; each
+  `LOG_SCOPE` constant is a one-line change.
 
 ## Residual-grep rule
 A gate that fails on a stray `ghostty` MUST exclude the carve-out paths above

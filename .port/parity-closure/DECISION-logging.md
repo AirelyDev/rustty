@@ -1078,6 +1078,27 @@ The only surviving direct call in the workspace is
 bin's own port of `main_ghostty.zig`'s `logFn` — not a restored `LOG` row and
 not what call shape 2 described.
 
+> **CORRECTED by task-14d-3: the grep above missed three.** `grep 'logging::log('`
+> is anchored on the PATH-QUALIFIED spelling. `crates/rustty-apprt-c/src/lib.rs`
+> imported the sink as `use rustty_core::logging::{log, Level};` and called it as
+> a bare `log(Level::Err, "default", ...)` — three sites, the port of
+> `src/main_c.zig`'s `std.log.err`/`.info`. So call shape 2 had **three**
+> adherents, not zero. **This does not change the ruling**; it strengthens the
+> second argument for it. Those three were exactly what §6r4 predicts:
+> `discover_emitters` cannot see the shape, so `src/main_c.zig` measured
+> 3-short while emitting all 3, and its allowance would have stayed stale
+> forever. task-14d-3 converted them to
+> `log::{error,info}!(target: "")` and the file reconciled to 0. The lesson is
+> the one PROCEDURE.md's blind spot 3 already states in another form: a grep
+> anchored on one spelling of a call cannot enumerate that call's sites.
+>
+> That conversion surfaced a second defect, fixed in the same commit: the
+> facade's `.default` scope is the EMPTY target, and `log_with`'s port of
+> `logFn` tests `scope == "default"`, so `target: ""` rendered `warning(): msg`
+> where the reference prints `warning: msg`. Two live sites already had it
+> (`renderer/overlay.rs`, `shadertoy.rs`). Normalized in
+> `rustty_core::logging::scope_from_target`.
+
 ### Why the prescription does not survive contact, and the practice does
 
 1. **The indirection it forbids lands in the same function one frame later.**
@@ -1113,9 +1134,18 @@ sink and does not use the facade. §6r2's forward-looking note called this
 correctly before any of its rows were restored, and task-14d-2 confirmed it in
 practice: those helpers read `rustty_global::logging()`, a leaf-crate
 process-global that needs no install call and works in tests, benches, the exe
-and the lib alike, so the facade would be strictly LESS reachable there. All 26
-live emissions in that crate use it, and `G-LOGFILE` counts a `log_*`-prefixed
-fn facade as an emission, so the shape is measurable.
+and the lib alike, so the facade would be strictly LESS reachable there. All
+**30** live emissions in that crate use it, and `G-LOGFILE` counts a
+`log_*`-prefixed fn facade as an emission, so the shape is measurable.
+
+> **NUMBER CORRECTED by task-14d-3.** This said "all 26". 26 is ONE reference
+> file's count — `src/config/Config.zig`'s arm, which G-LOGFILE reports as
+> `config_struct.rs+value_types.rs=26`. The crate carries four more through the
+> same sink: `file_load.rs=2` and `path.rs=2`. The substantive claim (every
+> emission in `rustty-config` goes through its own `format_log`/`log_*` sink,
+> none through the `log` facade) is unchanged and still true; only the number
+> was wrong. Read a crate-wide count off `check_log_reconcile.py --report`,
+> which reports per REFERENCE FILE, never off a single arm.
 
 ### The cost this accepts, stated plainly
 
