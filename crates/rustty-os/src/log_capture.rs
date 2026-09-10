@@ -221,6 +221,18 @@ pub(crate) fn collapse_ws(src: &str) -> String {
     out
 }
 
+/// Emits one `Warn` record at `target`, for tests that need to prove the
+/// capture is OBSERVING a given scope on the calling thread.
+///
+/// It lives here, not at the call site, because
+/// `check_log_reconcile.py` counts every `log::` macro in a MAPPED port file as
+/// an emission — test call sites included — so a probe written inline in
+/// `cf_release_thread.rs` credited that file's arm with a tenth emission
+/// against nine reference sites. This module is in no portmap arm.
+pub(crate) fn emit_probe(target: &str, message: &str) {
+    log::warn!(target: target, "{message}");
+}
+
 /// The whitespace-collapsed head of a facade emission: the macro, the target
 /// and the message literal. Level is one of `warn`/`error`/`info`/`debug`.
 pub(crate) fn emission_fragment(level: &str, message: &str) -> String {

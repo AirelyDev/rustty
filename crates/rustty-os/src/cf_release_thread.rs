@@ -347,7 +347,6 @@ unsafe fn CFRelease(_cf: *mut std::ffi::c_void) {}
 mod tests {
     //! task-14e-2 / S111-F4 — `os/cf_release_thread.zig`'s nine diagnostics.
     use super::*;
-    use crate::log_capture::CapturedRecord;
 
     /// Runs the REAL xev loop on THIS thread (the same shape as
     /// `tests/cf_release_live.rs`, which is an integration test and so cannot
@@ -455,10 +454,17 @@ mod tests {
     /// capture would have SEEN a `cf_release_thread`-scoped record emitted on
     /// this thread, so the empty tail of that vector means "not emitted" and
     /// not "not observable".
+    ///
+    /// The probe emission lives in `log_capture` rather than here on purpose.
+    /// `check_log_reconcile.py` counts every `log::` macro in a MAPPED port
+    /// file as an emission, TEST call sites included — a probe written inline
+    /// credited `src/os/cf_release_thread.zig`'s arm with a tenth emission
+    /// against nine reference sites, which would have masked a future dropped
+    /// site behind a phantom. `log_capture.rs` is in no portmap arm.
     #[test]
     fn the_capture_observes_this_scope_on_this_thread() {
         let cap = crate::log_capture::start();
-        log::warn!(target: LOG_SCOPE, "probe");
+        crate::log_capture::emit_probe(LOG_SCOPE, "probe");
         let messages = cap.messages();
         drop(cap);
         assert_eq!(
@@ -469,6 +475,5 @@ mod tests {
             )],
             messages
         );
-        let _: Vec<CapturedRecord> = Vec::new();
     }
 }
