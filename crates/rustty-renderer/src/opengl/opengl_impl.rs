@@ -36,11 +36,15 @@
 //! - the `alloc: std.mem.Allocator` field (OpenGL.zig:40) is DROPPED — the Rust
 //!   port does not thread an allocator (the leaves are `Vec`-managed), exactly as
 //!   `metal_impl` dropped it.
-//! - `surfaceInit`/`finalizeSurfaceInit`/`threadEnter`/`threadExit`/
-//!   `displayRealized` (OpenGL.zig:161-250) — the GTK-runtime `prepareContext(null)`
-//!   arm — need the `epoxy` loader decision L5 owns; NOT ported this tier. The
-//!   offscreen entry point is `init_offscreen`, which stands up its own headless
+//! - `surfaceInit`/`finalizeSurfaceInit`/`threadEnter`/`threadExit`
+//!   (OpenGL.zig:161-234) — the GTK-runtime `prepareContext(null)` arm — need the
+//!   `epoxy` loader decision L5 owns; NOT ported this tier. The offscreen entry
+//!   point is `init_offscreen`, which stands up its own headless
 //!   `OffscreenContext` (Task 1) and runs `prepare_context` over it.
+//!   UPDATED (task-14c-3): `displayRealized` (OpenGL.zig:237-250) IS ported now —
+//!   see [`OpenGL::display_realized`]. It was previously inlined into
+//!   `generic/linux_impl.rs::display_realized` in an ABORT-on-failure shape; the
+//!   reference warns and continues (parity rows S113-F1 / S115-F2).
 //! - `present`/`present_last_target` ("GL-ATTACH" deferred item): the real
 //!   `glBlitFramebuffer`-to-default-framebuffer body IS ported (below) but never
 //!   exercised by the offscreen milestone — the golden reads `Target::read_rgba()`
@@ -63,6 +67,15 @@ use super::sampler;
 use super::shaders::{self, Shaders};
 use super::target::{self, Target};
 use super::texture::{self, Texture};
+
+// const log = std.log.scoped(.opengl); (OpenGL.zig:34)
+//
+// The `log` facade's `target` for every call site ported out of `OpenGL.zig`. It is
+// the SAME `.opengl` scope every file in `pkg/opengl` and `src/renderer/opengl`
+// declares (`gl.rs`'s macro header spells that out), so `opengl/shaders.rs` and the
+// `Frame.zig` tail inlined into `generic/linux_impl.rs` both target this constant
+// rather than declaring their own copy.
+pub(crate) const LOG_SCOPE: &str = "opengl";
 
 /// Names the anonymous `struct { width: u32, height: u32 }` that `surfaceSize`
 /// returns (OpenGL.zig:279). Mirrors `metal_impl::SurfaceSize`.
@@ -250,6 +263,63 @@ impl OpenGL {
         self.context.is_some()
     }
 
+    /// PORTS: `OpenGL.zig:237-250` — `displayRealized`.
+    ///
+    /// ```zig
+    /// pub fn displayRealized(self: *const OpenGL) void {
+    ///     _ = self;
+    ///
+    ///     switch (apprt.runtime) {
+    ///         apprt.gtk => prepareContext(null) catch |err| {
+    ///             log.warn(
+    ///                 "Error preparing GL context in displayRealized, err={}",
+    ///                 .{err},
+    ///             );
+    ///         },
+    ///
+    ///         else => @compileError("only GTK should be calling displayRealized"),
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// **The return type is `void` and that is load-bearing.** A failed
+    /// `prepareContext` is WARNED AND SWALLOWED here; the generic renderer's
+    /// `displayRealized` (`generic.zig:934-961`) goes on to rebuild the shaders and
+    /// the swap chain regardless, and only THOSE `try`s can fail the re-realize.
+    /// The port used to return `Err(Error::GlFailed)` straight out of
+    /// `generic/linux_impl.rs::display_realized` on a prep failure, which aborted the
+    /// rebuild the reference performs — parity rows `S113-F1` (this warn) and
+    /// `S115-F2` (the aborted rebuild). Both are fixed by this method existing and
+    /// returning `()`.
+    ///
+    /// RUSTTY-ONLY GUARD (`owns_context`): the reference has exactly one GL context
+    /// model — GDK owns it — so its GTK arm always reloads. The port additionally has
+    /// the OFFSCREEN model (`init_offscreen`), whose owned `OffscreenContext` is
+    /// prepared once and is NEVER torn down by `display_unrealized` (which frees only
+    /// the swap chain + shaders, `generic.zig:982-983`), so it stays current across an
+    /// unrealize/realize cycle and must not be re-loaded. On the WINDOWED path a
+    /// re-realize CAN hand us a fresh GDK context whose entry points must be re-bound,
+    /// which is what the reference's reload is for.
+    pub fn display_realized(&self) {
+        // The offscreen context never needs the reload — see the note above. This
+        // guard is NOT the reference's; the reference has no offscreen path.
+        if self.owns_context() {
+            return;
+        }
+
+        // apprt.gtk => prepareContext(null) catch |err| { ... }
+        if let Err(err) = prepare_context_for_display_realized() {
+            // log.warn(
+            //     "Error preparing GL context in displayRealized, err={}",
+            //     .{err},
+            // );
+            log::warn!(
+                target: LOG_SCOPE,
+                "Error preparing GL context in displayRealized, err={err:?}"
+            );
+        }
+    }
+
     /// PORTS: `OpenGL.zig:58-60`.
     ///
     /// ```zig
@@ -402,11 +472,18 @@ impl OpenGL {
             Ok(())
         })();
 
-        // defer gl.enable(GL_FRAMEBUFFER_SRGB) catch |err| log.err(...);
-        if draw::enable(gl::FRAMEBUFFER_SRGB).is_err() {
-            // log.err("Error re-enabling GL_FRAMEBUFFER_SRGB, err={}", .{err});
-            // (not restored yet — the OpenGL 14c stage; the facade itself IS wired as
-            // of task-14c-1. Swallow, as the reference `defer` does after logging.)
+        // defer gl.enable(gl.c.GL_FRAMEBUFFER_SRGB) catch |err| {
+        //     log.err("Error re-enabling GL_FRAMEBUFFER_SRGB, err={}", .{err});
+        // };  (OpenGL.zig:307-309)
+        //
+        // RESTORED (task-14c-3, S113-F4). The reference LOGS and swallows — the
+        // `defer` has no way to fail the function — so the payload must be bound
+        // rather than dropped with `.is_err()`, which is what made this arm dead.
+        if let Err(err) = draw::enable(gl::FRAMEBUFFER_SRGB) {
+            log::error!(
+                target: LOG_SCOPE,
+                "Error re-enabling GL_FRAMEBUFFER_SRGB, err={err:?}"
+            );
         }
 
         blit?;
@@ -496,9 +573,20 @@ impl OpenGL {
             Ok(())
         })();
 
-        if draw::enable(gl::FRAMEBUFFER_SRGB).is_err() {
-            // (not restored yet — the OpenGL 14c stage; the facade itself IS wired as
-            // of task-14c-1. Swallow, as the reference `defer` does.)
+        // defer gl.enable(gl.c.GL_FRAMEBUFFER_SRGB) catch |err| {
+        //     log.err("Error re-enabling GL_FRAMEBUFFER_SRGB, err={}", .{err});
+        // };  (OpenGL.zig:307-309)
+        //
+        // RESTORED (task-14c-3, S113-F4) — the WINDOWED twin of the same reference
+        // `defer`. The port splits the one reference `present` into `present` (by
+        // value, offscreen) and `present_to_default` (by reference, windowed), so the
+        // single oracle site has TWO live emissions here; the ledger row's rustty
+        // column names both.
+        if let Err(err) = draw::enable(gl::FRAMEBUFFER_SRGB) {
+            log::error!(
+                target: LOG_SCOPE,
+                "Error re-enabling GL_FRAMEBUFFER_SRGB, err={err:?}"
+            );
         }
 
         blit?;
@@ -695,6 +783,69 @@ impl OpenGL {
     }
 }
 
+/// TEST-ONLY fault injection for [`OpenGL::display_realized`]'s
+/// `prepareContext(null)` arm.
+///
+/// The warn-and-continue behaviour the reference has (`OpenGL.zig:241-246` →
+/// `generic.zig:934-961`) is only observable when the context prep FAILS while the
+/// rest of the rebuild can still succeed, and no test can produce that state
+/// honestly: `sys::prepare_context_windowed` fails only when libEGL is missing, no
+/// context is current, or the driver is under GL 4.3 — and in every one of those
+/// states the shader/swap-chain rebuild that must be proven to still RUN would fail
+/// too, so a passing test could not distinguish "continued and rebuilt" from
+/// "aborted". Flipping this instead lets the test run against a live, healthy
+/// offscreen context while the prep arm reports failure, which isolates exactly the
+/// control flow the two parity rows are about.
+///
+/// `#[cfg(test)]` — it does not exist in the production library. Callers MUST hold
+/// `gl::test_support::gl_lock()` while it is set, because it is process-global.
+#[cfg(test)]
+pub(crate) static FORCE_DISPLAY_REALIZED_PREP_FAILURE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// RAII setter for [`FORCE_DISPLAY_REALIZED_PREP_FAILURE`]: clears the flag on drop
+/// so a panicking test cannot leave the whole test binary's
+/// [`OpenGL::display_realized`] permanently faulted.
+#[cfg(test)]
+pub(crate) struct ForcedPrepFailure;
+
+#[cfg(test)]
+impl ForcedPrepFailure {
+    pub(crate) fn set() -> Self {
+        FORCE_DISPLAY_REALIZED_PREP_FAILURE.store(true, std::sync::atomic::Ordering::SeqCst);
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for ForcedPrepFailure {
+    fn drop(&mut self) {
+        FORCE_DISPLAY_REALIZED_PREP_FAILURE.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// The message [`ForcedPrepFailure`] makes [`OpenGL::display_realized`] warn about,
+/// shared by the two tests that assert on it (here and in `generic::linux_impl`) so
+/// the two cannot drift apart.
+#[cfg(test)]
+pub(crate) const FORCED_PREP_FAILURE_WARNING: &str = concat!(
+    "Error preparing GL context in displayRealized, ",
+    "err=EglUnavailable(\"forced by FORCE_DISPLAY_REALIZED_PREP_FAILURE (test)\")"
+);
+
+/// The `prepareContext(null)` call of [`OpenGL::display_realized`], behind the
+/// test-only fault-injection hook above. In a non-test build this is exactly
+/// `sys::prepare_context_windowed()`.
+fn prepare_context_for_display_realized() -> Result<(u32, u32), sys::Error> {
+    #[cfg(test)]
+    if FORCE_DISPLAY_REALIZED_PREP_FAILURE.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(sys::Error::EglUnavailable(
+            "forced by FORCE_DISPLAY_REALIZED_PREP_FAILURE (test)".to_string(),
+        ));
+    }
+    sys::prepare_context_windowed()
+}
+
 /// Pixel format for image texture options.
 // pub const ImageTextureFormat = enum { gray, rgba, bgra };  (OpenGL.zig:380-395)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -804,5 +955,90 @@ mod tests {
         target.deinit();
         shaders.deinit();
         ogl.deinit();
+    }
+    /// PARITY (S113-F1) — `displayRealized`'s context-prep failure must WARN and
+    /// RETURN, never abort. The reference `OpenGL.displayRealized` returns `void`
+    /// (`OpenGL.zig:237`) and its GTK arm `catch`es `prepareContext`'s error into a
+    /// `log.warn` (`OpenGL.zig:241-246`); the port used to turn the same failure into
+    /// an `Err(Error::GlFailed)` that aborted the caller's rebuild.
+    ///
+    /// Asserts BOTH halves: the method returns (no panic, no error — its signature is
+    /// `()`), and it emits EXACTLY ONE record, whose full `(level, target, message)`
+    /// is compared as a vector so an extra record, a wrong scope, or a dropped `err=`
+    /// payload all fail. `{err:?}` is the crate-wide convention for the reference's
+    /// `{}`-on-an-error (`generic.rs`, `metal/*`), so the payload renders as the Rust
+    /// error's `Debug`.
+    ///
+    /// NO GL CONTEXT NEEDED, deliberately — the prep arm is faulted by
+    /// [`ForcedPrepFailure`], so this test is real coverage on every host including
+    /// the macOS lane that cannot compile the rest of this module. It takes
+    /// `gl_lock` anyway because the fault flag is process-global.
+    #[test]
+    fn display_realized_warns_and_continues_when_context_prep_fails() {
+        let _guard = test_support::gl_lock();
+        let _forced = ForcedPrepFailure::set();
+
+        // The WINDOWED api (`OpenGL::init`) — `context: None`, so `owns_context()` is
+        // false and the reference's `prepareContext(null)` arm is reached.
+        let api = OpenGL::init(AlphaBlending::Native);
+        assert!(!api.owns_context());
+
+        let capture = crate::log_capture::start();
+        // Returns `()`. If this ever regains a `Result` the parity row reopens.
+        api.display_realized();
+        let records = capture.messages();
+        drop(capture);
+
+        assert_eq!(
+            records,
+            vec![(
+                log::Level::Warn,
+                LOG_SCOPE.to_string(),
+                FORCED_PREP_FAILURE_WARNING.to_string(),
+            )]
+        );
+    }
+
+    /// The other side of the same guard: on the OFFSCREEN path (`owns_context()`)
+    /// there is no reload to attempt, so `display_realized` must emit NOTHING. This
+    /// is the "do not put a diagnostic on a success path" check — an emission here
+    /// would fire on every offscreen re-realize. Asserts the empty vector.
+    ///
+    /// Needs no GL context either: `owns_context()` is decided by the `context`
+    /// field, and the fault flag is set to prove the early return happens BEFORE the
+    /// prep arm.
+    #[test]
+    fn display_realized_is_silent_on_the_offscreen_path() {
+        let _guard = test_support::gl_lock();
+        let _forced = ForcedPrepFailure::set();
+
+        // Construct the OWNED-context shape without standing up EGL: this test is
+        // about the `owns_context()` branch, not about GL. `init_offscreen` would
+        // need a live driver and would make the test skippable for no benefit.
+        let api = match OpenGL::init_offscreen(AlphaBlending::Native, 8, 8) {
+            Ok(o) => o,
+            Err(e) => {
+                test_support::require_gl_or_skip(
+                    "display_realized_is_silent_on_the_offscreen_path",
+                    &e,
+                );
+                eprintln!(
+                    "no headless OpenGL {}.{} core context ({e}); skipping \
+                     display_realized_is_silent_on_the_offscreen_path",
+                    sys::MIN_VERSION_MAJOR,
+                    sys::MIN_VERSION_MINOR,
+                );
+                return;
+            }
+        };
+        assert!(api.owns_context());
+
+        let capture = crate::log_capture::start();
+        api.display_realized();
+        let records = capture.messages();
+        drop(capture);
+
+        assert_eq!(records, Vec::new());
+        api.deinit();
     }
 }
