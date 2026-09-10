@@ -179,6 +179,40 @@ pub fn register_resources() {
     });
 }
 
+/// TEST-ONLY: bind GTK for a display-requiring `#[ignore]`d test, or FAIL.
+///
+/// task-14d-3 fix round 1 (F2). Every such test used to open with
+/// `if gtk4::init().is_err() { return; }`, which reports `1 passed` when the
+/// test did not run at all. That is not a weak signal, it is an
+/// INDISTINGUISHABLE one: a reviewer reproducing this stage had sway fail to
+/// start, and the S50-F4 test then reported `1 passed` BOTH at baseline and with
+/// the defect re-introduced. Only forcing a panic on init failure revealed the
+/// run was vacuous.
+///
+/// These tests are `#[ignore]`d, so reaching one means an operator asked for it
+/// explicitly. In that situation a missing display is a broken environment, not
+/// a condition to paper over — the same reasoning as this crate's strict-mode
+/// gates, where a skip that cannot be told from a pass is not evidence.
+///
+/// The message names the two real causes so the failure is actionable, because
+/// `gtk4::init()` also fails legitimately when another headed test in the SAME
+/// binary has already bound GTK to a different libtest thread.
+#[cfg(test)]
+pub(crate) fn init_for_display_test(what: &str) {
+    if gtk4::init().is_ok() {
+        return;
+    }
+    panic!(
+        "gtk4::init() failed, so `{what}` could not run. This test is #[ignore]d \
+         and was asked for explicitly, so this is a FAILURE, not a skip — a \
+         silent `return` here reports `1 passed` for a test that never ran. \
+         Two causes: (a) no display — export DISPLAY or WAYLAND_DISPLAY (a \
+         headless sway works: see .port/tools/gates/v20b_compute_size_clamp_gate.sh); \
+         (b) another headed test in this binary already bound GTK to a different \
+         libtest thread — re-run with a narrower filter or `--test-threads=1`."
+    );
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

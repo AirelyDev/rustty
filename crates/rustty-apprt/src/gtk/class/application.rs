@@ -5275,9 +5275,10 @@ mod tests {
     #[test]
     #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored"]
     fn application_global_shortcut_trigger_performs_action() {
-        if gtk4::init().is_err() {
-            return;
-        }
+        // F2: NOT `if gtk4::init().is_err() { return; }`. This is the test whose
+        // own vacuity taught this stage the lesson; a silent skip here is
+        // indistinguishable from a pass, and a reviewer hit exactly that.
+        crate::gtk::init_for_display_test("application_global_shortcut_trigger_performs_action");
         let _ = libadwaita::init();
 
         let mut core_app: Box<CoreApp<Double>> =

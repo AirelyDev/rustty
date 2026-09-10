@@ -4802,9 +4802,8 @@ mod tests {
     #[test]
     #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
     fn surface_template_children_bind() {
-        if gtk4::init().is_err() {
-            return;
-        }
+        // F2: a silent skip reports `1 passed` for a test that never ran.
+        crate::gtk::init_for_display_test("surface_template_children_bind");
         let _ = libadwaita::init();
         crate::gtk::register_resources();
 
@@ -4845,9 +4844,8 @@ mod tests {
     fn default_termio_env_keeps_launch_lang() {
         use rustty_global::EnvMapExt as _;
 
-        if gtk4::init().is_err() {
-            return;
-        }
+        // F2: a silent skip reports `1 passed` for a test that never ran.
+        crate::gtk::init_for_display_test("surface (display-requiring test)");
         let _ = libadwaita::init();
         crate::gtk::register_resources();
 
@@ -4960,9 +4958,7 @@ mod tests {
     #[test]
     #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
     fn key_press_routes_through_im_context_first() {
-        let Some(surface) = display_surface() else {
-            return;
-        };
+        let surface = display_surface();
         let imp = surface.imp();
 
         // During a keypress that is NOT composing, a simple IM commit ("a") is
@@ -4995,14 +4991,16 @@ mod tests {
     /// Sets up GTK + a default `GhosttyApplication` and returns a fresh `Surface`.
     /// Returns `None` when no display is available (the caller returns early).
     #[cfg(test)]
-    fn display_surface() -> Option<Surface> {
-        if gtk4::init().is_err() {
-            return None;
-        }
+    /// F2: this used to return `None` when GTK could not init, and every caller
+    /// spelled `let Some(surface) = display_surface() else { return; }` — nine
+    /// `#[ignore]`d tests that each reported `1 passed` without running. It now
+    /// returns the `Surface` and FAILS loudly instead.
+    fn display_surface() -> Surface {
+        crate::gtk::init_for_display_test("surface (display_surface)");
         let _ = libadwaita::init();
         crate::gtk::register_resources();
         let _app = crate::gtk::class::application::Application::build_default_for_test();
-        Some(Surface::new(SurfaceOverrides::default()))
+        Surface::new(SurfaceOverrides::default())
     }
 
     /// **Invariant 6 / §5.2** — `dispose` is idempotent (the null-guards). Populates
@@ -5012,9 +5010,7 @@ mod tests {
     #[test]
     #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
     fn surface_dispose_is_idempotent() {
-        let Some(surface) = display_surface() else {
-            return;
-        };
+        let surface = display_surface();
         let imp = surface.imp();
 
         // `config` is populated by `init`'s app fallback; also install a source id.
@@ -5040,9 +5036,7 @@ mod tests {
     #[test]
     #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
     fn surface_dispose_removes_all_source_ids() {
-        let Some(surface) = display_surface() else {
-            return;
-        };
+        let surface = display_surface();
         let imp = surface.imp();
 
         imp.progress_bar_timer
@@ -5086,9 +5080,7 @@ mod tests {
     #[test]
     #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
     fn surface_core_is_none_before_first_resize() {
-        let Some(surface) = display_surface() else {
-            return;
-        };
+        let surface = display_surface();
 
         // No core surface exists before the first resize (**invariant 3**). The
         // apprt seam agrees: `core()` on the widget is `None`.
@@ -5119,9 +5111,7 @@ mod tests {
     #[test]
     #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
     fn surface_init_on_first_resize() {
-        let Some(surface) = display_surface() else {
-            return;
-        };
+        let surface = display_surface();
         let imp = surface.imp();
 
         assert!(surface.core().is_none(), "no core surface before resize");
@@ -5164,9 +5154,7 @@ mod tests {
     #[test]
     #[ignore = "requires a display; run via cargo test -p rustty-apprt --features gtk -- --ignored"]
     fn surface_render_signal_does_not_abort() {
-        let Some(surface) = display_surface() else {
-            return;
-        };
+        let surface = display_surface();
         let imp = surface.imp();
 
         // A null `GdkGLContext` value (typed as GLContext so the emit type-checks);
@@ -5199,9 +5187,7 @@ mod tests {
     fn surface_shim_read_accessors_forward() {
         use rustty_apprt_api::Surface as _;
 
-        let Some(surface) = display_surface() else {
-            return;
-        };
+        let surface = display_surface();
 
         // Stamp a known size into the cache (what `gl_resize` does), then read it
         // back through the apprt-surface seam pointer.
@@ -5271,9 +5257,7 @@ mod tests {
     fn render_contract_chain() {
         use rustty_apprt_api::{CoreSurfaceHandle, Surface as _, Target};
 
-        let Some(surface) = display_surface() else {
-            return;
-        };
+        let surface = display_surface();
         let app_thread = std::thread::current().id();
 
         // A surface-target handle whose `rt_surface` points at this widget's pinned
