@@ -68,6 +68,28 @@ git diff --stat .port/parity-closure/LEDGER.tsv
 python3 .port/tools/gates/check_parity_closure.py
 ```
 
+## Concurrency: one implementer at a time (ruled 2026-09-10)
+
+Three times on this plan, one worker's commit carried another worker's changes.
+Diagnosed properly, the cause is not careless staging:
+
+- `git add <path>` adds to the INDEX; a bare `git commit` then commits the WHOLE
+  index, including anything another worker staged earlier. Putting the paths on the
+  commit (`git commit <paths> -m ...`) fixes that half.
+- It does not fix the other half. **Two workers editing the SAME FILE in one working
+  tree contaminate each other no matter how the commit is scoped**, because a commit
+  takes the file's whole content. And this plan's workers all edit the same three
+  files: `LEDGER.tsv`, `ADJUDICATION.md`, and `NEW-FINDINGS.md`. Two of them also
+  independently claimed the same new finding id.
+
+**So: run ONE implementer at a time on this plan.** Reviewers are read-only and may
+run in parallel with anything. The shared ledger has to serialize regardless, so
+parallel implementers do not buy throughput — they move the conflict out of git,
+where it is loud, and into the documents, where it is silent.
+
+If parallel implementation is ever genuinely needed, give each worker its own git
+worktree and merge, rather than sharing one tree.
+
 ## Constraints that bind every row
 
 - **R1 full fidelity** — comments, tests assertion-for-assertion, error paths.
