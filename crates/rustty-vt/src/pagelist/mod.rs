@@ -1348,7 +1348,7 @@ pub struct OutOfMemory;
 // `enabled = builtin.is_test` gate (the `Module::enabled()` short-circuit).
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum InitFp {
+pub(crate) enum InitFp {
     InitMemoryPool,
     InitPages,
     ViewportPin,
@@ -1374,7 +1374,7 @@ enum InitPagesFp {
 
 #[cfg(test)]
 thread_local! {
-    static INIT_TW: core::cell::RefCell<rustty_util::tripwire::Module<InitFp, OutOfMemory>> =
+    pub(crate) static INIT_TW: core::cell::RefCell<rustty_util::tripwire::Module<InitFp, OutOfMemory>> =
         core::cell::RefCell::new(rustty_util::tripwire::module());
     static INIT_PAGES_TW: core::cell::RefCell<rustty_util::tripwire::Module<InitPagesFp, OutOfMemory>> =
         core::cell::RefCell::new(rustty_util::tripwire::module());

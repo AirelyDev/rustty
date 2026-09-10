@@ -646,12 +646,12 @@ impl<'a> Handler<'a> {
     // continues (the `catch |err| log.warn(...)` behavior), so a transient
     // allocation failure never propagates out of the stream.
     #[inline]
-    fn vt<F>(&mut self, f: F)
+    fn vt<F>(&mut self, action: &'static str, f: F)
     where
         F: FnOnce(&mut Terminal) -> Result<(), crate::pagelist::OutOfMemory>,
     {
         let r = f(self.term());
-        self.vt_catch(r);
+        self.vt_catch(action, r);
     }
 
     // The body of the reference's single `vtFallible(...) catch |err| { ... }`:
@@ -672,11 +672,11 @@ impl<'a> Handler<'a> {
     // (e.g. `Screen::start_hyperlink`'s `IncreaseCapacityError`) funnel through
     // the very same catch instead of dropping their `Result`.
     #[inline]
-    fn vt_catch<E>(&mut self, r: Result<(), E>) {
-        if r.is_err() {
+    fn vt_catch<E: std::fmt::Debug>(&mut self, action: &'static str, r: Result<(), E>) {
+        if let Err(err) = r {
             // self.semantic_failure = true;
             self.semantic_failure = true;
-            // log.warn("error handling VT action action={} err={}", .{ action, err });
+            log::warn!(target: LOG_SCOPE, "error handling VT action action={action} err={err:?}");
         }
     }
 
@@ -3224,17 +3224,17 @@ impl<'a> stream::Handler for Handler<'a> {
 
     // .print => try self.terminal.print(value.cp),
     fn print(&mut self, cp: u32) {
-        self.vt(|t| t.print(cp));
+        self.vt("print", |t| t.print(cp));
     }
 
     // .print_slice => try self.terminal.printSlice(value.cps),
     fn print_slice(&mut self, cps: &[u32]) {
-        self.vt(|t| t.print_slice(cps));
+        self.vt("print_slice", |t| t.print_slice(cps));
     }
 
     // .print_repeat => try self.terminal.printRepeat(value),
     fn print_repeat(&mut self, count: usize) {
-        self.vt(|t| t.print_repeat(count));
+        self.vt("print_repeat", |t| t.print_repeat(count));
     }
 
     // .bell => self.bell(),
@@ -3259,7 +3259,7 @@ impl<'a> stream::Handler for Handler<'a> {
 
     // .linefeed => try self.terminal.linefeed(),
     fn linefeed(&mut self) {
-        self.vt(|t| t.linefeed());
+        self.vt("linefeed", |t| t.linefeed());
     }
 
     // .carriage_return => self.terminal.carriageReturn(),
@@ -3423,7 +3423,7 @@ impl<'a> stream::Handler for Handler<'a> {
 
     // .scroll_up => try self.terminal.scrollUp(value),
     fn scroll_up(&mut self, count: usize) {
-        self.vt(|t| t.scroll_up(count));
+        self.vt("scroll_up", |t| t.scroll_up(count));
     }
 
     // .scroll_down => self.terminal.scrollDown(value),
@@ -3453,7 +3453,7 @@ impl<'a> stream::Handler for Handler<'a> {
 
     // .index => try self.terminal.index(),
     fn index(&mut self) {
-        self.vt(|t| t.index());
+        self.vt("index", |t| t.index());
     }
 
     // .next_line => {
@@ -3461,7 +3461,7 @@ impl<'a> stream::Handler for Handler<'a> {
     //     self.terminal.carriageReturn();
     // },
     fn next_line(&mut self) {
-        self.vt(|t| t.index());
+        self.vt("index", |t| t.index());
         self.term().carriage_return();
     }
 
@@ -3511,13 +3511,13 @@ impl<'a> stream::Handler for Handler<'a> {
     // instead of dropping it — same shape as the `dcs_hook` arm below.
     fn set_mode(&mut self, v: stream::Mode) {
         let r = self.do_set_mode(v.mode, true);
-        self.vt_catch(r);
+        self.vt_catch("set_mode", r);
     }
 
     // .reset_mode => try self.setMode(value.mode, false),
     fn reset_mode(&mut self, v: stream::Mode) {
         let r = self.do_set_mode(v.mode, false);
-        self.vt_catch(r);
+        self.vt_catch("reset_mode", r);
     }
 
     // .save_mode => self.terminal.modes.save(value.mode),
@@ -3532,7 +3532,7 @@ impl<'a> stream::Handler for Handler<'a> {
     fn restore_mode(&mut self, v: stream::Mode) {
         let enabled = self.term().modes.restore(v.mode);
         let r = self.do_set_mode(v.mode, enabled);
-        self.vt_catch(r);
+        self.vt_catch("restore_mode", r);
     }
 
     // .request_mode => self.requestMode(value.mode),
@@ -3691,19 +3691,19 @@ impl<'a> stream::Handler for Handler<'a> {
     // .dcs_hook => try self.dcsHook(value),
     fn dcs_hook(&mut self, dcs: crate::parser::DCS) {
         let r = self.do_dcs_hook(dcs);
-        self.vt_catch(r);
+        self.vt_catch("dcs_hook", r);
     }
 
     // .dcs_put => try self.dcsPut(value),
     fn dcs_put(&mut self, code: u8) {
         let r = self.do_dcs_put(code);
-        self.vt_catch(r);
+        self.vt_catch("dcs_put", r);
     }
 
     // .dcs_unhook => try self.dcsUnhook(),
     fn dcs_unhook(&mut self) {
         let r = self.do_dcs_unhook();
-        self.vt_catch(r);
+        self.vt_catch("dcs_unhook", r);
     }
 
     // .apc_start => self.apc_handler.start(),
@@ -3737,7 +3737,7 @@ impl<'a> stream::Handler for Handler<'a> {
     // which is why `vt_catch` is generic over the error (see its PORT NOTE).
     fn start_hyperlink(&mut self, v: stream::StartHyperlink) {
         let r = self.term().active_mut().start_hyperlink(v.uri, v.id);
-        self.vt_catch(r);
+        self.vt_catch("start_hyperlink", r);
     }
 
     // .end_hyperlink => self.terminal.screens.active.endHyperlink(),
@@ -3752,19 +3752,19 @@ impl<'a> stream::Handler for Handler<'a> {
 
     // .decaln => try self.terminal.decaln(),
     fn decaln(&mut self) {
-        self.vt(|t| t.decaln());
+        self.vt("decaln", |t| t.decaln());
     }
 
     // .window_title => try self.windowTitle(value.title),
     fn window_title(&mut self, v: stream::WindowTitle) {
         let r = self.do_window_title(v.title);
-        self.vt_catch(r);
+        self.vt_catch("window_title", r);
     }
 
     // .report_pwd => try self.reportPwd(value.url),
     fn report_pwd(&mut self, v: stream::ReportPwd) {
         let r = self.do_report_pwd(v.url);
-        self.vt_catch(r);
+        self.vt_catch("report_pwd", r);
     }
 
     // .show_desktop_notification => self.desktopNotification(value),
@@ -3879,7 +3879,7 @@ impl<'a> stream::Handler for Handler<'a> {
                     .term()
                     .set_attribute(attr)
                     .map_err(|_| crate::pagelist::OutOfMemory);
-                self.vt_catch(r);
+                self.vt_catch("set_attribute", r);
             }
         }
     }
@@ -3911,7 +3911,7 @@ impl<'a> stream::Handler for Handler<'a> {
 
     // .semantic_prompt => try self.terminal.semanticPrompt(value),
     fn semantic_prompt(&mut self, v: stream::SemanticPrompt) {
-        self.vt(|t| t.semantic_prompt(v));
+        self.vt("semantic_prompt", |t| t.semantic_prompt(v));
     }
 }
 
@@ -4424,7 +4424,21 @@ mod tests {
                 tw.borrow_mut()
                     .errorAlways(StartHyperlinkFp::DupeLink, crate::pagelist::OutOfMemory)
             });
+            // S166-F3: `vt_catch` logs `log.warn("error handling VT action
+            // action={} err={}", .{ action, err })` (stream_terminal.zig:344-347)
+            // on this exact shared-catch path.
+            let cap = crate::log_capture::start();
             s.next_slice(b"\x1b]8;;http://example.com/b\x1b\\");
+            let messages = cap.messages();
+            assert!(
+                messages
+                    .iter()
+                    .any(|(level, target, msg)| *level == log::Level::Warn
+                        && target == "stream_terminal"
+                        && msg.starts_with("error handling VT action action=start_hyperlink err=")),
+                "expected the vt_catch diagnostic, got: {messages:?}"
+            );
+            drop(cap);
             START_HYPERLINK_TW.with(|tw| {
                 tw.borrow_mut()
                     .end(rustty_util::tripwire::ResetMode::Reset)

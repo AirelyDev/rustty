@@ -463,7 +463,7 @@ impl ImageStorage {
 
         // const gop = self.images.getOrPutAssumeCapacity(img.id);
 
-        // log.debug("addImage image={}", .{img.withoutData()});
+        log::debug!(target: LOG_SCOPE, "addImage image={:?}", img.withoutData());
 
         // if (gop.found_existing) {
         //     self.removePlacementsByImageId(s, img.id);
@@ -541,11 +541,10 @@ impl ImageStorage {
         let _ = &alloc;
         // assert(self.images.get(image_id) != null);
         assert(self.images.contains_key(&image_id));
-        // log.debug("placement image_id={} placement_id={} placement={}\n", .{
-        //     image_id,
-        //     placement_id,
-        //     p,
-        // });
+        log::debug!(
+            target: LOG_SCOPE,
+            "placement image_id={image_id} placement_id={placement_id} placement={p:?}\n"
+        );
 
         // When we add a placement, take this opportunity to reap garbage.
         // Garbage are placements that disappeared off scrollback (were
@@ -815,11 +814,13 @@ impl ImageStorage {
             // result.restores.append(s.alloc, .{ ... }) catch {
             //     // OOM: this placement is left to the whims of the
             //     // generic pin tracking. Degraded, but safe.
-            log::warn!(target: LOG_SCOPE, "OOM adjusting image placement for scroll");
+            //     log.warn("OOM adjusting image placement for scroll", .{});
             //     continue;
             // };
             // PORT NOTE: Rust's `Vec::push` aborts on OOM, so the reference's
             // degraded-but-safe fallback arm is unreachable in this port.
+            // S190-F2 (WAIVED) already adjudicated this exact region as
+            // unreachable in the port; do not uncomment this log call.
             result.restores.push(Restore {
                 pin,
                 // SAFETY: shared read of the tracked pin, see above.
@@ -1323,7 +1324,7 @@ impl ImageStorage {
             }
             log::info!(target: LOG_SCOPE, "evicting images for animation frame, evicting={req_bytes}");
             if !self.evict_image_except(alloc, s, req_bytes, Some(image_id)) {
-                // log.warn("failed to evict enough images for animation frame", .{});
+                log::warn!(target: LOG_SCOPE, "failed to evict enough images for animation frame");
                 return Err(OutOfMemory);
             }
         }

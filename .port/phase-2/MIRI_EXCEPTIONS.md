@@ -2482,3 +2482,67 @@ impossible request is an interpreter-level hard error ("resource exhaustion"),
 which kills the binary before the `is_err()` is evaluated. There is no
 Miri-compatible variant — any request small enough for Miri to serve succeeds,
 and the assertion becomes vacuous.
+
+### `rustty-vt` — `pagelist_integrity_detects_max_lines_exceeded`: no G6c escape valve exists
+
+Task 14b's review flagged this test (pre-existing; 14b only added a
+`log_capture` assertion to its already-passing body, no change to its
+fixture) as timing out under Miri (measured: still running past 180s single-
+worker isolation, `ub=0` the whole time — no UB signal, purely slow). Unlike
+the `WS19 T6` G6c-eligible family documented above (the page-compression
+tests), this one has **no G6c escape valve**: it is already
+`#[cfg_attr(not(debug_assertions), ignore)]`, because `verify_integrity` is a
+no-op without `debug_assertions` and the test's own assertions
+(`Err(IntegrityError::MaxLinesExceeded)`) would be vacuous under
+`-C debug-assertions=off` — confirmed by directly running it that way
+(`RUSTFLAGS="-C debug-assertions=off" cargo +nightly miri test ...`), which
+fails with `left: Err(MaxLinesExceeded) right: Ok(())`. So the `all(miri,
+debug_assertions)` / G6c pairing the WS19 T6 annotation text promises
+("It RUNS there") would be **false** for this test; that exact wording must
+not be copied onto it.
+
+**Root cause, isolated separately** (confirmed on the sibling row
+`pagelist_integrity_detects_viewport_pin_not_in_list`, added in the same
+14b change and originally authored with the identical shape — `grow_rows`
+called in a loop up to hundreds of rows before the assertion under test):
+`grow_rows` runs a page-level `assert_integrity` **per row** under
+`debug_assertions`, each call O(current page size), making an n-row single-
+page buildup O(n²) under Miri's per-instruction interpretation — independent
+of the page's byte CAPACITY (a wide-`cols` page with a tiny row-capacity
+floor was tried and made no difference, because a wide `cols` inflates
+per-row cell-scan cost by the same factor it shrinks row count). The fix
+applied to the sibling test was to stop building the second page via a
+`grow_rows` loop and instead splice in an already-existing crate pattern —
+one `create_page` call plus direct `pages.append`/`total_rows` bookkeeping
+under `pause_integrity_checks` (the same technique `max_lines_exceeded`
+itself already uses for its OWN second page) — which cut it from a
+still-running-past-4-minutes background run to a clean, single-worker
+**30.54s pass, 0 UB, 0 leaks**.
+
+`max_lines_exceeded`'s SPECIFIC 594-row buildup (`s.grow_rows(page_rows)`,
+`page_rows = PageList::initial_capacity(cols).rows`) exists to fill the
+oldest page to EXACTLY standard capacity before the second (already
+`create_page`-spliced) page is appended — unlike the sibling test, changing
+its fixture to avoid the large `grow_rows` call would require either
+faking a "this page is full" state without actually filling it (risking a
+false pass that no longer represents "one complete historical page", the
+scenario `IntegrityError::MaxLinesExceeded` specifically requires) or
+restructuring what the test proves. That fixture change was judged out of
+this stage's scope (14b's task is restoring LOG-class diagnostics, not
+rewriting a pre-existing PageList test's construction strategy) and is left
+for a future stage.
+
+**Disposition:** `#[cfg_attr(all(miri, debug_assertions), ignore = "MIRI
+EXCEPTION — NO G6c ESCAPE (this file, 'no G6c escape valve exists' above):
+unlike the WS19 T6 compression family, this test is ALSO
+`#[cfg_attr(not(debug_assertions), ignore)]` — it needs `debug_assertions`
+ON to assert anything non-vacuous, so it cannot run in the
+`-C debug-assertions=off` G6c lane either. Confirmed slow-not-UB: multiple
+single-worker runs sustained `ub=0` past 180-240s before being stopped, no
+Miri-compatible fixture found within the 14b time budget (see this file's
+longer note). This is a genuine gap in Miri coverage for this one test, not
+a silent skip — the same fixture change that fixed the sibling
+`viewport_pin_not_in_list` test is the documented path to closing it."]`
+added to `pagelist_integrity_detects_max_lines_exceeded`
+(`crates/rustty-vt/src/pagelist/tests.rs`). It still runs, and is required
+to pass, natively (`cargo test -p rustty-vt --lib`) and in the release lane.

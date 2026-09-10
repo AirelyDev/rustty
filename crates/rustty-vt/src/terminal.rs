@@ -19407,6 +19407,9 @@ mod tests {
         let generation = t.screens.generation(crate::screen_set::Key::Alternate);
 
         resize_tw_error_always(ResizeFp::AlternateScreen);
+        // S142-F1/S143-F2: `log.warn("alternate screen resize failed,
+        // replacing it err={}", .{err})` (Terminal.zig:4110).
+        let cap = crate::log_capture::start();
         t.resize(
             alloc,
             Resize {
@@ -19416,6 +19419,16 @@ mod tests {
             },
         )
         .unwrap();
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "terminal"
+                    && msg.starts_with("alternate screen resize failed, replacing it err=")),
+            "expected the alternate-screen-resize-failed diagnostic, got: {messages:?}"
+        );
+        drop(cap);
         resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
 
         let alternate = t.screens.get(crate::screen_set::Key::Alternate).unwrap();
@@ -19451,7 +19464,20 @@ mod tests {
 
         let _ = t.switch_screen(crate::screen_set::Key::Alternate).unwrap();
         resize_tw_error_always(ResizeFp::AlternateScreen);
-        resize_tw_error_always(ResizeFp::AlternateScreenInit);
+        // NOT `ResizeFp::AlternateScreenInit`: that tripwire matches the
+        // reference's OWN silent `tw.check(.alternate_screen_init) catch
+        // break :alt;` guard (Terminal.zig:4131, no log call at all) — using
+        // it would short-circuit BEFORE the real `ScreenSet::get_init` call
+        // this test needs to fail. Force `PageList::init` itself (which
+        // `Screen::init` propagates through `?`) to fail instead, via the
+        // pagelist crate's own init tripwire.
+        crate::pagelist::INIT_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(crate::pagelist::InitFp::InitMemoryPool, OutOfMemory)
+        });
+        // S142-F1/S143-F2: `log.warn("alternate screen replacement failed,
+        // falling back to primary err={}", .{init_err})` (Terminal.zig:4149-4152).
+        let cap = crate::log_capture::start();
         t.resize(
             alloc,
             Resize {
@@ -19461,6 +19487,21 @@ mod tests {
             },
         )
         .unwrap();
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "terminal"
+                    && msg.starts_with(
+                        "alternate screen replacement failed, falling back to primary err="
+                    )),
+            "expected the alternate-screen-replacement-failed diagnostic, got: {messages:?}"
+        );
+        drop(cap);
+        crate::pagelist::INIT_TW
+            .with(|tw| tw.borrow_mut().end(rustty_util::tripwire::ResetMode::Reset))
+            .unwrap();
         resize_tw_end(rustty_util::tripwire::ResetMode::Reset).unwrap();
 
         let primary = t.screens.get(crate::screen_set::Key::Primary).unwrap();

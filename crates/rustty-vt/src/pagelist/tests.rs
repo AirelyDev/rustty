@@ -6846,6 +6846,10 @@ fn pagelist_enforce_limit_marks_activity_and_preserves_continuation() {
 // check fires. Requires `debug_assertions`: `verify_integrity` is a no-op
 // without them.
 #[cfg_attr(not(debug_assertions), ignore)]
+#[cfg_attr(
+    all(miri, debug_assertions),
+    ignore = "MIRI EXCEPTION — NO G6c ESCAPE (.port/phase-2/MIRI_EXCEPTIONS.md, 'no G6c escape valve exists'): this test is ALSO `#[cfg_attr(not(debug_assertions), ignore)]` above, so it cannot run in the `-C debug-assertions=off` G6c lane either — unlike the WS19 T6 compression family, there is no lane where this test both runs AND asserts something non-vacuous. Root cause: `s.grow_rows(page_rows)` builds a 594-row page one row at a time, and `debug_assertions` runs a page-level `assert_integrity` per row — O(current page size) each call, O(n^2) total. Confirmed slow-not-UB across multiple single-worker Miri runs (sustained `ub=0` past 180-240s before being stopped). See the referenced note for the fixture change (already applied to the sibling `viewport_pin_not_in_list` test) that would close this."
+)]
 #[test]
 fn pagelist_integrity_detects_max_lines_exceeded() {
     let cols: size::CellCountInt = 80;
@@ -6986,18 +6990,42 @@ fn pagelist_integrity_detects_page_serial_predates_epoch() {
 #[cfg_attr(not(debug_assertions), ignore)]
 #[test]
 fn pagelist_integrity_detects_viewport_pin_not_in_list() {
+    // Growing a page one row at a time (`grow_rows`) runs a full page-level
+    // `assert_integrity` PER ROW under `debug_assertions` — O(current page
+    // size) each time, so forcing a second page this way is O(n^2) in the
+    // row count, which is what made earlier drafts of this test time out
+    // under Miri regardless of how small a page's byte capacity was made.
+    // Sidestepping the loop entirely: create the second (tiny) page
+    // directly with ONE `create_page` call and splice it in — the exact
+    // technique `pagelist_integrity_detects_max_lines_exceeded` (above)
+    // already uses for the same reason.
     let mut s = PageList::init(Options::new(80, 24)).unwrap();
-    // Enough scrollback to span multiple pages (a page at cols=80 holds
-    // `PageList::initial_capacity(80).rows` rows — comfortably under 700),
-    // and scroll far enough back that the pin lands on an EARLIER page (so
-    // its node has at least one later sibling — needed below: the pin must
-    // not be `s.pages.last`, or the backward scan finds it on its very first
-    // step regardless). Kept as small as the two-page requirement allows:
-    // `grow_rows` runs a full `assert_integrity` per row under
-    // `debug_assertions`, which is the expensive part under Miri.
-    s.grow_rows(700).unwrap();
-    s.scroll(Scroll::Row(300));
+    assert_eq!(Ok(()), s.verify_integrity());
+
+    s.pause_integrity_checks(true);
+    let node = s
+        .create_page(super::CreatePage::new(Capacity {
+            styles: 8,
+            ..Capacity::new(10, 10)
+        }))
+        .unwrap();
+    unsafe { (*super::Node::page(node)).size.rows = 5 };
+    unsafe { s.pages.append(node) };
+    s.total_rows += 5;
+    s.pause_integrity_checks(false);
+    assert_eq!(2usize, s.total_pages());
+
+    // `total_rows` (29) minus the active height (24) leaves rows 1..=4
+    // scrollable before `scroll`'s "at/below the active area" clamp — all
+    // of which live on the FIRST (original, `s.pages.first`) page, so the
+    // pin lands there with the tiny page appended above as its later
+    // sibling.
+    s.scroll(Scroll::Row(2));
     assert!(s.viewport == Viewport::Pin);
+    assert!(core::ptr::eq(
+        unsafe { (*s.viewport_pin).node },
+        s.pages.first
+    ));
     assert_eq!(Ok(()), s.verify_integrity());
 
     // `pin_is_valid` (checked, for every tracked pin including this one,
