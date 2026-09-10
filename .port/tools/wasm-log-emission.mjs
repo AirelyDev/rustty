@@ -37,6 +37,20 @@
 //                         pre-3a90678c build; see --expect-silence)
 //   RUSTTY_WC_LOG_TEXT    override the expected message (self-test: a wrong value
 //                         must make arm A go RED)
+//
+//                         NOTE (fix round 1, finding 2): this is an env-settable
+//                         GATE INPUT, the shape ci.sh's own notes record killing
+//                         once as a spoofing hole (G1b: an override that could
+//                         redirect a probe away from what the script checks). It
+//                         is safe HERE, and only here, because it can only make
+//                         the gate STRICTER or RED, never green: arm A demands
+//                         that the artifact ACTUALLY EMIT the value, as the sole
+//                         record on the path (see below), so spoofing a pass
+//                         would require supplying a string the wasm genuinely
+//                         emitted — i.e. proving the very thing the gate asserts.
+//                         The always-on arms (the DEBUG-artifact check and both
+//                         negative controls) are NOT overridable. Do not add an
+//                         override that can weaken an assertion.
 // Flags:
 //   --expect-silence      INVERT arm A: assert the driven path emits NOTHING.
 //                         Only meaningful against an artifact whose exports do
@@ -184,13 +198,19 @@ const fail = (m) => {
         `the restored site produced NO log record. Expected: ${JSON.stringify(EXPECTED)}\n` +
           `      (backend not installed by this export? see rustty-web-canvas's install_contract_tests)`,
       );
-    if (!captured.includes(EXPECTED))
+    // EXACTLY ONE record, and it is the expected one (fix round 1, finding 3).
+    // `includes()` alone would not bound the record count, so an artifact that
+    // also emitted unrelated chatter on this path would still pass. The drive
+    // below touches three exports of which only `has_codepoint` logs, so one
+    // record is the whole truth about this path; if a future restoration adds a
+    // second one here, this arm SHOULD go red and be updated deliberately.
+    if (captured.length !== 1 || captured[0] !== EXPECTED)
       fail(
-        `captured ${captured.length} record(s) but none matched.\n` +
-          `      expected: ${JSON.stringify(EXPECTED)}\n` +
+        `expected EXACTLY ONE record and that it be the restored one.\n` +
+          `      expected: [${JSON.stringify(EXPECTED)}]\n` +
           `      captured: ${JSON.stringify(captured)}`,
       );
-    console.log(`arm A (positive): OK — captured ${JSON.stringify(EXPECTED)}`);
+    console.log(`arm A (positive): OK — captured ${JSON.stringify(EXPECTED)} (sole record)`);
   }
 }
 

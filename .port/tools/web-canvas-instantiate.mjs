@@ -12,6 +12,16 @@
 // the visual/interactive proof; this script is the headless CI-able check.
 //
 // Run:  node .port/tools/web-canvas-instantiate.mjs [--debug]
+//
+// !! NO GATE RUNS THIS SCRIPT. It is the standing evidence for `W9F-03`/`W9F-04`
+// (`.port/phase-2/DEFERRALS.md`) and the only headless check of the freestanding
+// link, but nothing in `.port/tools/ci.sh` invokes it — so when the artifact grew
+// an `env.log` import (`9a41c0c2`, this plan's own wasm log backend) that
+// `makeWebCanvasEnv` did not supply, every check below sat dead behind a
+// `LinkError` and nobody noticed. See `.port/parity-closure/NEW-FINDINGS.md` N10.
+// The glue is fixed; the GATING is not. Wiring this into `run_webgl_lane` beside
+// `wasm-log-emission.mjs` (which IS gated, for exactly this reason) is three
+// lines and is the open residual of N10.
 import { readFileSync } from "node:fs";
 import { makeWebCanvasEnv } from "./web-canvas-glue.mjs";
 import { makeMockCanvas } from "./web-canvas-mock.mjs";

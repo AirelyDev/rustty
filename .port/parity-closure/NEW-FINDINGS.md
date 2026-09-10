@@ -379,3 +379,59 @@ found, and current state.
   currently discard their payload with `.is_err()` / `Err(_err)` and must bind it, and
   **it cannot be typechecked on macOS** — the VM lane (`PROCEDURE.md`, Linux rows) is
   mandatory, not optional.
+
+---
+
+## N10 — `web-canvas-instantiate.mjs` was dead for ~1 day: this plan's own log backend added an `env.log` import the glue did not supply
+
+- **id**: N10
+- **severity**: low-medium (no shipped artifact affected — the break is in a verification
+  script, not in `rustty_web_canvas.wasm` itself. Medium only because the dead script is
+  the sole headless check for the whole freestanding web-canvas deliverable, so while it
+  was dead nothing was checking `W9F-03`/`W9F-04` or the "0 wasi imports" link invariant.)
+- **kind**: tooling regression introduced by this plan's own work (not a port defect, not
+  an oracle divergence)
+- **oracle**: none — `.port/tools/*.mjs` are rustty-only harnesses with no ghostty analogue.
+- **rustty**: `.port/tools/web-canvas-glue.mjs` (`makeWebCanvasEnv`) broke
+  `.port/tools/web-canvas-instantiate.mjs`.
+- **description**: `install_wasm_log_backend()` registers `rustty-os`'s `WasmLogger`, which
+  makes `rustty_web_canvas.wasm` import `env.log` — in BOTH profiles (release strips the
+  restored call-site bodies but keeps the import). `makeWebCanvasEnv` supplied only the
+  fourteen `rustty_wc_*` Canvas ops, and a missing wasm import is a hard `LinkError`, so
+  from the moment the backend landed:
+
+  ```
+  $ node .port/tools/web-canvas-instantiate.mjs
+  LinkError: WebAssembly.instantiate(): Import #14 "env" "log": function import requires a callable
+  ```
+
+  Every one of that script's checks — 0 wasi imports, instantiation, face/atlas/shaper
+  callability, the `(c4)` DeferredFace arms, the `(c5)` BGRA byte-order assertion, the
+  `(c6)` font-file-bytes rejection — was unreachable behind that throw.
+- **broken by**: `9a41c0c2` ("task-14c-4 (part 4): give rustty_web_canvas.wasm a log
+  backend"), which put the first `install_wasm_log_backend()` calls into
+  `rustty-font-shaper`'s seven exports and therefore introduced the `env.log` import.
+  `3a90678c` (the artifact-wide fix) widened the installer to the other twelve exports but
+  did not cause this; the import already existed.
+- **closed by**: `2ca1a947` (task-14wasm-proof). `makeWebCanvasEnv` now takes an optional
+  `log` and supplies a discarding default, so every existing caller works unchanged and the
+  new `.port/tools/wasm-log-emission.mjs` passes a capturing one. `node
+  .port/tools/web-canvas-instantiate.mjs` → ALL OK again.
+- **how found**: task-14wasm-proof, while reusing `web-canvas-glue.mjs` to build the
+  log-emission harness. Running the sibling script once, to confirm the glue still worked,
+  is what surfaced it — it was not found by any gate, test, or review.
+- **why this is recorded**: **no gate runs `web-canvas-instantiate.mjs`.** It is referenced
+  by two mutation-proven `.port/phase-2/DEFERRALS.md` entries (`W9F-03`, `W9F-04`) as their
+  standing evidence, and by `.port/tools/CI.md` nowhere. That is exactly why the rot went
+  unnoticed: a harness with no gate is a harness whose failure nobody observes. The same
+  argument is why `wasm-log-emission.mjs` was wired into `ci.sh`'s opt-in `--webgl` lane
+  rather than left as a documented command.
+- **state**: **CLOSED** for the glue defect itself.
+
+  **RESIDUAL, OPEN, and deliberately left for a future worker:**
+  `web-canvas-instantiate.mjs` is *still ungated*, so the exact rot mechanism demonstrated
+  here remains open for that script — the next import the artifact grows will kill it again,
+  silently. The fix is three lines in `run_webgl_lane` (`.port/tools/ci.sh`), beside the
+  log-emission gate that now runs there, using the RELEASE artifact that lane already
+  builds. Judged out of scope for task-14wasm-proof by its reviewer; recorded here so
+  whoever next touches that lane trips over it.

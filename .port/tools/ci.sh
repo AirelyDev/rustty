@@ -209,7 +209,9 @@
 #            target's artifacts + a browser process) and needs things CI boxes do
 #            not all have: the `wasm32-unknown-unknown` rustup target, `node`, and
 #            a Chrome/Chromium binary. Missing any is exit 3 (BLOCKED/env-missing)
-#            — NEVER a silent green.
+#            — NEVER a silent green. NOTE that `node` became a precondition of the
+#            WHOLE lane when the log-emission gate joined it: a box with Chrome but
+#            no node no longer gets a green WebGL2 result, it gets BLOCKED.
 #
 # Usage:
 #   bash .port/tools/ci.sh                   # full run (what CI runs)
@@ -335,8 +337,17 @@ run_webgl_lane() {
   # requires the wasm32 target. It is the ONLY executed evidence for the whole
   # class of wasm logging restorations; the two `install_contract_tests` that run
   # in the default lane check the source WIRING, not runtime behaviour.
+  # DISCLOSURE (fix round 1, finding 1): this check makes `node` a precondition of
+  # the WHOLE lane, including the Chrome gate below, which never needed it before.
+  # A box with the wasm target and Chrome but no node now gets 3 BLOCKED for the
+  # lane instead of a green WebGL2 result. That is the deliberate trade — a gate
+  # that skips itself when its runtime is absent is the vacuous-green shape this
+  # project has twice paid to remove — but it IS a new coupling, and if the WebGL2
+  # gate ever needs to run node-free, split the lane rather than making this
+  # skippable.
   if ! command -v node >/dev/null 2>&1; then
     echo "BLOCKED: node is not on PATH; the wasm log-emission gate cannot run." >&2
+    echo "         NOTE: this blocks the whole --webgl lane, the Chrome gate included." >&2
     echo "         Exiting 3 (environment missing) rather than passing vacuously." >&2
     return 3
   fi
