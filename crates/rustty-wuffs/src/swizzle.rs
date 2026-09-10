@@ -15,8 +15,8 @@ use allocator_api2::alloc::Allocator;
 use crate::{Error, RawBuf};
 use wuffs_sys::{
     rustty_wuffs_pixel_format__bits_per_pixel, rustty_wuffs_pixel_format__is_direct,
-    rustty_wuffs_pixel_format__is_interleaved, wuffs_base__pixel_format,
-    wuffs_base__pixel_swizzler, wuffs_base__pixel_swizzler__prepare,
+    rustty_wuffs_pixel_format__is_interleaved, rustty_wuffs_status__message,
+    wuffs_base__pixel_format, wuffs_base__pixel_swizzler, wuffs_base__pixel_swizzler__prepare,
     wuffs_base__pixel_swizzler__swizzle_interleaved_from_slice, wuffs_base__slice_u8,
     WUFFS_BASE__PIXEL_FORMAT__BGR, WUFFS_BASE__PIXEL_FORMAT__BGRA_PREMUL,
     WUFFS_BASE__PIXEL_FORMAT__RGB, WUFFS_BASE__PIXEL_FORMAT__RGBA_NONPREMUL,
@@ -26,10 +26,9 @@ use wuffs_sys::{
 
 // const log = std.log.scoped(.wuffs_swizzler);
 //
-// PORT NOTE (`log.warn` folds its scope into the message — error.rs `check` +
-// tripwire.rs precedent): `swizzle`'s prepare-failure branch below reuses
-// `crate::error::check`, which already renders this warning uniformly.
-use crate::error::check;
+// PORT NOTE: the reference's scope tag, carried through the `log` facade as
+// `target: LOG_SCOPE` (DECISION-logging.md §6r4).
+const LOG_SCOPE: &str = "wuffs_swizzler";
 
 // pub fn gToRgba(alloc: Allocator, src: []const u8) Error![]u8 {
 //     return swizzle(alloc, src, c.WUFFS_BASE__PIXEL_FORMAT__Y, c.WUFFS_BASE__PIXEL_FORMAT__RGBA_PREMUL);
@@ -342,12 +341,31 @@ fn swizzle<A: Allocator + Copy>(
                 0, // c.WUFFS_BASE__PIXEL_BLEND__SRC
             )
         };
-        // try check(log, &status);
+        // if (!c.wuffs_base__status__is_ok(&status)) {
         //
-        // PORT NOTE (DRY): reuses `crate::error::check` (the fold-the-log-scope
-        // precedent png.rs/jpeg.rs already establish) rather than re-duplicating
-        // the reference's inlined `is_ok`/`message`/`log.warn` sequence.
-        check(&status)?;
+        // PORT NOTE (S38-F2): `swizzle` does NOT call `error.zig`'s `check` — the
+        // reference inlines its own `is_ok`/`message`/`log.warn` sequence here with
+        // a DIFFERENT message (the bare `"{s}"` status text, not `check`'s
+        // `"decode err={s}"`) under its own `.wuffs_swizzler` scope. Reusing `check`
+        // here changed both the text and the scope; the reference's own sequence is
+        // reproduced instead. A Wuffs `status` is OK iff its `repr` pointer is NULL.
+        if !status.repr.is_null() {
+            // const e = c.wuffs_base__status__message(&status);
+            //
+            // SAFETY: `status.repr` is non-null (checked above);
+            // `rustty_wuffs_status__message` returns a 'static C string owned by
+            // the Wuffs runtime.
+            let e = unsafe { rustty_wuffs_status__message(&status) };
+            // PORT NOTE: the message is a Wuffs-owned C string; render it lossily
+            // for the human-facing warning only (never fed back onto a
+            // byte-faithful path).
+            // SAFETY: `e` is a non-null 'static NUL-terminated C string.
+            let e = unsafe { core::ffi::CStr::from_ptr(e) };
+            // log.warn("{s}", .{e});
+            log::warn!(target: LOG_SCOPE, "{}", e.to_string_lossy());
+            // return error.WuffsError;
+            return Err(Error::WuffsError);
+        }
     }
     {
         //     {
@@ -384,12 +402,71 @@ mod tests {
     use super::*;
     use allocator_api2::alloc::Global;
 
-    // The oracle (swizzle.zig) has two test{} blocks — "gaToRgba" and
-    // "rgbaSrcOver" (`86db30785`/`322d7ae78`), ported below. The other KATs
-    // are rustty-only (carried from the pre-test-block port), derived by
-    // reading the vendored `wuffs-v0.4.c` swizzle_xxxx__y / swizzle_bgrw__bgr
-    // / swizzle_bgrw__rgb / swizzle_swap_rgbx_bgrx bodies directly (see the
-    // workstream spec) rather than guessed.
+    // ---- task-14e-2 / S38-F2 -------------------------------------------------
+
+    // PORT NOTE (S38-F2): `swizzle.zig:172-176` does NOT delegate to
+    // `error.zig`'s `check`. It inlines its own failure arm with a DIFFERENT
+    // message (`log.warn("{s}", .{e})` — the bare Wuffs status text) under its
+    // own `.wuffs_swizzler` scope. The port had reused `check`, which renders
+    // `decode err={s}` under the CALLER's scope, so both the text and the scope
+    // diverged. These two tests pin both halves.
+    //
+    // The failure is driven by a real `wuffs_base__pixel_swizzler__prepare`
+    // rejection rather than a synthesised status: every source format the module
+    // uses fails to prepare against a `YA_NONPREMUL` destination (established by
+    // sweeping the seven formats this file names; the six other destinations all
+    // prepare successfully).
+
+    /// The restored site emits the reference's message under the reference's
+    /// scope, and nothing else.
+    #[test]
+    fn swizzle_prepare_failure_warns_with_the_reference_text_and_scope() {
+        let cap = crate::log_capture::start();
+        let src = [1u8; 24];
+        let err = swizzle(
+            Global,
+            &src,
+            WUFFS_BASE__PIXEL_FORMAT__RGBA_PREMUL,
+            WUFFS_BASE__PIXEL_FORMAT__YA_NONPREMUL,
+        )
+        .map(|_| ())
+        .unwrap_err();
+        let messages = cap.messages();
+        drop(cap);
+
+        // Positive control: the arm really ran (the reference returns
+        // `error.WuffsError` from the same block that logs).
+        assert_eq!(Error::WuffsError, err);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "wuffs_swizzler".to_string(),
+                "base: unsupported pixel swizzler option".to_string(),
+            )],
+            messages
+        );
+    }
+
+    /// The absence half: a SUCCESSFUL swizzle emits nothing. Guards against the
+    /// "diagnostic on a success path" defect, and asserts positively that it
+    /// reached past the `prepare` the silence is about (the destination buffer
+    /// is the swizzled output, which only exists if `prepare` AND the swizzle
+    /// itself ran).
+    #[test]
+    fn a_successful_swizzle_is_silent() {
+        let cap = crate::log_capture::start();
+        let rgba = gaToRgba(Global, &[7, 100, 8, 200]).unwrap();
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(
+            &[7u8, 7, 7, 100, 8, 8, 8, 200][..],
+            rgba.as_slice(),
+            "the swizzle did not run, so this test never reached the code whose \
+             silence it asserts"
+        );
+        assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
+    }
 
     // test "gaToRgba" {
     #[test]

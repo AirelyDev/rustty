@@ -28,8 +28,10 @@ use crate::{ImageData, RawBuf, Scratch, MAXIMUM_IMAGE_SIZE};
 
 // const log = std.log.scoped(.wuffs_png);
 //
-// PORT NOTE (`log.warn` folds its scope into the message — error.rs `check` +
-// tripwire.rs precedent).
+// PORT NOTE: the reference's scope tag, carried through the `log` facade as
+// `target: LOG_SCOPE` (DECISION-logging.md §6r4) and threaded into
+// `error::check` where the reference threads its `log`.
+pub(crate) const LOG_SCOPE: &str = "wuffs_png";
 
 /// Decode a PNG image.
 // pub fn decode(alloc: Allocator, data: []const u8) Error!ImageData {
@@ -61,7 +63,7 @@ pub fn decode<A: Allocator + Copy>(alloc: A, data: &[u8]) -> Result<ImageData<A>
             wuffs_png__decoder__initialize(decoder, decoder_size, WUFFS_VERSION as u64, 0)
         };
         // try check(log, &status);
-        check(&status)?;
+        check(LOG_SCOPE, &status)?;
     }
 
     // var source_buffer: c.wuffs_base__io_buffer = .{
@@ -91,7 +93,7 @@ pub fn decode<A: Allocator + Copy>(alloc: A, data: &[u8]) -> Result<ImageData<A>
             wuffs_png__decoder__decode_image_config(decoder, &mut image_config, &mut source_buffer)
         };
         // try check(log, &status);
-        check(&status)?;
+        check(LOG_SCOPE, &status)?;
     }
 
     // const width = c.wuffs_base__pixel_config__width(&image_config.pixcfg);
@@ -124,8 +126,9 @@ pub fn decode<A: Allocator + Copy>(alloc: A, data: &[u8]) -> Result<ImageData<A>
     //     return error.Overflow;
     // }
     if size > MAXIMUM_IMAGE_SIZE {
-        eprintln!(
-            "warning(wuffs_png): image size {size} is larger than the maximum allowed ({MAXIMUM_IMAGE_SIZE})"
+        log::warn!(
+            target: LOG_SCOPE,
+            "image size {size} is larger than the maximum allowed ({MAXIMUM_IMAGE_SIZE})"
         );
         return Err(Error::Overflow);
     }
@@ -176,7 +179,7 @@ pub fn decode<A: Allocator + Copy>(alloc: A, data: &[u8]) -> Result<ImageData<A>
             )
         };
         // try check(log, &status);
-        check(&status)?;
+        check(LOG_SCOPE, &status)?;
     }
 
     {
@@ -196,7 +199,7 @@ pub fn decode<A: Allocator + Copy>(alloc: A, data: &[u8]) -> Result<ImageData<A>
             )
         };
         // try check(log, &status);
-        check(&status)?;
+        check(LOG_SCOPE, &status)?;
     }
 
     // return .{ .width = width, .height = height, .data = destination };

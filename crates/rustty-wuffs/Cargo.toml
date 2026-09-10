@@ -36,6 +36,11 @@ wuffs-sys = { workspace = true }
 # RGBA buffer is allocated over the caller's allocator (align 1) so the renderer
 # can transfer the pointer into `image::Pending` and free it with the same layout.
 allocator-api2 = { workspace = true }
+# The `log` facade (DECISION-logging.md §6r4). `pkg/wuffs`'s four `log.warn`
+# sites — `error.zig`'s `check`, the `png`/`jpeg` maximum-image-size guard, and
+# `swizzle`'s prepare failure — emit through it under the reference's own
+# `.wuffs_{png,jpeg,swizzler}` scope tags.
+log = { workspace = true }
 
 [dev-dependencies]
 # Pure-Rust PNG encoder — generates the 1×1 solid PNG fixtures the known-answer

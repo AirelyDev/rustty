@@ -27,6 +27,11 @@ pub use error::Error;
 #[cfg(test)]
 pub(crate) mod test_fixtures;
 
+// TEST-ONLY `log::Log` capture backend for the restored `log.warn` sites
+// (task-14e-2). See the module header.
+#[cfg(test)]
+pub(crate) mod log_capture;
+
 /// The maximum image size, based on the 4G limit of Ghostty's
 /// `image-storage-limit` config.
 // pub const maximum_image_size = 4 * 1024 * 1024 * 1024;
