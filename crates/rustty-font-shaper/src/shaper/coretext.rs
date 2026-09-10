@@ -1141,7 +1141,8 @@ impl Shaper {
     // computes formatted codepoint strings and emits `log.warn`s (gated on
     // `positions_differ`/`position_y_differs`/`cluster_differs`/`extra_debugging`),
     // and its sole call site (in `shape`, above) is already commented out. This
-    // crate wires no logger, and the function reads
+    // function is NEVER CALLED in the reference either (its sole call site is
+    // commented out upstream), so it has no live emission to restore, and it reads
     // `unicode.table.get(...).grapheme_boundary_class` which is not part of this
     // tier. It is therefore preserved verbatim as a comment (R1: no loss):
     //

@@ -14,8 +14,9 @@ use rustty_util::quirks::inlineAssert as assert;
 // The reference's `std.log.scoped(.font_shaper)` tag, carried through the `log`
 // facade's `target:` (`.port/parity-closure/DECISION-logging.md` §6).
 const LOG_SCOPE: &str = "font_shaper";
-// PORT NOTE: this crate has no logger wired; `log.warn` sites are preserved as
-// comments (matching `collection.rs` / `codepoint_resolver.rs`).
+// PORT NOTE: reference `log.*` calls are kept as verbatim comments (R1) with
+// the live `log::` emission beneath them (matching `collection.rs` /
+// `codepoint_resolver.rs`).
 
 /// A minimal byte reader mirroring the reference's
 /// `std.io.fixedBufferStream(str).reader()`. `read_byte` yields the next byte or

@@ -28,6 +28,20 @@
 // framework crates (as in the coretext face).
 
 // const log = std.log.scoped(.deferred_face);
+//
+// The reference's `std.log.scoped(.deferred_face)` tag, carried through the
+// `log` facade's `target:` (`.port/parity-closure/DECISION-logging.md` §6).
+//
+// NOTE (task-14c-4): no LEDGER row named this file. Its three reference
+// `log.warn` sites were found by enumerating the reference's own calls per file
+// (PROCEDURE.md blind spot 3) rather than by trusting the rows' cited anchors.
+//
+// `#[allow(dead_code)]`: both of this file's live sites are inside
+// `cfg(target_arch = "wasm32")` modules, so on a native build the const has no
+// reader. Keeping it unconditional (rather than cfg-gating it) means the wasm
+// and native trees read identically.
+#[allow(dead_code)]
+const LOG_SCOPE: &str = "deferred_face";
 
 /// The DeferredFace itself. On the macOS coretext backend the only live payload
 /// is `ct`.
@@ -1142,9 +1156,20 @@ mod web_canvas_payload {
                     wc.presentation,
                 ) {
                     Ok(face) => face,
-                    // PORT NOTE (log-as-comment): this crate wires no logger.
-                    // log.warn("failed to init face for codepoint check face={s} err={}", …);
-                    Err(_err) => return false,
+                    // log.warn("failed to init face for codepoint check " ++
+                    //     "face={s} err={}", .{ wc.font_str, err });
+                    //
+                    // PORT NOTE: `{s}` renders the raw CSS font-string bytes;
+                    // the lossy UTF-8 conversion is confined to the diagnostic.
+                    Err(err) => {
+                        log::warn!(
+                            target: crate::deferred_face::LOG_SCOPE,
+                            "failed to init face for codepoint check face={} err={:?}",
+                            String::from_utf8_lossy(&wc.font_str),
+                            err
+                        );
+                        return false;
+                    }
                 };
                 // defer face.deinit();
                 // return face.glyphIndex(cp) != null;
@@ -1185,10 +1210,14 @@ mod ghostty_wasm_abi {
     use crate::Presentation;
 
     /// `export fn deferred_face_new(ptr: [*]const u8, len: usize, presentation: u16) ?*DeferredFace`
-    // PORT NOTE: `catch |err| { log.warn("error creating deferred face err={}", …);
-    // return null; }` — log-as-comment (this crate wires no logger); the only
-    // reference failure mode is OOM, which aborts here (`Box`), so the `null` arm
-    // is unreachable in the Rust port.
+    // PORT NOTE (WAIVED site — `.port/parity-closure/ADJUDICATION.md#n4-deferred
+    // -face-new`): `catch |err| { log.warn("error creating deferred face err={}",
+    // …); return null; }`. The only reference failure mode is OOM from
+    // `alloc.dupeZ`/`alloc.create`; in Rust `Vec`/`Box` ABORT on allocation
+    // failure rather than returning an error, so there is NO reachable failure
+    // arm here and no `null` return. A `log::warn!` at this site would have to
+    // sit on the SUCCESS path, where the reference is silent. Do not "restore"
+    // it.
     #[no_mangle]
     pub extern "C" fn deferred_face_new(
         ptr: *const u8,
@@ -1264,7 +1293,12 @@ mod ghostty_wasm_abi {
         ) {
             Ok(mut face) => face.deinit(),
             // log.warn("error loading deferred face err={}", .{err});
-            Err(_err) => (),
+            Err(err) => {
+                log::warn!(
+                    target: super::LOG_SCOPE,
+                    "error loading deferred face err={err:?}"
+                );
+            }
         }
     }
 }

@@ -21,8 +21,9 @@ use rustty_datastruct::cache_table::{CacheTable, Context};
 use crate::shape::{Cell, TextRun};
 
 // const log = std.log.scoped(.font_shaper_cache);
-// PORT NOTE: no logger is wired in this crate (see `feature.rs`); the reference
-// declares `log` but never uses it in this file.
+// PORT NOTE: the reference declares `log` but never USES it in this file, so
+// there is no call site to carry (the crate's `log` facade wiring is
+// `.port/parity-closure/DECISION-logging.md` §6; task-14c-4).
 
 /// An owning raw-slice handle for the cached `[]font.shape.Cell`.
 ///

@@ -27,7 +27,8 @@ use allocator_api2::alloc::Allocator;
 use crate::shape;
 
 // const log = std.log.scoped(.font_shaper);
-// PORT NOTE: no logger is wired in this crate; `log` is declared but unused here.
+// PORT NOTE: the reference declares `log` but never USES it in this file, so
+// there is no call site to carry (task-14c-4).
 
 /// Shaper that doesn't do any shaping. Each individual codepoint is mapped
 /// directly to the detected text run font's glyph index.

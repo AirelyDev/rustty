@@ -35,8 +35,11 @@ use crate::shape;
 use crate::shape::feature::{FeatureList, DEFAULT_FEATURES};
 
 // const log = std.log.scoped(.font_shaper);
-// PORT NOTE: this crate has no logger wired; `log.warn` sites are preserved as
-// comments (matching `feature.rs` / `noop.rs`).
+// PORT NOTE (task-14c-4): the crate now emits through the `log` facade
+// (`.port/parity-closure/DECISION-logging.md` §6), but THIS file has no live
+// reference call site to carry: every `log.warn` in `shaper/harfbuzz.zig` sits
+// inside `debugPositions`, whose only call site is commented out in the
+// reference itself (see the note on that function below).
 
 /// The error set for `init`/`shape`.
 ///
@@ -421,8 +424,8 @@ impl Shaper {
     // body computes formatted codepoint strings and emits `log.warn`s (gated on
     // `positions_differ`/`y_offset_differs`/`cluster_differs`/`extra_debugging`),
     // and its sole call site (in `shape`, above) is already commented out. This
-    // crate wires no logger (see the module-level note; `feature.rs`/`noop.rs`
-    // preserve `log` sites as comments), and the function reads
+    // function is NEVER CALLED in the reference either (its sole call site is
+    // commented out upstream), so it has no live emission to restore, and it reads
     // `unicode.table.get(...).grapheme_boundary_class` which is not part of this
     // tier. It is therefore preserved verbatim as a comment (R1: no loss):
     //
