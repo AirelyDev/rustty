@@ -1034,3 +1034,57 @@ found, and current state.
   initialize-on-first-`keyboardLayout`). That is a structural port, not logging work, and
   it also changes when a keymap-init failure becomes visible to an embedder — which is why
   it is filed here rather than folded into a LOG row.
+
+---
+
+## N19 — a whole crate's diagnostics were invisible to G-LOGFILE: undeclared port file + an emission shape that counts as neither
+
+- **id**: N19 (next free id checked 2026-09-10 against `NEW-FINDINGS.md`, `ADJUDICATION.md`
+  and the plan's `progress.md`: N1-N18 taken, N17/N18 by task-14d-3 the same day.)
+- **severity**: medium (a hole in the "99% of the reference's log sites are reconciled"
+  claim, in the file the plan calls its largest single gap)
+- **kind**: gate-coverage / measurement
+- **state**: **FIXED by task-14d-3** for the instance found. The CLASS is open — see
+  "what to do about it".
+- **where**: `LOG-PORTMAP.tsv`'s `src/apprt/embedded.zig` row, and
+  `crates/rustty-apprt-c/src/lib.rs`.
+- **description**: two independent invisibilities stacked on the same 23 diagnostics.
+
+  1. **The port file was not declared.** `src/apprt/embedded.zig`'s `CAPI` block ports to
+     `crates/rustty-apprt-c/src/lib.rs` — a DIFFERENT CRATE from the rest of the file.
+     The portmap declared only `crates/rustty-apprt/src/embedded.rs`. So 23 of the file's
+     54 sites were mapped to a file that could not carry them, and no amount of work on
+     the declared file could ever have credited them.
+  2. **The emissions there counted as NEITHER an emission NOR a bypass.** 22 of the 23
+     were live, as `eprintln!("error initializing app err={err:?}")`. `EPRINTLN_LOGFN`
+     only matches an `eprintln!` whose format string carries a `warn(scope):`-style
+     PREFIX. A bare `eprintln!` matches nothing, so it is not counted as an emission
+     (`primitive_sites`) and not counted as a bypass (`direct_print_sites`) either.
+
+  The combination is worse than either half. `src/apprt/embedded.zig` reported
+  `54 reference / 0 port` — a maximally alarming number — while 22 of the 23 "missing"
+  CAPI diagnostics were in fact being printed, just unmeasurably, from a file the gate
+  had never been told about.
+- **how found**: task-14d-3, closing S46-F5. The row's title claims the whole file, so
+  every one of the 54 had to be located; 23 of them were not in the declared port file.
+- **fix applied**: the arm is now
+  `crates/rustty-apprt/src/embedded.rs+crates/rustty-apprt-c/src/lib.rs` (a declared
+  overlap with `src/main_c.zig`, recorded in both `reason` cells), and all 22 live sites
+  are converted to `log::` facade calls, so both ratchets can see them.
+- **why this is the SAME disease N15 treated, in a place the treatment did not reach**:
+  N15 fixed "the gate's FILE LIST was seeded from the audit" by deriving the reference-side
+  universe from the reference tree. That closes the question "which REFERENCE files exist".
+  It does not touch the other side: **the PORT-side arm of every row is still a human
+  guess, and nothing checks it.** A reference file mapped to the wrong port file, or to
+  only half of the right ones, reads as a deficit forever and no gate arm objects.
+- **what to do about it (for the gate task)**: there is no cheap machine check for "is this
+  arm the right file". There IS a cheap check for the SECOND half: a bare `eprintln!`
+  inside a file that any portmap arm names is, with very high probability, a dropped
+  diagnostic rather than program output — it could be listed under the existing `NOTE:`
+  line the way empty `log_*` stubs already are. That would not have declared the missing
+  crate, but it would have made 22 invisible diagnostics visible as a question.
+- **the general lesson**: **deriving a gate's universe from the reference fixes only the
+  reference side of a two-sided mapping.** N15's rule ("derive the universe from the
+  reference, never from the audit") is right and incomplete: the port side of the same
+  mapping is still audit-derived, and it inherits exactly the blind spots N15 was written
+  to remove.
