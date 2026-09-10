@@ -35,14 +35,20 @@ use objc2_metal::{MTLBuffer, MTLDevice};
 use crate::metal::api;
 
 // const log = std.log.scoped(.metal);
-// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
-// (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
-// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
-// `log.*` sites are simply NOT RESTORED YET — the `metal` group's 14c stage owns them, and will
-// add `const LOG_SCOPE: &str = "metal";` here alongside the first live
-// emission. Until then each site stays a comment at its location. Scheduled
-// work, not a missing dependency.
-// The `log.warn` site in `sync` is the one it will fill.
+// PORT NOTE (task-14c-2, WAIVED — not restorable): the `log` facade IS wired for
+// this crate (`Cargo.toml`'s `log = { workspace = true }`), but `buffer.zig`'s two
+// `log.warn("buffer contents ptr is null", .{})` sites (`:98` and `:155`) have NO
+// reachable failure arm in rustty: objc2's `MTLBuffer::contents()` returns
+// `NonNull<c_void>`, so the reference's `orelse` guard is structurally unreachable
+// here. Emitting anyway would put a diagnostic on the SUCCESS path — the exact
+// shape this project has already shipped as a production bug. Both stay comments;
+// see `.port/parity-closure/ADJUDICATION.md#buffer-zig-contents-null`. There is
+// therefore no live emission in this file and hence deliberately no `LOG_SCOPE`
+// constant (an unused one is a `-D warnings` failure).
+//
+// NOTE for the ledger: neither site is cited by ANY row — `S119-F1` covers
+// `shaders.zig` only. They are recorded here because the reference has them, not
+// because a row asked.
 
 /// The error set for buffer operations.
 //
@@ -167,9 +173,11 @@ impl<T: Copy> Buffer<T> {
 
         // We can fit within the buffer so we can just replace bytes.
         let dst = {
-            // PORT NOTE: objc2's `contents()` returns `NonNull<c_void>` (never
-            // null), so ghostty's null-guard is structurally unreachable and is
-            // preserved here as this comment:
+            // PORT NOTE (task-14c-2): objc2's `contents()` returns `NonNull<c_void>`
+            // (never null), so ghostty's null-guard is structurally UNREACHABLE and is
+            // preserved here as this comment. The `log.warn` is NOT restorable — there
+            // is no failure arm to put it in, and hoisting it out of the arm would fire
+            // it on every successful sync. See the module PORT NOTE.
             //     const ptr = self.buffer.msgSend(?[*]u8, objc.sel("contents"), .{}) orelse {
             //         log.warn("buffer contents ptr is null", .{});
             //         return error.MetalFailed;
@@ -232,9 +240,10 @@ impl<T: Copy> Buffer<T> {
 
         // We can fit within the buffer so we can just replace bytes.
         let dst = {
-            // PORT NOTE: see `sync` — objc2's `contents()` is `NonNull`, so
-            // ghostty's null-guard (`log.warn` + `error.MetalFailed`) is
-            // structurally unreachable and preserved as this comment.
+            // PORT NOTE (task-14c-2): see `sync` — objc2's `contents()` is `NonNull`,
+            // so ghostty's null-guard (`buffer.zig:155`'s `log.warn("buffer contents ptr
+            // is null", .{})` + `error.MetalFailed`) is structurally unreachable and
+            // preserved as this comment. Not restorable; see the module PORT NOTE.
             self.buffer.contents().as_ptr() as *mut u8
         };
 

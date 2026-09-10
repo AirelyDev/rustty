@@ -38,14 +38,12 @@ use crate::metal::pipeline::{
 use crate::shaders::Image;
 
 // const log = std.log.scoped(.metal);
-// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// PORT NOTE (task-14c-2): the `log` facade is wired for this crate
 // (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
-// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
-// `log.*` sites are simply NOT RESTORED YET — row S119-F1's stage owns them, and will
-// add `const LOG_SCOPE: &str = "metal";` here alongside the first live
-// emission. Until then each site stays a comment at its location. Scheduled
-// work, not a missing dependency.
-// The `log.debug`/`log.warn`/`log.err` sites below are the ones it will fill.
+// shape 3); this file's `log.debug`/`log.warn`/`log.err` sites are RESTORED, each
+// beneath the reference call it ports.
+/// `shaders.zig:11`'s `const log = std.log.scoped(.metal);`.
+const LOG_SCOPE: &str = "metal";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Error {
@@ -376,16 +374,25 @@ impl Shaders {
                 .init_pipeline(device, &library, pixel_format)?,
         };
 
-        let post_pipelines: Vec<Pipeline> =
-            init_post_pipelines(device, &library, post_shaders, pixel_format).unwrap_or_else(
-                |_err| {
-                    // If an error happens while building postprocess shaders we
-                    // want to just not use any postprocess shaders since we don't
-                    // want to block Ghostty from working.
-                    // log.warn("error initializing postprocess shaders err={}", .{err});
-                    Vec::new()
-                },
-            );
+        let post_pipelines: Vec<Pipeline> = init_post_pipelines(
+            device,
+            &library,
+            post_shaders,
+            pixel_format,
+        )
+        .unwrap_or_else(|err| {
+            // If an error happens while building postprocess shaders we
+            // want to just not use any postprocess shaders since we don't
+            // want to block Ghostty from working.
+            // log.warn("error initializing postprocess shaders err={}", .{err});
+            // (R1 rendering note: the reference's `{}` on a Zig error prints
+            //  `error.<Name>` over its whole error set; the port has collapsed
+            //  every failure in this call tree to the single
+            //  `Error::MetalFailed`, so this always renders `MetalFailed`.
+            //  A pre-existing error-type divergence, not a logging one.)
+            log::warn!(target: LOG_SCOPE, "error initializing postprocess shaders err={err:?}");
+            Vec::new()
+        });
 
         Ok(Self {
             library,
@@ -421,12 +428,14 @@ impl Shaders {
 // `rustty_metallib` cfg, else `newLibraryWithSource` from `include_str!`. [F7] pins
 // the metallib path for GENERATING and COMPARING the golden; the source path is
 // compile-portability only (the two compilers can differ sub-LSB). The `checkError`
-// (`log.err("metal error={s}", …)`) is preserved as the `.map_err` below.
+// (`log.err("metal error={s}", …)`) is the `check_error` call in the `.map_err` below.
 fn init_library(
     device: &ProtocolObject<dyn MTLDevice>,
 ) -> Result<Retained<ProtocolObject<dyn MTLLibrary>>, Error> {
-    // const start = try std.time.Instant.now();  (shader-load timing; the `log.debug`
-    // below is a Goal-2 observability nicety, preserved as a comment.)
+    // const start = try std.time.Instant.now();
+    // (`std.time.Instant` monotonic-since-boot -> `std::time::Instant`; the reference
+    //  reads it off `global.io()`'s `.awake` clock, which is the same monotonic base.)
+    let start = std::time::Instant::now();
 
     #[cfg(rustty_metallib)]
     let library = {
@@ -436,9 +445,11 @@ fn init_library(
         // the bytes into a `dispatch_data_t` (DESTRUCTOR_DEFAULT-equivalent).
         const METALLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rustty.metallib"));
         let data = dispatch2::DispatchData::from_bytes(METALLIB);
-        device
-            .newLibraryWithData_error(&data)
-            .map_err(|_nserr| Error::MetalFailed)?
+        device.newLibraryWithData_error(&data).map_err(|nserr| {
+            // try checkError(err);   (shaders.zig:348)
+            check_error(&nserr);
+            Error::MetalFailed
+        })?
     };
     #[cfg(not(rustty_metallib))]
     let library = {
@@ -448,11 +459,22 @@ fn init_library(
         let src = NSString::from_str(SRC);
         device
             .newLibraryWithSource_options_error(&src, None)
-            .map_err(|_nserr| Error::MetalFailed)?
+            .map_err(|nserr| {
+                // try checkError(err);   (shaders.zig:348, the source-compile mirror of
+                // the metallib path above — ONE reference call site, two cfg-exclusive
+                // Rust arms, so exactly one of them is ever compiled in.)
+                check_error(&nserr);
+                Error::MetalFailed
+            })?
     };
 
     // const end = try std.time.Instant.now();
     // log.debug("shader library loaded time={}us", .{end.since(start) / std.time.ns_per_us});
+    log::debug!(
+        target: LOG_SCOPE,
+        "shader library loaded time={}us",
+        start.elapsed().as_micros()
+    );
 
     Ok(library)
 }
@@ -510,7 +532,11 @@ fn init_post_pipeline(
     let src = NSString::from_str(text);
     let post_library = device
         .newLibraryWithSource_options_error(&src, None)
-        .map_err(|_nserr| Error::MetalFailed)?;
+        .map_err(|nserr| {
+            // try checkError(err);   (shaders.zig:417)
+            check_error(&nserr);
+            Error::MetalFailed
+        })?;
 
     Pipeline::init(
         None,
@@ -529,4 +555,17 @@ fn init_post_pipeline(
         },
     )
     .map_err(|_| Error::MetalFailed)
+}
+
+/// The logging half of `shaders.zig`'s `checkError` (`:439-448`).
+///
+/// The reference keeps its OWN copy of this function, byte-identical to
+/// `Pipeline.zig`'s; the port mirrors that per-file duplication rather than
+/// factoring it out. See `metal::pipeline::check_error` for the full R1 note on
+/// what remains to port here (the `orelse return` early-out and the
+/// `error.MetalFailed` return are both carried by the `Result` objc2 already
+/// hands back) and on the `cstringPtr(.ascii)` versus `NSString` rendering.
+fn check_error(nserr: &objc2_foundation::NSError) {
+    // log.err("metal error={s}", .{str.cstringPtr(.ascii).?});
+    log::error!(target: LOG_SCOPE, "metal error={}", nserr.localizedDescription());
 }

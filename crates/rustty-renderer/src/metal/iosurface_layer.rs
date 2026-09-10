@@ -6,8 +6,9 @@
 //! Interfaces (`init`/`release`/`set_surface`/`set_surface_sync`/
 //! `set_display_callback`/`as_ca_layer`).
 //!
-//! PORT NOTE: `const log = std.log.scoped(.IOSurfaceLayer);` — routed to the log
-//! facade where used; the wrong-size-discard message is preserved as a comment.
+//! PORT NOTE (task-14c-2): `const log = std.log.scoped(.IOSurfaceLayer);` — routed
+//! to the `log` facade; the wrong-size-discard `log.debug` is RESTORED beneath its
+//! R1 comment in `set_surface_callback`.
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -18,6 +19,12 @@ use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadMarker};
 use objc2_core_foundation::{CFRetained, CGFloat, CGRect, Type};
 use objc2_io_surface::IOSurfaceRef;
 use objc2_quartz_core::{kCAGravityTopLeft, CALayer};
+
+/// `IOSurfaceLayer.zig:12`'s `const log = std.log.scoped(.IOSurfaceLayer);`.
+///
+/// The capitalisation is the REFERENCE's own scope name, carried verbatim (R1) —
+/// every other scope in this crate is lower_snake because the reference's is.
+const LOG_SCOPE: &str = "IOSurfaceLayer";
 
 // PORT NOTE: `var Subclass: ?objc.Class = null;` (lines 14-16):
 //   We subclass CALayer with a custom display handler, we only need
@@ -239,6 +246,12 @@ impl IOSurfaceLayer {
             //     "setSurfaceCallback(): surface is wrong size for layer, discarding. surface = {d}x{d}, layer = {d}x{d}",
             //     .{ surface.getWidth(), surface.getHeight(), width, height },
             // );
+            log::debug!(
+                target: LOG_SCOPE,
+                "setSurfaceCallback(): surface is wrong size for layer, discarding. surface = {}x{}, layer = {width}x{height}",
+                surface.width(),
+                surface.height()
+            );
             return;
         }
 

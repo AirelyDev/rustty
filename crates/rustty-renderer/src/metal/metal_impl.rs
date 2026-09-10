@@ -77,14 +77,14 @@ use core::ffi::c_void;
 // const Allocator = std.mem.Allocator;
 // const builtin = @import("builtin");                    → #[cfg(target_os = "macos")]
 // const log = std.log.scoped(.metal);
-// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// PORT NOTE (task-14c-2): the `log` facade is wired for this crate
 // (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
-// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
-// `log.*` sites are simply NOT RESTORED YET — the `metal` group's 14c stage owns them, and will
-// add `const LOG_SCOPE: &str = "metal";` here alongside the first live
-// emission. Until then each site stays a comment at its location. Scheduled
-// work, not a missing dependency.
-// The `log.debug` sites in `init` are among the ones it will fill.
+// shape 3) and this file's `log.*` sites are RESTORED. Each keeps the
+// reference's call as an R1 comment with the live emission beneath it.
+//
+/// `Metal.zig:39`'s `const log = std.log.scoped(.metal);` — the `@tagName` of the
+/// reference's scope, carried as the `log` crate's `target`.
+const LOG_SCOPE: &str = "metal";
 
 /// Names the anonymous `struct { width: u32, height: u32 }` that `surfaceSize`
 /// returns.
@@ -254,6 +254,14 @@ impl Metal {
         let max_texture_size = query_max_texture_size(&device);
         // log.debug("device properties default_storage_mode={} max_texture_size={}",
         //           .{ default_storage_mode, max_texture_size });
+        // (R1 rendering note: Zig's `{}` on an enum prints the fully qualified
+        //  `<type>.<tag>`; the port has only a derived `Debug`, so this renders
+        //  `Shared`/`Managed` where the reference renders
+        //  `mtl.MTLResourceOptions.StorageMode.shared`. Known, accepted.)
+        log::debug!(
+            target: LOG_SCOPE,
+            "device properties default_storage_mode={default_storage_mode:?} max_texture_size={max_texture_size}"
+        );
 
         Ok((device, queue, default_storage_mode, max_texture_size))
     }
@@ -846,8 +854,9 @@ impl Metal {
                     let mut s_mut = s;
                     s_mut.deinit();
                 }
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("metal warmup shader init failed err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "metal warmup shader init failed err={err:?}");
                 }
             }
         }
@@ -925,10 +934,9 @@ impl Metal {
 unsafe extern "C" fn display_callback(ctx: *mut c_void) {
     abort_on_unwind(|| {
         let renderer = ctx.cast::<Renderer>();
-        if let Err(_err) = unsafe { Renderer::draw_frame_raw(renderer, true) } {
+        if let Err(err) = unsafe { Renderer::draw_frame_raw(renderer, true) } {
             // log.warn("Error drawing frame in display callback, err={}", .{err});
-            // (not restored yet — the `metal` group's 14c stage; the facade itself IS
-            // wired, see `generic.rs`'s `macos_impl`.)
+            log::warn!(target: LOG_SCOPE, "Error drawing frame in display callback, err={err:?}");
         }
     })
 }

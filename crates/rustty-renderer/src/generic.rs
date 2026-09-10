@@ -5882,15 +5882,20 @@ mod macos_impl {
         if health == crate::Health::Healthy {
             // block.renderer.api.present(block.target.*, block.sync) catch |err|
             //     log.err("Failed to present render target: err={}", .{err});   (Frame.zig:82-88)
-            // NOT RESTORED YET (updated task-14c-1): the `log` facade IS wired for this
-            // crate now, but this site's oracle is `renderer/metal/Frame.zig:82-88`, which
-            // belongs to row S118-F4 (the `metal` group's 14c stage) rather than to
-            // S115-F4/S116-F2 — so the present-failure `log.err` stays the R1 comment
-            // above until that stage runs. We still consume the now-fallible Result
-            // faithfully (the layer path can fail; W1-3). `&mut api` reborrow through the
-            // raw ptr; `&*ctx.target` is the `*mut Target` back to `&Target`.
-            if let Err(_e) = unsafe { (*renderer).api.present(&*ctx.target, ctx.sync) } {
-                // log.err("Failed to present render target: err={}", .{_e});  (S118-F4)
+            // RESTORED (task-14c-2, S118-F4). This site's oracle is
+            // `renderer/metal/Frame.zig:82-88`, whose scope is `.metal`, NOT
+            // `generic.zig`'s `.generic_renderer` — so it targets
+            // `crate::metal::frame::LOG_SCOPE` even though the code lives here. It lives
+            // here at all because the port inlines `Frame.zig`'s `bufferCompleted` into
+            // this completion trampoline. We consume the now-fallible Result faithfully
+            // (the layer path can fail; W1-3). `&mut api` reborrow through the raw ptr;
+            // `&*ctx.target` is the `*mut Target` back to `&Target`.
+            if let Err(e) = unsafe { (*renderer).api.present(&*ctx.target, ctx.sync) } {
+                // log.err("Failed to present render target: err={}", .{err});
+                log::error!(
+                    target: crate::metal::frame::LOG_SCOPE,
+                    "Failed to present render target: err={e:?}"
+                );
             }
         }
         // block.renderer.frameCompleted(health);
@@ -7327,8 +7332,9 @@ mod macos_impl {
 
                 let path_bytes = path.as_os_str().as_encoded_bytes().to_vec();
                 let path_display = String::from_utf8(path_bytes.clone()).unwrap();
-                r.config.bg_image =
-                    Some(crate::generic::Path::Required(CString::new(path_bytes).unwrap()));
+                r.config.bg_image = Some(crate::generic::Path::Required(
+                    CString::new(path_bytes).unwrap(),
+                ));
 
                 let cap = crate::log_capture::start();
                 r.prep_background_image().expect("prep_background_image");
@@ -7440,8 +7446,9 @@ mod macos_impl {
 
                 let path_bytes = path.as_os_str().as_encoded_bytes().to_vec();
                 let path_display = String::from_utf8(path_bytes.clone()).unwrap();
-                r.config.bg_image =
-                    Some(crate::generic::Path::Required(CString::new(path_bytes).unwrap()));
+                r.config.bg_image = Some(crate::generic::Path::Required(
+                    CString::new(path_bytes).unwrap(),
+                ));
 
                 // The exact `{err:?}` rendering the site will produce, obtained the
                 // same way the site obtains it — so the assertion stays EXACT

@@ -33,14 +33,11 @@ use objc2_metal::{
 use crate::metal::api;
 
 // const log = std.log.scoped(.metal);
-// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// PORT NOTE (task-14c-2): the `log` facade is wired for this crate
 // (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
-// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
-// `log.*` sites are simply NOT RESTORED YET — row S118-F4's stage owns them, and will
-// add `const LOG_SCOPE: &str = "metal";` here alongside the first live
-// emission. Until then each site stays a comment at its location. Scheduled
-// work, not a missing dependency.
-// The `log.err` site in `checkError` is the one it will fill.
+// shape 3); `checkError`'s `log.err` is RESTORED at its use site below.
+/// `Pipeline.zig:11`'s `const log = std.log.scoped(.metal);`.
+const LOG_SCOPE: &str = "metal";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Error {
@@ -184,25 +181,55 @@ impl Pipeline {
 
         // Make our state
         //
-        // PORT NOTE: ghostty passes an `err` out-param and calls `checkError(err)`,
-        // which logs `nserr.localizedDescription` before returning
-        // `error.MetalFailed`:
-        //     log.err("metal error={s}", .{str.cstringPtr(.ascii).?});
+        // PORT NOTE (S35-F2, task-14c-2): ghostty passes an `err` out-param and calls
+        // `checkError(err)`, whose whole body is
+        //
+        //     fn checkError(err_: ?*anyopaque) !void {
+        //         const nserr = objc.Object.fromId(err_ orelse return);
+        //         const str = @as(*macos.foundation.String,
+        //             @ptrCast(nserr.getProperty(?*anyopaque, "localizedDescription").?));
+        //         log.err("metal error={s}", .{str.cstringPtr(.ascii).?});
+        //         return error.MetalFailed;
+        //     }
+        //
+        // The emission is the USE SITE's, not `String.cstringPtr`'s —
+        // `pkg/macos/foundation/string.zig:70-77` is a pure accessor that never logs.
         // objc2's `newRenderPipelineStateWithDescriptor:error:_` returns a `Result`
-        // whose `Err` carries the same `NSError`; the log site is preserved above
-        // (not restored yet — row S118-F4; the facade itself IS wired), and the `errdefer
-        // pipeline_state.release()` dissolves into `?` early-return + `Retained`
-        // Drop (a failed return drops nothing — the state is not yet stored).
+        // whose `Err` carries the same `NSError`, so `check_error` is inlined into
+        // this `map_err`. The `errdefer pipeline_state.release()` dissolves into `?`
+        // early-return + `Retained` Drop (a failed return drops nothing — the state
+        // is not yet stored).
         let state = opts
             .device
             .newRenderPipelineStateWithDescriptor_error(&desc)
-            .map_err(|_nserr| Error::MetalFailed)?;
+            .map_err(|nserr| {
+                check_error(&nserr);
+                Error::MetalFailed
+            })?;
 
         Ok(Self { state })
     }
 
     // PORT NOTE (ARC): `deinit()` (`self.state.release()`) dissolves into the
     // `Retained` field's automatic `Drop` — no manual impl.
+}
+
+/// The logging half of `Pipeline.zig`'s `checkError` (`:195-204`).
+///
+/// The reference's `err_ orelse return` early-out and its `return
+/// error.MetalFailed` are both carried by the `Result` the objc2 call already
+/// returns (there is no error object on the success arm, and the caller maps the
+/// `Err` to `Error::MetalFailed`), so what remains to port is the emission.
+///
+/// R1 rendering note: the reference renders `str.cstringPtr(.ascii).?` — the
+/// CFString's ASCII C-string pointer, unwrapped (a null, i.e. a description not
+/// stored in an ASCII-compatible encoding, panics there). objc2 hands us the same
+/// `localizedDescription` as an `NSString`; `to_string` is lossless UTF-8 rather
+/// than ASCII-only, so a non-ASCII description prints here where the reference
+/// would panic. Known, accepted: strictly more diagnostic, never less.
+fn check_error(nserr: &objc2_foundation::NSError) {
+    // log.err("metal error={s}", .{str.cstringPtr(.ascii).?});
+    log::error!(target: LOG_SCOPE, "metal error={}", nserr.localizedDescription());
 }
 
 /// Ports `Pipeline.autoAttribute`: for each attribute, set format/offset and

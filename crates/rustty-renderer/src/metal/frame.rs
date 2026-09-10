@@ -33,15 +33,15 @@ use crate::metal::render_pass::{Attachment, Options as RpOptions, RenderPass};
 use crate::metal::target::Target;
 
 // const log = std.log.scoped(.metal);
-// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
-// (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
-// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
-// `log.*` sites are simply NOT RESTORED YET — row S118-F4's stage owns them, and will
-// add `const LOG_SCOPE: &str = "metal";` here alongside the first live
-// emission. Until then each site stays a comment at its location. Scheduled
-// work, not a missing dependency.
-// The `log.err("Failed to present render target: err={}", ...)` site lives in
-// the completion body (its live copy is in `generic.rs`'s completion trampoline).
+// PORT NOTE (task-14c-2): `Frame.zig`'s ONE diagnostic — `log.err("Failed to
+// present render target: err={}", …)` (`Frame.zig:86`) — is NOT emitted from this
+// file, because the port does not have `bufferCompleted` here: its body is the
+// generic renderer's completion trampoline `generic.rs::metal_buffer_completed`
+// (this module stores only the `CompletionFn`). The live emission is therefore in
+// `generic.rs`, and it carries THIS file's scope via the constant below rather than
+// `generic.rs`'s own `generic_renderer` — the reference tags it `.metal`.
+/// `Frame.zig:16`'s `const log = std.log.scoped(.metal);`.
+pub(crate) const LOG_SCOPE: &str = "metal";
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Error {
