@@ -1498,7 +1498,10 @@ mod imp {
     /// the faithful shape of the reference's `if (glib.Source.remove(id) == 0)
     /// log.warn(...)` (`window.zig:1261-1263`, **invariant 11**). `SourceId`'s own
     /// `Drop` does NOT remove the source, so we remove via raw `g_source_remove`.
-    fn remove_source_id(id: Option<glib::SourceId>, what: &str) {
+    // `pub(super)` only so `mod tests` (a sibling of `mod imp`, not a child) can
+    // reach it — `remove_source_id_warns_only_on_failure_and_verbatim` is the
+    // full-vector assertion that this stays silent on its success path.
+    pub(super) fn remove_source_id(id: Option<glib::SourceId>, what: &str) {
         if let Some(source) = id {
             let removed = unsafe { glib::ffi::g_source_remove(source.as_raw()) };
             if removed == glib::ffi::GFALSE {
@@ -2486,7 +2489,7 @@ mod tests {
         use glib::translate::FromGlib;
 
         let cap = log_capture::start();
-        remove_source_id(None, "handle active state source");
+        imp::remove_source_id(None, "handle active state source");
         let quiet = cap.messages();
         drop(cap);
         assert_eq!(
@@ -2498,7 +2501,7 @@ mod tests {
         let cap = log_capture::start();
         // SAFETY: `u32::MAX` is not a live GLib source id; `g_source_remove`
         // reports failure for an unknown id rather than acting on one.
-        remove_source_id(
+        imp::remove_source_id(
             Some(unsafe { glib::SourceId::from_glib(u32::MAX) }),
             "handle active state source",
         );
