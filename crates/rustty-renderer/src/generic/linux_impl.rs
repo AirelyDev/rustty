@@ -110,6 +110,32 @@ use crate::size::{
 use crate::state;
 use crate::Overlay;
 
+// const log = std.log.scoped(.generic_renderer);   (generic.zig:46)
+//
+// DECISION-logging.md §6r call shape 3: `rustty-renderer` sits BELOW `rustty-vt-c`
+// in R4's layering, so restored sites call the `log` facade with `target:
+// LOG_SCOPE` carrying the reference's `std.log.scoped` tag. This is the OpenGL twin
+// of `generic.rs`'s `macos_impl::LOG_SCOPE` (`generic.rs:1190`); both twins port the
+// SAME `src/renderer/generic.zig` and therefore carry the SAME scope. The constant
+// is at FILE scope here because this whole file is the Linux-only arm.
+//
+// RESTORED (task-14c-5, finding N9). `generic.zig` has 33 live `log.*` calls at pin
+// `20abdb50a`. SIX of them are macOS-only and have no Linux counterpart at all —
+// `:991` (`displayLinkCallback`) and `:1169/:1177/:1183/:1188/:1190`
+// (`syncDisplayLink`), both guarded by `DisplayLink != void`, which is `void` off
+// macOS (see the module docs' divergence #1). Of the remaining 27, TWENTY-FOUR are
+// live in this file. The three that are not are `:1558` (`error rebuilding GPU
+// cells`) and `:2912`/`:3181` (`error caching font shaping results`, the same
+// reference call in two places): their Rust counterparts are infallible, so there is
+// no failure arm to hang the warn on. Each carries a PORT NOTE at its site; they are
+// the Linux-side residuals of the WAIVED rows `S115-F4` and `S116-F2`
+// (`ADJUDICATION.md#s115-f4`, `#s116-f2`), exactly as on the Metal side.
+//
+// One further emission in this file — `opengl_frame_completed`'s "Failed to present
+// render target" — is NOT a `generic.zig` site: its oracle is `opengl/Frame.zig:65`
+// and it therefore targets `opengl::opengl_impl::LOG_SCOPE`. See the note there.
+const LOG_SCOPE: &str = "generic_renderer";
+
 /// The number of buffers we use for double/triple buffering.
 //
 // PORT NOTE (macos_impl generic.rs:913-919): reference `SwapChain.buf_count =
@@ -762,13 +788,14 @@ enum Selected {
 /// is the macOS shaper); the Linux backend is `harfbuzz::Shaper`
 /// (`rustty_font_shaper::shape::Shaper` cfg-selects `harfbuzz` off macOS), so the arm
 /// is `shape::harfbuzz::Error` here. The payloads carry the faithful error value the
-/// reference logs (`log.warn`). UPDATED (task-14c-1): the `log` facade IS wired for
-/// this crate now, and the `macos_impl` twin's site is live
-/// (`log::warn!(target: LOG_SCOPE, "error building row y={y} err={err:?}")`); this
-/// OpenGL arm is simply not restored yet — the Linux 14c stage owns it and will add
-/// `const LOG_SCOPE: &str = "generic_renderer";` here. `#[allow(dead_code)]` records
-/// that the payload is carried-but-unread until then. Scheduled work, not a missing
-/// dependency.
+/// reference logs (`log.warn`). UPDATED (task-14c-5): the `log` facade is wired and
+/// this arm's site is now LIVE too — `rebuild_cells` binds the payload and emits
+/// `log::warn!(target: LOG_SCOPE, "error building row y={y} err={err:?}")`
+/// (`generic.zig:2627`), matching the `macos_impl` twin. The `#[derive(Debug)]` is
+/// what the `{err:?}` rendering reads; the `#[allow(dead_code)]` STAYS because
+/// rustc's `dead_code` lint does not count a `#[derive(Debug)]` field read as a use,
+/// so the variant payloads would still be reported "never read" without it (same
+/// reasoning as `generic.rs:3309`).
 #[derive(Debug)]
 #[allow(dead_code)]
 enum RebuildRowError {
@@ -1439,6 +1466,9 @@ impl Renderer {
 
         self.update_screen_size_uniforms();
 
+        // log.debug("screen size size={}", .{size});
+        log::debug!(target: LOG_SCOPE, "screen size size={size:?}");
+
         self.draw_mutex.unlock();
     }
 
@@ -1601,19 +1631,63 @@ impl Renderer {
             // Open the file / Read it.
             //
             // The reference `openFileAbsolute` + `readToEndAlloc(self.alloc,
-            // maxInt(u32))` (max size 4 GiB) collapse to `std.fs.read`; both the
-            // open failure and the read failure map to `break :load_background`
-            // (a warn + no-op). The 4 GiB cap is applied AFTER the read here (an
-            // oversize file is treated as a read failure), byte-faithfully over the
-            // `CString` path bytes (never a lossy `String`).
-            let contents: Vec<u8> = match std::fs::read(OsStr::from_bytes(path.to_bytes())) {
-                Ok(b) if b.len() <= u32::MAX as usize => b,
-                Ok(_) | Err(_) => {
-                    // log.warn("error opening/reading background image file \"{s}\": {}", ...);
-                    eprintln!(
-                        "warning(renderer): error opening/reading background image file {path:?}"
+            // maxInt(u32))` (max size 4 GiB) are kept as TWO distinct steps here
+            // (they were previously collapsed into one `std.fs.read`) because the
+            // reference logs a DIFFERENT message for each — "error opening ..." vs
+            // "error reading ..." — and R1 requires the message text verbatim. Both
+            // failures map to `break :load_background` (a warn + no-op). The 4 GiB
+            // cap is applied AFTER the read (an oversize file is treated as a read
+            // failure, the reference's `error.StreamTooLong`), byte-faithfully over
+            // the `CString` path bytes (never a lossy `String`).
+            //
+            // (task-14c-5: split to match `macos_impl`'s `generic.rs` twin, which
+            // task-14c-1 split for the same R1 reason. Same two `break`s as before,
+            // so decode and caller behaviour are unchanged.)
+            //
+            // `{s}` on the reference's `[]const u8` path prints the RAW bytes; the
+            // closest Rust rendering is `String::from_utf8_lossy` over the same
+            // bytes. The lossy conversion is confined to the log message — the path
+            // the port actually opens stays the byte-faithful `OsStr`.
+            let path_bytes = path.to_bytes();
+            let path_display = String::from_utf8_lossy(path_bytes);
+            // var file = std.fs.openFileAbsolute(path, .{}) catch |err| { log.warn(...); break; };
+            let mut file = match std::fs::File::open(OsStr::from_bytes(path_bytes)) {
+                Ok(f) => f,
+                Err(err) => {
+                    // log.warn("error opening background image file \"{s}\": {}", .{ path, err });
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error opening background image file \"{path_display}\": {err:?}"
                     );
                     break 'load_background None;
+                }
+            };
+            // const contents = file.readToEndAlloc(self.alloc, std.math.maxInt(u32))
+            //     catch |err| { log.warn(...); break; };
+            // defer self.alloc.free(contents);
+            let contents: Vec<u8> = {
+                let mut buf: Vec<u8> = Vec::new();
+                match std::io::Read::read_to_end(&mut file, &mut buf) {
+                    Ok(_) if buf.len() <= u32::MAX as usize => buf,
+                    // Over the reference's `maxInt(u32)` cap: the reference's
+                    // `readToEndAlloc` fails with `error.StreamTooLong`. Zig's `{}`
+                    // on an error value prints `error.` + the name, so the oracle's
+                    // rendering of this arm is `...: error.StreamTooLong` — the
+                    // prefix is part of the message text, not decoration.
+                    Ok(_) => {
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "error reading background image file \"{path_display}\": error.StreamTooLong"
+                        );
+                        break 'load_background None;
+                    }
+                    Err(err) => {
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "error reading background image file \"{path_display}\": {err:?}"
+                        );
+                        break 'load_background None;
+                    }
                 }
             };
 
@@ -1638,14 +1712,18 @@ impl Renderer {
                 FileType::Png => rustty_wuffs::png::decode(alloc, &contents)?,
                 FileType::Jpeg => rustty_wuffs::jpeg::decode(alloc, &contents)?,
                 FileType::Unknown => {
-                    eprintln!(
-                        "warning(renderer): Cannot determine file type for background image file {path:?}!"
+                    // log.warn("Cannot determine file type for background image file \"{s}\"!", .{path});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "Cannot determine file type for background image file \"{path_display}\"!"
                     );
                     break 'load_background None;
                 }
                 f => {
-                    eprintln!(
-                        "warning(renderer): Unsupported file type {f:?} for background image file {path:?}!"
+                    // log.warn("Unsupported file type {} for background image file \"{s}\"!", .{ f, path });
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "Unsupported file type {f:?} for background image file \"{path_display}\"!"
                     );
                     break 'load_background None;
                 }
@@ -1693,7 +1771,11 @@ impl Renderer {
         // custom shaders, never block the renderer) maps to `unwrap_or_else`.
         let custom_shaders: Vec<CString> =
             shadertoy::load_from_files(&self.config.custom_shaders, OpenGL::CUSTOM_SHADER_TARGET)
-                .unwrap_or_else(|_err| Vec::new());
+                .unwrap_or_else(|err| {
+                    // log.warn("error loading custom shaders err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error loading custom shaders err={err:?}");
+                    Vec::new()
+                });
 
         let custom_refs: Vec<&CStr> = custom_shaders.iter().map(|c| c.as_c_str()).collect();
         let has_custom_shaders = !custom_refs.is_empty();
@@ -2132,7 +2214,7 @@ impl Renderer {
             let highlights_ptr: *const [Highlight] =
                 self.terminal_state.row_data[y_usize].highlights.as_slice();
 
-            if let Err(_err) = self.rebuild_row(
+            if let Err(err) = self.rebuild_row(
                 y,
                 row,
                 cells_ptr,
@@ -2146,6 +2228,7 @@ impl Renderer {
                 // our render state so just clear this row and keep
                 // trying to finish it out.
                 // log.warn("error building row y={} err={}", .{ y, err });
+                log::warn!(target: LOG_SCOPE, "error building row y={y} err={err:?}");
                 self.cells.clear(y);
             }
         }
@@ -2309,7 +2392,7 @@ impl Renderer {
                 };
                 let mut x = range.x[0];
                 for cp in preedit_v.codepoints[range.cp_offset..].iter() {
-                    if let Err(_err) = self.add_preedit_cell(
+                    if let Err(err) = self.add_preedit_cell(
                         *cp,
                         point::Coordinate {
                             x,
@@ -2319,6 +2402,13 @@ impl Renderer {
                     ) {
                         // log.warn("error building preedit cell, will be invalid
                         //           x={} y={}, err={}", .{ x, range.y, err });
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "error building preedit cell, will be invalid x={} y={}, err={:?}",
+                            x,
+                            range.y,
+                            err
+                        );
                     }
 
                     x += if cp.wide { 2 } else { 1 };
@@ -2531,6 +2621,20 @@ impl Renderer {
                                 // Try to cache them. If caching fails for any reason we
                                 // continue because it is just a performance optimization,
                                 // not a correctness issue.
+                                // self.font_shaper_cache.put(self.alloc, run, new_cells) catch |err| {
+                                //     log.warn("error caching font shaping results err={}", .{err});
+                                // };
+                                //
+                                // LOG PORT NOTE (task-14c-5, N9 — Linux-side residual
+                                // of the WAIVED row S116-F2): this `log.warn` is NOT
+                                // restorable, exactly as in the Metal twin
+                                // (task-14c-1). `ShaperCache::put`
+                                // (`rustty-font-shaper/src/shaper/cache.rs:136`) is
+                                // INFALLIBLE in rustty — it allocates through the
+                                // infallible `Global`/`Box` path — so there is no
+                                // `catch` arm to hang the warn on and emitting it
+                                // unconditionally would put a diagnostic on the
+                                // SUCCESS path. See ADJUDICATION.md#s116-f2.
                                 self.font_shaper_cache.put(&run, unsafe { &*new_ptr });
 
                                 // The cells we get from direct shaping are always owned
@@ -2848,7 +2952,7 @@ impl Renderer {
             // which intersects parts of the text (descenders).
             if underline != sgr::Underline::None {
                 // SAFETY (§C.3): raw-self helper — see `self_raw`/`add_underline`.
-                if let Err(_err) = unsafe {
+                if let Err(err) = unsafe {
                     Renderer::add_underline(
                         self_raw,
                         x as CellCountInt,
@@ -2860,16 +2964,24 @@ impl Renderer {
                 } {
                     // log.warn("error adding underline to cell, will be invalid
                     //           x={} y={}, err={}", .{ x, y, err });
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error adding underline to cell, will be invalid x={x} y={y}, err={err:?}"
+                    );
                 }
             }
 
             if style.flags.overline {
                 // SAFETY (§C.3): raw-self helper — see `self_raw`/`add_underline`.
-                if let Err(_err) =
+                if let Err(err) =
                     unsafe { Renderer::add_overline(self_raw, x as CellCountInt, y, fg, alpha) }
                 {
                     // log.warn("error adding overline to cell, will be invalid
                     //           x={} y={}, err={}", .{ x, y, err });
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error adding overline to cell, will be invalid x={x} y={y}, err={err:?}"
+                    );
                 }
             }
 
@@ -2904,6 +3016,20 @@ impl Renderer {
                                 // Try to cache them. If caching fails for any reason we
                                 // continue because it is just a performance optimization,
                                 // not a correctness issue.
+                                // self.font_shaper_cache.put(self.alloc, run, new_cells) catch |err| {
+                                //     log.warn("error caching font shaping results err={}", .{err});
+                                // };
+                                //
+                                // LOG PORT NOTE (task-14c-5, N9 — Linux-side residual
+                                // of the WAIVED row S116-F2): this `log.warn` is NOT
+                                // restorable, exactly as in the Metal twin
+                                // (task-14c-1). `ShaperCache::put`
+                                // (`rustty-font-shaper/src/shaper/cache.rs:136`) is
+                                // INFALLIBLE in rustty — it allocates through the
+                                // infallible `Global`/`Box` path — so there is no
+                                // `catch` arm to hang the warn on and emitting it
+                                // unconditionally would put a diagnostic on the
+                                // SUCCESS path. See ADJUDICATION.md#s116-f2.
                                 self.font_shaper_cache.put(&run, unsafe { &*new_ptr });
 
                                 // The cells we get from direct shaping are always owned
@@ -2938,7 +3064,7 @@ impl Renderer {
                         && run.offset as usize + shaped_cells[shaper_cells_i].x as usize == x
                     {
                         // SAFETY (§C.3): raw-self helper — see `self_raw`/`add_glyph`.
-                        if let Err(_err) = unsafe {
+                        if let Err(err) = unsafe {
                             Renderer::add_glyph(
                                 self_raw,
                                 x as CellCountInt,
@@ -2953,6 +3079,10 @@ impl Renderer {
                         } {
                             // log.warn("error adding glyph to cell, will be invalid
                             //           x={} y={}, err={}", .{ x, y, err });
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "error adding glyph to cell, will be invalid x={x} y={y}, err={err:?}"
+                            );
                         }
                         shaper_cells_i += 1;
                     }
@@ -2962,11 +3092,15 @@ impl Renderer {
             // Finally, draw a strikethrough if necessary.
             if style.flags.strikethrough {
                 // SAFETY (§C.3): raw-self helper — see `self_raw`/`add_underline`.
-                if let Err(_err) = unsafe {
+                if let Err(err) = unsafe {
                     Renderer::add_strikethrough(self_raw, x as CellCountInt, y, fg, alpha)
                 } {
                     // log.warn("error adding strikethrough to cell, will be invalid
                     //           x={} y={}, err={}", .{ x, y, err });
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error adding strikethrough to cell, will be invalid x={x} y={y}, err={err:?}"
+                    );
                 }
             }
         }
@@ -3289,8 +3423,9 @@ impl Renderer {
                     )
                 } {
                     Ok(r) => r,
-                    Err(_err) => {
+                    Err(err) => {
                         // log.warn("error rendering cursor glyph err={}", .{err});
+                        log::warn!(target: LOG_SCOPE, "error rendering cursor glyph err={err:?}");
                         return;
                     }
                 }
@@ -3318,10 +3453,15 @@ impl Renderer {
                         // fonts so we just log and return instead of fallback.
                         // log.warn("failed to find lock symbol for cursor
                         //           codepoint=0xF023", .{});
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "failed to find lock symbol for cursor codepoint=0xF023"
+                        );
                         return;
                     }
-                    Err(_err) => {
+                    Err(err) => {
                         // log.warn("error rendering cursor glyph err={}", .{err});
+                        log::warn!(target: LOG_SCOPE, "error rendering cursor glyph err={err:?}");
                         return;
                     }
                 }
@@ -3372,10 +3512,16 @@ impl Renderer {
             Ok(None) => {
                 // log.warn("failed to find font for preedit codepoint={X}",
                 //          .{cp.codepoint});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "failed to find font for preedit codepoint={:X}",
+                    cp.codepoint
+                );
                 return Ok(());
             }
-            Err(_err) => {
+            Err(err) => {
                 // log.warn("error rendering preedit glyph err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error rendering preedit glyph err={err:?}");
                 return Ok(());
             }
         };
@@ -3590,6 +3736,8 @@ impl Renderer {
 
             // If we're in a synchronized output state, we pause all rendering.
             if unsafe { (*t).modes.get(Mode::SynchronizedOutput) } {
+                // log.debug("synchronized output started, skipping render", .{});
+                log::debug!(target: LOG_SCOPE, "synchronized output started, skipping render");
                 return Ok(());
             }
 
@@ -3712,7 +3860,14 @@ impl Renderer {
                     } else {
                         self.terminal_state
                             .link_cells(Global, vp)
-                            .unwrap_or_else(|_err| CellSet::new())
+                            .unwrap_or_else(|err| {
+                                // log.warn("error searching for OSC8 links err={}", .{err});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "error searching for OSC8 links err={err:?}"
+                                );
+                                CellSet::new()
+                            })
                     }
                 }
             };
@@ -3747,13 +3902,16 @@ impl Renderer {
 
         // Outside the critical area we can update our links to contain our regex
         // results.
-        let _ = self.config.links.render_cell_map(
+        // catch |err| log.warn("error searching for regex links err={}", .{err});
+        if let Err(err) = self.config.links.render_cell_map(
             Global,
             &mut critical.links,
             &self.terminal_state,
             state.mouse.point,
             state.mouse.mods,
-        );
+        ) {
+            log::warn!(target: LOG_SCOPE, "error searching for regex links err={err:?}");
+        }
 
         // Clear our highlight state and update.
         if self.search_matches_dirty || self.terminal_state.dirty != Dirty::False {
@@ -3774,18 +3932,35 @@ impl Renderer {
 
             // NOTE: The order below matters. Highlights added earlier take priority.
             if let Some(m) = &self.search_selected_match {
-                let _ = self.terminal_state.update_highlights_flattened(
+                // catch |err| {
+                //     // Not a critical error, we just won't show highlights.
+                //     log.warn("error updating search selected highlight err={}", .{err});
+                // }
+                if let Err(err) = self.terminal_state.update_highlights_flattened(
                     self.alloc,
                     HighlightTag::SearchMatchSelected as u8,
                     core::slice::from_ref(&m.r#match),
-                );
+                ) {
+                    // Not a critical error, we just won't show highlights.
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error updating search selected highlight err={err:?}"
+                    );
+                }
             }
             if let Some(m) = &self.search_matches {
-                let _ = self.terminal_state.update_highlights_flattened(
+                // catch |err| {
+                //     // Not a critical error, we just won't show highlights.
+                //     log.warn("error updating search highlights err={}", .{err});
+                // }
+                if let Err(err) = self.terminal_state.update_highlights_flattened(
                     self.alloc,
                     HighlightTag::SearchMatch as u8,
                     &m.matches,
-                );
+                ) {
+                    // Not a critical error, we just won't show highlights.
+                    log::warn!(target: LOG_SCOPE, "error updating search highlights err={err:?}");
+                }
             }
         }
 
@@ -3797,7 +3972,9 @@ impl Renderer {
         //     log.warn("error rebuilding overlay surface err={}", .{err});
         //
         // PORTS: generic.zig:1356-1365; macos_impl generic.rs:4959.
-        let _ = self.rebuild_overlay(&critical.overlay_features);
+        if let Err(err) = self.rebuild_overlay(&critical.overlay_features) {
+            log::warn!(target: LOG_SCOPE, "error rebuilding overlay surface err={err:?}");
+        }
 
         // Acquire the draw mutex for all remaining state updates.
         {
@@ -3814,6 +3991,22 @@ impl Renderer {
                 },
             );
             self.rebuild_cells(critical.preedit, cs, &critical.links);
+            // catch |err| {
+            //     // This means we weren't able to allocate our buffer
+            //     // to update the cells. In this case, we continue with
+            //     // our old buffer (frozen contents) and log it.
+            //     comptime assert(@TypeOf(err) == error{OutOfMemory});
+            //     log.warn("error rebuilding GPU cells err={}", .{err});
+            // }
+            //
+            // LOG PORT NOTE (task-14c-5, N9 — Linux-side residual of the WAIVED row
+            // S115-F4): `rebuild_cells` is INFALLIBLE in rustty (it returns `()`;
+            // its sole OOM source aborts via the `Global` allocator), so the
+            // reference's "continue with frozen contents" catch path is unreachable
+            // here and this `log.warn` is NOT restorable — emitting it
+            // unconditionally would put a diagnostic on the SUCCESS path. Same
+            // ruling as the Metal twin (task-14c-1, generic.rs:5412-5427). See
+            // ADJUDICATION.md#s115-f4.
 
             // The scrollbar is only emitted during draws so we also check the
             // scrollbar cache here and update if needed.
@@ -3842,9 +4035,12 @@ impl Renderer {
             // PORTS: generic.zig:1416-1424; macos_impl generic.rs:5026-5028.
             // (`Option<&Overlay>` — the borrowed-ownership deviation documented on
             //  `image::linux_impl::State::overlay_update`.)
-            let _ = self
+            if let Err(err) = self
                 .images
-                .overlay_update(self.alloc, self.overlay.as_ref());
+                .overlay_update(self.alloc, self.overlay.as_ref())
+            {
+                log::warn!(target: LOG_SCOPE, "error updating overlay images err={err:?}");
+            }
 
             // Update custom shader uniforms that depend on terminal state.
             // self.updateCustomShaderUniformsFromState();
@@ -6682,5 +6878,177 @@ mod tests {
         assert!(r.overlay.is_none());
 
         r.deinit();
+    }
+
+    // ===================================================================
+    // task-14c-5 (finding N9) — the RESTORED diagnostics of this Linux twin
+    // ===================================================================
+
+    /// Proof that `generic.zig`'s `log.*` family is live in the OpenGL arm, not
+    /// only in the Metal one. Four shapes that break INDEPENDENTLY:
+    ///
+    /// 1. a warn carrying only the (byte-lossy) path — `generic.zig:1995`;
+    /// 2. a warn carrying an extra formatted argument — `generic.zig:2002`;
+    /// 3. the SUCCESS path of the same function, which must emit NOTHING (this
+    ///    project has shipped a diagnostic-on-the-success-path bug once already,
+    ///    and three sites in this file were deliberately left unrestored for
+    ///    exactly that reason — see the `LOG PORT NOTE`s);
+    /// 4. a DEBUG-level site in a different function — `generic.zig:2137`.
+    ///
+    /// All four need a live `Renderer`, hence a GL context: they clean-skip through
+    /// `golden_renderer` and HARD-FAIL under `RUSTTY_REQUIRE_GL=1`.
+    mod restored_log_sites {
+        use super::*;
+        use crate::log_capture::CapturedRecord;
+        use std::ffi::CString;
+
+        /// Write `bytes` to a uniquely-named temp file with the given extension and
+        /// return (path, the `CString` the config holds, the `{s}` rendering the
+        /// oracle prints for it).
+        fn temp_bg_file(
+            tag: &str,
+            ext: &str,
+            bytes: &[u8],
+        ) -> (std::path::PathBuf, CString, String) {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("rustty_gl_bg_{tag}_{nanos}.{ext}"));
+            std::fs::write(&path, bytes).unwrap();
+            let cpath = CString::new(path.as_os_str().as_encoded_bytes().to_vec()).unwrap();
+            let display = String::from_utf8_lossy(cpath.to_bytes()).into_owned();
+            (path, cpath, display)
+        }
+
+        /// Run `prep_background_image` over `cpath` under capture and return every
+        /// record it emitted on this thread.
+        fn prep_under_capture(r: &mut Renderer, cpath: CString) -> Vec<CapturedRecord> {
+            r.config.bg_image = Some(crate::generic::Path::Required(cpath));
+            let cap = crate::log_capture::start();
+            let res = r.prep_background_image();
+            let records = cap.messages();
+            drop(cap);
+            res.expect("prep_background_image must not error on a break-arm path");
+            records
+        }
+
+        /// `generic.zig:1995` — neither the magic bytes nor the extension identify
+        /// the file, so the load block breaks with the "Cannot determine" warn.
+        #[test]
+        fn undetectable_file_type_warns_once() {
+            let _guard = test_support::gl_lock();
+            let mut r = match golden_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // GL-context skip
+            };
+
+            let (path, cpath, display) =
+                temp_bg_file("undetectable", "xyz", b"not an image at all");
+            let records = prep_under_capture(&mut r, cpath);
+            let _ = std::fs::remove_file(&path);
+
+            assert_eq!(
+                records,
+                vec![(
+                    log::Level::Warn,
+                    "generic_renderer".to_string(),
+                    format!("Cannot determine file type for background image file \"{display}\"!"),
+                )]
+            );
+            // The break arm leaves the renderer's bg image untouched.
+            assert!(r.bg_image.is_none());
+            r.deinit();
+        }
+
+        /// `generic.zig:2002` — GIF magic bytes are DETECTED, but the port decodes
+        /// only PNG and JPEG, so this is the `else => |f|` arm and its message
+        /// carries the detected type as a second argument. A restore that dropped
+        /// that argument passes test 1 above and fails this one.
+        #[test]
+        fn unsupported_file_type_warns_with_the_detected_type() {
+            let _guard = test_support::gl_lock();
+            let mut r = match golden_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // GL-context skip
+            };
+
+            // GIF87a magic — `FileType::detect` returns `Gif`, which the decode
+            // switch does not handle.
+            let (path, cpath, display) =
+                temp_bg_file("unsupported", "gif", b"GIF87a\x01\x00\x01\x00\x00\x00\x00");
+            let records = prep_under_capture(&mut r, cpath);
+            let _ = std::fs::remove_file(&path);
+
+            assert_eq!(
+                records,
+                vec![(
+                    log::Level::Warn,
+                    "generic_renderer".to_string(),
+                    format!("Unsupported file type Gif for background image file \"{display}\"!"),
+                )]
+            );
+            assert!(r.bg_image.is_none());
+            r.deinit();
+        }
+
+        /// The success path of the very same function must be SILENT. This is the
+        /// guard against the shape this project shipped once — a warning hoisted
+        /// out of its failure arm, firing on every successful call.
+        #[test]
+        fn a_successful_decode_emits_nothing() {
+            let _guard = test_support::gl_lock();
+            let mut r = match golden_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // GL-context skip
+            };
+
+            let png = encode_solid_png(2, 2, [0x30, 0x60, 0xC0]);
+            let (path, cpath, _display) = temp_bg_file("ok", "png", &png);
+            let records = prep_under_capture(&mut r, cpath);
+            let _ = std::fs::remove_file(&path);
+
+            assert_eq!(records, Vec::<CapturedRecord>::new());
+            // and it really did the work, so the silence is not the silence of a
+            // function that never ran.
+            assert!(matches!(r.bg_image, Some(crate::image::Image::Pending(_))));
+            r.deinit();
+        }
+
+        /// `generic.zig:2137` — a DEBUG-level site in a different function. Level
+        /// and scope are asserted, so a restore that used `log::warn!` or the wrong
+        /// target fails here even though the message text is right.
+        #[test]
+        fn set_screen_size_emits_one_debug_record() {
+            let _guard = test_support::gl_lock();
+            let mut r = match golden_renderer(10, 3) {
+                Some(r) => r,
+                None => return, // GL-context skip
+            };
+
+            let mut size = r.size;
+            size.padding = Padding {
+                top: 1,
+                bottom: 2,
+                left: 3,
+                right: 4,
+            };
+
+            let cap = crate::log_capture::start();
+            r.set_screen_size(size);
+            let records = cap.messages();
+            drop(cap);
+
+            assert_eq!(
+                records,
+                vec![(
+                    log::Level::Debug,
+                    "generic_renderer".to_string(),
+                    format!("screen size size={size:?}"),
+                )]
+            );
+            assert_eq!(r.size.padding, size.padding);
+            r.deinit();
+        }
     }
 }
