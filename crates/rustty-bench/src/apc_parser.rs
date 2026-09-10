@@ -182,7 +182,8 @@ impl ApcParser {
         self_.data_f = match options::data_file(self_.opts.data.as_deref()) {
             Ok(f) => f,
             Err(err) => {
-                eprintln!("[{LOG_SCOPE}] error opening data file err={err}");
+                // log.warn("error opening data file err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error opening data file err={err}");
                 return Err(Error::BenchmarkFailed);
             }
         };
@@ -227,7 +228,8 @@ impl ApcParser {
             let n = match read_slice_short(r, &mut buf) {
                 Ok(n) => n,
                 Err(err) => {
-                    eprintln!("[{LOG_SCOPE}] error reading data file err={err:?}");
+                    // log.warn("error reading data file err={?}", .{f_reader.err});
+                    log::warn!(target: LOG_SCOPE, "error reading data file err={err:?}");
                     return Err(Error::BenchmarkFailed);
                 }
             };

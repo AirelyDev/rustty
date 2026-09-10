@@ -384,7 +384,8 @@ impl PageCompression {
         //     return error.BenchmarkFailed;
         // };
         if let Err(err) = self_.setup_data() {
-            eprintln!("[{LOG_SCOPE}] failed to prepare page compression benchmark err={err:?}");
+            // log.warn("failed to prepare page compression benchmark err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "failed to prepare page compression benchmark err={err:?}");
             return Err(Error::BenchmarkFailed);
         }
         Ok(())
@@ -582,7 +583,8 @@ impl PageCompression {
                     match lz4::compress(&data[off..off + len], compression_output, table) {
                         Ok(n) => n,
                         Err(err) => {
-                            eprintln!("[{LOG_SCOPE}] page compression failed err={err:?}");
+                            // log.warn("page compression failed err={}", .{err});
+                            log::warn!(target: LOG_SCOPE, "page compression failed err={err:?}");
                             return Err(Error::BenchmarkFailed);
                         }
                     };
@@ -619,7 +621,8 @@ impl PageCompression {
                 let output_len = match compress::required_scratch(len) {
                     Ok(n) => n,
                     Err(err) => {
-                        eprintln!("[{LOG_SCOPE}] failed to size stored page output err={err:?}");
+                        // log.warn("failed to size stored page output err={}", .{err});
+                        log::warn!(target: LOG_SCOPE, "failed to size stored page output err={err:?}");
                         return Err(Error::BenchmarkFailed);
                     }
                 };
@@ -650,13 +653,26 @@ impl PageCompression {
                     Err(lz4::CompressError::OutputTooSmall) => continue,
                     // error.InputTooLarge => { log.warn(...); return error.BenchmarkFailed; },
                     Err(err) => {
-                        eprintln!("[{LOG_SCOPE}] stored page compression failed err={err:?}");
+                        // log.warn("stored page compression failed err={}", .{err});
+                        log::warn!(target: LOG_SCOPE, "stored page compression failed err={err:?}");
                         return Err(Error::BenchmarkFailed);
                     }
                 };
 
-                // const encoded = self.alloc.dupe(u8, self.compression_output[0..encoded_len])
-                //     catch |err| { log.warn(...); return error.BenchmarkFailed; };
+                // const encoded = self.alloc.dupe(
+                //     u8,
+                //     self.compression_output[0..encoded_len],
+                // ) catch |err| {
+                //     log.warn("stored page allocation failed err={}", .{err});
+                //     return error.BenchmarkFailed;
+                // };
+                //
+                // PORT NOTE (task-14e-2, N16 class — UNRESTORABLE, not
+                // dropped): the reference's `catch` arm is an ALLOCATION-failure
+                // arm. `to_vec()` aborts on OOM rather than returning an error,
+                // so there is no arm to hang the diagnostic on, and emitting
+                // unconditionally would put it on the success path. Do not
+                // "restore" this. Recorded in the portmap reason.
                 let encoded = self_.compression_output[..encoded_len].to_vec();
 
                 // const slot = &self.stored[self.stored_next];
@@ -694,7 +710,8 @@ impl PageCompression {
                 //     return error.BenchmarkFailed;
                 // };
                 if let Err(err) = lz4::decompress(&block.bytes, output) {
-                    eprintln!("[{LOG_SCOPE}] page decompression failed err={err:?}");
+                    // log.warn("page decompression failed err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "page decompression failed err={err:?}");
                     return Err(Error::BenchmarkFailed);
                 }
                 // std.mem.doNotOptimizeAway(output);
@@ -737,7 +754,8 @@ impl PageCompression {
             {
                 Ok(n) => n,
                 Err(err) => {
-                    eprintln!("[{LOG_SCOPE}] page compression report failed err={err:?}");
+                    // log.warn("page compression report failed err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "page compression report failed err={err:?}");
                     return Err(Error::BenchmarkFailed);
                 }
             };

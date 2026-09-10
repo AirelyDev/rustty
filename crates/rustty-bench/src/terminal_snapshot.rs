@@ -280,7 +280,8 @@ impl TerminalSnapshot {
         //     return error.BenchmarkFailed;
         // };
         self_.setup_impl().map_err(|err| {
-            eprintln!("[{LOG_SCOPE}] failed to prepare snapshot benchmark err={err:?}");
+            // log.warn("failed to prepare snapshot benchmark err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "failed to prepare snapshot benchmark err={err:?}");
             Error::BenchmarkFailed
         })
     }
@@ -409,7 +410,8 @@ impl TerminalSnapshot {
                     continuation: snapshot::Continuation::Ground,
                 },
             ) {
-                eprintln!("[{LOG_SCOPE}] snapshot encoding failed err={err:?}");
+                // log.warn("snapshot encoding failed err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "snapshot encoding failed err={err:?}");
                 return Err(Error::BenchmarkFailed);
             }
             // std.mem.doNotOptimizeAway(self.encoded.written());
@@ -441,7 +443,8 @@ impl TerminalSnapshot {
             ) {
                 Ok(d) => d,
                 Err(err) => {
-                    eprintln!("[{LOG_SCOPE}] snapshot decoding failed err={err:?}");
+                    // log.warn("snapshot decoding failed err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "snapshot decoding failed err={err:?}");
                     return Err(Error::BenchmarkFailed);
                 }
             };
@@ -480,7 +483,8 @@ impl TerminalSnapshot {
             ) {
                 Ok(d) => d,
                 Err(err) => {
-                    eprintln!("[{LOG_SCOPE}] snapshot READY decoding failed err={err:?}");
+                    // log.warn("snapshot READY decoding failed err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "snapshot READY decoding failed err={err:?}");
                     return Err(Error::BenchmarkFailed);
                 }
             };
@@ -544,7 +548,8 @@ impl TerminalSnapshot {
             let tag = match snapshot::record::Tag::from_int(tag_raw) {
                 Some(tag) => tag,
                 None => {
-                    eprintln!("[{LOG_SCOPE}] unknown record tag {tag_raw}");
+                    // log.warn("unknown record tag {}", .{tag_raw});
+                    log::warn!(target: LOG_SCOPE, "unknown record tag {tag_raw}");
                     return Err(Error::BenchmarkFailed);
                 }
             };

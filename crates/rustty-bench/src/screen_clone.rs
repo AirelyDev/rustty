@@ -256,7 +256,8 @@ impl ScreenClone {
             Ok(Some(f)) => f,
             Ok(None) => return Ok(()),
             Err(err) => {
-                eprintln!("[{LOG_SCOPE}] error opening data file err={err}");
+                // log.warn("error opening data file err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error opening data file err={err}");
                 return Err(Error::BenchmarkFailed);
             }
         };
@@ -277,7 +278,8 @@ impl ScreenClone {
             let n = match read_slice_short(&mut data_f, &mut buf) {
                 Ok(n) => n,
                 Err(err) => {
-                    eprintln!("[{LOG_SCOPE}] error reading data file err={err:?}");
+                    // log.warn("error reading data file err={?}", .{f_reader.err});
+                    log::warn!(target: LOG_SCOPE, "error reading data file err={err:?}");
                     break Err(Error::BenchmarkFailed);
                 }
             };
@@ -344,7 +346,8 @@ impl ScreenClone {
                 match unsafe { (*s).clone(alloc, Point::Viewport(Coordinate::default()), None) } {
                     Ok(c) => c,
                     Err(err) => {
-                        eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+                        // log.warn("error cloning screen err={}", .{err});
+                        log::warn!(target: LOG_SCOPE, "error cloning screen err={err:?}");
                         return Err(Error::BenchmarkFailed);
                     }
                 };
@@ -374,7 +377,8 @@ impl ScreenClone {
         //     return error.BenchmarkFailed;
         // };
         if let Err(err) = state.update(alloc, &mut self_.terminal) {
-            eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+            // log.warn("error cloning screen err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error cloning screen err={err:?}");
             return Err(Error::BenchmarkFailed);
         }
 
@@ -395,7 +399,8 @@ impl ScreenClone {
             state.screen = Key::Alternate;
             // state.update(alloc, &self.terminal) catch |err| { ... };
             if let Err(err) = state.update(alloc, &mut self_.terminal) {
-                eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+                // log.warn("error cloning screen err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error cloning screen err={err:?}");
                 return Err(Error::BenchmarkFailed);
             }
             // std.mem.doNotOptimizeAway(state);
@@ -418,7 +423,8 @@ impl ScreenClone {
         let alloc = unsafe { (*self_.terminal.screens.active).alloc };
         let mut state: RenderState = RenderState::empty();
         if let Err(err) = state.update(alloc, &mut self_.terminal) {
-            eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+            // log.warn("error cloning screen err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error cloning screen err={err:?}");
             return Err(Error::BenchmarkFailed);
         }
 
@@ -428,7 +434,8 @@ impl ScreenClone {
             // Forces a full rebuild because it thinks our screen changed
             state.screen = Key::Alternate;
             if let Err(err) = state.begin_update(alloc, &mut self_.terminal) {
-                eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+                // log.warn("error cloning screen err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error cloning screen err={err:?}");
                 return Err(Error::BenchmarkFailed);
             }
             black_box(&state);
@@ -448,7 +455,8 @@ impl ScreenClone {
         let alloc = unsafe { (*self_.terminal.screens.active).alloc };
         let mut state: RenderState = RenderState::empty();
         if let Err(err) = state.update(alloc, &mut self_.terminal) {
-            eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+            // log.warn("error cloning screen err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error cloning screen err={err:?}");
             return Err(Error::BenchmarkFailed);
         }
 
@@ -456,7 +464,8 @@ impl ScreenClone {
         // properly capture our speeds.
         for _ in 0..(3_000_000u64 * u64::from(self_.opts.loops)) {
             if let Err(err) = state.update(alloc, &mut self_.terminal) {
-                eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+                // log.warn("error cloning screen err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error cloning screen err={err:?}");
                 return Err(Error::BenchmarkFailed);
             }
             black_box(&state);
@@ -472,7 +481,8 @@ impl ScreenClone {
         let alloc = unsafe { (*self_.terminal.screens.active).alloc };
         let mut state: RenderState = RenderState::empty();
         if let Err(err) = state.update(alloc, &mut self_.terminal) {
-            eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+            // log.warn("error cloning screen err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error cloning screen err={err:?}");
             return Err(Error::BenchmarkFailed);
         }
 
@@ -499,7 +509,8 @@ impl ScreenClone {
             // pin.markDirty();
             pin.mark_dirty();
             if let Err(err) = state.update(alloc, &mut self_.terminal) {
-                eprintln!("[{LOG_SCOPE}] error cloning screen err={err:?}");
+                // log.warn("error cloning screen err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error cloning screen err={err:?}");
                 return Err(Error::BenchmarkFailed);
             }
             black_box(&state);

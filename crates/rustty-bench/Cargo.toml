@@ -32,6 +32,13 @@ path = "src/main_bench.rs"
 identity-oracle = ["rustty-identity/identity-oracle"]
 
 [dependencies]
+# The `LOG`-class facade (DECISION-logging.md §6r4, call shape 2). This crate's
+# 52 reference diagnostics were bare `eprintln!("[scope] ..")`, which reproduced
+# neither logFn's rendering nor its behaviour. They now emit through the facade;
+# `src/log_backend.rs` is the backend the standalone `[[bin]]` installs, since
+# neither shipped backend is reachable from it (see §6r2/§7 and that module's
+# header). Plain and unconditional (§8r).
+log = { workspace = true }
 # `identity-oracle` (above) flips this crate's string identity; `benchmark.rs`'s
 # macOS signpost interval reads `APP_NAME` for the R2 signpost name (upstream's
 # comptime `const signpost_name = "ghostty"`).

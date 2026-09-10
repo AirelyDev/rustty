@@ -1286,6 +1286,7 @@ name = "rustty-bench"
 version = "0.1.0"
 dependencies = [
  "allocator-api2",
+ "log",
  "rustty-args",
  "rustty-build-config",
  "rustty-datastruct",

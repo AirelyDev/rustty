@@ -21,6 +21,16 @@
 
 // pub const cli = @import("cli.zig");
 pub mod cli;
+
+// TEST-ONLY `log::Log` capture backend for the restored `log.*` sites
+// (task-14e-2). See the module header — in particular, why it does NOT use
+// `log_backend`.
+#[cfg(test)]
+pub(crate) mod log_capture;
+
+/// The `log::Log` backend the STANDALONE benchmark binary installs
+/// (task-14e-2). See the module header for why the crate needs its own.
+pub mod log_backend;
 // pub const Benchmark = @import("Benchmark.zig");
 pub mod benchmark;
 // pub const CApi = @import("CApi.zig");
@@ -179,5 +189,402 @@ impl DoNotOptimize for bool {
     #[inline(always)]
     fn sink(self) {
         (self as u8).sink()
+    }
+}
+
+#[cfg(test)]
+mod log_site_census {
+    //! task-14e-2 — a crate-wide census of the restored benchmark diagnostics.
+    //!
+    //! STRUCTURAL, and reported as such. Most of these sites need a real
+    //! failure of the thing being benchmarked (a corpus file that cannot be
+    //! opened mid-run, an LZ4 compression failure, a snapshot decode failure);
+    //! `hyperlink_map`'s two are the only pair with a cheap driver, and they
+    //! have behavioural tests. This census pins the rest: exactly one live
+    //! emission per reference call, at the reference's LEVEL, under the
+    //! reference's SCOPE, with the reference's MESSAGE TEXT.
+    //!
+    //! Assembled from fragments so no live-looking facade call enters this file
+    //! (task-14e-1's LIVE-TREE self-test lesson), and whitespace-collapsed on
+    //! both sides so `cargo fmt` wrapping cannot break a correct assertion.
+
+    /// `(reference file, port file, source)` for every mapped benchmark file.
+    const SOURCES: &[(&str, &str, &str)] = &[
+        (
+            "ApcParser.zig",
+            "apc_parser.rs",
+            include_str!("apc_parser.rs"),
+        ),
+        ("CApi.zig", "capi.rs", include_str!("capi.rs")),
+        (
+            "CodepointWidth.zig",
+            "codepoint_width.rs",
+            include_str!("codepoint_width.rs"),
+        ),
+        (
+            "GraphemeBreak.zig",
+            "grapheme_break.rs",
+            include_str!("grapheme_break.rs"),
+        ),
+        (
+            "HyperlinkMap.zig",
+            "hyperlink_map.rs",
+            include_str!("hyperlink_map.rs"),
+        ),
+        ("IsSymbol.zig", "is_symbol.rs", include_str!("is_symbol.rs")),
+        (
+            "OscParser.zig",
+            "osc_parser.rs",
+            include_str!("osc_parser.rs"),
+        ),
+        (
+            "PageCompression.zig",
+            "page_compression.rs",
+            include_str!("page_compression.rs"),
+        ),
+        (
+            "ScreenClone.zig",
+            "screen_clone.rs",
+            include_str!("screen_clone.rs"),
+        ),
+        (
+            "ScrollbackCompression.zig",
+            "scrollback_compression.rs",
+            include_str!("scrollback_compression.rs"),
+        ),
+        (
+            "TerminalFormatter.zig",
+            "terminal_formatter.rs",
+            include_str!("terminal_formatter.rs"),
+        ),
+        (
+            "TerminalParser.zig",
+            "terminal_parser.rs",
+            include_str!("terminal_parser.rs"),
+        ),
+        (
+            "TerminalResize.zig",
+            "terminal_resize.rs",
+            include_str!("terminal_resize.rs"),
+        ),
+        (
+            "TerminalSnapshot.zig",
+            "terminal_snapshot.rs",
+            include_str!("terminal_snapshot.rs"),
+        ),
+        (
+            "TerminalStream.zig",
+            "terminal_stream.rs",
+            include_str!("terminal_stream.rs"),
+        ),
+    ];
+
+    /// `(port file, level, message, how many)` — one row per reference call,
+    /// enumerated from the ORACLE with `check_log_reconcile.py`'s own
+    /// `zig_sites()` scanner, not from a grep of the port.
+    #[allow(clippy::type_complexity)]
+    const EXPECTED: &[(&str, &str, &str, usize)] = &[
+        // ApcParser.zig:102,130
+        (
+            "apc_parser.rs",
+            "warn",
+            "error opening data file err={err}",
+            1,
+        ),
+        (
+            "apc_parser.rs",
+            "warn",
+            "error reading data file err={err:?}",
+            1,
+        ),
+        // CApi.zig:17,26
+        ("capi.rs", "warn", "unknown action={}", 1),
+        (
+            "capi.rs",
+            "warn",
+            "failed to run action={action:?} err={err:?}",
+            1,
+        ),
+        // CodepointWidth.zig:89,110,125,152,184
+        (
+            "codepoint_width.rs",
+            "warn",
+            "error opening data file err={err}",
+            1,
+        ),
+        (
+            "codepoint_width.rs",
+            "warn",
+            "wcwidth is not available on Windows",
+            1,
+        ),
+        (
+            "codepoint_width.rs",
+            "warn",
+            "error reading data file err={err:?}",
+            3,
+        ),
+        // GraphemeBreak.zig:78,103,128
+        (
+            "grapheme_break.rs",
+            "warn",
+            "error opening data file err={err}",
+            1,
+        ),
+        (
+            "grapheme_break.rs",
+            "warn",
+            "error reading data file err={err:?}",
+            2,
+        ),
+        // HyperlinkMap.zig:48,69 — the only `log.err` pair in the tree.
+        (
+            "hyperlink_map.rs",
+            "error",
+            "entries must be a power of two greater than or equal to 16",
+            1,
+        ),
+        (
+            "hyperlink_map.rs",
+            "error",
+            "insufficient map capacity expected_at_least={} actual={}",
+            1,
+        ),
+        // IsSymbol.zig:76,101,128
+        (
+            "is_symbol.rs",
+            "warn",
+            "error opening data file err={err}",
+            1,
+        ),
+        (
+            "is_symbol.rs",
+            "warn",
+            "error reading data file err={err:?}",
+            2,
+        ),
+        // OscParser.zig:65
+        (
+            "osc_parser.rs",
+            "warn",
+            "error opening data file err={err}",
+            1,
+        ),
+        // PageCompression.zig:203,340,361,376,406,431 (:385 is UNRESTORABLE —
+        // an allocation-failure arm; see that site's PORT NOTE).
+        (
+            "page_compression.rs",
+            "warn",
+            "failed to prepare page compression benchmark err={err:?}",
+            1,
+        ),
+        (
+            "page_compression.rs",
+            "warn",
+            "page compression failed err={err:?}",
+            1,
+        ),
+        (
+            "page_compression.rs",
+            "warn",
+            "failed to size stored page output err={err:?}",
+            1,
+        ),
+        (
+            "page_compression.rs",
+            "warn",
+            "stored page compression failed err={err:?}",
+            1,
+        ),
+        (
+            "page_compression.rs",
+            "warn",
+            "page decompression failed err={err:?}",
+            1,
+        ),
+        (
+            "page_compression.rs",
+            "warn",
+            "page compression report failed err={err:?}",
+            1,
+        ),
+        // ScreenClone.zig:129,143 + nine `error cloning screen` sites.
+        (
+            "screen_clone.rs",
+            "warn",
+            "error opening data file err={err}",
+            1,
+        ),
+        (
+            "screen_clone.rs",
+            "warn",
+            "error reading data file err={err:?}",
+            1,
+        ),
+        (
+            "screen_clone.rs",
+            "warn",
+            "error cloning screen err={err:?}",
+            9,
+        ),
+        // ScrollbackCompression.zig:173
+        (
+            "scrollback_compression.rs",
+            "warn",
+            "failed to prepare scrollback compression benchmark err={err:?}",
+            1,
+        ),
+        // TerminalFormatter.zig:189,280,301,361
+        (
+            "terminal_formatter.rs",
+            "warn",
+            "failed to prepare formatter benchmark err={err:?}",
+            1,
+        ),
+        (
+            "terminal_formatter.rs",
+            "warn",
+            "formatting failed err={err}",
+            2,
+        ),
+        (
+            "terminal_formatter.rs",
+            "warn",
+            "roundtrip failed err={err:?}",
+            1,
+        ),
+        // TerminalParser.zig:57,88
+        (
+            "terminal_parser.rs",
+            "warn",
+            "error opening data file err={err}",
+            1,
+        ),
+        (
+            "terminal_parser.rs",
+            "warn",
+            "error reading data file err={err:?}",
+            1,
+        ),
+        // TerminalResize.zig:232,247,267
+        (
+            "terminal_resize.rs",
+            "warn",
+            "error opening data file err={err}",
+            1,
+        ),
+        (
+            "terminal_resize.rs",
+            "warn",
+            "error reading data file err={err:?}",
+            1,
+        ),
+        (
+            "terminal_resize.rs",
+            "warn",
+            "error resizing terminal err={err:?}",
+            1,
+        ),
+        // TerminalSnapshot.zig:145,216,234,256,289
+        (
+            "terminal_snapshot.rs",
+            "warn",
+            "failed to prepare snapshot benchmark err={err:?}",
+            1,
+        ),
+        (
+            "terminal_snapshot.rs",
+            "warn",
+            "snapshot encoding failed err={err:?}",
+            1,
+        ),
+        (
+            "terminal_snapshot.rs",
+            "warn",
+            "snapshot decoding failed err={err:?}",
+            1,
+        ),
+        (
+            "terminal_snapshot.rs",
+            "warn",
+            "snapshot READY decoding failed err={err:?}",
+            1,
+        ),
+        (
+            "terminal_snapshot.rs",
+            "warn",
+            "unknown record tag {tag_raw}",
+            1,
+        ),
+        // TerminalStream.zig:107,142
+        (
+            "terminal_stream.rs",
+            "warn",
+            "error opening data file err={err}",
+            1,
+        ),
+        (
+            "terminal_stream.rs",
+            "warn",
+            "error reading data file err={err:?}",
+            1,
+        ),
+    ];
+
+    fn collapse_ws(src: &str) -> String {
+        let mut out = String::with_capacity(src.len());
+        let mut in_ws = false;
+        for c in src.chars() {
+            if c.is_whitespace() {
+                in_ws = true;
+                continue;
+            }
+            // A space right after `(` is dropped so a `cargo fmt`-wrapped call
+            // collapses to the same text as a one-line one.
+            if in_ws && !out.is_empty() && !out.ends_with('(') {
+                out.push(' ');
+            }
+            in_ws = false;
+            out.push(c);
+        }
+        out
+    }
+
+    #[test]
+    fn every_reference_diagnostic_is_live_at_its_level_and_scope() {
+        for (_zig, port, level, message, count) in EXPECTED
+            .iter()
+            .map(|(port, level, message, count)| ("", *port, *level, *message, *count))
+        {
+            let src = SOURCES
+                .iter()
+                .find(|(_z, p, _s)| *p == port)
+                .unwrap_or_else(|| panic!("no source registered for {port}"))
+                .2;
+            let macro_name = ["log", "::", level, "!"].concat();
+            let wanted = collapse_ws(&format!("{macro_name}(target: LOG_SCOPE, \"{message}\""));
+            assert_eq!(
+                count,
+                collapse_ws(src).matches(&wanted).count(),
+                "expected {count} live emission(s) of `{wanted}` in {port}"
+            );
+        }
+    }
+
+    /// Every mapped benchmark file declares the reference's own scope tag, and
+    /// no file left a `[scope]`-prefixed `eprintln!` behind.
+    #[test]
+    fn no_facade_bypassing_print_remains() {
+        for (zig, port, src) in SOURCES {
+            assert!(
+                src.contains("const LOG_SCOPE: &str ="),
+                "{port} (ports {zig}) declares no LOG_SCOPE"
+            );
+            assert_eq!(
+                0,
+                src.matches("eprintln!(\"[{LOG_SCOPE}]").count(),
+                "{port} still writes a facade-bypassing print"
+            );
+        }
     }
 }

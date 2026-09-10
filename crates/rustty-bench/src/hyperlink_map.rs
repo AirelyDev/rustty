@@ -130,7 +130,11 @@ impl HyperlinkMap {
         //     return error.InvalidEntries;
         // }
         if opts.entries < 16 || !opts.entries.is_power_of_two() {
-            eprintln!("[{LOG_SCOPE}] entries must be a power of two greater than or equal to 16");
+            // log.err("entries must be a power of two greater than or equal to 16", .{});
+            log::error!(
+                target: LOG_SCOPE,
+                "entries must be a power of two greater than or equal to 16"
+            );
             return Err(CreateError::InvalidEntries);
         }
 
@@ -168,8 +172,10 @@ impl HyperlinkMap {
         //     return error.UnexpectedCapacity;
         // }
         if page.hyperlink_capacity() < opts.entries as usize {
-            eprintln!(
-                "[{LOG_SCOPE}] insufficient map capacity expected_at_least={} actual={}",
+            // log.err("insufficient map capacity expected_at_least={} actual={}", .{ opts.entries, page.hyperlinkCapacity() });
+            log::error!(
+                target: LOG_SCOPE,
+                "insufficient map capacity expected_at_least={} actual={}",
                 opts.entries,
                 page.hyperlink_capacity(),
             );
@@ -324,6 +330,77 @@ impl BenchmarkAction for HyperlinkMap {
 mod tests {
     use super::*;
     use crate::benchmark::RunMode;
+
+    // ---- task-14e-2 -------------------------------------------------------
+    //
+    // `HyperlinkMap.zig:48` is one of only two `log.err` (not `log.warn`) sites
+    // in the whole benchmark tree, so it is also this crate's level check on a
+    // REAL call path: the token is `error`, not `err`.
+
+    /// An invalid `entries` option takes the reference's `log.err` +
+    /// `error.InvalidEntries` arm.
+    #[test]
+    fn invalid_entries_logs_at_error_level_under_the_reference_scope() {
+        let alloc = Allocator;
+        let cap = crate::log_capture::start();
+        let out = HyperlinkMap::create(
+            alloc,
+            Options {
+                entries: 17, // not a power of two
+                mode: Mode::Lookup,
+                ..Options::default()
+            },
+        )
+        .map(|_| ());
+        let messages = cap.messages();
+        drop(cap);
+
+        // Positive reach: the reference's own return value from that arm.
+        // (`CreateError` derives no `PartialEq`, so match rather than compare.)
+        assert!(
+            matches!(out, Err(CreateError::InvalidEntries)),
+            "expected error.InvalidEntries, got {out:?}"
+        );
+        assert_eq!(
+            vec![(
+                log::Level::Error,
+                "hyperlink-map-bench".to_string(),
+                "entries must be a power of two greater than or equal to 16".to_string(),
+            )],
+            messages
+        );
+        // And the line `logFn` would write, end to end: `error(...)`, never
+        // `err(...)`.
+        assert_eq!(
+            "error(hyperlink-map-bench): entries must be a power of two greater than or equal to 16",
+            crate::log_backend::render(messages[0].0, &messages[0].1, &messages[0].2)
+        );
+    }
+
+    /// The absence half: a VALID `entries` emits nothing. Positive reach is the
+    /// created map, which only exists past the guard.
+    #[test]
+    fn a_valid_hyperlink_map_creation_is_silent() {
+        let alloc = Allocator;
+        let cap = crate::log_capture::start();
+        let created = HyperlinkMap::create(
+            alloc,
+            Options {
+                entries: 64,
+                mode: Mode::Lookup,
+                ..Options::default()
+            },
+        );
+        let messages = cap.messages();
+        drop(cap);
+
+        let impl_ = created.expect(
+            "create() failed, so this test never reached the code whose silence \
+             it asserts",
+        );
+        impl_.destroy(alloc);
+        assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
+    }
 
     // test HyperlinkMap { ... }
     #[test]

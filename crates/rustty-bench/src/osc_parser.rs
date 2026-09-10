@@ -116,7 +116,8 @@ impl OscParser {
         self_.data_f = match options::data_file(self_.opts.data.as_deref()) {
             Ok(f) => f,
             Err(err) => {
-                eprintln!("[{LOG_SCOPE}] error opening data file err={err}");
+                // log.warn("error opening data file err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error opening data file err={err}");
                 return Err(Error::BenchmarkFailed);
             }
         };

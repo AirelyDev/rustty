@@ -40,8 +40,10 @@ pub unsafe extern "C" fn rustty_benchmark_cli(
     let action = match cli::Action::from_name(action_name_bytes) {
         Some(a) => a,
         None => {
-            eprintln!(
-                "[{LOG_SCOPE}] unknown action={}",
+            // log.warn("unknown action={s}", .{action_name});
+            log::warn!(
+                target: LOG_SCOPE,
+                "unknown action={}",
                 String::from_utf8_lossy(action_name_bytes)
             );
             return false;
@@ -61,7 +63,12 @@ pub unsafe extern "C" fn rustty_benchmark_cli(
     let args_bytes = unsafe { CStr::from_ptr(args) }.to_bytes();
     match cli::main_action(Allocator, action, cli::Args::String(args_bytes)) {
         Err(err) => {
-            eprintln!("[{LOG_SCOPE}] failed to run action={action:?} err={err:?}");
+            // log.warn("failed to run action={s} err={}", .{ action_name, err });
+            //
+            // PORT NOTE: the reference formats the action's NAME (`{s}` on the
+            // `action_name` C string); `{action:?}` renders the parsed enum's
+            // Debug, which is the same identity in the port's PascalCase (R2).
+            log::warn!(target: LOG_SCOPE, "failed to run action={action:?} err={err:?}");
             false
         }
         // return true;

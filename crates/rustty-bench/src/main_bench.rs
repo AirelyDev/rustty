@@ -41,6 +41,16 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    // task-14e-2: install this crate's own `log::Log` backend BEFORE anything
+    // runs, so the 52 restored `log::warn!`/`log::error!` sites reach a human
+    // from the standalone binary. Neither shipped backend is reachable here —
+    // see `rustty_bench::log_backend`'s header, and DECISION-logging.md §6r2/§7.
+    //
+    // This is NOT `global.init(.{ .tool = ... })`: S62-F2 is about the whole
+    // process init (logging, RUSTTY_LOG, rlimits, locale, oniguruma/glslang,
+    // resources dir, signals) and this supplies only the logging part. That row
+    // stays OPEN.
+    rustty_bench::log_backend::install_bench_log_backend();
     match rustty_bench::cli::main() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

@@ -372,7 +372,8 @@ impl TerminalFormatter {
         //     return error.BenchmarkFailed;
         // };
         self_.setup_impl().map_err(|err| {
-            eprintln!("[{LOG_SCOPE}] failed to prepare formatter benchmark err={err:?}");
+            // log.warn("failed to prepare formatter benchmark err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "failed to prepare formatter benchmark err={err:?}");
             Error::BenchmarkFailed
         })
     }
@@ -546,7 +547,8 @@ impl TerminalFormatter {
             //     return error.BenchmarkFailed;
             // };
             if let Err(err) = f.format(&mut self_.output) {
-                eprintln!("[{LOG_SCOPE}] formatting failed err={err}");
+                // log.warn("formatting failed err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "formatting failed err={err}");
                 return Err(Error::BenchmarkFailed);
             }
             // std.mem.doNotOptimizeAway(self.output.written());
@@ -575,7 +577,8 @@ impl TerminalFormatter {
                 });
             }
             if let Err(err) = f.format(&mut self_.output) {
-                eprintln!("[{LOG_SCOPE}] formatting failed err={err}");
+                // log.warn("formatting failed err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "formatting failed err={err}");
                 return Err(Error::BenchmarkFailed);
             }
         }
@@ -656,7 +659,8 @@ impl TerminalFormatter {
         //     return error.BenchmarkFailed;
         // };
         self_.step_roundtrip_impl().map_err(|err| {
-            eprintln!("[{LOG_SCOPE}] roundtrip failed err={err:?}");
+            // log.warn("roundtrip failed err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "roundtrip failed err={err:?}");
             Error::BenchmarkFailed
         })
     }

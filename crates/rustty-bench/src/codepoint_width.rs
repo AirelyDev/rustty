@@ -167,7 +167,8 @@ impl CodepointWidth {
         self_.data_f = match options::data_file(self_.opts.data.as_deref()) {
             Ok(f) => f,
             Err(err) => {
-                eprintln!("[{LOG_SCOPE}] error opening data file err={err}");
+                // log.warn("error opening data file err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error opening data file err={err}");
                 return Err(Error::BenchmarkFailed);
             }
         };
@@ -200,7 +201,8 @@ impl CodepointWidth {
         #[cfg(windows)]
         {
             let _ = ptr;
-            eprintln!("[{LOG_SCOPE}] wcwidth is not available on Windows");
+            // log.warn("wcwidth is not available on Windows", .{});
+            log::warn!(target: LOG_SCOPE, "wcwidth is not available on Windows");
             return Ok(());
         }
         #[cfg(not(windows))]
@@ -232,7 +234,8 @@ impl CodepointWidth {
                 let n = match read_slice_short(r, &mut buf.0) {
                     Ok(n) => n,
                     Err(err) => {
-                        eprintln!("[{LOG_SCOPE}] error reading data file err={err:?}");
+                        // log.warn("error reading data file err={?}", .{f_reader.err});
+                        log::warn!(target: LOG_SCOPE, "error reading data file err={err:?}");
                         return Err(Error::BenchmarkFailed);
                     }
                 };
@@ -278,7 +281,8 @@ impl CodepointWidth {
             let n = match read_slice_short(r, &mut buf.0) {
                 Ok(n) => n,
                 Err(err) => {
-                    eprintln!("[{LOG_SCOPE}] error reading data file err={err:?}");
+                    // log.warn("error reading data file err={?}", .{f_reader.err});
+                    log::warn!(target: LOG_SCOPE, "error reading data file err={err:?}");
                     return Err(Error::BenchmarkFailed);
                 }
             };
@@ -324,7 +328,8 @@ impl CodepointWidth {
             let n = match read_slice_short(r, &mut buf.0) {
                 Ok(n) => n,
                 Err(err) => {
-                    eprintln!("[{LOG_SCOPE}] error reading data file err={err:?}");
+                    // log.warn("error reading data file err={?}", .{f_reader.err});
+                    log::warn!(target: LOG_SCOPE, "error reading data file err={err:?}");
                     return Err(Error::BenchmarkFailed);
                 }
             };

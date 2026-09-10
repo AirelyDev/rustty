@@ -419,7 +419,8 @@ impl TerminalResize {
             Ok(Some(f)) => f,
             Ok(None) => return Ok(()),
             Err(err) => {
-                eprintln!("[{LOG_SCOPE}] error opening data file err={err}");
+                // log.warn("error opening data file err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error opening data file err={err}");
                 return Err(Error::BenchmarkFailed);
             }
         };
@@ -448,7 +449,8 @@ impl TerminalResize {
             let n = match read_slice_short(r, &mut buf) {
                 Ok(n) => n,
                 Err(err) => {
-                    eprintln!("[{LOG_SCOPE}] error reading data file err={err:?}");
+                    // log.warn("error reading data file err={?}", .{f_reader.err});
+                    log::warn!(target: LOG_SCOPE, "error reading data file err={err:?}");
                     stream.deinit();
                     return Err(Error::BenchmarkFailed);
                 }
@@ -485,7 +487,8 @@ impl TerminalResize {
                 }),
             },
         ) {
-            eprintln!("[{LOG_SCOPE}] error resizing terminal err={err:?}");
+            // log.warn("error resizing terminal err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error resizing terminal err={err:?}");
             return Err(Error::BenchmarkFailed);
         }
         // std.mem.doNotOptimizeAway(&self.terminal);

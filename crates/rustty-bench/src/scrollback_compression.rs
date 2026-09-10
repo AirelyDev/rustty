@@ -292,8 +292,10 @@ impl ScrollbackCompression {
         //     return error.BenchmarkFailed;
         // };
         if let Err(err) = self_.load_corpus() {
-            eprintln!(
-                "[{LOG_SCOPE}] failed to prepare scrollback compression benchmark err={err:?}"
+            // log.warn("failed to prepare scrollback compression benchmark err={}", .{err});
+            log::warn!(
+                target: LOG_SCOPE,
+                "failed to prepare scrollback compression benchmark err={err:?}"
             );
             return Err(Error::BenchmarkFailed);
         }
