@@ -336,7 +336,7 @@ found, and current state.
 
 ---
 
-## N9 — the Linux twins of `generic.zig` and `image.zig` are still logging-dead, while their macOS twins are live and their rows are CLOSED
+## N9 — the Linux twins of `generic.zig` and `image.zig` were logging-dead while their macOS twins were live (CLOSED by task-14c-5)
 
 - **id**: N9
 - **severity**: medium (a Linux/FreeBSD build is silent on ~30 diagnostics the reference
@@ -385,12 +385,45 @@ found, and current state.
 - **size**: roughly **43 genuinely unported call sites** across the two files (the
   reviewer's count in the 14c-3 fix round). That is a task, not a fix round; narrowing the
   three dispositions is the honest interim state.
-- **state**: **OPEN.** Scheduling note for whoever takes it: it is mechanical (the macOS
-  twin is the patch), it needs `const LOG_SCOPE: &str = "generic_renderer";` in
-  `generic/linux_impl.rs` and `"renderer_image"` in `image/linux_impl.rs`, several arms
-  currently discard their payload with `.is_err()` / `Err(_err)` and must bind it, and
-  **it cannot be typechecked on macOS** — the VM lane (`PROCEDURE.md`, Linux rows) is
-  mandatory, not optional.
+- **state**: **CLOSED (task-14c-5, 2026-09-10).** Both Linux twins are restored.
+  `generic/linux_impl.rs` carries `const LOG_SCOPE: &str = "generic_renderer";` at file
+  scope and 25 live emissions covering 24 `generic.zig` call sites; `image/linux_impl.rs`
+  carries `const LOG_SCOPE: &str = "renderer_image";` and 11 live emissions. Verified on
+  the Linux VM (build / test / clippy `-D warnings` / workspace `fmt --check`, plus the
+  test pass under `RUSTTY_REQUIRE_GL=1`).
+
+  Corrections to this entry's own numbers, found by enumerating the reference rather
+  than trusting them:
+
+  - **"~43 genuinely unported call sites" was high.** The real figure is **35**
+    restorable sites (24 in `generic.zig`'s Linux arm + 11 in `image.zig`'s), and the
+    35 emissions are 36 because `generic.zig:1974` needs two arms (the io error and
+    the reference's `error.StreamTooLong` 4 GiB cap).
+  - **Six `generic.zig` sites have NO Linux counterpart at all** and were never
+    "unported": `:991` (`displayLinkCallback`) and `:1169/:1177/:1183/:1188/:1190`
+    (`syncDisplayLink`) are guarded by `if (comptime DisplayLink == void) return;`,
+    and `DisplayLink` is `void` off macOS. Counting them as a Linux gap is what
+    inflated the estimate.
+  - **The "1 live emission" in `generic/linux_impl.rs` was not a `generic.zig` site.**
+    It is `opengl/Frame.zig:65`'s present-failure, which task-14c-3 landed in that file
+    because the port inlines `Frame.zig`'s completion tail into
+    `opengl_frame_completed`. Against `generic.zig` the Linux twin stood at **zero**,
+    not one — the same "a reference call lands in a different file than its name
+    suggests" shape 14c-1 and 14c-2 each hit once.
+
+  **What remains — nothing that is not already a WAIVED row's own residual.** Five
+  reference sites are unrestorable on Linux, and they are the SAME five that are
+  unrestorable on macOS, for the same reason (the Rust operation is infallible, so
+  there is no failure arm and hoisting the warn would put a diagnostic on the SUCCESS
+  path): `generic.zig:1558` (S115-F4), `:2912` and `:3181` (S116-F2), `image.zig:365`
+  and `:447` (S117-F3). Each carries a PORT NOTE at its Linux code site and is recorded
+  as a Linux-side residual in the row's `ADJUDICATION.md` entry. The three rows stay
+  **WAIVED** — this task closed no rows and changed no row state.
+
+  The `eprintln!` stand-in class showed up again: `generic/linux_impl.rs`'s
+  `prep_background_image` had three of them AND the same collapsed `std::fs::read`
+  that task-14c-1 had to split in the Metal twin (the reference logs a different
+  message for open and for read). Both are fixed.
 - **why the two twins really are mutually exclusive** (checked in fix round 1, because it
   was disputed and the disputing read stopped one level too early): `generic.rs` is not
   itself platform-gated, but all 32 of its `log::` emissions sit inside its

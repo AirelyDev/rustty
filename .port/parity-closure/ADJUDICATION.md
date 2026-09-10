@@ -484,15 +484,20 @@ per `PROCEDURE.md` ("a site inside the cited anchors still forces `WAIVED`, no
 matter how well documented") they are `WAIVED`, not `CLOSED`.
 
 ### S115-F4 — PARTIALLY RESTORED, WAIVED (one cited anchor unreachable)
-- **NARROWED (task-14c-3 fix round 1): the restoration below is the macOS TWIN
-  ONLY.** `generic.zig` has two Rust twins — `generic.rs`'s
-  `#[cfg(target_os = "macos")] mod macos_impl` (from `generic.rs:1095`) and
-  `generic/linux_impl.rs`, mutually exclusive per build. Every count in this entry
-  is a count in a **macOS** build. In a Linux/FreeBSD build the twin carries **one**
-  live emission in total, so essentially none of what follows is emitted. That gap is
-  tracked as `NEW-FINDINGS.md` **N9** (OPEN, ~43 sites across both Linux twins); it is
-  NOT what this row is waived for and it does not change the waiver below, but this row
-  must not be read as "the diagnostics are restored" without the platform qualifier.
+- **BOTH TWINS NOW LIVE (task-14c-5, N9).** `generic.zig` has two Rust twins —
+  `generic.rs`'s `#[cfg(target_os = "macos")] mod macos_impl` (from
+  `generic.rs:1095`) and `generic/linux_impl.rs`, mutually exclusive per build.
+  task-14c-1 restored the macOS twin; task-14c-3 fix round 1 NARROWED this entry
+  because the Linux twin was still logging-dead; **task-14c-5 has now restored the
+  Linux twin too**, so the counts below hold on both platforms with ONE structural
+  difference: six of this row's fifteen anchors — `generic.zig:991`
+  (`displayLinkCallback`) and `:1169/:1177/:1183/:1188/:1190` (`syncDisplayLink`)
+  — are guarded by `DisplayLink != void`, which is `void` off macOS, so they have
+  no Linux counterpart to restore and are not "missing" there. The other EIGHT
+  restorable anchors (`:852, 1320, 1436, 1472, 1506, 1517, 1533, 1595`) are live in
+  `generic/linux_impl.rs`, and the residual below (`:1558`) is a residual on BOTH
+  arms for the same reason. `generic/linux_impl.rs` now carries
+  `const LOG_SCOPE: &str = "generic_renderer";` at file scope.
 - 14 of the row's 15 cited oracle anchors are now live `log::` emissions with the
   `generic_renderer` target, **in the macOS twin**: `generic.zig:852, 991, 1169, 1177, 1183, 1188, 1190,
   1320, 1436, 1472, 1506, 1517, 1533, 1595`. (`:991`'s emission lives in
@@ -504,18 +509,20 @@ matter how well documented") they are `WAIVED`, not `CLOSED`.
   .{err})`. Rustty's `rebuild_cells` is INFALLIBLE — its only OOM source aborts
   through the `Global` allocator — so the reference's `catch` arm does not exist
   and emitting the warn unconditionally would put a diagnostic on the SUCCESS
-  path. PORT NOTE at `crates/rustty-renderer/src/generic.rs` (search
+  path. PORT NOTE at `crates/rustty-renderer/src/generic.rs` AND (task-14c-5) at
+  `crates/rustty-renderer/src/generic/linux_impl.rs` (search
   `error rebuilding GPU cells`). Same shape as the `graphics_storage` OOM waiver
   (`#s190-f2`).
 - Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s115-f4
 
 ### S116-F2 — PARTIALLY RESTORED, WAIVED (two cited anchors unreachable)
-- **NARROWED (task-14c-3 fix round 1): the restoration below is the macOS TWIN
-  ONLY** — same qualifier, same reason, same tracking entry as `#s115-f4` above:
-  `generic.zig`'s Linux twin `generic/linux_impl.rs` carries one live emission in
-  total, so a Linux/FreeBSD build emits essentially none of the sixteen. Tracked as
-  `NEW-FINDINGS.md` **N9**; the waiver below is unchanged and still valid, it was
-  merely incomplete.
+- **BOTH TWINS NOW LIVE (task-14c-5, N9)** — same story as `#s115-f4` above. All
+  eighteen of this row's anchors DO exist in `generic/linux_impl.rs` (none of them
+  is display-link code), so the split there is the same as on macOS: **sixteen
+  live, two residual** (`:2912`/`:3181`). The Linux twin's `prep_background_image`
+  also had the same three `eprintln!` stand-ins and the same collapsed
+  `std::fs::read`; both are fixed there now, exactly as task-14c-1 fixed them in
+  the Metal twin, so the two open/read messages are verbatim on both arms.
 - 16 of the row's 18 cited oracle anchors are now live `log::` emissions with the
   `generic_renderer` target, **in the macOS twin**: `generic.zig:1960, 1974, 1995, 2002, 2137, 2627,
   2777, 3143, 3150, 3222, 3237, 3461, 3476, 3481, 3514, 3518`. This includes the
@@ -530,19 +537,22 @@ matter how well documented") they are `WAIVED`, not `CLOSED`.
   `catch` arm. Both sites now carry the reference's `log.warn` as an R1 comment
   plus a PORT NOTE (search `error caching font shaping results` in
   `crates/rustty-renderer/src/generic.rs`); before this stage neither site had so
-  much as a comment marking the dropped diagnostic.
+  much as a comment marking the dropped diagnostic. task-14c-5 did the same for the
+  two corresponding sites in `crates/rustty-renderer/src/generic/linux_impl.rs`,
+  which likewise had no comment at all.
 - Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s116-f2
 
 ## Batch 14c-2 — renderer macOS-backend `LOG` waivers (task-14c-2, 2026-09-10)
 
 ### S117-F3 — PARTIALLY RESTORED, WAIVED (two cited anchors unreachable)
-- **NARROWED (task-14c-3 fix round 1): the restoration below is the macOS TWIN
-  ONLY.** `image.zig` has two Rust twins, `image/macos_impl.rs` and
-  `image/linux_impl.rs`, mutually exclusive per build. In a Linux/FreeBSD build
-  **zero of the thirteen** cited anchors are live — `image/linux_impl.rs` has no
-  `log::` emission at all. Tracked as `NEW-FINDINGS.md` **N9** (OPEN); the waiver
-  below is unchanged and still valid, it was merely incomplete. (`shadertoy.rs` is
-  platform-neutral, so the three `shadertoy.zig` sites named below ARE live on every
+- **BOTH TWINS NOW LIVE (task-14c-5, N9).** `image.zig` has two Rust twins,
+  `image/macos_impl.rs` and `image/linux_impl.rs`, mutually exclusive per build.
+  task-14c-3 fix round 1 NARROWED this entry because `image/linux_impl.rs` had no
+  `log::` emission at all; **task-14c-5 has now restored it**, with the SAME
+  11-of-13 split and the SAME two residuals (`:365`, `:447`, infallible on both
+  arms). `image/linux_impl.rs` now carries
+  `const LOG_SCOPE: &str = "renderer_image";`. (`shadertoy.rs` is platform-neutral,
+  so the three `shadertoy.zig` sites named below were already live on every
   platform.)
 - 11 of the row's 13 cited `image.zig` anchors are now live `log::` emissions with
   the `renderer_image` target, **in the macOS twin**: `image.zig:85, 122, 132, 165, 378, 396, 423, 486,
@@ -562,8 +572,9 @@ matter how well documented") they are `WAIVED`, not `CLOSED`.
   `virtual_origins.getOrPut(alloc, …)` is fallible, `HashMap::entry` is not, and
   the reference's `break :fold` on that arm has no counterpart to reach either.
 - Both sites now carry the reference's `log.warn` as an R1 comment plus a PORT
-  NOTE (search `error deferring relative placement` and `error tracking virtual
-  origin` in `crates/rustty-renderer/src/image/macos_impl.rs`).
+  NOTE, in BOTH twins (search `error deferring relative placement` and `error
+  tracking virtual origin` in `crates/rustty-renderer/src/image/macos_impl.rs` and
+  `crates/rustty-renderer/src/image/linux_impl.rs`).
 - Same shape as `#s115-f4` / `#s116-f2` / `#s190-f2`.
 - Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s117-f3
 
