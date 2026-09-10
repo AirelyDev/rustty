@@ -316,7 +316,7 @@ mod wasm {
     /// `export fn shaper_new(cap: usize) ?*Shaper`
     #[no_mangle]
     pub extern "C" fn rustty_wc_shaper_new(cap: usize) -> *mut Shaper {
-        crate::face::web_canvas::install_wasm_log_backend();
+        crate::install_wasm_log_backend();
         match Shaper::init(shape::Options::default()) {
             Ok(mut shaper) => {
                 // The reference allocates a `cell_buf` of `cap` cells; our cell_buf
@@ -332,7 +332,7 @@ mod wasm {
     /// `export fn shaper_free(ptr: ?*Shaper) void`
     #[no_mangle]
     pub extern "C" fn rustty_wc_shaper_free(ptr: *mut Shaper) {
-        crate::face::web_canvas::install_wasm_log_backend();
+        crate::install_wasm_log_backend();
         if !ptr.is_null() {
             let mut shaper = unsafe { Box::from_raw(ptr) };
             shaper.deinit();
@@ -367,7 +367,7 @@ mod wasm {
         out_cells: *mut shape::Cell,
         out_cap: usize,
     ) -> isize {
-        crate::face::web_canvas::install_wasm_log_backend();
+        crate::install_wasm_log_backend();
         if shaper.is_null() || (n > 0 && (cps.is_null() || clusters.is_null())) {
             return -1;
         }

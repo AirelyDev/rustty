@@ -29,6 +29,131 @@
 #[cfg(test)]
 mod log_capture;
 
+/// RUSTTY-ONLY (no oracle analogue): install `rustty-os`'s wasm `log::Log`
+/// backend for the wasm artifacts this crate is linked into.
+///
+/// `.port/parity-closure/DECISION-logging.md` §6r3 finding 3 established the
+/// rule — a restored `log::` site emits nothing unless the RUNNING ARTIFACT has
+/// registered a backend, and the registration belongs at the artifact's first
+/// JS-callable entry point. `rustty_web_canvas.wasm` had none: it is rooted at
+/// `rustty-web-canvas`, and a JS host that drives the FONT surface never
+/// touches `rustty-vt-c`'s `rustty_terminal_*` exports, which is where the
+/// other backend install calls live.
+///
+/// # This is an ARTIFACT-wide contract, not a crate-wide one
+///
+/// The registration must fire from EVERY unmangled entry point in the artifact,
+/// not merely from this crate's own `rustty_wc_face_*` / `rustty_wc_shaper_*`
+/// exports. `rustty-web-canvas` owns twelve more (`rustty_wc_atlas_*`,
+/// `rustty_wc_deferred_*`, `rustty_wc_alloc`/`_free`), and at least one of them
+/// reaches a restored site: `rustty_wc_deferred_has_codepoint` calls
+/// `DeferredFace::has_codepoint`, whose web-canvas arm emits
+/// `failed to init face for codepoint check`. A host driving only the deferred
+/// surface would lose it. That is why this fn is `pub` and lives at the crate
+/// ROOT (available on every target) rather than `pub(crate)` inside the
+/// wasm32-only `face::web_canvas` — the visibility WAS the thing preventing
+/// `rustty-web-canvas` from complying.
+///
+/// **If you add a new unmangled export to `rustty_web_canvas.wasm`, from either
+/// crate, call this first.**
+///
+/// `rustty_os::wasm::log::install_log_backend` is `Once`-guarded and leaves an
+/// already-installed logger's filter alone, so the repetition is free and
+/// cannot clobber an embedder's own backend (§6r CRITICAL 1).
+///
+/// Non-wasm targets get a no-op: `rustty-os`'s wasm log module does not exist
+/// there, and the native builds already have a backend installed by their own
+/// binary. It is callable on every target so the call sites need no `cfg`.
+#[inline]
+pub fn install_wasm_log_backend() {
+    #[cfg(target_arch = "wasm32")]
+    rustty_os::wasm::log::install_log_backend();
+}
+
+/// RUSTTY-ONLY guard, the sibling of
+/// `rustty-web-canvas`'s `install_contract_tests` (task-14c-4 fix round 1, F3).
+/// The `rustty_web_canvas.wasm` log-backend contract is ARTIFACT-wide but its
+/// entry points are split across two crates; each crate guards its own half,
+/// because neither can `include_str!` the other's source. Keep the two in step.
+#[cfg(test)]
+mod install_contract_tests {
+    const CALL: &str = "install_wasm_log_backend();";
+
+    /// Every `rustty_wc_*` export this crate owns must call
+    /// [`crate::install_wasm_log_backend`] as its FIRST statement.
+    #[test]
+    fn every_rustty_wc_export_installs_the_log_backend() {
+        // (file label, source, expected export count)
+        let files: [(&str, &str, usize); 2] = [
+            (
+                "face/web_canvas.rs",
+                include_str!("face/web_canvas.rs"),
+                4, // face_new, face_free, face_render_glyph, face_debug_canvas
+            ),
+            (
+                "shaper/web_canvas.rs",
+                include_str!("shaper/web_canvas.rs"),
+                3, // shaper_new, shaper_free, shaper_shape
+            ),
+        ];
+
+        for (label, src, expected) in files {
+            let lines: Vec<&str> = src.lines().collect();
+            let mut checked: Vec<&str> = Vec::new();
+            let mut missing: Vec<&str> = Vec::new();
+
+            for (i, line) in lines.iter().enumerate() {
+                let t = line.trim_start();
+                // Only the PREFIXED `rustty_wc_*` surface: the unprefixed
+                // `ghostty-wasm-abi` twins belong to `rustty_wasm.wasm`, whose
+                // backend `rustty-config`/`rustty-wasm` already install
+                // (DECISION-logging.md §6r3 finding 3).
+                if !(t.starts_with("pub extern \"C\" fn rustty_wc_")
+                    || t.starts_with("pub unsafe extern \"C\" fn rustty_wc_"))
+                {
+                    continue;
+                }
+                let name = t
+                    .rsplit("fn ")
+                    .next()
+                    .unwrap_or(t)
+                    .split(['(', '<'])
+                    .next()
+                    .unwrap_or(t);
+
+                let mut j = i;
+                while j < lines.len() && !lines[j].trim_end().ends_with('{') {
+                    j += 1;
+                }
+                let first_stmt = lines
+                    .get(j + 1..)
+                    .unwrap_or(&[])
+                    .iter()
+                    .find(|l| !l.trim().is_empty())
+                    .map(|l| l.trim())
+                    .unwrap_or("");
+
+                checked.push(name);
+                if !first_stmt.ends_with(CALL) {
+                    missing.push(name);
+                }
+            }
+
+            // The scan must not silently find nothing (the vacuous-pass trap).
+            assert_eq!(
+                expected,
+                checked.len(),
+                "{label}: expected {expected} rustty_wc_* exports, scanned {checked:?}"
+            );
+            assert_eq!(
+                Vec::<&str>::new(),
+                missing,
+                "{label}: these exports do not open with a call ending `{CALL}`"
+            );
+        }
+    }
+}
+
 pub mod backend;
 pub mod codepoint_resolver;
 pub mod collection;

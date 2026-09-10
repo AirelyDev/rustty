@@ -913,33 +913,12 @@ fn push_int(out: &mut Vec<u8>, mut v: i64) {
 // render glyphs against a real (offscreen) Canvas.
 // ---------------------------------------------------------------------------
 
-/// RUSTTY-ONLY (no oracle analogue): install `rustty-os`'s wasm `log::Log`
-/// backend for the `rustty_web_canvas.wasm` artifact.
-///
-/// `.port/parity-closure/DECISION-logging.md` §6r3 finding 3 established the
-/// rule — a restored `log::` site emits nothing unless the RUNNING ARTIFACT has
-/// registered a backend, and the registration belongs at the artifact's first
-/// JS-callable entry point. `rustty_web_canvas.wasm` had none: it is rooted at
-/// `rustty-web-canvas`, whose only entry points are the `rustty_wc_*` exports,
-/// and a JS host that drives the FONT surface (`rustty_wc_face_*`,
-/// `rustty_wc_shaper_*`) never touches `rustty-vt-c`'s `rustty_terminal_*`
-/// exports, which are where the other backend install calls live. That is
-/// exactly why the S91-F7 / S97-F2 ledger rows carried
-/// `owner=NOT-CLOSABLE YET: ... Needs a rustty_wc_* install site first`.
-///
-/// Called from EVERY `rustty_wc_*` entry point in this crate (a host may call
-/// any of them first). `install_log_backend` is `Once`-guarded and leaves an
-/// already-installed logger's filter alone, so the repetition is free and
-/// cannot clobber an embedder's own backend (§6r CRITICAL 1).
-///
-/// Non-wasm targets get a no-op: `rustty-os`'s wasm log module does not exist
-/// there, and the native builds of this crate already have a backend installed
-/// by their own binary.
-#[inline]
-pub(crate) fn install_wasm_log_backend() {
-    #[cfg(target_arch = "wasm32")]
-    rustty_os::wasm::log::install_log_backend();
-}
+// The artifact-wide wasm log-backend installer lives at the CRATE ROOT
+// (`crate::install_wasm_log_backend`) rather than here, so that
+// `rustty-web-canvas` — which owns twelve more exports in the SAME
+// `rustty_web_canvas.wasm` artifact — can call it on every target. See its doc
+// comment for why the registration belongs at each entry point.
+use crate::install_wasm_log_backend;
 
 /// `export fn face_new(ptr, len, pts, p) ?*Face`
 #[no_mangle]
