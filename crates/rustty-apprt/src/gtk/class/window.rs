@@ -514,7 +514,8 @@ mod imp {
             for i in 0..n {
                 let page = self.tab_view.nth_page(i);
                 let Ok(tab) = page.child().downcast::<Tab>() else {
-                    eprintln!("warn(gtk): unexpected non-Tab child in tab view");
+                    // log.warn("unexpected non-Tab child in tab view", .{});
+                    log::warn!(target: LOG_SCOPE, "unexpected non-Tab child in tab view");
                     continue;
                 };
                 if tab.get_needs_confirm_quit() {
@@ -545,8 +546,9 @@ mod imp {
             // SAFETY: `core` is the surface widget's boxed, initialized core surface
             // (published by `Surface::init`, cleared only after the render/io
             // threads join in finalize); this runs on the main thread.
-            if let Err(_err) = unsafe { (*core).performBindingAction(action) } {
-                eprintln!("warn(gtk): error performing binding action");
+            if let Err(err) = unsafe { (*core).performBindingAction(action) } {
+                // log.warn("error performing binding action error={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error performing binding action error={err:?}");
             }
         }
 
@@ -646,8 +648,9 @@ mod imp {
             }
 
             // Window-protocol-specific appearance sync (`:706-709`).
-            if let Err(_err) = self.winproto.borrow_mut().sync_appearance() {
-                eprintln!("warn(gtk): failed to sync winproto appearance");
+            if let Err(err) = self.winproto.borrow_mut().sync_appearance() {
+                // log.warn("failed to sync winproto appearance error={}", .{err});
+                log::warn!(target: LOG_SCOPE, "failed to sync winproto appearance error={err:?}");
             }
         }
 
@@ -673,8 +676,9 @@ mod imp {
             if !obj.is_active() {
                 return;
             }
-            if let Err(_err) = self.winproto.borrow_mut().set_urgent(false) {
-                eprintln!("warn(gtk): winproto failed to reset urgency");
+            if let Err(err) = self.winproto.borrow_mut().set_urgent(false) {
+                // log.warn("winproto failed to reset urgency={}", .{err});
+                log::warn!(target: LOG_SCOPE, "winproto failed to reset urgency={err:?}");
             }
         }
 
@@ -742,8 +746,12 @@ mod imp {
                         drop(app_winproto);
                         self.winproto.replace(wp);
                     }
-                    Err(_err) => {
-                        eprintln!("warn(gtk): failed to initialize window protocol");
+                    Err(err) => {
+                        // log.warn("failed to initialize window protocol error={}", .{err});
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "failed to initialize window protocol error={err:?}"
+                        );
                         return;
                     }
                 }
@@ -756,8 +764,12 @@ mod imp {
                     let obj_weak = obj.downgrade();
                     gdk_surface.connect_notify_local(Some(detail), move |_, _| {
                         if let Some(win) = obj_weak.upgrade() {
-                            if let Err(_err) = win.imp().winproto.borrow_mut().resize_event() {
-                                eprintln!("warn(gtk): winproto resize event failed");
+                            if let Err(err) = win.imp().winproto.borrow_mut().resize_event() {
+                                // log.warn("winproto resize event failed error={}", .{err});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "winproto resize event failed error={err:?}"
+                                );
                             }
                         }
                     });
@@ -1172,11 +1184,19 @@ mod imp {
             // Verify that this surface is actually in this window (`:1679-1697`).
             match ext::ancestor::<super::Window>(surface) {
                 None => {
-                    eprintln!("warn(gtk): present request called for non-existent surface");
+                    // log.warn("present request called for non-existent surface", .{});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "present request called for non-existent surface"
+                    );
                     return;
                 }
                 Some(win) if win != *obj => {
-                    eprintln!("warn(gtk): present request called for surface in different window");
+                    // log.warn("present request called for surface in different window", .{});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "present request called for surface in different window"
+                    );
                     return;
                 }
                 Some(_) => {}
@@ -1184,7 +1204,8 @@ mod imp {
 
             // Get the tab for this surface (`:1699-1706`).
             let Some(tab) = ext::ancestor::<Tab>(surface) else {
-                eprintln!("warn(gtk): present request surface not found");
+                // log.warn("present request surface not found", .{});
+                log::warn!(target: LOG_SCOPE, "present request surface not found");
                 return;
             };
 
@@ -1481,10 +1502,18 @@ mod imp {
         if let Some(source) = id {
             let removed = unsafe { glib::ffi::g_source_remove(source.as_raw()) };
             if removed == glib::ffi::GFALSE {
-                eprintln!(
-                    "warn(gtk): unable to remove {what} source={}",
-                    source.as_raw()
-                );
+                // log.warn("unable to remove handle active state source", .{});
+                //
+                // task-14d-3: the message text is now VERBATIM. It used to
+                // append `source={}`, which the pinned reference
+                // (`window.zig:1402`) does not print — the `{s} source={d}`
+                // shape this was written against belongs to a superseded
+                // revision. `what` is the reference's own wording, so
+                // `remove_source_id(.., "handle active state source")`
+                // reproduces `:1402` exactly. The second caller
+                // ("tab overview focus timer") has NO reference counterpart at
+                // all — see its own PORT NOTE in `dispose`.
+                log::warn!(target: LOG_SCOPE, "unable to remove {what}");
             }
         }
     }
@@ -1493,6 +1522,15 @@ mod imp {
 /// PORTS: `super::super::surface::CoreSurface` — the libghostty-core surface the
 /// window drives binding actions against (`window.zig:747`).
 use super::surface::CoreSurface;
+
+/// `const log = std.log.scoped(.gtk_ghostty_window)` (`window.zig:34`).
+///
+/// REBRANDED per the precedent task-14d-2 set at
+/// `gtk/class/config.rs`'s `LOG_SCOPE` and now written into
+/// `.port/tools/PARITY_NAMING.md`: a log scope tag is a runtime identity string
+/// emitted into user-visible diagnostic text, so `ghostty` becomes `rustty`.
+/// A GType registered NAME is a different thing and is NOT rebranded.
+const LOG_SCOPE: &str = "gtk_rustty_window";
 
 glib::wrapper! {
     /// PORTS: `window.zig:35` `pub const Window` — the `GhosttyWindow`.
@@ -1866,6 +1904,14 @@ impl Window {
         // (`:1431-1457`) — both call `closePageFinish(page, …)`. The reference
         // re-resolves the tab_view via `getAncestor(page.child())`; we already
         // have it as `imp.tab_view`, so we clone it into the closures.
+        //
+        // UNRESTORED SITES `window.zig:1612` and `:1626` (task-14d-3): both are
+        // `log.warn("close confirmation called for non-existent page", .{})` on
+        // the `orelse` of that `getAncestor`. Because this port never performs
+        // the lookup — it captures the `tab_view` it already holds — the
+        // failure the warning reports cannot occur, and restoring it would put
+        // a diagnostic on a success path. These two are the whole of this
+        // file's residual allowance.
         let dialog = CloseConfirmationDialog::new(Target::Tab);
         let tab_view = imp.tab_view.get();
         let page_close = page.clone();
@@ -2091,17 +2137,24 @@ impl Window {
     ) {
         let imp = this.imp();
         if imp.surface_init.get() {
-            eprintln!(
-                "warn(gtk): quick terminal property can't be changed after surfaces initialized"
+            // log.warn("quick terminal property can't be changed after surfaces have been initialized", .{});
+            //
+            // S58-F6 "one message text differs": the port said "after surfaces
+            // initialized"; the reference says "after surfaces have been
+            // initialized".
+            log::warn!(
+                target: LOG_SCOPE,
+                "quick terminal property can't be changed after surfaces have been initialized"
             );
             return;
         }
         if imp.quick_terminal.get() {
-            if let Err(_err) = Application::default()
+            if let Err(err) = Application::default()
                 .winproto_mut()
                 .init_quick_terminal(this)
             {
-                eprintln!("warn(gtk): failed to initialize quick terminal");
+                // log.warn("failed to initialize quick terminal error={}", .{err});
+                log::warn!(target: LOG_SCOPE, "failed to initialize quick terminal error={err:?}");
             }
         }
     }
@@ -2114,8 +2167,12 @@ impl Window {
         _pspec: &glib::ParamSpec,
         this: &Window,
     ) {
-        if let Err(_err) = this.imp().winproto.borrow_mut().sync_appearance() {
-            eprintln!("warn(gtk): failed to sync appearance after scale factor update");
+        if let Err(err) = this.imp().winproto.borrow_mut().sync_appearance() {
+            // log.warn("failed to sync appearance after scale factor has been updated={}", .{err});
+            log::warn!(
+                target: LOG_SCOPE,
+                "failed to sync appearance after scale factor has been updated={err:?}"
+            );
         }
     }
 
@@ -2216,11 +2273,13 @@ fn action_close(_action: &gio::SimpleAction, _param: Option<&glib::Variant>, thi
 /// PORTS: `window.zig:1842-1869` `actionCloseTab`.
 fn action_close_tab(_action: &gio::SimpleAction, param: Option<&glib::Variant>, this: &Window) {
     let Some(param) = param else {
-        eprintln!("warn(gtk): win.close-tab called without a parameter");
+        // log.warn("win.close-tab called without a parameter", .{});
+        log::warn!(target: LOG_SCOPE, "win.close-tab called without a parameter");
         return;
     };
     let Some(mode_str) = param.get::<String>() else {
-        eprintln!("warn(gtk): invalid mode provided to win.close-tab");
+        // log.warn("invalid mode provided to win.close-tab", .{});
+        log::warn!(target: LOG_SCOPE, "invalid mode provided to win.close-tab");
         return;
     };
     // `std.meta.stringToEnum(CloseTabMode, ...)` (`:1855-1866`) — the reference's
@@ -2230,7 +2289,8 @@ fn action_close_tab(_action: &gio::SimpleAction, param: Option<&glib::Variant>, 
         "other" => binding::CloseTabMode::Other,
         "right" => binding::CloseTabMode::Right,
         other => {
-            eprintln!("warn(gtk): invalid mode provided to win.close-tab: {other}");
+            // log.warn("invalid mode provided to win.close-tab: {s}", .{str.?});
+            log::warn!(target: LOG_SCOPE, "invalid mode provided to win.close-tab: {other}");
             return;
         }
     };
@@ -2360,15 +2420,17 @@ fn action_ring_bell(_action: &gio::SimpleAction, _param: Option<&glib::Variant>,
         if let Some(native) = this.surface() {
             native.beep();
         } else {
-            eprintln!("warn(gtk): unable to get native surface from window");
+            // log.warn("unable to get native surface from window", .{});
+            log::warn!(target: LOG_SCOPE, "unable to get native surface from window");
         }
     }
 
     // Attention / urgency (`:1995-2003`).
     if c.bell_features.attention && !this.is_active() {
         drop(cfg);
-        if let Err(_err) = imp.winproto.borrow_mut().set_urgent(true) {
-            eprintln!("warn(gtk): winproto failed to set urgency");
+        if let Err(err) = imp.winproto.borrow_mut().set_urgent(true) {
+            // log.warn("winproto failed to set urgency={}", .{err});
+            log::warn!(target: LOG_SCOPE, "winproto failed to set urgency={err:?}");
         }
     }
 }
@@ -2400,6 +2462,57 @@ mod tests {
     use super::*;
     use glib::translate::ToGlibPtr;
     use std::ffi::c_void;
+
+    use crate::log_capture;
+
+    /// S58-F6, the "one message text differs" half plus the success-path rule.
+    ///
+    /// `remove_source_id` is the port of `window.zig:1400-1403`'s
+    /// `if (glib.Source.remove(v) == 0) log.warn("unable to remove handle active
+    /// state source", .{})`. Two things are pinned:
+    ///
+    ///  1. Nothing at all is emitted when there is no source to remove. This
+    ///     project has already shipped a diagnostic that sat OUTSIDE its
+    ///     `catch` block and fired on every success; a full-vector `assert_eq!`
+    ///     on an empty capture is what makes that regression fail here.
+    ///  2. The failure arm's text is VERBATIM. It used to append `source={}`,
+    ///     which the pinned reference does not print.
+    ///
+    /// The invalid id makes GLib emit its own `g_critical` on stderr before
+    /// returning FALSE. That is GLib's own output, not a captured record, and
+    /// it does not affect the assertion.
+    #[test]
+    fn remove_source_id_warns_only_on_failure_and_verbatim() {
+        use glib::translate::FromGlib;
+
+        let cap = log_capture::start();
+        remove_source_id(None, "handle active state source");
+        let quiet = cap.messages();
+        drop(cap);
+        assert_eq!(
+            Vec::<(log::Level, String, String)>::new(),
+            quiet,
+            "no source to remove is a SUCCESS path and must be silent"
+        );
+
+        let cap = log_capture::start();
+        // SAFETY: `u32::MAX` is not a live GLib source id; `g_source_remove`
+        // reports failure for an unknown id rather than acting on one.
+        remove_source_id(
+            Some(unsafe { glib::SourceId::from_glib(u32::MAX) }),
+            "handle active state source",
+        );
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "gtk_rustty_window".to_string(),
+                "unable to remove handle active state source".to_string(),
+            )],
+            messages
+        );
+    }
 
     /// Every guard condition of `toplevelComputeSize` that does not need a live
     /// toplevel (oracle `004c88e41`, P3-W8 T5).
