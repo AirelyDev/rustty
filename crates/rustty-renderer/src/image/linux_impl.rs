@@ -93,14 +93,23 @@ use crate::size::CellSize;
 
 use crate::overlay::Overlay;
 
-// const log = std.log.scoped(.renderer_image);
-// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
-// (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call shape
-// 3), and `generic.rs`'s `macos_impl` is the worked example. These `log.warn(...)`
-// sites are simply NOT RESTORED YET — row S117-F3's stage owns them and will add
-// `const LOG_SCOPE: &str = "renderer_image";` here alongside the first live
-// emission. Until then each site is preserved as a comment at its location.
-// Scheduled work, not a missing dependency.
+// const log = std.log.scoped(.renderer_image);   (image.zig:14)
+//
+// DECISION-logging.md §6r call shape 3: `rustty-renderer` sits BELOW `rustty-vt-c`
+// in R4's layering, so restored sites call the `log` facade with `target:
+// LOG_SCOPE` carrying the reference's `std.log.scoped` tag. This is the OpenGL twin
+// of `image/macos_impl.rs:84`; both twins port the SAME `src/renderer/image.zig`
+// and therefore carry the SAME scope.
+//
+// RESTORED (task-14c-5, finding N9): the reference has 13 live `log.*` calls in
+// `image.zig`; 11 are live here. `image.zig:365` (`error deferring relative
+// placement`) and `:447` (`error tracking virtual origin`) are NOT restorable —
+// their Rust counterparts (`Vec::push`, `HashMap::entry`) are infallible, so there
+// is no failure arm to hang the warn on and emitting unconditionally would put a
+// diagnostic on the SUCCESS path. Both carry a PORT NOTE at the code site; both
+// are Linux-side residuals of the WAIVED row `S117-F3`
+// (`ADJUDICATION.md#s117-f3`), exactly as they are on the Metal side.
+const LOG_SCOPE: &str = "renderer_image";
 
 /// Generic image rendering state for the renderer. This stores all
 /// images and their placements and exposes only a limited public API
@@ -257,8 +266,9 @@ impl State {
             let pending = self.images.get(&id).is_some_and(|e| e.image.is_pending());
             if pending {
                 let img = &mut self.images.get_mut(&id).unwrap().image;
-                if img.upload(alloc, api).is_err() {
+                if let Err(err) = img.upload(alloc, api) {
                     // log.warn("error uploading image to GPU err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error uploading image to GPU err={err:?}");
                     success = false;
                 }
             }
@@ -321,6 +331,11 @@ impl State {
                 Some(v) => v,
                 None => {
                     // log.warn("image not found for placement image_id={}", .{p.image_id});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "image not found for placement image_id={:?}",
+                        p.image_id
+                    );
                     continue;
                 }
             };
@@ -330,6 +345,11 @@ impl State {
                 Image::Ready(t) | Image::UnloadReady(t) => t,
                 _ => {
                     // log.warn("image not ready for placement image_id={}", .{p.image_id});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "image not ready for placement image_id={:?}",
+                        p.image_id
+                    );
                     continue;
                 }
             };
@@ -351,8 +371,12 @@ impl State {
                 }],
             ) {
                 Ok(b) => b,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("error creating image vertex buffer err={}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error creating image vertex buffer err={err:?}"
+                    );
                     continue;
                 }
             };
@@ -781,6 +805,15 @@ impl State {
                                 // (Vec::push aborts on OOM — the Zig catch arm
                                 // logs and skips; unreachable under Rust's
                                 // global-alloc model, the crate-wide precedent.)
+                                //
+                                // LOG PORT NOTE (task-14c-5, N9 — Linux-side
+                                // residual of the WAIVED row S117-F3): this
+                                // `log.warn` is NOT restorable for the same reason
+                                // as its Metal twin (`image/macos_impl.rs`,
+                                // task-14c-2). `Vec::push` is infallible, so there
+                                // is no failure arm to hang the warn on, and
+                                // hoisting it out would put a diagnostic on the
+                                // SUCCESS path. See ADJUDICATION.md#s117-f3.
                                 pending_relative.push(PendingRelative {
                                     image_id: key.image_id,
                                     p: *p,
@@ -805,6 +838,11 @@ impl State {
                     None => {
                         // log.warn("missing image for placement, ignoring image_id={}",
                         //     .{kv.key_ptr.image_id});
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "missing image for placement, ignoring image_id={}",
+                            key.image_id
+                        );
                         continue;
                     }
                 };
@@ -814,11 +852,11 @@ impl State {
                 //     // other placements even if one fails.
                 //     log.warn("error preparing kitty placement err={}", .{err});
                 // };
-                if self
-                    .prep_kitty_placement(alloc, t, top_y, bot_y, &image, p, origin)
-                    .is_err()
+                if let Err(err) =
+                    self.prep_kitty_placement(alloc, t, top_y, bot_y, &image, p, origin)
                 {
                     // log.warn("error preparing kitty placement err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error preparing kitty placement err={err:?}");
                 }
             }
         }
@@ -847,13 +885,12 @@ impl State {
             let mut v_it = graphics_unicode::placement_iterator(top, Some(bot));
             // while (v_it.next()) |virtual_p| { ... }
             while let Some(virtual_p) = v_it.next() {
-                if self
-                    .prep_kitty_virtual_placement(alloc, t, &virtual_p, cell_size)
-                    .is_err()
+                if let Err(err) = self.prep_kitty_virtual_placement(alloc, t, &virtual_p, cell_size)
                 {
                     // For errors we log and continue. We try to place
                     // other placements even if one fails.
                     // log.warn("error preparing kitty placement err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error preparing kitty placement err={err:?}");
                 }
 
                 // We need to track the origins of all the placeholders
@@ -887,7 +924,16 @@ impl State {
                         };
 
                         // Add the origin for this target
-                        // const gop = virtual_origins.getOrPut(alloc, target.key) catch ...;
+                        // const gop = virtual_origins.getOrPut(alloc, target.key) catch |err| {
+                        //     log.warn("error tracking virtual origin err={}", .{err});
+                        //     break :fold;
+                        // };
+                        // LOG PORT NOTE (task-14c-5, N9 — Linux-side residual of the
+                        // WAIVED row S117-F3): NOT restorable, same as the Metal twin
+                        // (task-14c-2). The reference's `getOrPut` takes an allocator and
+                        // can fail; `HashMap::entry` cannot (OOM aborts through `Global`),
+                        // so there is no failure arm for the `log.warn` and no
+                        // `break :fold` to reach. See ADJUDICATION.md#s117-f3.
                         // if (!gop.found_existing) {
                         //     gop.value_ptr.* = .{ .x = vp.viewport.x, .y = vp.viewport.y };
                         // } else {
@@ -971,11 +1017,9 @@ impl State {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                if self
-                    .append_kitty_placement(alloc, t, &image, &pr.p, x, y)
-                    .is_err()
-                {
+                if let Err(err) = self.append_kitty_placement(alloc, t, &image, &pr.p, x, y) {
                     // log.warn("error preparing kitty placement err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error preparing kitty placement err={err:?}");
                 }
             }
         }
@@ -1282,6 +1326,11 @@ impl State {
             None => {
                 // log.warn("missing image for virtual placement, ignoring image_id={}",
                 //     .{p.image_id});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "missing image for virtual placement, ignoring image_id={}",
+                    p.image_id
+                );
                 return Ok(());
             }
         };
@@ -1294,8 +1343,9 @@ impl State {
         //     catch |err| { log.warn("error rendering virtual placement err={}", .{err}); return; };
         let rp = match p.render_placement(storage, &image, cell_size.width, cell_size.height) {
             Ok(rp) => rp,
-            Err(_) => {
+            Err(err) => {
                 // log.warn("error rendering virtual placement err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error rendering virtual placement err={err:?}");
                 return Ok(());
             }
         };
@@ -1412,14 +1462,14 @@ impl State {
         // gop.value_ptr.image.getPendingPointer().?.prepForUpload(alloc) catch |err| { ... };
         // (`b17abd96d`: prepForUpload moved onto `Image.Pending`.)
         let entry = self.images.get_mut(&id).unwrap();
-        if entry
+        if let Err(err) = entry
             .image
             .get_pending_pointer()
             .unwrap()
             .prep_for_upload(alloc)
-            .is_err()
         {
             // log.warn("error preparing image for upload err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error preparing image for upload err={err:?}");
             entry.image.mark_for_unload();
             return Err(PrepImageError::ImageConversionError);
         }
@@ -3111,6 +3161,71 @@ mod tests {
             &[0u8, 0, 255, 255][..],
             entry.image.get_pending().unwrap().data_slice(),
         );
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    // ===================================================================
+    // task-14c-5 (finding N9) — the RESTORED diagnostics of this Linux twin
+    // ===================================================================
+
+    /// `image.zig:646` — the "missing image for virtual placement" warn, driven
+    /// through the real `prep_kitty_virtual_placement` with an `image_id` that has
+    /// no image in the terminal's Kitty storage.
+    ///
+    /// PURE: this arm returns before `renderPlacement`, so it needs no GL context
+    /// and is NEVER skipped. It is the cheapest possible proof that this twin's
+    /// `LOG_SCOPE` is wired and that its emissions reach a `log::Log` backend —
+    /// before this task the whole file emitted nothing at all.
+    #[test]
+    fn missing_image_for_virtual_placement_warns_once() {
+        let alloc = Global;
+
+        let mut t = rustty_vt::terminal::Terminal::init(alloc, opts(3, 3)).unwrap();
+        t.width_px = 30;
+        t.height_px = 30;
+
+        // A pin into the live screen; the arm under test never reads it.
+        let sp = t.screens.active;
+        let pin = unsafe { *(*sp).cursor.page_pin };
+
+        let p = KittyUnicodePlacement {
+            pin,
+            image_id: 7, // nothing was ever added under this id
+            placement_id: 0,
+            col: 0,
+            row: 0,
+            width: 1,
+            height: 1,
+        };
+
+        let mut state: State = State::empty();
+
+        let cap = crate::log_capture::start();
+        let res = state.prep_kitty_virtual_placement(
+            alloc,
+            &t,
+            &p,
+            CellSize {
+                width: 10,
+                height: 10,
+            },
+        );
+        let records = cap.messages();
+        drop(cap);
+
+        res.expect("the missing-image arm logs and returns Ok, it does not error");
+        assert_eq!(
+            records,
+            vec![(
+                log::Level::Warn,
+                "renderer_image".to_string(),
+                "missing image for virtual placement, ignoring image_id=7".to_string(),
+            )]
+        );
+        // Nothing was placed.
+        assert!(state.kitty_placements.is_empty());
 
         state.deinit(alloc);
         t.deinit(alloc);
