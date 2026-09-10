@@ -3536,7 +3536,7 @@ mod action {
     use super::super::surface::{CoreSurface, Size, Surface as GhosttySurface};
     use super::super::tab::{Tab, TabOverrides};
     use super::super::window::{SelectTab, Window};
-    use super::{ext, AppTargetHandle, Application, Config, CoreConfig};
+    use super::{ext, AppTargetHandle, Application, Config, CoreConfig, LOG_SCOPE};
     use crate::gtk::i18n::tr;
     use crate::gtk::surface::Surface as ApprtSurface;
 

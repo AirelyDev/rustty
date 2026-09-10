@@ -1131,6 +1131,12 @@ fn delete_surface_from_app(rt: *mut ApprtSurface) {
 /// PORTS: `surface.zig:3406-3409` `InitError = Allocator.Error ||
 /// error{GLAreaError, SurfaceError}`. The only consumer ([`Surface::gl_resize`])
 /// logs and discards it (`:3401-3403`), so the variants carry no payload.
+// task-14d-3: `Debug` is required by the restored
+// `log.warn("surface failed to initialize err={}", .{err})`
+// (`surface.zig:3502`) — the port had dropped the error value, so nothing
+// needed to render it. Semver-additive, no layout/ABI effect, and the only new
+// capability is the one the reference already exercises at that call site.
+#[derive(Debug)]
 enum InitError {
     /// `error.GLAreaError` — `makeCurrent` reported a GL error (`:3423`).
     GlArea,

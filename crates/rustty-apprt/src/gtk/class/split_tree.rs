@@ -385,14 +385,23 @@ impl SplitTree {
 
         // log.debug("new split at={} direction={} old_tree={f} new_tree={f}", .{ handle, direction, old_tree, &new_tree });
         //
-        // PORT NOTE: Zig's `{f}` calls `Tree.format`; the port's `Tree` renders
-        // through `Debug` (N11's crate-wide stand-in). `old_tree` is read back
-        // out of the field because the borrow above has been dropped.
+        // PORT NOTE: Zig's `{f}` calls `Tree.format`, and the port has that exact
+        // function as `SplitTree::format()` — so the two tree payloads are
+        // rendered through it, NOT through `Debug` (`SplitTree` has no `Debug`
+        // impl, and adding one would be both a cross-crate change and a LESS
+        // faithful rendering). `{}` on the reference's `handle`/`direction` is
+        // Zig's aggregate/enum formatter; `Debug` is this port's crate-wide
+        // stand-in for that (N11). `old_tree` is read back out of the field
+        // because the borrow taken above has been dropped.
         log::debug!(
             target: LOG_SCOPE,
-            "new split at={handle:?} direction={direction:?} old_tree={old_tree:?} new_tree={new_tree:?}",
-            old_tree = self.imp().tree.borrow().as_ref().map(|t| &t.0),
-            new_tree = &new_tree,
+            "new split at={handle:?} direction={direction:?} old_tree={} new_tree={}",
+            self.imp()
+                .tree
+                .borrow()
+                .as_ref()
+                .map_or_else(|| "empty".to_string(), |t| t.0.format()),
+            new_tree.format(),
         );
 
         self.set_tree_inner(Some(&Tree(new_tree)));
