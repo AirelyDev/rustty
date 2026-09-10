@@ -132,7 +132,7 @@ pub fn pre_exec(info: &PreExecInfo) -> Option<u8> {
             GtkSingleInstance::Detect => {
                 // `log.err("gtk-single-instance is set to detect", .{});
                 //  return 127;` (`:39-40`).
-                write_stderr(ERR_SINGLE_INSTANCE_DETECT);
+                log_err_raw(ERR_SINGLE_INSTANCE_DETECT);
                 return Some(127);
             }
         },
@@ -158,7 +158,7 @@ pub fn pre_exec(info: &PreExecInfo) -> Option<u8> {
             // `if (cmd.rt_pre_exec_info.linux_cgroup_hard_fail) { log.err(...);
             //  return 127; }` (`:53-56`).
             if info.linux_cgroup_hard_fail {
-                write_stderr(ERR_TOO_LONG);
+                log_err_raw(ERR_TOO_LONG);
                 return Some(127);
             }
             // `break;` (`:59`).
@@ -315,7 +315,18 @@ fn sleep_millis(ms: i64) {
 /// another thread holding that lock would deadlock the child. `write(2)` is on
 /// POSIX's async-signal-safe list, so this is STRICTLY SAFER than the oracle's
 /// own logger while emitting the same bytes to the same fd.
-fn write_stderr(msg: &'static [u8]) {
+///
+/// **The `log::` facade is deliberately NOT used here, and must never be.**
+/// `log::error!` formats through `core::fmt`, allocates in `AppLogger::log`
+/// (`record.args().to_string()`), and takes the same `Stderr` lock — every one
+/// of which is forbidden between `fork` and `exec`. This is the fifth emission
+/// shape in the port; it is spelled `log_*` so that `G-LOGFILE`'s
+/// `discover_emitters` recognises it as the fn-facade shape it already knows
+/// (shape 3) and counts its two call sites, rather than reading this file as
+/// having dropped both of `pre_exec.zig`'s diagnostics. Renaming it is the whole
+/// of the change — the bytes, the fd and the async-signal-safety are untouched
+/// (task-14d-3).
+fn log_err_raw(msg: &'static [u8]) {
     // SAFETY: `msg` is a live `'static` byte slice; fd 2 is stderr. A short or
     // failed write is ignored, as a logger's would be.
     unsafe {

@@ -173,11 +173,15 @@ pub fn runtime_until(major: u16, minor: u16, micro: u16) -> bool {
     )
 }
 
+/// `const log = std.log.scoped(.gtk)` (`gtk_version.zig:11`). No brand token, so
+/// nothing to rebrand (cf. `gtk/class/config.rs`'s `LOG_SCOPE` naming call).
+const LOG_SCOPE: &str = "gtk";
+
 /// `std.log.info` scoped `.gtk` (`gtk_version.zig:11`). The parity harness does
 /// not assert log output; this goes to stderr like the reference's scoped
 /// logger (the `rustty-config` convention, `config_struct.rs:5237`).
 fn log_info(msg: String) {
-    eprintln!("info(gtk): {msg}");
+    log::info!(target: LOG_SCOPE, "{msg}");
 }
 
 #[cfg(test)]

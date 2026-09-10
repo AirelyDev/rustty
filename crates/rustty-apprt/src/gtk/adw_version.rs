@@ -147,10 +147,14 @@ pub fn runtime_at_least(major: u16, minor: u16, micro: u16) -> bool {
     )
 }
 
+/// `const log = std.log.scoped(.gtk)` (`adw_version.zig:11`). No brand token, so
+/// nothing to rebrand (cf. `gtk/class/config.rs`'s `LOG_SCOPE` naming call).
+const LOG_SCOPE: &str = "gtk";
+
 /// `std.log.info` scoped `.gtk` (`adw_version.zig:13` — the adw module logs
 /// under the `.gtk` scope too, not a `.adw` one).
 fn log_info(msg: String) {
-    eprintln!("info(gtk): {msg}");
+    log::info!(target: LOG_SCOPE, "{msg}");
 }
 
 #[cfg(test)]
