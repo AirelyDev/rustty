@@ -32,6 +32,25 @@ pub enum Backend {
     Iocp,
 }
 
+impl Backend {
+    /// The `@tagName` of this backend — what Zig's `{t}` renders for
+    /// `xev.backend`.
+    //
+    // PORT NOTE (task 14d-1): needed by `global.zig:178`'s
+    // `std.log.info("libxev default backend={t}", .{xev.backend})`, restored in
+    // `rustty-apprt`. The strings are the REFERENCE's enum field names
+    // (`backend.zig`), not the Rust variant spellings.
+    pub fn tag_name(self) -> &'static str {
+        match self {
+            Backend::IoUring => "io_uring",
+            Backend::Epoll => "epoll",
+            Backend::Kqueue => "kqueue",
+            Backend::WasiPoll => "wasi_poll",
+            Backend::Iocp => "iocp",
+        }
+    }
+}
+
 /// Returns a recommend default backend from inspecting the system.
 //
 // PORT NOTE: `pub fn default() Backend` mapped to Rust's `Default` trait so the call
@@ -158,6 +177,20 @@ impl Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `@tagName` table `global.zig:178`'s restored
+    /// `std.log.info("libxev default backend={t}", .{xev.backend})` prints
+    /// (task 14d-1, S43-F2). These are the REFERENCE's enum field names, so a
+    /// Rust-variant-derived spelling (`IoUring`, `WasiPoll`) is a defect, not a
+    /// style choice.
+    #[test]
+    fn backend_tag_names_are_the_reference_field_names() {
+        assert_eq!("io_uring", Backend::IoUring.tag_name());
+        assert_eq!("epoll", Backend::Epoll.tag_name());
+        assert_eq!("kqueue", Backend::Kqueue.tag_name());
+        assert_eq!("wasi_poll", Backend::WasiPoll.tag_name());
+        assert_eq!("iocp", Backend::Iocp.tag_name());
+    }
 
     #[test]
     fn backend_default_and_candidates() {

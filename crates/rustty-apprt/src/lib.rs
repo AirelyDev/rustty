@@ -252,10 +252,39 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     init_signals();
 
     // Setup our Xev backend if we're dynamic
-    //   PORT NOTE: `xev.dynamic` is comptime-FALSE in the port on every target
-    //   (rustty-xev is the static kqueue surface on macOS; the Linux
-    //   io_uring/epoll selection is dynamic.rs's own concern) — the detect call
-    //   comptime-elides, exactly like the reference on a static backend.
+    // if (comptime xev.dynamic) xev.detect() catch |err| {
+    //     std.log.warn("failed to detect xev backend, falling back to " ++
+    //         "most compatible backend err={}", .{err});
+    // };
+    //
+    // CORRECTED (task 14d-1, closes S43-F2): the PORT NOTE that stood here
+    // claimed "`xev.dynamic` is comptime-FALSE in the port on every target ...
+    // the detect call comptime-elides". That is true on macOS/kqueue and FALSE
+    // on Linux: `rustty-xev` exports `DYNAMIC = true`, `CANDIDATES =
+    // [IoUring, Epoll]` and `detect()` there (`dynamic.rs`, the port of
+    // `dynamic.zig:46/48/96`), exactly as the reference's `Dynamic` layer does.
+    // So detection was NEVER RUN, the process kept `BACKEND_DEFAULT` (the
+    // LAST candidate — epoll) whatever the kernel supported, and the backend
+    // line below printed a value the port had not computed. `#[cfg]` is the
+    // faithful image of the reference's `comptime xev.dynamic` fold: on the
+    // static-backend targets the reference elides this block too.
+    #[cfg(target_os = "linux")]
+    if rustty_xev::DYNAMIC {
+        if let Err(_err) = rustty_xev::detect() {
+            // `detect()`'s error set is `error{NoAvailableBackends}` — one
+            // variant — so Zig's `{}` renders exactly this text. The port's
+            // unified D6 seam `Error` carries no name of its own, so the
+            // reference's rendering is written out rather than derived from a
+            // `{:?}` that would print `Error`.
+            log_with(
+                Level::Warn,
+                "default",
+                "failed to detect xev backend, falling back to most compatible \
+                 backend err=error.NoAvailableBackends",
+                &logging,
+            );
+        }
+    }
 
     // Output some debug information right away
     log_with(
@@ -313,13 +342,19 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
         &format!("renderer={:?}", build_config::renderer()),
         &logging,
     );
-    // std.log.info("libxev default backend={t}", ...) — static per target (see
-    // the xev PORT NOTE above).
-    let xev_backend = if cfg!(target_os = "macos") {
-        "kqueue"
-    } else {
-        "io_uring"
-    };
+    // std.log.info("libxev default backend={t}", .{xev.backend});
+    //
+    // CORRECTED (task 14d-1, closes S43-F2): this was a HARDCODED
+    // `if cfg!(macos) { "kqueue" } else { "io_uring" }` — a value the port
+    // never computed, and wrong on any Linux box where `detect()` (now run,
+    // above) selects epoll. `xev.backend` is the STATIC `Backend` on a
+    // single-candidate target and the `pub var backend` global that `detect`
+    // just wrote on a dynamic one; both are read here through the same
+    // per-target surface the reference reads.
+    #[cfg(target_os = "linux")]
+    let xev_backend = rustty_xev::backend().tag_name();
+    #[cfg(not(target_os = "linux"))]
+    let xev_backend = rustty_xev::Backend::default().tag_name();
     log_with(
         Level::Info,
         "default",
