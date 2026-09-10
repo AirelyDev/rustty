@@ -80,8 +80,10 @@ use crate::shape::feature::{FeatureList, DEFAULT_FEATURES};
 use crate::shared_grid::SharedGrid;
 
 // const log = std.log.scoped(.font_shaper);
-// PORT NOTE: this crate wires no logger; `log.warn`/`log.err` sites are preserved
-// as comments (matching `harfbuzz.rs` / `feature.rs`).
+//
+// The reference's `std.log.scoped(.font_shaper)` tag, carried through the `log`
+// facade's `target:` (`.port/parity-closure/DECISION-logging.md` §6).
+const LOG_SCOPE: &str = "font_shaper";
 
 /// Raw CoreText entry point that objc2 0.3 wraps as non-null (it can
 /// legitimately return NULL, which the reference handles as OOM).
@@ -489,7 +491,18 @@ impl Shaper {
             for r in self.cf_release_pool.drain(..) {
                 unsafe { cf_release::CFRelease(r) };
             }
-            // (comptime !builtin.is_test) log.warn(...) — no-op here.
+            // PORT NOTE: the reference's `comptime !builtin.is_test` guard is
+            // `#[cfg(not(test))]` here — SAME suppression, same reason (in a
+            // test a non-empty pool is normal because no release thread is
+            // waited on; in production it is a bug). A consequence, stated so it
+            // is not mistaken for an untested restoration: this one site is
+            // deliberately NOT observable from this crate's own `cargo test`
+            // binary, exactly as it is not observable from the reference's.
+            #[cfg(not(test))]
+            log::warn!(
+                target: LOG_SCOPE,
+                "BUG: CFRelease pool was not empty, releasing remaining objects"
+            );
         }
         self.cf_release_pool = Vec::new();
 
@@ -501,7 +514,12 @@ impl Shaper {
         // }
         // self.cf_release_thread.deinit();
         // self.alloc.destroy(self.cf_release_thread);
-        let _ = self.cf_release_tx.send(cf_release::Msg::Stop);
+        if let Err(err) = self.cf_release_tx.send(cf_release::Msg::Stop) {
+            log::error!(
+                target: LOG_SCOPE,
+                "error notifying cf release thread to stop, may stall err={err:?}"
+            );
+        }
         if let Some(handle) = self.cf_release_handle.take() {
             let _ = handle.join();
         }
@@ -522,6 +540,16 @@ impl Shaper {
         //     self.cf_release_pool.clearRetainingCapacity();
         //     return;
         // };
+        //
+        // PORT NOTE (S94-F4, WAIVED site 1 of 2 —
+        // `.port/parity-closure/ADJUDICATION.md#s94-f4`): the reference's
+        // `log.warn("error converting release pool to owned slice, ...")` lives
+        // in the `catch` arm of `toOwnedSlice`, which can fail because it
+        // REALLOCATES through the allocator. `std::mem::take` moves the existing
+        // `Vec` out and leaves an empty one — it allocates nothing and returns
+        // no `Result`, so there is NO failure arm to log from. Emitting here
+        // would fire on the success path, where the reference is silent. Do not
+        // "restore" this by logging unconditionally.
         let items = std::mem::take(&mut self.cf_release_pool);
 
         // Send the items. If the send succeeds then we wake up the
@@ -545,6 +573,15 @@ impl Shaper {
             .cf_release_tx
             .send(cf_release::Msg::Release(cf_release::SendableRefs(items)))
         {
+            // PORT NOTE (S94-F4, WAIVED site 2 of 2 —
+            // `.port/parity-closure/ADJUDICATION.md#s94-f4`): after a successful
+            // push the reference performs a SEPARATE `wakeup.notify()` and logs
+            // `"error notifying cf release thread to wake up, may stall"` in its
+            // `catch` arm. An mpsc `send` IS the wakeup — the channel unparks the
+            // receiver as part of the same infallible operation — so this arm has
+            // no distinct notify step and therefore no failure arm. Emitting here
+            // would fire on every successful frame end, where the reference is
+            // silent.
             Ok(()) => {}
             Err(std::sync::mpsc::SendError(cf_release::Msg::Release(items))) => {
                 for r in items.0 {

@@ -10,6 +10,10 @@
 use rustty_util::quirks::inlineAssert as assert;
 
 // const log = std.log.scoped(.font_shaper);
+//
+// The reference's `std.log.scoped(.font_shaper)` tag, carried through the `log`
+// facade's `target:` (`.port/parity-closure/DECISION-logging.md` §6).
+const LOG_SCOPE: &str = "font_shaper";
 // PORT NOTE: this crate has no logger wired; `log.warn` sites are preserved as
 // comments (matching `collection.rs` / `codepoint_resolver.rs`).
 
@@ -431,7 +435,15 @@ impl FeatureList {
                 //     "failed to parse font feature setting: \"{s}\"",
                 //     .{fbs.buffer[i..fbs.pos]},
                 // );
-                let _ = i;
+                //
+                // PORT NOTE: the reference's `{s}` renders the raw slice bytes;
+                // the lossy UTF-8 conversion is confined to the diagnostic, not
+                // to any data path (memory `zig-byteslice-to-rust-rawbytes`).
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "failed to parse font feature setting: \"{}\"",
+                    String::from_utf8_lossy(&fbs.buf[i..fbs.pos])
+                );
             }
         }
     }
