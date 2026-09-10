@@ -90,6 +90,34 @@ where it is loud, and into the documents, where it is silent.
 If parallel implementation is ever genuinely needed, give each worker its own git
 worktree and merge, rather than sharing one tree.
 
+## The Linux VM: two corrections learned the hard way (2026-09-10)
+
+- **`cargo clean` on the VM destroys the long-running Miri sweep.** Its `--target-dir` is
+  `~/projects/rustty/target/miri` — **inside** the directory `cargo clean` removes. This
+  controller told two workers the sweep was safe from cleaning because it "uses a separate
+  build directory"; that is true only in the `--target-dir` sense and is **wrong** about
+  `cargo clean`. If the VM runs out of space, remove **only** `target/debug/incremental`
+  (large, regenerable, on no Miri path) and confirm the sweep with `pgrep -c miri` before
+  and after.
+- **`--features gtk` is not enough.** Use `--features gtk,x11,wayland`. A real defect — a
+  `LOG_SCOPE` inserted between a `#[derive(Debug)]` and its enum, killing the `Debug` impl
+  five restored sites depend on — was caught **only** by `cargo build --workspace`, because
+  the narrower feature set never compiles the affected file. `cargo fmt --check` stayed
+  green through all five rounds of breakage: it parses, it does not type-check.
+
+## Testing: an absence needs a positive assertion (2026-09-10)
+
+A test asserting that something is **not** emitted must also assert, positively, that it
+reached the code the absence is about. Found when a negative control did not fire: the
+assertion was vacuous for two stacked reasons — a dispatch thunk returned early on an unbound
+field, and the binding step **snapshotted** that field into a closure, so binding it
+afterwards changed nothing. The existing counter could not catch either, because it was
+bumped one frame above the guard. The fix added a counter bumped **inside** the thunk and
+asserted it advances by one.
+
+On this plan a "negative control" has three times turned out not to exercise the thing it
+claimed. Prove the control fails, then prove it fails *for the stated reason*.
+
 ## Constraints that bind every row
 
 - **R1 full fidelity** — comments, tests assertion-for-assertion, error paths.
