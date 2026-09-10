@@ -94,7 +94,7 @@ use rustty_datastruct::blocking_queue::Timeout;
 // added beneath it.
 //
 // `Exec.zig` is the single largest log-bearing file in the whole reference (58
-// live sites at pin 20abdb50a). FIVE of them have no live counterpart here, and
+// live sites at pin 20abdb50a). FOUR of them have no live counterpart here, and
 // each says so at its own code site. In every case the reference's diagnostic
 // hangs off a failure the PORT CANNOT PRODUCE, so restoring it would put a
 // diagnostic on a success path:
@@ -106,9 +106,12 @@ use rustty_datastruct::blocking_queue::Timeout;
 //                                               error return between its
 //                                               registration and the success
 //                                               return.
-//   :1469 `failed to spawn gather thread`     — `std::thread::scope` has no
-//                                               fallible spawn.
-// The `LOG-PORTMAP.tsv` allowance is held at 5 for exactly those.
+// `:1469` (`failed to spawn gather thread`) was ALSO listed here, and that was
+// WRONG: `Builder::spawn_scoped` returns a `Result` and the site was discarding
+// it with `.expect`. `S211-F6` is the ledger row that already recorded exactly
+// that ("gather-thread spawn failure panics instead of logging and returning").
+// Restored in task-14e-1 fix round 1, both halves — see the site itself.
+// The `LOG-PORTMAP.tsv` allowance is held at 4 for the four above.
 const LOG_SCOPE: &str = "io_exec";
 
 /// PORT NOTE (Zig-std shim, task-14e-1): `@tagName(posix.errno(...))` — the
@@ -2011,18 +2014,106 @@ fn subprocess_pre_exec(cmd: &mut Command) -> Option<u8> {
     if let Err(err) = unsafe { (*sp).childPreExec() } {
         // log.err("error initializing child: {}", .{err});
         //
-        // PORT NOTE (async-signal safety): this runs in the FORKED CHILD, after
-        // `fork()` and before `execve()`. It is nevertheless the FACADE and not a
-        // raw `write` — unlike `rustty-os`'s post-fork sites, because the
-        // reference itself calls `log.err` here, through the same global `logFn`
-        // its other sites use, and reproducing that call is the port's job. If a
-        // future stage decides this path must be async-signal-safe, the change
-        // belongs on BOTH sides of the seam at once and must be argued against
-        // the reference, not introduced here unilaterally.
-        log::error!(target: LOG_SCOPE, "error initializing child: {err:?}");
+        // PORT NOTE (async-signal safety) — see `log_err_child_raw` below.
+        // THIS RUNS IN THE FORKED CHILD, between `fork(2)` and `execve(2)`, so
+        // the `log::` facade must never be used here. `rustty-apprt`'s
+        // `gtk/pre_exec.rs` is the PRECEDENT this follows, not a case to
+        // distinguish from: `pre_exec.zig:39` and `:58` call `log.err` through
+        // the very same global `logFn` this site does, and that port renders
+        // them as a raw `write(2)` for exactly this reason.
+        log_err_child_raw(&err);
     }
     // return null;
     None
+}
+
+/// The FIFTH emission shape (`ADJUDICATION.md`, task-14d-3): `Exec.zig:1045`'s
+/// `log.err("error initializing child: {}", .{err})`, hand-rendered and written
+/// with a raw `write(2)` instead of going through the `log::` facade.
+///
+/// # Why the facade is forbidden here, and why fidelity does not require it
+///
+/// This is called from `subprocess_pre_exec`, the `os_pre_exec` hook, which
+/// `Command::spawn` invokes IN THE FORKED CHILD after `fork(2)` returns 0 and
+/// before `execve(2)`. Only the forking thread survives into the child, so any
+/// lock held by another thread at the instant of the fork is held FOREVER in the
+/// child. The parent here always has a renderer thread, an io thread and a
+/// gather thread running. POSIX therefore permits only async-signal-safe
+/// operations on this path.
+///
+/// `log::error!` violates that twice over. It formats through `core::fmt` into
+/// the installed backend, and `rustty-core`'s `AppLogger` — the backend the real
+/// app installs — both ALLOCATES (`logging.rs:61,76,97` build the rendered
+/// string) and takes the process-wide STDERR LOCK (`logging.rs:99`). Either the
+/// allocator's lock or stderr's can be held by a dead thread, and the child then
+/// hangs with NO diagnostic at all — strictly worse than the failure this
+/// diagnostic exists to report.
+///
+/// Fidelity here is owed to the reference's observable OUTPUT, not to its call
+/// mechanism, and nothing is lost: the bytes below are exactly what `logFn`
+/// would have written to the same fd. `rustty-apprt`'s `gtk/pre_exec.rs`
+/// established this shape for the identical reference construct
+/// (`pre_exec.zig:39,58` are also `log.err` through the same global `logFn`);
+/// this is that precedent applied, not an exception to it.
+///
+/// The name is `log_*` on purpose: `G-LOGFILE`'s `discover_emitters` recognises
+/// a `log_`-prefixed fn wrapping a `write!` as the fn-facade shape it already
+/// knows (shape 3), so the call site is COUNTED rather than read as a dropped
+/// diagnostic.
+///
+/// # The level token is `error`, not `err`
+///
+/// The prefix hand-renders `logFn`'s own output, so it must render it exactly.
+/// Zig's `std.log.Level.asText` maps `.err` to the string **`"error"`**
+/// (`lib/std/log.zig:45`), and this port agrees at
+/// `rustty_core::logging::Level::as_text`. Two stages have now shipped `err(`
+/// here; `log_err_child_raw_writes_exactly_what_logfn_would` captures the real
+/// bytes off fd 2 rather than re-asserting the literal.
+///
+/// # No allocation below this line
+///
+/// The message is formatted into a STACK buffer through `core::fmt`, which does
+/// not allocate, and the only argument is `crate::Error`'s derived `Debug`,
+/// which does not allocate either. An over-long render is truncated rather than
+/// grown. Then one `write(2)`, which is on POSIX's async-signal-safe list.
+#[cfg(not(windows))]
+fn log_err_child_raw(err: &crate::Error) {
+    /// A `core::fmt::Write` sink over a fixed stack buffer. Truncates; never
+    /// allocates, never locks.
+    struct StackBuf {
+        buf: [u8; 256],
+        len: usize,
+    }
+
+    impl core::fmt::Write for StackBuf {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            let room = self.buf.len() - self.len;
+            let n = room.min(s.len());
+            self.buf[self.len..self.len + n].copy_from_slice(&s.as_bytes()[..n]);
+            self.len += n;
+            Ok(())
+        }
+    }
+
+    use core::fmt::Write as _;
+    let mut out = StackBuf {
+        buf: [0u8; 256],
+        len: 0,
+    };
+    // `logFn`'s rendering: `<level>(<scope>): <message>\n`. The scope is
+    // `LOG_SCOPE` (`io_exec`), the same tag the facade sites in this file pass
+    // as `target:`.
+    // (`writeln!`, not `write!` + `\n`, only because clippy insists; `writeln!`
+    // always emits a bare `\n` on every platform, so the bytes are identical.
+    // `G-LOGFILE`'s `WRAPPER_WRITE` recognises both.)
+    let _ = writeln!(out, "error({LOG_SCOPE}): error initializing child: {err:?}");
+
+    // SAFETY: `out.buf[..out.len]` is a live, initialized byte range on this
+    // frame; fd 2 is stderr. A short or failed write is ignored, as a logger's
+    // would be. `write(2)` is async-signal-safe.
+    unsafe {
+        let _ = libc::write(2, out.buf.as_ptr().cast::<std::ffi::c_void>(), out.len);
+    }
 }
 
 impl Subprocess {
@@ -4483,19 +4574,31 @@ impl ReadThread {
         // gather stage borrow `&pipeline` without an `Arc`, matching the
         // reference's stack-local `Pipeline`.
         //
-        // The reference treats a spawn failure as fatal:
+        // const gather_thread = std.Thread.spawn(
+        //     .{},
+        //     gatherMainPosix,
+        //     .{ fd, quit, &pipeline },
+        // ) catch |err| {
         //     // If we can't spawn a thread the process is already
         //     // doomed (every surface spawns several), so don't try
         //     // to limp along.
         //     log.err("read thread exiting, failed to spawn gather thread err={}", .{err});
         //     return;
-        // `std::thread::scope` has no fallible spawn, so the failure mode it
-        // guards against surfaces as the same abort Rust already uses for
-        // thread-spawn failure.
+        // };
+        // defer gather_thread.join();
         //
-        // PORT NOTE (G-LOGFILE / task-14e-1): so `Exec.zig:1469`'s
-        // `log.err("read thread exiting, failed to spawn gather thread err={}", ...)`
-        // has no arm to hang on. See the file-header note.
+        // PORT NOTE (task-14e-1 fix round 1, closes the log half of S211-F6):
+        // `Builder::spawn_scoped` DOES return a `Result`. This site used to
+        // discard it with `.expect("spawn io-gather")` and carried a note
+        // claiming `std::thread::scope` has no fallible spawn — that claim was
+        // wrong, and `S211-F6` ("gather-thread spawn failure panics instead of
+        // logging and returning") is the ledger row that already said so. The
+        // reference deliberately does NOT crash here: it logs and RETURNS,
+        // letting the read thread exit while the rest of the process lives.
+        // Both halves are restored below. The `return` leaves this closure,
+        // which is the last statement of `threadMainPosix`, so it returns from
+        // the read thread exactly as the reference's `return` does; nothing was
+        // spawned, so there is nothing for the scope to join.
         let pipeline = &pipeline;
         std::thread::scope(|scope| {
             let gather_fd = fd;
@@ -4505,11 +4608,15 @@ impl ReadThread {
                 // if (comptime !builtin.os.tag.isDarwin()) gather_thread.setName("io-gather");
                 builder = builder.name("io-gather".to_string());
             }
-            builder
-                .spawn_scoped(scope, move || {
-                    Self::gatherMainPosix(gather_fd, gather_quit, pipeline);
-                })
-                .expect("spawn io-gather");
+            if let Err(err) = builder.spawn_scoped(scope, move || {
+                Self::gatherMainPosix(gather_fd, gather_quit, pipeline);
+            }) {
+                log::error!(
+                    target: LOG_SCOPE,
+                    "read thread exiting, failed to spawn gather thread err={err:?}"
+                );
+                return;
+            }
 
             // This thread is the parse stage. We consume batches in ring
             // order until the gather stage reports the stream is over and
@@ -7491,6 +7598,146 @@ mod tests {
             );
             let _ = Instant::now();
         }
+    }
+}
+
+/// task-14e-1 fix round 1: the FIFTH emission shape's actual bytes.
+#[cfg(all(test, not(windows)))]
+mod child_raw_log_tests {
+    use super::{log_err_child_raw, LOG_SCOPE};
+
+    /// Runs `f` with fd 2 redirected into a pipe and returns everything written
+    /// to it. This captures the REAL bytes `log_err_child_raw` puts on the wire,
+    /// rather than re-asserting the literal that produced them — the failure
+    /// mode being guarded against is a hand-rendered prefix drifting from what
+    /// `logFn` would write, and a test that reads the same literal back cannot
+    /// see that.
+    ///
+    /// fd 2 is process-global, so this borrows the crate's fork-KAT
+    /// serialization lock: it is the existing "don't let two tests touch
+    /// process-global fd state at once" mutex, and holding it here keeps a
+    /// concurrent test's stderr out of our pipe (and ours out of theirs).
+    fn capture_stderr(f: impl FnOnce()) -> Vec<u8> {
+        let _serial = crate::FORK_KAT_SERIAL
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let mut fds = [0i32; 2];
+        assert_eq!(0, unsafe { libc::pipe(fds.as_mut_ptr()) }, "pipe(2) failed");
+        let (read_fd, write_fd) = (fds[0], fds[1]);
+
+        // SAFETY: all four calls are plain fd manipulation on fds we own.
+        let saved = unsafe { libc::dup(2) };
+        assert!(saved >= 0, "dup(2) of stderr failed");
+        assert!(
+            unsafe { libc::dup2(write_fd, 2) } >= 0,
+            "dup2 onto stderr failed"
+        );
+
+        f();
+
+        // Restore stderr FIRST, then close the write end, so the read below
+        // cannot block waiting on a writer that is still open.
+        assert!(unsafe { libc::dup2(saved, 2) } >= 0, "dup2 restore failed");
+        unsafe {
+            libc::close(saved);
+            libc::close(write_fd);
+        }
+
+        let mut buf = [0u8; 1024];
+        let n = unsafe {
+            libc::read(
+                read_fd,
+                buf.as_mut_ptr().cast::<std::ffi::c_void>(),
+                buf.len(),
+            )
+        };
+        unsafe { libc::close(read_fd) };
+        assert!(n >= 0, "read(2) from the capture pipe failed");
+        buf[..n as usize].to_vec()
+    }
+
+    /// The bytes must be exactly what `logFn` would have written for this level
+    /// and scope.
+    ///
+    /// The level token is the trap: Zig's `std.log.Level.asText` maps `.err` to
+    /// the string **`"error"`** (`lib/std/log.zig:45`), NOT to the tag name
+    /// `"err"`. Two stages have shipped `err(` on this exact rendering
+    /// (`rustty-apprt`'s `gtk/pre_exec.rs` said it for the whole life of that
+    /// file, corrected by task-14d-3 fix round 1), so this test asserts the
+    /// token explicitly and separately as well as pinning the whole line.
+    #[test]
+    fn log_err_child_raw_writes_exactly_what_logfn_would() {
+        let captured = capture_stderr(|| log_err_child_raw(&crate::Error));
+        let text = String::from_utf8(captured).expect("the rendering is ASCII");
+
+        assert_eq!("error(io_exec): error initializing child: Error\n", text);
+
+        // Stated separately so a failure names the actual defect rather than
+        // just showing two long unequal strings.
+        assert!(
+            text.starts_with("error("),
+            "the level token must be `error` (Zig's Level.asText for .err), \
+             never the tag name `err`; got {text:?}"
+        );
+        assert!(
+            text.starts_with(&format!("error({LOG_SCOPE}): ")),
+            "the scope must be this file's LOG_SCOPE, the same tag the facade \
+             sites pass as `target:`; got {text:?}"
+        );
+        assert!(
+            text.ends_with('\n'),
+            "logFn terminates every line with a newline; got {text:?}"
+        );
+    }
+
+    /// The whole point of the shape: no allocation and no stderr lock on the
+    /// post-`fork` path. This cannot be asserted directly, so it is asserted
+    /// STRUCTURALLY — the helper's body must not name the facade or any of the
+    /// locking/allocating printers. A future edit that "simplifies" it back to
+    /// `log::error!` or `eprintln!` fails here.
+    #[test]
+    fn log_err_child_raw_uses_no_facade_and_no_locking_printer() {
+        let src = include_str!("exec.rs");
+        let start = src
+            .find("fn log_err_child_raw(")
+            .expect("the helper must exist");
+        // The body ends at the next top-level item.
+        let end = src[start..]
+            .find("\nimpl Subprocess {")
+            .expect("the helper is defined just above `impl Subprocess`")
+            + start;
+        let body = &src[start..end];
+
+        // The facade tokens are ASSEMBLED rather than written out. Spelling
+        // `log` + `::` + `error!` as one literal here puts a live-LOOKING facade
+        // macro into this file's source, and `check_log_reconcile.py
+        // --self-test`'s LIVE-TREE arm — a naive grep cross-checked against the
+        // gate's own string-stripping scanner — reads it as a site the scanner
+        // "ate" and goes RED. The gate is right and the first draft of this test
+        // was wrong; joining the fragments keeps the assertion identical and the
+        // naive grep quiet.
+        let sep = "::";
+        let facade_error = format!("log{sep}error!");
+        let facade_warn = format!("log{sep}warn!");
+        for forbidden in [
+            facade_error.as_str(),
+            facade_warn.as_str(),
+            "eprintln!",
+            "eprint!",
+            "format!",
+        ] {
+            assert!(
+                !body.contains(forbidden),
+                "`log_err_child_raw` runs between fork(2) and execve(2); \
+                 `{forbidden}` allocates and/or takes the stderr lock, either of \
+                 which can be held by a thread that did not survive the fork"
+            );
+        }
+        assert!(
+            body.contains("libc::write("),
+            "the emission must be a raw write(2) — POSIX async-signal-safe"
+        );
     }
 }
 

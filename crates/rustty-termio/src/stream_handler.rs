@@ -3521,7 +3521,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // },
     fn kitty_keyboard_push(&mut self, v: stream::KittyKeyboardFlags) {
         // log.debug("pushing kitty keyboard mode: {}", .{value.flags});
-        log::debug!(target: LOG_SCOPE, "pushing kitty keyboard mode:{:?}", v.flags);
+        log::debug!(target: LOG_SCOPE, "pushing kitty keyboard mode: {:?}", v.flags);
         self.term().active_mut().kitty_keyboard.push(v.flags);
     }
 
@@ -3541,7 +3541,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // },
     fn kitty_keyboard_set(&mut self, v: stream::KittyKeyboardFlags) {
         // log.debug("setting kitty keyboard mode: set {}", .{value.flags});
-        log::debug!(target: LOG_SCOPE, "setting kitty keyboard mode: set{:?}", v.flags);
+        log::debug!(target: LOG_SCOPE, "setting kitty keyboard mode: set {:?}", v.flags);
         self.term()
             .active_mut()
             .kitty_keyboard
@@ -3554,7 +3554,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // },
     fn kitty_keyboard_set_or(&mut self, v: stream::KittyKeyboardFlags) {
         // log.debug("setting kitty keyboard mode: or {}", .{value.flags});
-        log::debug!(target: LOG_SCOPE, "setting kitty keyboard mode: or{:?}", v.flags);
+        log::debug!(target: LOG_SCOPE, "setting kitty keyboard mode: or {:?}", v.flags);
         self.term()
             .active_mut()
             .kitty_keyboard
@@ -3567,7 +3567,7 @@ impl<M: AppMailbox> stream::Handler for StreamHandler<M> {
     // },
     fn kitty_keyboard_set_not(&mut self, v: stream::KittyKeyboardFlags) {
         // log.debug("setting kitty keyboard mode: not {}", .{value.flags});
-        log::debug!(target: LOG_SCOPE, "setting kitty keyboard mode: not{:?}", v.flags);
+        log::debug!(target: LOG_SCOPE, "setting kitty keyboard mode: not {:?}", v.flags);
         self.term()
             .active_mut()
             .kitty_keyboard
@@ -3999,6 +3999,242 @@ mod tests {
                 ),
             ],
             messages
+        );
+    }
+
+    /// task-14e-1 fix round 1: pin the caller→tag mapping for ALL 38 `vt`
+    /// callers, not just the two the funnel test renders.
+    ///
+    /// WHY THIS IS STATIC. The regression this guards against is a caller
+    /// passing the wrong tag, or a new caller passing none. Driving it
+    /// dynamically would need each trait method's inner call to FAIL, and every
+    /// one of them is fallible only on `OutOfMemory` (`Terminal::print`,
+    /// `::index`, `Decrqss::encode` …) — which Rust's global allocator aborts on
+    /// rather than returning. There is no input that makes them fail, so there
+    /// is no dynamic drive for 36 of the 38. Reading the mapping out of the
+    /// source covers all 38 and catches the exact defect; `vt_funnel_…` above
+    /// pins the RENDERING, and `vt_callers_are_wired_to_the_funnel` below proves
+    /// the wiring is live rather than dead source text.
+    ///
+    /// Two independent assertions:
+    ///   1. every `self.vt("<tag>", …)` tag equals its enclosing `fn` name — the
+    ///      port's trait methods are named for the reference's own union fields,
+    ///      so this is what makes a copy-paste caller with a stale tag fail;
+    ///   2. every tag is in the reference's `Action` union
+    ///      (`src/terminal/stream.zig:35-140` at pin 20abdb50a), transcribed
+    ///      below the way this tree's other `@tagName` ports are.
+    #[test]
+    fn vt_caller_tags_match_the_reference_action_union() {
+        // `pub const Action = union(Key) { … }`, src/terminal/stream.zig:35.
+        const REFERENCE_ACTION_TAGS: &[&str] = &[
+            "print",
+            "print_slice",
+            "print_repeat",
+            "bell",
+            "backspace",
+            "horizontal_tab",
+            "horizontal_tab_back",
+            "linefeed",
+            "carriage_return",
+            "enquiry",
+            "invoke_charset",
+            "cursor_up",
+            "cursor_down",
+            "cursor_left",
+            "cursor_right",
+            "cursor_col",
+            "cursor_row",
+            "cursor_col_relative",
+            "cursor_row_relative",
+            "cursor_pos",
+            "cursor_style",
+            "erase_display_below",
+            "erase_display_above",
+            "erase_display_complete",
+            "erase_display_scrollback",
+            "erase_display_scroll_complete",
+            "erase_line_right",
+            "erase_line_left",
+            "erase_line_complete",
+            "erase_line_right_unless_pending_wrap",
+            "delete_chars",
+            "erase_chars",
+            "insert_lines",
+            "insert_blanks",
+            "delete_lines",
+            "scroll_up",
+            "scroll_down",
+            "tab_clear_current",
+            "tab_clear_all",
+            "tab_set",
+            "tab_reset",
+            "index",
+            "next_line",
+            "reverse_index",
+            "full_reset",
+            "set_mode",
+            "reset_mode",
+            "save_mode",
+            "restore_mode",
+            "request_mode",
+            "request_mode_unknown",
+            "top_and_bottom_margin",
+            "left_and_right_margin",
+            "left_and_right_margin_ambiguous",
+            "save_cursor",
+            "restore_cursor",
+            "modify_key_format",
+            "mouse_shift_capture",
+            "protected_mode_off",
+            "protected_mode_iso",
+            "protected_mode_dec",
+            "size_report",
+            "title_push",
+            "title_pop",
+            "xtversion",
+            "device_attributes",
+            "device_status",
+            "kitty_keyboard_query",
+            "kitty_keyboard_push",
+            "kitty_keyboard_pop",
+            "kitty_keyboard_set",
+            "kitty_keyboard_set_or",
+            "kitty_keyboard_set_not",
+            "dcs_hook",
+            "dcs_put",
+            "dcs_unhook",
+            "apc_start",
+            "apc_end",
+            "apc_put",
+            "apc_put_slice",
+            "end_hyperlink",
+            "active_status_display",
+            "decaln",
+            "window_title",
+            "report_pwd",
+            "show_desktop_notification",
+            "progress_report",
+            "start_hyperlink",
+            "clipboard_contents",
+            "mouse_shape",
+            "configure_charset",
+            "set_attribute",
+            "kitty_color_report",
+            "color_operation",
+            "semantic_prompt",
+            "kitty_clipboard",
+            "kitty_dnd",
+        ];
+
+        let src = include_str!("stream_handler.rs");
+        let mut enclosing: Option<&str> = None;
+        let mut seen = 0usize;
+        for line in src.lines() {
+            if let Some(rest) = line.strip_prefix("    fn ") {
+                let end = rest.find(['(', '<']).unwrap_or(0);
+                enclosing = Some(&rest[..end]);
+            }
+            let Some(rest) = line.trim_start().strip_prefix("self.vt(\"") else {
+                continue;
+            };
+            let tag = &rest[..rest.find('"').expect("the tag is a string literal")];
+            let owner = enclosing.expect("a vt() call outside any fn");
+            seen += 1;
+            assert_eq!(
+                owner, tag,
+                "`self.vt({tag:?}, …)` sits in `fn {owner}` — the tag must be the \
+                 enclosing trait method's own name, because the port names each \
+                 method for the reference Action field it dispatches"
+            );
+            assert!(
+                REFERENCE_ACTION_TAGS.contains(&tag),
+                "{tag:?} is not a field of the reference's `Action` union"
+            );
+        }
+        assert_eq!(
+            38, seen,
+            "expected 38 `self.vt(…)` callers; a change in the count means an \
+             action was added or removed and this pin needs revisiting"
+        );
+    }
+
+    /// The wiring half of the test above: the tags are not dead source text.
+    ///
+    /// Drives two REAL trait methods (`Handler::print` and
+    /// `Handler::kitty_keyboard_query`, chosen because they take different
+    /// funnel paths) and asserts (a) each produced its own observable side
+    /// effect, so the method body really ran and really reached `self.vt(…)`
+    /// at its tail, and (b) the funnel stayed SILENT on the success arm — the
+    /// reference only logs in `catch`.
+    ///
+    /// The expected vector is not empty: `queryKittyKeyboard` emits
+    /// `stream_handler.zig:909`'s own `log.debug("querying kitty keyboard mode")`
+    /// unconditionally, which is reference behaviour and is pinned here too. So
+    /// this asserts exactly one thing fired and it was NOT the funnel — a
+    /// stronger statement than an empty vector would have been, and the reason
+    /// this is an `assert_eq!` on the whole vector rather than a count.
+    #[test]
+    fn vt_callers_are_wired_to_the_funnel() {
+        use rustty_vt::stream::Handler as _;
+
+        let cap = crate::log_capture::start();
+        let mut term = Terminal::init(Global, terminal_opts(Some(false))).unwrap();
+        let mailbox: *mut Mailbox = Box::into_raw(Box::new(
+            crate::mailbox::Mailbox::initSPSC().expect("Mailbox::initSPSC"),
+        ));
+        // `messageWriter`'s slow path unlocks the renderer mutex, so this test
+        // needs a real `State` (the visibility-report KAT's shape).
+        let mutex: *mut rustty_zigstd::thread::Mutex =
+            Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
+        let state: *mut State = Box::into_raw(Box::new(State {
+            mutex,
+            terminal: &raw mut term,
+            inspector: None,
+            inspector_ptr: None,
+            preedit: None,
+            mouse: rustty_renderer::state::Mouse::default(),
+            demand: Default::default(),
+            handoff_gen: Default::default(),
+            handoff_park: Default::default(),
+        }));
+        let mut h = handler_for(&raw mut term, mailbox, state);
+
+        // `.print => try self.terminal.print(value.cp)`
+        h.print(u32::from('Z'));
+        // `.kitty_keyboard_query => try self.queryKittyKeyboard()`
+        h.kitty_keyboard_query();
+
+        let messages = cap.messages();
+        // POSITIVE (a): `print` reached the terminal.
+        let cell_printed = unsafe { (*term.screens.active).cursor.x } == 1;
+        // POSITIVE (b): `queryKittyKeyboard` pushed its reply into the mailbox.
+        let replied = mailbox_pop(mailbox).is_some();
+        drop(cap);
+        h.renderer_wakeup.deinit();
+        term.deinit(Global);
+        drop(unsafe { Box::from_raw(state) });
+        drop(unsafe { Box::from_raw(mutex) });
+        drop(unsafe { Box::from_raw(mailbox) });
+
+        assert!(
+            cell_printed,
+            "Handler::print did not reach Terminal::print, so this test never \
+             reached the `self.vt(\"print\", …)` it is exercising"
+        );
+        assert!(
+            replied,
+            "Handler::kitty_keyboard_query did not reach the mailbox, so this \
+             test never reached its `self.vt(…)`"
+        );
+        assert_eq!(
+            vec![(
+                log::Level::Debug,
+                "io_handler".to_string(),
+                "querying kitty keyboard mode".to_string(),
+            )],
+            messages,
+            "the only record must be queryKittyKeyboard's own reference debug \
+             line; anything from the `vt` funnel means a success arm is logging"
         );
     }
 

@@ -982,3 +982,83 @@ under mutually-exclusive `cfg` arms (`started subcommand path=…` on the posix 
 arms; the flatpak spawn under `#[cfg(feature = "flatpak")]`), so the textual scan credits
 more emissions than there are reference sites. The per-file allowances are set from the
 SITE inventory above, not from the delta.
+
+### task 14e-1 fix round 1 — three corrections
+
+**1. `Exec.zig:1469` was waived on a false claim, and the ledger already refuted it.**
+The waiver said `std::thread::scope` has no fallible spawn. `Builder::spawn_scoped` returns a
+`Result`; the site discarded it with `.expect("spawn io-gather")`. **There was an arm — it
+panicked.** And `S211-F6` is a CONFIRMED, OPEN row on this same file titled "gather-thread spawn
+failure panics instead of logging and returning", which had recorded exactly this independently.
+So the first round waived as unrestorable a diagnostic the repository's own ledger records as
+missing *because the port panics instead of logging*.
+
+The waiver is reverted and both halves are restored: the `error` emission, and the reference's
+**log-and-return** semantics (the `return` leaves the `scope` closure, which is the last statement
+of `threadMainPosix`, so the read thread exits exactly as the reference's does; nothing was
+spawned, so there is nothing to join). `Exec.zig`'s waived count drops 5 → 4 and its allowance
+3 → 2. `S211-F6` stays **OPEN** with a narrowed `owner`: the code half is done, but no test drives
+it — forcing a real thread-spawn failure needs resource exhaustion, and a flaky exhaustion harness
+would be worse than an untested fix. That row's port line range was also stale (`4232-4245` against
+code near `4611`) and is corrected.
+
+**The lesson generalises.** A waiver asserting "the port cannot produce this failure" is a claim
+about the port's control flow, and it must be checked against the code AND against the ledger's
+other classes — this one was contradicted by an `INDIV`/`missing-error-path` row that a `LOG`-class
+sweep never looks at. Grep the ledger for the reference file before waiving anything in it.
+
+**2. The forked-child site used the facade, and the reasoning was backwards.**
+`Exec.zig:1045` runs between `fork(2)` and `execve(2)`. The first round kept `log::error!` there,
+arguing that `rustty-apprt`'s `gtk/pre_exec.rs` raw-`write` shape applies where the reference is
+async-signal-safe and this site is not. That is backwards: `pre_exec.zig:39` and `:58` **also call
+`log.err`**, through the same global `logFn`. The two are the *identical* reference construct, and
+that port's own note calls the call "the reference's one liberty".
+
+The hazard is concrete, not theoretical. `rustty-core`'s `AppLogger` — the backend the real app
+installs — both allocates (`logging.rs:61,76,97`) and takes the process-wide stderr lock
+(`logging.rs:99`). The parent always has renderer, io and gather threads running, so either lock
+can be held by a thread that did not survive the fork, and the child then hangs with **no
+diagnostic at all** — strictly worse than the failure the diagnostic exists to report.
+
+Fidelity here is owed to the reference's observable OUTPUT, not its call mechanism, and the
+raw-write shape loses nothing because it hand-renders the same bytes. The site now calls
+`log_err_child_raw`, which formats into a 256-byte **stack** buffer through `core::fmt` (no
+allocation; the only argument is a derived `Debug`) and then issues one `write(2)`. `G-LOGFILE`
+counts it: the `log_` prefix plus the `writeln!` inside makes `discover_emitters` classify it as
+the fn-facade shape (shape 3), so the call site is credited rather than read as dropped, and the
+N14 bypass count is unchanged at 60.
+
+**The bytes were verified, not asserted.** `log_err_child_raw_writes_exactly_what_logfn_would`
+redirects fd 2 through a pipe and reads back what was actually written:
+
+```
+error(io_exec): error initializing child: Error\n
+```
+
+The level token is `error`, not `err` — Zig's `Level.asText` maps `.err` to `"error"`
+(`lib/std/log.zig:45`). That is the third time this rendering has been at risk on this plan, so
+the test asserts the token separately from the whole line, and a control that changes `error(` to
+`err(` fails it. A second, structural test fails if `log::error!`/`eprintln!`/`format!` ever
+reappears inside the helper.
+
+**3. The dropped-space class was reintroduced in the very commit that discovered it.**
+Four sites — `stream_handler.rs:3524, :3544, :3557, :3570` — emitted `mode:Flags { … }` where the
+reference emits `mode: <value>`. Cause: a scripted edit built each format string as `msg[:-3]`,
+stripping the `{}` **and the space before it**. Same partial-message class as the `action=`
+truncation the same commit found and fixed.
+
+Fixed, and then **all 120 restored messages were swept for the class**: a checker normalises every
+restored `log::` format string and the oracle's own `log.*` format strings by replacing every
+placeholder with a sentinel, and requires an exact match. (Substring matching does *not* catch
+this — `"pushing kitty keyboard mode:"` is a substring of the reference's
+`"pushing kitty keyboard mode: {}"`. The first version of the checker was written that way, scored
+zero, and was self-tested by reintroducing the bug — which it missed.) The sweep reports **6**
+mismatches, all intended and individually verified: five R2 identity substitutions
+(`Ghostty`/`ghostty` → `rustty_identity::APP_NAME*`) and `DeferLog`'s `"{}"`, which carries its
+message as an argument. The coordinator is scheduling the machine version as gate work.
+
+**Also corrected:** the first round's report attributed the second cfg-duplicated emission pair to
+the flatpak spawn. Wrong — that occurs once, at `exec.rs:3258`. The two duplicated pairs are
+`cannot access cwd, ignoring` (`:2929`/`:3202`) and `started subcommand path={s} pid={?}`
+(`:2985`/`:3361`), both being the posix and windows `start` arms. The count of two was right; the
+attribution was not. Fixed in the portmap `reason` cell.
