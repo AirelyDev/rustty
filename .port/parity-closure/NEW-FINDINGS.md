@@ -886,19 +886,38 @@ found, and current state.
      rather than invisible).
 
 - **the baseline grew, and that is the gate becoming truthful**: deficit **183 over 33 files
-  -> 536 over 114 files**; facade bypass (N14) **188 over 6 files -> 276 over 25 files**;
-  port emissions seen **753 -> 919**. **No diagnostic was lost and nothing regressed.** The
-  353 additional deficit sites were always missing; the gate simply could not see the files
+  -> 535 over 113 files**; facade bypass (N14) **188 over 6 files -> 276 over 25 files**;
+  port emissions seen **753 -> 924**. **No diagnostic was lost and nothing regressed.** The
+  ~350 additional deficit sites were always missing; the gate simply could not see the files
   they were missing from. Anyone comparing the two baselines must compare coverage first.
-- **NOT fixed here, deliberately**: none of the 536 sites were restored. That is stage work
+- **NOT fixed here, deliberately**: none of the 535 sites were restored. That is stage work
   and far larger than a fix round. The gate measures it, the portmap declares it, and the
   ratchet forces each restoration to tighten its row.
 - **how found**: the fix-round-2 review, chasing N14's false completeness claim, asked why
   five obviously log-bearing files were not capped — and the answer was that they were not in
   the portmap at all, because no `LOG` row names them.
+- **the exclusion list is now budgeted too (fix round 4).** Completing the portmap created a
+  new lever and left it unratcheted. An exclusion RETIRES a reference file instead of
+  reconciling it, so it erases that file's entire deficit: the review demonstrated that
+  reclassifying `src/termio/Exec.zig` as `no-port: nothing implements this` made **58 sites
+  of deficit vanish and the gate stayed GREEN** (coverage 99% -> 95%, exclusions 2 -> 3, and
+  nothing counted either). Allowances ratchet and bypass caps ratchet; this did not, and it
+  is the widest lever in the gate. The portmap now carries a required
+  `#!exclusion-cap files=2 sites=2` directive, frozen at today's two files and two sites, on
+  the same two-way ratchet: over budget is RED, UNDER budget is RED (tighten it in the commit
+  that brings a file back into scope), and a missing directive is BLOCKED — a cap that can be
+  disabled by deleting a line is not a cap. Re-running the review's probe now yields
+  `RED: 3 excluded file(s), budget 2` and `RED: 60 excluded site(s), budget 2`.
+- **two of the 110 new mappings are NOT corroborated**, and their portmap rows now say so at
+  the row rather than only in a report: `src/unicode/props_uucode.zig` and
+  `src/unicode/symbols_uucode.zig` were resolved by an exact filename-stem match alone — the
+  Rust file neither names the reference file nor reproduces its one log message, so both
+  independent checks that confirmed the other 107 failed there. One site each; accepted
+  because the stem match is unambiguous, flagged because it is the weakest evidence in the
+  file.
 - **state**: **OPEN.** The instrument is fixed and the debt is declared. Working it down is a
   per-file adjudication pass in deficit order, starting with `termio/Exec.zig` (58),
-  `termio/stream_handler.zig` (41) and `apprt/embedded.zig` (54).
+  `apprt/embedded.zig` (54) and `termio/stream_handler.zig` (41).
 
 ## N16 — three `Config.zig` `log.warn` sites are UNRESTORABLE, not dropped: their Rust counterparts are infallible
 

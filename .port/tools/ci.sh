@@ -750,7 +750,8 @@ GATE_REGISTRY=(
   # (.port/parity-closure/LOG-PORTMAP.tsv), so hardening costs nothing today and
   # buys the only thing that matters: a new dropped diagnostic, or a Linux twin
   # that silently stops emitting what its macOS twin emits, turns the branch red
-  # the same run. The declared debt (536 sites, NEW-FINDINGS N12/N15) is tracked as a
+  # the same run. The declared debt (535 sites over 113 files, NEW-FINDINGS
+  # N12/N15) is tracked as a
   # finding, not as gate noise — `--report` prints the whole table on demand.
   # The allowances are a RATCHET: one that exceeds the measured deficit is RED,
   # so restoring a site must tighten it in the same commit. A SECOND ratchet
@@ -761,7 +762,15 @@ GATE_REGISTRY=(
   # reference tree itself: any .zig with live log sites that the portmap neither
   # declares nor EXCLUDES-with-a-category is RED (N15 — the portmap was first
   # seeded from the audit's LOG rows and inherited its blind spots, leaving 112
-  # files and 523 diagnostics invisible). Nothing here is
+  # files and 523 diagnostics invisible). NO DIAGNOSTIC WAS LOST AND NOTHING
+  # REGRESSED when that landed and the baseline tripled: the deficit went 183 over
+  # 33 files to 535 over 113 because COVERAGE went 63% to 99% of the reference's
+  # log sites. The ~350 additional sites were always missing; the gate could not
+  # see the files they were missing from. Compare coverage before comparing
+  # baselines. A FOURTH check budgets the EXCLUSIONS (`#!exclusion-cap` in the
+  # portmap, frozen at 2 files / 2 sites, ratcheted both ways): retiring a
+  # reference file erases its whole deficit, so it is the widest lever here and
+  # was the only number that was not ratcheted. Nothing here is
   # env-settable (R5); an absent or off-pin oracle checkout is 3 BLOCKED, never a
   # vacuous green.
   "G-LOGFILE-SELF|HARD|$PY $GATES/check_log_reconcile.py --self-test"

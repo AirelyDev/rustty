@@ -221,6 +221,14 @@ worktree and merge, rather than sharing one tree.
      reference tree itself and goes RED on any log-bearing file that is neither declared nor
      EXCLUDED-with-a-category. **Whenever you build a gate to catch an audit's blind spots,
      derive its universe from the reference, never from the audit.**
+   - **Ratchet EVERY number a stage can move, including the escape hatch.** Completing the
+     portmap (N15) created a new lever: an EXCLUSION retires a reference file instead of
+     reconciling it, so it erases that file's whole deficit. Reclassifying
+     `src/termio/Exec.zig` as `no-port:` wiped 58 sites and left the gate green, because
+     allowances and bypass caps were ratcheted and the exclusion list was not. It now has a
+     frozen `#!exclusion-cap` budget on the same two-way ratchet, and the gate BLOCKS if the
+     directive is missing. When you add a category to let people record an honest exception,
+     cap the category in the same commit — otherwise the exception becomes the exit.
    - **A count ratchet needs a SHAPE ratchet beside it.** `G-LOGFILE` counts a
      `eprintln!("warn(gtk): …")` as an emission, because the reference's diagnostic does
      reach a human — so without a second constraint a stage could close a count deficit by

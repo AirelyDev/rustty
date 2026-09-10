@@ -37,6 +37,12 @@ count, so the arm can read greener than a per-site audit would. The portmap
 records every such overlap in its `reason` column. A green here means "no
 diagnostic mass was lost", not "every individual site is live".
 
+EXCLUSION BUDGET: an exclusion retires a reference file rather than reconciling
+it, erasing its whole deficit — the widest lever here, and once the only number
+that was not ratcheted (retiring `src/termio/Exec.zig` wiped 58 sites and stayed
+GREEN). The portmap's `#!exclusion-cap files=N sites=N` directive freezes it, both
+ways; a missing directive is BLOCKED.
+
 COVERAGE: the gate enumerates the REFERENCE TREE, not the portmap. This file was
 first seeded from the audit's LOG rows and so inherited the audit's blind spots —
 112 reference files holding 523 live diagnostics, 37% of the total, sat outside it
@@ -489,6 +495,34 @@ def rust_emissions(paths, sources, emitters, defs):
 # ---------------------------------------------------------------------------
 # Portmap
 # ---------------------------------------------------------------------------
+EXCLUSION_DIRECTIVE = re.compile(
+    r"^#!\s*exclusion-cap\s+files=(\d+)\s+sites=(\d+)\s*$"
+)
+
+
+def load_exclusion_cap(path):
+    """The frozen exclusion budget, from the portmap's `#!exclusion-cap` directive.
+
+    WHY THIS IS NOT OPTIONAL. Every other number in this gate is a ratchet:
+    allowances ratchet, bypass caps ratchet. The exclusion list did not, and it is
+    the WIDEST possible lever — reclassifying `src/termio/Exec.zig` as
+    `no-port: nothing implements this` erased 58 sites of deficit and left the
+    gate GREEN. A stage under pressure could retire a whole file instead of
+    restoring it and the gate would applaud. The whole argument for a closed
+    category set is that an exclusion can be counted and argued; counting it means
+    counting it AGAINST A FROZEN NUMBER.
+
+    Absent directive is BLOCKED, not a default: a cap that can be disabled by
+    deleting a line is not a cap.
+    """
+    with open(path, encoding="utf-8") as fh:
+        for raw in fh:
+            m = EXCLUSION_DIRECTIVE.match(raw.rstrip("\n"))
+            if m:
+                return {"files": int(m.group(1)), "sites": int(m.group(2))}
+    return None
+
+
 def load_portmap(path):
     """Rows of the declared reference -> port mapping.
 
@@ -584,7 +618,7 @@ def ledger_log_files(path):
 # Verdict
 # ---------------------------------------------------------------------------
 def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=False,
-            oracle_log_files=None):
+            oracle_log_files=None, exclusion_cap=None):
     """Return (rc, lines). rc 0 GREEN, 1 RED. Pure — all I/O is in the callers.
 
     `zig_text(path)` / `rust_text(path)` return source text or None if absent.
@@ -721,8 +755,17 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
         for r in excluded_rows:
             k = r["reason"].split(":", 1)[0].strip()
             kinds[k] = kinds.get(k, 0) + 1
+        ex_sites = sum(
+            (oracle_log_files or {}).get(r["oracle"], 0) for r in excluded_rows
+        )
+        budget = (
+            f" (budget {exclusion_cap['files']} file(s) / {exclusion_cap['sites']} site(s))"
+            if exclusion_cap
+            else ""
+        )
         out.append(
-            f"           {len(excluded_rows)} reference file(s) DECLARED-EXCLUDED: "
+            f"           {len(excluded_rows)} reference file(s) DECLARED-EXCLUDED "
+            f"holding {ex_sites} site(s){budget}: "
             + ", ".join(f"{v} {k}" for k, v in sorted(kinds.items()))
         )
     if oracle_log_files:
@@ -792,6 +835,32 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
             if len(uncovered) > 12:
                 out.append(f"       ... and {len(uncovered) - 12} more")
             rc = 1
+    if exclusion_cap is not None:
+        n_files = len(excluded_rows)
+        n_sites = sum(
+            (oracle_log_files or {}).get(r["oracle"], 0) for r in excluded_rows
+        )
+        for label, got, cap in (
+            ("excluded file", n_files, exclusion_cap["files"]),
+            ("excluded site", n_sites, exclusion_cap["sites"]),
+        ):
+            if got > cap:
+                out.append(
+                    f"RED: {got} {label}(s), budget {cap}. An exclusion RETIRES a "
+                    "reference file instead of reconciling it, so it is the widest "
+                    "lever in this gate — reclassifying one large file as `no-port:` "
+                    "erases its whole deficit and would otherwise stay GREEN. Raising "
+                    "this budget is a deliberate, reviewed edit to the portmap's "
+                    "`#!exclusion-cap` directive, never a side effect."
+                )
+                rc = 1
+            elif got < cap:
+                out.append(
+                    f"RED: {got} {label}(s), budget {cap} — the same RATCHET as the "
+                    "allowances and the bypass caps: tighten `#!exclusion-cap` in the "
+                    "commit that brought the file back into scope."
+                )
+                rc = 1
     bad_excl = []
     for r in excluded_rows:
         kind = r["reason"].split(":", 1)[0].strip()
@@ -1070,7 +1139,7 @@ def self_test():
     rt = lambda p: rs.get(p)
     olf = {"src/ok.zig": 1, "src/two.zig": 2}  # the "reference tree" for coverage arms
 
-    def run(portmap_rows, claims=None, coverage=None):
+    def run(portmap_rows, claims=None, coverage=None, excap=None):
         # rows are (oracle, arms, allowance, reason) or (…, allowance, cap, reason)
         pm = []
         for row in portmap_rows:
@@ -1094,7 +1163,9 @@ def self_test():
                     "lineno": 0,
                 }
             )
-        return verdict(pm, claims or {}, zt, rt, oracle_log_files=coverage)
+        return verdict(
+            pm, claims or {}, zt, rt, oracle_log_files=coverage, exclusion_cap=excap
+        )
 
     cases = []
     # 1. reconciles exactly
@@ -1203,6 +1274,37 @@ def self_test():
          run([("src/ok.zig", "c/ok.rs", "0", "0", ""),
               ("src/two.zig", "-", "0", "0", "we did not get to it")], None, olf)[0], 1)
     )
+    # 10f. THE EXCLUSION RATCHET. An exclusion retires a reference file rather than
+    #      reconciling it, so it erases that file's whole deficit — the widest lever
+    #      in the gate, and the only number that was unratcheted. `src/two.zig` holds
+    #      2 live sites; the budget below is 1 file / 2 sites.
+    EXCAP = {"files": 1, "sites": 2}
+    ok_excl = [("src/ok.zig", "c/ok.rs", "0", "0", ""),
+               ("src/two.zig", "-", "0", "0", "no-port: nothing implements this")]
+    cases.append(
+        ("exclusions exactly at budget",
+         run(ok_excl, None, olf, EXCAP)[0], 0)
+    )
+    cases.append(
+        ("one exclusion OVER budget (a file retired to erase its deficit)",
+         run([("src/ok.zig", "-", "0", "0", "no-port: x")] + ok_excl[1:],
+             None, olf, EXCAP)[0], 1)
+    )
+    cases.append(
+        ("exclusions UNDER budget — stale, must be tightened",
+         run([("src/ok.zig", "c/ok.rs", "0", "0", ""),
+              ("src/two.zig", "c/mac.rs", "0", "0", "")], None, olf, EXCAP)[0], 1)
+    )
+    cases.append(
+        ("right file count, too many excluded SITES",
+         run([("src/ok.zig", "c/ok.rs", "0", "0", ""),
+              ("src/two.zig", "-", "0", "0", "no-port: x")],
+             None, olf, {"files": 1, "sites": 1})[0], 1)
+    )
+    cases.append(
+        ("right file count, budgeted for more SITES than are excluded",
+         run(ok_excl, None, olf, {"files": 1, "sites": 3})[0], 1)
+    )
     # 11. a LOG row citing a file with no portmap entry
     cases.append(
         ("undeclared reference file",
@@ -1286,6 +1388,16 @@ def main():
             file=sys.stderr,
         )
         return 3
+    exclusion_cap = load_exclusion_cap(PORTMAP)
+    if exclusion_cap is None:
+        print(
+            "BLOCKED: the portmap carries no `#!exclusion-cap files=N sites=N`\n"
+            "         directive. An exclusion retires a reference file instead of\n"
+            "         reconciling it, so it is the widest lever in this gate; a cap\n"
+            "         that can be disabled by deleting a line is not a cap.",
+            file=sys.stderr,
+        )
+        return 3
     claims = ledger_log_files(LEDGER) if os.path.exists(LEDGER) else {}
     if not claims:
         print(
@@ -1362,6 +1474,7 @@ def main():
         facade,
         report="--report" in sys.argv,
         oracle_log_files=oracle_log_files,
+        exclusion_cap=exclusion_cap,
     )
     print("\n".join(lines))
     return rc

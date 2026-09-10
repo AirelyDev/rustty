@@ -44,11 +44,25 @@
 # renderer_seam.rs (a different crate), OpenGL.zig's head -> opengl/gl/sys.rs,
 # main_ghostty.zig -> rustty-core/src/logging.rs, and both renderer platform-twin pairs.
 #
+# NO DIAGNOSTIC WAS LOST AND NOTHING REGRESSED when this file tripled on 2026-09-10. The
+# deficit went 183 over 33 files to 535 over 113 because COVERAGE went 63% to 99% of the
+# reference's log sites, not because anything broke: the ~350 additional sites were always
+# missing, and the gate simply could not see the files they were missing from (N15). Any
+# comparison of a pre- and post-2026-09-10 baseline must compare coverage first.
+#
 # Baselined 2026-09-10 against oracle pin 20abdb50a (task 14gate; allowances corrected in
-# fix round 1, bypass_cap added in fix round 2). The allowances are the measured deficit,
+# fix round 1, bypass_cap added in fix round 2, exclusion budget added in fix round 4). The allowances are the measured deficit,
 # frozen, tracked as NEW-FINDINGS.md N12; the bypass caps are the measured facade bypass,
 # frozen, tracked as N14. Both are ratchets: a declared number LARGER than what is measured
 # is RED, so an improvement must tighten it in the same commit.
+# The EXCLUSION BUDGET. Frozen, and on the same ratchet as every other number here:
+# more than this is RED, FEWER than this is RED too (tighten it in the commit that
+# brings a file back into scope). An exclusion RETIRES a reference file rather than
+# reconciling it, so it erases that file's entire deficit - reclassifying
+# src/termio/Exec.zig as `no-port:` would have wiped 58 sites and left the gate GREEN.
+# It is the widest lever in this gate and was the only number that was not ratcheted.
+# Deleting this line does not disable the check; the gate BLOCKS without it.
+#!exclusion-cap files=2 sites=2
 oracle_file	port_arms	allowance	bypass_cap	reason
 pkg/macos/foundation/string.zig	crates/rustty-renderer/src/metal/pipeline.rs	0	0	
 pkg/macos/text/font_collection.zig	-	0	0	unresolved: port target not established (task 14gate fix round 3). One debug dump at :76 inside the vendored macOS CoreText BINDING package; the port reaches CoreText through objc2, and no Rust file carries this message. Declared so the gap is counted, not silent.
@@ -104,7 +118,7 @@ src/benchmark/TerminalStream.zig	crates/rustty-bench/src/terminal_stream.rs	2	0	
 src/benchmark/cli.zig	crates/rustty-bench/src/cli.rs	0	0	
 src/build/Config.zig	crates/rustty-build-config/src/build.rs	2	0	N15: this file was OUTSIDE the portmap until 2026-09-10 — the portmap was seeded from the audit's LOG rows and inherited its blind spots, so no row names it. Measured, not adjudicated: deficit 2.
 src/build/GhosttyDist.zig	xtask/src/dist.rs	1	0	N15: this file was OUTSIDE the portmap until 2026-09-10 — the portmap was seeded from the audit's LOG rows and inherited its blind spots, so no row names it. Measured, not adjudicated: deficit 1.
-src/build/combine_archives.zig	xtask/src/archives.rs	2	0	N15: this file was OUTSIDE the portmap until 2026-09-10 — the portmap was seeded from the audit's LOG rows and inherited its blind spots, so no row names it. Measured, not adjudicated: deficit 2.
+src/build/combine_archives.zig	xtask/src/main.rs+xtask/src/archives.rs	2	0	N15: outside the portmap until 2026-09-10. ARM WIDENED 2026-09-11 to match docs/parity-audit/src-build.md:48, which maps this file to `xtask/src/main.rs` AND `xtask/src/archives.rs`; archives.rs's own header says it ports GhosttyLib.zig and LibtoolStep.zig, NOT this file, so the narrow arm named a file that does not claim it. Deficit is 2 either way — nothing under xtask/ emits diagnostics of any shape — so this is an accuracy fix, not a numeric one.
 src/build/wasm_patch_growable_table.zig	xtask/src/wasm_patch_growable_table.rs	1	0	N15: this file was OUTSIDE the portmap until 2026-09-10 — the portmap was seeded from the audit's LOG rows and inherited its blind spots, so no row names it. Measured, not adjudicated: deficit 1.
 src/cli/args.zig	crates/rustty-args/src/args.rs	3	0	N12: rows S67-F2, S67-F9 are still OPEN; restoring these sites is that row's work.
 src/cli/ghostty.zig	crates/rustty-cli/src/rustty.rs	2	0	N12: rows S68-F5 are still OPEN; restoring these sites is that row's work.
@@ -223,5 +237,5 @@ src/termio/shell_integration.zig	crates/rustty-termio/src/shell_integration.rs	3
 src/termio/stream_handler.zig	crates/rustty-termio/src/stream_handler.rs	41	0	N15: this file was OUTSIDE the portmap until 2026-09-10 — the portmap was seeded from the audit's LOG rows and inherited its blind spots, so no row names it. Measured, not adjudicated: deficit 41.
 src/tripwire.zig	crates/rustty-util/src/tripwire.rs	0	0	
 src/unicode/grapheme.zig	crates/rustty-unicode/src/grapheme.rs	2	0	N15: this file was OUTSIDE the portmap until 2026-09-10 — the portmap was seeded from the audit's LOG rows and inherited its blind spots, so no row names it. Measured, not adjudicated: deficit 2.
-src/unicode/props_uucode.zig	crates/rustty-unicode/src/props_uucode.rs	1	0	N15: this file was OUTSIDE the portmap until 2026-09-10 — the portmap was seeded from the audit's LOG rows and inherited its blind spots, so no row names it. Measured, not adjudicated: deficit 1.
-src/unicode/symbols_uucode.zig	crates/rustty-unicode/src/symbols_uucode.rs	1	0	N15: this file was OUTSIDE the portmap until 2026-09-10 — the portmap was seeded from the audit's LOG rows and inherited its blind spots, so no row names it. Measured, not adjudicated: deficit 1.
+src/unicode/props_uucode.zig	crates/rustty-unicode/src/props_uucode.rs	1	0	N15, and MAPPING NOT CORROBORATED — one of only two rows in this file with that status. The arm was resolved by an exact filename-stem match ALONE: the Rust file neither names the reference file nor reproduces its one log message, so the two independent checks that confirmed 107 of the other 109 new rows both FAILED here. The stem match is exact and unambiguous, which is why it was accepted, but a reviewer should confirm the arm before this row's deficit of 1 is acted on.
+src/unicode/symbols_uucode.zig	crates/rustty-unicode/src/symbols_uucode.rs	1	0	N15, and MAPPING NOT CORROBORATED — one of only two rows in this file with that status. The arm was resolved by an exact filename-stem match ALONE: the Rust file neither names the reference file nor reproduces its one log message, so the two independent checks that confirmed 107 of the other 109 new rows both FAILED here. The stem match is exact and unambiguous, which is why it was accepted, but a reviewer should confirm the arm before this row's deficit of 1 is acted on.
