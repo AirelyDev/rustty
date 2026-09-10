@@ -11896,6 +11896,16 @@ mod machinery_tests {
     /// `std.log.Level.err.asText()` is **`"error"`**, not `"err"` — and `logFn`
     /// prefixes with `level_txt`. Two stages on this plan got this rendering
     /// wrong, so it is pinned separately from any call site (task-14e-2).
+    ///
+    /// Asserted through `format_log` rather than by calling `log_err` here on
+    /// purpose: `check_log_reconcile.py` counts every call site of a `log_*`
+    /// sink as an EMISSION, test call sites included, so a direct call in this
+    /// file would credit `src/config/Config.zig`'s arm with a diagnostic the
+    /// port does not actually make and let its ratchet be tightened onto a
+    /// phantom. The helper itself is pinned behaviourally by
+    /// `c_api::log_site_tests::load_file_logs_the_reference_error_under_the_config_scope`,
+    /// which drives a REAL failure through `log_err` and asserts the rendered
+    /// `error(config): ` prefix.
     #[test]
     fn config_log_err_renders_the_error_token() {
         let on = rustty_global::Logging {
@@ -11906,10 +11916,10 @@ mod machinery_tests {
             Some("error(config): boom".to_string()),
             format_log("error", "boom", on)
         );
-
-        log_capture::arm();
-        log_err("boom".to_string());
-        assert_eq!(vec!["error(config): boom".to_string()], log_capture::take());
+        assert_ne!(
+            Some("err(config): boom".to_string()),
+            format_log("error", "boom", on)
+        );
     }
 
     #[test]
