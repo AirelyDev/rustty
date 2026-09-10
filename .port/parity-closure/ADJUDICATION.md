@@ -679,3 +679,51 @@ site and is excluded — the counts below say so where it matters.
 no row named it. Its line: **2 live sites : 2 emissions after.** With it, every
 file under `src/font` that contains a live reference `log.*` call has now been
 enumerated and reconciled against the port.
+
+## task 14d-1 — `rustty-core`'s dropped diagnostics
+
+### S41-F1 — WAIVED (not CLOSED): two sites in range have no failure arm
+- Every other site inside the row's cited span (`Surface.zig:2193-4345`) is live:
+  28 live reference `log.*` calls in that span, 26 of them now emitting.
+- The two that do not, and cannot:
+  - `Surface.zig:3074` — `ev.binding = self.alloc.dupe(input.Binding.Action,
+    actions) catch |err| binding: { log.warn("error allocating binding action for
+    inspector err={}", .{err}); break :binding &.{}; };`
+  - `Surface.zig:3258` — `const copy = self.alloc.alloc(u8, slice.len) catch |err|
+    { log.warn("error allocating pty data for inspector err={}", .{err}); break
+    :pty; };`
+- Both are OOM-only `catch` arms over an allocation. The port's counterparts are
+  `actions.to_vec()` and `slice.to_vec()`: Rust's global allocator ABORTS on
+  allocation failure rather than returning an error, so there is no `Result`, no
+  branch, and nothing to log from. This is the workspace-wide allocator doctrine,
+  not an oversight in this file, and it predates this stage — the PORT NOTE at
+  each site already says so ("the OOM-only catch collapses — infallible global
+  allocator; the `&.{}` fallback arm is unreachable").
+- Emitting anything at either site would put a diagnostic on a path that only
+  ever succeeds — the bug class this plan exists to catch — so the sites stay as
+  they are and the ROW is `WAIVED` rather than `CLOSED`, per the stage brief's
+  rule ("Before restoring, confirm a real failure arm exists. If not: WAIVED").
+- `owner` records the two file:line pairs. The row's 26 restorable sites ARE
+  restored; the waiver is about the two that are not defects.
+
+### S41-F1 — three cited anchors contain no `log.*` call at all
+- `Surface.zig:2854`, `:3671` and `:3989` are cited by the row and, at pin
+  `20abdb50a`, hold `fn maybeHandleBinding(`'s signature, `fn isMouseReporting`'s
+  body, and a `break :click;` respectively. There is no `log.` within 40 lines of
+  any of them.
+- The row cites 30 anchors for 28 real sites in its span. Recorded because a
+  reader reconciling anchor-count against site-count will otherwise conclude two
+  sites were missed.
+
+### Sites restored that NO row claims
+- Both `Surface.zig` rows start at `:2193` (S41-F1) and `:4424` (S42-F2). The
+  file's first 2192 lines contain **37 live reference `log.*` calls** — the whole
+  of `init`, `deinit`, `handleMessage`, `updateConfig`, the clipboard writers and
+  the renderer-health/scrollbar notifiers. No row claims any of them. All 37 are
+  restored, under PROCEDURE.md blind spot 3 ("a site you find that no row claims
+  still gets restored").
+- One of those unclaimed sites is NOT restored, for the same infallible-arm
+  reason as the two above: `Surface.zig:767` (`error copying command for title,
+  title will not be set err={}`), whose `Command::string()` is infallible in the
+  port. It belongs to no row, so it changes no row's state; recorded here so it
+  is not mistaken for an oversight.

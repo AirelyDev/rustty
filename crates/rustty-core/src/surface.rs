@@ -250,8 +250,17 @@ use rustty_vt::terminal::Terminal;
 
 // const log = std.log.scoped(.surface);
 // PORT NOTE: the reference `log.debug/info/warn/err` sites are preserved
-// verbatim as comments at each site (termio/app.rs precedent — no Rust
-// logging shim).
+// verbatim as comments at each site, with the LIVE emission added directly
+// beneath each one (task 14d-1, `.port/parity-closure/DECISION-logging.md` §6
+// call shape 2 — `rustty-core` is below `rustty-vt-c` in R4's layering, so
+// restored sites go through the `log` facade and reach whichever backend the
+// running binary installed). `LOG_SCOPE` is the `@tagName` of the reference's
+// `std.log.scoped(.surface)`.
+//
+// Six sites in this file stay COMMENT-ONLY because they are commented out in
+// the ORACLE too (`Surface.zig:2540, 2666, 3460, 3548, 3798, 4539` — the
+// preedit/key/scroll/mouse/cursor-pos traces); each carries a note saying so.
+const LOG_SCOPE: &str = "surface";
 
 // The renderer implementation to use.
 // const Renderer = rendererpkg.Renderer;
@@ -542,8 +551,12 @@ impl Search {
         // the child still holds its `&mut Thread` here (stop-then-join), so a
         // `self.state.stop` reborrow of `state` would be SB UB. `self.stop`
         // touches only the loop's `Arc<Shared>` (outside `state`).
-        if let Err(_err) = self.stop.notify() {
+        if let Err(err) = self.stop.notify() {
             // log.err("error notifying search thread to stop, may stall err={}", .{err});
+            log::error!(
+                target: LOG_SCOPE,
+                "error notifying search thread to stop, may stall err={err:?}"
+            );
         }
 
         // Wait for the OS thread to quit
@@ -1647,7 +1660,15 @@ impl<A: apprt::App + 'static> Drop for InspEvGuard<A> {
                     // field-level notify needs no such bound. `catch {}` -> `let _`.)
                     let _ = unsafe { &(*self.surface).renderer_thread.wakeup }.notify();
                 }
-                Err(_err) => {}
+                // } else |err| {
+                //     log.warn("error adding key event to inspector err={}", .{err});
+                // }
+                Err(err) => {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error adding key event to inspector err={err:?}"
+                    );
+                }
             }
         }
     }
@@ -1715,8 +1736,12 @@ where
             .change_conditional_state(unsafe { (*app).config_conditional_state })
         {
             Ok(v) => v,
-            Err(_err) => {
+            Err(err) => {
                 // log.warn("failed to apply conditional state to config err={}", .{err});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "failed to apply conditional state to config err={err:?}"
+                );
                 None
             }
         };
@@ -1786,6 +1811,12 @@ where
         //     x_dpi,
         //     y_dpi,
         // });
+        log::debug!(
+            target: LOG_SCOPE,
+            "xscale={} yscale={} xdpi={x_dpi} ydpi={y_dpi}",
+            content_scale.x,
+            content_scale.y
+        );
 
         // The font size we desire along with the DPI determined for the surface
         // const font_size: font.face.DesiredSize = .{
@@ -2149,9 +2180,10 @@ where
             // (`std.process.EnvMap.init`) collapses.
             let mut env = match unsafe { &*rt_surface }.default_termio_env() {
                 Ok(env) => env,
-                Err(_err) => {
+                Err(err) => {
                     // If an error occurs, we don't want to block surface startup.
                     // log.warn("error getting env map for surface err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error getting env map for surface err={err:?}");
                     // PORT NOTE (P3-W7 T4): `internal_os.getEnvMap(alloc)` ->
                     // `global.environMap()` (`src/os/env.zig` was DELETED by
                     // `e8525c0fd`). This is the site area E §3.1 identified as
@@ -2462,10 +2494,11 @@ where
         // This allows the apprt to fully initialize the surface before we
         // start messing with the window.
         // self.recomputeInitialSize() catch |err| { ... };
-        if let Err(_err) = unsafe { (*self_).recomputeInitialSize() } {
+        if let Err(err) = unsafe { (*self_).recomputeInitialSize() } {
             // We don't treat this as a fatal error because not setting
             // an initial size shouldn't stop our terminal from working.
             // log.warn("unable to set initial window size: {}", .{err});
+            log::warn!(target: LOG_SCOPE, "unable to set initial window size: {err:?}");
         }
 
         // if (config.title) |title| {
@@ -2701,8 +2734,12 @@ where
         {
             // self.renderer_thread.stop.notify() catch |err|
             //     log.err("error notifying renderer thread to stop, may stall err={}", .{err});
-            if let Err(_err) = self.renderer_thread.stop.notify() {
+            if let Err(err) = self.renderer_thread.stop.notify() {
                 // log.err("error notifying renderer thread to stop, may stall err={}", .{err});
+                log::error!(
+                    target: LOG_SCOPE,
+                    "error notifying renderer thread to stop, may stall err={err:?}"
+                );
             }
             // self.renderer_thr.join();
             //
@@ -2724,8 +2761,12 @@ where
         {
             // self.io_thread.stop.notify() catch |err|
             //     log.err("error notifying io thread to stop, may stall err={}", .{err});
-            if let Err(_err) = self.io_thread.stop.notify() {
+            if let Err(err) = self.io_thread.stop.notify() {
                 // log.err("error notifying io thread to stop, may stall err={}", .{err});
+                log::error!(
+                    target: LOG_SCOPE,
+                    "error notifying io thread to stop, may stall err={err:?}"
+                );
             }
             // self.io_thr.join();
             self.io_thr
@@ -2804,7 +2845,12 @@ where
         config.deinit();
         drop(config);
 
-        // log.info("surface closed addr={x}", .{@intFromPtr(self)});
+        // log.info("surface closed id={x}", .{self.id});
+        //
+        // CORRECTED (task 14d-1): the comment carried `addr={x}` /
+        // `@intFromPtr(self)`; at pin 20abdb50a `Surface.zig:847` reads
+        // `id={x}` / `self.id`. The reference wins.
+        log::info!(target: LOG_SCOPE, "surface closed id={:x}", self.id);
     }
 
     /// Close this surface. This will trigger the runtime to start the
@@ -3167,6 +3213,10 @@ where
                 // if (self.config.title != null) {
                 if self.config.title.is_some() {
                     // log.debug("ignoring title change request since static title is set via config", .{});
+                    log::debug!(
+                        target: LOG_SCOPE,
+                        "ignoring title change request since static title is set via config"
+                    );
                     return Ok(());
                 }
 
@@ -3175,6 +3225,11 @@ where
                 // const slice = std.mem.sliceTo(@as([*:0]const u8, @ptrCast(v)), 0);
                 let slice = &v[..v.iter().position(|&b| b == 0).unwrap_or(v.len())];
                 // log.debug("changing title \"{s}\"", .{slice});
+                log::debug!(
+                    target: LOG_SCOPE,
+                    "changing title \"{}\"",
+                    String::from_utf8_lossy(slice)
+                );
                 // _ = try self.rt_app.performAction(
                 //     .{ .surface = self },
                 //     .set_title,
@@ -3191,6 +3246,10 @@ where
                 // if (!self.config.title_report) {
                 if !self.config.title_report {
                     // log.info("report_title requested, but disabled via config", .{});
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "report_title requested, but disabled via config"
+                    );
                     break 'report_title;
                 }
 
@@ -3287,6 +3346,7 @@ where
             // .set_mouse_shape => |shape| {
             Message::SetMouseShape(shape) => {
                 // log.debug("changing mouse shape: {}", .{shape});
+                log::debug!(target: LOG_SCOPE, "changing mouse shape: {shape:?}");
                 // _ = try self.rt_app.performAction(
                 //     .{ .surface = self },
                 //     .mouse_shape,
@@ -3315,6 +3375,10 @@ where
                 // if (self.config.clipboard_read == .deny) {
                 if self.config.clipboard_read == configpkg::value_types::ClipboardAccess::Deny {
                     // log.info("application attempted to read clipboard, but 'clipboard-read' is set to deny", .{});
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "application attempted to read clipboard, but 'clipboard-read' is set to deny"
+                    );
                     return Ok(());
                 }
 
@@ -3401,6 +3465,10 @@ where
                 // if (!self.config.desktop_notifications) {
                 if !self.config.desktop_notifications {
                     // log.info("application attempted to display a desktop notification, but 'desktop-notifications' is disabled", .{});
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "application attempted to display a desktop notification, but 'desktop-notifications' is disabled"
+                    );
                     return Ok(());
                 }
 
@@ -3459,10 +3527,11 @@ where
                 // ) catch |err| {
                 //     log.warn("apprt failed to ring bell={}", .{err});
                 // };
-                if let Err(_err) = unsafe { &*self.rt_app }
+                if let Err(err) = unsafe { &*self.rt_app }
                     .perform_action(apprt::Target::Surface(&*self), apprt::Action::RingBell)
                 {
                     // log.warn("apprt failed to ring bell={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "apprt failed to ring bell={err:?}");
                 }
             }
 
@@ -3475,11 +3544,12 @@ where
                 // ) catch |err| {
                 //     log.warn("apprt failed to report progress err={}", .{err});
                 // };
-                if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+                if let Err(err) = unsafe { &*self.rt_app }.perform_action(
                     apprt::Target::Surface(&*self),
                     apprt::Action::ProgressReport(v),
                 ) {
                     // log.warn("apprt failed to report progress err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "apprt failed to report progress err={err:?}");
                 }
             }
 
@@ -3516,6 +3586,18 @@ where
                     duration: end.duration_since(start).as_nanos() as u64,
                 };
                 // log.debug("command took {f}", .{duration});
+                //
+                // (`{f}` calls the type's own `format`; `Duration::format` is
+                // the faithful port of it, so this is byte-identical.)
+                {
+                    let mut duration_buf: Vec<u8> = Vec::new();
+                    duration.format(&mut duration_buf);
+                    log::debug!(
+                        target: LOG_SCOPE,
+                        "command took {}",
+                        String::from_utf8_lossy(&duration_buf)
+                    );
+                }
 
                 // _ = self.rt_app.performAction(
                 //     .{ .surface = self },
@@ -3527,7 +3609,7 @@ where
                 // ) catch |err| {
                 //     log.warn("apprt failed to notify command finish={}", .{err});
                 // };
-                if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+                if let Err(err) = unsafe { &*self.rt_app }.perform_action(
                     apprt::Target::Surface(&*self),
                     apprt::Action::CommandFinished(CommandFinished {
                         exit_code: v,
@@ -3535,6 +3617,7 @@ where
                     }),
                 ) {
                     // log.warn("apprt failed to notify command finish={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "apprt failed to notify command finish={err:?}");
                 }
             }
 
@@ -3714,6 +3797,10 @@ where
                 }
 
                 // log.warn("abnormal process exit detected, showing error message", .{});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "abnormal process exit detected, showing error message"
+                );
 
                 // Try and show a GUI message. If it returns true, don't do anything else.
                 // if (self.rt_app.performAction(
@@ -3729,8 +3816,12 @@ where
                     apprt::Action::ShowChildExited(info),
                 ) {
                     Ok(shown) => shown,
-                    Err(_err) => {
+                    Err(err) => {
                         // log.err("error trying to show native child exited GUI err={}", .{err});
+                        log::error!(
+                            target: LOG_SCOPE,
+                            "error trying to show native child exited GUI err={err:?}"
+                        );
                         // break :gui false;
                         false
                     }
@@ -3744,8 +3835,9 @@ where
                 //     log.err("error handling abnormal child exit err={}", .{err});
                 //     return;
                 // };
-                if let Err(_err) = self.childExitedAbnormally(info) {
+                if let Err(err) = self.childExitedAbnormally(info) {
                     // log.err("error handling abnormal child exit err={}", .{err});
+                    log::error!(target: LOG_SCOPE, "error handling abnormal child exit err={err:?}");
                     return;
                 }
 
@@ -3775,8 +3867,12 @@ where
                 apprt::Action::ShowChildExited(info),
             ) {
                 Ok(shown) => shown,
-                Err(_err) => {
+                Err(err) => {
                     // log.err("error trying to show native child exited GUI err={}", .{err});
+                    log::error!(
+                        target: LOG_SCOPE,
+                        "error trying to show native child exited GUI err={err:?}"
+                    );
                     // break :gui false;
                     false
                 }
@@ -4063,7 +4159,7 @@ where
         //     // the secure input state.
         //     log.warn("apprt failed to set secure input state err={}", .{err});
         // };
-        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+        if let Err(err) = unsafe { &*self.rt_app }.perform_action(
             apprt::Target::Surface(&*self),
             apprt::Action::SecureInput(if v { SecureInput::On } else { SecureInput::Off }),
         ) {
@@ -4071,6 +4167,7 @@ where
             // entire operation just because the apprt failed to set
             // the secure input state.
             // log.warn("apprt failed to set secure input state err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "apprt failed to set secure input state err={err:?}");
         }
 
         // try self.queueRender();
@@ -4100,8 +4197,13 @@ where
         // PORT NOTE (§3.3a): pass the RAW `self_` (NOT `&mut *self_`) — a whole
         // `&mut Surface` reborrow here, on the search thread, races the main
         // thread's `&mut self` = SB UB (mirihar `callback_naive`).
-        if let Err(_err) = unsafe { Self::searchCallback_(self_, event) } {
+        if let Err(err) = unsafe { Self::searchCallback_(self_, event) } {
             // log.warn("error in search callback err={}", .{err});
+            //
+            // NOTE (task 14d-1): this emission fires on the SEARCH THREAD, so
+            // `log_capture::start`'s thread-isolated capture cannot observe it;
+            // a test for it needs `log_capture::start_admitting_all_threads`.
+            log::warn!(target: LOG_SCOPE, "error in search callback err={err:?}");
         }
     }
 
@@ -4334,9 +4436,13 @@ where
             //     // Not a big deal if this fails.
             //     log.warn("failed to notify renderer of mods change err={}", .{err});
             // };
-            if let Err(_err) = self.queueRender() {
+            if let Err(err) = self.queueRender() {
                 // Not a big deal if this fails.
                 // log.warn("failed to notify renderer of mods change err={}", .{err});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "failed to notify renderer of mods change err={err:?}"
+                );
             }
         }
     }
@@ -4424,6 +4530,10 @@ where
                     // if (!click_pt.coord().eql(pos_vp)) {
                     if !click_pt.coord().eql(pos_vp) {
                         // log.debug("mouse moved while left click held, ignoring link hover", .{});
+                        log::debug!(
+                            target: LOG_SCOPE,
+                            "mouse moved while left click held, ignoring link hover"
+                        );
                         // break :link .{ null, false };
                         break 'link (None, false);
                     }
@@ -4473,6 +4583,7 @@ where
                         Some(v) => v,
                         None => {
                             // log.warn("failed to get URI for OSC8 hyperlink", .{});
+                            log::warn!(target: LOG_SCOPE, "failed to get URI for OSC8 hyperlink");
                             break 'link (None, false);
                         }
                     };
@@ -4569,6 +4680,7 @@ where
     // fn updateRendererHealth(self: *Surface, health: rendererpkg.Health) void {
     fn updateRendererHealth(&mut self, health: rendererpkg::Health) {
         // log.warn("renderer health status change status={}", .{health});
+        log::warn!(target: LOG_SCOPE, "renderer health status change status={health:?}");
         // _ = self.rt_app.performAction(
         //     .{ .surface = self },
         //     .renderer_health,
@@ -4576,11 +4688,15 @@ where
         // ) catch |err| {
         //     log.warn("failed to notify app of renderer health change err={}", .{err});
         // };
-        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+        if let Err(err) = unsafe { &*self.rt_app }.perform_action(
             apprt::Target::Surface(&*self),
             apprt::Action::RendererHealth(health),
         ) {
             // log.warn("failed to notify app of renderer health change err={}", .{err});
+            log::warn!(
+                target: LOG_SCOPE,
+                "failed to notify app of renderer health change err={err:?}"
+            );
         }
     }
 
@@ -4594,11 +4710,12 @@ where
         // ) catch |err| {
         //     log.warn("failed to notify app of scrollbar change err={}", .{err});
         // };
-        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+        if let Err(err) = unsafe { &*self.rt_app }.perform_action(
             apprt::Target::Surface(&*self),
             apprt::Action::Scrollbar(scrollbar),
         ) {
             // log.warn("failed to notify app of scrollbar change err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "failed to notify app of scrollbar change err={err:?}");
         }
     }
 
@@ -4615,11 +4732,15 @@ where
         // ) catch |err| {
         //     log.warn("failed to notify app of config state change err={}", .{err});
         // };
-        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+        if let Err(err) = unsafe { &*self.rt_app }.perform_action(
             apprt::Target::Surface(&*self),
             apprt::Action::ReloadConfig(ReloadConfig { soft: true }),
         ) {
             // log.warn("failed to notify app of config state change err={}", .{err});
+            log::warn!(
+                target: LOG_SCOPE,
+                "failed to notify app of config state change err={err:?}"
+            );
         }
     }
 
@@ -4646,8 +4767,12 @@ where
         let mut config_: Option<configpkg::Config> =
             match original.change_conditional_state(self.config_conditional_state) {
                 Ok(v) => v,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("failed to apply conditional state to config err={}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to apply conditional state to config err={err:?}"
+                    );
                     None
                 }
             };
@@ -4675,11 +4800,12 @@ where
         // };
         let derived = match DerivedConfig::init(self.alloc, config) {
             Ok(v) => v,
-            Err(_err) => {
+            Err(err) => {
                 // If the derivation fails then we just log and return. We don't
                 // hard fail in this case because we don't want to error the surface
                 // when config fails we just want to keep using the old config.
                 // log.err("error updating configuration err={}", .{err});
+                log::error!(target: LOG_SCOPE, "error updating configuration err={err:?}");
                 return Ok(());
             }
         };
@@ -4709,8 +4835,9 @@ where
         // _ = self.deactivateAllKeyTables() catch |err| {
         //     log.warn("failed to deactivate key tables err={}", .{err});
         // };
-        if let Err(_err) = self.deactivateAllKeyTables() {
+        if let Err(err) = self.deactivateAllKeyTables() {
             // log.warn("failed to deactivate key tables err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "failed to deactivate key tables err={err:?}");
         }
 
         // Before sending any other config changes, we give the renderer a new font
@@ -4724,6 +4851,10 @@ where
             // if (self.font_size_adjusted) {
             if self.font_size_adjusted {
                 // log.info("font size manually adjusted, preserving previous size on config reload", .{});
+                log::info!(
+                    target: LOG_SCOPE,
+                    "font size manually adjusted, preserving previous size on config reload"
+                );
                 // break :font_size self.font_size;
                 break 'font_size self.font_size;
             }
@@ -4779,8 +4910,9 @@ where
         // self.queueRender() catch |err| {
         //     log.warn("failed to notify renderer of config change err={}", .{err});
         // };
-        if let Err(_err) = self.queueRender() {
+        if let Err(err) = self.queueRender() {
             // log.warn("failed to notify renderer of config change err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "failed to notify renderer of config change err={err:?}");
         }
 
         // If we have a title set then we update our window to have the
@@ -4976,6 +5108,7 @@ where
                     // I don't think this is possible but I don't want to crash on
                     // that assertion so let's just break out...
                     // log.warn("viewport bottom-right pin not found, bug?", .{});
+                    log::warn!(target: LOG_SCOPE, "viewport bottom-right pin not found, bug?");
                     break 'viewport None;
                 }
             };
@@ -5396,6 +5529,10 @@ where
         // if (self.config.clipboard_write == .deny) {
         if self.config.clipboard_write == configpkg::value_types::ClipboardAccess::Deny {
             // log.info("application attempted to write clipboard, but 'clipboard-write' is set to deny", .{});
+            log::info!(
+                target: LOG_SCOPE,
+                "application attempted to write clipboard, but 'clipboard-write' is set to deny"
+            );
             return Ok(());
         }
 
@@ -5424,6 +5561,7 @@ where
             Ok(decoded) => decoded.len(),
             Err(_) => {
                 // log.info("application sent invalid base64 data for OSC 52", .{});
+                log::info!(target: LOG_SCOPE, "application sent invalid base64 data for OSC 52");
                 return Ok(());
             }
         };
@@ -5442,7 +5580,7 @@ where
         //     log.err("error setting clipboard string err={}", .{err});
         //     return;
         // };
-        if let Err(_err) = unsafe { &*self.rt_surface }.set_clipboard(
+        if let Err(err) = unsafe { &*self.rt_surface }.set_clipboard(
             loc,
             &[apprt::ClipboardContent {
                 mime: b"text/plain".as_slice(),
@@ -5451,6 +5589,7 @@ where
             confirm,
         ) {
             // log.err("error setting clipboard string err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error setting clipboard string err={err:?}");
             return Ok(());
         }
 
@@ -5678,13 +5817,17 @@ where
         //     false,
         // ) catch |err| {
         for clipboard in clipboards {
-            if let Err(_err) =
+            if let Err(err) =
                 unsafe { &*self.rt_surface }.set_clipboard(*clipboard, &contents_items, false)
             {
                 // log.err(
                 //     "error setting clipboard string clipboard={} err={}",
                 //     .{ clipboard, err },
                 // );
+                log::error!(
+                    target: LOG_SCOPE,
+                    "error setting clipboard string clipboard={clipboard:?} err={err:?}"
+                );
             }
         }
 
@@ -5733,11 +5876,15 @@ where
             // ) catch |err| {
             //     log.warn("apprt failed selection_changed notification err={}", .{err});
             // };
-            if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+            if let Err(err) = unsafe { &*self.rt_app }.perform_action(
                 apprt::Target::Surface(&*self),
                 apprt::Action::SelectionChanged,
             ) {
                 // log.warn("apprt failed selection_changed notification err={}", .{err});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "apprt failed selection_changed notification err={err:?}"
+                );
             }
         }
 
@@ -5824,10 +5971,11 @@ where
         //     // an initial size shouldn't stop our terminal from working.
         //     log.warn("unable to recompute initial window size: {}", .{err});
         // };
-        if let Err(_err) = self.recomputeInitialSize() {
+        if let Err(err) = self.recomputeInitialSize() {
             // We don't treat this as a fatal error because not setting
             // an initial size shouldn't stop our terminal from working.
             // log.warn("unable to recompute initial window size: {}", .{err});
+            log::warn!(target: LOG_SCOPE, "unable to recompute initial window size: {err:?}");
         }
 
         // Notify the window
@@ -5853,6 +6001,7 @@ where
     // pub fn setFontSize(self: *Surface, size: font.face.DesiredSize) !void {
     pub fn setFontSize(&mut self, size: DesiredSize) -> Result<(), Error> {
         // log.debug("set font size size={}", .{size.points});
+        log::debug!(target: LOG_SCOPE, "set font size size={}", size.points);
 
         // Update our font size so future changes work
         // self.font_size = size;
@@ -5995,11 +6144,19 @@ where
         if grid_size.columns < 5 && (self.size.padding.left > 0 || self.size.padding.right > 0) {
             // log.warn("WARNING: very small terminal grid detected with padding " ++
             //     "set. Is your padding reasonable?", .{});
+            log::warn!(
+                target: LOG_SCOPE,
+                "WARNING: very small terminal grid detected with padding set. Is your padding reasonable?"
+            );
         }
         // if (grid_size.rows < 2 and (self.size.padding.top > 0 or self.size.padding.bottom > 0)) {
         if grid_size.rows < 2 && (self.size.padding.top > 0 || self.size.padding.bottom > 0) {
             // log.warn("WARNING: very small terminal grid detected with padding " ++
             //     "set. Is your padding reasonable?", .{});
+            log::warn!(
+                target: LOG_SCOPE,
+                "WARNING: very small terminal grid detected with padding set. Is your padding reasonable?"
+            );
         }
 
         // Mail the IO thread
@@ -6053,6 +6210,7 @@ where
     // pub fn preeditCallback(self: *Surface, preedit_: ?[]const u8) !void {
     pub fn preeditCallback(&mut self, preedit_: Option<&[u8]>) -> Result<(), Error> {
         // log.debug("text preeditCallback value={any}", .{preedit_});
+        // (COMMENT-ONLY BY DESIGN: commented out in the ORACLE too, Surface.zig:2540.)
 
         // Crash metadata in case we crash in here
         // crash.sentry.thread_state = self.crashThreadState();
@@ -6287,6 +6445,7 @@ where
     // (the inferred `!InputEffect` is the [`Error`] union.)
     pub fn keyCallback(&mut self, event_orig: KeyEvent) -> Result<InputEffect, Error> {
         // log.warn("text keyCallback event={}", .{event_orig});
+        // (COMMENT-ONLY BY DESIGN: commented out in the ORACLE too, Surface.zig:2666.)
 
         // Apply key remappings to transform modifiers before any processing.
         // This allows users to remap modifier keys at the app level.
@@ -6430,8 +6589,9 @@ where
                     // (Zig widens the f32 cursor coordinates to the f64
                     // params — the selectionScrollTick precedent.)
                     let pos_vp = self.posToViewport(f64::from(pos.x), f64::from(pos.y));
-                    if let Err(_err) = self.mouseRefreshLinks(pos, pos_vp, self.mouse.over_link) {
+                    if let Err(err) = self.mouseRefreshLinks(pos, pos_vp, self.mouse.over_link) {
                         // log.warn("failed to refresh links err={}", .{err});
+                        log::warn!(target: LOG_SCOPE, "failed to refresh links err={err:?}");
                         // (the deferred mutex unlock — the catch break)
                         unsafe { (*self.renderer_state.mutex).unlock() };
                         break 'mouse_mods;
@@ -6787,11 +6947,12 @@ where
                 //     );
                 // };
                 let trigger = *unsafe { &*entry.0 }.key_at(entry.1);
-                if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+                if let Err(err) = unsafe { &*self.rt_app }.perform_action(
                     apprt::Target::Surface(&*self),
                     apprt::Action::KeySequence(KeySequence::Trigger(trigger)),
                 ) {
                     // log.warn("failed to notify app of key sequence err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "failed to notify app of key sequence err={err:?}");
                 }
 
                 // return .consumed;
@@ -6842,6 +7003,12 @@ where
         //     leaf.flags,
         //     actions,
         // });
+        log::debug!(
+            target: LOG_SCOPE,
+            "key event binding flags={:?} action={:?}",
+            leaf.flags,
+            actions
+        );
         // const performed = performed: {
         let performed = 'performed: {
             // If this is a global or all action, then we perform it on
@@ -6878,8 +7045,13 @@ where
                 // performAllChainedAction clone precedent.)
                 match self.performBindingAction(action.clone()) {
                     Ok(v) => performed = performed || v,
-                    Err(_err) => {
+                    Err(err) => {
                         // log.info("key binding action failed action={t} err={}", .{ action, err });
+                        log::info!(
+                            target: LOG_SCOPE,
+                            "key binding action failed action={} err={err:?}",
+                            action.tag_name()
+                        );
                     }
                 }
             }
@@ -6897,6 +7069,10 @@ where
             for action in actions {
                 if closingAction(action) {
                     // log.debug("key binding is a closing binding, halting key event processing", .{});
+                    log::debug!(
+                        target: LOG_SCOPE,
+                        "key binding is a closing binding, halting key event processing"
+                    );
                     // return .closed;
                     return Ok(Some(InputEffect::Closed));
                 }
@@ -7008,11 +7184,12 @@ where
         //         .{err},
         //     );
         // };
-        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+        if let Err(err) = unsafe { &*self.rt_app }.perform_action(
             apprt::Target::Surface(&*self),
             apprt::Action::KeyTable(KeyTable::DeactivateAll),
         ) {
             // log.warn("failed to notify app of key table err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "failed to notify app of key table err={err:?}");
         }
 
         // return true;
@@ -7101,11 +7278,12 @@ where
         //         .{err},
         //     );
         // };
-        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+        if let Err(err) = unsafe { &*self.rt_app }.perform_action(
             apprt::Target::Surface(&*self),
             apprt::Action::KeySequence(KeySequence::End),
         ) {
             // log.warn("failed to notify app of key sequence end err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "failed to notify app of key sequence end err={err:?}");
         }
 
         // No matter what we clear our current sequence set. This restores
@@ -7538,9 +7716,21 @@ where
                     // the comparison is safety-gated; the caught error
                     // collapses to the `.ignored` fallback, the log is the
                     // comment above.)
-                    let effect = self
-                        .keyCallback(pressed_key.clone())
-                        .unwrap_or(InputEffect::Ignored);
+                    // CORRECTED (task 14d-1): `unwrap_or` DISCARDED the error
+                    // the reference logs. The `catch |err| err: { log.warn(...);
+                    // break :err .ignored; }` block is restored whole — the
+                    // fallback AND its diagnostic.
+                    let effect = match self.keyCallback(pressed_key.clone()) {
+                        Ok(v) => v,
+                        Err(err) => {
+                            // log.warn("error releasing key on focus loss err={}", .{err});
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "error releasing key on focus loss err={err:?}"
+                            );
+                            InputEffect::Ignored
+                        }
+                    };
                     debug_assert!(effect != InputEffect::Closed);
                 }
 
@@ -7593,9 +7783,19 @@ where
                             for side in [Key::$right, Key::$left] {
                                 pressed_key.key = side;
                                 if pressed_key.key != original_key {
-                                    let effect = self
-                                        .keyCallback(pressed_key.clone())
-                                        .unwrap_or(InputEffect::Ignored);
+                                    // (same restored catch block as the
+                                    // release-the-full-key site above.)
+                                    let effect = match self.keyCallback(pressed_key.clone()) {
+                                        Ok(v) => v,
+                                        Err(err) => {
+                                            // log.warn("error releasing key on focus loss err={}", .{err});
+                                            log::warn!(
+                                                target: LOG_SCOPE,
+                                                "error releasing key on focus loss err={err:?}"
+                                            );
+                                            InputEffect::Ignored
+                                        }
+                                    };
                                     debug_assert!(effect != InputEffect::Closed);
                                 }
                             }
@@ -7676,6 +7876,7 @@ where
         scroll_mods: input_mouse::ScrollMods,
     ) -> Result<(), Error> {
         // log.info("SCROLL: xoff={} yoff={} mods={}", .{ xoff, yoff, scroll_mods });
+        // (COMMENT-ONLY BY DESIGN: commented out in the ORACLE too, Surface.zig:3460.)
 
         // Crash metadata in case we crash in here
         // crash.sentry.thread_state = self.crashThreadState();
@@ -7828,6 +8029,7 @@ where
         };
 
         // log.info("SCROLL: delta_y={} delta_x={}", .{ y.delta, x.delta });
+        // (COMMENT-ONLY BY DESIGN: commented out in the ORACLE too, Surface.zig:3548.)
 
         {
             // self.renderer_state.mutex.lock();
@@ -8203,6 +8405,7 @@ where
             // does, let's log it and return. No need to crash upstreams.
             // In the future we may want to fall back to allocation.
             // log.warn("failed to encode mouse event err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "failed to encode mouse event err={_err:?}");
             return;
         }
         // const written = writer.buffered();
@@ -8336,6 +8539,7 @@ where
         let _thread_state = ThreadStateGuard;
 
         // log.debug("mouse action={} button={} mods={}", .{ action, button, mods });
+        // (COMMENT-ONLY BY DESIGN: commented out in the ORACLE too, Surface.zig:3798.)
 
         // If we have an inspector, we always queue a render
         // if (self.inspector != null) {
@@ -8465,8 +8669,12 @@ where
             let release_pos: Option<apprt::CursorPos> =
                 match unsafe { &*self.rt_surface }.get_cursor_pos() {
                     Ok(v) => Some(v),
-                    Err(_err) => {
+                    Err(err) => {
                         // log.warn("error reading cursor position for mouse release err={}", .{err});
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "error reading cursor position for mouse release err={err:?}"
+                        );
                         None
                     }
                 };
@@ -8578,8 +8786,9 @@ where
                             return Ok(true);
                         }
                     }
-                    Err(_err) => {
+                    Err(err) => {
                         // log.warn("error processing links err={}", .{err});
+                        log::warn!(target: LOG_SCOPE, "error processing links err={err:?}");
                     }
                 }
             }
@@ -8600,8 +8809,9 @@ where
                         return Ok(true);
                     }
                 }
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("error processing prompt click err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error processing prompt click err={err:?}");
                 }
             }
 
@@ -9301,6 +9511,7 @@ where
                     // This shouldn't be possible because we asserted we're at
                     // a prompt above, so we MUST find some prompt in a left_up search.
                     // log.warn("cursor is at prompt but no prompt found", .{});
+                    log::warn!(target: LOG_SCOPE, "cursor is at prompt but no prompt found");
                     // if (comptime std.debug.runtime_safety) unreachable;
                     if cfg!(debug_assertions) {
                         unreachable!();
@@ -9374,10 +9585,12 @@ where
                 //     "sending click_events={} event=ESC{s}",
                 //     .{ key, resp[1..] },
                 // );
-                //
-                // (`key` feeds only the log line above — the alloc_gpa
-                // consume precedent.)
-                let _ = key;
+                log::debug!(
+                    target: LOG_SCOPE,
+                    "sending click_events={} event=ESC{}",
+                    key,
+                    String::from_utf8_lossy(&data[1..resp_len])
+                );
 
                 // Ask our IO thread to write the data
                 // self.queueIo(.{ .write_small = .{
@@ -9476,6 +9689,7 @@ where
                 Some(v) => v,
                 None => {
                     // log.warn("failed to get pin for clicked point", .{});
+                    log::warn!(target: LOG_SCOPE, "failed to get pin for clicked point");
                     return Ok(None);
                 }
             };
@@ -9749,6 +9963,7 @@ where
                     Some(v) => v,
                     None => {
                         // log.warn("failed to get URI for OSC8 hyperlink", .{});
+                        log::warn!(target: LOG_SCOPE, "failed to get URI for OSC8 hyperlink");
                         return Ok(false);
                     }
                 };
@@ -9789,6 +10004,10 @@ where
         // URL opener. We log a warning because we want well-behaved
         // apprts to handle this themselves.
         // log.warn("apprt did not handle open URL action, falling back to default opener", .{});
+        log::warn!(
+            target: LOG_SCOPE,
+            "apprt did not handle open URL action, falling back to default opener"
+        );
         // try internal_os.open(
         //     self.alloc,
         //     action.kind,
@@ -9991,6 +10210,7 @@ where
         let _thread_state = ThreadStateGuard;
 
         // log.debug("cursor pos x={} y={} mods={?}", .{ pos.x, pos.y, mods });
+        // (COMMENT-ONLY BY DESIGN: commented out in the ORACLE too, Surface.zig:4539.)
 
         // If the position is negative, it is outside our viewport and
         // we need to clear any hover states.
@@ -10499,11 +10719,12 @@ where
         // ) catch |err| {
         //     log.warn("apprt failed to set mouse visibility err={}", .{err});
         // };
-        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+        if let Err(err) = unsafe { &*self.rt_app }.perform_action(
             apprt::Target::Surface(&*self),
             apprt::Action::MouseVisibility(MouseVisibility::Hidden),
         ) {
             // log.warn("apprt failed to set mouse visibility err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "apprt failed to set mouse visibility err={err:?}");
         }
     }
 
@@ -10522,11 +10743,12 @@ where
         // ) catch |err| {
         //     log.warn("apprt failed to set mouse visibility err={}", .{err});
         // };
-        if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+        if let Err(err) = unsafe { &*self.rt_app }.perform_action(
             apprt::Target::Surface(&*self),
             apprt::Action::MouseVisibility(MouseVisibility::Visible),
         ) {
             // log.warn("apprt failed to set mouse visibility err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "apprt failed to set mouse visibility err={err:?}");
         }
     }
 
@@ -10668,8 +10890,9 @@ where
                 // }
                 {
                     unsafe { (*self.renderer_state.mutex).lock() };
-                    if let Err(_err) = self.scrollToBottom() {
+                    if let Err(err) = self.scrollToBottom() {
                         // log.warn("error scrolling to bottom err={}", .{err});
+                        log::warn!(target: LOG_SCOPE, "error scrolling to bottom err={err:?}");
                     }
                     unsafe { (*self.renderer_state.mutex).unlock() };
                 }
@@ -10694,8 +10917,13 @@ where
                 // writes into `buf` and returns the written length.)
                 let text_len = match configpkg::string::parse(&mut buf, data) {
                     Ok(n) => n,
-                    Err(_err) => {
+                    Err(err) => {
                         // log.warn("error parsing text binding text={s} err={}", .{ data, err });
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "error parsing text binding text={} err={err:?}",
+                            String::from_utf8_lossy(data)
+                        );
                         return Ok(true);
                     }
                 };
@@ -10719,8 +10947,9 @@ where
                 // }
                 {
                     unsafe { (*self.renderer_state.mutex).lock() };
-                    if let Err(_err) = self.scrollToBottom() {
+                    if let Err(err) = self.scrollToBottom() {
                         // log.warn("error scrolling to bottom err={}", .{err});
+                        log::warn!(target: LOG_SCOPE, "error scrolling to bottom err={err:?}");
                     }
                     unsafe { (*self.renderer_state.mutex).unlock() };
                 }
@@ -10748,8 +10977,9 @@ where
 
                     // With the lock held, we must scroll to the bottom.
                     // We always scroll to the bottom for these inputs.
-                    if let Err(_err) = self.scrollToBottom() {
+                    if let Err(err) = self.scrollToBottom() {
                         // log.warn("error scrolling to bottom err={}", .{err});
+                        log::warn!(target: LOG_SCOPE, "error scrolling to bottom err={err:?}");
                     }
 
                     let normal = !self
@@ -11121,12 +11351,20 @@ where
                         // }
                         match self.setSelection(None) {
                             Ok(()) => {
-                                if let Err(_err) = self.queueRender() {
+                                if let Err(err) = self.queueRender() {
                                     // log.warn("failed to queue render after clear selection err={}", .{err});
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "failed to queue render after clear selection err={err:?}"
+                                    );
                                 }
                             }
-                            Err(_err) => {
+                            Err(err) => {
                                 // log.warn("failed to clear selection after copy err={}", .{err});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "failed to clear selection after copy err={err:?}"
+                                );
                             }
                         }
                     }
@@ -11187,8 +11425,12 @@ where
                                 );
                             match r {
                                 Ok(v) => v,
-                                Err(_err) => {
+                                Err(err) => {
                                     // log.err("error reading url string err={}", .{err});
+                                    log::error!(
+                                        target: LOG_SCOPE,
+                                        "error reading url string err={err:?}"
+                                    );
                                     unsafe { (*self.renderer_state.mutex).unlock() };
                                     return Ok(false);
                                 }
@@ -11206,6 +11448,10 @@ where
                                 Some(v) => v,
                                 None => {
                                     // log.warn("failed to get URI for OSC8 hyperlink", .{});
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "failed to get URI for OSC8 hyperlink"
+                                    );
                                     unsafe { (*self.renderer_state.mutex).unlock() };
                                     return Ok(false);
                                 }
@@ -11228,7 +11474,7 @@ where
                     //     log.err("error copying url to clipboard err={}", .{err});
                     //     return false;
                     // };
-                    if let Err(_err) = unsafe { &*self.rt_surface }.set_clipboard(
+                    if let Err(err) = unsafe { &*self.rt_surface }.set_clipboard(
                         apprt::Clipboard::Standard,
                         &[apprt::ClipboardContent {
                             mime: b"text/plain".as_slice(),
@@ -11237,6 +11483,7 @@ where
                         false,
                     ) {
                         // log.err("error copying url to clipboard err={}", .{err});
+                        log::error!(target: LOG_SCOPE, "error copying url to clipboard err={err:?}");
                         unsafe { (*self.renderer_state.mutex).unlock() };
                         return Ok(false);
                     }
@@ -11299,6 +11546,7 @@ where
                 let clamped_delta = f32::max(0.0, f32::min(255.0, delta));
 
                 // log.debug("increase font size={}", .{clamped_delta});
+                log::debug!(target: LOG_SCOPE, "increase font size={clamped_delta}");
 
                 // Max point size is somewhat arbitrary.
                 // var size = self.font_size;
@@ -11327,6 +11575,7 @@ where
                 let clamped_delta = f32::max(0.0, f32::min(255.0, delta));
 
                 // log.debug("decrease font size={}", .{clamped_delta});
+                log::debug!(target: LOG_SCOPE, "decrease font size={clamped_delta}");
 
                 // var size = self.font_size;
                 let mut size = self.font_size;
@@ -11343,6 +11592,7 @@ where
             // .reset_font_size => {
             binding::ScopedSurface::ResetFontSize => {
                 // log.debug("reset font size", .{});
+                log::debug!(target: LOG_SCOPE, "reset font size");
 
                 // var size = self.font_size;
                 let mut size = self.font_size;
@@ -11359,6 +11609,7 @@ where
             // .set_font_size => |points| {
             binding::ScopedSurface::SetFontSize(points) => {
                 // log.debug("set font size={d}", .{points});
+                log::debug!(target: LOG_SCOPE, "set font size={points}");
 
                 // var size = self.font_size;
                 let mut size = self.font_size;
@@ -12027,6 +12278,11 @@ where
                 // self.config.mouse_reporting = !self.config.mouse_reporting;
                 self.config.mouse_reporting = !self.config.mouse_reporting;
                 // log.debug("mouse reporting toggled: {}", .{self.config.mouse_reporting});
+                log::debug!(
+                    target: LOG_SCOPE,
+                    "mouse reporting toggled: {}",
+                    self.config.mouse_reporting
+                );
             }
 
             // .toggle_command_palette => return try self.rt_app.performAction(
@@ -12155,6 +12411,11 @@ where
                     Some(s) => s as *const binding::Set,
                     None => {
                         // log.debug("key table not found: {s}", .{name});
+                        log::debug!(
+                            target: LOG_SCOPE,
+                            "key table not found: {}",
+                            String::from_utf8_lossy(name)
+                        );
                         return Ok(false);
                     }
                 };
@@ -12172,6 +12433,11 @@ where
                     // }
                     if std::ptr::eq(active, set) {
                         // log.debug("ignoring duplicate activate table: {s}", .{name});
+                        log::debug!(
+                            target: LOG_SCOPE,
+                            "ignoring duplicate activate table: {}",
+                            String::from_utf8_lossy(name)
+                        );
                         return Ok(false);
                     }
                 }
@@ -12186,6 +12452,11 @@ where
                 // }
                 if self.keyboard.table_stack.len() >= MAX_ACTIVE_KEY_TABLES {
                     // log.info("ignoring activate table, max depth reached: {s}", .{name});
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "ignoring activate table, max depth reached: {}",
+                        String::from_utf8_lossy(name)
+                    );
                     return Ok(false);
                 }
 
@@ -12209,14 +12480,20 @@ where
                 //         .{err},
                 //     );
                 // };
-                if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+                if let Err(err) = unsafe { &*self.rt_app }.perform_action(
                     apprt::Target::Surface(&*self),
                     apprt::Action::KeyTable(KeyTable::Activate(name)),
                 ) {
                     // log.warn("failed to notify app of key table err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "failed to notify app of key table err={err:?}");
                 }
 
                 // log.debug("key table activated: {s}", .{name});
+                log::debug!(
+                    target: LOG_SCOPE,
+                    "key table activated: {}",
+                    String::from_utf8_lossy(name)
+                );
             }
 
             // .deactivate_key_table => {
@@ -12254,11 +12531,12 @@ where
                 //         .{err},
                 //     );
                 // };
-                if let Err(_err) = unsafe { &*self.rt_app }.perform_action(
+                if let Err(err) = unsafe { &*self.rt_app }.perform_action(
                     apprt::Target::Surface(&*self),
                     apprt::Action::KeyTable(KeyTable::Deactivate),
                 ) {
                     // log.warn("failed to notify app of key table err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "failed to notify app of key table err={err:?}");
                 }
             }
 
@@ -12295,9 +12573,13 @@ where
                     //     // Not a big deal if this fails.
                     //     log.warn("failed to notify renderer of crash message err={}", .{err});
                     // };
-                    if let Err(_err) = self.queueRender() {
+                    if let Err(err) = self.queueRender() {
                         // Not a big deal if this fails.
                         // log.warn("failed to notify renderer of crash message err={}", .{err});
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "failed to notify renderer of crash message err={err:?}"
+                        );
                     }
                 }
 
@@ -12801,6 +13083,7 @@ where
             apprt::ClipboardRequest::List(clipboard) => {
                 if !self.completeClipboardPasteEvent(clipboard, complete.available)? {
                     // log.debug("mode 5522 paste event was not written", .{});
+                    log::debug!(target: LOG_SCOPE, "mode 5522 paste event was not written");
                 }
             }
 
@@ -12956,8 +13239,9 @@ where
                     },
                     false,
                 );
-                if set_result.is_err() {
+                if let Err(err) = &set_result {
                     // log.err("error setting clipboard err={}", .{err});
+                    log::error!(target: LOG_SCOPE, "error setting clipboard err={err:?}");
                     let result = self.kittyClipboardStatus(
                         kitty_clipboard::Operation::Write,
                         &kitty_ref.id.clone(),
@@ -12998,8 +13282,12 @@ where
             // .osc_52_read => |clipboard| self.completeClipboardReadOSC52("", clipboard, true)
             //     catch |err| { log.warn(...); },
             apprt::ClipboardRequest::Osc52Read(clipboard) => {
-                if let Err(_err) = self.completeClipboardReadOSC52(b"", clipboard, true) {
+                if let Err(err) = self.completeClipboardReadOSC52(b"", clipboard, true) {
                     // log.warn("error replying to OSC 52 clipboard read err={}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error replying to OSC 52 clipboard read err={err:?}"
+                    );
                 }
             }
 
@@ -13012,13 +13300,17 @@ where
             apprt::ClipboardRequest::KittyRead(kitty) => {
                 // SAFETY: single-owner leaked Box; destroyed exactly once below.
                 let kitty_ref: &apprt::KittyRead = unsafe { &*kitty };
-                if let Err(_err) = self.kittyClipboardStatus(
+                if let Err(err) = self.kittyClipboardStatus(
                     kitty_clipboard::Operation::Read,
                     &kitty_ref.id.clone(),
                     kitty_ref.terminator,
                     kitty_clipboard::Status::Eperm,
                 ) {
                     // log.warn("error replying to kitty clipboard read err={}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error replying to kitty clipboard read err={err:?}"
+                    );
                 }
                 unsafe { apprt::KittyRead::destroy(kitty) };
             }
@@ -13026,13 +13318,17 @@ where
             // .kitty_write => |kitty| { defer kitty.destroy(); ... },
             apprt::ClipboardRequest::KittyWrite(kitty) => {
                 let kitty_ref: &apprt::KittyWrite = unsafe { &*kitty };
-                if let Err(_err) = self.kittyClipboardStatus(
+                if let Err(err) = self.kittyClipboardStatus(
                     kitty_clipboard::Operation::Write,
                     &kitty_ref.id.clone(),
                     kitty_ref.terminator,
                     kitty_clipboard::Status::Eperm,
                 ) {
                     // log.warn("error replying to kitty clipboard write err={}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error replying to kitty clipboard write err={err:?}"
+                    );
                 }
                 unsafe { apprt::KittyWrite::destroy(kitty) };
             }
@@ -13096,6 +13392,10 @@ where
                     //     "application attempted to read clipboard, but 'clipboard-read' is set to deny",
                     //     .{},
                     // );
+                    log::info!(
+                        target: LOG_SCOPE,
+                        "application attempted to read clipboard, but 'clipboard-read' is set to deny"
+                    );
                     // return .unsupported;
                     return Ok(apprt::ClipboardReadResult::Unsupported);
                 }
@@ -13271,6 +13571,10 @@ where
         if self.config.clipboard_read == configpkg::value_types::ClipboardAccess::Deny {
             // defer req.destroy();
             // log.info("application attempted to read clipboard, but 'clipboard-read' is set to deny", .{});
+            log::info!(
+                target: LOG_SCOPE,
+                "application attempted to read clipboard, but 'clipboard-read' is set to deny"
+            );
             // try self.kittyClipboardStatus(.read, req.id, req.terminator, .EPERM);
             // return;
             let result = self.kittyClipboardStatus(
@@ -13364,6 +13668,10 @@ where
         if self.config.clipboard_write == configpkg::value_types::ClipboardAccess::Deny {
             // defer req.destroy();
             // log.info("application attempted to write clipboard, but 'clipboard-write' is set to deny", .{});
+            log::info!(
+                target: LOG_SCOPE,
+                "application attempted to write clipboard, but 'clipboard-write' is set to deny"
+            );
             // try self.kittyClipboardStatus(.write, req.id, req.terminator, .EPERM);
             // return;
             let result = self.kittyClipboardStatus(
@@ -13638,6 +13946,10 @@ where
             // if (unsafe) {
             if unsafe_ {
                 // log.info("potentially unsafe paste detected, rejecting until confirmation", .{});
+                log::info!(
+                    target: LOG_SCOPE,
+                    "potentially unsafe paste detected, rejecting until confirmation"
+                );
                 // return error.UnsafePaste;
                 //
                 // (unlock before propagating — the explicit-unlock convention.)
@@ -13650,8 +13962,9 @@ where
             // self.scrollToBottom() catch |err| {
             //     log.warn("error scrolling to bottom err={}", .{err});
             // };
-            if let Err(_err) = self.scrollToBottom() {
+            if let Err(err) = self.scrollToBottom() {
                 // log.warn("error scrolling to bottom err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error scrolling to bottom err={err:?}");
             }
 
             // break :encode_opts opts;
@@ -13844,6 +14157,7 @@ where
             // if (now.since(last) < 1 * std.time.ns_per_s) {
             if now.saturating_duration_since(last).as_nanos() < NS_PER_S {
                 // log.warn("rate limiting desktop notifications", .{});
+                log::warn!(target: LOG_SCOPE, "rate limiting desktop notifications");
                 return Ok(());
             }
         }
@@ -13870,6 +14184,7 @@ where
                 // if (now.since(last) < 5 * std.time.ns_per_s) {
                 if now.saturating_duration_since(last).as_nanos() < 5 * NS_PER_S {
                     // log.warn("suppressing identical desktop notification", .{});
+                    log::warn!(target: LOG_SCOPE, "suppressing identical desktop notification");
                     return Ok(());
                 }
             }
@@ -15257,5 +15572,190 @@ mod clipboard_codepoint_map_e2e {
         }
         drop(rt_app);
         let _ = &mu;
+    }
+}
+
+// ===========================================================================
+// task 14d-1 (S41-F1, S42-F2): the restored `Surface.zig` diagnostics.
+//
+// `Surface::init` is untestable here (it spawns a live pty/renderer/io
+// thread — see `renderer_config_tests`' module doc), so these follow this
+// file's established fabrication recipe: a heap-pinned `Surface<TestApp>` in
+// `MaybeUninit` with ONLY the fields the method under test reads written.
+// Every method driven below returns before touching any other field, which
+// is exactly why these four sites were chosen: they need `config` (and, for
+// the key-table one, the `Default` `keyboard`) and nothing else.
+//
+// Four tests for 100 restored sites, chosen for shapes that break
+// INDEPENDENTLY: a policy-gate `info` that must NOT fire on the allowed
+// path, a second `info` in the SAME function reached only after the gate
+// passes, a `debug` on an early return in a different function, and a
+// `{s}`-interpolated `debug` (the `[]const u8` -> `String::from_utf8_lossy`
+// conversion, which no other test here would catch). Assertions are
+// full-vector `assert_eq!` on the captured records.
+// ===========================================================================
+#[cfg(test)]
+mod diagnostics_tests {
+    use super::*;
+    use crate::app::test_runtime::TestApp;
+    use crate::log_capture;
+    use std::mem::MaybeUninit;
+
+    /// A `Surface<TestApp>` with only `config` (and `keyboard`) live.
+    ///
+    /// Returns the `MaybeUninit` box so the caller keeps it alive; the
+    /// `DerivedConfig` is deinit-ed + dropped in `teardown` below, matching
+    /// `clipboard_codepoint_map_e2e`'s teardown convention (`.deinit()` frees
+    /// the oniguruma handles, `drop_in_place` runs the ordinary `Drop` for
+    /// the owned `Vec`/`String` fields that `MaybeUninit` would otherwise
+    /// leak).
+    fn fabricate(
+        mutate: impl FnOnce(&mut configpkg::Config),
+    ) -> Box<MaybeUninit<Surface<TestApp>>> {
+        let mut full_config = configpkg::Config::default_config();
+        // No links => `DerivedConfig::init` never reaches oniguruma, so these
+        // tests are Miri-clean (the `clipboard_codepoint_map_fixture_is_miri_
+        // clean` precedent).
+        full_config.link.links.clear();
+        mutate(&mut full_config);
+        let derived = DerivedConfig::init(Allocator, &full_config).expect("DerivedConfig::init");
+
+        let mut mu: Box<MaybeUninit<Surface<TestApp>>> = Box::new(MaybeUninit::uninit());
+        let sp = mu.as_mut_ptr();
+        unsafe {
+            std::ptr::addr_of_mut!((*sp).config).write(derived);
+            std::ptr::addr_of_mut!((*sp).keyboard).write(Keyboard::default());
+        }
+        mu
+    }
+
+    fn teardown(mut mu: Box<MaybeUninit<Surface<TestApp>>>) {
+        let sp = mu.as_mut_ptr();
+        unsafe {
+            (*sp).config.deinit();
+            std::ptr::drop_in_place(std::ptr::addr_of_mut!((*sp).config));
+            std::ptr::drop_in_place(std::ptr::addr_of_mut!((*sp).keyboard));
+        }
+    }
+
+    /// `Surface.zig:2194` — the `clipboard-write = deny` gate. Both arms are
+    /// asserted: the denied one emits exactly the reference's line, and the
+    /// ALLOWED one does not emit it at all. A diagnostic hoisted above the
+    /// `if` would fail the second half — the success-path bug class.
+    #[test]
+    fn clipboard_write_deny_logs_once_and_the_allowed_path_does_not() {
+        let mut mu = fabricate(|c| {
+            c.clipboard_write = configpkg::value_types::ClipboardAccess::Deny;
+        });
+        let cap = log_capture::start();
+        unsafe { &mut *mu.as_mut_ptr() }
+            .clipboardWrite(b"aGk=", apprt::Clipboard::Standard)
+            .expect("clipboardWrite");
+        let denied = cap.messages();
+        drop(cap);
+        teardown(mu);
+
+        assert_eq!(
+            vec![(
+                log::Level::Info,
+                "surface".to_string(),
+                "application attempted to write clipboard, but 'clipboard-write' is set to deny"
+                    .to_string()
+            )],
+            denied
+        );
+
+        // The inverse arm — policy allows — is asserted by the next test:
+        // with `clipboard_write = Ask` this same function runs PAST this
+        // gate and the deny line is absent from its captured vector. It is
+        // split out rather than done here because the allowed path with a
+        // VALID payload continues into `set_clipboard`, which needs a live
+        // `rt_surface` this fixture deliberately does not fabricate.
+    }
+
+    /// `Surface.zig:2206` — the invalid-base64 line, in the SAME function,
+    /// reached only when the deny gate above did NOT fire. Proves the two
+    /// sites are independent and that the deny line is genuinely gated.
+    #[test]
+    fn clipboard_write_invalid_base64_logs_and_the_deny_line_does_not() {
+        let mut mu = fabricate(|c| {
+            c.clipboard_write = configpkg::value_types::ClipboardAccess::Ask;
+        });
+        let cap = log_capture::start();
+        unsafe { &mut *mu.as_mut_ptr() }
+            .clipboardWrite(b"!!!not base64!!!", apprt::Clipboard::Standard)
+            .expect("clipboardWrite");
+        let messages = cap.messages();
+        drop(cap);
+        teardown(mu);
+
+        assert_eq!(
+            vec![(
+                log::Level::Info,
+                "surface".to_string(),
+                "application sent invalid base64 data for OSC 52".to_string()
+            )],
+            messages
+        );
+    }
+
+    /// `Surface.zig:980` — `handleMessage(.set_title)` short-circuits when a
+    /// static title is configured. Different function, different level
+    /// (`debug`), and an early return: a regression that dropped the
+    /// early-return branch would still typecheck.
+    #[test]
+    fn set_title_with_a_static_config_title_logs_and_returns() {
+        let mut mu = fabricate(|c| {
+            c.title = Some(b"static".to_vec());
+        });
+        let cap = log_capture::start();
+        unsafe { &mut *mu.as_mut_ptr() }
+            .handleMessage(Message::SetTitle({
+                let mut t = [0u8; 256];
+                t[0] = b'x';
+                t
+            }))
+            .expect("handleMessage");
+        let messages = cap.messages();
+        drop(cap);
+        teardown(mu);
+
+        assert_eq!(
+            vec![(
+                log::Level::Debug,
+                "surface".to_string(),
+                "ignoring title change request since static title is set via config".to_string()
+            )],
+            messages
+        );
+    }
+
+    /// `Surface.zig:5521` — `key table not found: {s}`. The ONLY test here
+    /// with an interpolated argument, and deliberately so: `{s}` on a
+    /// `[]const u8` becomes `String::from_utf8_lossy`, a conversion the
+    /// compiler cannot check and no other assertion in this module would
+    /// catch. A missing table is the reference's own miss path.
+    #[test]
+    fn activate_key_table_logs_the_missing_table_name() {
+        // The default config ships no key tables, so "nav" is a genuine
+        // miss without touching the map at all.
+        let mut mu = fabricate(|_c| {});
+        let cap = log_capture::start();
+        let performed = unsafe { &mut *mu.as_mut_ptr() }
+            .performBindingAction(binding::Action::ActivateKeyTable(b"nav".to_vec()))
+            .expect("performBindingAction");
+        let messages = cap.messages();
+        drop(cap);
+        teardown(mu);
+
+        assert!(!performed);
+        assert_eq!(
+            vec![(
+                log::Level::Debug,
+                "surface".to_string(),
+                "key table not found: nav".to_string()
+            )],
+            messages
+        );
     }
 }
