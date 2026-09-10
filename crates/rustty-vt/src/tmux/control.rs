@@ -35,9 +35,12 @@ use crate::pagelist::OutOfMemory;
 
 // const log = std.log.scoped(.terminal_tmux);
 //
-// PORT NOTE: `const log = std.log.scoped(.terminal_tmux);` — Rustty has no
-// logging facade wired into this crate (matching the other terminal modules), so
-// the scoped logger and its `log.warn` calls are ported as commented-out lines.
+// PORT NOTE (task-14e-2): the note that stood here said Rustty had "no logging
+// facade wired into this crate", so the scoped logger and its `log.warn` calls
+// were ported as commented-out lines. That has not been true since task 14b —
+// `rustty-vt` carries `log = { workspace = true }`. The reference's scope tag is
+// carried through the facade as `target: LOG_SCOPE` (DECISION-logging.md §6r4).
+const LOG_SCOPE: &str = "terminal_tmux";
 
 /// A tmux control mode parser. This takes in output from tmux control
 /// mode and parses it into a structured notifications.
@@ -219,6 +222,11 @@ impl Parser {
                             }
                             BlockTerminator::Err => {
                                 // log.warn("tmux control mode error={s}", .{output});
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "tmux control mode error={}",
+                                    String::from_utf8_lossy(&self.buffer[0..output_len]),
+                                );
                                 return Ok(Some(Notification::BlockErr(
                                     self.buffer[0..output_len].to_vec(),
                                 )));
@@ -290,6 +298,12 @@ impl Parser {
         } else if cmd == b"%sessions-changed" {
             if line != b"%sessions-changed" {
                 // log.warn("failed to match notification cmd={s} line=\"{s}\"", .{ cmd, line });
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "failed to match notification cmd={} line=\"{}\"",
+                    String::from_utf8_lossy(cmd),
+                    String::from_utf8_lossy(line),
+                );
                 // break :cmd;
                 //
                 // PORT NOTE: the Zig `break :cmd` exits the labelled `cmd:` block
@@ -328,6 +342,11 @@ impl Parser {
         } else {
             // Unknown notification, log it and return to idle state.
             // log.warn("unknown tmux control mode notification={s}", .{cmd});
+            log::warn!(
+                target: LOG_SCOPE,
+                "unknown tmux control mode notification={}",
+                String::from_utf8_lossy(cmd),
+            );
 
             // Unknown command. Clear the buffer and return to idle state.
             self.buffer.clear();
@@ -370,16 +389,26 @@ impl Parser {
                 oni::Syntax::default(),
                 None,
             )
-            .map_err(|_err| {
+            .map_err(|err| {
                 // log.warn("regex init failed error={}", .{err});
+                //
+                // PORT NOTE (N11): Zig's `{}` on an error renders `error.<Name>`;
+                // `{err:?}` renders the Rust error's own Debug.
+                log::warn!(target: LOG_SCOPE, "regex init failed error={err:?}");
                 ParseError::RegexError
             })?;
             // defer re.deinit();
 
             let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to match notification cmd={} line=\"{}\" err={err:?}",
+                        String::from_utf8_lossy(cmd),
+                        String::from_utf8_lossy(line),
+                    );
                     // break :cmd;
                     re.deinit();
                     return Ok(None);
@@ -408,16 +437,26 @@ impl Parser {
                 oni::Syntax::default(),
                 None,
             )
-            .map_err(|_err| {
+            .map_err(|err| {
                 // log.warn("regex init failed error={}", .{err});
+                //
+                // PORT NOTE (N11): Zig's `{}` on an error renders `error.<Name>`;
+                // `{err:?}` renders the Rust error's own Debug.
+                log::warn!(target: LOG_SCOPE, "regex init failed error={err:?}");
                 ParseError::RegexError
             })?;
             // defer re.deinit();
 
             let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to match notification cmd={} line=\"{}\" err={err:?}",
+                        String::from_utf8_lossy(cmd),
+                        String::from_utf8_lossy(line),
+                    );
                     re.deinit();
                     return Ok(None);
                 }
@@ -445,16 +484,26 @@ impl Parser {
                 oni::Syntax::default(),
                 None,
             )
-            .map_err(|_err| {
+            .map_err(|err| {
                 // log.warn("regex init failed error={}", .{err});
+                //
+                // PORT NOTE (N11): Zig's `{}` on an error renders `error.<Name>`;
+                // `{err:?}` renders the Rust error's own Debug.
+                log::warn!(target: LOG_SCOPE, "regex init failed error={err:?}");
                 ParseError::RegexError
             })?;
             // defer re.deinit();
 
             let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to match notification cmd={} line=\"{}\" err={err:?}",
+                        String::from_utf8_lossy(cmd),
+                        String::from_utf8_lossy(line),
+                    );
                     re.deinit();
                     return Ok(None);
                 }
@@ -489,16 +538,26 @@ impl Parser {
                 oni::Syntax::default(),
                 None,
             )
-            .map_err(|_err| {
+            .map_err(|err| {
                 // log.warn("regex init failed error={}", .{err});
+                //
+                // PORT NOTE (N11): Zig's `{}` on an error renders `error.<Name>`;
+                // `{err:?}` renders the Rust error's own Debug.
+                log::warn!(target: LOG_SCOPE, "regex init failed error={err:?}");
                 ParseError::RegexError
             })?;
             // defer re.deinit();
 
             let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to match notification cmd={} line=\"{}\" err={err:?}",
+                        String::from_utf8_lossy(cmd),
+                        String::from_utf8_lossy(line),
+                    );
                     re.deinit();
                     return Ok(None);
                 }
@@ -525,16 +584,26 @@ impl Parser {
                 oni::Syntax::default(),
                 None,
             )
-            .map_err(|_err| {
+            .map_err(|err| {
                 // log.warn("regex init failed error={}", .{err});
+                //
+                // PORT NOTE (N11): Zig's `{}` on an error renders `error.<Name>`;
+                // `{err:?}` renders the Rust error's own Debug.
+                log::warn!(target: LOG_SCOPE, "regex init failed error={err:?}");
                 ParseError::RegexError
             })?;
             // defer re.deinit();
 
             let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to match notification cmd={} line=\"{}\" err={err:?}",
+                        String::from_utf8_lossy(cmd),
+                        String::from_utf8_lossy(line),
+                    );
                     re.deinit();
                     return Ok(None);
                 }
@@ -562,16 +631,26 @@ impl Parser {
                 oni::Syntax::default(),
                 None,
             )
-            .map_err(|_err| {
+            .map_err(|err| {
                 // log.warn("regex init failed error={}", .{err});
+                //
+                // PORT NOTE (N11): Zig's `{}` on an error renders `error.<Name>`;
+                // `{err:?}` renders the Rust error's own Debug.
+                log::warn!(target: LOG_SCOPE, "regex init failed error={err:?}");
                 ParseError::RegexError
             })?;
             // defer re.deinit();
 
             let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to match notification cmd={} line=\"{}\" err={err:?}",
+                        String::from_utf8_lossy(cmd),
+                        String::from_utf8_lossy(line),
+                    );
                     re.deinit();
                     return Ok(None);
                 }
@@ -599,16 +678,26 @@ impl Parser {
                 oni::Syntax::default(),
                 None,
             )
-            .map_err(|_err| {
+            .map_err(|err| {
                 // log.warn("regex init failed error={}", .{err});
+                //
+                // PORT NOTE (N11): Zig's `{}` on an error renders `error.<Name>`;
+                // `{err:?}` renders the Rust error's own Debug.
+                log::warn!(target: LOG_SCOPE, "regex init failed error={err:?}");
                 ParseError::RegexError
             })?;
             // defer re.deinit();
 
             let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to match notification cmd={} line=\"{}\" err={err:?}",
+                        String::from_utf8_lossy(cmd),
+                        String::from_utf8_lossy(line),
+                    );
                     re.deinit();
                     return Ok(None);
                 }
@@ -635,16 +724,26 @@ impl Parser {
                 oni::Syntax::default(),
                 None,
             )
-            .map_err(|_err| {
+            .map_err(|err| {
                 // log.warn("regex init failed error={}", .{err});
+                //
+                // PORT NOTE (N11): Zig's `{}` on an error renders `error.<Name>`;
+                // `{err:?}` renders the Rust error's own Debug.
+                log::warn!(target: LOG_SCOPE, "regex init failed error={err:?}");
                 ParseError::RegexError
             })?;
             // defer re.deinit();
 
             let mut region = match re.search(line, oni::SearchOptions::default()) {
                 Ok(region) => region,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("failed to match notification cmd={s} line=\"{s}\" err={}", .{ cmd, line, err });
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to match notification cmd={} line=\"{}\" err={err:?}",
+                        String::from_utf8_lossy(cmd),
+                        String::from_utf8_lossy(line),
+                    );
                     re.deinit();
                     return Ok(None);
                 }
@@ -994,6 +1093,86 @@ mod tests {
             Err(OutOfMemory),
             Parser::init_options(4096, usize::MAX / 2).map(|_| ())
         );
+    }
+
+    // ---- task-14e-2: the restored `tmux/control.zig` diagnostics ------------
+    //
+    // `assert_eq!` on the FULL captured record vector, never `.any()`.
+
+    fn tmux_warn(msg: &str) -> crate::log_capture::CapturedRecord {
+        (
+            log::Level::Warn,
+            "terminal_tmux".to_string(),
+            msg.to_string(),
+        )
+    }
+
+    fn feed(input: &[u8]) -> (Vec<crate::log_capture::CapturedRecord>, usize) {
+        let mut c = Parser::init();
+        let cap = crate::log_capture::start();
+        let mut notifications = 0usize;
+        for &byte in input {
+            if c.put(byte).unwrap().is_some() {
+                notifications += 1;
+            }
+        }
+        let messages = cap.messages();
+        drop(cap);
+        c.deinit();
+        (messages, notifications)
+    }
+
+    /// `control.zig:478` — a notification this parser does not know.
+    #[test]
+    fn an_unknown_notification_warns_with_the_command() {
+        let (messages, notifications) = feed(b"%bogus-notification arg\n");
+        assert_eq!(0, notifications);
+        assert_eq!(
+            vec![tmux_warn(
+                "unknown tmux control mode notification=%bogus-notification"
+            )],
+            messages
+        );
+    }
+
+    /// `control.zig:277` — the one non-regex match failure: `%sessions-changed`
+    /// takes no arguments, so a line carrying any is a match failure.
+    #[test]
+    fn a_sessions_changed_line_with_arguments_warns() {
+        let (messages, notifications) = feed(b"%sessions-changed extra\n");
+        assert_eq!(0, notifications);
+        assert_eq!(
+            vec![tmux_warn(
+                "failed to match notification cmd=%sessions-changed line=\"%sessions-changed extra\""
+            )],
+            messages
+        );
+    }
+
+    /// `control.zig:132` — a `%error`-terminated block.
+    #[test]
+    fn an_error_block_warns_with_its_output() {
+        let (messages, notifications) =
+            feed(b"%begin 1578922740 269 1\nbad thing\n%error 1578922740 269 1\n");
+        // Positive reach: the block still produces its `BlockErr` notification.
+        assert_eq!(1, notifications);
+        assert_eq!(
+            vec![tmux_warn("tmux control mode error=bad thing")],
+            messages
+        );
+    }
+
+    /// The absence half: a well-formed block emits NOTHING. Positive reach is
+    /// the `BlockEnd` notification, which only exists if the block completed.
+    #[test]
+    fn a_well_formed_block_is_silent() {
+        let (messages, notifications) = feed(b"%begin 1578922740 269 1\n%end 1578922740 269 1\n");
+        assert_eq!(
+            1, notifications,
+            "the block never completed, so this test never reached the code \
+             whose silence it asserts"
+        );
+        assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
     }
 
     // test "tmux begin/end empty"

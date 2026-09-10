@@ -12,11 +12,14 @@
 use crate::osc::encoding;
 use crate::osc::{Command, Parser};
 
-// PORT NOTE: `const log = std.log.scoped(.kitty_text_sizing);` — Rustty has no
-// logging facade wired into this crate (matching the convention used by the
-// `osc.zig` scoped logger), so the scoped logger and its calls are ported as
-// commented lines.
 // const log = std.log.scoped(.kitty_text_sizing);
+//
+// PORT NOTE (task-14e-2): the note that stood here said "Rustty has no logging
+// facade wired into this crate". That has not been true since task 14b —
+// `rustty-vt` carries `log = { workspace = true }` and 138 live emissions in
+// `stream.rs` alone. The reference's scope tag is carried through the facade as
+// `target: LOG_SCOPE` (DECISION-logging.md §6r4).
+const LOG_SCOPE: &str = "kitty_text_sizing";
 
 pub const MAX_PAYLOAD_LENGTH: usize = 4096;
 
@@ -78,6 +81,9 @@ pub struct OSC {
 
 // PORT NOTE: `error{ UnknownKey, InvalidValue }` — the error set returned by
 // `update`.
+// (Debug is derived for the reference's `log.warn("... : {}", .{err})` payload;
+// dead-code analysis intentionally ignores derived Debug, hence the allow.)
+#[derive(Debug)]
 enum UpdateError {
     UnknownKey,
     InvalidValue,
@@ -173,6 +179,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
         s
     } else {
         // log.warn("missing semicolon before payload", .{});
+        log::warn!(target: LOG_SCOPE, "missing semicolon before payload");
         parser.state = crate::osc::State::Invalid;
         return None;
     };
@@ -183,11 +190,13 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
     // and be under the size limit.
     if payload.len() > MAX_PAYLOAD_LENGTH {
         // log.warn("payload is too long", .{});
+        log::warn!(target: LOG_SCOPE, "payload is too long");
         parser.state = crate::osc::State::Invalid;
         return None;
     }
     if !encoding::is_safe_utf8(payload) {
         // log.warn("payload is not escape code safe UTF-8", .{});
+        log::warn!(target: LOG_SCOPE, "payload is not escape code safe UTF-8");
         parser.state = crate::osc::State::Invalid;
         return None;
     }
@@ -228,11 +237,13 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 Some(k) => k,
                 None => {
                     // log.warn("missing key", .{});
+                    log::warn!(target: LOG_SCOPE, "missing key");
                     continue;
                 }
             };
             if k.len() != 1 {
                 // log.warn("key must be a single character", .{});
+                log::warn!(target: LOG_SCOPE, "key must be a single character");
                 continue;
             }
 
@@ -241,6 +252,7 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 Some(value) => value,
                 None => {
                     // log.warn("missing value", .{});
+                    log::warn!(target: LOG_SCOPE, "missing value");
                     continue;
                 }
             };
@@ -251,9 +263,25 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
                 Err(err) => {
                     match err {
                         // log.warn("unknown key: '{c}'", .{k[0]})
-                        UpdateError::UnknownKey => {}
+                        UpdateError::UnknownKey => {
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "unknown key: '{}'",
+                                k[0] as char
+                            );
+                        }
                         // log.warn("invalid value for key '{c}': {}", .{ k[0], err })
-                        UpdateError::InvalidValue => {}
+                        //
+                        // PORT NOTE (N11): Zig's `{}` on an error renders
+                        // `error.<Name>`; `{err:?}` renders the bare variant
+                        // name. Workspace-dominant rendering; N11's scope.
+                        UpdateError::InvalidValue => {
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "invalid value for key '{}': {err:?}",
+                                k[0] as char
+                            );
+                        }
                     }
                     continue;
                 }
@@ -266,8 +294,116 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
 
 #[cfg(test)]
 mod tests {
-    use super::{HAlign, VAlign};
+    use super::{HAlign, VAlign, MAX_PAYLOAD_LENGTH};
     use crate::osc::{Command, Parser};
+
+    // ---- task-14e-2: the restored `kitty_text_sizing.zig` diagnostics -------
+    //
+    // `assert_eq!` on the FULL captured record vector, never `.any()`.
+
+    fn warn(msg: &str) -> crate::log_capture::CapturedRecord {
+        (
+            log::Level::Warn,
+            "kitty_text_sizing".to_string(),
+            msg.to_string(),
+        )
+    }
+
+    fn drive(input: &str) -> Vec<crate::log_capture::CapturedRecord> {
+        let mut p: Parser = Parser::init(None);
+        let cap = crate::log_capture::start();
+        for ch in input.bytes() {
+            p.next(ch);
+        }
+        let _ = p.end(Some(0x1b));
+        let messages = cap.messages();
+        drop(cap);
+        messages
+    }
+
+    /// `kitty_text_sizing.zig:87` — no `;` in the captured payload.
+    ///
+    /// The capture starts AFTER the `66;` introducer, so `66;abc` is the
+    /// no-semicolon case; a bare `66` never reaches this parser at all (the OSC
+    /// dispatcher goes `Invalid` on the missing introducer separator).
+    #[test]
+    fn a_missing_semicolon_warns() {
+        assert_eq!(
+            vec![warn("missing semicolon before payload")],
+            drive("66;abc")
+        );
+    }
+
+    /// `:122`/`:126`/`:131` — the key/value shape diagnostics.
+    #[test]
+    fn malformed_key_value_pairs_warn() {
+        // `s` alone: `splitn(2, '=')` yields the key and no value.
+        assert_eq!(vec![warn("missing value")], drive("66;s;hi"));
+        // A two-character key.
+        assert_eq!(
+            vec![warn("key must be a single character")],
+            drive("66;sc=2;hi")
+        );
+    }
+
+    /// `:137` — an unrecognised single-character key.
+    #[test]
+    fn an_unknown_key_warns_with_the_character() {
+        assert_eq!(vec![warn("unknown key: 'z'")], drive("66;z=1;hi"));
+    }
+
+    /// `:96` — a payload over `MAX_PAYLOAD_LENGTH`.
+    ///
+    /// Needs an ALLOCATING parser: with `Parser::init(None)` the OSC capture is
+    /// capped at the inline `MAX_BUF` (2048) and the dispatcher goes `Invalid`
+    /// long before this parser sees the payload — so the test would have passed
+    /// its `Vec::new()` assertion while never reaching the guard.
+    #[test]
+    fn an_over_long_payload_warns() {
+        let backend = rustty_lib::allocator::GlobalZigAllocator;
+        let alloc = rustty_lib::allocator::ZigAllocatorRef::new(&backend);
+        let mut p: Parser = Parser::init(Some(alloc));
+        let mut input = String::from("66;;");
+        input.push_str(&"a".repeat(MAX_PAYLOAD_LENGTH + 1));
+
+        let cap = crate::log_capture::start();
+        for ch in input.bytes() {
+            p.next(ch);
+        }
+        let out = p.end(Some(0x1b)).is_none();
+        let messages = cap.messages();
+        drop(cap);
+
+        // Positive reach: the guard's own `return None`.
+        assert!(out);
+        assert_eq!(vec![warn("payload is too long")], messages);
+    }
+
+    /// The absence half: a well-formed OSC 66 emits NOTHING, and the parse
+    /// really happened (the positive reach).
+    #[test]
+    fn a_well_formed_osc_66_is_silent() {
+        let mut p: Parser = Parser::init(None);
+        let cap = crate::log_capture::start();
+        for ch in b"66;s=2;bobr" {
+            p.next(*ch);
+        }
+        let cmd = p.end(Some(0x1b)).map(|c| c.clone());
+        let messages = cap.messages();
+        drop(cap);
+
+        match cmd {
+            Some(Command::KittyTextSizing(osc)) => {
+                assert_eq!(2u8, osc.scale);
+                assert_eq!(b"bobr", osc.text.as_slice());
+            }
+            other => panic!(
+                "the OSC did not parse ({other:?}), so this test never reached \
+                 the code whose silence it asserts"
+            ),
+        }
+        assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
+    }
 
     #[test]
     fn osc_66_empty_parameters() {

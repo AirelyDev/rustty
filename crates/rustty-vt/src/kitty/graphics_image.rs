@@ -64,6 +64,12 @@ mod temp_dir {
 }
 
 // const log = std.log.scoped(.kitty_gfx);
+//
+// PORT NOTE: the reference's scope tag, carried through the `log` facade as
+// `target: LOG_SCOPE` (DECISION-logging.md §6r4). NOTE that two of this file's
+// calls are `std.log.warn` — the UNSCOPED logger, i.e. the `.default` scope,
+// whose carrier is the EMPTY target, not this constant.
+const LOG_SCOPE: &str = "kitty_gfx";
 
 /// Maximum width or height of an image. Taken directly from Kitty.
 const MAX_DIMENSION: u32 = 10000;
@@ -320,6 +326,7 @@ impl LoadingImage {
             if cmd.data.contains(&0) {
                 // POSIX paths cannot contain internal nulls.
                 // log.warn("invalid image path: BadPathName", .{});
+                log::warn!(target: LOG_SCOPE, "invalid image path: BadPathName");
                 return Err(Error::InvalidData);
             }
         }
@@ -375,6 +382,7 @@ impl LoadingImage {
         // without the leading slash, but the Kitty protocol does not.
         if !validSharedMemoryName(path, NAME_MAX) {
             // log.warn("invalid shared memory name", .{});
+            log::warn!(target: LOG_SCOPE, "invalid shared memory name");
             return Err(Error::InvalidData);
         }
 
@@ -393,6 +401,15 @@ impl LoadingImage {
         let fd = unsafe { libc::shm_open(pathz.as_ptr(), libc::O_RDONLY, 0) };
         if fd < 0 {
             // log.warn("unable to open shared memory {s}: {}", .{ path, err });
+            //
+            // PORT NOTE (N11): the reference renders a Zig `error.<Name>`; the
+            // port's failure is a libc errno, rendered through `io::Error`.
+            log::warn!(
+                target: LOG_SCOPE,
+                "unable to open shared memory {}: {}",
+                String::from_utf8_lossy(path),
+                std::io::Error::last_os_error(),
+            );
             return Err(Error::InvalidData);
         }
 
@@ -421,6 +438,12 @@ impl LoadingImage {
             let rc = unsafe { libc::fstat(guard.fd, &mut st) };
             if rc != 0 {
                 // log.warn("unable to fstat shared memory {s}: {}", .{ path, err });
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "unable to fstat shared memory {}: {}",
+                    String::from_utf8_lossy(path),
+                    std::io::Error::last_os_error(),
+                );
                 return Err(Error::InvalidData);
             }
             if st.st_size <= 0 {
@@ -453,6 +476,12 @@ impl LoadingImage {
         };
         if map_ptr == libc::MAP_FAILED {
             // log.warn("unable to mmap shared memory {s}: {}", .{ path, err });
+            log::warn!(
+                target: LOG_SCOPE,
+                "unable to mmap shared memory {}: {}",
+                String::from_utf8_lossy(path),
+                std::io::Error::last_os_error(),
+            );
             return Err(Error::InvalidData);
         }
         // defer std.posix.munmap(map);
@@ -575,8 +604,9 @@ impl LoadingImage {
         impl Drop for DeletePathGuard {
             fn drop(&mut self) {
                 if let Some(p) = &self.delete_path {
-                    if unlink(p).is_err() {
+                    if let Err(err) = unlink(p) {
                         // log.warn("failed to delete temporary file: {}", .{err});
+                        log::warn!(target: LOG_SCOPE, "failed to delete temporary file: {err}");
                     }
                 }
             }
@@ -587,8 +617,9 @@ impl LoadingImage {
         // TOCTOU issues.
         let mut file = match open_file(path) {
             Ok(f) => f,
-            Err(_err) => {
+            Err(err) => {
                 // log.warn("failed to open image file: {}", .{err});
+                log::warn!(target: LOG_SCOPE, "failed to open image file: {err}");
                 return Err(Error::InvalidData);
             }
         };
@@ -599,8 +630,9 @@ impl LoadingImage {
         // cooperating process to swap a symlink or directory entry in between.
         let abs_path = match Self::validatedFilePath(&file) {
             Ok(p) => p,
-            Err(_err) => {
+            Err(err) => {
                 // log.warn("failed to validate image file path: {}", .{err});
+                log::warn!(target: LOG_SCOPE, "failed to validate image file path: {err:?}");
                 return Err(Error::InvalidData);
             }
         };
@@ -629,22 +661,34 @@ impl LoadingImage {
             Ok(md) => {
                 if !md.is_file() {
                     // log.warn("file is not a regular file kind={}", .{stat.kind});
+                    //
+                    // PORT NOTE: `stat.kind` is Zig's `File.Kind` enum; the
+                    // Rust counterpart is `std::fs::FileType`, rendered by its
+                    // own Debug.
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "file is not a regular file kind={:?}",
+                        md.file_type()
+                    );
                     return Err(Error::InvalidData);
                 }
             }
-            Err(_err) => {
+            Err(err) => {
                 // log.warn("failed to stat file: {}", .{err});
+                log::warn!(target: LOG_SCOPE, "failed to stat file: {err}");
                 return Err(Error::InvalidData);
             }
         }
 
         if t.offset > 0 {
             use std::io::Seek;
-            if file
-                .seek(std::io::SeekFrom::Start(t.offset as u64))
-                .is_err()
-            {
+            if let Err(err) = file.seek(std::io::SeekFrom::Start(t.offset as u64)) {
                 // log.warn("failed to seek to offset {}: {}", .{ t.offset, err });
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "failed to seek to offset {}: {err}",
+                    t.offset
+                );
                 return Err(Error::InvalidData);
             }
         }
@@ -672,16 +716,23 @@ impl LoadingImage {
             // Rust-global OOM policy).
             use std::io::Read;
             managed.resize(size, 0);
-            if file.read_exact(&mut managed).is_err() {
+            if let Err(err) = file.read_exact(&mut managed) {
                 // log.warn("failed to read image file: {}", .{err});
+                log::warn!(target: LOG_SCOPE, "failed to read image file: {err}");
                 return Err(Error::InvalidData);
             }
         } else {
             use std::io::Read;
             // `.limited(max_size)`: read at most `max_size` bytes.
             let mut limited = (&mut file).take(MAX_SIZE as u64);
-            if limited.read_to_end(&mut managed).is_err() {
+            if let Err(err) = limited.read_to_end(&mut managed) {
                 // log.warn("failed to read image file: {?}", .{buf_reader.err});
+                //
+                // PORT NOTE: the reference renders the buffered reader's
+                // OPTIONAL stored error (`{?}` — `null` when unset); here the
+                // failure is always present at this site, so it renders as the
+                // error itself.
+                log::warn!(target: LOG_SCOPE, "failed to read image file: {err}");
                 return Err(Error::InvalidData);
             }
         }
@@ -778,6 +829,7 @@ impl LoadingImage {
         // If our data would get too big, return an error
         if self.data.len() + data.len() > MAX_SIZE {
             // log.warn("image data too large max_size={}", .{max_size});
+            log::warn!(target: LOG_SCOPE, "image data too large max_size={}", MAX_SIZE);
             return Err(Error::InvalidData);
         }
 
@@ -824,6 +876,15 @@ impl LoadingImage {
                 //     "insufficient frame data image id={} expected_len={} actual_len={}",
                 //     .{ img.id, expected_len, actual_len },
                 // );
+                //
+                // PORT NOTE: `std.log.warn` is the UNSCOPED logger — the
+                // reference's `.default` scope, whose facade carrier is the
+                // EMPTY target (§6r4), NOT this file's `.kitty_gfx` scope.
+                log::warn!(
+                    target: "",
+                    "insufficient frame data image id={} expected_len={expected_len} actual_len={actual_len}",
+                    self.image.id
+                );
                 return Err(Error::InsufficientData);
             }
             // self.data.items.len = expected_len;
@@ -833,6 +894,16 @@ impl LoadingImage {
             //     "unexpected length image id={} width={} height={} bpp={} expected_len={} actual_len={}",
             //     .{ img.id, img.width, img.height, bpp, expected_len, actual_len },
             // );
+            //
+            // PORT NOTE: `std.log.warn` — the `.default` scope; see the
+            // sibling above.
+            log::warn!(
+                target: "",
+                "unexpected length image id={} width={} height={} bpp={bpp} expected_len={expected_len} actual_len={actual_len}",
+                self.image.id,
+                self.image.width,
+                self.image.height
+            );
             return Err(Error::InvalidData);
         }
 
@@ -909,8 +980,13 @@ impl LoadingImage {
         // Write it to an array list
         let list = match zlib_sys::inflate_zlib(&self.data, MAX_SIZE) {
             Ok(list) => list,
-            Err(_) => {
+            Err(err) => {
                 // log.warn("failed to read decompressed data: {?}", .{stream.err});
+                //
+                // PORT NOTE: the reference renders the stream's OPTIONAL stored
+                // error (`{?}`); here the failure is always present at this
+                // site, so it renders as the error itself.
+                log::warn!(target: LOG_SCOPE, "failed to read decompressed data: {err:?}");
                 return Err(Error::DecompressionFailed);
             }
         };
@@ -969,6 +1045,12 @@ impl LoadingImage {
 
         if result.data.len() > MAX_SIZE {
             // log.warn("png image too large size={} max_size={}", .{ result.data.len, max_size });
+            log::warn!(
+                target: LOG_SCOPE,
+                "png image too large size={} max_size={}",
+                result.data.len(),
+                MAX_SIZE
+            );
             return Err(Error::InvalidData);
         }
 
@@ -1568,6 +1650,106 @@ mod tests {
             )
             .map(|_| ())
         );
+    }
+
+    // ---- task-14e-2: the restored `kitty/graphics_image.zig` diagnostics ----
+    //
+    // `assert_eq!` on the FULL captured record vector, never `.any()`.
+
+    /// `graphics_image.zig:218` — a shared-memory name the protocol rejects.
+    /// Rides the same driver as
+    /// `image_load_rejects_invalid_POSIX_shared_memory_names` above.
+    #[test]
+    #[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
+    fn an_invalid_shared_memory_name_warns() {
+        let cmd: command::Command = command::Command {
+            control: command::Control::Transmit(command::Transmission {
+                format: command::Format::Rgb,
+                medium: command::Medium::SharedMemory,
+                width: 1,
+                height: 1,
+                image_id: 31,
+                ..Default::default()
+            }),
+            quiet: command::Quiet::No,
+            data: b"kitty-without-leading-slash".to_vec(),
+        };
+
+        let cap = crate::log_capture::start();
+        let out = LoadingImage::init(
+            &cmd,
+            &Limits {
+                file: false,
+                temporary_file: TemporaryFileLimit::Disabled,
+                shared_memory: true,
+            },
+        )
+        .map(|_| ());
+        let messages = cap.messages();
+        drop(cap);
+
+        // Positive reach: the guard's own return value.
+        assert_eq!(Err(Error::InvalidData), out);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "kitty_gfx".to_string(),
+                "invalid shared memory name".to_string(),
+            )],
+            messages
+        );
+    }
+
+    /// `graphics_image.zig:551` — the UNSCOPED `std.log.warn` (the `.default`
+    /// scope, carried by the EMPTY target) when the accumulated data length
+    /// does not match `width * height * bpp`.
+    #[test]
+    fn an_unexpected_data_length_warns_under_the_default_scope() {
+        // 2x1 RGB => 6 bytes expected; supply 3.
+        let mut loading = shm_loading(2, 1, command::Format::Rgb);
+        loading.data = vec![0u8; 3];
+
+        let cap = crate::log_capture::start();
+        let out = loading.complete().map(|_| ());
+        let messages = cap.messages();
+        drop(cap);
+
+        // Positive reach: the guard's own return value.
+        assert_eq!(Err(Error::InvalidData), out);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                // `std.log.warn`, not `log.warn` — the `.default` scope.
+                String::new(),
+                "unexpected length image id=0 width=2 height=1 bpp=3 \
+                 expected_len=6 actual_len=3"
+                    .to_string(),
+            )],
+            messages
+        );
+    }
+
+    /// The absence half: a correctly-sized image completes silently. Positive
+    /// reach is the completed `Image`'s own data length.
+    #[test]
+    fn a_correctly_sized_image_completes_silently() {
+        let mut loading = shm_loading(2, 1, command::Format::Rgb);
+        loading.data = vec![0u8; 6];
+
+        let cap = crate::log_capture::start();
+        let out = loading.complete();
+        let messages = cap.messages();
+        drop(cap);
+
+        let img = out.expect(
+            "complete() failed, so this test never reached the code whose \
+             silence it asserts",
+        );
+        match &img.data {
+            Data::Complete(d) => assert_eq!(6, d.len()),
+            other => panic!("unexpected image data: {other:?}"),
+        }
+        assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
     }
 
     /// Test helper: the reference's `const loading: LoadingImage = .{ .image =
