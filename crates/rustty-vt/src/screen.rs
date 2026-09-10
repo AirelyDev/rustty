@@ -79,6 +79,9 @@ use rustty_unicode as unicode;
 // `rustty_util::fastmem::rotateOnceR`.
 use rustty_util::fastmem;
 
+// const log = std.log.scoped(.screen);
+const LOG_SCOPE: &str = "screen";
+
 // pub const CursorStyle = @import("cursor.zig").Style;
 pub use crate::cursor::Style as CursorStyle;
 
@@ -603,6 +606,7 @@ impl PromptClickMove {
 // uniting the system-OOM case with the page insert-error cases so the
 // `startHyperlink` retry loop can discriminate (it adjusts page capacities for
 // the `Insert` cases and treats `OutOfMemory` as fatal).
+#[derive(Debug)]
 enum StartHyperlinkOnceError {
     OutOfMemory,
     Insert(crate::page::InsertHyperlinkError),
@@ -1254,10 +1258,12 @@ impl Screen {
                 (*new_page).styles.add(base, self.cursor.style)
             } {
                 Ok(id) => id,
-                Err(_err) => {
+                Err(err) => {
                     // TODO: Should we increase the capacity further in this case?
-                    // log.warn("(Screen.increaseCapacity) Failed to add cursor
-                    //   style back to page, err={}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "(Screen.increaseCapacity) Failed to add cursor style back to page, err={err:?}"
+                    );
 
                     // Reset the cursor style.
                     self.cursor.style = style::Style::default();
@@ -1275,10 +1281,12 @@ impl Screen {
             self.cursor.hyperlink = None;
 
             // Re-add
-            if let Err(_err) = self.start_hyperlink_once(unsafe { (*link).clone() }) {
+            if let Err(err) = self.start_hyperlink_once(unsafe { (*link).clone() }) {
                 // TODO: Should we increase the capacity further in this case?
-                // log.warn("(Screen.increaseCapacity) Failed to add cursor
-                //   hyperlink back to page, err={}", .{err});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "(Screen.increaseCapacity) Failed to add cursor hyperlink back to page, err={err:?}"
+                );
             }
 
             // Remove our old link
@@ -2287,12 +2295,12 @@ impl Screen {
         // On the new page, we need to migrate our style
         if let Some(old_style) = old_style_ {
             self.cursor.style = old_style;
-            if let Err(_err) = self.manual_style_update() {
+            if let Err(err) = self.manual_style_update() {
                 // This failure should not happen because manualStyleUpdate
                 // handles page splitting, overflow, and more. This should only
                 // happen if we're out of RAM. In this case, we'll just degrade
                 // gracefully back to the default style.
-                // log.err("failed to update style on cursor change err={}", .{err});
+                log::error!(target: LOG_SCOPE, "failed to update style on cursor change err={err:?}");
                 self.cursor.style = style::Style::default();
                 self.cursor.style_id = 0;
             }
@@ -2311,11 +2319,11 @@ impl Screen {
                 hyperlink::HyperlinkId::Explicit(v) => Some(v.clone()),
                 hyperlink::HyperlinkId::Implicit(_) => None,
             };
-            if let Err(_err) = self.start_hyperlink(&uri, id_.as_deref()) {
+            if let Err(err) = self.start_hyperlink(&uri, id_.as_deref()) {
                 // This shouldn't happen because startHyperlink should handle
                 // resizing. This only happens if we're truly out of RAM. Degrade
                 // to forgetting the hyperlink.
-                // log.err("failed to update hyperlink on cursor change err={}", .{err});
+                log::error!(target: LOG_SCOPE, "failed to update hyperlink on cursor change err={err:?}");
             }
 
             // Remove our old link
@@ -2403,11 +2411,11 @@ impl Screen {
             };
 
             // And it to our cursor.
-            if let Err(_err) = self.start_hyperlink(&uri, id_.as_deref()) {
+            if let Err(err) = self.start_hyperlink(&uri, id_.as_deref()) {
                 // This shouldn't happen because startHyperlink should handle
                 // resizing. This only happens if we're truly out of RAM. Degrade
                 // to forgetting the hyperlink.
-                // log.err("failed to update hyperlink on cursor change err={}", .{err});
+                log::error!(target: LOG_SCOPE, "failed to update hyperlink on cursor change err={err:?}");
             }
         }
 
@@ -3151,12 +3159,12 @@ impl Screen {
 
         // Restore the cursor style.
         self.cursor.style = cursor_style;
-        if self.manual_style_update().is_err() {
+        if let Err(err) = self.manual_style_update() {
             // This failure should not happen because manualStyleUpdate handles
             // page splitting, overflow, and more. This should only happen if
             // we're out of RAM. In this case, we'll just degrade gracefully back
             // to the default style.
-            // log.err("failed to update style on cursor reload err={}", .{err});
+            log::error!(target: LOG_SCOPE, "failed to update style on cursor reload err={err:?}");
             self.cursor.style = style::Style::default();
             self.cursor.style_id = 0;
         }
@@ -3203,11 +3211,11 @@ impl Screen {
                 hyperlink::HyperlinkId::Explicit(v) => Some(v.clone()),
                 hyperlink::HyperlinkId::Implicit(_) => None,
             };
-            if let Err(_err) = self.start_hyperlink(&uri, id_.as_deref()) {
+            if let Err(err) = self.start_hyperlink(&uri, id_.as_deref()) {
                 // This shouldn't happen because startHyperlink should handle
                 // resizing. This only happens if we're truly out of RAM. Degrade
                 // to forgetting the hyperlink.
-                // log.err("failed to update hyperlink on resize err={}", .{err});
+                log::error!(target: LOG_SCOPE, "failed to update hyperlink on resize err={err:?}");
             }
 
             // Remove our old link
@@ -3320,8 +3328,10 @@ impl Screen {
                                     // This should never happen because promptIterator
                                     // should always find a prompt if we already verified
                                     // our row is some kind of prompt.
-                                    // log.warn("cursor on prompt line but promptIterator
-                                    //   found no prompt", .{});
+                                    log::warn!(
+                                        target: LOG_SCOPE,
+                                        "cursor on prompt line but promptIterator found no prompt"
+                                    );
                                     break 'prompt;
                                 }
                             }
@@ -3362,8 +3372,11 @@ impl Screen {
         // has no `errdefer`, so we invoke it on the error path below.
         let revert = |s: &mut Screen| {
             s.cursor.style = old_style;
-            if s.manual_style_update().is_err() {
-                // log.warn("setAttribute error restoring old style after failure ...");
+            if let Err(err) = s.manual_style_update() {
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "setAttribute error restoring old style after failure err={err:?}"
+                );
                 s.cursor.style = style::Style::default();
                 s.manual_style_update()
                     .expect("manualStyleUpdate to default cannot fail");
@@ -3636,7 +3649,7 @@ impl Screen {
                         // guaranteed to increase our capacity by at least one and
                         // we only need one space, but again, I don't want to crash
                         // here so let's log loudly and reset.
-                        // log.err("style addition failed after capacity increase", .{});
+                        log::error!(target: LOG_SCOPE, "style addition failed after capacity increase");
                         return Err(IncreaseCapacityError::OutOfMemory);
                     }
                     Err(AddError::NeedsRehash) => {
@@ -3644,7 +3657,7 @@ impl Screen {
                         // and rehashing should never result in a duplicate. But
                         // we don't want to simply hard crash so log it and
                         // clear our style.
-                        // log.err("style rehash resulted in needs rehash", .{});
+                        log::error!(target: LOG_SCOPE, "style rehash resulted in needs rehash");
                         return Ok(());
                     }
                 }
@@ -3787,7 +3800,7 @@ impl Screen {
                     // This should never happen because we just increased capacity.
                     // Log loudly but still return an error so we don't just
                     // crash.
-                    // log.err("grapheme append failed after capacity increase", .{});
+                    log::error!(target: LOG_SCOPE, "grapheme append failed after capacity increase");
                     pagelist::grow::IncreaseCapacityError::OutOfMemory
                 })?;
             }
@@ -9014,6 +9027,47 @@ mod tests {
             let contents = dump(&s, vp());
             assert_eq!(contents, b"line1\nline2");
         }
+        s.deinit();
+    }
+
+    // S134-F1: `clear_prompt_for_redraw`'s `Redraw::True` arm logs
+    // `log.warn("cursor on prompt line but promptIterator found no prompt",
+    // .{})` (Screen.zig:2264) when the cursor is FLAGGED semantic-prompt
+    // content but no row is actually tagged with a `SemanticPrompt` marker
+    // for `prompt_iterator` to find — the exact "cursor.semantic_content
+    // says prompt, but the row's own tag was never set" mismatch the
+    // function's own doc comment describes (some shells mark input areas but
+    // not every continuation line). Reproduced directly, without going
+    // through `cursor_set_semantic_content` (which sets BOTH fields
+    // consistently and would never trigger this path).
+    #[test]
+    fn screen_resize_prompt_redraw_true_logs_when_no_prompt_row_is_tagged() {
+        let mut s = mkscreen(20, 5, 5);
+        s.test_write_string(b"line1").unwrap();
+
+        // Flag the cursor as prompt content WITHOUT tagging any row's
+        // `SemanticPrompt`, so `prompt_iterator` finds nothing.
+        s.cursor.semantic_content = pagepkg::SemanticContent::Prompt;
+
+        let cap = crate::log_capture::start();
+        s.resize(Resize {
+            cols: 30,
+            rows: 5,
+            reflow: true,
+            prompt_redraw: osc::semantic_prompt::Redraw::True,
+        })
+        .unwrap();
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "screen"
+                    && *msg == "cursor on prompt line but promptIterator found no prompt"),
+            "expected the no-prompt-found diagnostic, got: {messages:?}"
+        );
+        drop(cap);
+
         s.deinit();
     }
 

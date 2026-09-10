@@ -21,6 +21,7 @@ use crate::kitty::graphics as kitty_gfx;
 use crate::options::KITTY_GRAPHICS;
 
 // const log = std.log.scoped(.terminal_apc);
+const LOG_SCOPE: &str = "terminal_apc";
 
 /// APC command handler. This should be hooked into a terminal.Stream handler.
 /// The start/feed/end functions are meant to be called from the terminal.Stream
@@ -234,8 +235,8 @@ impl Handler {
             // } else unreachable,
             State::Kitty(p) => {
                 if KITTY_GRAPHICS {
-                    if p.feed(byte).is_err() {
-                        // log.warn("kitty graphics protocol error: {}", .{err});
+                    if let Err(err) = p.feed(byte) {
+                        log::warn!(target: LOG_SCOPE, "kitty graphics protocol error: {err:?}");
                         // p.deinit();
                         // PORT NOTE: the Rust kitty `Parser` has no `deinit` (it
                         // frees its `data`/`kv` on drop); reassigning `self.state`
@@ -253,8 +254,8 @@ impl Handler {
             //     self.state = .ignore;
             // },
             State::Glyph(p) => {
-                if p.feed(byte).is_err() {
-                    // log.warn("glyph protocol error: {}", .{err});
+                if let Err(err) = p.feed(byte) {
+                    log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
                     p.deinit();
                     self.state = State::Ignore;
                 }
@@ -340,8 +341,8 @@ impl Handler {
                 // .kitty => |*p| if (comptime build_options.kitty_graphics) { ... } else unreachable,
                 State::Kitty(p) => {
                     if KITTY_GRAPHICS {
-                        if p.feed_slice(rem).is_err() {
-                            // log.warn("kitty graphics protocol error: {}", .{err});
+                        if let Err(err) = p.feed_slice(rem) {
+                            log::warn!(target: LOG_SCOPE, "kitty graphics protocol error: {err:?}");
                             // p.deinit();
                             self.state = State::Ignore;
                         }
@@ -353,8 +354,8 @@ impl Handler {
 
                 // .glyph => |*p| { p.feedSlice(rem) catch ...; return; },
                 State::Glyph(p) => {
-                    if p.feed_slice(rem).is_err() {
-                        // log.warn("glyph protocol error: {}", .{err});
+                    if let Err(err) = p.feed_slice(rem) {
+                        log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
                         p.deinit();
                         self.state = State::Ignore;
                     }
@@ -410,8 +411,8 @@ impl Handler {
                 // Use the same allocator that was used to create the parser.
                 match p.complete() {
                     Ok(command) => Some(Command::Kitty(command)),
-                    Err(_) => {
-                        // log.warn("kitty graphics protocol error: {}", .{err});
+                    Err(err) => {
+                        log::warn!(target: LOG_SCOPE, "kitty graphics protocol error: {err:?}");
                         None
                     }
                 }
@@ -426,8 +427,8 @@ impl Handler {
             // },
             State::Glyph(mut p) => match p.complete() {
                 Ok(command) => Some(Command::Glyph(command)),
-                Err(_) => {
-                    // log.warn("glyph protocol error: {}", .{err});
+                Err(err) => {
+                    log::warn!(target: LOG_SCOPE, "glyph protocol error: {err:?}");
                     None
                 }
             },
@@ -769,6 +770,34 @@ mod tests {
             h.feed(alloc, c);
         }
         assert!(h.end(alloc).is_none());
+    }
+
+    // S149-F2: glyph-protocol parse failures at `end()` log
+    // `log.warn("glyph protocol error: {}", .{err})` (apc.zig:241-244).
+    #[test]
+    fn glyph_protocol_error_at_end_logs() {
+        let alloc = Global;
+        let mut h: Handler = Handler::default();
+        h.start();
+        // `glyph::IDENTIFIER` ("25a1") routes into the glyph protocol state;
+        // "x" is not a well-formed glyph request, so `complete()` fails with
+        // `CommandParserError::InvalidFormat`.
+        h.feed_slice(alloc, b"25a1;x");
+
+        let cap = crate::log_capture::start();
+        assert!(h.end(alloc).is_none());
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "terminal_apc"
+                    && msg.starts_with("glyph protocol error: ")),
+            "expected the glyph-protocol-error diagnostic, got: {messages:?}"
+        );
+        drop(cap);
+
+        h.deinit();
     }
 
     // test "capture unknown APC command"

@@ -603,17 +603,12 @@ impl PageList {
         // is that we always have full active space.
         if tl_pt.tag() == point::Tag::Active {
             for _ in 0..erased {
-                if self.grow().is_err() {
+                if let Err(err) = self.grow() {
                     // If this fails its a pretty big issue actually... but I don't
                     // want to turn this function into an error-returning function
                     // because erasing active is so rare and even if it happens failing
                     // is even more rare...
-                    //
-                    // PORT NOTE: the reference logs the error and returns; we keep
-                    // the early return and elide the `log.err` call (no logging
-                    // facade is wired into the crate yet — see `grow.rs` for the
-                    // same `// log.err(...)` convention).
-                    // log.err("failed to regrow active area after erase err={}", .{err});
+                    log::error!(target: super::LOG_SCOPE, "failed to regrow active area after erase err={err:?}");
                     return;
                 }
             }

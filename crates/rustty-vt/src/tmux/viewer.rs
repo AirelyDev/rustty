@@ -64,10 +64,7 @@ use super::output;
 use super::output::{Value, Variable};
 
 // const log = std.log.scoped(.terminal_tmux_viewer);
-//
-// PORT NOTE: the reference's `std.log.scoped(...)` messages are dropped in the
-// port (the crate does not thread a logging facade through these seams). The
-// log sites are preserved as comments so the control flow is byte-traceable.
+const LOG_SCOPE: &str = "terminal_tmux_viewer";
 
 // TODO: A list of TODOs as I think about them.
 // - We need to make startup more robust so session and block can happen
@@ -458,7 +455,7 @@ impl Viewer {
             //     break :defunct &.{};
             // },
             State::Defunct => {
-                // log.info("received notification in defunct state, ignoring", .{});
+                log::info!(target: LOG_SCOPE, "received notification in defunct state, ignoring");
                 self.actions.clear();
                 &self.actions
             }
@@ -624,11 +621,11 @@ impl Viewer {
 
             // .output => |out| self.receivedOutput(out.pane_id, out.data) catch |err| {
             control::Notification::Output { pane_id, data } => {
-                if let Err(_err) = self.received_output(pane_id, &data) {
-                    // log.warn(
-                    //     "failed to process output for pane id={}: {}",
-                    //     .{ out.pane_id, err },
-                    // );
+                if let Err(err) = self.received_output(pane_id, &data) {
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to process output for pane id={pane_id}: {err:?}"
+                    );
                 }
             }
 
@@ -1161,8 +1158,7 @@ impl Viewer {
             Some(c) => c,
             None => {
                 // If we have no pending commands, this is unexpected.
-                // log.info("unexpected block output err={}", .{is_err});
-                let _ = is_err;
+                log::info!(target: LOG_SCOPE, "unexpected block output err={is_err:?}");
                 return Ok(());
             }
         };
@@ -1604,7 +1600,7 @@ impl Viewer {
         let pane: &mut Pane = match self.panes.get_ptr(&id) {
             Some(p) => p,
             None => {
-                // log.info("received pane history for untracked pane id={}", .{id});
+                log::info!(target: LOG_SCOPE, "received pane history for untracked pane id={id}");
                 return Ok(());
             }
         };
@@ -3294,5 +3290,29 @@ mod tests {
             }
         }
         false
+    }
+
+    // S209-F2: `received_pane_history` logs `log.info("received pane history
+    // for untracked pane id={}", .{id})` (viewer.zig:1049) when the history
+    // arrives for a pane id this viewer never tracked.
+    #[test]
+    fn received_pane_history_for_untracked_pane_logs() {
+        let mut viewer = Viewer::init(Global).unwrap();
+        assert!(viewer.panes.get_ptr(&999).is_none());
+
+        let cap = crate::log_capture::start();
+        assert!(viewer
+            .received_pane_history(screen_set::Key::Primary, 999, b"some history")
+            .is_ok());
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Info
+                    && target == "terminal_tmux_viewer"
+                    && *msg == "received pane history for untracked pane id=999"),
+            "expected the untracked-pane-history diagnostic, got: {messages:?}"
+        );
+        drop(cap);
     }
 }

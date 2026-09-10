@@ -302,6 +302,7 @@ pub(crate) static GLOBAL_ZIG_ALLOCATOR: rustty_lib::allocator::GlobalZigAllocato
     rustty_lib::allocator::GlobalZigAllocator;
 
 // const log = std.log.scoped(.terminal);
+const LOG_SCOPE: &str = "terminal";
 
 /// Default tabstop interval
 const TABSTOP_INTERVAL: u16 = 8;
@@ -2449,7 +2450,7 @@ impl Terminal {
         // characters are ALWAYS attached to some other non-zero-width
         // character at the time of writing.
         if unsafe { (*active).cursor.x } == 0 && left == 1 {
-            // log.warn("zero-width character with no prior character, ignoring", .{});
+            log::warn!(target: LOG_SCOPE, "zero-width character with no prior character, ignoring");
             return Ok(());
         }
 
@@ -2465,7 +2466,7 @@ impl Terminal {
 
         // If our previous cell has no text, just ignore the zero-width character
         if !unsafe { (*prev).has_text() } {
-            // log.warn("zero-width character with no prior character, ignoring", .{});
+            log::warn!(target: LOG_SCOPE, "zero-width character with no prior character, ignoring");
             return Ok(());
         }
 
@@ -2717,9 +2718,12 @@ impl Terminal {
         // handles clearing the old hyperlink and an optimization if we're
         // overwriting the same hyperlink.
         if unsafe { (*active).cursor.hyperlink_id } > 0 {
-            if let Err(_err) = self.active_mut().cursor_set_hyperlink() {
+            if let Err(err) = self.active_mut().cursor_set_hyperlink() {
                 // @branchHint(.unlikely);
-                // log.warn("error reallocating for more hyperlink space, ignoring hyperlink err={}", .{err});
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "error reallocating for more hyperlink space, ignoring hyperlink err={err:?}"
+                );
 
                 // A partially successful grow can replace the page even when the
                 // call fails, so `cell` may be stale here. The cursor pointers are
@@ -3191,12 +3195,12 @@ impl Terminal {
         //     self.screens.active.manualStyleUpdate() catch unreachable;
         // };
         unsafe { (*self.screens.active).cursor.style = saved_style };
-        if let Err(_err) = self.active_mut().manual_style_update() {
+        if let Err(err) = self.active_mut().manual_style_update() {
             // Regardless of the error here, we revert back to an unstyled
             // cursor. It is more important that the restore succeeds in
             // other attributes because terminals have no way to communicate
             // failure back.
-            // log.warn("restoreCursor error updating style err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "restoreCursor error updating style err={err:?}");
             let screen: *mut Screen = self.screens.active;
             unsafe { (*screen).cursor.style = style::Style::default() };
             self.active_mut().manual_style_update().unwrap();
@@ -3569,8 +3573,9 @@ impl Terminal {
                 .tabstops
                 .unset(unsafe { (*self.screens.active).cursor.x } as usize),
             csi::TabClear::All => self.tabstops.reset(0),
-            // log.warn("invalid or unknown tab clear setting: {}", .{cmd}),
-            csi::TabClear::Other(_) => {}
+            csi::TabClear::Other(_) => {
+                log::warn!(target: LOG_SCOPE, "invalid or unknown tab clear setting: {cmd:?}");
+            }
         }
     }
 
@@ -4580,7 +4585,7 @@ impl Terminal {
             unsafe { (*(*self.screens.active).cursor.page_pin).down((rem - 1) as usize) }.unwrap();
         let cur_p: *mut crate::pagelist::Pin = match self.active_mut().pages.track_pin(down_pin) {
             Ok(p) => p,
-            Err(_err) => {
+            Err(err) => {
                 // comptime assert(@TypeOf(err) == error{OutOfMemory});
                 //
                 // This error scenario means that our GPA is OOM. This is not a
@@ -4588,8 +4593,7 @@ impl Terminal {
                 // because it'll result in a corrupted screen. Ideally in the future
                 // we flag the state as broken and show an error message to the user.
                 // For now, we panic.
-                // log.err("insertLines trackPin error err={}", .{err});
-                // @panic("insertLines trackPin OOM");
+                log::error!(target: LOG_SCOPE, "insertLines trackPin error err={err:?}");
                 panic!("insertLines trackPin OOM");
             }
         };
@@ -4841,11 +4845,10 @@ impl Terminal {
         let cursor_pin = unsafe { *(*self.screens.active).cursor.page_pin };
         let cur_p: *mut crate::pagelist::Pin = match self.active_mut().pages.track_pin(cursor_pin) {
             Ok(p) => p,
-            Err(_err) => {
+            Err(err) => {
                 // See insertLines
                 // comptime assert(@TypeOf(err) == error{OutOfMemory});
-                // log.err("deleteLines trackPin error err={}", .{err});
-                // @panic("deleteLines trackPin OOM");
+                log::error!(target: LOG_SCOPE, "deleteLines trackPin error err={err:?}");
                 panic!("deleteLines trackPin OOM");
             }
         };
@@ -5345,7 +5348,7 @@ impl Terminal {
             }
 
             _ => {
-                // log.err("unimplemented erase line mode: {}", .{mode});
+                log::error!(target: LOG_SCOPE, "unimplemented erase line mode: {mode:?}");
                 return;
             }
         };
@@ -5427,8 +5430,8 @@ impl Terminal {
         match mode {
             csi::EraseDisplay::ScrollComplete => {
                 // self.screens.active.scrollClear() catch |err| { ... };
-                if self.active_mut().scroll_clear().is_err() {
-                    // log.warn("scroll clear failed, doing a normal clear err={}", .{err});
+                if let Err(err) = self.active_mut().scroll_clear() {
+                    log::warn!(target: LOG_SCOPE, "scroll clear failed, doing a normal clear err={err:?}");
                     self.erase_display(csi::EraseDisplay::Complete, protected_req);
                     return;
                 }
@@ -6157,7 +6160,7 @@ impl Terminal {
         // also fails, we fall back to the primary screen.
         if let Some(alt) = self.screens.get(crate::screen_set::Key::Alternate) {
             'alt: {
-                let _err: ResizeError = 'resize: {
+                let err: ResizeError = 'resize: {
                     #[cfg(test)]
                     if let Err(e) = resize_tw_check(ResizeFp::AlternateScreen) {
                         break 'resize e.into();
@@ -6189,7 +6192,7 @@ impl Terminal {
                     }
                 };
 
-                // log.warn("alternate screen resize failed, replacing it err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "alternate screen resize failed, replacing it err={err:?}");
 
                 // If the alternate screen isn't active, then we just free it
                 // and move on. It'll be reallocated when it gets reinitialized
@@ -6243,9 +6246,11 @@ impl Terminal {
                     },
                 ) {
                     Ok(r) => r,
-                    Err(_init_err) => {
-                        // log.warn("alternate screen replacement failed,
-                        //   falling back to primary err={}", .{init_err});
+                    Err(init_err) => {
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "alternate screen replacement failed, falling back to primary err={init_err:?}"
+                        );
                         break 'alt;
                     }
                 };
@@ -7408,6 +7413,36 @@ mod tests {
         assert_eq!(max_lines, unsafe {
             (*t.screens.active).pages.limits.lines.explicit
         });
+
+        t.deinit(Global);
+    }
+
+    // S141-F4: `print_inner_zero_width`'s "previous cell has no text" guard
+    // logs the SAME `log.warn("zero-width character with no prior
+    // character, ignoring", .{})` (Terminal.zig:1491) as the `x == 0` guard
+    // above, but on the OTHER branch: cursor not at column 0, yet the cell
+    // to its left was never written.
+    #[test]
+    fn terminal_zero_width_character_with_blank_prior_cell_logs() {
+        let mut t = Terminal::init(Global, opts(10, 2)).unwrap();
+        t.modes.set(modespkg::Mode::GraphemeCluster, false);
+
+        // Move the cursor to a column whose left neighbor is blank, without
+        // ever writing there (`set_cursor_pos` alone writes nothing).
+        t.set_cursor_pos(1, 5);
+
+        let cap = crate::log_capture::start();
+        t.print(0x0332).unwrap(); // Combining low line — a zero-width mark.
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "terminal"
+                    && *msg == "zero-width character with no prior character, ignoring"),
+            "expected the zero-width-no-prior-character diagnostic, got: {messages:?}"
+        );
+        drop(cap);
 
         t.deinit(Global);
     }
@@ -10493,6 +10528,29 @@ mod tests {
         t.deinit(Global);
     }
 
+    // S142-F1: `tab_clear`'s `else` arm logs `log.warn("invalid or unknown
+    // tab clear setting: {}", .{cmd})` (Terminal.zig:2288-2293) for any
+    // unrecognized DECST/TBC parameter.
+    #[test]
+    fn terminal_tab_clear_unknown_setting_logs() {
+        let mut t = Terminal::init(Global, opts(30, 5)).unwrap();
+
+        let cap = crate::log_capture::start();
+        t.tab_clear(csi::TabClear::Other(99));
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "terminal"
+                    && msg.starts_with("invalid or unknown tab clear setting: ")),
+            "expected the unknown-tab-clear diagnostic, got: {messages:?}"
+        );
+        drop(cap);
+
+        t.deinit(Global);
+    }
+
     // test "Terminal: cursorPos resets wrap"
     #[test]
     fn terminal_cursor_pos_resets_wrap() {
@@ -12226,6 +12284,29 @@ mod tests {
     // background sgr" and the "eraseLine right protected *" group drive
     // `set_attribute` / `set_protected_mode`; now ported in vt-12b-4 (see the
     // SGR/protected section at the end of this module).
+
+    // S142-F1/S143-F2: `erase_line`'s catch-all arm logs `log.err("unimplemented
+    // erase line mode: {}", .{mode})` (Terminal.zig:3524-3527) for any
+    // `csi::EraseLine::Other` (unrecognized DECSEL/EL) parameter.
+    #[test]
+    fn terminal_erase_line_unimplemented_mode_logs() {
+        let mut t = Terminal::init(Global, opts(10, 5)).unwrap();
+
+        let cap = crate::log_capture::start();
+        t.erase_line(csi::EraseLine::Other(99), false);
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Error
+                    && target == "terminal"
+                    && msg.starts_with("unimplemented erase line mode: ")),
+            "expected the unimplemented-erase-line-mode diagnostic, got: {messages:?}"
+        );
+        drop(cap);
+
+        t.deinit(Global);
+    }
 
     // test "Terminal: eraseLine right wide character"
     #[test]
@@ -20966,9 +21047,22 @@ mod tests {
     fn terminal_zero_width_character_at_start() {
         let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
 
-        // This used to crash the terminal. This is not allowed so we should
-        // just ignore it.
+        // S141-F4: `print_inner_zero_width`'s `x == 0` guard logs
+        // `log.warn("zero-width character with no prior character,
+        // ignoring", .{})` (Terminal.zig:1480) — this used to crash the
+        // terminal, so it's ignored instead.
+        let cap = crate::log_capture::start();
         t.print(0x200D).unwrap();
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "terminal"
+                    && *msg == "zero-width character with no prior character, ignoring"),
+            "expected the zero-width-no-prior-character diagnostic, got: {messages:?}"
+        );
+        drop(cap);
 
         assert_eq!(unsafe { (*t.screens.active).cursor.y }, 0);
         assert_eq!(unsafe { (*t.screens.active).cursor.x }, 0);

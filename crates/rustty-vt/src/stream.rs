@@ -68,6 +68,7 @@ use crate::stream_continuation as continuationpkg;
 use crate::utf8_decoder::UTF8Decoder;
 
 // const log = std.log.scoped(.stream);
+const LOG_SCOPE: &str = "stream";
 
 // /// Flip this to true when you want verbose debug output for
 // /// debugging terminal stream issues. In addition to louder
@@ -1969,7 +1970,9 @@ impl<'a, H: Handler> Stream<'a, H> {
                 Some(a) => a,
                 None => continue,
             };
-            // if (comptime debug) log.info("action: {f}", .{action});
+            if DEBUG {
+                log::info!(target: LOG_SCOPE, "action: {action:?}");
+            }
 
             // A handler can expose this to get the raw action before
             // it is further parsed. If this returns `true` then we skip
@@ -2069,12 +2072,16 @@ impl<'a, H: Handler> Stream<'a, H> {
         //     return;
         // }
         if c != b'm' && p.params_sep.count() > 0 {
-            // log.warn("CSI colon or mixed separators only allowed for 'm' command, got: {f}", ...);
+            log::warn!(
+                target: LOG_SCOPE,
+                "CSI colon or mixed separators only allowed for 'm' command, got: {action:?}"
+            );
             return;
         }
 
-        // if (comptime debug) log.info("action: {f}", .{Parser.Action{ .csi_dispatch = action }});
-        // self.csiDispatch(action);
+        if DEBUG {
+            log::info!(target: LOG_SCOPE, "action: {:?}", parser::Action::CsiDispatch(Box::new(action.clone())));
+        }
         self.csi_dispatch(action);
     }
 
@@ -2098,8 +2105,10 @@ impl<'a, H: Handler> Stream<'a, H> {
         }
 
         // const c0: ansi.C0 = @enumFromInt(c);
-        // if (comptime debug) log.info("execute: {f}", .{c0});
         let c0 = ansi::C0::from_int(c);
+        if DEBUG {
+            log::info!(target: LOG_SCOPE, "execute: {c0:?}");
+        }
         // switch (c0) { ... }
         match c0 {
             // We ignore SOH/STX: https://github.com/microsoft/terminal/issues/10786
@@ -4346,6 +4355,35 @@ mod tests {
             !log_unsupported_once(&SEEN_OSC1_CHANGE_ICON, 0),
             "key 0 was already claimed by the dispatch arm"
         );
+    }
+
+    // S163-F2: the stream's own inline CSI fast-path dispatch logs
+    // `log.warn("CSI colon or mixed separators only allowed for 'm' command,
+    // got: {f}", .{action})` (stream.zig:1352-1356) for a colon-separated CSI
+    // whose final byte is not 'm' — the same rule (and same message text) as
+    // `Parser::do_action`'s `warn_csi_sep_mismatch`, ported separately here
+    // because the fast path builds and dispatches the CSI action without
+    // going through the state-machine `Parser`.
+    #[test]
+    fn csi_fast_path_logs_on_colon_separator_mismatch_for_non_m_command() {
+        struct H;
+        impl Handler for H {}
+
+        let mut s: Stream<H> = Stream::init(Options::with_handler(H));
+        let cap = crate::log_capture::start();
+        s.next_slice(b"\x1b[1:2H"); // cursor position, colon sep, NOT 'm'
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "stream"
+                    && msg.starts_with(
+                        "CSI colon or mixed separators only allowed for 'm' command, got: "
+                    )),
+            "expected the CSI-sep-mismatch diagnostic, got: {messages:?}"
+        );
+        drop(cap);
     }
 
     // ------------------------------------------------------------------

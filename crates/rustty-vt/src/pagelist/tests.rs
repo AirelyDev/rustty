@@ -1148,6 +1148,32 @@ fn pagelist_increaseCapacity_to_increase_styles() {
     s.deinit();
 }
 
+// S124-F1: `increaseCapacity` unconditionally logs `log.info("adjusting page
+// capacity={}", .{cap})` (PageList.zig:4317) before creating the larger
+// replacement page — reached by any ordinary capacity-increase call, no
+// corruption needed.
+#[test]
+fn pagelist_increase_capacity_logs_the_adjusted_capacity() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+
+    let cap = crate::log_capture::start();
+    let _ = s
+        .increase_capacity(s.pages.first, Some(IncreaseCapacity::Styles))
+        .unwrap();
+    let messages = cap.messages();
+    assert!(
+        messages
+            .iter()
+            .any(|(level, target, msg)| *level == log::Level::Info
+                && target == "page_list"
+                && msg.starts_with("adjusting page capacity=")),
+        "expected the adjusting-page-capacity diagnostic, got: {messages:?}"
+    );
+    drop(cap);
+
+    s.deinit();
+}
+
 // ref: test "PageList increaseCapacity styles projects capacity from page density"
 #[test]
 fn pagelist_increaseCapacity_styles_projects_capacity_from_page_density() {
@@ -3104,6 +3130,105 @@ fn pagelist_page_preserving_state_leaves_a_compressed_node_compressed() {
         // Restore so deinit's accounting sees a resident page.
         let _ = super::Node::page(node);
     }
+    s.deinit();
+}
+
+/// S122-F1: `page_preserving_state`'s decode-failure path
+/// (PageList.zig:186 `log.err("failed to clone compressed page err={}", ...)`,
+/// mod.rs:572-573). A codec error here is "internal corruption" per the
+/// reference's own comment — reproduced by corrupting a real compressed
+/// node's `encoded` bytes (the same `0xFF`-fill technique the malformed-data
+/// tests above use) so `clone_buf`'s LZ4 decode genuinely fails, then
+/// asserting the diagnostic fires on the panicking path.
+#[test]
+fn pagelist_page_preserving_state_logs_and_panics_on_decode_failure() {
+    let mut s = PageList::init(Options {
+        max_size: Some(1000),
+        ..Options::new(20, 5)
+    })
+    .unwrap();
+    let node = s.pages.first;
+    unsafe {
+        let page = super::Node::page(node);
+        let len = (*page).memory_len();
+        let mut scratch = vec![0u8; crate::compress::required_scratch(len).unwrap()];
+        let mut table: crate::compress::lz4::HashTable = [0; crate::compress::lz4::HASH_TABLE_LEN];
+        let compressed =
+            crate::compress::CompressedPage::init(page as *const Page, &mut scratch, &mut table)
+                .unwrap()
+                .unwrap();
+        (*node).data = NodeData::Compressed(compressed);
+    }
+    compressed_encoded_fill_for_test(node, 0xFF);
+
+    let cap = crate::log_capture::start();
+    let node_addr = node as usize;
+    let result = std::panic::catch_unwind(move || unsafe {
+        super::Node::page_preserving_state(node_addr as *const super::Node)
+    });
+    assert!(result.is_err(), "expected the corrupted decode to panic");
+    let messages = cap.messages();
+    assert!(
+        messages
+            .iter()
+            .any(|(level, target, msg)| *level == log::Level::Error
+                && target == "page_list"
+                && msg.starts_with("failed to clone compressed page err=")),
+        "expected the clone-compressed-page diagnostic, got: {messages:?}"
+    );
+    drop(cap);
+
+    // The panicking path never writes back to `node.data` on failure, so the
+    // node is still `Compressed` with its corrupted encoding. `deinit` tears
+    // every node down through `RestoreMode::Discard` (mod.rs:2124), which
+    // never decodes, so it is safe to call directly.
+    s.deinit();
+}
+
+/// S122-F1: `Node::restore`'s `RestoreMode::Preserve` decode-failure path
+/// (PageList.zig:278 `log.err("failed to restore compressed page err={}",
+/// ...)`, mod.rs:624-625) — reached through `Node::page`, the ordinary
+/// "decompress on access" accessor, when the retained encoding is corrupted.
+#[test]
+fn pagelist_node_page_logs_and_panics_on_restore_decode_failure() {
+    let mut s = PageList::init(Options {
+        max_size: Some(1000),
+        ..Options::new(20, 5)
+    })
+    .unwrap();
+    let node = s.pages.first;
+    unsafe {
+        let page = super::Node::page(node);
+        let len = (*page).memory_len();
+        let mut scratch = vec![0u8; crate::compress::required_scratch(len).unwrap()];
+        let mut table: crate::compress::lz4::HashTable = [0; crate::compress::lz4::HASH_TABLE_LEN];
+        let compressed =
+            crate::compress::CompressedPage::init(page as *const Page, &mut scratch, &mut table)
+                .unwrap()
+                .unwrap();
+        (*node).data = NodeData::Compressed(compressed);
+    }
+    compressed_encoded_fill_for_test(node, 0xFF);
+
+    let cap = crate::log_capture::start();
+    let node_addr = node as usize;
+    let result = std::panic::catch_unwind(move || unsafe {
+        super::Node::page(node_addr as *mut super::Node)
+    });
+    assert!(result.is_err(), "expected the corrupted decode to panic");
+    let messages = cap.messages();
+    assert!(
+        messages
+            .iter()
+            .any(|(level, target, msg)| *level == log::Level::Error
+                && target == "page_list"
+                && msg.starts_with("failed to restore compressed page err=")),
+        "expected the restore-compressed-page diagnostic, got: {messages:?}"
+    );
+    drop(cap);
+
+    // As above: the node is still `Compressed` (corrupted) after the panic;
+    // `deinit`'s discard-restore teardown handles it without decoding.
     s.deinit();
 }
 
@@ -6749,11 +6874,264 @@ fn pagelist_integrity_detects_max_lines_exceeded() {
     s.total_rows += node_rows as usize;
     s.pause_integrity_checks(false);
 
+    // S122-F1: the reference logs `log.warn("PageList integrity violation:
+    // max lines exceeded history={} max={}", .{...})` (PageList.zig:871-874)
+    // on this exact violation.
+    let cap = crate::log_capture::start();
     assert_eq!(Err(IntegrityError::MaxLinesExceeded), s.verify_integrity());
+    let messages = cap.messages();
+    assert!(
+        messages
+            .iter()
+            .any(|(level, target, msg)| *level == log::Level::Warn
+                && target == "page_list"
+                && msg.starts_with("PageList integrity violation: max lines exceeded history=")),
+        "expected the max-lines-exceeded integrity diagnostic, got: {messages:?}"
+    );
+    drop(cap);
 
     // Raising the limit back to unlimited restores a valid list so `deinit`'s
     // own integrity assertion holds.
     s.limits.lines.explicit = usize::MAX;
+    assert_eq!(Ok(()), s.verify_integrity());
+
+    s.deinit();
+}
+
+// S122-F1: `verify_integrity`'s total_rows-mismatch check
+// (PageList.zig:831-834). Corrupt the cached `total_rows` field behind
+// integrity checks paused (the same technique
+// `pagelist_integrity_detects_max_lines_exceeded` uses), then confirm both
+// the error variant and the restored `log.warn` diagnostic.
+#[cfg_attr(not(debug_assertions), ignore)]
+#[test]
+fn pagelist_integrity_detects_total_rows_mismatch() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    s.grow_rows(10).unwrap();
+    assert_eq!(Ok(()), s.verify_integrity());
+
+    s.pause_integrity_checks(true);
+    s.total_rows += 5;
+    s.pause_integrity_checks(false);
+
+    let cap = crate::log_capture::start();
+    assert_eq!(Err(IntegrityError::TotalRowsMismatch), s.verify_integrity());
+    let messages = cap.messages();
+    assert!(
+        messages
+            .iter()
+            .any(|(level, target, msg)| *level == log::Level::Warn
+                && target == "page_list"
+                && msg.starts_with("PageList integrity violation: total_rows mismatch cached=")),
+        "expected the total_rows-mismatch integrity diagnostic, got: {messages:?}"
+    );
+    drop(cap);
+
+    s.pause_integrity_checks(true);
+    s.total_rows -= 5;
+    s.pause_integrity_checks(false);
+    assert_eq!(Ok(()), s.verify_integrity());
+
+    s.deinit();
+}
+
+// S122-F1: `verify_integrity`'s page-serial-predates-epoch check
+// (PageList.zig:820-823). Bumping `page_serial_epoch` past every existing
+// node's `serial` (paused, as above) reproduces the violation without
+// corrupting anything the reference doesn't itself guard against.
+#[cfg_attr(not(debug_assertions), ignore)]
+#[test]
+fn pagelist_integrity_detects_page_serial_predates_epoch() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    s.grow_rows(10).unwrap();
+    assert_eq!(Ok(()), s.verify_integrity());
+
+    s.pause_integrity_checks(true);
+    s.page_serial_epoch += 1_000_000;
+    s.pause_integrity_checks(false);
+
+    let cap = crate::log_capture::start();
+    assert_eq!(Err(IntegrityError::PageSerialInvalid), s.verify_integrity());
+    let messages = cap.messages();
+    assert!(
+        messages
+            .iter()
+            .any(|(level, target, msg)| *level == log::Level::Warn
+                && target == "page_list"
+                && msg.starts_with(
+                    "PageList integrity violation: page serial predates epoch serial="
+                )),
+        "expected the page-serial-predates-epoch integrity diagnostic, got: {messages:?}"
+    );
+    drop(cap);
+
+    s.pause_integrity_checks(true);
+    s.page_serial_epoch -= 1_000_000;
+    s.pause_integrity_checks(false);
+    assert_eq!(Ok(()), s.verify_integrity());
+
+    s.deinit();
+}
+
+// S122-F1: the three `viewport == .pin` checks (PageList.zig:845-848 "not in
+// list", :871-874 "offset mismatch", :880-883 "rows too small").
+// `s.scroll(Scroll::Row(_))` is the ordinary, non-corrupting way to put the
+// list into `Viewport::Pin` (used throughout this file, e.g.
+// `pagelist_scroll_to_row_in_scrollback`); each test then corrupts exactly
+// the one cached field its check reads.
+
+// PageList.zig:845-848 — "viewport pin not in list". Point `viewport_pin` at
+// a node this list doesn't own so the scan in `verify_integrity` never finds
+// it.
+#[cfg_attr(not(debug_assertions), ignore)]
+#[test]
+fn pagelist_integrity_detects_viewport_pin_not_in_list() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    // Enough scrollback to span multiple pages (a page at cols=80 holds
+    // `PageList::initial_capacity(80).rows` rows — comfortably under 700),
+    // and scroll far enough back that the pin lands on an EARLIER page (so
+    // its node has at least one later sibling — needed below: the pin must
+    // not be `s.pages.last`, or the backward scan finds it on its very first
+    // step regardless). Kept as small as the two-page requirement allows:
+    // `grow_rows` runs a full `assert_integrity` per row under
+    // `debug_assertions`, which is the expensive part under Miri.
+    s.grow_rows(700).unwrap();
+    s.scroll(Scroll::Row(300));
+    assert!(s.viewport == Viewport::Pin);
+    assert_eq!(Ok(()), s.verify_integrity());
+
+    // `pin_is_valid` (checked, for every tracked pin including this one,
+    // BEFORE the viewport-pin block) scans forward from `pages.first` via
+    // `.next` and only requires the node to be reachable that way — so we
+    // can reproduce "not found by the `.prev` backward scan from
+    // `pages.last`" (PageList.zig:845-848) surgically: splice the pin's node
+    // out of the BACKWARD chain only (repoint its forward-neighbor's `.prev`
+    // around it), leaving the forward `.next` chain — and thus
+    // `pin_is_valid` — completely untouched. This reproduces the reference's
+    // own distinction (a node can satisfy `pinIsValid` while the
+    // list-scan-from-the-tail in `assertIntegrity` still doesn't visit it)
+    // without corrupting anything the tracked-pins check itself guards.
+    let vp_node = unsafe { (*s.viewport_pin).node };
+    let vp_next = unsafe { (*vp_node).next };
+    assert!(
+        !vp_next.is_null(),
+        "the pin's node must have a later sibling"
+    );
+
+    s.pause_integrity_checks(true);
+    let vp_prev = unsafe { (*vp_node).prev };
+    unsafe { (*vp_next).prev = vp_prev };
+    s.pause_integrity_checks(false);
+
+    let cap = crate::log_capture::start();
+    assert_eq!(
+        Err(IntegrityError::ViewportPinOffsetMismatch),
+        s.verify_integrity()
+    );
+    let messages = cap.messages();
+    assert!(
+        messages
+            .iter()
+            .any(|(level, target, msg)| *level == log::Level::Warn
+                && target == "page_list"
+                && *msg == "PageList integrity violation: viewport pin not in list"),
+        "expected the viewport-pin-not-in-list integrity diagnostic, got: {messages:?}"
+    );
+    drop(cap);
+
+    // Repair the backward chain before any further mutation (`deinit`'s own
+    // integrity assertion, and the pool teardown it does, both walk the
+    // list).
+    s.pause_integrity_checks(true);
+    unsafe { (*vp_next).prev = vp_node };
+    s.pause_integrity_checks(false);
+    assert_eq!(Ok(()), s.verify_integrity());
+
+    s.deinit();
+}
+
+// PageList.zig:871-874 — "viewport pin offset mismatch". The pin IS in the
+// list, but the cached `viewport_pin_row_offset` no longer matches the
+// scan's recomputed offset.
+#[cfg_attr(not(debug_assertions), ignore)]
+#[test]
+fn pagelist_integrity_detects_viewport_pin_offset_mismatch() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    s.grow_rows(20).unwrap();
+    s.scroll(Scroll::Row(5));
+    assert!(s.viewport == Viewport::Pin);
+    assert_eq!(Ok(()), s.verify_integrity());
+    assert!(s.viewport_pin_row_offset.is_some());
+
+    s.pause_integrity_checks(true);
+    let saved = s.viewport_pin_row_offset;
+    s.viewport_pin_row_offset = Some(saved.unwrap() + 7);
+    s.pause_integrity_checks(false);
+
+    let cap = crate::log_capture::start();
+    assert_eq!(
+        Err(IntegrityError::ViewportPinOffsetMismatch),
+        s.verify_integrity()
+    );
+    let messages = cap.messages();
+    assert!(
+        messages
+            .iter()
+            .any(|(level, target, msg)| *level == log::Level::Warn
+                && target == "page_list"
+                && msg.starts_with(
+                    "PageList integrity violation: viewport pin offset mismatch cached="
+                )),
+        "expected the viewport-pin-offset-mismatch integrity diagnostic, got: {messages:?}"
+    );
+    drop(cap);
+
+    s.pause_integrity_checks(true);
+    s.viewport_pin_row_offset = saved;
+    s.pause_integrity_checks(false);
+    assert_eq!(Ok(()), s.verify_integrity());
+
+    s.deinit();
+}
+
+// PageList.zig:880-883 — "viewport pin rows too small". The recomputed
+// offset is correct, but `self.rows` (the active-area height) has been
+// inflated past what's left of the scrollback below the pin.
+#[cfg_attr(not(debug_assertions), ignore)]
+#[test]
+fn pagelist_integrity_detects_viewport_pin_insufficient_rows() {
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    s.grow_rows(20).unwrap();
+    s.scroll(Scroll::Row(5));
+    assert!(s.viewport == Viewport::Pin);
+    assert_eq!(Ok(()), s.verify_integrity());
+
+    s.pause_integrity_checks(true);
+    let saved = s.rows;
+    s.rows = s.total_rows as size::CellCountInt + 100;
+    s.pause_integrity_checks(false);
+
+    let cap = crate::log_capture::start();
+    assert_eq!(
+        Err(IntegrityError::ViewportPinInsufficientRows),
+        s.verify_integrity()
+    );
+    let messages = cap.messages();
+    assert!(
+        messages
+            .iter()
+            .any(|(level, target, msg)| *level == log::Level::Warn
+                && target == "page_list"
+                && msg.starts_with(
+                    "PageList integrity violation: viewport pin rows too small rows="
+                )),
+        "expected the viewport-pin-insufficient-rows integrity diagnostic, got: {messages:?}"
+    );
+    drop(cap);
+
+    s.pause_integrity_checks(true);
+    s.rows = saved;
+    s.pause_integrity_checks(false);
     assert_eq!(Ok(()), s.verify_integrity());
 
     s.deinit();
@@ -9564,6 +9942,61 @@ fn pagelist_erase_active_regrows_automatically() {
     assert!(s.total_rows() == s.rows as usize);
     s.erase_active(10);
     assert!(s.total_rows() == s.rows as usize);
+
+    s.deinit();
+}
+
+// S124-F1: when regrowing after an active erase fails, the reference logs
+// `log.err("failed to regrow active area after erase err={}", .{err})`
+// (PageList.zig:5580) and gives up silently rather than propagating the
+// error (`erase_rows`/`erase_active` return no `Result`). Forced via the
+// SAME `GrowFp::CreatePage` fail point
+// `pagelist_resize_no_reflow_grow_rows_oom_restores_limits` uses: fill the
+// only page to capacity first so `grow()`'s one fallible allocation is the
+// very next call.
+#[test]
+fn pagelist_erase_active_logs_when_regrow_fails() {
+    use super::grow::{GrowFp, GROW_TW};
+    use rustty_util::tripwire::ResetMode;
+
+    // Erasing active rows physically shrinks whichever page(s) they lived
+    // on, so a regrow ordinarily just reclaims the freed capacity in place
+    // — never touching `grow()`'s allocating path at all. To reach
+    // `GrowFp::CreatePage`, the erase must remove rows from a DIFFERENT node
+    // than the one `grow()` tops back up (always the LAST node): make the
+    // active area exactly two full, zero-slack pages (`rows` == exactly
+    // `2 * initial_capacity(cols).rows`), then erase exactly the first page.
+    // That fully removes the FIRST node (freeing nothing on the last one),
+    // so the regrow must extend the last page — which is already at its own
+    // full capacity — forcing `grow()` to allocate a brand-new page node.
+    let page_cap = PageList::initial_capacity(80).rows;
+    let mut s = PageList::init(Options::new(80, page_cap * 2)).unwrap();
+    assert!(s.total_rows() == s.rows as usize);
+    assert_eq!(2usize, s.total_pages());
+    assert_eq!(page_cap, unsafe {
+        super::Node::capacity(s.pages.last).rows
+    });
+    assert_eq!(page_cap, unsafe { super::Node::rows(s.pages.last) });
+    let rows_before = s.total_rows();
+
+    GROW_TW.with(|tw| tw.borrow_mut().errorAlways(GrowFp::CreatePage, OutOfMemory));
+    let cap = crate::log_capture::start();
+    s.erase_active(page_cap - 1);
+    let messages = cap.messages();
+    assert!(
+        messages
+            .iter()
+            .any(|(level, target, msg)| *level == log::Level::Error
+                && target == "page_list"
+                && msg.starts_with("failed to regrow active area after erase err=")),
+        "expected the failed-to-regrow-after-erase diagnostic, got: {messages:?}"
+    );
+    drop(cap);
+    GROW_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+
+    // The regrow gave up silently: active area stays short by the erased
+    // rows rather than panicking or propagating an error.
+    assert_eq!(rows_before - page_cap as usize, s.total_rows()); // erase_active(page_cap-1) erases `page_cap` rows inclusive
 
     s.deinit();
 }

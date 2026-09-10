@@ -62,6 +62,7 @@ use crate::terminal::{DeccolmMode, SwitchScreenMode, Terminal};
 use core::marker::PhantomData;
 
 // const log = std.log.scoped(.stream_terminal);
+const LOG_SCOPE: &str = "stream_terminal";
 
 /// This is a Stream implementation that processes actions against
 /// a Terminal and updates the Terminal state.
@@ -876,7 +877,7 @@ impl<'a> Handler<'a> {
             &mut buf,
             rustty_simd::base64::Padding::Optional,
         ) else {
-            // log.warn("OSC 52 clipboard write is not valid base64, ignoring", .{});
+            log::warn!(target: LOG_SCOPE, "OSC 52 clipboard write is not valid base64, ignoring");
             return;
         };
 
@@ -2504,8 +2505,8 @@ impl<'a> Handler<'a> {
                     csi::SizeReportStyle::Csi18T => size_report::Style::Csi18T,
                     csi::SizeReportStyle::Csi21T => unreachable!(),
                 };
-                if size_report::encode(&mut aw, report_style, s).is_err() {
-                    // log.warn("error encoding size report err={}", .{err});
+                if let Err(err) = size_report::encode(&mut aw, report_style, s) {
+                    log::warn!(target: LOG_SCOPE, "error encoding size report err={err:?}");
                     return;
                 }
             }
@@ -2527,7 +2528,11 @@ impl<'a> Handler<'a> {
         // } else title_raw;
         let max_title_len = 1024;
         let title = if title_raw.len() > max_title_len {
-            // log.warn("title length {d} exceeds max length {d}, truncating", ...);
+            log::warn!(
+                target: LOG_SCOPE,
+                "title length {} exceeds max length {max_title_len}, truncating",
+                title_raw.len()
+            );
             &title_raw[0..max_title_len]
         } else {
             title_raw
@@ -2561,7 +2566,11 @@ impl<'a> Handler<'a> {
         // } else url_raw;
         let max_url_len = 4096;
         let url = if url_raw.len() > max_url_len {
-            // log.warn("pwd url length {d} exceeds max length {d}, truncating", ...);
+            log::warn!(
+                target: LOG_SCOPE,
+                "pwd url length {} exceeds max length {max_url_len}, truncating",
+                url_raw.len()
+            );
             &url_raw[0..max_url_len]
         } else {
             url_raw
@@ -2638,8 +2647,8 @@ impl<'a> Handler<'a> {
     // detail, so we pass the buffered bytes directly.
     fn send_mode_report(&mut self, report: modes::Report) {
         let mut buf = String::new();
-        if report.encode(&mut buf).is_err() {
-            // log.warn("error encoding mode report err={}", .{err});
+        if let Err(err) = report.encode(&mut buf) {
+            log::warn!(target: LOG_SCOPE, "error encoding mode report err={err:?}");
             return;
         }
         self.write_pty(buf.as_bytes());
@@ -2928,7 +2937,7 @@ impl ClipboardReadState {
         // reference to the state exists while the callback runs.
         let state = unsafe { &mut *(ctx as *mut ClipboardReadState) };
         if state.replied {
-            // log.warn("clipboard read replied more than once, ignoring", .{});
+            log::warn!(target: LOG_SCOPE, "clipboard read replied more than once, ignoring");
             return;
         }
 
@@ -3027,7 +3036,7 @@ impl KittyClipboardReadState {
         // callback; no other reference to the state exists while it runs.
         let state = unsafe { &mut *(ctx as *mut KittyClipboardReadState) };
         if state.replied {
-            // log.warn("clipboard read replied more than once, ignoring", .{});
+            log::warn!(target: LOG_SCOPE, "clipboard read replied more than once, ignoring");
             return;
         }
         state.replied = true;
@@ -3161,7 +3170,7 @@ impl KittyClipboardWriteReplyState {
         // callback; no other reference to the state exists while it runs.
         let state = unsafe { &mut *(ctx as *mut KittyClipboardWriteReplyState) };
         if state.status.is_some() {
-            // log.warn("clipboard write replied more than once, ignoring", .{});
+            log::warn!(target: LOG_SCOPE, "clipboard write replied more than once, ignoring");
             return;
         }
         state.status = Some(match result {
@@ -3840,8 +3849,8 @@ impl<'a> stream::Handler for Handler<'a> {
     //     log.warn("error handling kitty dnd err={}", .{err});
     // },
     fn kitty_dnd(&mut self, v: osc::KittyDndProtocol) {
-        if self.do_kitty_dnd(&v).is_err() {
-            // log.warn("error handling kitty dnd err={}", .{err});
+        if let Err(err) = self.do_kitty_dnd(&v) {
+            log::warn!(target: LOG_SCOPE, "error handling kitty dnd err={err:?}");
         }
     }
 
@@ -3883,8 +3892,8 @@ impl<'a> stream::Handler for Handler<'a> {
     // RESPONSE failure, not a divergence of terminal-owned state, so it must
     // NOT route through `vt_catch` / set `semantic_failure`.
     fn kitty_color_report(&mut self, v: kitty::color::OSC) {
-        if self.do_kitty_color_operation(v).is_err() {
-            // log.warn("error reporting Kitty colors err={}", .{err});
+        if let Err(err) = self.do_kitty_color_operation(v) {
+            log::warn!(target: LOG_SCOPE, "error reporting Kitty colors err={err:?}");
         }
     }
 
@@ -3895,8 +3904,8 @@ impl<'a> stream::Handler for Handler<'a> {
     //
     // PORT NOTE (oracle 439d35e27): stays GRACEFUL; see `kitty_color_report`.
     fn color_operation(&mut self, v: stream::ColorOperation) {
-        if self.do_color_operation(&v.requests, v.terminator).is_err() {
-            // log.warn("error reporting OSC color err={}", .{err});
+        if let Err(err) = self.do_color_operation(&v.requests, v.terminator) {
+            log::warn!(target: LOG_SCOPE, "error reporting OSC color err={err:?}");
         }
     }
 
@@ -6318,6 +6327,37 @@ mod tests {
         }
         assert!(t.get_title().is_none());
         assert_eq!(1_usize, COUNTER.with(|c| c.get()));
+
+        t.deinit(Global);
+    }
+
+    // S166-F3: `do_window_title` logs `log.warn("title length {d} exceeds max
+    // length {d}, truncating", .{...})` (stream_terminal.zig:1471-1474) when
+    // the OSC 2 title payload exceeds 1024 bytes.
+    #[test]
+    fn window_title_over_max_length_logs_and_truncates() {
+        let mut t = Terminal::init(Global, opts(80, 24)).unwrap();
+
+        let mut osc = Vec::new();
+        osc.extend_from_slice(b"\x1b]2;");
+        osc.extend(std::iter::repeat(b'A').take(2000));
+        osc.extend_from_slice(b"\x1b\\");
+
+        let cap = crate::log_capture::start();
+        let mut s = t.vt_stream();
+        s.next_slice(&osc);
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "stream_terminal"
+                    && msg.starts_with("title length 2000 exceeds max length 1024, truncating")),
+            "expected the title-length-exceeded diagnostic, got: {messages:?}"
+        );
+        drop(cap);
+
+        assert_eq!(1024, t.get_title().unwrap().len());
 
         t.deinit(Global);
     }

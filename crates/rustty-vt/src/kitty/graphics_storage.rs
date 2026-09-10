@@ -39,6 +39,7 @@ use rustty_util::quirks::inlineAssert as assert;
 use std::collections::HashMap;
 
 // const log = std.log.scoped(.kitty_gfx);
+const LOG_SCOPE: &str = "kitty_gfx";
 
 /// Process-global counter backing all generation stamps (see
 /// ImageStorage.generation and Image.generation). This is global rather
@@ -362,9 +363,9 @@ impl ImageStorage {
         // If we re lowering our limit, check if we need to evict.
         if limit < self.total_bytes {
             let req_bytes = self.total_bytes - limit;
-            // log.info("evicting images to lower limit, evicting={}", .{req_bytes});
+            log::info!(target: LOG_SCOPE, "evicting images to lower limit, evicting={req_bytes}");
             if !self.evict_image(alloc, s, req_bytes) {
-                // log.warn("failed to evict enough images for required bytes", .{});
+                log::warn!(target: LOG_SCOPE, "failed to evict enough images for required bytes");
             }
         }
 
@@ -453,9 +454,9 @@ impl ImageStorage {
         let total_bytes = self.total_bytes - old_len + new_len;
         if total_bytes > self.total_limit {
             let req_bytes = total_bytes - self.total_limit;
-            // log.info("evicting images to make space for {} bytes", .{req_bytes});
+            log::info!(target: LOG_SCOPE, "evicting images to make space for {req_bytes} bytes");
             if !self.evict_image_except(alloc, s, req_bytes, Some(img.id)) {
-                // log.warn("failed to evict enough images for required bytes", .{});
+                log::warn!(target: LOG_SCOPE, "failed to evict enough images for required bytes");
                 return Err(OutOfMemory);
             }
         }
@@ -814,7 +815,7 @@ impl ImageStorage {
             // result.restores.append(s.alloc, .{ ... }) catch {
             //     // OOM: this placement is left to the whims of the
             //     // generic pin tracking. Degraded, but safe.
-            //     log.warn("OOM adjusting image placement for scroll", .{});
+            log::warn!(target: LOG_SCOPE, "OOM adjusting image placement for scroll");
             //     continue;
             // };
             // PORT NOTE: Rust's `Vec::push` aborts on OOM, so the reference's
@@ -1320,7 +1321,7 @@ impl ImageStorage {
             if req_bytes > self.total_limit {
                 return Err(OutOfMemory);
             }
-            // log.info("evicting images for animation frame, evicting={}", .{req_bytes});
+            log::info!(target: LOG_SCOPE, "evicting images for animation frame, evicting={req_bytes}");
             if !self.evict_image_except(alloc, s, req_bytes, Some(image_id)) {
                 // log.warn("failed to evict enough images for animation frame", .{});
                 return Err(OutOfMemory);
@@ -1604,7 +1605,7 @@ impl ImageStorage {
                 #[allow(clippy::absurd_extreme_comparisons)]
                 command::DeleteAction::IntersectCell { delete, x, y } => {
                     if x <= 0 || y <= 0 {
-                        // log.warn("delete intersect cell coords must be at least 1", .{});
+                        log::warn!(target: LOG_SCOPE, "delete intersect cell coords must be at least 1");
                         break 'arms;
                     }
 
@@ -1628,7 +1629,7 @@ impl ImageStorage {
                 #[allow(clippy::absurd_extreme_comparisons)]
                 command::DeleteAction::IntersectCellZ { delete, x, y, z } => {
                     if x <= 0 || y <= 0 {
-                        // log.warn("delete intersect cell coords must be at least 1", .{});
+                        log::warn!(target: LOG_SCOPE, "delete intersect cell coords must be at least 1");
                         break 'arms;
                     }
 
@@ -1652,7 +1653,7 @@ impl ImageStorage {
                 #[allow(clippy::absurd_extreme_comparisons)]
                 command::DeleteAction::Column { delete, x } => {
                     if x <= 0 {
-                        // log.warn("delete column must be greater than zero", .{});
+                        log::warn!(target: LOG_SCOPE, "delete column must be greater than zero");
                         break 'arms;
                     }
 
@@ -1679,7 +1680,7 @@ impl ImageStorage {
                 #[allow(clippy::absurd_extreme_comparisons)]
                 command::DeleteAction::Row { delete, y } => {
                     if y <= 0 {
-                        // log.warn("delete row must be greater than zero", .{});
+                        log::warn!(target: LOG_SCOPE, "delete row must be greater than zero");
                         break 'arms;
                     }
 
@@ -1931,17 +1932,19 @@ impl ImageStorage {
     ) {
         let _ = &alloc;
         if v.image_id == 0 && v.image_number == 0 {
-            // log.warn("delete animation frames requires image id or number", .{});
+            log::warn!(target: LOG_SCOPE, "delete animation frames requires image id or number");
             return;
         }
         // const img = self.imagePtrByIdOrNumber(v.image_id, v.image_number) orelse { ... };
         let img_id = match self.image_ptr_by_id_or_number(v.image_id, v.image_number) {
             Some(img) => img.id,
             None => {
-                // log.warn(
-                //     "delete animation frames for unknown image id={} number={}",
-                //     .{ v.image_id, v.image_number },
-                // );
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "delete animation frames for unknown image id={} number={}",
+                    v.image_id,
+                    v.image_number
+                );
                 return;
             }
         };
@@ -4027,6 +4030,41 @@ mod tests {
                 },
             })
             .is_some());
+
+        s.deinit(alloc, t.screens.active);
+        t.deinit(alloc);
+    }
+
+    // S190-F1: `delete`'s `DeleteAction::Column { x: 0, .. }` arm logs
+    // `log.warn("delete column must be greater than zero", .{})`
+    // (graphics_storage.zig:1294-1297) — the reference's 1-indexed column
+    // rejects a literal 0.
+    #[test]
+    fn delete_column_zero_logs_and_is_a_no_op() {
+        let alloc = allocator_api2::alloc::Global;
+        let mut t = Terminal::init(alloc, opts(3, 3)).unwrap();
+        let mut s: ImageStorage = ImageStorage::default();
+
+        let cap = crate::log_capture::start();
+        s.delete(
+            alloc,
+            &mut t,
+            command::DeleteAction::Column {
+                delete: false,
+                x: 0,
+            },
+        );
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "kitty_gfx"
+                    && *msg == "delete column must be greater than zero"),
+            "expected the delete-column-must-be-positive diagnostic, got: {messages:?}"
+        );
+        drop(cap);
+        assert!(!s.dirty);
 
         s.deinit(alloc, t.screens.active);
         t.deinit(alloc);

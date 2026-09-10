@@ -35,11 +35,7 @@ use super::key;
 use super::mouse;
 
 // const log = std.log.scoped(.mouse_encode);
-//
-// PORT NOTE: the X10-coordinate-overflow branch logs an info line. There is no
-// crate-wide logging facade wired into rustty-vt yet, so the `log.info` call is
-// kept as a comment-faithful no-op at the call site (the early `return` it guards
-// is preserved).
+const LOG_SCOPE: &str = "mouse_encode";
 
 /// Options that affect mouse encoding behavior and provide runtime context.
 //
@@ -230,7 +226,7 @@ pub fn encode<W: std::io::Write>(
     match opts.format {
         terminal_mouse::Format::X10 => {
             if cell.x > 222 || cell.y > 222 {
-                // log.info("X10 mouse format can only encode X/Y up to 223", .{});
+                log::info!(target: LOG_SCOPE, "X10 mouse format can only encode X/Y up to 223");
                 return Ok(());
             }
 
@@ -919,6 +915,7 @@ mod tests {
 
     #[test]
     fn x10_coordinate_limit() {
+        let cap = crate::log_capture::start();
         let mut data: Vec<u8> = Vec::new();
         let mut last: Option<point::Coordinate> = None;
         encode(
@@ -940,6 +937,19 @@ mod tests {
         .unwrap();
 
         assert_eq!(0usize, data.len());
+
+        // S106-F2: the reference logs `log.info("X10 mouse format can only
+        // encode X/Y up to 223", .{})` (mouse_encode.zig:123) on this exact
+        // overflow path.
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Info
+                    && target == "mouse_encode"
+                    && msg == "X10 mouse format can only encode X/Y up to 223"),
+            "expected the X10-overflow info diagnostic, got: {messages:?}"
+        );
     }
 
     #[test]

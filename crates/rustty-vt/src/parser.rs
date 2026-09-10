@@ -24,9 +24,25 @@ use crate::osc;
 use crate::parse_table::TABLE as table;
 
 // const log = std.log.scoped(.parser);
-// PORT NOTE: Rustty has no logging facade wired into this crate (matching the
-// convention used by PageList / DCS / OSC et al.), so the scoped logger and its
-// `log.warn(...)` calls are ported as commented lines.
+const LOG_SCOPE: &str = "parser";
+
+/// Log a warning for a CSI dispatch with colon/mixed separators on a non-'m'
+/// command.
+///
+/// This is `#[inline(never)]` on purpose so that this unlikely (cold)
+/// behavior doesn't bloat the hot dispatch path, which has been measured to
+/// actually affect both binary size and performance due to icache busts.
+///
+/// PORTS: oracle@main Parser.zig `warnCsiSepMismatch` (`noinline fn`,
+/// `@branchHint(.cold)`).
+#[cold]
+#[inline(never)]
+fn warn_csi_sep_mismatch(csi: &CSI) {
+    log::warn!(
+        target: LOG_SCOPE,
+        "CSI colon or mixed separators only allowed for 'm' command, got: {csi:?}"
+    );
+}
 
 /// States for the state machine
 // PORT NOTE: the explicit discriminants pin the declaration-order values that
@@ -708,7 +724,7 @@ impl<'a> Parser<'a> {
     pub fn collect(&mut self, c: u8) {
         if self.intermediates_idx as usize >= MAX_INTERMEDIATE {
             // @branchHint(.cold);
-            // log.warn("invalid intermediates count", .{});
+            log::warn!(target: LOG_SCOPE, "invalid intermediates count");
             return;
         }
 
@@ -810,35 +826,25 @@ impl<'a> Parser<'a> {
                 // PORT NOTE: the reference slices into `self`'s buffers here
                 // ("only valid until the next call to next"); the owned payload
                 // copies the tracked prefixes (see the Action PORT NOTE).
-                let result = Action::CsiDispatch(Box::new(CSI {
+                let csi = CSI {
                     intermediates: InlineVec::from_buf(self.intermediates, self.intermediates_idx),
                     params: InlineVec::from_buf(self.params, self.params_idx),
                     params_sep: self.params_sep,
                     final_: c,
-                }));
+                };
 
                 // We only allow colon or mixed separators for the 'm' command.
                 if c != b'm' && self.params_sep.count() > 0 {
-                    // The reference hoists the warning into a dedicated cold helper:
-                    //
-                    // /// Log a warning for a CSI dispatch with colon/mixed separators on a
-                    // /// non-'m' command.
-                    // ///
-                    // /// This is noinline on purpose so that this unlikely (cold) behavior
-                    // /// doesn't bloat the hot dispatch path which has been measured to actually
-                    // /// affect both binary size and performance due to icache busts.
-                    // noinline fn warnCsiSepMismatch(csi: Action.CSI) void {
-                    // @branchHint(.cold);
-                    // log.warn(
-                    //     "CSI colon or mixed separators only allowed for 'm' command, got: {f}",
-                    //     .{csi},
-                    // );
+                    // The reference hoists the warning into a dedicated cold helper
+                    // (`warn_csi_sep_mismatch`, `#[cold]`/`#[inline(never)]` below)
+                    // so this unlikely branch doesn't bloat the hot dispatch path.
+                    warn_csi_sep_mismatch(&csi);
                     // break :csi_dispatch null;
                     return None;
                 }
 
                 // break :csi_dispatch result;
-                Some(result)
+                Some(Action::CsiDispatch(Box::new(csi)))
             }
             // .esc_dispatch => Action{ .esc_dispatch = .{
             //     .intermediates = self.intermediates[0..self.intermediates_idx],
@@ -1699,5 +1705,65 @@ mod tests {
         assert!(a[0].is_none());
         assert!(a[1].is_none());
         assert!(a[2].is_none());
+    }
+
+    // S132-F1: `collect` logs `log.warn("invalid intermediates count", .{})`
+    // (Parser.zig:319-328) when more than `MAX_INTERMEDIATE` intermediate
+    // bytes arrive before the final byte.
+    #[test]
+    fn collect_logs_when_intermediates_overflow() {
+        let cap = crate::log_capture::start();
+        let mut p = Parser::init();
+        let _ = p.next(0x1B); // ESC
+        let _ = p.next(b'['); // CSI entry
+                              // Intermediate bytes are 0x20..=0x2F; feed one more than
+                              // `MAX_INTERMEDIATE` (4) to overflow `collect`.
+        for _ in 0..(MAX_INTERMEDIATE + 1) {
+            let _ = p.next(b'!');
+        }
+        let _ = p.next(b'm');
+
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "parser"
+                    && *msg == "invalid intermediates count"),
+            "expected the invalid-intermediates-count diagnostic, got: {messages:?}"
+        );
+        drop(cap);
+    }
+
+    // S132-F1: `warnCsiSepMismatch` logs `log.warn("CSI colon or mixed
+    // separators only allowed for 'm' command, got: {f}", .{csi})`
+    // (Parser.zig:412-424) when a colon-separated CSI dispatches on any final
+    // byte other than 'm'.
+    #[test]
+    fn csi_dispatch_logs_on_colon_separator_mismatch_for_non_m_command() {
+        let cap = crate::log_capture::start();
+        let mut p = Parser::init();
+        let _ = p.next(0x1B); // ESC
+        let _ = p.next(b'['); // CSI entry
+        let _ = p.next(b'1');
+        let _ = p.next(b':'); // colon separator — only valid for 'm'
+        let _ = p.next(b'2');
+        let a = p.next(b'H'); // cursor position, NOT 'm'
+
+        // The dispatch is suppressed entirely on the mismatch (`return None`).
+        assert!(a.iter().all(Option::is_none));
+
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "parser"
+                    && msg.starts_with(
+                        "CSI colon or mixed separators only allowed for 'm' command, got: "
+                    )),
+            "expected the CSI-sep-mismatch diagnostic, got: {messages:?}"
+        );
+        drop(cap);
     }
 }

@@ -1656,6 +1656,7 @@ dependencies = [
  "allocator-api2",
  "dcimgui-sys",
  "libc",
+ "log",
  "rustty-datastruct",
  "rustty-font",
  "rustty-identity",

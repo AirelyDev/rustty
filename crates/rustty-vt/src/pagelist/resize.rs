@@ -1052,20 +1052,15 @@ impl PageList {
                     Ok(_) => {
                         copied += 1;
                     }
-                    Err(_err) => {
+                    Err(err) => {
                         // I don't THINK this should be possible, because while our
                         // row count may diminish due to the adjustment, our
                         // prior capacity should have been sufficient to hold all the
                         // managed memory.
-                        // log.warn(
-                        //     "unexpected cloneRowFrom failure during resizeWithoutReflowGrowCols: {}",
-                        //     .{err},
-                        // );
-                        //
-                        // PORT NOTE: the reference `log` is `std.log.scoped(.page_list)`
-                        // (commented out at the module top). We preserve the warning
-                        // verbatim above; the scoped logger is not yet wired in the
-                        // Rust port.
+                        log::warn!(
+                            target: super::LOG_SCOPE,
+                            "unexpected cloneRowFrom failure during resizeWithoutReflowGrowCols: {err:?}"
+                        );
 
                         // We can actually safely handle this though by exiting
                         // this loop early and cutting our copy short.
@@ -1584,7 +1579,10 @@ impl ReflowCursor {
                             // If we're already on the first-row, we can't split
                             // any further, so we just ignore bad cells and take
                             // corrupted (but valid) cell contents.
-                            // log.warn("reflowRow OutOfSpace on first row, discarding cell managed memory", .{});
+                            log::warn!(
+                                target: super::LOG_SCOPE,
+                                "reflowRow OutOfSpace on first row, discarding cell managed memory"
+                            );
                             x += 1;
                             self.cursor_forward();
                         } else {
@@ -2054,7 +2052,7 @@ impl ReflowCursor {
                 }
             }
 
-            if let Err(_err) =
+            if let Err(err) =
                 unsafe { (*self.page).set_graphemes(self.page_row, self.page_cell, cps) }
             {
                 // This shouldn't fail since we made sure we have space
@@ -2062,7 +2060,7 @@ impl ReflowCursor {
                 // so we have a warn level log. This is ALMOST non-recoverable,
                 // though we choose to recover by corrupting the cell
                 // to a non-grapheme codepoint.
-                // log.err("setGraphemes failed after capacity increase err={}", .{err});
+                log::error!(target: super::LOG_SCOPE, "setGraphemes failed after capacity increase err={err:?}");
                 if cfg!(debug_assertions) {
                     // Force a crash with safe builds.
                     unreachable!();
@@ -2099,10 +2097,10 @@ impl ReflowCursor {
 
                 let dst_link = match unsafe { src_link.dupe(src_page, self.page) } {
                     Ok(v) => v,
-                    Err(_err) => {
+                    Err(err) => {
                         // This shouldn't fail since we did a capacity
                         // check above.
-                        // log.err("link dupe failed with capacity check err={}", .{err});
+                        log::error!(target: super::LOG_SCOPE, "link dupe failed with capacity check err={err:?}");
                         if cfg!(debug_assertions) {
                             // Force a crash with safe builds.
                             unreachable!();
@@ -2152,10 +2150,10 @@ impl ReflowCursor {
                             // We need to recreate the link into the new page.
                             let dst_link2 = match unsafe { src_link.dupe(src_page, self.page) } {
                                 Ok(v) => v,
-                                Err(_err2) => {
+                                Err(err2) => {
                                     // This shouldn't fail since we did a capacity
                                     // check above.
-                                    // log.err("link dupe failed with capacity check err={}", .{err2});
+                                    log::error!(target: super::LOG_SCOPE, "link dupe failed with capacity check err={err2:?}");
                                     if cfg!(debug_assertions) {
                                         // Force a crash with safe builds.
                                         unreachable!();
@@ -2178,15 +2176,15 @@ impl ReflowCursor {
                                     .add_with_id(base, dst_link2, src_id)
                             } {
                                 Ok(v) => v,
-                                Err(_err2) => {
+                                Err(err2) => {
                                     // This shouldn't happen since we increased capacity
                                     // above so we handle it like the other similar
                                     // cases and log it, crash in safe builds, and
                                     // remove the hyperlink in unsafe builds.
-                                    // log.err(
-                                    //     "addWithIdContext failed after capacity increase err={}",
-                                    //     .{err2},
-                                    // );
+                                    log::error!(
+                                        target: super::LOG_SCOPE,
+                                        "addWithIdContext failed after capacity increase err={err2:?}"
+                                    );
                                     if cfg!(debug_assertions) {
                                         // Force a crash with safe builds.
                                         unreachable!();
@@ -2204,13 +2202,13 @@ impl ReflowCursor {
                 // We expect this to succeed due to the hyperlinkCapacity
                 // check we did before. If it doesn't succeed let's
                 // log it, crash (in safe builds), and clear our state.
-                if let Err(_err) =
+                if let Err(err) =
                     unsafe { (*self.page).set_hyperlink(self.page_row, self.page_cell, dst_id) }
                 {
-                    // log.err(
-                    //     "setHyperlink failed after capacity increase err={}",
-                    //     .{err},
-                    // );
+                    log::error!(
+                        target: super::LOG_SCOPE,
+                        "setHyperlink failed after capacity increase err={err:?}"
+                    );
                     if cfg!(debug_assertions) {
                         // Force a crash with safe builds.
                         unreachable!();
@@ -2284,14 +2282,14 @@ impl ReflowCursor {
                                 .add_with_id(base, style, cell.style_id())
                         } {
                             Ok(v) => v,
-                            Err(_err2) => {
+                            Err(err2) => {
                                 // Should not fail since we just modified capacity
                                 // above. Log it, crash in safe builds, clear style
                                 // in unsafe builds.
-                                // log.err(
-                                //     "addWithId failed after capacity increase err={}",
-                                //     .{err2},
-                                // );
+                                log::error!(
+                                    target: super::LOG_SCOPE,
+                                    "addWithId failed after capacity increase err={err2:?}"
+                                );
                                 if cfg!(debug_assertions) {
                                     // Force a crash with safe builds.
                                     unreachable!();
@@ -2375,12 +2373,11 @@ impl ReflowCursor {
 
         // Copy our old data. This should NOT fail because we have the
         // capacity of the old page which already fits the data we requested.
-        if let Err(_err) = unsafe { (*self.page).clone_row_from(old_page, self.page_row, old_row) }
-        {
-            // log.err(
-            //     "error cloning single row for moveLastRowToNewPage err={}",
-            //     .{err},
-            // );
+        if let Err(err) = unsafe { (*self.page).clone_row_from(old_page, self.page_row, old_row) } {
+            log::error!(
+                target: super::LOG_SCOPE,
+                "error cloning single row for moveLastRowToNewPage err={err:?}"
+            );
             panic!("unexpected copy row failure");
         }
 

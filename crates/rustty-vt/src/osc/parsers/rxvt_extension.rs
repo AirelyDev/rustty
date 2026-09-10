@@ -4,11 +4,8 @@
 
 use crate::osc::{Command, Parser};
 
-// PORT NOTE: `const log = std.log.scoped(.osc_rxvt_extension);` — Rustty has no
-// logging facade wired into this crate (matching the convention used by the
-// `osc.zig` scoped logger), so the scoped logger and its calls are ported as
-// commented lines.
 // const log = std.log.scoped(.osc_rxvt_extension);
+const LOG_SCOPE: &str = "osc_rxvt_extension";
 
 /// Parse OSC 777
 pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Command> {
@@ -32,14 +29,14 @@ pub fn parse<'a>(parser: &'a mut Parser, _: Option<u8>) -> Option<&'a mut Comman
     };
     let ext = &data[0..k];
     if ext != b"notify" {
-        // log.warn("unknown rxvt extension: {s}", .{ext});
+        log::warn!(target: LOG_SCOPE, "unknown rxvt extension: {}", String::from_utf8_lossy(ext));
         parser.state = crate::osc::State::Invalid;
         return None;
     }
     let t = if let Some(off) = data[k + 1..].iter().position(|&b| b == b';') {
         k + 1 + off
     } else {
-        // log.warn("rxvt notify extension is missing the title", .{});
+        log::warn!(target: LOG_SCOPE, "rxvt notify extension is missing the title");
         parser.state = crate::osc::State::Invalid;
         return None;
     };
@@ -80,5 +77,55 @@ mod tests {
             }
             _ => unreachable!(),
         }
+    }
+
+    // S196-F1: an unrecognized rxvt extension name logs
+    // `log.warn("unknown rxvt extension: {s}", .{ext})`
+    // (rxvt_extension.zig:27-30).
+    #[test]
+    fn osc_777_unknown_extension_logs() {
+        let mut p: Parser = Parser::init(None);
+        let input = "777;bogus;whatever";
+        for ch in input.bytes() {
+            p.next(ch);
+        }
+
+        let cap = crate::log_capture::start();
+        assert!(p.end(Some(0x1b)).is_none());
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "osc_rxvt_extension"
+                    && *msg == "unknown rxvt extension: bogus"),
+            "expected the unknown-rxvt-extension diagnostic, got: {messages:?}"
+        );
+        drop(cap);
+    }
+
+    // S196-F1: a `notify` extension missing its title separator logs
+    // `log.warn("rxvt notify extension is missing the title", .{})`
+    // (rxvt_extension.zig:31-34).
+    #[test]
+    fn osc_777_notify_missing_title_logs() {
+        let mut p: Parser = Parser::init(None);
+        let input = "777;notify;TitleOnlyNoSecondSemicolon";
+        for ch in input.bytes() {
+            p.next(ch);
+        }
+
+        let cap = crate::log_capture::start();
+        assert!(p.end(Some(0x1b)).is_none());
+        let messages = cap.messages();
+        assert!(
+            messages
+                .iter()
+                .any(|(level, target, msg)| *level == log::Level::Warn
+                    && target == "osc_rxvt_extension"
+                    && *msg == "rxvt notify extension is missing the title"),
+            "expected the missing-title diagnostic, got: {messages:?}"
+        );
+        drop(cap);
     }
 }

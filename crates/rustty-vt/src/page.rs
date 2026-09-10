@@ -106,6 +106,9 @@ use crate::style::Id as StyleId;
 use crate::style::Set as StyleSet;
 use crate::style::Style;
 
+// const log = std.log.scoped(.page);
+pub(crate) const LOG_SCOPE: &str = "page";
+
 // PORT NOTE: `build_options.kitty_graphics`. The reference enables the Kitty
 // graphics protocol by default for the ghostty artifact; the page uses this only
 // to set `Row.kitty_virtual_placeholder`. We keep the slot true so the layout

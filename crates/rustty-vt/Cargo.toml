@@ -193,6 +193,15 @@ rustty-os = { workspace = true }
 rustty-lib = { workspace = true }
 rustty-util = { workspace = true }
 rustty-render-types = { workspace = true }
+# task 14b (DECISION-logging.md §6r IMPORTANT 5, call shape 3): `rustty-vt` sits
+# below `rustty-core`/`rustty-vt-c` in R4's acyclic layering (neither may be
+# depended on here without inverting it), so restored `log.{warn,info,err,debug}`
+# sites call the `log` crate's macros directly — reaching whichever of the two
+# process-wide backends (`rustty-vt-c::sys::Logger` or
+# `rustty-core::logging::AppLogger`) the running binary installed. First genuine
+# runtime dependency of this crate (previously `log` was only a `bindgen`
+# build-dependency transitively, per DECISION-logging.md §3).
+log = { workspace = true }
 # R3: the safe Oniguruma wrapper (imported as `oni`). Optional — only pulled in
 # under `--features oniguruma`, which gates `string_map.rs`'s regex search
 # surface (faithful to the reference's optional `oniguruma` build dependency).

@@ -350,3 +350,9 @@ pub mod ref_counted_set;
 // (`tests/fuzz_corpus_replay.rs`) share one set of harness entry points.
 // Test/fuzz infrastructure only — never called by production code.
 pub mod fuzz_harness;
+
+// task 14b: process-wide capture `log::Log` for the restored `LOG`-class
+// diagnostics (DECISION-logging.md §6r call shape 3). Test-only — never
+// compiled into the production library.
+#[cfg(test)]
+pub(crate) mod log_capture;

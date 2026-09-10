@@ -118,6 +118,7 @@ use crate::page::{Capacity, Page, Row};
 use crate::point;
 
 // const log = std.log.scoped(.page_list);
+pub(crate) const LOG_SCOPE: &str = "page_list";
 
 /// The number of PageList.Nodes we preheat the pool with. A node is
 /// a very small struct so we can afford to preheat many, but the exact
@@ -563,13 +564,13 @@ impl Node {
                 // exactly `len` bytes.
                 match unsafe { compressed.clone_buf(ptr, len) } {
                     Ok(page) => Ok(PreservedPage::Owned { page, ptr, len }),
-                    Err(_err) => {
+                    Err(err) => {
                         // The encoded data was produced by our codec and remains
                         // immutable while compressed. Failure is internal
                         // corruption, matching the normal restoration boundary.
                         // SAFETY: `ptr`/`layout` are the pair allocated above.
                         unsafe { std::alloc::dealloc(ptr, layout) };
-                        // log.err("failed to clone compressed page err={}", .{err});
+                        log::error!(target: LOG_SCOPE, "failed to clone compressed page err={err:?}");
                         panic!("failed to clone compressed terminal page");
                     }
                 }
@@ -617,12 +618,12 @@ impl Node {
                 // SAFETY: the mapping was just recommitted and is unaliased.
                 match unsafe { (*NodeData::compressed_payload(data)).restore() } {
                     Ok(p) => p,
-                    Err(_err) => {
+                    Err(err) => {
                         // Compressed nodes retain the immutable encoding and exact
                         // output mapping used to create them. Any decode error is an
                         // internal codec bug or memory corruption. Keep this switch
                         // exhaustive so new decoder errors require classification.
-                        // log.err("failed to restore compressed page err={}", .{err});
+                        log::error!(target: LOG_SCOPE, "failed to restore compressed page err={err:?}");
                         panic!("failed to restore compressed terminal page");
                     }
                 }
@@ -1982,10 +1983,12 @@ impl PageList {
 
                 // Every live node must belong to the current validity epoch.
                 if unsafe { (*node).serial } < self.page_serial_epoch {
-                    // log.warn(
-                    //     "PageList integrity violation: page serial predates epoch serial={} epoch={}",
-                    //     .{ node.serial, self.page_serial_epoch },
-                    // );
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "PageList integrity violation: page serial predates epoch serial={} epoch={}",
+                        unsafe { (*node).serial },
+                        self.page_serial_epoch,
+                    );
                     return Err(IntegrityError::PageSerialInvalid);
                 }
             }
@@ -1993,10 +1996,12 @@ impl PageList {
 
         // Verify that our cached total_rows matches the actual row count
         if actual_total != self.total_rows {
-            // log.warn(
-            //     "PageList integrity violation: total_rows mismatch cached={} actual={}",
-            //     .{ self.total_rows, actual_total },
-            // );
+            log::warn!(
+                target: LOG_SCOPE,
+                "PageList integrity violation: total_rows mismatch cached={} actual={}",
+                self.total_rows,
+                actual_total,
+            );
             return Err(IntegrityError::TotalRowsMismatch);
         }
 
@@ -2007,10 +2012,12 @@ impl PageList {
             if history_rows > self.limits.max(Key::Lines)
                 && !core::ptr::eq(self.pages.first, self.get_top_left(point::Tag::Active).node)
             {
-                // log.warn(
-                //     "PageList integrity violation: max lines exceeded history={} max={}",
-                //     .{ history_rows, self.maxLines() },
-                // );
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "PageList integrity violation: max lines exceeded history={} max={}",
+                    history_rows,
+                    self.limits.max(Key::Lines),
+                );
                 return Err(IntegrityError::MaxLinesExceeded);
             }
         }
@@ -2037,19 +2044,18 @@ impl PageList {
                     node = unsafe { (*n).prev };
                 }
 
-                // log.warn(
-                //     "PageList integrity violation: viewport pin not in list",
-                //     .{},
-                // );
+                log::warn!(target: LOG_SCOPE, "PageList integrity violation: viewport pin not in list");
                 return Err(IntegrityError::ViewportPinOffsetMismatch);
             };
 
             if let Some(cached_offset) = self.viewport_pin_row_offset {
                 if cached_offset != actual_offset {
-                    // log.warn(
-                    //     "PageList integrity violation: viewport pin offset mismatch cached={} actual={}",
-                    //     .{ cached_offset, actual_offset },
-                    // );
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "PageList integrity violation: viewport pin offset mismatch cached={} actual={}",
+                        cached_offset,
+                        actual_offset,
+                    );
                     return Err(IntegrityError::ViewportPinOffsetMismatch);
                 }
             }
@@ -2057,10 +2063,12 @@ impl PageList {
             // Ensure our viewport has enough rows.
             let rows = self.total_rows - actual_offset;
             if rows < self.rows as usize {
-                // log.warn(
-                //     "PageList integrity violation: viewport pin rows too small rows={} needed={}",
-                //     .{ rows, self.rows },
-                // );
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "PageList integrity violation: viewport pin rows too small rows={} needed={}",
+                    rows,
+                    self.rows,
+                );
                 return Err(IntegrityError::ViewportPinInsufficientRows);
             }
         }

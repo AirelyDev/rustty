@@ -111,13 +111,10 @@ impl PageList {
 
         // Copy our old data. This should NOT fail because we have the
         // capacity of the old page which already fits the data we requested.
-        if let Err(_err) =
+        if let Err(err) =
             unsafe { (*target_page).clone_from(page, y_start as usize, y_end as usize) }
         {
-            // log.err(
-            //     "error cloning rows for split err={}",
-            //     .{err},
-            // );
+            log::error!(target: super::LOG_SCOPE, "error cloning rows for split err={err:?}");
 
             // Rather than crash, we return an OutOfSpace to show that
             // we couldn't split and let our callers gracefully handle it.
@@ -764,7 +761,7 @@ impl PageList {
             }
         }
 
-        // log.info("adjusting page capacity={}", .{cap});
+        log::info!(target: super::LOG_SCOPE, "adjusting page capacity={cap:?}");
 
         // Create our new page and clone the old page into it.
         let new_node = self
@@ -776,12 +773,12 @@ impl PageList {
         assert!(unsafe { (*new_page).capacity.cols >= (*page).capacity.cols });
         unsafe { (*new_page).size.rows = (*page).size.rows };
         unsafe { (*new_page).size.cols = (*page).size.cols };
-        if let Err(_err) = unsafe { (*new_page).clone_from(page, 0, (*page).size.rows as usize) } {
+        if let Err(err) = unsafe { (*new_page).clone_from(page, 0, (*page).size.rows as usize) } {
             // cloneFrom only errors if there isn't capacity for the data
             // from the source page but we're only increasing capacity so
             // this should never be possible. If it happens, we should crash
             // because we're in no man's land and can't safely recover.
-            // log.err("increaseCapacity clone failed err={}", .{err});
+            log::error!(target: super::LOG_SCOPE, "increaseCapacity clone failed err={err:?}");
             panic!("unexpected clone failure");
         }
 
@@ -868,12 +865,12 @@ impl PageList {
         let new_page: *mut Page = unsafe { super::Node::page(new_node) };
         unsafe { (*new_page).size = (*page).size };
         unsafe { (*new_page).dirty = (*page).dirty };
-        if let Err(_err) = unsafe { (*new_page).clone_from(page, 0, (*page).size.rows as usize) } {
+        if let Err(err) = unsafe { (*new_page).clone_from(page, 0, (*page).size.rows as usize) } {
             // cloneFrom should not fail when compacting since req_cap is
             // computed to exactly fit the source content and our expectation
             // of exactRowCapacity ensures it can fit all the requested
             // data.
-            // log.err("compact clone failed err={}", .{err});
+            log::error!(target: super::LOG_SCOPE, "compact clone failed err={err:?}");
 
             // In this case, let's gracefully degrade by pretending we
             // didn't need to compact.

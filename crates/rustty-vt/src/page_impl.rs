@@ -584,11 +584,11 @@ impl Page {
         }
 
         if self.size.rows == 0 {
-            // log.warn("page integrity violation zero row count", .{});
+            log::warn!(target: crate::page::LOG_SCOPE, "page integrity violation zero row count");
             return Err(IntegrityError::ZeroRowCount);
         }
         if self.size.cols == 0 {
-            // log.warn("page integrity violation zero col count", .{});
+            log::warn!(target: crate::page::LOG_SCOPE, "page integrity violation zero col count");
             return Err(IntegrityError::ZeroColCount);
         }
 
@@ -603,9 +603,7 @@ impl Page {
         let rows = unsafe {
             core::slice::from_raw_parts(self.rows.ptr(base), self.size.rows as usize)
         };
-        // PORT NOTE: the reference binds `y` for log-warning messages (kept as
-        // comments here); the index is otherwise unused so we drop it.
-        for row in rows.iter() {
+        for (y, row) in rows.iter().enumerate() {
             let graphemes_start = graphemes_seen;
             let cells = unsafe {
                 core::slice::from_raw_parts(row.cells().ptr(base), self.size.cols as usize)
@@ -615,7 +613,10 @@ impl Page {
                     // If a cell has grapheme data, it must be present in
                     // the grapheme map.
                     if self.lookup_grapheme(cell).is_none() {
-                        // log.warn("...grapheme data missing", ...);
+                        log::warn!(
+                            target: crate::page::LOG_SCOPE,
+                            "page integrity violation y={y} x={x} grapheme data missing"
+                        );
                         return Err(IntegrityError::MissingGraphemeData);
                     }
 
@@ -625,7 +626,10 @@ impl Page {
                     // The grapheme_count check above is just an optimization
                     // to speed up integrity checks.
                     if self.lookup_grapheme(cell).is_some() {
-                        // log.warn("...cell not marked as grapheme", ...);
+                        log::warn!(
+                            target: crate::page::LOG_SCOPE,
+                            "page integrity violation y={y} x={x} cell not marked as grapheme"
+                        );
                         return Err(IntegrityError::UnmarkedGraphemeCell);
                     }
                 }
@@ -636,7 +640,10 @@ impl Page {
                     let _ = unsafe { self.styles.get(base, cell.style_id()) };
 
                     if !row.styled() {
-                        // log.warn("...row not marked as styled", ...);
+                        log::warn!(
+                            target: crate::page::LOG_SCOPE,
+                            "page integrity violation y={y} x={x} row not marked as styled"
+                        );
                         return Err(IntegrityError::UnmarkedStyleRow);
                     }
 
@@ -648,13 +655,19 @@ impl Page {
                     let id = match self.lookup_hyperlink(cell) {
                         Some(id) => id,
                         None => {
-                            // log.warn("...hyperlink data missing", ...);
+                            log::warn!(
+                                target: crate::page::LOG_SCOPE,
+                                "page integrity violation y={y} x={x} hyperlink data missing"
+                            );
                             return Err(IntegrityError::MissingHyperlinkData);
                         }
                     };
 
                     if !row.hyperlink() {
-                        // log.warn("...row not marked as hyperlink", ...);
+                        log::warn!(
+                            target: crate::page::LOG_SCOPE,
+                            "page integrity violation y={y} x={x} row not marked as hyperlink"
+                        );
                         return Err(IntegrityError::UnmarkedHyperlinkRow);
                     }
 
@@ -667,7 +680,10 @@ impl Page {
                 } else {
                     // It should not have hyperlink data if it isn't marked
                     if self.lookup_hyperlink(cell).is_some() {
-                        // log.warn("...cell not marked as hyperlink", ...);
+                        log::warn!(
+                            target: crate::page::LOG_SCOPE,
+                            "page integrity violation y={y} x={x} cell not marked as hyperlink"
+                        );
                         return Err(IntegrityError::UnmarkedHyperlinkCell);
                     }
                 }
@@ -680,14 +696,20 @@ impl Page {
                         // Spacer tails can't be at the start because they follow
                         // a wide char.
                         if x == 0 {
-                            // log.warn("...spacer tail at start", ...);
+                            log::warn!(
+                                target: crate::page::LOG_SCOPE,
+                                "page integrity violation y={y} x={x} spacer tail at start"
+                            );
                             return Err(IntegrityError::InvalidSpacerTailLocation);
                         }
 
                         // Spacer tails must follow a wide char
                         let prev = cells[x - 1];
                         if prev.wide() != Wide::Wide {
-                            // log.warn("...spacer tail not following wide", ...);
+                            log::warn!(
+                                target: crate::page::LOG_SCOPE,
+                                "page integrity violation y={y} x={x} spacer tail not following wide"
+                            );
                             return Err(IntegrityError::InvalidSpacerTailLocation);
                         }
                     }
@@ -695,13 +717,19 @@ impl Page {
                     Wide::SpacerHead => {
                         // Spacer heads must be at the end
                         if x != (self.size.cols as usize) - 1 {
-                            // log.warn("...spacer head not at end", ...);
+                            log::warn!(
+                                target: crate::page::LOG_SCOPE,
+                                "page integrity violation y={y} x={x} spacer head not at end"
+                            );
                             return Err(IntegrityError::InvalidSpacerHeadLocation);
                         }
 
                         // The row must be wrapped
                         if !row.wrap() {
-                            // log.warn("...spacer head not wrapped", ...);
+                            log::warn!(
+                                target: crate::page::LOG_SCOPE,
+                                "page integrity violation y={y} spacer head not wrapped"
+                            );
                             return Err(IntegrityError::UnwrappedSpacerHead);
                         }
                     }
@@ -713,7 +741,10 @@ impl Page {
                 // If a cell in a row has grapheme data, the row must
                 // be marked as having grapheme data.
                 if !row.grapheme() {
-                    // log.warn("...grapheme data but row not marked", ...);
+                    log::warn!(
+                        target: crate::page::LOG_SCOPE,
+                        "page integrity violation y={y} grapheme data but row not marked"
+                    );
                     return Err(IntegrityError::UnmarkedGraphemeRow);
                 }
             }
@@ -721,7 +752,11 @@ impl Page {
 
         // Our graphemes seen should exactly match the grapheme count
         if graphemes_seen > self.grapheme_count() {
-            // log.warn("...grapheme count mismatch...", ...);
+            log::warn!(
+                target: crate::page::LOG_SCOPE,
+                "page integrity violation grapheme count mismatch expected={graphemes_seen} actual={}",
+                self.grapheme_count()
+            );
             return Err(IntegrityError::InvalidGraphemeCount);
         }
 
@@ -730,7 +765,10 @@ impl Page {
             for (id, expected) in styles_seen.iter() {
                 let ref_count = unsafe { self.styles.ref_count(base, *id) } as usize;
                 if ref_count < *expected {
-                    // log.warn("...style ref count mismatch...", ...);
+                    log::warn!(
+                        target: crate::page::LOG_SCOPE,
+                        "page integrity violation style ref count mismatch id={id:?} expected={expected} actual={ref_count}"
+                    );
                     return Err(IntegrityError::MismatchedStyleRef);
                 }
             }
@@ -741,7 +779,10 @@ impl Page {
             for (id, expected) in hyperlinks_seen.iter() {
                 let ref_count = unsafe { self.hyperlink_set.ref_count(base, *id) } as usize;
                 if ref_count < *expected {
-                    // log.warn("...hyperlink ref count mismatch...", ...);
+                    log::warn!(
+                        target: crate::page::LOG_SCOPE,
+                        "page integrity violation hyperlink ref count mismatch id={id:?} expected={expected} actual={ref_count}"
+                    );
                     return Err(IntegrityError::MismatchedHyperlinkRef);
                 }
             }

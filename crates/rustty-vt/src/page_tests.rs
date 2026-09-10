@@ -2050,10 +2050,21 @@ mod tests {
         // Make invalid by unmarking the row
         unsafe { (*page.get_row(0)).set_grapheme(false) };
 
+        // S157-F1: `log.warn("page integrity violation y={} grapheme data but
+        // row not marked", .{y})` (page.zig:565-568).
+        let cap = crate::log_capture::start();
         assert_eq!(
             Err(IntegrityError::UnmarkedGraphemeRow),
             page.verify_integrity(),
         );
+        let messages = cap.messages();
+        assert!(
+            messages.iter().any(|(level, target, msg)| *level == log::Level::Warn
+                && target == "page"
+                && msg.starts_with("page integrity violation y=0 grapheme data but row not marked")),
+            "expected the grapheme-data-row-not-marked diagnostic, got: {messages:?}"
+        );
+        drop(cap);
 
         page.deinit();
     }
@@ -2158,10 +2169,22 @@ mod tests {
         // Miss a ref
         unsafe { page.styles.release(base, id) };
 
+        // S157-F1: `log.warn("page integrity violation style ref count
+        // mismatch id={} expected={} actual={}", .{...})` (page.zig:565-568
+        // — the style-ref-count arm).
+        let cap = crate::log_capture::start();
         assert_eq!(
             Err(IntegrityError::MismatchedStyleRef),
             page.verify_integrity(),
         );
+        let messages = cap.messages();
+        assert!(
+            messages.iter().any(|(level, target, msg)| *level == log::Level::Warn
+                && target == "page"
+                && msg.starts_with("page integrity violation style ref count mismatch id=")),
+            "expected the style-ref-count-mismatch diagnostic, got: {messages:?}"
+        );
+        drop(cap);
 
         page.deinit();
     }
@@ -2180,7 +2203,19 @@ mod tests {
         })
         .unwrap();
         page.size.rows = 0;
+
+        // S157-F1: `log.warn("page integrity violation zero row count", .{})`
+        // (page.zig:406).
+        let cap = crate::log_capture::start();
         assert_eq!(Err(IntegrityError::ZeroRowCount), page.verify_integrity());
+        let messages = cap.messages();
+        assert!(
+            messages.iter().any(|(level, target, msg)| *level == log::Level::Warn
+                && target == "page"
+                && *msg == "page integrity violation zero row count"),
+            "expected the zero-row-count integrity diagnostic, got: {messages:?}"
+        );
+        drop(cap);
 
         page.deinit();
     }
@@ -2199,7 +2234,19 @@ mod tests {
         })
         .unwrap();
         page.size.cols = 0;
+
+        // S157-F1: `log.warn("page integrity violation zero col count", .{})`
+        // (page.zig:410).
+        let cap = crate::log_capture::start();
         assert_eq!(Err(IntegrityError::ZeroColCount), page.verify_integrity());
+        let messages = cap.messages();
+        assert!(
+            messages.iter().any(|(level, target, msg)| *level == log::Level::Warn
+                && target == "page"
+                && *msg == "page integrity violation zero col count"),
+            "expected the zero-col-count integrity diagnostic, got: {messages:?}"
+        );
+        drop(cap);
 
         page.deinit();
     }
