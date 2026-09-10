@@ -1084,15 +1084,6 @@ mod tests {
         target.deinit();
         api.deinit();
 
-        // If some driver DOES give a surfaceless context a complete default
-        // framebuffer, the blit succeeds, the re-enable succeeds and there is nothing
-        // to log — say so instead of asserting a wrong thing.
-        assert!(
-            res.is_err(),
-            "fixture precondition: the blit into an incomplete FBO 0 must fail; \
-             got Ok, so this host's surfaceless default framebuffer is complete \
-             and the S113-F4 arm cannot be exercised this way"
-        );
         assert_eq!(
             records,
             vec![(
@@ -1102,5 +1093,16 @@ mod tests {
                     .to_string(),
             )]
         );
+
+        // AND the present itself reports OK. That is not an oversight, it is what
+        // both the reference and the port do: the `glBlitFramebuffer` call is raw and
+        // UNCHECKED on both sides (OpenGL.zig:316-327 has no `try`), so the GL error
+        // it raised is not part of the blit's result — it is collected by the NEXT
+        // `errors.getError()`, which is the one inside the SRGB re-enable. The record
+        // above is therefore the ONLY report this failure ever gets, which is
+        // precisely why the dead arm mattered. (The first VM run asserted
+        // `res.is_err()` here and failed; that assertion was wrong about the port,
+        // not the port wrong about the reference.)
+        assert!(res.is_ok(), "unexpected present error: {res:?}");
     }
 }
