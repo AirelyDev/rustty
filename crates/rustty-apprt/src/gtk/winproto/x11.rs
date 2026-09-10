@@ -83,10 +83,6 @@ const XKB_MINOR_VERSION: c_int = 0;
 /// uses (`x11.zig:136`). Not exported by `x11-dl`.
 const QUEUED_AFTER_READING: c_int = 1;
 
-/// PORTS: the inferred error set of `x11.zig`'s `!App` / `!Window` returns
-/// (`X11Error` + `GetWindowPropertyError`, `x11.zig:423-431`). Wrapped by
-/// [`super::WinprotoError::X11`].
-#[derive(Debug)]
 /// `const log = std.log.scoped(.gtk_x11)` (`x11.zig:25`).
 ///
 /// Carried as the `log::` facade's `target:` (`DECISION-logging.md` §6r4). The
@@ -94,6 +90,10 @@ const QUEUED_AFTER_READING: c_int = 1;
 /// is not the reference's `@tagName` — the scope tag is now exact.
 const LOG_SCOPE: &str = "gtk_x11";
 
+/// PORTS: the inferred error set of `x11.zig`'s `!App` / `!Window` returns
+/// (`X11Error` + `GetWindowPropertyError`, `x11.zig:423-431`). Wrapped by
+/// [`super::WinprotoError::X11`].
+#[derive(Debug)]
 pub enum Error {
     /// `error.NotX11Surface` (`x11.zig:188,193`).
     NotX11Surface,
