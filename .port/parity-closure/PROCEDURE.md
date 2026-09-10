@@ -107,6 +107,23 @@ python3 .port/tools/gates/check_parity_closure.py
    done, the row is `WAIVED` **with the reason in `owner`** — never `CLOSED`. This is discipline,
    not a check; the gate will not catch you.
 
+   **The one carve-out** (ruled 2026-09-09, from the 14r-b review; see `NEW-FINDINGS.md` N2).
+   A row may stay `CLOSED` when the unrestorable site falls **outside the row's own cited oracle
+   anchors** — the audit scoped the row deliberately, and a site it never claimed is not that
+   row's hole. Three conditions, all required, none of them optional:
+
+   - every one of the row's **cited anchors** is verified live, site by site;
+   - the exception is written into the tracked `owner` cell **and** into a PORT NOTE at the
+     code site, so neither survives only in a gitignored report;
+   - the leftover gets its **own entry in `NEW-FINDINGS.md`**, so the finale re-audit meets it
+     as a tracked item rather than as a footnote inside a closed row.
+
+   This is not a softening. The rule exists to stop a hole living only in a report; the carve-out
+   demands the hole be recorded in three tracked places instead. A site **inside** the cited
+   anchors still forces `WAIVED`, no matter how well documented. If you are unsure which side of
+   the line a site falls on, it is inside — `WAIVED` is the safe answer, and understating
+   completion costs nothing.
+
 2. **The gate counts rows, not sites.** A row citing twenty sites closes on the same single
    `state` cell as a row citing one. Closing a multi-site row therefore requires checking every
    cited anchor is actually live, not just that the row's *theme* was addressed. The 14b review
