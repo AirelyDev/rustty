@@ -652,7 +652,9 @@ mod wasm {
                 };
                 let font_index = run.font_index;
                 let run_cells = run.cells;
-                let cells = shaper.shape(run).map_err(|_| ShaperTestError::ShapeFailed)?;
+                let cells = shaper
+                    .shape(run)
+                    .map_err(|_| ShaperTestError::ShapeFailed)?;
                 // log.info("y={} run={d} shape={any} idx={}", .{ y, run.cells,
                 //     cells, run.font_index });
                 //

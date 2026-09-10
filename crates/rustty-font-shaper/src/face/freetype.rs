@@ -2539,7 +2539,11 @@ mod tests {
         let mut face: Face = Face::init(
             lib,
             embedded::VARIABLE,
-            opts(size(14.0, super::super::DEFAULT_DPI, super::super::DEFAULT_DPI)),
+            opts(size(
+                14.0,
+                super::super::DEFAULT_DPI,
+                super::super::DEFAULT_DPI,
+            )),
         )?;
 
         let cap = crate::log_capture::start();
@@ -2566,7 +2570,11 @@ mod tests {
         let mut face: Face = Face::init(
             lib,
             embedded::VARIABLE,
-            opts(size(14.0, super::super::DEFAULT_DPI, super::super::DEFAULT_DPI)),
+            opts(size(
+                14.0,
+                super::super::DEFAULT_DPI,
+                super::super::DEFAULT_DPI,
+            )),
         )?;
 
         let cap = crate::log_capture::start();

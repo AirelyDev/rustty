@@ -401,7 +401,8 @@ mod install_contract_tests {
 
         for (i, line) in lines.iter().enumerate() {
             let t = line.trim_start();
-            if !(t.starts_with("pub extern \"C\" fn") || t.starts_with("pub unsafe extern \"C\" fn"))
+            if !(t.starts_with("pub extern \"C\" fn")
+                || t.starts_with("pub unsafe extern \"C\" fn"))
             {
                 continue;
             }

@@ -1774,7 +1774,9 @@ mod coretext_impl {
                     // `Head::init` returns `Result`, so this IS a reachable
                     // failure arm — the `.ok()` that used to stand here silently
                     // discarded both the error and the reference's diagnostic.
-                    Some(data) => crate::discovery::parse_head_table(unsafe { data.as_bytes_unchecked() }),
+                    Some(data) => {
+                        crate::discovery::parse_head_table(unsafe { data.as_bytes_unchecked() })
+                    }
                 };
                 if let Some(head) = head_ {
                     is_bold = is_bold || (head.macStyle & 1 == 1);
@@ -1795,7 +1797,9 @@ mod coretext_impl {
                     //
                     // Same shape as the `head` arm above: a reachable failure
                     // arm, not a success path.
-                    Some(data) => crate::discovery::parse_os2_table(unsafe { data.as_bytes_unchecked() }),
+                    Some(data) => {
+                        crate::discovery::parse_os2_table(unsafe { data.as_bytes_unchecked() })
+                    }
                 };
                 if let Some(os2) = os2_ {
                     is_bold = is_bold || os2.fsSelection.bold;

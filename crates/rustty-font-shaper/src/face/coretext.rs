@@ -409,8 +409,8 @@ impl Face {
         let len = axes.count();
         for i in 0..len {
             // const dict = axes.getValueAtIndex(macos.foundation.Dictionary, i);
-            let dict = unsafe { axes.value_at_index(i) }
-                as *const objc2_core_foundation::CFDictionary;
+            let dict =
+                unsafe { axes.value_at_index(i) } as *const objc2_core_foundation::CFDictionary;
             if dict.is_null() {
                 continue;
             }
