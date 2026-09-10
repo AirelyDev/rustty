@@ -89,6 +89,13 @@ python3 .port/tools/gates/check_parity_closure.py
   `git push ssh://rvm/~/projects/rustty +HEAD:refs/heads/p6-incoming`, then
   `ssh rvm 'cd ~/projects/rustty && git reset --hard p6-incoming && <command>'`.
   Pushing to the VM's checked-out branch is refused, hence the side ref.
+- **wasm rows** — anything that can change struct layout, Cargo features, or
+  linkage must also build for `wasm32-unknown-unknown`, which the macOS and
+  Linux lanes both miss. Three artifacts, three separate build graphs:
+  `.port/tools/build-vt-wasm.sh`, `.port/tools/build-web-canvas-wasm.sh`,
+  `.port/tools/build-main-wasm.sh`. A `log` feature or an `offset_of!` freeze
+  that is right on LP64 can be wrong on `wasm32` — both have already happened
+  (`DECISION-logging.md` §8r).
 
 ## Two gate blind spots (recorded 2026-09-09, from the 14b review)
 

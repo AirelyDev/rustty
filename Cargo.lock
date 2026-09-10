@@ -1691,6 +1691,7 @@ dependencies = [
 name = "rustty-wasm"
 version = "0.1.0"
 dependencies = [
+ "log",
  "rustty-config",
  "rustty-font",
  "rustty-font-shaper",

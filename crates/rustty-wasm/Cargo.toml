@@ -70,3 +70,24 @@ rustty-font-shaper = { workspace = true, features = ["ghostty-wasm-abi"] }
 # link, which cannot build at all). The block itself IS ported, in
 # `rustty-core/src/app.rs` (WS14 T5) — dropping the edge is the MORE faithful
 # choice, not a shortcut.
+
+# The comptime-equivalent release gate for THIS artifact (`rustty_wasm.wasm`,
+# built by `.port/tools/build-main-wasm.sh`). See
+# `.port/parity-closure/DECISION-logging.md` §8 for the full derivation.
+#
+# `rustty-vt-c` carries an identical table, and feature unification spreads the
+# effect across every crate compiled into the SAME wasm artifact — but ONLY
+# within that artifact's own dependency graph. `rustty-wasm` does NOT depend on
+# `rustty-vt-c` (it is a separate wasm root: `cargo build -p rustty-wasm
+# --target wasm32-unknown-unknown`), so it needs its own declaration. Without
+# it, this artifact still links every restored `log::warn!`-shaped diagnostic in
+# `rustty-vt` (whose `log = { workspace = true }` is unconditional) with
+# `STATIC_MAX_LEVEL` at its uncapped default — the dead weight §8 removes.
+#
+# Target-gated, not unconditional, for the reason §8 gives: `release_max_level_off`
+# is a global switch on the one shared `log` compilation, so enabling it outside
+# `wasm32` would also silence `rustty-core::logging::AppLogger` in the native
+# `rustty` binary's release build. Cargo activates a `[target.'cfg(...)']` table
+# only when the ACTUAL compile target matches, so the native build never sees it.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+log = { workspace = true, features = ["release_max_level_off"] }

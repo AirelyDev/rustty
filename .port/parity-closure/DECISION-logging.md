@@ -1195,3 +1195,61 @@ target (`x86_64-apple-darwin`), which — per the `cargo tree -i log` check abov
   `rustty_web_canvas.wasm` (§7's font-shaper gap notes) and were not touched by 14a/14b.
   `build-main-wasm.sh`'s artifact was not checked at all this stage — do a `cargo tree ... -i log`
   pass on it before assuming coverage.
+
+### §8r — fix-review round 1 (2026-09-09): the gate reached only two of the three wasm artifacts
+
+The §8 text above concluded that "one declaration covers every crate reachable from a
+`rustty-vt-c`-rooted wasm artifact ... so 14c-14e do not need to repeat this per crate", and its own
+Concerns bullet flagged that `build-main-wasm.sh`'s artifact had not been checked. The review did
+that check. **It was not covered.** Feature unification is per-build-graph, and `rustty-wasm` — the
+root of `rustty_wasm.wasm` — does not depend on `rustty-vt-c` at all. It does depend on `rustty-vt`,
+whose `log = { workspace = true }` (`crates/rustty-vt/Cargo.toml:204`) is unconditional, so every
+diagnostic string stages 14a/14b restored in `rustty-vt` was still linking into that artifact.
+
+**The rule, corrected:** the feature must be declared once per WASM ARTIFACT ROOT CRATE — the crate
+named in a `cargo build -p <crate> --target wasm32-unknown-unknown` — not once per workspace, and not
+once per crate that contains call sites. Feature unification then covers everything below that root.
+
+| artifact | root crate | covered by | `STATIC_MAX_LEVEL == Off` |
+|---|---|---|---|
+| `rustty_vt.wasm` | `rustty-vt-c` | its own table | yes |
+| `rustty_web_canvas.wasm` | `rustty-web-canvas` | depends on `rustty-vt-c` | yes |
+| `rustty_wasm.wasm` | `rustty-wasm` | **its own table, added in this round** | yes (was: no) |
+
+Verified for all three with `cargo tree -p <root> --target wasm32-unknown-unknown -e features -i log`,
+and that `rustty`, `rustty-vt-c` and `rustty-core` all show NO `release_max_level_off` when the same
+query is run against `aarch64-apple-darwin` — the native app build keeps its logging.
+
+Measured on `rustty_wasm.wasm` (`.port/tools/build-main-wasm.sh --release`, `cargo clean -p
+rustty-wasm --release --target wasm32-unknown-unknown` between runs):
+
+| build | `rustty_wasm.wasm` |
+|---|---|
+| before (this round's `crates/rustty-wasm/Cargo.toml` table reverted) | 1,000,535 bytes |
+| after | 992,196 bytes |
+
+**Delta: −8,339 bytes.** Smaller than `rustty_vt.wasm`'s −27,201 because this artifact links a
+narrower slice of `rustty-vt` (no `rustty-vt-c` C-ABI surface), but it is the same dead weight, and it
+would have grown with every row stages 14c-14e restore.
+
+#### Regression found by building the artifact rather than reasoning about it
+
+`rustty_wasm.wasm` did not build at all. Task 3's `@embed-abi` freeze in
+`crates/rustty-input/src/command.rs` asserts LP64 field offsets (`action` at 8, `title` at 16,
+`description` at 24) as unconditional `const _: () = assert!(...)`. On `wasm32-unknown-unknown`
+pointers are 4 bytes, so all three fail const evaluation and `rustty-input` — reachable from
+`rustty-wasm` via `rustty-config` — does not compile. Task 3 landed those asserts and was reviewed
+four times without anyone compiling for `wasm32`; this is the same class as the four Linux breakages,
+one target over.
+
+Fixed by gating the offset asserts on `#[cfg(target_pointer_width = "64")]` while leaving the
+`@embed-abi` comment annotations (which the A4 gate greps) unconditional. `rustty-embed.h` is a
+native-host header and no wasm artifact exports that C ABI, so nothing is lost. The size assert was
+also tightened from `4 * size_of::<*const c_char>()` — tautological under any `repr`, the Task 3
+review's own finding, still standing — to the hard literal `32`. `check_embed_h_abi.sh` still passes
+(19/60 aggregates frozen) and `cargo build --workspace` is green.
+
+**Standing constraint, added:** a change that can affect layout, features, or linkage must be built
+for `wasm32-unknown-unknown` as well as the Linux lane before it is called done. All three artifacts
+build green as of this round: `rustty_vt.wasm` 884,786 · `rustty_web_canvas.wasm` 1,587,089 ·
+`rustty_wasm.wasm` 992,196.

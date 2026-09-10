@@ -669,12 +669,20 @@ static LOGGER: Logger = Logger;
 /// PORT NOTE: the wasm-release level mirrors `lib_vt.zig`'s own size guard
 /// (see `log_fn`'s PORT NOTE) — `options.log_level = .err` there still passes
 /// `.err`-and-above to the (no-op) sink; capping to `Off` here goes one step
-/// further and matches what actually matters (`logFn = ... .noop`): a
-/// non-debug wasm build must not link ANY of the restored message-formatting
-/// code the facade's call sites bring in, which `Off` guarantees by never
-/// constructing a `log::Record` at the call site's `log::warn!` macro
-/// expansion (the crate's own filter check short-circuits first). Task-14a
-/// review round 2: this used to be an early return BEFORE `set_logger` was
+/// further and matches what actually matters (`logFn = ... .noop`): no record
+/// is ever dispatched to the sink on a non-debug wasm build.
+///
+/// This cap is a RUNTIME filter and nothing more. `log::set_max_level` writes
+/// an `AtomicUsize` the compiler cannot fold, so it does NOT keep the restored
+/// message-formatting code out of the artifact — an earlier version of this
+/// comment claimed it did, and that claim was false. The compile-time gate
+/// that actually erases those strings is `log`'s `release_max_level_off`
+/// Cargo feature, declared in the `wasm32`-target-gated dependency tables of
+/// this crate and of `rustty-wasm` (each wasm artifact root needs its own).
+/// See `.port/parity-closure/DECISION-logging.md` §8 for the derivation and
+/// the measured byte deltas. The runtime cap stays as defense-in-depth for
+/// the debug-wasm build, where the compile-time gate does not apply.
+/// Task-14a review round 2: this used to be an early return BEFORE `set_logger` was
 /// even attempted (skipping registration entirely on wasm-release) — that was
 /// itself an unconditional clobber, just inverted (silencing a wasm host's own
 /// filter instead of raising it). `set_logger` is now attempted on every

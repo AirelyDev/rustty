@@ -65,18 +65,35 @@ pub struct C {
     pub description: *const std::os::raw::c_char,
 }
 
+// The byte offsets below are the LP64 layout that `rustty-embed.h` declares and
+// that the A4 gate (`check_embed_h_abi.sh`) reads out of these annotations. They
+// are deliberately hard literals rather than `n * size_of::<ptr>()` expressions:
+// a pointer-arithmetic form is tautological under any `repr`, so it cannot catch
+// the layout break it exists to catch.
+//
+// The const asserts are therefore gated to 64-bit targets, while the `@embed-abi`
+// comments the gate greps stay unconditional. `wasm32-unknown-unknown` has 4-byte
+// pointers, so the literals are false there — but that target never links the
+// embed C ABI at all (`rustty-embed.h` is a native-host header; the wasm
+// artifacts export the `config_*`/`atlas_*`/`rustty_wc_*` surfaces instead), so
+// there is no ABI to freeze and nothing is lost. Ungated, these asserts fail
+// const evaluation and break the `wasm32` build of every crate that reaches
+// `rustty-input` — which is how this gate was found.
 // @embed-abi rustty_command_s 32
-const _: () =
-    assert!(std::mem::size_of::<C>() == 4 * std::mem::size_of::<*const std::os::raw::c_char>());
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<C>() == 32);
 const _: () =
     assert!(std::mem::align_of::<C>() == std::mem::align_of::<*const std::os::raw::c_char>());
 // @embed-abi-field rustty_command_s action_key 0
 const _: () = assert!(std::mem::offset_of!(C, action_key) == 0);
 // @embed-abi-field rustty_command_s action 8
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::offset_of!(C, action) == 8);
 // @embed-abi-field rustty_command_s title 16
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::offset_of!(C, title) == 16);
 // @embed-abi-field rustty_command_s description 24
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::offset_of!(C, description) == 24);
 
 /// Owns the NUL-terminated buffers that a `C` value's pointers borrow.
