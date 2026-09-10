@@ -99,6 +99,13 @@ use super::WinprotoError;
 /// off its `*ApprtWindow` (`wayland.zig:93,254-258,302-307`).
 type ApprtWindow = crate::gtk::class::window::Window;
 
+/// `const log = std.log.scoped(.winproto_wayland)` (`wayland.zig:27`).
+///
+/// Carried as the `log::` facade's `target:` (`DECISION-logging.md` §6r4). The
+/// `eprintln!`s this replaced all printed `warn(gtk)` — the WRONG scope; this
+/// file's reference scope is `winproto_wayland`, not `gtk`.
+const LOG_SCOPE: &str = "winproto_wayland";
+
 /// PORTS: the inferred error set of `wayland.zig`'s `!App` / `!Window` /
 /// `!initQuickTerminal` returns. Wrapped by [`super::WinprotoError::Wayland`].
 #[derive(Debug)]
@@ -324,8 +331,10 @@ impl App {
     #[must_use]
     pub fn supports_quick_terminal(&self) -> bool {
         if !gtk4_layer_shell::is_supported() {
-            eprintln!(
-                "warn(gtk): your compositor does not support the wlr-layer-shell protocol; disabling quick terminal"
+            // log.warn("your compositor does not support the wlr-layer-shell protocol; disabling quick terminal", .{});
+            log::warn!(
+                target: LOG_SCOPE,
+                "your compositor does not support the wlr-layer-shell protocol; disabling quick terminal"
             );
             return false;
         }
@@ -603,6 +612,14 @@ impl Window {
         let qh = g.qh().clone();
 
         // `mgr.create(wl_surface)` — the decoration object (`wayland.zig:141-153`).
+        //
+        // PORT NOTE (task-14d-3, UNRESTORED SITE `wayland.zig:170`): the reference
+        // wraps this in `catch |err| { log.warn("could not create decoration
+        // object={}", .{err}); break :deco null; }`. wayland-rs's `create` returns
+        // the proxy DIRECTLY — a Wayland request cannot fail synchronously — so
+        // there is no failure arm here and restoring the warning would put a
+        // diagnostic on a success path. The same applies to
+        // `get_background_effect` (`:190`) and the KDE slide `create` (`:403`).
         // wayland-client returns an inert proxy (never errors) if creation fails.
         let decoration = g
             .kde_decoration_manager()
@@ -685,6 +702,16 @@ impl Window {
     }
 
     /// PORTS: `wayland.zig:195-199` `Window.resizeEvent`.
+    //
+    // PORT NOTE (task-14d-3, UNRESTORED SITE `wayland.zig:225`): the reference is
+    // `self.syncBlur() catch |err| { log.err("failed to sync blur={}", .{err}); }`.
+    // [`Self::sync_blur`] is INFALLIBLE here — every wayland-rs request it makes
+    // (`create_region`, `add`, `set_blur_region`, `destroy`) returns `()`, because
+    // the Wayland wire protocol is fire-and-forget and errors arrive later as
+    // protocol errors on the connection, not as a return value. There is no
+    // failure arm to hang the diagnostic on, and adding one would put a
+    // diagnostic on a SUCCESS path. Same for `:231` and `:234` in
+    // [`Self::sync_appearance`].
     pub fn resize_event(&mut self) -> Result<(), WinprotoError> {
         self.sync_blur();
         let _ = self.conn.flush();
@@ -703,7 +730,8 @@ impl Window {
             .is_some_and(|w| w.is_quick_terminal())
         {
             if let Err(err) = self.sync_quick_terminal() {
-                eprintln!("warn(gtk): failed to sync quick terminal appearance={err}");
+                // log.warn("failed to sync quick terminal appearance={}", .{err});
+                log::warn!(target: LOG_SCOPE, "failed to sync quick terminal appearance={err:?}");
             }
         }
 
@@ -923,8 +951,10 @@ impl Window {
             QuickTerminalKeyboardInteractivity::None => KeyboardMode::None,
             QuickTerminalKeyboardInteractivity::OnDemand => {
                 if gtk4_layer_shell::protocol_version() < 4 {
-                    eprintln!(
-                        "warn(gtk): your compositor does not support on-demand keyboard access; falling back to exclusive access"
+                    // log.warn("your compositor does not support on-demand keyboard access; falling back to exclusive access", .{});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "your compositor does not support on-demand keyboard access; falling back to exclusive access"
                     );
                     KeyboardMode::Exclusive
                 } else {

@@ -548,6 +548,11 @@ impl Dispatch<KdeOutputOrderV1, ()> for Globals {
 /// behavior is therefore identical (a superseded token never activates) without
 /// tracking a per-surface "current token" that the reference's `*Window`-routed
 /// handler has but this `Globals`-routed one does not.
+///
+/// task-14d-3: that also makes `wayland.zig:461`'s
+/// `log.warn("received event for unknown activation token; ignoring", .{})` an
+/// UNRESTORED SITE with no arm to hang it on — the branch it guards cannot be
+/// entered here. Named explicitly so the file's log deficit has a written cause.
 impl Dispatch<XdgActivationTokenV1, WlSurface> for Globals {
     fn event(
         state: &mut Self,

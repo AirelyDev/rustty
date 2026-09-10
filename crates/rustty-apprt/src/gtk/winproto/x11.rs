@@ -87,6 +87,13 @@ const QUEUED_AFTER_READING: c_int = 1;
 /// (`X11Error` + `GetWindowPropertyError`, `x11.zig:423-431`). Wrapped by
 /// [`super::WinprotoError::X11`].
 #[derive(Debug)]
+/// `const log = std.log.scoped(.gtk_x11)` (`x11.zig:25`).
+///
+/// Carried as the `log::` facade's `target:` (`DECISION-logging.md` §6r4). The
+/// pre-existing `eprintln!` prints spelled this `gtk-x11`, with a HYPHEN, which
+/// is not the reference's `@tagName` — the scope tag is now exact.
+const LOG_SCOPE: &str = "gtk_x11";
+
 pub enum Error {
     /// `error.NotX11Surface` (`x11.zig:188,193`).
     NotX11Surface,
@@ -242,6 +249,10 @@ impl App {
         // event code; `XkbSelectEventDetails` then asks the server to deliver
         // `XkbStateNotify` events whose MODIFIER-state bits changed, which is what
         // `event_mods` peeks for. Both are FATAL on failure in the reference.
+        // log.debug("Xkb.init: initializing Xkb", .{});
+        log::debug!(target: LOG_SCOPE, "Xkb.init: initializing Xkb");
+        // log.debug("Xkb.init: running XkbQueryExtension", .{});
+        log::debug!(target: LOG_SCOPE, "Xkb.init: running XkbQueryExtension");
         let mut opcode: c_int = 0;
         let mut base_event_code: c_int = 0;
         let mut base_error_code: c_int = 0;
@@ -260,9 +271,16 @@ impl App {
             )
         } == 0
         {
-            eprintln!("err(gtk-x11): error initializing Xkb extension: XkbQueryExtension failed");
+            // log.err("Fatal: error initializing Xkb extension: error executing XkbQueryExtension", .{});
+            log::error!(
+                target: LOG_SCOPE,
+                "Fatal: error initializing Xkb extension: error executing XkbQueryExtension"
+            );
             return Err(Error::XkbInitializationError.into());
         }
+
+        // log.debug("Xkb.init: running XkbSelectEventDetails", .{});
+        log::debug!(target: LOG_SCOPE, "Xkb.init: running XkbSelectEventDetails");
 
         // `if (XkbSelectEventDetails(display, XkbUseCoreKbd, XkbStateNotify,
         // XkbModifierStateMask, XkbModifierStateMask) == 0) return
@@ -277,8 +295,10 @@ impl App {
             )
         } == 0
         {
-            eprintln!(
-                "err(gtk-x11): error initializing Xkb extension: XkbSelectEventDetails failed"
+            // log.err("Fatal: error initializing Xkb extension: error executing XkbSelectEventDetails", .{});
+            log::error!(
+                target: LOG_SCOPE,
+                "Fatal: error initializing Xkb extension: error executing XkbSelectEventDetails"
             );
             return Err(Error::XkbInitializationError.into());
         }
@@ -366,8 +386,9 @@ impl App {
 
         // `log.debug("X11: found extra XkbStateNotify event w/lookup_mods: {b}")`
         // (`x11.zig:151`).
-        eprintln!(
-            "debug(gtk-x11): found extra XkbStateNotify event w/lookup_mods: {lookup_mods:b}"
+        log::debug!(
+            target: LOG_SCOPE,
+            "X11: found extra XkbStateNotify event w/lookup_mods: {lookup_mods:b}"
         );
 
         // `x11.zig:149,152-158` — the XKB mask -> `input.Mods` mapping.
@@ -415,6 +436,8 @@ impl App {
     #[allow(clippy::unused_self)]
     #[must_use]
     pub fn supports_quick_terminal(&self) -> bool {
+        // log.warn("quick terminal is not yet supported on X11", .{});
+        log::warn!(target: LOG_SCOPE, "quick terminal is not yet supported on X11");
         false
     }
 
@@ -510,17 +533,24 @@ impl Window {
     /// PORTS: `x11.zig:207-212` `Window.resizeEvent`. The blur region must track
     /// window resizes.
     pub fn resize_event(&mut self) -> Result<(), WinprotoError> {
-        // The reference logs and swallows the sync error; we do the same (the
-        // winproto dispatch expects a best-effort result).
-        self.sync_blur();
+        // self.syncBlur() catch |err| { log.err("failed to sync blur={}", .{err}); };
+        if let Err(err) = self.sync_blur() {
+            log::error!(target: LOG_SCOPE, "failed to sync blur={err:?}");
+        }
         Ok(())
     }
 
     /// PORTS: `x11.zig:214-223` `Window.syncAppearance`. Re-derive both the blur
     /// region (CSD toggles change its offset) and the decoration hints.
     pub fn sync_appearance(&mut self) -> Result<(), WinprotoError> {
-        self.sync_blur();
-        self.sync_decorations();
+        // self.syncBlur() catch |err| { log.err("failed to sync blur={}", .{err}); };
+        if let Err(err) = self.sync_blur() {
+            log::error!(target: LOG_SCOPE, "failed to sync blur={err:?}");
+        }
+        // self.syncDecorations() catch |err| { log.err("failed to sync decorations={}", .{err}); };
+        if let Err(err) = self.sync_decorations() {
+            log::error!(target: LOG_SCOPE, "failed to sync decorations={err:?}");
+        }
         Ok(())
     }
 
@@ -559,12 +589,19 @@ impl Window {
 
     /// PORTS: `x11.zig:232-276` `Window.syncBlur`. Sets/clears the KDE blur region
     /// property from the window's `background-blur` config.
-    fn sync_blur(&mut self) {
+    //
+    // PORT NOTE (S60-F6): the reference is `fn syncBlur(self: *Window) !void` and
+    // its two callers LOG the error. This returned `()` and discarded both
+    // property-write results with `let _ =`, so the reference's `failed to sync
+    // blur={}` diagnostics had no error value to carry and were dropped entirely.
+    // The signature is the reference's again; the `?` sites below are exactly the
+    // `try`s the reference has.
+    fn sync_blur(&mut self) -> Result<(), Error> {
         let Some(apprt) = self.apprt_window.upgrade() else {
-            return;
+            return Ok(());
         };
         let Some(config) = apprt.get_config() else {
-            return;
+            return Ok(());
         };
         let blur = config.get().background_blur;
 
@@ -580,45 +617,57 @@ impl Window {
 
         // Only touch X11 when the region actually changes (`x11.zig:250-253`).
         if region.eql(&self.blur_region) {
-            return;
+            return Ok(());
         }
 
         if region.slices().is_empty() {
             // `deleteProperty(kde_blur)` (`x11.zig:271`).
-            let _ = self.delete_property(self.atoms.kde_blur);
+            self.delete_property(self.atoms.kde_blur)?;
         } else {
+            // log.debug("set blur={}, window xid={}, region={}", .{ blur, xid, region });
+            log::debug!(
+                target: LOG_SCOPE,
+                "set blur={blur:?}, window xid={xid}, region={region:?}",
+                xid = self.x11_surface.xid(),
+            );
             // `changeProperty(Slice, kde_blur, XA_CARDINAL, ._32, .replace, slices)`
             // (`x11.zig:262-269`). Each `Slice` is four `c_long` words => nelements
             // = 4 * len. `Slice` is `#[repr(C)]` of `i64`(=`c_long`) so the slice
             // buffer is already a contiguous long array.
             let slices = region.slices();
             let nelements = (slices.len() * 4) as c_int;
-            let _ = unsafe {
+            unsafe {
                 self.change_property(
                     self.atoms.kde_blur,
                     xlib::XA_CARDINAL,
                     slices.as_ptr().cast::<c_uchar>(),
                     nelements,
                 )
-            };
+            }?;
         }
 
         self.blur_region = region;
+        Ok(())
     }
 
     /// PORTS: `x11.zig:278-318` `Window.syncDecorations`. Read the existing
     /// `_MOTIF_WM_HINTS` (to preserve other bits), set the decorations flag + `all`
     /// bit from the window-decoration config, and write it back — skipping the
     /// write when the hints are unchanged.
-    fn sync_decorations(&mut self) {
+    //
+    // PORT NOTE (S60-F6): as with [`Self::sync_blur`], the reference is
+    // `fn syncDecorations(self: *Window) !void` and `syncAppearance` LOGS its
+    // error. This used to swallow the error and `return`, which left
+    // `failed to sync decorations={}` with nothing to report.
+    fn sync_decorations(&mut self) -> Result<(), Error> {
         // `getWindowProperty(...)` catching PropertyNotFound (`x11.zig:281-296`).
         let mut hints = match self.get_motif_hints() {
             Ok(Some(h)) => h,
             // PropertyNotFound => default (already-zeroed) hints (`x11.zig:289-290`).
             Ok(None) => MotifWmHints::default(),
-            // RequestFailed / type / format mismatch: the reference propagates;
-            // here syncAppearance is best-effort, so bail (matches its log+return).
-            Err(_) => return,
+            // RequestFailed / type / format mismatch: the reference PROPAGATES,
+            // and so does this now — `syncAppearance` is where it is logged.
+            Err(err) => return Err(err),
         };
 
         // `hints.flags.decorations = true` (`x11.zig:298`).
@@ -633,24 +682,22 @@ impl Window {
 
         // Only update when the hints actually change (`x11.zig:305-307`).
         if self.last_applied_decoration_hints == Some(hints) {
-            return;
+            return Ok(());
         }
 
         // `changeProperty(MotifWMHints, motif_wm_hints, motif_wm_hints, ._32, .replace, &.{hints})`
         // (`x11.zig:309-316`). One element of five `c_long` words => nelements = 5.
         let data = std::ptr::addr_of!(hints).cast::<c_uchar>();
-        if unsafe {
+        unsafe {
             self.change_property(
                 self.atoms.motif_wm_hints,
                 self.atoms.motif_wm_hints,
                 data,
                 5,
             )
-        }
-        .is_ok()
-        {
-            self.last_applied_decoration_hints = Some(hints);
-        }
+        }?;
+        self.last_applied_decoration_hints = Some(hints);
+        Ok(())
     }
 
     /// The window-decoration intent, read live from the apprt window
