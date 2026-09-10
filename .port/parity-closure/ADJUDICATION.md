@@ -518,6 +518,46 @@ matter how well documented") they are `WAIVED`, not `CLOSED`.
   much as a comment marking the dropped diagnostic.
 - Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s116-f2
 
+## Batch 14c-2 — renderer macOS-backend `LOG` waivers (task-14c-2, 2026-09-10)
+
+### S117-F3 — PARTIALLY RESTORED, WAIVED (two cited anchors unreachable)
+- 11 of the row's 13 cited `image.zig` anchors are now live `log::` emissions with
+  the `renderer_image` target: `image.zig:85, 122, 132, 165, 378, 396, 423, 486,
+  646, 660, 747`. The row's title also covers `shadertoy.zig`, and ALL of its live
+  sites are restored: `:71` (`loaded custom shader path={s}`), `:117` (the
+  spirv-error warn, whose arguments the port's comment had elided behind `...`) and
+  `:298` (the spirv-cross error callback, which no row's oracle column claims —
+  restored per PROCEDURE.md blind spot 3). `shadertoy.zig:424` stays a comment
+  because it is a comment in the REFERENCE too.
+- **Residual 1:** `image.zig:365`,
+  `log.warn("error deferring relative placement err={}", .{err})`. The reference's
+  `pending_relative.append(alloc, …)` takes an allocator and can fail; rustty's
+  `Vec::push` cannot (OOM aborts through `Global`). There is no `catch` arm, and
+  hoisting the warn out of it would fire it on every SUCCESSFUL deferral.
+- **Residual 2:** `image.zig:447`,
+  `log.warn("error tracking virtual origin err={}", .{err})`. Same shape:
+  `virtual_origins.getOrPut(alloc, …)` is fallible, `HashMap::entry` is not, and
+  the reference's `break :fold` on that arm has no counterpart to reach either.
+- Both sites now carry the reference's `log.warn` as an R1 comment plus a PORT
+  NOTE (search `error deferring relative placement` and `error tracking virtual
+  origin` in `crates/rustty-renderer/src/image/macos_impl.rs`).
+- Same shape as `#s115-f4` / `#s116-f2` / `#s190-f2`.
+- Disposition: state=WAIVED, owner=.port/parity-closure/ADJUDICATION.md#s117-f3
+
+### buffer-zig-contents-null — two unrestorable sites that NO row claims
+- `src/renderer/metal/buffer.zig:98` and `:155` each carry
+  `log.warn("buffer contents ptr is null", .{})` inside an `orelse` guard on
+  `msgSend(?[*]u8, objc.sel("contents"))`. objc2's `MTLBuffer::contents()` returns
+  `NonNull<c_void>`, so the guard is structurally unreachable in rustty and the
+  warn has no failure arm.
+- **No ledger row cites `buffer.zig` at all** — `S119-F1` covers `shaders.zig`
+  only — so no row's state is affected by this and no row is being `CLOSED` over a
+  hole it claimed. It is recorded here, at both code sites, and in
+  `NEW-FINDINGS.md` as [[N6]], so the finale re-audit meets it as a tracked item.
+- Consequence: `crates/rustty-renderer/src/metal/buffer.rs` deliberately has NO
+  `LOG_SCOPE` constant, because it has no live emission and an unused constant is a
+  `-D warnings` failure.
+
 ## Batch 14c-4 — src/font `LOG` waivers and narrowed residuals (task-14c-4, 2026-09-10)
 
 The eleven `class=LOG` rows in `src/font` (`S84-F1`, `S86-F2`, `S90-F2`,
@@ -615,3 +655,25 @@ site and is excluded — the counts below say so where it matters.
 - **The swap itself was NOT done** — it is a runtime refactor, not a logging
   change, and out of this stage's scope. The row stays OPEN with an `owner`
   recording that the blocker it rested on does not exist.
+
+### N6 — `discovery.zig`'s two table-parse warns (no ledger row; RESTORED)
+- Added in task-14c-4 fix round 1 (review item F4). `src/font/discovery.zig` has
+  exactly two live `log.*` calls — `:762` (`error parsing head table`) and `:779`
+  (`error parsing OS/2 table`) — and NO ledger row names either. The port
+  discarded both failures with `.ok()`, keeping the diagnostics as PORT NOTE
+  comments; the file had no `LOG_SCOPE` at all.
+- **Not waivable:** `Head::init` and `OS2::init` both return `Result`, so these
+  are genuine reachable failure arms, unlike this batch's `S94-F4` and `N4`
+  residuals. Both are now live on the reference's `discovery` scope.
+- The `catch` arms were extracted into `parse_head_table` / `parse_os2_table`
+  free fns so the failure arm is reachable from a test at all; four tests cover
+  them (malformed warns exactly once and still degrades to `None`; well-formed
+  emits nothing).
+- Full entry: `.port/parity-closure/NEW-FINDINGS.md`, section `N6`.
+- Disposition: no row to close; tracked as finding N6.
+
+### Inventory addendum (fix round 1)
+`src/font/discovery.zig` was not in this batch's original per-file table because
+no row named it. Its line: **2 live sites : 2 emissions after.** With it, every
+file under `src/font` that contains a live reference `log.*` call has now been
+enumerated and reconciled against the port.

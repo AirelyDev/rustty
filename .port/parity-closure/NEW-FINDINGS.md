@@ -186,3 +186,106 @@ found, and current state.
   stand-in with `rustty_os::cf_release_thread`, on the real kqueue backend, with a test
   that proves released objects reach it. Schedule it as its own task; it is not logging
   work and must not ride along inside a `LOG`-class row's closure.
+
+---
+
+## N4 — `DeferredFace.zig` has three live `log.warn` sites and no `LOG` row names the file
+
+- **id**: N4
+- **severity**: low (three diagnostics; no state or rendering difference)
+- **kind**: dropped-diagnostic / **ledger under-coverage**
+- **oracle**: `src/font/DeferredFace.zig:403` (`failed to init face for codepoint
+  check face={s} err={}`), `:430` (`error creating deferred face err={}`), `:463`
+  (`error loading deferred face err={}`). All three are live — the file's only
+  other `log` mention, `:303`, is commented out upstream.
+- **rustty**: `crates/rustty-font-shaper/src/deferred_face.rs` — all three were
+  carried as PORT NOTE comments, two of them explicitly justified with the (now
+  false) claim "this crate wires no logger".
+- **description**: the file has four rows in `src/font` — `S85-F2`, `S85-F3`,
+  `S85-F5`, `S85-F6` — and **not one is `class=LOG`**. The audit that produced the
+  ledger found four defects in this file and did not find its dropped
+  diagnostics, so no row's cited anchors would ever have led an executor here.
+  This is the under-count shape `PROCEDURE.md` blind spot 3 was written for, and
+  it is the second instance found in one stage (the first being the fifth,
+  unclaimed site in `face/web_canvas.zig:317`).
+- **how found**: task 14c-4, by enumerating the reference's OWN `log.*` calls
+  per file across the whole of `src/font` and reconciling the count against the
+  live emissions in the port — not by following any row's anchors. The same
+  method found N6 in `discovery.zig`.
+- **disposition**: `:403` and `:463` are **restored** and live, on the
+  reference's `deferred_face` scope. `:430` is **WAIVED**: its only reference
+  failure mode is OOM from `alloc.dupeZ`/`alloc.create`, and Rust's `Vec`/`Box`
+  ABORT on allocation failure rather than returning, so the port has no reachable
+  failure arm and no `null` return — the emission could only sit on the success
+  path. PORT NOTE at the site; adjudicated at
+  `.port/parity-closure/ADJUDICATION.md`, batch 14c-4, heading
+  `N4 — deferred_face_new's dropped warn`.
+- **why this is recorded separately from any row**: there is no row to close.
+  Without this entry the work is invisible to the finale re-audit, and the file
+  would read as fully covered because its four rows are all ticked.
+- **state**: **CLOSED for the two restorable sites, WAIVED for the third.** The
+  residual item for the finale is not code but process: **no `LOG`-class row
+  exists for `DeferredFace.zig`, and the ledger should not be read as if the
+  absence of a row means the absence of a defect.**
+
+---
+
+## N6 — `discovery.zig`'s two table-parse `log.warn`s were discarded by `.ok()`, and no row names them
+
+- **id**: N6
+- **severity**: low (two diagnostics; the `null`/`None` degradation was already
+  faithful, only the warning was lost)
+- **kind**: dropped-diagnostic / **ledger under-coverage**
+- **oracle**: `src/font/discovery.zig:762` (`error parsing head table: {}`) and
+  `:779` (`error parsing OS/2 table: {}`), both in the `catch` arm of an
+  `opentype.*.init` inside the CoreText descriptor walk. These are the file's
+  ONLY two `log.*` calls, and both are live.
+- **rustty**: `crates/rustty-font-shaper/src/discovery.rs` — both parses were
+  `.ok()`, discarding the error and the diagnostic together, with the reference's
+  `log.warn` kept as a PORT NOTE comment. The file carried no `LOG_SCOPE` at all,
+  even though task 14c-4's own scope table assigns `discovery.zig` the scope
+  `discovery`.
+- **description**: same shape as N4 — no ledger row names either site, so no
+  executor following cited anchors would have reached them. Distinct from the
+  waived cases in this stage: `Head::init` and `OS2::init` both return `Result`,
+  so these are genuine reachable failure arms and the "no diagnostic on a success
+  path" rule does not apply.
+- **how found**: task 14c-4 fix round 1, in response to review item F4, which
+  itself came from applying blind spot 3's enumeration to the one `src/font` file
+  the stage had not swept.
+- **disposition**: both **restored**. The `catch` arms were extracted into
+  `parse_head_table` / `parse_os2_table` free fns taking `&[u8]`, because
+  manufacturing a CTFont with a malformed table is not something the suite can
+  do — the extraction is what makes the failure arm reachable from a test.
+  Covered by four tests (a malformed table warns exactly once and still degrades
+  to `None`; a well-formed one emits nothing).
+- **state**: **CLOSED.** As with N4, the residual for the finale is the process
+  point: two files in `src/font` had live diagnostics that the ledger never
+  named.
+
+## N6 — `metal/buffer.zig`'s two null-contents warns are unrestorable and unclaimed
+
+- **id**: N6
+- **severity**: low (two diagnostics that cannot fire in rustty; no behavioural divergence
+  on any reachable path)
+- **kind**: unrestorable-diagnostic / uncited-site
+- **oracle**: `src/renderer/metal/buffer.zig:98` and `:155` —
+  `log.warn("buffer contents ptr is null", .{}); return error.MetalFailed;` inside the
+  `orelse` guard on `msgSend(?[*]u8, objc.sel("contents"), .{})`, in `sync` and
+  `syncFromArrayLists` respectively.
+- **rustty**: `crates/rustty-renderer/src/metal/buffer.rs` — both `dst` blocks, which call
+  objc2's `MTLBuffer::contents()`.
+- **description**: objc2 types `contents()` as returning `NonNull<c_void>`, so the
+  reference's null guard has no counterpart. There is no failure arm for the `log.warn` to
+  live in, and lifting it out of the arm would put a diagnostic on the success path — the
+  production-bug shape this plan has already shipped once. Both sites keep the reference
+  call as an R1 comment with a PORT NOTE saying why it is not restorable.
+- **how found**: task 14c-2, enumerating the ORACLE's own `log.*` calls per file rather
+  than trusting the ledger's anchors (PROCEDURE.md blind spot 3). `buffer.zig` is not cited
+  by `S119-F1` or by any other row.
+- **why this is recorded separately**: no row claims these sites, so no row's `CLOSED`
+  state rests on them and the blind-spot-1 carve-out is not in play. This entry exists so
+  the gap is tracked rather than living only in a gitignored report.
+- **state**: **WAIVED-by-construction.** Nothing to schedule unless the port ever moves off
+  objc2's `NonNull` contract for `contents()`; if it does, restore both warns with
+  `error.MetalFailed` as the return.
