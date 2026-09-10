@@ -116,3 +116,41 @@ found, and current state.
   `TestStep::run`'s contract to return a `Result` and giving `TestStep` a
   hand-written `Debug`, both of which would make the port's test helper LESS
   faithful to the reference in order to restore one of its diagnostics.
+
+---
+
+## N3 — the port shares one "seen" table between two `logUnsupportedOnce` sites the reference keeps separate
+
+- **id**: N3
+- **severity**: low (exactly one suppressed diagnostic per process; no state or
+  rendering difference)
+- **kind**: behavioral-difference (a warning the reference emits twice per
+  process — once from each of two call sites — the port emits once)
+- **oracle**: `src/terminal/stream.zig:734` and `:1185`, both calling
+  `logUnsupportedOnce("ignoring UTF-8-decoded C1 controls, first: 0x{x}", .{…},
+  0x80)`. The helper (`stream.zig:3040`) declares its `Static.seen` table
+  **inside** the generic function, so Zig monomorphizes one table per
+  `@TypeOf(args)` instantiation. The two sites pass different argument types —
+  `:734` passes `cp`, a `u32` element of `cp_buf: [4096]u32` (`stream.zig:671`);
+  `:1185` passes `c`, a narrower integer — so they are two distinct
+  instantiations with **two separate tables**.
+- **rustty**: `crates/rustty-vt/src/stream.rs:1151` and `:1847` both pass
+  `&SEEN_UTF8_DECODED_C1` (`stream.rs:4719`) — one shared table.
+- **description**: the port's `log_unsupported_once` takes the table by
+  reference rather than instantiating it per argument type, so the two sites
+  share suppression state. The first site to fire claims key `0x80`; the second
+  then finds the key already present and never emits. The reference emits from
+  both. Net effect: exactly one warning suppressed per process, on a path that
+  is itself a rare-input diagnostic.
+- **how found**: during task 14r-a's fix round, while verifying that a PORT NOTE
+  in `stream.rs` correctly described which statics are shared between call
+  sites. The note's sharing claim was accurate about the port and wrong about
+  the reference. Recorded as a `KNOWN DIVERGENCE` comment at the static's
+  definition.
+- **why not fixed in that round**: it is a behavioral change outside the two
+  rows that round was fixing (S163-F2, S164-F1), made on a branch two other
+  workers were committing to. The correct fix is to give each site its own
+  static and assert both emit — small, but it needs its own test and its own
+  review rather than riding along inside a test-isolation fix.
+- **state**: **OPEN** — to be fixed with a test that drives both call sites in
+  one process and asserts two records, not one.
