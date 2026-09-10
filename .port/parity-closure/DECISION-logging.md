@@ -682,3 +682,157 @@ dominates. Reproduced twice, identical byte count both times.
   crates): all clean.
 - No ledger row touched by this round; the six `CLOSED` rows from §6 are
   unchanged.
+
+## §6r2 — Task 14a review round 2 fixes
+
+Fixed 2026-09-09, same day as §6/§6r, in response to the second review of
+task 14a. CRITICAL 1, IMPORTANT 4, and IMPORTANT 5 were confirmed addressed
+by the reviewer and needed no further change. CRITICAL 2 and IMPORTANT 3
+were confirmed still open in specific, named places; fixed below. No ledger
+row touched.
+
+### CRITICAL 2 — closed for real this time, in three parts
+
+**1. No install on the libghostty/macOS path.** `rustty_init`
+(`crates/rustty-apprt-c/src/lib.rs`) — the port of `main_c.zig`'s
+`ghostty_init`, the process init for the LIBRARY artifact — never called
+`install_app_log_backend()`. Since `rustty_build_config::apprt::app_runtime`
+is `None` on everything but Linux/FreeBSD, **the shipped macOS application is
+libghostty (this crate), not the `rustty` exe** — so §6r's fix, which only
+touched `main_rustty.rs`, left the primary-platform app with no backend at
+all. Fixed: `rustty_init` now calls `install_app_log_backend()` as its first
+action, before anything else (including its own `log()` calls for the
+Windows-unsupported and detect-action error paths).
+
+**2. The install was too late in `main()`.** Both `main_rustty.rs::main()`
+and (now) `rustty_init` install BEFORE calling `state_init()` /
+`rustty_apprt::init_with_action` — not after. `init_with_action` runs the
+bootstrap sequence (locale, crash-init, glslang, oniguruma, resources dir,
+i18n) that several `LOG` rows restore diagnostics INSIDE (e.g. S111-F5 in
+`rustty-os/src/locale.rs`), and only calls `rustty_core::STATE.set` at the
+very end of that sequence. Installing after `state_init()` returned meant
+every bootstrap-window site executed before any logger existed, reaching
+nothing — while the oracle's `std_options.logFn` is live from process entry.
+Now: bootstrap-window sites read `Logging::default()` via `logging::log`'s
+own documented pre-`STATE` fallback (oracle-faithful — the reference's own
+zero-initialized `state` gives the identical "default logging config"
+behavior before its own `state.init()` resolves the real flags); every site
+after `state_init()`/`init_with_action` succeeds reads the fully resolved
+flags.
+
+**3. `rustty-bench` has no reachable backend and is NOT closable under
+either backend as they exist today.** `crates/rustty-bench/Cargo.toml` has
+no `rustty-core` dependency and no `rustty-vt-c` dependency; it is a
+separate `[[bin]]` (`cargo tree -p rustty` confirms it is not linked from
+the app either). Given the choice the review explicitly offered (install
+there, or record the row as not closable), this round records it: **S62-F2,
+and any other `LOG`-class row in `rustty-bench`, must NOT be closed by
+14b-14e's mechanical `log::warn!` restoration** — there is no process-wide
+`log` backend reachable from this binary, so a restored site there would
+compile, run, and silently emit nothing, exactly the "bookkeeping-green"
+failure CRITICAL 2 was originally about. Whichever stage reaches
+`rustty-bench` must either (a) add a real install call (the crate would need
+a new dependency edge — on `rustty-core` if that's architecturally sound for
+a benchmark CLI, or a lighter path via `rustty_global::logging()` per the
+forward-looking note below), or (b) leave the row `OPEN`/`WAIVED` with this
+paragraph cited as the reason, never silently `CLOSED`.
+
+### The `STATE` claim in §6r was wrong; corrected
+
+§6r asserted `AppLogger`-forwarded records "fall back to `Logging::default()`
+... permanent for this path rather than transient at boot." This is false:
+`rustty_core::STATE` **is** populated on the real path
+(`main_rustty.rs::main()` -> `state_init()` -> `rustty_apprt::
+init_with_action` -> `rustty_core::STATE.set(state)`, with `state.logging =
+compute_logging(action_detected, RUSTTY_LOG)` — the fully resolved flags).
+Since the install now runs BEFORE `state_init()` (item 2 above), the
+`Logging::default()` fallback is exactly what it should be: real, but
+strictly bounded to the bootstrap window before `STATE` is set — not a
+permanent divergence. `crates/rustty-core/src/logging.rs`'s doc comment on
+`install_app_log_backend` is corrected in place (marked as a correction, not
+silently rewritten) to say this instead.
+
+### IMPORTANT 3 — the last uncovered constructor, plus the stateless entries
+
+`rustty_snapshot_decoder_new_buf` (`crates/rustty-vt-c/src/lib.rs`) was a
+genuine gap in the "every top-level `*_new`" sweep — `example/c-vt-snapshot`
+calls it BEFORE `rustty_snapshot_decoder_new`. Fixed: it now installs too
+(17 constructors covered, not 16).
+
+Beyond `*_new`: `example/c-vt-size-report`, `example/c-vt-build-info`,
+`example/c-vt-color-scheme`, and `example/c-vt-encode-focus` call no
+constructor at all — only a single stateless encode/info function
+(`rustty_size_report_encode`, `rustty_build_info`,
+`rustty_color_scheme_report_encode`, `rustty_focus_encode`). The review
+offered a choice (cover them, or state the limitation); this round covers
+them — each now also calls `install_log_backend()` as its first action, since
+`rustty_build_info` in particular has its own `log.warn` guard in the
+reference and is exactly the kind of site this stage exists to fix. The
+"whichever constructor an embedder calls first wins" framing in §6r no
+longer needs a qualifier: every `#[no_mangle]` entry point reachable as a
+shipped example's FIRST call now installs.
+
+### Same class as CRITICAL 1 — the wasm-release arm was an inverted clobber
+
+`install_log_backend`'s wasm-release arm called `log::set_max_level(Off)`
+UNCONDITIONALLY, with no `set_logger` success-arm guard — silencing a wasm
+host's own already-installed filter instead of raising it (CRITICAL 1's bug,
+inverted). Fixed by removing the special-cased early return entirely and
+unifying the function: `log::set_logger(&LOGGER)` is now attempted on EVERY
+target, and `log::set_max_level` — `Off` on non-debug wasm32, `Debug`/`Error`
+elsewhere per IMPORTANT 4 — runs only inside that one shared success arm.
+`Logger`/`std_level_from_log`/`LOGGER` are consequently always referenced now
+(the three `#[cfg_attr(..., allow(dead_code))]` annotations from §6 no
+longer apply and were removed).
+
+### Two forward-looking notes recorded, not fixed
+
+- **`rustty-config` already has a strictly-more-reachable path.**
+  `config_struct.rs:5396-5415`'s `format_log`/`log_warn` read
+  `rustty_global::logging()`, a leaf-crate process-global every crate below
+  `rustty-core` can name — no install call needed, works in tests/benches/
+  exe/lib alike. Routing `rustty-config`'s 5 `LOG` rows through the
+  `log::warn!` facade (as §6r's table currently has them) would give that one
+  crate TWO divergent logging paths, with the new one strictly *less*
+  reachable than the one it already has. 14b-14e should consider moving
+  `rustty-config`'s 5 rows into the direct-call group (parallel to
+  `rustty-core`/`rustty-apprt`/`rustty-cli`) rather than the facade group —
+  not decided or executed here, just flagged before those rows are restored.
+- **Latent recursion once `rustty-os` restores its own `log::warn!` sites.**
+  `AppLogger::log` -> `logging::log` -> `log_with` -> (macOS)
+  `rustty_os::macos::Log`. `rustty-os` is one of the 11 facade crates (2
+  `LOG` rows). If any restored site on the `rustty_os::macos::Log` code path
+  itself (or anything it calls) ever logs via `log::warn!`, that call
+  recurses back into `AppLogger::log` while already inside it. Nothing in the
+  current `rustty-os` codebase does this (checked: `macos::Log`'s own source
+  has no `log::` macro call), so it is not live today — but 14b-14e must
+  check this specifically when restoring `rustty-os`'s 2 rows, before, not
+  after, landing them.
+
+### wasm cost, re-measured again
+
+| build | `rustty-vt.wasm` |
+|---|---|
+| before task 14a | 892,220 bytes |
+| after §6 | 885,927 bytes |
+| after §6r (round 1 fixes) | 886,918 bytes |
+| after §6r2 (round 2 fixes, this section) | 888,020 bytes |
+
+Delta from §6r: **+1,102 bytes** (5 more `install_log_backend()` call sites
+plus `log::set_logger` now attempted unconditionally on wasm-release instead
+of short-circuited). Still **−4,200 bytes** overall against the pre-14a
+baseline. Reproduced twice, identical.
+
+### Re-verification after this round's fixes
+
+- `cargo test -p rustty-vt-c --all-features`: 492 passed, 0 failed.
+- `cargo test -p rustty-core --lib logging::`: 5 passed, 0 failed (doc-only
+  change to `install_app_log_backend`'s comment; no test behavior changed).
+- `cargo check -p rustty`, `cargo check -p rustty-apprt-c`: both clean.
+- `cargo check --workspace --all-targets`: clean.
+- `cargo clippy -p rustty-vt-c --all-targets --all-features -- -D warnings`,
+  `cargo clippy -p rustty-core --all-targets --all-features -- -D warnings`,
+  `cargo clippy -p rustty-apprt-c --all-targets -- -D warnings`, `cargo
+  clippy -p rustty --all-targets -- -D warnings`: all clean.
+- `cargo fmt --check` (all touched crates): clean.
+- No ledger row touched; the six `CLOSED` rows are unchanged.

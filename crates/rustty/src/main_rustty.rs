@@ -118,6 +118,24 @@ fn state_init() -> Result<GlobalState<Action>, InitError> {
 
 // pub fn main() !MainReturn {
 pub fn main() {
+    // task-14a review round 2 (CRITICAL 2 item 2): install BEFORE
+    // `state_init()`, not after. `state_init()` -> `rustty_apprt::
+    // init_with_action` runs the bootstrap sequence (locale, crash-init,
+    // glslang, oniguruma, resources dir, i18n) that several `LOG` ledger rows
+    // restore diagnostics INSIDE (e.g. S111-F5 in `rustty-os/src/locale.rs`),
+    // and `rustty_core::STATE` is not populated until the very end of that
+    // sequence (`rustty-apprt/src/lib.rs`'s `STATE.set`). Installing after
+    // `state_init()` returned meant every one of those bootstrap-window sites
+    // would execute before ANY logger existed and be silently dropped, while
+    // the oracle's `std_options.logFn` is live from process entry. Installing
+    // here instead means: bootstrap-window sites read `Logging::default()`
+    // (via `logging::log`'s own pre-`STATE` fallback) — genuinely
+    // oracle-faithful, since the reference's zero-initialized `state` gives
+    // the exact same "default logging config" behavior before its own
+    // `state.init()` resolves the real flags — and every site AFTER
+    // `state_init()` succeeds reads the fully resolved `RUSTTY_LOG`/
+    // action-derived flags once `STATE` is set.
+    rustty_core::logging::install_app_log_backend();
     // We first start by initializing our global state. This will setup
     // process-level state we need to run the terminal. The reason we use
     // a global is because the C API needs to be able to access this state;
@@ -168,16 +186,6 @@ pub fn main() {
             std::process::exit(1);
         }
     };
-    // task-14a review CRITICAL 2 (rustty-core::logging::install_app_log_backend,
-    // see its own PORT NOTE): registers the `log` facade backend for the
-    // ACTUAL application binary, so restored `log::warn!` sites in
-    // rustty-vt/rustty-renderer/rustty-font-shaper/etc. (14b-14e) reach the
-    // real `logging::log`/`log_with` sink instead of nowhere — this binary
-    // does not link `rustty-vt-c`, so task 14a's `sys::Logger` backend never
-    // runs here. Installed once state_init() has succeeded (analogous to
-    // the reference's `std_options` being active for the whole of `main()`'s
-    // body, which runs after `state.init()` in `main_ghostty.zig` too).
-    rustty_core::logging::install_app_log_backend();
     // defer state.deinit();
     //   PORT NOTE: every path below ends in `std::process::exit` (or the diverging
     //   GUI leaf), which — like the reference `posix.exit` — does NOT run deferred

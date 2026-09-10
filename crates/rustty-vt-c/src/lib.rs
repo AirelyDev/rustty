@@ -148,6 +148,10 @@ mod writer;
 /// returns `INVALID_VALUE` without dereferencing `out`.
 #[no_mangle]
 pub unsafe extern "C" fn rustty_build_info(data: c_int, out: *mut std::ffi::c_void) -> c_int {
+    // task-14a review round 2 (IMPORTANT 3): `example/c-vt-build-info` calls
+    // this and no `*_new` constructor at all, so it must also install the log
+    // backend to be covered.
+    crate::sys::install_log_backend();
     use build_info::BuildInfo;
     // SAFETY: `out` validity is the caller's contract (see fn-level # Safety).
     // PORT NOTE: the integer-range guard (`std.meta.intToEnum(BuildInfo, ...)
@@ -332,6 +336,9 @@ pub unsafe extern "C" fn rustty_color_scheme_report_encode(
     buf_len: usize,
     out_written: *mut usize,
 ) -> c_int {
+    // task-14a review round 2 (IMPORTANT 3): `example/c-vt-color-scheme` calls
+    // this and no `*_new` constructor at all.
+    crate::sys::install_log_backend();
     use rustty_vt::device_status::ColorScheme;
     // Integer-range guard on the raw c_int crossing the C boundary
     // (RusttyColorScheme: LIGHT=0, DARK=1 — see include/rustty/vt/device.h).
@@ -360,6 +367,9 @@ pub unsafe extern "C" fn rustty_focus_encode(
     out_len: usize,
     out_written: *mut usize,
 ) -> c_int {
+    // task-14a review round 2 (IMPORTANT 3): `example/c-vt-encode-focus` calls
+    // this and no `*_new` constructor at all.
+    crate::sys::install_log_backend();
     let event = match focus::FocusEvent::from_c_int(event) {
         Some(e) => e,
         None => return result::Result::InvalidValue.to_c_int(),
@@ -573,6 +583,9 @@ pub unsafe extern "C" fn rustty_size_report_encode(
     out_len: usize,
     out_written: *mut usize,
 ) -> c_int {
+    // task-14a review round 2 (IMPORTANT 3): `example/c-vt-size-report` calls
+    // this and no `*_new` constructor at all.
+    crate::sys::install_log_backend();
     let style = match size_report::SizeReportStyle::from_c_int(style) {
         Some(s) => s,
         None => return result::Result::InvalidValue.to_c_int(),
@@ -1825,6 +1838,11 @@ pub unsafe extern "C" fn rustty_snapshot_decoder_new_buf(
     ptr: *const u8,
     len: usize,
 ) -> c_int {
+    // task-14a review round 2 (IMPORTANT 3): this constructor was missing from
+    // the earlier "every top-level `*_new`" sweep — `example/c-vt-snapshot`
+    // calls it BEFORE `rustty_snapshot_decoder_new` (see that example's
+    // `main.c`), so it must install too, not just its sibling.
+    crate::sys::install_log_backend();
     // SAFETY: pointer validity is the caller's contract.
     unsafe { snapshot::decoder_new_buf(alloc.as_ref(), decoder, ptr, len) }.to_c_int()
 }

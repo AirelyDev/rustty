@@ -188,17 +188,28 @@ static APP_LOGGER: AppLogger = AppLogger;
 /// split — that crate is porting `lib_vt.zig`'s C-ABI arm, a different
 /// `std_options` block in the reference with its own (lower) release default.
 ///
-/// KNOWN LIMITATION (documented, not fixed here — out of scope for a
-/// logging-facade review): `log()` above reads `rustty_core::STATE`, which
-/// the real `rustty` bin (`crates/rustty/src/main_rustty.rs`) never
-/// populates — ADV-FIX 2 gives the bin its own `GlobalState<Action>`
-/// (`Action` bound to the CLI action type) separate from `rustty_core::STATE`
-/// (bound `Action = ()`), specifically so cli-dependent code never has to
-/// live in `rustty-core`/`rustty-apprt`. So until that split is revisited,
-/// `AppLogger`-forwarded records fall back to `Logging::default()` rather
-/// than the bin's own resolved `RUSTTY_LOG`/action-derived flags — the SAME
-/// fallback `log()` already documents for any caller before `STATE` is set,
-/// just permanent for this path rather than transient at boot.
+/// CORRECTED (task-14a review round 2 — the previous revision of this
+/// comment asserted the opposite of what actually happens; do not reintroduce
+/// it): `log()` above reads `rustty_core::STATE`, and `rustty_core::STATE`
+/// **is** populated on the real path — `main_rustty.rs::main()` calls
+/// `state_init()`, which calls `rustty_apprt::init_with_action`, which ends
+/// with `let _ = rustty_core::STATE.set(state)` (`rustty-apprt/src/lib.rs`),
+/// where `state.logging` is `compute_logging(action_detected, RUSTTY_LOG)` —
+/// the fully resolved flags, not `Logging::default()`. `install_app_log_
+/// backend` is called BEFORE `state_init()` (see `main_rustty.rs::main`'s own
+/// PORT NOTE), so: any restored `log::warn!` site that runs during the
+/// bootstrap sequence `init_with_action` itself performs (locale, crash-init,
+/// glslang, oniguruma, resources dir, i18n — several `LOG` ledger rows land
+/// inside this window, e.g. S111-F5 in `rustty-os/src/locale.rs`) reads
+/// `Logging::default()` via `log()`'s own pre-`STATE` fallback — which is
+/// oracle-faithful, not a gap: the reference's zero-initialized `state` gives
+/// the exact same "default logging config" behavior before ITS OWN
+/// `state.init()` resolves the real flags. Every site that runs AFTER
+/// `state_init()` returns reads the fully resolved flags, same as the
+/// reference after its own `state.init()` completes. `rustty_init`
+/// (`rustty-apprt-c/src/lib.rs`, the libghostty/macOS process-init path)
+/// installs the SAME way, at its own earliest point, before its own call
+/// into `rustty_apprt::init_with_action`.
 pub fn install_app_log_backend() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {

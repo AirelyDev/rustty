@@ -608,15 +608,12 @@ fn log_fn_c_abi(level: StdLevel, scope: &str, args: core::fmt::Arguments) {
 // `log_fn_c_abi`) the funnel for BOTH this crate's own direct `log_fn` call
 // sites and every `log`-macro call site in the crates beneath it — matching the
 // oracle's "one global sink for the whole library" shape.
-// `#[cfg_attr(... wasm32 release ..., allow(dead_code))]` on this section:
-// `install_log_backend`'s wasm-release arm never calls `log::set_logger`
-// (it caps `max_level` to `Off` instead, see that function's PORT NOTE), so
-// `Logger`/`std_level_from_log`/`LOGGER` are genuinely unreferenced in that
-// one configuration until a real call site exists to trip the `Off` filter
-// check before reaching here — that's the point, not a bug. Every other
-// configuration (including this crate's own `log_facade_backend_reaches_the_
-// c_sink` test) exercises them.
-#[cfg_attr(all(target_arch = "wasm32", not(debug_assertions)), allow(dead_code))]
+// task-14a review round 2: `install_log_backend` now calls `log::set_logger`
+// on EVERY target unconditionally (only `max_level` differs by target/build —
+// see that function's own PORT NOTE for why the earlier wasm-release
+// early-return, which skipped `set_logger` entirely, was itself an
+// unconditional-clobber bug in the opposite direction). So `Logger` is always
+// referenced, on every configuration; no `allow(dead_code)` is needed here.
 struct Logger;
 
 /// Map a `log::Level` onto the reference's 4-level `std.log.Level`
@@ -624,7 +621,6 @@ struct Logger;
 /// does not; `install_log_backend` never enables it (max level caps at
 /// `Debug`), so this arm is unreachable in practice — mapped to `Debug` rather
 /// than panicking, since a filter-level mismatch is not a per-message defect.
-#[cfg_attr(all(target_arch = "wasm32", not(debug_assertions)), allow(dead_code))]
 fn std_level_from_log(level: log::Level) -> StdLevel {
     match level {
         log::Level::Error => StdLevel::Err,
@@ -661,7 +657,6 @@ impl log::Log for Logger {
     fn flush(&self) {}
 }
 
-#[cfg_attr(all(target_arch = "wasm32", not(debug_assertions)), allow(dead_code))]
 static LOGGER: Logger = Logger;
 
 /// Register [`Logger`] as the process-wide `log` backend and set the max
@@ -671,14 +666,20 @@ static LOGGER: Logger = Logger;
 /// host that has since changed its own filter is never overridden by a later
 /// `rustty_terminal_new`.
 ///
-/// PORT NOTE: the wasm-release arm mirrors `lib_vt.zig`'s own size guard
+/// PORT NOTE: the wasm-release level mirrors `lib_vt.zig`'s own size guard
 /// (see `log_fn`'s PORT NOTE) — `options.log_level = .err` there still passes
 /// `.err`-and-above to the (no-op) sink; capping to `Off` here goes one step
 /// further and matches what actually matters (`logFn = ... .noop`): a
 /// non-debug wasm build must not link ANY of the restored message-formatting
 /// code the facade's call sites bring in, which `Off` guarantees by never
 /// constructing a `log::Record` at the call site's `log::warn!` macro
-/// expansion (the crate's own filter check short-circuits first).
+/// expansion (the crate's own filter check short-circuits first). Task-14a
+/// review round 2: this used to be an early return BEFORE `set_logger` was
+/// even attempted (skipping registration entirely on wasm-release) — that was
+/// itself an unconditional clobber, just inverted (silencing a wasm host's own
+/// filter instead of raising it). `set_logger` is now attempted on every
+/// target and `set_max_level` — `Off` on this one, one of the other two
+/// levels elsewhere — runs only in the shared success arm below.
 ///
 /// Non-wasm level (IMPORTANT 4, task-14a review): `lib_vt.zig`'s `std_options`
 /// does NOT set `log_level` for the `terminal.options.c_abi` arm, so Zig's
@@ -699,25 +700,28 @@ static LOGGER: Logger = Logger;
 pub fn install_log_backend() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        #[cfg(all(target_arch = "wasm32", not(debug_assertions)))]
-        {
-            log::set_max_level(log::LevelFilter::Off);
+        // task-14a review round 2 (same class as CRITICAL 1): the wasm-release
+        // arm used to call `set_max_level(Off)` UNCONDITIONALLY, with no
+        // `set_logger` guard — the inverse of CRITICAL 1's bug (silencing
+        // rather than raising a host's own filter). `set_logger` is now
+        // attempted on every target, and `set_max_level` — whichever level is
+        // appropriate for the target/build — runs ONLY in the success arm, so
+        // a wasm host that already owns the `log` registration keeps its own
+        // filter untouched here too.
+        if log::set_logger(&LOGGER).is_ok() {
+            let level = if cfg!(all(target_arch = "wasm32", not(debug_assertions))) {
+                log::LevelFilter::Off
+            } else if cfg!(debug_assertions) {
+                log::LevelFilter::Debug
+            } else {
+                log::LevelFilter::Error
+            };
+            log::set_max_level(level);
         }
-        #[cfg(not(all(target_arch = "wasm32", not(debug_assertions))))]
-        {
-            if log::set_logger(&LOGGER).is_ok() {
-                let level = if cfg!(debug_assertions) {
-                    log::LevelFilter::Debug
-                } else {
-                    log::LevelFilter::Error
-                };
-                log::set_max_level(level);
-            }
-            // else: a logger (an embedder's own, or another instance of this
-            // one) is already installed. Leave its max_level filter as-is —
-            // touching it here would be exactly the embedder-visible
-            // regression this fix addresses.
-        }
+        // else: a logger (an embedder's own, or another instance of this
+        // one) is already installed. Leave its max_level filter as-is —
+        // touching it here would be exactly the embedder-visible
+        // regression this fix addresses.
     });
 }
 

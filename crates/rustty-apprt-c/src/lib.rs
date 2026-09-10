@@ -241,6 +241,20 @@ fn detect_from_argv(
 pub unsafe extern "C" fn rustty_init(argc: usize, argv: *mut *mut c_char) -> c_int {
     use rustty_core::logging::{log, Level};
 
+    // task-14a review round 2 (CRITICAL 2 item 1): `rustty_init` is the port
+    // of `main_c.zig`'s `ghostty_init`, the process init for the LIBRARY
+    // artifact — `main_c.zig:32`'s `pub const std_options = main.std_options;`
+    // means the oracle's C artifact inherits the SAME global `logFn` the app
+    // binary installs, live from process entry. `rustty-build-config::apprt::
+    // app_runtime` is `None` on everything but Linux/FreeBSD, so on macOS —
+    // this project's primary platform — the shipped application IS
+    // libghostty (this crate), not the `rustty` exe; `main_rustty.rs`'s
+    // install alone left the real macOS app with no backend at all. Installed
+    // FIRST, before `rustty_apprt::init_with_action` runs (same "earliest
+    // point, bootstrap-window sites get the oracle-faithful
+    // `Logging::default()` fallback" reasoning as `main_rustty.rs::main`).
+    rustty_core::logging::install_app_log_backend();
+
     // reference: assert(builtin.link_libc);  (Rust `std` always links libc.)
 
     // The `.c` arm of `global.init`'s `args` field (`global.zig:62-77`, `e8525c0fd`):
