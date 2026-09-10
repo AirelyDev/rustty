@@ -85,6 +85,16 @@ gettext-sys = { path = "../../crates-sys/gettext-sys" }
 # only { rustty-global, libc } — strictly below rustty-os.
 rustty-xev = { workspace = true }
 
+# task-14a review round 3 (finding 3): the `log` facade backend for the wasm
+# artifact (`rustty-wasm`). `wasm::log` already hosts the freestanding sink
+# (`freestanding::log`, the port of `os/wasm/log.zig`); this crate is the
+# natural shared home for its `log::Log` registration too, since it is already
+# a dependency of every crate that needs to call the install fn from an actual
+# JS-callable entry point (`rustty-config`'s wasm-feature `config_new`,
+# `rustty-wasm`'s own atlas exports) without a layering cycle.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+log = { workspace = true }
+
 [build-dependencies]
 # R3: compile the vendored `pty.c` standalone with the host C compiler.
 cc = "1"

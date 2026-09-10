@@ -606,7 +606,7 @@ rows actually span **14** crates (`awk -F'\t' '$4=="LOG" && $11=="OPEN"'
 | rustty-termio | 1 |
 | rustty-simd | 1 |
 | rustty-crash | 1 |
-| rustty-bench | 1 |
+| rustty-bench | 1 — **see §6r2/§6r3 below: NOT closable as a bare `log::warn!` restoration; read that note first** |
 | **total** | **73** |
 
 `rustty-apprt` (10 rows) was missing entirely. Worse: §6 prescribed the
@@ -720,22 +720,27 @@ behavior before its own `state.init()` resolves the real flags); every site
 after `state_init()`/`init_with_action` succeeds reads the fully resolved
 flags.
 
-**3. `rustty-bench` has no reachable backend and is NOT closable under
-either backend as they exist today.** `crates/rustty-bench/Cargo.toml` has
-no `rustty-core` dependency and no `rustty-vt-c` dependency; it is a
-separate `[[bin]]` (`cargo tree -p rustty` confirms it is not linked from
-the app either). Given the choice the review explicitly offered (install
-there, or record the row as not closable), this round records it: **S62-F2,
-and any other `LOG`-class row in `rustty-bench`, must NOT be closed by
-14b-14e's mechanical `log::warn!` restoration** — there is no process-wide
-`log` backend reachable from this binary, so a restored site there would
-compile, run, and silently emit nothing, exactly the "bookkeeping-green"
-failure CRITICAL 2 was originally about. Whichever stage reaches
-`rustty-bench` must either (a) add a real install call (the crate would need
-a new dependency edge — on `rustty-core` if that's architecturally sound for
-a benchmark CLI, or a lighter path via `rustty_global::logging()` per the
-forward-looking note below), or (b) leave the row `OPEN`/`WAIVED` with this
-paragraph cited as the reason, never silently `CLOSED`.
+**3. `rustty-bench` — the verdict stands, but the ORIGINAL rationale was
+wrong; corrected in round 3 (see §6r3).** The claim that `rustty-bench` "is
+not linked from the app either" is **false for libghostty**: `cargo tree -p
+rustty-apprt-c -i rustty-bench` shows a real edge, forced at
+`crates/rustty-apprt-c/src/lib.rs:160` (`extern crate rustty_bench as _;`,
+retaining `rustty_benchmark_cli` in the C-ABI staticlib). The `rustty-bench`
+LIBRARY is very much part of the shipped macOS artifact, and once
+`rustty_init` installs `install_app_log_backend()` (item 1 above), any
+`log::warn!` a restored `rustty-bench` site emits from CODE REACHED THROUGH
+`rustty_benchmark_cli` in that artifact DOES reach a real backend. What
+remains genuinely unreachable is narrower than originally stated: S62-F2's
+OWN site (`rustty-bench/src/cli.rs:201-208`) is reached SOLELY from the
+standalone `[[bin]]` entry point (`main_bench.rs`'s `fn main()`, `cli::main`
+directly) — that binary has no `rustty-core` dependency and is not launched
+by anything that installs either backend. So: the crate-wide "not
+closable" framing was too broad; **only `rustty-bench` rows whose restored
+site is reached solely from the standalone bin (S62-F2 confirmed; check
+each other `rustty-bench` row individually against this before restoring
+it) are unclosable without adding a bin-side install** — the vast bulk of
+`rustty-bench`'s code, reached through the libghostty artifact, already has
+a real backend once item 1 lands.
 
 ### The `STATE` claim in §6r was wrong; corrected
 
@@ -835,4 +840,182 @@ baseline. Reproduced twice, identical.
   `cargo clippy -p rustty-apprt-c --all-targets -- -D warnings`, `cargo
   clippy -p rustty --all-targets -- -D warnings`: all clean.
 - `cargo fmt --check` (all touched crates): clean.
+- No ledger row touched; the six `CLOSED` rows are unchanged.
+
+## §6r3 — Task 14a review round 3 fixes
+
+Fixed 2026-09-09, same day as §6/§6r/§6r2, in response to the third review
+of task 14a. CRITICAL 2(a)/(b)/(c), the `STATE` correction, and the
+wasm-release containment were all confirmed addressed by the reviewer and
+needed no further change. Three things fixed below; no ledger row touched.
+After this round the reachability position is: **72 of 73 rows closable**
+(all but S62-F2), with the two bootstrap-window rows correct once finding 2
+below is read alongside them, and the 40 wasm-linked rows correct once
+finding 3's backend lands.
+
+### 1. IMPORTANT 3 residual — the fifth stateless entry point
+
+`example/c-vt-modes` calls `rustty_mode_report_encode` and nothing else
+exported — `rustty_mode_new`/`_value`/`_ansi` are `static inline` in
+`include/rustty/vt/modes.h`, invisible to a `*_new`/exported-symbol sweep,
+which is why this one was missed alongside the four stateless entry points
+round 2 already covered. Fixed: `rustty_mode_report_encode`
+(`crates/rustty-vt-c/src/lib.rs`) now installs too. All entry points a
+shipped example reaches first now install; the "every entry point reachable
+as a shipped example's first call now installs" claim in §6r2 is true as
+written.
+
+### 2. Bootstrap records now use resolved flags, not defaults
+
+Round 2 moved the install call before `state_init()`/`rustty_apprt::
+init_with_action` so bootstrap-window sites get a real (if default) sink
+instead of nothing. The review found a real, NEW gap this introduced: the
+oracle resolves `self.logging` EARLY inside `global.init` (`global.zig:59-82`
+zero-init, then :139/:147-155 resolve it) — before signals, the version log,
+`crash.init`, locale, glslang, oniguruma, resourcesDir, i18n — so every one
+of the reference's own log calls in that window already reads the RESOLVED
+value, never a default. The port computed the same value at
+`rustty-apprt/src/lib.rs`'s `compute_logging` call but only published it via
+`rustty_global::set_logging` at the very END of `init_with_action`
+(previously right before `STATE.set`) — so between "computed" and
+"published," `init_with_action`'s OWN direct `log_with(..., &logging)` call
+sites (passing the value explicitly) were correct, while a restored FACADE
+`log::warn!` in a sub-init called from the SAME function (e.g. S111-F5 in
+`rustty-os/src/locale.rs`) would read `rustty_global::logging()`'s stale
+default — a real, user-visible divergence (`rustty +list-fonts` on Linux:
+oracle suppresses the locale warning under an action, port would print it
+into the action's output).
+
+**Fix:** moved `rustty_global::set_logging(logging)` from the end of
+`init_with_action` to immediately after `logging` is computed (`logging` is
+`Copy` and never reassigned after that point, so this is safe — verified by
+reading every use of the binding between the two points). Left the original
+call site in place too — now a harmless, idempotent no-op (`OnceLock::set`
+on an already-set cell) — so the "one computation site, mirrored into the
+leaf global, right where `state.logging`/`STATE.set` are finalized" shape
+stays visible at both points. Changed `rustty-core::logging::log`'s
+pre-`STATE` fallback from `Logging::default()` to `rustty_global::logging()`
+— which is what `main_ghostty.zig:131`'s `logFn` actually reads
+(`global.logging()`), and which itself defaults sensibly
+(`rustty-global/src/lib.rs`'s `LOGGING.get().copied().unwrap_or_default()`)
+before anything has run. Net effect: the pre-`STATE` window now reads
+whatever `rustty_global::logging()` currently holds — a real default before
+`init_with_action` computes anything, and the FULLY RESOLVED value from the
+moment `init_with_action` computes it onward, which (after this fix) is
+BEFORE the bootstrap sub-inits run, matching the oracle's own ordering
+exactly. This makes the port structurally identical to the oracle for this
+window, not merely closer.
+
+Both `crates/rustty-core/src/logging.rs`'s doc comment on `log` and §6r2's
+"KNOWN LIMITATION"/"STATE claim" text are superseded by this fix; do not
+restore the "permanent `Logging::default()` fallback" framing from §6r2 —
+after this fix, the fallback is `rustty_global::logging()`, which is a real
+default only before ANY init has computed anything, not a permanent
+divergence from the resolved flags.
+
+### 3. A third artifact — `rustty-wasm` — had no backend at all
+
+`crates/rustty-wasm/src/lib.rs`'s `log_sink` module only `#[used]`-retains
+`rustty_os::wasm::log::freestanding::log`'s symbol; it never registered a
+`log::Log`. `cargo tree -p rustty-wasm` links `rustty-vt`, `rustty-config`,
+`rustty-os`, `rustty-args`, `rustty-font-shaper`, `rustty-simd` — **40 of the
+73 rows' crates**. The oracle's `main_wasm.zig` DOES install
+`freestanding::log` as its `std_options.logFn`, live for the whole module —
+this is CRITICAL 2(a)'s exact shape, one artifact over: pre-existing (not
+introduced by this stage's diff), but it would have silently muted 40 rows
+in the wasm build the moment 14b-14e restored them.
+
+**Fix, hosted in `rustty-os` rather than `rustty-wasm` itself:**
+`rustty-os` is already a dependency of every crate that owns a real
+JS-callable entry point in this artifact (`rustty-config`'s wasm-feature
+`config_new`, `rustty-wasm`'s own `rustty_wasm_atlas_data`/`_size`), so
+hosting the registration there — rather than in `rustty-wasm`, which
+NOTHING calls into first — avoids a layering problem entirely. Added to
+`crates/rustty-os/src/wasm/log.rs` (`#[cfg(target_arch = "wasm32")]`
+throughout): `struct WasmLogger` (`impl log::Log`, forwarding into
+`freestanding::log`), `fn level_text` (the same 5-to-4-level mapping as the
+other two backends), and `pub fn install_log_backend()` — `Once`-guarded,
+`set_max_level` only in the `set_logger`-success arm (same contained shape
+as the other two backends). Level default ports `main_wasm.zig`'s own
+`std_options.log_level` (`.Debug => .debug, .ReleaseSmall => .warn, else =>
+.info`; the Rust build model's missing `ReleaseSmall` cfg collapses that arm
+into `else => .info`, the SAME documented divergence `rustty-wasm`'s own
+`LOG_LEVEL` const already carries). `rustty-os/Cargo.toml` gained a
+`[target.'cfg(target_arch = "wasm32")'.dependencies] log = { workspace =
+true }` entry.
+
+Installed from `rustty-config::wasm::config_new` (the actual first
+JS-callable entry point) and, as cheap `Once`-guarded insurance,
+`rustty-wasm`'s own `rustty_wasm_atlas_data`/`rustty_wasm_atlas_size` (in
+case a host calls an atlas export before ever calling `config_new`).
+
+A proving test (`facade_tests::install_log_backend_registers_without_
+panicking`, `#[cfg(target_arch = "wasm32")]`-gated) was added alongside the
+new module. **Verification limitation, disclosed rather than papered over:**
+this environment has no `wasmtime`/`wasmer` (checked: `which wasmtime
+wasmer` finds neither), and `cargo test -p rustty-os --target
+wasm32-unknown-unknown` is ALREADY broken independent of this change (a
+pre-existing, unrelated `libc::sysconf` reference in
+`page_allocator.rs` that only compiles under `cfg(target_family = "unix")`,
+confirmed via `git stash` — the same failure occurs on the pre-round-3 tree).
+So the new test is verified to TYPE-CHECK (`cargo build -p rustty-os
+--target wasm32-unknown-unknown --features wasm-host-owned` succeeds) but
+could not be EXECUTED in this environment. This is a real, disclosed gap,
+not a claimed pass.
+
+### wasm cost, re-measured a third time
+
+| build | `rustty-vt.wasm` |
+|---|---|
+| before task 14a | 892,220 bytes |
+| after §6 | 885,927 bytes |
+| after §6r | 886,918 bytes |
+| after §6r2 | 888,020 bytes |
+| after §6r3 (this section) | 888,131 bytes |
+
+Delta from §6r2: **+111 bytes** (one more `install_log_backend()` call site
+in `rustty_mode_report_encode`; finding 3's `rustty-os`/`rustty-config`/
+`rustty-wasm` changes do not touch `rustty-vt-c`'s own wasm artifact at all,
+so they are not reflected in this table — they affect the SEPARATE
+`rustty_wasm.wasm` artifact, which could not be built or measured in this
+environment for the pre-existing, unrelated reason above). Still **−4,089
+bytes** net against the pre-14a baseline. Reproduced twice, identical.
+
+### Doc corrections in this round
+
+- §6r's crate table (the one 14b-14e are told to read a row's crate off)
+  now annotates the `rustty-bench` row with a pointer to this section rather
+  than leaving it looking identical to every closable row.
+- §6r2's rationale for "why `rustty-bench` isn't closable" was itself wrong
+  in one claim ("it is not linked from the app either") — `cargo tree -p
+  rustty-apprt-c -i rustty-bench` shows the edge (`rustty-apprt-c/src/
+  lib.rs:160`'s `extern crate rustty_bench as _;`, forcing
+  `rustty_benchmark_cli` into the libghostty/macOS staticlib). The verdict on
+  S62-F2 is unchanged (still not closable — its own site is reached solely
+  from the standalone `[[bin]]`), but the blanket "the whole crate is
+  unreachable" framing was too broad: most of `rustty-bench`'s code IS
+  reached through the libghostty artifact and DOES have a real backend once
+  finding 1 (round 2) lands. §6r2's paragraph 3 is corrected in place (marked
+  as a correction) rather than silently rewritten.
+
+### Re-verification after this round's fixes
+
+- `cargo test -p rustty-vt-c --all-features`: 492 passed, 0 failed.
+- `cargo test -p rustty-core --lib logging::`: 5 passed, 0 failed.
+- `cargo test -p rustty-apprt-c --lib rustty_init`: 1 passed, 0 failed.
+- `cargo test -p rustty-apprt --lib`: 12 passed, 0 failed.
+- `cargo test -p rustty-os --lib`: 84 passed, 0 failed (host target; the new
+  wasm32-only facade test does not run here by construction).
+- `cargo test -p rustty-config --lib --features wasm`: 227 passed, 0 failed.
+- `cargo test -p rustty-wasm --lib`: 0 tests (host target; this crate's log
+  facade code is wasm32-only).
+- `cargo check --workspace --all-targets`: clean.
+- `cargo clippy -p {rustty-vt-c,rustty-core,rustty-apprt-c,rustty-apprt,
+  rustty-os,rustty-config,rustty-wasm,rustty} --all-targets --all-features
+  -- -D warnings`: all clean (rustty-wasm/rustty-os without `--all-features`
+  where a feature doesn't apply).
+- `cargo fmt --check` (all eight touched crates): clean.
+- `cargo build -p rustty-os --target wasm32-unknown-unknown
+  --features wasm-host-owned`: clean (confirms the new wasm-only module
+  type-checks for the real target).
 - No ledger row touched; the six `CLOSED` rows are unchanged.

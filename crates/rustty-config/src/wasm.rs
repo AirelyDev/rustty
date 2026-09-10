@@ -58,6 +58,13 @@ pub mod wasm_exports {
     // export fn config_new() ?*Config {
     #[no_mangle]
     pub extern "C" fn config_new() -> *mut Config {
+        // task-14a review round 3 (finding 3): `config_new` is the actual
+        // JS-callable entry point a host calls first in this artifact —
+        // install the `log` facade backend here (`rustty_os::wasm::log`
+        // hosts it; this crate already depends on `rustty-os`, so no
+        // layering cycle). See that function's own PORT NOTE.
+        #[cfg(target_arch = "wasm32")]
+        rustty_os::wasm::log::install_log_backend();
         // const result = alloc.create(Config) catch ...;
         // result.* = Config.default(alloc) catch ...;
         Box::into_raw(Box::new(Config::default_config()))

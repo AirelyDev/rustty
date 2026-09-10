@@ -1519,6 +1519,7 @@ dependencies = [
  "cc",
  "gettext-sys",
  "libc",
+ "log",
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",

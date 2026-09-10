@@ -393,6 +393,11 @@ pub unsafe extern "C" fn rustty_mode_report_encode(
     out_len: usize,
     out_written: *mut usize,
 ) -> c_int {
+    // task-14a review round 3 (IMPORTANT 3 residual): `example/c-vt-modes`
+    // calls this and nothing else exported — `rustty_mode_new`/`_value`/
+    // `_ansi` are `static inline` in the header, invisible to a `*_new`/
+    // exported-symbol sweep, which is how this one was missed.
+    crate::sys::install_log_backend();
     // SAFETY: `out`/`out_written` validity is the caller's contract.
     unsafe { modes::report_encode(tag, state, out, out_len, out_written) }.to_c_int()
 }

@@ -201,6 +201,12 @@ pub mod host_readback {
         atlas: *const Atlas,
         out_len: *mut usize,
     ) -> *const u8 {
+        // task-14a review round 3 (finding 3): cheap, `Once`-guarded
+        // insurance alongside `config_new`'s install (`rustty-config/src/
+        // wasm.rs`) in case a host calls an atlas export before ever calling
+        // `config_new`.
+        #[cfg(target_arch = "wasm32")]
+        rustty_os::wasm::log::install_log_backend();
         if atlas.is_null() {
             if !out_len.is_null() {
                 unsafe { *out_len = 0 };
@@ -220,6 +226,9 @@ pub mod host_readback {
     /// `atlas` must be null or a live atlas from `atlas_new`.
     #[no_mangle]
     pub unsafe extern "C" fn rustty_wasm_atlas_size(atlas: *const Atlas) -> u32 {
+        // task-14a review round 3 (finding 3): see `rustty_wasm_atlas_data`.
+        #[cfg(target_arch = "wasm32")]
+        rustty_os::wasm::log::install_log_backend();
         if atlas.is_null() {
             return 0;
         }

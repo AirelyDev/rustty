@@ -224,6 +224,30 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     let env = rustty_global::environ().get_alloc(b"RUSTTY_LOG");
     let logging = compute_logging(action_detected, env.as_deref());
 
+    // task-14a review round 3 (finding 2): mirror the SAME computed `logging`
+    // into the leaf process-global HERE — immediately after it is computed,
+    // not at the end of this function (`state.logging = logging`/
+    // `STATE.set` below still happen at the end; this is purely about WHEN
+    // the leaf-crate mirror below `rustty-core` becomes visible). The oracle
+    // resolves `self.logging` this early too (`global.zig:59-82`'s `state =
+    // .{ ..., .logging = .{} }` zero-init comment: "this MUST be initialized
+    // before any log output because the log function uses the global
+    // state") and every reference log call between here and the end of
+    // `state.init()` (signals, version log, `crash.init`, locale, glslang,
+    // oniguruma, resourcesDir, i18n) reads the ALREADY-RESOLVED value, not a
+    // zero-initialized one — `self.logging` is set once, at the top, and
+    // never reassigned before `logFn` needs it again. Before this fix, a
+    // restored facade `log::warn!` in one of those sub-inits (e.g.
+    // `rustty-os/src/locale.rs`'s S111-F5) would read
+    // `rustty_global::logging()`'s default rather than this function's own
+    // resolved `logging` — even though THIS function's own `log_with(...,
+    // &logging)` call sites below (:241 onward) already pass the resolved
+    // value explicitly. Moving the mirror here makes both paths agree.
+    // `logging` is `Copy` and never reassigned after this line (see the
+    // `let` — not `let mut` — above), so publishing it now and again
+    // (harmlessly, `OnceLock::set` is idempotent) at the end is safe.
+    rustty_global::set_logging(logging);
+
     // Setup our signal handlers before logging
     init_signals();
 
@@ -465,11 +489,13 @@ pub fn init_with_action(action_detected: bool) -> Result<rustty_core::Logging, I
     state.logging = logging;
     state.rlimits = rlimits;
     let _ = rustty_core::STATE.set(state);
-    // Mirror the SAME computed logging into the leaf process-global so crates
-    // below rustty-core (rustty-config's `.config` scoped logger) see the
-    // reference `global.logging()` accessor's value — the stderr gate that
-    // keeps action output clean (`if (self.action != null) self.logging.stderr
-    // = false;`). One computation site (`compute_logging` above), two mirrors.
+    // task-14a review round 3 (finding 2): this call moved up to right after
+    // `logging` is computed (see the PORT NOTE there) so every sub-init in
+    // between reads the resolved value instead of a default. Left here too,
+    // now a harmless idempotent no-op (`OnceLock::set` on an already-set
+    // cell), so the "one computation site, mirrored into the leaf global"
+    // shape stays visible at the same point `state.logging`/`STATE.set` are
+    // finalized, without depending on execution order for correctness.
     rustty_global::set_logging(logging);
 
     *done = true;

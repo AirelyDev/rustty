@@ -102,13 +102,29 @@ pub fn log_with(level: Level, scope: &str, message: &str, logging: &Logging) {
 }
 
 /// The STATE-reading variant — the reference `logFn` reads the process-global
-/// `state.logging`. Before `STATE` is set, falls back to `Logging::default()`
-/// (the reference zero-initializes `state` — logging at defaults — before any
-/// log output can happen).
+/// `state.logging` (`main_ghostty.zig:131` -> `global.logging()`). Before
+/// `rustty_core::STATE` is set, falls back to `rustty_global::logging()` —
+/// task-14a review round 3 (finding 2): this used to fall back to
+/// `Logging::default()` directly, which was right in spirit (the oracle's
+/// `global.zig:59-82` zero-initializes `state.logging` before `state.init()`
+/// resolves it — "this MUST be initialized before any log output because the
+/// log function uses the global state") but wrong in practice once
+/// `rustty_apprt::init_with_action` started publishing the resolved
+/// `Logging` into `rustty_global::set_logging` EARLIER than it sets
+/// `rustty_core::STATE` (see that function's own PORT NOTE): between those
+/// two points, this fallback was reading a stale default while
+/// `rustty_global::logging()` already held the real, resolved value. Reading
+/// `rustty_global::logging()` here instead means: before ANY init has run,
+/// it returns its own sensible default (`rustty-global/src/lib.rs`'s
+/// `LOGGING.get().copied().unwrap_or_default()`) — the same zero-init
+/// behavior as before — and from the moment `init_with_action` computes
+/// `logging` onward (which is now BEFORE `rustty_core::STATE` is set), this
+/// fallback reads the fully resolved flags instead of a default, exactly
+/// matching the oracle's single-assignment-then-read `self.logging`.
 pub fn log(level: Level, scope: &str, message: &str) {
     match crate::STATE.get() {
         Some(state) => log_with(level, scope, message, &state.logging),
-        None => log_with(level, scope, message, &Logging::default()),
+        None => log_with(level, scope, message, &rustty_global::logging()),
     }
 }
 
