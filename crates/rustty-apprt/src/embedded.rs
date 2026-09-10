@@ -125,6 +125,13 @@ type CoreApp = rustty_core::app::App<App>;
 // const CoreSurface = @import("../Surface.zig");
 type CoreSurface = rustty_core::surface::Surface<App>;
 
+// const log = std.log.scoped(.embedded_window);
+//
+/// The `@tagName` of the reference's `std.log.scoped(.embedded_window)`
+/// (`embedded.zig:26`), carried as `log::` facade `target:` per
+/// `DECISION-logging.md` §6r4. No brand token, so nothing to rebrand here.
+const LOG_SCOPE: &str = "embedded_window";
+
 // PORT NOTE: reference `pub const resourcesDir = internal_os.resourcesDir;`
 // (embedded.zig:27).
 pub use rustty_os::resourcesDir;
@@ -501,6 +508,19 @@ impl App {
                 Ok(id) => id,
                 Err(_err) => return Layout::Unknown,
             };
+            // PORT NOTE (S46-F5, UNRESTORED SITE — one of `embedded.zig`'s 54):
+            // `embedded.zig:251` has a `log.warn("error initializing keymap
+            // err={}", .{err})` that this port has NO arm for. Upstream moved
+            // `App.keymap` to `?input.Keymap` and made `keyboardLayout` LAZILY
+            // initialize it (`self.keymap = input.Keymap.init() catch |err| { …
+            // return .unknown; }`); this port still initializes `keymap`
+            // EAGERLY in `App::init`, where the reference's own `init` does not
+            // log at all — it `try`s and propagates. Restoring the diagnostic
+            // here would put it on a path the reference does not log from, and
+            // restoring it faithfully means porting the lazy-keymap change,
+            // which is a STRUCTURAL divergence, not logging work. Tracked as its
+            // own entry in `NEW-FINDINGS.md` (N18) rather than hidden inside the
+            // LOG row.
 
             // return input.KeyboardLayout.mapAppleId(id) orelse .unknown;
             Layout::map_apple_id(id).unwrap_or(Layout::Unknown)
@@ -703,8 +723,23 @@ impl ApprtApp for App {
         self.performPreAction(&target, &action);
 
         // log.debug("dispatching action target={t} action={} value={any}", .{ target, action, value });
-        // (PORT NOTE: no logging shim — the reference `log.debug` is preserved as this
-        // comment, the established core/termio convention.)
+        //
+        // PORT NOTE: `{t}` is Zig's TAG-NAME format, so `target={t}` is
+        // `Target::key()` (`TargetKey` derives `Debug`); the reference's `action`
+        // parameter is likewise the `apprt.Action.Key` ENUM, so `action={}` is
+        // `Action::key()`. The reference's third field, `value={any}`, has NO
+        // counterpart here: rustty folds the reference's separate `value` payload
+        // INTO `Action`, and `Action<'a>` does not implement `Debug` (deriving it
+        // would cascade the derive across every payload type in this crate and
+        // several below it — a public-surface change far wider than one debug
+        // line). Filed as a new finding rather than papered over; the two fields
+        // the reference's own tag names carry are live.
+        log::debug!(
+            target: LOG_SCOPE,
+            "dispatching action target={:?} action={:?}",
+            target.key(),
+            action.key(),
+        );
 
         // return self.opts.action(self, target.cval(), @unionInit(apprt.Action, @tagName(action), value).cval());
         //
@@ -1179,10 +1214,23 @@ impl Surface {
                     // metadata succeeds — the single error maps to the open-error
                     // arm. `wd` is a byte path → `OsStr::from_bytes` (rustty-os
                     // `path.rs` precedent).
+                    //
+                    // PORT NOTE (S46-F5): `{s}` on the reference's `wd` byte slice
+                    // prints the bytes verbatim; `wd` is a C string from the host and
+                    // is not guaranteed UTF-8, so it is rendered lossily here — the
+                    // same choice `rustty-os`'s byte-path diagnostics make.
                     use std::os::unix::ffi::OsStrExt;
+                    let wd_display = String::from_utf8_lossy(wd);
                     let stat = match std::fs::metadata(std::ffi::OsStr::from_bytes(wd)) {
                         Ok(md) => md,
-                        Err(_err) => break 'wd,
+                        Err(err) => {
+                            // log.warn("error opening requested working directory dir={s} err={}", .{ wd, err });
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "error opening requested working directory dir={wd_display} err={err:?}",
+                            );
+                            break 'wd;
+                        }
                     };
 
                     // if (stat.kind != .directory) {
@@ -1190,6 +1238,10 @@ impl Surface {
                     //     break :wd;
                     // }
                     if !stat.is_dir() {
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "requested working directory is not a directory dir={wd_display}",
+                        );
                         break 'wd;
                     }
 
@@ -1493,8 +1545,9 @@ impl Surface {
             }
 
             // else => log.err("error completing clipboard request err={}", .{err}),
-            Err(_err) => {
+            Err(err) => {
                 // log.err("error completing clipboard request err={}", .{err});
+                log::error!(target: LOG_SCOPE, "error completing clipboard request err={err:?}");
             }
         }
 
@@ -1680,8 +1733,9 @@ impl Surface {
             }
 
             // else => log.err("error completing clipboard request err={}", .{err}),
-            Err(_err) => {
+            Err(err) => {
                 // log.err("error completing clipboard request err={}", .{err});
+                log::error!(target: LOG_SCOPE, "error completing clipboard request err={err:?}");
             }
         }
 
@@ -1721,8 +1775,9 @@ impl Surface {
         //     log.err("error in refresh callback err={}", .{err});
         //     return;
         // };
-        if let Err(_err) = self.core_surface.refreshCallback() {
+        if let Err(err) = self.core_surface.refreshCallback() {
             // log.err("error in refresh callback err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error in refresh callback err={err:?}");
         }
     }
 
@@ -1745,8 +1800,9 @@ impl Surface {
         //     log.err("error in draw err={}", .{err});
         //     return;
         // };
-        if let Err(_err) = unsafe { CoreSurface::draw(&raw mut (*self_).core_surface) } {
+        if let Err(err) = unsafe { CoreSurface::draw(&raw mut (*self_).core_surface) } {
             // log.err("error in draw err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error in draw err={err:?}");
         }
     }
 
@@ -1773,8 +1829,9 @@ impl Surface {
         //     log.err("error in content scale callback err={}", .{err});
         //     return;
         // };
-        if let Err(_err) = self.core_surface.contentScaleCallback(self.content_scale) {
+        if let Err(err) = self.core_surface.contentScaleCallback(self.content_scale) {
             // log.err("error in content scale callback err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error in content scale callback err={err:?}");
         }
     }
 
@@ -1800,8 +1857,9 @@ impl Surface {
         //     log.err("error in size callback err={}", .{err});
         //     return;
         // };
-        if let Err(_err) = self.core_surface.sizeCallback(self.size) {
+        if let Err(err) = self.core_surface.sizeCallback(self.size) {
             // log.err("error in size callback err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error in size callback err={err:?}");
         }
     }
 
@@ -1811,8 +1869,9 @@ impl Surface {
         //     log.err("error setting color scheme err={}", .{err});
         //     return;
         // };
-        if let Err(_err) = self.core_surface.colorSchemeCallback(scheme) {
+        if let Err(err) = self.core_surface.colorSchemeCallback(scheme) {
             // log.err("error setting color scheme err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error setting color scheme err={err:?}");
         }
     }
 
@@ -1838,8 +1897,9 @@ impl Surface {
         #[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
         match self.core_surface.mouseButtonCallback(action, button, mods) {
             Ok(v) => v,
-            Err(_err) => {
+            Err(err) => {
                 // log.err("error in mouse button callback err={}", .{err});
+                log::error!(target: LOG_SCOPE, "error in mouse button callback err={err:?}");
                 false
             }
         }
@@ -1855,8 +1915,9 @@ impl Surface {
         //     log.err("error in mouse pressure callback err={}", .{err});
         //     return;
         // };
-        if let Err(_err) = self.core_surface.mousePressureCallback(stage, pressure) {
+        if let Err(err) = self.core_surface.mousePressureCallback(stage, pressure) {
             // log.err("error in mouse pressure callback err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error in mouse pressure callback err={err:?}");
         }
     }
 
@@ -1871,8 +1932,9 @@ impl Surface {
         //     log.err("error in scroll callback err={}", .{err});
         //     return;
         // };
-        if let Err(_err) = self.core_surface.scrollCallback(xoff, yoff, mods) {
+        if let Err(err) = self.core_surface.scrollCallback(xoff, yoff, mods) {
             // log.err("error in scroll callback err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error in scroll callback err={err:?}");
         }
     }
 
@@ -1899,11 +1961,12 @@ impl Surface {
             y: y as f32,
         }) {
             Ok(v) => v,
-            Err(_err) => {
+            Err(err) => {
                 // log.err(
                 //     "error converting cursor pos to scaled pixels in cursor pos callback err={}",
                 //     .{err},
                 // );
+                log::error!(target: LOG_SCOPE, "error converting cursor pos to scaled pixels in cursor pos callback err={err:?}");
                 return;
             }
         };
@@ -1932,11 +1995,12 @@ impl Surface {
         //
         // PORT NOTE: core `cursorPosCallback` takes `mods: ?input.Mods`; the
         // reference's non-optional `mods` coerces to `Some`.
-        if let Err(_err) = self
+        if let Err(err) = self
             .core_surface
             .cursorPosCallback(self.cursor_pos, Some(mods))
         {
             // log.err("error in cursor pos callback err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error in cursor pos callback err={err:?}");
         }
     }
 
@@ -1946,8 +2010,9 @@ impl Surface {
         //     log.err("error in preedit callback err={}", .{err});
         //     return;
         // };
-        if let Err(_err) = self.core_surface.preeditCallback(preedit_) {
+        if let Err(err) = self.core_surface.preeditCallback(preedit_) {
             // log.err("error in preedit callback err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error in preedit callback err={err:?}");
         }
     }
 
@@ -1957,8 +2022,9 @@ impl Surface {
         //     log.err("error in key callback err={}", .{err});
         //     return;
         // };
-        if let Err(_err) = self.core_surface.textCallback(text) {
+        if let Err(err) = self.core_surface.textCallback(text) {
             // log.err("error in key callback err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error in key callback err={err:?}");
         }
     }
 
@@ -1968,8 +2034,9 @@ impl Surface {
         //     log.err("error in focus callback err={}", .{err});
         //     return;
         // };
-        if let Err(_err) = self.core_surface.focusCallback(focused) {
+        if let Err(err) = self.core_surface.focusCallback(focused) {
             // log.err("error in focus callback err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error in focus callback err={err:?}");
         }
     }
 
@@ -1979,8 +2046,9 @@ impl Surface {
         //     log.err("error in occlusion callback err={}", .{err});
         //     return;
         // };
-        if let Err(_err) = self.core_surface.occlusionCallback(visible) {
+        if let Err(err) = self.core_surface.occlusionCallback(visible) {
             // log.err("error in occlusion callback err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error in occlusion callback err={err:?}");
         }
     }
 
@@ -2006,10 +2074,11 @@ impl Surface {
     pub fn queueInspectorRender(&mut self) {
         // SAFETY: `self.app` is a live `*mut App` for the lifetime of this Surface
         // (E1/E2 invariant — the embedded app outlives every surface it owns).
-        if let Err(_err) = unsafe { &*self.app }
+        if let Err(err) = unsafe { &*self.app }
             .perform_action(Target::Surface(&self.core_surface), Action::RenderInspector)
         {
             // log.err("error rendering the inspector err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error rendering the inspector err={err:?}");
         }
     }
 
@@ -2254,8 +2323,9 @@ impl Inspector {
         // surface.core_surface.activateInspector() catch |err| {
         //     log.err("failed to activate inspector err={}", .{err});
         // };
-        if let Err(_err) = unsafe { (*surface).core_surface.activateInspector() } {
+        if let Err(err) = unsafe { (*surface).core_surface.activateInspector() } {
             // log.err("failed to activate inspector err={}", .{err});
+            log::error!(target: LOG_SCOPE, "failed to activate inspector err={err:?}");
         }
 
         // return .{
@@ -2366,8 +2436,8 @@ impl Inspector {
             // SAFETY: `device` is the host-owned `id<MTLDevice>` the caller passed;
             // the current ImGui context was set above.
             if !unsafe { dcimgui_sys::ImGui_ImplMetal_Init(device) } {
-                // log.warn — no scoped-log sink in this leaf (vt-c precedent): stderr.
-                eprintln!("failed to initialize metal backend");
+                // log.warn("failed to initialize metal backend", .{});
+                log::warn!(target: LOG_SCOPE, "failed to initialize metal backend");
                 return false;
             }
         }
@@ -2380,8 +2450,7 @@ impl Inspector {
         self.backend = Some(Backend::Metal);
 
         // log.debug("initialized metal backend", .{});
-        // (no scoped-log sink in this leaf — vt-c precedent — and a debug line;
-        // elided rather than emitted to stderr.)
+        log::debug!(target: LOG_SCOPE, "initialized metal backend");
 
         // return true;
         true
@@ -3184,6 +3253,7 @@ impl ApprtSurface for Surface {
             Some(func) => func,
             None => {
                 // log.info("runtime embedder does not support closing a surface", .{});
+                log::info!(target: LOG_SCOPE, "runtime embedder does not support closing a surface");
                 return;
             }
         };
