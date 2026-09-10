@@ -5274,15 +5274,43 @@ mod tests {
         assert!(!r.reinitialize_shaders);
         assert_eq!(r.target_config_modified, 1);
 
-        // ...and it warned exactly once, through the api hook, in `OpenGL.zig`'s
-        // `.opengl` scope (NOT this file's `generic_renderer`).
+        // ...and it warned exactly once, FIRST, through the api hook, in
+        // `OpenGL.zig`'s `.opengl` scope (NOT this file's `generic_renderer`).
+        //
+        // The capture is NOT a one-element vector, and the reason is itself evidence:
+        // everything after the warning is the REBUILD's own `pkg/opengl` chatter
+        // (`shader created id=…` / `program linked id=…`, `Shader.zig`/`Program.zig`
+        // debug sites), which this stage's third commit routed through the same
+        // facade. Under the old abort those records could not exist, because
+        // `init_shaders` never ran. So the assertion is split rather than loosened —
+        // an exact `assert_eq!` on the head, and an exact `assert_eq!` on the tail
+        // PROJECTED to `(level, target)` so the GL object ids (driver-assigned) stay
+        // out of it. No `.any()`, no `.contains()`.
+        let (head, tail) = records.split_first().expect("at least the warning");
         assert_eq!(
-            records,
-            vec![(
+            head,
+            &(
                 log::Level::Warn,
                 crate::opengl::opengl_impl::LOG_SCOPE.to_string(),
                 crate::opengl::opengl_impl::FORCED_PREP_FAILURE_WARNING.to_string(),
-            )]
+            )
+        );
+        assert!(
+            !tail.is_empty(),
+            "the rebuild must have emitted the shader/program debug records that \
+             prove it ran; an empty tail means `init_shaders` was skipped"
+        );
+        let tail_shape: Vec<(log::Level, String)> =
+            tail.iter().map(|(l, t, _)| (*l, t.clone())).collect();
+        assert_eq!(
+            tail_shape,
+            vec![
+                (
+                    log::Level::Debug,
+                    crate::opengl::opengl_impl::LOG_SCOPE.to_string()
+                );
+                tail.len()
+            ]
         );
 
         r.deinit();
