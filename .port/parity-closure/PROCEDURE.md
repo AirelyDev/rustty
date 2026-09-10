@@ -119,7 +119,7 @@ worktree and merge, rather than sharing one tree.
   that is right on LP64 can be wrong on `wasm32` — both have already happened
   (`DECISION-logging.md` §8r).
 
-## Two gate blind spots (recorded 2026-09-09, from the 14b review)
+## Gate blind spots (1-3 recorded 2026-09-09 from the 14b review; 4 added 2026-09-10)
 
 `G-PARITY` enforces less than this procedure requires. Know the gaps:
 
@@ -175,3 +175,48 @@ worktree and merge, rather than sharing one tree.
    cited anchor is actually live, not just that the row's *theme* was addressed. The 14b review
    found three rows closed on reports asserting consolidation that had not happened — ~120
    commented sites in `stream.rs` alone. Verify anchors; do not summarise them.
+
+4. **A reference file's HEAD can be unaudited, and no row will ever claim it — now
+   machine-checked.** Recorded 2026-09-10 (`NEW-FINDINGS.md` N12). Every row cites a RANGE
+   of reference line numbers; anything outside every row's range is outside the audit.
+   Several large reference files have their lowest cited anchor partway down: `Surface.zig`
+   had 38 live `log.*` sites above line 2193, `gtk/class/application.zig` 20 above 812,
+   `Config.zig` 14 above 4680 — **101 unclaimed head sites over 14 files**. N4, N6, N7 and
+   N9 are all instances of this class found the hard way, one file at a time.
+
+   Unlike blind spots 1-3 this one is caught by machine.
+   **`.port/tools/gates/check_log_reconcile.py` (`G-LOGFILE`, HARD in `ci.sh`)** reconciles
+   per ORACLE FILE, not per row: the reference's live `log.*` call sites against live port
+   emissions in the Rust file(s) declared to port it, per platform arm. Because it counts
+   the whole file, a row's anchors are irrelevant to it and an unaudited head cannot hide.
+   `--report` prints the full per-file deficit table.
+
+   **What it still needs from you, because no gate can supply it:**
+
+   - **The mapping is DECLARED, in `.port/parity-closure/LOG-PORTMAP.tsv`, never guessed.**
+     Filename inference gets at least five entries wrong — `global.zig` ports to
+     `rustty-apprt/src/lib.rs`, `renderer/Thread.zig` to `rustty-core/src/renderer_seam.rs`
+     (a different crate), `OpenGL.zig`'s head to `opengl/gl/sys.rs`, `main_ghostty.zig` to
+     `rustty-core/src/logging.rs`, and both renderer twin pairs split two ways. **Adding a
+     LOG row for a reference file with no portmap entry turns the gate RED**; add the entry
+     in the same commit, and take that as the prompt to say where the file really ports to.
+   - **Platform twins are separate arms (`|`), never summed.** A file's score is the
+     MINIMUM over arms, because only one arm compiles on a given target. Summing them is
+     precisely how N9 hid: a fully restored macOS twin covering a Linux twin that emitted
+     almost none of it, with three rows reading as done.
+   - **The allowances are a RATCHET.** An allowance LARGER than the measured deficit is
+     RED, so restoring a site must tighten the number in the same commit; slack cannot be
+     left behind for a future regression to hide in. A non-zero allowance with no `reason`
+     is RED, the same rule G-PARITY applies to a `WAIVED` row's `owner`.
+   - **It counts, it does not attribute.** A green means "no diagnostic mass was lost from
+     this file", not "every individual site is live". Where two reference files port into
+     one Rust file the arm is credited with that file's whole count; the portmap's `reason`
+     column records every such overlap. Blind spot 3 still applies inside a row.
+   - **Four emission shapes exist in this port** and the gate knows all four:
+     `log::warn!`, a `macro_rules! log_warn!` facade (`opengl/gl.rs`), a `fn log_warn(msg)`
+     facade (`config_struct.rs`, most of `rustty-os`), and `eprintln!("warn(scope): …")`
+     reproducing Zig's default `logFn` output inline (the whole GTK tree). If you add a
+     fifth, teach `discover_emitters` about it — a shape the gate cannot see reads as a
+     dropped diagnostic, and a shape it sees wrongly reads as a false green. A `log_*`
+     helper with an EMPTY body is a dropped diagnostic, not a facade, and the gate lists
+     those under its `NOTE:` line.

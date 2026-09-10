@@ -738,6 +738,26 @@ GATE_REGISTRY=(
   # Task 41 when all findings are closed.
   "G-PARITY-SELF|HARD|$PY $GATES/check_parity_closure.py --self-test"
   "G-PARITY|PROGRESS|$PY $GATES/check_parity_closure.py"
+  # G-LOGFILE (task 14gate) — the SAME blind spot as G-CENSUS, but for
+  # DIAGNOSTICS. G-PARITY counts ROWS, and every row cites a RANGE of reference
+  # lines, so whatever falls outside every row's range is unaudited and no row
+  # will ever claim it: `Surface.zig` had 38 live `log.*` sites above the lowest
+  # line any LOG row cites, `gtk/class/application.zig` 20, `Config.zig` 14 — 101
+  # over 14 files. This gate reconciles per ORACLE FILE instead: reference log
+  # sites vs live port emissions, per declared platform arm.
+  #
+  # HARD, not PROGRESS, from day one. It is GREEN at its baseline
+  # (.port/parity-closure/LOG-PORTMAP.tsv), so hardening costs nothing today and
+  # buys the only thing that matters: a new dropped diagnostic, or a Linux twin
+  # that silently stops emitting what its macOS twin emits, turns the branch red
+  # the same run. The declared debt (232 sites, NEW-FINDINGS N12) is tracked as a
+  # finding, not as gate noise — `--report` prints the whole table on demand.
+  # The allowances are a RATCHET: one that exceeds the measured deficit is RED,
+  # so restoring a site must tighten it in the same commit. Nothing here is
+  # env-settable (R5); an absent or off-pin oracle checkout is 3 BLOCKED, never a
+  # vacuous green.
+  "G-LOGFILE-SELF|HARD|$PY $GATES/check_log_reconcile.py --self-test"
+  "G-LOGFILE|HARD|$PY $GATES/check_log_reconcile.py"
   # G8b — the real perf regression fence (paired, same-session, vs a stored
   # binary). BLOCKS (2/3) rather than passing when the box is loaded or the
   # untracked oracle binary/corpora are absent. MUST precede G8: it emits the

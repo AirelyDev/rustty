@@ -382,9 +382,15 @@ found, and current state.
   blind-spot-1 carve-out is not in play. But a reader of those rows would reasonably
   believe the diagnostics are restored, and on Linux they are not. This entry is so the
   finale re-audit meets that as a tracked item.
-- **size**: roughly **43 genuinely unported call sites** across the two files (the
-  reviewer's count in the 14c-3 fix round). That is a task, not a fix round; narrowing the
-  three dispositions is the honest interim state.
+- **size**: **35 genuinely unported call sites** across the two files (24 in
+  `generic.zig`, 11 in `image.zig`), producing 36 emissions. The figure first written here
+  was "roughly 43", from the 14c-3 fix round; it was wrong, and it is corrected in place
+  rather than only below, because a reader greps the size bullet. The 43 counted six
+  `generic.zig` sites (`:991`, `:1169`, `:1177`, `:1183`, `:1188`, `:1190`) that sit behind
+  `if (comptime DisplayLink == void) return;` and therefore have **no Linux counterpart to
+  port at all**; the Linux twin has no display-link field. See the state block below and
+  task-14c-5 §2.1. That is a task, not a fix round; narrowing the three dispositions was
+  the honest interim state.
 - **state**: **CLOSED (task-14c-5, 2026-09-10).** Both Linux twins are restored.
   `generic/linux_impl.rs` carries `const LOG_SCOPE: &str = "generic_renderer";` at file
   scope and 25 live emissions covering 24 `generic.zig` call sites; `image/linux_impl.rs`
@@ -489,13 +495,30 @@ found, and current state.
 
 ---
 
-## N11 — restored `log` sites render `{err:?}` where Zig's `{}` renders `error.<Name>`, crate-wide across ~35 sites
+## N11 — restored `log` sites render Rust's derived formatter where Zig renders its builtin aggregate formatter, crate-wide across ~35 sites
 
 - **id**: N11 (next free id checked at the time of writing: N1-N10 taken, N10 by another
   worker — ids have collided twice on this branch)
 - **severity**: low (message-text divergence in a diagnostic; no state, control-flow or
   rendering difference)
 - **kind**: log-text divergence / cross-cutting
+- **root cause (widened 2026-09-10)**: this is NOT only about error values. The general
+  shape is **Rust's derived `Debug` standing in for Zig's builtin aggregate formatter**,
+  and it bites plain values as much as errors. Three non-error instances, all verified
+  against captured records, not inferred:
+  - `image.zig:122` and `:132` — the placement id renders as `Kitty(7)` where Zig's `{}`
+    on the tagged union prints `renderer.image.Id{ .kitty = 7 }`. Present on **both**
+    platform twins (`image/macos_impl.rs`, `image/linux_impl.rs`).
+  - `generic.zig:2137` — the screen size renders as a full Rust struct dump where Zig
+    prints `renderer.Size{ .screen = … }`. Ported at
+    `crates/rustty-renderer/src/generic/linux_impl.rs:1470` and its macOS counterpart.
+
+  **Mirroring the existing behaviour was the right call and should stay that way until the
+  sweep.** `Id` has no Zig `format` method to port, so hand-writing a `Display` impl would
+  be *inventing* fidelity rather than restoring it; and the two platform twins must keep
+  the same public surface, so a divergence introduced on one arm alone would be a worse
+  defect than the text gap. These are recorded here rather than filed separately because
+  the root cause is identical and splitting them would fragment the eventual sweep.
 - **oracle**: every `log.*("… err={}", .{err})` in `src/renderer` and `pkg/opengl` — e.g.
   `generic.zig:852, 1436, 1558, 2627, 3461`, `renderer/Metal.zig`, `renderer/image.zig`,
   `renderer/opengl/Frame.zig:65`, `renderer/OpenGL.zig:242, 308`.
@@ -525,7 +548,143 @@ found, and current state.
 - **state**: **OPEN**, scheduled as its own task. Scope: give the renderer's error types
   (`opengl::opengl_impl::Error`, `opengl::gl::errors::Error`, `metal::*`, the shaper and
   collection errors that reach a log site) the `error.{name}` `Display` impl, switch the
-  sites to `{err}`, and update the handful of tests that assert on a rendered payload —
+  sites to `{err}`, **and decide the non-error aggregates named under root cause above**
+  (`image::Id`, `renderer::Size`) in the same pass, on both twins together, and update the handful of tests that assert on a rendered payload —
   `opengl_impl::tests::display_realized_warns_and_continues_when_context_prep_fails` and
   `present_logs_when_the_srgb_re_enable_fails` both pin the current `Debug` form and will
   need their expected strings changed with it.
+## N12 — the audit's line anchors leave whole reference-file HEADS unaudited, and no row will ever claim them (new gate G-LOGFILE)
+
+- **id**: N12 (next free id checked 2026-09-10 against `NEW-FINDINGS.md`, `ADJUDICATION.md`
+  and the plan's `progress.md`: N1-N11 taken, N12/N13 pre-allocated in `progress.md` for
+  exactly these two entries and used here as allocated.)
+- **severity**: medium (a systematic audit-coverage hole, not one defect; it has already
+  produced real gaps — N4, N6, N7 and N9 are all instances)
+- **kind**: audit-coverage / gate blind spot
+- **oracle**: every reference file cited by a `LOG`-class ledger row, at pin `20abdb50a`.
+- **rustty**: n/a — this is a finding about the AUDIT and the GATE, not about a code site.
+- **description**: `G-PARITY` counts ROWS. Every audit row cites a RANGE of reference line
+  numbers, so anything OUTSIDE every row's range is unaudited and **no row will ever claim
+  it**. Several large reference files have their lowest cited anchor partway down the file,
+  leaving an entirely unclaimed head. Measured by sweeping every `LOG` row, taking each
+  row's minimum anchor, and counting the reference's own live `log.*` calls above it:
+
+  | unclaimed head sites | oracle file | lowest row anchor | rows |
+  |---|---|---|---|
+  | 38 | `src/Surface.zig` | 2193 | S41-F1 (WAIVED), S42-F2 (CLOSED) |
+  | 20 | `src/apprt/gtk/class/application.zig` | 812 | S49-F5, S50-F4 (both OPEN) |
+  | 14 | `src/config/Config.zig` | 4680 | S74-F5, S75-F1, S75-F2 (all OPEN) |
+  | 8 | `src/apprt/gtk/winproto/x11.zig` | 225 | S60-F6 (OPEN) |
+  | 7 | `src/renderer/OpenGL.zig` | 237 | S113-F1, S113-F4 (both CLOSED) |
+  | 5 | `src/main_ghostty.zig` | 129 | S44-F4 (WAIVED) |
+  | 2 | `src/terminal/stream.zig` | 1352 | S163-F2, S164-F1 (both CLOSED) |
+  | 2 | `src/apprt/gtk/class/surface.zig` | 1045 | S54-F4, S54-F6 (both OPEN) |
+  | 1 each | `terminal/page.zig`, `terminal/Terminal.zig`, `renderer/Thread.zig`, `font/CodepointResolver.zig`, `apprt/embedded.zig`, `font/glyf_rasterize_png_test.zig` | | |
+
+  **101 unclaimed head sites over 14 files.** This table was independently reproduced from
+  the ledger and the pin by task 14gate and matches the original review count exactly.
+
+  **A head being unclaimed does NOT mean it is unported.** Three of the six largest are
+  already restored and a gate that flagged them would be ignored within a day:
+  `Config.zig`'s head is live (`crates/rustty-config/src/config_struct.rs:5472, 5949, 5984,
+  6151` — through that file's `log_info`/`log_warn` fn facade, not `log::`);
+  `OpenGL.zig`'s head ports to `crates/rustty-renderer/src/opengl/gl/sys.rs:400, 409,
+  578-582` — a DIFFERENT Rust file than the name suggests, and through a `macro_rules!`
+  facade; `Surface.zig`'s head was restored by task 14d-1.
+
+- **the fix is the gate, not the rows**: `.port/tools/gates/check_log_reconcile.py`
+  (`G-LOGFILE`) reconciles per ORACLE FILE, comparing the reference's live `log.*` call
+  sites against live port emissions in the Rust file(s) declared to port it
+  (`.port/parity-closure/LOG-PORTMAP.tsv`). Because it counts the WHOLE file it does not
+  care where a row's anchors fall, so an unaudited head cannot hide in it. It is HARD in
+  `ci.sh` from day one.
+
+- **what the gate measured, and this is the tracked debt**: 63 reference files, 894 live
+  reference log sites, 694 live port emissions on the thinnest platform arm —
+  **a deficit of 232 sites over 34 files**, frozen as the portmap's allowances. Full table:
+  `python3 .port/tools/gates/check_log_reconcile.py --report`. The largest, and the ones
+  that are NOT explained by an already-OPEN row:
+
+  | deficit | oracle file | rows | note |
+  |---|---|---|---|
+  | 49 | `src/terminal/stream.zig` | S163-F2, S164-F1 — **both CLOSED** | repeated reference messages (each "unimplemented CSI callback" etc. fires from several reference arms) collapsed onto one port site |
+  | 7 | `src/terminal/stream_terminal.zig` | S166-F3 — **CLOSED** | the clipboard reply/grant family |
+  | 3 | `src/terminal/Terminal.zig` | S141-F4, S142-F1, S143-F2 — **all CLOSED** | `cursor copy failed entering alt screen`, the grapheme-attach debug |
+  | 2 | `src/font/face/coretext.zig` | S90-F2 — **CLOSED** | |
+  | 2 | `src/font/face/freetype.zig` | S91-F8, S91-F10 — **both CLOSED** | |
+  | 1 each | `PageList.zig`, `page.zig`, `kitty/graphics_storage.zig` | CLOSED | |
+
+  A `CLOSED` row sitting above a live deficit is exactly PROCEDURE.md blind spot 2 ("the
+  gate counts rows, not sites") measured for the first time. These are **not** closed by
+  this entry.
+
+- **three port-side facts a naive scanner gets wrong**, all found while building the gate
+  and all of which cause a FALSE report if missed:
+  1. **There are four emission shapes, not one.** `log::warn!(target: SCOPE, …)` is only
+     the commonest. `crates/rustty-renderer/src/opengl/gl.rs` defines `macro_rules!
+     log_warn!` and its leaf modules emit through that; `crates/rustty-config/src/
+     config_struct.rs` and much of `rustty-os` use a `fn log_warn(msg)` facade;
+     `crates/rustty-vt-c/src/sys.rs::log_fn` ends in an embedder-installed **C callback
+     pointer** and contains no Rust write primitive at all. A `log::`-only scan reads
+     `rustty-vt-c` as emitting nothing when it in fact reconciles exactly (2/2, 5/5, 1/1,
+     1/1) and reads `gtk/class/application.rs` as **zero** when it emits **96**.
+  2. **`eprintln!` is a real emission in the GTK tree** — `rustty-apprt`'s GTK files
+     reproduce Zig's default `logFn` OUTPUT inline, prefix and all
+     (`eprintln!("warn(gtk): …")`). The prefix is the signal: a bare `eprintln!` is
+     ordinary program output (help-text failures, test-harness skip lines) and counting it
+     would manufacture emissions the reference never asked for.
+  3. **A `log_*` helper with an empty body is a DROPPED diagnostic, not a facade.**
+     `rustty-os/src/locale.rs` and `cf_release_thread.rs` carry 16 such no-op stubs between
+     them, each holding the reference call in a comment and emitting nothing. The gate
+     counts their call sites as zero and lists them under its own `NOTE:` line.
+
+- **correction to the brief this task was given**: it stated that
+  `crates/rustty-apprt/src/gtk/class/application.rs` has "**zero** facade emissions". It
+  has **96**, through shape (2) above; the file is 15 short of the reference's 111, not
+  111 short. The brief's three named false positives are all genuinely false positives at
+  the HEAD level, but two of them (`Surface.zig` −3, `Config.zig` −8) do carry a whole-file
+  deficit elsewhere in the file, so "the head is restored" and "the file reconciles" are
+  different claims and this finding keeps them separate.
+
+- **how found**: a review swept every LOG row's minimum anchor and counted above it; task
+  14gate reproduced the sweep, then built the gate and measured the whole-file picture.
+- **state**: **OPEN.** The gate and the frozen baseline are landed; the 232-site debt is
+  not. Next step is a per-file adjudication pass in deficit order — `stream.zig` first,
+  since it alone is 49 and both its rows are CLOSED — tightening the portmap allowance in
+  the same commit as each restoration (the gate is a ratchet and goes RED on slack).
+
+## N13 — two `self_.?` elisions turn a Zig safe-build panic into silent UB on an ABI-nullable pointer
+
+- **id**: N13 (allocated with N12 above; ids checked 2026-09-10)
+- **severity**: medium (undefined behaviour on a null pointer where the reference has a
+  defined, loud failure; unreachable in practice today, but only by construction)
+- **kind**: safety-check elision / uncited site
+- **oracle**: `src/os/cf_release_thread.zig` `wakeupCallback` and `src/renderer/Thread.zig`
+  `wakeupCallback`, both `const t = self_.?;`.
+- **rustty**: `crates/rustty-os/src/cf_release_thread.rs:269` and
+  `crates/rustty-core/src/renderer_seam.rs:1679` — both replace the unwrap with the comment
+  `// const t = self_.?;  (non-null by construction)` and then use the raw `self_` pointer.
+- **description**: the reference's `.?` on an optional pointer is a **checked** unwrap: in
+  a safe build a null userdata panics with `attempt to use null value`, loudly and at the
+  call site. The port elides the check entirely and dereferences `self_` unconditionally,
+  so the same input is undefined behaviour instead.
+
+  The "non-null by construction" justification is weaker than it reads, because the
+  pointer is **nullable by ABI on this very path**:
+  `crates/rustty-xev/src/common.rs:23-29`'s `userdata_value` returns
+  `core::ptr::null_mut()` whenever the userdata type is `()`, faithfully reproducing the
+  reference's `Userdata == void` special case. Any watcher registered with unit userdata
+  therefore hands these callbacks a null `self_`. Today no caller does; nothing in the type
+  system or in a debug assertion says so, and nothing fails loudly if that changes.
+- **why it is here and not in a row**: no ledger row cites either line. It is **not a LOG
+  defect** — no diagnostic was dropped at either site (both keep their `log.err` arms; the
+  Thread one emits, the cf_release_thread one goes through a no-op stub tracked under N12's
+  point 3). It surfaced only because both files were being read for the logging sweep.
+- **the cheap fix**: `assert!(!self_.is_null(), "self_.? — the reference unwraps a checked
+  optional here")` at both sites, or a `debug_assert!` plus a PORT NOTE if the release-mode
+  branch is unacceptable. Either restores a defined failure and documents the invariant the
+  comment currently only asserts in prose.
+- **how found**: task 14gate, while enumerating `rustty-os` and `rustty-core` emission
+  sites for the G-LOGFILE portmap.
+- **state**: **OPEN.** Not fixed here — this task is a gate, and adding assertions to two
+  callbacks is a code change outside its scope.

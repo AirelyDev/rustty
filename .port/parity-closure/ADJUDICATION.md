@@ -499,7 +499,9 @@ matter how well documented") they are `WAIVED`, not `CLOSED`.
   arms for the same reason. `generic/linux_impl.rs` now carries
   `const LOG_SCOPE: &str = "generic_renderer";` at file scope.
 - 14 of the row's 15 cited oracle anchors are now live `log::` emissions with the
-  `generic_renderer` target, **in the macOS twin**: `generic.zig:852, 991, 1169, 1177, 1183, 1188, 1190,
+  `generic_renderer` target, **on both twins** (macOS via `generic.rs`, Linux via
+  `generic/linux_impl.rs` since task-14c-5; the six `DisplayLink`-gated anchors have no
+  Linux counterpart to carry at all): `generic.zig:852, 991, 1169, 1177, 1183, 1188, 1190,
   1320, 1436, 1472, 1506, 1517, 1533, 1595`. (`:991`'s emission lives in
   `crates/rustty-renderer/src/metal/cvdisplaylink.rs` because the port inlines
   `displayLinkCallback`'s body into the CoreVideo `extern "C"` trampoline — a
@@ -524,7 +526,8 @@ matter how well documented") they are `WAIVED`, not `CLOSED`.
   `std::fs::read`; both are fixed there now, exactly as task-14c-1 fixed them in
   the Metal twin, so the two open/read messages are verbatim on both arms.
 - 16 of the row's 18 cited oracle anchors are now live `log::` emissions with the
-  `generic_renderer` target, **in the macOS twin**: `generic.zig:1960, 1974, 1995, 2002, 2137, 2627,
+  `generic_renderer` target, **on both twins** (Linux restored by task-14c-5):
+  `generic.zig:1960, 1974, 1995, 2002, 2137, 2627,
   2777, 3143, 3150, 3222, 3237, 3461, 3476, 3481, 3514, 3518`. This includes the
   three `eprintln!` stand-ins on the `prepBackgroundImage` path, and the row's own
   "open/read warnings merged" complaint: the port had collapsed the reference's
@@ -555,7 +558,8 @@ matter how well documented") they are `WAIVED`, not `CLOSED`.
   so the three `shadertoy.zig` sites named below were already live on every
   platform.)
 - 11 of the row's 13 cited `image.zig` anchors are now live `log::` emissions with
-  the `renderer_image` target, **in the macOS twin**: `image.zig:85, 122, 132, 165, 378, 396, 423, 486,
+  the `renderer_image` target, **on both twins** (Linux restored by task-14c-5, the same
+  11-of-13 split): `image.zig:85, 122, 132, 165, 378, 396, 423, 486,
   646, 660, 747`. The row's title also covers `shadertoy.zig`, and ALL of its live
   sites are restored: `:71` (`loaded custom shader path={s}`), `:117` (the
   spirv-error warn, whose arguments the port's comment had elided behind `...`) and
