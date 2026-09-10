@@ -390,6 +390,7 @@ dependencies = [
  "cc",
  "gettext-sys",
  "libc",
+ "log",
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",
@@ -443,6 +444,7 @@ version = "0.1.0"
 dependencies = [
  "allocator-api2",
  "libc",
+ "log",
  "rustty-datastruct",
  "rustty-font",
  "rustty-identity",
