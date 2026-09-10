@@ -30,10 +30,22 @@
 // the glyph render options are owned by the PURE `rustty-font` leaf below this
 // tier. `assert = quirks.inlineAssert` is `rustty_util::quirks::inlineAssert`.
 // `config` supplies `FreetypeLoadFlags` (see `FreetypeLoadFlags` below). `log` is
-// a scoped logger; rustty has no logging facade wired into this crate (the
-// PageList/dcs convention), so all `log.*` calls are ported as verbatim comments
-// and are no-ops.
+// a scoped logger; it maps onto the `log` facade crate with the reference's
+// `std.log.scoped` tag carried as `target: LOG_SCOPE`
+// (`.port/parity-closure/DECISION-logging.md` §6). Reference `log.*` calls are
+// kept as verbatim comments (R1) with the live emission beneath them.
 use allocator_api2::alloc::Allocator;
+/// The reference's `std.log.scoped(.font_face)` tag, carried through the `log`
+/// facade's `target:`. `face/freetype.zig`, `face/coretext.zig` and
+/// `face/web_canvas.zig` all share this ONE scope in the reference; that is the
+/// reference's own choice and is ported as-is.
+const LOG_SCOPE: &str = "font_face";
+
+/// The reference guards its variation-axes dump with
+/// `comptime builtin.mode == .Debug`; `cfg!(debug_assertions)` is the direct
+/// Rust analog (same choice as `face/coretext.rs`).
+const DEBUG_MODE: bool = cfg!(debug_assertions);
+
 use rustty_font::atlas::{Atlas, Format};
 use rustty_font::glyph::{ConstraintSize, Glyph, RenderOptions, Size};
 use rustty_font::metrics::FaceMetrics;
@@ -266,30 +278,13 @@ impl Face {
         // In debug mode, we output information about available variation axes,
         // if they exist.
         //
-        // PORT NOTE: this `if (comptime builtin.mode == .Debug) mm: {...}` block
-        // is purely diagnostic (it logs the font's variation axes via `log.debug`)
-        // and has no behavioral effect. Per the log-as-comment convention it is
-        // ported verbatim as a comment:
+        // if (comptime builtin.mode == .Debug) mm: { ... }
         //
-        // if (comptime builtin.mode == .Debug) mm: {
-        //     if (!face.hasMultipleMasters()) break :mm;
-        //     var buf: [1024]u8 = undefined;
-        //     log.debug("variation axes font={s}", .{try result.name(&buf)});
-        //     const mm = try face.getMMVar();
-        //     defer lib.lib.doneMMVar(mm);
-        //     for (0..mm.num_axis) |i| {
-        //         const axis = mm.axis[i];
-        //         const id_raw = std.math.cast(c_int, axis.tag) orelse continue;
-        //         const id: font.face.Variation.Id = @bitCast(id_raw);
-        //         log.debug("variation axis: name={s} id={s} min={} max={} def={}", .{
-        //             std.mem.sliceTo(axis.name, 0),
-        //             id.str(),
-        //             axis.minimum >> 16,
-        //             axis.maximum >> 16,
-        //             axis.def >> 16,
-        //         });
-        //     }
-        // }
+        // Ported live (S91-F8): the body is `log_variation_axes`, which takes the
+        // mode flag as a parameter so the release arm is testable; the ONLY
+        // production call site passes `DEBUG_MODE`, the direct port of
+        // `comptime builtin.mode == .Debug`. Same shape as `face/coretext.rs`.
+        result.log_variation_axes(DEBUG_MODE)?;
 
         Ok(result)
     }
@@ -424,6 +419,96 @@ impl Face {
 
         set_size_(self.face, opts.size)?;
         self.size = opts.size;
+        Ok(())
+    }
+
+    /// The reference's `if (comptime builtin.mode == .Debug) mm: { ... }`
+    /// variation-axes dump from `initFace` (`face/freetype.zig:116-135`),
+    /// extracted into a method so both arms are independently testable.
+    /// `debug_mode` is the port of `comptime builtin.mode == .Debug`; the sole
+    /// production call site passes [`DEBUG_MODE`].
+    ///
+    /// Purely diagnostic: it emits `log.debug` records and has no effect on the
+    /// face. The reference's `try result.name(&buf)` and `try face.getMMVar()`
+    /// PROPAGATE, so this returns `Result` and `init_face` uses `?` on it — the
+    /// error paths are part of the ported behaviour, not just the emission.
+    fn log_variation_axes(&self, debug_mode: bool) -> Result<(), Error> {
+        if !debug_mode {
+            return Ok(());
+        }
+
+        // if (!face.hasMultipleMasters()) break :mm;
+        if !self.face.has_multiple_masters() {
+            return Ok(());
+        }
+
+        // var buf: [1024]u8 = undefined;
+        // log.debug("variation axes font={s}", .{try result.name(&buf)});
+        //
+        // PORT NOTE: `{s}` renders the raw name bytes; the lossy UTF-8
+        // conversion is confined to the diagnostic, not to any data path.
+        let mut buf = [0u8; 1024];
+        log::debug!(
+            target: LOG_SCOPE,
+            "variation axes font={}",
+            String::from_utf8_lossy(self.name(&mut buf)?)
+        );
+
+        // const mm = try face.getMMVar();
+        // defer lib.lib.doneMMVar(mm);
+        let mm = self.face.get_mm_var()?;
+
+        // for (0..mm.num_axis) |i| { ... }
+        for i in 0..unsafe { (*mm).num_axis } as usize {
+            // const axis = mm.axis[i];
+            let axis = unsafe { *(*mm).axis.add(i) };
+
+            // const id_raw = std.math.cast(c_int, axis.tag) orelse continue;
+            let id_raw: core::ffi::c_int = match core::ffi::c_int::try_from(axis.tag) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            // const id: font.face.Variation.Id = @bitCast(id_raw);
+            //
+            // PORT NOTE: `Variation.Id` is `packed struct(u32) { d, c, b, a }`,
+            // so the FIRST field takes the least-significant byte — the same
+            // layout `Id::to_u32` documents, read in the opposite direction.
+            let bits = id_raw as u32;
+            let id = super::Id {
+                d: (bits & 0xff) as u8,
+                c: ((bits >> 8) & 0xff) as u8,
+                b: ((bits >> 16) & 0xff) as u8,
+                a: ((bits >> 24) & 0xff) as u8,
+            };
+
+            // log.debug("variation axis: name={s} id={s} min={} max={} def={}", .{
+            //     std.mem.sliceTo(axis.name, 0), id.str(),
+            //     axis.minimum >> 16, axis.maximum >> 16, axis.def >> 16,
+            // });
+            //
+            // PORT NOTE: `axis.name` is a NUL-terminated C string owned by
+            // FreeType; `sliceTo(.., 0)` is `CStr::from_ptr`. A NULL `name` is
+            // not something `sliceTo` would tolerate, but FreeType can leave it
+            // unset, so the port renders `""` there rather than dereferencing
+            // NULL — a diagnostic must not be able to crash the process.
+            let name: &[u8] = if axis.name.is_null() {
+                b""
+            } else {
+                unsafe { core::ffi::CStr::from_ptr(axis.name) }.to_bytes()
+            };
+            log::debug!(
+                target: LOG_SCOPE,
+                "variation axis: name={} id={} min={} max={} def={}",
+                String::from_utf8_lossy(name),
+                String::from_utf8_lossy(&id.str()),
+                axis.minimum >> 16,
+                axis.maximum >> 16,
+                axis.def >> 16
+            );
+        }
+
+        self.lib.lib.done_mm_var(mm);
         Ok(())
     }
 
@@ -858,7 +943,6 @@ impl Face {
             // Use @bitCast to u32 because MSVC translates C enums
             // as signed int, while GCC/Clang uses unsigned int.
             //
-            // PORT NOTE (log-as-comment):
             // const tag: u32 = @bitCast(f);
             // log.err(
             //     "Can't render glyph with unsupported glyph format \"{s}\"",
@@ -869,6 +953,23 @@ impl Face {
             //         @truncate(tag >> 0),
             //     }},
             // );
+            //
+            // PORT NOTE: `@bitCast(f)` reinterprets the glyph-format enum's bits
+            // as `u32` — the reference's comment above explains why the cast is
+            // through `u32` and not the C signed int. The four `@truncate`s spell
+            // the tag's four bytes MOST-significant first; `{s}` then renders
+            // them as text.
+            let tag: u32 = glyph_format as u32;
+            log::error!(
+                target: LOG_SCOPE,
+                "Can't render glyph with unsupported glyph format \"{}\"",
+                String::from_utf8_lossy(&[
+                    (tag >> 24) as u8,
+                    (tag >> 16) as u8,
+                    (tag >> 8) as u8,
+                    tag as u8,
+                ])
+            );
             return Err(Error::UnsupportedGlyphFormat);
         }
 
@@ -885,6 +986,17 @@ impl Face {
             }
         } else {
             // log.warn("glyph={} pixel mode={}", .{ glyph_index, bitmap.pixel_mode });
+            //
+            // PORT NOTE: this warn is emitted IMMEDIATELY BEFORE the `@panic`,
+            // and that ordering is the whole point of it — it is the only record
+            // of which glyph and which pixel mode caused the abort. It must stay
+            // above the `panic!`.
+            log::warn!(
+                target: LOG_SCOPE,
+                "glyph={} pixel mode={}",
+                glyph_index,
+                bitmap.pixel_mode
+            );
             panic!("unsupported pixel mode");
         }
 
@@ -1284,6 +1396,20 @@ impl Face {
                     //     "(getMetrics) Width of glyph '水' for font \"{s}\" is greater than its advance ({d} > {d}), discarding ic_width metric.",
                     //     .{ font_name, ft_glyph_width, advance },
                     // );
+                    //
+                    // PORT NOTE: the reference's `catch "<Error getting font
+                    // name>"` fallback is part of the message, not an error path;
+                    // `{s}` renders the raw name bytes, so the lossy UTF-8
+                    // conversion is confined to the diagnostic.
+                    let mut buf = [0u8; 1024];
+                    let font_name = self
+                        .name(&mut buf)
+                        .map(String::from_utf8_lossy)
+                        .unwrap_or(std::borrow::Cow::Borrowed("<Error getting font name>"));
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "(getMetrics) Width of glyph '水' for font \"{font_name}\" is greater than its advance ({ft_glyph_width} > {advance}), discarding ic_width metric."
+                    );
                     break 'ic_width None;
                 }
 
