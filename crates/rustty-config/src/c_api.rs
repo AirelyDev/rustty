@@ -19,16 +19,37 @@ use rustty_input::binding::{Action, TriggerC};
 
 // const log = std.log.scoped(.config);
 //
-// PORT NOTE: rustty-config has no scoped-log sink in this leaf; the reference's
-// `log.err(...)` in each `catch` arm becomes an `eprintln!` (the `lib_vt`/`vt-c`
-// convention for C-ABI error logging).
+// PORT NOTE (task-14e-2): this file's `catch` arms used a bare `eprintln!`,
+// which carries neither `logFn`'s `error(config): ` prefix nor its
+// `Logging.stderr` gate — so a CLI action that is supposed to keep its output
+// clean got these lines anyway. They now go through the crate's own
+// `config_struct::log_err` sink, the same one every other `rustty-config`
+// diagnostic uses (DECISION-logging.md §6r4's one documented exception to the
+// facade: `format_log` reads `rustty_global::logging()`, a leaf-crate
+// process-global that needs no install call and works in tests, benches, the
+// exe and the lib alike).
+use crate::config_struct::log_err;
 
 /// Create a new configuration filled with the initial default values.
 // export fn ghostty_config_new() ?*Config {
 #[no_mangle]
 pub extern "C" fn rustty_config_new() -> *mut Config {
-    // const result = state.alloc.create(Config) catch ...; — the heap slot.
-    // result.* = Config.default(state.alloc) catch ...;
+    // const result = state.alloc.create(Config) catch |err| {
+    //     log.err("error allocating config err={}", .{err});
+    //     return null;
+    // };
+    // result.* = Config.default(state.alloc) catch |err| {
+    //     log.err("error creating config err={}", .{err});
+    //     state.alloc.destroy(result);
+    //     return null;
+    // };
+    //
+    // PORT NOTE (task-14e-2, N16 class — UNRESTORABLE, not dropped): both
+    // `catch` arms are allocation-failure arms. `Box::new` aborts on OOM rather
+    // than returning an error, and `Config::default_config()` returns a
+    // `Config`, not a `Result`. There is NO failure arm to hang either
+    // diagnostic on, and emitting unconditionally would put a diagnostic on the
+    // success path — the bug this project shipped once. Do not "restore" these.
     Box::into_raw(Box::new(Config::default_config()))
 }
 
@@ -53,7 +74,19 @@ pub unsafe extern "C" fn rustty_config_free(ptr: *mut Config) {
 /// `self` must be a valid pointer from `rustty_config_new`/`rustty_config_clone`.
 #[no_mangle]
 pub unsafe extern "C" fn rustty_config_clone(self_: *mut Config) -> *mut Config {
-    // result.* = self.clone(state.alloc) catch ...;
+    // const result = state.alloc.create(Config) catch |err| {
+    //     log.err("error allocating config err={}", .{err});
+    //     return null;
+    // };
+    // result.* = self.clone(state.alloc) catch |err| {
+    //     log.err("error cloning config err={}", .{err});
+    //     state.alloc.destroy(result);
+    //     return null;
+    // };
+    //
+    // PORT NOTE (task-14e-2, N16 class — UNRESTORABLE, not dropped): see
+    // `rustty_config_new`. `Box::new` aborts on OOM and `clone_config()`
+    // returns a `Config`, not a `Result`; neither arm exists here.
     // SAFETY: per contract `self_` is a live Config pointer.
     let self_ref = unsafe { &*self_ };
     Box::into_raw(Box::new(self_ref.clone_config()))
@@ -65,10 +98,13 @@ pub unsafe extern "C" fn rustty_config_clone(self_: *mut Config) -> *mut Config 
 /// `self` must be a valid `Config` pointer.
 #[no_mangle]
 pub unsafe extern "C" fn rustty_config_load_cli_args(self_: *mut Config) {
-    // self.loadCliArgs(state.alloc) catch |err| { log.err(...); };
+    // self.loadCliArgs(state.alloc) catch |err| {
+    //     log.err("error loading config err={}", .{err});
+    // };
     // SAFETY: per contract `self_` is a live, uniquely-borrowed Config pointer.
     if let Err(err) = unsafe { &mut *self_ }.load_cli_args() {
-        eprintln!("error loading config err={err:?}");
+        // log.err("error loading config err={}", .{err});
+        log_err(format!("error loading config err={err:?}"));
     }
 }
 
@@ -80,10 +116,13 @@ pub unsafe extern "C" fn rustty_config_load_cli_args(self_: *mut Config) {
 /// `self` must be a valid `Config` pointer.
 #[no_mangle]
 pub unsafe extern "C" fn rustty_config_load_default_files(self_: *mut Config) {
-    // self.loadDefaultFiles(state.alloc) catch |err| { log.err(...); };
+    // self.loadDefaultFiles(state.alloc) catch |err| {
+    //     log.err("error loading config err={}", .{err});
+    // };
     // SAFETY: per contract `self_` is a live, uniquely-borrowed Config pointer.
     if let Err(err) = unsafe { &mut *self_ }.load_default_files() {
-        eprintln!("error loading config err={err:?}");
+        // log.err("error loading config err={}", .{err});
+        log_err(format!("error loading config err={err:?}"));
     }
 }
 
@@ -101,13 +140,16 @@ pub unsafe extern "C" fn rustty_config_load_file(
     // const path_slice = std.mem.span(path);
     // SAFETY: per contract `path` is a valid NUL-terminated C string.
     let path_slice = unsafe { std::ffi::CStr::from_ptr(path) }.to_bytes();
-    // self.loadFile(state.alloc, path_slice) catch |err| { log.err(...); };
+    // self.loadFile(state.alloc, path_slice) catch |err| {
+    //     log.err("error loading config from file path={s} err={}", .{ path_slice, err });
+    // };
     // SAFETY: per contract `self_` is a live, uniquely-borrowed Config pointer.
     if let Err(err) = unsafe { &mut *self_ }.load_file(path_slice) {
-        eprintln!(
+        // log.err("error loading config from file path={s} err={}", .{ path_slice, err });
+        log_err(format!(
             "error loading config from file path={} err={err:?}",
             std::string::String::from_utf8_lossy(path_slice)
-        );
+        ));
     }
 }
 
@@ -119,10 +161,13 @@ pub unsafe extern "C" fn rustty_config_load_file(
 /// `self` must be a valid `Config` pointer.
 #[no_mangle]
 pub unsafe extern "C" fn rustty_config_load_recursive_files(self_: *mut Config) {
-    // self.loadRecursiveFiles(state.alloc) catch |err| { log.err(...); };
+    // self.loadRecursiveFiles(state.alloc) catch |err| {
+    //     log.err("error loading config err={}", .{err});
+    // };
     // SAFETY: per contract `self_` is a live, uniquely-borrowed Config pointer.
     if let Err(err) = unsafe { &mut *self_ }.load_recursive_files() {
-        eprintln!("error loading config err={err:?}");
+        // log.err("error loading config err={}", .{err});
+        log_err(format!("error loading config err={err:?}"));
     }
 }
 
@@ -131,10 +176,13 @@ pub unsafe extern "C" fn rustty_config_load_recursive_files(self_: *mut Config) 
 /// `self` must be a valid `Config` pointer.
 #[no_mangle]
 pub unsafe extern "C" fn rustty_config_finalize(self_: *mut Config) {
-    // self.finalize() catch |err| { log.err(...); };
+    // self.finalize() catch |err| {
+    //     log.err("error finalizing config err={}", .{err});
+    // };
     // SAFETY: per contract `self_` is a live, uniquely-borrowed Config pointer.
     if let Err(err) = unsafe { &mut *self_ }.finalize() {
-        eprintln!("error finalizing config err={err:?}");
+        // log.err("error finalizing config err={}", .{err});
+        log_err(format!("error finalizing config err={err:?}"));
     }
 }
 
@@ -192,7 +240,8 @@ pub unsafe extern "C" fn rustty_config_trigger(
     match config_trigger_(unsafe { &*self_ }, s) {
         Ok(t) => t,
         Err(err) => {
-            eprintln!("error finding trigger err={err:?}");
+            // log.err("error finding trigger err={}", .{err});
+            log_err(format!("error finding trigger err={err:?}"));
             // `.{}` — the default (empty) trigger projected to C.
             rustty_input::binding::Trigger::default().cval()
         }
@@ -267,7 +316,8 @@ pub extern "C" fn rustty_config_open_path() -> String {
         // return .fromSlice(path);
         Ok(path) => String::from_path(path),
         Err(err) => {
-            eprintln!("error opening config in editor err={err:?}");
+            // log.err("error opening config in editor err={}", .{err});
+            log_err(format!("error opening config in editor err={err:?}"));
             String::empty()
         }
     }
@@ -575,6 +625,113 @@ mod tests {
             assert_eq!(
                 unsafe { trigger.key.physical },
                 rustty_vt::input::key::Key::Unidentified
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod log_site_tests {
+    //! task-14e-2 — `src/config/CApi.zig`'s eleven `log.err` sites. No LEDGER
+    //! row names this file (it entered the portmap with N15); seven are
+    //! restored, four are UNRESTORABLE and documented at their own sites.
+    //!
+    //! These go through `config_struct::log_err`, so `log_capture` here is the
+    //! crate's own thread-local recorder, which records `format_log`'s output
+    //! shape (`error(config): <msg>`) at the helper's entry.
+    use super::{rustty_config_load_file, Config};
+    use crate::config_struct::log_capture;
+
+    /// A real driver: `rustty_config_load_file` on a path that does not exist.
+    #[test]
+    fn load_file_logs_the_reference_error_under_the_config_scope() {
+        let mut cfg = Config::default_config();
+        let path = std::ffi::CString::new("/nonexistent/rustty-14e2/does-not-exist.conf").unwrap();
+
+        log_capture::arm();
+        unsafe { rustty_config_load_file(&mut cfg, path.as_ptr()) };
+        let records = log_capture::take();
+
+        assert_eq!(1, records.len(), "expected exactly one record: {records:?}");
+        // The level token is `error`, NOT `err`: Zig's `Level.err.asText()` is
+        // "error", and `logFn` prefixes with `level_txt`.
+        assert!(
+            records[0].starts_with(
+                "error(config): error loading config from file \
+                 path=/nonexistent/rustty-14e2/does-not-exist.conf err="
+            ),
+            "unexpected record: {}",
+            records[0]
+        );
+    }
+
+    /// The absence half: loading a file that DOES parse emits nothing.
+    /// Positive reach is the config value the file actually set.
+    #[test]
+    fn a_successful_load_file_is_silent() {
+        let dir = std::env::temp_dir().join("rustty-14e2-capi");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("ok.conf");
+        std::fs::write(&file, b"maximize = true\n").unwrap();
+        let path = std::ffi::CString::new(file.to_str().unwrap()).unwrap();
+
+        let mut cfg = Config::default_config();
+        log_capture::arm();
+        unsafe { rustty_config_load_file(&mut cfg, path.as_ptr()) };
+        let records = log_capture::take();
+
+        assert!(
+            cfg.maximize,
+            "the file was not applied, so this test never reached the code \
+             whose silence it asserts"
+        );
+        // NOT an empty vector, and deliberately so: `file_load.zig`'s own
+        // `log.info("reading configuration file path={s}")` fires on this
+        // path. That is reference behaviour and is pinned here too — a
+        // stronger statement than an empty vector. What must NOT appear is
+        // `error(config): error loading config from file …`.
+        assert_eq!(
+            vec![format!(
+                "info(config): reading configuration file path={}",
+                file.display()
+            )],
+            records
+        );
+        let _ = std::fs::remove_file(&file);
+    }
+
+    /// The six restored sites this crate cannot drive (they need a failing
+    /// `loadCliArgs`/`loadDefaultFiles`/`loadRecursiveFiles`/`finalize`, an
+    /// unparsable binding action, or an editor-launch failure). STRUCTURAL, and
+    /// reported as such: level, scope and message text pinned from the source.
+    #[test]
+    fn the_other_restored_sites_are_live_with_the_reference_text() {
+        const SRC: &str = include_str!("c_api.rs");
+        // Assembled from fragments so no live-looking sink call enters this file.
+        let call = |message: &str| -> std::string::String {
+            let f = ["log", "_err"].concat();
+            format!("{f}(format!(\"{message}\"))")
+        };
+        // log.err("error loading config err={}", .{err});   (x3: cli args,
+        // default files, recursive files)
+        assert_eq!(
+            3,
+            SRC.matches(&call("error loading config err={err:?}"))
+                .count()
+        );
+        for message in [
+            // log.err("error finalizing config err={}", .{err});
+            "error finalizing config err={err:?}",
+            // log.err("error finding trigger err={}", .{err});
+            "error finding trigger err={err:?}",
+            // log.err("error opening config in editor err={}", .{err});
+            "error opening config in editor err={err:?}",
+        ] {
+            let wanted = call(message);
+            assert_eq!(
+                1,
+                SRC.matches(&wanted).count(),
+                "expected exactly one live emission `{wanted}`"
             );
         }
     }

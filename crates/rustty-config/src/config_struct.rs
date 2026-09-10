@@ -5445,6 +5445,22 @@ pub(crate) mod log_capture {
     }
 }
 
+/// `std.log.err` scoped `.config` — the sibling of [`log_info`]/[`log_warn`]
+/// for the reference's `log.err` sites (`config/CApi.zig`'s eleven `catch`
+/// arms).
+///
+/// The level token is **`error`**, not `err`: Zig's `std.log.Level.err.asText()`
+/// is `"error"` (`lib/std/log.zig`), and `logFn` prefixes with `level_txt`. This
+/// rendering has been got wrong more than once on this plan, so
+/// `config_log_err_renders_the_error_token` pins it separately.
+pub(crate) fn log_err(msg: String) {
+    #[cfg(test)]
+    log_capture::push("error", &msg);
+    if let Some(line) = format_log("error", &msg, rustty_global::logging()) {
+        eprintln!("{line}");
+    }
+}
+
 pub(crate) fn log_info(msg: String) {
     #[cfg(test)]
     log_capture::push("info", &msg);
@@ -11877,6 +11893,25 @@ mod machinery_tests {
     // false` when a CLI action runs). `format_log` is the SINGLE formatting
     // site `log_info`/`log_warn` write through, so gating is asserted on its
     // return instead of fragile stderr capture.
+    /// `std.log.Level.err.asText()` is **`"error"`**, not `"err"` — and `logFn`
+    /// prefixes with `level_txt`. Two stages on this plan got this rendering
+    /// wrong, so it is pinned separately from any call site (task-14e-2).
+    #[test]
+    fn config_log_err_renders_the_error_token() {
+        let on = rustty_global::Logging {
+            stderr: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            Some("error(config): boom".to_string()),
+            format_log("error", "boom", on)
+        );
+
+        log_capture::arm();
+        log_err("boom".to_string());
+        assert_eq!(vec!["error(config): boom".to_string()], log_capture::take());
+    }
+
     #[test]
     fn config_log_gate_honors_logging_stderr() {
         let gated = rustty_global::Logging {
