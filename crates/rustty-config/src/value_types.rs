@@ -6363,9 +6363,554 @@ impl FormatEntry for MouseScrollMultiplier {
     }
 }
 
+// ===========================================================================
+// PORTS: Zig `lib/std/fmt/parse_float.zig` + `parse_float/parse.zig` +
+// `parse_float/FloatStream.zig` + `parse_float/convert_hex.zig` (Zig 0.16.0,
+// the version `ghostty/build.zig.zon` pins as `.minimum_zig_version`).
+//
+// S75-F1. `parse_float_f64` used to be
+// `core::str::from_utf8(input).ok().and_then(|s| s.parse::<f64>().ok())`.
+// Rust's `f64::from_str` and Zig's `std.fmt.parseFloat` accept DIFFERENT
+// grammars, and every difference is a config value Ghostty loads and rustty
+// rejects with an `InvalidValue` diagnostic:
+//
+//   * `_` DIGIT SEPARATORS. `FloatStream.scanDigit` skips `_` and counts it,
+//     and `validUnderscores` then requires every `_` to sit strictly between
+//     two digits OF THE BASE. So `wght=1_000` and `precision:1_0` load in the
+//     reference; Rust rejects any `_` as `InvalidDigit`.
+//   * HEX FLOATS. `parsePartialNumber` takes a `0x`/`0X` prefix into a base-16
+//     stream whose exponent character is `p`/`P`, and — unlike C `strtod` —
+//     the exponent is OPTIONAL, so `0x1p8`, `0x1.8p0` AND `0x1.8` are all
+//     valid. Rust rejects every one of them.
+//
+// The GRAMMAR is ported here in full because that is the part that decides
+// acceptance. The DECIMAL numeric conversion is delegated to Rust's
+// `f64::from_str` once the grammar has accepted (see `parse_float_f64`); both
+// implementations are correctly-rounded shortest-round-trip parsers over the
+// same input, so `convertFast`/`convertEiselLemire`/`convertSlow` would be a
+// large, bit-identical re-derivation. The HEX conversion has no Rust
+// equivalent at all and IS ported, from `convert_hex.zig`.
+//
+// Naming: the reference's names carry a `pf_` prefix here because
+// `value_types.rs` already has `parse`/`format` free functions.
+
+/// PORTS: `parse_float/common.zig` `isDigit`.
+fn pf_is_digit(c: u8, base: u8) -> bool {
+    debug_assert!(base == 10 || base == 16);
+    // return if (base == 10) '0' <= c and c <= '9'
+    //     else '0' <= c and c <= '9' or 'a' <= c and c <= 'f' or 'A' <= c and c <= 'F';
+    if base == 10 {
+        c.is_ascii_digit()
+    } else {
+        c.is_ascii_hexdigit()
+    }
+}
+
+/// PORTS: `parse_float/parse.zig` `validUnderscores`.
+fn pf_valid_underscores(s: &[u8], base: u8) -> bool {
+    // var i: usize = 0;
+    // while (i < s.len) : (i += 1) {
+    let mut i: usize = 0;
+    while i < s.len() {
+        // if (s[i] == '_') {
+        if s[i] == b'_' {
+            // underscore at start of end
+            // if (i == 0 or i + 1 == s.len) return false;
+            if i == 0 || i + 1 == s.len() {
+                return false;
+            }
+            // consecutive underscores
+            // if (!common.isDigit(s[i - 1], base) or !common.isDigit(s[i + 1], base)) return false;
+            if !pf_is_digit(s[i - 1], base) || !pf_is_digit(s[i + 1], base) {
+                return false;
+            }
+            // next is guaranteed a digit, skip an extra
+            // i += 1;
+            i += 1;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// PORTS: `parse_float/FloatStream.zig`.
+struct PfStream<'a> {
+    slice: &'a [u8],
+    offset: usize,
+    underscore_count: usize,
+}
+
+impl<'a> PfStream<'a> {
+    // pub fn init(s: []const u8) FloatStream
+    fn init(s: &'a [u8]) -> PfStream<'a> {
+        PfStream {
+            slice: s,
+            offset: 0,
+            underscore_count: 0,
+        }
+    }
+
+    // Returns the offset from the start *excluding* any underscores that were found.
+    // pub fn offsetTrue(self: FloatStream) usize
+    fn offset_true(&self) -> usize {
+        self.offset - self.underscore_count
+    }
+
+    // pub fn reset(self: *FloatStream) void
+    fn reset(&mut self) {
+        self.offset = 0;
+        self.underscore_count = 0;
+    }
+
+    // pub fn hasLen(self: FloatStream, n: usize) bool
+    fn has_len(&self, n: usize) -> bool {
+        self.offset + n <= self.slice.len()
+    }
+
+    // pub fn first(self: FloatStream) ?u8
+    fn first(&self) -> Option<u8> {
+        if self.has_len(1) {
+            Some(self.slice[self.offset])
+        } else {
+            None
+        }
+    }
+
+    // pub fn firstIs(self: FloatStream, comptime cs: []const u8) bool
+    fn first_is(&self, cs: &[u8]) -> bool {
+        matches!(self.first(), Some(c) if cs.contains(&c))
+    }
+
+    // pub fn firstIsLower(self: FloatStream, comptime cs: []const u8) bool
+    fn first_is_lower(&self, cs: &[u8]) -> bool {
+        matches!(self.first(), Some(c) if cs.contains(&(c | 0x20)))
+    }
+
+    // pub fn firstIsDigit(self: FloatStream, comptime base: u8) bool
+    fn first_is_digit(&self, base: u8) -> bool {
+        matches!(self.first(), Some(c) if pf_is_digit(c, base))
+    }
+
+    // pub fn advance(self: *FloatStream, n: usize) void
+    fn advance(&mut self, n: usize) {
+        self.offset += n;
+    }
+
+    // pub fn scanDigit(self: *FloatStream, comptime base: u8) ?u8
+    fn scan_digit(&mut self, base: u8) -> Option<u8> {
+        debug_assert!(base == 10 || base == 16);
+        // retry: while (true) {
+        loop {
+            match self.first() {
+                // if ('0' <= ok and ok <= '9') { advance; return ok - '0'; }
+                Some(c) if c.is_ascii_digit() => {
+                    self.advance(1);
+                    return Some(c - b'0');
+                }
+                // else if (base == 16 and 'a' <= ok and ok <= 'f')
+                Some(c) if base == 16 && (b'a'..=b'f').contains(&c) => {
+                    self.advance(1);
+                    return Some(c - b'a' + 10);
+                }
+                // else if (base == 16 and 'A' <= ok and ok <= 'F')
+                Some(c) if base == 16 && (b'A'..=b'F').contains(&c) => {
+                    self.advance(1);
+                    return Some(c - b'A' + 10);
+                }
+                // else if (ok == '_') { advance; underscore_count += 1; continue :retry; }
+                Some(b'_') => {
+                    self.advance(1);
+                    self.underscore_count += 1;
+                }
+                _ => return None,
+            }
+        }
+    }
+}
+
+/// PORTS: `parse_float/common.zig` `Number(T)` for `T = f64`.
+struct PfNumber {
+    exponent: i64,
+    mantissa: u64,
+    negative: bool,
+    many_digits: bool,
+    hex: bool,
+}
+
+/// PORTS: `parse_float/parse.zig` `tryParseDigits`.
+///
+/// PORT NOTE: the reference has an 8-digits-at-a-time SWAR fast path for
+/// base 10 (`parse8Digits`) ahead of this loop. It is a pure optimisation over
+/// the identical scalar recurrence below and is deliberately not ported; it
+/// changes no result.
+fn pf_try_parse_digits(stream: &mut PfStream, x: &mut u64, base: u8) {
+    // while (stream.scanDigit(base)) |digit| { x.* *%= base; x.* +%= digit; }
+    while let Some(digit) = stream.scan_digit(base) {
+        *x = x.wrapping_mul(base as u64).wrapping_add(digit as u64);
+    }
+}
+
+/// PORTS: `parse_float/parse.zig` `min_n_digit_int`.
+///
+/// PORT NOTE: `n *= 10` in the reference regardless of the parse base — this is
+/// used as a magnitude threshold, not a base-relative one. Kept as-is.
+fn pf_min_n_digit_int(digit_count: usize) -> u64 {
+    let mut n: u64 = 1;
+    let mut i: usize = 1;
+    while i < digit_count {
+        n *= 10;
+        i += 1;
+    }
+    n
+}
+
+/// PORTS: `parse_float/parse.zig` `tryParseNDigits`.
+fn pf_try_parse_n_digits(stream: &mut PfStream, x: &mut u64, base: u8, n: usize) {
+    while *x < pf_min_n_digit_int(n) {
+        match stream.scan_digit(base) {
+            Some(digit) => {
+                *x = x.wrapping_mul(base as u64).wrapping_add(digit as u64);
+            }
+            None => break,
+        }
+    }
+}
+
+/// PORTS: `parse_float/parse.zig` `parseScientific`.
+fn pf_parse_scientific(stream: &mut PfStream) -> Option<i64> {
+    // var exponent: i64 = 0; var negative = false;
+    let mut exponent: i64 = 0;
+    let mut negative = false;
+    // if (stream.first()) |c| { negative = c == '-'; if (c == '-' or c == '+') stream.advance(1); }
+    if let Some(c) = stream.first() {
+        negative = c == b'-';
+        if c == b'-' || c == b'+' {
+            stream.advance(1);
+        }
+    }
+    // if (stream.firstIsDigit(10)) {
+    if stream.first_is_digit(10) {
+        while let Some(digit) = stream.scan_digit(10) {
+            // no overflows here, saturate well before overflow
+            if exponent < 0x1000_0000 {
+                exponent = 10 * exponent + digit as i64;
+            }
+        }
+        return Some(if negative { -exponent } else { exponent });
+    }
+    None
+}
+
+/// PORTS: `parse_float/parse.zig` `parsePartialNumberBase`.
+fn pf_parse_partial_number_base(
+    stream: &mut PfStream,
+    negative: bool,
+    n: &mut usize,
+    base: u8,
+    max_mantissa_digits: usize,
+    exp_char_lower: u8,
+) -> Option<PfNumber> {
+    debug_assert!(base == 10 || base == 16);
+
+    // parse initial digits before dot
+    let mut mantissa: u64 = 0;
+    pf_try_parse_digits(stream, &mut mantissa, base);
+    let int_end = stream.offset_true();
+    let mut n_digits = stream.offset_true() as isize;
+
+    // handle dot with the following digits
+    let mut exponent: i64 = 0;
+    if stream.first_is(b".") {
+        stream.advance(1);
+        let marker = stream.offset_true();
+        pf_try_parse_digits(stream, &mut mantissa, base);
+        let n_after_dot = stream.offset_true() - marker;
+        exponent = -(n_after_dot as i64);
+        n_digits += n_after_dot as isize;
+    }
+
+    // adjust required shift to offset mantissa for base-16 (2^4)
+    if base == 16 {
+        exponent *= 4;
+    }
+
+    if n_digits == 0 {
+        return None;
+    }
+
+    // handle scientific format
+    let mut exp_number: i64 = 0;
+    if stream.first_is_lower(&[exp_char_lower]) {
+        stream.advance(1);
+        exp_number = pf_parse_scientific(stream)?;
+        exponent += exp_number;
+    }
+
+    // length must be complete parsed length
+    let len = stream.offset;
+    *n += len;
+
+    if stream.underscore_count > 0 && !pf_valid_underscores(stream.slice, base) {
+        return None;
+    }
+
+    // common case with not many digits
+    if n_digits <= max_mantissa_digits as isize {
+        return Some(PfNumber {
+            exponent,
+            mantissa,
+            negative,
+            many_digits: false,
+            hex: base == 16,
+        });
+    }
+
+    n_digits -= max_mantissa_digits as isize;
+    let mut many_digits = false;
+    // re-parse from beginning
+    stream.reset();
+    while stream.first_is(b"0._") {
+        // '0' = '.' + 2
+        let next = stream.slice[stream.offset];
+        if next != b'_' {
+            n_digits -= next.saturating_sub(b'0' - 1) as isize;
+        } else {
+            stream.underscore_count += 1;
+        }
+        stream.advance(1);
+    }
+    if n_digits > 0 {
+        // at this point we have more than max_mantissa_digits significant
+        // digits, let's try again
+        many_digits = true;
+        mantissa = 0;
+        stream.reset();
+        pf_try_parse_n_digits(stream, &mut mantissa, base, max_mantissa_digits);
+
+        exponent = if mantissa >= pf_min_n_digit_int(max_mantissa_digits) {
+            // big int
+            int_end as i64 - stream.offset_true() as i64
+        } else {
+            // the next byte must be present and be '.'
+            stream.advance(1);
+            let marker = stream.offset_true();
+            pf_try_parse_n_digits(stream, &mut mantissa, base, max_mantissa_digits);
+            marker as i64 - stream.offset_true() as i64
+        };
+        if base == 16 {
+            exponent *= 4;
+        }
+        // add back the explicit part
+        exponent += exp_number;
+    }
+
+    Some(PfNumber {
+        exponent,
+        mantissa,
+        negative,
+        many_digits,
+        hex: base == 16,
+    })
+}
+
+/// PORTS: `parse_float/parse.zig` `parsePartialNumber` for `T = f64`
+/// (`MantissaT == u64`, so `max_mantissa_digits` is 16 hex / 19 decimal).
+fn pf_parse_partial_number(s: &[u8], negative: bool, n: &mut usize) -> Option<PfNumber> {
+    debug_assert!(!s.is_empty());
+    *n = 0;
+
+    // if (s.len >= 2 and s[0] == '0' and std.ascii.toLower(s[1]) == 'x')
+    if s.len() >= 2 && s[0] == b'0' && s[1].eq_ignore_ascii_case(&b'x') {
+        let mut stream = PfStream::init(&s[2..]);
+        *n += 2;
+        pf_parse_partial_number_base(&mut stream, negative, n, 16, 16, b'p')
+    } else {
+        let mut stream = PfStream::init(s);
+        pf_parse_partial_number_base(&mut stream, negative, n, 10, 19, b'e')
+    }
+}
+
+/// PORTS: `parse_float/parse.zig` `parseNumber`.
+fn pf_parse_number(s: &[u8], negative: bool) -> Option<PfNumber> {
+    let mut consumed: usize = 0;
+    let number = pf_parse_partial_number(s, negative, &mut consumed)?;
+    // must consume entire float (no trailing data)
+    if s.len() == consumed {
+        Some(number)
+    } else {
+        None
+    }
+}
+
+/// PORTS: `std.ascii.startsWithIgnoreCase`.
+fn pf_starts_with_ignore_case(s: &[u8], prefix: &[u8]) -> bool {
+    s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix)
+}
+
+/// PORTS: `parse_float/parse.zig` `parsePartialInfOrNan`.
+fn pf_parse_partial_inf_or_nan(s: &[u8], negative: bool, n: &mut usize) -> Option<f64> {
+    // inf/infinity; infxxx should only consume inf.
+    if pf_starts_with_ignore_case(s, b"inf") {
+        *n = 3;
+        if pf_starts_with_ignore_case(&s[3..], b"inity") {
+            *n = 8;
+        }
+        return Some(if !negative {
+            f64::INFINITY
+        } else {
+            f64::NEG_INFINITY
+        });
+    }
+    if pf_starts_with_ignore_case(s, b"nan") {
+        *n = 3;
+        return Some(f64::NAN);
+    }
+    None
+}
+
+/// PORTS: `parse_float/parse.zig` `parseInfOrNan`.
+fn pf_parse_inf_or_nan(s: &[u8], negative: bool) -> Option<f64> {
+    let mut consumed: usize = 0;
+    let special = pf_parse_partial_inf_or_nan(s, negative, &mut consumed)?;
+    if s.len() == consumed {
+        Some(special)
+    } else {
+        None
+    }
+}
+
+/// PORTS: `parse_float/convert_hex.zig` `convertHex` for `T = f64`.
+///
+/// Converts the form `0xMMM.NNNpEEE`: `MMM.NNN` is the mantissa stored as an
+/// integer, `EEE` the offset exponent. Derived (in the reference) from Go's
+/// `strconv/atof.go`. The `T`-generic `math.float*` queries are resolved for
+/// `f64`: `floatExponentMax = 1023`, `floatExponentMin = -1022`,
+/// `floatMantissaBits = 52`, `floatFractionalBits = 52`, `floatExponentBits = 11`.
+fn pf_convert_hex(n_: PfNumber) -> f64 {
+    let mut n = n_;
+
+    // if (n.mantissa == 0) return if (n.negative) -0.0 else 0.0;
+    if n.mantissa == 0 {
+        return if n.negative { -0.0 } else { 0.0 };
+    }
+
+    const MAX_EXP: i64 = 1023;
+    const MIN_EXP: i64 = -1022;
+    const MANTISSA_BITS: u32 = 52;
+    const FRACTIONAL_BITS: u32 = 52;
+    const EXP_BITS: u32 = 11;
+    const EXP_BIAS: i64 = MIN_EXP - 1;
+
+    // mantissa now implicitly divided by 2^fractional_bits
+    n.exponent += FRACTIONAL_BITS as i64;
+
+    // Shift mantissa and exponent to bring representation into float range.
+    while n.mantissa != 0 && (n.mantissa >> (MANTISSA_BITS + 2)) == 0 {
+        n.mantissa <<= 1;
+        n.exponent -= 1;
+    }
+    if n.many_digits {
+        n.mantissa |= 1;
+    }
+    while (n.mantissa >> (1 + FRACTIONAL_BITS + 2)) != 0 {
+        n.mantissa = (n.mantissa >> 1) | (n.mantissa & 1);
+        n.exponent += 1;
+    }
+
+    // If exponent is too negative, denormalize in hopes of making it
+    // representable. (The -2 is for the rounding bits.)
+    while n.mantissa > 1 && n.exponent < MIN_EXP - 2 {
+        n.mantissa = (n.mantissa >> 1) | (n.mantissa & 1);
+        n.exponent += 1;
+    }
+
+    // Round using two bottom bits.
+    let mut round = n.mantissa & 3;
+    n.mantissa >>= 2;
+    round |= n.mantissa & 1; // round to even (round up if mantissa is odd)
+    n.exponent += 2;
+    if round == 3 {
+        n.mantissa += 1;
+        if n.mantissa == 1u64 << (1 + FRACTIONAL_BITS) {
+            n.mantissa >>= 1;
+            n.exponent += 1;
+        }
+    }
+
+    // Denormal or zero
+    if (n.mantissa >> FRACTIONAL_BITS) == 0 {
+        n.exponent = EXP_BIAS;
+    }
+
+    // Infinity and range error
+    if n.exponent > MAX_EXP {
+        return if n.negative {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        };
+    }
+
+    let mut bits = n.mantissa & ((1u64 << MANTISSA_BITS) - 1);
+    bits |= (((n.exponent - EXP_BIAS) & ((1i64 << EXP_BITS) - 1)) as u64) << MANTISSA_BITS;
+    if n.negative {
+        bits |= 1u64 << (MANTISSA_BITS + EXP_BITS);
+    }
+    f64::from_bits(bits)
+}
+
 /// PORTS: `std.fmt.parseFloat(f64, input)`.
+///
+/// S75-F1: the ACCEPTANCE grammar is the reference's, ported above. Only the
+/// DECIMAL numeric conversion is delegated — see the module comment on
+/// `pf_is_digit` for why `convertFast`/`convertEiselLemire`/`convertSlow` are
+/// not re-derived here.
 fn parse_float_f64(input: &[u8]) -> Result<f64, ParseError> {
-    core::str::from_utf8(input)
+    // if (s.len == 0) return error.InvalidCharacter;
+    if input.is_empty() {
+        return Err(Error::InvalidValue);
+    }
+
+    // var i: usize = 0;
+    // const negative = s[i] == '-';
+    // if (s[i] == '-' or s[i] == '+') i += 1;
+    let mut i: usize = 0;
+    let negative = input[0] == b'-';
+    if input[0] == b'-' || input[0] == b'+' {
+        i += 1;
+    }
+    // if (s.len == i) return error.InvalidCharacter;
+    if input.len() == i {
+        return Err(Error::InvalidValue);
+    }
+    let rest = &input[i..];
+
+    // const n = parse.parseNumber(T, s[i..], negative) orelse {
+    //     return parse.parseInfOrNan(T, s[i..], negative) orelse error.InvalidCharacter;
+    // };
+    let n = match pf_parse_number(rest, negative) {
+        Some(n) => n,
+        None => {
+            return pf_parse_inf_or_nan(rest, negative).ok_or(Error::InvalidValue);
+        }
+    };
+
+    // if (n.hex) return convertHex(T, n);
+    if n.hex {
+        return Ok(pf_convert_hex(n));
+    }
+
+    // convertFast / convertEiselLemire / convertSlow, delegated: with the
+    // reference's grammar already satisfied, `f64::from_str` computes the same
+    // correctly-rounded result over the same digits. `_` separators are the one
+    // thing it cannot read, and `validUnderscores` has just proven every one of
+    // them well-placed, so stripping them here is not a relaxation.
+    let mut cleaned: Vec<u8> = Vec::with_capacity(input.len());
+    if negative {
+        cleaned.push(b'-');
+    }
+    cleaned.extend(rest.iter().copied().filter(|&c| c != b'_'));
+    core::str::from_utf8(&cleaned)
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
         .ok_or(Error::InvalidValue)
@@ -9473,6 +10018,138 @@ mod tests {
     // `inputpkg.command.defaults` -> `rustty_input::command::defaults()`.
     // -----------------------------------------------------------------------
     use rustty_input::binding::Action;
+
+    // No reference `test {}` — PROVING test for S75-F1. The expected values are
+    // an ORACLE TABLE: each one is `@bitCast(u64, std.fmt.parseFloat(f64, input))`
+    // as printed by a throwaway `zig test` against the SAME Zig std the oracle
+    // pins (0.16.0, `ghostty/build.zig.zon` `.minimum_zig_version`), so this
+    // asserts bit-for-bit agreement with the reference parser rather than
+    // agreement with a hand-derived expectation.
+    //
+    // The rows that FAILED before this change — every one accepted by Zig and
+    // rejected by Rust's `f64::from_str` — are the `_`-separator and hex-float
+    // forms: `1_000.5`, `1_0`, `1e1_0`, `1_0e1_0`, `1_2_3.4_5_6e1_2`, `0x1p8`,
+    // `0x1p1`, `0x1.8p0`, `0x1.8`, `0X1P1`, `0x1e`, `0x1_0p0`, `0x.8p1`,
+    // `0x1.fffffffffffffp1023`, `0x1p-1074`, `0x1p-1075`, `0x0p0`, `-0x0p0`,
+    // `0x123456789abcdef123456789abcdefp0`, `0x1_2.3_4p1_0`, `0x1.8p-1`.
+    // The rest are REGRESSION rows: forms Zig rejects (`1_`, `_1`, `1__0`,
+    // `1_.0`, `1._0`, `0x`, `0xp1`, `0x1p`, `1e`, `1abc`, leading spaces, a bare
+    // sign, empty) that a looser grammar would have started accepting, plus the
+    // inf/nan spellings and ordinary decimals that must not have moved.
+    #[test]
+    fn parse_float_f64_matches_std_fmt_parsefloat() {
+        let cases: &[(&[u8], Option<u64>)] = &[
+            (b"1_000.5".as_slice(), Some(0x408f440000000000u64)),
+            (b"1_0".as_slice(), Some(0x4024000000000000u64)),
+            (b"0x1p8".as_slice(), Some(0x4070000000000000u64)),
+            (b"0x1p1".as_slice(), Some(0x4000000000000000u64)),
+            (b"0x1.8p0".as_slice(), Some(0x3ff8000000000000u64)),
+            (b"0x1.8".as_slice(), Some(0x3ff8000000000000u64)),
+            (b"0X1P1".as_slice(), Some(0x4000000000000000u64)),
+            (b"0x1e".as_slice(), Some(0x403e000000000000u64)),
+            (b"0x1_0p0".as_slice(), Some(0x4030000000000000u64)),
+            (b"1e1_0".as_slice(), Some(0x4202a05f20000000u64)),
+            (b"1_0e1_0".as_slice(), Some(0x42374876e8000000u64)),
+            (b"1_".as_slice(), None),
+            (b"_1".as_slice(), None),
+            (b"1__0".as_slice(), None),
+            (b"1_.0".as_slice(), None),
+            (b"1._0".as_slice(), None),
+            (b"1.5".as_slice(), Some(0x3ff8000000000000u64)),
+            (b"-1.5".as_slice(), Some(0xbff8000000000000u64)),
+            (b"+1.5".as_slice(), Some(0x3ff8000000000000u64)),
+            (b"inf".as_slice(), Some(0x7ff0000000000000u64)),
+            (b"-inf".as_slice(), Some(0xfff0000000000000u64)),
+            (b"Infinity".as_slice(), Some(0x7ff0000000000000u64)),
+            (b"nan".as_slice(), Some(0x7ff8000000000000u64)),
+            (b"NaN".as_slice(), Some(0x7ff8000000000000u64)),
+            (b"-nan".as_slice(), Some(0x7ff8000000000000u64)),
+            (b"".as_slice(), None),
+            (b"-".as_slice(), None),
+            (b"+".as_slice(), None),
+            (b"1abc".as_slice(), None),
+            (b"   1".as_slice(), None),
+            (b"0x".as_slice(), None),
+            (b"0xp1".as_slice(), None),
+            (b"0x1p".as_slice(), None),
+            (b"1e".as_slice(), None),
+            (b".5".as_slice(), Some(0x3fe0000000000000u64)),
+            (b"5.".as_slice(), Some(0x4014000000000000u64)),
+            (b"0x.8p1".as_slice(), Some(0x3ff0000000000000u64)),
+            (b"1e400".as_slice(), Some(0x7ff0000000000000u64)),
+            (b"-1e400".as_slice(), Some(0xfff0000000000000u64)),
+            (b"1e-400".as_slice(), Some(0x0u64)),
+            (
+                b"0x1.fffffffffffffp1023".as_slice(),
+                Some(0x7fefffffffffffffu64),
+            ),
+            (b"0x1p-1074".as_slice(), Some(0x1u64)),
+            (b"0x1p-1075".as_slice(), Some(0x0u64)),
+            (b"0x0p0".as_slice(), Some(0x0u64)),
+            (b"-0x0p0".as_slice(), Some(0x8000000000000000u64)),
+            (
+                b"12345678901234567890123456789012".as_slice(),
+                Some(0x46637a61478c8b28u64),
+            ),
+            (
+                b"1.7976931348623157e308".as_slice(),
+                Some(0x7fefffffffffffffu64),
+            ),
+            (
+                b"0x123456789abcdef123456789abcdefp0".as_slice(),
+                Some(0x47323456789abcdeu64),
+            ),
+            (b"1_2_3.4_5_6e1_2".as_slice(), Some(0x42dc1215c1a00000u64)),
+            (b"0x1_2.3_4p1_0".as_slice(), Some(0x40d2340000000000u64)),
+            (b"2.5".as_slice(), Some(0x4004000000000000u64)),
+            (b"100".as_slice(), Some(0x4059000000000000u64)),
+            (b"0.0001".as_slice(), Some(0x3f1a36e2eb1c432du64)),
+            (b"1e-5".as_slice(), Some(0x3ee4f8b588e368f1u64)),
+            (b"0x1.8p-1".as_slice(), Some(0x3fe8000000000000u64)),
+        ];
+        for &(input, want) in cases {
+            let got = parse_float_f64(input).ok().map(f64::to_bits);
+            assert_eq!(
+                got,
+                want,
+                "parse_float_f64({:?})",
+                String::from_utf8_lossy(input)
+            );
+        }
+    }
+
+    // The S75-F1 surface the audit actually cites: `RepeatableFontVariation`'s
+    // axis value and `MouseScrollMultiplier`'s bare/`precision:`/`discrete:`
+    // fields all go through `parse_float_f64`. Before the fix each of these
+    // produced `error.InvalidValue` — a config diagnostic and a DISCARDED
+    // setting — where Ghostty loads the value.
+    #[test]
+    fn font_variation_and_scroll_multiplier_accept_zig_float_syntaxes() {
+        let mut v = RepeatableFontVariation::default();
+        // `wght=1_000` — digit separators.
+        v.parse_cli(Some(b"wght=1_000")).unwrap();
+        // `wdth=0x1p8` — a hex float, exponent present.
+        v.parse_cli(Some(b"wdth=0x1p8")).unwrap();
+        // `slnt=0x1.8` — a hex float with NO exponent, which C's `strtod`
+        // rejects and Zig's parser does not.
+        v.parse_cli(Some(b"slnt=0x1.8")).unwrap();
+        assert_eq!(
+            v.list.iter().map(|x| x.value).collect::<Vec<f64>>(),
+            vec![1000.0, 256.0, 1.5],
+        );
+
+        let mut m = MouseScrollMultiplier::default();
+        m.parse_cli(Some(b"precision:1_0,discrete:0x1p1")).unwrap();
+        assert_eq!((m.precision, m.discrete), (10.0, 2.0));
+
+        // Still rejected, exactly as the reference rejects them.
+        assert!(RepeatableFontVariation::default()
+            .parse_cli(Some(b"wght=1__0"))
+            .is_err());
+        assert!(RepeatableFontVariation::default()
+            .parse_cli(Some(b"wght=1_"))
+            .is_err());
+    }
 
     // No reference `test {}` — PROVING tests for S75-F2 and for the two
     // UNCLAIMED sibling sites the audit never names (`Config.zig:8887, 8893`,

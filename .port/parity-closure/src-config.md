@@ -19,7 +19,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** loadCliArgs ignores cwd realpath failure and expands CLI paths against an empty base
   - **Oracle:** `src/config/Config.zig:4331-4336` → **Rustty:** `crates/rustty-config/src/config_struct.rs:6712-6717`
   - **Audit's suggested fix:** Propagate the io::Error as LoadError::Io instead of defaulting.
-- [ ] **S75-F1** · CONFIRMED · `LOG` · behavioral-difference
+- [x] **S75-F1** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** RepeatableFontVariation.parseCLI rejects float syntaxes std.fmt.parseFloat accepts (digit separators, hex floats)
   - **Oracle:** `src/config/Config.zig:6437-6447` → **Rustty:** `crates/rustty-config/src/value_types.rs:3229-3233, 6296-6302`
   - **Audit's suggested fix:** Make parse_float_f64 a faithful port of std.fmt.parseFloat: strip well-placed '_' separators (validUnderscores rules) before parsing, and add a hex-float path (0x mantissa with optional 'p' exponent), or port parse_float from Zig std into rustty-zigstd.
