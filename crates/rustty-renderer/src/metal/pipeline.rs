@@ -291,3 +291,97 @@ fn auto_attribute(table: VertexLayoutRef, vertex_desc: &MTLVertexDescriptor) {
         }
     }
 }
+
+/// task-14c-2 — S35-F2: proof that the `metal error={s}` diagnostic emits AT THE
+/// USE SITE (`checkError`, reached from `Pipeline.init`), not inside
+/// `String.cstringPtr`.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::log_capture::CapturedRecord;
+    use crate::metal::metal_impl::Metal;
+    use crate::size::AlphaBlending;
+
+    /// S35-F2 is a HELPER-versus-USE-SITE question, and getting it backwards is
+    /// the failure mode the row is about. The reference's
+    /// `pkg/macos/foundation/string.zig:70-77` `cstringPtr` is a pure accessor —
+    /// it returns `?[:0]const u8` and logs NOTHING. The emission belongs to its
+    /// two callers, `Pipeline.zig:202` and `shaders.zig:446`, both inside
+    /// `checkError`.
+    ///
+    /// So this test drives a REAL `Pipeline::init` failure (a fragment function
+    /// installed in the vertex slot — both functions resolve, the pipeline-state
+    /// creation is what Metal rejects, which is the only arm that produces an
+    /// `NSError` for `checkError` to read) and asserts:
+    ///
+    /// * exactly ONE record — an emission in the helper as well as the use site
+    ///   would give two;
+    /// * level `Error` and target `metal` — `Pipeline.zig:11`'s scope;
+    /// * the message is the reference's `metal error=` followed by the NSError's
+    ///   `localizedDescription`, i.e. what `cstringPtr` would have returned.
+    ///
+    /// Metal-gated: routed through `metal::test_support::require_metal_or_skip`,
+    /// so under `RUSTTY_REQUIRE_METAL=1` (exported on the macOS CI leg) a missing
+    /// device is a HARD FAILURE rather than a silent green.
+    #[test]
+    fn check_error_emits_at_the_use_site() {
+        let metal = match Metal::init_offscreen(AlphaBlending::Native, 4, 4) {
+            Ok(m) => m,
+            Err(e) => {
+                crate::metal::test_support::require_metal_or_skip(
+                    "check_error_emits_at_the_use_site",
+                    &format!("{e:?}"),
+                );
+                eprintln!("no Metal device; skipping");
+                return;
+            }
+        };
+        let shaders = metal.init_shaders(&[]).expect("init_shaders");
+
+        let capture = crate::log_capture::start();
+        let res = Pipeline::init(
+            None,
+            Options {
+                device: &metal.device,
+                // `cell_text_vertex` takes a `[[stage_in]]` vertex input
+                // (`shaders.metal:558`) but we pass `None` for the attribute
+                // table, so no MTLVertexDescriptor is attached. Both functions
+                // resolve — we get past the `ok_or(MetalFailed)` guards — and
+                // `newRenderPipelineStateWithDescriptor:error:` rejects the
+                // descriptor with an NSError, which is the only arm that gives
+                // `checkError` something to read. (Deliberately NOT a
+                // fragment-function-in-the-vertex-slot fixture: Metal treats that
+                // as a hard validation abort and SIGKILLs the process instead of
+                // returning an error.)
+                vertex_fn: "cell_text_vertex",
+                fragment_fn: "cell_text_fragment",
+                vertex_library: &shaders.library,
+                fragment_library: &shaders.library,
+                step_fn: api::MTLVertexStepFunction::PerVertex,
+                attachments: &[Attachment {
+                    pixel_format: api::MTLPixelFormat::BGRA8Unorm,
+                    blending_enabled: false,
+                }],
+            },
+        );
+        let records: Vec<CapturedRecord> = capture.messages();
+        drop(capture);
+
+        assert!(
+            res.is_err(),
+            "the fixture must actually fail, otherwise this test is vacuous"
+        );
+        assert_eq!(records.len(), 1, "expected exactly one record: {records:?}");
+        let (level, target, msg) = &records[0];
+        assert_eq!(*level, log::Level::Error);
+        assert_eq!(target, "metal");
+        assert!(
+            msg.starts_with("metal error="),
+            "message text must be the reference's, verbatim; got {msg:?}"
+        );
+        assert!(
+            msg.len() > "metal error=".len(),
+            "the NSError's localizedDescription must be rendered, not dropped: {msg:?}"
+        );
+    }
+}

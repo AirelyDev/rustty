@@ -214,7 +214,11 @@ mod tests {
         let messages = cap.messages();
         drop(cap);
         assert_eq!(
-            vec![(log::Level::Warn, "generic_renderer".to_string(), "mine".to_string())],
+            vec![(
+                log::Level::Warn,
+                "generic_renderer".to_string(),
+                "mine".to_string()
+            )],
             messages
         );
     }

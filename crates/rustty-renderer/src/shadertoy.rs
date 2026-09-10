@@ -1074,3 +1074,126 @@ mod tests {
         assert_eq!(align_of::<Uniforms>(), 16);
     }
 }
+
+/// task-14c-2 — proof that the restored `shadertoy.zig` diagnostics actually
+/// EMIT, on real failure paths, with the reference's exact message text.
+///
+/// Neither test here needs a Metal device: glslang and spirv-cross are host
+/// libraries. That is deliberate — this stage is otherwise almost entirely Metal
+/// code, and the 14c-1 fix round demonstrated that a device-gated suite can go
+/// `102 passed; 0 failed` with zero Metal tests actually executing. The one test
+/// in this stage that genuinely CANNOT run without a device
+/// (`metal::pipeline::tests::check_error_emits_at_the_use_site`) routes through
+/// `metal::test_support::require_metal_or_skip` and prints a skip line.
+#[cfg(test)]
+mod restored_log_sites {
+    use super::*;
+    use crate::log_capture::CapturedRecord;
+
+    /// Writes `body` to a nanos-suffixed temp file and returns its path.
+    fn temp_shader(body: &[u8]) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("rustty_log_shader_{nanos}.glsl"));
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    /// TEST 1 — a plain SINGLE-ARGUMENT emission on a reachable failure path:
+    /// `shadertoy.zig:298`'s `std.log.warn("spirv-cross error message={s}", .{msg})`,
+    /// the callback `spvc_context_set_error_callback` installs.
+    ///
+    /// Two things it proves beyond "a record exists":
+    ///
+    /// 1. The callback is genuinely WIRED into spirv-cross — the record can only
+    ///    appear because the C library called back into `error_callback`. Calling
+    ///    that function directly from the test would prove nothing.
+    /// 2. It targets `""`, the reference's `.default` scope, NOT `shadertoy`.
+    ///    `std.log.warn` is unscoped (`main_ghostty.zig:133`: a `.default` record
+    ///    gets an empty prefix); DECISION-logging.md §6r carries that as `target: ""`.
+    ///    An "obvious tidy-up" to `LOG_SCOPE` fails this test.
+    ///
+    /// This site is claimed by NO ledger row (S117-F3's oracle column stops at
+    /// `image.zig`). Restored and tested per PROCEDURE.md blind spot 3.
+    #[test]
+    fn spirv_cross_error_callback_emits_unscoped() {
+        // Four bytes so the `spv.len % 4 != 0` guard passes, but not a valid
+        // SPIR-V magic number — `spvc_context_parse_spirv` rejects it and reports
+        // through the error callback.
+        let capture = crate::log_capture::start();
+        let res = msl_from_spv(&[0u8, 0, 0, 0]);
+        let records: Vec<CapturedRecord> = capture.messages();
+        drop(capture);
+
+        assert!(
+            matches!(res, Err(Error::SpvcFailed)),
+            "expected the parse to fail, got {res:?}"
+        );
+        assert_eq!(records.len(), 1, "expected exactly one record: {records:?}");
+        let (level, target, msg) = &records[0];
+        assert_eq!(*level, log::Level::Warn);
+        assert_eq!(
+            target, "",
+            "the reference uses `std.log.warn` (.default scope)"
+        );
+        assert!(
+            msg.starts_with("spirv-cross error message="),
+            "message text must be the reference's, verbatim; got {msg:?}"
+        );
+    }
+
+    /// TEST 2 — the ELIDED-COMMENT site: `shadertoy.zig:117`'s
+    ///
+    ///     log.warn("spirv error path={s} info={s} debug={s}", .{
+    ///         path, errlog.info, errlog.debug,
+    ///     });
+    ///
+    /// The port's preserved comment read
+    /// `// log.warn("spirv error path={s} info={s} debug={s}", ...);` — the
+    /// ARGUMENTS were elided behind `...`. Anything restored from that comment
+    /// alone cannot know that there are three of them, that they are in the order
+    /// path/info/debug, or that the whole call is guarded by
+    /// `if (errlog.info.len > 0 or errlog.debug.len > 0)`. This test asserts the
+    /// fully-substituted string, so it fails for a restore made from the comment.
+    ///
+    /// The expected `info`/`debug` bodies are recomputed here by running the same
+    /// compile, rather than hard-coded — glslang's diagnostic wording is its
+    /// business, the ARGUMENT ORDER is ours.
+    #[test]
+    fn spirv_failure_warns_with_the_full_oracle_message() {
+        use std::ffi::CString;
+
+        let path = temp_shader(TEST_INVALID);
+        let cpath = CString::new(path.as_os_str().as_encoded_bytes().to_vec()).unwrap();
+
+        // Recompute what the reference's three arguments render to.
+        let src = test_glsl_z(TEST_INVALID);
+        let mut sink: Vec<u8> = Vec::new();
+        let mut expect_log = SpirvLog::default();
+        assert!(spirv_from_glsl(&mut sink, Some(&mut expect_log), &src).is_err());
+        assert!(
+            !expect_log.info.is_empty(),
+            "fixture must actually produce a glslang info log"
+        );
+        let expected = format!(
+            "spirv error path={} info={} debug={}",
+            String::from_utf8_lossy(cpath.to_bytes()),
+            String::from_utf8_lossy(&expect_log.info),
+            String::from_utf8_lossy(&expect_log.debug),
+        );
+
+        let capture = crate::log_capture::start();
+        let res = load_from_file(&cpath, Target::Glsl);
+        let records: Vec<CapturedRecord> = capture.messages();
+        drop(capture);
+        let _ = std::fs::remove_file(&path);
+
+        assert!(matches!(res, Err(Error::GlslangFailed)), "got {res:?}");
+        assert_eq!(
+            records,
+            vec![(log::Level::Warn, "shadertoy".to_string(), expected)]
+        );
+    }
+}
