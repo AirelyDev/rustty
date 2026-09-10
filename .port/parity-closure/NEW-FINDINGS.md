@@ -887,3 +887,45 @@ found, and current state.
 - **state**: **OPEN.** The instrument is fixed and the debt is declared. Working it down is a
   per-file adjudication pass in deficit order, starting with `termio/Exec.zig` (58),
   `termio/stream_handler.zig` (41) and `apprt/embedded.zig` (54).
+
+## N16 — three `Config.zig` `log.warn` sites are UNRESTORABLE, not dropped: their Rust counterparts are infallible
+
+- **id**: N16 (next free id checked 2026-09-10 against `NEW-FINDINGS.md`, `ADJUDICATION.md`
+  and the plan's `progress.md`: N1-N15 taken, N15 by task-14gate round 3 the same day.)
+- **severity**: low (three diagnostics the port cannot emit; no state, control-flow or
+  rendering difference on either side)
+- **kind**: unrestorable-diagnostic / unclaimed
+- **oracle**: `src/config/Config.zig:4563` (`expandHome`, `global.environMap()` catch),
+  `:5396` (`Replay.next`, `diag.clone` catch), `:5400` (`Replay.next`,
+  `_diagnostics.append` catch) — pin `20abdb50a`.
+- **rustty**: `crates/rustty-config/src/config_struct.rs` — the `expandHome` non-wasm arm
+  and the `ReplayStep::Diagnostic` arm of `Replay::next`.
+- **description**: each of the three reference sites is the body of a `catch |err|` arm.
+  The port's counterpart for each is INFALLIBLE, so there is no failure arm to log from:
+  - `global.environMap()` -> `rustty_global::environ_map()`, which returns a snapshot of
+    the process-global captured environ and has no error path at all;
+  - `diag.clone(arena_alloc)` -> `Diagnostic::clone_in(&self) -> Self`, which takes no
+    allocator and returns no `Result`;
+  - `self.config._diagnostics.append(arena_alloc, cloned)` ->
+    `DiagnosticList::append(cloned)`, which returns `()`.
+
+  Restoring any of the three would put a diagnostic on a SUCCESS path — the bug this plan
+  has already shipped once (a scroll warning outside its `catch` block firing on every
+  successful scroll). They are therefore recorded, not deferred.
+- **how found**: task-14d-2, reconciling `src/config/Config.zig` site by site through
+  `check_log_reconcile.py`. The file measures 29 reference sites against 26 live
+  emissions after that task; these three ARE that residual 3, and the portmap's allowance
+  and `reason` name them.
+- **why this is recorded separately**: **no LEDGER row cites any of the three.** The rows
+  that name `Config.zig` cite `:4331-4336`, `:4413-4448`, `:4671-4730`, `:4844-4849`,
+  `:6437-6481`, `:7355-7397`, `:8199-8253`, `:8719-8724`, `:9002-9309`, `:10093-10790` —
+  `:4563`, `:5396` and `:5400` fall in none of them. This is exactly the PROCEDURE.md
+  blind-spot-4 / N12 class, one level finer: not an unaudited file HEAD, but unaudited
+  GAPS between a file's cited ranges.
+- **what would change this**: if `rustty-config` ever gives any of the three operations a
+  real error path — most plausibly `environ_map()`, were the environ capture made lazy and
+  fallible — the corresponding `log.warn` becomes restorable and this entry closes with
+  it. A PORT NOTE at each of the three sites says so.
+- **state**: **OPEN** as a tracked non-defect. `src/config/Config.zig`'s G-LOGFILE
+  allowance of 3 is these three sites and nothing else; if that number ever exceeds 3,
+  something else has been dropped.
