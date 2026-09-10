@@ -154,3 +154,35 @@ found, and current state.
   review rather than riding along inside a test-isolation fix.
 - **state**: **OPEN** — to be fixed with a test that drives both call sites in
   one process and asserts two records, not one.
+
+---
+
+## N5 — `S94-F1`'s mpsc stand-in rests on a justification that is false, and the real port exists
+
+- **id**: N5
+- **severity**: medium (a subsystem the port replaced with a stand-in under a PORT NOTE
+  that misstates why; the faithful implementation is already in the tree and unused)
+- **kind**: unported-work / stale-deferral
+- **oracle**: `src/font/shaper/coretext.zig:76-81` — the `CFReleaseThread` the shaper
+  starts and hands released CoreFoundation objects to.
+- **rustty**: `crates/rustty-font-shaper/src/shaper/coretext.rs:36-55` — an mpsc channel
+  stand-in, formerly carrying a PORT NOTE calling the CFReleaseThread seam "deferred".
+- **description**: the PORT NOTE's premise was that the release thread had not been
+  ported. It had: `rustty_os::cf_release_thread` is a real, inhabited implementation on
+  the live kqueue backend. Task 14c-4 verified this while closing the file's logging rows
+  and corrected the note in place, but did not perform the swap — replacing a channel
+  stand-in with the real thread is a runtime refactor, not a logging change, and belonged
+  in neither that task's scope nor a fix round on a shared branch.
+- **how found**: task 14c-4, while closing `S94-F4` and the other `shaper/coretext.rs`
+  rows. Found by checking the PORT NOTE's factual claim rather than accepting it —
+  the same method that found [[N4]] and the `codepoint_resolver` control-flow divergence.
+- **why this is recorded separately from S94-F1**: `S94-F1` stays `OPEN` and is the row
+  that tracks the swap. This entry exists because the row's own text describes the defect
+  as a logging omission, which it is not, and because the corrected PORT NOTE now reads as
+  a satisfactory answer when it is only an accurate description of an outstanding gap.
+  This project has a standing lesson that stale deferral notes manufacture fake gaps; the
+  inverse also holds — a corrected note can conceal a real one.
+- **state**: **OPEN — needs an owner.** The swap is a runtime refactor: replace the mpsc
+  stand-in with `rustty_os::cf_release_thread`, on the real kqueue backend, with a test
+  that proves released objects reach it. Schedule it as its own task; it is not logging
+  work and must not ride along inside a `LOG`-class row's closure.
