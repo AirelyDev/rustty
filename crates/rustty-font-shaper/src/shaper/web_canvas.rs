@@ -52,6 +52,12 @@ mod wasm {
     // The reference's `std.log.scoped(.font_shaper)` tag, carried through the
     // `log` facade's `target:`
     // (`.port/parity-closure/DECISION-logging.md` §6).
+    //
+    // `#[allow(dead_code)]`: this file's two live sites are both inside the
+    // `ghostty-wasm-abi`-gated submodule (the unprefixed `shaper_test` export),
+    // so without that feature the const has no reader. Keeping it unconditional
+    // means the two feature trees read identically.
+    #[allow(dead_code)]
     const LOG_SCOPE: &str = "font_shaper";
 
     use rustty_unicode::grapheme::{grapheme_break, BreakState};
