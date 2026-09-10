@@ -30,6 +30,13 @@ rustty-util = { workspace = true }
 # uucode-derived data in rustty-unicode (R3: no uucode dep), so the scalar path
 # reads the identical values back out of rustty-unicode (a leaf crate).
 rustty-unicode = { workspace = true }
+# The `LOG`-class facade (DECISION-logging.md §6r4, call shape 2). `rustty-simd`
+# sits below `rustty-vt-c`/`rustty-core` in R4's layering, so `base64.zig`'s
+# `log.warn` restores onto `log::warn!(target: "simd_base64", ..)` and reaches
+# whichever `log::Log` backend the running binary installed. Plain and
+# unconditional — the `release_max_level_*` comptime gate belongs only on the
+# wasm ARTIFACT crates (`rustty-vt-c`, `rustty-wasm`), per §8/§8r.
+log = { workspace = true }
 
 # R3: the SIMD kernels link against the SAME C libraries the reference uses,
 # vendored standalone (no ghostty dep). highway provides the runtime dispatch;

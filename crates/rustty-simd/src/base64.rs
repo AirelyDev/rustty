@@ -5,6 +5,10 @@ use crate::base64_scalar::scalar_decoder;
 use rustty_util::quirks::inlineAssert as assert;
 
 // const log = std.log.scoped(.simd_base64);
+//
+// PORT NOTE: the reference's scope tag, carried through the `log` facade as
+// `target: LOG_SCOPE` (DECISION-logging.md §6r4).
+const LOG_SCOPE: &str = "simd_base64";
 
 /// `options.simd` — whether SIMD-accelerated code paths are built. Mirrors the
 /// reference's `build_options.simd`, which defaults to `true`.
@@ -37,12 +41,21 @@ pub fn max_len(input: &[u8]) -> usize {
 
 fn max_len_scalar(input: &[u8]) -> usize {
     // PARITY: the reference is `catch |err| { log.warn(...); return 0; }`; kept
-    // as an explicit match so the (commented) error-logging branch is preserved.
+    // as an explicit match so the error-logging branch is preserved.
     #[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
     match scalar_decoder.calc_size_for_slice(scalar_input(input)) {
         Ok(v) => v,
-        Err(_err) => {
+        Err(err) => {
             // log.warn("failed to calculate base64 size for payload: {}", .{err});
+            //
+            // PORT NOTE (N11): Zig's `{}` on an error renders `error.<Name>`;
+            // the Rust `{err:?}` renders the bare variant name. That is the
+            // workspace-dominant rendering for a ported `err={}`/`: {}` and is
+            // N11's scope to change, not this site's.
+            log::warn!(
+                target: LOG_SCOPE,
+                "failed to calculate base64 size for payload: {err:?}"
+            );
             0
         }
     }
@@ -308,6 +321,52 @@ mod tests {
     // (camelCase `maxLen` preserved); spaces are not valid in a Rust fn name.
     #![allow(non_snake_case)]
     use super::*;
+
+    // ---- task-14e-2 / S120-F2 ------------------------------------------------
+
+    /// `maxLenScalar`'s failure arm emits the reference's message under the
+    /// reference's `.simd_base64` scope, and returns 0.
+    ///
+    /// `pad_char` is `None` for `scalar_decoder`, so `calcSizeUpperBound`
+    /// returns `error.InvalidPadding` for any length ≡ 1 (mod 4) — a real
+    /// driver, not a synthesised error value.
+    #[test]
+    fn max_len_scalar_warns_when_the_size_cannot_be_calculated() {
+        let cap = crate::log_capture::start();
+        let len = max_len_scalar(b"aGVsb");
+        let messages = cap.messages();
+        drop(cap);
+
+        // Positive reach: the reference's `catch` arm returns 0.
+        assert_eq!(0, len);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "simd_base64".to_string(),
+                "failed to calculate base64 size for payload: InvalidPadding".to_string(),
+            )],
+            messages
+        );
+    }
+
+    /// The absence half: a payload whose size CAN be calculated emits nothing.
+    /// Guards the "diagnostic on a success path" defect, and asserts positively
+    /// that it reached past the `catch` the silence is about — the returned
+    /// length only exists on the `Ok` arm.
+    #[test]
+    fn max_len_scalar_is_silent_on_success() {
+        let cap = crate::log_capture::start();
+        let len = max_len_scalar(b"aGVsbG8gd29ybGQ=");
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(
+            11, len,
+            "maxLenScalar did not return on the Ok arm, so this test never \
+             reached the code whose silence it asserts"
+        );
+        assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
+    }
 
     #[test]
     fn base64_maxLen() {

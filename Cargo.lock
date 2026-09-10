@@ -1589,6 +1589,7 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "highway-sys",
+ "log",
  "rustty-unicode",
  "rustty-util",
  "simdutf-sys",

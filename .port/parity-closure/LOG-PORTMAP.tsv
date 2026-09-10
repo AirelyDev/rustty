@@ -180,7 +180,7 @@ src/renderer/metal/shaders.zig	crates/rustty-renderer/src/metal/shaders.rs	0	0
 src/renderer/opengl/Frame.zig	crates/rustty-renderer/src/generic/linux_impl.rs	0	0	OVERLAP: Frame.zig:65's one site is inlined into generic/linux_impl.rs, which also holds generic.zig's sites; this arm is credited with that whole file's count.
 src/renderer/opengl/shaders.zig	crates/rustty-renderer/src/opengl/shaders.rs	0	0	
 src/renderer/shadertoy.zig	crates/rustty-renderer/src/shadertoy.rs	0	0	
-src/simd/base64.zig	crates/rustty-simd/src/base64.rs	1	0	N12: rows S120-F2 are still OPEN; restoring these sites is that row's work.
+src/simd/base64.zig	crates/rustty-simd/src/base64.rs	0	0	task-14e-2: closes S120-F2 — the 1 site is live.
 src/terminal/PageList.zig	crates/rustty-vt/src/pagelist/erase.rs+crates/rustty-vt/src/pagelist/grow.rs+crates/rustty-vt/src/pagelist/mod.rs+crates/rustty-vt/src/pagelist/resize.rs	1	0	N12: rows S122-F1, S123-F1, S124-F1 are CLOSED yet the port is short here; measured 2026-09-10, not individually adjudicated.
 src/terminal/Parser.zig	crates/rustty-vt/src/parser.rs	0	0	
 src/terminal/Screen.zig	crates/rustty-vt/src/screen.rs	0	0	

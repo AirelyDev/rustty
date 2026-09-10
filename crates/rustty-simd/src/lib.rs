@@ -120,6 +120,11 @@ pub const fn lanes(elem_size: usize) -> Option<usize> {
 // re-exported by main.zig). It is a private submodule of this crate here.
 mod base64_scalar;
 
+// TEST-ONLY `log::Log` capture backend for the restored `log.warn` site
+// (task-14e-2, S120-F2). See the module header.
+#[cfg(test)]
+pub(crate) mod log_capture;
+
 #[cfg(test)]
 mod tests {
     // @import("std").testing.refAllDecls(@This());
