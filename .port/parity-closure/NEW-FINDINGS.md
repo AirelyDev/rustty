@@ -74,3 +74,45 @@ found, and current state.
   new finding recorded for it — but is called out here and at the call site
   in `lib.rs` because it is exactly the kind of hazard a future edit to that
   line could reintroduce silently.
+
+---
+
+## N2 — one `log.warn` in `tmux/viewer.zig` has no restorable Rust counterpart
+
+- **id**: N2
+- **severity**: low (test-helper diagnostic only; no shipped code path)
+- **kind**: unportable-by-signature (the port's test helper has a different
+  error-reporting contract than the reference's, and one of its two format
+  arguments has no `Debug` impl to render)
+- **oracle**: `src/terminal/tmux/viewer.zig:1497` —
+  `log.warn("testViewer step failed i={} step={}", .{ i, step });` inside
+  `fn testViewer(viewer: *Viewer, steps: []const TestStep) !void`, in the
+  `step.run(viewer) catch |err|` arm.
+- **rustty**: `crates/rustty-vt/src/tmux/viewer.rs:2606-2624` — left as a
+  fidelity comment with a PORT NOTE stating both obstructions.
+- **description**: two independent reasons, either sufficient. (1) The port's
+  `TestStep::run` returns `()` and reports a failed step by panicking — the
+  port of the reference's `!void` plus `try`-assertions — so there is no error
+  value to `catch` and therefore no arm for the emission to live in.
+  (2) `step={}` would require `Debug` on `TestStep`, which holds a
+  `Box<dyn Fn>`; closures have no `Debug` impl, so the argument cannot be
+  rendered without changing the helper's representation.
+- **how found**: while closing S209-F2 (all `log.*` diagnostics in the tmux
+  viewer). The site is NOT among that row's cited oracle anchors — the audit
+  scoped the row to non-test code — so its absence does not make S209-F2's
+  closure a hole. It is recorded here so the finale re-audit sees it as a
+  tracked item in its own right rather than as a footnote in a closed row's
+  `owner` cell.
+- **controller ruling (2026-09-09)**: S209-F2 stays **CLOSED**, not `WAIVED`.
+  The two states available carry different meanings — `CLOSED` is "every cited
+  anchor restored", `WAIVED` is "not a defect" — and neither describes
+  "complete within scope, with one out-of-scope site permanently unportable".
+  `CLOSED` is correct on the row's own anchors, the exception is written into
+  the tracked ledger's `owner` cell and into a PORT NOTE at the code site, and
+  this entry gives the leftover its own visible record. Cost if wrong: the
+  finale re-audit re-derives this one test-only site and finds it already
+  explained in three places.
+- **state**: **OPEN — will not fix.** Closing it requires changing
+  `TestStep::run`'s contract to return a `Result` and giving `TestStep` a
+  hand-written `Debug`, both of which would make the port's test helper LESS
+  faithful to the reference in order to restore one of its diagnostics.
