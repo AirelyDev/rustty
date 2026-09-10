@@ -90,6 +90,25 @@ const LOG_SCOPE: &str = "gtk_rustty_application";
 /// that GLib's own messages keep their own scope tag. No brand token.
 const GLIB_LOG_SCOPE: &str = "glib";
 
+/// TEST-ONLY: how many times the installed global-shortcut dispatch thunk got
+/// PAST its `rt_app` guard and actually called `performAllAction`.
+///
+/// A process-global rather than an imp field because the thunk is a
+/// `Box<dyn Fn>` that captures only the two raw backrefs — capturing the
+/// `Application` to reach a field would risk an `Rc` cycle with a `'static`
+/// closure.
+///
+/// It exists because `global_shortcut_trigger_count` does NOT prove the dispatch
+/// happened: that counter is bumped at the top of `global_shortcut_trigger`,
+/// while the thunk it invokes opens with
+/// `let Some(rt_app) = rt_app else { return; }`. With `rt_app` unbound the
+/// trigger count still reaches 1 and `performAllAction` is never called — which
+/// is exactly how the S50-F4 empty-capture assertion was VACUOUS until the Linux
+/// negative control caught it (task-14d-3).
+#[cfg(test)]
+static PERFORM_ALL_ACTION_REACHED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 mod imp {
     use super::*;
     // The GTK-tier traits the startup/activate/dispose vfuncs and their helpers
@@ -2986,6 +3005,8 @@ impl Application {
                 let Some(rt_app) = rt_app else {
                     return;
                 };
+                #[cfg(test)]
+                PERFORM_ALL_ACTION_REACHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 // SAFETY: as above — app-thread-only access to the two backrefs.
                 // self.core().performAllAction(self.rt(), action.*) catch |err| {
                 //     log.warn("failed to perform action={}", .{err});
@@ -5275,6 +5296,22 @@ mod tests {
             "bind_core_app must install the performAllAction thunk"
         );
 
+        // task-14d-3: the `rt_app` backref MUST be bound too. The installed thunk
+        // opens with `let Some(rt_app) = rt_app else { return; }`, so with it
+        // unbound the thunk returns BEFORE `performAllAction` and this test never
+        // reaches the dispatch it claims to prove. Caught by running the S50-F4
+        // negative control on Linux: re-adding the removed success emission left
+        // the test GREEN, which is the definition of a vacuous assertion.
+        let mut rt_app = Double {
+            config: rustty_config::Config::default_config(),
+        };
+        let rt_ptr: *mut Double = &raw mut rt_app;
+        app.bind_rt_app(rt_ptr.cast());
+        assert!(
+            app.imp().rt_app.get().is_some(),
+            "bind_rt_app must publish the rt-app backref the thunk dereferences"
+        );
+
         // S50-F4 (task-14d-3): the SUCCESS path must emit NOTHING. The port
         // used to log `global shortcut action performed ok` here; the reference
         // (`application.zig:1741-1749`) is a bare `catch` with no success arm,
@@ -5282,6 +5319,7 @@ mod tests {
         // defect as a missing one. Asserting the FULL captured record vector is
         // empty is what makes the regression fail — a `.any()`-style assertion
         // could not see an EXTRA record at all.
+        let reached_before = PERFORM_ALL_ACTION_REACHED.load(std::sync::atomic::Ordering::Relaxed);
         let cap = crate::log_capture::start();
         app.imp()
             .global_shortcut_trigger(&ActionBoxed(rustty_input::binding::Action::NewWindow));
@@ -5292,6 +5330,13 @@ mod tests {
             app.imp().global_shortcut_trigger_count.get(),
             1,
             "the trigger handler must reach the core dispatch exactly once"
+        );
+        assert_eq!(
+            PERFORM_ALL_ACTION_REACHED.load(std::sync::atomic::Ordering::Relaxed) - reached_before,
+            1,
+            "the thunk must have reached performAllAction — without this the \
+             empty-capture assertion below is vacuous, which is exactly what the \
+             S50-F4 negative control caught on Linux"
         );
         assert_eq!(
             Vec::<(log::Level, String, String)>::new(),
