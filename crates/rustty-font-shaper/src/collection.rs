@@ -479,7 +479,7 @@ impl Collection {
                 let entry = self.faces.get_mut(Style::Regular)[index].get_entry();
                 let face = match self.get_face_from_entry(entry) {
                     Ok(f) => f,
-                    Err(_err) => {
+                    Err(err) => {
                         // log.warn("error loading regular entry={d} err={}", .{ it.index - 1, err });
                         //
                         // PORT NOTE: the reference's `it.index - 1` is the index
@@ -489,7 +489,7 @@ impl Collection {
                             target: LOG_SCOPE,
                             "error loading regular entry={} err={:?}",
                             index,
-                            _err
+                            err
                         );
                         index += 1;
                         continue;
@@ -1737,6 +1737,86 @@ mod tests {
             let idx = c.get_index(u32::from('🥸'), Style::Regular, PresentationMode::Any);
             assert!(idx.is_none());
         }
+
+        c.deinit();
+        lib.deinit();
+    }
+
+    // task-14c-4 fix round 1 (F2, row S81-F1): the restored
+    // `log.warn("error loading regular entry={d} err={}")` in `completeStyles`'
+    // regular-face scan.
+    //
+    // COVERAGE LIMIT, stated rather than papered over: only the SUCCESS path is
+    // driven here. Reaching the `Err` arm needs a Regular entry whose
+    // `get_face_from_entry` fails, i.e. a `DeferredFace` backed by a platform
+    // discovery descriptor that resolves and then fails to load — this suite
+    // builds its faces from embedded BYTES, which either succeed or fail at
+    // `Face::init` before ever reaching the collection. The emission itself was
+    // verified by reading both sides (`Collection.zig:343-351`).
+    //
+    // What this test DOES guard is the failure mode this project has actually
+    // shipped: a diagnostic left on the success path, firing on every
+    // successful call. With every regular face loadable, the captured vector
+    // must contain the six `log.info` records `completeStyles` is SUPPOSED to
+    // emit and nothing else — in particular, no `error loading regular entry`.
+    #[test]
+    fn complete_styles_is_silent_when_every_regular_face_loads() {
+        let mut lib = Library::init().unwrap();
+
+        let mut c = Collection::init();
+        c.load_options = Some(LoadOptions {
+            library: lib,
+            ..Default::default()
+        });
+        c.add(
+            Face::init(
+                lib,
+                embedded::REGULAR,
+                opts(DesiredSize {
+                    points: 12.0,
+                    xdpi: 96,
+                    ydpi: 96,
+                }),
+            )
+            .unwrap(),
+            AddOptions {
+                style: Style::Regular,
+                fallback: false,
+                size_adjustment: SizeAdjustment::None,
+            },
+        )
+        .unwrap();
+
+        let cap = crate::log_capture::start();
+        c.complete_styles(FontSyntheticStyle::default()).unwrap();
+        let messages = cap.messages();
+        drop(cap);
+
+        // Full-vector assertion, specifically NOT `.any()`/`.contains()`. The
+        // expectation is not "empty": `completeStyles` legitimately emits six
+        // `log.info` records the reference also emits (the synthetic-style
+        // creation trace, restored in this stage's part 1). Pinning the WHOLE
+        // vector is what proves the S81-F1 warn is absent — an `.any()`-style
+        // "no warn present" check would also pass if the six infos had been
+        // dropped, or duplicated, or reordered.
+        let info = |m: &str| {
+            (
+                log::Level::Info,
+                "font_collection".to_string(),
+                m.to_string(),
+            )
+        };
+        assert_eq!(
+            vec![
+                info("font synthetic italic created family=JetBrains Mono"),
+                info("synthetic italic face created"),
+                info("font synthetic bold created family=JetBrains Mono"),
+                info("synthetic bold face created"),
+                info("font synthetic bold created family=JetBrains Mono"),
+                info("synthetic bold italic face created from italic"),
+            ],
+            messages
+        );
 
         c.deinit();
         lib.deinit();
