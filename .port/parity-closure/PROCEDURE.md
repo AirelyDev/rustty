@@ -249,6 +249,26 @@ claimed. Prove the control fails, then prove it fails *for the stated reason*.
      reference tree itself and goes RED on any log-bearing file that is neither declared nor
      EXCLUDED-with-a-category. **Whenever you build a gate to catch an audit's blind spots,
      derive its universe from the reference, never from the audit.**
+   - **A count check cannot see a message that is PRESENT but WRONG**, and a count check is
+     what most gates are. One funnel emitted half of `"error handling VT action action={}
+     err={}"` and reconciled perfectly; the stage that found it then reintroduced the class
+     four times in its own fix commit, dropping the space before a placeholder. `G-LOGFILE`
+     now compares each emission's text against the reference call preserved as a comment
+     above it (N21), with placeholder CONTENTS normalised and spacing left alone, and
+     declares exceptions in `LOG-TEXT-DIVERGENCES.tsv`. **It reaches 72% of emissions** — it
+     can only compare what the port wrote down, so preserving the reference call at a site
+     is what makes that site checkable. The same scan detects the inverse (N20): a preserved
+     comment quoting a call the reference does NOT have, which a future stage would
+     faithfully restore.
+   - **`LEDGER.tsv`'s rustty-side line anchors have drifted, and are NOT being refreshed.**
+     Up to 70 lines on rows closed earlier in this plan, because restoration moves code.
+     Ruled 2026-09-11: **leave them and treat them as historical citations, not as
+     locations.** Three reasons. They are the AUDIT's record of where it looked, and
+     rewriting them rewrites that record. A mechanical refresh needs a matching heuristic,
+     and every heuristic in this plan that was trusted without a mutation test turned out to
+     be wrong. And the authority on where a diagnostic lives now is the gate, which is
+     regenerated from the reference on every run, not a frozen anchor. **Treat a ledger
+     rustty anchor as "this region, at the time of the audit"; locate the code by symbol.**
    - **Ratchet EVERY number a stage can move, including the escape hatch.** Completing the
      portmap (N15) created a new lever: an EXCLUSION retires a reference file instead of
      reconciling it, so it erases that file's whole deficit. Reclassifying

@@ -1089,7 +1089,19 @@ found, and current state.
   mapping is still audit-derived, and it inherits exactly the blind spots N15 was written
   to remove.
 
-## N20 — stale pre-resync Zig comments reproduce reference log calls that no longer exist at the pin
+## N20 — stale pre-resync Zig comments reproduce reference log calls that no longer exist at the pin (MACHINE-CHECKED since 2026-09-11)
+
+
+> **MACHINE-CHECKED SINCE 2026-09-11 (task 14gate fix round 5).** `G-LOGFILE` now rides the
+> message-content scan (N21) to detect this automatically: every preserved reference comment
+> whose message appears nowhere in the reference at the pin — live OR commented-out — is
+> reported, and must be declared as `stale-comment` in `LOG-TEXT-DIVERGENCES.tsv` or the gate
+> is RED. **20 are declared**, well beyond the three this entry was opened for; a naive
+> "message not in the reference" test reports 101, so three filters remove the classes that
+> are legitimately non-verbatim (elided comments, one-word paraphrases, and messages that are
+> a substring or literal-prefix match of a real reference message). Each declaration is
+> classified from the message alone and is NOT individually traced to the upstream commit
+> that removed it — that tracing is still open work.
 
 - **id**: N20 (next free id checked 2026-09-10 against `NEW-FINDINGS.md`, `ADJUDICATION.md`
   and the plan's `progress.md`: N1-N19 taken, N17/N18/N19 by task-14d-3 the same day.)
@@ -1130,3 +1142,59 @@ found, and current state.
   are worth a RED. Scoped as its own task, not folded into a restoration stage — the fix
   for a hit is a judgement call (correct the comment, or delete the arm) and should not be
   made under time pressure inside another task.
+## N21 — a message that is PRESENT but WRONG reconciles perfectly: G-LOGFILE now compares text, not only counts
+
+- **id**: N21 (next free id checked 2026-09-11 against `NEW-FINDINGS.md` headings, a
+  workspace grep and `progress.md`: N1-N20 taken.)
+- **severity**: medium (diagnostic-text fidelity; no state or control-flow difference, but
+  it is invisible to every check this gate had until now)
+- **kind**: gate coverage / message fidelity
+- **oracle**: every `log.*` call in the reference at pin `20abdb50a`.
+- **rustty**: `.port/tools/gates/check_log_reconcile.py`,
+  `.port/parity-closure/LOG-TEXT-DIVERGENCES.tsv`.
+- **description**: every check in `G-LOGFILE` up to this point COUNTS. A message that is
+  emitted but wrong passes all of them. A stage found one funnel emitting only the `err=`
+  half of `"error handling VT action action={} err={}"` — it emitted, so it reconciled — and
+  then **reintroduced the same class four times in its own fix commit**, dropping the space
+  before a placeholder so the port emits `mode:Flags { … }` where the reference emits
+  `mode: <value>`. Discovering a defect class and recommitting it in the same change is the
+  strongest available argument that it needs a machine.
+
+  The check compares each live emission's format string against the reference call preserved
+  as a comment above it, with **placeholder contents normalised and nothing else** — spacing
+  is the payload, because `mode: {}` versus `mode:{}` is the bug. Runs of two or more spaces
+  collapse to one, because an R1 comment often wraps one reference line across two comment
+  lines; a one-space-to-zero change is still caught, a three-to-one change is not, and that
+  is stated rather than hidden.
+
+- **what it found across the port**: **16 divergences**, every one of them a knowing
+  decision rather than a bug — 7 R2 identity renames (`ghostty` -> `rustty` /
+  `APP_NAME`), 2 error-name literals (the N11 class), 2 format-shape differences with a
+  PORT NOTE at the site, 1 parameterised format string whose rendered line is identical, 1
+  absent payload (N18's `value={any}`), and the rest abbreviated comments. **The class is
+  therefore not widespread — but that is only knowable because something went looking.**
+- **what it CANNOT see**: **735 of 1014 emissions (72%) have a preserved reference comment
+  to compare against; the other 28% have none and are unchecked.** The pass can only compare
+  what the port wrote down. That number is printed on every run rather than left implicit,
+  and raising it is a reason to preserve the reference call at a site, not just its message.
+- **how a legitimate divergence is declared**: a row in
+  `.port/parity-closure/LOG-TEXT-DIVERGENCES.tsv` — `kind`, `port_file`,
+  `reference_message`, `port_message`, `reason` — with `kind` from a closed set
+  (`identity-rename`, `error-name-literal`, `abbreviated-comment`, `format-shape`,
+  `parameterised`, `payload-absent`, `stale-comment`) and a mandatory reason. **Undeclared
+  divergence is RED**, and so is a declaration that matches nothing in the tree — a waiver
+  that outlives what it excused is how an exception becomes permanent. Rows key on the
+  MESSAGE PAIR, never on a line number, because line anchors in this plan have already
+  drifted up to 70 lines when restoration moved code. The entry count is capped by a
+  `#!divergence-cap` directive on the same two-way ratchet as everything else here.
+- **proved by mutation, not by reading**: the first version of this checker (in the stage
+  that found the original defect) used substring matching, scored zero mismatches, and
+  **still scored zero when the bug was deliberately reintroduced**. So this one was
+  mutation-tested against the live tree before it was trusted: truncating
+  `"error building row y={y} err={err:?}"` to `"error building row err={err:?}"` in
+  `generic/linux_impl.rs:2231` turns the gate RED naming the file, the line and both texts,
+  and so does deleting the single space in `"error building rowy={y}"`. The first mutation
+  I tried caught nothing — because that site has no preserved comment, which is how the 72%
+  figure above came to be measured.
+- **state**: **OPEN** as a standing check. All 16 present divergences are declared with
+  reasons; nothing is outstanding except the 28% of emissions the pass cannot reach.

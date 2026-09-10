@@ -68,6 +68,7 @@ GATES_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT_DIR = os.path.dirname(os.path.dirname(GATES_DIR))
 ROOT = os.path.dirname(PORT_DIR)
 PORTMAP = os.path.join(PORT_DIR, "parity-closure", "LOG-PORTMAP.tsv")
+DIVERGENCES = os.path.join(PORT_DIR, "parity-closure", "LOG-TEXT-DIVERGENCES.tsv")
 LEDGER = os.path.join(PORT_DIR, "parity-closure", "LEDGER.tsv")
 
 # R3: the oracle is an EXTERNAL read-only checkout, never shipped into the repo.
@@ -493,6 +494,351 @@ def rust_emissions(paths, sources, emitters, defs):
 
 
 # ---------------------------------------------------------------------------
+# Message CONTENT reconciliation, and stale preserved comments
+# ---------------------------------------------------------------------------
+# WHY A COUNT GATE CANNOT DO THIS. Everything above counts emissions. A message
+# that is PRESENT but wrong reconciles perfectly: one funnel emitted only the
+# `err=` half of `"error handling VT action action={} err={}"` and every count in
+# this gate was green. The same stage then reintroduced the class four times in
+# its own fix commit, dropping the space before a placeholder so the port emitted
+# `mode:Flags { … }` where the reference emits `mode: <value>`. Discovering a
+# defect class and recommitting it in the same change is the argument for
+# machine-checking it.
+#
+# The check compares each live emission's format string against the reference
+# call preserved as a comment above it, with placeholder CONTENTS normalised and
+# nothing else — spacing is the payload, since `mode: {}` vs `mode:{}` is exactly
+# the bug. Runs of 2+ spaces collapse to one, because the R1 comment often wraps
+# a single reference line across two comment lines; a 1-to-0 space change is
+# still caught, a 3-to-1 change is not, and that is recorded rather than hidden.
+#
+# THE INVERSE CHECK RIDES ALONG. Some preserved comments quote reference calls
+# that DO NOT EXIST at the pin — stranded by our own Phase 6 pin advance (N20).
+# Nothing emits them today, so nothing is wrong; the risk is that a future stage
+# works by the standard method, reads the comment and faithfully restores a call
+# the reference never had. Both checks extract a message from a commented
+# reference call; one compares it to the port, the other to the reference. One
+# scan, two verdicts.
+ZIG_CALL_IN_COMMENT = re.compile(
+    r"(?:std\.log|log|glib_log)\.(warn|err|info|debug)\s*\("
+)
+LOGFN_PREFIX_TEXT = re.compile(r"^(?:warn|debug|info|err|error)\([^)]*\):\s?")
+LEVEL_ALIAS = {"error": "err"}
+
+
+def normalise_message(text):
+    """Placeholder contents erased, `{{`/`}}` preserved, runs of spaces collapsed."""
+    if text is None:
+        return None
+    text = LOGFN_PREFIX_TEXT.sub("", text)  # a bypass print carries logFn's prefix
+    text = text.replace("{{", "\x00").replace("}}", "\x01")
+    text = re.sub(r"\{[^{}]*\}", "{}", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return text.replace("\x00", "{").replace("\x01", "}")
+
+
+def zig_format_arg(blob):
+    """The reference call's format argument: every literal in it, concatenated.
+
+    Stops at the `.{...}` args tuple or at the `)` that closes the call. Both
+    stops are load-bearing: `Overlay.zig` and `Face.zig` split their format
+    across two `++`-joined literals, so taking only the first TRUNCATES the
+    message — manufacturing the very defect this check hunts — while PROSE after
+    the reproduced call ("the reference's \"new_tab_to_new_window\" text,
+    verbatim") gets concatenated on without the paren stop.
+    """
+    depth, stop, p, instr = 0, len(blob), 0, False
+    while p < len(blob):
+        c = blob[p]
+        if instr:
+            if c == "\\":
+                p += 2
+                continue
+            if c == '"':
+                instr = False
+            p += 1
+            continue
+        if c == '"':
+            instr = True
+            p += 1
+            continue
+        if blob.startswith(".{", p):
+            stop = p
+            break
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth <= 0:
+                stop = p
+                break
+        p += 1
+    scan, parts, p = blob[:stop], [], 0
+    while p < len(scan):
+        if scan[p] != '"':
+            p += 1
+            continue
+        p += 1
+        out = []
+        while p < len(scan):
+            c = scan[p]
+            if c == "\\":
+                nxt = scan[p + 1] if p + 1 < len(scan) else ""
+                out.append({"n": "\n", "t": "\t", "r": "\r"}.get(nxt, nxt))
+                p += 2
+                continue
+            if c == '"':
+                p += 1
+                break
+            out.append(c)
+            p += 1
+        parts.append("".join(out))
+    return "".join(parts) if parts else None
+
+
+def rust_message_at(nc, pos):
+    """The MESSAGE literal of the emission at `pos`, skipping a `target:` argument."""
+    i = nc.find('"', pos)
+    while i >= 0:
+        if re.search(r"target\s*:\s*$", nc[max(0, i - 40) : i]):
+            j = i + 1
+            while j < len(nc):
+                if nc[j] == "\\":
+                    j += 2
+                    continue
+                if nc[j] == '"':
+                    break
+                j += 1
+            i = nc.find('"', j + 1)
+            continue
+        break
+    if i < 0:
+        return None
+    j, out = i + 1, []
+    while j < len(nc):
+        c = nc[j]
+        if c == "\\":
+            nxt = nc[j + 1] if j + 1 < len(nc) else ""
+            if nxt == "\n":  # Rust line continuation: newline + indent elided
+                j += 2
+                while j < len(nc) and nc[j] in " \t":
+                    j += 1
+                continue
+            out.append({"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}.get(nxt, nxt))
+            j += 2
+            continue
+        if c == '"':
+            break
+        out.append(c)
+        j += 1
+    return "".join(out)
+
+
+def commented_reference_calls(raw, code):
+    """[(line, level, message)] for reference `log.*` calls preserved in comments."""
+    raw_lines, code_lines = raw.split("\n"), code.split("\n")
+    bodies = {}
+    for idx, line in enumerate(raw_lines):
+        m = re.search(r"//", line)
+        if m and code_lines[idx][m.start() : m.start() + 2] != "//":
+            bodies[idx + 1] = line[m.start() + 2 :]
+    found = []
+    for lineno in sorted(bodies):
+        m = ZIG_CALL_IN_COMMENT.search(bodies[lineno])
+        if not m:
+            continue
+        blob, j = bodies[lineno][m.end() - 1 :], lineno + 1
+        while j in bodies and blob.count("(") > blob.count(")") and j - lineno < 8:
+            blob += " " + re.sub(r"^[/\s]+", "", bodies[j])
+            j += 1
+        found.append((lineno, m.group(1), zig_format_arg(blob)))
+    return found
+
+
+def live_emission_messages(code, nc):
+    """[(line, level, message)] for live emissions."""
+    out = []
+    for pos in primitive_sites(code, nc):
+        msg = rust_message_at(nc, pos)
+        m = re.match(r"log::(warn|error|info|debug|trace)!", code[pos : pos + 24])
+        if m:
+            level = LEVEL_ALIAS.get(m.group(1), m.group(1))
+        else:  # a facade-bypassing print carries the level in its logFn prefix
+            pm = LOGFN_PREFIX_TEXT.match(msg or "")
+            level = LEVEL_ALIAS.get(pm.group(0).split("(")[0], pm.group(0).split("(")[0]) if pm else None
+        out.append((code.count("\n", 0, pos) + 1, level, msg))
+    return out
+
+
+def pair_messages(raw, code, nc, window=14):
+    """[(ref_line, ref_msg, emit_line, emit_msg)] — comment paired to emission.
+
+    Three rules, each of which removed a wall of phantom mismatches when added:
+      * the LEVEL must match. A comment block often holds calls at several levels
+        with only some restored, and pairing a `log.debug` comment with a
+        `log::warn!` two lines down compares two unrelated calls.
+      * an EXACT normalised match among the pending comments wins. Ports restore
+        a block in a different order often enough that positional pairing shifts
+        every later pair.
+      * otherwise the OLDEST pending comment within the window is used, matching
+        the order a block is written and restored in.
+    """
+    refs = commented_reference_calls(raw, code)
+    ems = live_emission_messages(code, nc)
+    events = sorted(
+        [(l, "r", (m, lv)) for l, lv, m in refs] + [(l, "e", (m, lv)) for l, lv, m in ems]
+    )
+    pending, out = [], []
+    for line, kind, payload in events:
+        if kind == "r":
+            pending.append((line, payload))
+            continue
+        emsg, elevel = payload
+        pending = [x for x in pending if line - x[0] <= window]
+        same = [x for x in pending if x[1][1] == elevel or elevel is None]
+        if not same:
+            continue
+        pending = [x for x in pending if x not in same] + same
+        base = len(pending) - len(same)
+        hit = next(
+            (
+                base + k
+                for k, (_l, m) in enumerate(same)
+                if m[0] is not None and normalise_message(m[0]) == normalise_message(emsg)
+            ),
+            None,
+        )
+        rline, m = pending.pop(hit if hit is not None else base)
+        out.append((rline, m[0], line, emsg))
+    return out
+
+
+def reference_message_index(zig_walk):
+    """{normalised reference message} over the whole reference tree, for N20."""
+    # LIVE **and** COMMENTED-OUT reference calls both count as "the reference has
+    # this". A port comment that faithfully reproduces a call the reference itself
+    # keeps commented out (`Surface.zig`'s `SCROLL:` debug scaffolding, six such
+    # sites) is not stranded — it is exactly as faithful as the reference is.
+    index = set()
+    for _rel, text in zig_walk():
+        lines = text.split("\n")
+        for i, line in enumerate(lines):
+            if not (ZIG_CALL.search(zig_strip(line)) or ZIG_CALL_IN_COMMENT.search(line)):
+                continue
+            blob = " ".join(lines[i : i + 4])
+            m = ZIG_CALL_IN_COMMENT.search(blob)
+            if not m:
+                continue
+            msg = zig_format_arg(blob[m.end() - 1 :])
+            if msg:
+                index.add(normalise_message(msg))
+    return index
+
+
+ELIDED = ("\u2026", "...")
+
+
+def is_stranded_comment(rn, ref_index):
+    """True only for a comment that quotes a call the reference does not have.
+
+    Precision matters more than recall here, because this fires on EVERY
+    preserved comment in the port and a check that cries wolf is ignored within a
+    day. A naive "message not in the index" test reports 101 sites, of which the
+    known real population is 3; the other 98 are R1 comments that are
+    deliberately not verbatim. Three filters, each removing a class that is
+    legitimately non-verbatim rather than stranded:
+
+      * ELIDED comments (`"… err={}"`, `"... err={}"`) quote a call by shape, not
+        by text, and were never meant to be reproducible.
+      * SHORT or single-word messages (`"render"`) are paraphrases; a stranded
+        reference call is a real sentence.
+      * ABBREVIATED comments quote a genuine call's message in part
+        (`"cancelled by the user"` for `"open uri request was cancelled by the
+        user"`), so a message that is a SUBSTRING of a real reference message is
+        an abbreviation, not a stranding.
+
+    The residue is what actually needs a human: text that reads like a real
+    reference message and appears nowhere in the reference at the pin.
+    """
+    if not rn or any(e in rn for e in ELIDED):
+        return False
+    if len(rn) < 14 or " " not in rn.strip():
+        return False
+    if rn in ref_index:
+        return False
+    if any(rn in known for known in ref_index):
+        return False
+    # A comment may differ from the reference in PLACEHOLDER DECORATION
+    # (`err=E{s}` written as `err={}`) or PARAMETERISE a literal the reference
+    # spells out (`unable to remove {}` for `unable to remove rebuild source`).
+    # Neither is a stranding: the call is there, the comment is just not verbatim.
+    # Compare on the literal prefix before the first placeholder, which survives
+    # both — and which is still a whole phrase, so it does not collapse distinct
+    # messages together.
+    prefix = rn.split("{")[0]
+    if len(prefix) >= 14 and any(known.startswith(prefix) for known in ref_index):
+        return False
+    return True
+
+
+DIVERGENCE_KINDS = (
+    "identity-rename",
+    "error-name-literal",
+    "abbreviated-comment",
+    "format-shape",
+    "parameterised",
+    "payload-absent",
+    "stale-comment",
+)
+DIVERGENCE_DIRECTIVE = re.compile(r"^#!\s*divergence-cap\s+entries=(\d+)\s*$")
+
+
+def load_divergences(path):
+    """(rows, cap). Rows key on the MESSAGE PAIR, never on a line number.
+
+    Line numbers drift — `LEDGER.tsv`'s rustty-side anchors have moved up to 70
+    lines on rows closed earlier in this plan, because restoration moves code.
+    A declaration keyed on text survives that; one keyed on a line does not.
+    """
+    rows, cap = [], None
+    if not os.path.exists(path):
+        return rows, cap
+    with open(path, encoding="utf-8", newline="") as fh:
+        for lineno, raw in enumerate(fh, 1):
+            line = raw.rstrip("\n")
+            m = DIVERGENCE_DIRECTIVE.match(line)
+            if m:
+                cap = int(m.group(1))
+                continue
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            parts = line.split("\t")
+            if parts[0].strip() == "kind":
+                continue
+            if len(parts) < 5:
+                raise ValueError(
+                    f"{path}:{lineno}: expected 5 tab-separated columns "
+                    "(kind, port_file, reference_message, port_message, reason)"
+                )
+            def unesc(v):
+                # Messages can contain a TAB (`"[rebuildCells time] {}\t{}"`) or a
+                # newline, and this file is tab-separated. They are stored escaped.
+                return v.replace("\\t", "\t").replace("\\n", "\n").replace("\\\\", "\\")
+
+            rows.append(
+                {
+                    "kind": parts[0].strip(),
+                    "file": parts[1].strip(),
+                    "ref": unesc(parts[2]),
+                    "port": unesc(parts[3]),
+                    "reason": parts[4].strip(),
+                    "lineno": lineno,
+                }
+            )
+    return rows, cap
+
+
+# ---------------------------------------------------------------------------
 # Portmap
 # ---------------------------------------------------------------------------
 EXCLUSION_DIRECTIVE = re.compile(
@@ -618,7 +964,8 @@ def ledger_log_files(path):
 # Verdict
 # ---------------------------------------------------------------------------
 def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=False,
-            oracle_log_files=None, exclusion_cap=None):
+            oracle_log_files=None, exclusion_cap=None, raw_sources=None,
+            ref_index=None, divergences=None, divergence_cap=None):
     """Return (rc, lines). rc 0 GREEN, 1 RED. Pure — all I/O is in the callers.
 
     `zig_text(path)` / `rust_text(path)` return source text or None if absent.
@@ -914,6 +1261,124 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
 
     # Only stubs that are actually CALLED from a mapped port file matter: an
     # uncalled `log_*` test helper is not a dropped diagnostic.
+    # --- MESSAGE CONTENT + stale preserved comments (one scan, two verdicts) ----
+    if raw_sources is not None and ref_index is not None:
+        decl = divergences or []
+        seen = set()
+        mismatches, stale = [], []
+        n_paired = n_emissions = 0
+        for path in sorted(pool):
+            raw = raw_sources.get(path)
+            if raw is None:
+                continue
+            code, nc = pool[path]
+            n_emissions += len(primitive_sites(code, nc))
+            for rline, rmsg, eline, emsg in pair_messages(raw, code, nc):
+                if rmsg is None or emsg is None:
+                    continue
+                n_paired += 1
+                rn, en = normalise_message(rmsg), normalise_message(emsg)
+                if rn != en:
+                    mismatches.append((path, eline, rn, en))
+            for rline, _lvl, rmsg in commented_reference_calls(raw, code):
+                if rmsg is None:
+                    continue
+                rn = normalise_message(rmsg)
+                if is_stranded_comment(rn, ref_index):
+                    stale.append((path, rline, rn))
+
+        def declared(kind_set, path, rn, en):
+            for d in decl:
+                if (
+                    d["kind"] in kind_set
+                    and d["file"] == path
+                    and normalise_message(d["ref"]) == rn
+                    and normalise_message(d["port"] or "") == (en or "")
+                ):
+                    seen.add(d["lineno"])
+                    return True
+            return False
+
+        content_kinds = tuple(k for k in DIVERGENCE_KINDS if k != "stale-comment")
+        undeclared_mm = [
+            x for x in mismatches if not declared(content_kinds, x[0], x[2], x[3])
+        ]
+        undeclared_st = [
+            x for x in stale if not declared(("stale-comment",), x[0], x[2], "")
+        ]
+        bad_kind = [d for d in decl if d["kind"] not in DIVERGENCE_KINDS]
+        no_reason = [d for d in decl if not d["reason"]]
+        dead = [d for d in decl if d["lineno"] not in seen]
+        out.append(
+            f"           message content: {n_paired} of {n_emissions} emission(s) have a "
+            f"preserved reference comment to check against "
+            f"({100 * n_paired // max(1, n_emissions)}%; the rest are UNCHECKED by this "
+            "pass — it can only compare what the port wrote down)"
+        )
+        out.append(
+            f"           message content: {len(mismatches)} divergence(s) and "
+            f"{len(stale)} stale preserved comment(s), {len(decl)} declared"
+            + (f" (cap {divergence_cap})" if divergence_cap is not None else "")
+        )
+        if undeclared_mm:
+            out.append(
+                f"RED: {len(undeclared_mm)} emission(s) whose text does not match the "
+                "reference call preserved above them. A count gate cannot see a message "
+                "that is PRESENT but truncated — that is why this check exists. Fix the "
+                "text, or declare the divergence in LOG-TEXT-DIVERGENCES.tsv:"
+            )
+            for path, line, rn, en in undeclared_mm[:10]:
+                out.append(f"       {path}:{line}")
+                out.append(f"           reference {rn!r}")
+                out.append(f"           port      {en!r}")
+            rc = 1
+        if undeclared_st:
+            out.append(
+                f"RED: {len(undeclared_st)} preserved comment(s) quote a reference call "
+                "that does not exist at the pin (N20). Nothing emits them, so nothing is "
+                "wrong today — the risk is a future stage reading the comment and "
+                "faithfully restoring a call the reference never had:"
+            )
+            for path, line, rn in undeclared_st[:10]:
+                out.append(f"       {path}:{line}  {rn!r}")
+            rc = 1
+        if bad_kind:
+            out.append(
+                f"RED: {len(bad_kind)} declared divergence(s) with a kind outside "
+                f"{DIVERGENCE_KINDS}"
+            )
+            rc = 1
+        if no_reason:
+            out.append(
+                f"RED: {len(no_reason)} declared divergence(s) with no reason — the same "
+                "rule as an allowance or a WAIVED row's owner"
+            )
+            rc = 1
+        if dead:
+            out.append(
+                f"RED: {len(dead)} declared divergence(s) match nothing in the tree. A "
+                "declaration that outlives what it excused is how a waiver becomes "
+                "permanent; delete it in the commit that fixed the text:"
+            )
+            for d in dead[:6]:
+                out.append(f"       {d['file']}: {normalise_message(d['ref'])!r}")
+            rc = 1
+        if divergence_cap is not None:
+            if len(decl) > divergence_cap:
+                out.append(
+                    f"RED: {len(decl)} declared divergence(s), cap {divergence_cap}. "
+                    "Declaring a text divergence excuses a real difference from the "
+                    "reference; the number of excuses is capped and reviewed."
+                )
+                rc = 1
+            elif len(decl) < divergence_cap:
+                out.append(
+                    f"RED: {len(decl)} declared divergence(s), cap {divergence_cap} — the "
+                    "same RATCHET as everything else here: tighten it in the commit that "
+                    "removed the declaration."
+                )
+                rc = 1
+
     noop = sorted(
         (p, n, ln)
         for p, v in stubs.items()
@@ -1305,6 +1770,59 @@ def self_test():
         ("right file count, budgeted for more SITES than are excluded",
          run(ok_excl, None, olf, {"files": 1, "sites": 3})[0], 1)
     )
+    # 10g. MESSAGE CONTENT. A count gate cannot see a message that is present but
+    #      wrong; these arms are the proof that this one can. `c/txt.rs` carries a
+    #      preserved reference comment above a matching emission.
+    TXT_OK = (
+        'fn a() {\n    // log.warn("mode: {} err={}", .{ m, err });\n'
+        '    log::warn!(target: S, "mode: {m} err={err:?}");\n}\n'
+    )
+    TXT_TRUNC = TXT_OK.replace('"mode: {m} err={err:?}"', '"err={err:?}"')
+    TXT_NOSPACE = TXT_OK.replace('"mode: {m} err={err:?}"', '"mode:{m} err={err:?}"')
+    TXT_STALE = (
+        'fn a() {\n    // log.warn("a message the reference does not have", .{});\n}\n'
+    )
+    REF_INDEX = {"mode: {} err={}"}
+
+    def run_txt(src, decl=(), cap=None, allowance="0"):
+        rs2 = dict(rs, **{"c/txt.rs": src})
+        pm = [{"oracle": "src/ok.zig", "excluded": False, "arms": [["c/txt.rs"]],
+               "allowance": allowance, "bypass_cap": "0",
+               "reason": "no emission in this fixture" if allowance != "0" else "",
+               "lineno": 0}]
+        return verdict(
+            pm, {}, zt, lambda p: rs2.get(p), oracle_log_files=None,
+            raw_sources={"c/txt.rs": src}, ref_index=REF_INDEX,
+            divergences=list(decl), divergence_cap=cap,
+        )[0]
+
+    cases.append(("message text matches the preserved reference comment",
+                  run_txt(TXT_OK), 0))
+    cases.append(("HALF THE MESSAGE MISSING — the defect a count gate cannot see",
+                  run_txt(TXT_TRUNC), 1))
+    cases.append(("a dropped space before a placeholder (`mode:{}` for `mode: {}`)",
+                  run_txt(TXT_NOSPACE), 1))
+    cases.append(("...unless the divergence is declared with a reason",
+                  run_txt(TXT_TRUNC, [{"kind": "format-shape", "file": "c/txt.rs",
+                                       "ref": "mode: {} err={}", "port": "err={}",
+                                       "reason": "declared", "lineno": 1}]), 0))
+    cases.append(("a declaration with no reason is RED",
+                  run_txt(TXT_TRUNC, [{"kind": "format-shape", "file": "c/txt.rs",
+                                       "ref": "mode: {} err={}", "port": "err={}",
+                                       "reason": "", "lineno": 1}]), 1))
+    cases.append(("a declaration matching nothing is RED",
+                  run_txt(TXT_OK, [{"kind": "format-shape", "file": "c/txt.rs",
+                                    "ref": "gone", "port": "gone",
+                                    "reason": "x", "lineno": 1}]), 1))
+    cases.append(("a comment quoting a call the reference does not have (N20)",
+                  run_txt(TXT_STALE, allowance="1"), 1))
+    cases.append(("...unless it is declared as a stale comment",
+                  run_txt(TXT_STALE, [{"kind": "stale-comment", "file": "c/txt.rs",
+                                       "ref": "a message the reference does not have",
+                                       "port": "", "reason": "N20", "lineno": 1}],
+                          allowance="1"), 0))
+    cases.append(("divergence cap exceeded",
+                  run_txt(TXT_OK, [], cap=1), 1))
     # 11. a LOG row citing a file with no portmap entry
     cases.append(
         ("undeclared reference file",
@@ -1338,7 +1856,9 @@ def self_test():
         "SELF-TEST GREEN: the gate flips RED on a short file, an unreasoned or stale\n"
         "allowance, a short PLATFORM TWIN that summing would have hidden, a no-op\n"
         "log stub, an undeclared file, a missing port file, a vacuous scan, and a\n"
-        "facade-BYPASSING direct print over its declared cap, an UNDECLARED reference\n"
+        "facade-BYPASSING direct print over its declared cap, a TRUNCATED or\n"
+        "respaced message text, a comment quoting a call the reference does not have,\n"
+        "an UNDECLARED reference\n"
         "file with live log sites and an uncategorised exclusion — and the scanner agrees\n"
         "with a naive grep on every mapped port file and on every Rust literal shape."
         if ok
@@ -1414,6 +1934,29 @@ def main():
         with open(p, encoding="utf-8", errors="replace") as fh:
             return fh.read()
 
+    raw_sources = {}
+    for r in portmap:
+        for arm in r["arms"]:
+            for f in arm:
+                full = os.path.join(ROOT, f)
+                if os.path.isfile(full) and f not in raw_sources:
+                    with open(full, encoding="utf-8", errors="replace") as fh:
+                        raw_sources[f] = fh.read()
+    try:
+        divergences, divergence_cap = load_divergences(DIVERGENCES)
+    except ValueError as exc:
+        print(f"BLOCKED: {exc}", file=sys.stderr)
+        return 3
+    if divergence_cap is None:
+        print(
+            "BLOCKED: LOG-TEXT-DIVERGENCES.tsv carries no `#!divergence-cap\n"
+            "         entries=N` directive. A declared text divergence excuses a real\n"
+            "         difference from the reference; a cap that can be disabled by\n"
+            "         deleting a line is not a cap.",
+            file=sys.stderr,
+        )
+        return 3
+
     def rust_text(rel):
         p = os.path.join(ROOT, rel)
         if not os.path.isfile(p):
@@ -1433,6 +1976,7 @@ def main():
                         yield os.path.relpath(full, ORACLE), fh.read()
 
     oracle_log_files = oracle_files_with_log_sites(zig_walk)
+    ref_index = reference_message_index(zig_walk)
     if not oracle_log_files:
         print(
             "BLOCKED: the oracle tree yielded no files with live log sites — the "
@@ -1475,6 +2019,10 @@ def main():
         report="--report" in sys.argv,
         oracle_log_files=oracle_log_files,
         exclusion_cap=exclusion_cap,
+        raw_sources=raw_sources,
+        ref_index=ref_index,
+        divergences=divergences,
+        divergence_cap=divergence_cap,
     )
     print("\n".join(lines))
     return rc

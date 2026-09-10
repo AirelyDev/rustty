@@ -770,7 +770,15 @@ GATE_REGISTRY=(
   # baselines. A FOURTH check budgets the EXCLUSIONS (`#!exclusion-cap` in the
   # portmap, frozen at 2 files / 2 sites, ratcheted both ways): retiring a
   # reference file erases its whole deficit, so it is the widest lever here and
-  # was the only number that was not ratcheted. Nothing here is
+  # was the only number that was not ratcheted. A FIFTH check compares message
+  # TEXT: a count gate cannot see a message that is PRESENT but truncated (one
+  # funnel emitted half of "error handling VT action action={} err={}" and
+  # reconciled), so each emission is compared against the reference call
+  # preserved as a comment above it, with placeholder contents normalised and
+  # spacing left alone. Exceptions are declared in LOG-TEXT-DIVERGENCES.tsv
+  # (30 today, capped and ratcheted); the same scan flags a comment quoting a
+  # call the reference does NOT have (N20). It reaches 72% of emissions — it can
+  # only compare what the port wrote down. Nothing here is
   # env-settable (R5); an absent or off-pin oracle checkout is 3 BLOCKED, never a
   # vacuous green.
   "G-LOGFILE-SELF|HARD|$PY $GATES/check_log_reconcile.py --self-test"

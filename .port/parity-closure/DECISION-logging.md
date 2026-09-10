@@ -600,6 +600,15 @@ reconcile.
 
 ### IMPORTANT 5 — §6's crate list was wrong; `rustty-core`/`rustty-apprt`/`rustty-cli` need a THIRD call shape
 
+> **THE TABLE IS AUDIT-DERIVED AND THEREFORE UNDER-INCLUSIVE (noted 2026-09-11).** It was
+> built from OPEN audit rows, so a crate with real reference `log.*` sites but no audit row
+> does not appear in it — and one such crate had to have the `log` dependency added by a
+> later stage. **`G-LOGFILE` (`.port/tools/gates/check_log_reconcile.py`), not this table, is
+> authoritative on which crates need the facade**: it enumerates the reference tree rather
+> than the audit, and every log-bearing reference file is declared or excluded in
+> `LOG-PORTMAP.tsv`. Use the table to read a row's crate; use the gate to ask whether a crate
+> is in scope at all. (Same root cause as N15, one level up.)
+>
 > **CALL SHAPE 2 IS SUPERSEDED — see §6r4 (2026-09-10).** The crate TABLE below is
 > correct and still binding: read a row's crate off it. The three-shape RULE below is
 > not — call shape 2 (`rustty_core::logging::log(...)` direct from `rustty-core` /
