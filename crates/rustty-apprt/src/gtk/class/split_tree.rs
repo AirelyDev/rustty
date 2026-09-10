@@ -44,6 +44,14 @@ use crate::gtk::class::close_confirmation_dialog::{CloseConfirmationDialog, Targ
 use crate::gtk::ext;
 use crate::gtk::weak_ref::WeakRef;
 
+/// `const log = std.log.scoped(.gtk_ghostty_split_tree)` (`split_tree.zig:21`).
+///
+/// REBRANDED per the precedent task-14d-2 set at `gtk/class/config.rs` and now
+/// recorded in `.port/tools/PARITY_NAMING.md`: a log scope tag is a runtime
+/// identity string emitted into user-visible diagnostic text. The GType
+/// registered NAME in this file is deliberately NOT rebranded.
+const LOG_SCOPE: &str = "gtk_rustty_split_tree";
+
 /// PORTS: `class/surface.zig:59` `pub const Tree = datastruct.SplitTree(Self)`.
 ///
 /// A `#[glib::Boxed]` newtype so it can back the `?*Surface.Tree` GObject
@@ -116,10 +124,13 @@ fn remove_source_id(id: Option<glib::SourceId>, what: &str) {
     if let Some(source) = id {
         let removed = unsafe { glib::ffi::g_source_remove(source.as_raw()) };
         if removed == glib::ffi::GFALSE {
-            eprintln!(
-                "warn(gtk): unable to remove {what} source={}",
-                source.as_raw()
-            );
+            // log.warn("unable to remove {s}", .{what});
+            //
+            // task-14d-3: the `source={}` suffix is gone — no pinned reference
+            // site prints it (see this file's `unable to remove ...` sites);
+            // `what` carries the reference's own wording, so each caller
+            // reproduces its own reference message verbatim.
+            log::warn!(target: LOG_SCOPE, "unable to remove {what}");
         }
     }
 }
@@ -243,10 +254,10 @@ mod imp {
             // `priv.last_focused.deinit()` (1dbc8ca30: the named
             // clear-before-free; see `weak_ref.rs` `deinit`).
             self.last_focused.deinit();
-            remove_source_id(self.rebuild_source.borrow_mut().take(), "rebuild");
+            remove_source_id(self.rebuild_source.borrow_mut().take(), "rebuild source");
             remove_source_id(
                 self.restore_focus_source.borrow_mut().take(),
-                "restore_focus",
+                "restore_focus source",
             );
             self.dispose_template();
             // NOTE: the reference frees `tree` in `finalize` (`:607-618`); in Rust
@@ -371,6 +382,18 @@ impl SplitTree {
                 }
             }
         };
+
+        // log.debug("new split at={} direction={} old_tree={f} new_tree={f}", .{ handle, direction, old_tree, &new_tree });
+        //
+        // PORT NOTE: Zig's `{f}` calls `Tree.format`; the port's `Tree` renders
+        // through `Debug` (N11's crate-wide stand-in). `old_tree` is read back
+        // out of the field because the borrow above has been dropped.
+        log::debug!(
+            target: LOG_SCOPE,
+            "new split at={handle:?} direction={direction:?} old_tree={old_tree:?} new_tree={new_tree:?}",
+            old_tree = self.imp().tree.borrow().as_ref().map(|t| &t.0),
+            new_tree = &new_tree,
+        );
 
         self.set_tree_inner(Some(&Tree(new_tree)));
         Ok(())
@@ -498,7 +521,7 @@ impl SplitTree {
 
             // This really shouldn't fail, but just in case
             let Some(target_handle) = target_tree.0.locate(target) else {
-                eprintln!("warn(gtk): target is not placed in a split tree");
+                log::warn!(target: LOG_SCOPE, "target is not placed in a split tree");
                 return Ok(());
             };
 
@@ -533,7 +556,7 @@ impl SplitTree {
 
             // TODO: Find a better way to access the split tree from here
             let Some(source_tree_widget) = ext::ancestor::<SplitTree>(source) else {
-                eprintln!("warn(gtk): source is not placed in a split tree");
+                log::warn!(target: LOG_SCOPE, "source is not placed in a split tree");
                 return Ok(());
             };
 
@@ -805,7 +828,7 @@ impl SplitTree {
             let new_tree = match tree.0.remove(handle) {
                 Ok(t) => t,
                 Err(e) => {
-                    eprintln!("warn(gtk): unable to remove surface from tree: {e:?}");
+                    log::warn!(target: LOG_SCOPE, "unable to remove surface from tree: {e:?}");
                     return;
                 }
             };
@@ -858,10 +881,10 @@ impl SplitTree {
         this.notify("is-zoomed");
 
         // Drop any pending rebuild/restore sources (`:832-843`).
-        remove_source_id(imp.rebuild_source.borrow_mut().take(), "rebuild");
+        remove_source_id(imp.rebuild_source.borrow_mut().take(), "rebuild source");
         remove_source_id(
             imp.restore_focus_source.borrow_mut().take(),
-            "restore_focus",
+            "restore_focus source",
         );
 
         // Empty tree → clear immediately (`:845-851`).
@@ -995,7 +1018,7 @@ impl SplitTree {
 /// PORTS: `split_tree.zig:623-652` `actionNewSplit`.
 fn action_new_split(_a: &gio::SimpleAction, args: Option<&glib::Variant>, this: &SplitTree) {
     let Some(args) = args else {
-        eprintln!("warn(gtk): split-tree.new-split called without a parameter");
+        log::warn!(target: LOG_SCOPE, "split-tree.new-split called without a parameter");
         return;
     };
     let Some(dir_str) = args.str() else {
@@ -1007,13 +1030,13 @@ fn action_new_split(_a: &gio::SimpleAction, args: Option<&glib::Variant>, this: 
         "down" => Direction::Down,
         "up" => Direction::Up,
         other => {
-            eprintln!("warn(gtk): invalid split direction for split-tree.new-split: {other}");
+            log::warn!(target: LOG_SCOPE, "invalid split direction for split-tree.new-split: {other}");
             return;
         }
     };
     let active = this.get_active_surface();
     if let Err(e) = this.new_split(direction, active.as_ref(), SurfaceOverrides::default()) {
-        eprintln!("warn(gtk): new split failed error={e:?}");
+        log::warn!(target: LOG_SCOPE, "new split failed error={e:?}");
     }
 }
 
@@ -1027,7 +1050,7 @@ fn action_equalize(_a: &gio::SimpleAction, _args: Option<&glib::Variant>, this: 
         match old.0.equalize() {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("warn(gtk): unable to equalize tree: {e:?}");
+                log::warn!(target: LOG_SCOPE, "unable to equalize tree: {e:?}");
                 return;
             }
         }
@@ -1137,7 +1160,7 @@ mod split_imp {
     impl ObjectImpl for SplitTreeSplit {
         /// PORTS: `split_tree.zig:1311-1329` `dispose`.
         fn dispose(&self) {
-            remove_source_id(self.idle.borrow_mut().take(), "idle");
+            remove_source_id(self.idle.borrow_mut().take(), "idle source");
             self.dispose_template();
         }
     }
@@ -1255,13 +1278,13 @@ impl SplitTreeSplit {
                 // of a SplitTree, we assume that our handle is valid, and we assume
                 // the handle is always a split node.
                 let Some(split_tree) = ext::ancestor::<SplitTree>(self) else {
-                    eprintln!("warn(gtk): SplitTree ancestor not found");
+                    log::warn!(target: LOG_SCOPE, "SplitTree ancestor not found");
                     return;
                 };
                 let handle = imp.handle.get();
                 let mut tref = split_tree.imp().tree.borrow_mut();
                 let Some(tree) = tref.as_mut() else {
-                    eprintln!("warn(gtk): no tree data model set");
+                    log::warn!(target: LOG_SCOPE, "no tree data model set");
                     return;
                 };
                 debug_assert!(handle.idx() < tree.0.nodes.len());

@@ -25,6 +25,14 @@ use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use libadwaita::subclass::prelude::*;
 
+/// `const log = std.log.scoped(.gtk_ghostty_resize_overlay)` (`resize_overlay.zig:10`).
+///
+/// REBRANDED per the precedent task-14d-2 set at `gtk/class/config.rs` and now
+/// recorded in `.port/tools/PARITY_NAMING.md`: a log scope tag is a runtime
+/// identity string emitted into user-visible diagnostic text. The GType
+/// registered NAME in this file is deliberately NOT rebranded.
+const LOG_SCOPE: &str = "gtk_rustty_resize_overlay";
+
 /// Removes a glib source id, warning (not panicking) on failure — the faithful
 /// shape of the reference's `if (glib.Source.remove(id) == 0) log.warn(...)`
 /// (`resize_overlay.zig:196-267`, **invariant 11**). `SourceId`'s own `Drop`
@@ -36,10 +44,13 @@ fn remove_source_id(id: Option<glib::SourceId>, what: &str) {
         // passing it to `g_source_remove` is always valid (returns FALSE if gone).
         let removed = unsafe { glib::ffi::g_source_remove(source.as_raw()) };
         if removed == glib::ffi::GFALSE {
-            eprintln!(
-                "warn(gtk): unable to remove {what} source={}",
-                source.as_raw()
-            );
+            // log.warn("unable to remove {s}", .{what});
+            //
+            // task-14d-3: the `source={}` suffix is gone — no pinned reference
+            // site prints it (see this file's `unable to remove ...` sites);
+            // `what` carries the reference's own wording, so each caller
+            // reproduces its own reference message verbatim.
+            log::warn!(target: LOG_SCOPE, "unable to remove {what}");
         }
     }
 }

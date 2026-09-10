@@ -60,6 +60,14 @@ use super::config::Config;
 use super::surface::Surface;
 use super::window::Window;
 
+/// `const log = std.log.scoped(.gtk_ghostty_command_palette)` (`command_palette.zig:21`).
+///
+/// REBRANDED per the precedent task-14d-2 set at `gtk/class/config.rs` and now
+/// recorded in `.port/tools/PARITY_NAMING.md`: a log scope tag is a runtime
+/// identity string emitted into user-visible diagnostic text. The GType
+/// registered NAME in this file is deliberately NOT rebranded.
+const LOG_SCOPE: &str = "gtk_rustty_command_palette";
+
 /// A `#[glib::Boxed]` newtype so a [`binding::Action`] can cross the `trigger`
 /// signal boundary as a `glib::Value`.
 ///
@@ -239,7 +247,7 @@ impl CommandPalette {
         let config = imp.config.borrow().clone();
         let Some(config) = config else {
             // `log.warn("command palette does not have a config!")` (`:147-150`).
-            eprintln!("warn(gtk): command palette does not have a config!");
+            log::warn!(target: LOG_SCOPE, "command palette does not have a config!");
             return;
         };
 
@@ -249,6 +257,17 @@ impl CommandPalette {
         let mut commands: Vec<Command> = Vec::new();
 
         // `collectJumpCommands` (`:162-164`) — documented placeholder (module doc).
+        // UNRESTORED SITES (task-14d-3), all three of this file's residual
+        // allowance, all the same cause — the reference's fallible call is
+        // infallible here, so there is no `catch` arm and restoring the warning
+        // would put a diagnostic on a success path:
+        //   `:163` `failed to collect jump commands: {}` —
+        //          `collect_jump_commands` returns `()`.
+        //   `:197` `failed to create command: {}` — `Command::new` returns
+        //          `Command`, not `Result` (the reference's error is an
+        //          allocation failure).
+        //   `:203` `failed to add command to list: {}` — `Vec::push` cannot
+        //          fail; the reference's `ArrayList.append` takes an allocator.
         self.collect_jump_commands(&config, &mut commands);
 
         // `collectRegularCommands` (`:166`).
