@@ -1084,14 +1084,30 @@ mod tests {
         target.deinit();
         api.deinit();
 
+        // TWO records, in order, and the FIRST one is a bonus proof: it is
+        // `glDebugMessageCallback`'s GL_DEBUG_SEVERITY_HIGH arm (OpenGL.zig:109),
+        // which `prepareContext` registered and which this stage routed through the
+        // `log` facade along with the rest of `pkg/opengl`'s logger. The driver
+        // reports the same blit failure through it, so the message tail is Mesa's
+        // wording, not ours — hence the split assertion below rather than one
+        // `assert_eq!` over a string we do not own. The SECOND is the S113-F4 site,
+        // asserted whole.
+        assert_eq!(records.len(), 2, "records: {records:?}");
+        assert_eq!(records[0].0, log::Level::Error);
+        assert_eq!(records[0].1, LOG_SCOPE);
+        assert!(
+            records[0].2.contains("GL_INVALID_FRAMEBUFFER_OPERATION"),
+            "expected the debug-callback report of the blit failure, got {:?}",
+            records[0].2
+        );
         assert_eq!(
-            records,
-            vec![(
+            records[1],
+            (
                 log::Level::Error,
                 LOG_SCOPE.to_string(),
                 "Error re-enabling GL_FRAMEBUFFER_SRGB, err=InvalidFramebufferOperation"
                     .to_string(),
-            )]
+            )
         );
 
         // AND the present itself reports OK. That is not an oversight, it is what
