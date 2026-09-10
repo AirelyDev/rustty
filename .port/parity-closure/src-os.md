@@ -62,14 +62,16 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Port/percent number parsing does not accept Zig parseInt's '_' digit separators
   - **Oracle:** `src/os/uri.zig:21-91` → **Rustty:** `crates/rustty-os/src/uri.rs:321-336`
   - **Audit's suggested fix:** Implement Zig's parseWithSign semantics (skip '_' after the first digit, '+' prefix, '-' rejected for unsigned) in `parse_int_u16` / `parse_int_u8_hex`.
-- [ ] **S113-F2** · CONFIRMED · `LOG` · missing-branch
+- [x] **S113-F2** · CONFIRMED · `LOG` · missing-branch
   - **What:** Metal log.debug/log.warn call sites preserved only as comments
   - **Oracle:** `src/renderer/Metal.zig:85-88,174,443` → **Rustty:** `crates/rustty-renderer/src/metal/metal_impl.rs:250-251,844-846,923-926`
   - **Audit's suggested fix:** Route the three sites through the crate's log macros (or the rustty log facade) with the oracle's message text.
-- [ ] **S113-F3** · CONFIRMED · `LOG` · missing-branch
+  - **Disposition (task-14c-2):** CLOSED — all 3 of `Metal.zig`'s live `log.*` calls (`:85` debug, `:174` warn, `:443` warn) are live in `metal/metal_impl.rs` under `LOG_SCOPE = "metal"`. `:174`'s emission lives in `display_callback`, the port's `extern "C"` trampoline, not in the `loopEnter` block comment that also quotes it (the double-count trap). `:85`'s `default_storage_mode` renders `Shared`/`Managed` via a derived `Debug` where Zig's `{}` renders the fully-qualified enum name — the known/accepted rendering difference.
+- [x] **S113-F3** · CONFIRMED · `LOG` · missing-branch
   - **What:** Overlay rect-draw error warnings are swallowed silently
   - **Oracle:** `src/renderer/Overlay.zig:195-197,245-247,291-293` → **Rustty:** `crates/rustty-renderer/src/overlay.rs:329-341,461-470,509-518`
   - **Audit's suggested fix:** Emit the three warnings through the crate's log macros with the oracle text and the `OverlayError` Display.
+  - **Disposition (task-14c-2):** CLOSED — all three cited anchors are live in `overlay.rs`. The ledger is RIGHT and this task's brief was wrong to say there were two: `Overlay.zig:196` is a `std.log.warn`, i.e. the `.default` scope, so it emits with `target: ""` per DECISION-logging.md §6r while `:246`/`:292` use `renderer_overlay`. `OverlayError` has no `Display` impl (the audit's suggestion assumed one); the payloads render through the derived `Debug`, and `#[allow(dead_code)]` stays because rustc does not count a `Debug` field read as a use.
 - [ ] **S113-F4** · CONFIRMED · `LOG` · missing-branch
   - **What:** present: re-enable GL_FRAMEBUFFER_SRGB failure is swallowed without the oracle's log.err
   - **Oracle:** `src/renderer/OpenGL.zig:307-309` → **Rustty:** `crates/rustty-renderer/src/opengl/opengl_impl.rs:406-410,499-501`

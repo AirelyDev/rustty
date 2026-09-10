@@ -89,10 +89,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** pkg/macos foundation wrapper tests (16 test blocks) have no rustty counterpart
   - **Oracle:** `pkg/macos/foundation/array.zig:123-176 (plus attributed_string.zig:89-103, character_set.zig:31-49, data.zig:32-38, dictionary.zig:92-125, number.zig:69-79, string.zig:118-120,149-174, url.zig:68-104)` → **Rustty:** `crates/rustty-font-shaper/src/discovery.rs:860-870`
   - **Audit's suggested fix:** Either record these as not-applicable in the parity ledger (replaced binding), or add one macOS-gated #[test] in rustty-font-shaper covering the surrogate-pair helper ('A' -> false, U+1F600 -> D83D/DE00) and a CFDictionary/CFNumber round-trip via objc2-core-foundation.
-- [ ] **S35-F2** · CONFIRMED · `LOG` · behavioral-difference
+- [x] **S35-F2** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** Metal error use-site of String.cstringPtr drops the `metal error={s}` log
   - **Oracle:** `pkg/macos/foundation/string.zig:70-77 (use sites src/renderer/metal/shaders.zig:446, src/renderer/metal/Pipeline.zig:202)` → **Rustty:** `crates/rustty-renderer/src/metal/pipeline.rs:181-193 (and shaders.rs:435,445)`
   - **Audit's suggested fix:** In both map_err closures, emit the reference log line (`log::error!("metal error={}", nserr.localizedDescription())`) before returning Error::MetalFailed.
+  - **Disposition (task-14c-2):** CLOSED. Confirmed against the pin that `string.zig:70-77`'s `cstringPtr` is a pure accessor that logs NOTHING — the emission is the USE SITE's, in each file's own copy of `checkError`. Both are live: `metal::pipeline::check_error` and `metal::shaders::check_error`, reached from three `map_err` arms (Pipeline's one, plus shaders' metallib/source pair, which are cfg-exclusive ports of the single `shaders.zig:348` call). Proved by `metal::pipeline::tests::check_error_emits_at_the_use_site`.
 - [ ] **S36-F4** · DISPUTED · `INDIV` · missing-error-path
   - **What:** Log::create does not check os_log_create for NULL (reference unwraps with `.?`)
   - **Oracle:** `pkg/macos/os/log.zig:7-15` → **Rustty:** `crates/rustty-os/src/macos.rs:297-302`
@@ -105,10 +106,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** macos.video.PixelFormat (CVPixelFormatType enum, 83 members) has no counterpart
   - **Oracle:** `pkg/macos/video/pixel_format.zig:1-171` → **Rustty:** `crates/rustty-renderer/src/metal/cvdisplaylink.rs:1-87`
   - **Audit's suggested fix:** If full pkg/macos surface parity is wanted, add a `PixelFormat(pub i32)` newtype with the 83 associated constants (values from CVPixelBuffer.h) next to cvdisplaylink.rs; otherwise record it as an intentionally-unbound, unused binding.
-- [ ] **S37-F5** · CONFIRMED · `LOG` · behavioral-difference
+- [x] **S37-F5** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** Monomorphized output_callback drops the reference `log.err("error notifying draw_now err={}")`
   - **Oracle:** `pkg/macos/video/display_link.zig:51-83` → **Rustty:** `crates/rustty-renderer/src/metal/cvdisplaylink.rs:282-288`
   - **Audit's suggested fix:** Emit the error log through the renderer crate's log seam (as generic.rs does elsewhere) inside the Err arm.
+  - **Disposition (task-14c-2):** CLOSED — the emission is live at `crates/rustty-renderer/src/metal/cvdisplaylink.rs` (`error notifying draw_now err={err:?}`, `generic_renderer` scope), restored by task-14c-1. Note for the re-audit: the cited oracle `pkg/macos/video/display_link.zig:51-83` contains NO `log.*` call at pin `20abdb50a` — the reference call this row is about is `src/renderer/generic.zig:991`, whose body the port inlines into the CoreVideo `extern "C"` trampoline. Verified by inspection, not by a test: the site fires on a CoreVideo thread, which `log_capture` deliberately does not admit.
 - [ ] **S38-F1** · DISPUTED · `TEST` · other
   - **What:** `too_big` fixtures exist in the oracle checkout but the port claims they are absent and substitutes synthetic headers
   - **Oracle:** `pkg/wuffs/src/png.zig:148-151` → **Rustty:** `crates/rustty-wuffs/src/png.rs:245-261`

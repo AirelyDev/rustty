@@ -59,14 +59,17 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** All log.warn/log.info diagnostics in image.zig and shadertoy.zig are elided (comment-only), no logging facade
   - **Oracle:** `src/renderer/image.zig:85,122,132,165,365,378-381,396,423,447,486,646-649,660,747` → **Rustty:** `crates/rustty-renderer/src/image/macos_impl.rs:218,257,266,289,696,723,738,773,895,1200,1215,1339`
   - **Audit's suggested fix:** Wire a `log`/`tracing` facade (scoped `renderer_image` / `shadertoy`) and emit the same messages at the same sites; at minimum forward the spirv-cross callback message and the glslang info/debug logs so shader compile errors reach the user.
-- [ ] **S118-F4** · CONFIRMED · `LOG` · behavioral-difference
+  - **Disposition (task-14c-2):** WAIVED — 11/13 cited `image.zig` anchors restored as live `log::` sites under `renderer_image`, and all three of `shadertoy.zig`'s live sites (`:71`, `:117`, and the unclaimed spirv-cross callback at `:298`). `image.zig:365` (`Vec::push`) and `:447` (`HashMap::entry`) are infallible in rustty, so neither `log.warn` has a failure arm to live in. See `ADJUDICATION.md#s117-f3`.
+- [x] **S118-F4** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** Dropped log sites: Pipeline checkError, Frame present failure, IOSurfaceLayer wrong-size discard
   - **Oracle:** `src/renderer/metal/Pipeline.zig:195-204` → **Rustty:** `crates/rustty-renderer/src/metal/pipeline.rs:182-194`
   - **Audit's suggested fix:** Wire the renderer to the workspace log facade (or `log` crate) and emit the three messages with the same text/level.
-- [ ] **S119-F1** · CONFIRMED · `LOG` · behavioral-difference
+  - **Disposition (task-14c-2):** CLOSED — the cited anchor (`Pipeline.zig:195-204`) plus both sites named only in the row's title are live. Pipeline `checkError` → `metal::pipeline::check_error`. `Frame.zig:86`'s present failure is NOT in `metal/frame.rs`: the port inlines `bufferCompleted` into `generic.rs::metal_buffer_completed`, so the emission is there — carrying `crate::metal::frame::LOG_SCOPE` (`"metal"`), because the scope belongs to `Frame.zig`, not to `generic.zig`. `IOSurfaceLayer.zig:115`'s wrong-size discard is live in `metal/iosurface_layer.rs` under the reference's own `IOSurfaceLayer` scope casing.
+- [x] **S119-F1** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** Metal shader log sites (checkError log.err, post-shader log.warn, library-load log.debug) are not emitted
   - **Oracle:** `src/renderer/metal/shaders.zig:151, 350, 439-447` → **Rustty:** `crates/rustty-renderer/src/metal/shaders.rs:40-42, 374-382, 419-452, 505-507`
   - **Audit's suggested fix:** Wire the crate's log facade (once available) and emit the three messages, extracting `localizedDescription` from the NSError in the map_err closures.
+  - **Disposition (task-14c-2):** CLOSED — all three of `shaders.zig`'s live calls are live in `metal/shaders.rs`. `:350`'s `shader library loaded time={}us` needed its MEASUREMENT restored too (the port had commented out the `std.time.Instant` pair along with the log); it now uses `std::time::Instant`. `:151`'s `err={err:?}` always renders `MetalFailed` because the port collapsed the whole `initPostPipelines` error set to one variant — a pre-existing error-type divergence, noted at the site, not a logging one.
 - [ ] **S119-F3** · DISPUTED · `LOG` · missing-branch
   - **What:** OpenGL Frame.complete tail skips api.present when the API owns the context (offscreen) and drops the present-failure log.err
   - **Oracle:** `src/renderer/opengl/Frame.zig:62-70` → **Rustty:** `crates/rustty-renderer/src/generic/linux_impl.rs:812-822`

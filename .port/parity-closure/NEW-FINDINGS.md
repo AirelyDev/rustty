@@ -263,9 +263,9 @@ found, and current state.
   point: two files in `src/font` had live diagnostics that the ledger never
   named.
 
-## N6 — `metal/buffer.zig`'s two null-contents warns are unrestorable and unclaimed
+## N7 — `metal/buffer.zig`'s two null-contents warns are unrestorable and unclaimed
 
-- **id**: N6
+- **id**: N7
 - **severity**: low (two diagnostics that cannot fire in rustty; no behavioural divergence
   on any reachable path)
 - **kind**: unrestorable-diagnostic / uncited-site

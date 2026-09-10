@@ -553,7 +553,9 @@ matter how well documented") they are `WAIVED`, not `CLOSED`.
 - **No ledger row cites `buffer.zig` at all** — `S119-F1` covers `shaders.zig`
   only — so no row's state is affected by this and no row is being `CLOSED` over a
   hole it claimed. It is recorded here, at both code sites, and in
-  `NEW-FINDINGS.md` as [[N6]], so the finale re-audit meets it as a tracked item.
+  `NEW-FINDINGS.md` as [[N7]], so the finale re-audit meets it as a tracked item.
+  (It was written as N6 and renumbered to N7: another worker committed a different
+  N6 into `NEW-FINDINGS.md` in the same minute.)
 - Consequence: `crates/rustty-renderer/src/metal/buffer.rs` deliberately has NO
   `LOG_SCOPE` constant, because it has no live emission and an unused constant is a
   `-D warnings` failure.
