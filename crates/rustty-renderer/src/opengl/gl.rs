@@ -53,23 +53,35 @@ pub mod vertex_array;
 // not this one's; the macro NAMES and call sites do not have to change when it
 // happens, only the bodies here.
 //
+// DONE (task-14c-3, the OpenGL 14c stage): the bodies below now route through the
+// `log` facade with `target: LOG_SCOPE` (`"opengl"`), so every one of the eleven
+// `pkg/opengl` + `OpenGL.zig` call sites reaches whichever `log::Log` backend the
+// running binary installed, exactly like the `metal`-scope sites 14c-2 converted.
+// The macro NAMES and the call sites are unchanged, as that note predicted. No row
+// in `LEDGER.tsv` claims these — they were never DEAD, only mis-routed — but the
+// note above scheduled them here explicitly, so they are done here.
+//
 // They live HERE, at the package root, rather than in each leaf, because the
 // reference's logger is likewise one shared thing rather than a per-file one.
 // Task 1 introduced them privately inside `sys` (which was then the only file that
 // logged); Task 3 adds two more files that log (`Shader.zig`/`Program.zig`), so
-// they are hoisted rather than copied. `sys` now imports them from here; the
-// emitted text is unchanged.
+// they are hoisted rather than copied. `sys` now imports them from here.
+
+/// `const log = std.log.scoped(.opengl);` — shared by EVERY file in `pkg/opengl`
+/// (`Shader.zig:5`, `Program.zig:5`) and by `src/renderer/OpenGL.zig:34`.
+pub(crate) const LOG_SCOPE: &str = "opengl";
+
 macro_rules! log_err {
-    ($($arg:tt)*) => { eprintln!("error(opengl): {}", format_args!($($arg)*)) };
+    ($($arg:tt)*) => { log::error!(target: $crate::opengl::gl::LOG_SCOPE, $($arg)*) };
 }
 macro_rules! log_warn {
-    ($($arg:tt)*) => { eprintln!("warning(opengl): {}", format_args!($($arg)*)) };
+    ($($arg:tt)*) => { log::warn!(target: $crate::opengl::gl::LOG_SCOPE, $($arg)*) };
 }
 macro_rules! log_info {
-    ($($arg:tt)*) => { eprintln!("info(opengl): {}", format_args!($($arg)*)) };
+    ($($arg:tt)*) => { log::info!(target: $crate::opengl::gl::LOG_SCOPE, $($arg)*) };
 }
 macro_rules! log_debug {
-    ($($arg:tt)*) => { eprintln!("debug(opengl): {}", format_args!($($arg)*)) };
+    ($($arg:tt)*) => { log::debug!(target: $crate::opengl::gl::LOG_SCOPE, $($arg)*) };
 }
 
 // `macro_rules!` is textually scoped; these re-exports make the macros addressable

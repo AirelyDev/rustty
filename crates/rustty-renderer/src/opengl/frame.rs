@@ -31,8 +31,9 @@ use super::target::Target;
 // PORT NOTE (updated task-14c-1): `Frame.zig`'s
 // `log.err("Failed to present render target: err={}", …)` call site lives in the
 // completion body (`generic/linux_impl.rs`), preserved as a comment there. It is
-// NOT RESTORED YET — the OpenGL 14c stage owns it; the `log` facade itself IS wired
-// for this crate now. Scheduled work, not a missing dependency.
+// RESTORED (task-14c-3) at that site, targeting `opengl_impl::LOG_SCOPE` (`"opengl"`,
+// Frame.zig:15's scope) rather than the `generic_renderer` scope of the file it ended
+// up in — the scope belongs to the file whose call is being ported.
 
 /// The present + report tail of `Frame.complete` (`Frame.zig:62-70`), type-erased
 /// so `Frame` compiles before `GenericRenderer(OpenGL)` exists. The renderer task

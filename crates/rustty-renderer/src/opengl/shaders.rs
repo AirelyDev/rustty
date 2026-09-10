@@ -42,13 +42,13 @@ use super::pipeline::{
     AttribClass, AttribDesc, Options as PipelineOptions, Pipeline, StepFunction, VertexLayout,
 };
 
-// const log = std.log.scoped(.opengl);
-// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
-// (`Cargo.toml`'s `log = { workspace = true }`). The reference's `log.warn` call
-// site (in `Shaders.init`'s post-pipeline recovery) is simply NOT RESTORED YET —
-// the OpenGL 14c stage owns it and will add `const LOG_SCOPE: &str = "opengl";`
-// here. Until then it is preserved as a comment at that site. Scheduled work, not
-// a missing dependency.
+// const log = std.log.scoped(.opengl);   (opengl/shaders.zig:8)
+// RESTORED (task-14c-3, the OpenGL 14c stage): the reference's one `log.warn` call
+// site in this file (`Shaders.init`'s post-pipeline recovery, opengl/shaders.zig:123)
+// is live below. No `LEDGER.tsv` row claims it — its Metal twin is claimed by
+// `S119-F1`, whose rustty column names only `metal/shaders.rs` — so it is restored
+// under PROCEDURE.md blind spot 3 and reported under its own heading.
+const LOG_SCOPE: &str = "opengl";
 
 /// PORTS: the inferred error set of `Shaders.init` — a pipeline compile/link
 /// failure surfacing through [`Pipeline::init`]. Rust has no globally-interned
@@ -406,11 +406,12 @@ impl Shaders {
             bg_image,
         };
 
-        let post_pipelines = init_post_pipelines(post_shaders).unwrap_or_else(|_err| {
+        let post_pipelines = init_post_pipelines(post_shaders).unwrap_or_else(|err| {
             // If an error happens while building postprocess shaders we want to
             // just not use any postprocess shaders since we don't want to block
             // Ghostty from working.
             // log.warn("error initializing postprocess shaders err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error initializing postprocess shaders err={err:?}");
             Vec::new()
         });
 
