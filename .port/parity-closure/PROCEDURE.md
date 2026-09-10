@@ -89,3 +89,19 @@ python3 .port/tools/gates/check_parity_closure.py
   `git push ssh://rvm/~/projects/rustty +HEAD:refs/heads/p6-incoming`, then
   `ssh rvm 'cd ~/projects/rustty && git reset --hard p6-incoming && <command>'`.
   Pushing to the VM's checked-out branch is refused, hence the side ref.
+
+## Two gate blind spots (recorded 2026-09-09, from the 14b review)
+
+`G-PARITY` enforces less than this procedure requires. Know the gaps:
+
+1. **A `CLOSED` row with a known unrestored site slips through.** The gate rejects a `WAIVED`
+   row with an empty `owner`, but places no constraint on `CLOSED`. So "close it and mention
+   the hole in the report" passes the gate while violating this procedure. If a site cannot be
+   done, the row is `WAIVED` **with the reason in `owner`** — never `CLOSED`. This is discipline,
+   not a check; the gate will not catch you.
+
+2. **The gate counts rows, not sites.** A row citing twenty sites closes on the same single
+   `state` cell as a row citing one. Closing a multi-site row therefore requires checking every
+   cited anchor is actually live, not just that the row's *theme* was addressed. The 14b review
+   found three rows closed on reports asserting consolidation that had not happened — ~120
+   commented sites in `stream.rs` alone. Verify anchors; do not summarise them.
