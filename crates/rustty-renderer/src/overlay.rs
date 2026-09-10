@@ -56,14 +56,12 @@ use crate::image::{Pending, PixelFormat};
 use crate::size::{CellSize, Size};
 
 // const log = std.log.scoped(.renderer_overlay);
-// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// PORT NOTE (task-14c-2): the `log` facade is wired for this crate
 // (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
-// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
-// `log.*` sites are simply NOT RESTORED YET — row S117-F3's stage owns them, and will
-// add `const LOG_SCOPE: &str = "renderer_overlay";` here alongside the first live
-// emission. Until then each site stays a comment at its location. Scheduled
-// work, not a missing dependency.
-// Every `log.warn(...)` call site is preserved as a comment at its location.
+// shape 3); all THREE of `Overlay.zig`'s `log.warn` sites are RESTORED beneath
+// their R1 comments.
+/// `Overlay.zig:25`'s `const log = std.log.scoped(.renderer_overlay);`.
+const LOG_SCOPE: &str = "renderer_overlay";
 
 /// The colors we use for overlays.
 // pub const Color = enum { hyperlink, semantic_prompt, semantic_input };
@@ -332,7 +330,7 @@ impl Overlay {
                 }
                 let end_x = x;
 
-                if let Err(_err) = self.highlight_grid_rect(
+                if let Err(err) = self.highlight_grid_rect(
                     start_x,
                     y,
                     end_x - start_x,
@@ -341,10 +339,14 @@ impl Overlay {
                     fill_color,
                 ) {
                     // std.log.warn("Error drawing hyperlink border: {}", .{err});
-                    // PORT NOTE (updated task-14c-1): the facade is wired; this
-                    // site is not restored yet (see overlay.rs top). The reference
-                    // `catch |err| log.warn(...)` still collapses to swallowing the
-                    // error, preserved as this comment.
+                    // PORT NOTE (task-14c-2, scope): this is the reference's ONLY
+                    // `std.log.warn` in this file — i.e. the `.default` scope, NOT the
+                    // file's `.renderer_overlay` one (`main_ghostty.zig:133`: a
+                    // `.default`-scoped record gets an EMPTY prefix). Per
+                    // DECISION-logging.md §6r the `.default` scope is carried as
+                    // `target: ""`; do not "fix" it to `LOG_SCOPE`, the difference is
+                    // the reference's.
+                    log::warn!(target: "", "Error drawing hyperlink border: {err:?}");
                 }
             }
         }
@@ -465,7 +467,7 @@ impl Overlay {
 
                 // const bar_width = @min(@as(usize, 5), self.cell_size.width);
                 let bar_width = std::cmp::min(5usize, self.cell_size.width as usize);
-                if let Err(_err) = self.highlight_pixel_rect(
+                if let Err(err) = self.highlight_pixel_rect(
                     0,
                     start_y,
                     bar_width,
@@ -474,6 +476,7 @@ impl Overlay {
                     prompt_fill,
                 ) {
                     // log.warn("Error drawing semantic prompt bar: {}", .{err});
+                    log::warn!(target: LOG_SCOPE, "Error drawing semantic prompt bar: {err:?}");
                 }
             }
         }
@@ -513,7 +516,7 @@ impl Overlay {
                     SemanticContent::Output => unreachable!(),
                 };
 
-                if let Err(_err) = self.highlight_grid_rect(
+                if let Err(err) = self.highlight_grid_rect(
                     start_x,
                     y,
                     x - start_x,
@@ -522,6 +525,10 @@ impl Overlay {
                     color.rect_fill(),
                 ) {
                     // log.warn("Error drawing semantic content highlight: {}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "Error drawing semantic content highlight: {err:?}"
+                    );
                 }
             }
         }
@@ -769,13 +776,13 @@ impl Overlay {
 /// z2d subset `move_to`/`line_to`/`close_path` are infallible, so only
 /// `fill`/`stroke` contribute — hence the two wrapping variants.
 //
-// PORT NOTE: the `Fill`/`Stroke` payloads carry the faithful z2d error set; the
-// reference consumes them via `log.warn("... {}", .{err})` at each rect-helper
-// call site, which is not restored yet (see the file-top PORT NOTE — the facade
-// itself IS wired), so those sites swallow the error (`if let Err(_err)`) and the
-// payloads are carried-but-unread. `#[allow(dead_code)]` records that — the
-// variants ARE constructed (via `map_err`); only the inner error is not yet
-// read.
+// PORT NOTE (updated task-14c-2): the `Fill`/`Stroke` payloads carry the faithful
+// z2d error set, and the reference consumes them via `log.warn("... {}", .{err})`
+// at each rect-helper call site — all three of which are now RESTORED, so the
+// payloads DO reach a `{err:?}` render. `#[allow(dead_code)]` nevertheless stays:
+// rustc does not count a `#[derive(Debug)]` field read as a use, so removing it
+// re-breaks `-D warnings` (the same finding 14c-1 recorded for
+// `generic.rs`'s `RebuildRowError`).
 #[derive(Debug)]
 #[allow(dead_code)]
 enum OverlayError {

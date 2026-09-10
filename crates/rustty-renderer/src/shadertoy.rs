@@ -56,14 +56,19 @@ use crate::generic::{Path, RepeatablePath};
 static SHADER_FFI_LOCK: Mutex<()> = Mutex::new(());
 
 // const log = std.log.scoped(.shadertoy);
-// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// PORT NOTE (task-14c-2): the `log` facade is wired for this crate
 // (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
-// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
-// `log.*` sites are simply NOT RESTORED YET — row S117-F3's stage owns them, and will
-// add `const LOG_SCOPE: &str = "shadertoy";` here alongside the first live
-// emission. Until then each site stays a comment at its location. Scheduled
-// work, not a missing dependency.
-// The `log.info`/`log.warn` sites below are the ones it will fill.
+// shape 3); all THREE of `shadertoy.zig`'s live `log` sites are RESTORED beneath
+// their R1 comments. (`shadertoy.zig:424`'s `// log.warn("glsl={s}", .{glsl});` is
+// commented in the REFERENCE too, so it stays a comment here — un-commenting it
+// would be a divergence, not a restoration.)
+//
+// R1 note on `{s}` over byte slices: the reference's paths and spirv-cross logs are
+// raw `[]const u8`. The lossy UTF-8 conversion below is confined to the MESSAGE;
+// no ported datum is routed through it (`zig-byteslice-to-rust-rawbytes` governs
+// data, not diagnostics — the same carve-out 14c-1 took in `generic.rs`).
+/// `shadertoy.zig:11`'s `const log = std.log.scoped(.shadertoy);`.
+const LOG_SCOPE: &str = "shadertoy";
 
 /// S117-F1: an align(16)-carrying newtype over `[f32; 4]`.
 ///
@@ -252,7 +257,12 @@ pub fn load_from_files(paths: &RepeatablePath, target: Target) -> Result<Vec<CSt
             Err(Error::FileNotFound) if optional => continue,
             Err(err) => return Err(err),
         };
-        // log.info("loaded custom shader path={s}", .{path});   // not restored yet (S117-F3)
+        // log.info("loaded custom shader path={s}", .{path});
+        log::info!(
+            target: LOG_SCOPE,
+            "loaded custom shader path={}",
+            String::from_utf8_lossy(path.to_bytes())
+        );
         // try list.append(alloc_gpa, shader);
         list.push(shader);
     }
@@ -331,8 +341,20 @@ pub fn load_from_file(path: &CStr, target: Target) -> Result<CString, Error> {
     let mut spirv: Vec<u8> = Vec::new();
     let mut errlog = SpirvLog::default();
     if let Err(err) = spirv_from_glsl(&mut spirv, Some(&mut errlog), &glsl) {
-        // log.warn("spirv error path={s} info={s} debug={s}", ...);   // not restored yet (S117-F3)
-        let _ = &errlog; // (info/debug observed only by the elided log.warn)
+        // if (errlog.info.len > 0 or errlog.debug.len > 0) {
+        //     log.warn("spirv error path={s} info={s} debug={s}", .{
+        //         path, errlog.info, errlog.debug,
+        //     });
+        // }
+        if !errlog.info.is_empty() || !errlog.debug.is_empty() {
+            log::warn!(
+                target: LOG_SCOPE,
+                "spirv error path={} info={} debug={}",
+                String::from_utf8_lossy(path.to_bytes()),
+                String::from_utf8_lossy(&errlog.info),
+                String::from_utf8_lossy(&errlog.debug)
+            );
+        }
         return Err(err);
     }
     // (The reference re-packs into a u32-aligned list for the `@alignCast`; the
@@ -784,16 +806,34 @@ fn spv_cross(
 // that bindgen does not emit as a constant; inline its value (1) as `spvc_bool`.
 const SPVC_TRUE: spvc::spvc_bool = 1;
 
-// PORT NOTE: the reference's inline spirv-cross error callback. `msg` logging is
-// still elided — not because there is no facade (there is, as of task-14c-1) but
-// because this site is row S117-F3's, not this stage's. The callback signature
-// matches `spvc_error_callback`.
+// PORT NOTE (task-14c-2): the reference's inline spirv-cross error callback,
+// RESTORED. It is `std.log.warn`, i.e. the `.default` scope rather than this file's
+// `.shadertoy` one, so it carries `target: ""` per DECISION-logging.md §6r — not
+// `LOG_SCOPE`. The callback signature matches `spvc_error_callback`.
+//
+// This site was UNCLAIMED by any ledger row (S117-F3's oracle column stops at
+// `image.zig`; `shadertoy.zig:298` appears in no row's anchors) — restored anyway,
+// per PROCEDURE.md blind spot 3.
 // fn callback(_: ?*anyopaque, msg_ptr: [*c]const u8) callconv(.c) void {
 //     const msg = std.mem.sliceTo(msg_ptr, 0);
 //     std.log.warn("spirv-cross error message={s}", .{msg});
 // }
 unsafe extern "C" fn error_callback(_userdata: *mut c_void, msg_ptr: *const c_char) {
-    let _ = msg_ptr;
+    // const msg = std.mem.sliceTo(msg_ptr, 0);
+    // PORT NOTE (panic policy): this runs on a C (spirv-cross) frame, so a null
+    // `msg_ptr` must not be dereferenced. The reference's `[*c]const u8` -> `sliceTo`
+    // has the same contract (spirv-cross always passes a NUL-terminated string).
+    if msg_ptr.is_null() {
+        return;
+    }
+    // SAFETY: non-null and NUL-terminated, per `spvc_error_callback`'s contract.
+    let msg = unsafe { std::ffi::CStr::from_ptr(msg_ptr) };
+    // std.log.warn("spirv-cross error message={s}", .{msg});
+    log::warn!(
+        target: "",
+        "spirv-cross error message={}",
+        String::from_utf8_lossy(msg.to_bytes())
+    );
 }
 
 // ---------------------------------------------------------------------------

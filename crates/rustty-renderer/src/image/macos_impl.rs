@@ -70,14 +70,12 @@ use crate::size::CellSize;
 use crate::overlay::Overlay;
 
 // const log = std.log.scoped(.renderer_image);
-// PORT NOTE (updated task-14c-1): the `log` facade IS wired for this crate now
+// PORT NOTE (task-14c-2): the `log` facade is wired for this crate
 // (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
-// shape 3), and `generic.rs`'s `macos_impl` is the worked example. This file's
-// `log.*` sites are simply NOT RESTORED YET — row S117-F3's stage owns them, and will
-// add `const LOG_SCOPE: &str = "renderer_image";` here alongside the first live
-// emission. Until then each site stays a comment at its location. Scheduled
-// work, not a missing dependency.
-// Every `log.warn(...)` call site is preserved as a comment at its location.
+// shape 3); every one of `image.zig`'s thirteen `log.warn` sites is RESTORED
+// beneath its R1 comment.
+/// `image.zig:14`'s `const log = std.log.scoped(.renderer_image);`.
+const LOG_SCOPE: &str = "renderer_image";
 
 /// Generic image rendering state for the renderer. This stores all
 /// images and their placements and exposes only a limited public API
@@ -220,8 +218,9 @@ impl State {
             let pending = self.images.get(&id).is_some_and(|e| e.image.is_pending());
             if pending {
                 let img = &mut self.images.get_mut(&id).unwrap().image;
-                if img.upload(alloc, api).is_err() {
+                if let Err(err) = img.upload(alloc, api) {
                     // log.warn("error uploading image to GPU err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error uploading image to GPU err={err:?}");
                     success = false;
                 }
             }
@@ -261,6 +260,11 @@ impl State {
                 Some(v) => v,
                 None => {
                     // log.warn("image not found for placement image_id={}", .{p.image_id});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "image not found for placement image_id={:?}",
+                        p.image_id
+                    );
                     continue;
                 }
             };
@@ -270,6 +274,11 @@ impl State {
                 Image::Ready(t) | Image::UnloadReady(t) => t,
                 _ => {
                     // log.warn("image not ready for placement image_id={}", .{p.image_id});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "image not ready for placement image_id={:?}",
+                        p.image_id
+                    );
                     continue;
                 }
             };
@@ -291,8 +300,12 @@ impl State {
                 }],
             ) {
                 Ok(b) => b,
-                Err(_err) => {
+                Err(err) => {
                     // log.warn("error creating image vertex buffer err={}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error creating image vertex buffer err={err:?}"
+                    );
                     continue;
                 }
             };
@@ -701,9 +714,15 @@ impl State {
                                 // pending_relative.append(alloc, .{ ... }) catch |err| {
                                 //     log.warn("error deferring relative placement err={}", .{err});
                                 // };
-                                // (Vec::push aborts on OOM — the Zig catch arm
-                                // logs and skips; unreachable under Rust's
-                                // global-alloc model, the crate-wide precedent.)
+                                // PORT NOTE (task-14c-2, WAIVED — not restorable):
+                                // `Vec::push` is infallible (OOM aborts through
+                                // `Global`), so there is NO failure arm for this
+                                // `log.warn` to live in. Hoisting it out of the arm
+                                // would fire it on every SUCCESSFUL deferral — the
+                                // production-bug shape this plan has already shipped
+                                // once. Same adjudication as `generic.zig:1558`'s
+                                // `error rebuilding GPU cells` (14c-1 §4).
+                                // See ADJUDICATION.md#s117-f3.
                                 pending_relative.push(PendingRelative {
                                     image_id: key.image_id,
                                     p: *p,
@@ -726,8 +745,15 @@ impl State {
                 let image = match storage.image_by_id(key.image_id) {
                     Some(img) => img,
                     None => {
-                        // log.warn("missing image for placement, ignoring image_id={}",
-                        //     .{kv.key_ptr.image_id});
+                        // log.warn(
+                        //     "missing image for placement, ignoring image_id={}",
+                        //     .{kv.key_ptr.image_id},
+                        // );
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "missing image for placement, ignoring image_id={}",
+                            key.image_id
+                        );
                         continue;
                     }
                 };
@@ -737,11 +763,11 @@ impl State {
                 //     // other placements even if one fails.
                 //     log.warn("error preparing kitty placement err={}", .{err});
                 // };
-                if self
-                    .prep_kitty_placement(alloc, t, top_y, bot_y, &image, p, origin)
-                    .is_err()
+                if let Err(err) =
+                    self.prep_kitty_placement(alloc, t, top_y, bot_y, &image, p, origin)
                 {
                     // log.warn("error preparing kitty placement err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error preparing kitty placement err={err:?}");
                 }
             }
         }
@@ -770,13 +796,12 @@ impl State {
             let mut v_it = graphics_unicode::placement_iterator(top, Some(bot));
             // while (v_it.next()) |virtual_p| { ... }
             while let Some(virtual_p) = v_it.next() {
-                if self
-                    .prep_kitty_virtual_placement(alloc, t, &virtual_p, cell_size)
-                    .is_err()
+                if let Err(err) = self.prep_kitty_virtual_placement(alloc, t, &virtual_p, cell_size)
                 {
                     // For errors we log and continue. We try to place
                     // other placements even if one fails.
                     // log.warn("error preparing kitty placement err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error preparing kitty placement err={err:?}");
                 }
 
                 // We need to track the origins of all the placeholders
@@ -810,7 +835,15 @@ impl State {
                         };
 
                         // Add the origin for this target
-                        // const gop = virtual_origins.getOrPut(alloc, target.key) catch ...;
+                        // const gop = virtual_origins.getOrPut(alloc, target.key) catch |err| {
+                        //     log.warn("error tracking virtual origin err={}", .{err});
+                        //     break :fold;
+                        // };
+                        // PORT NOTE (task-14c-2, WAIVED — not restorable): the reference's
+                        // `getOrPut` takes an allocator and can fail; `HashMap::entry` cannot
+                        // (OOM aborts through `Global`), so there is no failure arm for the
+                        // `log.warn` and no `break :fold` to reach. See
+                        // ADJUDICATION.md#s117-f3.
                         // if (!gop.found_existing) {
                         //     gop.value_ptr.* = .{ .x = vp.viewport.x, .y = vp.viewport.y };
                         // } else {
@@ -894,11 +927,9 @@ impl State {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                if self
-                    .append_kitty_placement(alloc, t, &image, &pr.p, x, y)
-                    .is_err()
-                {
+                if let Err(err) = self.append_kitty_placement(alloc, t, &image, &pr.p, x, y) {
                     // log.warn("error preparing kitty placement err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error preparing kitty placement err={err:?}");
                 }
             }
         }
@@ -1203,8 +1234,15 @@ impl State {
         let image = match storage.image_by_id(p.image_id) {
             Some(img) => img,
             None => {
-                // log.warn("missing image for virtual placement, ignoring image_id={}",
-                //     .{p.image_id});
+                // log.warn(
+                //     "missing image for virtual placement, ignoring image_id={}",
+                //     .{p.image_id},
+                // );
+                log::warn!(
+                    target: LOG_SCOPE,
+                    "missing image for virtual placement, ignoring image_id={}",
+                    p.image_id
+                );
                 return Ok(());
             }
         };
@@ -1217,8 +1255,9 @@ impl State {
         //     catch |err| { log.warn("error rendering virtual placement err={}", .{err}); return; };
         let rp = match p.render_placement(storage, &image, cell_size.width, cell_size.height) {
             Ok(rp) => rp,
-            Err(_) => {
+            Err(err) => {
                 // log.warn("error rendering virtual placement err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error rendering virtual placement err={err:?}");
                 return Ok(());
             }
         };
@@ -1335,14 +1374,14 @@ impl State {
         // gop.value_ptr.image.getPendingPointer().?.prepForUpload(alloc) catch |err| { ... };
         // (`b17abd96d`: prepForUpload moved onto `Image.Pending`.)
         let entry = self.images.get_mut(&id).unwrap();
-        if entry
+        if let Err(err) = entry
             .image
             .get_pending_pointer()
             .unwrap()
             .prep_for_upload(alloc)
-            .is_err()
         {
             // log.warn("error preparing image for upload err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error preparing image for upload err={err:?}");
             entry.image.mark_for_unload();
             return Err(PrepImageError::ImageConversionError);
         }
@@ -1471,7 +1510,13 @@ pub enum PrepImageError {
 //
 // PORT NOTE: `union(enum) { kitty: u32, overlay }` → a plain enum (the `overlay`
 // arm has no payload). `#[derive(..., Hash)]` makes it a `HashMap` key.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+//
+// PORT NOTE (task-14c-2): `Debug` is derived because `image.zig:122`/`:132`'s
+// restored `log.warn("... image_id={}", .{p.image_id})` render this value. Zig's
+// `{}` on a tagged union prints `<TypeName>{ .kitty = <n> }`; the derived `Debug`
+// prints `Kitty(<n>)`. That rendering difference is the known/accepted one (the
+// reference has no custom `format` method to port).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Id {
     /// Image sent to the terminal state via the kitty graphics protocol.
     /// The value is the ID assigned by the terminal.
