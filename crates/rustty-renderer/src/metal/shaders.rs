@@ -389,7 +389,8 @@ impl Shaders {
             //  `error.<Name>` over its whole error set; the port has collapsed
             //  every failure in this call tree to the single
             //  `Error::MetalFailed`, so this always renders `MetalFailed`.
-            //  A pre-existing error-type divergence, not a logging one.)
+            //  A pre-existing error-type divergence, not a logging one; tracked
+            //  in its own right as `.port/parity-closure/NEW-FINDINGS.md` N8.)
             log::warn!(target: LOG_SCOPE, "error initializing postprocess shaders err={err:?}");
             Vec::new()
         });

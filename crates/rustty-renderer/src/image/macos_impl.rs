@@ -72,8 +72,14 @@ use crate::overlay::Overlay;
 // const log = std.log.scoped(.renderer_image);
 // PORT NOTE (task-14c-2): the `log` facade is wired for this crate
 // (`Cargo.toml`'s `log = { workspace = true }`; DECISION-logging.md §6r call
-// shape 3); every one of `image.zig`'s thirteen `log.warn` sites is RESTORED
-// beneath its R1 comment.
+// shape 3). ELEVEN of `image.zig`'s thirteen `log.warn` sites are RESTORED, each
+// beneath its R1 comment. The other TWO are NOT restorable and stay comments with
+// a PORT NOTE at the site: `image.zig:365` (`error deferring relative placement`,
+// reference `ArrayList.append(alloc, …)` is fallible, `Vec::push` is not) and
+// `image.zig:447` (`error tracking virtual origin`, reference
+// `getOrPut(alloc, …)` is fallible, `HashMap::entry` is not). Both are inside row
+// S117-F3's cited anchors, which is why that row is WAIVED rather than CLOSED —
+// see `.port/parity-closure/ADJUDICATION.md#s117-f3`.
 /// `image.zig:14`'s `const log = std.log.scoped(.renderer_image);`.
 const LOG_SCOPE: &str = "renderer_image";
 

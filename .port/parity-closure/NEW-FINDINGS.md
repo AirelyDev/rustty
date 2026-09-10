@@ -289,3 +289,47 @@ found, and current state.
 - **state**: **WAIVED-by-construction.** Nothing to schedule unless the port ever moves off
   objc2's `NonNull` contract for `contents()`; if it does, restore both warns with
   `error.MetalFailed` as the return.
+
+---
+
+## N8 — `initPostPipelines`'s error set collapsed to one variant, so its restored log always prints the same thing
+
+- **id**: N8
+- **severity**: low (a diagnostic that is present and correctly placed but permanently
+  under-informative; no state or rendering difference)
+- **kind**: error-type degeneration / behavioral-difference
+- **oracle**: `src/renderer/metal/shaders.zig:151` —
+  `log.warn("error initializing postprocess shaders err={}", .{err});` in the
+  `initPostPipelines(...) catch |err| err: { ... break :err &.{}; }` arm. `err` there
+  ranges over the inferred error union of `initPostPipelines`, which spans allocation
+  failure, `error.MetalFailed` from either `checkError` site, and the shader-source
+  decode path — so Zig's `{}` renders a DIFFERENT `error.<Name>` per cause.
+- **rustty**: `crates/rustty-renderer/src/metal/shaders.rs` — `init_post_pipelines`
+  returns `Result<Vec<Pipeline>, Error>` where `Error` has exactly one variant,
+  `MetalFailed`. Every failure in that call tree is flattened into it (four separate
+  `.map_err(|_| Error::MetalFailed)` / `.map_err(|_nserr| ...)` sites feed it).
+- **description**: the restored emission is at the right place, at the right level,
+  with the reference's verbatim message text — but its one argument can only ever
+  render `MetalFailed`, so the diagnostic cannot distinguish an out-of-memory from a
+  spirv-cross-produced MSL that failed to decode as UTF-8 from a Metal compile error.
+  The reference distinguishes all three. This is an ERROR-TYPE divergence, not a
+  logging one: it predates the log restoration and would exist identically if the log
+  had never been dropped.
+- **how found**: task 14c-2, restoring `S119-F1`'s three sites. It is the shape the
+  brief warned about ("a function's error type had degenerated so the restored message
+  would print `err=()`") in a milder form — degenerate to one NAMED variant rather than
+  to `()`, which is why it survives a casual read of the restored line.
+- **why this is recorded separately from S119-F1**: `S119-F1` is legitimately CLOSED —
+  all three of its cited anchors are live emissions with verbatim text, which is what
+  the row asks for. Widening a Metal error set is a runtime refactor and must not ride
+  along inside a `LOG`-class row's closure (the same principle applied to [[N5]]). But
+  the divergence is knowable and permanent, and right now it lives only in a row
+  disposition inside a CLOSED row, where the finale re-audit would not meet it as a
+  tracked item.
+- **state**: **OPEN — needs an owner.** Closing it means giving
+  `metal::shaders::Error` (and the `metal::pipeline::Error` it folds in) variants that
+  distinguish the reference's causes — at minimum allocation/decode/Metal-compile —
+  and threading them through the four flattening `map_err`s. Note the same flattening
+  is what makes every other `{err:?}` site in this crate unverifiable against the
+  oracle's rendering (task-14c-1 fix round, concern 1); this row is simply the one
+  case where the collapse is total and therefore provable without a ruling.

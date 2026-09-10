@@ -309,10 +309,9 @@ mod tests {
     /// two callers, `Pipeline.zig:202` and `shaders.zig:446`, both inside
     /// `checkError`.
     ///
-    /// So this test drives a REAL `Pipeline::init` failure (a fragment function
-    /// installed in the vertex slot — both functions resolve, the pipeline-state
-    /// creation is what Metal rejects, which is the only arm that produces an
-    /// `NSError` for `checkError` to read) and asserts:
+    /// So this test drives a REAL `Pipeline::init` failure — `cell_text_vertex`,
+    /// which takes a `[[stage_in]]` vertex input, with NO attribute table — and
+    /// asserts:
     ///
     /// * exactly ONE record — an emission in the helper as well as the use site
     ///   would give two;
@@ -323,6 +322,21 @@ mod tests {
     /// Metal-gated: routed through `metal::test_support::require_metal_or_skip`,
     /// so under `RUSTTY_REQUIRE_METAL=1` (exported on the macOS CI leg) a missing
     /// device is a HARD FAILURE rather than a silent green.
+    ///
+    /// # DANGER — do not change the shader function names in this fixture
+    ///
+    /// The fixture must fail by returning an `NSError`. Metal has a second,
+    /// NON-recoverable failure mode: a descriptor it considers *malformed* (as
+    /// opposed to merely invalid) aborts the process instead of returning an
+    /// error. Putting a FRAGMENT function in the vertex slot — e.g.
+    /// `vertex_fn: "bg_color_fragment"` — is exactly that: it does not fail the
+    /// test, it **SIGKILLs / segfaults the whole test binary**, which reads in CI
+    /// as an infrastructure flake rather than as a broken fixture. Both this task
+    /// and its reviewer reproduced it. `cell_text_vertex` + a missing attribute
+    /// table is the fixture that fails RECOVERABLY; keep it, and if you must
+    /// change it, verify the new one still reaches
+    /// `newRenderPipelineStateWithDescriptor:error:` and comes back with an
+    /// `Err`, not a signal.
     #[test]
     fn check_error_emits_at_the_use_site() {
         let metal = match Metal::init_offscreen(AlphaBlending::Native, 4, 4) {
@@ -349,10 +363,10 @@ mod tests {
                 // resolve — we get past the `ok_or(MetalFailed)` guards — and
                 // `newRenderPipelineStateWithDescriptor:error:` rejects the
                 // descriptor with an NSError, which is the only arm that gives
-                // `checkError` something to read. (Deliberately NOT a
-                // fragment-function-in-the-vertex-slot fixture: Metal treats that
-                // as a hard validation abort and SIGKILLs the process instead of
-                // returning an error.)
+                // `checkError` something to read.
+                //
+                // See the DANGER note on this test: a fragment function in the
+                // vertex slot kills the process instead of failing the test.
                 vertex_fn: "cell_text_vertex",
                 fragment_fn: "cell_text_fragment",
                 vertex_library: &shaders.library,
