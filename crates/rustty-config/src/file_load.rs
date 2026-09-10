@@ -321,7 +321,14 @@ pub fn open(path: &[u8]) -> Result<std::fs::File, OpenFileError> {
         Err(err) => match err.kind() {
             std::io::ErrorKind::NotFound => return Err(OpenFileError::FileNotFound),
             _ => {
-                // log.warn("unexpected file open error path={s} err={}", .{ path, err });
+                // log.warn("unexpected file open error path={s} err={}", .{
+                //     path,
+                //     err,
+                // });
+                crate::config_struct::log_warn(format!(
+                    "unexpected file open error path={} err={err:?}",
+                    String::from_utf8_lossy(path)
+                ));
                 return Err(OpenFileError::FileOpenFailed);
             }
         },
@@ -333,8 +340,15 @@ pub fn open(path: &[u8]) -> Result<std::fs::File, OpenFileError> {
     // };
     let stat = match file.metadata() {
         Ok(m) => m,
-        Err(_err) => {
-            // log.warn("error getting file stat path={s} err={}", .{ path, err });
+        Err(err) => {
+            // log.warn("error getting file stat path={s} err={}", .{
+            //     path,
+            //     err,
+            // });
+            crate::config_struct::log_warn(format!(
+                "error getting file stat path={} err={err:?}",
+                String::from_utf8_lossy(path)
+            ));
             return Err(OpenFileError::FileOpenFailed);
         }
     };
@@ -373,4 +387,61 @@ fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
 #[cfg(not(unix))]
 fn os_str_from_bytes(bytes: &[u8]) -> &std::ffi::OsStr {
     std::ffi::OsStr::new(std::str::from_utf8(bytes).unwrap_or(""))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // No reference `test {}` — PROVING test for S78-F6. `file_load.open`'s two
+    // `log.warn` calls (`config/file_load.zig:152-155` unexpected open error,
+    // `:162-165` stat error) were carried as inert comments, so a config file
+    // that exists but cannot be opened failed silently. The open-error arm is
+    // the one reachable portably (a path whose PARENT is a regular file gives
+    // `ENOTDIR`, which is not `FileNotFound`); both arms write through the same
+    // `config_struct::log_warn` helper.
+    #[test]
+    fn open_warns_on_an_unexpected_open_error() {
+        let mut file = std::env::temp_dir();
+        file.push("rustty-s78f6-parent-is-a-file");
+        std::fs::write(&file, b"x").unwrap();
+
+        // `<regular file>/child` — ENOTDIR, i.e. an `else =>` open error.
+        let canon = std::fs::canonicalize(&file).unwrap();
+        let mut path: Vec<u8> = {
+            #[cfg(unix)]
+            {
+                use std::os::unix::ffi::OsStrExt;
+                canon.as_os_str().as_bytes().to_vec()
+            }
+            #[cfg(not(unix))]
+            {
+                canon.to_string_lossy().as_bytes().to_vec()
+            }
+        };
+        path.extend_from_slice(b"/child");
+        assert!(is_absolute(&path));
+
+        // The exact `{err:?}` rendering is the platform's `io::Error` Debug;
+        // take it from the same failing call rather than hard-coding an errno
+        // spelling, so the assertion pins the LEVEL, PATH and MESSAGE SHAPE on
+        // every target.
+        let err = std::fs::File::open(os_str_from_bytes(&path)).unwrap_err();
+        assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
+
+        crate::config_struct::log_capture::arm();
+        let got = open(&path);
+        let records = crate::config_struct::log_capture::take();
+
+        assert!(matches!(got, Err(OpenFileError::FileOpenFailed)));
+        assert_eq!(
+            records,
+            vec![format!(
+                "warning(config): unexpected file open error path={} err={err:?}",
+                String::from_utf8_lossy(&path)
+            )],
+        );
+
+        std::fs::remove_file(&file).unwrap();
+    }
 }

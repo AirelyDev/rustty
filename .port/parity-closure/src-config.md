@@ -114,7 +114,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** theme diagnostics: file-kind tag names collapsed to 'unknown' and errors rendered via io::Error Display
   - **Oracle:** `src/config/theme.zig:129-153, 177-201, 211-222, 259-277` → **Rustty:** `crates/rustty-config/src/theme.rs:334, 430, 489, 586, 638-650`
   - **Audit's suggested fix:** Extend kind_name using std::os::unix::fs::FileTypeExt (is_fifo -> named_pipe, is_socket -> unix_domain_socket, is_block_device -> block_device, is_char_device -> character_device) and render io errors in the `error.<Name>` form.
-- [ ] **S78-F6** · CONFIRMED · `LOG` · other
+- [x] **S78-F6** · CONFIRMED · `LOG` · other
   - **What:** file_load.open drops both log.warn calls
   - **Oracle:** `src/config/file_load.zig:150-167` → **Rustty:** `crates/rustty-config/src/file_load.rs:319-340`
   - **Audit's suggested fix:** Emit the two warnings through the crate's logging path (config_struct.rs log_warn or the rustty log facade).
