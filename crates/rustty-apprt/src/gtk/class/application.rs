@@ -5290,18 +5290,17 @@ mod tests {
             "unbound core app installs no dispatch thunk"
         );
 
-        app.bind_core_app::<Double>();
-        assert!(
-            app.imp().perform_all_action_thunk.borrow().is_some(),
-            "bind_core_app must install the performAllAction thunk"
-        );
-
-        // task-14d-3: the `rt_app` backref MUST be bound too. The installed thunk
-        // opens with `let Some(rt_app) = rt_app else { return; }`, so with it
-        // unbound the thunk returns BEFORE `performAllAction` and this test never
-        // reaches the dispatch it claims to prove. Caught by running the S50-F4
-        // negative control on Linux: re-adding the removed success emission left
-        // the test GREEN, which is the definition of a vacuous assertion.
+        // task-14d-3: the `rt_app` backref MUST be bound, and BEFORE
+        // `bind_core_app`. The thunk opens with
+        // `let Some(rt_app) = rt_app else { return; }`, and `bind_core_app`
+        // SNAPSHOTS `imp.rt_app` into the closure at install time
+        // (`let rt_app = self.imp().rt_app.get()...` — application.rs:2913), so
+        // binding it afterwards has no effect on an already-installed thunk.
+        // With it unbound the thunk returns BEFORE `performAllAction` and this
+        // test never reaches the dispatch it claims to prove. Caught by running
+        // the S50-F4 negative control on Linux: re-adding the removed success
+        // emission left the test GREEN, which is the definition of a vacuous
+        // assertion.
         let mut rt_app = Double {
             config: rustty_config::Config::default_config(),
         };
@@ -5310,6 +5309,12 @@ mod tests {
         assert!(
             app.imp().rt_app.get().is_some(),
             "bind_rt_app must publish the rt-app backref the thunk dereferences"
+        );
+
+        app.bind_core_app::<Double>();
+        assert!(
+            app.imp().perform_all_action_thunk.borrow().is_some(),
+            "bind_core_app must install the performAllAction thunk"
         );
 
         // S50-F4 (task-14d-3): the SUCCESS path must emit NOTHING. The port
