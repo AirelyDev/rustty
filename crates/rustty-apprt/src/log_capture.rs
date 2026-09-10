@@ -293,12 +293,43 @@ mod tests {
     /// Outside a capture window the logger must drop everything, so foreign
     /// records cannot accumulate in the buffer over the life of the test
     /// binary and cannot be observed by the NEXT capture.
+    ///
+    /// task-14d-3 fix round 1 (F3): the emptiness assertion is NOT on its own.
+    /// An absence proves nothing without a positive assertion that the code
+    /// path under test was reached — a no-op `install` would have satisfied the
+    /// empty vector just as well as a working discard. The second half emits
+    /// INSIDE the window and asserts the record arrives, which is what
+    /// establishes that the logger is installed, admitting, and reachable from
+    /// this thread; only then does the first half's silence mean "discarded"
+    /// rather than "nothing was ever listening".
     #[test]
     fn records_emitted_outside_a_capture_are_discarded() {
-        log::warn!(target: "gtk_rustty_surface", "before any capture");
+        const SELFTEST_TARGET: &str = "task14d3_discard_selftest";
+
+        log::warn!(target: SELFTEST_TARGET, "before any capture");
         let cap = start();
-        let messages = cap.messages();
+        let outside = cap.messages();
+
+        // POSITIVE control: the same logger, thread and target — but inside the
+        // window this time.
+        log::warn!(target: SELFTEST_TARGET, "inside the capture");
+        let inside = cap.messages();
         drop(cap);
-        assert_eq!(Vec::<CapturedRecord>::new(), messages);
+
+        assert_eq!(
+            Vec::<CapturedRecord>::new(),
+            outside,
+            "a record emitted before the guard existed must be discarded"
+        );
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                SELFTEST_TARGET.to_string(),
+                "inside the capture".to_string()
+            )],
+            inside,
+            "the same emission INSIDE the window must be captured — without this \
+             the assertion above passes for a logger that was never installed"
+        );
     }
 }
