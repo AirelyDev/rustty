@@ -60,6 +60,10 @@ use wayland_protocols_plasma::slide::client::org_kde_kwin_slide_manager::OrgKdeK
 use super::hotkeys::Hotkeys;
 use super::vicinae::vicinae_hotkey_manager_v1::VicinaeHotkeyManagerV1;
 
+/// `const log = std.log.scoped(.winproto_wayland_globals)` (`Globals.zig:14`).
+/// Carried as the `log::` facade's `target:` (`DECISION-logging.md` §6r4).
+const LOG_SCOPE: &str = "winproto_wayland_globals";
+
 /// PORTS: `Globals.zig:29-47` `Tag`. Which advertised global a binding
 /// corresponds to. Used as the key of the binding map, exactly as the reference
 /// does (`Globals.zig:17`), to route the `global_remove` event
@@ -279,6 +283,20 @@ impl Globals {
     /// `T.generated_version` (`Globals.zig:149-153`); we clamp to the advertised
     /// version too so a compositor advertising a lower version than we support does
     /// not raise a protocol error.
+    //
+    // PORT NOTE (task-14d-3): `log.debug("matched {}", .{T})` (`Globals.zig:150`)
+    // is ONE reference site inside an `inline for` over the tag list, so it
+    // executes once per matched interface. Rust has no `inline for` here — the
+    // dispatch is an if-else chain — so the same one reference site becomes SEVEN
+    // static call sites, one per branch. `{}` on a Zig TYPE prints the type name
+    // (`wl.Compositor`); the closest available payload in wayland-rs is the
+    // interface NAME (`wl_compositor`), which is what is printed. This is why this
+    // file measures 10 emissions against 6 reference sites; it is not extra
+    // diagnostic mass at runtime.
+    //
+    // UNRESTORED SITE `Globals.zig:157` (`error binding interface {s} error={}`):
+    // `WlRegistry::bind` in wayland-rs returns the proxy directly and cannot fail
+    // synchronously, so there is no `catch` arm to hang it on.
     fn bind_global(
         &mut self,
         registry: &WlRegistry,
@@ -289,17 +307,23 @@ impl Globals {
     ) {
         if interface == WlCompositor::interface().name {
             let v = version.min(WlCompositor::interface().version);
+            // log.debug("matched {}", .{T});
+            log::debug!(target: LOG_SCOPE, "matched {}", WlCompositor::interface().name);
             let old = self.compositor.take();
             self.compositor = Some(registry.bind::<WlCompositor, (), Globals>(name, v, qh, ()));
             self.record_binding(Tag::Compositor, name, old.map(|p| p.id()));
         } else if interface == XdgActivationV1::interface().name {
             let v = version.min(XdgActivationV1::interface().version);
+            // log.debug("matched {}", .{T});
+            log::debug!(target: LOG_SCOPE, "matched {}", XdgActivationV1::interface().name);
             let old = self.xdg_activation.take();
             self.xdg_activation =
                 Some(registry.bind::<XdgActivationV1, (), Globals>(name, v, qh, ()));
             self.record_binding(Tag::XdgActivation, name, old.map(|p| p.id()));
         } else if interface == OrgKdeKwinServerDecorationManager::interface().name {
             let v = version.min(OrgKdeKwinServerDecorationManager::interface().version);
+            // log.debug("matched {}", .{T});
+            log::debug!(target: LOG_SCOPE, "matched {}", OrgKdeKwinServerDecorationManager::interface().name);
             let old = self.kde_decoration_manager.take();
             self.kde_decoration_manager = Some(
                 registry.bind::<OrgKdeKwinServerDecorationManager, (), Globals>(name, v, qh, ()),
@@ -309,12 +333,16 @@ impl Globals {
             self.needs_roundtrip = true;
         } else if interface == OrgKdeKwinSlideManager::interface().name {
             let v = version.min(OrgKdeKwinSlideManager::interface().version);
+            // log.debug("matched {}", .{T});
+            log::debug!(target: LOG_SCOPE, "matched {}", OrgKdeKwinSlideManager::interface().name);
             let old = self.kde_slide_manager.take();
             self.kde_slide_manager =
                 Some(registry.bind::<OrgKdeKwinSlideManager, (), Globals>(name, v, qh, ()));
             self.record_binding(Tag::KdeSlideManager, name, old.map(|p| p.id()));
         } else if interface == KdeOutputOrderV1::interface().name {
             let v = version.min(KdeOutputOrderV1::interface().version);
+            // log.debug("matched {}", .{T});
+            log::debug!(target: LOG_SCOPE, "matched {}", KdeOutputOrderV1::interface().name);
             let old = self.kde_output_order.take();
             self.kde_output_order =
                 Some(registry.bind::<KdeOutputOrderV1, (), Globals>(name, v, qh, ()));
@@ -323,6 +351,8 @@ impl Globals {
             self.needs_roundtrip = true;
         } else if interface == ExtBackgroundEffectManagerV1::interface().name {
             let v = version.min(ExtBackgroundEffectManagerV1::interface().version);
+            // log.debug("matched {}", .{T});
+            log::debug!(target: LOG_SCOPE, "matched {}", ExtBackgroundEffectManagerV1::interface().name);
             let old = self.ext_background_effect.take();
             self.ext_background_effect =
                 Some(registry.bind::<ExtBackgroundEffectManagerV1, (), Globals>(name, v, qh, ()));
@@ -333,6 +363,8 @@ impl Globals {
             // PORTS: `Globals.zig:46` — the `vicinae_hotkey_manager` arm of the
             // registry bind. The manager emits no events, so no extra roundtrip.
             let v = version.min(VicinaeHotkeyManagerV1::interface().version);
+            // log.debug("matched {}", .{T});
+            log::debug!(target: LOG_SCOPE, "matched {}", VicinaeHotkeyManagerV1::interface().name);
             let old = self.vicinae_hotkey_manager.take();
             self.vicinae_hotkey_manager =
                 Some(registry.bind::<VicinaeHotkeyManagerV1, (), Globals>(name, v, qh, ()));
@@ -439,6 +471,8 @@ impl Dispatch<WlRegistry, ()> for Globals {
                 interface,
                 version,
             } => {
+                // log.debug("found global {s}", .{v.interface});
+                log::debug!(target: LOG_SCOPE, "found global {interface}");
                 state.bind_global(registry, qh, name, &interface, version);
             }
             wl_registry::Event::GlobalRemove { name } => {
@@ -509,7 +543,18 @@ impl Dispatch<KdeOutputOrderV1, ()> for Globals {
 
                 if output_name.is_empty() {
                     state.state.primary_output_name = None;
+                    // log.warn("ignoring empty primary output name from kde_output_order_v1", .{});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "ignoring empty primary output name from kde_output_order_v1"
+                    );
                 } else {
+                    // UNRESTORED SITE `Globals.zig:239` (`failed to allocate
+                    // primary output name: {}`): the reference's `alloc.dupeZ`
+                    // can fail; the Rust `String` here is already owned and
+                    // allocation is infallible, so the arm does not exist.
+                    // log.debug("primary output: {s}", .{name});
+                    log::debug!(target: LOG_SCOPE, "primary output: {output_name}");
                     state.state.primary_output_name = Some(output_name);
                 }
             }
