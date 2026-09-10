@@ -62,7 +62,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** wasm: SHELL-env/flatpak lookup in finalize is not gated off like the oracle's isWasm guard
   - **Oracle:** `src/config/Config.zig:4671-4674` → **Rustty:** `crates/rustty-config/src/config_struct.rs:7276-7278, 7315-7332`
   - **Audit's suggested fix:** Add `#[cfg(not(target_family = "wasm"))]` to the outer block.
-- [ ] **S75-F2** · CONFIRMED · `LOG` · behavioral-difference
+- [x] **S75-F2** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** Keybinds.parseCLI drops the three std.log messages (keybind =, keybind = clear, table cleared)
   - **Oracle:** `src/config/Config.zig:7355, 7365, 7397` → **Rustty:** `crates/rustty-config/src/value_types.rs:4798-4815, 4850-4856`
   - **Audit's suggested fix:** Expose the config_struct.rs log_info helper (plus a log_debug variant) to value_types.rs and emit the three messages at the same points.

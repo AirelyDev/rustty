@@ -4809,6 +4809,9 @@ impl Keybinds {
         // Check for special values
         if value.is_empty() {
             // log.info("config has 'keybind =', using default keybinds", .{});
+            crate::config_struct::log_info(
+                "config has 'keybind =', using default keybinds".to_string(),
+            );
             self.init();
             return Ok(());
         }
@@ -4819,6 +4822,9 @@ impl Keybinds {
             // allocated value). This isn't a memory leak because the arena
             // will be freed when the config is freed.
             // log.info("config has 'keybind = clear', all keybinds cleared", .{});
+            crate::config_struct::log_info(
+                "config has 'keybind = clear', all keybinds cleared".to_string(),
+            );
             self.set = rustty_input::binding::Set::default();
             self.tables = rustty_zigstd::array_hash_map::AutoArrayHashMapUnmanaged::new();
             self.chain_target = KeybindsChainTarget::Root;
@@ -4868,6 +4874,10 @@ impl Keybinds {
                 // definition/clear command
                 if binding.is_empty() {
                     // log.debug("config has 'keybind = {s}/', table cleared", .{table_name});
+                    crate::config_struct::log_debug(format!(
+                        "config has 'keybind = {}/', table cleared",
+                        String::from_utf8_lossy(table_name)
+                    ));
                     // gop.value_ptr.* = .{};
                     *self.tables.value_at_mut(gop.index) = rustty_input::binding::Set::default();
                     self.chain_target = KeybindsChainTarget::Root;
@@ -6052,6 +6062,9 @@ impl RepeatableCommand {
         // if (input.len == 0) {
         if input.is_empty() {
             // log.info("config has 'command-palette-entry =', using default entries", .{});
+            crate::config_struct::log_info(
+                "config has 'command-palette-entry =', using default entries".to_string(),
+            );
             // try self.init(alloc);
             self.init();
             // return;
@@ -6061,6 +6074,10 @@ impl RepeatableCommand {
         // if (std.mem.eql(u8, input, "clear")) {
         if input == b"clear" {
             // log.info("config has 'command-palette-entry = clear', all command entries cleared", .{});
+            crate::config_struct::log_info(
+                "config has 'command-palette-entry = clear', all command entries cleared"
+                    .to_string(),
+            );
             // self.value.clearRetainingCapacity();
             self.value.clear();
             // self.value_c.clearRetainingCapacity();
@@ -9456,6 +9473,67 @@ mod tests {
     // `inputpkg.command.defaults` -> `rustty_input::command::defaults()`.
     // -----------------------------------------------------------------------
     use rustty_input::binding::Action;
+
+    // No reference `test {}` — PROVING tests for S75-F2 and for the two
+    // UNCLAIMED sibling sites the audit never names (`Config.zig:8887, 8893`,
+    // `RepeatableCommand.parseCLI`; PROCEDURE.md blind spot 4). All five are
+    // `Keybinds`/`RepeatableCommand` "special value" announcements that were
+    // carried as inert comments: `value_types.rs` contained no live emission at
+    // all before this change.
+    #[test]
+    fn keybinds_parse_cli_announces_the_reference_special_values() {
+        // `keybind =` -> reset to the default keybinds.
+        let mut set: Keybinds = Keybinds::default();
+        crate::config_struct::log_capture::arm();
+        set.parse_cli(Some(b"")).unwrap();
+        assert_eq!(
+            crate::config_struct::log_capture::take(),
+            vec!["info(config): config has 'keybind =', using default keybinds".to_string()],
+        );
+
+        // `keybind = clear` -> drop every binding and every table.
+        crate::config_struct::log_capture::arm();
+        set.parse_cli(Some(b"clear")).unwrap();
+        assert_eq!(
+            crate::config_struct::log_capture::take(),
+            vec!["info(config): config has 'keybind = clear', all keybinds cleared".to_string()],
+        );
+
+        // `keybind = <name>/` -> clear that table. `log.debug`, not `log.info`,
+        // and the ONLY one of the three that formats a value.
+        set.parse_cli(Some(b"foo/shift+a=csi:hello")).unwrap();
+        crate::config_struct::log_capture::arm();
+        set.parse_cli(Some(b"foo/")).unwrap();
+        assert_eq!(
+            crate::config_struct::log_capture::take(),
+            vec!["debug(config): config has 'keybind = foo/', table cleared".to_string()],
+        );
+    }
+
+    #[test]
+    fn repeatable_command_parse_cli_announces_the_reference_special_values() {
+        let mut list = RepeatableCommand::default();
+        crate::config_struct::log_capture::arm();
+        list.parse_cli(Some(b"")).unwrap();
+        assert_eq!(
+            crate::config_struct::log_capture::take(),
+            vec![
+                "info(config): config has 'command-palette-entry =', using default entries"
+                    .to_string()
+            ],
+        );
+
+        crate::config_struct::log_capture::arm();
+        list.parse_cli(Some(b"clear")).unwrap();
+        assert_eq!(
+            crate::config_struct::log_capture::take(),
+            vec![concat!(
+                "info(config): config has 'command-palette-entry = clear', ",
+                "all command entries cleared"
+            )
+            .to_string()],
+        );
+    }
 
     // test "RepeatableCommand parseCLI"
     // PORT NOTE: `set_font_size:3.14` is the reference test's literal input; the

@@ -5674,6 +5674,12 @@ pub(crate) fn expand_home<'a>(path: &'a [u8], buf: &'a mut [u8]) -> &'a [u8] {
         // PORT NOTE: `rustty_global::environ_map()` is infallible (a snapshot of
         // the captured environ), so the reference's `catch` warn-arm has no Rust
         // analogue.
+        //
+        // N16 (unclaimed-and-unrestorable): that makes `Config.zig:4563`'s
+        // `log.warn` unrestorable rather than merely dropped — there is no
+        // failure arm to fire it from. No LEDGER row cites it; it is the third
+        // of the three sites behind `src/config/Config.zig`'s residual
+        // G-LOGFILE allowance of 3.
         let environ_map = rustty_global::environ_map();
 
         // return internal_os.expandHome(
@@ -5770,6 +5776,19 @@ impl rustty_args::args::SelfDrivenIterator<Config> for ReplayIterator {
                     //     log.warn("error cloning diagnostic err={}", .{err});
                     //     break :diag;
                     // };
+                    //
+                    // PORT NOTE (N16, unclaimed-and-unrestorable): the
+                    // reference's two `catch |err|` arms here log and
+                    // `break :diag`. Both operations are INFALLIBLE in the
+                    // port — `Diagnostic::clone_in` returns `Self` (no
+                    // allocator, no `Allocator.Error`) and
+                    // `DiagnosticList::append` returns `()` — so neither
+                    // `log.warn` has a failure arm to fire from. Restoring
+                    // them would put a diagnostic on a success path, which
+                    // this plan has already shipped once. No LEDGER row cites
+                    // `Config.zig:5396`/`:5400`; they are two of the three
+                    // sites behind `src/config/Config.zig`'s residual
+                    // G-LOGFILE allowance of 3.
                     let cloned = diag.clone_in();
                     // self.config._diagnostics.append(arena_alloc, cloned) catch |err| {
                     //     log.warn("error appending diagnostic err={}", .{err});
