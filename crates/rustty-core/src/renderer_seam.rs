@@ -124,9 +124,10 @@ const CURSOR_BLINK_INTERVAL: u64 = 600;
 /// `threadMain` only logs+discards it (the reference `catch |err| log.warn`),
 /// so the discriminant is never inspected at runtime.
 // PORT NOTE: the payloads are the values the reference `threadMain`'s
-// `log.warn("error in renderer err={}", .{err})` would format; that log is
-// ported as a comment (the module's log convention), so the payloads are held
-// but unread until logging is wired — hence `allow(dead_code)`.
+// `log.warn("error in renderer err={}", .{err})` formats. CORRECTED (task
+// 14d-1): that log is now LIVE, so the payloads are read — through the derived
+// `Debug`, which rustc's dead-code analysis does not count as a use, hence the
+// `allow(dead_code)` stays.
 #[derive(Debug)]
 #[allow(dead_code)]
 enum ThreadMainError {
@@ -604,6 +605,72 @@ pub struct Options<A: apprt::App + 'static> {
     pub thread: *mut Thread<A>,
 }
 
+// const log = std.log.scoped(.renderer_thread);   (renderer/Thread.zig:19)
+//
+// PORT NOTE (task 14d-1): the reference `log.debug/info/warn/err` sites in
+// `renderer/Thread.zig` are preserved verbatim as comments at each site, with
+// the LIVE emission added directly beneath each one
+// (`.port/parity-closure/DECISION-logging.md` §6 call shape 2 — `rustty-core`
+// is below `rustty-vt-c` in R4's layering, so restored sites go through the
+// `log` facade). `LOG_SCOPE` is the `@tagName` of the scope above. Note that
+// `renderer/Thread.zig` ports into `rustty-core`, not `rustty-renderer` — a
+// deliberate layering decision — so this scope lives here.
+const LOG_SCOPE: &str = "renderer_thread";
+
+/// The `{}` image of a renderer `Message`, for `drainMailbox`'s restored
+/// `log.debug("mailbox message={}", .{message})` site (`Thread.zig:308`).
+///
+/// PORT NOTE (task 14d-1): Zig's default `{}` on a `union(enum)` renders the
+/// ACTIVE TAG AND ITS PAYLOAD, so a tag name alone would not be this site. The
+/// port cannot get there through `{:?}`: `renderer::Message` has no `Debug`
+/// impl, and deriving one cascades into `rustty-font-shaper`
+/// (`shared_grid_set::Key`), `renderer::thread::DerivedConfig`,
+/// `renderer::generic::DerivedConfig`, `SearchMatches` and `SearchMatch` — five
+/// types across two other crates, none of them this row's subject. So the
+/// formatting lives HERE, at the one call site that needs it, and renders the
+/// reference's own union syntax (`.tag = payload`) with the reference's own
+/// field names.
+///
+/// Two knowing divergences, both documented rather than hidden:
+///  * Zig prefixes the union's `@typeName`; this prints the braces alone.
+///  * Four payload types are not printable without the cascade above, so they
+///    render as an elision (`..`) or a cheap projection (a pointer, a count)
+///    instead of their fields. The TAG — which is what the trace is for — is
+///    exact for every variant.
+struct MessageDbg<'a>(&'a rustty_renderer::Message);
+
+impl core::fmt::Display for MessageDbg<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        use rustty_renderer::Message as M;
+        match self.0 {
+            M::Crash => write!(f, "{{ .crash = void }}"),
+            M::Focus(v) => write!(f, "{{ .focus = {v} }}"),
+            M::Visible(v) => write!(f, "{{ .visible = {v} }}"),
+            M::ResetCursorBlink => write!(f, "{{ .reset_cursor_blink = void }}"),
+            M::FontGrid { grid, set, .. } => write!(
+                f,
+                "{{ .font_grid = {{ .grid = {grid:?}, .set = {set:?}, .new_key = .., .old_key = .. }} }}"
+            ),
+            M::Resize(v) => write!(f, "{{ .resize = {v:?} }}"),
+            M::ChangeConfig { .. } => {
+                write!(f, "{{ .change_config = {{ .thread = .., .impl = .. }} }}")
+            }
+            M::SearchViewportMatches(v) => write!(
+                f,
+                "{{ .search_viewport_matches = {{ .matches = ..[{}] }} }}",
+                v.matches.len()
+            ),
+            M::SearchSelectedMatch(v) => write!(
+                f,
+                "{{ .search_selected_match = {} }}",
+                if v.is_some() { ".." } else { "null" }
+            ),
+            M::Inspector(v) => write!(f, "{{ .inspector = {v} }}"),
+            M::MacosDisplayId(v) => write!(f, "{{ .macos_display_id = {v} }}"),
+        }
+    }
+}
+
 /// Represents the renderer thread logic. The renderer thread is able to
 /// be woken up to render.
 //
@@ -1022,16 +1089,29 @@ where
         //     // In the future, we should expose this on the thread struct.
         //     log.warn("error in renderer err={}", .{err});
         // };
-        if let Err(_err) = unsafe { Self::threadMain_(self_) } {
-            let _ = &_err;
+        if let Err(err) = unsafe { Self::threadMain_(self_) } {
             // In the future, we should expose this on the thread struct.
             // log.warn("error in renderer err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error in renderer err={err:?}");
         }
     }
 
     // fn threadMain_(self: *Thread) !void {
     unsafe fn threadMain_(self_: *mut Thread<A>) -> Result<(), ThreadMainError> {
         // defer log.debug("renderer thread exited", .{});
+        //
+        // PORT NOTE (task 14d-1): a Zig `defer` at function scope runs on
+        // EVERY exit, including the error returns below, so the emission goes
+        // in a `Drop` guard rather than at the tail — a tail call would be
+        // skipped on exactly the failure paths the diagnostic exists to
+        // bracket.
+        struct ThreadExited;
+        impl Drop for ThreadExited {
+            fn drop(&mut self) {
+                log::debug!(target: LOG_SCOPE, "renderer thread exited");
+            }
+        }
+        let _thread_exited = ThreadExited;
 
         // Right now, on Darwin, `std.Thread.setName` can only name the current
         // thread, and we have no way to get the current thread from within it,
@@ -1136,6 +1216,17 @@ where
         // log.debug("starting renderer thread", .{});
         // defer log.debug("starting renderer thread shutdown", .{});
         // _ = try self.loop.run(.until_done);
+        log::debug!(target: LOG_SCOPE, "starting renderer thread");
+        // Same `defer`-is-not-a-tail-call reasoning as `ThreadExited` above:
+        // `loop.run` is a `try`, so a tail emission would be skipped on the
+        // exact path this line is meant to bracket.
+        struct ThreadShutdown;
+        impl Drop for ThreadShutdown {
+            fn drop(&mut self) {
+                log::debug!(target: LOG_SCOPE, "starting renderer thread shutdown");
+            }
+        }
+        let _thread_shutdown = ThreadShutdown;
         unsafe { (*self_).loop_.run(xev::RunMode::UntilDone) }?;
         Ok(())
     }
@@ -1174,8 +1265,10 @@ where
 
             // if (internal_os.macos.setQosClass(class)) { log.debug } else |err| { log.warn }
             match internal_os::macos::setQosClass(class) {
-                Ok(()) => { /* log.debug("thread QoS class set class={}", .{class}); */ }
-                Err(_err) => { /* log.warn("error setting QoS class err={}", .{err}); */ }
+                // log.debug("thread QoS class set class={}", .{class});
+                Ok(()) => log::debug!(target: LOG_SCOPE, "thread QoS class set class={class:?}"),
+                // log.warn("error setting QoS class err={}", .{err});
+                Err(err) => log::warn!(target: LOG_SCOPE, "error setting QoS class err={err:?}"),
             }
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios")))]
@@ -1253,6 +1346,7 @@ where
         // while (self.mailbox.pop()) |message| {
         while let Some(message) = unsafe { (*(*self_).mailbox).pop() } {
             // log.debug("mailbox message={}", .{message});
+            log::debug!(target: LOG_SCOPE, "mailbox message={}", MessageDbg(&message));
             // switch (message) {
             match message {
                 // .crash => @panic("crash request, crashing intentionally"),
@@ -1548,8 +1642,9 @@ where
             #[cfg(target_os = "macos")]
             {
                 let rp: *mut rustty_renderer::Renderer = unsafe { &raw mut (*(*self_).renderer).0 };
-                if let Err(_err) = unsafe { rustty_renderer::Renderer::draw_frame_raw(rp, false) } {
+                if let Err(err) = unsafe { rustty_renderer::Renderer::draw_frame_raw(rp, false) } {
                     // log.warn("error drawing err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error drawing err={err:?}");
                 }
             }
             // L4 SWAP LANDED (first light): the raw-self draw routes through the core
@@ -1558,8 +1653,9 @@ where
             // macOS arm). Routing through the seam keeps ONE draw path on this target.
             #[cfg(not(target_os = "macos"))]
             {
-                if let Err(_err) = unsafe { Renderer::drawFrame((*self_).renderer, false) } {
+                if let Err(err) = unsafe { Renderer::drawFrame((*self_).renderer, false) } {
                     // log.warn("error drawing err={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "error drawing err={err:?}");
                 }
             }
         }
@@ -1574,8 +1670,9 @@ where
         r: Result<(), xev::WaitError>,
     ) -> xev::CallbackAction {
         // _ = r catch |err| { log.err("error in wakeup err={}", .{err}); return .rearm; };
-        if r.is_err() {
+        if let Err(err) = r {
             // log.err("error in wakeup err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error in wakeup err={err:?}");
             return xev::CallbackAction::Rearm;
         }
 
@@ -1584,8 +1681,9 @@ where
         // When we wake up, we check the mailbox. Mailbox producers should
         // wake up our thread after publishing.
         // t.drainMailbox() catch |err| log.err("error draining mailbox err={}", .{err});
-        if let Err(_err) = Self::drainMailbox(self_) {
+        if let Err(err) = Self::drainMailbox(self_) {
             // log.err("error draining mailbox err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error draining mailbox err={err:?}");
         }
 
         // Render immediately
@@ -1623,8 +1721,9 @@ where
         r: Result<(), xev::WaitError>,
     ) -> xev::CallbackAction {
         // _ = r catch |err| { log.err("error in draw now err={}", .{err}); return .rearm; };
-        if r.is_err() {
+        if let Err(err) = r {
             // log.err("error in draw now err={}", .{err});
+            log::error!(target: LOG_SCOPE, "error in draw now err={err:?}");
             return xev::CallbackAction::Rearm;
         }
 
@@ -1666,6 +1765,18 @@ where
         //     log.warn("render callback fired without data set", .{});
         //     return .disarm;
         // };
+        //
+        // PORT NOTE (task 14d-1): this arm was elided as "non-null by
+        // construction". It is not structurally absent: `rustty-xev` hands a
+        // callback its userdata as a RAW `*mut Userdata`
+        // (`common::userdata_value`), which is exactly as nullable as the
+        // reference's `?*Thread` — so the reference's guard ports directly,
+        // and eliding it turned a disarm-and-warn into a null dereference.
+        if self_.is_null() {
+            // This shouldn't happen so we log it.
+            log::warn!(target: LOG_SCOPE, "render callback fired without data set");
+            return xev::CallbackAction::Disarm;
+        }
 
         // If we're not visible there's no point spending CPU rebuilding cells —
         // we'll catch up when the .visible mailbox message flips us back on.
@@ -1681,12 +1792,13 @@ where
         //
         // (PORT NOTE: `update_frame` takes a SHARED `&State`; the error is
         // `VtOutOfMemory`, logged not propagated.)
-        if let Err(_err) = unsafe {
+        if let Err(err) = unsafe {
             (*(*self_).renderer)
                 .0
                 .update_frame(&*(*self_).state, (*self_).flags.cursor_blink_visible)
         } {
             // log.warn("error rendering err={}", .{err});
+            log::warn!(target: LOG_SCOPE, "error rendering err={err:?}");
         }
 
         // Draw
@@ -1719,14 +1831,29 @@ where
         if let Err(err) = r {
             match err {
                 xev::TimerRunError::Canceled => return xev::CallbackAction::Disarm,
-                _ => {
-                    // log.warn("animation callback fired without data set", .{});
-                    unreachable!()
-                }
+                // else => unreachable,
+                //
+                // CORRECTED (task 14d-1): this arm carried a
+                // `// log.warn("animation callback fired without data set")`
+                // comment. That is a MIS-TRANSCRIPTION — the reference's
+                // `else` arm here is a bare `unreachable` with no diagnostic
+                // (`Thread.zig:619`); the "fired without data set" warning
+                // belongs to the `self_ orelse` arm below
+                // (`Thread.zig:623-627`), where it is now restored.
+                _ => unreachable!(),
             }
         }
-        // const t: *Thread = self_ orelse { ...; return .disarm; };
-        // (non-null by construction)
+        // const t: *Thread = self_ orelse {
+        //     // This shouldn't happen so we log it.
+        //     log.warn("animation callback fired without data set", .{});
+        //     return .disarm;
+        // };
+        // (same nullable-raw-userdata reasoning as `renderCallback` above.)
+        if self_.is_null() {
+            // This shouldn't happen so we log it.
+            log::warn!(target: LOG_SCOPE, "animation callback fired without data set");
+            return xev::CallbackAction::Disarm;
+        }
 
         // Animations pause entirely while we're invisible; the .visible
         // mailbox message re-arms us when we can be seen again.
@@ -1774,6 +1901,10 @@ where
                 xev::TimerRunError::Canceled => return xev::CallbackAction::Disarm,
                 _ => {
                     // log.warn("error in cursor timer callback err={}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error in cursor timer callback err={err:?}"
+                    );
                     unreachable!()
                 }
             }
@@ -1784,6 +1915,15 @@ where
         //     log.warn("render callback fired without data set", .{});
         //     return .disarm;
         // };
+        // (same nullable-raw-userdata reasoning as `renderCallback` above. The
+        // message text really is "render callback" here — `Thread.zig:672`
+        // copy-pastes it into `cursorTimerCallback`; kept verbatim, typo and
+        // all, per R1.)
+        if self_.is_null() {
+            // This shouldn't happen so we log it.
+            log::warn!(target: LOG_SCOPE, "render callback fired without data set");
+            return xev::CallbackAction::Disarm;
+        }
 
         // t.flags.cursor_blink_visible = !t.flags.cursor_blink_visible;
         unsafe { (*self_).flags.cursor_blink_visible = !(*self_).flags.cursor_blink_visible };
@@ -1823,11 +1963,51 @@ where
         //     else => { log.warn(...); unreachable; },
         // };
         //
-        // (PORT NOTE: Rustty's `CancelError` set is `error{Canceled}` — its sole
-        // variant is the success case; the NotFound/unreachable arms above have
-        // no counterpart yet and are preserved verbatim in the comment.)
-        if let Err(_err) = r {
-            // error.Canceled => {} (success)
+        // CORRECTED (task 14d-1, closes S114-F2): the note that stood here
+        // ("Rustty's `CancelError` set is `error{Canceled}` ... the
+        // NotFound/unreachable arms have no counterpart yet") was true of the
+        // macOS/kqueue set ONLY, and the code it justified — `if let
+        // Err(_err) = r {}` — swallowed EVERY cancel error on every target.
+        // `rustty-xev`'s `CancelError` is per-target, exactly as the
+        // reference's `xev.Timer.CancelError` is:
+        //
+        //   * kqueue (macOS/iOS/visionOS/FreeBSD): `error{Canceled}`. Its one
+        //     variant IS the reference's success arm, so the `NotFound` and
+        //     `else` arms are UNINHABITED there — nothing was being swallowed
+        //     on that target, and there is no failure arm to log from.
+        //   * dynamic (Linux): `error{NotFound, ExpirationInProgress,
+        //     Unexpected}`. `NotFound` is the reference's second success arm
+        //     ("completed before it could cancel"); the other two fell into
+        //     the reference's `else`, which WARNS AND THEN HITS
+        //     `unreachable` — i.e. the reference treats them as impossible
+        //     and crashes a safe build. The port continued silently.
+        //
+        // Faithful means the reference's own control flow, not a log line
+        // added to a swallow: warn, then `unreachable!()` — Rust's
+        // `unreachable!()` panics the way Zig's `unreachable` does in a safe
+        // build, and in a release build both are UB-on-reach by contract.
+        // The diagnostic is kept because the reference emits it BEFORE
+        // trapping, so the operator sees which error caused the crash.
+        if let Err(err) = r {
+            #[cfg(not(target_os = "linux"))]
+            match err {
+                // error.Canceled => {}, // success
+                xev::CancelError::Canceled => {}
+            }
+            #[cfg(target_os = "linux")]
+            match err {
+                // error.NotFound => {}, // completed before it could cancel
+                xev::CancelError::NotFound => {}
+                // else => { log.warn(...); unreachable; },
+                _ => {
+                    // log.warn("error in cursor cancel callback err={}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "error in cursor cancel callback err={err:?}"
+                    );
+                    unreachable!()
+                }
+            }
         }
 
         // return .disarm;
@@ -2058,10 +2238,12 @@ impl Compression {
         //     },
         // };
         //
-        // (Both arms `.disarm`; the non-`Canceled` arm only differs by the log,
-        // which is a comment per this module's log convention.)
-        if let Err(_err) = result {
-            // log.warn("error in compression timer err={}", .{err});
+        // (Both arms `.disarm`; the non-`Canceled` arm differs only by the log.)
+        if let Err(err) = result {
+            if err != xev::TimerRunError::Canceled {
+                // log.warn("error in compression timer err={}", .{err});
+                log::warn!(target: LOG_SCOPE, "error in compression timer err={err:?}");
+            }
             return xev::CallbackAction::Disarm;
         }
 
@@ -2637,5 +2819,214 @@ mod surface_mailbox_seam_tests {
         );
 
         while queue.pop().is_some() {}
+    }
+}
+
+// ===========================================================================
+// task 14d-1 (S114-F2, S114-F3): the restored `renderer/Thread.zig`
+// diagnostics, and the cursor-cancel control flow.
+//
+// Chosen for shapes that break INDEPENDENTLY rather than one test per site:
+// the two callbacks whose null-userdata guard was elided outright, the
+// compression timer's Canceled-vs-other split, the cursor-cancel row's
+// BEHAVIOUR (which is not a log line at all), and the mailbox message
+// rendering. Every log assertion is a full-vector `assert_eq!` on the
+// captured records.
+//
+// All five run without a renderer, a GPU or a live xev loop: each drives a
+// callback directly on the calling thread, which is also why plain
+// `log_capture::start` (thread-isolated) is enough here and the
+// `start_admitting_all_threads` escape hatch is NOT used — nothing under test
+// spawns.
+// ===========================================================================
+#[cfg(test)]
+mod thread_diagnostics_tests {
+    use super::compression_tests::TestApp;
+    use super::*;
+    use crate::log_capture;
+
+    /// `Thread.zig:563` — the `self_ orelse` arm of `renderCallback`, elided by
+    /// the port as "non-null by construction". `rustty-xev` hands userdata to a
+    /// callback as a raw `*mut Userdata`, so the arm is reachable and the
+    /// reference's disarm-and-warn is the correct behaviour; before this it was
+    /// a null dereference.
+    #[test]
+    fn render_callback_warns_and_disarms_without_data_set() {
+        let cap = log_capture::start();
+        let action = Thread::<TestApp>::renderCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Ok(()),
+        );
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(xev::CallbackAction::Disarm, action);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "renderer_thread".to_string(),
+                "render callback fired without data set".to_string()
+            )],
+            messages
+        );
+    }
+
+    /// `Thread.zig:625` — the same shape in `animationTimerCallback`, with the
+    /// OTHER message text. A single shared guard would pass the test above and
+    /// fail this one.
+    #[test]
+    fn animation_timer_callback_warns_and_disarms_without_data_set() {
+        let cap = log_capture::start();
+        let action = Thread::<TestApp>::animationTimerCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Ok(()),
+        );
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(xev::CallbackAction::Disarm, action);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "renderer_thread".to_string(),
+                "animation callback fired without data set".to_string()
+            )],
+            messages
+        );
+    }
+
+    /// `Thread.zig:823` — the compression timer warns on any error EXCEPT
+    /// `Canceled`, and disarms either way. The port previously returned
+    /// `.disarm` for both with no diagnostic at all; a fix that logged
+    /// unconditionally would fail the first half of this test, which is the
+    /// success-path-diagnostic bug class (a canceled timer is routine).
+    #[test]
+    fn compression_timer_warns_only_on_a_non_canceled_error() {
+        let cap = log_capture::start();
+        let canceled = Compression::timerCallback::<TestApp>(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Err(xev::TimerRunError::Canceled),
+        );
+        let after_canceled = cap.messages();
+        let unexpected = Compression::timerCallback::<TestApp>(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Err(xev::TimerRunError::Unexpected),
+        );
+        let after_unexpected = cap.messages();
+        drop(cap);
+
+        assert_eq!(xev::CallbackAction::Disarm, canceled);
+        assert_eq!(xev::CallbackAction::Disarm, unexpected);
+        assert_eq!(Vec::<log_capture::CapturedRecord>::new(), after_canceled);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "renderer_thread".to_string(),
+                "error in compression timer err=Unexpected".to_string()
+            )],
+            after_unexpected
+        );
+    }
+
+    /// S114-F2, the BEHAVIOURAL half. On kqueue targets `xev::CancelError` has
+    /// the single variant `Canceled`, which is the reference's own success arm
+    /// — so the correct behaviour here is silence and `.disarm`, and there is
+    /// no reachable `unreachable` branch on this target. This test exists to
+    /// pin exactly that: a "fix" that warned on every cancel error would fire
+    /// on every routine cursor-blink cancel.
+    ///
+    /// The other half of the row — `NotFound` silent, everything else warning
+    /// and then trapping — is only reachable where `CancelError` has more than
+    /// one variant (the Linux/dynamic set), and is asserted by the two tests
+    /// below, which compile only there.
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn cursor_cancel_callback_is_silent_on_the_success_arm() {
+        let cap = log_capture::start();
+        let action = Thread::<TestApp>::cursorCancelCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Err(xev::CancelError::Canceled),
+        );
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(xev::CallbackAction::Disarm, action);
+        assert_eq!(Vec::<log_capture::CapturedRecord>::new(), messages);
+    }
+
+    /// S114-F2 on the target where the divergence was real: `NotFound` is the
+    /// reference's second success arm ("completed before it could cancel") and
+    /// must stay silent.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn cursor_cancel_callback_is_silent_on_not_found() {
+        let cap = log_capture::start();
+        let action = Thread::<TestApp>::cursorCancelCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Err(xev::CancelError::NotFound),
+        );
+        let messages = cap.messages();
+        drop(cap);
+
+        assert_eq!(xev::CallbackAction::Disarm, action);
+        assert_eq!(Vec::<log_capture::CapturedRecord>::new(), messages);
+    }
+
+    /// S114-F2's actual defect: the port SWALLOWED these and continued where
+    /// the reference warns and hits `unreachable`. The row is closed on this
+    /// assertion, not on a log line — before the fix this call returned
+    /// `.disarm` quietly and the test fails by NOT panicking.
+    #[test]
+    #[cfg(target_os = "linux")]
+    #[should_panic(expected = "internal error: entered unreachable code")]
+    fn cursor_cancel_callback_traps_on_an_impossible_error() {
+        let _ = Thread::<TestApp>::cursorCancelCallback(
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            Err(xev::CancelError::Unexpected),
+        );
+    }
+
+    /// `Thread.zig:308` — `mailbox message={}` renders the ACTIVE TAG AND ITS
+    /// PAYLOAD, using the reference's own field names. A tag-only rendering
+    /// (the obvious shortcut) fails on every payload-bearing arm here.
+    #[test]
+    fn mailbox_message_renders_the_reference_union_syntax() {
+        use rustty_renderer::Message as M;
+        assert_eq!("{ .crash = void }", MessageDbg(&M::Crash).to_string());
+        assert_eq!("{ .focus = true }", MessageDbg(&M::Focus(true)).to_string());
+        assert_eq!(
+            "{ .visible = false }",
+            MessageDbg(&M::Visible(false)).to_string()
+        );
+        assert_eq!(
+            "{ .reset_cursor_blink = void }",
+            MessageDbg(&M::ResetCursorBlink).to_string()
+        );
+        assert_eq!(
+            "{ .inspector = true }",
+            MessageDbg(&M::Inspector(true)).to_string()
+        );
+        assert_eq!(
+            "{ .macos_display_id = 7 }",
+            MessageDbg(&M::MacosDisplayId(7)).to_string()
+        );
+        assert_eq!(
+            "{ .search_selected_match = null }",
+            MessageDbg(&M::SearchSelectedMatch(None)).to_string()
+        );
     }
 }

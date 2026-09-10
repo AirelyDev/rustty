@@ -98,7 +98,15 @@ pub fn setQosClass(class: QosClass) -> Result<(), SetQosClassError> {
 }
 
 /// https://developer.apple.com/library/archive/documentation/Performance/Conceptual/power_efficiency_guidelines_osx/PrioritizeWorkAtTheTaskLevel.html#//apple_ref/doc/uid/TP40013929-CH35-SW1
-#[derive(Clone, Copy, PartialEq, Eq)]
+//
+// PORT NOTE (task 14d-1): `Debug` is derived so that
+// `renderer/Thread.zig:289`'s restored `log.debug("thread QoS class set
+// class={}", .{class})` can render the class. The variants are already
+// spelled with the REFERENCE's own tag names, so `{:?}` prints exactly what
+// Zig's `@tagName` would; Zig's `{}` additionally prefixes the `@typeName`,
+// which the port drops (the same cosmetic divergence every `{:?}` site in
+// this workspace carries).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(C)]
 #[allow(non_camel_case_types)]
 pub enum QosClass {
