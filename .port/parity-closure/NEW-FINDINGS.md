@@ -1198,3 +1198,72 @@ found, and current state.
   figure above came to be measured.
 - **state**: **OPEN** as a standing check. All 16 present divergences are declared with
   reasons; nothing is outstanding except the 28% of emissions the pass cannot reach.
+
+---
+
+## N22 — G-LOGFILE counts `log.*` sites inside reference functions that the reference never calls
+
+**Found 2026-09-10 (task-14e-2), while accounting for the last 10 sites of `src/font/shaper/`.**
+
+`check_log_reconcile.py`'s `zig_sites()` is a LINE scanner. `zig_strip` correctly refuses to
+count a `log.*` call that is **commented out** — `Surface.zig` alone carries six — but nothing
+in it can see that a whole **function** is dead. Two reference files have one:
+
+| reference | function | its only call site, at pin `20abdb50a` | sites counted |
+|---|---|---|---|
+| `src/font/shaper/coretext.zig` | `debugPositions` (`:690`) | `:503` — `//try self.debugPositions(...)` | 4 (`:775, :793, :806, :820`) |
+| `src/font/shaper/harfbuzz.zig` | `debugPositions` (`:302`) | `:236` — `//try self.debugPositions(...)` | 4 (`:379, :396, :409, :421`) |
+
+So **8 of the tree's 1415 "live reference log sites" are diagnostics the reference itself
+never emits.** They are counted as deficits against the port, and any stage that "restores"
+them creates eight emissions the reference does not make — the inverse defect (N20's class,
+reached by a different route).
+
+**Not fixed here, deliberately.** Teaching the scanner about dead functions means resolving
+Zig call graphs, which is a much larger scanner than this gate has, and R5 requires a gate
+change to be net-new coverage with a self-test arm and an argument. The two files' portmap
+`reason` cells now say precisely this instead, so the allowances are not read as "8 dropped
+diagnostics".
+
+**The generalisable point.** A line-oriented liveness test on the REFERENCE side has the same
+blind spot the port-side scanner had before its char-literal fix: it is exact about the syntax
+it examines and silent about the context around it. When a gate measures "the reference does
+X", check whether X is *reachable*, not only whether it is *written*.
+
+The port is consistent with this reading already: `coretext.rs` and `harfbuzz.rs` both preserve
+`debugPositions` verbatim as a comment with a PORT NOTE saying it is never called upstream.
+Making it live would additionally need `unicode.table.get(cp).grapheme_boundary_class`, which
+`rustty-unicode` does not carry (checked: no `grapheme_boundary_class` anywhere in that crate).
+
+**state**: OPEN as a measurement caveat. No port change is owed.
+
+---
+
+## N23 — `src/config/CApi.zig` was 11-short and no row claimed it; 7 restored, 4 unrestorable
+
+**Found 2026-09-10 (task-14e-2).** The file entered the portmap with N15 and no `LOG`-class
+row cites it, so nothing in the audit ever looked at it.
+
+All eleven `catch` arms wrote a bare `eprintln!`. That is worse than it looks: `logFn`'s
+stderr branch is gated on `global.logging().stderr`, which `global.zig`'s `init` sets **false
+when a CLI action is detected** precisely so action output stays clean — and a bare
+`eprintln!` ignores that gate entirely. So `rustty config --help`-style paths could emit
+diagnostics the reference suppresses, on top of losing the `error(config): ` prefix.
+
+Seven are restored through `config_struct::log_err`, the crate's own sink (§6r4's one
+documented exception to the facade). `log_err` is new; `log_info`/`log_warn`/`log_debug`
+already existed, which is itself worth noting — the crate had no `err`-level sink at all, so
+every `log.err` site in `rustty-config` had nowhere to go.
+
+The remaining four are the **N16 class — UNRESTORABLE, not dropped**:
+
+- `CApi.zig:17` / `:40` `error allocating config err={}` — the reference's `state.alloc.create`
+  failure arms. `Box::new` aborts on OOM rather than returning an error.
+- `CApi.zig:22` `error creating config err={}` — `Config::default_config()` returns a `Config`,
+  not a `Result`.
+- `CApi.zig:45` `error cloning config err={}` — `clone_config()` likewise.
+
+Each has the reference's full sequence preserved as a comment plus a PORT NOTE saying
+explicitly not to "restore" it, and the portmap `reason` records the same. Allowance 11 -> 4.
+
+**state**: the four are a standing, documented allowance. Nothing is outstanding.

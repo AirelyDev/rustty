@@ -1428,3 +1428,80 @@ review's own finding, still standing — to the hard literal `32`. `check_embed_
 for `wasm32-unknown-unknown` as well as the Linux lane before it is called done. All three artifacts
 build green as of this round: `rustty_vt.wasm` 884,786 · `rustty_web_canvas.wasm` 1,587,089 ·
 `rustty_wasm.wasm` 992,196.
+
+---
+
+## §6r5 — task-14e-2: two shapes still, but a THIRD BACKEND, and `rustty-config` gains `log_err`
+
+Recorded 2026-09-10 by task-14e-2, the last logging stage. §6r4's ruling is
+unchanged and this section adds to it rather than superseding anything.
+
+### The call shapes are still two. The BACKENDS are now three.
+
+§6r4 settled the CALL shape. It did not settle where the record goes, and one
+crate turned out to have nowhere for it to go at all.
+
+`rustty-bench`'s 53 reference diagnostics were bare
+`eprintln!("[{LOG_SCOPE}] …")`. Converting them to `log::warn!` is right by
+§6r4 — but a `log::warn!` emits nothing until a binary installs a backend, and
+§6r2/§7 already record that the standalone `[[bin]]` (`main_bench.rs`) installs
+neither of the two the workspace ships:
+
+- `rustty-vt-c::sys::Logger` is installed by the `rustty_*_new` C exports, which
+  the bench binary never calls;
+- `rustty-core::logging::AppLogger` is installed by `rustty_init` and by
+  `main_rustty.rs`, neither of which is this binary.
+
+`rustty-bench` can depend on neither crate without inverting R4. So the
+conversion on its own would have made the standalone bench binary **silent
+where it used to print** — a regression, dressed as a gate improvement. That is
+the sharpest illustration so far of "the cost this accepts" in §6r4: for a
+LIBRARY the silence is theoretical; for a tool binary it is the whole output.
+
+**`crates/rustty-bench/src/log_backend.rs` is the "bin-side install" §6r2 names
+as the missing piece.** It reproduces `logFn`'s line —
+`level_txt ++ "(" ++ @tagName(scope) ++ "): " ++ message`, with `.err` rendering
+as `error` and the `.default` scope (the EMPTY target) dropping the
+parenthesised part per N17 — and is installed **only** from `main_bench.rs`.
+When the bench LIBRARY is reached through libghostty
+(`rustty-apprt-c/src/lib.rs:160`'s `extern crate rustty_bench as _;`),
+`rustty_init` has already claimed the `log::set_logger` slot and this install is
+a no-op.
+
+**This does NOT close `S62-F2`.** That row is about the whole process init the
+reference's `cli.main` performs — logging, `GHOSTTY_LOG`, rlimits, locale,
+oniguruma/glslang, the resources dir and signal handlers. Only the logging part
+is supplied. The row stays `OPEN` with a narrowed `owner`.
+
+**The rule this adds:** before converting a crate's diagnostics onto the facade,
+identify the ARTIFACT each restored site is reached from and check that
+something installs a backend there. If nothing does, adding one is part of the
+conversion, not a follow-up — otherwise the stage trades a visible-but-wrong
+diagnostic for no diagnostic and the count gate calls it progress.
+
+### `rustty-config` had no `err`-level sink
+
+§6r4's exception (that `rustty-config` keeps its own
+`format_log`/`log_{info,warn,debug}` sink) was stated for the three levels the
+crate happened to use. `src/config/CApi.zig`'s eleven sites are all `log.err`,
+and there was no `log_err`. Added, with the level token `error` — Zig's
+`std.log.Level.err.asText()` — pinned by its own test at `format_log`, positively
+and negatively.
+
+One trap worth recording, because it turned the gate RED before it was caught:
+that test originally called `log_err(...)` directly. `discover_emitters` counts
+**every** call site of a `log_*` sink as an emission, **test call sites
+included**, so the call credited `src/config/Config.zig`'s arm
+(`config_struct.rs+value_types.rs`) with a diagnostic the port does not make,
+dropping its measured deficit 3 -> 2 and tempting the next step to ratchet the
+allowance onto a phantom. The assertion goes through `format_log` (not a
+`log_*` name) instead, and the site is proved behaviourally from `c_api.rs`.
+**A test that calls a fn-facade sink by name moves this gate's numbers.**
+
+### Empty `log_*` stubs: gone
+
+The tree carried 15 `log_*` definitions that never reached the facade. 14 of
+them were in `rustty-os` (`locale.rs` 6, `cf_release_thread.rs` 8) and are
+removed — each reference call now emits inline where the reference emits it.
+The one that remains, `stream.rs`'s `log_unsupported_once`, is a dedup
+PREDICATE and is correctly listed rather than being a defect.
