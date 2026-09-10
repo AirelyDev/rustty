@@ -64,9 +64,21 @@ use super::surface::SurfaceData;
 
 // const log = std.log.scoped(.inspector_terminal_io);
 //
-// PORT NOTE: no logging facade is wired into the inspector crate (the
-// renderer.rs precedent); the `log.err`/`log.warn` arms below are preserved as
-// comments at their sites.
+// PORT NOTE (DECISION-logging.md §6/§6r4, task-14e-1 2026-09-10): the `log`
+// facade IS now wired into this crate (`rustty-inspector` sits below
+// `rustty-vt-c` in R4's layering, so the facade is the call shape). `LOG_SCOPE`
+// is the `@tagName` of the reference's `std.log.scoped(.inspector_terminal_io)`.
+// This supersedes the earlier "no logging facade is wired into the inspector
+// crate" note; `widgets/renderer.rs`'s two sites are still comment-only and are
+// tracked by `LOG-PORTMAP.tsv`'s own row for `src/inspector/widgets/renderer.zig`.
+//
+// TWO of this file's five reference sites stay comment-only, and deliberately:
+// both are `formatEvents`'s `catch log.err` arms, and `formatEvents` is
+// INFALLIBLE in the port (the `!` collapses under the global allocator —
+// OOM aborts, panic=abort parity). There is no failure arm to hang them on and
+// emitting them unconditionally would put a diagnostic on a success path.
+// `LOG-PORTMAP.tsv` holds this file's allowance at 2 for exactly those two.
+const LOG_SCOPE: &str = "inspector_terminal_io";
 
 /// Minimal `defer`-style scope guard — runs `f` on drop (mirrors the private
 /// `Defer` in `widgets.rs`/`screen.rs`). panic=abort means no unwinding ever
@@ -753,21 +765,30 @@ impl Stream {
         // `[]const u8` coercion of `.data` excludes the sentinel from the
         // slice LENGTH while the backing NUL stays one past it, hence the
         // `len - 1` slice of the NUL-terminated `contents`. The `catch
-        // log.err` arm is comment-preserved (no logging facade — module note);
-        // the error is swallowed exactly as the reference does.
+        // log.err` arm is RESTORED below; the error is otherwise swallowed
+        // exactly as the reference does.
+        //
+        // PORT NOTE (log text): the concrete backend error is erased to `Err(())`
+        // at this seam by design (see `SurfaceData::rt_set_clipboard`), so
+        // `err={err:?}` renders `()` where Zig's `{}` on the error value would
+        // render `error.<Name>`. That is the seam's erasure showing through, not
+        // a formatting choice — sibling of NEW-FINDINGS N11.
         //
         // SAFETY: `surface.surface` is the erased live `*Surface` and
         // `rt_set_clipboard` its matching trampoline, both caller-supplied and
         // valid for this draw call (INV-1/INV-11 — the `SurfaceData`
         // contract).
-        let _ = unsafe {
+        if let Err(err) = unsafe {
             (surface.rt_set_clipboard)(
                 surface.surface,
                 b"text/plain",
                 &contents[..contents.len() - 1],
                 false,
             )
-        };
+        } {
+            // log.err("failed to copy terminal IO events err={}", .{err});
+            log::error!(target: LOG_SCOPE, "failed to copy terminal IO events err={err:?}");
+        }
     }
 
     /// Ask the application runtime to save all recorded events to a file.
@@ -804,12 +825,15 @@ impl Stream {
         // `rt_export_terminal_io` its matching trampoline, both
         // caller-supplied and valid for this draw call (INV-1/INV-11 — the
         // `SurfaceData` contract).
-        let _handled = match unsafe {
+        let handled = match unsafe {
             (surface.rt_export_terminal_io)(surface.surface, &contents[..contents.len() - 1])
         } {
             Ok(v) => v,
-            Err(()) => {
+            Err(err) => {
                 // log.err("failed to export terminal IO events err={}", .{err});
+                //
+                // (the same seam erasure as `copyEvents` above: `err` is `()`.)
+                log::error!(target: LOG_SCOPE, "failed to export terminal IO events err={err:?}");
                 return;
             }
         };
@@ -817,9 +841,12 @@ impl Stream {
         // if (!handled) {
         //     log.warn("application runtime does not support exporting terminal IO events", .{});
         // }
-        //
-        // (the `!handled` arm's body is only the log.warn — comment-preserved,
-        // no logging facade; module note.)
+        if !handled {
+            log::warn!(
+                target: LOG_SCOPE,
+                "application runtime does not support exporting terminal IO events"
+            );
+        }
     }
 
     /// Format all recorded events as tab-separated text. Events are exported

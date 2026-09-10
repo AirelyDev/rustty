@@ -42,6 +42,10 @@ rustty-input = { workspace = true }
 rustty-datastruct = { workspace = true }
 # `Allocator` parameter parity (allocator_api2 Global — termio precedent).
 allocator-api2 = { workspace = true }
+# The `log` facade (DECISION-logging.md §6 / §6r4): `widgets/termio.zig`'s five
+# `std.log.scoped(.inspector_terminal_io)` sites restore through it. rustty-inspector
+# is below `rustty-vt-c` in R4's layering, so the facade is the call shape.
+log = { workspace = true }
 # R4 acyclic Surface seam (Inspector.rs `render`): `surface.renderer_thread.
 # wakeup.notify()` crosses as a bare `&rustty_xev::Async` parameter rather than
 # the core-local `renderer_thread: Thread<A>` (which names the cyclic

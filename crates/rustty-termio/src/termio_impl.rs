@@ -90,8 +90,12 @@ static GLOBAL_ZIG_ALLOCATOR_FOR_OSC: rustty_lib::allocator::GlobalZigAllocator =
 
 // const log = std.log.scoped(.io_exec);
 //
-// PORT NOTE: routed through named log helpers below that preserve the reference's
-// messages verbatim (rustty-os cf_release_thread precedent).
+// PORT NOTE (DECISION-logging.md §6/§6r4): `LOG_SCOPE` is the `@tagName` of the
+// reference's `std.log.scoped(.io_exec)` — `Termio.zig` shares the scope with
+// `Exec.zig`. Restored sites call the `log` facade with `target: LOG_SCOPE`;
+// this replaces the EMPTY `log_warn_input_open_failed` stub the file used to
+// carry (an empty `log_*` helper is a dropped diagnostic, not a facade).
+const LOG_SCOPE: &str = "io_exec";
 
 /// PORT NOTE: the reference `terminal_stream` field type `StreamHandler.Stream`
 /// (= `terminal.Stream(StreamHandler)`, src/termio/stream_handler.zig — landed
@@ -251,7 +255,15 @@ impl ThreadEnterState {
                     let f = match std::fs::File::open(os_str_from_bytes(path)) {
                         Ok(f) => f,
                         Err(err) => {
-                            log_warn_input_open_failed(path, &err);
+                            // log.warn("failed to open input file={s} err={}", .{
+                            //     path,
+                            //     err,
+                            // });
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "failed to open input file={} err={err:?}",
+                                String::from_utf8_lossy(path)
+                            );
                             return Err(PrepareInputError::InputNotFound);
                         }
                     };
@@ -939,7 +951,16 @@ impl<M: AppMailbox> Termio<M> {
                     //     log.warn("failed to queue input string err={}", .{err});
                     //     return error.InputFailed;
                     // },
-                    Input::String(v) => unsafe { (*self_).queueWrite(&mut *data, &v, false) },
+                    Input::String(v) => {
+                        let r = unsafe { (*self_).queueWrite(&mut *data, &v, false) };
+                        if let Err(err) = &r {
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "failed to queue input string err={err:?}"
+                            );
+                        }
+                        r
+                    }
                     // .file => |f| {
                     //     const contents = compat_file.readToEndAlloc(
                     //         f,
@@ -960,16 +981,29 @@ impl<M: AppMailbox> Termio<M> {
                     // (the `defer self.alloc.free(contents)` is `bytes` dropping
                     // at the end of this arm.)
                     Input::File(f) => match read_input_file(f, 10 * 1024 * 1024) {
-                        Ok(bytes) => unsafe { (*self_).queueWrite(&mut *data, &bytes, false) },
-                        Err(_err) => {
+                        Ok(bytes) => {
+                            let r = unsafe { (*self_).queueWrite(&mut *data, &bytes, false) };
+                            if let Err(err) = &r {
+                                log::warn!(
+                                    target: LOG_SCOPE,
+                                    "failed to queue input file err={err:?}"
+                                );
+                            }
+                            r
+                        }
+                        Err(err) => {
                             // log.warn("failed to read input file err={}", .{err});
+                            log::warn!(
+                                target: LOG_SCOPE,
+                                "failed to read input file err={err:?}"
+                            );
                             Err(Error)
                         }
                     },
                 };
                 if queued.is_err() {
-                    // (log.warn for the string/file queue failures — see the
-                    // reference arms above; both return `error.InputFailed`.)
+                    // (each failing arm above logged its own reference message;
+                    // all three return `error.InputFailed`.)
                     // errdefer self.backend.threadExit(data);
                     //
                     // SAFETY: `data` is fully initialized (backend.threadEnter
@@ -1492,8 +1526,9 @@ impl<M: AppMailbox> Termio<M> {
             } else {
                 focus::Event::Lost
             };
-            if focus::encode(&mut writer, event).is_err() {
+            if let Err(err) = focus::encode(&mut writer, event) {
                 // log.err("error encoding focus event err={}", .{err});
+                log::error!(target: LOG_SCOPE, "error encoding focus event err={err:?}");
                 return Ok(());
             }
             // try self.queueWrite(td, writer.buffered(), false);
@@ -1703,6 +1738,15 @@ impl<M: AppMailbox> Termio<M> {
                 // parser allocator collapses under Rust's infallible global
                 // allocator), unlike the reference's `catch |err| log.err`; the
                 // error-logging arm never fires so it has no Rust equivalent.
+                //
+                // PORT NOTE (G-LOGFILE / task-14e-1, 2026-09-10): this is
+                // `Termio.zig:705`, the ONE site of this file's six that stays
+                // UNRESTORED, and it stays that way deliberately. There is no
+                // failure arm to hang it on; emitting it unconditionally would
+                // put a diagnostic on a success path (the bug this plan already
+                // shipped once). `LOG-PORTMAP.tsv`'s `src/termio/Termio.zig`
+                // allowance is held at 1 for exactly this site, with the reason
+                // in its `reason` column; see `ADJUDICATION.md`.
                 unsafe {
                     (*insp).recordPtyRead(
                         (*io).alloc,
@@ -1955,12 +1999,6 @@ impl core::fmt::Write for FixedWriter<'_> {
         self.len += bytes.len();
         Ok(())
     }
-}
-
-// PORT NOTE: the `log.warn` call site in `prepareInput`, preserved verbatim
-// (cf_release log-helper precedent).
-fn log_warn_input_open_failed(_path: &[u8], _err: &std::io::Error) {
-    // log.warn("failed to open input file={s} err={}", .{ path, err });
 }
 
 /// PORT NOTE: `std.fs.File.readToEndAlloc(alloc, max_bytes)` — reads the whole file

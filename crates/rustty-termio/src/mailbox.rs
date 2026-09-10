@@ -32,8 +32,13 @@ use crate::Message;
 
 // const log = std.log.scoped(.io_writer);
 //
-// PORT NOTE: routed through named log helpers below that preserve the reference's
-// messages verbatim (rustty-os cf_release_thread precedent).
+// PORT NOTE (DECISION-logging.md §6/§6r4): `LOG_SCOPE` is the `@tagName` of the
+// reference's `std.log.scoped(.io_writer)`; restored sites go through the `log`
+// facade. This replaces the two EMPTY `log_*` stub helpers this file used to
+// carry — an empty helper is a dropped diagnostic, not a facade (G-LOGFILE's
+// own `NOTE:` line lists them as such), so the calls are back inline where the
+// reference has them.
+const LOG_SCOPE: &str = "io_writer";
 
 /// A queue used for storing messages that is periodically drained.
 /// Typically used by a multi-threaded application. The capacity is
@@ -148,7 +153,10 @@ impl Mailbox {
                 //     return;
                 // };
                 if let Err(err) = wakeup.notify() {
-                    log_warn_wake_failed(&err);
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to wake up writer, data will be dropped err={err:?}"
+                    );
                     return;
                 }
 
@@ -191,20 +199,12 @@ impl Mailbox {
             // },
             Mailbox::Spsc { wakeup, .. } => {
                 if let Err(err) = wakeup.notify() {
-                    log_warn_notify_failed(&err);
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "failed to notify writer, data will be dropped err={err:?}"
+                    );
                 }
             }
         }
     }
-}
-
-// PORT NOTE: the `log.warn` call site in `notify`, preserved verbatim (cf_release
-// log-helper precedent).
-fn log_warn_notify_failed(_err: &xev::NotifyError) {
-    // log.warn("failed to notify writer, data will be dropped err={}", .{err});
-}
-
-// PORT NOTE: the `log.warn` call site in `send`'s slow path, preserved verbatim.
-fn log_warn_wake_failed(_err: &xev::NotifyError) {
-    // log.warn("failed to wake up writer, data will be dropped err={}", .{err});
 }

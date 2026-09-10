@@ -38,6 +38,11 @@ use crate::command::{EnvMap, EnvMapExt as _};
 
 // const log = std.log.scoped(.shell_integration);
 //
+// PORT NOTE (DECISION-logging.md §6/§6r4): `LOG_SCOPE` is the `@tagName` of the
+// reference's `std.log.scoped(.shell_integration)`; restored sites call the
+// `log` facade with `target: LOG_SCOPE`.
+const LOG_SCOPE: &str = "shell_integration";
+//
 // PORT NOTE: the reference's log call sites are preserved verbatim as comments at
 // each site (rustty-os cf_release_thread precedent).
 
@@ -481,8 +486,13 @@ fn setupBash(
             drop(file); // file.close();
             env.put(b"ENV", &script_path);
         }
-        Err(_err) => {
+        Err(err) => {
             // log.warn("unable to open {s}: {}", .{ script_path, err });
+            log::warn!(
+                target: LOG_SCOPE,
+                "unable to open {}: {err:?}",
+                String::from_utf8_lossy(&script_path)
+            );
             env.removev(&env_name("BASH_ENV"));
             return Ok(None);
         }
@@ -568,8 +578,13 @@ fn setupXdgDataDirs(resource_dir: &[u8], env: &mut EnvMap) -> bool {
     // integ_dir.close();
     match std::fs::read_dir(byte_path(&integ_path)) {
         Ok(integ_dir) => drop(integ_dir), // integ_dir.close();
-        Err(_err) => {
+        Err(err) => {
             // log.warn("unable to open {s}: {}", .{ integ_path, err });
+            log::warn!(
+                target: LOG_SCOPE,
+                "unable to open {}: {err:?}",
+                String::from_utf8_lossy(&integ_path)
+            );
             return false;
         }
     }
@@ -761,8 +776,13 @@ fn setupZsh(
     // integ_dir.close();
     match std::fs::read_dir(byte_path(&integ_path)) {
         Ok(integ_dir) => drop(integ_dir), // integ_dir.close();
-        Err(_err) => {
+        Err(err) => {
             // log.warn("unable to open {s}: {}", .{ integ_path, err });
+            log::warn!(
+                target: LOG_SCOPE,
+                "unable to open {}: {err:?}",
+                String::from_utf8_lossy(&integ_path)
+            );
             return Ok(None);
         }
     }

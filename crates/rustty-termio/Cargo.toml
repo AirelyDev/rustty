@@ -100,6 +100,12 @@ rustty-lib = { workspace = true }
 # #13b). R3: `libc` binds the SAME system library the reference's Zig
 # `std.posix`/`std.c` calls into (rustty-os precedent) — not a reimplementation.
 libc = "0.2"
+# The `log` facade (DECISION-logging.md §6 call shape 1 / §6r4: every crate below
+# `rustty-vt-c` restores its reference `std.log.scoped(...)` sites as
+# `log::{warn,error,info,debug}!(target: LOG_SCOPE, ...)`). Plain and
+# unconditional — the `release_max_level_*` comptime gate belongs only on the
+# three wasm artifact root crates (§8r), and rustty-termio is not one.
+log = { workspace = true }
 
 [dev-dependencies]
 # `P3-W3` T6 Step 4: the config -> PageList scrollback-limit handoff KAT drives
