@@ -826,10 +826,20 @@ unsafe fn opengl_frame_completed(renderer: *mut (), target: *mut Target, health:
     // if (health == .healthy) self.renderer.api.present(self.target.*) catch |err| { log.err(...) };
     // WINDOWED only: GDK owns the context ⇒ FBO 0 is the GLArea framebuffer.
     if health == crate::Health::Healthy && !unsafe { (*renderer).api.owns_context() } {
-        if let Err(_err) = unsafe { (*renderer).api.present_to_default(&*target) } {
+        if let Err(err) = unsafe { (*renderer).api.present_to_default(&*target) } {
             // log.err("Failed to present render target: err={}", .{err});
-            // (not restored yet — the Linux 14c stage; the facade itself IS wired as of
-            // task-14c-1. Swallow, as the reference `catch` logs + swallows.)
+            //
+            // RESTORED (task-14c-3). This site's oracle is `renderer/opengl/Frame.zig:65`,
+            // whose scope is `.opengl` (Frame.zig:15) — NOT `generic.zig`'s
+            // `.generic_renderer` — so it targets `crate::opengl::opengl_impl::LOG_SCOPE`
+            // even though the code lives here, exactly as the Metal twin
+            // (`generic.rs:5895`) targets `metal::frame::LOG_SCOPE`. It lives here at all
+            // because the port inlines `Frame.zig`'s completion tail into this
+            // trampoline. Logged and swallowed, as the reference `catch` does.
+            log::error!(
+                target: crate::opengl::opengl_impl::LOG_SCOPE,
+                "Failed to present render target: err={err:?}"
+            );
         }
     }
     // block.renderer.frameCompleted(health);
@@ -1734,24 +1744,27 @@ impl Renderer {
         //
         // OpenGL DOES declare `displayRealized` (OpenGL.zig:237-250), whose body is
         // the GTK arm's `prepareContext(null)` — reload the GL loader over the context
-        // GDK just made current on (re-)realize.
+        // GDK just made current on (re-)realize. That body now lives where the
+        // reference puts it, in [`OpenGL::display_realized`], including its
+        // `owns_context` offscreen guard; read that method's doc for why the offscreen
+        // path skips the reload.
         //
-        // GL-ATTACH (LANDED): on the WINDOWED path (`!api.owns_context()` — GDK owns
-        // the context) we reload GL via `sys::prepare_context_windowed`, because a
-        // re-realize (e.g. moving the window between displays / a split) can hand us a
-        // FRESH GDK context whose entry points must be re-bound; the GTK apprt calls
-        // this right after `gl_area.make_current()` (surface.rs `gl_realize`), so that
-        // context is current here. On the OFFSCREEN path (`api.owns_context()`) it is
-        // a no-op: the owned `OffscreenContext` is prepared once in
-        // `OpenGL::init_offscreen` and is NEVER torn down by `display_unrealized`
-        // (which frees only the swap chain + shaders, generic.zig:982-983), so it
-        // stays current across the unrealize/realize cycle and needs no reload — this
-        // is what keeps the offscreen re-realize unit test valid.
+        // FIXED (task-14c-3, parity rows S113-F1 + S115-F2): this used to be
+        //     if !self.api.owns_context()
+        //         && crate::opengl::gl::sys::prepare_context_windowed().is_err()
+        //     { return Err(Error::GlFailed); }
+        // i.e. a failed context prep ABORTED the whole re-realize. The reference
+        // cannot do that: `api.displayRealized()` returns `void` (OpenGL.zig:237) and
+        // swallows the failure after a `log.warn` (OpenGL.zig:241-246), so
+        // `generic.zig:939-942` has no error to propagate and the rebuild below ALWAYS
+        // runs. The rebuild is now reached in a state the port never used to enter —
+        // GL possibly not (re-)loaded — which is exactly the reference's state, and it
+        // is handled the same way: `init_shaders` and `SwapChain::init` are the `try`
+        // sites (generic.zig:955-958), so a genuinely dead context fails THERE, with
+        // the leaf GL error, instead of being pre-empted by a `GlFailed` that hid it.
         // (This runs BEFORE `draw_mutex.lock()` below — reference order
-        // generic.zig:939-947 — so an early return here holds no lock.)
-        if !self.api.owns_context() && crate::opengl::gl::sys::prepare_context_windowed().is_err() {
-            return Err(Error::GlFailed);
-        }
+        // generic.zig:939-947.)
+        self.api.display_realized();
 
         // self.draw_mutex.lock(); defer self.draw_mutex.unlock(); (generic.zig:946-947)
         //
@@ -5187,6 +5200,91 @@ mod tests {
         assert!(r.swap_chain.is_some());
 
         // Teardown must not panic/leak after the re-realize cycle.
+        r.deinit();
+    }
+
+    /// PARITY (S115-F2, with S113-F1) — the BEHAVIOURAL half: a failed GL context
+    /// prep must NOT abort the re-realize. The reference's
+    /// `generic.zig:934-961 displayRealized` calls `self.api.displayRealized()`, which
+    /// returns `void` after warning (`OpenGL.zig:237-250`), and then ALWAYS runs
+    /// `try self.initShaders()` + `SwapChain.init`. The port used to `return
+    /// Err(Error::GlFailed)` before the mutex was even taken, so the shaders and the
+    /// swap chain were never rebuilt — the GLArea would come back from a display move
+    /// or a split with no GPU resources at all.
+    ///
+    /// This asserts the REBUILD, not the log line: after `display_unrealized` leaves
+    /// the swap chain `None` and the shaders `defunct`, a `display_realized` whose
+    /// context prep FAILS must still return `Ok`, repopulate `swap_chain`, un-`defunct`
+    /// the shaders and reset the two frame-config flags — i.e. everything
+    /// `generic.zig:955-961` does. It also pins the one warning, as a full-vector
+    /// `assert_eq!`, because a rebuild that happened SILENTLY would mean the api hook
+    /// was not called at all.
+    ///
+    /// WHY THE FAULT IS INJECTED: see [`crate::opengl::opengl_impl::FORCE_DISPLAY_REALIZED_PREP_FAILURE`].
+    /// Every honest way to make `prepare_context_windowed` fail also breaks the
+    /// rebuild this test has to observe succeeding, which would make a pass
+    /// indistinguishable from the abort being tested for.
+    ///
+    /// The renderer is built with [`Renderer::init_windowed`] — the api must NOT own
+    /// the context, or `display_realized`'s offscreen guard returns before the prep
+    /// arm — over a context this test stands up itself, so GL is genuinely live while
+    /// the prep arm reports failure. That is exactly the reference's situation: GDK
+    /// owns a working context and only the LOADER reload failed.
+    #[test]
+    fn linux_opengl_display_realized_rebuilds_even_when_context_prep_fails() {
+        // Holds `gl_lock` for the whole context lifetime AND for the process-global
+        // fault flag; `_gl` drops last (after `r.deinit()`).
+        let _gl = match test_support::offscreen_gl(
+            "linux_opengl_display_realized_rebuilds_even_when_context_prep_fails",
+        ) {
+            Some(ctx) => ctx,
+            // `offscreen_gl` has already run `require_gl_or_skip` + printed the skip
+            // line (and panics instead under RUSTTY_REQUIRE_GL=1).
+            None => return,
+        };
+
+        let (font_grid, size) = test_font_grid_and_size(10, 3);
+        let opts = Options {
+            config: derived_config_for_test(),
+            font_grid,
+            size,
+            surface_mailbox: SurfaceMailbox::DETACHED,
+        };
+        // WINDOWED api (`OpenGL::init`): owns no context, so `display_realized`
+        // reaches the `prepareContext(null)` arm. The context `_gl` holds is current,
+        // so the GL work below is real.
+        let mut r = Renderer::init_windowed(Global, opts).expect("init_windowed");
+
+        r.display_unrealized();
+        assert!(r.swap_chain.is_none());
+        assert!(r.shaders.defunct);
+        r.reinitialize_shaders = true;
+        r.target_config_modified = 0;
+
+        let _forced = crate::opengl::opengl_impl::ForcedPrepFailure::set();
+        let capture = crate::log_capture::start();
+        let result = r.display_realized();
+        let records = capture.messages();
+        drop(capture);
+
+        // THE ROW: the re-realize completed rather than aborting on the prep failure.
+        result.expect("display_realized must not abort on a context-prep failure");
+        assert!(r.swap_chain.is_some());
+        assert!(!r.shaders.defunct);
+        assert!(!r.reinitialize_shaders);
+        assert_eq!(r.target_config_modified, 1);
+
+        // ...and it warned exactly once, through the api hook, in `OpenGL.zig`'s
+        // `.opengl` scope (NOT this file's `generic_renderer`).
+        assert_eq!(
+            records,
+            vec![(
+                log::Level::Warn,
+                crate::opengl::opengl_impl::LOG_SCOPE.to_string(),
+                crate::opengl::opengl_impl::FORCED_PREP_FAILURE_WARNING.to_string(),
+            )]
+        );
+
         r.deinit();
     }
 
