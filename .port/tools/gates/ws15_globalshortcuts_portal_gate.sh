@@ -8,12 +8,14 @@
 #   2. `BindShortcuts` completed AND its results name the bound shortcut;
 #   3. the injected `Activated` reached the app's signal handler;
 #   4. the shortcut id RESOLVED in the map (`dispatch map-hit`);
-#   5. `performAllAction` was reached and returned Ok (`action performed ok`) —
-#      which requires the `trigger` emission and an installed dispatch thunk;
-#   6. a new toplevel window actually appeared — counted out-of-process from
+#   5. a new toplevel window actually appeared — counted out-of-process from
 #      GtkApplication's own D-Bus window export — the bound action being
-#      `new_window`.
-# Assertions 4-6 are what make this more than a signal-delivery test: the older
+#      `new_window`. That entails `performAllAction` having been reached through
+#      the `trigger` emission and an installed dispatch thunk, and having
+#      returned Ok. (Until task-14d-3 this was two assertions, the first of them
+#      greping a rustty-only success log line that the reference does not emit;
+#      see the note at that assertion for why dropping it costs no coverage.)
+# Assertions 4-5 are what make this more than a signal-delivery test: the older
 # "global shortcut activated=" line is logged BEFORE dispatch and so passes even
 # when the map lookup misses or the action fails.
 #
@@ -312,16 +314,17 @@ done
 }
 echo "map lookup resolved $SHORTCUT to its bound action"
 
-performed=0
-for _ in $(seq 1 20); do
-  if grep -q "global shortcut action performed ok" "$APP_LOG"; then performed=1; break; fi
-  sleep 0.5
-done
-[ "$performed" -eq 1 ] || {
-  echo "--- app log ---"; cat "$APP_LOG"
-  fail "the bound action was never performed (trigger not emitted, thunk not installed, or performAllAction returned Err)"
-}
-echo "performAllAction completed Ok"
+# NOTE (task-14d-3, S50-F4): this used to grep for a rustty-only
+# `global shortcut action performed ok` line emitted on `performAllAction`'s
+# SUCCESS arm. The reference (`application.zig:1741-1749`) has no such log — it
+# is a bare `catch` — so the emission was itself a parity defect and was removed.
+# THIS GATE IS NOT WEAKENED BY THAT. The bound action is `new_window`, and the
+# assertion immediately below counts a new toplevel on the session bus: a window
+# appearing ENTAILS `performAllAction` having run and returned Ok, so the
+# retained assertion strictly implies the removed one. What is lost is only the
+# ability to distinguish "performAllAction returned Err" from "it returned Ok but
+# produced no window" in the failure message; the failure text below now names
+# both.
 
 # --- the observable side effect ----------------------------------------------
 # The bound action is `new_window`, so a window must actually have appeared.
@@ -333,7 +336,7 @@ for _ in $(seq 1 20); do
 done
 [ "${windows_after:-0}" -gt "${windows_before:-0}" ] || {
   echo "--- app log ---"; cat "$APP_LOG"
-  fail "no new window appeared (before=$windows_before after=$windows_after): the action was reported performed but had no effect"
+  fail "the bound action did not produce a window (before=$windows_before after=$windows_after): trigger not emitted, thunk not installed, performAllAction returned Err, or it returned Ok with no effect"
 }
 echo "new window observed on the session bus: $windows_before -> $windows_after"
 

@@ -80,6 +80,16 @@ use crate::gtk::portal::OpenUri;
 use crate::gtk::surface::Surface as ApprtSurface;
 use crate::gtk::{build_info, ext, winproto, WeakRef};
 
+/// `const log = std.log.scoped(.gtk_ghostty_application)` (`application.zig:50`).
+/// REBRANDED per the task-14d-2 precedent (`.port/tools/PARITY_NAMING.md`); the
+/// GType registered NAME in this file is deliberately NOT rebranded.
+const LOG_SCOPE: &str = "gtk_rustty_application";
+
+/// `const glib_log = std.log.scoped(.glib)` (`application.zig:62`) — the SECOND
+/// scoped alias in this reference file, used only by `glibLogWriterFunction` so
+/// that GLib's own messages keep their own scope tag. No brand token.
+const GLIB_LOG_SCOPE: &str = "glib";
+
 mod imp {
     use super::*;
     // The GTK-tier traits the startup/activate/dispose vfuncs and their helpers
@@ -413,7 +423,7 @@ mod imp {
             if let Some(source) = self.signal_source.take() {
                 let removed = unsafe { glib::ffi::g_source_remove(source.as_raw()) };
                 if removed == glib::ffi::GFALSE {
-                    eprintln!("warn(gtk): unable to remove signal source");
+                    log::warn!(target: LOG_SCOPE, "unable to remove signal source");
                 }
             }
 
@@ -447,7 +457,7 @@ mod imp {
         /// installs us as the process-global default `GApplication`, then runs the
         /// six startup helpers in the reference's exact order.
         fn startup(&self) {
-            eprintln!("debug(gtk): startup");
+            log::debug!(target: LOG_SCOPE, "startup");
 
             // `gio.Application.virtual_methods.startup.call(parent)` (`:1297-1300`).
             self.parent_startup();
@@ -483,7 +493,7 @@ mod imp {
         /// the core app mailbox (**the app's only window-creation entry** — it goes
         /// through the mailbox, not a direct call), then chains the parent activate.
         fn activate(&self) {
-            eprintln!("debug(gtk): activate");
+            log::debug!(target: LOG_SCOPE, "activate");
 
             // `priv.core_app.mailbox.push(.{ .new_window = {} }, .forever)`
             // (`:1463-1466`), monomorphized into [`new_window_thunk`] by
@@ -547,7 +557,7 @@ mod imp {
             // Follow the `new_window_thunk` idiom: borrow-and-call the thunk inline.
             if let Some(thunk) = self.update_config_thunk.borrow().as_ref() {
                 thunk(config).map_err(|err| {
-                    eprintln!("warn(gtk): error updating app config err={err:?}");
+                    log::warn!(target: LOG_SCOPE, "error updating app config err={err:?}");
                     rustty_apprt_api::ApprtError
                 })?;
             }
@@ -615,25 +625,21 @@ mod imp {
                 // only at the very last step, never converting the payload.
                 if let Some(bytes) = section.bytes() {
                     let data: &[u8] = &bytes;
-                    eprintln!(
-                        "warn(gtk): css parsing failed at {location}: {:?} {} {}\n{}",
+                    log::warn!(target: LOG_SCOPE, "css parsing failed at {location}: {:?} {} {}\n{}",
                         error.domain(),
                         error.code(),
                         error.message(),
-                        String::from_utf8_lossy(data),
-                    );
+                        String::from_utf8_lossy(data),);
                     // `return;` (`:1274`).
                     return;
                 }
             }
 
             // The fallback line (`:1275-1280`).
-            eprintln!(
-                "warn(gtk): css parsing failed at {location}: {:?} {} {}",
+            log::warn!(target: LOG_SCOPE, "css parsing failed at {location}: {:?} {} {}",
                 error.domain(),
                 error.code(),
-                error.message(),
-            );
+                error.message(),);
         }
 
         /// PORTS: `application.zig:1335-1360` `startupXev`. Configures libxev to a
@@ -664,15 +670,11 @@ mod imp {
             };
 
             if result {
-                eprintln!(
-                    "info(gtk): libxev manual backend={:?}",
-                    rustty_xev::backend()
-                );
+                log::info!(target: LOG_SCOPE, "libxev manual backend={:?}",
+                    rustty_xev::backend());
             } else {
-                eprintln!(
-                    "warn(gtk): libxev manual backend failed, using default={:?}",
-                    rustty_xev::backend()
-                );
+                log::warn!(target: LOG_SCOPE, "libxev manual backend failed, using default={:?}",
+                    rustty_xev::backend());
             }
         }
 
@@ -729,7 +731,7 @@ mod imp {
         fn handle_style_manager_dark(&self, style: &libadwaita::StyleManager) {
             let is_dark = style.is_dark();
             let scheme = if is_dark { "dark" } else { "light" };
-            eprintln!("debug(gtk): style manager changed scheme={scheme}");
+            log::debug!(target: LOG_SCOPE, "style manager changed scheme={scheme}");
 
             // `core_app.colorSchemeEvent(self.rt(), scheme)` + per-surface
             // `surface.core().colorSchemeCallback(scheme)` (`:1551-1563`). Both reach
@@ -1017,14 +1019,13 @@ mod imp {
             // self, .app, .{})` (`:1594-1605`). On failure "we want the user to
             // know it. For now we log but we should show another GUI."
             let app = self.obj();
-            if action::reload_config(
+            if let Err(err) = action::reload_config(
                 &app,
                 Target::<AppTargetHandle>::App,
                 rustty_apprt_api::action::ReloadConfig::default(),
-            )
-            .is_err()
-            {
-                eprintln!("warn(gtk): error reloading config");
+            ) {
+                // log.warn("error reloading config: {}", .{err});
+                log::warn!(target: LOG_SCOPE, "error reloading config: {err:?}");
             }
         }
 
@@ -1194,11 +1195,13 @@ mod imp {
                 .unwrap();
             }
 
-            // `log.debug("runtime CSS is {d} bytes", .{contents.len})` (`:921`).
-            // PORT NOTE: this port has no debug-logging shim (the same doctrine
-            // recorded at `embedded.rs:648-649`), so the reference log line is
-            // preserved as a comment rather than emitted. Byte count is
-            // `css.len()`.
+            // log.debug("runtime CSS is {d} bytes", .{contents.len});
+            //
+            // S49-F5: this was dropped entirely on the grounds that the port had
+            // "no debug-logging shim". It has one now (`DECISION-logging.md`
+            // §6r4). The reference's `contents` is the built CSS byte slice, so
+            // the count is `css.len()`.
+            log::debug!(target: LOG_SCOPE, "runtime CSS is {} bytes", css.len());
 
             // Clears any previously loaded CSS from this provider (`:923-927`).
             // gtk4-rs 0.11 `CssProvider::load_from_string` has the same
@@ -1220,7 +1223,7 @@ mod imp {
 
             // `gdk.Display.getDefault() orelse { warn; return }` (`:1069-1072`).
             let Some(display) = gtk4::gdk::Display::default() else {
-                eprintln!("warn(gtk): unable to get display");
+                log::warn!(target: LOG_SCOPE, "unable to get display");
                 return;
             };
 
@@ -1260,10 +1263,8 @@ mod imp {
                 // either way we skip to the next path.
                 let contents = match std::fs::metadata(path) {
                     Ok(meta) if meta.len() > CSS_FILE_SIZE_LIMIT => {
-                        eprintln!(
-                            "warn(gtk): gtk-custom-css file {} was larger than {CSS_FILE_SIZE_LIMIT} bytes",
-                            path.display()
-                        );
+                        log::warn!(target: LOG_SCOPE, "gtk-custom-css file {} was larger than {CSS_FILE_SIZE_LIMIT} bytes",
+                            path.display());
                         continue;
                     }
                     Ok(_) => match std::fs::read(path) {
@@ -1271,10 +1272,8 @@ mod imp {
                         Err(err) => {
                             let missing = err.kind() == std::io::ErrorKind::NotFound;
                             if !missing || !optional {
-                                eprintln!(
-                                    "warn(gtk): error opening gtk-custom-css file {}: {err}",
-                                    path.display()
-                                );
+                                log::warn!(target: LOG_SCOPE, "error opening gtk-custom-css file {}: {err}",
+                                    path.display());
                             }
                             continue;
                         }
@@ -1282,16 +1281,14 @@ mod imp {
                     Err(err) => {
                         let missing = err.kind() == std::io::ErrorKind::NotFound;
                         if !missing || !optional {
-                            eprintln!(
-                                "warn(gtk): error opening gtk-custom-css file {}: {err}",
-                                path.display()
-                            );
+                            log::warn!(target: LOG_SCOPE, "error opening gtk-custom-css file {}: {err}",
+                                path.display());
                         }
                         continue;
                     }
                 };
 
-                eprintln!("info(gtk): loading gtk-custom-css path={}", path.display());
+                log::info!(target: LOG_SCOPE, "loading gtk-custom-css path={}", path.display());
 
                 // Fresh provider, wire the parse-error logger, own it in the Vec,
                 // load, and register on the display at USER priority (`:1115-1139`).
@@ -1394,10 +1391,8 @@ mod imp {
                 QuitTimer::Active(source) => {
                     let removed = unsafe { glib::ffi::g_source_remove(source.as_raw()) };
                     if removed == glib::ffi::GFALSE {
-                        eprintln!(
-                            "warn(gtk): unable to remove quit timer source={}",
-                            source.as_raw()
-                        );
+                        log::warn!(target: LOG_SCOPE, "unable to remove quit timer source={}",
+                            source.as_raw());
                     }
                     // `source` is consumed here (moved out of the timer); dropping it
                     // does NOT double-remove — `SourceId`'s own `Drop` is a no-op.
@@ -1623,7 +1618,7 @@ unsafe extern "C" fn handle_sigusr2(ud: glib::ffi::gpointer) -> glib::ffi::gbool
         return glib::ffi::GTRUE;
     }
 
-    eprintln!("info(gtk): received SIGUSR2, reloading configuration");
+    log::info!(target: LOG_SCOPE, "received SIGUSR2, reloading configuration");
 
     // `Action.reloadConfig(self, .app, .{})` (`:1512-1521`). Reach the app singleton
     // (rustty's blessed `self`-equivalent accessor; the `ud` pointer is that same
@@ -1631,14 +1626,14 @@ unsafe extern "C" fn handle_sigusr2(ud: glib::ffi::gpointer) -> glib::ffi::gbool
     // `Action` helper straight, NOT through `core.performAction`. On failure we log;
     // "we should show another GUI" (`:1516-1519`) is future work.
     let app = Application::default();
-    if action::reload_config(
+    if let Err(err) = action::reload_config(
         &app,
         Target::<AppTargetHandle>::App,
         rustty_apprt_api::action::ReloadConfig::default(),
-    )
-    .is_err()
-    {
-        eprintln!("warn(gtk): error reloading config");
+    ) {
+        // log.warn("error reloading config: {}", .{err});
+        // (task-14d-3: the error VALUE was dropped — the `.is_err()` discarded it.)
+        log::warn!(target: LOG_SCOPE, "error reloading config: {err:?}");
     }
 
     // `return @intFromBool(glib.SOURCE_CONTINUE)` (`:1523`).
@@ -1758,10 +1753,8 @@ fn action_new_window(
         // ensure that the supplied parameter is an array of strings
         // (`:1918-1925`).
         if !arguments.is_type(glib::VariantTy::STRING_ARRAY) {
-            eprintln!(
-                "warn(gtk): parameter is of type '{}', not 'as'",
-                arguments.type_().as_str(),
-            );
+            log::warn!(target: LOG_SCOPE, "parameter is of type '{}', not 'as'",
+                arguments.type_().as_str(),);
             break 'overrides None;
         }
 
@@ -1777,7 +1770,7 @@ fn action_new_window(
         Target::<AppTargetHandle>::App,
         overrides.unwrap_or_default(),
     ) {
-        eprintln!("warn(gtk): unable to create new window: {err:?}");
+        log::warn!(target: LOG_SCOPE, "unable to create new window: {err:?}");
     }
 }
 
@@ -1801,13 +1794,13 @@ fn action_new_tab(
     let (surface_id, overrides) = {
         // were we given a parameter? (`:1961-1964`.)
         let Some(parameter) = parameter else {
-            eprintln!("warn(gtk): app.new-tab did not receive a parameter");
+            log::warn!(target: LOG_SCOPE, "app.new-tab did not receive a parameter");
             return;
         };
 
         // `log.warn("got parameter: {s}", .{parameter.getTypeString()})`
         // (`:1966` — the reference logs this unconditionally).
-        eprintln!("warn(gtk): got parameter: {}", parameter.type_().as_str());
+        log::warn!(target: LOG_SCOPE, "got parameter: {}", parameter.type_().as_str());
 
         // ensure that the supplied parameter is an array of strings
         // (`:1968-1978` — the `(tas)` tuple check).
@@ -1815,10 +1808,8 @@ fn action_new_tab(
             return;
         };
         if !parameter.is_type(tas) {
-            eprintln!(
-                "warn(gtk): parameter is of type '{}', not '(tas)'",
-                parameter.type_().as_str(),
-            );
+            log::warn!(target: LOG_SCOPE, "parameter is of type '{}', not '(tas)'",
+                parameter.type_().as_str(),);
             return;
         }
 
@@ -1908,7 +1899,7 @@ fn parse_overrides(arguments_it: glib::VariantIter) -> Option<TabOverrides> {
             match cmd.parse_cli(Some(v.as_bytes())) {
                 Ok(()) => command = Some(cmd),
                 Err(err) => {
-                    eprintln!("warn(gtk): unable to parse command: {err:?}");
+                    log::warn!(target: LOG_SCOPE, "unable to parse command: {err:?}");
                     return None;
                 }
             }
@@ -1924,7 +1915,7 @@ fn parse_overrides(arguments_it: glib::VariantIter) -> Option<TabOverrides> {
             match ShellIntegration::string_to_enum(v.trim().as_bytes()) {
                 Some(parsed) => parsed_shell_integration = Some(parsed),
                 None => {
-                    eprintln!("warn(gtk): unable to parse shell integration {v}: InvalidValue")
+                    log::warn!(target: LOG_SCOPE, "unable to parse shell integration {v}: InvalidValue")
                 }
             }
             continue;
@@ -1979,15 +1970,13 @@ fn action_open_config(
     // mailbox; see the routing note below.
     let target: OpenConfig = 'target: {
         let Some(parameter) = parameter else {
-            eprintln!("warn(gtk): no parameter provided to app.open-config action");
+            log::warn!(target: LOG_SCOPE, "no parameter provided to app.open-config action");
             break 'target OpenConfig::OsOpen;
         };
 
         if !parameter.is_type(glib::VariantTy::STRING) {
-            eprintln!(
-                "warn(gtk): parameter to app.open-config action is of type '{}' not 's'",
-                parameter.type_().as_str(),
-            );
+            log::warn!(target: LOG_SCOPE, "parameter to app.open-config action is of type '{}' not 's'",
+                parameter.type_().as_str(),);
             break 'target OpenConfig::OsOpen;
         }
 
@@ -2001,10 +1990,8 @@ fn action_open_config(
             "os-open" => OpenConfig::OsOpen,
             "new-window" => OpenConfig::NewWindow,
             _ => {
-                eprintln!(
-                    "warn(gtk): '{str}' is not configured as a target for the \
-                     app.open-config action"
-                );
+                log::warn!(target: LOG_SCOPE, "'{str}' is not configured as a target for the \
+                     app.open-config action");
                 OpenConfig::OsOpen
             }
         }
@@ -2127,14 +2114,14 @@ fn action_reload_config(
     // (`App.zig:428`, `rt_app.performAction(.app, .reload_config, .{})`), so it
     // collapses to the same `.app`-target reload the SIGUSR2 handler performs. Route
     // it directly. On failure, log (`:1672`).
-    if action::reload_config(
+    if let Err(err) = action::reload_config(
         app,
         Target::<AppTargetHandle>::App,
         rustty_apprt_api::action::ReloadConfig::default(),
-    )
-    .is_err()
-    {
-        eprintln!("warn(gtk): error reloading config");
+    ) {
+        // log.warn("error reloading config: {}", .{err});
+        // (task-14d-3: the error VALUE was dropped — the `.is_err()` discarded it.)
+        log::warn!(target: LOG_SCOPE, "error reloading config: {err:?}");
     }
 }
 
@@ -2208,10 +2195,10 @@ fn deinit_private(priv_: &imp::Application) {
 }
 
 /// PORTS: `application.zig:48-110` `glibLogWriterFunction`. Funnels
-/// GLib/GObject/GTK log messages through rustty's logging — here `eprintln!`,
-/// matching the `gtk_version`/`adw_version` `log_version` convention (no logging
-/// framework is wired in this tier) — rather than letting GLib dump them straight
-/// to stderr unstructured. Registered once via [`glib::log_set_writer_func`] in
+/// GLib/GObject/GTK log messages through rustty's logging — the `log::` facade
+/// under the reference's own `glib` scope (`GLIB_LOG_SCOPE`) — rather than
+/// letting GLib dump them straight to stderr unstructured. Registered once via
+/// [`glib::log_set_writer_func`] in
 /// [`Application::new`] (`application.zig:251`).
 ///
 /// The reference scans the structured-log fields for `MESSAGE` / `GLIB_DOMAIN`
@@ -2246,15 +2233,27 @@ fn glib_log_writer(level: glib::LogLevel, fields: &[glib::LogField<'_>]) -> glib
     // the reference's ordered flag checks.
     match level {
         // error + critical -> err (`application.zig:84-91`).
-        glib::LogLevel::Error => eprintln!("error(glib): ERROR: {domain}: {message}"),
-        glib::LogLevel::Critical => eprintln!("error(glib): CRITICAL: {domain}: {message}"),
+        glib::LogLevel::Error => {
+            log::error!(target: GLIB_LOG_SCOPE, "ERROR: {domain}: {message}");
+        }
+        glib::LogLevel::Critical => {
+            log::error!(target: GLIB_LOG_SCOPE, "CRITICAL: {domain}: {message}");
+        }
         // warning -> warn (`application.zig:92-95`).
-        glib::LogLevel::Warning => eprintln!("warn(glib): WARNING: {domain}: {message}"),
+        glib::LogLevel::Warning => {
+            log::warn!(target: GLIB_LOG_SCOPE, "WARNING: {domain}: {message}");
+        }
         // message + info -> info (`application.zig:96-103`).
-        glib::LogLevel::Message => eprintln!("info(glib): MESSAGE: {domain}: {message}"),
-        glib::LogLevel::Info => eprintln!("info(glib): INFO: {domain}: {message}"),
+        glib::LogLevel::Message => {
+            log::info!(target: GLIB_LOG_SCOPE, "MESSAGE: {domain}: {message}");
+        }
+        glib::LogLevel::Info => {
+            log::info!(target: GLIB_LOG_SCOPE, "INFO: {domain}: {message}");
+        }
         // debug -> debug (`application.zig:104-107`).
-        glib::LogLevel::Debug => eprintln!("debug(glib): DEBUG: {domain}: {message}"),
+        glib::LogLevel::Debug => {
+            log::debug!(target: GLIB_LOG_SCOPE, "DEBUG: {domain}: {message}");
+        }
     }
     glib::LogWriterOutput::Handled
 }
@@ -2341,7 +2340,7 @@ fn set_gtk_env(config: &CoreConfig) {
             parts.push("vulkan-disable");
         }
         let value = parts.join(",");
-        eprintln!("warn(gtk): setting GDK_DEBUG={value}");
+        log::warn!(target: LOG_SCOPE, "setting GDK_DEBUG={value}");
         if let Ok(v) = CString::new(value) {
             env_setenv(c"GDK_DEBUG", &v);
         }
@@ -2360,7 +2359,7 @@ fn set_gtk_env(config: &CoreConfig) {
             parts.push("vulkan");
         }
         let value = parts.join(",");
-        eprintln!("warn(gtk): setting GDK_DISABLE={value}");
+        log::warn!(target: LOG_SCOPE, "setting GDK_DISABLE={value}");
         if let Ok(v) = CString::new(value) {
             env_setenv(c"GDK_DISABLE", &v);
         }
@@ -2612,10 +2611,32 @@ impl Application {
         // shouldn't stop startup, translations just may not resolve
         // (`application.zig:288-293`).
         if let Err(err) = rustty_os::i18n::initGlobalDomain() {
-            eprintln!("warn(gtk): i18n initialization failed error={err:?}");
+            log::warn!(target: LOG_SCOPE, "i18n initialization failed error={err:?}");
         }
 
         // Setup our GTK init env vars (`application.zig:296-305`), then libadwaita
+        // UNRESTORED SITES (task-14d-3) — this file's residual deficit, each a
+        // `catch` arm of a call that is INFALLIBLE in this port, so restoring
+        // any of them would put a diagnostic on a success path:
+        //   `:114` `UNKNOWN: {s}: {s}` — gtk4-rs decodes the level flags into a
+        //          closed `glib::LogLevel` with no unknown variant.
+        //   `:314` `error setting GTK environment variables err={}` — see below.
+        //   `:1258` `accelerator somehow longer than 1024 bytes: {f}` — the
+        //          reference formats into a fixed 1024-byte stack buffer; this
+        //          port formats into a `String`.
+        //   `:1304` `out of memory loading runtime CSS, no runtime CSS applied`
+        //          and `:1310` `failed to load custom CSS, ...` —
+        //          `load_runtime_css`/`load_custom_css` return `()`.
+        //   `:1804` `error toggling quick terminal err={}` and `:1815`
+        //          `error quitting err={}` — both collapse to a direct call
+        //          that cannot fail (see each action fn's own PORT NOTE).
+        //   `:1998 :2002 :2037 :2044 :2814` — Zig `dupeZ`/`ArrayList.append`/
+        //          `bufPrint` allocation failures; the Rust equivalents are
+        //          infallible.
+        //   `:2197` `unable to load resources` — gresource registration is
+        //          compiled in and cannot fail at runtime here.
+        //   `:3024` `unable to resize split, out of memory` — same class.
+        //
         // (`application.zig:306`). `set_gtk_env` is infallible in rustty (see its
         // doc), so the reference's `error.NoSpaceLeft` warn arm folds away.
         set_gtk_env(&config);
@@ -2644,7 +2665,7 @@ impl Application {
                         break 'app_id class_str.to_owned();
                     }
                 }
-                eprintln!("warn(gtk): invalid 'class' in config, ignoring");
+                log::warn!(target: LOG_SCOPE, "invalid 'class' in config, ignoring");
             }
             build_info::APPLICATION_ID.to_owned()
         };
@@ -2652,7 +2673,7 @@ impl Application {
         // The GDK display, or exit — there is no scenario we expect this to be
         // null, and we don't want null checks everywhere (`application.zig:337-342`).
         let Some(display) = gdk4::Display::default() else {
-            eprintln!("warn(gtk): gdk display is null, exiting");
+            log::warn!(target: LOG_SCOPE, "gdk display is null, exiting");
             std::process::exit(1);
         };
 
@@ -2661,15 +2682,13 @@ impl Application {
         let winproto = match winproto::App::init(&display, &app_id, &config) {
             Ok(wp) => wp,
             Err(err) => {
-                eprintln!("warn(gtk): error initializing windowing protocol err={err}");
+                log::warn!(target: LOG_SCOPE, "error initializing windowing protocol err={err}");
                 winproto::App::default()
             }
         };
-        eprintln!("debug(gtk): windowing protocol={:?}", winproto.protocol());
+        log::debug!(target: LOG_SCOPE, "windowing protocol={:?}", winproto.protocol());
 
-        eprintln!(
-            "debug(gtk): creating GTK application id={app_id} single-instance={single_instance}"
-        );
+        log::debug!(target: LOG_SCOPE, "creating GTK application id={app_id} single-instance={single_instance}");
 
         // Wrap the configuration in a GObject (`application.zig:366-368`). This
         // clones the config, so the local `config` may drop at end of scope.
@@ -2833,15 +2852,13 @@ impl Application {
                         if let Some(surface_id) = surface_id_ {
                             match unsafe { &*core_app }.findSurfaceByID(surface_id) {
                                 Some(s) => break 'surface Some(s),
-                                None => eprintln!(
-                                    "warn(gtk): new-tab: unable to find surface 0x{surface_id:016x}"
-                                ),
+                                None => log::warn!(target: LOG_SCOPE, "new-tab: unable to find surface 0x{surface_id:016x}"),
                             }
                         }
                         match unsafe { &*core_app }.focusedSurface() {
                             Some(s) => Some(s),
                             None => {
-                                eprintln!("warn(gtk): new-tab: unable to find surface");
+                                log::warn!(target: LOG_SCOPE, "new-tab: unable to find surface");
                                 None
                             }
                         }
@@ -2856,7 +2873,7 @@ impl Application {
                         // SAFETY: `findSurfaceByID`/`focusedSurface` return
                         // live app-thread surfaces (validated above).
                         if !action::new_tab(Target::Surface(unsafe { &*surface }), overrides) {
-                            eprintln!("warn(gtk): new-tab: unable to create tab");
+                            log::warn!(target: LOG_SCOPE, "new-tab: unable to create tab");
                         }
                     } else {
                         // `Action.newWindow(self, null, .{ ... })`
@@ -2864,7 +2881,7 @@ impl Application {
                         if let Err(err) =
                             action::new_window(&app, Target::<AppTargetHandle>::App, overrides)
                         {
-                            eprintln!("warn(gtk): new-tab: unable to create new window: {err:?}");
+                            log::warn!(target: LOG_SCOPE, "new-tab: unable to create new window: {err:?}");
                         }
                     }
                 })));
@@ -2970,21 +2987,29 @@ impl Application {
                     return;
                 };
                 // SAFETY: as above — app-thread-only access to the two backrefs.
-                match unsafe { &mut *core_app }.performAllAction(unsafe { &*rt_app }, action) {
-                    // PORT NOTE (rustty-only instrumentation): the reference has no
-                    // success-side log here. We emit one because it is the ONLY
-                    // observable that proves the whole activation chain completed —
-                    // portal `Activated` → map lookup hit → `trigger` emission →
-                    // installed thunk → `performAllAction` returning Ok. The
-                    // pre-dispatch "global shortcut activated=" line is emitted
-                    // before any of that and so cannot prove dispatch;
-                    // `.port/tools/gates/ws15_globalshortcuts_portal_gate.sh`
-                    // asserts THIS line.
-                    Ok(()) => eprintln!("debug(gtk): global shortcut action performed ok"),
-                    Err(_err) => {
-                        // log.warn("failed to perform action={}", .{err});
-                        eprintln!("warn(gtk): failed to perform global shortcut action");
-                    }
+                // self.core().performAllAction(self.rt(), action.*) catch |err| {
+                //     log.warn("failed to perform action={}", .{err});
+                // };
+                //
+                // S50-F4 (INVERSE PARITY DEFECT, fixed task-14d-3): there used to
+                // be a success arm here emitting
+                // `debug(gtk): global shortcut action performed ok`. The
+                // reference (`application.zig:1741-1749`) has NO success-side log
+                // — it is a bare `catch`. An emission the reference does not make
+                // is as much a parity defect as a missing one, so it is gone.
+                //
+                // Its stated purpose was to give
+                // `.port/tools/gates/ws15_globalshortcuts_portal_gate.sh` an
+                // observable for "the chain completed". That gate did not lose
+                // coverage: its very next assertion counts a NEW TOPLEVEL WINDOW
+                // on the session bus, and the bound action is `new_window` — a
+                // window appearing entails `performAllAction` having run and
+                // returned Ok, so the retained assertion implies the removed one.
+                if let Err(err) =
+                    unsafe { &mut *core_app }.performAllAction(unsafe { &*rt_app }, action)
+                {
+                    // log.warn("failed to perform action={}", .{err});
+                    log::warn!(target: LOG_SCOPE, "failed to perform action={err:?}");
                 }
             },
         )));
@@ -3083,10 +3108,8 @@ impl Application {
         // Register the application (`:500-516`). A failure warns and bails; the
         // `_cleanup` guard still runs on the way out.
         self.register(gio::Cancellable::NONE).map_err(|err| {
-            eprintln!(
-                "warn(gtk): error registering application: {}",
-                err.message()
-            );
+            log::warn!(target: LOG_SCOPE, "error registering application: {}",
+                err.message());
             RunError::ApplicationRegisterFailed
         })?;
 
@@ -3107,14 +3130,14 @@ impl Application {
         // If we are NOT the primary instance, never run the loop — another GTK
         // instance is already running (`:532-540`).
         if self.is_remote() {
-            eprintln!("debug(gtk): application is remote, exiting run loop after activation");
+            log::debug!(target: LOG_SCOPE, "application is remote, exiting run loop after activation");
             return Ok(());
         }
 
         // Tell systemd that we are ready (`:543`).
         rustty_os::systemd::notify::ready();
 
-        eprintln!("debug(gtk): entering runloop");
+        log::debug!(target: LOG_SCOPE, "entering runloop");
         imp.running.set(true);
         while imp.running.get() {
             // Block until a source is ready OR `wakeup()` breaks us out (`:549`).
@@ -3156,7 +3179,7 @@ impl Application {
 
                 // Quit timer expired → quit (`:560-564`).
                 if matches!(*imp.quit_timer.borrow(), imp::QuitTimer::Expired) {
-                    eprintln!("debug(gtk): must_quit due to quit timer expired");
+                    log::debug!(target: LOG_SCOPE, "must_quit due to quit timer expired");
                     break 'q true;
                 }
 
@@ -3166,7 +3189,7 @@ impl Application {
                     && imp.requested_window.get()
                     && self.windows().is_empty()
                 {
-                    eprintln!("debug(gtk): must_quit due to no app windows");
+                    log::debug!(target: LOG_SCOPE, "must_quit due to no app windows");
                     break 'q true;
                 }
 
@@ -3177,7 +3200,7 @@ impl Application {
                 self.quit_now();
             }
         }
-        eprintln!("debug(gtk): exiting runloop");
+        log::debug!(target: LOG_SCOPE, "exiting runloop");
 
         Ok(())
     }
@@ -3458,8 +3481,12 @@ impl Application {
             | Action::CheckForUpdates
             | Action::Undo
             | Action::Redo => {
-                // `log.warn("unimplemented action={}", .{action})` (`:791`).
-                eprintln!("warn(gtk): unimplemented action");
+                // log.warn("unimplemented action={}", .{action});
+                //
+                // S49-F5: the action NAME was omitted. `{}` on the reference's
+                // `apprt.Action.Key` enum prints its tag; `Action::key()` is the
+                // port's equivalent (`ActionKey` derives `Debug`).
+                log::warn!(target: LOG_SCOPE, "unimplemented action={:?}", action.key());
                 return Ok(false);
             }
         }
@@ -3662,7 +3689,7 @@ mod action {
     pub(super) fn equalize_splits<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
         match target {
             Target::App => {
-                eprintln!("warn(gtk): equalize splits to app is unexpected");
+                log::warn!(target: LOG_SCOPE, "equalize splits to app is unexpected");
                 false
             }
             Target::Surface(v) => {
@@ -3681,7 +3708,7 @@ mod action {
             Target::Surface(v) => {
                 let Some(w) = widget(v) else { return false };
                 let Some(tree) = ext::ancestor::<SplitTree>(&w) else {
-                    eprintln!("warn(gtk): surface is not in a split tree, ignoring goto_split");
+                    log::warn!(target: LOG_SCOPE, "surface is not in a split tree, ignoring goto_split");
                     return false;
                 };
                 tree.goto(match to {
@@ -3703,7 +3730,7 @@ mod action {
             Target::Surface(v) => {
                 let Some(w) = widget(v) else { return false };
                 let Some(window) = ext::ancestor::<Window>(&w) else {
-                    eprintln!("warn(gtk): surface is not in a window, ignoring goto_tab");
+                    log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring goto_tab");
                     return false;
                 };
                 // `window.selectTab(switch (tab) { ... })` (`:2058-2063`). The special
@@ -3803,7 +3830,7 @@ mod action {
         value: rustty_apprt_api::action::MouseOverLink<'_>,
     ) {
         match target {
-            Target::App => eprintln!("warn(gtk): mouse over link to app is unexpected"),
+            Target::App => log::warn!(target: LOG_SCOPE, "mouse over link to app is unexpected"),
             Target::Surface(v) => {
                 // PORTS: `application.zig:2151-2153`
                 // `surface.rt_surface.gobj().setMouseHoverUrl(if (value.url.len > 0) value.url else null)`.
@@ -3828,7 +3855,7 @@ mod action {
         shape: rustty_vt::mouse::Shape,
     ) {
         match target {
-            Target::App => eprintln!("warn(gtk): mouse shape to app is unexpected"),
+            Target::App => log::warn!(target: LOG_SCOPE, "mouse shape to app is unexpected"),
             Target::Surface(v) => {
                 // PORTS: `application.zig:2164` `surface.rt_surface.gobj().setMouseShape(shape)`.
                 // Sets the widget's `mouse-shape` property (carried as the shape's `i32`
@@ -3849,7 +3876,7 @@ mod action {
     ) {
         use rustty_apprt_api::action::MouseVisibility;
         match target {
-            Target::App => eprintln!("warn(gtk): mouse visibility to app is unexpected"),
+            Target::App => log::warn!(target: LOG_SCOPE, "mouse visibility to app is unexpected"),
             Target::Surface(v) => {
                 // PORTS: `application.zig:2175-2178`
                 // `setMouseHidden(switch (visibility) { .visible => false, .hidden => true })`.
@@ -3872,7 +3899,7 @@ mod action {
             Target::Surface(v) => {
                 let Some(w) = widget(v) else { return false };
                 let Some(window) = ext::ancestor::<Window>(&w) else {
-                    eprintln!("warn(gtk): surface is not in a window, ignoring move_tab");
+                    log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring move_tab");
                     return false;
                 };
                 // `window.moveTab(surface, @intCast(value.amount))` (`:2196-2199`).
@@ -3891,9 +3918,7 @@ mod action {
                     // `log.warn("surface is not in a window, ignoring
                     // new_tab_to_new_window")` (`:2626` — the reference's
                     // "new_tab_to_new_window" text, verbatim).
-                    eprintln!(
-                        "warn(gtk): surface is not in a window, ignoring new_tab_to_new_window"
-                    );
+                    log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring new_tab_to_new_window");
                     return false;
                 };
 
@@ -3911,7 +3936,7 @@ mod action {
     ) -> bool {
         match target {
             Target::App => {
-                eprintln!("warn(gtk): new split to app is unexpected");
+                log::warn!(target: LOG_SCOPE, "new split to app is unexpected");
                 false
             }
             Target::Surface(v) => {
@@ -3938,13 +3963,13 @@ mod action {
     ) -> bool {
         match target {
             Target::App => {
-                eprintln!("warn(gtk): new tab to app is unexpected");
+                log::warn!(target: LOG_SCOPE, "new tab to app is unexpected");
                 false
             }
             Target::Surface(v) => {
                 let Some(w) = widget(v) else { return false };
                 let Some(window) = ext::ancestor::<Window>(&w) else {
-                    eprintln!("warn(gtk): surface is not in a window, ignoring new_tab");
+                    log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring new_tab");
                     return false;
                 };
                 // `window.newTab(core, .{ .command, .shell_integration,
@@ -4038,7 +4063,7 @@ mod action {
         let path = match rustty_config::edit::open_path() {
             Ok(p) => p,
             Err(err) => {
-                eprintln!("warn(gtk): error getting config file path: {err:?}");
+                log::warn!(target: LOG_SCOPE, "error getting config file path: {err:?}");
                 return false;
             }
         };
@@ -4068,7 +4093,7 @@ mod action {
                 ) {
                     Ok(c) => c,
                     Err(err) => {
-                        eprintln!("warn(gtk): unable to get command to edit the config: {err:?}");
+                        log::warn!(target: LOG_SCOPE, "unable to get command to edit the config: {err:?}");
                         return false;
                     }
                 };
@@ -4105,7 +4130,7 @@ mod action {
                         ..Default::default()
                     },
                 ) {
-                    eprintln!("warn(gtk): unable to create new window: {err:?}");
+                    log::warn!(target: LOG_SCOPE, "unable to create new window: {err:?}");
                     return false;
                 }
             }
@@ -4130,7 +4155,7 @@ mod action {
         // an asynchronous failure reaches the same fallback from the portal
         // callbacks.
         if let Err(err) = app.open_uri().start(value) {
-            eprintln!("error(gtk): unable to open uri err={err}");
+            log::error!(target: LOG_SCOPE, "unable to open uri err={err}");
             open_url_fallback(value.kind, value.url);
         }
     }
@@ -4154,7 +4179,7 @@ mod action {
             OpenUrlKind::Osc8 => rustty_os::open::Kind::Osc8,
         };
         if let Err(err) = rustty_os::open::open(kind, url) {
-            eprintln!("warn(gtk): unable to open url: {err:?}");
+            log::warn!(target: LOG_SCOPE, "unable to open url: {err:?}");
         }
     }
 
@@ -4164,7 +4189,7 @@ mod action {
         value: rustty_apprt_api::action::Pwd<'_>,
     ) {
         match target {
-            Target::App => eprintln!("warn(gtk): pwd to app is unexpected"),
+            Target::App => log::warn!(target: LOG_SCOPE, "pwd to app is unexpected"),
             Target::Surface(v) => {
                 // PORTS: `application.zig:2372` `surface.rt_surface.gobj().setPwd(value.pwd)`
                 // — set the surface widget's `pwd` property (the tab tooltip + the window
@@ -4250,7 +4275,7 @@ mod action {
                 Target::Surface(v) => {
                     let Some(w) = widget(v) else { return false };
                     let Some(tab) = ext::ancestor::<Tab>(&w) else {
-                        eprintln!("warn(gtk): surface is not in a tab, ignoring prompt_tab_title");
+                        log::warn!(target: LOG_SCOPE, "surface is not in a tab, ignoring prompt_tab_title");
                         return false;
                     };
                     tab.prompt_tab_title();
@@ -4264,10 +4289,8 @@ mod action {
                 Target::Surface(v) => {
                     let Some(w) = widget(v) else { return false };
                     let Some(win) = ext::ancestor::<Window>(&w) else {
-                        eprintln!(
-                            "warn(gtk): surface is not in a window, \
-                             ignoring prompt_window_title"
-                        );
+                        log::warn!(target: LOG_SCOPE, "surface is not in a window, \
+                             ignoring prompt_window_title");
                         return false;
                     };
                     win.prompt_window_title();
@@ -4317,7 +4340,7 @@ mod action {
             // wraps the loaded `CoreConfig` in a `Config` GObject (which clones it),
             // so the local load result may drop here.
             let core_config = CoreConfig::load().map_err(|err| {
-                eprintln!("warn(gtk): error loading config on reload err={err:?}");
+                log::warn!(target: LOG_SCOPE, "error loading config on reload err={err:?}");
                 ApprtError
             })?;
             Config::new(&core_config)
@@ -4341,7 +4364,7 @@ mod action {
                     unsafe { &mut *core }
                         .updateConfig(config.get())
                         .map_err(|err| {
-                            eprintln!("warn(gtk): error updating surface config err={err:?}");
+                            log::warn!(target: LOG_SCOPE, "error updating surface config err={err:?}");
                             ApprtError
                         })?;
                 }
@@ -4359,13 +4382,13 @@ mod action {
     ) -> bool {
         match target {
             Target::App => {
-                eprintln!("warn(gtk): resize_split to app is unexpected");
+                log::warn!(target: LOG_SCOPE, "resize_split to app is unexpected");
                 false
             }
             Target::Surface(v) => {
                 let Some(w) = widget(v) else { return false };
                 let Some(tree) = ext::ancestor::<SplitTree>(&w) else {
-                    eprintln!("warn(gtk): surface is not in a split tree, ignoring resize_split");
+                    log::warn!(target: LOG_SCOPE, "surface is not in a split tree, ignoring resize_split");
                     return false;
                 };
                 // If the tree has no splits (one leaf), the action is not performable
@@ -4382,7 +4405,7 @@ mod action {
                 match tree.resize(dir, value.amount) {
                     Ok(handled) => handled,
                     Err(_) => {
-                        eprintln!("warn(gtk): unable to resize split");
+                        log::warn!(target: LOG_SCOPE, "unable to resize split");
                         false
                     }
                 }
@@ -4502,7 +4525,7 @@ mod action {
         value: rustty_apprt_api::action::SetTitle<'_>,
     ) {
         match target {
-            Target::App => eprintln!("warn(gtk): set_title to app is unexpected"),
+            Target::App => log::warn!(target: LOG_SCOPE, "set_title to app is unexpected"),
             Target::Surface(v) => {
                 // PORTS: `application.zig:2576-2583` `setTitle` — set the surface widget's
                 // `title` property. The tab's `computed_title` binds this active-surface
@@ -4523,13 +4546,13 @@ mod action {
     ) -> bool {
         match target {
             Target::App => {
-                eprintln!("warn(gtk): set_tab_title to app is unexpected");
+                log::warn!(target: LOG_SCOPE, "set_tab_title to app is unexpected");
                 false
             }
             Target::Surface(v) => {
                 let Some(w) = widget(v) else { return false };
                 let Some(tab) = ext::ancestor::<Tab>(&w) else {
-                    eprintln!("warn(gtk): surface is not in a tab, ignoring set_tab_title");
+                    log::warn!(target: LOG_SCOPE, "surface is not in a tab, ignoring set_tab_title");
                     return false;
                 };
                 // `setTitleOverride(if len==0 null else title)` (`:2594`).
@@ -4554,13 +4577,13 @@ mod action {
             Target::App => {
                 // `log.warn("set_tab_title to app is unexpected")` (`:3117` —
                 // the reference's copy-pasted "set_tab_title" text, verbatim).
-                eprintln!("warn(gtk): set_tab_title to app is unexpected");
+                log::warn!(target: LOG_SCOPE, "set_tab_title to app is unexpected");
                 false
             }
             Target::Surface(v) => {
                 let Some(w) = widget(v) else { return false };
                 let Some(window) = ext::ancestor::<Window>(&w) else {
-                    eprintln!("warn(gtk): surface is not in a window, ignoring set_window_title");
+                    log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring set_window_title");
                     return false;
                 };
                 // `window.setTitleOverride(if (value.title.len == 0) null
@@ -4680,16 +4703,14 @@ mod action {
     pub(super) fn toggle_split_zoom<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
         match target {
             Target::App => {
-                eprintln!("warn(gtk): toggle_split_zoom to app is unexpected");
+                log::warn!(target: LOG_SCOPE, "toggle_split_zoom to app is unexpected");
                 false
             }
             Target::Surface(v) => {
                 // TODO: pass surface ID when we have that
                 let Some(w) = widget(v) else { return false };
                 let Some(tree) = ext::ancestor::<SplitTree>(&w) else {
-                    eprintln!(
-                        "warn(gtk): surface is not in a split tree, ignoring toggle_split_zoom"
-                    );
+                    log::warn!(target: LOG_SCOPE, "surface is not in a split tree, ignoring toggle_split_zoom");
                     return false;
                 };
                 if !tree.property::<bool>("is-split") {
@@ -4723,9 +4744,7 @@ mod action {
             Target::Surface(v) => {
                 let Some(w) = widget(v) else { return false };
                 let Some(window) = ext::ancestor::<Window>(&w) else {
-                    eprintln!(
-                        "warn(gtk): surface is not in a window, ignoring toggle_tab_overview"
-                    );
+                    log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring toggle_tab_overview");
                     return false;
                 };
                 window.toggle_tab_overview();
@@ -4742,9 +4761,7 @@ mod action {
             Target::Surface(v) => {
                 let Some(w) = widget(v) else { return false };
                 let Some(window) = ext::ancestor::<Window>(&w) else {
-                    eprintln!(
-                        "warn(gtk): surface is not in a window, ignoring toggle_window_decorations"
-                    );
+                    log::warn!(target: LOG_SCOPE, "surface is not in a window, ignoring toggle_window_decorations");
                     return false;
                 };
                 window.toggle_window_decorations();
@@ -4885,7 +4902,7 @@ mod action {
             // `dialog.as(gtk.FileChooser).getFile() orelse { warn; return; }`
             // (`:2320-2324`).
             let Some(file) = dialog.file() else {
-                eprintln!("warn(gtk): inspector export dialog returned no file");
+                log::warn!(target: LOG_SCOPE, "inspector export dialog returned no file");
                 return;
             };
 
@@ -4902,7 +4919,7 @@ mod action {
                 gio::FileCreateFlags::empty(),
                 gio::Cancellable::NONE,
             ) {
-                eprintln!("err(gtk): failed to export terminal IO events err={err}");
+                log::error!(target: LOG_SCOPE, "failed to export terminal IO events err={err}");
             }
         }
     }
@@ -4946,7 +4963,7 @@ mod action {
     ) -> bool {
         match target {
             Target::App => {
-                eprintln!("warn(gtk): key_sequence action to app is unexpected");
+                log::warn!(target: LOG_SCOPE, "key_sequence action to app is unexpected");
                 false
             }
             Target::Surface(v) => {
@@ -4967,7 +4984,7 @@ mod action {
     ) -> bool {
         match target {
             Target::App => {
-                eprintln!("warn(gtk): key_table action to app is unexpected");
+                log::warn!(target: LOG_SCOPE, "key_table action to app is unexpected");
                 false
             }
             Target::Surface(v) => {
@@ -4986,7 +5003,7 @@ mod action {
     pub(super) fn show_on_screen_keyboard<C: CoreSurfaceHandle>(target: Target<'_, C>) -> bool {
         match target {
             Target::App => {
-                eprintln!("warn(gtk): show_on_screen_keyboard to app is unexpected");
+                log::warn!(target: LOG_SCOPE, "show_on_screen_keyboard to app is unexpected");
                 false
             }
             Target::Surface(v) => match widget(v) {
@@ -5258,13 +5275,28 @@ mod tests {
             "bind_core_app must install the performAllAction thunk"
         );
 
+        // S50-F4 (task-14d-3): the SUCCESS path must emit NOTHING. The port
+        // used to log `global shortcut action performed ok` here; the reference
+        // (`application.zig:1741-1749`) is a bare `catch` with no success arm,
+        // and an emission the reference does not make is as much a parity
+        // defect as a missing one. Asserting the FULL captured record vector is
+        // empty is what makes the regression fail — a `.any()`-style assertion
+        // could not see an EXTRA record at all.
+        let cap = crate::log_capture::start();
         app.imp()
             .global_shortcut_trigger(&ActionBoxed(rustty_input::binding::Action::NewWindow));
+        let messages = cap.messages();
+        drop(cap);
 
         assert_eq!(
             app.imp().global_shortcut_trigger_count.get(),
             1,
             "the trigger handler must reach the core dispatch exactly once"
+        );
+        assert_eq!(
+            Vec::<(log::Level, String, String)>::new(),
+            messages,
+            "globalShortcutTrigger's SUCCESS path logs nothing in the reference"
         );
     }
 
@@ -5865,50 +5897,6 @@ mod tests {
         );
     }
 
-    /// Run `f` with the process's fd 2 redirected into a temp file, and return
-    /// everything written there as RAW BYTES (never a lossy `String` — the thing
-    /// under test is a byte dump).
-    ///
-    /// `eprintln!` reaches fd 2 ONLY when libtest's per-thread output capture is
-    /// off, i.e. under `--nocapture`; with capture on, std diverts the write to
-    /// libtest's sink and this returns empty. The caller treats an empty capture
-    /// as a HARD FAILURE rather than a pass, so a capture-on run can never make
-    /// the assertion below vacuous.
-    fn capture_stderr<F: FnOnce()>(f: F) -> Vec<u8> {
-        use std::io::Write;
-        use std::os::fd::AsRawFd;
-
-        let path = std::env::temp_dir().join(format!(
-            "rustty-v14-css-{}-{:?}.log",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let file = std::fs::File::create(&path).expect("create the stderr sink");
-
-        // SAFETY: plain fd plumbing on the current process. `saved` is a fresh
-        // duplicate of fd 2 that we own and restore/close below; `file`'s fd is
-        // valid for the whole scope.
-        let saved = unsafe { libc::dup(2) };
-        assert!(saved >= 0, "dup(2) failed");
-        assert!(
-            unsafe { libc::dup2(file.as_raw_fd(), 2) } >= 0,
-            "dup2 onto fd 2 failed"
-        );
-
-        f();
-
-        let _ = std::io::stderr().flush();
-        unsafe {
-            libc::dup2(saved, 2);
-            libc::close(saved);
-        }
-        drop(file);
-
-        let out = std::fs::read(&path).expect("read the stderr sink");
-        let _ = std::fs::remove_file(&path);
-        out
-    }
-
     /// V14 (`.port/phase-2/VERIFICATION_DEBT.md`): drive
     /// [`imp::Application::signal_css_parsing_error`] ITSELF, not just the
     /// `CssSection::bytes()` binding it calls.
@@ -5934,9 +5922,9 @@ mod tests {
     /// bound to a different libtest thread) — it does not add a new init to a
     /// `tests/` binary.
     #[test]
-    #[ignore = "headed GTK; needs --nocapture (fd-2 capture). run: \
+    #[ignore = "headed GTK. run: \
                 cargo test -p rustty-apprt --features gtk[,gtk-v4_16] --lib \
-                css_parsing_error -- --ignored --nocapture"]
+                css_parsing_error -- --ignored"]
     fn signal_css_parsing_error_byte_dump_follows_the_feature_ceiling() {
         if gtk4::init().is_err() {
             // Another headed test in this binary already bound GTK to its thread.
@@ -5977,7 +5965,17 @@ mod tests {
             }
         ));
 
-        let logged = capture_stderr(|| provider.load_from_string(BAD_CSS));
+        // task-14d-3: this used to dup(2)-redirect fd 2 and grep the bytes,
+        // because the handler wrote through a raw `eprintln!`. It now goes
+        // through the `log::` facade, so the records are read from the capture
+        // logger instead — which is strictly better evidence (level and scope
+        // are pinned too) and removes this test's `--nocapture` dependency for
+        // the log half. The `capture_stderr` fd-2 helper had no other caller
+        // and is deleted with it.
+        let cap = crate::log_capture::start();
+        provider.load_from_string(BAD_CSS);
+        let logged = cap.messages();
+        drop(cap);
 
         assert!(
             calls.get() > 0,
@@ -5985,34 +5983,34 @@ mod tests {
         );
         assert!(
             !logged.is_empty(),
-            "captured NOTHING on fd 2 — run this test with `--nocapture`, or libtest \
-             swallows the handler's eprintln! and the assertion below would be vacuous"
+            "the handler emitted NOTHING — the assertions below would be vacuous"
         );
 
         println!(
-            "V14 EVIDENCE (gtk-v4_16 = {}): {}",
+            "V14 EVIDENCE (gtk-v4_16 = {}): {logged:?}",
             cfg!(feature = "gtk-v4_16"),
-            String::from_utf8_lossy(&logged).trim_end()
         );
 
-        // Both arms log the fallback fields (`:1275-1280`).
-        let head = b"warn(gtk): css parsing failed at";
+        // Both arms log the fallback fields (`:1275-1280`), at warn, under this
+        // file's own reference scope.
         assert!(
-            logged.windows(head.len()).any(|w| w == head),
-            "the handler must log the fallback line in BOTH arms; got {:?}",
-            String::from_utf8_lossy(&logged)
+            logged.iter().any(|(level, target, msg)| {
+                *level == log::Level::Warn
+                    && target == LOG_SCOPE
+                    && msg.starts_with("css parsing failed at")
+            }),
+            "the handler must log the fallback line in BOTH arms, at warn under \
+             {LOG_SCOPE}; got {logged:?}"
         );
 
         // The differential: the raw source bytes appear IFF the ceiling is raised.
-        let needle = BAD_CSS.as_bytes();
-        let has_bytes = logged.windows(needle.len()).any(|w| w == needle);
+        let has_bytes = logged.iter().any(|(_, _, msg)| msg.contains(BAD_CSS));
         assert_eq!(
             has_bytes,
             cfg!(feature = "gtk-v4_16"),
             "the `application.zig:1261-1274` byte dump must be present IFF \
-             `gtk-v4_16` is on (feature on = {}); logged: {:?}",
+             `gtk-v4_16` is on (feature on = {}); logged: {logged:?}",
             cfg!(feature = "gtk-v4_16"),
-            String::from_utf8_lossy(&logged)
         );
     }
 }

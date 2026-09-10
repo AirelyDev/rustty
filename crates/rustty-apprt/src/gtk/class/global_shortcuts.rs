@@ -75,6 +75,11 @@ use rustty_input::binding::{Action, Trigger, Value};
 
 use crate::gtk::key;
 
+/// `const log = std.log.scoped(.gtk_ghostty_global_shortcuts)`
+/// (`global_shortcuts.zig:15`). REBRANDED per the task-14d-2 precedent (see
+/// `.port/tools/PARITY_NAMING.md`); the GType registered NAME is not.
+const LOG_SCOPE: &str = "gtk_rustty_global_shortcuts";
+
 /// PORTS: `global_shortcuts.zig:85-101` `GlobalShortcuts.BindFailed` — "A global
 /// shortcut that failed to bind or was revoked."
 ///
@@ -272,6 +277,18 @@ impl GlobalShortcuts {
     /// shortcut registration from the current config: close the previous session,
     /// rebuild the trigger→action map, and — if anything is registered — start the
     /// portal round-trip with `CreateSession`.
+    // UNRESTORED SITES (task-14d-3), all five of this file's residual deficit,
+    // all the same cause — the reference's fallible call is INFALLIBLE here, so
+    // there is no `catch` arm and restoring the diagnostic would put it on a
+    // success path:
+    //   `:239` `buffer too small to translate trigger, ignoring={f}` — the
+    //          reference formats the trigger into a fixed 1024-byte stack
+    //          buffer that can overflow; this port formats into a `String`.
+    //   `:345` `out of memory: failed to clone session handle` — the handle is
+    //          an owned `String`; the reference's `dupeZ` can fail.
+    //   `:365` `failed to bind shortcuts={}` — [`Self::request`] returns `()`.
+    //   `:567` and `:580` `error refreshing global shortcuts: {}` — this
+    //          function returns `()`.
     fn refresh(&self) {
         // Always close our previous state first (`:150`).
         self.close();
@@ -302,7 +319,8 @@ impl GlobalShortcuts {
             // double-borrow panic.
             if let Some(app) = app_default() {
                 if app.winproto_mut().bind_global_shortcuts(self, config.get()) {
-                    eprintln!("debug(gtk): global shortcuts bound via winproto");
+                    // log.debug("global shortcuts bound via winproto", .{});
+                    log::debug!(target: LOG_SCOPE, "global shortcuts bound via winproto");
                     return;
                 }
             }
@@ -410,12 +428,21 @@ impl GlobalShortcuts {
             return;
         };
 
-        // PORT NOTE (rustty-only instrumentation): the reference logs nothing here.
+        // PORT NOTE (rustty-only instrumentation, KEPT — unlike S50-F4's
+        // success line, which was removed): the reference logs nothing here.
         // This line is reachable only AFTER the map lookup hit, so it separates
-        // "signal arrived" from "signal resolved to a bound action" for the live
-        // gate; the terminal success observable is `global shortcut action
-        // performed ok` in `application.rs`.
-        eprintln!("debug(gtk): global shortcut dispatch map-hit id={shortcut_id}");
+        // "signal arrived" from "signal resolved to a bound action" for
+        // `.port/tools/gates/ws15_globalshortcuts_portal_gate.sh`, which has no
+        // other way to tell those two apart — the reference's own
+        // `activated={s}` fires before the lookup. It is deliberately NOT
+        // emitted under this file's reference `LOG_SCOPE`, so it cannot be
+        // mistaken for a restored reference diagnostic; see the task-14d-3
+        // report's inverse-defect heading, which lists it as a candidate a
+        // later stage may still want to remove.
+        log::debug!(
+            target: "rustty_gtk_instrumentation",
+            "global shortcut dispatch map-hit id={shortcut_id}"
+        );
 
         // `self.emitTrigger(&action)` (`:605`).
         self.emit_trigger(&action);
@@ -488,7 +515,14 @@ impl GlobalShortcuts {
         // `getRequestPath` (`:429`). `getUniqueName` never returns null on an
         // ordinary message-bus connection (`:476-478`).
         let Some(unique_name) = dbus.unique_name() else {
-            eprintln!("warn(gtk): global shortcuts: dbus connection has no unique name");
+            // PORT NOTE: the reference's `getUniqueName` null arm
+            // (`global_shortcuts.zig:476-478`) returns `error.NoDBusUniqueName`
+            // without logging; this warn is rustty-only and, like the map-hit
+            // line, is not emitted under the reference scope.
+            log::warn!(
+                target: "rustty_gtk_instrumentation",
+                "global shortcuts: dbus connection has no unique name"
+            );
             return;
         };
         let request_path = request_object_path(unique_name.as_str(), &request_token);
@@ -532,16 +566,17 @@ impl GlobalShortcuts {
                 match response {
                     // `.{0 => method.onResponse(..)}` (`:414-417`)
                     0 => {
-                        eprintln!(
-                            "debug(gtk): global shortcuts request successful method={}",
-                            method.name()
-                        );
+                        // log.debug("request successful", .{});
+                        log::debug!(target: LOG_SCOPE, "request successful");
                         this.on_response(method, &results);
                     }
-                    1 => eprintln!("debug(gtk): global shortcuts request was cancelled by user"),
-                    2 => eprintln!("warn(gtk): global shortcuts request ended unexpectedly"),
+                    // 1 => log.debug("request was cancelled by user", .{}),
+                    1 => log::debug!(target: LOG_SCOPE, "request was cancelled by user"),
+                    // 2 => log.warn("request ended unexpectedly", .{}),
+                    2 => log::warn!(target: LOG_SCOPE, "request ended unexpectedly"),
+                    // else => log.warn("unrecognized response code={}", .{response}),
                     other => {
-                        eprintln!("warn(gtk): global shortcuts unrecognized response code={other}")
+                        log::warn!(target: LOG_SCOPE, "unrecognized response code={other}");
                     }
                 }
             },
@@ -570,7 +605,14 @@ impl GlobalShortcuts {
                 // neither do we, for the same reason: doing so reintroduces the
                 // very race the pre-subscription avoids.
                 if let Err(err) = res {
-                    eprintln!("warn(gtk): global shortcuts {method_name} request failed={err}");
+                    // log.warn("request failed={s} ({})", .{ err_.f_message orelse "(unknown)", err_.f_code });
+                    let _ = method_name;
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "request failed={} ({})",
+                        err.message(),
+                        err.code(),
+                    );
                 }
             },
         );
@@ -583,13 +625,16 @@ impl GlobalShortcuts {
             Method::CreateSession => {
                 // `vardict.lookup("session_handle", "&s", &handle)` (`:287-293`).
                 let Some(handle) = session_handle_from_results(results) else {
-                    eprintln!(
-                        "warn(gtk): global shortcuts session handle not found in response={}",
+                    // log.warn("session handle not found in response={s}", .{vardict.print(true)});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "session handle not found in response={}",
                         results.print(true)
                     );
                     return;
                 };
-                eprintln!("debug(gtk): global shortcuts session_handle={handle}");
+                // log.debug("session_handle={?s}", .{handle});
+                log::debug!(target: LOG_SCOPE, "session_handle={handle}");
                 self.imp().handle.replace(Some(handle.clone()));
 
                 let dbus = { self.imp().dbus_connection.borrow().clone() };
@@ -618,7 +663,8 @@ impl GlobalShortcuts {
                         else {
                             return;
                         };
-                        eprintln!("debug(gtk): global shortcut activated={id}");
+                        // log.debug("activated={s}", .{shortcut_id});
+                        log::debug!(target: LOG_SCOPE, "activated={id}");
                         this.dispatch_activation(&id);
                     },
                 );
@@ -630,13 +676,18 @@ impl GlobalShortcuts {
 
             // `.bind_shortcuts => {}` (`:323`).
             //
-            // PORT NOTE (rustty-only instrumentation): the reference's arm is
-            // empty. We log the accepted binding set, because this is the single
-            // observable that proves the compositor took the shortcuts — it is
-            // what `.port/tools/gates/ws15_globalshortcuts_portal_gate.sh` asserts.
+            // PORT NOTE (rustty-only instrumentation, KEPT): the reference's arm
+            // is empty. We log the accepted binding set, because this is the
+            // single observable that proves the compositor took the shortcuts —
+            // it is what `.port/tools/gates/ws15_globalshortcuts_portal_gate.sh`
+            // asserts. task-14d-3 moved it OFF this file's reference `LOG_SCOPE`
+            // onto a `rustty_gtk_instrumentation` target, so it cannot be
+            // mistaken for a restored reference diagnostic and does not inflate
+            // this file's reconciliation count.
             Method::BindShortcuts => {
-                eprintln!(
-                    "debug(gtk): global shortcuts bound results={}",
+                log::debug!(
+                    target: "rustty_gtk_instrumentation",
+                    "global shortcuts bound results={}",
                     results.print(true)
                 );
             }
