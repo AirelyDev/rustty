@@ -36,7 +36,15 @@ use rustty_cfg_fmt::{FormatEntry, FormatError, Writer};
 // clone the bytes at the reference's copy sites (Surface.init copies it into
 // the termio Exec config AND keeps it for the title block — Surface.zig:618/
 // 649/755/769; the core app.rs `performAllChainedAction` clone precedent).
-#[derive(Clone)]
+//
+// PORT NOTE (Rust-only glue, additive; N11): `Debug` — `Config.zig:4746`'s
+// `log.info("shell src=config value={}", .{cmd})` applies Zig's `{}` to a value
+// with no `format` method, i.e. the builtin aggregate formatter
+// (`config.Command{ .shell = { 47, 98, ... } }`, byte slices rendered as their
+// numeric elements). Rust's derived `Debug` is the port's crate-wide stand-in
+// for that formatter (`Shell([47, 98, ...])`); the spelling difference is
+// tracked as N11 and swept crate-wide there, not here.
+#[derive(Clone, Debug)]
 pub enum Command {
     /// Execute a command directly, e.g. via `exec`. The format here
     /// is already structured to be ready to passed directly to `exec`

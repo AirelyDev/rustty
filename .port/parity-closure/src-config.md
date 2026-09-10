@@ -50,7 +50,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** config-file diagnostics render Rust io::Error / a reduced kind set instead of Zig error and File.Kind tag names
   - **Oracle:** `src/config/Config.zig:4413-4426, 4432-4448` → **Rustty:** `crates/rustty-config/src/config_struct.rs:6811-6818, 6836-6848, 5424-5434`
   - **Audit's suggested fix:** Map io::ErrorKind to the Zig error names and use the unix FileTypeExt to name fifo/char/block devices.
-- [ ] **S74-F5** · CONFIRMED · `LOG` · behavioral-difference
+- [x] **S74-F5** · CONFIRMED · `LOG` · behavioral-difference
   - **What:** finalize log lines drop their formatted values
   - **Oracle:** `src/config/Config.zig:4680, 4844-4849` → **Rustty:** `crates/rustty-config/src/config_struct.rs:7290, 7514-7518`
   - **Audit's suggested fix:** Include the Command's Display/format and the Duration formatter output in the messages.

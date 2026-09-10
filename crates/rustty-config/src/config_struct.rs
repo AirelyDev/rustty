@@ -7384,8 +7384,15 @@ impl Config {
                     // if (self.command) |cmd|
                     //     log.info("shell src=config value={}", .{cmd})
                     // else shell_env: {
-                    if let Some(_cmd) = &self.command {
-                        log_info("shell src=config".to_string());
+                    if let Some(cmd) = &self.command {
+                        // PORT NOTE (N11): Zig's `{}` on a value with no
+                        // `format` method renders its builtin aggregate
+                        // formatter (`config.Command{ .shell = ... }`);
+                        // `{cmd:?}` is the port's crate-wide stand-in for that.
+                        // Same family as the renderer's `image::Id` /
+                        // `renderer::Size` sites; the crate-wide sweep is N11's
+                        // own task, not this row's.
+                        log_info(format!("shell src=config value={cmd:?}"));
                     } else {
                         'shell_env: {
                             // Flatpak always gets its shell from outside the sandbox
@@ -7608,10 +7615,16 @@ impl Config {
                 //     "quit-after-last-window-closed-delay is set to a very short value ({f}), which might cause problems",
                 //     .{duration},
                 // );
-                log_warn(
-                    "quit-after-last-window-closed-delay is set to a very short value, which might cause problems"
-                        .to_string(),
-                );
+                // `{f}` calls `Duration.format` (`Config.zig`'s `Duration`,
+                // the `units` walk), NOT the builtin aggregate formatter —
+                // `4s`, `1m 30s`. `Duration::format` is the direct port of it
+                // and is already used by `format_entry`.
+                let mut rendered: Vec<u8> = Vec::new();
+                duration.format(&mut rendered);
+                log_warn(format!(
+                    "quit-after-last-window-closed-delay is set to a very short value ({}), which might cause problems",
+                    String::from_utf8_lossy(&rendered)
+                ));
             }
         }
 
@@ -11820,6 +11833,42 @@ mod machinery_tests {
             // );
             assert_eq!(2500, cfg.abnormal_command_exit_runtime);
         }
+    }
+
+    // No reference `test {}` — PROVING test for S74-F5. `finalize`'s
+    // `quit-after-last-window-closed-delay ... very short value ({f})` warning
+    // (`Config.zig:4866`) dropped its formatted value, so every too-short delay
+    // produced the same string and the user could not see WHICH value was
+    // rejected. `{f}` calls `Duration.format` (`4s`, `1m 30s`), not the builtin
+    // aggregate formatter.
+    //
+    // S74-F5's OTHER site, `Config.zig:4746`'s `log.info("shell src=config
+    // value={}", .{cmd})`, has no unit test by construction: the reference wraps
+    // that whole `command:` block in `comptime !builtin.is_test`
+    // (`Config.zig:4739`) and the port ports the gate as `#[cfg(not(test))]`
+    // (`config_struct.rs:7285`), so it cannot execute in a `cargo test` binary
+    // on either side. Its restored payload is asserted by inspection against the
+    // oracle, not by a test that would have to defeat the reference's own gate.
+    #[test]
+    fn finalize_warns_with_the_formatted_short_quit_delay() {
+        let mut cfg = Config::default_config();
+        cfg.quit_after_last_window_closed_delay = Some(Duration {
+            // 4s — under the reference's `5 * std.time.ns_per_s` threshold.
+            duration: 4 * NS_PER_S,
+        });
+
+        log_capture::arm();
+        cfg.finalize().unwrap();
+        let records = log_capture::take();
+
+        assert_eq!(
+            records,
+            vec![concat!(
+                "warning(config): quit-after-last-window-closed-delay is set to a very ",
+                "short value (4s), which might cause problems"
+            )
+            .to_string()],
+        );
     }
 
     // No reference `test {}` — PROVING tests for the `.config` scoped logger's
