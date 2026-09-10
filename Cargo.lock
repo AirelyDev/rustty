@@ -1194,6 +1194,7 @@ dependencies = [
  "harfbuzz-sys",
  "libadwaita",
  "libc",
+ "log",
  "objc2",
  "rustty-apprt-api",
  "rustty-args",

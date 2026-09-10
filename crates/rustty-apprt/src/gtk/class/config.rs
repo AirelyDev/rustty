@@ -33,6 +33,44 @@ use glib::subclass::prelude::*;
 
 use rustty_config::Config as CoreConfig;
 
+/// `const log = std.log.scoped(.gtk_ghostty_config)` (`config.zig:11`).
+/// The scope tag is a runtime identity string, so it is rebranded per
+/// `.port/tools/PARITY_NAMING.md` ("runtime identity strings ... become
+/// rustty"); the GType NAME below is deliberately NOT, because it is a
+/// registered type identity the reference's `.name = "GhosttyConfig"` fixes.
+const LOG_SCOPE: &str = "gtk_rustty_config";
+
+/// `var buf: [4095:0]u8` (`config.zig:117`). The reference formats EACH
+/// diagnostic into this fixed buffer through `std.Io.Writer.fixed`, so a
+/// diagnostic longer than 4095 bytes makes `diag.format` fail with
+/// `error.WriteFailed` and is SKIPPED with a warning rather than shown
+/// truncated. Diagnostic text embeds user-controlled config key/value/file-path
+/// text, so the over-long case is reachable (S51-F2).
+const DIAGNOSTICS_BUFFER_LEN: usize = 4095;
+
+/// The single error `std.Io.Writer.fixed` can produce here. Zig's `{}` on it
+/// renders `error.WriteFailed`; the port's crate-wide convention renders Rust's
+/// `Debug`, i.e. `WriteFailed` (N11).
+#[derive(Debug, PartialEq, Eq)]
+enum DiagnosticFormatError {
+    WriteFailed,
+}
+
+/// `writer.end = 0; diag.format(&writer)` against that fixed 4095-byte buffer
+/// (`config.zig:119-126`). `Diagnostic::format` writes into a growable `Vec`,
+/// which cannot fail, so the reference's CAPACITY is what has to be enforced:
+/// anything past 4095 bytes is the `error.WriteFailed` arm.
+fn format_diagnostic_bounded(
+    diag: &rustty_args::diagnostics::Diagnostic,
+) -> Result<Vec<u8>, DiagnosticFormatError> {
+    let mut buf: Vec<u8> = Vec::new();
+    diag.format(&mut buf);
+    if buf.len() > DIAGNOSTICS_BUFFER_LEN {
+        return Err(DiagnosticFormatError::WriteFailed);
+    }
+    Ok(buf)
+}
+
 mod imp {
     use super::*;
     use std::cell::OnceCell;
@@ -105,19 +143,33 @@ mod imp {
             // `gtk.TextBuffer.new(null)` (`config.zig:114`).
             let text_buf = gtk4::TextBuffer::new(None);
 
-            // PORT NOTE: the oracle formats into a fixed `[4095:0]u8` stack
-            // buffer (`config.zig:117`) — a Zig stack-size constraint, not
-            // semantics — and truncates anything longer. Rust formats into a
-            // growable `Vec<u8>` per diagnostic (no truncation), which is
-            // behavior-preserving for the common short-diagnostic case and
-            // strictly more faithful for long ones. `Diagnostic::format` writes
+            // `var buf: [4095:0]u8` + `writer: .fixed(&buf)`
+            // (`config.zig:117-118`) -> `format_diagnostic_bounded`, which
+            // enforces the same 4095-byte capacity. `Diagnostic::format` writes
             // UTF-8; a lossy decode guards the `insert_at_cursor(&str)` binding.
+            // for (config._diagnostics.items()) |diag| {
             for diag in config._diagnostics.items() {
-                let mut buf: Vec<u8> = Vec::new();
-                diag.format(&mut buf);
+                //     writer.end = 0;
+                //     diag.format(&writer) catch |err| {
+                //         log.warn(
+                //             "error writing diagnostic to buffer err={}",
+                //             .{err},
+                //         );
+                //         continue;
+                //     };
+                let buf = match format_diagnostic_bounded(diag) {
+                    Ok(buf) => buf,
+                    Err(err) => {
+                        log::warn!(
+                            target: LOG_SCOPE,
+                            "error writing diagnostic to buffer err={err:?}",
+                        );
+                        continue;
+                    }
+                };
                 let text = String::from_utf8_lossy(&buf);
-                // `text_buf.insertAtCursor(&buf, ...)` then `"\n"`
-                // (`config.zig:129-130`).
+                //     text_buf.insertAtCursor(&buf, @intCast(writer.end));
+                //     text_buf.insertAtCursor("\n", 1);
                 text_buf.insert_at_cursor(&text);
                 text_buf.insert_at_cursor("\n");
             }
@@ -212,5 +264,47 @@ mod tests {
         assert!(!has, "a default config has no diagnostics");
         let buffer: Option<gtk4::TextBuffer> = obj.property("diagnostics-buffer");
         assert!(buffer.is_none(), "no diagnostics -> null buffer");
+    }
+
+    // No reference `test {}` — PROVING test for S51-F2. `diagnosticsBuffer`
+    // formats each diagnostic into a fixed `[4095:0]u8`
+    // (`config.zig:117-126`); a diagnostic that does not fit makes
+    // `diag.format` fail with `error.WriteFailed` and is SKIPPED with a
+    // warning, not shown truncated and not shown in full. The port formatted
+    // into a growable `Vec` and always inserted the whole text.
+    //
+    // Asserted on `format_diagnostic_bounded`, the capacity decision itself,
+    // rather than through `diagnostics-buffer`: the property getter needs a
+    // `gtk4::TextBuffer`, and the boundary is what the row is about. The
+    // boundary is exact — `writer.end` may reach 4095, so 4095 fits and 4096
+    // does not.
+    #[test]
+    fn diagnostics_buffer_skips_a_diagnostic_that_overflows_the_reference_buffer() {
+        use rustty_args::diagnostics::Diagnostic;
+
+        // `Diagnostic.format` writes `key`, then ": ", then `message` when a
+        // key is present; with no key and no location it writes `message`
+        // alone, so `message.len()` IS the formatted length here.
+        let exact = Diagnostic {
+            message: vec![b'x'; DIAGNOSTICS_BUFFER_LEN],
+            ..Diagnostic::default()
+        };
+        let over = Diagnostic {
+            message: vec![b'x'; DIAGNOSTICS_BUFFER_LEN + 1],
+            ..Diagnostic::default()
+        };
+
+        assert_eq!(
+            format_diagnostic_bounded(&exact).map(|b| b.len()),
+            Ok(DIAGNOSTICS_BUFFER_LEN),
+            "4095 bytes is the last length `std.Io.Writer.fixed(&buf)` accepts"
+        );
+        assert!(
+            matches!(
+                format_diagnostic_bounded(&over),
+                Err(DiagnosticFormatError::WriteFailed)
+            ),
+            "4096 bytes overflows the reference's fixed buffer"
+        );
     }
 }

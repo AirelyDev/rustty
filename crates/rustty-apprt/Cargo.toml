@@ -106,6 +106,13 @@ x11 = ["gtk", "dep:gdk4-x11"]
 # WS4 `initSignals` (global.zig): the SIGPIPE-ignore sigaction. R3: libc binds
 # the SAME syscalls the reference's std.posix wraps (the rustty-cli precedent).
 libc = "0.2"
+# DECISION-logging.md §6/§6r: the `log` facade the restored `log.*` sites in this
+# crate emit through. Plain and unconditional — `release_max_level_*` belongs only
+# on wasm artifact ROOT crates (§8r), and this crate is in no wasm artifact. The
+# backend is whichever the running binary installed
+# (`rustty_core::logging::AppLogger` for the `rustty` app binary, which this
+# crate's only consumers are).
+log = { workspace = true }
 rustty-core = { workspace = true }
 rustty-apprt-api = { workspace = true }
 # R2 single-source-of-truth for the product identity. `gtk::build_info` sources
