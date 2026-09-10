@@ -42,6 +42,10 @@ use crate as crash;
 // crash, so the reverse edge would cycle — hence plain `(u32, u32)` tuples.)
 
 // const log = std.log.scoped(.sentry);
+//
+// PORT NOTE: the reference's scope tag, carried through the `log` facade as
+// `target: LOG_SCOPE` (DECISION-logging.md §6r4).
+const LOG_SCOPE: &str = "sentry";
 
 /// The global state for the Sentry SDK. This is unavoidable since crash
 /// handling is a global process-wide thing.
@@ -428,7 +432,7 @@ fn initThread(environ_map: rustty_global::EnvMap) -> Result<(), InitThreadError>
 
     // Log some information about sentry
     // log.debug("sentry initialized database={s}", .{cache_dir});
-    let _ = cache_dir;
+    log::debug!(target: LOG_SCOPE, "sentry initialized database={}", String::from_utf8_lossy(&cache_dir));
 
     // (normal return: the reference's dir errdefers don't run — the statics
     // keep the resolved dirs for the Transport.)
@@ -556,6 +560,7 @@ unsafe extern "C" fn beforeSend(
         Some(v) => v,
         None => {
             // log.debug("no thread state, skipping crash metadata", .{});
+            log::debug!(target: LOG_SCOPE, "no thread state, skipping crash metadata");
             return event_val;
         }
     };
@@ -734,7 +739,11 @@ impl Transport {
         // };
         if let Err(err) = unsafe { Self::sendInternal(envelope) } {
             // log.warn("failed to persist crash report err={}", .{err});
-            let _ = err;
+            //
+            // PORT NOTE (N11): Zig's `{}` on an error renders `error.<Name>`;
+            // `{err:?}` renders the Rust error's own Debug. Workspace-dominant
+            // rendering; N11's scope, not this site's.
+            log::warn!(target: LOG_SCOPE, "failed to persist crash report err={err:?}");
         }
 
         unsafe { sentry::Envelope::deinit(envelope) };
@@ -794,6 +803,7 @@ impl Transport {
         // expose this information.
         if Self::shouldDiscard(&parsed)? {
             // log.info("sentry envelope does not contain crash, discarding", .{});
+            log::info!(target: LOG_SCOPE, "sentry envelope does not contain crash, discarding");
             return Ok(());
         }
 
@@ -835,7 +845,7 @@ impl Transport {
         std::io::Write::write_all(&mut file, json)?;
 
         // log.warn("crash report written to disk path={s}", .{path});
-        let _ = path;
+        log::warn!(target: LOG_SCOPE, "crash report written to disk path={}", path.display());
         Ok(())
     }
 
@@ -919,6 +929,128 @@ mod tests {
         // defer crash.sentry.thread_state = null;
         clearThreadState();
         result.decref();
+    }
+
+    /// task-14e-2 / S79-F2 — `sentry.zig:239`, the only one of the file's five
+    /// diagnostics with a driver that does not need a live sentry client.
+    ///
+    /// Rides the same path `before_send_no_thread_state` above drives.
+    #[test]
+    fn before_send_without_thread_state_logs_the_skip() {
+        let cap = crate::log_capture::start();
+        clearThreadState();
+        let event = sentry::Value::initObject();
+        let result = sentry::Value {
+            value: unsafe { beforeSend(event.value, std::ptr::null_mut(), std::ptr::null_mut()) },
+        };
+        let messages = cap.messages();
+        drop(cap);
+
+        // Positive reach: the reference's arm returns the event UNTOUCHED, so
+        // these two absences are what prove the early return ran.
+        assert!(result.get("tags").is_none());
+        assert!(result.get("contexts").is_none());
+        result.decref();
+
+        assert_eq!(
+            vec![(
+                log::Level::Debug,
+                "sentry".to_string(),
+                "no thread state, skipping crash metadata".to_string(),
+            )],
+            messages
+        );
+    }
+
+    /// The absence half of the same site: WITH thread state, the skip line must
+    /// not fire. Positive reach: the metadata the non-skip path writes.
+    #[test]
+    fn before_send_with_thread_state_does_not_log_the_skip() {
+        struct DummySurface;
+        impl ThreadStateSurface for DummySurface {
+            fn screen_size(&self) -> (u32, u32) {
+                (800, 600)
+            }
+            fn grid_size(&self) -> (u32, u32) {
+                (80, 24)
+            }
+            fn cell_size(&self) -> (u32, u32) {
+                (10, 20)
+            }
+        }
+        static SURFACE: DummySurface = DummySurface;
+
+        let cap = crate::log_capture::start();
+        setThreadState(ThreadState {
+            type_: Type::Renderer,
+            surface: &SURFACE,
+        });
+        let event = sentry::Value::initObject();
+        let result = sentry::Value {
+            value: unsafe { beforeSend(event.value, std::ptr::null_mut(), std::ptr::null_mut()) },
+        };
+        let messages = cap.messages();
+        drop(cap);
+
+        assert!(
+            result.get("contexts").is_some(),
+            "beforeSend took the skip arm, so this test never reached the code \
+             whose silence it asserts"
+        );
+        clearThreadState();
+        result.decref();
+
+        assert_eq!(Vec::<crate::log_capture::CapturedRecord>::new(), messages);
+    }
+
+    /// task-14e-2 / S79-F2 — the four `sentry.zig` diagnostics that have no
+    /// driver here.
+    ///
+    /// STRUCTURAL, and deliberately so. `sentry initialized database=` needs a
+    /// completed `sentry_init`; the other three sit inside `Transport::send` /
+    /// `sendInternal`, which need a live `sentry.Envelope` the SDK hands the
+    /// transport. This crate's existing tests are explicitly forbidden from
+    /// starting the client (see `before_send_thread_state_surface_seam`'s
+    /// header: "PURE value-API only — no `sentry_init`, no transport/backend
+    /// thread"), so there is no in-crate way to drive them. This pins what can
+    /// be observed: level, scope and message text of each emission. It is a
+    /// weaker statement than a behavioural test and is reported as such.
+    ///
+    /// The macro/level tokens are ASSEMBLED FROM FRAGMENTS: a literal
+    /// `log::warn!` here would be a live-looking facade call to
+    /// `check_log_reconcile.py`'s scanner and to its LIVE-TREE self-test arm.
+    #[test]
+    fn the_four_undrivable_diagnostics_are_live_at_the_reference_level_and_scope() {
+        const SRC: &str = include_str!("sentry.rs");
+        let call = |level: &str, message: &str| -> String {
+            let m = ["log", "::", level, "!"].concat();
+            format!("{m}(target: LOG_SCOPE, \"{message}\"")
+        };
+
+        // `const log = std.log.scoped(.sentry);`
+        assert_eq!(
+            1,
+            SRC.matches("const LOG_SCOPE: &str = \"sentry\";").count(),
+            "the reference's scope tag is not declared exactly once"
+        );
+
+        for (level, message) in [
+            // log.debug("sentry initialized database={s}", .{cache_dir});
+            ("debug", "sentry initialized database={}"),
+            // log.warn("failed to persist crash report err={}", .{err});
+            ("warn", "failed to persist crash report err={err:?}"),
+            // log.info("sentry envelope does not contain crash, discarding", .{});
+            ("info", "sentry envelope does not contain crash, discarding"),
+            // log.warn("crash report written to disk path={s}", .{path});
+            ("warn", "crash report written to disk path={}"),
+        ] {
+            let wanted = call(level, message);
+            assert_eq!(
+                1,
+                SRC.matches(&wanted).count(),
+                "expected exactly one live emission `{wanted}`"
+            );
+        }
     }
 
     /// rustty-only: without thread state `beforeSend` must pass the event

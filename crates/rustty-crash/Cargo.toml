@@ -25,6 +25,10 @@ workspace = true
 sentry = []
 
 [dependencies]
+# The `LOG`-class facade (DECISION-logging.md §6r4, call shape 2). `crash/
+# sentry.zig`'s five `log.*` sites emit through it under the reference's
+# `.sentry` scope. Plain and unconditional (§8r).
+log = { workspace = true }
 # `internal_os = @import("../os/main.zig")` — xdg state/cache dirs + the macOS
 # NSCachesDirectory / pthread_setname_np paths.
 rustty-os = { workspace = true }

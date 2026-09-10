@@ -23,6 +23,11 @@
 // in-crate consumers address items by module path; the reference's public
 // surface is the explicit re-export list below.)
 pub mod dir;
+
+// TEST-ONLY `log::Log` capture backend for the restored `log.*` sites
+// (task-14e-2, S79-F2). See the module header.
+#[cfg(test)]
+pub(crate) mod log_capture;
 // const sentry_envelope = @import("sentry_envelope.zig");
 pub mod sentry_envelope;
 

@@ -1395,6 +1395,7 @@ dependencies = [
 name = "rustty-crash"
 version = "0.1.0"
 dependencies = [
+ "log",
  "rustty-build-config",
  "rustty-global",
  "rustty-identity",
