@@ -42,6 +42,13 @@ use rustty_apprt_api::action::{OpenUrl, OpenUrlKind};
 
 use super::{format_token, generate_token, parse_request_path_token, request_path};
 
+/// `const log = std.log.scoped(.openuri)` (`OpenURI.zig:18`).
+///
+/// S59-F6: every emission in this file previously printed `(gtk)` — the wrong
+/// scope entirely — through a raw `eprintln!`. Carried as the `log::` facade's
+/// `target:` (`DECISION-logging.md` §6r4). No brand token, nothing to rebrand.
+const LOG_SCOPE: &str = "openuri";
+
 /// PORTS: `OpenURI.zig:337-339` — the portal bus name, object path and interface.
 const PORTAL_BUS_NAME: &str = "org.freedesktop.portal.Desktop";
 const PORTAL_OBJECT_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -369,6 +376,15 @@ fn send_request(
     );
 }
 
+/// UNRESTORED SITES in this function (task-14d-3), all structural:
+/// * `:369` `Open URI request finished without a D-Bus source object` and
+///   `:373` `... with an unexpected source object` — the reference recovers the
+///   connection by downcasting an untyped `?*gobject.Object` handed to a C
+///   callback. This port's closure captures the typed connection directly, so
+///   neither failure can be expressed.
+/// * `:393` `D-Bus method call returned a null value!` — the async call's
+///   `Result` is `Ok(Variant)`; there is no null reply to test for.
+///
 /// PORTS: `OpenURI.zig:354-439` `requestCallback`. Process the result of the original
 /// method call. Receiving this result does not indicate the call SUCCEEDED, but it
 /// may carry an error worth logging, and it names the portal's actual request path.
@@ -388,7 +404,17 @@ fn request_callback(
     let reply = match res {
         Ok(reply) => reply,
         Err(err) => {
-            eprintln!("error(gtk): open uri request failed={err}");
+            // log.err("Open URI request failed={s} ({})", .{ err.f_message orelse "(unknown)", err.f_code });
+            //
+            // S59-F6: the code was dropped. glib::Error's Display IS the
+            // message (`err.f_message`), and `.kind()`/the raw code is exposed
+            // by `glib::Error::code()`.
+            log::error!(
+                target: LOG_SCOPE,
+                "Open URI request failed={} ({})",
+                err.message(),
+                err.code(),
+            );
             fail_request_and_fallback(inner, token);
             return;
         }
@@ -397,7 +423,11 @@ fn request_callback(
     // `if (reply.isOfType("(o)") == 0)` (`:398-405`).
     let reply_ty = glib::VariantTy::new("(o)").expect("(o) is a valid variant type");
     if !reply.is_type(reply_ty) {
-        eprintln!("warn(gtk): reply from D-Bus method call does not contain an object path!");
+        // log.warn("Reply from D-Bus method call does not contain an object path!", .{});
+        log::warn!(
+            target: LOG_SCOPE,
+            "Reply from D-Bus method call does not contain an object path!"
+        );
         fail_request_and_fallback(inner, token);
         return;
     }
@@ -405,22 +435,34 @@ fn request_callback(
     // `reply.get("(&o)", &object_path)` (`:407-408`).
     let object_path = reply.child_value(0);
     let Some(object_path) = object_path.str() else {
-        eprintln!("warn(gtk): open uri reply object path is not a string");
+        // PORT NOTE: the reference reads the object path with
+        // `reply.get("(&o)", &object_path)`, which cannot fail once
+        // `isOfType("(o)")` has passed; `glib::Variant::str()` is `Option`, so
+        // this arm is Rust-only. It keeps the reference's disposition for a
+        // malformed reply (fail + fall back) and is deliberately NOT given the
+        // text of a reference site it does not correspond to.
+        log::warn!(target: LOG_SCOPE, "open uri reply object path is not a string");
         fail_request_and_fallback(inner, token);
         return;
     };
 
     // `portal.parseRequestPathToken(..) orelse { .. }` (`:410-414`).
     let Some(reply_token) = parse_request_path_token(object_path) else {
-        eprintln!("warn(gtk): unable to parse token from the object path {object_path}");
+        // log.warn("Unable to parse token from the object path {s}", .{object_path});
+        log::warn!(
+            target: LOG_SCOPE,
+            "Unable to parse token from the object path {object_path}"
+        );
         fail_request_and_fallback(inner, token);
         return;
     };
 
     // `if (token != request.token)` (`:416-423`).
     if reply_token != token {
-        eprintln!(
-            "warn(gtk): open uri request returned mismatched token expected={token:x} actual={reply_token:x}"
+        // log.warn("Open URI request returned mismatched token expected={x} actual={x}", .{ request.token, token });
+        log::warn!(
+            target: LOG_SCOPE,
+            "Open URI request returned mismatched token expected={token:x} actual={reply_token:x}"
         );
         fail_request_and_fallback(inner, token);
         return;
@@ -446,11 +488,20 @@ fn request_callback(
             return;
         }
 
-        eprintln!(
-            "debug(gtk): updating open uri request path old={request_path} new={object_path}"
+        // log.debug("updating open uri request path old={s} new={s}", .{ request.request_path, object_path });
+        log::debug!(
+            target: LOG_SCOPE,
+            "updating open uri request path old={request_path} new={object_path}"
         );
         // `self.unsubscribeFromResponse(entry); self.subscribeToResponse(..)`
         // (`:437-438`). Dropping the old subscription IS the unsubscribe.
+        //
+        // UNRESTORED SITE `OpenURI.zig:225` (task-14d-3):
+        // `unsubscribeFromResponse` warns `unable to unsubscribe open uri
+        // response without dbus connection` when `self.dbus` is null, because
+        // the reference needs the connection to call `signalUnsubscribe`. Here
+        // the subscription is RAII — dropping it unsubscribes — so no
+        // connection is needed and the failure cannot occur.
         if let Some(entry) = state.entries.get_mut(&token) {
             entry.subscription = None;
         }
@@ -462,12 +513,19 @@ fn request_callback(
     inner.observed.set(observed);
 }
 
+/// UNRESTORED SITE `OpenURI.zig:454` (task-14d-3): `OpenURI response received
+/// with null userdata` guards the `@ptrCast(ud orelse ...)` of a C callback's
+/// user-data pointer. This handler is a Rust closure over an `Rc<Inner>`, so
+/// there is no nullable user-data to check. `:532`'s `cleanup called with null
+/// userdata` is the same shape in [`cleanup`].
+///
 /// PORTS: `OpenURI.zig:443-499` `responseReceived`. Handles the `Response` signal
 /// from the portal, which carries the actual result of the method call.
 fn response_received(inner: &Rc<Inner>, object_path: &str, params: &glib::Variant) {
     // `portal.parseRequestPathToken(..) orelse { log; return }` (`:459-462`).
     let Some(token) = parse_request_path_token(object_path) else {
-        eprintln!("warn(gtk): open uri invalid object path: {object_path}");
+        // log.warn("invalid object path: {s}", .{std.mem.span(object_path)});
+        log::warn!(target: LOG_SCOPE, "invalid object path: {object_path}");
         return;
     };
 
@@ -481,7 +539,8 @@ fn response_received(inner: &Rc<Inner>, object_path: &str, params: &glib::Varian
     // entry out drops its subscription. The borrow is released before any fallback.
     let entry = inner.state.borrow_mut().entries.remove(&token);
     let Some(entry) = entry else {
-        eprintln!("warn(gtk): open uri no entry for token {token:x}");
+        // log.warn("no entry for token {x}", .{token});
+        log::warn!(target: LOG_SCOPE, "no entry for token {token:x}");
         return;
     };
 
@@ -503,23 +562,40 @@ fn response_received(inner: &Rc<Inner>, object_path: &str, params: &glib::Varian
 
     match response {
         // `0 => log.debug("open uri successful")` (`:484-486`).
-        0 => eprintln!("debug(gtk): open uri successful token={token:x}"),
+        // log.debug("open uri successful", .{});
+        //
+        // S59-F6: this and the `cancelled` line below were printed
+        // UNCONDITIONALLY. Zig's `std.log` machinery erases `log.debug` at
+        // comptime in a non-Debug build; `log::debug!` is gated by the
+        // installed backend's `log::max_level()`, which
+        // `install_app_log_backend` sets to `Info` off a debug build — the
+        // direct analogue of the reference's `.log_level` default. The `token=`
+        // suffix each of these four carried is gone too: it is not in the
+        // reference's message text.
+        0 => log::debug!(target: LOG_SCOPE, "open uri successful"),
         // `1 => log.debug("cancelled by the user")` (`:487-489`).
-        1 => eprintln!("debug(gtk): open uri request was cancelled by the user token={token:x}"),
+        1 => log::debug!(target: LOG_SCOPE, "open uri request was cancelled by the user"),
         // `2 => { log.warn; openUrlFallback }` (`:490-493`).
         2 => {
-            eprintln!("warn(gtk): open uri request ended unexpectedly token={token:x}");
+            // log.warn("open uri request ended unexpectedly", .{});
+            log::warn!(target: LOG_SCOPE, "open uri request ended unexpectedly");
             fallback(inner, entry.kind, &entry.uri);
         }
         // `else => { log.err; openUrlFallback }` (`:494-497`).
         other => {
-            eprintln!("error(gtk): open uri unrecognized response code={other}");
+            // log.err("unrecognized response code={}", .{response});
+            log::error!(target: LOG_SCOPE, "unrecognized response code={other}");
             fallback(inner, entry.kind, &entry.uri);
         }
     }
 }
 
 /// PORTS: `OpenURI.zig:506-515` `stopCleanupTimer`.
+//
+// PORT NOTE (task-14d-3, UNRESTORED SITE `OpenURI.zig:512`): the reference tests
+// `if (glib.Source.remove(timer) == 0) log.warn("unable to remove cleanup timer
+// source={d}", .{timer})`. glib-rs's `SourceId::remove` returns `()` — it has no
+// failure report — so there is no arm for the warning.
 fn stop_cleanup_timer(state: &mut State) {
     if let Some(timer) = state.cleanup_timer.take() {
         timer.remove();
@@ -579,7 +655,8 @@ fn cleanup(inner: &Rc<Inner>) {
         stale
             .into_iter()
             .filter_map(|token| {
-                eprintln!("warn(gtk): open uri request timed out token={token:x}");
+                // log.warn("open uri request timed out token={x}", .{entry.token});
+                log::warn!(target: LOG_SCOPE, "open uri request timed out token={token:x}");
                 state
                     .entries
                     .remove(&token)
@@ -596,6 +673,89 @@ fn cleanup(inner: &Rc<Inner>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::log_capture;
+
+    /// Build the `(u@a{sv})` payload the portal's `Response` signal carries
+    /// (`OpenURI.zig:481`).
+    fn response_params(code: u32) -> glib::Variant {
+        glib::Variant::tuple_from_iter([code.to_variant(), glib::VariantDict::new(None).end()])
+    }
+
+    /// S59-F6, the SCOPE half. Every emission in this file printed `(gtk)`;
+    /// the reference's scope is `openuri` (`OpenURI.zig:18`). The message text
+    /// had drifted too — the port had prefixed it with `open uri `.
+    ///
+    /// Asserts the FULL captured record vector, so an extra record, a missing
+    /// one, a wrong level or a wrong scope all fail.
+    #[test]
+    fn response_with_an_unparseable_object_path_warns_under_the_openuri_scope() {
+        let cap = log_capture::start();
+        let open_uri = OpenUri::new();
+        response_received(
+            &open_uri.inner,
+            "/not/a/request/path/zz",
+            &response_params(0),
+        );
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(
+            vec![(
+                log::Level::Warn,
+                "openuri".to_string(),
+                "invalid object path: /not/a/request/path/zz".to_string(),
+            )],
+            messages
+        );
+    }
+
+    /// S59-F6, the LEVEL half. `OpenURI.zig:484-497` uses FOUR different
+    /// levels for the four response codes; the port printed all of them
+    /// through `eprintln!`, i.e. unconditionally and with the level baked into
+    /// the text. Codes 0 and 1 are `log.debug`; this pins both.
+    ///
+    /// Codes 2 and `else` are deliberately NOT driven here: their reference
+    /// arms call `openUrlFallback`, which spawns the OS opener. Their levels
+    /// (warn / err) are pinned by reading, not by launching a browser from a
+    /// unit test — stated rather than quietly skipped.
+    #[test]
+    fn successful_and_cancelled_responses_log_at_debug() {
+        let cap = log_capture::start();
+        let open_uri = OpenUri::new();
+
+        for (token, code) in [(0x11usize, 0u32), (0x22usize, 1u32)] {
+            open_uri.inner.state.borrow_mut().entries.insert(
+                token,
+                Entry {
+                    start: Instant::now(),
+                    token,
+                    kind: OpenUrlKind::Unknown,
+                    uri: b"https://example.invalid/".to_vec(),
+                    subscription: None,
+                },
+            );
+            let path = super::super::build_request_path("1_1", token);
+            response_received(&open_uri.inner, &path, &response_params(code));
+        }
+
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(
+            vec![
+                (
+                    log::Level::Debug,
+                    "openuri".to_string(),
+                    "open uri successful".to_string(),
+                ),
+                (
+                    log::Level::Debug,
+                    "openuri".to_string(),
+                    "open uri request was cancelled by the user".to_string(),
+                ),
+            ],
+            messages
+        );
+    }
 
     /// With no D-Bus connection set, `start` reports `DBusConnectionRequired` — the
     /// reference's `self.dbus orelse return error.DBusConnectionRequired`
