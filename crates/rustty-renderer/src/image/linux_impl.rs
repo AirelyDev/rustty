@@ -1598,7 +1598,15 @@ pub enum PrepImageError {
 //
 // PORT NOTE: `union(enum) { kitty: u32, overlay }` → a plain enum (the `overlay`
 // arm has no payload). `#[derive(..., Hash)]` makes it a `HashMap` key.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+//
+// PORT NOTE (task-14c-5): `Debug` is derived because `image.zig:122`/`:132`'s
+// restored `log.warn("... image_id={}", .{p.image_id})` render this value. Zig's
+// `{}` on a tagged union prints `<TypeName>{ .kitty = <n> }`; the derived `Debug`
+// prints `Kitty(<n>)`. That rendering difference is the known/accepted one (the
+// reference has no custom `format` method to port). The Metal twin derived it for
+// the same reason in task-14c-2 (`image/macos_impl.rs:1525`); the twins must keep
+// the same public surface.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Id {
     /// Image sent to the terminal state via the kitty graphics protocol.
     /// The value is the ID assigned by the terminal.
