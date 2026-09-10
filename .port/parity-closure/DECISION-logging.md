@@ -600,6 +600,12 @@ reconcile.
 
 ### IMPORTANT 5 — §6's crate list was wrong; `rustty-core`/`rustty-apprt`/`rustty-cli` need a THIRD call shape
 
+> **CALL SHAPE 2 IS SUPERSEDED — see §6r4 (2026-09-10).** The crate TABLE below is
+> correct and still binding: read a row's crate off it. The three-shape RULE below is
+> not — call shape 2 (`rustty_core::logging::log(...)` direct from `rustty-core` /
+> `rustty-apprt` / `rustty-cli`) has **zero** call sites in the workspace and cannot be
+> measured by `G-LOGFILE`. §6r4 records what those crates actually do and why.
+
 **The bug:** §6 listed 12 crates for the `log`-facade side; the open `LOG`
 rows actually span **14** crates (`awk -F'\t' '$4=="LOG" && $11=="OPEN"'
 .port/parity-closure/LEDGER.tsv`, grouped by crate path):
@@ -1032,6 +1038,99 @@ bytes** net against the pre-14a baseline. Reproduced twice, identical.
   --features wasm-host-owned`: clean (confirms the new wasm-only module
   type-checks for the real target).
 - No ledger row touched; the six `CLOSED` rows are unchanged.
+
+---
+
+## §6r4 — call shape 2 never happened: what the crates ACTUALLY do (2026-09-10)
+
+Recorded by task-14d-2, which hit the divergence while restoring
+`src/apprt/gtk/class/config.zig`'s one site and was nearly misled by it. This
+section **supersedes §6r IMPORTANT 5's three-shape rule**. IMPORTANT 5's crate
+TABLE is untouched and still binding — only its prescription changes.
+
+### The divergence, measured
+
+IMPORTANT 5 says `rustty-core` (5 rows), `rustty-apprt` (10) and `rustty-cli`
+(2) — the three crates that already have a real `rustty-core` edge — restore
+their sites as `rustty_core::logging::log(level, scope, message)` DIRECTLY,
+"the exact same 'you already have the edge, don't add a facade indirection'
+rule `rustty-vt-c`'s own sites follow", and that no `log` dependency is added
+to any of the three.
+
+Three stages later, that is not what any of them does:
+
+```
+$ grep -rn --include='*.rs' 'logging::log(' crates/
+(no matches)
+```
+
+- **`rustty-core`** restored `App.zig`'s 11 sites (task-14d-1) and
+  `Surface.zig`'s 100 sites as `log::warn!`/`info!`/`debug!` with
+  `target: LOG_SCOPE`. `crates/rustty-core/Cargo.toml` carries
+  `log = { workspace = true }`.
+- **`rustty-apprt`** restored `gtk/class/config.zig`'s site the same way
+  (task-14d-2) and gained the same dependency line.
+- **`rustty-cli`**'s 2 rows are still `OPEN`, so it has no restored site either
+  way.
+
+The only surviving direct call in the workspace is
+`crates/rustty/src/main_rustty.rs:472`'s `logging::log_with(...)`, which is the
+bin's own port of `main_ghostty.zig`'s `logFn` — not a restored `LOG` row and
+not what call shape 2 described.
+
+### Why the prescription does not survive contact, and the practice does
+
+1. **The indirection it forbids lands in the same function one frame later.**
+   `AppLogger::log` (§6r CRITICAL 2) forwards straight into
+   `rustty_core::logging::log`. So `log::warn!(target: "app", …)` from
+   `rustty-core` and `logging::log(Level::Warn, "app", …)` from `rustty-core`
+   reach the SAME sink, with the same `Logging::default()` fallback that
+   CRITICAL 2's known-limitation note describes. The anti-indirection argument
+   is real for `rustty-vt-c` (whose sink ends in a C callback the facade cannot
+   reach without a backend) and empty for these three.
+2. **`G-LOGFILE` cannot see the direct shape.** `discover_emitters`'s `FN_DEF`
+   regex is `\bfn\s+(log_[A-Za-z0-9_]*)\s*[(<]` — it requires a `log_`
+   PREFIX. `logging.rs`'s sink is `pub fn log(...)`, so it is never discovered
+   as an emitter and every call to it is counted as a DROPPED diagnostic. A row
+   closed on call shape 2 would leave a permanently stale allowance behind it,
+   which the ratchet then reports as RED forever. This is not a reason the
+   shape is wrong — it is a reason the shape cannot be adopted without teaching
+   the gate first, and no stage has.
+
+### The rule, restated
+
+**Two shapes, not three:**
+
+1. **`rustty-vt-c` itself** — direct `sys::log_fn(...)`. Unchanged from §6.
+2. **Every other crate, all 14 in IMPORTANT 5's table** —
+   `log::{warn,error,info,debug}!(target: "<scope>", ...)`, `""` for the
+   reference's `.default` scope. `rustty-core`, `rustty-apprt` and
+   `rustty-cli` are NOT special-cased.
+
+**With one documented exception, which is the reverse of the one IMPORTANT 5
+made:** `rustty-config` keeps its OWN `format_log`/`log_{info,warn,debug}`
+sink and does not use the facade. §6r2's forward-looking note called this
+correctly before any of its rows were restored, and task-14d-2 confirmed it in
+practice: those helpers read `rustty_global::logging()`, a leaf-crate
+process-global that needs no install call and works in tests, benches, the exe
+and the lib alike, so the facade would be strictly LESS reachable there. All 26
+live emissions in that crate use it, and `G-LOGFILE` counts a `log_*`-prefixed
+fn facade as an emission, so the shape is measurable.
+
+### The cost this accepts, stated plainly
+
+A `log::warn!` emits nothing until some binary calls
+`install_log_backend`/`install_app_log_backend`, and it is additionally gated by
+`log::max_level()`. A direct `logging::log(...)` would fire unconditionally.
+That difference is invisible in the `rustty` app binary (`main_rustty.rs`
+installs the backend immediately after `state_init()`, before anything logs) and
+in the `rustty-vt-c` artifacts (every `*_new` C export installs), but it is real
+for **unit tests, benches, and any embedder that links one of these crates
+without installing a backend** — those see silence where the reference logs.
+That is precisely the property `rustty-config` declines to give up, and it is
+the one thing a future stage might revisit. Revisiting it means teaching
+`discover_emitters` about the bare `fn log` sink FIRST, in the same commit, with
+a self-test arm (R5).
 
 ---
 

@@ -678,6 +678,18 @@ found, and current state.
 
 - **how found**: a review swept every LOG row's minimum anchor and counted above it; task
   14gate reproduced the sweep, then built the gate and measured the whole-file picture.
+- **A FINER INSTANCE OF THE SAME CLASS, found 2026-09-10 by task-14d-2 — this entry
+  describes unaudited HEADS only, and the hole is bigger than that.** The rows citing a
+  file also leave unaudited GAPS *between* their cited ranges, which no minimum-anchor
+  sweep can see. `Config.zig` is the worked example: its rows cite `:4331-4336`,
+  `:4413-4448`, `:4671-4730`, `:4844-4849`, `:6437-6481`, `:7355-7397`, `:8199-8253`,
+  `:8719-8724`, `:9002-9309` and `:10093-10790`, and four live `log.*` sites fall in the
+  gaps between them — `:4563`, `:5396`, `:5400` (unrestorable, N16) and `:8887`/`:8893`
+  (restorable, restored by task-14d-2 under their own heading). All five are BELOW the
+  file's lowest anchor, so the head sweep counted none of them. Only the whole-file
+  reconciliation `G-LOGFILE` performs catches this variant, which is a second argument for
+  the gate being per-file rather than per-row. Any future sweep of this class must count
+  set-difference against the union of a file's ranges, not against their minimum.
 - **state**: **OPEN.** The gate and the corrected baseline are landed; the 183-site debt is
   not. Next step is a per-file adjudication pass in deficit order — `embedded.zig` (54, all
   54 reference calls survive only as R1 comments) first, then `application.zig` (15),
