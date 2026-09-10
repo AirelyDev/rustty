@@ -960,3 +960,77 @@ found, and current state.
 - **state**: **OPEN** as a tracked non-defect. `src/config/Config.zig`'s G-LOGFILE
   allowance of 3 is these three sites and nothing else; if that number ever exceeds 3,
   something else has been dropped.
+
+---
+
+## N17 — the `log` facade's `.default` scope (`target: ""`) rendered `warning(): msg`, not `warning: msg`
+
+- **id**: N17 (next free id checked 2026-09-10 against `NEW-FINDINGS.md`, `ADJUDICATION.md`
+  and the plan's `progress.md`: N1-N16 taken, N16 by task-14d-2 the same day.)
+- **severity**: low (a two-character difference in every `.default`-scope diagnostic's
+  prefix; no state, control-flow or rendering difference)
+- **kind**: emission-fidelity / cross-seam spelling mismatch
+- **state**: **FIXED by task-14d-3** in the same commit that found it. Recorded because the
+  CLASS is worth knowing, not because anything is left open.
+- **where**: `crates/rustty-core/src/logging.rs` — `AppLogger::log` (the facade -> sink
+  adapter). Live victims at `crates/rustty-renderer/src/overlay.rs:349` and
+  `crates/rustty-renderer/src/shadertoy.rs:833`, the workspace's only two
+  `log::warn!(target: "")` sites before this stage.
+- **description**: two documents describe the same thing with two different spellings, and
+  nothing bridged them.
+  - `DECISION-logging.md` §6 fixes the facade convention: pass `target: ""` for the
+    reference's `.default` scope.
+  - `logging::log_with` is the port of `main_ghostty.zig`'s `logFn`, whose `scope` is a Zig
+    ENUM and whose default arm is `if (scope == .default)`. The port spells that arm
+    `if scope == "default"`.
+
+  So a `log::warn!(target: "", ...)` fell through to the SCOPED branch and rendered
+  `warning(): Error drawing hyperlink border: ...` where the reference prints
+  `warning: Error drawing hyperlink border: ...`. On macOS it additionally created an
+  empty unified-logging category.
+- **how found**: task-14d-3, converting `crates/rustty-apprt-c/src/lib.rs`'s three
+  `src/main_c.zig` sites (which are `.default`-scope) from the direct sink call to the
+  facade. The defect was in the destination, not in the sites being moved.
+- **fix**: `scope_from_target(target)` in `logging.rs` maps `""` -> `"default"` and passes
+  everything else through. Normalized at the FACADE ADAPTER rather than inside `log_with`,
+  so `log_with` stays a faithful port of `logFn` (whose `scope` can never be empty) and the
+  Rust-only spelling mismatch is confined to the Rust-only bridge. Test
+  `empty_facade_target_maps_onto_the_reference_default_scope`; negative control run.
+- **the general lesson**: when a convention is fixed in a DECISION doc and the code that
+  consumes it is a port of something with a different type (an enum, here), the two
+  spellings meet at exactly one function — and that function is where the port has to be
+  written down and tested. No count-based gate can see this: both spellings emit.
+
+---
+
+## N18 — `App.keymap` is EAGER in the port and LAZY upstream, which costs `embedded.zig:251`'s diagnostic
+
+- **id**: N18
+- **severity**: low (one `log.warn` the port cannot emit; the structural difference itself
+  is benign on every path the port exercises)
+- **kind**: upstream-drift / structural, surfaced as an unrestorable diagnostic
+- **state**: **OPEN** as a tracked item. Not a LOG defect that can be closed by logging work.
+- **where**: reference `src/apprt/embedded.zig:243-256` (`App.keyboardLayout`) and `:194-200`
+  (`App.init`); port `crates/rustty-apprt/src/embedded.rs` `App::init` / `App::keyboardLayout`
+  (PORT NOTE at the latter).
+- **description**: at pin `20abdb50a` the reference stores `keymap: ?input.Keymap = null` in
+  `App.init` and LAZILY initializes it on the first `keyboardLayout()` call:
+
+  ```zig
+  self.keymap = input.Keymap.init() catch |err| {
+      log.warn("error initializing keymap err={}", .{err});
+      return .unknown;
+  };
+  ```
+
+  This port initializes `keymap` EAGERLY in `App::init`, where the reference's own `init`
+  does not log at all — it `try`s and propagates. So there is no arm in the port that
+  corresponds to `:251`, and emitting the warning from `App::init` would put it on a path
+  the reference does not log from.
+- **how found**: task-14d-3, enumerating all 54 of `embedded.zig`'s reference sites through
+  `check_log_reconcile.py` while closing S46-F5. `:251` is ABOVE that row's lowest cited
+  anchor, i.e. the PROCEDURE.md blind-spot-4 / N12 class again.
+- **what would change this**: porting the lazy keymap (`keymap: Option<Keymap>` +
+  initialize-on-first-`keyboardLayout`). That is a structural port, not logging work, and
+  it also changes when a keymap-init failure becomes visible to an embedder — which is why
+  it is filed here rather than folded into a LOG row.

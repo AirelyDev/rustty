@@ -765,3 +765,122 @@ enumerated and reconciled against the port.
   title will not be set err={}`), whose `Command::string()` is infallible in the
   port. It belongs to no row, so it changes no row's state; recorded here so it
   is not mistaken for an oversight.
+
+---
+
+## task 14d-3 — `rustty-apprt` and the GTK tree
+
+### S46-F5 — WAIVED (not CLOSED): 8 of `embedded.zig`'s 54 sites have no arm
+
+46 of 54 are live. The 8 that are not:
+
+| reference site | why there is no arm |
+|---|---|
+| `:251` | the port initializes `App.keymap` EAGERLY; upstream is now LAZY, and the warning lives in `keyboardLayout`'s lazy-init `catch`. Structural drift — `NEW-FINDINGS.md` **N18**. |
+| `:353` | `clone_config()` is infallible (no allocator). |
+| `:540` | `openDirAbsolute` + `dir.stat()` collapse into one `std::fs::metadata`, so the separate stat-error arm cannot occur. `:531`'s arm covers both. |
+| `:559` | `WorkingDirectory::finalize()` returns `()`. |
+| `:828 :883 :899` | `stackFallback` conversion buffers are owned `Vec`s; Rust allocation is infallible. |
+| `:1983` | `dupeZ` -> `to_vec()`; same. |
+
+PROCEDURE.md blind spot 1 is explicit that a row with a known unrestored site is
+`WAIVED` with the reason in `owner`, never `CLOSED`. The carve-out does not apply:
+this row's title claims the WHOLE FILE ("all backend `log.*` sites in
+`embedded.rs` are elided"), so every one of the 54 is inside its claim. Understating
+completion costs nothing.
+
+### `embedded.zig`'s CAPI block ports to a DIFFERENT CRATE, and the portmap did not say so
+
+`LOG-PORTMAP.tsv` mapped `src/apprt/embedded.zig` to
+`crates/rustty-apprt/src/embedded.rs` alone. 23 of the file's 54 sites are inside the
+reference's `CAPI` block, which ports to `crates/rustty-apprt-c/src/lib.rs` — a
+different crate. Those 23 could never have been credited, and 22 of them were sitting
+there as bare `eprintln!`s, invisible to BOTH ratchets (a bare `eprintln!` carries no
+`warn(scope):` prefix, so `G-LOGFILE` counts it as neither an emission nor a bypass).
+The arm now sums both files. This is the same class as the portmap header's own
+"filename guessing gets at least five of these wrong" list; it is now six.
+
+### The arm's green is an OVER-CREDIT, stated so nobody reads it as completeness
+
+`src/apprt/embedded.zig` scores 54/54 with 8 sites genuinely unrestored. It reaches 54
+because the shared arm also carries `src/main_c.zig`'s 5 emissions (a declared overlap)
+and 3 port-only D11 C-boundary range guards. 46 real + 8 over-credit = 54. The ratchet
+FORCES `allowance=0` once measured deficit is 0, so the honest number cannot live in the
+allowance; it lives in the `reason` cell and here.
+
+### S50-F4 — the inverse defect, plus the gate change that had to accompany it
+
+`globalShortcutTrigger` emitted `global shortcut action performed ok` on its SUCCESS
+path. `application.zig:1741-1749` is a bare `catch` with no success arm. Removed.
+
+`.port/tools/gates/ws15_globalshortcuts_portal_gate.sh` asserted that line, so its grep
+is deleted. **R5 argument that this is not a weakening:** the gate's very next assertion
+counts a new toplevel window on the session bus, and the bound action is `new_window`. A
+window appearing ENTAILS `performAllAction` having been reached (through the `trigger`
+emission and an installed thunk) and having returned Ok. The retained assertion strictly
+implies the removed one; only the granularity of the failure MESSAGE changes, and that
+message now names all four causes.
+
+### Two more inverse defects found, and three rustty-only lines KEPT
+
+Found while working, under their own heading in the report:
+
+- `rustty_app_set_color_scheme` and `rustty_surface_set_color_scheme` each printed
+  `invalid color scheme ... value={}` on an out-of-range enum. At the pin BOTH oracle
+  guards are `std.enums.fromInt(...) orelse return;` — silent (`embedded.zig:1788`,
+  `:1992`). The R1 comments reproduce a SUPERSEDED revision. **Removed**, matching the
+  precedent already in that same file: `rustty_surface_mouse_pressure` had an identical
+  stale-revision emission removed earlier for exactly this reason.
+- **KEPT**: three rustty-only instrumentation lines in `global_shortcuts.rs` that the
+  WS15 live portal gate genuinely depends on and that have no substitute (the
+  reference's own `activated={s}` fires BEFORE the map lookup, so it cannot separate
+  "signal arrived" from "signal resolved"). They are moved off the reference scope onto
+  `target: "rustty_gtk_instrumentation"` so they cannot be mistaken for restored
+  reference diagnostics. Listed as candidates for a later stage.
+
+### A FIFTH emission shape exists, and it must never become the facade
+
+`gtk/pre_exec.rs` runs between `fork()` and `exec()`. Its two `log.err` sites were
+already live as a raw async-signal-safe `write(2)` of a `&'static [u8]` — `log::error!`
+formats through `core::fmt`, allocates in `AppLogger::log`, and takes the process
+`Stderr` lock, all forbidden there. `G-LOGFILE` saw neither. Rather than teach the
+scanner a new shape (R5: net-new coverage plus a self-test arm), the helper is renamed
+`write_stderr` -> `log_err_raw` so it presents as the fn-facade shape the gate already
+knows. Bytes, fd and async-signal-safety untouched.
+
+### `logVersion` is a scanner blind spot the reference's own naming creates
+
+`adw_version.rs` / `gtk_version.rs` keep an allowance of 1 each, and it is NOT a dropped
+diagnostic. `discover_emitters`'s `FN_DEF` is `\bfn\s+(log_[A-Za-z0-9_]*)`; the reference
+names the function `logVersion`, the port spells it `log_version`, so `log_version` is
+itself classified as a FACADE and `rust_emissions`'s `inside()` excludes every primitive
+within its own span. The emission is credited only at `log_version`'s CALL sites, which
+are in `application.rs`. Recorded in both `reason` cells.
+
+### Folds a count ratchet cannot see
+
+Three files measure short with every reference site covered, because several reference
+sites route through ONE shared helper whose single `log::warn!` reproduces each caller's
+own message verbatim from its `what` argument:
+
+| reference file | reference sites | port emissions | fold |
+|---|---|---|---|
+| `resize_overlay.zig` | 4 | 1 | 4 `unable to remove ...` -> `remove_source_id` |
+| `split_tree.zig` | 15 | 11 | 5 -> `remove_source_id` |
+| `surface.zig` | 63 | 62 | 4 -> `remove_source_id` |
+
+The inverse also happens: `wayland/Globals.zig` measures 10 against 6 because
+`Globals.zig:150`'s single `log.debug("matched {}")` sits inside an `inline for` over the
+tag list, which Rust's if-else dispatch turns into seven static sites with identical
+runtime behaviour.
+
+### Message texts that had drifted (none of them in a row)
+
+Found by comparing every reference message against its port counterpart, not by the
+rows: the `Fatal: ` and `X11: ` prefixes in `x11.rs`; `gtk-x11` for the reference's
+`gtk_x11` scope; `after surfaces initialized` for `after surfaces have been initialized`;
+`unable to remove {what} source={}` where no pinned reference site prints `source=`
+(a superseded-revision shape, found in THREE files); `common cause: <url>` for
+`this is a common cause of this issue: <url>`; six `open uri ` prefixes and six
+`global shortcuts ` prefixes the reference does not use; and a `token={x}` suffix on four
+OpenURI messages. All restored verbatim.
