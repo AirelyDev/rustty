@@ -4549,8 +4549,21 @@ impl<'a, H: Handler> Stream<'a, H> {
 // `"unimplemented mode: {}"` sites, and the two `"unimplemented ESC action: {f}"`
 // sites. Rust has no per-instantiation static, so the port makes the table an
 // explicit `&'static UnsupportedOnceTable` argument and declares one static per
-// distinct reference tuple — eight statics for ten call sites, with the two
-// pairs deliberately sharing theirs. That is the reference's own granularity,
+// distinct reference tuple — NINE statics for TWELVE call sites, with those
+// pairs deliberately sharing theirs.
+//
+// KNOWN DIVERGENCE, pre-existing, not introduced by task 14r-a (recorded
+// 2026-09-09 while restoring the emissions; NOT fixed here because it is a
+// behavioural change outside this row's scope): the port ALSO shares
+// `SEEN_UTF8_DECODED_C1` between the two
+// `"ignoring UTF-8-decoded C1 controls, first: 0x{x}"` sites, and the reference
+// does NOT. `stream.zig:734` passes `.{cp}` where `cp` is a `u32`
+// (`cp_buf: [4096]u32`, `stream.zig:671`); `stream.zig:1185` passes `.{c}` where
+// `c` is the `u21` parameter of `handleCodepoint`. Different `@TypeOf(args)`
+// means two separate Zig instantiations, so under the reference that message
+// can be emitted once per decode path; the port emits it once in total. Both
+// sites key on the literal `0x80`, so the effect is exactly one suppressed
+// warning per process. That is the reference's own granularity,
 // and it is observable: under the reference, setting then resetting the same
 // unimplemented mode logs ONCE, not twice.
 //
@@ -4698,10 +4711,11 @@ fn log_unsupported_once(table: &UnsupportedOnceTable, key: u16) -> bool {
     false
 }
 
-// The nine reference `(format, @TypeOf(args))` instantiations, in the order
-// they appear in `stream.zig`. `SEEN_UTF8_DECODED_C1`,
-// `SEEN_UNIMPLEMENTED_MODE` and `SEEN_UNIMPLEMENTED_ESC_ACTION` are each shared
-// by two call sites, exactly as Zig shares them.
+// The nine statics behind the twelve call sites, in the order they appear in
+// `stream.zig`. `SEEN_UNIMPLEMENTED_MODE` and `SEEN_UNIMPLEMENTED_ESC_ACTION`
+// are each shared by two call sites exactly as Zig shares them.
+// `SEEN_UTF8_DECODED_C1` is also shared by two call sites, but Zig does NOT
+// share those — see the KNOWN DIVERGENCE note above.
 static SEEN_UTF8_DECODED_C1: UnsupportedOnceTable = UnsupportedOnceTable::new();
 static SEEN_INVALID_C0: UnsupportedOnceTable = UnsupportedOnceTable::new();
 static SEEN_INVALID_DEVICE_ATTRIBUTES: UnsupportedOnceTable = UnsupportedOnceTable::new();
