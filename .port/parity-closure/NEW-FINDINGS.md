@@ -2228,3 +2228,107 @@ it. The port now ignores the region unless `top < bottom < rows`, as the same re
 cursor and tab-stop geometry. Reference defect: `UPSTREAM-DEFECTS.md` UD11.
 
 **state**: CLOSED by the task R13-A follow-up (`ac627fab`).
+
+## N45 — a non-UTF-8 command-line argument panicked `Config::load_cli_args` on Linux and FreeBSD
+
+- **id**: N45 (next free id checked 2026-09-11; N44 was the last). Inventory P1.
+- **found by**: the R13 inventory's code sweep (P1, coordinator verified); fixed by task R13-B.
+- **severity**: high. **kind**: behavioral-difference (the port's own defect; byte-slice fidelity).
+- **oracle**: `src/config/Config.zig:4267` (`internal_os.xdg.parseTerminalExec(global.args().vector)`),
+  `src/os/xdg.zig:105-118`.
+- **rustty**: `crates/rustty-config/src/config_struct.rs:6697`, `crates/rustty-os/src/xdg.rs:175`.
+
+The xdg-terminal-exec check built its argv with `std::env::args()`, which panics on the first
+non-UTF-8 element. It ran before argv[0] was looked at, so any non-UTF-8 argument aborted startup
+on Linux and FreeBSD (`rustty -e cat $'\xff'`, a Latin-1 path from a launcher). The reference reads
+the raw byte argv. `parseTerminalExec` now takes byte slices, and the argv is read through
+`args_os` and `arg_bytes`, the seam `args_iterator` already used. Not an R13 item: the reference
+does not have this defect.
+
+Test: `crates/rustty-config/tests/load_cli_args_non_utf8_argv.rs` (`harness = false`, because a
+libtest binary cannot even start with a non-UTF-8 argv). It re-executes itself with argv[0]
+`xdg-terminal-exec`, and with `rustty -e cat`, each followed by the argument `FF FE`, and checks the
+command the child built. It passes on the Linux VM; on macOS the branch is not compiled and the
+test does nothing. `parse_terminal_exec_keeps_non_utf8_bytes` (rustty-os) covers the parser.
+Negative control, VM 2026-09-11: reinstating `std::env::args()` makes the child panic at
+`library/std/src/env.rs:871` with `called Result::unwrap() on an Err value: "\xFF\xFE"`.
+
+The first commit left `arg_raw.as_bytes()` in the Linux-only branch. The macOS build does not
+compile that branch, and the first Linux build caught it (`63ad6e12`). Two other
+`std::env::args()` calls remain, in developer tools rather than the app:
+`crates/rustty-unicode/examples/dump_tables.rs:29` and
+`crates/rustty-apprt-c/src/bin/translate_probe.rs:20`.
+
+**state**: CLOSED by task R13-B (`895cba09`, `63ad6e12`).
+
+## N46 — a cell-relative `cursor-text` or selection colour with a custom shader panicked the renderer (S116-F1)
+
+- **id**: N46.
+- **found by**: parity audit S116-F1 (refuted on "same defined semantics", so no LEDGER row),
+  `.port/phase-3/UPSTREAM_BUGS.md` U2, the R13 inventory (M5); fixed by task R13-B.
+- **severity**: medium. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/renderer/generic.zig:2266-2293`.
+- **rustty**: `crates/rustty-renderer/src/generic.rs:5657`,
+  `crates/rustty-renderer/src/generic/linux_impl.rs:4127`.
+
+S116-F1 found the port's `unreachable!()` in the three uniform writes, and the audit refuted it
+because the port matched the reference. U2 recorded the same site as "ported as-is". Under R13 a
+reachable crash is not ported: with any `custom-shader`, `cursor-text = cell-foreground` (or either
+`*-invert-fg-bg` compatibility key) panicked both renderer twins. Each uniform is now written only
+for an explicit colour and otherwise left unchanged, as when the option is unset. This entry is the
+record for S116-F1; no LEDGER row was added. Reference defect: `UPSTREAM-DEFECTS.md` UD57.
+
+**state**: CLOSED by task R13-B (`1ec776dc`).
+
+## N47 — the initial window size and size-limit arithmetic panicked on overflow
+
+- **id**: N47. Inventory M18.
+- **found by**: the R13 inventory's code sweep (T1-6); `:705` confirmed by task R13-B.
+- **severity**: low. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/Surface.zig:1856-1886`, `:705-706`.
+- **rustty**: `crates/rustty-core/src/surface.rs:283` (`initial_size_px`, `size_limit_min`),
+  `:2542` (`init`), `:5180` (`recomputeInitialSize`).
+
+The port multiplied like the reference, and release keeps overflow checks, so `window-height =
+1000000000` panicked at startup. It also converted the scaled size with a saturating `as u32` where
+the reference traps. `:705` (the brief's unverified site) is reachable in arithmetic through
+`adjust-cell-width`, not measured end to end. Both computations are now checked helpers: on
+overflow `recomputeInitialSize` takes its existing skip path and `init` skips `size_limit`.
+Reference defect: `UPSTREAM-DEFECTS.md` UD59.
+
+**state**: CLOSED by task R13-B (`ff312abe`, test strengthened in `71255471`).
+
+## N48 — a UTF-8 mouse report on a surrogate coordinate panicked
+
+- **id**: N48. Inventory M22.
+- **found by**: the R13 inventory's code sweep (T1-10); fixed by task R13-B.
+- **severity**: low. **kind**: missing-branch (reference defect, R13).
+- **oracle**: `src/input/mouse_encode.zig:134-149`.
+- **rustty**: `crates/rustty-vt/src/input/mouse_encode.rs:245`.
+
+The port's `char::from_u32(..).unwrap()` mirrored `utf8Encode(…) catch unreachable` and panicked
+for a coordinate in 55263..=57310, reachable through the C-ABI mouse encoder. The event is now not
+reported, and nothing is written. Reference defect: `UPSTREAM-DEFECTS.md` UD60.
+
+**state**: CLOSED by task R13-B (`b802801b`).
+
+## N49 — kitty shared-memory loads took SIGBUS on a truncated object, and formed a `&[u8]` over a peer-writable mapping
+
+- **id**: N49. Inventory M20 and P6.
+- **found by**: the R13 inventory (M20 code T1-8, unverified; P6 code); reproduced and fixed by
+  task R13-B.
+- **severity**: low (M20); low (P6, UB that no test can observe). **kind**: missing-branch
+  (reference defect, R13) + unsafe-soundness (port only).
+- **oracle**: `src/terminal/kitty/graphics_image.zig:245-273`.
+- **rustty**: `crates/rustty-vt/src/kitty/graphics_image.rs:482` (`readSharedMemoryPosix`),
+  `:579` (`pread_range`).
+
+M20 was unverified with no reproducer. Measured on the Linux VM: an owner that shrinks the object
+after the terminal's `fstat` makes the copy out of the mapping die with SIGBUS, both in a C probe of
+the syscall sequence and in the port's own test through the VT stream. macOS cannot shrink POSIX
+shared memory, and it cannot `pread` it either (ESPIPE), so macOS keeps the mapping. P6: the port
+built `&[u8]` over the `MAP_SHARED` mapping, which the sender can write while it is borrowed. The
+range is now read with `pread` (a short read is `InvalidData`), and the macOS path copies through a
+raw pointer. Reference defect: `UPSTREAM-DEFECTS.md` UD61.
+
+**state**: CLOSED by task R13-B (`7f93dbc8`).

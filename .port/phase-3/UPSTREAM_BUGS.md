@@ -93,6 +93,15 @@ Ported as-is. Fixing it locally would mean inventing behaviour the reference doe
 not have, and the correct resolution is an upstream decision about what that arm
 should do.
 
+> **Reversed by task R13-B (2026-09-11), under R13.** The port now writes each of
+> the three uniforms only for an explicit colour and leaves it unchanged for
+> `cell-foreground` / `cell-background`. The record, with the measured reference
+> behaviour and a proposed upstream fix, is
+> `.port/parity-closure/UPSTREAM-DEFECTS.md` UD57 (NEW-FINDINGS N46). The line
+> numbers above are from the July pin: the sites are `generic.zig:2266-2293` at
+> `20abdb50a`, and the port's `unreachable!()` sat at `generic.rs:5674`, `:5689`,
+> `:5704` and in `generic/linux_impl.rs` before the fix.
+
 ---
 
 ## U3 — tmux control-mode integer overflow on unbounded `([0-9]+)`
