@@ -364,8 +364,8 @@ impl<'a> Action<'a> {
 mod tests {
     use super::{ActionKey, TargetKey};
     use rustty_lib::c_header::header_decls;
-    use rustty_lib::henum_fields;
-    use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values};
+    use rustty_lib::henum_type;
+    use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values, EnumType};
 
     /// The checked-in public C header, embedded at compile time.
     ///
@@ -388,17 +388,17 @@ mod tests {
     /// direction was blind — a variant ADDED to `ActionKey` with no
     /// `RUSTTY_IPC_ACTION_*` enumerator left both tests green, where the
     /// reference's `inline for (@typeInfo(T).@"enum".fields)` fails. The lists
-    /// go through `henum_fields!`, whose exhaustive `match` makes that a
-    /// compile error.
+    /// go through `henum_type!`, whose exhaustive `match` makes that a
+    /// compile error. (It also observes the tag type and binds each key to its
+    /// variant; see its doc.)
     fn run_henum_src(
         src: &str,
         header_enum: &str,
         prefix: &str,
-        fields: &[(&str, i64)],
+        t: &EnumType,
     ) -> Result<(), String> {
-        let t = enum_type_values(fields);
         let decls = header_decls(src, header_enum);
-        check_ghostty_henum(&t, prefix, |name| decls.get(name).copied())
+        check_ghostty_henum(t, prefix, |name| decls.get(name).copied())
     }
 
     /// Self-check that the two probes below can actually FAIL — i.e. that they
@@ -408,10 +408,10 @@ mod tests {
     /// `@import("ghostty.h")` is the real header.
     #[test]
     fn ghostty_h_probe_can_fail() {
-        let fields = [
+        let fields = enum_type_values(&[
             ("class", TargetKey::Class as i64),
             ("detect", TargetKey::Detect as i64),
-        ];
+        ]);
         let run = |src: &str| {
             run_henum_src(
                 src,
@@ -447,7 +447,7 @@ mod tests {
             HEADER_SRC,
             "rustty_ipc_target_tag_e",
             "RUSTTY_IPC_TARGET_",
-            &henum_fields!(TargetKey, [("class", Class), ("detect", Detect)]),
+            &henum_type!(TargetKey, [("class", Class), ("detect", Detect)]),
         )
         .unwrap();
     }
@@ -461,7 +461,7 @@ mod tests {
             HEADER_SRC,
             "rustty_ipc_action_tag_e",
             "RUSTTY_IPC_ACTION_",
-            &henum_fields!(
+            &henum_type!(
                 ActionKey,
                 [
                     ("new_window", NewWindow),

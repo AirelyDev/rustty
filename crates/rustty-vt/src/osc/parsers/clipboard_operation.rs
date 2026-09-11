@@ -61,9 +61,14 @@ mod tests {
 
     #[test]
     fn osc_52_get_set_clipboard() {
-        let backend = rustty_lib::allocator::GlobalZigAllocator;
-        let alloc = rustty_lib::allocator::ZigAllocatorRef::new(&backend);
-        let mut p: Parser = Parser::init(Some(alloc));
+        // var p: Parser = .init(null);
+        //
+        // CORRECTION (task 19 fix round 1): task 19's S194-F2 commit
+        // (`3eb3763e`) also switched THIS test to `Parser::init(Some(alloc))`
+        // by an unbounded text replacement — the reference's "OSC 52: get/set
+        // clipboard" is `.init(null)`. That made the two tests identical again,
+        // the other way round. This one exercises the FIXED capture backing.
+        let mut p: Parser = Parser::init(None);
 
         let input = "52;s;?";
         for ch in input.bytes() {

@@ -223,44 +223,180 @@ where
     Ok(())
 }
 
-/// Bind a hand-written `(key, Variant)` list to its enum so the list cannot
-/// silently fall behind the enum.
+/// The compile-time checks shared by [`henum_type!`] and [`enum_name_table!`].
 ///
-/// PORT NOTE: no reference counterpart — the oracle does not need one.
-/// `lib.checkGhosttyHEnum` reflects with `inline for (@typeInfo(T).@"enum".fields)`,
-/// so a variant ADDED to the Zig enum is checked against `ghostty.h` by
-/// construction. Rust has no such reflection, so every `check_ghostty_henum`
-/// caller in this workspace writes its keys out by hand — and a hand-written
-/// list cannot observe a variant that is not in it.
+/// PORT NOTE: no reference counterpart (finding N36). Every argument is a
+/// parallel slice, one entry per list row: the hand-written key, the Rust
+/// variant's identifier (`stringify!`), and the variant's discriminant. Called
+/// from a `const` item, so each `panic!` here is a COMPILE error at the macro's
+/// call site — in whichever crate expands it. That matters: the
+/// unreachable-pattern lint a duplicated `match` arm would raise is suppressed
+/// for macros expanded from another crate, so a lint cannot be the defence.
 ///
-/// This macro closes that half. It expands to the `&[(&str, i64)]` fields array
-/// AND to an exhaustive `match` over `$E`, so adding a variant to the enum
-/// without adding it here is a COMPILE ERROR, and naming a variant twice is an
-/// unreachable-pattern lint (`-D warnings` on this workspace's `--all-targets`
-/// clippy runs). See finding N36.
+/// 1. **The key names its variant.** The reference's key IS `@tagName`, so it
+///    cannot disagree with the variant. Here the key is typed by hand, and the
+///    two-edit mutation "transpose two variants, then swap the list's keys to
+///    make the red test green" would otherwise pass while `Health::Healthy` is
+///    1 in Rust and `HEALTHY` is 0 in C. Compared ignoring `_` and ASCII case,
+///    because the Zig snake_case spellings are not a mechanical function of the
+///    Rust idents (`digit_0` / `Digit0` but `f1` / `F1`, `osc8` / `Osc8`,
+///    `export_terminal_io` / `ExportTerminalIO`).
+/// 2. **No variant is listed twice** (equal discriminants — Rust forbids two
+///    variants sharing one).
+/// 3. **No key is listed twice.**
+#[doc(hidden)]
+pub const fn __henum_const_check(keys: &[&str], idents: &[&str], discs: &[i64]) {
+    assert!(keys.len() == idents.len() && keys.len() == discs.len());
+    let mut i = 0;
+    while i < keys.len() {
+        if !eq_ignoring_underscores_and_ascii_case(keys[i].as_bytes(), idents[i].as_bytes()) {
+            panic!("henum/enum_name_table: a key does not name its variant (compared ignoring `_` and case) — the list pairs a key with the wrong variant");
+        }
+        let mut j = i + 1;
+        while j < keys.len() {
+            if discs[i] == discs[j] {
+                panic!("henum/enum_name_table: a variant is listed twice");
+            }
+            if eq_bytes(keys[i].as_bytes(), keys[j].as_bytes()) {
+                panic!("henum/enum_name_table: a key is listed twice");
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+}
+
+const fn eq_bytes(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+const fn eq_ignoring_underscores_and_ascii_case(a: &[u8], b: &[u8]) -> bool {
+    let (mut i, mut j) = (0, 0);
+    loop {
+        while i < a.len() && a[i] == b'_' {
+            i += 1;
+        }
+        while j < b.len() && b[j] == b'_' {
+            j += 1;
+        }
+        if i == a.len() || j == b.len() {
+            return i == a.len() && j == b.len();
+        }
+        if !a[i].eq_ignore_ascii_case(&b[j]) {
+            return false;
+        }
+        i += 1;
+        j += 1;
+    }
+}
+
+impl TagType {
+    /// The tag type an enum's REPRESENTATION implies: `c_int` when it is
+    /// `c_int`-sized, otherwise `u<bits>` of its size.
+    ///
+    /// PORT NOTE (finding N36, task 19 fix round 1): the reference's
+    /// `checkGhosttyHEnum` opens with `expect(info.tag_type == c_int)` against
+    /// the enum's REAL tag type. The port's [`enum_type_values`] hardcodes
+    /// [`TagType::CInt`], so that check could not fail — `#[repr(u8)]` on a
+    /// header-synced enum stayed green. [`henum_type!`] now derives the tag
+    /// from `size_of` of the enum (or of its C-value mapper's return type).
+    ///
+    /// Residual, by construction: a size cannot tell `i32` from `u32`, so
+    /// `#[repr(u32)]` still reads as `c_int`. Rust exposes no way to observe
+    /// an enum repr's signedness without a negative discriminant.
+    pub fn from_repr_size(bytes: usize) -> TagType {
+        if bytes == core::mem::size_of::<core::ffi::c_int>() {
+            TagType::CInt
+        } else {
+            TagType::U((bytes * 8) as u16)
+        }
+    }
+}
+
+/// [`enum_type_values`] with the tag type observed from the enum rather than
+/// assumed. Used by [`henum_type!`]; not for hand-built fixtures.
+#[doc(hidden)]
+pub fn __henum_type(tag_bytes: usize, fields: &[(&str, i64)]) -> EnumType {
+    let mut t = enum_type_values(fields);
+    t.tag_type = TagType::from_repr_size(tag_bytes);
+    t
+}
+
+/// `size_of` the return type of a C-value mapper, and the mapper's values.
+#[doc(hidden)]
+pub fn __henum_mapped<E: Copy, R: Into<i64>>(mapper: fn(E) -> R, v: E) -> (usize, i64) {
+    (core::mem::size_of::<R>(), mapper(v).into())
+}
+
+/// Build the [`EnumType`] a `checkGhosttyHEnum` port compares against the
+/// header, from a hand-written `(key, Variant)` list that the compiler binds
+/// to the enum.
 ///
-/// Two forms: the default reads the discriminant with `as i64`; the second
-/// takes an explicit `fn($E) -> i64` for enums whose C value comes from a
-/// method (e.g. `ProgressReportState::int_from_enum`).
+/// PORT NOTE: no reference counterpart (finding N36). `lib.checkGhosttyHEnum`
+/// reflects with `inline for (@typeInfo(T).@"enum".fields)` — the keys ARE
+/// `@tagName`, the values ARE `@intFromEnum`, the tag type IS the enum's. Rust
+/// has no such reflection, so every `check_ghostty_henum` caller writes the
+/// list by hand, and each of those three facts became a thing the list could
+/// get wrong silently. This macro makes each one observed:
+///
+/// - **roster** — an exhaustive `match` over `$E`, so a variant the list does
+///   not name is a COMPILE error (an appended variant was invisible before);
+/// - **values** — read out of the enum (`$E::$V as i64`, or a mapper), never
+///   re-derived from list order (finding N29);
+/// - **tag type** — `size_of` the enum (or the mapper's return type), so a
+///   non-`c_int` repr fails the check's opening `tag_type == c_int` test;
+/// - **key ↔ variant, duplicates** — [`__henum_const_check`], at compile time.
+///
+/// Two forms: the default reads the discriminant; the second takes a
+/// `fn($E) -> R` for enums whose C value comes from a method
+/// (e.g. `ProgressReportState::int_from_enum`), and takes the tag type from `R`.
 ///
 /// ```ignore
-/// let fields = rustty_lib::henum_fields!(TargetKey, [("class", Class), ("detect", Detect)]);
+/// let t = rustty_lib::henum_type!(TargetKey, [("class", Class), ("detect", Detect)]);
 /// ```
 #[macro_export]
-macro_rules! henum_fields {
-    ($E:ident, [ $( ($key:literal, $V:ident) ),* $(,)? ]) => {
-        $crate::henum_fields!($E, |v: $E| v as i64, [ $( ($key, $V) ),* ])
-    };
-    ($E:ident, $value:expr, [ $( ($key:literal, $V:ident) ),* $(,)? ]) => {{
-        // Exhaustive over `$E`: a variant the list does not name does not
-        // compile. This is the Rust stand-in for the reference's
-        // `inline for (@typeInfo(T).@"enum".fields)`.
+macro_rules! henum_type {
+    ($E:ident, [ $( ($key:literal, $V:ident) ),* $(,)? ]) => {{
         #[allow(dead_code)]
         fn __henum_exhaustive(v: $E) -> &'static str {
             match v { $( $E::$V => $key, )* }
         }
-        let __henum_value: fn($E) -> i64 = $value;
-        [ $( ($key, __henum_value($E::$V)) ),* ]
+        const _: () = $crate::r#enum::__henum_const_check(
+            &[ $( $key ),* ],
+            &[ $( stringify!($V) ),* ],
+            &[ $( $E::$V as i64 ),* ],
+        );
+        $crate::r#enum::__henum_type(
+            ::core::mem::size_of::<$E>(),
+            &[ $( ($key, $E::$V as i64) ),* ],
+        )
+    }};
+    ($E:ident, $value:expr, [ $( ($key:literal, $V:ident) ),* $(,)? ]) => {{
+        #[allow(dead_code)]
+        fn __henum_exhaustive(v: $E) -> &'static str {
+            match v { $( $E::$V => $key, )* }
+        }
+        const _: () = $crate::r#enum::__henum_const_check(
+            &[ $( $key ),* ],
+            &[ $( stringify!($V) ),* ],
+            &[ $( $E::$V as i64 ),* ],
+        );
+        let __henum_rows = [ $( ($key, $crate::r#enum::__henum_mapped($value, $E::$V)) ),* ];
+        let __henum_bytes = ::core::mem::size_of::<$E>();
+        let __henum_bytes = __henum_rows.first().map_or(__henum_bytes, |(_, (b, _))| *b);
+        let __henum_fields: ::std::vec::Vec<(&str, i64)> =
+            __henum_rows.iter().map(|(k, (_, v))| (*k, *v)).collect();
+        $crate::r#enum::__henum_type(__henum_bytes, &__henum_fields)
     }};
 }
 
@@ -272,7 +408,9 @@ macro_rules! henum_fields {
 /// a table that can fall behind the enum, and the failure shows up as a
 /// runtime `unreachable!()` rather than as a build error. Wrapping the table in
 /// this macro emits an exhaustive `match` beside it, so a new variant is a
-/// COMPILE ERROR until the table names it. See finding N36.
+/// COMPILE ERROR until the table names it, and runs [`__henum_const_check`]
+/// over it, so a duplicated row or a name paired with the wrong variant is one
+/// too. See finding N36.
 ///
 /// The table body is written exactly as it would be without the macro:
 ///
@@ -300,6 +438,11 @@ macro_rules! enum_name_table {
             fn exhaustive(v: $E) -> &'static str {
                 match v { $( $E::$V => $s, )* }
             }
+            $crate::r#enum::__henum_const_check(
+                &[ $( $s ),* ],
+                &[ $( stringify!($V) ),* ],
+                &[ $( $E::$V as i64 ),* ],
+            );
         };
     };
 }
@@ -308,34 +451,76 @@ macro_rules! enum_name_table {
 mod tests {
     use super::*;
 
-    /// The `henum_fields!` values are read OUT OF THE ENUM, not re-derived from
-    /// the list's order, and the list is exhaustive over the enum by
-    /// construction.
+    /// The `henum_type!` values are read OUT OF THE ENUM, not re-derived from
+    /// the list's order, and the tag type is observed from the representation.
     ///
-    /// PORT NOTE: no reference analogue. The exhaustiveness half cannot be
-    /// negative-controlled from a test, because its failure mode is a COMPILE
-    /// error: adding a variant here without a list entry stops this crate
-    /// building. That is strictly stronger than the reference's test failure,
-    /// and it was verified by doing exactly that (finding N36).
+    /// PORT NOTE: no reference analogue. The roster, key-binding and duplicate
+    /// halves cannot be negative-controlled from a test, because their failure
+    /// mode is a COMPILE error; they were verified by real mutations at real
+    /// call sites in other crates (finding N36).
     #[test]
-    fn henum_fields_reads_values_from_the_enum() {
+    fn henum_type_reads_values_and_tag_from_the_enum() {
         #[derive(Clone, Copy)]
         #[repr(i32)]
         enum Probe {
             A = 3,
             B = 9,
         }
-        let fields = crate::henum_fields!(Probe, [("a", A), ("b", B)]);
-        assert_eq!([("a", 3i64), ("b", 9i64)], fields);
+        let t = crate::henum_type!(Probe, [("a", A), ("b", B)]);
+        assert_eq!(
+            vec![("a".to_string(), 3usize), ("b".to_string(), 9usize)],
+            t.fields
+        );
+        assert_eq!(TagType::CInt, t.tag_type);
 
-        // The mapper form, for enums whose C value comes from a method.
+        // The mapper form, for enums whose C value comes from a method; the tag
+        // type is the mapper's return type.
         impl Probe {
-            fn doubled(self) -> i64 {
-                (self as i64) * 2
+            fn doubled(self) -> i32 {
+                (self as i32) * 2
+            }
+            fn doubled_u8(self) -> u8 {
+                (self as u8) * 2
             }
         }
-        let mapped = crate::henum_fields!(Probe, |v: Probe| v.doubled(), [("a", A), ("b", B)]);
-        assert_eq!([("a", 6i64), ("b", 18i64)], mapped);
+        let mapped = crate::henum_type!(Probe, Probe::doubled, [("a", A), ("b", B)]);
+        assert_eq!(
+            vec![("a".to_string(), 6usize), ("b".to_string(), 18usize)],
+            mapped.fields
+        );
+        assert_eq!(TagType::CInt, mapped.tag_type);
+        let narrow = crate::henum_type!(Probe, Probe::doubled_u8, [("a", A), ("b", B)]);
+        assert_eq!(TagType::U(8), narrow.tag_type);
+
+        #[derive(Clone, Copy)]
+        #[repr(u8)]
+        enum Narrow {
+            X,
+        }
+        let t = crate::henum_type!(Narrow, [("x", X)]);
+        assert_eq!(TagType::U(8), t.tag_type);
+        assert!(
+            check_ghostty_henum(&t, "P_", |_| Some(0)).is_err(),
+            "a u8 repr must fail the c_int check"
+        );
+    }
+
+    #[test]
+    fn henum_key_matching_ignores_underscores_and_case() {
+        assert!(eq_ignoring_underscores_and_ascii_case(
+            b"export_terminal_io",
+            b"ExportTerminalIO"
+        ));
+        assert!(eq_ignoring_underscores_and_ascii_case(
+            b"digit_0", b"Digit0"
+        ));
+        assert!(eq_ignoring_underscores_and_ascii_case(b"f1", b"F1"));
+        assert!(!eq_ignoring_underscores_and_ascii_case(
+            b"healthy",
+            b"Unhealthy"
+        ));
+        assert!(!eq_ignoring_underscores_and_ascii_case(b"f1", b"F10"));
+        assert!(!eq_ignoring_underscores_and_ascii_case(b"f10", b"F1"));
     }
 
     #[test]

@@ -265,8 +265,8 @@ pub enum Health {
 mod health_tests {
     use super::Health;
     use rustty_lib::c_header::header_decls;
-    use rustty_lib::henum_fields;
-    use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values, EnumType};
+    use rustty_lib::henum_type;
+    use rustty_lib::r#enum::{check_ghostty_henum, EnumType};
 
     /// The checked-in public C header, embedded at compile time.
     ///
@@ -324,7 +324,7 @@ mod health_tests {
     /// int. The keys are the snake_case forms of the variants, in declaration
     /// order; the VALUES are `Health::Variant as i64`, read out of the enum.
     ///
-    /// PORT NOTE (N36): the KEY LIST is bound to `Health` by `henum_fields!`,
+    /// PORT NOTE (N36): the KEY LIST is bound to `Health` by `henum_type!`,
     /// whose exhaustive `match` makes an ADDED variant with no
     /// `RUSTTY_RENDERER_HEALTH_*` enumerator a compile error. The reference
     /// gets that from `inline for (@typeInfo(T).@"enum".fields)`.
@@ -334,10 +334,7 @@ mod health_tests {
     /// check compared the header to a hand-typed list's ORDER and could not
     /// observe `Health` at all.
     fn health_enum_descriptor() -> EnumType {
-        enum_type_values(&henum_fields!(
-            Health,
-            [("healthy", Healthy), ("unhealthy", Unhealthy)]
-        ))
+        henum_type!(Health, [("healthy", Healthy), ("unhealthy", Unhealthy)])
     }
 
     // test "ghostty.h Health" {

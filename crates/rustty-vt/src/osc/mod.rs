@@ -379,8 +379,8 @@ mod tests {
     use super::ProgressReportState;
     use crate::options as build_options;
     use rustty_lib::c_header::header_decls;
-    use rustty_lib::henum_fields;
-    use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values, EnumType};
+    use rustty_lib::henum_type;
+    use rustty_lib::r#enum::{check_ghostty_henum, EnumType};
 
     /// The checked-in public C header, embedded at compile time.
     ///
@@ -444,7 +444,7 @@ mod tests {
     /// ADDED to `State` with no `RUSTTY_PROGRESS_STATE_*` enumerator left this
     /// test green, where the reference's
     /// `inline for (@typeInfo(T).@"enum".fields)` fails. It goes through
-    /// `henum_fields!`, whose exhaustive `match` makes that a compile error.
+    /// `henum_type!`, whose exhaustive `match` makes that a compile error.
     ///
     /// PORT NOTE (N29): the VALUES come from
     /// `ProgressReportState::int_from_enum()` — the port's model of
@@ -453,9 +453,9 @@ mod tests {
     /// FACTORY model, which assigns each key its INDEX — so the check compared
     /// the header to a hand-typed list's ORDER and could not observe `State`.
     fn state_enum_descriptor() -> EnumType {
-        enum_type_values(&henum_fields!(
+        henum_type!(
             ProgressReportState,
-            |v: ProgressReportState| v.int_from_enum() as i64,
+            |v: ProgressReportState| v.int_from_enum(),
             [
                 ("remove", Remove),
                 ("set", Set),
@@ -463,7 +463,7 @@ mod tests {
                 ("indeterminate", Indeterminate),
                 ("pause", Pause),
             ]
-        ))
+        )
     }
 
     // test "ghostty.h Command.ProgressReport.State" {

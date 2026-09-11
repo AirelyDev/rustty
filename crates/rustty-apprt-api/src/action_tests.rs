@@ -8,7 +8,7 @@
 //! commented-out code at their type sites in `action.rs`, NOT counted toward G1.
 
 use rustty_lib::c_header::header_decls;
-use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values};
+use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values, EnumType};
 
 use crate::action::*;
 
@@ -44,19 +44,13 @@ const HEADER_SRC: &str = include_str!(concat!(
 /// not observe the Rust enums — transposing two `ActionKey` variants left all
 /// 27 tests and all seven binary-interface gates green. The values now come
 /// from the enum.
-fn run_henum(header_enum: &str, prefix: &str, fields: &[(&str, i64)]) {
-    run_henum_src(HEADER_SRC, header_enum, prefix, fields).unwrap();
+fn run_henum(header_enum: &str, prefix: &str, t: &EnumType) {
+    run_henum_src(HEADER_SRC, header_enum, prefix, t).unwrap();
 }
 
-fn run_henum_src(
-    src: &str,
-    header_enum: &str,
-    prefix: &str,
-    fields: &[(&str, i64)],
-) -> Result<(), String> {
-    let t = enum_type_values(fields);
+fn run_henum_src(src: &str, header_enum: &str, prefix: &str, t: &EnumType) -> Result<(), String> {
     let decls = header_decls(src, header_enum);
-    check_ghostty_henum(&t, prefix, |name| decls.get(name).copied())
+    check_ghostty_henum(t, prefix, |name| decls.get(name).copied())
 }
 
 /// `("zig field name", RustEnum::Variant)` -> `("zig field name", <value>)`.
@@ -70,14 +64,15 @@ fn run_henum_src(
 /// direction — a variant ADDED to the Rust enum with no `RUSTTY_*` enumerator
 /// left all 17 tests green, where the reference's
 /// `inline for (@typeInfo(T).@"enum".fields)` fails. Expanding through
-/// `rustty_lib::henum_fields!` emits an exhaustive `match` over the enum
-/// beside the list, so that is now a COMPILE error.
+/// `rustty_lib::henum_type!` emits an exhaustive `match` over the enum
+/// beside the list, so that is now a COMPILE error. (It also observes the tag
+/// type and binds each key to its variant — task 19 fix round 1.)
 macro_rules! henum {
     ($header:literal, $prefix:literal, $E:ident, [ $( ($key:literal, $V:ident) ),* $(,)? ]) => {
         run_henum(
             $header,
             $prefix,
-            &rustty_lib::henum_fields!($E, [ $( ($key, $V) ),* ]),
+            &rustty_lib::henum_type!($E, [ $( ($key, $V) ),* ]),
         )
     };
 }
@@ -90,10 +85,10 @@ macro_rules! henum {
 /// `@import("ghostty.h")` is the real header.
 #[test]
 fn ghostty_h_probe_can_fail() {
-    let fields = [
+    let fields = enum_type_values(&[
         ("app", TargetKey::App as i64),
         ("surface", TargetKey::Surface as i64),
-    ];
+    ]);
     let run = |src: &str| run_henum_src(src, "rustty_target_tag_e", "RUSTTY_TARGET_", &fields);
 
     // Baseline: the real header passes.

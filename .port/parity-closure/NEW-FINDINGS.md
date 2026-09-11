@@ -1976,8 +1976,8 @@ Found by task 19 while measuring `S47-F1` and `S156-F1`, both of which name the 
 **remaining half of the same seam**, and no row claims it.
 
 **The reference reflects; the port writes a list.** `lib.checkGhosttyHEnum` iterates
-`@typeInfo(T).@"enum".fields`, so BOTH directions are bound: a header enumerator that the enum
-does not have, and an enum variant the header does not declare. Rust has no such reflection, so
+`@typeInfo(T).@"enum".fields`, so every variant the enum HAS is checked against the header by
+construction. Rust has no such reflection, so
 every one of this workspace's five `check_ghostty_henum` callers supplies a HAND-TYPED key list.
 `N29` bound the values (`<Enum>::Variant as i64`); nothing bound the roster.
 
@@ -2001,11 +2001,39 @@ right", had the gap too.
 anything the test does. That is luck, not design, and it is why the fix is a shared device rather
 than a per-site argument.
 
-**Fix**: `rustty_lib::henum_fields!` (and `rustty_lib::enum_name_table!` for the `TAG_NAMES`
-class) expand the hand-written list into the fields array AND an exhaustive `match` over the
-enum, so a variant the list does not name stops the crate building. That is stronger than the
+CORRECTION (task 19 fix round 1, reviewer): this paragraph used to say the reference binds
+"BOTH directions … a header enumerator that the enum does not have, and an enum variant the
+header does not declare". **It does not.** `checkGhosttyHEnum` iterates only the enum's fields
+(`src/lib/enum.zig:126`) and removes matched values from an `EnumSet(T)`; a header enumerator the
+enum lacks is caught by NEITHER side, and the A3 header gate checks function symbols only. The
+port is faithful on that direction. The blind spot this finding closes is the enum→header one,
+which the reference does bind.
+
+**Fix**: `rustty_lib::henum_type!` (and `rustty_lib::enum_name_table!` for the `TAG_NAMES`
+class) expand the hand-written list into the checked `EnumType` AND an exhaustive `match` over
+the enum, so a variant the list does not name stops the crate building. That is stronger than the
 reference's failure mode (a test failure), and it is the closest Rust has to
 `inline for (@typeInfo(T).@"enum".fields)`.
+
+CORRECTION (task 19 fix round 1): the macro was first called `henum_fields!` and its doc claimed a
+DUPLICATED list entry is caught as an unreachable-pattern lint under `-D warnings`. **That never
+fires at a real call site**: rustc suppresses that lint for code expanded from another crate's
+macro, so a duplicated `("unhealthy", Unhealthy)` in `rustty-renderer` passed test and clippy
+alike (reviewer-measured). The round also found two more things the hand-written list could get
+wrong silently, both of which the reference gets from reflection. All three are now observed:
+
+| hand-written fact | reference | port before | port now | proof (real call site) |
+|---|---|---|---|---|
+| no row listed twice | reflection | lint suppressed cross-crate — GREEN | const-eval panic = compile error | duplicate `("unhealthy", Unhealthy)` in `rustty-renderer`; duplicate `(Key::Copy, "copy")` in `TAG_NAMES` → `a variant is listed twice` |
+| key names its variant | key IS `@tagName` | transpose `Health`'s variants AND swap the list's keys → GREEN while `Health::Healthy` = 1 and `HEALTHY` = 0 | const-eval check, key vs `stringify!(Variant)` ignoring `_` and case | that two-edit mutation → `a key does not name its variant`; so does swapping `copy`/`cut` in `TAG_NAMES` |
+| tag type is `c_int` | `info.tag_type == c_int` | `enum_type_values` hardcoded `CInt` — `#[repr(u8)]` on `Health` GREEN | `size_of` the enum (or the mapper's return type) | `#[repr(u8)]` on `Health` → `expected c_int tag_type`, both tests RED |
+
+The key comparison ignores `_` and ASCII case because the Zig snake_case names are not a
+mechanical function of the Rust idents (`digit_0`/`Digit0` but `f1`/`F1`, `osc8`/`Osc8`,
+`export_terminal_io`/`ExportTerminalIO`); all 340 existing rows satisfy it. Residuals, by
+construction: a size cannot tell `repr(i32)` from `repr(u32)`, and two variants whose names differ
+only by `_` or case could be transposed undetected (Rust's naming lints make the latter
+unrealistic).
 
 **state**: CLOSED by task 19 at all five sites. Recorded here rather than reopening `S45-F1`,
 whose own claim — "the C values are looked up in the enum itself" — was true, was fixed, and is

@@ -122,8 +122,8 @@ mod shape_tests {
     use super::Shape;
     use crate::options as build_options;
     use rustty_lib::c_header::{header_decls as parse_header_decls, parse_header_enum};
-    use rustty_lib::henum_fields;
-    use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values, EnumType};
+    use rustty_lib::henum_type;
+    use rustty_lib::r#enum::{check_ghostty_henum, EnumType};
     use std::collections::HashMap;
 
     /// The `@hasDecl`/`@field` stand-in: the header's declarations as a lookup.
@@ -166,10 +166,10 @@ mod shape_tests {
         //
         // PORT NOTE (N36): the KEY LIST was hand-typed too, so an APPENDED
         // `Shape` variant with no `RUSTTY_MOUSE_SHAPE_*` enumerator left both
-        // tests green — measured. `henum_fields!` emits an exhaustive `match`
+        // tests green — measured. `henum_type!` emits an exhaustive `match`
         // over `Shape` beside the list, so that is now a compile error; the
         // reference gets it from `inline for (@typeInfo(T).@"enum".fields)`.
-        enum_type_values(&henum_fields!(
+        henum_type!(
             Shape,
             [
                 ("default", Default),
@@ -207,7 +207,7 @@ mod shape_tests {
                 ("zoom_in", ZoomIn),
                 ("zoom_out", ZoomOut),
             ]
-        ))
+        )
     }
 
     #[test]

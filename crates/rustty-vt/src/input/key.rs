@@ -1437,6 +1437,14 @@ mod tests {
     /// shows up as an out-of-bounds panic or a wrong name at runtime. The
     /// reference has no such table — `w3c()` derives the name from `@tagName`
     /// — so the derivation is checkable, and this test runs it.
+    ///
+    /// What it catches that `w3c` below does not (task 19 fix round 1): a
+    /// CASING error in a single-word name. `"Backquote"` -> `"backquote"` leaves
+    /// `w3c` GREEN, because `from_w3c` first tries the whole code lowercased and
+    /// round-trips it, while `Key::Backquote.w3c()` now returns a string that
+    /// is not a W3C code — measured, only this test goes RED. (The first control
+    /// recorded for this test, `"IntlBackslash"` -> `"Intlbackslash"`, did NOT
+    /// discriminate: `w3c` fails on it too, as it does on a `KeyA`/`KeyB` swap.)
     #[test]
     fn w3c_names_are_derived_from_tag_names() {
         assert_eq!(
@@ -1465,8 +1473,14 @@ mod tests {
     /// `@typeInfo(Key).@"enum".fields`. Those are the same set only because
     /// `enum_name_table!` makes the table exhaustive over `Key` at compile
     /// time; this test pins the other half — that the table has no DUPLICATE
-    /// variant, which would make it a proper superset of nothing useful and
-    /// leave `tag_index` returning the first of two homes for a key.
+    /// variant, which would leave `tag_index` returning the first of two homes
+    /// for a key.
+    ///
+    /// CORRECTION (task 19 fix round 1): since `enum_name_table!` gained its
+    /// compile-time duplicate check, a duplicated row no longer BUILDS, so this
+    /// test's duplicate arm cannot fail today; it is kept as the runtime
+    /// statement of the invariant `tag_index` relies on, not as independent
+    /// coverage.
     #[test]
     fn tag_names_names_each_key_exactly_once() {
         let mut seen: Vec<Key> = Vec::with_capacity(TAG_NAMES.len());
