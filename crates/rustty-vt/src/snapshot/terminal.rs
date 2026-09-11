@@ -1203,6 +1203,12 @@ pub fn decode(source: &mut dyn io::Reader, alloc: Allocator) -> Result<Terminal,
     // field defaults (the Kitty image knobs); rustty-vt `Options` has no
     // `Default`, so the (ghostty-artifact) defaults are spelled out (the
     // crate-wide treatment; see `terminal.rs`'s option sites).
+    // tripwire seam: Terminal.init's pools, pins and default tab stops.
+    #[cfg(test)]
+    if super::tw::check(super::tw::SnapshotFp::Alloc).is_err() {
+        payload.deinit(alloc);
+        return Err(DecodeError::OutOfMemory);
+    }
     let mut result = match Terminal::init(
         alloc,
         TerminalOptions {
@@ -1234,6 +1240,13 @@ pub fn decode(source: &mut dyn io::Reader, alloc: Allocator) -> Result<Terminal,
     // Recreate the optional screen now so ScreenSet routing is complete before
     // its empty screens are replaced by the following SCREEN records.
     if header.screen_count == 2 {
+        // tripwire seam: the alternate screen's allocation.
+        #[cfg(test)]
+        if super::tw::check(super::tw::SnapshotFp::Alloc).is_err() {
+            result.deinit(alloc);
+            payload.deinit(alloc);
+            return Err(DecodeError::OutOfMemory);
+        }
         if let Err(_) = result.screens.get_init(
             alloc,
             TerminalScreenKey::Alternate,
@@ -1287,7 +1300,21 @@ pub fn decode(source: &mut dyn io::Reader, alloc: Allocator) -> Result<Terminal,
 
     // Native strings retain trailing NUL sentinels. Setters construct those
     // without exposing that detail in the wire format.
+    // tripwire seam: the native pwd string allocation.
+    #[cfg(test)]
+    if super::tw::check(super::tw::SnapshotFp::Alloc).is_err() {
+        result.deinit(alloc);
+        payload.deinit(alloc);
+        return Err(DecodeError::OutOfMemory);
+    }
     if let Err(_) = result.set_pwd(&payload.pwd) {
+        result.deinit(alloc);
+        payload.deinit(alloc);
+        return Err(DecodeError::OutOfMemory);
+    }
+    // tripwire seam: the native title string allocation.
+    #[cfg(test)]
+    if super::tw::check(super::tw::SnapshotFp::Alloc).is_err() {
         result.deinit(alloc);
         payload.deinit(alloc);
         return Err(DecodeError::OutOfMemory);

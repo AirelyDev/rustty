@@ -431,6 +431,9 @@ pub fn decode_page(
     // SAFETY: `pages_ptr` points at the live PageList owned by
     // `terminal_screen`; until `finalize`/`deinit` below, the list is only
     // touched through the allocation itself (the allocate_page contract).
+    // tripwire seam: each history page's backing allocation.
+    #[cfg(test)]
+    super::tw::check(super::tw::SnapshotFp::Alloc).map_err(|_| DecodePageError::OutOfMemory)?;
     let mut allocation: PageAllocation =
         unsafe { TerminalPageList::allocate_page(pages_ptr, decoder.capacity()) }
             .map_err(|_| DecodePageError::OutOfMemory)?;

@@ -410,6 +410,11 @@ fn decode_page_string(
     // Allocate space for the string and read directly into it.
     // SAFETY: `page_ptr` points at a live Page; the helper projects to the
     // `string_alloc` field only (the crate's narrow-scope raw-page pattern).
+    // tripwire seam: the page string-allocator allocation.
+    #[cfg(test)]
+    if super::tw::check(super::tw::SnapshotFp::Alloc).is_err() {
+        return Err(DecodePageStringError::StringsOutOfMemory);
+    }
     let value: &mut [u8] = match unsafe { Page::string_alloc_alloc(page_ptr, len) } {
         Ok(v) => v,
         Err(_) => return Err(DecodePageStringError::StringsOutOfMemory),
@@ -642,9 +647,14 @@ mod tests {
     //
     // PORT NOTE: `std.testing.FailingAllocator` with `fail_index` → the
     // SNAPSHOT_TW tripwire seam (`error_after(min = fail_index)`), the
-    // crate's established failure-injection stand-in. Tripwires only arm in
-    // debug builds, hence the cfg guard.
-    #[cfg(debug_assertions)]
+    // crate's established failure-injection stand-in.
+    //
+    // PORT NOTE: formerly `#[cfg(debug_assertions)]`-gated on the belief that
+    // "tripwires only arm in debug builds". `rustty-vt` turns on
+    // `rustty-util`'s `tripwire-test` feature as a dev-dependency feature
+    // exactly so `Module::enabled()` is also true under `cargo test
+    // --release` (Zig's `builtin.is_test` holds at any optimize mode), so the
+    // gate only suppressed the test in release test builds.
     #[test]
     fn decode_allocation_failure() {
         use crate::snapshot::tw;

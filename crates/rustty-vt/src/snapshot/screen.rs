@@ -606,6 +606,9 @@ pub fn decode(
     // Build the native page list transactionally. Alternate screens never
     // retain scrollback, while primary screens inherit the caller's limits.
     let mut result: TerminalScreen = {
+        // tripwire seam: the PageList builder's own allocation.
+        #[cfg(test)]
+        super::tw::check(super::tw::SnapshotFp::Alloc).map_err(|_| DecodeError::OutOfMemory)?;
         let mut builder = Builder::init(pagelist::Options {
             max_size: if key == TerminalScreenKey::Alternate {
                 Some(0)
@@ -630,6 +633,10 @@ pub fn decode(
         let built: Result<pagelist::PageList, DecodeError> = (|| {
             for _ in 0..header.page_count {
                 let mut decoder = page::Decoder::init(&mut *source)?;
+                // tripwire seam: each decoded page's backing allocation.
+                #[cfg(test)]
+                super::tw::check(super::tw::SnapshotFp::Alloc)
+                    .map_err(|_| DecodeError::OutOfMemory)?;
                 let native_page = builder
                     .allocate_page(decoder.capacity())
                     .map_err(|_| DecodeError::OutOfMemory)?;
@@ -661,6 +668,12 @@ pub fn decode(
                            // SAFETY: `row_pin.node` is a live node of `pages`.
             let node_cols = unsafe { Node::cols(row_pin.node) };
             let x = header.cursor_x.min(node_cols - 1);
+            // tripwire seam: the cursor's tracked-pin allocation.
+            #[cfg(test)]
+            if super::tw::check(super::tw::SnapshotFp::Alloc).is_err() {
+                pages.deinit();
+                return Err(DecodeError::OutOfMemory);
+            }
             let pin: *mut Pin = match pages.track_pin(Pin {
                 node: row_pin.node,
                 x,

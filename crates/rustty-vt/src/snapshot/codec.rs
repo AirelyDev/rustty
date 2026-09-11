@@ -2583,26 +2583,59 @@ mod tests {
     //
     // PORT NOTE: `std.testing.FailingAllocator` sweeping EVERY allocation →
     // the SNAPSHOT_TW tripwire seam (the crate's failure-injection stand-in;
-    // see mod.rs), which covers the subsystem's instrumented decode
-    // allocations (terminal tabstops/pwd/title, continuation bytes,
-    // hyperlink entries). The sweep injects a failure at each instrumented
-    // index; runs past the last instrumented allocation decode successfully,
-    // mirroring the reference's recovered-allocation runs. Leak-freedom is
-    // proven by the Miri lane rather than the FailingAllocator's accounting.
-    // Tripwires only arm in debug builds, hence the cfg guard.
-    #[cfg(debug_assertions)]
+    // see mod.rs), which is instrumented at the subsystem's fallible decode
+    // allocations (the list is in `snapshot/mod.rs`'s `tw` doc comment). The
+    // sweep bound is the baseline run's reach count, the analogue of
+    // `FailingAllocator.alloc_index`; every index in it must actually trip.
+    // Leak-freedom is proven by the Miri lane rather than the
+    // FailingAllocator's accounting.
+    //
+    // PORT NOTE (parity S206-F1, closed under `PROCEDURE.md` blind-spot 1's
+    // carve-out): one decode allocation in this subsystem is still NOT
+    // instrumented — `snapshot/grid.rs`'s `Remap::init`, which the reference
+    // declares `Allocator.Error!Self` and the port made infallible. It lives in
+    // `snapshot/grid.zig`, outside this row's cited oracle anchors
+    // (`snapshot.zig:1626-1694`), and is tracked as N30 in
+    // `.port/parity-closure/NEW-FINDINGS.md`. The complete golden's pages carry
+    // empty style/hyperlink tables, so they take `Remap::empty()` and this sweep
+    // would not reach it even if it were instrumented.
+    //
+    // PORT NOTE: this test was previously `#[cfg(debug_assertions)]`-gated on
+    // the belief that "tripwires only arm in debug builds". That is wrong for
+    // this crate: `rustty-vt`'s dev-dependency turns on `rustty-util`'s
+    // `tripwire-test` feature precisely so `tripwire::Module::enabled()` is
+    // true in RELEASE test builds too (Zig's `builtin.is_test`, which holds at
+    // any optimize mode). The gate only suppressed the test under
+    // `cargo test --release`; the fail points themselves are `#[cfg(test)]`.
     #[test]
     fn complete_snapshot_decode_allocation_failures_are_transactional() {
         use crate::snapshot::tw;
 
-        fn exercise(bytes: &[u8]) {
+        fn exercise(bytes: &[u8], min_allocations: usize) {
+            // The baseline decode runs with no fail point armed; its reach
+            // count is this seam's `FailingAllocator.alloc_index`.
+            let _ = tw::take_reached();
             let mut baseline_source = io::FixedReader::new(bytes);
             let mut baseline_decoded =
                 decode(&mut baseline_source, Allocator, &test_decode_options()).unwrap();
             baseline_decoded.deinit(Allocator);
+            let allocation_count = tw::take_reached();
+            assert!(allocation_count > 0);
+            // PORT NOTE: `FailingAllocator` sees every allocation, so the
+            // reference's count needs no floor. This seam is OPT-IN, so a
+            // site that silently loses its `tw::check` would simply shrink
+            // the sweep and stay green. The floor is a one-way ratchet that
+            // makes such a loss RED; raise it when instrumentation is added,
+            // never lower it. See the instrumented sites listed in the
+            // `SnapshotFp` doc comment in `snapshot/mod.rs`.
+            assert!(
+                allocation_count >= min_allocations,
+                "instrumented decode allocations regressed: \
+                 {allocation_count} < {min_allocations}",
+            );
 
             let mut saw_out_of_memory = false;
-            for fail_index in 0..8usize {
+            for fail_index in 0..allocation_count {
                 tw::error_after(tw::SnapshotFp::Alloc, fail_index);
                 let mut source = io::FixedReader::new(bytes);
                 match decode(&mut source, Allocator, &test_decode_options()) {
@@ -2610,13 +2643,22 @@ mod tests {
                     Err(DecodeError::OutOfMemory) => saw_out_of_memory = true,
                     Err(err) => panic!("unexpected decode error: {err:?}"),
                 }
-                let _ = tw::end(rustty_util::tripwire::ResetMode::Reset);
+                // Every index below `allocation_count` must actually have
+                // tripped: this is what binds the sweep bound to the decode's
+                // real allocation behaviour instead of to a hardcoded number.
+                // `end` reports an UNTRIPPED expectation as an error.
+                assert_eq!(
+                    Ok(()),
+                    tw::end(rustty_util::tripwire::ResetMode::Reset),
+                    "fail point never tripped at fail_index={fail_index} \
+                     (allocation_count={allocation_count})",
+                );
             }
             assert!(saw_out_of_memory);
         }
 
         // The complete golden exercises Terminal, both screens, and history.
-        exercise(&test_complete_fixture());
+        exercise(&test_complete_fixture(), 15);
 
         // A non-ground component additionally exercises owned continuation
         // bytes.
@@ -2631,7 +2673,7 @@ mod tests {
             },
         )
         .unwrap();
-        exercise(encoded.written());
+        exercise(encoded.written(), 10);
 
         t.deinit(Allocator);
     }

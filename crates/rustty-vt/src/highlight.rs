@@ -169,9 +169,17 @@ impl Flattened {
         // PORT NOTE: the reference accumulates into a `std.MultiArrayList(PageChunk)`
         // (with an `errdefer result.deinit(alloc)`); the Rust `Vec<Chunk>` owns its
         // storage and frees on drop, so the errdefer is implicit.
+        //
+        // PORT NOTE: the reference's `try result.append(alloc, ...)` is FALLIBLE
+        // (`Allocator.Error!Flattened`). `Vec::push` is not — it aborts — so the
+        // growth is done through `try_reserve`, which is what makes the declared
+        // `Result` reachable instead of decorative.
         let mut result: Vec<Chunk> = Vec::new();
         let mut it = start.page_iterator(Direction::RightDown, Some(end));
         while let Some(chunk) = it.next() {
+            #[cfg(test)]
+            flattened_tw_check(FlattenedFp::Alloc)?;
+            result.try_reserve(1).map_err(|_| OutOfMemory)?;
             result.push(Chunk {
                 node: chunk.node,
                 serial: unsafe { (*chunk.node).serial },
@@ -182,6 +190,11 @@ impl Flattened {
         Ok(Flattened {
             chunks: result,
             top_x: start.x,
+            // PORT NOTE: the reference writes `.end_x = end.x` here, naming a field
+            // `Flattened` does not have (`bot_x`). That is a latent compile error the
+            // reference never hits because `Flattened.init` has no caller and Zig only
+            // analyses referenced functions. `bot_x` is the field `empty` and `clone`
+            // both use, so it is the intended one.
             bot_x: end.x,
         })
     }
@@ -197,7 +210,15 @@ impl Flattened {
     // because its fallible signature can't be the std `Clone::clone`.
     #[allow(clippy::should_implement_trait)]
     pub fn clone(&self) -> Result<Flattened, OutOfMemory> {
-        let mut chunks: Vec<Chunk> = Vec::with_capacity(self.chunks.len());
+        // PORT NOTE: `Vec::with_capacity` aborts on OOM, which would make the
+        // reference's `try self.chunks.clone(alloc)` unfailable here; the fallible
+        // `try_reserve_exact` preserves the reference's error path.
+        #[cfg(test)]
+        flattened_tw_check(FlattenedFp::Alloc)?;
+        let mut chunks: Vec<Chunk> = Vec::new();
+        chunks
+            .try_reserve_exact(self.chunks.len())
+            .map_err(|_| OutOfMemory)?;
         for c in &self.chunks {
             chunks.push(Chunk {
                 node: c.node,
@@ -261,3 +282,94 @@ impl Flattened {
 use List as _List;
 #[allow(unused_imports)]
 use PageChunk as _PageChunk;
+
+// PORT NOTE: tripwire fail-point enum + thread-local module standing in for the
+// reference tests' `std.testing.FailingAllocator` (the crate's established
+// failure-injection seam; see `stream_continuation.rs`'s `TRACKER_TW` PORT
+// NOTE). One point, `Alloc`, sits at `Flattened.init`'s per-chunk growth and
+// `Flattened.clone`'s reservation — the two sites the reference reaches with
+// `try`. Without it the declared `Allocator.Error` return is unreachable in the
+// port, because Rust's infallible `Vec` growth aborts instead of erroring.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum FlattenedFp {
+    Alloc,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FLATTENED_TW: core::cell::RefCell<
+        rustty_util::tripwire::Module<FlattenedFp, OutOfMemory>,
+    > = core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+#[cfg(test)]
+#[inline]
+fn flattened_tw_check(point: FlattenedFp) -> Result<(), OutOfMemory> {
+    FLATTENED_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kitty;
+    use crate::point;
+    use crate::screen::{Options, Screen};
+    use allocator_api2::alloc::Global as Allocator;
+    use rustty_util::tripwire::ResetMode;
+
+    fn arm() {
+        FLATTENED_TW.with(|tw| tw.borrow_mut().errorAlways(FlattenedFp::Alloc, OutOfMemory));
+    }
+
+    fn disarm() -> Result<(), rustty_util::tripwire::UntrippedError> {
+        FLATTENED_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset))
+    }
+
+    // PORT NOTE: net-new (highlight.zig declares no tests). It exists to prove
+    // that `Flattened.init`/`clone`'s declared `Allocator.Error` return is
+    // REACHABLE — before this, both were infallible in the port and the
+    // `Result` could only ever be `Ok` (parity row S155-F6).
+    #[test]
+    fn flattened_init_and_clone_propagate_out_of_memory() {
+        let mut s = Screen::init(
+            Allocator,
+            Options {
+                cols: 10,
+                rows: 3,
+                max_scrollback_bytes: Some(0),
+                max_scrollback_lines: None,
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .unwrap();
+
+        let start = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 0, y: 0 }))
+            .unwrap();
+        let end = s
+            .pages
+            .pin(point::Point::Active(point::Coordinate { x: 9, y: 2 }))
+            .unwrap();
+
+        // Unarmed: the same call succeeds and visits at least one chunk, so the
+        // failure below is about the allocation and not about an empty range.
+        let ok = Flattened::init(start.pin_copy(), end.pin_copy()).unwrap();
+        assert!(!ok.chunks.is_empty());
+
+        arm();
+        assert_eq!(
+            Err(OutOfMemory),
+            Flattened::init(start.pin_copy(), end.pin_copy()).map(|_| ()),
+        );
+        disarm().unwrap();
+
+        arm();
+        assert_eq!(Err(OutOfMemory), ok.clone().map(|_| ()));
+        disarm().unwrap();
+
+        s.deinit();
+    }
+}

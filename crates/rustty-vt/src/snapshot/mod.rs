@@ -236,8 +236,22 @@ pub mod io;
 /// tests' `std.testing.FailingAllocator` (the crate's established
 /// failure-injection seam; see `stream_continuation.rs`'s `TRACKER_TW`
 /// PORT NOTE). One point, `Alloc`, sits at the subsystem's fallible
-/// decode allocations (`continuation::decode`, `hyperlink::decode`, and
-/// `terminal::decode_payload`'s tabstops/pwd/title allocations).
+/// decode allocations. Unlike `FailingAllocator`, which sees every
+/// allocation, this seam is OPT-IN: the instrumented sites are
+///
+///   * `continuation::decode_alloc` — owned continuation bytes;
+///   * `hyperlink::decode_alloc` — owned hyperlink bytes;
+///   * `hyperlink::decode_page_string` — page string-allocator strings;
+///   * `terminal::decode_payload` — tab stops, pwd and title;
+///   * `terminal::decode` — `Terminal.init`, the alternate screen,
+///     `set_pwd` and `set_title`;
+///   * `screen::decode` — the PageList builder, each decoded page, and
+///     the cursor's tracked pin;
+///   * `history::decode_page` — each history page.
+///
+/// The transactionality sweep in `codec.rs` derives its bound from a
+/// baseline run's reach count and carries a FLOOR on that count, so
+/// dropping a site from this list turns that test red.
 #[cfg(test)]
 pub(crate) mod tw {
     use core::cell::RefCell;
@@ -257,8 +271,29 @@ pub(crate) mod tw {
         > = RefCell::new(rustty_util::tripwire::module());
     }
 
+    thread_local! {
+        /// Number of times any fail point in this module has been REACHED
+        /// since the last `reset_reached`, armed or not.
+        ///
+        /// PORT NOTE: stands in for `std.testing.FailingAllocator.alloc_index`,
+        /// which the reference's transactionality test reads to learn how many
+        /// allocations a clean decode performs before sweeping them. The
+        /// tripwire module itself keeps a per-point `reached` counter but does
+        /// not expose it, and it is a ported reference file — so the counter
+        /// lives here, in this crate-local stand-in, rather than diverging
+        /// `rustty-util::tripwire` from its oracle.
+        pub(crate) static SNAPSHOT_TW_REACHED: core::cell::Cell<usize> =
+            const { core::cell::Cell::new(0) };
+    }
+
+    /// Reset the reach counter and return its previous value.
+    pub(crate) fn take_reached() -> usize {
+        SNAPSHOT_TW_REACHED.with(|c| c.replace(0))
+    }
+
     #[inline]
     pub(crate) fn check(point: SnapshotFp) -> Result<(), OutOfMemory> {
+        SNAPSHOT_TW_REACHED.with(|c| c.set(c.get() + 1));
         SNAPSHOT_TW.with(|tw| tw.borrow_mut().check(point))
     }
 

@@ -1612,3 +1612,34 @@ here the ledger does not contradict the waiver, it *dates* it.
   residual is only a mis-typed pairing at authoring time, which the header comparison
   catches for every key whose value differs.
 - **state**: **CLOSED by task 15 fix round 1.**
+
+## N30 — `snapshot/grid.zig`'s `Remap.init` is fallible upstream and INFALLIBLE in the port, and no ALLOC row claims it
+
+- **id**: N30
+- **severity**: low (the reference's `Allocator.Error` path is unreachable in the port; on
+  real OOM the port aborts where the reference returns `error.OutOfMemory` and the whole
+  snapshot decode degrades)
+- **kind**: missing-error-path (the ALLOC family)
+- **where**: reference `src/terminal/snapshot/grid.zig:1523-1532`
+  (`fn Remap(comptime Id) type { pub fn init(alloc: Allocator) Allocator.Error!Self }` —
+  `try alloc.alloc(Id, capacity)` plus `try std.DynamicBitSetUnmanaged.initEmpty`);
+  port `crates/rustty-vt/src/snapshot/grid.rs:1833` `pub fn init() -> Remap`, whose
+  `vec![0u16; CAPACITY]` / `vec![0u64; CAPACITY / 64]` abort instead of erroring.
+  Reached from `snapshot/page.rs`'s `decode_payload_body` (two sites) whenever a decoded
+  page declares a non-empty style or hyperlink table; `PayloadDecodeError::OutOfMemory`
+  already exists there, so the error has somewhere to go.
+- **why it is filed rather than folded into S206-F1**: `S206-F1` cites
+  `src/terminal/snapshot/snapshot.zig:1626-1694` — the transactionality TEST — and task 16
+  restored that test's shape and instrumented the decode allocation sites the row names
+  (`PROCEDURE.md` blind-spot 1 carve-out: the leftover falls outside the row's cited oracle
+  anchors, so it gets its own tracked entry instead of living in a closed row's footnote).
+  `Remap.init` is in a different reference file that no ALLOC row cites. The complete
+  golden fixture's pages declare empty style/hyperlink tables, so they take the `empty()`
+  branch and allocate nothing — the sweep's count is unaffected either way, which is
+  exactly why this could sit unnoticed.
+- **fix**: make `Remap::init` return `Result<Remap, OutOfMemory>` via `try_reserve_exact`,
+  add the `snapshot::tw::SnapshotFp::Alloc` check in front of it, propagate at
+  `decode_payload_body`'s two call sites, and raise the transactionality test's
+  `min_allocations` floor with a fixture whose pages carry styles. 26 call sites, 24 of
+  them in `grid.rs`'s own tests.
+- **state**: **OPEN** — not attempted by task 16.
