@@ -546,10 +546,6 @@ mod tests {
     ///
     /// PORT NOTE (WS7 B10 convention): tripwire injection is compiled out when
     /// `debug_assertions` is off, so this test is ignored under `--release`.
-    #[cfg_attr(
-        not(debug_assertions),
-        ignore = "tripwire failure injection is disabled without debug_assertions"
-    )]
     #[test]
     fn compressed_page_reports_a_failed_encoded_allocation() {
         use rustty_util::tripwire::ResetMode;

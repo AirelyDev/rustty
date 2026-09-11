@@ -18,12 +18,14 @@
 #                    the absence of the dev-only trees .gitattributes marks
 #                    export-ignore. ~15s.
 #   RUSTTY_DISTCHECK=1
-#                    additionally `xtask distcheck`, which extracts the tarball
-#                    and runs its TEST SUITE there (parity S63-F8)
-#                    and BUILDS it. That is a cold full-workspace build, far
-#                    too slow to put in front of every local ci.sh run, so it
-#                    is opt-in and CI turns it on for one leg. When it is off
-#                    the gate says so by name — it never counts as green.
+#                    additionally `xtask distcheck`, which extracts the tarball,
+#                    BUILDS it and then RUNS ITS TEST SUITE there — the
+#                    reference's check step is `zig build test` inside the
+#                    extracted directory (parity S63-F8). That is a cold
+#                    full-workspace build AND test run, far too slow to put in
+#                    front of every local ci.sh run, so it is opt-in and CI
+#                    turns it on for one leg. When it is off the gate says so
+#                    by name — it never counts as green.
 #
 # Exit contract (`.port/tools/CI.md`): 0 = pass, 1 = red, 3 = BLOCKED.
 set -uo pipefail

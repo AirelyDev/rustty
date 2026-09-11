@@ -7106,17 +7106,22 @@ mod tests {
     // set_title/set_pwd allocation-failure tests (WS8 T5). Mirrors the
     // tabstops.rs `RESIZE_TW` usage exactly.
     #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    // P3-W5 repair: the seam this test drives (`SET_STRING_TW`, `SetStringFp`,
-    // `set_string_tw_*`) is itself `#[cfg(debug_assertions)]`, so an `ignore`
-    // attribute is not enough — the test would not COMPILE in release, which is
-    // what broke `cargo test -p rustty-vt --release` on `main`. Gate the test
-    // out entirely; it still runs and passes in debug.
-    #[cfg(debug_assertions)]
+    // WS18 release lane (CORRECTED — fix round 1 of parity S166-F2): the sentence
+    // that used to stand here, "`tripwire::Module::enabled()` is
+    // `cfg!(debug_assertions)`", is FALSE and had this test `#[ignore]`d in
+    // release for a reason that did not exist. `enabled()` is
+    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and
+    // rustty-vt turns `rustty-util/tripwire-test` on as a dev-dependency feature
+    // precisely so this crate's fail points trip in the RELEASE test lane too —
+    // which is what Zig's `builtin.is_test` does at every optimize mode. Verified:
+    // this test RUNS and PASSES under `cargo test -p rustty-vt --release`.
+    // The P3-W5 repair that used to sit here gated the TEST out of release with
+    // `#[cfg(debug_assertions)]`, because the seam it drives (`SET_STRING_TW`,
+    // `SetStringFp`, `set_string_tw_*`) was itself `#[cfg(debug_assertions)]`
+    // and an `ignore` would still have to compile. That was treating the
+    // symptom: the seam's gate is now
+    // `cfg(any(test, debug_assertions, feature = "tripwire-test"))`, so both
+    // the seam and this test exist under `cargo test -p rustty-vt --release`.
     fn terminal_set_string_tripwire_seam_arms_and_resets() {
         SET_STRING_TW.with(|tw| {
             tw.borrow_mut()
@@ -7133,17 +7138,22 @@ mod tests {
 
     // test "Terminal: setPwd preserves a sentinel on allocation failure"
     #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    // P3-W5 repair: the seam this test drives (`SET_STRING_TW`, `SetStringFp`,
-    // `set_string_tw_*`) is itself `#[cfg(debug_assertions)]`, so an `ignore`
-    // attribute is not enough — the test would not COMPILE in release, which is
-    // what broke `cargo test -p rustty-vt --release` on `main`. Gate the test
-    // out entirely; it still runs and passes in debug.
-    #[cfg(debug_assertions)]
+    // WS18 release lane (CORRECTED — fix round 1 of parity S166-F2): the sentence
+    // that used to stand here, "`tripwire::Module::enabled()` is
+    // `cfg!(debug_assertions)`", is FALSE and had this test `#[ignore]`d in
+    // release for a reason that did not exist. `enabled()` is
+    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and
+    // rustty-vt turns `rustty-util/tripwire-test` on as a dev-dependency feature
+    // precisely so this crate's fail points trip in the RELEASE test lane too —
+    // which is what Zig's `builtin.is_test` does at every optimize mode. Verified:
+    // this test RUNS and PASSES under `cargo test -p rustty-vt --release`.
+    // The P3-W5 repair that used to sit here gated the TEST out of release with
+    // `#[cfg(debug_assertions)]`, because the seam it drives (`SET_STRING_TW`,
+    // `SetStringFp`, `set_string_tw_*`) was itself `#[cfg(debug_assertions)]`
+    // and an `ignore` would still have to compile. That was treating the
+    // symptom: the seam's gate is now
+    // `cfg(any(test, debug_assertions, feature = "tripwire-test"))`, so both
+    // the seam and this test exist under `cargo test -p rustty-vt --release`.
     fn terminal_set_pwd_preserves_a_sentinel_on_allocation_failure() {
         let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
 
@@ -7195,17 +7205,22 @@ mod tests {
 
     // test "Terminal: setTitle preserves a sentinel on allocation failure"
     #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    // P3-W5 repair: the seam this test drives (`SET_STRING_TW`, `SetStringFp`,
-    // `set_string_tw_*`) is itself `#[cfg(debug_assertions)]`, so an `ignore`
-    // attribute is not enough — the test would not COMPILE in release, which is
-    // what broke `cargo test -p rustty-vt --release` on `main`. Gate the test
-    // out entirely; it still runs and passes in debug.
-    #[cfg(debug_assertions)]
+    // WS18 release lane (CORRECTED — fix round 1 of parity S166-F2): the sentence
+    // that used to stand here, "`tripwire::Module::enabled()` is
+    // `cfg!(debug_assertions)`", is FALSE and had this test `#[ignore]`d in
+    // release for a reason that did not exist. `enabled()` is
+    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and
+    // rustty-vt turns `rustty-util/tripwire-test` on as a dev-dependency feature
+    // precisely so this crate's fail points trip in the RELEASE test lane too —
+    // which is what Zig's `builtin.is_test` does at every optimize mode. Verified:
+    // this test RUNS and PASSES under `cargo test -p rustty-vt --release`.
+    // The P3-W5 repair that used to sit here gated the TEST out of release with
+    // `#[cfg(debug_assertions)]`, because the seam it drives (`SET_STRING_TW`,
+    // `SetStringFp`, `set_string_tw_*`) was itself `#[cfg(debug_assertions)]`
+    // and an `ignore` would still have to compile. That was treating the
+    // symptom: the seam's gate is now
+    // `cfg(any(test, debug_assertions, feature = "tripwire-test"))`, so both
+    // the seam and this test exist under `cargo test -p rustty-vt --release`.
     fn terminal_set_title_preserves_a_sentinel_on_allocation_failure() {
         let mut t = Terminal::init(Global, opts(5, 1)).unwrap();
 
@@ -18920,7 +18935,10 @@ mod tests {
     // `debug_assertions` is off — faithful to the reference's
     // `build_options.slow_runtime_safety`, under which the oracle's test only
     // exists. Debug-only; it still runs and passes there.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "DEBUG-ONLY BY DESIGN, and this reason was MEASURED (fix round 1 of parity S166-F2): this test drives the slow-runtime-safety mechanism — `PageList::assert_integrity` / `pin_is_valid` — which the port compiles out when `debug_assertions` is off, faithful to the reference's `build_options.slow_runtime_safety`, under which the oracle's counterpart only exists. It is NOT ignored because of the tripwire gate (that claim was false and is gone): un-ignoring it turns the release lane RED, which is why it stays."
+    )]
     fn terminal_full_reset_tracked_pins() {
         let mut t = Terminal::init(Global, opts(80, 80)).unwrap();
 
@@ -19217,12 +19235,15 @@ mod tests {
 
     // test "Terminal: resize preserves tabstops on allocation failure"
     #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // WS18 release lane (CORRECTED — fix round 1 of parity S166-F2): the sentence
+    // that used to stand here, "`tripwire::Module::enabled()` is
+    // `cfg!(debug_assertions)`", is FALSE and had this test `#[ignore]`d in
+    // release for a reason that did not exist. `enabled()` is
+    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and
+    // rustty-vt turns `rustty-util/tripwire-test` on as a dev-dependency feature
+    // precisely so this crate's fail points trip in the RELEASE test lane too —
+    // which is what Zig's `builtin.is_test` does at every optimize mode. Verified:
+    // this test RUNS and PASSES under `cargo test -p rustty-vt --release`.
     fn terminal_resize_preserves_tabstops_on_allocation_failure() {
         let alloc = Global;
         let mut t = Terminal::init(alloc, opts(10, 1)).unwrap();
@@ -19266,13 +19287,16 @@ mod tests {
     //                     primary already resized, so the resize SUCCEEDS and
     //                     the inactive alternate is dropped instead.
     //
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
+    // WS18 release lane (CORRECTED — fix round 1 of parity S166-F2): the sentence
+    // that used to stand here, "`tripwire::Module::enabled()` is
+    // `cfg!(debug_assertions)`", is FALSE and had this test `#[ignore]`d in
+    // release for a reason that did not exist. `enabled()` is
+    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and
+    // rustty-vt turns `rustty-util/tripwire-test` on as a dev-dependency feature
+    // precisely so this crate's fail points trip in the RELEASE test lane too —
+    // which is what Zig's `builtin.is_test` does at every optimize mode. Verified:
+    // this test RUNS and PASSES under `cargo test -p rustty-vt --release`.
     #[test]
-    #[cfg_attr(not(debug_assertions), ignore)]
     fn terminal_resize_failure_paths_preserve_consistent_state() {
         let alloc = Global;
 
@@ -19494,7 +19518,6 @@ mod tests {
     //
     // WS18 release lane: tripwire fail point; see the PORT NOTE above.
     #[test]
-    #[cfg_attr(not(debug_assertions), ignore)]
     fn terminal_alternate_resize_failure_replaces_active_alternate_screen() {
         let alloc = Global;
         let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
@@ -19556,7 +19579,6 @@ mod tests {
     //
     // WS18 release lane: tripwire fail point; see the PORT NOTE above.
     #[test]
-    #[cfg_attr(not(debug_assertions), ignore)]
     fn terminal_alternate_resize_replacement_failure_falls_back_to_primary() {
         let alloc = Global;
         let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();

@@ -7463,11 +7463,6 @@ mod tests {
 
     // test "stream: continuation lifecycle"
     #[test]
-    #[cfg_attr(
-        not(debug_assertions),
-        ignore = "the FailingAllocator arm needs the TRACKER_TW tripwire, which \
-                  (like Zig's builtin.is_test gate) is debug-only"
-    )]
     fn stream_continuation_lifecycle() {
         let mut disabled: Stream<ContinuationTestHandler> =
             Stream::init(Options::with_handler(ContinuationTestHandler::default()));
@@ -7968,11 +7963,6 @@ mod tests {
 
     // test "stream: continuation allocation failure recovers"
     #[test]
-    #[cfg_attr(
-        not(debug_assertions),
-        ignore = "needs the TRACKER_TW tripwire (the FailingAllocator stand-in), \
-                  which is debug-only"
-    )]
     fn stream_continuation_allocation_failure_recovers() {
         #[cfg(debug_assertions)]
         {

@@ -605,12 +605,15 @@ mod tests {
 
     // test "Tabstops: resize alloc failure preserves state"
     #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // WS18 release lane (CORRECTED — fix round 1 of parity S166-F2): the sentence
+    // that used to stand here, "`tripwire::Module::enabled()` is
+    // `cfg!(debug_assertions)`", is FALSE and had this test `#[ignore]`d in
+    // release for a reason that did not exist. `enabled()` is
+    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and
+    // rustty-vt turns `rustty-util/tripwire-test` on as a dev-dependency feature
+    // precisely so this crate's fail points trip in the RELEASE test lane too —
+    // which is what Zig's `builtin.is_test` does at every optimize mode. Verified:
+    // this test RUNS and PASSES under `cargo test -p rustty-vt --release`.
     fn tabstops_resize_alloc_failure_preserves_state() {
         use rustty_util::tripwire::ResetMode;
 

@@ -866,8 +866,11 @@ mod tests {
     // `build_options.slow_runtime_safety`, under which the oracle's test only
     // exists. Debug-only; it still runs and passes there. (Same convention as
     // `terminal_full_reset_tracked_pins`.)
-    #[cfg_attr(not(debug_assertions), ignore)]
     #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "DEBUG-ONLY BY DESIGN, and this reason was MEASURED (fix round 1 of parity S166-F2): this test drives the slow-runtime-safety mechanism — `PageList::assert_integrity` / `pin_is_valid` — which the port compiles out when `debug_assertions` is off, faithful to the reference's `build_options.slow_runtime_safety`, under which the oracle's counterpart only exists. It is NOT ignored because of the tripwire gate (that claim was false and is gone): un-ignoring it turns the release lane RED, which is why it stays."
+    )]
     fn feed_keeps_its_tracked_pin_within_a_shorter_page() {
         use crate::pagelist::{Node as PlNode, PageList, Pin};
         // PORT NOTE: 80 cols instead of the reference's 10. The property under

@@ -4467,7 +4467,6 @@ mod tests {
     //
     // WS18 release lane: tripwire fail point; see the SET_STRING_TW PORT NOTE.
     #[test]
-    #[cfg_attr(not(debug_assertions), ignore)]
     fn semantic_failure_is_not_set_by_a_color_operation_failure() {
         // (a) Baseline: the arm IS reached and DOES produce a response, so the
         //     failure injected in (b) is landing on a live code path. (Without

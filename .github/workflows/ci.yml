@@ -158,8 +158,10 @@ jobs:
       # wrong for a repo checkout, where a vanished corpus would quietly retire
       # 4,001 replays. RUSTTY_REQUIRE_FUZZ_CORPUS=1 flips that skip into a hard
       # failure on every leg that HAS the repo (the same device as the two
-      # variables above). Env setup, not a check — the check sequence stays
-      # solely in ci.sh.
+      # variables above). This step covers the `test` matrix job (Ubuntu +
+      # macOS); the `windows` job below arms it separately because it is a
+      # different job with its own env and its own shell. Env setup, not a
+      # check — the check sequence stays solely in ci.sh.
       - name: Require the mirrored fuzz corpus (repo checkouts, parity S63-F8)
         run: echo "RUSTTY_REQUIRE_FUZZ_CORPUS=1" >> "$GITHUB_ENV"
 
@@ -357,6 +359,19 @@ jobs:
             target
           key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: windows-cargo-
+
+      # parity S63-F8, fix round 1: this leg runs rustty-vt's tests, which
+      # include the five corpus replays, and it is a repo checkout like every
+      # other leg — so it must arm the same guard. It was the one job that did
+      # not, which is harmless only for as long as the corpus happens to be
+      # present, and a guard whose entire purpose is to not depend on that is
+      # the wrong place to be unarmed. Env setup, not a check — the check
+      # sequence stays solely in ci.sh.
+      - name: Require the mirrored fuzz corpus (repo checkout, parity S63-F8)
+        # Explicit, like the `test_dll_init` step below: this job's other steps
+        # are bare `cargo` invocations that do not care which shell runs them.
+        shell: pwsh
+        run: echo "RUSTTY_REQUIRE_FUZZ_CORPUS=1" >> $env:GITHUB_ENV
 
       # The reference's `zig build test-lib-vt` on its Windows runner. This is
       # the first time the VT test suite has EXECUTED on Windows — the

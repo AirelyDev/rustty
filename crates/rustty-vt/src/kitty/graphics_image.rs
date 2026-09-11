@@ -2338,6 +2338,18 @@ mod tests {
             data: rel_path.as_bytes().to_vec(),
         };
 
+        // The scratch directory is removed on EVERY exit, including a panic —
+        // a bare `remove_dir_all` at the end leaks it whenever an assertion
+        // below fails, and this one lives under `target/`, where it would then
+        // persist across runs.
+        struct Scratch(String);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _scratch = Scratch(rel_dir.clone());
+
         let mut loading = LoadingImage::init(
             &cmd,
             &Limits {
@@ -2349,8 +2361,6 @@ mod tests {
         .unwrap();
         let img = loading.complete().unwrap();
         assert!(img.compression == command::Compression::None);
-
-        std::fs::remove_dir_all(&rel_dir).unwrap();
     }
 
     // test "image load: regular file size reads exactly requested bytes"

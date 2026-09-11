@@ -2725,12 +2725,15 @@ mod tests {
         ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): out of budget in the debug-assertions-ON G6 lane, and NOT rescuable by the G6c debug-assertions-off lane — this test drives a `debug_assertions`-only mechanism and is already `cfg_attr(not(debug_assertions), ignore)`, so turning the assertions off makes it inert rather than fast. Covered natively + by ASan."
     )]
     #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // WS18 release lane (CORRECTED — fix round 1 of parity S166-F2): the sentence
+    // that used to stand here, "`tripwire::Module::enabled()` is
+    // `cfg!(debug_assertions)`", is FALSE and had this test `#[ignore]`d in
+    // release for a reason that did not exist. `enabled()` is
+    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and
+    // rustty-vt turns `rustty-util/tripwire-test` on as a dev-dependency feature
+    // precisely so this crate's fail points trip in the RELEASE test lane too —
+    // which is what Zig's `builtin.is_test` does at every optimize mode. Verified:
+    // this test RUNS and PASSES under `cargo test -p rustty-vt --release`.
     fn reload_active_partial_history_cleanup_on_append_slice_error() {
         // This test verifies that when reloadActive fails at appendSlice (after
         // the loop), all FlattenedHighlight items are properly cleaned up.
@@ -2797,12 +2800,15 @@ mod tests {
         ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): out of budget in the debug-assertions-ON G6 lane, and NOT rescuable by the G6c debug-assertions-off lane — this test drives a `debug_assertions`-only mechanism and is already `cfg_attr(not(debug_assertions), ignore)`, so turning the assertions off makes it inert rather than fast. Covered natively + by ASan."
     )]
     #[test]
-    // WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-    // fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-    // faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-    // `debug_assertions` the fail point never trips, so the test can only run in
-    // debug — where it still runs and passes. NOT disabled to hide a failure.
-    #[cfg_attr(not(debug_assertions), ignore)]
+    // WS18 release lane (CORRECTED — fix round 1 of parity S166-F2): the sentence
+    // that used to stand here, "`tripwire::Module::enabled()` is
+    // `cfg!(debug_assertions)`", is FALSE and had this test `#[ignore]`d in
+    // release for a reason that did not exist. `enabled()` is
+    // `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and
+    // rustty-vt turns `rustty-util/tripwire-test` on as a dev-dependency feature
+    // precisely so this crate's fail points trip in the RELEASE test lane too —
+    // which is what Zig's `builtin.is_test` does at every optimize mode. Verified:
+    // this test RUNS and PASSES under `cargo test -p rustty-vt --release`.
     fn reload_active_partial_history_cleanup_on_loop_append_error() {
         // This test verifies that when reloadActive fails inside the loop
         // (after some items have been appended), all FlattenedHighlight items

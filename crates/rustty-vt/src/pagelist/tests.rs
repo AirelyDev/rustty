@@ -138,12 +138,15 @@ fn pagelist() {
 
 // ref: test "PageList init error"
 #[test]
-// WS18 release lane: this test injects a failure through a `rustty_util::tripwire`
-// fail point, and `tripwire::Module::enabled()` is `cfg!(debug_assertions)` (the
-// faithful stand-in for Zig's `builtin.is_test`; see its PORT NOTE). Without
-// `debug_assertions` the fail point never trips, so the test can only run in
-// debug — where it still runs and passes. NOT disabled to hide a failure.
-#[cfg_attr(not(debug_assertions), ignore)]
+// WS18 release lane (CORRECTED — fix round 1 of parity S166-F2): the sentence
+// that used to stand here, "`tripwire::Module::enabled()` is
+// `cfg!(debug_assertions)`", is FALSE and had this test `#[ignore]`d in
+// release for a reason that did not exist. `enabled()` is
+// `cfg!(any(test, debug_assertions, feature = "tripwire-test"))`, and
+// rustty-vt turns `rustty-util/tripwire-test` on as a dev-dependency feature
+// precisely so this crate's fail points trip in the RELEASE test lane too —
+// which is what Zig's `builtin.is_test` does at every optimize mode. Verified:
+// this test RUNS and PASSES under `cargo test -p rustty-vt --release`.
 fn pagelist_init_error() {
     use super::{InitFp, InitPagesFp, OutOfMemory, INIT_PAGES_TW, INIT_TW};
     use rustty_util::tripwire::ResetMode;
@@ -2740,10 +2743,6 @@ fn pagelist_compress_page_rejects_an_already_compressed_node() {
 /// ignored there rather than left to fail (the other tripwire tests in this file
 /// predate that convention and are part of the known-red `--release` set).
 #[cfg_attr(
-    not(debug_assertions),
-    ignore = "tripwire failure injection is disabled without debug_assertions"
-)]
-#[cfg_attr(
     miri,
     ignore = "MIRI EXCEPTION (.port/phase-2/MIRI_EXCEPTIONS.md, 'WS19 T6 — the two-lane re-measurement'): out of budget in the debug-assertions-ON G6 lane, and NOT rescuable by the G6c debug-assertions-off lane — this test drives a `debug_assertions`-only mechanism and is already `cfg_attr(not(debug_assertions), ignore)`, so turning the assertions off makes it inert rather than fast. Covered natively + by ASan."
 )]
@@ -3799,10 +3798,6 @@ fn pagelist_incremental_compression_advances_after_failure() {
 /// `debug_assertions` is off, so this test is inert under `--release` and is
 /// ignored there rather than left to fail — same convention as
 /// `pagelist_compress_page_decommit_failure_leaves_the_page_resident`.
-#[cfg_attr(
-    not(debug_assertions),
-    ignore = "tripwire failure injection is disabled without debug_assertions"
-)]
 #[test]
 fn pagelist_incremental_compression_advances_after_decommit_failure() {
     use rustty_util::tripwire::ResetMode;
@@ -4334,10 +4329,6 @@ fn pagelist_oversized_page_is_heap_owned() {
 /// PORT NOTE (WS7 B10 convention): tripwire injection is compiled out when
 /// `debug_assertions` is off, so this test is ignored under `--release` rather
 /// than left to fail.
-#[cfg_attr(
-    not(debug_assertions),
-    ignore = "tripwire failure injection is disabled without debug_assertions"
-)]
 #[test]
 fn pagelist_incremental_compression_advances_after_allocation_failure() {
     use rustty_util::tripwire::ResetMode;
@@ -5449,7 +5440,10 @@ fn pagelist_split_preserves_styled_cells() {
 // `debug_assertions` is off — faithful to the reference's
 // `build_options.slow_runtime_safety`, under which the oracle's test only
 // exists. Debug-only; it still runs and passes there.
-#[cfg_attr(not(debug_assertions), ignore)]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "DEBUG-ONLY BY DESIGN, and this reason was MEASURED (fix round 1 of parity S166-F2): this test drives the slow-runtime-safety mechanism — `PageList::assert_integrity` / `pin_is_valid` — which the port compiles out when `debug_assertions` is off, faithful to the reference's `build_options.slow_runtime_safety`, under which the oracle's counterpart only exists. It is NOT ignored because of the tripwire gate (that claim was false and is gone): un-ignoring it turns the release lane RED, which is why it stays."
+)]
 fn pagelist_erase_row_error_path_runs_integrity_gate() {
     let mut s = PageList::init(Options {
         max_size: Some(0),
@@ -6883,12 +6877,15 @@ fn pagelist_enforce_limit_marks_activity_and_preserves_continuation() {
 // the active-boundary page) behind `pause_integrity_checks` and asserts the
 // check fires. Requires `debug_assertions`: `verify_integrity` is a no-op
 // without them.
-#[cfg_attr(not(debug_assertions), ignore)]
 #[cfg_attr(
     all(miri, debug_assertions),
     ignore = "MIRI EXCEPTION — NO G6c ESCAPE (.port/phase-2/MIRI_EXCEPTIONS.md, 'no G6c escape valve exists'): this test is ALSO `#[cfg_attr(not(debug_assertions), ignore)]` above, so it cannot run in the `-C debug-assertions=off` G6c lane either — unlike the WS19 T6 compression family, there is no lane where this test both runs AND asserts something non-vacuous. Root cause: `s.grow_rows(page_rows)` builds a 594-row page one row at a time, and `debug_assertions` runs a page-level `assert_integrity` per row — O(current page size) each call, O(n^2) total. Confirmed slow-not-UB across multiple single-worker Miri runs (sustained `ub=0` past 180-240s before being stopped). See the referenced note for the fixture change (already applied to the sibling `viewport_pin_not_in_list` test) that would close this."
 )]
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "DEBUG-ONLY BY DESIGN, and this reason was MEASURED (fix round 1 of parity S166-F2): this test drives the slow-runtime-safety mechanism — `PageList::assert_integrity` / `pin_is_valid` — which the port compiles out when `debug_assertions` is off, faithful to the reference's `build_options.slow_runtime_safety`, under which the oracle's counterpart only exists. It is NOT ignored because of the tripwire gate (that claim was false and is gone): un-ignoring it turns the release lane RED, which is why it stays."
+)]
 fn pagelist_integrity_detects_max_lines_exceeded() {
     let cols: size::CellCountInt = 80;
     let page_rows: usize = PageList::initial_capacity(cols).rows as usize;
@@ -6945,8 +6942,11 @@ fn pagelist_integrity_detects_max_lines_exceeded() {
 // integrity checks paused (the same technique
 // `pagelist_integrity_detects_max_lines_exceeded` uses), then confirm both
 // the error variant and the restored `log.warn` diagnostic.
-#[cfg_attr(not(debug_assertions), ignore)]
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "DEBUG-ONLY BY DESIGN, and this reason was MEASURED (fix round 1 of parity S166-F2): this test drives the slow-runtime-safety mechanism — `PageList::assert_integrity` / `pin_is_valid` — which the port compiles out when `debug_assertions` is off, faithful to the reference's `build_options.slow_runtime_safety`, under which the oracle's counterpart only exists. It is NOT ignored because of the tripwire gate (that claim was false and is gone): un-ignoring it turns the release lane RED, which is why it stays."
+)]
 fn pagelist_integrity_detects_total_rows_mismatch() {
     let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(10).unwrap();
@@ -6981,8 +6981,11 @@ fn pagelist_integrity_detects_total_rows_mismatch() {
 // (PageList.zig:820-823). Bumping `page_serial_epoch` past every existing
 // node's `serial` (paused, as above) reproduces the violation without
 // corrupting anything the reference doesn't itself guard against.
-#[cfg_attr(not(debug_assertions), ignore)]
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "DEBUG-ONLY BY DESIGN, and this reason was MEASURED (fix round 1 of parity S166-F2): this test drives the slow-runtime-safety mechanism — `PageList::assert_integrity` / `pin_is_valid` — which the port compiles out when `debug_assertions` is off, faithful to the reference's `build_options.slow_runtime_safety`, under which the oracle's counterpart only exists. It is NOT ignored because of the tripwire gate (that claim was false and is gone): un-ignoring it turns the release lane RED, which is why it stays."
+)]
 fn pagelist_integrity_detects_page_serial_predates_epoch() {
     let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(10).unwrap();
@@ -7025,8 +7028,11 @@ fn pagelist_integrity_detects_page_serial_predates_epoch() {
 // PageList.zig:845-848 — "viewport pin not in list". Point `viewport_pin` at
 // a node this list doesn't own so the scan in `verify_integrity` never finds
 // it.
-#[cfg_attr(not(debug_assertions), ignore)]
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "DEBUG-ONLY BY DESIGN, and this reason was MEASURED (fix round 1 of parity S166-F2): this test drives the slow-runtime-safety mechanism — `PageList::assert_integrity` / `pin_is_valid` — which the port compiles out when `debug_assertions` is off, faithful to the reference's `build_options.slow_runtime_safety`, under which the oracle's counterpart only exists. It is NOT ignored because of the tripwire gate (that claim was false and is gone): un-ignoring it turns the release lane RED, which is why it stays."
+)]
 fn pagelist_integrity_detects_viewport_pin_not_in_list() {
     // Growing a page one row at a time (`grow_rows`) runs a full page-level
     // `assert_integrity` PER ROW under `debug_assertions` — O(current page
@@ -7119,8 +7125,11 @@ fn pagelist_integrity_detects_viewport_pin_not_in_list() {
 // PageList.zig:871-874 — "viewport pin offset mismatch". The pin IS in the
 // list, but the cached `viewport_pin_row_offset` no longer matches the
 // scan's recomputed offset.
-#[cfg_attr(not(debug_assertions), ignore)]
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "DEBUG-ONLY BY DESIGN, and this reason was MEASURED (fix round 1 of parity S166-F2): this test drives the slow-runtime-safety mechanism — `PageList::assert_integrity` / `pin_is_valid` — which the port compiles out when `debug_assertions` is off, faithful to the reference's `build_options.slow_runtime_safety`, under which the oracle's counterpart only exists. It is NOT ignored because of the tripwire gate (that claim was false and is gone): un-ignoring it turns the release lane RED, which is why it stays."
+)]
 fn pagelist_integrity_detects_viewport_pin_offset_mismatch() {
     let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(20).unwrap();
@@ -7163,8 +7172,11 @@ fn pagelist_integrity_detects_viewport_pin_offset_mismatch() {
 // PageList.zig:880-883 — "viewport pin rows too small". The recomputed
 // offset is correct, but `self.rows` (the active-area height) has been
 // inflated past what's left of the scrollback below the pin.
-#[cfg_attr(not(debug_assertions), ignore)]
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "DEBUG-ONLY BY DESIGN, and this reason was MEASURED (fix round 1 of parity S166-F2): this test drives the slow-runtime-safety mechanism — `PageList::assert_integrity` / `pin_is_valid` — which the port compiles out when `debug_assertions` is off, faithful to the reference's `build_options.slow_runtime_safety`, under which the oracle's counterpart only exists. It is NOT ignored because of the tripwire gate (that claim was false and is gone): un-ignoring it turns the release lane RED, which is why it stays."
+)]
 fn pagelist_integrity_detects_viewport_pin_insufficient_rows() {
     let mut s = PageList::init(Options::new(80, 24)).unwrap();
     s.grow_rows(20).unwrap();
@@ -17265,10 +17277,6 @@ fn pagelist_builder_validates_the_finished_list() {
 // injection is compiled out without `debug_assertions`, so the test is inert
 // under `--release` and ignored there — same convention as
 // `pagelist_init_error`. NOT disabled to hide a failure.
-#[cfg_attr(
-    not(debug_assertions),
-    ignore = "tripwire failure injection is disabled without debug_assertions"
-)]
 fn pagelist_builder_finish_is_transactional_on_allocation_failure() {
     use super::builder::{FinishError, FinishFp, FINISH_TW};
     use super::{Builder, OutOfMemory};
@@ -17603,10 +17611,6 @@ fn pagelist_page_allocation_rejects_limits_before_modifying_the_destination() {
 // reference deliberately tolerates with its 64-iteration bound. Ignored
 // without `debug_assertions` (tripwire compiled out), same convention as
 // `pagelist_init_error`.
-#[cfg_attr(
-    not(debug_assertions),
-    ignore = "tripwire failure injection is disabled without debug_assertions"
-)]
 fn pagelist_page_allocation_allocation_failure_leaves_list_unchanged() {
     use super::builder::{AllocatePageFp, ALLOCATE_PAGE_TW};
     use super::{OutOfMemory, PageAllocation, PAGE_PREHEAT};
