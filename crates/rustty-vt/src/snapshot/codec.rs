@@ -2631,11 +2631,21 @@ mod tests {
     // failure keeps this test green. The reach count is unchanged, so the floor
     // is satisfied; the fail point still trips, so the per-index assertion is
     // satisfied; and `saw_out_of_memory` is satisfied by any other site.
-    // Asserting `Err` at every index would catch it, but the reference
-    // deliberately permits `Ok` — `hyperlink::decode_page_string`'s caller
-    // degrades to `Ok(0)` instead of propagating, exactly as the reference's
-    // `decodePageString` does — so that assertion would be a divergence. The
-    // reference's own test has the same blind spot.
+    // Asserting `Err` at every index would catch it, but the reference test
+    // deliberately permits `Ok`, so that assertion would be a divergence. The
+    // reference's own test has the same blind spot
+    // (`.port/parity-closure/UPSTREAM-DEFECTS.md` UD17).
+    //
+    // CORRECTION (task R13-R): this note used to give the reason as
+    // `decodePageString`'s degrade to `Ok(0)`. That site allocates from the
+    // page's own string allocator (`snapshot/hyperlink.zig`,
+    // `page.string_alloc.alloc`), which the reference test's `FailingAllocator`
+    // never sees. The reference site that can turn a failing heap allocation
+    // into `Ok` is `decodeCursorHyperlink` (`snapshot/screen.zig:1117-1140`,
+    // `error.OutOfMemory` → no cursor hyperlink). In this port the seam ALSO
+    // arms `hyperlink::decode_page_string` (its caller degrades to `Ok(0)` as
+    // the reference does on `StringsOutOfMemory`), which is a second way to
+    // reach `Ok` here. Either way the conclusion stands.
     //
     // PORT NOTE: this test was previously `#[cfg(debug_assertions)]`-gated on
     // the belief that "tripwires only arm in debug builds". That is wrong for

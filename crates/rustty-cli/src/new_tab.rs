@@ -110,11 +110,16 @@ pub struct Options {
     // _working_directory_seen: bool = false,
     pub _working_directory_seen: bool,
 
-    /// All of the arguments after `+new-tab`. They will be sent to Ghosttty
+    /// All of the arguments after `+new-tab`. They will be sent to Rustty
     /// for processing.
     //
-    // (R1: "Ghosttty" is the reference's own typo, kept verbatim — it is a
-    // doc comment, not an identifier, so the R2 renamer leaves it alone.)
+    // PORT NOTE: the reference reads "sent to Ghosttty" (`new_tab.zig:28`), a
+    // typo of the brand name, and `new_window.zig:24` has the same typo. It is
+    // a brand token in doc prose, so it is retargeted to Rustty like every other
+    // brand mention in this file (R2, module header), and matches
+    // `new_window.rs`. The typo is recorded for upstream as
+    // `.port/parity-closure/UPSTREAM-DEFECTS.md` UD43. (Task R13-R; this note
+    // used to keep "Ghosttty" verbatim while `new_window.rs` did not.)
     // _arguments: std.ArrayList([:0]const u8) = .empty,
     pub _arguments: Vec<Vec<u8>>,
 

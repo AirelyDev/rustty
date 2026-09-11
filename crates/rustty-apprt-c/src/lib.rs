@@ -774,16 +774,10 @@ pub unsafe extern "C" fn rustty_app_has_global_keybinds(v: *mut App) -> bool {
 /// `v` must be a valid pointer returned by [`rustty_app_new`].
 #[no_mangle]
 pub unsafe extern "C" fn rustty_app_set_color_scheme(v: *mut App, scheme_raw: c_int) {
-    // const scheme = std.meta.intToEnum(apprt.ColorScheme, scheme_raw) catch {
-    //     log.warn(
-    //         "invalid color scheme to ghostty_surface_set_color_scheme value={}",
-    //         .{scheme_raw},
-    //     );
-    //     return;
-    // };
+    // const scheme = std.enums.fromInt(apprt.ColorScheme, scheme_raw) orelse return;
     //
     // PORT NOTE: `apprt.ColorScheme` is `enum(u2) { light = 0, dark = 1 }`; the
-    // `intToEnum` guard lives here on the raw `c_int` crossing the C boundary (vt-c
+    // `fromInt` guard lives here on the raw `c_int` crossing the C boundary (vt-c
     // `rustty_build_info` precedent).
     //
     // PORT NOTE (task-14d-3, INVERSE PARITY DEFECT — a rustty-ONLY emission,
@@ -793,8 +787,14 @@ pub unsafe extern "C" fn rustty_app_set_color_scheme(v: *mut App, scheme_raw: c_
     // return;` (embedded.zig:1788) — SILENT. The port emitted a warning here that no
     // pinned oracle revision emits, which is the same defect shape S50-F4
     // records and the same one this file's `rustty_surface_mouse_pressure`
-    // already had removed for exactly this reason. The comment above is kept
-    // (R1) as the record of what upstream used to do.
+    // already had removed for exactly this reason.
+    //
+    // CORRECTION (task R13-R, N20): the commented reference line above now
+    // quotes the pin. It used to quote the superseded revision, an
+    // `intToEnum` guard that warned about an invalid color scheme (with the
+    // surface function's name even in this app function), which invited a
+    // later stage to restore that warning. Do not restore it: the pin logs
+    // nothing here.
     let scheme = match scheme_raw {
         0 => ColorScheme::Light,
         1 => ColorScheme::Dark,
@@ -1670,16 +1670,10 @@ pub unsafe extern "C" fn rustty_surface_tty_name(surface: *mut Surface) -> Strin
 /// `surface` must be a valid pointer returned by [`rustty_surface_new`].
 #[no_mangle]
 pub unsafe extern "C" fn rustty_surface_set_color_scheme(surface: *mut Surface, scheme_raw: c_int) {
-    // const scheme = std.meta.intToEnum(apprt.ColorScheme, scheme_raw) catch {
-    //     log.warn(
-    //         "invalid color scheme to ghostty_surface_set_color_scheme value={}",
-    //         .{scheme_raw},
-    //     );
-    //     return;
-    // };
+    // const scheme = std.enums.fromInt(apprt.ColorScheme, scheme_raw) orelse return;
     //
     // PORT NOTE: `apprt.ColorScheme` is `enum(u2) { light = 0, dark = 1 }`; the
-    // `intToEnum` guard lives here on the raw `c_int` crossing the C boundary (the
+    // `fromInt` guard lives here on the raw `c_int` crossing the C boundary (the
     // E6 `rustty_app_set_color_scheme` precedent).
     //
     // PORT NOTE (task-14d-3, INVERSE PARITY DEFECT — a rustty-ONLY emission,
@@ -1689,8 +1683,14 @@ pub unsafe extern "C" fn rustty_surface_set_color_scheme(surface: *mut Surface, 
     // return;` (embedded.zig:1992) — SILENT. The port emitted a warning here that no
     // pinned oracle revision emits, which is the same defect shape S50-F4
     // records and the same one this file's `rustty_surface_mouse_pressure`
-    // already had removed for exactly this reason. The comment above is kept
-    // (R1) as the record of what upstream used to do.
+    // already had removed for exactly this reason.
+    //
+    // CORRECTION (task R13-R, N20): the commented reference line above now
+    // quotes the pin. It used to quote the superseded revision, an
+    // `intToEnum` guard that warned about an invalid color scheme (with the
+    // surface function's name even in this app function), which invited a
+    // later stage to restore that warning. Do not restore it: the pin logs
+    // nothing here.
     let scheme = match scheme_raw {
         0 => ColorScheme::Light,
         1 => ColorScheme::Dark,

@@ -161,6 +161,18 @@ pub fn rasterize(
     // z2d surface owns its `Vec<Alpha8>`; with `Alpha8` `#[repr(transparent)]`
     // over `u8`, drawing into the owned surface and MOVING the buffer out (see
     // the return below) reaches the same single-allocation end state.
+    //
+    // PORT NOTE (width/height casts, reviewed under R13 in task R13-R): the
+    // reference allocates `width * height` bytes first and then `@intCast`s
+    // both to z2d's `i32`, so a dimension above `i32::MAX` either fails that
+    // allocation (`error.OutOfMemory`) or traps at the cast. Here `as i32`
+    // runs first and wraps such a value negative, and `Surface::init` returns
+    // `InvalidWidth`/`InvalidHeight` before allocating: an error, not a crash.
+    // Not an R13 site: `width` is `grid_metrics.cell_width` times a `u2` cell
+    // count and `height` is `grid_metrics.cell_height` (renderer grid metrics,
+    // not glyph or font-file data), and `rasterize` has no non-test caller in
+    // the reference or the port at pin 20abdb50a. Revisit if the APC glyph
+    // protocol starts rendering through it (inventory M98).
     let mut sfc: Surface =
         Surface::init(SurfaceType::ImageSurfaceAlpha8, width as i32, height as i32)?;
 

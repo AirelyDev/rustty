@@ -155,6 +155,13 @@ pub struct Uniforms {
     pub foreground_color: [f32; 4], // align(16); offset 4416 needs no forcing
     pub cursor_color: [f32; 4],  // align(16); offset 4432 needs no forcing
     pub cursor_text: [f32; 4],   // align(16); offset 4448 needs no forcing
+    // PORT NOTE: reference defect, kept (R1; not a crash, so R13 does not change it). The
+    // GLSL prefix (`shaders/shadertoy_prefix.glsl:29-30`, byte-identical to the reference)
+    // declares `iSelectionForegroundColor` THEN `iSelectionBackgroundColor`, the opposite of
+    // these two fields (`shadertoy.zig:40-41`). The block is uploaded byte for byte, so a
+    // custom shader reading `iSelectionForegroundColor` gets `selection_background_color`
+    // and vice versa, exactly as in Ghostty. Do not reorder either side here; the fix belongs
+    // upstream (`.port/parity-closure/UPSTREAM-DEFECTS.md` UD20).
     pub selection_background_color: [f32; 4], // align(16); offset 4464 needs no forcing
     pub selection_foreground_color: [f32; 4], // align(16); offset 4480 needs no forcing
 }

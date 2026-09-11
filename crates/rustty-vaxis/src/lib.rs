@@ -149,16 +149,21 @@ pub fn install_panic_recovery() {
 /// during a panic (`main.zig:66-78`).
 ///
 /// Zig: `if (tty.global_tty) |*gty| { gty.writer().writeAll(reset) catch {};
-/// gty.deinit(); }` — the global is read, NOT cleared, and every I/O error is
+/// gty.writer().flush() catch {}; gty.deinit(); }` — the global is read, NOT
+/// cleared, and every I/O error is
 /// swallowed. The rustty `tty::GlobalTty` keeps only the restore fields (`fd` +
 /// `termios` — see its divergence note), so the reset bundle goes to the fd directly
 /// and `gty.deinit()` is inlined as the same tcsetattr/close `PosixTty::deinit` does.
 ///
 /// PORT NOTE (writer divergence): Zig's `gty.writer()` is the tty's BUFFERED
-/// `std.Io.Writer`, so upstream's `writeAll` only reaches the terminal when the
-/// buffer happens to drain; rustty has no writer in the global (only `fd`), so the
-/// bundle is written to the fd with `libc::write` — upstream's stated intent
-/// ("resets terminal state on a panic"), and unbuffered so it always lands.
+/// `std.Io.Writer`, and vaxis 0.6.0 flushes it right after `writeAll`
+/// (`main.zig:74-75`); rustty has no writer in the global (only `fd`), so the
+/// bundle is written to the fd with `libc::write`, unbuffered, which reaches the
+/// terminal at the same point the reference's flush does.
+///
+/// CORRECTION (task R13-R): this note used to say upstream's `writeAll` "only
+/// reaches the terminal when the buffer happens to drain". That described a
+/// `recover` without the flush; the pinned vaxis 0.6.0 has it.
 #[cfg(not(windows))]
 pub fn recover() {
     use core::ffi::c_void;
@@ -173,6 +178,7 @@ pub fn recover() {
     // const reset: []const u8 = ctlseqs.csi_u_pop ++ ctlseqs.mouse_reset ++
     //     ctlseqs.bp_reset ++ ctlseqs.rmcup;
     // gty.writer().writeAll(reset) catch {};
+    // gty.writer().flush() catch {};
     // (one concatenated byte bundle; a failed write abandons the REST of the bundle,
     // exactly as `writeAll`'s error return would)
     'write_all: for seq in [

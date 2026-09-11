@@ -90,6 +90,11 @@ pub struct Options {
 
     /// All of the arguments after `+new-window`. They will be sent to Rustty
     /// for processing.
+    //
+    // PORT NOTE: the reference reads "sent to Ghosttty" (`new_window.zig:24`), a
+    // typo of the brand name; like every brand mention here it is retargeted to
+    // Rustty (R2), as in `new_tab.rs`. Recorded for upstream as
+    // `.port/parity-closure/UPSTREAM-DEFECTS.md` UD43.
     // _arguments: std.ArrayList([:0]const u8) = .empty,
     pub _arguments: Vec<Vec<u8>>,
 
