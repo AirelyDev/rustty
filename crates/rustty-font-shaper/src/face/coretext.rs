@@ -59,8 +59,8 @@ use objc2_core_graphics::{
     CGImageByteOrderInfo, CGTextDrawingMode,
 };
 use objc2_core_text::{
-    CTFont, CTFontManagerCreateFontDescriptorFromData, CTFontOrientation, CTFontSymbolicTraits,
-    CTFontTableOptions,
+    CTFont, CTFontDescriptor, CTFontManagerCreateFontDescriptorFromData, CTFontOrientation,
+    CTFontSymbolicTraits, CTFontTableOptions,
 };
 
 use rustty_font::atlas::Atlas;
@@ -96,6 +96,81 @@ mod sys {
             space: *const CGColorSpace,
             bitmap_info: u32,
         ) -> *mut CGContext;
+    }
+
+    // PORT NOTE (parity S36-F3): the CoreText creates whose reference wrappers
+    // (`pkg/macos/text/font.zig`, `font_descriptor.zig`) map a NULL result to
+    // `Allocator.Error.OutOfMemory`. objc2's wrappers for these are non-`Option`
+    // and `expect(..)` internally, so a NULL result PANICKED where the reference
+    // returns an error every use site propagates with `try`. Declared against
+    // the SAME framework objc2 links (R3 — a binding, not a reimplementation;
+    // the file already does this for `CGBitmapContextCreate`, and `discovery.rs`
+    // for `CTFontCreateWithName`).
+    #[link(name = "CoreText", kind = "framework")]
+    extern "C-unwind" {
+        pub fn CTFontCreateWithFontDescriptor(
+            descriptor: &CTFontDescriptor,
+            size: f64,
+            matrix: *const c_void,
+        ) -> *mut CTFont;
+        pub fn CTFontCreateCopyWithAttributes(
+            font: &CTFont,
+            size: f64,
+            matrix: *const CGAffineTransform,
+            attributes: Option<&CTFontDescriptor>,
+        ) -> *mut CTFont;
+        pub fn CTFontDescriptorCreateCopyWithVariation(
+            original: &CTFontDescriptor,
+            variation_identifier: &CFNumber,
+            variation_value: f64,
+        ) -> *mut CTFontDescriptor;
+    }
+}
+
+/// `Font.createWithFontDescriptor` — NULL is `error.OutOfMemory` (S36-F3).
+/// The reference wrapper always passes a NULL matrix.
+fn ct_font_create_with_font_descriptor(
+    desc: &CTFontDescriptor,
+    size: f64,
+) -> Result<CFRetained<CTFont>, Error> {
+    // SAFETY: `desc` is a live CTFontDescriptor; NULL matrix is documented-valid.
+    let raw = unsafe { sys::CTFontCreateWithFontDescriptor(desc, size, ptr::null()) };
+    match NonNull::new(raw) {
+        // SAFETY: "Create rule" — the +1 reference is taken by `from_raw`.
+        Some(p) => Ok(unsafe { CFRetained::from_raw(p) }),
+        None => Err(Error::OutOfMemory),
+    }
+}
+
+/// `Font.copyWithAttributes` — NULL is `error.OutOfMemory` (S36-F3).
+fn ct_font_copy_with_attributes(
+    font: &CTFont,
+    size: f64,
+    matrix: *const CGAffineTransform,
+    attributes: Option<&CTFontDescriptor>,
+) -> Result<CFRetained<CTFont>, Error> {
+    // SAFETY: every argument is either a live CF object or a documented NULL.
+    let raw = unsafe { sys::CTFontCreateCopyWithAttributes(font, size, matrix, attributes) };
+    match NonNull::new(raw) {
+        // SAFETY: "Create rule" — the +1 reference is taken by `from_raw`.
+        Some(p) => Ok(unsafe { CFRetained::from_raw(p) }),
+        None => Err(Error::OutOfMemory),
+    }
+}
+
+/// `FontDescriptor.createCopyWithVariation` — NULL is `error.OutOfMemory`
+/// (S36-F3).
+fn ct_font_descriptor_copy_with_variation(
+    original: &CTFontDescriptor,
+    id: &CFNumber,
+    value: f64,
+) -> Result<CFRetained<CTFontDescriptor>, Error> {
+    // SAFETY: both CF arguments are live.
+    let raw = unsafe { sys::CTFontDescriptorCreateCopyWithVariation(original, id, value) };
+    match NonNull::new(raw) {
+        // SAFETY: "Create rule" — the +1 reference is taken by `from_raw`.
+        Some(p) => Ok(unsafe { CFRetained::from_raw(p) }),
+        None => Err(Error::OutOfMemory),
     }
 }
 
@@ -224,7 +299,7 @@ impl Face {
             .ok_or(Error::FontInitFailure)?;
         // defer desc.release();
 
-        let ct_font = unsafe { CTFont::with_font_descriptor(&desc, 12.0, ptr::null()) };
+        let ct_font = ct_font_create_with_font_descriptor(&desc, 12.0)?;
         // defer ct_font.release();
 
         Face::init_font_copy(&ct_font, opts)
@@ -239,7 +314,7 @@ impl Face {
         // but we need to scale the points by the DPI and to do that we use our
         // function called "pixels".
         let ct_font =
-            unsafe { base.copy_with_attributes(opts.size.pixels() as f64, ptr::null(), None) };
+            ct_font_copy_with_attributes(base, opts.size.pixels() as f64, ptr::null(), None)?;
         // errdefer ct_font.release();
 
         Face::init_font(ct_font, opts)
@@ -337,7 +412,7 @@ impl Face {
     /// Return a new face that is the same as this but has a transformation
     /// matrix applied to italicize it.
     pub fn synthetic_italic(&self, opts: Options) -> Result<Face, Error> {
-        let ct_font = unsafe { self.font.copy_with_attributes(0.0, &italic_skew, None) };
+        let ct_font = ct_font_copy_with_attributes(&self.font, 0.0, &italic_skew, None)?;
         // errdefer ct_font.release();
         Face::init_font(ct_font, opts)
     }
@@ -346,7 +421,7 @@ impl Face {
     /// bold effect to it. This is useful for fonts that don't have a bold
     /// variant.
     pub fn synthetic_bold(&self, opts: Options) -> Result<Face, Error> {
-        let ct_font = unsafe { self.font.copy_with_attributes(0.0, ptr::null(), None) };
+        let ct_font = ct_font_copy_with_attributes(&self.font, 0.0, ptr::null(), None)?;
         // errdefer ct_font.release();
         let mut face = Face::init_font(ct_font, opts)?;
 
@@ -561,7 +636,7 @@ impl Face {
             }
             .ok_or(Error::OutOfMemory)?;
             // defer id.release();
-            let next = unsafe { desc.copy_with_variation(&id, v.value) };
+            let next = ct_font_descriptor_copy_with_variation(&desc, &id, v.value)?;
             // desc.release(); desc = next;
             desc = next;
         }
@@ -571,10 +646,7 @@ impl Face {
         new_opts.size = self.size;
 
         // Initialize a font based on these attributes.
-        let ct_font = unsafe {
-            self.font
-                .copy_with_attributes(0.0, ptr::null(), Some(&desc))
-        };
+        let ct_font = ct_font_copy_with_attributes(&self.font, 0.0, ptr::null(), Some(&desc))?;
         // errdefer ct_font.release();
         let face = Face::init_font(ct_font, new_opts)?;
         self.deinit();
@@ -1524,7 +1596,7 @@ mod tests {
     fn named_font(name: &str, size: f64) -> CFRetained<CTFont> {
         let cf_name = new_string_utf8(name.as_bytes()).unwrap();
         let desc = unsafe { CTFontDescriptor::with_name_and_size(&cf_name, size) };
-        unsafe { CTFont::with_font_descriptor(&desc, size, ptr::null()) }
+        ct_font_create_with_font_descriptor(&desc, size).unwrap()
     }
 
     // test {} (unnamed): Monaco, render all visible ASCII.

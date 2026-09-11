@@ -942,6 +942,29 @@ mod coretext_impl {
                 size: f64,
                 matrix: *const c_void,
             ) -> *mut CTFont;
+
+            // PORT NOTE (parity S36-F3): the same treatment for the remaining
+            // reference wrappers in this file that map a NULL CoreText result
+            // to `Allocator.Error.OutOfMemory`. objc2's wrappers for these are
+            // non-`Option` and `expect(..)` internally, so a NULL result
+            // PANICKED where the reference returns an error the caller
+            // propagates with `try`.
+            pub fn CTFontCreateWithFontDescriptor(
+                descriptor: &CTFontDescriptor,
+                size: f64,
+                matrix: *const c_void,
+            ) -> *mut CTFont;
+            pub fn CTFontDescriptorCreateWithAttributes(
+                attributes: &CFDictionary,
+            ) -> *mut CTFontDescriptor;
+            pub fn CTFontDescriptorCreateCopyWithAttributes(
+                original: &CTFontDescriptor,
+                attributes: &CFDictionary,
+            ) -> *mut CTFontDescriptor;
+            pub fn CTFontCollectionCreateWithFontDescriptors(
+                descriptors: &CFArray,
+                options: *const c_void,
+            ) -> *mut CTFontCollection;
         }
     }
 
@@ -961,6 +984,67 @@ mod coretext_impl {
             // `CFRetained::from_raw` takes that ownership (releases on drop).
             Some(p) => Ok(unsafe { CFRetained::from_raw(p) }),
             // orelse Allocator.Error.OutOfMemory
+            None => Err(Error::OutOfMemory),
+        }
+    }
+
+    /// The reference `pkg/macos/text/font.zig` `Font.createWithFontDescriptor`:
+    /// a NULL result is `Allocator.Error.OutOfMemory` (parity S36-F3). The
+    /// reference wrapper always passes a NULL matrix.
+    fn ct_font_create_with_font_descriptor(
+        desc: &CTFontDescriptor,
+        size: f64,
+    ) -> Result<CFRetained<CTFont>, Error> {
+        // SAFETY: `desc` is a live CTFontDescriptor; NULL matrix is documented-valid.
+        let raw = unsafe { sys::CTFontCreateWithFontDescriptor(desc, size, ptr::null()) };
+        match NonNull::new(raw) {
+            // SAFETY: "Create rule" — the +1 reference is taken by `from_raw`.
+            Some(p) => Ok(unsafe { CFRetained::from_raw(p) }),
+            None => Err(Error::OutOfMemory),
+        }
+    }
+
+    /// The reference `pkg/macos/text/font_descriptor.zig`
+    /// `FontDescriptor.createWithAttributes` (parity S36-F3).
+    fn ct_font_descriptor_create_with_attributes(
+        attributes: &CFDictionary,
+    ) -> Result<CFRetained<CTFontDescriptor>, Error> {
+        // SAFETY: `attributes` is a live CFDictionary.
+        let raw = unsafe { sys::CTFontDescriptorCreateWithAttributes(attributes) };
+        match NonNull::new(raw) {
+            // SAFETY: "Create rule" — the +1 reference is taken by `from_raw`.
+            Some(p) => Ok(unsafe { CFRetained::from_raw(p) }),
+            None => Err(Error::OutOfMemory),
+        }
+    }
+
+    /// The reference `pkg/macos/text/font_descriptor.zig`
+    /// `FontDescriptor.createCopyWithAttributes` (parity S36-F3).
+    fn ct_font_descriptor_create_copy_with_attributes(
+        original: &CTFontDescriptor,
+        attributes: &CFDictionary,
+    ) -> Result<CFRetained<CTFontDescriptor>, Error> {
+        // SAFETY: both arguments are live CF objects.
+        let raw = unsafe { sys::CTFontDescriptorCreateCopyWithAttributes(original, attributes) };
+        match NonNull::new(raw) {
+            // SAFETY: "Create rule" — the +1 reference is taken by `from_raw`.
+            Some(p) => Ok(unsafe { CFRetained::from_raw(p) }),
+            None => Err(Error::OutOfMemory),
+        }
+    }
+
+    /// The reference `pkg/macos/text/font_collection.zig`
+    /// `FontCollection.createWithFontDescriptors` (parity S36-F3). The
+    /// reference wrapper always passes NULL options.
+    fn ct_font_collection_create_with_font_descriptors(
+        descriptors: &CFArray,
+    ) -> Result<CFRetained<CTFontCollection>, Error> {
+        // SAFETY: `descriptors` is a live CFArray; NULL options is documented-valid.
+        let raw =
+            unsafe { sys::CTFontCollectionCreateWithFontDescriptors(descriptors, ptr::null()) };
+        match NonNull::new(raw) {
+            // SAFETY: "Create rule" — the +1 reference is taken by `from_raw`.
+            Some(p) => Ok(unsafe { CFRetained::from_raw(p) }),
             None => Err(Error::OutOfMemory),
         }
     }
@@ -1165,7 +1249,7 @@ mod coretext_impl {
             }
 
             // return try macos.text.FontDescriptor.createWithAttributes(@ptrCast(attrs));
-            Ok(unsafe { CTFontDescriptor::with_attributes(&attrs) })
+            ct_font_descriptor_create_with_attributes(&attrs)
         }
     }
 
@@ -1234,7 +1318,7 @@ mod coretext_impl {
 
             // Build our collection
             // const set = try macos.text.FontCollection.createWithFontDescriptors(desc_arr);
-            let set = unsafe { CTFontCollection::with_font_descriptors(Some(&desc_arr), None) };
+            let set = ct_font_collection_create_with_font_descriptors(&desc_arr)?;
             // defer set.release();
             // const list = set.createMatchingFontDescriptors();
             let list = unsafe { set.matching_font_descriptors() };
@@ -1660,10 +1744,14 @@ mod coretext_impl {
             // 0 automatically because we don't want a font we can't load.
             // const font: *macos.text.Font = macos.text.Font.createWithFontDescriptor(ct_desc, 12) catch return self;
             //
-            // PORT NOTE: objc2's `with_font_descriptor` returns a non-null font
-            // (CoreText substitutes rather than failing), so the `catch return self`
-            // 0-score path is effectively unreachable; the call cannot fail here.
-            let font = unsafe { CTFont::with_font_descriptor(ct_desc, 12.0, ptr::null()) };
+            // PORT NOTE (parity S36-F3): objc2's `with_font_descriptor` is
+            // non-`Option` and PANICS on a NULL result; the reference returns
+            // `error.OutOfMemory` and this site catches it into a 0 score. The
+            // raw symbol restores that arm.
+            let font = match ct_font_create_with_font_descriptor(ct_desc, 12.0) {
+                Ok(f) => f,
+                Err(_) => return this,
+            };
             // defer font.release();
 
             // We prefer fonts with more glyphs, all else being equal.
@@ -2081,15 +2169,14 @@ mod coretext_impl {
                         null_val as *const _ as *const c_void,
                     );
                 }
-                unsafe { self.list[self.i].copy_with_attributes(&attrs) }
+                ct_font_descriptor_create_copy_with_attributes(&self.list[self.i], &attrs)?
             };
 
             // Create our font. We need a size to initialize it so we use size
             // 12 but we will alter the size later.
             // const font = try macos.text.Font.createWithFontDescriptor(desc, 12);
             // errdefer font.release();
-            let font: CFRetained<CTFont> =
-                unsafe { CTFont::with_font_descriptor(&desc, 12.0, ptr::null()) };
+            let font: CFRetained<CTFont> = ct_font_create_with_font_descriptor(&desc, 12.0)?;
 
             // Increment after we return
             // defer self.i += 1;

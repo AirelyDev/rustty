@@ -2929,17 +2929,45 @@ pub unsafe extern "C" fn rustty_surface_quicklook_font(ptr: *mut Surface) -> *mu
     //     null,
     // ) catch return null;
     //
-    // PORT NOTE: objc2's `copy_with_attributes` folds the reference's null-check
-    // (`catch return null`) into a non-null `expect` — the same contract the
-    // CoreText face's own `init_font_copy` relies on (face/coretext.rs). The
-    // result is the +1 CTFont (created via `CFRetained::from_raw`). `size` is f32,
-    // `content_scale.y` f32; the quotient widens to the `CGFloat` (f64) argument.
-    // SAFETY: `matrix` is a null `*const CGAffineTransform`; `attributes` is None.
-    let copy: CFRetained<CTFont> = unsafe {
-        (*face)
-            .font
-            .copy_with_attributes((size / content_scale.y) as f64, core::ptr::null(), None)
+    // PORT NOTE (parity S36-F3): objc2's `copy_with_attributes` folds the
+    // reference's null-check into a non-null `expect`, so a NULL CoreText result
+    // PANICKED ACROSS THE C ABI here — where the reference's `catch return null`
+    // hands the host a NULL `CTFontRef` and the host copes. This is the most
+    // visible instance of that class, so the raw symbol is declared against the
+    // SAME framework objc2 links (R3 — a binding, not a reimplementation; the
+    // pattern `rustty-font-shaper`'s `discovery.rs`/`face/coretext.rs` use).
+    // `size` is f32, `content_scale.y` f32; the quotient widens to the `CGFloat`
+    // (f64) argument.
+    //
+    // The declaration is `extern "C"`, not `"C-unwind"`: this crate's DG5
+    // panic-policy gate (`tests/panic_policy.rs`) bans the `"C-unwind"` ABI
+    // string here, and CoreText does not unwind, so plain `"C"` is both correct
+    // and policy-compliant.
+    #[link(name = "CoreText", kind = "framework")]
+    extern "C" {
+        fn CTFontCreateCopyWithAttributes(
+            font: *const CTFont,
+            size: f64,
+            matrix: *const core::ffi::c_void,
+            attributes: *const core::ffi::c_void,
+        ) -> *mut CTFont;
+    }
+    // SAFETY: `(*face).font` is a live CTFont; `matrix`/`attributes` are the
+    // reference's NULLs.
+    let raw = unsafe {
+        CTFontCreateCopyWithAttributes(
+            CFRetained::as_ptr(&(*face).font).as_ptr(),
+            (size / content_scale.y) as f64,
+            core::ptr::null(),
+            core::ptr::null(),
+        )
     };
+    // ... catch return null;
+    let Some(raw) = core::ptr::NonNull::new(raw) else {
+        return core::ptr::null_mut();
+    };
+    // SAFETY: "Create rule" — the +1 reference is taken by `from_raw`.
+    let copy: CFRetained<CTFont> = unsafe { CFRetained::from_raw(raw) };
 
     // return copy;
     //

@@ -682,11 +682,21 @@ mod fontconfig_payload {
         // arm the callers bind against; `FaceError` carries no fontconfig atom, so a
         // failed/mistyped `get` is mapped to `FaceError::OutOfMemory` — the SAME
         // failure atom the CoreText `name` arm returns when it cannot materialize the
-        // name (`DeferredFace.zig:193-194`). This is a non-panicking error return:
-        // the callers (`codepoint_resolver.rs`, `shared_grid_set.rs`) discard it, as
-        // the reference does with its own error. A render-prepared pattern always
-        // carries `FC_FAMILY`; `FC_FULLNAME` is present for effectively all real
-        // fonts, so this path is not reached in practice.
+        // name (`DeferredFace.zig:193-194`). This is a non-panicking error return.
+        //
+        // CORRECTION (parity S86-F1): an earlier version of this note said "the
+        // callers ... discard it, as the reference does". That is true of ONE
+        // caller and not the other. `CodepointResolver.zig:203-206` does
+        // `deferred_face.name(&buf) catch "<error>"` — discarded — and
+        // `codepoint_resolver.rs:355-361` matches it. But
+        // `SharedGridSet.zig:199-202` writes `try face.name(&name_buf)` inside
+        // the `log.info` argument tuple, which Zig evaluates eagerly, so a name
+        // error aborts `collection()` and therefore `ref()`: no grid is created.
+        // Both `shared_grid_set.rs` sites propagate with `?` accordingly.
+        //
+        // A render-prepared pattern always carries `FC_FAMILY`; `FC_FULLNAME` is
+        // present for effectively all real fonts, so this path is not reached in
+        // practice.
         pub fn name<'a>(&self, buf: &'a mut [u8]) -> Result<&'a [u8], FaceError> {
             if let Some(fc) = self.fc.as_ref() {
                 // SAFETY: see `family_name`.

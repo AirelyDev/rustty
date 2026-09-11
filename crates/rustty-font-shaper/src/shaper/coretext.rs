@@ -105,12 +105,36 @@ const LOG_SCOPE: &str = "font_shaper";
 mod sys {
     use super::{CFRange, CTLine, CTTypesetter};
     use core::ptr::NonNull;
+    use objc2_core_foundation::CFDictionary;
+    use objc2_core_foundation::CGAffineTransform;
+    use objc2_core_text::{CTFont, CTFontDescriptor};
     #[link(name = "CoreText", kind = "framework")]
     extern "C-unwind" {
         pub fn CTTypesetterCreateLine(
             typesetter: &CTTypesetter,
             string_range: CFRange,
         ) -> Option<NonNull<CTLine>>;
+
+        /// PORT NOTE (parity S94-F3): same treatment, same reason.
+        /// `FontDescriptor.createWithAttributes` is
+        /// `Allocator.Error!*FontDescriptor` in the reference
+        /// (`pkg/macos/text/font_descriptor.zig`), but objc2's
+        /// `CTFontDescriptor::with_attributes` is non-`Option` and unwraps
+        /// internally, so a NULL result ABORTED where the reference returns
+        /// `error.OutOfMemory` and `shape()` propagates it. Every other CF
+        /// create in this file already does `.ok_or(Error::OutOfMemory)?`.
+        pub fn CTFontDescriptorCreateWithAttributes(
+            attributes: &CFDictionary,
+        ) -> *mut CTFontDescriptor;
+
+        /// PORT NOTE (parity S94-F3): `Font.copyWithAttributes` is
+        /// `Allocator.Error!*Font` in the reference (`pkg/macos/text/font.zig`).
+        pub fn CTFontCreateCopyWithAttributes(
+            font: &CTFont,
+            size: f64,
+            matrix: *const CGAffineTransform,
+            attributes: Option<&CTFontDescriptor>,
+        ) -> *mut CTFont;
     }
 }
 
@@ -1118,18 +1142,26 @@ impl Shaper {
 
             // const desc = try macos.text.FontDescriptor.createWithAttributes(attrs);
             // self.cf_release_pool.appendAssumeCapacity(desc);
-            let desc = unsafe { CTFontDescriptor::with_attributes(attrs) };
-            let desc_raw = CFRetained::into_raw(desc);
+            // PORT NOTE (parity S94-F3): the raw symbol, not objc2's non-`Option`
+            // wrapper, so a NULL result is the reference's `error.OutOfMemory`
+            // rather than a panic. Both creates return +1 references, exactly
+            // what `CFRetained::into_raw` produced before.
+            let desc_raw =
+                NonNull::new(unsafe { sys::CTFontDescriptorCreateWithAttributes(attrs) })
+                    .ok_or(Error::OutOfMemory)?;
             self.cf_release_pool.push(desc_raw.as_ptr() as *mut c_void);
             let desc_ref: &CTFontDescriptor = unsafe { desc_raw.as_ref() };
 
             // const copied = try original.copyWithAttributes(0, null, desc);
             // errdefer copied.release();
             // break :font copied;
-            unsafe { original.copy_with_attributes(0.0, ptr::null(), Some(desc_ref)) }
+            NonNull::new(unsafe {
+                sys::CTFontCreateCopyWithAttributes(original, 0.0, ptr::null(), Some(desc_ref))
+            })
+            .ok_or(Error::OutOfMemory)?
         };
         // self.cf_release_pool.appendAssumeCapacity(run_font);
-        let run_font_raw = CFRetained::into_raw(run_font);
+        let run_font_raw = run_font;
         self.cf_release_pool
             .push(run_font_raw.as_ptr() as *mut c_void);
         let run_font_ref = unsafe { run_font_raw.as_ref() };
