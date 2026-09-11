@@ -199,7 +199,7 @@ pub const IM_GUI_DOCK_NODE_FLAGS_PRIVATE_DOCK_SPACE: ImGuiDockNodeFlags = 1 << 1
 // and the per-frame draw data (never stored — see PREPORT_INSPECTOR §1) crosses
 // as `*mut ImDrawData`. These names are stable: the apprt-c
 // `rustty_inspector_metal_{init,render,shutdown}` exports call them directly.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))] // isDarwin()
 extern "C" {
     /// Initialize the Metal backend for the current ImGui context.
     /// `device` is an `id<MTLDevice>` objc handle. Returns false on failure.
@@ -250,7 +250,7 @@ extern "C" {
 //
 // The per-frame draw data (never stored — see PREPORT_INSPECTOR §1) crosses as
 // `*mut ImDrawData`, already in scope above.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "ios")))] // !isDarwin()
 extern "C" {
     /// Initialize the OpenGL3 backend for the current ImGui context.
     /// `glsl_version` is a NUL-terminated `#version` string, or NULL to let the
@@ -354,7 +354,7 @@ mod tests {
     /// is not available in a headless unit test. The exact set mirrors the
     /// inspector's calls (embedded.zig renderMetal / Backend.deinit +
     /// pkg/dcimgui/main.zig:23-27).
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))] // isDarwin()
     #[test]
     fn link_imgui_impl_metal_ffi() {
         // Coerce each `extern "C"` fn item to an opaque address; the linker
@@ -379,7 +379,7 @@ mod tests {
     /// above. Takes the address of each of the 5 entry points so a missing
     /// export from the compiled `imgui_impl_opengl3.cpp` TU is a *link* error
     /// at test-binary build time; no GL context is needed to force the link.
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))] // !isDarwin()
     #[test]
     fn opengl3_symbols_link() {
         // Coerce each `extern "C"` fn item to an opaque address; the linker

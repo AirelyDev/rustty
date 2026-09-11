@@ -50,6 +50,12 @@ fn main() {
     let dcimgui = vendor.join("dcimgui");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    // `target.result.os.tag.isDarwin()` is the reference's selector for the Metal
+    // backend and, negated, for the OpenGL3 one (`src/build/SharedDeps.zig:601,604`),
+    // spelled `macos || ios` per the workspace's `isDarwin()` convention
+    // (rustty-apprt-c's `rustty_inspector_metal_*` exports). CORRECTION (task 20,
+    // S46-F4): the backend gates below tested `target_os == "macos"` only.
+    let is_darwin = target_os == "macos" || target_os == "ios";
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 
     // FreeType header dir, exported by freetype-sys via `cargo:include`
@@ -111,7 +117,7 @@ fn main() {
     // `backend-opengl3` option is on (pkg/dcimgui/build.zig:72-74). The
     // reference's own selector is `backend-metal = isDarwin`
     // (src/build/SharedDeps.zig:539).
-    if target_os == "macos" {
+    if is_darwin {
         build.define("ZIGPKG_IMGUI_ENABLE_METAL", "1");
     }
 
@@ -122,7 +128,7 @@ fn main() {
     // its `backend-opengl3` option is on (pkg/dcimgui/build.zig:72-74). The
     // vendored `imgui_impl_opengl3_loader.h` is self-contained (it dlopens the
     // GL library at runtime via imgl3wInit), so no libGL link is required here.
-    if target_os != "macos" {
+    if !is_darwin {
         build.define("ZIGPKG_IMGUI_ENABLE_OPENGL3", "1");
     }
 
@@ -154,7 +160,7 @@ fn main() {
     // separate archive. It resolves its sibling `imgui_impl_opengl3_loader.h`
     // relative to the already-configured `vendor/imgui` include path; the loader
     // is self-contained (dlopens libGL at runtime), so no libGL link is needed.
-    if target_os != "macos" {
+    if !is_darwin {
         build.file(imgui.join("backends/imgui_impl_opengl3.cpp"));
         println!("cargo:rerun-if-changed=vendor/imgui/backends/imgui_impl_opengl3.cpp");
         println!("cargo:rerun-if-changed=vendor/imgui/backends/imgui_impl_opengl3.h");
@@ -177,7 +183,7 @@ fn main() {
     // `.mm` `#include`s "imgui.h" (vendor/imgui) and "imgui_impl_metal.h"
     // (vendor/imgui/backends) and `#import`s <Metal/Metal.h> +
     // <QuartzCore/CAMetalLayer.h>.
-    if target_os == "macos" {
+    if is_darwin {
         let backends = imgui.join("backends");
         let mut metal = cc::Build::new();
         metal

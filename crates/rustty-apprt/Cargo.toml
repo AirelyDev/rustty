@@ -197,8 +197,10 @@ rustty-xev = { workspace = true }
 
 # objc2/Metal msgSends (renderMetal's MTLRenderCommandEncoder construction, the
 # device/command_buffer/desc release balances) are Darwin-only, exactly like
-# rustty-renderer/rustty-apprt-c/rustty-os's own objc2 deps below.
-[target.'cfg(target_os = "macos")'.dependencies]
+# rustty-renderer/rustty-apprt-c/rustty-os's own objc2 deps below. Darwin means
+# `macos || ios` (the reference's `isDarwin()`); task 20 (S46-F4) widened this from
+# macOS alone, with the Metal gates in `src/embedded.rs` that use it.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 # objc2: the ObjC runtime (`msg_send!`), pinned to the same 0.6 the rest of the
 # workspace uses (rustty-renderer/rustty-apprt-c/rustty-os). `renderMetal`'s
 # `MTLRenderCommandEncoder` construction (`renderCommandEncoderWithDescriptor:`

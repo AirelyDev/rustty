@@ -331,10 +331,18 @@ impl KeyEvent<'_> {
         let text: &[u8] = self.text.unwrap_or(b"");
         // const unshifted_codepoint: u21 = std.math.cast(u21, self.unshifted_codepoint) orelse 0;
         //
-        // PORT NOTE: rustty models `u21` as `u32` (`rustty_vt::input::key::u21`),
-        // so the `std.math.cast(u21, u32)` is the identity and the `orelse 0`
-        // fallback is unreachable; assigned directly.
-        let unshifted_codepoint: key::u21 = self.unshifted_codepoint;
+        // CORRECTION (task 20, S46-F2): this was assigned straight through under a
+        // note that said "rustty models `u21` as `u32` ... so the
+        // `std.math.cast(u21, u32)` is the identity and the `orelse 0` fallback is
+        // unreachable". The ALIAS is `u32`; the cast is not the identity. A host
+        // value above `maxInt(u21)` (0x1F_FFFF) becomes 0 in the reference, which
+        // then matches keybinds by physical key instead of by an impossible
+        // codepoint.
+        let unshifted_codepoint: key::u21 = if self.unshifted_codepoint <= 0x1F_FFFF {
+            self.unshifted_codepoint
+        } else {
+            0
+        };
 
         // We want to get the physical unmapped key to process keybinds.
         // const physical_key = keycode: for (input.keycodes.entries) |entry| {
@@ -2270,16 +2278,23 @@ impl Backend {
     // pub fn deinit(self: Backend) void { ... }
     //
     // PORT NOTE (Task 4): tears down the imgui_impl_metal global state. The
-    // reference gates the `ImGui_ImplMetal_Shutdown()` call on `isDarwin()`; the
-    // dcimgui-sys binding is itself `#[cfg(target_os = "macos")]`, so the `.metal`
-    // arm is a no-op off macOS (matching the guard).
+    // reference gates the `ImGui_ImplMetal_Shutdown()` call on `isDarwin()`, and so
+    // does this (`macos || ios`, the workspace's `isDarwin()` spelling).
+    //
+    // CORRECTION (task 20, S46-F4): every Metal gate in this file — here, `Defer`,
+    // `initMetal`, `renderMetal`, `newFrame` — and the dcimgui-sys Metal backend
+    // were `#[cfg(target_os = "macos")]`, while the `rustty_inspector_metal_*` CAPI
+    // exports that call them are `any(macos, ios)`. On iOS `initMetal` reported
+    // success without initialising Metal and `renderMetal` hit its non-Darwin
+    // `unimplemented!()`. The note here used to say the binding "is itself
+    // `#[cfg(target_os = "macos")]`, so the `.metal` arm is a no-op off macOS".
     pub fn deinit(self) {
         // switch (self) {
         //     .metal => if (builtin.target.os.tag.isDarwin()) cimgui.ImGui_ImplMetal_Shutdown(),
         // }
         match self {
             Backend::Metal => {
-                #[cfg(target_os = "macos")]
+                #[cfg(any(target_os = "macos", target_os = "ios"))]
                 unsafe {
                     dcimgui_sys::ImGui_ImplMetal_Shutdown()
                 };
@@ -2296,10 +2311,10 @@ impl Backend {
 /// on every exit path (including the early `return false` in `initMetal`).
 /// panic=abort means no unwinding ever crosses these FFI calls, so
 /// drop-on-scope-exit is the sole runtime path (no double-fire, no leak).
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 struct Defer<F: FnMut()>(F);
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 impl<F: FnMut()> Drop for Defer<F> {
     fn drop(&mut self) {
         (self.0)();
@@ -2415,10 +2430,10 @@ impl Inspector {
         // `msg_send!` idiom as `renderMetal`'s command_buffer/desc release and the
         // `rustty_set_window_background_blur` blur leaf (rustty-apprt-c/src/lib.rs)
         // — no objc2-metal/objc2-foundation typed bindings needed. This fn (like
-        // `renderMetal`) is reached only through the `#[cfg(target_os = "macos")]`
-        // CAPI export, so the guard is likewise macOS-only; off macOS `device` is
+        // `renderMetal`) is reached only through the Darwin-gated
+        // CAPI export, so the guard is likewise Darwin-only; off Darwin `device` is
         // untouched (never released — there is no host retain to balance there).
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         let _release_device = Defer(|| {
             let ptr: *mut objc2::runtime::AnyObject = device.cast();
             // SAFETY: `device` is the host-owned `id<MTLDevice>` handed to this
@@ -2444,13 +2459,13 @@ impl Inspector {
         //     return false;
         // }
         //
-        // PORT NOTE: `ImGui_ImplMetal_Init` is `#[cfg(target_os = "macos")]` in
+        // PORT NOTE: `ImGui_ImplMetal_Init` is Darwin-gated (`macos || ios`) in
         // dcimgui-sys (the imgui_impl_metal.mm backend is macOS-only), mirroring the
         // reference `Backend.deinit`'s `isDarwin()` guard. This method is only ever
-        // reached through the `#[cfg(target_os = "macos")]` `rustty_inspector_metal_init`
-        // export, so off macOS the call is elided and the arm is unreachable in
+        // reached through the Darwin-gated `rustty_inspector_metal_init`
+        // export, so off Darwin the call is elided and the arm is unreachable in
         // practice.
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
             // SAFETY: `device` is the host-owned `id<MTLDevice>` the caller passed;
             // the current ImGui context was set above.
@@ -2460,7 +2475,7 @@ impl Inspector {
                 return false;
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {
             let _ = device;
         }
@@ -2502,10 +2517,10 @@ impl Inspector {
     // CFG NOTE: Metal (and the `ImGui_ImplMetal_*` dcimgui-sys symbols /
     // macOS-only `objc2` msgSends this body uses) exists only on Darwin, so —
     // like the `MacOS`/`IOS` platform structs above — this fn is split into a
-    // live `#[cfg(target_os = "macos")]` definition and a non-Darwin stub. The
-    // sole caller is the `#[cfg(target_os = "macos")]` CAPI export
+    // live Darwin (`macos || ios`) definition and a non-Darwin stub. The
+    // sole caller is the Darwin-gated CAPI export
     // `rustty_inspector_metal_render`, so the stub is unreachable in practice.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn renderMetal(
         &mut self,
         command_buffer: *mut c_void,
@@ -2659,9 +2674,9 @@ impl Inspector {
 
     /// Non-Darwin stub — see the CFG NOTE on the macOS `renderMetal` above.
     /// Metal does not exist off Darwin, so there is nothing to port here; this
-    /// fn is unreachable off macOS (its sole caller, `rustty_inspector_metal_render`,
-    /// is itself `#[cfg(target_os = "macos")]`).
-    #[cfg(not(target_os = "macos"))]
+    /// fn is unreachable off Darwin (its sole caller, `rustty_inspector_metal_render`,
+    /// is itself `any(target_os = "macos", target_os = "ios")`).
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     pub fn renderMetal(
         &mut self,
         command_buffer: *mut c_void,
@@ -2669,7 +2684,7 @@ impl Inspector {
     ) -> Result<(), ApprtError> {
         let _ = (command_buffer, desc);
         unimplemented!(
-            "embedded::Inspector::renderMetal — Metal is Darwin-only; unreachable off macOS"
+            "embedded::Inspector::renderMetal — Metal is Darwin-only; unreachable off Darwin"
         )
     }
 
@@ -2964,11 +2979,11 @@ impl Inspector {
     // LIVE — pure dcimgui + `std::time` (no objc). A private helper called by
     // [`Inspector::renderMetal`]'s double-frame loop.
     //
-    // PORT NOTE: carries `renderMetal`'s `#[cfg(target_os = "macos")]` (its sole
+    // PORT NOTE: carries `renderMetal`'s Darwin gate (its sole
     // caller, per the note there); the reference has no non-Darwin build of the
     // Metal inspector path at all, so an unconditional definition would be dead
     // code on every other target.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     fn newFrame(&mut self) -> Result<(), ApprtError> {
         // const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
         let io = unsafe { dcimgui_sys::ImGui_GetIO() };
@@ -3778,6 +3793,35 @@ mod keymap_lazy_tests {
         // And a second call reuses it rather than rebuilding.
         let _ = app.keyboardLayout();
         assert!(unsafe { &*app.keymap.get() }.is_some());
+    }
+}
+
+#[cfg(test)]
+mod key_event_core_tests {
+    use super::*;
+
+    fn event(unshifted_codepoint: u32) -> KeyEvent<'static> {
+        KeyEvent {
+            action: key::Action::Press,
+            mods: Mods::default(),
+            consumed_mods: Mods::default(),
+            keycode: 0,
+            text: None,
+            unshifted_codepoint,
+            composing: false,
+        }
+    }
+
+    /// S46-F2: `std.math.cast(u21, self.unshifted_codepoint) orelse 0`
+    /// (`embedded.zig:116-119`). The largest `u21` passes through; one past it, and
+    /// `u32::MAX`, become 0.
+    #[test]
+    fn key_event_core_zeroes_an_unshifted_codepoint_outside_u21() {
+        let cp = |v| event(v).core().expect("core key event").unshifted_codepoint;
+        assert_eq!(cp(u32::from('a')), u32::from('a'));
+        assert_eq!(cp(0x1F_FFFF), 0x1F_FFFF);
+        assert_eq!(cp(0x20_0000), 0);
+        assert_eq!(cp(u32::MAX), 0);
     }
 }
 
