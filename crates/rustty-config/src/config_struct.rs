@@ -6692,9 +6692,17 @@ impl Config {
         // if ((comptime builtin.os.tag == .linux) or (comptime builtin.os.tag == .freebsd)) {
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
-            // if (internal_os.xdg.parseTerminalExec(std.os.argv)) |args| {
-            let argv: Vec<String> = std::env::args().collect();
-            let argv_refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+            // if (internal_os.xdg.parseTerminalExec(global.args().vector)) |args| {
+            //
+            // PORT NOTE (NEW-FINDINGS N45): the reference passes the raw byte
+            // argv. This read `std::env::args()`, which panics on any non-UTF-8
+            // argument, so on Linux and FreeBSD `rustty -e cat $'\xff'` aborted at
+            // startup whatever argv[0] was. The argv is now read as bytes
+            // (`args_os` + `arg_bytes`, the seam `args_iterator` already uses).
+            let argv: Vec<Vec<u8>> = std::env::args_os()
+                .map(|arg| rustty_args::args::arg_bytes(&arg))
+                .collect();
+            let argv_refs: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
             if let Some(args) = rustty_os::xdg::parseTerminalExec(&argv_refs) {
                 // const arena_alloc = self._arena.?.allocator();
 

@@ -92,3 +92,10 @@ rustty-oniguruma = { workspace = true, optional = true }
 # helpgen.genConfig): build.rs scans config_struct.rs for each field's `///` doc.
 [build-dependencies]
 rustty-helpgen = { workspace = true }
+
+# Task R13-B (NEW-FINDINGS N45): this test re-executes itself with a non-UTF-8
+# argv. A libtest binary cannot be started with one (libtest's own `main` calls
+# `std::env::args()`), so it has its own `main`.
+[[test]]
+name = "load_cli_args_non_utf8_argv"
+harness = false

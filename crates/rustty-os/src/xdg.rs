@@ -171,9 +171,14 @@ fn dir(
 
 /// Parses the xdg-terminal-exec specification. This expects argv[0] to
 /// be "xdg-terminal-exec".
+///
+/// PORT NOTE (NEW-FINDINGS N45): the reference takes the raw byte argv
+/// (`[]const [*:0]const u8`). This took `&[&str]`, so its only caller had to
+/// build the argv with `std::env::args()`, which PANICS on a non-UTF-8
+/// argument. It now takes byte slices, like the reference.
 #[allow(non_snake_case)]
-pub fn parseTerminalExec<'a>(argv: &'a [&'a str]) -> Option<&'a [&'a str]> {
-    if path_basename(argv[0]) != "xdg-terminal-exec" {
+pub fn parseTerminalExec<'a>(argv: &'a [&'a [u8]]) -> Option<&'a [&'a [u8]]> {
+    if path_basename(argv[0]) != b"xdg-terminal-exec" {
         return None;
     }
 
@@ -183,7 +188,7 @@ pub fn parseTerminalExec<'a>(argv: &'a [&'a str]) -> Option<&'a [&'a str]> {
     }
 
     // If the first argument is "-e" we skip it.
-    let start: usize = if argv[1] == "-e" { 2 } else { 1 };
+    let start: usize = if argv[1] == b"-e" { 2 } else { 1 };
     Some(&argv[start..])
 }
 
@@ -251,15 +256,15 @@ fn path_join(paths: &[&[u8]]) -> Vec<u8> {
     buf
 }
 
-// `std.fs.path.basename`: the final path component.
-fn path_basename(path: &str) -> &str {
-    let bytes = path.as_bytes();
+// `std.fs.path.basename`: the final path component, on raw path bytes.
+fn path_basename(path: &[u8]) -> &[u8] {
+    let bytes = path;
     let mut end_index = bytes.len();
     while end_index > 0 && is_sep(bytes[end_index - 1]) {
         end_index -= 1;
     }
     if end_index == 0 {
-        return "";
+        return b"";
     }
     let mut start_index = end_index;
     while start_index > 0 && !is_sep(bytes[start_index - 1]) {
@@ -481,25 +486,42 @@ mod tests {
     #[test]
     #[allow(non_snake_case)]
     fn parse_terminal_exec() {
+        // PORT NOTE: the reference's argv elements are `[*:0]const u8`; the
+        // port's are byte slices, spelled `&b"…"[..]` here.
         {
-            let actual = parseTerminalExec(&["a", "b", "c"]);
+            let argv: [&[u8]; 3] = [b"a", b"b", b"c"];
+            let actual = parseTerminalExec(&argv);
             assert!(actual.is_none());
         }
         {
-            let actual = parseTerminalExec(&["xdg-terminal-exec"]).unwrap();
-            assert_eq!(actual, &[] as &[&str]);
+            let argv: [&[u8]; 1] = [b"xdg-terminal-exec"];
+            let actual = parseTerminalExec(&argv).unwrap();
+            assert_eq!(actual, &[] as &[&[u8]]);
         }
         {
-            let actual = parseTerminalExec(&["xdg-terminal-exec", "a", "b", "c"]).unwrap();
-            assert_eq!(actual, &["a", "b", "c"]);
+            let argv: [&[u8]; 4] = [b"xdg-terminal-exec", b"a", b"b", b"c"];
+            let actual = parseTerminalExec(&argv).unwrap();
+            assert_eq!(actual, &[&b"a"[..], b"b", b"c"]);
         }
         {
-            let actual = parseTerminalExec(&["xdg-terminal-exec", "-e", "a", "b", "c"]).unwrap();
-            assert_eq!(actual, &["a", "b", "c"]);
+            let argv: [&[u8]; 5] = [b"xdg-terminal-exec", b"-e", b"a", b"b", b"c"];
+            let actual = parseTerminalExec(&argv).unwrap();
+            assert_eq!(actual, &[&b"a"[..], b"b", b"c"]);
         }
         {
-            let actual = parseTerminalExec(&["xdg-terminal-exec", "a", "-e", "b", "c"]).unwrap();
-            assert_eq!(actual, &["a", "-e", "b", "c"]);
+            let argv: [&[u8]; 5] = [b"xdg-terminal-exec", b"a", b"-e", b"b", b"c"];
+            let actual = parseTerminalExec(&argv).unwrap();
+            assert_eq!(actual, &[&b"a"[..], b"-e", b"b", b"c"]);
         }
+    }
+
+    // rustty-only (N45): argv elements that are not UTF-8 pass through
+    // unchanged, in argv0's directory part and in the command.
+    #[test]
+    fn parse_terminal_exec_keeps_non_utf8_bytes() {
+        let argv: [&[u8]; 4] = [b"/opt/\xe9/xdg-terminal-exec", b"-e", b"cat", b"\xff\xfe"];
+        let actual = parseTerminalExec(&argv).unwrap();
+        assert_eq!(actual, &[&b"cat"[..], b"\xff\xfe"]);
+        assert!(std::str::from_utf8(actual[1]).is_err());
     }
 }
