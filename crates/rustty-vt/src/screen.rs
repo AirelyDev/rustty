@@ -264,6 +264,73 @@ pub struct Cursor {
 }
 
 impl Cursor {
+    /// `std.meta.eql(a, b)` for a `Cursor`.
+    ///
+    /// PORT NOTE (S143-F1, no reference counterpart): the reference's resize
+    /// failure test asserts `std.meta.eql(before_primary.cursor, primary.cursor)`
+    /// — the WHOLE cursor, including `pending_wrap`, the style, the hyperlink
+    /// state and the three page pointers. `std.meta.eql` compares pointer
+    /// fields by ADDRESS (it does not follow them) and recurses into struct
+    /// fields, which is what this reproduces; `Style` carries its own `eql`
+    /// (the reference's `Style` is a plain struct that `std.meta.eql` walks).
+    ///
+    /// Both sides are destructured rather than compared field-by-field, so a
+    /// field added to `Cursor` fails to compile here instead of silently
+    /// dropping out of the comparison — the reflection the reference gets from
+    /// `std.meta.eql` for free.
+    #[cfg(test)]
+    pub(crate) fn meta_eql(&self, other: &Cursor) -> bool {
+        let Cursor {
+            x,
+            y,
+            cursor_style,
+            pending_wrap,
+            protected,
+            style,
+            style_id,
+            hyperlink_id,
+            hyperlink_implicit_id,
+            hyperlink,
+            semantic_content,
+            semantic_content_clear_eol,
+            page_pin,
+            page_row,
+            page_cell,
+        } = self;
+        let Cursor {
+            x: o_x,
+            y: o_y,
+            cursor_style: o_cursor_style,
+            pending_wrap: o_pending_wrap,
+            protected: o_protected,
+            style: o_style,
+            style_id: o_style_id,
+            hyperlink_id: o_hyperlink_id,
+            hyperlink_implicit_id: o_hyperlink_implicit_id,
+            hyperlink: o_hyperlink,
+            semantic_content: o_semantic_content,
+            semantic_content_clear_eol: o_semantic_content_clear_eol,
+            page_pin: o_page_pin,
+            page_row: o_page_row,
+            page_cell: o_page_cell,
+        } = other;
+        x == o_x
+            && y == o_y
+            && cursor_style == o_cursor_style
+            && pending_wrap == o_pending_wrap
+            && protected == o_protected
+            && style.eql(o_style)
+            && style_id == o_style_id
+            && hyperlink_id == o_hyperlink_id
+            && hyperlink_implicit_id == o_hyperlink_implicit_id
+            && hyperlink == o_hyperlink
+            && semantic_content == o_semantic_content
+            && semantic_content_clear_eol == o_semantic_content_clear_eol
+            && page_pin == o_page_pin
+            && page_row == o_page_row
+            && page_cell == o_page_cell
+    }
+
     pub fn deinit(&mut self, alloc: Allocator) {
         // if (self.hyperlink) |link| {
         //     link.deinit(alloc);

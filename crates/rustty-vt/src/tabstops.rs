@@ -157,6 +157,35 @@ impl Default for Tabstops<Global> {
 }
 
 impl<A: Allocator> Tabstops<A> {
+    /// The value `std.meta.eql(a, b)` compares for a `Tabstops`, as a
+    /// comparable snapshot.
+    ///
+    /// PORT NOTE (S143-F1, no reference counterpart): the reference's resize
+    /// failure test asserts `std.meta.eql(before.tabstops, t.tabstops)` on a
+    /// BY-VALUE copy of the whole struct. `std.meta.eql` compares an array
+    /// field elementwise and a SLICE field by `ptr` and `len` — not by
+    /// contents — so this returns exactly those three things. `Tabstops` is not
+    /// `Copy` here (`dynamic_stops` is a `Box<[Unit], A>`), so the test
+    /// snapshots this tuple instead of the struct.
+    ///
+    /// Destructured rather than field-by-field on purpose: a field added to
+    /// `Tabstops` fails to compile here until it is accounted for, which is
+    /// what `std.meta.eql`'s reflection gives the reference for free.
+    #[cfg(test)]
+    pub(crate) fn meta_eql_snapshot(&self) -> (usize, [Unit; PREALLOC_COUNT], *const Unit, usize) {
+        let Tabstops {
+            cols,
+            prealloc_stops,
+            dynamic_stops,
+        } = self;
+        (
+            *cols,
+            *prealloc_stops,
+            dynamic_stops.as_ptr(),
+            dynamic_stops.len(),
+        )
+    }
+
     // pub fn deinit(self: *Tabstops, alloc: Allocator) void {
     //     if (self.dynamic_stops.len > 0) alloc.free(self.dynamic_stops);
     //     self.* = undefined;

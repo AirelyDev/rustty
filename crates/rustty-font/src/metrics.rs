@@ -948,12 +948,22 @@ mod tests {
 
     // PORT NOTE: the reference's two `formatConfig` tests live under the
     // `Modifier` struct and gate on `@import("terminal_options").artifact == .lib`
-    // returning `error.SkipZigTest` before importing `../config.zig`. The config
-    // crate is not yet carved into rustty, so the formatter cannot be wired here;
-    // we exercise the same `parseCLI` + `formatEntry` value path the reference
-    // tests assert ("a = 24%\n" / "a = -30\n" minus the config-supplied "a = "
-    // prefix and trailing newline, which are produced by the not-yet-ported
-    // `configpkg.entryFormatter`). The artifact gate is `options::ARTIFACT`.
+    // returning `error.SkipZigTest` before importing `../config.zig`. The
+    // artifact gate is `options::ARTIFACT`.
+    //
+    // CORRECTION (S85-F4): the note that stood here said "The config crate is
+    // not yet carved into rustty, so the formatter cannot be wired here", and
+    // both tests asserted only the VALUE (`b"24%"` / `b"-30"`) where the
+    // reference asserts the whole formatted entry line. That premise has been
+    // false since `rustty-cfg-fmt` landed: `format_entry_string` IS the port of
+    // `configpkg.entryFormatter`'s string arm, it is a dependency-free leaf, and
+    // `rustty-config`'s `config_struct.rs` drives production formatting through
+    // it. The tests now assert the reference's own strings.
+    //
+    // PORT NOTE: the reference's `Modifier.formatEntry(formatter)` writes the
+    // whole line itself; the port splits it — `Modifier::format_entry` renders
+    // the VALUE and the config layer wraps it with the key and the newline —
+    // so the test composes the same two pieces production composes.
     #[test]
     fn formatConfig_percent() {
         if crate::options::ARTIFACT == crate::options::Artifact::Lib {
@@ -962,7 +972,10 @@ mod tests {
         let p = Modifier::parse_cli(Some(b"24%")).unwrap();
         let mut buf = [0u8; 1024];
         let out = p.format_entry(&mut buf).unwrap();
-        assert_eq!(out, b"24%");
+        let mut w = rustty_cfg_fmt::AllocatingWriter::init();
+        rustty_cfg_fmt::format_entry_string(b"a", out, &mut w).unwrap();
+        // try std.testing.expectEqualSlices(u8, "a = 24%\n", buf.written());
+        assert_eq!(w.written(), b"a = 24%\n");
     }
 
     #[test]
@@ -973,7 +986,10 @@ mod tests {
         let p = Modifier::parse_cli(Some(b"-30")).unwrap();
         let mut buf = [0u8; 1024];
         let out = p.format_entry(&mut buf).unwrap();
-        assert_eq!(out, b"-30");
+        let mut w = rustty_cfg_fmt::AllocatingWriter::init();
+        rustty_cfg_fmt::format_entry_string(b"a", out, &mut w).unwrap();
+        // try std.testing.expectEqualSlices(u8, "a = -30\n", buf.written());
+        assert_eq!(w.written(), b"a = -30\n");
     }
 
     #[test]

@@ -49,6 +49,12 @@ rustty-z2d = { workspace = true }
 allocator-api2 = { workspace = true }
 
 [dev-dependencies]
+# TEST-ONLY (parity S85-F4): the reference's two `formatConfig` tests run the
+# modifier through `configpkg.entryFormatter("a", ..)` and assert the WHOLE
+# formatted entry line (`"a = 24%\n"`). `rustty-cfg-fmt` is the port of that
+# formatter and is a dependency-free leaf crate, so the tests can assert the
+# reference's string without rustty-font gaining a config edge.
+rustty-cfg-fmt = { workspace = true }
 # TEST-ONLY (parity S83-F3 / S86-F4): enable rustty-util's `tripwire-test`
 # feature so this crate's fail-point tests trip in the RELEASE test lane too.
 # Zig's `builtin.is_test` is true for the whole compilation unit at ANY optimize

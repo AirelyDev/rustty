@@ -330,7 +330,11 @@ pub enum MouseShiftCapture {
 
 /// These are just a packed set of flags we may set on the terminal.
 // flags: packed struct { ... } = .{}
-#[derive(Debug, Clone, Copy)]
+//
+// PORT NOTE (S143-F1): `PartialEq`/`Eq` so the resize failure-path test can do
+// the reference's `try testing.expectEqual(before.flags, t.flags)` — whole
+// struct, every field — instead of picking out `dirty.clear`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Flags {
     // This supports a Kitty extension where programs using semantic
     // prompts (OSC133) can annotate their new prompts with `redraw=0` to
@@ -438,7 +442,7 @@ impl Colors {
 /// This only contains dirty flags for terminal state, not for the screen
 /// state. The screen state has its own dirty flags.
 // pub const Dirty = packed struct { ... }
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Dirty {
     /// Set when the color palette is modified in any way.
     pub palette: bool,
@@ -19338,7 +19342,19 @@ mod tests {
             ));
 
             // PORT NOTE: `const before = t;` is a Zig by-value struct copy; the
-            // Rust port snapshots exactly the fields the reference compares.
+            // Rust port snapshots the fields the reference compares.
+            //
+            // CORRECTION (S143-F1): the note that stood here said the port
+            // "snapshots exactly the fields the reference compares". It did
+            // not. The reference compares whole values —
+            // `expectEqual(before.flags, t.flags)` (every `Flags` field),
+            // `std.meta.eql(before.tabstops, t.tabstops)` (the entire tabstop
+            // table) and `std.meta.eql(before_*.cursor, *.cursor)` (the entire
+            // `Cursor`) — where the port compared `flags.dirty.clear`, the two
+            // tabstop bits at columns 8 and 3, and the cursor `(x, y)` pair. A
+            // rollback that cleared another `Flags` field, disturbed another
+            // tabstop or altered `cursor.pending_wrap` passed here and failed
+            // upstream.
             let before_width_px = t.width_px;
             let before_height_px = t.height_px;
             let before_modes = (t.modes.values, t.modes.saved, t.modes.default);
@@ -19350,9 +19366,8 @@ mod tests {
                 t.scrolling_region.left,
                 t.scrolling_region.right,
             );
-            let before_dirty_clear = t.flags.dirty.clear;
-            let before_tabstop_8 = t.tabstops.get(8);
-            let before_tabstop_3 = t.tabstops.get(3);
+            let before_flags = t.flags;
+            let before_tabstops = t.tabstops.meta_eql_snapshot();
             let before_active_key = t.screens.active_key;
             let before_active = t.screens.active;
             let (before_primary_cols, before_primary_rows, before_primary_total_rows) = unsafe {
@@ -19362,7 +19377,7 @@ mod tests {
                     (*primary).pages.total_rows,
                 )
             };
-            let before_primary_cursor_xy = unsafe { ((*primary).cursor.x, (*primary).cursor.y) };
+            let before_primary_cursor = unsafe { (*primary).cursor };
             let before_primary_page: Vec<u8> = unsafe {
                 let page: *const Page = crate::pagelist::Node::page((*primary).pages.pages.first);
                 core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len()).to_vec()
@@ -19374,7 +19389,7 @@ mod tests {
                     (*alternate).pages.total_rows,
                 )
             };
-            let before_alt_cursor_xy = unsafe { ((*alternate).cursor.x, (*alternate).cursor.y) };
+            let before_alternate_cursor = unsafe { (*alternate).cursor };
             let before_alternate_page: Vec<u8> = unsafe {
                 let page: *const Page = crate::pagelist::Node::page((*alternate).pages.pages.first);
                 core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len()).to_vec()
@@ -19473,9 +19488,10 @@ mod tests {
                     t.scrolling_region.right,
                 )
             );
-            assert_eq!(before_dirty_clear, t.flags.dirty.clear);
-            assert_eq!(before_tabstop_8, t.tabstops.get(8));
-            assert_eq!(before_tabstop_3, t.tabstops.get(3));
+            // try testing.expectEqual(before.flags, t.flags);
+            assert_eq!(before_flags, t.flags);
+            // try testing.expect(std.meta.eql(before.tabstops, t.tabstops));
+            assert_eq!(before_tabstops, t.tabstops.meta_eql_snapshot());
             assert_eq!(before_active_key, t.screens.active_key);
             assert!(std::ptr::eq(before_active, t.screens.active));
 
@@ -19483,9 +19499,10 @@ mod tests {
                 assert_eq!(before_primary_cols, (*primary).pages.cols);
                 assert_eq!(before_primary_rows, (*primary).pages.rows);
                 assert_eq!(before_primary_total_rows, (*primary).pages.total_rows);
-                assert_eq!(
-                    before_primary_cursor_xy,
-                    ((*primary).cursor.x, (*primary).cursor.y)
+                // try testing.expect(std.meta.eql(before_primary.cursor, primary.cursor));
+                assert!(
+                    before_primary_cursor.meta_eql(&(*primary).cursor),
+                    "primary cursor changed after a failed resize"
                 );
                 let page: *const Page = crate::pagelist::Node::page((*primary).pages.pages.first);
                 let after = core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len());
@@ -19497,9 +19514,10 @@ mod tests {
                 assert_eq!(before_alt_cols, (*alternate).pages.cols);
                 assert_eq!(before_alt_rows, (*alternate).pages.rows);
                 assert_eq!(before_alt_total_rows, (*alternate).pages.total_rows);
-                assert_eq!(
-                    before_alt_cursor_xy,
-                    ((*alternate).cursor.x, (*alternate).cursor.y)
+                // try testing.expect(std.meta.eql(before_alternate.cursor, alternate.cursor));
+                assert!(
+                    before_alternate_cursor.meta_eql(&(*alternate).cursor),
+                    "alternate cursor changed after a failed resize"
                 );
                 let page: *const Page = crate::pagelist::Node::page((*alternate).pages.pages.first);
                 let after = core::slice::from_raw_parts((*page).memory_ptr(), (*page).memory_len());
