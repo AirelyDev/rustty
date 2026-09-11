@@ -508,6 +508,292 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    For zero-sized `K`, find the entry's index by scanning `metadata` for the one used slot (or probe from `hash(key) & mask`), and change the "0 sized key" test to use `void` as the key type so it exercises the branch it is named for.
 - upstream status: not reported
 
+### UD29 — GTK `winproto/noop.zig` `updateConfigEvent` names a type that does not exist
+- kind:            latent (compile)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/apprt/gtk/winproto/noop.zig:64-67 (`pub fn updateConfigEvent(_: *Window, _: *const ApprtWindow.DerivedConfig) !void {}`), `ApprtWindow` imported at :8 from `../class/window.zig`, at 20abdb50a
+- defect:          `class/window.zig` declares no `DerivedConfig`: a search of `src/apprt/gtk` finds only this line, a comment in `class/config.zig:18`, and an unrelated `font.SharedGridSet.DerivedConfig` in `class/surface.zig:2206`. Nothing calls it: the `winproto.zig` dispatcher's `Window` has no `updateConfigEvent`, and neither `wayland.zig` nor `x11.zig` defines one. Zig never analyses the declaration, so the build passes. It is a leftover from the pre-GObject apprt.
+- ReleaseSafe:     none; a compile error on first reference.
+- ReleaseFast:     same.
+- reachability:    none.
+- port handling:   not ported (the parameter type does not exist): `crates/rustty-apprt/src/gtk/winproto/noop.rs:117-123` explains, citing N32.
+- parity row(s):   NEW-FINDINGS N32; S60-F4, S60-F9 (unchanged); inventory M52.
+- test:            n/a.
+- proposed fix:    Delete `updateConfigEvent` from `winproto/noop.zig`.
+- upstream status: not reported
+
+### UD30 — renderer `cursorTimerCallback` logs "render callback fired without data set"
+- kind:            latent (copy-paste in a log message)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/renderer/Thread.zig:654-683 (`cursorTimerCallback`), message at :672; the original in `renderCallback` at :563; the correctly renamed sibling "animation callback fired without data set" at :625, at 20abdb50a
+- defect:          The null-userdata warning in the cursor blink timer callback was copied from `renderCallback` without renaming, so a missing-userdata event in the cursor timer is logged as a render-callback problem. The animation callback shows the intended pattern.
+- ReleaseSafe:     misleading log only.
+- ReleaseFast:     same.
+- reachability:    none in practice (the userdata is always set when the timer is armed).
+- port handling:   faithful: `crates/rustty-core/src/renderer_seam.rs:1924` (reference quoted at :1915).
+- parity row(s):   none; inventory M53.
+- test:            n/a.
+- proposed fix:    Change the message at :672 to "cursor timer callback fired without data set".
+- upstream status: not reported
+
+### UD31 — copy-pasted log messages: `ghostty_surface_split_focus` and GTK `setWindowTitle`
+- kind:            latent (copy-paste in log messages)
+- upstream project: ghostty
+- severity:        low
+- reference:       at 20abdb50a:
+  - src/apprt/embedded.zig:2182-2195 (`ghostty_surface_split_focus`, performing `.goto_split`) logs "error creating new split err={}" at :2192, copied from `ghostty_surface_split` (:2177).
+  - src/apprt/gtk/class/application.zig:3111-3133 (`setWindowTitle`, dispatched for `.set_window_title` at :773) logs "set_tab_title to app is unexpected" at :3117, copied from `setTabTitle` (:3093).
+- defect:          Both messages name the wrong operation, so a `goto_split` failure is reported as a split-creation failure, and an app-targeted `set_window_title` as `set_tab_title`.
+  - Two further sub-sites in the source records are **refuted at the pin**: "mouse over link does nothing with an app target" and "set mouse shapes nothing" are not in `src/` (removed upstream in the embedded action rework). The `ghostty_app_set_color_scheme` message (inventory M103) is refuted too: the pin logs "error setting color scheme" (embedded.zig:1791).
+- ReleaseSafe:     misleading logs only.
+- ReleaseFast:     same.
+- reachability:    embedder (a split focus failure) and GTK (an app-targeted `set_window_title`).
+- port handling:   faithful: `crates/rustty-apprt-c/src/lib.rs:2201-2211` (PORT NOTE naming the copy-paste) and `crates/rustty-apprt/src/gtk/class/application.rs:4682-4684`.
+- parity row(s):   none; inventory M54.
+- test:            n/a.
+- proposed fix:    embedded.zig:2192 → "error focusing split err={}"; application.zig:3117 → "set_window_title to app is unexpected".
+- upstream status: not reported
+
+### UD32 — OpenGL `present` does not check `BlitFramebuffer`; its error is reported as a failure to re-enable sRGB
+- kind:            latent
+- upstream project: ghostty
+- severity:        low
+- reference:       src/renderer/OpenGL.zig:299-331 (`present`): `defer gl.enable(GL_FRAMEBUFFER_SRGB) catch |err| log.err("Error re-enabling GL_FRAMEBUFFER_SRGB, err={}", …)` at :307-309, unchecked `BlitFramebuffer` at :316-327, `self.last_target = target` at :330; pkg/opengl/draw.zig:56-59 (`enable` calls `errors.getError()` after `glEnable`); pkg/opengl/Framebuffer.zig:66-71 (`unbind` does not check); pkg/opengl/errors.zig:16-26 (`getError` reads one `glGetError`), at 20abdb50a
+- defect:          `glBlitFramebuffer` records its error (for example `GL_INVALID_OPERATION` for mismatched formats, or `GL_INVALID_FRAMEBUFFER_OPERATION` for an incomplete read framebuffer) and nothing checks it. `present` returns success and records the target as presented. On scope exit the framebuffer unbind runs unchecked, then the deferred `gl.enable` calls `glGetError`, receives the blit's pending error, and logs "Error re-enabling GL_FRAMEBUFFER_SRGB" although `glEnable` itself succeeded. By reading.
+- ReleaseSafe:     no crash; a failed present is invisible to the caller and its log line blames the wrong call.
+- ReleaseFast:     same.
+- reachability:    GL driver or framebuffer state errors.
+- port handling:   faithful: `crates/rustty-renderer/src/opengl/opengl_impl.rs:476-485` and `:577-588` (the restored log is the only report).
+- parity row(s):   none; inventory M55.
+- test:            n/a.
+- proposed fix:    Call `try gl.errors.getError();` immediately after `BlitFramebuffer`, so `present` fails and `last_target` is not updated on failure; that also stops the error leaking into the deferred `enable`.
+- upstream status: not reported
+
+### UD33 — dead diagnostic helpers whose only callers are commented out
+- kind:            latent (dead code)
+- upstream project: ghostty
+- severity:        low
+- reference:       at 20abdb50a:
+  - src/font/shaper/coretext.zig:690 `fn debugPositions` (only call commented out at :503)
+  - src/font/shaper/harfbuzz.zig:302 `fn debugPositions` (commented call at :236)
+  - pkg/macos/text/font_collection.zig:41 `fn debugDumpList` (commented calls at :114, :138)
+  - src/terminal/bitmap_allocator.zig:212 `fn dumpBitmaps` (no caller)
+  - src/inspector/widgets/termio.zig:435 `pub fn eventTable` (commented call at :120; no other caller in `src/`; `inspector/main.zig`'s test uses non-recursive `refAllDecls`)
+- defect:          These functions are never referenced, so Zig never analyses them. They are not type-checked against current APIs and can bit-rot unnoticed. The source records also mention "eight gate log sites"; those were not located, are **UNVERIFIED**, and are not included.
+- ReleaseSafe:     none.
+- ReleaseFast:     none.
+- reachability:    none.
+- port handling:   faithful, tracked by the N22 dead-site ratchet (`.port/parity-closure/LOG-DEAD-SITES.tsv`).
+- parity row(s):   NEW-FINDINGS N22; S109-F1, S149-F3 (WAIVED, unchanged); inventory M56.
+- test:            n/a.
+- proposed fix:    Either delete them, or keep them type-checked by referencing them from a test or behind a comptime debug flag. Upstream may prefer to keep them as debugging aids, so the issue should present both options.
+- upstream status: not reported
+
+### UD34 — `highlight.Flattened.init` cannot compile (wrong field name and wrong chunk type)
+- kind:            latent (compile)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/terminal/highlight.zig:141-160 (`Flattened.init`); `const PageChunk = PageList.PageIterator.Chunk` at :16; `Flattened` fields at :116-122 (`chunks: std.MultiArrayList(Chunk)`, `top_x`, `bot_x`) and `Flattened.Chunk` at :128-133; `PageIterator.Chunk` at src/terminal/PageList.zig:6617-6624, at 20abdb50a
+- defect:          Three compile errors, all in a function nothing calls (no `Flattened.init` or decl-literal `.init` caller in `src/`; `Flattened` values are built from `.empty` elsewhere, e.g. `search/sliding_window.zig:327`):
+  1. `.end_x = end.x` at :158: `Flattened` has `bot_x`, not `end_x`.
+  2. `result` is a `std.MultiArrayList(PageChunk)` (:146), and `PageIterator.Chunk` has only `node`, `start` and `end`, so appending `.serial = chunk.node.serial` (:151) names a nonexistent field.
+  3. `.chunks = result` (:156) assigns a `MultiArrayList(PageChunk)` to a `MultiArrayList(Flattened.Chunk)` field.
+  By reading; not compiled.
+- ReleaseSafe:     none; a compile error on first use.
+- ReleaseFast:     same.
+- reachability:    none.
+- port handling:   ported with the evident intent (`bot_x`, chunks carrying `serial`): `crates/rustty-vt/src/highlight.rs:168-199`, PORT NOTE at :193-197.
+- parity row(s):   S155-F6 (OOM only, unchanged); inventory M57.
+- test:            n/a.
+- proposed fix:    Declare `result` as `std.MultiArrayList(Chunk)` and write `.bot_x = end.x`; add a small test that flattens a two-page highlight so the function is analysed. Or delete `init` if it is not meant to be used.
+- upstream status: not reported
+
+### UD35 — IPC `NewTab.C.deinit` and `NewTab.cval` are copies of `NewWindow`'s, and neither struct's `cval`/`deinit` compiles
+- kind:            latent (compile)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/apprt/ipc.zig:124-171 (`NewTab`): `pub fn deinit(self: *NewWindow.C, …)` at :151 and `pub fn cval(self: *NewWindow, …) … !NewWindow.C` at :156-170; the `NewWindow` originals at :100-102 and :105-119; the generic dispatcher `Action.cval` at :238-251, at 20abdb50a
+- defect:          `NewTab.C.deinit` takes `*NewWindow.C`, and `NewTab.cval` takes `*NewWindow` and returns `NewWindow.C`, so neither can be called on a `NewTab`, and `cval` never sets `surface_id`, the one field `NewTab.C` adds. The shared body is also ill-typed in both structs. **Measured** by compiling a verbatim copy of `NewWindow` with Zig 0.16.0 and a test that calls `cval` and `C.deinit`:
+  - `cval` fails with "expected type '?[*]?[*:0]const u8', found '[][*:0]const u8'": it assigns `alloc.alloc([*:0]const u8, n)` (a slice) to the many-pointer field (and would then index the optional).
+  - `C.deinit` fails inside `Allocator.free`'s `comptime assert(slice_info.size == .slice)`, because `arguments` is a many-pointer.
+  Nothing reaches these: the only caller of a per-action `cval` is `Action.cval` (:243), and nothing in `src/` calls `Action.cval`. By reading, `Action.cval` would not compile either (it passes the error union `cval` returns straight into a union field, and calls a `*NewWindow` method on a by-value capture).
+- ReleaseSafe:     none; compile errors on first use.
+- ReleaseFast:     same.
+- reachability:    none.
+- port handling:   corrected with UPSTREAM QUIRK notes: `crates/rustty-apprt-api/src/ipc.rs:224-232` (`NewTabC::deinit`) and `:250-256` (`NewTab::cval`, passes `surface_id` through).
+- parity row(s):   none in LEDGER; phase-4 P4-U2; inventory M58.
+- test:            n/a. Probe: a verbatim copy of `NewWindow` under `zig test` (Zig 0.16.0), task R13-R.
+- proposed fix:    Change the `NewTab` receivers to `*NewTab.C` / `*NewTab` and the return type to `NewTab.C`, and set `result.surface_id = self.surface_id`. In both structs, marshal through a slice and store its pointer (`const args = try alloc.alloc(?[*:0]const u8, n + 1); … result.arguments = args.ptr;`), and free with the reconstructed slice length. Make `Action.cval` `try` the payload's `cval` and return an error union. Add a test that calls `Action.cval` for both actions. Or remove the unused `cval`s.
+- upstream status: not reported
+
+### UD36 — `termio.Backend.childExitedAbnormally` calls a function `Exec` does not define
+- kind:            latent (compile)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/termio/backend.zig:88-103 (`Backend.childExitedAbnormally`, calling `exec.childExitedAbnormally(gpa, t, exit_code, runtime_ms)` at :96), at 20abdb50a
+- defect:          `src/termio/Exec.zig` defines no `childExitedAbnormally` (a search of `src` finds only this wrapper and `Surface.zig`'s own private function). Nothing calls `Backend.childExitedAbnormally`: the abnormal-exit message is built in `Surface.childExitedAbnormally` (src/Surface.zig:1277, :1330). Zig never analyses the wrapper, so the build passes.
+- ReleaseSafe:     none; a compile error on first use.
+- ReleaseFast:     same.
+- reachability:    none.
+- port handling:   a tripwire `unimplemented!` with an explanation: `crates/rustty-termio/src/backend.rs:172-185`.
+- parity row(s):   none; inventory M59.
+- test:            n/a.
+- proposed fix:    Delete `Backend.childExitedAbnormally` from `backend.zig`.
+- upstream status: not reported
+
+### UD37 — wasm `web_canvas` shaper refers to APIs that no longer exist
+- kind:            latent (compile)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/font/shaper/web_canvas.zig at 20abdb50a:
+  - :188 `run.group.group.faceFromIndex(run.font_index)`
+  - :264 and :273 `group: *font.GroupCache`
+  - :275 `terminal.Terminal.init(alloc, self.cell_buf.len, 80)`
+  - :288 `term.screen.rowIterator(.viewport)`
+  - :293 `self.runIterator(group, row, null, null)`
+- defect:          `font.shape.TextRun` has `grid: *font.SharedGrid` and no `group` field (src/font/shaper/run.zig:13-38), and no `faceFromIndex` exists in `src/`. `font.GroupCache` is not exported by `src/font/main.zig` (stale `const GroupCache = font.GroupCache;` aliases also remain, unused, in `shaper/coretext.zig:17` and `shaper/noop.zig:8`). `Terminal` has `screens`, not `screen` (Terminal.zig:48), and `Terminal.init` is now `init(io, alloc, opts)` (:311-315). The shaper's own `runIterator` takes one `RunOptions` argument (:63-71). The file is selected only for wasm targets (font/main.zig:34-40, :50), and no build step compiles Ghostty's wasm font tree: `src/main_wasm.zig`, the root that would import it, is referenced by no build file, and the only wasm artifact is libghostty-vt (`src/build/GhosttyLibVt.zig`), whose root does not import `font/main.zig`. So none of this is analysed.
+- ReleaseSafe:     none; compile errors if the wasm font tree is built.
+- ReleaseFast:     same.
+- reachability:    none.
+- port handling:   ported by evident intent ("FAITHFUL MODERNIZATION": `faceFromIndex` → `Collection::get_face`): `crates/rustty-font-shaper/src/shaper/web_canvas.rs:7-16` (module note) and `:250-252`; the `shaper_test` rework at `:346` and `:432`.
+- parity row(s):   none; inventory M60.
+- test:            n/a.
+- proposed fix:    Either update the wasm shaper to the `SharedGrid` API (`run.grid.resolver.collection.getFace(run.font_index)`, `Terminal.init(io, alloc, .{ .cols = …, .rows = … })`, `screens.active`, `runIterator(.{ … })`) and add the wasm font tree to a CI build, or delete `shaper/web_canvas.zig` together with `face/web_canvas.zig` (UD38).
+- upstream status: not reported
+
+### UD38 — web_canvas `renderGlyph` switches on an `Atlas.Format.rgba` tag that no longer exists
+- kind:            latent (compile)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/font/face/web_canvas.zig:199-217 (`renderGlyph`, `.rgba => render.bitmap` at :202), reached from the wasm export `face_render_glyph` (:521-530, via `face_render_glyph_` :553); src/font/Atlas.zig:53-67 `Format = enum(u8) { grayscale = 0, bgr = 1, bgra = 2 }`, at 20abdb50a
+- defect:          Commit `41ae32814` ("renderer: fix color glyph rendering under OpenGL", an ancestor of the pin) renamed `Atlas.Format.rgba` to `bgra` and `rgb` to `bgr`, but left this switch arm on `.rgba`. `Format` is an exhaustive enum, so the arm is a compile error whenever `renderGlyph` is analysed. It has not been compiled since the rename, because nothing builds the wasm font tree (see UD37).
+  A rename alone would not fix it. `renderGlyphInternal` copies `ctx.getImageData(...).data` (:444-446), which is RGBA byte order; storing it verbatim in a `.bgra` atlas swaps the red and blue channels of every colour glyph.
+- ReleaseSafe:     no runtime effect; a compile error if the wasm font tree is built.
+- ReleaseFast:     same.
+- reachability:    none (no build step compiles it).
+- port handling:   deviates, because Rust compiles every item: `Format::Bgra => rgba_to_bgra(&render.bitmap)`, with the reference arm kept as a comment: `crates/rustty-font-shaper/src/face/web_canvas.rs:472-478` (module note :34-42, helper :818-826).
+- parity row(s):   none (S91 shard, no LEDGER row); inventory M61.
+- test:            n/a (record only).
+- proposed fix:    Change the arm to `.bgra` and convert the canvas RGBA bytes to BGRA before `atlas.set` (swap bytes 0 and 2 of each pixel). Also add the wasm font tree to a CI `zig build` check, or delete it (UD37).
+- upstream status: not reported
+
+### UD39 — GTK apprt `Surface.cgroup` calls `cgroupPath`, which was removed from the GObject surface
+- kind:            latent (compile)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/apprt/gtk/Surface.zig:40-42 (`pub fn cgroup(self: *Self) ?[]const u8 { return self.surface.cgroupPath(); }`), at 20abdb50a
+- defect:          `self.surface` is the `class/surface.zig` `Surface`, which has no `cgroupPath`: a search of `src` and `pkg` finds only this call. Commit `1342eb594` ("gtk: revamp cgroup/transient scope handling", an ancestor of the pin) deleted `cgroupPath` from `class/surface.zig` but left this wrapper. Nothing calls `.cgroup(` on an apprt surface, so Zig never analyses the body.
+- ReleaseSafe:     none; a compile error if anything calls it.
+- ReleaseFast:     same.
+- reachability:    none.
+- port handling:   a placeholder returning `None`: `crates/rustty-apprt/src/gtk/class/surface.rs:2215-2222` (`cgroup_path`, "Placeholder-leaf").
+- parity row(s):   none; inventory M62.
+- test:            n/a.
+- proposed fix:    Delete `Surface.cgroup` from `src/apprt/gtk/Surface.zig`. Since `1342eb594` the cgroup scope is per command (`post_fork.zig`), so there is no per-surface cgroup to return.
+- upstream status: not reported
+
+### UD40 — `pkg/opengl` `Buffer.Binding.attribute` and `draw.pixelStore` use removed `@typeInfo` tags and a method `Buffer.Binding` lacks
+- kind:            latent (compile)
+- upstream project: ghostty (pkg/opengl)
+- severity:        low
+- reference:       pkg/opengl/Buffer.zig:142-179 (`Binding.attribute`: `.Array => |ary|` at :159, `try b.enableAttribArray(idx)` at :178); pkg/opengl/draw.zig:80-86 (`pixelStore`: `.ComptimeInt, .Int =>` at :82), at 20abdb50a
+- defect:          The pin requires Zig 0.16.0 (`build.zig.zon:6`), whose `std.builtin.Type` tags are lowercase (`.array`, `.int`, `.comptime_int`); `.Array`, `.Int` and `.ComptimeInt` are pre-0.14 spellings. `attribute` also calls `b.enableAttribArray`, which `Buffer.Binding` does not declare; only `VertexArray.Binding` has one (pkg/opengl/VertexArray.zig:33). Neither function has a caller in Zig code (only the definitions and the `main.zig:42` re-export of `pixelStore`). Both take `comptime`/`anytype` parameters, so their bodies are checked only when instantiated, which never happens.
+- ReleaseSafe:     none; a compile error on first use.
+- ReleaseFast:     same.
+- reachability:    none.
+- port handling:   `Binding.attribute` is deliberately not ported (PORT NOTE `crates/rustty-renderer/src/opengl/gl/buffer.rs:13-26`); its helpers `attribute_divisor`, `attribute_advanced` and `attribute_i_advanced` are ported.
+- parity row(s):   none (S37-F3 is a session id with no LEDGER row); inventory M63.
+- test:            n/a.
+- proposed fix:    Delete `Buffer.Binding.attribute` and `draw.pixelStore`, which are unused. If kept, update the tags to `.array`/`.int`/`.comptime_int` and enable the attribute through the bound vertex array (`VertexArray.Binding.enableAttribArray`).
+- upstream status: not reported
+
+### UD41 — `FeatureList.format` contains a pasted copy of `Feature.format`'s body, and the file's formatters use std APIs Zig 0.16 lacks
+- kind:            latent (compile)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/font/shaper/feature.zig:258-284 (`FeatureList.format`), siblings `Feature.toString` :191-196 and `Feature.format` :198-219, at 20abdb50a
+- defect:          `FeatureList.format` loops over `self.features.items` but tests `i != std.features.items.len - 1` (:267); `std.features` does not exist (it should be `self.features`). After the loop the whole `Feature.format` body is pasted in (:269-283), using `self.value` and `self.tag`, which are not fields of `FeatureList`.
+  - All three functions also use std APIs Zig 0.16.0 does not have: `std.fmt.FormatOptions` (0.16 `std.fmt` defines `Options`, fmt.zig:31), `std.fmt.format`, `std.io` and `std.io.fixedBufferStream` (0.16 `std` exposes `Io`).
+  - Their 4-parameter `format(self, comptime layout, opts, writer)` signature is the pre-0.15 convention; current Ghostty formatters are `format(self, writer: *std.Io.Writer)`.
+  None of them is referenced: `toString` has no caller, and `FeatureList` is only constructed (shaper/harfbuzz.zig:65, shaper/coretext.zig:153), never formatted.
+- ReleaseSafe:     none; a compile error the first time a `Feature` or `FeatureList` is formatted or `toString` is called.
+- ReleaseFast:     same.
+- reachability:    none.
+- port handling:   the live loop is ported and the pasted tail kept as a comment with a PORT NOTE: `crates/rustty-font-shaper/src/shaper/feature.rs:453-489`; `Feature::to_string` ported live at `feature.rs:334-360`.
+- parity row(s):   none; inventory M64.
+- test:            n/a.
+- proposed fix:    Rewrite the formatters in the 0.16 form `pub fn format(self: T, writer: *std.Io.Writer) !void`: `FeatureList.format` iterates `self.features.items`, compares against `self.features.items.len - 1`, and drops the pasted tail; `Feature.format` uses `writer.print`; `toString` writes through `std.Io.Writer.fixed(buf)`. Add a test that formats a `FeatureList` (for example `-liga, kern=2`) so the formatters are analysed.
+- upstream status: not reported
+
+### UD42 — typo in the `os` module doc comment ("butos/main.zig")
+- kind:            latent (prose)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/os/main.zig:2, at 20abdb50a
+- defect:          The module doc reads "These aren't restricted to syscalls or low-level operations, butos/main.zig"; the file's own path was pasted into the sentence, which continues on the next line "also OS-specific features and conventions."
+- ReleaseSafe:     none.
+- ReleaseFast:     none.
+- reachability:    none (generated docs only).
+- port handling:   the port's prose reads "…low-level operations, but / also OS-specific features and conventions." (`crates/rustty-os/src/lib.rs:17-19`).
+- parity row(s):   none (phase-3 NON_PORTS E28); inventory M69.
+- test:            n/a.
+- proposed fix:    Replace `butos/main.zig` with `but` (bundle with UD43 as one typo PR).
+- upstream status: not reported
+
+### UD43 — typos: "Ghosttty" (two CLI docs), "fever than", and the GType name `GhostttySurfaceScrolledWindow`
+- kind:            latent (prose, plus one type name)
+- upstream project: ghostty
+- severity:        low
+- reference:       at 20abdb50a:
+  - src/cli/new_tab.zig:28 and src/cli/new_window.zig:24 ("They will be sent to Ghosttty")
+  - src/terminal/kitty/graphics_command.zig:16 ("KIP has fever than 52 possible")
+  - src/apprt/gtk/class/surface_scrolled_window.zig:23 (`.name = "GhostttySurfaceScrolledWindow"`) and src/apprt/gtk/ui/1.5/surface-scrolled-window.blp:4 (`template $GhostttySurfaceScrolledWindow: Adw.Bin`)
+- defect:          The first two are doc-comment typos ("Ghostty", "fewer"). The third is a registered GObject type name with a triple `t`; the other 28 `.name = "Ghostty…"` registrations in `src/apprt/gtk/class/` are spelled correctly. The misspelling is used consistently (the Zig class and the Blueprint template are its only two occurrences), so nothing is broken. The class sets no CSS name, so CSS selectors are unaffected. The name is visible in GtkInspector, in GLib warning output, and to anything that looks types up by name.
+- ReleaseSafe:     none.
+- ReleaseFast:     none.
+- reachability:    none.
+- port handling:   "fever than" faithful in `crates/rustty-vt/src/kitty/graphics_command.rs:33`; the GType faithful in `crates/rustty-apprt/src/gtk/class/surface_scrolled_window.rs:73-78` and `crates/rustty-apprt/assets/ui/1.5/surface-scrolled-window.blp:4`. The "Ghosttty" doc prose is a brand token, which the CLI ports retarget to the Rustty product name (R2): task R13-R made `crates/rustty-cli/src/new_tab.rs` and `new_window.rs` consistent ("Rustty" in both, with a note citing this entry); before that, `new_tab.rs` kept "Ghosttty" and `new_window.rs` did not.
+- parity row(s):   none; inventory M70.
+- test:            n/a.
+- proposed fix:    Fix the two prose typos. Rename the GType to `GhosttySurfaceScrolledWindow` in `surface_scrolled_window.zig:23` and `surface-scrolled-window.blp:4` in the same commit (the two must change together or template binding fails at class init). The GType name is not public API, but out-of-tree tooling matching on type names would see the change.
+- upstream status: not reported
+
+### UD44 — CLI TUIs leave the terminal raw on a panic: no root panic handler calls `vaxis.recover`
+- kind:            latent (functional)
+- upstream project: ghostty (with a libvaxis sub-report)
+- severity:        low
+- reference:       at 20abdb50a:
+  - src/main.zig:1-25 (the root re-exports `main` and `std_options` only). The only root `panic` declaration in `src` is `src/lib_vt.zig:500`, the libghostty-vt root.
+  - vaxis users: src/cli/boo.zig (`vxfw`), src/cli/list_themes.zig (`tty: vaxis.Tty` at :243, `deinit` at :301), and the pretty-print path of src/cli/list_colors.zig (`vaxis.Tty.init` at :82, `defer tty.deinit()` at :83).
+  - libvaxis 0.6.0 (pinned by `build.zig.zon:25-30`) `src/main.zig:50-79` (`Panic`, `panic_handler`, `recover`); `src/tty.zig:27,85,254` (`global_tty`, set in `Tty.init`).
+- defect:          libvaxis ships the recovery hook: `panic_handler` calls `recover()`, which writes `csi_u_pop ++ mouse_reset ++ bp_reset ++ rmcup`, flushes, and runs `Tty.deinit` (restoring termios). The hook only takes effect if the root module declares `panic`, and Ghostty's does not. Zig panics do not unwind, so the TUIs' `defer tty.deinit()` never runs. A panic in a vaxis TUI therefore goes to the default handler and exits with the tty in raw mode, the alternate screen active, and mouse and bracketed-paste reporting still enabled.
+  - libvaxis sub-report: the ready-made `vaxis.Panic` namespace cannot be used on Zig 0.16: it references `std.debug.FormattedPanic` (`main.zig:52-57`), which does not exist in the 0.16.0 std, although vaxis 0.6.0 declares `minimum_zig_version = "0.16.0"`.
+- ReleaseSafe:     any safety panic inside a TUI leaves the user's shell with echo off, no line editing, and the alternate screen active until `reset`. Mechanism by reading; the post-panic terminal state was **not measured (UNVERIFIED)**.
+- ReleaseFast:     same for an explicit `@panic`; safety checks become undefined behaviour instead.
+- reachability:    any panic in the CLI TUIs (for example the `list_themes` sites recorded as inventory M25).
+- port handling:   faithful: the rustty CLI installs no hook. `install_panic_recovery()` exists as an opt-in port (`crates/rustty-vaxis/src/lib.rs:128-146`, PORT NOTE W16-EXPLICIT-01) but no crate calls it. The CLI's release profile unwinds (the workspace sets `panic = "abort"` only for the xcframework profile, `Cargo.toml:426-433`), but the port's Tty has no `Drop` that restores termios.
+- parity row(s):   none; inventory M75.
+- test:            n/a.
+- proposed fix:    In the Ghostty root (`src/main_ghostty.zig`, re-exported through `main.zig` the way `std_options` is), declare `pub const panic = std.debug.FullPanic(struct { fn f(msg: []const u8, ra: ?usize) noreturn { vaxis.recover(); std.debug.defaultPanic(msg, ra); } }.f);` (`FullPanic` and `defaultPanic` exist in the 0.16.0 std, debug.zig:97, :489). `recover` is a no-op while `vaxis.tty.global_tty` is null, so the GUI path is unaffected. Raise two points with libvaxis: `global_tty` is set in `Tty.init` and not cleared by `deinit` (a panic after a TUI exited would `tcsetattr`/`close` a stale fd), and `vaxis.Panic` should move to `std.debug.FullPanic` for Zig 0.16.
+- upstream status: not reported
+
+### UD45 — `pkg/libxml2` builds `LIBXML_VERSION` by string concatenation: 2.11.5 becomes `201105`, not `21105`
+- kind:            latent (inert)
+- upstream project: ghostty (pkg/libxml2 build)
+- severity:        low
+- reference:       pkg/libxml2/build.zig:37-41 (`-DLIBXML_VERSION=` and `-DLIBXML_VERSION_STRING=`) and :128-146 (`Version.number()` returns `major ++ "0" ++ minor ++ "0" ++ micro` with `minor = "11"`, `micro = "5"`), at 20abdb50a. Pinned libxml2 2.11.5 (`pkg/libxml2/build.zig.zon:3,8-9`).
+- defect:          The concatenation matches libxml2's formula (`configure.ac:21`, `major * 10000 + minor * 100 + micro`) only when minor and micro each have one digit. For 2.11.5 it yields `"2" ++ "0" ++ "11" ++ "0" ++ "5" = 201105` instead of `21105`. The wrong value reaches `LIBXML_VERSION` (used by `xmlCheckVersion`, `parserInternals.c:64-82`) and `LIBXML_VERSION_STRING` (the exported `xmlParserVersion`, `globals.c:182,548`). `LIBXML_DOTTED_VERSION` is correct. A client calling `xmlCheckVersion(21105)` would get "Fatal: program compiled against libxml 2 using libxml 20" on stderr (no abort).
+- ReleaseSafe:     no effect in Ghostty's link graph.
+- ReleaseFast:     same.
+- reachability:    none today: the only consumer, fontconfig 2.14.2, references neither `xmlCheckVersion`, `LIBXML_TEST_VERSION`, `LIBXML_VERSION` nor `xmlParserVersion`, and the override `pkg/libxml2/override/include/libxml/xmlversion.h` defines none of them.
+- port handling:   faithful with a note: `crates-sys/libxml2-sys/build.rs:145` (`version_number()`) reproduces `"201105"` and argues it is inert (the note mentions only `xmlCheckVersion`, not `xmlParserVersion`; harmless for the same reason).
+- parity row(s):   none (session sF10); inventory M84.
+- test:            n/a.
+- proposed fix:    Compute the number arithmetically at comptime, for example `std.fmt.comptimePrint("{d}", .{major * 10000 + minor * 100 + micro})` with integer components, and derive both strings from it; or parse `configure.ac` as the TODO above `Version` suggests.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
@@ -517,8 +803,4 @@ Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do
 | C3 | `src/renderer/Thread.zig:698-723` `cursorCancelCallback` | `unreachable` on cancel errors other than Canceled/NotFound; reachability depends on what the event loop can return | crash? | **ported as `unreachable!()`** (task 14d-1, S114-F2) — reachability must be decided | task 14d-1 |
 | C4 | `src/termio/Exec.zig:1045`; `src/apprt/gtk/pre_exec.zig:39,58` | `log.err` between fork and exec: the log function allocates and locks, so a child forked from a multi-threaded parent can deadlock silently | deadlock | handled safely (raw `write`, tasks 14d-3 and 14e-1) | tasks 14d-3, 14e-1 |
 | C5 | `src/font/DeferredFace.zig:154-157, 186-197` | zero-copy `cstringPtr` path returns into a +1 CFString that is never released | leak | rows S85-F6 / S90-F3 left OPEN | task 16 |
-| C6 | `src/apprt/gtk/noop.zig` `updateConfigEvent` | references `ApprtWindow.DerivedConfig`, which does not exist; compiles only because nothing calls it | latent | N32 | task 18 |
-| C7 | `src/renderer/Thread.zig:672` `cursorTimerCallback` | log message says "render callback" — copy-pasted from the render callback | latent | kept verbatim (R1) | task 14d-1 review |
-| C8 | `src/renderer/OpenGL.zig:316-327` `present` | `BlitFramebuffer` unchecked; its GL error surfaces later inside the SRGB re-enable, misattributed | latent | faithful; restored log is the only report | task 14c-3 |
-| C9 | `src/font/shaper/coretext.zig`, `harfbuzz.zig` `debugPositions` | dead private functions, only callers commented out | latent | N22 dead-site ratchet | task 14e-2 |
 | C11 | `src/font/face/coretext.zig:1023-1036`; `src/terminal/StringMap` tests | assertions cannot distinguish the fixture under test | test-weakness | ported verbatim (S90-F5, S140-F1) | task 17 |

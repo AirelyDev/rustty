@@ -1313,6 +1313,8 @@ Making it live would additionally need `unicode.table.get(cp).grapheme_boundary_
 
 **state**: OPEN as a measurement caveat. No port change is owed.
 
+**upstream record**: the dead helpers themselves are `UPSTREAM-DEFECTS.md` UD33 (task R13-R).
+
 ---
 
 ## N23 — `src/config/CApi.zig` was 11-short and no row claimed it; 7 restored, 4 unrestorable
@@ -1742,6 +1744,8 @@ compile if anything called it.
 
 **state**: OPEN as a watch item. Discharged if upstream gives `updateConfigEvent` a caller or a
 real `DerivedConfig`; nothing to do until then.
+
+**upstream record**: `UPSTREAM-DEFECTS.md` UD29 (task R13-R).
 
 ---
 
