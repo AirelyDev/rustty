@@ -2538,6 +2538,17 @@ pub enum Option_ {
     // reference contract for each arm's expected pointee type.
 }
 
+/// Zig `@intCast` from a C-ABI `uint64_t` into a narrower destination, with the
+/// out-of-range value taken to the destination's maximum instead of trapping.
+///
+/// PORT NOTE (task R13-P, `UPSTREAM-DEFECTS.md` UD63): generic over the
+/// destination so the saturating arm is testable on a 64-bit host, where
+/// `usize::try_from(u64)` can never fail. The only production caller is the
+/// `kitty_image_storage_limit` setter.
+fn saturating_from_u64<T: TryFrom<u64>>(v: u64, max: T) -> T {
+    T::try_from(v).unwrap_or(max)
+}
+
 // pub fn set(terminal_: Terminal, option: Option, value: ?*const anyopaque) ... {
 //     if (comptime std.debug.runtime_safety) { _ = intToEnum(Option, ...) catch { ... return .invalid_value; }; }
 //     const wrapper = terminal_ orelse return .invalid_value;
@@ -2879,13 +2890,20 @@ unsafe fn set_typed(terminal_: Terminal, option: Option_, value: *const c_void) 
             // const limit: usize = if (value) |v| @intCast(v.*) else 0;
             // PORT NOTE (W33-B07): `@intCast` is a CHECKED narrowing — a
             // safety-checked build traps when the `uint64_t` limit exceeds
-            // `usize` (only reachable where `usize` is 32-bit). Per the port's
-            // binding table (`@intCast` -> `T::try_from(x).unwrap()`) this is
-            // `usize::try_from`, not a bare `as`, which would silently wrap.
-            // On 64-bit targets the conversion is infallible.
+            // `usize` (only reachable where `usize` is 32-bit). Measured with
+            // Zig 0.16.0 (`r13p-reference-probe.zig`, the same cast narrowed to
+            // u32): Debug and ReleaseSafe panic "integer does not fit in
+            // destination type", ReleaseFast wraps (4294967296 -> 0).
+            //
+            // PORT NOTE: reference defect (R13), `UPSTREAM-DEFECTS.md` UD63. The
+            // value is a C-ABI caller's `uint64_t`, not an invariant, and this
+            // is an `extern "C"` setter, so a panic aborts. A limit above the
+            // address space is a request for "no practical limit", so it
+            // saturates; the earlier `.unwrap()` trapped in EVERY profile,
+            // which was stricter than the reference's own safe builds.
             let ptr = value as *const u64;
             let limit: usize = if !ptr.is_null() {
-                usize::try_from(unsafe { *ptr }).unwrap()
+                saturating_from_u64(unsafe { *ptr }, usize::MAX)
             } else {
                 0
             };
@@ -10811,33 +10829,50 @@ mod tests {
         });
     }
 
-    // The trapping arm of `@intCast`: only reachable where `usize` is narrower
-    // than `u64` (e.g. wasm32, which is a Kitty-graphics-ENABLED target). A bare
-    // `as` would wrap the limit to a small value instead of trapping.
+    // Task R13-P (`UPSTREAM-DEFECTS.md` UD63) REVERSED this test, which pinned
+    // the trapping arm of `@intCast`. The value is a C-ABI caller's `uint64_t`
+    // inside an `extern "C"` setter, not an invariant, so under R13 the port
+    // saturates instead of aborting the host. Only reachable where `usize` is
+    // narrower than `u64` (e.g. wasm32, a Kitty-graphics-ENABLED target), which
+    // cannot be RUN here — `saturating_from_u64_takes_the_maximum` below drives
+    // the same helper at u32 width on this host.
     #[test]
     #[cfg(target_pointer_width = "32")]
-    #[should_panic]
-    fn kitty_image_storage_limit_over_usize_traps() {
-        if !rustty_vt::options::KITTY_GRAPHICS {
-            // Keep the `should_panic` contract meaningful on a build where the
-            // option returns early.
-            panic!("kitty graphics disabled");
-        }
+    fn kitty_image_storage_limit_over_usize_saturates() {
         with_test_allocator(|alloc| {
             let (r, t) = new_t(alloc, 80, 24);
             assert_eq!(Result::Success, r);
 
             let limit: u64 = u64::from(u32::MAX) + 1;
-            let _ = unsafe {
+            let got = unsafe {
                 set(
                     t,
                     Option_::KittyImageStorageLimit,
                     core::ptr::addr_of!(limit) as *const c_void,
                 )
             };
+            assert_eq!(Result::Success, got);
 
             unsafe { free(t) };
         });
+    }
+
+    /// The saturating conversion itself, at a width this host can exercise: on
+    /// a 32-bit target `usize` is exactly this narrow, and the limit a C caller
+    /// passes above it becomes "no practical limit" instead of a panic.
+    #[test]
+    fn saturating_from_u64_takes_the_maximum() {
+        assert_eq!(0u32, saturating_from_u64(0, u32::MAX));
+        assert_eq!(320_000_000u32, saturating_from_u64(320_000_000, u32::MAX));
+        assert_eq!(u32::MAX, saturating_from_u64(u64::from(u32::MAX), u32::MAX));
+        // The value the reversed test above passes: 2^32 has no u32.
+        assert_eq!(
+            u32::MAX,
+            saturating_from_u64(u64::from(u32::MAX) + 1, u32::MAX)
+        );
+        assert_eq!(u32::MAX, saturating_from_u64(u64::MAX, u32::MAX));
+        // On this host the production width is infallible, and unchanged.
+        assert_eq!(usize::MAX, saturating_from_u64(u64::MAX, usize::MAX));
     }
 
     #[test]
