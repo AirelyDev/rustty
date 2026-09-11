@@ -323,6 +323,25 @@ impl Face {
     /// Initialize a face with a CTFont. This will take ownership over
     /// the CTFont. This does NOT copy or retain the CTFont.
     pub fn init_font(ct_font: CFRetained<CTFont>, opts: Options) -> Result<Face, Error> {
+        Face::init_font_with(ct_font, opts, |f| f.log_variation_axes(DEBUG_MODE))
+    }
+
+    /// `initFont` with its one fallible diagnostic step as a parameter.
+    ///
+    /// PORT NOTE (task R13-P, N53): the seam exists so a test can drive the
+    /// reference's `errdefer hb_font.destroy()` (`face/coretext.zig:101`,
+    /// covering `try result.name` at `:124`) without a font that makes the name
+    /// lookup fail. It is a plain function parameter, NOT a test-only hook:
+    /// production passes its own closure and no test code compiles into the
+    /// library.
+    fn init_font_with<F>(
+        ct_font: CFRetained<CTFont>,
+        opts: Options,
+        log_axes: F,
+    ) -> Result<Face, Error>
+    where
+        F: FnOnce(&Face) -> Result<(), Error>,
+    {
         let traits = unsafe { ct_font.symbolic_traits() };
 
         // var hb_font = if (comptime harfbuzz_shaper) font: {
@@ -386,7 +405,16 @@ impl Face {
         // takes the mode flag as a parameter so the release arm is testable; the
         // ONLY production call site passes `DEBUG_MODE`, the direct port of
         // `comptime builtin.mode == .Debug`.
-        result.log_variation_axes(DEBUG_MODE)?;
+        //
+        // PORT NOTE (task R13-P, N53): this was `?`, which leaked the HarfBuzz
+        // font — the reference's `errdefer if (comptime harfbuzz_shaper)
+        // hb_font.destroy()` (`face/coretext.zig:101`) covers exactly this
+        // error. `font` and `color` own their data and release on `Drop`; the
+        // HarfBuzz font is a raw handle, so it is destroyed here.
+        if let Err(err) = log_axes(&result) {
+            result.hb_font.destroy();
+            return Err(err);
+        }
 
         Ok(result)
     }
@@ -1860,6 +1888,70 @@ mod tests {
     /// The RELEASE arm. `debug_mode == false` is the port of
     /// `comptime builtin.mode == .Debug` being false, and it must emit NOTHING
     /// even for a font that HAS variation axes.
+    /// Task R13-P (`NEW-FINDINGS.md` N53): the reference's
+    /// `errdefer if (comptime harfbuzz_shaper) hb_font.destroy()`
+    /// (`face/coretext.zig:101`) covers the fallible variation-axes step at
+    /// `:124`. The port's `?` dropped the `Face` instead, and `Face` has no
+    /// `Drop`, so the HarfBuzz font leaked. Proven POSITIVELY: a HarfBuzz
+    /// user-data destroy callback runs only when the font is destroyed.
+    #[test]
+    fn a_failed_variation_axes_step_destroys_the_harfbuzz_font() -> Result<(), Error> {
+        use core::sync::atomic::{AtomicUsize, Ordering};
+
+        static DESTROYED: AtomicUsize = AtomicUsize::new(0);
+        unsafe extern "C" fn on_destroy(data: *mut core::ffi::c_void) {
+            DESTROYED.fetch_add(1, Ordering::SeqCst);
+            // SAFETY: the only `data` ever attached is the leaked box below.
+            drop(unsafe { Box::from_raw(data.cast::<u8>()) });
+        }
+
+        // A real face, to borrow a CTFont from.
+        let mut base = Face::init(
+            crate::library::Library::init().unwrap(),
+            embedded::VARIABLE,
+            opts(14.0),
+        )?;
+        let ct_font = base.font.clone();
+
+        let before = DESTROYED.load(Ordering::SeqCst);
+        let got = Face::init_font_with(ct_font, opts(14.0), |f| {
+            // Tie a destroy callback to THIS HarfBuzz font.
+            let key: *mut harfbuzz_sys::hb_user_data_key_t =
+                // SAFETY: the key is an opaque token HarfBuzz only compares by
+                // address; zeroed is a valid value for it.
+                Box::into_raw(Box::new(unsafe {
+                    core::mem::zeroed::<harfbuzz_sys::hb_user_data_key_t>()
+                }));
+            let data = Box::into_raw(Box::new(0u8)).cast::<core::ffi::c_void>();
+            // SAFETY: `f.hb_font` is live for the call, and `key`/`data` are
+            // leaked so they outlive the font.
+            let ok = unsafe {
+                harfbuzz_sys::hb_font_set_user_data(
+                    f.hb_font.handle,
+                    key,
+                    data,
+                    Some(on_destroy),
+                    1,
+                )
+            };
+            assert_ne!(0, ok, "the destroy probe must attach");
+            Err(Error::FontInitFailure)
+        });
+
+        assert!(
+            matches!(got, Err(Error::FontInitFailure)),
+            "the failure propagates"
+        );
+        assert_eq!(
+            before + 1,
+            DESTROYED.load(Ordering::SeqCst),
+            "the HarfBuzz font is destroyed on the error path, not leaked"
+        );
+
+        base.deinit();
+        Ok(())
+    }
+
     #[test]
     fn log_variation_axes_is_silent_when_not_debug_mode() -> Result<(), Error> {
         let mut face = Face::init(

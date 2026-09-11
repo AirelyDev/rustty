@@ -250,13 +250,37 @@ impl Face {
 
     // PORT NOTE: `initFace`.
     fn init_face(lib: Library, face: ft::Face, opts: Options) -> Result<Face, Error> {
+        Face::init_face_with(lib, face, opts, |f| f.log_variation_axes(DEBUG_MODE))
+    }
+
+    /// `initFace` with its one fallible diagnostic step as a parameter.
+    ///
+    /// PORT NOTE (task R13-P, N53): the seam exists so a test can drive the
+    /// reference's `errdefer` arms (`face/freetype.zig:100-105` covering `try
+    /// result.name` / `try face.getMMVar()` at `:120-126`) without a font that
+    /// makes FreeType fail. It is a plain function parameter, NOT a test-only
+    /// hook: production passes its own closure and no test code compiles into
+    /// the library.
+    fn init_face_with<F>(
+        lib: Library,
+        face: ft::Face,
+        opts: Options,
+        log_axes: F,
+    ) -> Result<Face, Error>
+    where
+        F: FnOnce(&Face) -> Result<(), Error>,
+    {
         face.select_charmap(Encoding::Unicode)?;
         set_size_(face, opts.size)?;
 
         let hb_font = hb::create_font(face.handle)?;
-        // errdefer hb_font.destroy(); — no fallible op follows, so `?` above is
-        // the only path that could leave `hb_font` dangling, and it returns
-        // before `hb_font` exists.
+        // errdefer hb_font.destroy();
+        //
+        // PORT NOTE (task R13-P, N53): the old comment here claimed no fallible
+        // operation followed. `log_variation_axes` below IS fallible (the
+        // reference's `try result.name(&buf)` and `try face.getMMVar()`), so
+        // both this errdefer and the `ft_mutex` one below are live. `Face` has
+        // no `Drop`, so they are realized explicitly on that error arm.
 
         // const ft_mutex = try lib.alloc.create(std.Thread.Mutex);
         // errdefer lib.alloc.destroy(ft_mutex);
@@ -284,7 +308,18 @@ impl Face {
         // mode flag as a parameter so the release arm is testable; the ONLY
         // production call site passes `DEBUG_MODE`, the direct port of
         // `comptime builtin.mode == .Debug`. Same shape as `face/coretext.rs`.
-        result.log_variation_axes(DEBUG_MODE)?;
+        if let Err(err) = log_axes(&result) {
+            // The reference's errdefers, in their reverse-declaration order:
+            // `lib.alloc.destroy(ft_mutex)` then `hb_font.destroy()`. The FT face
+            // itself belongs to the caller (`initFile`/`init` hold
+            // `errdefer face.deinit()`), so it is NOT freed here, and `Face` has
+            // no `Drop` that could free either handle a second time.
+            // SAFETY: `ft_mutex` came from `Box::into_raw` above and nothing else
+            // owns it; `result` is dropped without running any handle teardown.
+            unsafe { drop(Box::from_raw(result.ft_mutex)) };
+            result.hb_font.destroy();
+            return Err(err);
+        }
 
         Ok(result)
     }
@@ -2533,6 +2568,68 @@ mod tests {
     /// `comptime builtin.mode == .Debug` being false, and it must emit NOTHING
     /// even for a font that HAS variation axes — otherwise a release build of
     /// rustty would log where the reference is silent.
+    /// Task R13-P (`NEW-FINDINGS.md` N53): the reference's
+    /// `errdefer hb_font.destroy()` / `errdefer lib.alloc.destroy(ft_mutex)`
+    /// (`face/freetype.zig:100-105`) cover the fallible variation-axes step at
+    /// `:120-126`. The port's `?` dropped the `Face` instead, leaking the
+    /// HarfBuzz font and the boxed mutex. Proven POSITIVELY for the HarfBuzz
+    /// font: a user-data destroy callback runs only when the font is destroyed.
+    /// The boxed mutex has no comparable probe; it is freed on the same arm.
+    #[test]
+    fn a_failed_variation_axes_step_destroys_the_harfbuzz_font() -> Result<(), Error> {
+        use core::sync::atomic::{AtomicUsize, Ordering};
+
+        static DESTROYED: AtomicUsize = AtomicUsize::new(0);
+        unsafe extern "C" fn on_destroy(data: *mut core::ffi::c_void) {
+            DESTROYED.fetch_add(1, Ordering::SeqCst);
+            // SAFETY: the only `data` ever attached is the leaked box below.
+            drop(unsafe { Box::from_raw(data.cast::<u8>()) });
+        }
+
+        // A real face, to borrow the FT face from. `base` owns it and frees it
+        // in `deinit`, exactly as `initFile`/`init`'s `errdefer face.deinit()`
+        // owns it around `initFace`.
+        let lib = Library::init()?;
+        let mut base = Face::init(lib, embedded::VARIABLE, opts(size(12.0, 96, 96)))?;
+
+        let before = DESTROYED.load(Ordering::SeqCst);
+        let got = Face::init_face_with(base.lib, base.face, opts(size(12.0, 96, 96)), |f| {
+            let key: *mut harfbuzz_sys::hb_user_data_key_t =
+                // SAFETY: the key is an opaque token HarfBuzz only compares by
+                // address; zeroed is a valid value for it.
+                Box::into_raw(Box::new(unsafe {
+                    core::mem::zeroed::<harfbuzz_sys::hb_user_data_key_t>()
+                }));
+            let data = Box::into_raw(Box::new(0u8)).cast::<core::ffi::c_void>();
+            // SAFETY: `f.hb_font` is live for the call, and `key`/`data` are
+            // leaked so they outlive the font.
+            let ok = unsafe {
+                harfbuzz_sys::hb_font_set_user_data(
+                    f.hb_font.handle,
+                    key,
+                    data,
+                    Some(on_destroy),
+                    1,
+                )
+            };
+            assert_ne!(0, ok, "the destroy probe must attach");
+            Err(Error::OutOfMemory)
+        });
+
+        assert!(
+            matches!(got, Err(Error::OutOfMemory)),
+            "the failure propagates"
+        );
+        assert_eq!(
+            before + 1,
+            DESTROYED.load(Ordering::SeqCst),
+            "the HarfBuzz font is destroyed on the error path, not leaked"
+        );
+
+        base.deinit();
+        Ok(())
+    }
+
     #[test]
     fn log_variation_axes_is_silent_when_not_debug_mode() -> Result<(), Error> {
         let mut lib: Library = Library::init()?;
