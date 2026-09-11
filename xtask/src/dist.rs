@@ -282,14 +282,26 @@ pub fn distcheck() -> Result<PathBuf, String> {
     // same trade-off in the comment above its own check step.
     let cargo_home = checkdir.join("cargo-home");
     std::fs::create_dir_all(&cargo_home).map_err(|e| format!("create fresh CARGO_HOME: {e}"))?;
-    let status = Command::new("cargo")
-        .current_dir(&extracted)
-        .env("CARGO_HOME", &cargo_home)
-        .args(["test", "--workspace", "--offline", "--locked"])
-        .status()
-        .map_err(|e| format!("spawn cargo test: {e}"))?;
-    if !status.success() {
-        return Err(format!("distcheck test exited with {status}"));
+    // BUILD FIRST, then TEST. Not belt-and-braces: `cargo test` does not
+    // produce the `cdylib` artifacts, and `rustty-apprt-c`'s C-ABI smoke test
+    // links against `target/<profile>/librustty_apprt_c.{dylib,so}`. In a
+    // developer's tree that file is already there from an earlier
+    // `cargo build`, so the test passes; in a freshly extracted tarball it is
+    // not, and the test fails on its absence. Zig's single `zig build test`
+    // builds what its tests need, so this pair is what reproduces it.
+    for (step, args) in [
+        ("build", ["build", "--workspace", "--offline", "--locked"]),
+        ("test", ["test", "--workspace", "--offline", "--locked"]),
+    ] {
+        let status = Command::new("cargo")
+            .current_dir(&extracted)
+            .env("CARGO_HOME", &cargo_home)
+            .args(args)
+            .status()
+            .map_err(|e| format!("spawn cargo {step}: {e}"))?;
+        if !status.success() {
+            return Err(format!("distcheck {step} exited with {status}"));
+        }
     }
 
     let _ = std::fs::remove_dir_all(&checkdir);
