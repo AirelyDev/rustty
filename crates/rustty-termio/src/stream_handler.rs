@@ -535,6 +535,18 @@ impl<M: AppMailbox> StreamHandler<M> {
                     rustty_vt::tmux::ControlNotification::Enter => {
                         // Setup our viewer state
                         // assert(self.tmux_viewer == null);
+                        //
+                        // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md
+                        // UD6). In the reference this assert is reachable: a
+                        // control-mode block over the parser's 1 MiB limit ends
+                        // the DCS without an `.exit`, so the viewer survives
+                        // into the next `ESC P 1000 p`. The port's
+                        // `dcs::Handler::put` emits `.exit` when it discards a
+                        // tmux state, so every way out of the tmux DCS state
+                        // (`unhook`, a discarded `put`, handler teardown) frees
+                        // the viewer first and the assert is an invariant again
+                        // (R7). Tests: `tmux_oversized_control_block_ends_the_viewer`,
+                        // `tmux_reattach_after_an_oversized_control_block_does_not_crash`.
                         assert!(self.tmux_viewer.is_none());
                         // const viewer = try self.alloc.create(terminal.tmux.Viewer);
                         // errdefer self.alloc.destroy(viewer);
@@ -4566,6 +4578,142 @@ mod tests {
 
         h.deinit();
         h.renderer_wakeup.deinit();
+        unsafe {
+            drop(Box::from_raw(state));
+            drop(Box::from_raw(mutex));
+            drop(Box::from_raw(mailbox));
+        }
+        term.deinit(Global);
+    }
+
+    // R13 (task R13-A, UPSTREAM-DEFECTS UD6): a tmux control-mode block larger
+    // than the parser's 1 MiB limit. The reference's `dcs.Handler.put` catches
+    // the parser's `OutOfMemory`, discards the state and returns null, so no
+    // `.exit` reaches `dcsCommand` and the viewer is never freed; the next
+    // `ESC P 1000 p` then trips `assert(self.tmux_viewer == null)`
+    // (`stream_handler.zig:410`). These two tests drive the real bytes through
+    // the VT stream into this handler.
+    //
+    // A real tmux reaches it: `tmux -CC attach` to a pane with more than 1 MiB
+    // of history, detach, then attach again in the same surface.
+    #[cfg(feature = "oniguruma")]
+    fn tmux_stream_fixture() -> (
+        Box<Terminal>,
+        *mut Mailbox,
+        *mut rustty_zigstd::thread::Mutex,
+        *mut State,
+    ) {
+        let mut term = Box::new(Terminal::init(Global, terminal_opts(Some(false))).unwrap());
+        let mailbox: *mut Mailbox = Box::into_raw(Box::new(
+            crate::mailbox::Mailbox::initSPSC().expect("Mailbox::initSPSC"),
+        ));
+        let mutex: *mut rustty_zigstd::thread::Mutex =
+            Box::into_raw(Box::new(rustty_zigstd::thread::Mutex::new()));
+        let state: *mut State = Box::into_raw(Box::new(State {
+            mutex,
+            terminal: &raw mut *term,
+            inspector: None,
+            inspector_ptr: None,
+            preedit: None,
+            mouse: rustty_renderer::state::Mouse::default(),
+            demand: Default::default(),
+            handoff_gen: Default::default(),
+            handoff_park: Default::default(),
+        }));
+        (term, mailbox, mutex, state)
+    }
+
+    // A tmux control-mode block whose payload is one byte over the parser's
+    // 1 MiB buffer limit, including the `ESC \` that ends the DCS.
+    #[cfg(feature = "oniguruma")]
+    fn oversized_tmux_block() -> Vec<u8> {
+        let mut bytes = b"\x1bP1000p%begin 1 1 1\n".to_vec();
+        let mut line = vec![b'a'; 79];
+        line.push(b'\n');
+        let payload = 1024 * 1024 + 1;
+        while bytes.len() < payload + 32 {
+            bytes.extend_from_slice(&line);
+        }
+        bytes.extend_from_slice(b"\x1b\\");
+        bytes
+    }
+
+    #[test]
+    #[cfg(feature = "oniguruma")]
+    fn tmux_oversized_control_block_ends_the_viewer() {
+        let (mut term, mailbox, mutex, state) = tmux_stream_fixture();
+        let h = handler_for(&raw mut *term, mailbox, state);
+        let mut s = stream::Stream::init(stream::Options::with_handler(h));
+
+        // Reached: `ESC P 1000 p` builds the viewer.
+        s.next_slice(b"\x1bP1000p");
+        assert!(
+            s.handler.tmux_viewer.is_some(),
+            ".enter must build the viewer"
+        );
+
+        // The oversized block, up to but not including the DCS terminator.
+        let block = oversized_tmux_block();
+        let body = &block[7..block.len() - 2];
+        s.next_slice(body);
+        assert!(
+            s.handler.tmux_viewer.is_none(),
+            "a control-mode block over the 1 MiB limit must end the session and free the viewer"
+        );
+
+        // The rest of the DCS is dropped, and the terminator is harmless.
+        s.next_slice(b"%begin 2 2 2\n%end 2 2 2\n\x1b\\");
+        assert!(s.handler.tmux_viewer.is_none());
+        assert!(mailbox_pop(mailbox).is_none());
+
+        s.deinit();
+        s.handler.renderer_wakeup.deinit();
+        unsafe {
+            drop(Box::from_raw(state));
+            drop(Box::from_raw(mutex));
+            drop(Box::from_raw(mailbox));
+        }
+        term.deinit(Global);
+    }
+
+    #[test]
+    #[cfg(feature = "oniguruma")]
+    fn tmux_reattach_after_an_oversized_control_block_does_not_crash() {
+        let (mut term, mailbox, mutex, state) = tmux_stream_fixture();
+        let h = handler_for(&raw mut *term, mailbox, state);
+        let mut s = stream::Stream::init(stream::Options::with_handler(h));
+
+        // First attach: the viewer exists, then the oversized history block.
+        s.next_slice(b"\x1bP1000p");
+        assert!(
+            s.handler.tmux_viewer.is_some(),
+            ".enter must build the viewer"
+        );
+        let block = oversized_tmux_block();
+        s.next_slice(&block[7..]);
+
+        // Second attach in the same surface. The reference asserts here.
+        s.next_slice(b"\x1bP1000p");
+        assert!(
+            s.handler.tmux_viewer.is_some(),
+            "the second attach must build a new viewer"
+        );
+
+        // The new viewer is live: its startup block and the session change make
+        // it send its first command to tmux.
+        s.next_slice(b"%begin 1 1 1\n%end 1 1 1\n%session-changed $1 rustty\n");
+        let msg = mailbox_pop(mailbox).expect("the new viewer must send its first command");
+        let bytes = write_bytes(&msg);
+        assert_eq!(Some(&b'\n'), bytes.last());
+
+        s.next_slice(b"\x1b\\");
+        assert!(
+            s.handler.tmux_viewer.is_none(),
+            "ESC \\ ends the second session"
+        );
+
+        s.deinit();
+        s.handler.renderer_wakeup.deinit();
         unsafe {
             drop(Box::from_raw(state));
             drop(Box::from_raw(mutex));

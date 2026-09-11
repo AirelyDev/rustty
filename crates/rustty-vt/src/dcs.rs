@@ -200,9 +200,30 @@ impl<A: Allocator> Handler<A> {
             Err(_err) => {
                 // On error we just discard our state and ignore the rest
                 // log.info("error putting byte into DCS handler err={}", .{err});
+                //
+                // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD6).
+                // The reference returns `null` here for every state. For the
+                // tmux state that means no `.exit` is ever emitted: `unhook`
+                // then sees `.ignore` and returns null too, so the stream
+                // handler never frees its tmux viewer, and the next
+                // `ESC P 1000 p` trips `assert(self.tmux_viewer == null)`
+                // (`stream_handler.zig:410`; ReleaseFast leaks the viewer
+                // instead). The only error a tmux `put` produces is the
+                // control parser's `OutOfMemory` when a notification or block
+                // exceeds its 1 MiB limit, which any output inside the DCS can
+                // reach, including a real `tmux -CC attach` to a pane with
+                // more than 1 MiB of history. `control.zig` documents that
+                // limit as "the control mode session will be forcibly exited",
+                // so a discarded tmux state emits `.exit`, which frees the
+                // viewer through the handler's existing `.exit` arm.
+                let was_tmux = matches!(self.state, State::Tmux(_));
                 self.discard();
                 self.state = State::Ignore;
-                None
+                if was_tmux {
+                    Some(Command::Tmux(TmuxCommand::Exit))
+                } else {
+                    None
+                }
             }
         }
     }
