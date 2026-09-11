@@ -94,9 +94,9 @@ mod tests {
         // `Banner::is_revealed()`/`title()` are inherent in libadwaita 0.9.2
         // (`src/auto/banner.rs:75,81`) — there is no `BannerExt` to import.
 
-        if gtk4::init().is_err() {
-            return;
-        }
+        // CORRECTION (task 20): this was `if gtk4::init().is_err() { return; }`,
+        // which reports `1 passed` for a test that never ran when there is no display.
+        crate::gtk::init_for_display_test("template_inflates_banner_child");
         let _ = libadwaita::init();
         crate::gtk::register_resources();
 

@@ -5229,9 +5229,9 @@ mod tests {
     fn application_startup_sets_default_and_actions() {
         use gio::prelude::{ActionGroupExt, ApplicationExt};
 
-        if gtk4::init().is_err() {
-            return;
-        }
+        // CORRECTION (task 20): this was `if gtk4::init().is_err() { return; }`,
+        // which reports `1 passed` for a test that never ran when there is no display.
+        crate::gtk::init_for_display_test("application_startup_sets_default_and_actions");
         let _ = libadwaita::init();
 
         let app = build_test_app(std::ptr::null_mut());
@@ -5421,9 +5421,9 @@ mod tests {
         use rustty_input::binding::{Trigger, TriggerKey};
         use rustty_vt::input::key_mods::Mods;
 
-        if gtk4::init().is_err() {
-            return;
-        }
+        // CORRECTION (task 20): this was `if gtk4::init().is_err() { return; }`,
+        // which reports `1 passed` for a test that never ran when there is no display.
+        crate::gtk::init_for_display_test("application_bind_failed_signal_reaches_the_handler");
         let _ = libadwaita::init();
 
         use gio::prelude::ApplicationExt as _;
@@ -5471,9 +5471,9 @@ mod tests {
     fn application_activate_pushes_new_window() {
         use gio::subclass::prelude::ApplicationImpl;
 
-        if gtk4::init().is_err() {
-            return;
-        }
+        // CORRECTION (task 20): this was `if gtk4::init().is_err() { return; }`,
+        // which reports `1 passed` for a test that never ran when there is no display.
+        crate::gtk::init_for_display_test("application_activate_pushes_new_window");
         let _ = libadwaita::init();
 
         // A real core app so the mailbox exists; `create` gives a heap-stable
@@ -5512,9 +5512,9 @@ mod tests {
     fn application_dispose_removes_signal_source() {
         use gio::prelude::ApplicationExt;
 
-        if gtk4::init().is_err() {
-            return;
-        }
+        // CORRECTION (task 20): this was `if gtk4::init().is_err() { return; }`,
+        // which reports `1 passed` for a test that never ran when there is no display.
+        crate::gtk::init_for_display_test("application_dispose_removes_signal_source");
         let _ = libadwaita::init();
 
         let app = build_test_app(std::ptr::null_mut());
@@ -5555,10 +5555,9 @@ mod tests {
         use gio::prelude::ApplicationExt;
         use libadwaita::prelude::AdwApplicationExt;
 
-        if gtk4::init().is_err() {
-            eprintln!("skip: no display");
-            return;
-        }
+        // CORRECTION (task 20): this was `if gtk4::init().is_err() { <print>; return; }`,
+        // which reports `1 passed` for a test that never ran when there is no display.
+        crate::gtk::init_for_display_test("application_v4_20_color_scheme_css_push");
         let _ = libadwaita::init();
         assert!(
             crate::gtk::gtk_version::at_least(4, 20, 0),
@@ -5639,9 +5638,9 @@ mod tests {
     #[test]
     #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored"]
     fn application_run_loop_ticks_then_quits() {
-        if gtk4::init().is_err() {
-            return;
-        }
+        // CORRECTION (task 20): this was `if gtk4::init().is_err() { return; }`,
+        // which reports `1 passed` for a test that never ran when there is no display.
+        crate::gtk::init_for_display_test("application_run_loop_ticks_then_quits");
         let _ = libadwaita::init();
 
         // A real apprt `App` double + core app so the tick thunk dereferences live
@@ -5713,9 +5712,9 @@ mod tests {
     #[test]
     #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored"]
     fn saved_language_reads_the_captured_launch_lang() {
-        if gtk4::init().is_err() {
-            return;
-        }
+        // CORRECTION (task 20): this was `if gtk4::init().is_err() { return; }`,
+        // which reports `1 passed` for a test that never ran when there is no display.
+        crate::gtk::init_for_display_test("saved_language_reads_the_captured_launch_lang");
         let _ = libadwaita::init();
 
         let app = build_test_app(std::ptr::null_mut());
@@ -5758,9 +5757,11 @@ mod tests {
     fn quit_needing_confirmation_presents_dialog_and_close_request_quits() {
         use libadwaita::prelude::AdwDialogExt as _;
 
-        if gtk4::init().is_err() {
-            return;
-        }
+        // CORRECTION (task 20): this was `if gtk4::init().is_err() { return; }`,
+        // which reports `1 passed` for a test that never ran when there is no display.
+        crate::gtk::init_for_display_test(
+            "quit_needing_confirmation_presents_dialog_and_close_request_quits",
+        );
         let _ = libadwaita::init();
         crate::gtk::register_resources();
 
@@ -5810,9 +5811,11 @@ mod tests {
         use gio::prelude::ApplicationExt as _;
         use gtk4::prelude::GtkWindowExt as _;
 
-        if gtk4::init().is_err() {
-            return;
-        }
+        // CORRECTION (task 20): this was `if gtk4::init().is_err() { return; }`,
+        // which reports `1 passed` for a test that never ran when there is no display.
+        crate::gtk::init_for_display_test(
+            "quit_now_destroys_our_windows_and_spares_foreign_toplevels",
+        );
         let _ = libadwaita::init();
         crate::gtk::register_resources();
 
@@ -5866,9 +5869,9 @@ mod tests {
     fn quit_timer_start_stop_is_idempotent() {
         use rustty_config::value_types::Duration;
 
-        if gtk4::init().is_err() {
-            return;
-        }
+        // CORRECTION (task 20): this was `if gtk4::init().is_err() { return; }`,
+        // which reports `1 passed` for a test that never ran when there is no display.
+        crate::gtk::init_for_display_test("quit_timer_start_stop_is_idempotent");
         let _ = libadwaita::init();
 
         let app = build_test_app(std::ptr::null_mut());
@@ -5919,9 +5922,9 @@ mod tests {
     #[test]
     #[ignore = "requires a display; run via xvfb-run -a cargo test -p rustty-apprt --features gtk -- --ignored"]
     fn wakeup_breaks_blocking_iteration() {
-        if gtk4::init().is_err() {
-            return;
-        }
+        // CORRECTION (task 20): this was `if gtk4::init().is_err() { return; }`,
+        // which reports `1 passed` for a test that never ran when there is no display.
+        crate::gtk::init_for_display_test("wakeup_breaks_blocking_iteration");
         let _ = libadwaita::init();
 
         // `Application::wakeup` delegates to `MainContext::default().wakeup()`; build
@@ -5977,15 +5980,11 @@ mod tests {
                 cargo test -p rustty-apprt --features gtk[,gtk-v4_16] --lib \
                 css_parsing_error -- --ignored"]
     fn signal_css_parsing_error_byte_dump_follows_the_feature_ceiling() {
-        if gtk4::init().is_err() {
-            // Another headed test in this binary already bound GTK to its thread.
-            // Loud, so a filtered run can never be mistaken for evidence.
-            println!(
-                "V14: SKIPPED — GTK is bound to another test thread; \
-                 re-run with `--lib css_parsing_error`"
-            );
-            return;
-        }
+        // CORRECTION (task 20): this was `if gtk4::init().is_err() { <print>; return; }`,
+        // which reports `1 passed` for a test that never ran when there is no display.
+        crate::gtk::init_for_display_test(
+            "signal_css_parsing_error_byte_dump_follows_the_feature_ceiling",
+        );
         let _ = libadwaita::init();
 
         // The runtime half of the two-part gate: with the feature on but a < 4.16

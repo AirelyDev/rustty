@@ -201,9 +201,9 @@ mod tests {
     fn adding_actions_to_an_object() {
         use gtk4::prelude::*;
 
-        if gtk4::init().is_err() {
-            return;
-        }
+        // CORRECTION (task 20): this was `if gtk4::init().is_err() { return; }`,
+        // which reports `1 passed` for a test that never ran when there is no display.
+        crate::gtk::init_for_display_test("adding_actions_to_an_object");
 
         fn callback(
             _action: &gio::SimpleAction,
