@@ -52,6 +52,25 @@ fn main() {
         .flag_if_supported("-fno-exceptions")
         .flag_if_supported("-fno-rtti");
 
+    // if (target.result.abi == .msvc) { ... }  (pkg/simdutf/build.zig:55-63)
+    //
+    // PORT NOTE (S38-F5): the reference adds four MSVC-only flags inside the
+    // same `no_libcxx` branch, and they were not mirrored. `_USE_STD_VECTOR_
+    // ALGORITHMS=0` and the `_Avx2WmemEnabledWeakValue` alias exist because
+    // `-fno-autolink` drops UCRT's `/alternatename` fallback, so the weak
+    // symbol has to be pointed at the real one by hand; `-fno-stack-protector`
+    // goes with dropping the CRT's own support. The reference's separate
+    // `abi == .msvc` `-std=c++17` arm is already covered unconditionally by
+    // the `.std("c++17")` above.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        build
+            .define("_USE_STD_VECTOR_ALGORITHMS", Some("0"))
+            // -fno-autolink also drops UCRT's /alternatename fallback.
+            .define("_Avx2WmemEnabledWeakValue", Some("_Avx2WmemEnabled"))
+            .flag_if_supported("-fno-autolink")
+            .flag_if_supported("-fno-stack-protector");
+    }
+
     // wasm32: with SIMDUTF_NO_LIBCXX the amalgamation needs no C++ standard
     // library at link time. The freestanding wasm toolchain has no `-lc++`, and
     // the cc crate would otherwise emit `cargo:rustc-link-lib=c++` and break the

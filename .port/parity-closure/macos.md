@@ -11,15 +11,15 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** OUT-OF-SHARD NOTE: TerminalViewContainerTests.swift has no counterpart in rustty/macos/Tests
   - **Oracle:** `macos/Tests/Terminal/TerminalViewContainerTests.swift:1-EOF` → **Rustty:** `macos/Tests/Terminal/TerminalViewContainerTests.swift:n/a (absent)`
   - **Audit's suggested fix:** Port macos/Tests/Terminal/TerminalViewContainerTests.swift to rustty/macos/Tests/Terminal/ with the same assertions (rename-only), and add it to Rustty.xctestplan if tests are enumerated there.
-- [ ] **S16-F1** · CONFIRMED · `ABI` · missing-test
+- [x] **S16-F1** · CONFIRMED · `ABI` · missing-test
   - **What:** TerminalViewContainerTests.swift (glassAvailability) has no rustty counterpart
   - **Oracle:** `macos/Tests/Terminal/TerminalViewContainerTests.swift:1-63` → **Rustty:** `macos/Tests/Terminal/TerminalViewContainerTests.swift:n/a (file absent)`
   - **Audit's suggested fix:** Add macos/Tests/Terminal/TerminalViewContainerTests.swift to rustty as a token-transformed copy of the oracle file (Ghostty->Rustty, ghosttyConfigDidChange->rusttyConfigDidChange), keeping the single @Test glassAvailability with both #expect arms.
-- [ ] **S17-F1** · CONFIRMED · `ABI` · missing-test
+- [x] **S17-F1** · CONFIRMED · `ABI` · missing-test
   - **What:** TerminalViewContainerTests.swift (glassAvailability Swift Testing case) has no rustty counterpart
   - **Oracle:** `macos/Tests/Terminal/TerminalViewContainerTests.swift:1-63` → **Rustty:** `macos/Tests/Terminal/ (no TerminalViewContainerTests.swift):n/a`
   - **Audit's suggested fix:** Add rustty/macos/Tests/Terminal/TerminalViewContainerTests.swift as a token-renamed copy of the oracle file (Ghostty->Rustty, ghosttyConfigDidChange->rusttyConfigDidChange, @testable import Rustty) and make sure it is included in the Rustty test target / Rustty.xctestplan.
-- [ ] **S30-F1** · CONFIRMED · `ABI` · missing-test
+- [x] **S30-F1** · CONFIRMED · `ABI` · missing-test
   - **What:** TerminalViewContainerTests.swift (glassAvailability) has no counterpart
   - **Oracle:** `macos/Tests/Terminal/TerminalViewContainerTests.swift:1-63` → **Rustty:** `macos/Tests/Terminal/:n/a`
   - **Audit's suggested fix:** Add macos/Tests/Terminal/TerminalViewContainerTests.swift as the token-renamed oracle file (Rustty.Config, rusttyConfigDidChange); the Tests group is a synchronized root group so no pbxproj edit is needed.

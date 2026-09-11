@@ -123,7 +123,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Unsupported OS silently builds without a module finder instead of failing the build
   - **Oracle:** `pkg/sentry/build.zig:119-124` → **Rustty:** `crates-sys/sentry-sys/build.rs:164-171`
   - **Audit's suggested fix:** `panic!("target_os={target_os} not supported")` in the fallback arm (freestanding excepted) to mirror the reference's hard error.
-- [ ] **S38-F5** · CONFIRMED · `ABI` · missing-branch
+- [x] **S38-F5** · CONFIRMED · `ABI` · missing-branch
   - **What:** simdutf MSVC-specific no_libcxx flags not mirrored
   - **Oracle:** `pkg/simdutf/build.zig:51-72` → **Rustty:** `crates-sys/simdutf-sys/build.rs:47-53`
   - **Audit's suggested fix:** Add `if CARGO_CFG_TARGET_ENV == "msvc" { define _USE_STD_VECTOR_ALGORITHMS=0, _Avx2WmemEnabledWeakValue=_Avx2WmemEnabled; flag -fno-autolink, -fno-stack-protector }`.

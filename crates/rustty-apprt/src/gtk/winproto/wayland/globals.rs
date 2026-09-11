@@ -407,12 +407,13 @@ impl Globals {
     fn on_global_removed(&mut self, tag: Tag) {
         match tag {
             Tag::KdeOutputOrder => self.state.reset_output_order(),
-            Tag::ExtBackgroundEffect => {
-                // DIVERGENCE (pre-existing): the reference leaves
-                // `bg_effect_capabilities` set. rustty clears the derived `blur`
-                // bit so a withdrawn manager cannot leave a stale capability.
-                self.state.bg_blur_supported = false;
-            }
+            // PORT NOTE (S61-F2): this used to carry a `Tag::ExtBackgroundEffect`
+            // arm clearing `state.bg_blur_supported`, labelled in-place as a
+            // deliberate DIVERGENCE. The reference's `onGlobalRemoved` has only
+            // the `.kde_output_order` arm and an `else => {}`: a withdrawn
+            // `ext_background_effect` manager leaves `bg_effect_capabilities`
+            // exactly as it was. R1 fidelity — the extra arm is removed.
+            // `else => {}`
             _ => {}
         }
     }

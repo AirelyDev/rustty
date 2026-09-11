@@ -4045,15 +4045,23 @@ mod log_root_tests {
         });
 
         let all = CAPTURED.lock().unwrap().clone();
-        // Every diagnostic — whoever emitted it — carries the reference's level.
-        for (level, _, _) in all.iter() {
-            assert_eq!(LogLevel::Warning, *level);
-        }
-        let captured: Vec<(&String, &String)> = all
+        // FLAKE FIX (task 15): this loop used to run over EVERY captured entry.
+        // `reset_global()` serializes the tests that MUTATE the sys global, but
+        // nothing stops a concurrently running test from EMITTING a diagnostic
+        // while this callback is installed, so a `debug`-level line from
+        // elsewhere in the binary failed this test (`left: Warning, right:
+        // Debug`). Assert the level over the entries THIS test caused — the
+        // only set it controls — which is why the unique SEL exists. Same fix,
+        // same reason, as `render::tests::
+        // render_invalid_selector_warns_through_the_scoped_log_sink`.
+        let mine: Vec<&(LogLevel, String, String)> = all
             .iter()
             .filter(|(_, _, m)| m.ends_with("=31339"))
-            .map(|(_, s, m)| (s, m))
             .collect();
+        for (level, _, _) in mine.iter() {
+            assert_eq!(LogLevel::Warning, *level);
+        }
+        let captured: Vec<(&String, &String)> = mine.iter().map(|(_, s, m)| (s, m)).collect();
         // Scopes are the reference's `std.log.scoped` tags: `.build_info_c`
         // (build_info.zig:7), `.key_event` (key_event.zig:8), `.mouse_event`
         // (mouse_event.zig:11), `.selection_gesture_c`

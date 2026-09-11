@@ -1500,3 +1500,40 @@ here the ledger does not contradict the waiver, it *dates* it.
   `check_closed_enum_abi.sh` enforces a structural rule over Rust source and has no
   "expected" side to synthesise.
 - **state**: **OPEN.**
+
+## N28 — two log-sink tests could fail SPURIOUSLY: they asserted over every OTHER test's diagnostics
+
+- **id**: N28 (next free id checked 2026-09-10 against `NEW-FINDINGS.md` headings and a
+  workspace grep for `\bN[0-9]+\b`: N1-N27 taken, N26/N27 by this same task.)
+- **severity**: medium (a red CI run with no defect behind it, about one `cargo test -p
+  rustty-vt-c` in three — and a flaky gate is a gate people learn to re-run)
+- **kind**: verification instrument
+- **rustty**: `crates/rustty-vt-c/src/render/tests.rs`
+  (`render_invalid_selector_warns_through_the_scoped_log_sink`) and
+  `crates/rustty-vt-c/src/lib.rs`
+  (`log_root_tests::root_wrapper_invalid_selectors_warn_through_the_c_log_callback`).
+- **description**: both tests install a process-global C log callback, provoke diagnostics
+  with a SEL value no other test uses, and then — before filtering — looped over **every**
+  entry in the shared capture buffer asserting `LogLevel::Warning`. The serialization guard
+  they take (`sys::tests::reset_global()`) serializes tests that MUTATE the sys global; it
+  does not, and cannot, stop a concurrently running test from EMITTING a diagnostic while
+  the callback is installed. Any `debug`-level line from anywhere in the binary therefore
+  failed them: `left: Warning, right: Debug`.
+
+  Both tests' own comments already say the unique SEL exists "so the capture can be
+  filtered" — the blanket loop contradicted the design directly above it.
+- **fix**: filter FIRST, then assert level/scope/order/text over the entries the test itself
+  caused. No coverage is lost: every diagnostic each test provokes is still checked on all
+  four axes. What was removed is an assertion about other tests' output, which neither test
+  controls or has any business making.
+- **how found**: task 15's three-consecutive-runs repetition pass. One run in three was red;
+  10 runs at the task's base commit (`7419838b`) were green, so the new test added in the
+  same task perturbed the scheduling enough to expose it — it did not cause it. 12/12 green
+  after the fix.
+- **the general point, and it is the mirror image of this plan's running theme**: the plan
+  has been finding instruments that could not FAIL. This is an instrument that could fail
+  for a reason unrelated to its subject, which corrodes trust in exactly the same way —
+  a test that is red for a reason nobody can act on trains people to ignore red. **An
+  assertion over shared process-global state must be scoped to the state the test itself
+  produced.**
+- **state**: **CLOSED by task 15** in both places.

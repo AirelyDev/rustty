@@ -2785,17 +2785,26 @@ fn render_invalid_selector_warns_through_the_scoped_log_sink() {
     });
 
     let all = log_capture::CAPTURED.lock().unwrap().clone();
-    // Every render diagnostic — whoever emitted it — carries the reference's
-    // scope and level.
-    for (level, scope, _) in all.iter() {
+    // FLAKE FIX (task 15): this loop used to run over EVERY captured entry and
+    // assert it was a `render_state_c` warning. `reset_global()` serializes the
+    // tests that MUTATE the sys global, but it does not — and cannot — stop a
+    // concurrently running test from EMITTING a diagnostic while this callback
+    // is installed, so any `debug`-level line from elsewhere in the binary made
+    // this test fail (`left: Warning, right: Debug`, reproducible about one run
+    // in three). The test's own comment above already says the SEL value exists
+    // precisely so the capture can be filtered; assert over the entries this
+    // test caused, which is the only set it controls. Coverage of this test's
+    // subject is unchanged — every diagnostic it provokes is still checked for
+    // scope, level, order and text.
+    let mine: Vec<&(crate::sys::LogLevel, String, String)> = all
+        .iter()
+        .filter(|(_, _, m)| m.ends_with("=31337"))
+        .collect();
+    for (level, scope, _) in mine.iter() {
         assert_eq!(crate::sys::LogLevel::Warning, *level);
         assert_eq!(LOG_SCOPE, scope);
     }
-    let captured: Vec<&String> = all
-        .iter()
-        .filter(|(_, _, m)| m.ends_with("=31337"))
-        .map(|(_, _, m)| m)
-        .collect();
+    let captured: Vec<&String> = mine.iter().map(|(_, _, m)| m).collect();
     let expected = [
         "render_state_get invalid data value=31337",
         "render_state_row_get invalid data value=31337",
