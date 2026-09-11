@@ -18,4 +18,13 @@ fn main() {
     let version = trimmed.strip_prefix("rustc ").unwrap_or(trimmed);
     println!("cargo:rustc-env=RUSTTY_RUSTC_VERSION={version}");
     println!("cargo:rerun-if-env-changed=RUSTC");
+
+    // `builtin.mode` (parity S42-F3). Zig has four optimize modes and
+    // `build_config.mode_string` reports whichever one the build used. The
+    // crate can see `debug_assertions` on its own, but NOT the optimization
+    // level — that is only visible here, as cargo's `OPT_LEVEL`, so bake it in.
+    // Together the two reconstruct all four modes; see `mode_string`.
+    let opt_level = std::env::var("OPT_LEVEL").unwrap_or_else(|_| "0".to_string());
+    println!("cargo:rustc-env=RUSTTY_OPT_LEVEL={opt_level}");
+    println!("cargo:rerun-if-env-changed=OPT_LEVEL");
 }

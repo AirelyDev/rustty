@@ -409,6 +409,24 @@ mod tests {
         );
     }
 
+    // test "_ returns msgid at comptime"
+    //
+    // PORT NOTE (parity S111-F10): the reference's assertion is
+    // `comptime @"_"("Ghostty")`, which takes the `if (@inComptime()) return
+    // msgid;` arm — an arm the port cannot have, because `gettext_` is FFI and
+    // Rust cannot evaluate it at const-eval time (see the PORT NOTE on
+    // `gettext_`). What the reference's test OBSERVES, though, is portable: a
+    // msgid with no translation bound comes back unchanged, byte for byte. That
+    // is asserted here on every platform — the sibling test below covers only
+    // macOS, and returns early elsewhere, so without this one the whole
+    // property was unasserted on Linux.
+    #[test]
+    #[cfg_attr(miri, ignore)] // ffi: dgettext crosses the C boundary
+    fn gettext_returns_msgid_when_untranslated() {
+        let msgid = c"Rustty";
+        assert_eq!(msgid, gettext_(msgid));
+    }
+
     /// WS9 regression: `gettext_` resolves `dgettext` from rustty's OWN
     /// vendored libintl (`gettext-sys`), not from Homebrew.
     ///

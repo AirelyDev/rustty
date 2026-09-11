@@ -2656,6 +2656,135 @@ mod tests {
         }
     }
 
+    // test "kitty renderer ignores pending payloads and removes replaced placements"
+    // (PURE — never touches GL; byte-identical to the macos twin's test. Parity
+    // S117-F2: the reference has ONE `image.zig`, so a test present in only one
+    // of the two port twins is coverage the other twin does not have — and this
+    // is the only kitty_renderer_* test the OpenGL twin was missing.)
+    #[test]
+    fn kitty_renderer_ignores_pending_payloads_and_removes_replaced_placements() {
+        use rustty_vt::kitty::graphics_image::Data;
+
+        let alloc = Global;
+
+        let mut t = rustty_vt::terminal::Terminal::init(alloc, opts(3, 3)).unwrap();
+        t.width_px = 30;
+        t.height_px = 30;
+
+        let mut state: State = State::empty();
+
+        // const storage = &t.screens.active.kitty_images;
+        // (re-derived from the raw screen pointer per access, per the storage's
+        // `s: *mut Screen` PORT NOTE.)
+        let sp = t.screens.active;
+        let tracked = unsafe { &(*sp).pages }.count_tracked_pins();
+        let pending = unsafe { &mut (*sp).kitty_images }
+            .add_pending_image(
+                alloc,
+                sp,
+                KittyImage {
+                    id: 1,
+                    width: 1,
+                    height: 1,
+                    format: Format::Rgba,
+                    data: Data::Pending(4),
+                    ..KittyImage::default()
+                },
+            )
+            .unwrap();
+        // const pin = try t.screens.active.pages.trackPin(
+        //     t.screens.active.cursor.page_pin.*,
+        // );
+        let pin = {
+            let cursor_pin = unsafe { *(*sp).cursor.page_pin };
+            unsafe { &mut (*sp).pages }.track_pin(cursor_pin).unwrap()
+        };
+        unsafe { &mut (*sp).kitty_images }
+            .add_placement(
+                alloc,
+                sp,
+                1,
+                1,
+                KittyStoragePlacement {
+                    columns: 1,
+                    rows: 1,
+                    ..KittyStoragePlacement::with_location(Location::Pin(pin))
+                },
+            )
+            .unwrap();
+
+        state.kitty_update(
+            alloc,
+            &t,
+            CellSize {
+                width: 10,
+                height: 10,
+            },
+        );
+        assert_eq!(1usize, unsafe { &(*sp).kitty_images }.placements.len());
+        assert_eq!(0usize, state.kitty_placements.len());
+        // `.get(..).is_none()`, not `!contains_key(..)`: the reference asserts
+        // `state.images.get(...) == null`, and the port mirrors that.
+        #[allow(clippy::unnecessary_get_then_check)]
+        {
+            assert!(state.images.get(&Id::Kitty(1)).is_none());
+        }
+
+        // const pixels = try alloc.dupe(u8, "rgba");
+        let pixels = b"rgba".to_vec();
+        assert!(pending.complete(unsafe { &mut (*sp).kitty_images }, pixels));
+        state.kitty_update(
+            alloc,
+            &t,
+            CellSize {
+                width: 10,
+                height: 10,
+            },
+        );
+        assert_eq!(1usize, state.kitty_placements.len());
+        assert_eq!(
+            pending.generation,
+            state.images.get(&Id::Kitty(1)).unwrap().generation
+        );
+
+        // A newer pending replacement deletes the native placement and marks the
+        // copied texture data for unload.
+        let _ = unsafe { &mut (*sp).kitty_images }
+            .add_pending_image(
+                alloc,
+                sp,
+                KittyImage {
+                    id: 1,
+                    width: 1,
+                    height: 1,
+                    format: Format::Rgba,
+                    data: Data::Pending(4),
+                    ..KittyImage::default()
+                },
+            )
+            .unwrap();
+        state.kitty_update(
+            alloc,
+            &t,
+            CellSize {
+                width: 10,
+                height: 10,
+            },
+        );
+        assert_eq!(0usize, unsafe { &(*sp).kitty_images }.placements.len());
+        assert_eq!(tracked, unsafe { &(*sp).pages }.count_tracked_pins());
+        assert_eq!(0usize, state.kitty_placements.len());
+        assert!(state
+            .images
+            .get(&Id::Kitty(1))
+            .unwrap()
+            .image
+            .is_unloading());
+
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
     // test "kitty renderer uses the intersected source rectangle"
     // (PURE — never touches GL; byte-identical to the macos twin's test.)
     #[test]

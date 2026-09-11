@@ -11713,7 +11713,13 @@ mod clone_changed_tests {
     #[test]
     fn clone_default() {
         // var source = try Config.default(alloc);
-        let source = Config::default();
+        //
+        // `default_config()`, NOT `Config::default()` (parity S77-F2): the
+        // reference's `Config.default(alloc)` also installs the default
+        // keybinds, the command-palette entries and the URL link, so cloning it
+        // is what exercises deep-copying those collections. The bare
+        // field-default fixture clones three empty containers.
+        let source = Config::default_config();
         // var dest = try source.clone(alloc);
         let dest = source.clone_config();
 
@@ -11738,8 +11744,8 @@ mod clone_changed_tests {
     // }
     #[test]
     fn clone_preserves_conditional_state() {
-        // var a = try Config.default(alloc);
-        let mut a = Config::default();
+        // var a = try Config.default(alloc);  (see `clone_default`, S77-F2)
+        let mut a = Config::default_config();
         // a._conditional_state.theme = .dark;
         a._conditional_state.theme = conditional::Theme::Dark;
         // try testing.expectEqual(.dark, a._conditional_state.theme);
@@ -11767,8 +11773,8 @@ mod clone_changed_tests {
     // }
     #[test]
     fn changed() {
-        // var source = try Config.default(alloc);
-        let source = Config::default();
+        // var source = try Config.default(alloc);  (see `clone_default`, S77-F2)
+        let source = Config::default_config();
         // var dest = try source.clone(alloc);
         let mut dest = source.clone_config();
         // dest.@"font-thicken" = true;

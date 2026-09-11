@@ -115,14 +115,48 @@ pub const fn release_channel() -> ReleaseChannel {
 /// Zig's `@tagName(builtin.mode)` yields the optimization-mode enum tag
 /// (`"Debug"`, `"ReleaseSafe"`, `"ReleaseFast"`, `"ReleaseSmall"`); the
 /// `lastIndexOfScalar(u8, m, '.')` slice keeps only the trailing component if
-/// the tag is ever qualified with a `.`-prefixed namespace. Rust has no
-/// `OptimizeMode` reflection, so the mode is reconstructed from the same
-/// `debug_assertions` toggle [`IS_DEBUG`]/[`SLOW_RUNTIME_SAFETY`] are derived
-/// from: a debug build reports `"Debug"`, an optimized build reports
-/// `"ReleaseFast"`.
+/// the tag is ever qualified with a `.`-prefixed namespace.
+//
+// PORT NOTE (parity S42-F3): Rust has no `OptimizeMode` reflection, and this
+// used to report only `"Debug"` or `"ReleaseFast"` — so the two modes a user
+// is most likely to be running when they paste `rustty +version` into a bug
+// report (a safety-checked optimized build, and a size-optimized one) were
+// both reported as `ReleaseFast`. All four are reconstructible from two facts:
+//
+//   * the OPTIMIZATION LEVEL, which the crate cannot see but cargo hands the
+//     build script as `OPT_LEVEL` (baked in as `RUSTTY_OPT_LEVEL`), and
+//   * `debug_assertions`, which is what distinguishes a safety-checked
+//     optimized build from a fast one — the same distinction Zig draws between
+//     `ReleaseSafe` and `ReleaseFast`.
+//
+// The mapping, which is the Cargo-profile analogue of Zig's four modes:
+//
+//   opt-level 0                         -> Debug
+//   opt-level "s" / "z"                 -> ReleaseSmall
+//   opt-level 1/2/3, debug_assertions   -> ReleaseSafe
+//   opt-level 1/2/3, no debug_assertions-> ReleaseFast
 pub const fn mode_string() -> &'static str {
-    if cfg!(debug_assertions) {
-        "Debug"
+    // `env!` is const-evaluable, so this stays a `const fn`.
+    mode_string_for(env!("RUSTTY_OPT_LEVEL"), cfg!(debug_assertions))
+}
+
+/// The decision itself, over its two inputs rather than over this build's.
+//
+// Split out so the test can drive EVERY mode, including the two this build does
+// not have — a test that re-derived the answer beside the function would prove
+// nothing about the function (the tautology this parity pass exists to remove).
+pub const fn mode_string_for(opt_level: &str, debug_assertions: bool) -> &'static str {
+    let opt_level = opt_level.as_bytes();
+    // `const fn` cannot use `==` on `&str`; compare the single byte cargo
+    // always emits ("0", "1", "2", "3", "s", "z").
+    if opt_level.len() == 1 && opt_level[0] == b'0' {
+        return "Debug";
+    }
+    if opt_level.len() == 1 && (opt_level[0] == b's' || opt_level[0] == b'z') {
+        return "ReleaseSmall";
+    }
+    if debug_assertions {
+        "ReleaseSafe"
     } else {
         "ReleaseFast"
     }
@@ -363,6 +397,43 @@ mod tests {
             crate::RUSTC_VERSION
         );
         assert!(!crate::RUSTC_VERSION.contains("rustc "));
+    }
+
+    /// `mode_string` must report the ACTUAL build mode (parity S42-F3), not one
+    /// of two hardcoded answers. It is asserted against the same two facts the
+    /// function derives it from — `RUSTTY_OPT_LEVEL` and `debug_assertions` —
+    /// so it is meaningful in every profile the workspace builds in, rather
+    /// than pinning one literal that is only right in one of them.
+    #[test]
+    fn mode_string_reports_the_actual_optimize_mode() {
+        let opt_level = env!("RUSTTY_OPT_LEVEL");
+        let expected = match opt_level {
+            "0" => "Debug",
+            "s" | "z" => "ReleaseSmall",
+            _ if cfg!(debug_assertions) => "ReleaseSafe",
+            _ => "ReleaseFast",
+        };
+        assert_eq!(expected, crate::mode_string(), "opt-level {opt_level:?}");
+
+        // All four Zig modes must be REACHABLE, i.e. the function must not be
+        // able to collapse onto a subset. (This is the arm that was false
+        // before: nothing could ever produce ReleaseSafe or ReleaseSmall.)
+        for (level, debug_assertions, want) in [
+            ("0", true, "Debug"),
+            ("0", false, "Debug"),
+            ("s", false, "ReleaseSmall"),
+            ("z", false, "ReleaseSmall"),
+            ("1", true, "ReleaseSafe"),
+            ("2", true, "ReleaseSafe"),
+            ("3", false, "ReleaseFast"),
+            ("2", false, "ReleaseFast"),
+        ] {
+            assert_eq!(
+                want,
+                crate::mode_string_for(level, debug_assertions),
+                "opt-level {level:?}, debug_assertions {debug_assertions}"
+            );
+        }
     }
 
     /// The packaging options are OPTIONS, not constants.
