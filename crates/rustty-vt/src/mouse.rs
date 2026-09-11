@@ -122,6 +122,7 @@ mod shape_tests {
     use super::Shape;
     use crate::options as build_options;
     use rustty_lib::c_header::{header_decls as parse_header_decls, parse_header_enum};
+    use rustty_lib::henum_fields;
     use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values, EnumType};
     use std::collections::HashMap;
 
@@ -162,42 +163,51 @@ mod shape_tests {
         // the `lib.Enum` FACTORY model, which assigns each key its INDEX — so
         // the check compared the header to a hand-typed list's ORDER and could
         // not observe `Shape` at all.
-        enum_type_values(&[
-            ("default", Shape::Default as i64),
-            ("context_menu", Shape::ContextMenu as i64),
-            ("help", Shape::Help as i64),
-            ("pointer", Shape::Pointer as i64),
-            ("progress", Shape::Progress as i64),
-            ("wait", Shape::Wait as i64),
-            ("cell", Shape::Cell as i64),
-            ("crosshair", Shape::Crosshair as i64),
-            ("text", Shape::Text as i64),
-            ("vertical_text", Shape::VerticalText as i64),
-            ("alias", Shape::Alias as i64),
-            ("copy", Shape::Copy as i64),
-            ("move", Shape::Move as i64),
-            ("no_drop", Shape::NoDrop as i64),
-            ("not_allowed", Shape::NotAllowed as i64),
-            ("grab", Shape::Grab as i64),
-            ("grabbing", Shape::Grabbing as i64),
-            ("all_scroll", Shape::AllScroll as i64),
-            ("col_resize", Shape::ColResize as i64),
-            ("row_resize", Shape::RowResize as i64),
-            ("n_resize", Shape::NResize as i64),
-            ("e_resize", Shape::EResize as i64),
-            ("s_resize", Shape::SResize as i64),
-            ("w_resize", Shape::WResize as i64),
-            ("ne_resize", Shape::NeResize as i64),
-            ("nw_resize", Shape::NwResize as i64),
-            ("se_resize", Shape::SeResize as i64),
-            ("sw_resize", Shape::SwResize as i64),
-            ("ew_resize", Shape::EwResize as i64),
-            ("ns_resize", Shape::NsResize as i64),
-            ("nesw_resize", Shape::NeswResize as i64),
-            ("nwse_resize", Shape::NwseResize as i64),
-            ("zoom_in", Shape::ZoomIn as i64),
-            ("zoom_out", Shape::ZoomOut as i64),
-        ])
+        //
+        // PORT NOTE (N36): the KEY LIST was hand-typed too, so an APPENDED
+        // `Shape` variant with no `RUSTTY_MOUSE_SHAPE_*` enumerator left both
+        // tests green — measured. `henum_fields!` emits an exhaustive `match`
+        // over `Shape` beside the list, so that is now a compile error; the
+        // reference gets it from `inline for (@typeInfo(T).@"enum".fields)`.
+        enum_type_values(&henum_fields!(
+            Shape,
+            [
+                ("default", Default),
+                ("context_menu", ContextMenu),
+                ("help", Help),
+                ("pointer", Pointer),
+                ("progress", Progress),
+                ("wait", Wait),
+                ("cell", Cell),
+                ("crosshair", Crosshair),
+                ("text", Text),
+                ("vertical_text", VerticalText),
+                ("alias", Alias),
+                ("copy", Copy),
+                ("move", Move),
+                ("no_drop", NoDrop),
+                ("not_allowed", NotAllowed),
+                ("grab", Grab),
+                ("grabbing", Grabbing),
+                ("all_scroll", AllScroll),
+                ("col_resize", ColResize),
+                ("row_resize", RowResize),
+                ("n_resize", NResize),
+                ("e_resize", EResize),
+                ("s_resize", SResize),
+                ("w_resize", WResize),
+                ("ne_resize", NeResize),
+                ("nw_resize", NwResize),
+                ("se_resize", SeResize),
+                ("sw_resize", SwResize),
+                ("ew_resize", EwResize),
+                ("ns_resize", NsResize),
+                ("nesw_resize", NeswResize),
+                ("nwse_resize", NwseResize),
+                ("zoom_in", ZoomIn),
+                ("zoom_out", ZoomOut),
+            ]
+        ))
     }
 
     #[test]

@@ -379,6 +379,7 @@ mod tests {
     use super::ProgressReportState;
     use crate::options as build_options;
     use rustty_lib::c_header::header_decls;
+    use rustty_lib::henum_fields;
     use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values, EnumType};
 
     /// The checked-in public C header, embedded at compile time.
@@ -439,6 +440,12 @@ mod tests {
     /// `@typeInfo(State).@"enum".fields`: remove, set, error, indeterminate,
     /// pause.
     ///
+    /// PORT NOTE (N36, S156-F1): the KEY LIST was hand-typed too, so a variant
+    /// ADDED to `State` with no `RUSTTY_PROGRESS_STATE_*` enumerator left this
+    /// test green, where the reference's
+    /// `inline for (@typeInfo(T).@"enum".fields)` fails. It goes through
+    /// `henum_fields!`, whose exhaustive `match` makes that a compile error.
+    ///
     /// PORT NOTE (N29): the VALUES come from
     /// `ProgressReportState::int_from_enum()` — the port's model of
     /// `@intFromEnum` for this type, and the same function `cval()` ships
@@ -446,16 +453,17 @@ mod tests {
     /// FACTORY model, which assigns each key its INDEX — so the check compared
     /// the header to a hand-typed list's ORDER and could not observe `State`.
     fn state_enum_descriptor() -> EnumType {
-        enum_type_values(&[
-            ("remove", ProgressReportState::Remove.int_from_enum() as i64),
-            ("set", ProgressReportState::Set.int_from_enum() as i64),
-            ("error", ProgressReportState::Error.int_from_enum() as i64),
-            (
-                "indeterminate",
-                ProgressReportState::Indeterminate.int_from_enum() as i64,
-            ),
-            ("pause", ProgressReportState::Pause.int_from_enum() as i64),
-        ])
+        enum_type_values(&henum_fields!(
+            ProgressReportState,
+            |v: ProgressReportState| v.int_from_enum() as i64,
+            [
+                ("remove", Remove),
+                ("set", Set),
+                ("error", Error),
+                ("indeterminate", Indeterminate),
+                ("pause", Pause),
+            ]
+        ))
     }
 
     // test "ghostty.h Command.ProgressReport.State" {

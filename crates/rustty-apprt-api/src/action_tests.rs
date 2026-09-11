@@ -65,9 +65,20 @@ fn run_henum_src(
 /// re-derived from the list's order. A reordered enum, a variant given an
 /// explicit discriminant, or an inserted variant all change what this expands
 /// to, and the header comparison then fails.
+///
+/// FIX (N36): the KEY LIST was hand-typed, so the check was blind in the other
+/// direction — a variant ADDED to the Rust enum with no `RUSTTY_*` enumerator
+/// left all 17 tests green, where the reference's
+/// `inline for (@typeInfo(T).@"enum".fields)` fails. Expanding through
+/// `rustty_lib::henum_fields!` emits an exhaustive `match` over the enum
+/// beside the list, so that is now a COMPILE error.
 macro_rules! henum {
-    ($header:literal, $prefix:literal, $E:ty, [ $( ($key:literal, $V:ident) ),* $(,)? ]) => {
-        run_henum($header, $prefix, &[ $( ($key, <$E>::$V as i64) ),* ])
+    ($header:literal, $prefix:literal, $E:ident, [ $( ($key:literal, $V:ident) ),* $(,)? ]) => {
+        run_henum(
+            $header,
+            $prefix,
+            &rustty_lib::henum_fields!($E, [ $( ($key, $V) ),* ]),
+        )
     };
 }
 

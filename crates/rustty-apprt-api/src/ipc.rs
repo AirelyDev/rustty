@@ -364,6 +364,7 @@ impl<'a> Action<'a> {
 mod tests {
     use super::{ActionKey, TargetKey};
     use rustty_lib::c_header::header_decls;
+    use rustty_lib::henum_fields;
     use rustty_lib::r#enum::{check_ghostty_henum, enum_type_values};
 
     /// The checked-in public C header, embedded at compile time.
@@ -382,6 +383,13 @@ mod tests {
     /// read out of the enum, not the key's index in a hand-typed list. Without
     /// that the check compares the header to a literal and cannot observe the
     /// port's enums at all.
+    ///
+    /// PORT NOTE (N36, S47-F1): the KEY LIST was still hand-typed, so the other
+    /// direction was blind — a variant ADDED to `ActionKey` with no
+    /// `RUSTTY_IPC_ACTION_*` enumerator left both tests green, where the
+    /// reference's `inline for (@typeInfo(T).@"enum".fields)` fails. The lists
+    /// go through `henum_fields!`, whose exhaustive `match` makes that a
+    /// compile error.
     fn run_henum_src(
         src: &str,
         header_enum: &str,
@@ -435,15 +443,11 @@ mod tests {
     // }
     #[test]
     fn ghostty_h_target_key() {
-        let _ = (TargetKey::Class, TargetKey::Detect);
         run_henum_src(
             HEADER_SRC,
             "rustty_ipc_target_tag_e",
             "RUSTTY_IPC_TARGET_",
-            &[
-                ("class", TargetKey::Class as i64),
-                ("detect", TargetKey::Detect as i64),
-            ],
+            &henum_fields!(TargetKey, [("class", Class), ("detect", Detect)]),
         )
         .unwrap();
     }
@@ -453,23 +457,18 @@ mod tests {
     // }
     #[test]
     fn ghostty_h_action_key() {
-        let _ = (
-            ActionKey::NewWindow,
-            ActionKey::NewTab,
-            ActionKey::ToggleQuickTerminal,
-        );
         run_henum_src(
             HEADER_SRC,
             "rustty_ipc_action_tag_e",
             "RUSTTY_IPC_ACTION_",
-            &[
-                ("new_window", ActionKey::NewWindow as i64),
-                ("new_tab", ActionKey::NewTab as i64),
-                (
-                    "toggle_quick_terminal",
-                    ActionKey::ToggleQuickTerminal as i64,
-                ),
-            ],
+            &henum_fields!(
+                ActionKey,
+                [
+                    ("new_window", NewWindow),
+                    ("new_tab", NewTab),
+                    ("toggle_quick_terminal", ToggleQuickTerminal),
+                ]
+            ),
         )
         .unwrap();
     }

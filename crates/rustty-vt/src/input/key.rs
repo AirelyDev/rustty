@@ -382,192 +382,201 @@ pub enum Key {
     Paste,
 }
 
-/// PORT NOTE: the reference enum tags are snake_case identifiers (e.g.
-/// `key_a`, `numpad_0`, `intl_backslash`, `@"fn"`). `tagName`/`fromW3C`/`w3c`
-/// operate on those snake_case names, so this table maps each `Key` variant to
-/// its reference `@tagName` string. This is the single source of truth for the
-/// name-based methods, replacing Zig's `@tagName`/`std.meta.stringToEnum`.
-/// PORT NOTE (`9673a22b0` ABI manifest): `pub` so `rustty-vt-c`'s
-/// `types.rs` can reflect the key names + values into `rustty_type_json`
-/// exactly like the reference's `inline for (@typeInfo(Key).@"enum".fields)`.
-pub const TAG_NAMES: &[(Key, &str)] = &[
-    (Key::Unidentified, "unidentified"),
-    (Key::Backquote, "backquote"),
-    (Key::Backslash, "backslash"),
-    (Key::BracketLeft, "bracket_left"),
-    (Key::BracketRight, "bracket_right"),
-    (Key::Comma, "comma"),
-    (Key::Digit0, "digit_0"),
-    (Key::Digit1, "digit_1"),
-    (Key::Digit2, "digit_2"),
-    (Key::Digit3, "digit_3"),
-    (Key::Digit4, "digit_4"),
-    (Key::Digit5, "digit_5"),
-    (Key::Digit6, "digit_6"),
-    (Key::Digit7, "digit_7"),
-    (Key::Digit8, "digit_8"),
-    (Key::Digit9, "digit_9"),
-    (Key::Equal, "equal"),
-    (Key::IntlBackslash, "intl_backslash"),
-    (Key::IntlRo, "intl_ro"),
-    (Key::IntlYen, "intl_yen"),
-    (Key::KeyA, "key_a"),
-    (Key::KeyB, "key_b"),
-    (Key::KeyC, "key_c"),
-    (Key::KeyD, "key_d"),
-    (Key::KeyE, "key_e"),
-    (Key::KeyF, "key_f"),
-    (Key::KeyG, "key_g"),
-    (Key::KeyH, "key_h"),
-    (Key::KeyI, "key_i"),
-    (Key::KeyJ, "key_j"),
-    (Key::KeyK, "key_k"),
-    (Key::KeyL, "key_l"),
-    (Key::KeyM, "key_m"),
-    (Key::KeyN, "key_n"),
-    (Key::KeyO, "key_o"),
-    (Key::KeyP, "key_p"),
-    (Key::KeyQ, "key_q"),
-    (Key::KeyR, "key_r"),
-    (Key::KeyS, "key_s"),
-    (Key::KeyT, "key_t"),
-    (Key::KeyU, "key_u"),
-    (Key::KeyV, "key_v"),
-    (Key::KeyW, "key_w"),
-    (Key::KeyX, "key_x"),
-    (Key::KeyY, "key_y"),
-    (Key::KeyZ, "key_z"),
-    (Key::Minus, "minus"),
-    (Key::Period, "period"),
-    (Key::Quote, "quote"),
-    (Key::Semicolon, "semicolon"),
-    (Key::Slash, "slash"),
-    (Key::AltLeft, "alt_left"),
-    (Key::AltRight, "alt_right"),
-    (Key::Backspace, "backspace"),
-    (Key::CapsLock, "caps_lock"),
-    (Key::ContextMenu, "context_menu"),
-    (Key::ControlLeft, "control_left"),
-    (Key::ControlRight, "control_right"),
-    (Key::Enter, "enter"),
-    (Key::MetaLeft, "meta_left"),
-    (Key::MetaRight, "meta_right"),
-    (Key::ShiftLeft, "shift_left"),
-    (Key::ShiftRight, "shift_right"),
-    (Key::Space, "space"),
-    (Key::Tab, "tab"),
-    (Key::Convert, "convert"),
-    (Key::KanaMode, "kana_mode"),
-    (Key::NonConvert, "non_convert"),
-    (Key::Delete, "delete"),
-    (Key::End, "end"),
-    (Key::Help, "help"),
-    (Key::Home, "home"),
-    (Key::Insert, "insert"),
-    (Key::PageDown, "page_down"),
-    (Key::PageUp, "page_up"),
-    (Key::ArrowDown, "arrow_down"),
-    (Key::ArrowLeft, "arrow_left"),
-    (Key::ArrowRight, "arrow_right"),
-    (Key::ArrowUp, "arrow_up"),
-    (Key::NumLock, "num_lock"),
-    (Key::Numpad0, "numpad_0"),
-    (Key::Numpad1, "numpad_1"),
-    (Key::Numpad2, "numpad_2"),
-    (Key::Numpad3, "numpad_3"),
-    (Key::Numpad4, "numpad_4"),
-    (Key::Numpad5, "numpad_5"),
-    (Key::Numpad6, "numpad_6"),
-    (Key::Numpad7, "numpad_7"),
-    (Key::Numpad8, "numpad_8"),
-    (Key::Numpad9, "numpad_9"),
-    (Key::NumpadAdd, "numpad_add"),
-    (Key::NumpadBackspace, "numpad_backspace"),
-    (Key::NumpadClear, "numpad_clear"),
-    (Key::NumpadClearEntry, "numpad_clear_entry"),
-    (Key::NumpadComma, "numpad_comma"),
-    (Key::NumpadDecimal, "numpad_decimal"),
-    (Key::NumpadDivide, "numpad_divide"),
-    (Key::NumpadEnter, "numpad_enter"),
-    (Key::NumpadEqual, "numpad_equal"),
-    (Key::NumpadMemoryAdd, "numpad_memory_add"),
-    (Key::NumpadMemoryClear, "numpad_memory_clear"),
-    (Key::NumpadMemoryRecall, "numpad_memory_recall"),
-    (Key::NumpadMemoryStore, "numpad_memory_store"),
-    (Key::NumpadMemorySubtract, "numpad_memory_subtract"),
-    (Key::NumpadMultiply, "numpad_multiply"),
-    (Key::NumpadParenLeft, "numpad_paren_left"),
-    (Key::NumpadParenRight, "numpad_paren_right"),
-    (Key::NumpadSubtract, "numpad_subtract"),
-    (Key::NumpadSeparator, "numpad_separator"),
-    (Key::NumpadUp, "numpad_up"),
-    (Key::NumpadDown, "numpad_down"),
-    (Key::NumpadRight, "numpad_right"),
-    (Key::NumpadLeft, "numpad_left"),
-    (Key::NumpadBegin, "numpad_begin"),
-    (Key::NumpadHome, "numpad_home"),
-    (Key::NumpadEnd, "numpad_end"),
-    (Key::NumpadInsert, "numpad_insert"),
-    (Key::NumpadDelete, "numpad_delete"),
-    (Key::NumpadPageUp, "numpad_page_up"),
-    (Key::NumpadPageDown, "numpad_page_down"),
-    (Key::Escape, "escape"),
-    (Key::F1, "f1"),
-    (Key::F2, "f2"),
-    (Key::F3, "f3"),
-    (Key::F4, "f4"),
-    (Key::F5, "f5"),
-    (Key::F6, "f6"),
-    (Key::F7, "f7"),
-    (Key::F8, "f8"),
-    (Key::F9, "f9"),
-    (Key::F10, "f10"),
-    (Key::F11, "f11"),
-    (Key::F12, "f12"),
-    (Key::F13, "f13"),
-    (Key::F14, "f14"),
-    (Key::F15, "f15"),
-    (Key::F16, "f16"),
-    (Key::F17, "f17"),
-    (Key::F18, "f18"),
-    (Key::F19, "f19"),
-    (Key::F20, "f20"),
-    (Key::F21, "f21"),
-    (Key::F22, "f22"),
-    (Key::F23, "f23"),
-    (Key::F24, "f24"),
-    (Key::F25, "f25"),
-    (Key::Fn, "fn"),
-    (Key::FnLock, "fn_lock"),
-    (Key::PrintScreen, "print_screen"),
-    (Key::ScrollLock, "scroll_lock"),
-    (Key::Pause, "pause"),
-    (Key::BrowserBack, "browser_back"),
-    (Key::BrowserFavorites, "browser_favorites"),
-    (Key::BrowserForward, "browser_forward"),
-    (Key::BrowserHome, "browser_home"),
-    (Key::BrowserRefresh, "browser_refresh"),
-    (Key::BrowserSearch, "browser_search"),
-    (Key::BrowserStop, "browser_stop"),
-    (Key::Eject, "eject"),
-    (Key::LaunchApp1, "launch_app_1"),
-    (Key::LaunchApp2, "launch_app_2"),
-    (Key::LaunchMail, "launch_mail"),
-    (Key::MediaPlayPause, "media_play_pause"),
-    (Key::MediaSelect, "media_select"),
-    (Key::MediaStop, "media_stop"),
-    (Key::MediaTrackNext, "media_track_next"),
-    (Key::MediaTrackPrevious, "media_track_previous"),
-    (Key::Power, "power"),
-    (Key::Sleep, "sleep"),
-    (Key::AudioVolumeDown, "audio_volume_down"),
-    (Key::AudioVolumeMute, "audio_volume_mute"),
-    (Key::AudioVolumeUp, "audio_volume_up"),
-    (Key::WakeUp, "wake_up"),
-    (Key::Copy, "copy"),
-    (Key::Cut, "cut"),
-    (Key::Paste, "paste"),
-];
+rustty_lib::enum_name_table! {
+    // FIX (S103-F3 / N36): the table is declared through
+    // `enum_name_table!`, which emits an exhaustive `match` over `Key`
+    // beside it. A `Key` variant that this table does not name is now a
+    // COMPILE error instead of a runtime `unreachable!()` in
+    // `tag_index` and a silently-skipped entry in the `w3c` test. The
+    // reference needs no such device: its tests and `@tagName` reflect
+    // with `inline for (@typeInfo(Key).@"enum".fields)`.
+    /// PORT NOTE: the reference enum tags are snake_case identifiers (e.g.
+    /// `key_a`, `numpad_0`, `intl_backslash`, `@"fn"`). `tagName`/`fromW3C`/`w3c`
+    /// operate on those snake_case names, so this table maps each `Key` variant to
+    /// its reference `@tagName` string. This is the single source of truth for the
+    /// name-based methods, replacing Zig's `@tagName`/`std.meta.stringToEnum`.
+    /// PORT NOTE (`9673a22b0` ABI manifest): `pub` so `rustty-vt-c`'s
+    /// `types.rs` can reflect the key names + values into `rustty_type_json`
+    /// exactly like the reference's `inline for (@typeInfo(Key).@"enum".fields)`.
+    pub const TAG_NAMES: &[(Key, &str)] = &[
+        (Key::Unidentified, "unidentified"),
+        (Key::Backquote, "backquote"),
+        (Key::Backslash, "backslash"),
+        (Key::BracketLeft, "bracket_left"),
+        (Key::BracketRight, "bracket_right"),
+        (Key::Comma, "comma"),
+        (Key::Digit0, "digit_0"),
+        (Key::Digit1, "digit_1"),
+        (Key::Digit2, "digit_2"),
+        (Key::Digit3, "digit_3"),
+        (Key::Digit4, "digit_4"),
+        (Key::Digit5, "digit_5"),
+        (Key::Digit6, "digit_6"),
+        (Key::Digit7, "digit_7"),
+        (Key::Digit8, "digit_8"),
+        (Key::Digit9, "digit_9"),
+        (Key::Equal, "equal"),
+        (Key::IntlBackslash, "intl_backslash"),
+        (Key::IntlRo, "intl_ro"),
+        (Key::IntlYen, "intl_yen"),
+        (Key::KeyA, "key_a"),
+        (Key::KeyB, "key_b"),
+        (Key::KeyC, "key_c"),
+        (Key::KeyD, "key_d"),
+        (Key::KeyE, "key_e"),
+        (Key::KeyF, "key_f"),
+        (Key::KeyG, "key_g"),
+        (Key::KeyH, "key_h"),
+        (Key::KeyI, "key_i"),
+        (Key::KeyJ, "key_j"),
+        (Key::KeyK, "key_k"),
+        (Key::KeyL, "key_l"),
+        (Key::KeyM, "key_m"),
+        (Key::KeyN, "key_n"),
+        (Key::KeyO, "key_o"),
+        (Key::KeyP, "key_p"),
+        (Key::KeyQ, "key_q"),
+        (Key::KeyR, "key_r"),
+        (Key::KeyS, "key_s"),
+        (Key::KeyT, "key_t"),
+        (Key::KeyU, "key_u"),
+        (Key::KeyV, "key_v"),
+        (Key::KeyW, "key_w"),
+        (Key::KeyX, "key_x"),
+        (Key::KeyY, "key_y"),
+        (Key::KeyZ, "key_z"),
+        (Key::Minus, "minus"),
+        (Key::Period, "period"),
+        (Key::Quote, "quote"),
+        (Key::Semicolon, "semicolon"),
+        (Key::Slash, "slash"),
+        (Key::AltLeft, "alt_left"),
+        (Key::AltRight, "alt_right"),
+        (Key::Backspace, "backspace"),
+        (Key::CapsLock, "caps_lock"),
+        (Key::ContextMenu, "context_menu"),
+        (Key::ControlLeft, "control_left"),
+        (Key::ControlRight, "control_right"),
+        (Key::Enter, "enter"),
+        (Key::MetaLeft, "meta_left"),
+        (Key::MetaRight, "meta_right"),
+        (Key::ShiftLeft, "shift_left"),
+        (Key::ShiftRight, "shift_right"),
+        (Key::Space, "space"),
+        (Key::Tab, "tab"),
+        (Key::Convert, "convert"),
+        (Key::KanaMode, "kana_mode"),
+        (Key::NonConvert, "non_convert"),
+        (Key::Delete, "delete"),
+        (Key::End, "end"),
+        (Key::Help, "help"),
+        (Key::Home, "home"),
+        (Key::Insert, "insert"),
+        (Key::PageDown, "page_down"),
+        (Key::PageUp, "page_up"),
+        (Key::ArrowDown, "arrow_down"),
+        (Key::ArrowLeft, "arrow_left"),
+        (Key::ArrowRight, "arrow_right"),
+        (Key::ArrowUp, "arrow_up"),
+        (Key::NumLock, "num_lock"),
+        (Key::Numpad0, "numpad_0"),
+        (Key::Numpad1, "numpad_1"),
+        (Key::Numpad2, "numpad_2"),
+        (Key::Numpad3, "numpad_3"),
+        (Key::Numpad4, "numpad_4"),
+        (Key::Numpad5, "numpad_5"),
+        (Key::Numpad6, "numpad_6"),
+        (Key::Numpad7, "numpad_7"),
+        (Key::Numpad8, "numpad_8"),
+        (Key::Numpad9, "numpad_9"),
+        (Key::NumpadAdd, "numpad_add"),
+        (Key::NumpadBackspace, "numpad_backspace"),
+        (Key::NumpadClear, "numpad_clear"),
+        (Key::NumpadClearEntry, "numpad_clear_entry"),
+        (Key::NumpadComma, "numpad_comma"),
+        (Key::NumpadDecimal, "numpad_decimal"),
+        (Key::NumpadDivide, "numpad_divide"),
+        (Key::NumpadEnter, "numpad_enter"),
+        (Key::NumpadEqual, "numpad_equal"),
+        (Key::NumpadMemoryAdd, "numpad_memory_add"),
+        (Key::NumpadMemoryClear, "numpad_memory_clear"),
+        (Key::NumpadMemoryRecall, "numpad_memory_recall"),
+        (Key::NumpadMemoryStore, "numpad_memory_store"),
+        (Key::NumpadMemorySubtract, "numpad_memory_subtract"),
+        (Key::NumpadMultiply, "numpad_multiply"),
+        (Key::NumpadParenLeft, "numpad_paren_left"),
+        (Key::NumpadParenRight, "numpad_paren_right"),
+        (Key::NumpadSubtract, "numpad_subtract"),
+        (Key::NumpadSeparator, "numpad_separator"),
+        (Key::NumpadUp, "numpad_up"),
+        (Key::NumpadDown, "numpad_down"),
+        (Key::NumpadRight, "numpad_right"),
+        (Key::NumpadLeft, "numpad_left"),
+        (Key::NumpadBegin, "numpad_begin"),
+        (Key::NumpadHome, "numpad_home"),
+        (Key::NumpadEnd, "numpad_end"),
+        (Key::NumpadInsert, "numpad_insert"),
+        (Key::NumpadDelete, "numpad_delete"),
+        (Key::NumpadPageUp, "numpad_page_up"),
+        (Key::NumpadPageDown, "numpad_page_down"),
+        (Key::Escape, "escape"),
+        (Key::F1, "f1"),
+        (Key::F2, "f2"),
+        (Key::F3, "f3"),
+        (Key::F4, "f4"),
+        (Key::F5, "f5"),
+        (Key::F6, "f6"),
+        (Key::F7, "f7"),
+        (Key::F8, "f8"),
+        (Key::F9, "f9"),
+        (Key::F10, "f10"),
+        (Key::F11, "f11"),
+        (Key::F12, "f12"),
+        (Key::F13, "f13"),
+        (Key::F14, "f14"),
+        (Key::F15, "f15"),
+        (Key::F16, "f16"),
+        (Key::F17, "f17"),
+        (Key::F18, "f18"),
+        (Key::F19, "f19"),
+        (Key::F20, "f20"),
+        (Key::F21, "f21"),
+        (Key::F22, "f22"),
+        (Key::F23, "f23"),
+        (Key::F24, "f24"),
+        (Key::F25, "f25"),
+        (Key::Fn, "fn"),
+        (Key::FnLock, "fn_lock"),
+        (Key::PrintScreen, "print_screen"),
+        (Key::ScrollLock, "scroll_lock"),
+        (Key::Pause, "pause"),
+        (Key::BrowserBack, "browser_back"),
+        (Key::BrowserFavorites, "browser_favorites"),
+        (Key::BrowserForward, "browser_forward"),
+        (Key::BrowserHome, "browser_home"),
+        (Key::BrowserRefresh, "browser_refresh"),
+        (Key::BrowserSearch, "browser_search"),
+        (Key::BrowserStop, "browser_stop"),
+        (Key::Eject, "eject"),
+        (Key::LaunchApp1, "launch_app_1"),
+        (Key::LaunchApp2, "launch_app_2"),
+        (Key::LaunchMail, "launch_mail"),
+        (Key::MediaPlayPause, "media_play_pause"),
+        (Key::MediaSelect, "media_select"),
+        (Key::MediaStop, "media_stop"),
+        (Key::MediaTrackNext, "media_track_next"),
+        (Key::MediaTrackPrevious, "media_track_previous"),
+        (Key::Power, "power"),
+        (Key::Sleep, "sleep"),
+        (Key::AudioVolumeDown, "audio_volume_down"),
+        (Key::AudioVolumeMute, "audio_volume_mute"),
+        (Key::AudioVolumeUp, "audio_volume_up"),
+        (Key::WakeUp, "wake_up"),
+        (Key::Copy, "copy"),
+        (Key::Cut, "cut"),
+        (Key::Paste, "paste"),
+    ];
+}
 
 impl Key {
     /// Narrow an inbound C integer to a `Key`, mirroring `std.meta.intToEnum`;
@@ -584,8 +593,16 @@ impl Key {
     /// match. `TAG_NAMES` is the same table `tag_index`/`tag_name`/
     /// `string_to_enum` already use and it lists every variant exactly once, so
     /// this cannot drift out of sync with the enum the way a duplicated match
-    /// would; the `key: every tag has a name` test already pins the table
-    /// against the variant set.
+    /// would; the `enum_name_table!` wrapper on the table is what makes "every
+    /// variant exactly once" true — a `Key` variant it does not name is a
+    /// compile error.
+    ///
+    /// CORRECTION (S103-F3): this used to end "the `key: every tag has a name`
+    /// test already pins the table against the variant set". **No such test
+    /// ever existed**, here or in the reference (`src/input/key.zig` at pin
+    /// `20abdb50a` has exactly four `test` blocks and none of them is it), so
+    /// nothing pinned the table: with a variant appended to `Key` and left out
+    /// of `TAG_NAMES`, all 101 `input::key` tests passed — measured.
     pub fn from_c_int(v: std::os::raw::c_int) -> Option<Key> {
         TAG_NAMES
             .iter()
@@ -1414,11 +1431,63 @@ mod tests {
         assert!(!Key::Digit1.keypad());
     }
 
+    /// PROVING TEST (S103-F3, no reference analogue). `W3C_NAMES` is a SECOND
+    /// hand-maintained table indexed by `tag_index()`, i.e. by position in
+    /// `TAG_NAMES`. Nothing bound the two: a short or misaligned `W3C_NAMES`
+    /// shows up as an out-of-bounds panic or a wrong name at runtime. The
+    /// reference has no such table — `w3c()` derives the name from `@tagName`
+    /// — so the derivation is checkable, and this test runs it.
+    #[test]
+    fn w3c_names_are_derived_from_tag_names() {
+        assert_eq!(
+            TAG_NAMES.len(),
+            W3C_NAMES.len(),
+            "W3C_NAMES is indexed by position in TAG_NAMES"
+        );
+        for (i, (_, tag)) in TAG_NAMES.iter().enumerate() {
+            // "upper-case the first letter, and upper-case the letter
+            // following each underscore while dropping the underscore".
+            let mut want = String::with_capacity(tag.len());
+            let mut up = true;
+            for ch in tag.chars() {
+                if ch == '_' {
+                    up = true;
+                    continue;
+                }
+                want.push(if up { ch.to_ascii_uppercase() } else { ch });
+                up = false;
+            }
+            assert_eq!(want, W3C_NAMES[i], "W3C_NAMES[{i}] for tag `{tag}`");
+        }
+    }
+
+    /// The `w3c` test below iterates `TAG_NAMES`, where the reference iterates
+    /// `@typeInfo(Key).@"enum".fields`. Those are the same set only because
+    /// `enum_name_table!` makes the table exhaustive over `Key` at compile
+    /// time; this test pins the other half — that the table has no DUPLICATE
+    /// variant, which would make it a proper superset of nothing useful and
+    /// leave `tag_index` returning the first of two homes for a key.
+    #[test]
+    fn tag_names_names_each_key_exactly_once() {
+        let mut seen: Vec<Key> = Vec::with_capacity(TAG_NAMES.len());
+        for (k, tag) in TAG_NAMES {
+            assert!(!seen.contains(k), "duplicate entry for tag `{tag}`");
+            assert_eq!(*k, TAG_NAMES[k.tag_index()].0);
+            seen.push(*k);
+        }
+    }
+
     #[test]
     fn w3c() {
         // All our keys should convert to and from the W3C format.
         // We don't support every key in the W3C spec, so we only
         // check the enum fields.
+        //
+        // PORT NOTE (S103-F3): the reference is
+        // `inline for (@typeInfo(Key).@"enum".fields)`. Iterating `TAG_NAMES`
+        // covers the same set only because `enum_name_table!` makes the table
+        // exhaustive over `Key` at compile time — before that, a variant
+        // missing from the table was silently skipped here.
         for (key, _) in TAG_NAMES {
             let w3c_name = key.w3c();
             assert_eq!(*key, Key::from_w3c(w3c_name.as_bytes()).unwrap());

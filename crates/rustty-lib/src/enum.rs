@@ -223,9 +223,138 @@ where
     Ok(())
 }
 
+/// Bind a hand-written `(key, Variant)` list to its enum so the list cannot
+/// silently fall behind the enum.
+///
+/// PORT NOTE: no reference counterpart — the oracle does not need one.
+/// `lib.checkGhosttyHEnum` reflects with `inline for (@typeInfo(T).@"enum".fields)`,
+/// so a variant ADDED to the Zig enum is checked against `ghostty.h` by
+/// construction. Rust has no such reflection, so every `check_ghostty_henum`
+/// caller in this workspace writes its keys out by hand — and a hand-written
+/// list cannot observe a variant that is not in it.
+///
+/// This macro closes that half. It expands to the `&[(&str, i64)]` fields array
+/// AND to an exhaustive `match` over `$E`, so adding a variant to the enum
+/// without adding it here is a COMPILE ERROR, and naming a variant twice is an
+/// unreachable-pattern lint (`-D warnings` on this workspace's `--all-targets`
+/// clippy runs). See finding N36.
+///
+/// Two forms: the default reads the discriminant with `as i64`; the second
+/// takes an explicit `fn($E) -> i64` for enums whose C value comes from a
+/// method (e.g. `ProgressReportState::int_from_enum`).
+///
+/// ```ignore
+/// let fields = rustty_lib::henum_fields!(TargetKey, [("class", Class), ("detect", Detect)]);
+/// ```
+#[macro_export]
+macro_rules! henum_fields {
+    ($E:ident, [ $( ($key:literal, $V:ident) ),* $(,)? ]) => {
+        $crate::henum_fields!($E, |v: $E| v as i64, [ $( ($key, $V) ),* ])
+    };
+    ($E:ident, $value:expr, [ $( ($key:literal, $V:ident) ),* $(,)? ]) => {{
+        // Exhaustive over `$E`: a variant the list does not name does not
+        // compile. This is the Rust stand-in for the reference's
+        // `inline for (@typeInfo(T).@"enum".fields)`.
+        #[allow(dead_code)]
+        fn __henum_exhaustive(v: $E) -> &'static str {
+            match v { $( $E::$V => $key, )* }
+        }
+        let __henum_value: fn($E) -> i64 = $value;
+        [ $( ($key, __henum_value($E::$V)) ),* ]
+    }};
+}
+
+/// Declare a `&[(Enum, &str)]` lookup table that the compiler keeps exhaustive.
+///
+/// PORT NOTE: no reference counterpart. The oracle reaches every variant of an
+/// enum with `@tagName` / `inline for (@typeInfo(T).@"enum".fields)`; a Rust
+/// port that replaces that reflection with a hand-written parallel table gains
+/// a table that can fall behind the enum, and the failure shows up as a
+/// runtime `unreachable!()` rather than as a build error. Wrapping the table in
+/// this macro emits an exhaustive `match` beside it, so a new variant is a
+/// COMPILE ERROR until the table names it. See finding N36.
+///
+/// The table body is written exactly as it would be without the macro:
+///
+/// ```ignore
+/// rustty_lib::enum_name_table! {
+///     /// docs
+///     pub const TAG_NAMES: &[(Key, &str)] = &[
+///         (Key::Unidentified, "unidentified"),
+///     ];
+/// }
+/// ```
+#[macro_export]
+macro_rules! enum_name_table {
+    (
+        $(#[$meta:meta])*
+        $vis:vis const $NAME:ident : &[($E:ident, &str)] = &[
+            $( ($_e:ident :: $V:ident, $s:literal) ),* $(,)?
+        ];
+    ) => {
+        $(#[$meta])*
+        $vis const $NAME: &[($E, &str)] = &[ $( ($E::$V, $s) ),* ];
+
+        const _: () = {
+            #[allow(dead_code)]
+            fn exhaustive(v: $E) -> &'static str {
+                match v { $( $E::$V => $s, )* }
+            }
+        };
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `henum_fields!` values are read OUT OF THE ENUM, not re-derived from
+    /// the list's order, and the list is exhaustive over the enum by
+    /// construction.
+    ///
+    /// PORT NOTE: no reference analogue. The exhaustiveness half cannot be
+    /// negative-controlled from a test, because its failure mode is a COMPILE
+    /// error: adding a variant here without a list entry stops this crate
+    /// building. That is strictly stronger than the reference's test failure,
+    /// and it was verified by doing exactly that (finding N36).
+    #[test]
+    fn henum_fields_reads_values_from_the_enum() {
+        #[derive(Clone, Copy)]
+        #[repr(i32)]
+        enum Probe {
+            A = 3,
+            B = 9,
+        }
+        let fields = crate::henum_fields!(Probe, [("a", A), ("b", B)]);
+        assert_eq!([("a", 3i64), ("b", 9i64)], fields);
+
+        // The mapper form, for enums whose C value comes from a method.
+        impl Probe {
+            fn doubled(self) -> i64 {
+                (self as i64) * 2
+            }
+        }
+        let mapped = crate::henum_fields!(Probe, |v: Probe| v.doubled(), [("a", A), ("b", B)]);
+        assert_eq!([("a", 6i64), ("b", 18i64)], mapped);
+    }
+
+    #[test]
+    fn enum_name_table_declares_the_table() {
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        enum Probe2 {
+            One,
+            Two,
+        }
+        crate::enum_name_table! {
+            /// doc comments survive the macro.
+            const PROBE_NAMES: &[(Probe2, &str)] = &[
+                (Probe2::One, "one"),
+                (Probe2::Two, "two"),
+            ];
+        }
+        assert_eq!(2, PROBE_NAMES.len());
+        assert_eq!((Probe2::Two, "two"), PROBE_NAMES[1]);
+    }
 
     #[test]
     fn zig() {

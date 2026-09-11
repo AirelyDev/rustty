@@ -1967,3 +1967,46 @@ assertion named, (2) a decision on whether it is the test or the handshake that 
 (3) if the suite is to be trusted under contention, a repetition measurement that is taken
 under load rather than on an idle host.
 
+
+## N36 — the header-sync tests are HALF-blind: 22 `checkGhosttyHEnum` ports cannot see a variant ADDED to the Rust enum
+
+Found by task 19 while measuring `S47-F1` and `S156-F1`, both of which name the defect
+`S45-F1`/`N29` already fixed. Those fixes are real and I confirmed them by measurement
+(transposing two `ActionKey` variants turns `ghostty_h_action_key` RED). This is the
+**remaining half of the same seam**, and no row claims it.
+
+**The reference reflects; the port writes a list.** `lib.checkGhosttyHEnum` iterates
+`@typeInfo(T).@"enum".fields`, so BOTH directions are bound: a header enumerator that the enum
+does not have, and an enum variant the header does not declare. Rust has no such reflection, so
+every one of this workspace's five `check_ghostty_henum` callers supplies a HAND-TYPED key list.
+`N29` bound the values (`<Enum>::Variant as i64`); nothing bound the roster.
+
+**Measured, not argued.** Appending a variant to the end of an enum (the realistic case — a new
+action goes on the end) with no header enumerator and no entry in the test's list:
+
+| site | enums | before | after |
+|---|---|---|---|
+| `rustty-apprt-api/src/action_tests.rs` | 17 | **27 tests GREEN** | compile error |
+| `rustty-apprt-api/src/ipc.rs` | `ActionKey`, `TargetKey` | **3 tests GREEN** | compile error |
+| `rustty-renderer/src/lib.rs` | `Health` | **2 tests GREEN** | compile error |
+| `rustty-vt/src/mouse.rs` | `Shape` | **6 tests GREEN** | compile error |
+| `rustty-vt/src/osc/mod.rs` | `ProgressReportState` | already a compile error | unchanged |
+
+Note the shape of the blind spot: INSERTING a variant in the middle shifts the discriminants and
+is caught by the value comparison `N29` restored. Only an APPENDED variant is invisible — which
+is the one people actually write. `mouse.rs`, the one caller task 15 recorded as having "did it
+right", had the gap too.
+
+`ProgressReportState` was already bound, by its own `int_from_enum()` exhaustive `match` — not by
+anything the test does. That is luck, not design, and it is why the fix is a shared device rather
+than a per-site argument.
+
+**Fix**: `rustty_lib::henum_fields!` (and `rustty_lib::enum_name_table!` for the `TAG_NAMES`
+class) expand the hand-written list into the fields array AND an exhaustive `match` over the
+enum, so a variant the list does not name stops the crate building. That is stronger than the
+reference's failure mode (a test failure), and it is the closest Rust has to
+`inline for (@typeInfo(T).@"enum".fields)`.
+
+**state**: CLOSED by task 19 at all five sites. Recorded here rather than reopening `S45-F1`,
+whose own claim — "the C values are looked up in the enum itself" — was true, was fixed, and is
+not this.
