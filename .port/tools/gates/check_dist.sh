@@ -19,6 +19,7 @@
 #                    export-ignore. ~15s.
 #   RUSTTY_DISTCHECK=1
 #                    additionally `xtask distcheck`, which extracts the tarball
+#                    and runs its TEST SUITE there (parity S63-F8)
 #                    and BUILDS it. That is a cold full-workspace build, far
 #                    too slow to put in front of every local ci.sh run, so it
 #                    is opt-in and CI turns it on for one leg. When it is off
@@ -165,16 +166,16 @@ else
   rm -f "$LIST.debian.log"
 fi
 
-echo "=== G-DIST 5/5 :: distcheck (extract + build) ==="
+echo "=== G-DIST 5/5 :: distcheck (extract + test) ==="
 if [ "${RUSTTY_DISTCHECK:-0}" != "1" ]; then
-  echo "    skipped distcheck (set RUSTTY_DISTCHECK=1 — it is a cold full-workspace build)"
+  echo "    skipped distcheck (set RUSTTY_DISTCHECK=1 — it is a cold full-workspace build+test)"
   echo "G-DIST GREEN (tarball built and shape-checked). Not run: distcheck."
   exit 0
 fi
 if ! cargo run -q -p xtask -- distcheck > /dev/null 2>&1; then
   cargo run -q -p xtask -- distcheck 2>&1 | tail -30 | sed 's/^/    /'
-  red "xtask distcheck failed — the tarball does not build standalone"
+  red "xtask distcheck failed — the tarball does not build and pass its tests standalone"
 fi
-echo "    ok      distcheck: the extracted tarball builds"
+echo "    ok      distcheck: the extracted tarball builds AND its tests pass"
 echo "G-DIST GREEN (tarball built, shape-checked, and distcheck clean)."
 exit 0

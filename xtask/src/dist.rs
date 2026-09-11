@@ -261,21 +261,35 @@ pub fn distcheck() -> Result<PathBuf, String> {
         return Err("extracted tree missing .cargo/config.toml source replacement".into());
     }
 
-    // Build the workspace from the extracted tree to prove it is
-    // self-contained: `--offline --locked` with a FRESH `CARGO_HOME`, so
-    // neither the network nor the developer's warm registry cache can stand in
-    // for a broken vendor tree (W2-01 — the old plain `cargo build` here was
-    // green even though no vendor tree existed at all).
+    // Run the TEST SUITE from the extracted tree — not just a build (parity
+    // S63-F8). The reference's check step is
+    // `step = b.addSystemCommand(&.{"zig", "build", "test"}); step.setCwd(
+    // extract_dir); step.expectExitCode(0);` (GhosttyDist.zig:128-131), i.e.
+    // the guarantee the tarball ships with is "its tests pass where it was
+    // unpacked", not merely "it compiles there". A source tarball that builds
+    // and then fails its own tests is exactly what this step exists to catch,
+    // and `cargo build` could not see it.
+    //
+    // `--offline --locked` with a FRESH `CARGO_HOME` stays, so neither the
+    // network nor the developer's warm registry cache can stand in for a
+    // broken vendor tree (W2-01 — the old plain `cargo build` here was green
+    // even though no vendor tree existed at all). Note this also raises the
+    // bar on the vendor tree itself: it must now carry the DEV-dependencies
+    // too, which a build-only check never exercised.
+    //
+    // Like the reference, this is not fully hermetic (it shares the host
+    // toolchain and target dir policy) and is slow; the reference documents the
+    // same trade-off in the comment above its own check step.
     let cargo_home = checkdir.join("cargo-home");
     std::fs::create_dir_all(&cargo_home).map_err(|e| format!("create fresh CARGO_HOME: {e}"))?;
     let status = Command::new("cargo")
         .current_dir(&extracted)
         .env("CARGO_HOME", &cargo_home)
-        .args(["build", "--workspace", "--offline", "--locked"])
+        .args(["test", "--workspace", "--offline", "--locked"])
         .status()
-        .map_err(|e| format!("spawn cargo build: {e}"))?;
+        .map_err(|e| format!("spawn cargo test: {e}"))?;
     if !status.success() {
-        return Err(format!("distcheck build exited with {status}"));
+        return Err(format!("distcheck test exited with {status}"));
     }
 
     let _ = std::fs::remove_dir_all(&checkdir);

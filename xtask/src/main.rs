@@ -101,7 +101,8 @@ SUBCOMMANDS:
                        rustty-vt-c's closure. Port of ghostty's
                        `zig build dist -Demit-lib-vt=true` (release-tip.yml's
                        source-tarball-lib-vt job).
-    distcheck          Build the source tarball, extract it, and build it to validate self-containment
+    distcheck          Build the source tarball, extract it, and RUN ITS TEST SUITE to validate
+                       self-containment (ghostty's `zig build test` inside the extracted dir)
     release-info [--version <vX.Y.Z>] [--ref <refs/tags/vX.Y.Z>] [--no-workspace-check]
                        Emit the release metadata (version, build, commit, commit_long)
                        the .github/workflows/release-{tag,tip}.yml pipelines consume,

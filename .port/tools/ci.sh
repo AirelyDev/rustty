@@ -455,8 +455,10 @@ GATE_REGISTRY=(
   # workflows, so a broken tarball would first have surfaced DURING a release.
   # Builds it and asserts its shape (single versioned prefix, the files a
   # from-scratch build needs, >1000 vendored crates-sys files, and no .port/ or
-  # docs/superpowers/ leakage). `xtask distcheck` — extract and BUILD the
-  # tarball — is a cold full-workspace build and runs only under
+  # docs/superpowers/ leakage). `xtask distcheck` — extract the tarball and run
+  # ITS TEST SUITE (parity S63-F8; the reference's check step is `zig build
+  # test` inside the extracted dir) — is a cold full-workspace build+test and
+  # runs only under
   # RUSTTY_DISTCHECK=1 (set by ci.yml on the Ubuntu leg); otherwise the gate
   # reports it skipped BY NAME rather than implying it ran.
   "G-DIST|HARD|bash $GATES/check_dist.sh"

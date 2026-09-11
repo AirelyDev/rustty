@@ -4150,17 +4150,29 @@ mod tests {
             // `Loop.init(.{.thread_pool})`; what is missing is the macOS
             // `File`/`TCP`/`UDP` watcher instantiation this test needs to drive
             // IO through the pool. Assert the deferral is still ledgered so this
-            // skip stays visible (compile-time embed: a removed ledger entry
+            // skip stays visible (compile-time probe: a removed ledger entry
             // fails this test on the next build).
-            let ledger = include_str!("../../../.port/phase-2/DEFERRALS.md");
-            assert!(
-                ledger.contains("macOS `xev.File`/`TCP`/`UDP` watcher surface")
-                    && ledger.contains("file IO on thread pool"),
-                "the macOS `xev.File` watcher deferral vanished from \
-                 DEFERRALS.md but `kqueue_file_io_on_thread_pool` is still a \
-                 skip-stub: port the watcher (and flip \
-                 MACOS_FILE_WATCHER_PORTED) or restore the ledger entry"
-            );
+            //
+            // PORT NOTE (parity S63-F8): this was `include_str!` of
+            // `.port/phase-2/DEFERRALS.md`, which HARD-FAILS to compile where
+            // that file does not exist — i.e. in the source tarball, which
+            // deliberately excludes `.port/`. The shipped tarball therefore
+            // could not build its own tests, and `xtask distcheck` could not
+            // see it because it only BUILT the extracted tree. build.rs now
+            // probes the ledger and reports both "is there a ledger here at
+            // all" and "does it still carry the entry", so the tripwire is
+            // unchanged in the repo and simply has nothing to check in a
+            // tarball.
+            if env!("RUSTTY_XEV_DEFERRALS_PRESENT") == "1" {
+                assert_eq!(
+                    "1",
+                    env!("RUSTTY_XEV_DEFERRAL_LEDGERED"),
+                    "the macOS `xev.File` watcher deferral vanished from \
+                     DEFERRALS.md but `kqueue_file_io_on_thread_pool` is still \
+                     a skip-stub: port the watcher (and flip \
+                     MACOS_FILE_WATCHER_PORTED) or restore the ledger entry"
+                );
+            }
             return;
         }
         unreachable!(
