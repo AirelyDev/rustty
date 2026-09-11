@@ -270,6 +270,22 @@ fn workflows_only_call_real_xtask_subcommands() {
 /// Ghostty takes the version from the tag, rustty from the manifest).
 #[test]
 fn release_info_writes_github_output_and_rejects_a_mismatched_tag() {
+    // `xtask release-info` derives the build number and commit by shelling to
+    // git, so it cannot run outside a checkout — and the SOURCE TARBALL ships
+    // no `.git` (parity S63-F8; `xtask distcheck` now runs the extracted tree's
+    // tests, as the reference's check step does). Same reasoning as
+    // `release::tests::build_info_reads_this_checkout`: the precondition is
+    // "we are in a git checkout", which a repo checkout cannot fail, so this
+    // skip is structurally unreachable where it would matter and needs no
+    // strict-mode switch.
+    if !workspace_root().join(".git").exists() {
+        eprintln!(
+            "no .git at {} (source tarball); skipping \
+             release_info_writes_github_output_and_rejects_a_mismatched_tag",
+            workspace_root().display()
+        );
+        return;
+    }
     let dir = std::env::temp_dir().join(format!("rustty-release-info-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
