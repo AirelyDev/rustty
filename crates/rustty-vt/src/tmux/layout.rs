@@ -168,11 +168,14 @@ impl Layout {
     // way, the first to overflow do so at about 1,500 levels in a debug build
     // and about 2,400 in a release build. The port therefore rejects a layout
     // nested deeper than `MAX_DEPTH` with the parser's existing `SyntaxError`,
-    // which the viewer already turns into its defunct state. A tmux split nests
-    // only inside a split of the other direction, and each level takes at least
-    // a row or a column (tmux's own behaviour, not re-read from its source), so
-    // a real layout this deep would need a window over 1,000 cells both wide
-    // and tall. `Drop` is iterative as well (see above `Layout`). `depth`
+    // which the viewer already turns into its defunct state. The limit matches
+    // tmux: commit `b7c5030004` (2026-09-09) added `LAYOUT_V1_MAX_DEPTH 1000` to
+    // `layout_construct_v1`, counting depth the same way (root is 0, a cell
+    // deeper than 1000 is rejected). Older tmux has no cap, so a hand-written
+    // `select-layout` string could nest deeper there, but a layout built by
+    // splitting cannot realistically reach 1000: each nested split takes at
+    // least a row or a column. `Drop` is iterative as well (see above
+    // `Layout`). `depth`
     // counts the containers enclosing this node. Tests:
     // `deeply_nested_layout_is_a_syntax_error_beyond_max_depth`,
     // `dropping_a_very_deep_layout_does_not_recurse`, and the viewer's

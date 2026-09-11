@@ -1662,6 +1662,25 @@ impl Viewer {
                     Some(v) => v,
                     None => break 'scroll,
                 };
+                // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD11;
+                // inventory M111). The reference stores tmux's values without
+                // checking them against the pane. A bottom at or past `rows`
+                // makes the next line feed or wrap panic in
+                // `Screen.cursorDown` (`assert(self.cursor.y + n <
+                // self.pages.rows)`, `Screen.zig:828`; port `screen.rs:1577`),
+                // and a one-row region away from the top makes `index()` call
+                // `cursorScrollRegionUp(0)`, which asserts `limit >= 1`. The
+                // values come from tmux's `list-panes` reply, so anything
+                // written to the pty inside `ESC P 1000 p` supplies them. This
+                // same reply ignores its other out-of-screen geometry (the
+                // cursor and saved cursor: `>= rows` or `>= cols` breaks out;
+                // a tab stop `>= cols` is skipped), and the terminal's own
+                // DECSTBM refuses `top >= bottom`. So the port ignores a region
+                // unless `top < bottom < rows`, leaving the pane's current
+                // region. Test: `pane_state_scroll_region_outside_the_pane_is_ignored`.
+                if !(scroll_top < scroll_bottom && scroll_bottom < t.rows) {
+                    break 'scroll;
+                }
                 // t.scrolling_region.top = scroll_top;
                 t.scrolling_region.top = scroll_top;
                 // t.scrolling_region.bottom = scroll_bottom;
@@ -3775,6 +3794,81 @@ mod tests {
             "the active area is not empty after the index loop, got {active:?}"
         );
         s.deinit();
+    }
+
+    /// R13 (M111). Pane 7 (80x24) gets a `list-panes` reply putting its cursor
+    /// on row 23 with the scroll region `upper`..`lower`, then `%output` long
+    /// enough to wrap. Returns pane 7's scroll region afterwards and whether its
+    /// active area holds the output.
+    #[cfg(feature = "oniguruma")]
+    fn pane_state_scroll_region_then_wrapping_output(
+        upper: usize,
+        lower: usize,
+    ) -> (u16, u16, bool) {
+        use crate::tmux::test_host;
+        let mut s = test_host::stream();
+        test_host::attach(&mut s);
+        let line = test_host::list_windows_line(0, 80, 24, b"80x24,0,0,7");
+        s.next_slice(&test_host::block(3, &line));
+        for n in 4..8 {
+            s.next_slice(&test_host::block(n, b""));
+        }
+        let state = format!(
+            "%7;0;23;1;;;;1;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;{upper};{lower};8"
+        );
+        s.next_slice(&test_host::block(8, state.as_bytes()));
+        assert_eq!(
+            23,
+            unsafe {
+                &*s.handler
+                    .viewer()
+                    .panes
+                    .get_ptr(&7)
+                    .unwrap()
+                    .terminal
+                    .screens
+                    .active
+            }
+            .cursor
+            .y,
+            "the list-panes reply was applied (cursor row 23)"
+        );
+
+        let mut output = b"%output %7 ".to_vec();
+        output.resize(output.len() + 100, b'x');
+        output.push(b'\n');
+        s.next_slice(&output);
+        assert_eq!(State::CommandQueue, s.handler.viewer().state);
+        let pane = s.handler.viewer().panes.get_ptr(&7).unwrap();
+        let region = (
+            pane.terminal.scrolling_region.top,
+            pane.terminal.scrolling_region.bottom,
+        );
+        let active = pane_dump(s.handler.viewer(), 7, crate::point::Tag::Active);
+        s.deinit();
+        (region.0, region.1, active.contains("xxxxxxxxxx"))
+    }
+
+    #[cfg(feature = "oniguruma")]
+    #[test]
+    fn pane_state_scroll_region_outside_the_pane_is_ignored() {
+        // Positive control: an in-range region is applied, and the wrapping
+        // output scrolls inside it.
+        assert_eq!(
+            (0, 10, true),
+            pane_state_scroll_region_then_wrapping_output(0, 10)
+        );
+        // Below the pane (the reviewer's crash, and the off-by-one at `rows`),
+        // a one-row region away from the top (which `Terminal::index` cannot
+        // scroll), and an inverted region: ignored, as the reply's other bad
+        // geometry is. The pane keeps its full-screen region.
+        for (upper, lower) in [(0, 100), (0, 24), (23, 23), (5, 5), (10, 5)] {
+            assert_eq!(
+                (0, 23, true),
+                pane_state_scroll_region_then_wrapping_output(upper, lower),
+                "{upper};{lower}"
+            );
+        }
     }
 
     /// R13 (UPSTREAM-DEFECTS UD10). A `list-windows` reply whose layout nests
