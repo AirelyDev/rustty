@@ -269,7 +269,17 @@ claimed. Prove the control fails, then prove it fails *for the stated reason*.
      `log_*` sink, or a test that writes a logging macro to prove one fires, moves every
      number: one such site turned this gate red and another hid a nine-site file at ten.
      G-LOGFILE skips `#[cfg(test)]` / `#[test]` spans for emissions, bypassing prints and
-     preserved comments alike.
+     preserved comments alike — a claim that was written into three artifacts including this
+     one BEFORE the comment half was implemented, and that had no self-test arm at all, which
+     is why nobody noticed. Both halves are implemented and both have arms now. **Write the
+     arm in the commit that makes the claim.**
+   - **"Unchecked" is two states, and collapsing them hides the worst defects.** An item a
+     check cannot reach is an honest unknown. An item the check CAN reach and fails to
+     resolve is a suspicion, and it must be counted and reported separately. G-LOGFILE's
+     content check put both in one silent bucket, so a message truncated to its trailing
+     clause scored 0.333, fell out of pairing, and left the gate GREEN with no signal — the
+     bigger the truncation, the quieter it got. Undeclared members of the second bucket are
+     now ratcheted at zero.
    - **A count check cannot see a message that is PRESENT but WRONG**, and a count check is
      what most gates are. One funnel emitted half of `"error handling VT action action={}
      err={}"` and reconciled perfectly; the stage that found it then reintroduced the class

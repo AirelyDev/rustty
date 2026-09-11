@@ -781,7 +781,11 @@ GATE_REGISTRY=(
   # it can only compare what the port wrote down — and the run prints which
   # crates it cannot see at all and how concentrated the unchecked sites are,
   # because the two files with the most unchecked text are also the two with the
-  # largest deficits. Measurements EXCLUDE #[cfg(test)]/#[test] code: a test that
+  # largest deficits. An emission that HAS a reference comment and cannot be
+  # matched to it above the similarity floor is counted and ratcheted SEPARATELY
+  # from one that never had a comment — collapsing the two let a message
+  # truncated to its trailing clause pass GREEN. Measurements EXCLUDE
+  # #[cfg(test)]/#[test] code (emissions AND preserved comments): a test that
   # names a log_* sink was inflating counts. Nothing here is
   # env-settable (R5); an absent or off-pin oracle checkout is 3 BLOCKED, never a
   # vacuous green.

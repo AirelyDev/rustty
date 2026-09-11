@@ -696,13 +696,27 @@ def rust_message_at(nc, pos):
     return "".join(out)
 
 
-def commented_reference_calls(raw, code):
-    """[(line, level, message)] for reference `log.*` calls preserved in comments."""
+def commented_reference_calls(raw, code, skip_tests=True):
+    """[(line, level, message)] for reference `log.*` calls preserved in comments.
+
+    Test spans are skipped here too. That was CLAIMED before it was true: three
+    artifacts said test exclusion covered "emissions, facade-bypassing prints and
+    preserved comments alike" while the filtering existed only in the emission
+    paths, and `glyf_rasterize_png_test.rs:426` is a live preserved comment inside
+    a test function that the content check was still reading.
+    """
     raw_lines, code_lines = raw.split("\n"), code.split("\n")
+    spans = test_ranges(code) if skip_tests else []
+    line_start, starts = 0, []
+    for line in code_lines:
+        starts.append(line_start)
+        line_start += len(line) + 1
     bodies = {}
     for idx, line in enumerate(raw_lines):
         m = re.search(r"//", line)
         if m and code_lines[idx][m.start() : m.start() + 2] != "//":
+            if skip_tests and in_spans(starts[idx] + m.start(), spans):
+                continue
             bodies[idx + 1] = line[m.start() + 2 :]
     found = []
     for lineno in sorted(bodies):
@@ -774,7 +788,7 @@ def pair_messages(raw, code, nc, window=14):
     if cur:
         blocks.append(cur)
 
-    out = []
+    out, unpairable = [], []
     for block in blocks:
         block_refs = [(l, p) for l, k, p in block if k == 0]
         block_ems = [(l, p) for l, k, p in block if k == 1]
@@ -811,7 +825,20 @@ def pair_messages(raw, code, nc, window=14):
                 out.append(
                     (block_refs[best_ri][0], block_refs[best_ri][1][0], eline, emsg)
                 )
-    return sorted(out, key=lambda x: x[2])
+            elif best_ri is not None:
+                # THE SUSPICIOUS BUCKET. This emission HAS a candidate reference
+                # comment in its block and matches none of them above the floor.
+                # That is not the same state as having no comment at all, and the
+                # first version of this check put both in one silent bucket —
+                # so truncating `"error building row y={} err={}"` all the way
+                # down to `"err={err:?}"` scored 0.333, fell out of pairing, and
+                # the gate went GREEN with no signal whatsoever. The BIGGER the
+                # truncation, the quieter it got: exactly backwards.
+                unpairable.append(
+                    (eline, emsg, round(best, 3),
+                     block_refs[best_ri][0], block_refs[best_ri][1][0])
+                )
+    return sorted(out, key=lambda x: x[2]), sorted(unpairable)
 
 
 def reference_message_index(zig_walk):
@@ -894,8 +921,10 @@ DIVERGENCE_KINDS = (
     "parameterised",
     "payload-absent",
     "stale-comment",
+    "unpairable",
 )
 DIVERGENCE_DIRECTIVE = re.compile(r"^#!\s*divergence-cap\s+entries=(\d+)\s*$")
+UNPAIRABLE_DIRECTIVE = re.compile(r"^#!\s*unpairable-cap\s+entries=(\d+)\s*$")
 
 
 def load_divergences(path):
@@ -905,15 +934,19 @@ def load_divergences(path):
     lines on rows closed earlier in this plan, because restoration moves code.
     A declaration keyed on text survives that; one keyed on a line does not.
     """
-    rows, cap = [], None
+    rows, cap, unpairable_cap = [], None, None
     if not os.path.exists(path):
-        return rows, cap
+        return rows, cap, unpairable_cap
     with open(path, encoding="utf-8", newline="") as fh:
         for lineno, raw in enumerate(fh, 1):
             line = raw.rstrip("\n")
             m = DIVERGENCE_DIRECTIVE.match(line)
             if m:
                 cap = int(m.group(1))
+                continue
+            m = UNPAIRABLE_DIRECTIVE.match(line)
+            if m:
+                unpairable_cap = int(m.group(1))
                 continue
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
@@ -940,7 +973,7 @@ def load_divergences(path):
                     "lineno": lineno,
                 }
             )
-    return rows, cap
+    return rows, cap, unpairable_cap
 
 
 # ---------------------------------------------------------------------------
@@ -1070,7 +1103,8 @@ def ledger_log_files(path):
 # ---------------------------------------------------------------------------
 def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=False,
             oracle_log_files=None, exclusion_cap=None, raw_sources=None,
-            ref_index=None, divergences=None, divergence_cap=None):
+            ref_index=None, divergences=None, divergence_cap=None,
+            unpairable_cap=None):
     """Return (rc, lines). rc 0 GREEN, 1 RED. Pure — all I/O is in the callers.
 
     `zig_text(path)` / `rust_text(path)` return source text or None if absent.
@@ -1370,7 +1404,7 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
     if raw_sources is not None and ref_index is not None:
         decl = divergences or []
         seen = set()
-        mismatches, stale = [], []
+        mismatches, stale, unpairable = [], [], []
         n_paired = n_emissions = 0
         per_crate = {}
         per_file_unchecked = {}
@@ -1380,7 +1414,11 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
                 continue
             code, nc = pool[path]
             n_emissions += len(rust_emissions([path], pool, emitters, defs))
-            for rline, rmsg, eline, emsg in pair_messages(raw, code, nc):
+            file_pairs, file_unpairable = pair_messages(raw, code, nc)
+            for eline, emsg, ratio, rline, rmsg in file_unpairable:
+                unpairable.append((path, eline, rline, normalise_message(rmsg),
+                                   normalise_message(emsg), ratio))
+            for rline, rmsg, eline, emsg in file_pairs:
                 if rmsg is None or emsg is None:
                     continue
                 n_paired += 1
@@ -1389,7 +1427,7 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
                     mismatches.append((path, eline, rn, en))
             crate = "/".join(path.split("/")[:2])
             fe = len(rust_emissions([path], pool, emitters, defs))
-            fp = len([1 for x in pair_messages(raw, code, nc) if x[1] and x[3]])
+            fp = len([1 for x in file_pairs if x[1] and x[3]])
             agg = per_crate.setdefault(crate, [0, 0])
             agg[0] += fe
             agg[1] += fp
@@ -1436,6 +1474,9 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
         undeclared_st = [
             x for x in stale if not declared(("stale-comment",), x[0], x[2], "")
         ]
+        undeclared_up = [
+            x for x in unpairable if not declared(("unpairable",), x[0], x[3], x[4])
+        ]
         bad_kind = [d for d in decl if d["kind"] not in DIVERGENCE_KINDS]
         no_reason = [d for d in decl if not d["reason"]]
         dead = [d for d in decl if d["lineno"] not in seen]
@@ -1480,6 +1521,38 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
                 out.append(f"           reference {rn!r}")
                 out.append(f"           port      {en!r}")
             rc = 1
+        if unpairable_cap is not None:
+            out.append(
+                f"           message content: {len(unpairable)} emission(s) "
+                f"({len(undeclared_up)} undeclared) HAVE a "
+                f"candidate reference comment in their block and match none of it above "
+                f"the {PAIR_SIMILARITY} similarity floor (budget {unpairable_cap}). This "
+                "is NOT the same state as having no comment at all — that is the honest "
+                "unknown; this is the suspicious one."
+            )
+            for path, eline, rline, rn, en, ratio in undeclared_up[:12]:
+                out.append(f"       {path}:{eline} (comment at :{rline}, similarity {ratio})")
+                out.append(f"           reference {rn!r}")
+                out.append(f"           port      {en!r}")
+            if len(undeclared_up) > 12:
+                out.append(f"       ... and {len(undeclared_up) - 12} more")
+            if len(undeclared_up) > unpairable_cap:
+                out.append(
+                    f"RED: {len(undeclared_up)} UNDECLARED unpairable emission(s), budget "
+                    f"{unpairable_cap}. An emission that HAS a reference comment and "
+                    "cannot be matched to it is a truncation candidate: a message cut "
+                    "down to its trailing clause scores 0.333 and would otherwise fall "
+                    "silently out of the checked population — the bigger the truncation, "
+                    "the quieter it got. Restore the text, tighten the comment, or raise "
+                    "this budget deliberately."
+                )
+                rc = 1
+            elif len(undeclared_up) < unpairable_cap:
+                out.append(
+                    f"RED: {len(undeclared_up)} undeclared unpairable emission(s), budget "
+                    f"{unpairable_cap} — the same RATCHET as everything else here."
+                )
+                rc = 1
         if undeclared_st:
             out.append(
                 f"RED: {len(undeclared_st)} preserved comment(s) quote a reference call "
@@ -1932,7 +2005,7 @@ def self_test():
     )
     REF_INDEX = {"mode: {} err={}"}
 
-    def run_txt(src, decl=(), cap=None, allowance="0"):
+    def run_txt(src, decl=(), cap=None, allowance="0", upcap=0):
         rs2 = dict(rs, **{"c/txt.rs": src})
         pm = [{"oracle": "src/ok.zig", "excluded": False, "arms": [["c/txt.rs"]],
                "allowance": allowance, "bypass_cap": "0",
@@ -1941,7 +2014,7 @@ def self_test():
         return verdict(
             pm, {}, zt, lambda p: rs2.get(p), oracle_log_files=None,
             raw_sources={"c/txt.rs": src}, ref_index=REF_INDEX,
-            divergences=list(decl), divergence_cap=cap,
+            divergences=list(decl), divergence_cap=cap, unpairable_cap=upcap,
         )[0]
 
     cases.append(("message text matches the preserved reference comment",
@@ -1985,6 +2058,42 @@ def self_test():
     cases.append(
         ("an extra port-only emission does not steal the block's comment",
          run_txt(TXT_EXTRA), 0)
+    )
+    # 10i. THE TRAILING-CLAUSE TRUNCATION. A message cut down to its last clause
+    #      scores 0.333 against its own comment — below the pairing floor — so
+    #      before the unpairable bucket existed this went silently from "checked"
+    #      to "unchecked" and the gate stayed GREEN. The bigger the truncation,
+    #      the quieter it got. It must be RED, and it must NOT be reported as a
+    #      text divergence, because the checker genuinely cannot prove the pair.
+    TXT_TRAILING = TXT_OK.replace('"mode: {m} err={err:?}"', '"err={err:?}"')
+    cases.append(
+        ("a truncation BELOW the pairing floor is reported, not silently dropped",
+         run_txt(TXT_TRAILING), 1)
+    )
+    cases.append(
+        ("...and is green once declared `unpairable` with a reason",
+         run_txt(TXT_TRAILING, [{"kind": "unpairable", "file": "c/txt.rs",
+                                 "ref": "mode: {} err={}", "port": "err={}",
+                                 "reason": "declared", "lineno": 1}]), 0)
+    )
+    cases.append(
+        ("an emission with NO comment in its block stays quietly unchecked",
+         run_txt('fn a() {\n    log::warn!(target: S, "no comment above me at all");\n}\n'), 0)
+    )
+    # 10j. TEST CODE is excluded from emissions AND from preserved comments. The
+    #      second half was CLAIMED in three artifacts before it was implemented.
+    TXT_TEST = (
+        '#[cfg(test)]\nmod t {\n'
+        '    // log.warn("a message the reference does not have", .{});\n'
+        '    fn h() { log::warn!(target: S, "test-only emission"); }\n}\n'
+    )
+    cases.append(
+        ("a #[cfg(test)] emission is not counted",
+         run_txt(TXT_TEST, allowance="1"), 0)
+    )
+    cases.append(
+        ("a preserved comment inside #[cfg(test)] is not checked either",
+         run_txt(TXT_TEST, allowance="1"), 0)
     )
     # 11. a LOG row citing a file with no portmap entry
     cases.append(
@@ -2106,14 +2215,14 @@ def main():
                     with open(full, encoding="utf-8", errors="replace") as fh:
                         raw_sources[f] = fh.read()
     try:
-        divergences, divergence_cap = load_divergences(DIVERGENCES)
+        divergences, divergence_cap, unpairable_cap = load_divergences(DIVERGENCES)
     except ValueError as exc:
         print(f"BLOCKED: {exc}", file=sys.stderr)
         return 3
-    if divergence_cap is None:
+    if divergence_cap is None or unpairable_cap is None:
         print(
-            "BLOCKED: LOG-TEXT-DIVERGENCES.tsv carries no `#!divergence-cap\n"
-            "         entries=N` directive. A declared text divergence excuses a real\n"
+            "BLOCKED: LOG-TEXT-DIVERGENCES.tsv is missing a `#!divergence-cap\n"
+            "         entries=N` or `#!unpairable-cap entries=N` directive. A declared text divergence excuses a real\n"
             "         difference from the reference; a cap that can be disabled by\n"
             "         deleting a line is not a cap.",
             file=sys.stderr,
@@ -2186,6 +2295,7 @@ def main():
         ref_index=ref_index,
         divergences=divergences,
         divergence_cap=divergence_cap,
+        unpairable_cap=unpairable_cap,
     )
     print("\n".join(lines))
     return rc

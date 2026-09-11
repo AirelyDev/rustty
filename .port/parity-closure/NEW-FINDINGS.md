@@ -1098,15 +1098,29 @@ found, and current state.
 > reported, and must be declared as `stale-comment` in `LOG-TEXT-DIVERGENCES.tsv` or the gate
 > is RED. **21 are declared**, well beyond the three this entry was opened for.
 >
-> Measured over the 1588 preserved reference comments in mapped port files, in the order the
-> code applies them: **1527** are found in the reference index (1475 live, 52 quoting a call
-> the reference itself keeps commented out), **19** are elided (`"… err={}"`), **16** are
-> short or one-word paraphrases, **1** is a substring of a real message, **6** match a real
-> message on the literal prefix before the first placeholder, and **21** survive as stranded.
-> An earlier version of this note attributed those filters by estimate — elided ~10, short
-> ~5, substring ~24, commented-index 36 — and **not one of those numbers survived
-> measurement**, even though they summed to the right total. The arithmetic was right and
-> the components were invented.
+> **Measured 2026-09-11 by walking `is_stranded_comment`'s branches in the order the code
+> applies them**, over the 1581 preserved reference comments in mapped port files (down from
+> 1588 now that test spans are excluded here too):
+>
+> | # | branch | count |
+> |---|---|---|
+> | 1 | message could not be extracted (empty) | 69 |
+> | 2 | elided (`…` / `...`) | 17 |
+> | 3 | short or one-word | 9 |
+> | 4 | exact match in the reference index (live **or** commented-out) | 1459 |
+> | 5 | substring of a real reference message | 0 |
+> | 6 | literal-prefix match before the first placeholder | 6 |
+> | 7 | **STRANDED** | **21** |
+> | | **sum** | **1581** |
+>
+> This table has now been wrong twice. The first version attributed the filters by estimate
+> (elided ~10, short ~5, substring ~24, commented-index 36) and not one component survived
+> measurement, though they summed correctly. The second version was measured — but against a
+> DIFFERENT branch order than the code uses (it split the index into live and commented-out
+> and tested them first), so four of its six numbers were still wrong and the six summed to
+> 1590 against a stated 1588. **The gate was right both times; the table about the gate was
+> not.** It is now derived by executing the gate's own predicate, branch by branch, and the
+> column sums to the stated total.
 >
 > The short-message threshold was also a real FALSE NEGATIVE at 14 characters: it suppressed
 > `exec.rs:4421`'s `"DATA: {}"`, a genuine stranding. It is 6 now, which adds exactly that
@@ -1231,6 +1245,25 @@ found, and current state.
   and so does deleting the single space in `"error building rowy={y}"`. The first mutation
   I tried caught nothing — because that site has no preserved comment, which is how the 72%
   figure above came to be measured.
+- **two states of "unchecked", not one (added 2026-09-11)**. An emission with NO preserved
+  comment anywhere in its block is genuinely unknowable — that is the honest 31%. An emission
+  that HAS candidate comments and matches none of them above the 0.55 similarity floor is a
+  different and suspicious state, and the first version of this check put both in the same
+  silent bucket. That is how a message truncated all the way down to its trailing clause
+  (`"error building row y={} err={}"` -> `"err={err:?}"`, similarity **0.333**) moved from
+  checked to unchecked with **zero signal and a GREEN gate** — the bigger the truncation, the
+  quieter it got, which is exactly backwards. Lowering the floor would only bring back false
+  accusations, so the second state is now counted, printed with both texts and the similarity
+  score, declarable as `kind=unpairable` with a reason, and **ratcheted**: undeclared ones
+  are capped at zero. One site exists today (`window.rs:1519`, similarity 0.548) and is
+  declared.
+- **the test-span exclusion was CLAIMED in three artifacts before it was implemented.**
+  Round 6's commit message, this finding and `PROCEDURE.md` all said test code was skipped
+  "for emissions, facade-bypassing prints and preserved comments alike"; the filtering
+  existed only in the emission paths, and `glyf_rasterize_png_test.rs:426` is a live
+  preserved comment inside a test function that the content check was still reading. It is
+  implemented now, in `commented_reference_calls`, with self-test arms for both halves —
+  there were none before, which is why nobody noticed.
 - **state**: **OPEN** as a standing check. All 12 present divergences are declared with
   reasons; what is outstanding is the 31% of emissions the pass cannot reach, concentrated
   as described above, plus the note under N22 that the 1415 reference-site denominator is
