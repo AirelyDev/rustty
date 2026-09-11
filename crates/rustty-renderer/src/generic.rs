@@ -8793,6 +8793,12 @@ mod macos_impl {
             r.custom_shader_uniforms.selection_background_color = sentinel;
             r.custom_shader_uniforms.selection_foreground_color = sentinel;
             r.custom_shader_uniforms.foreground_color = sentinel;
+            // Sentinels for the two uniforms written AFTER the three colour
+            // blocks. Neither is a value the function can produce, so they
+            // pin that the function ran to its end rather than returning
+            // early out of a colour block.
+            r.custom_shader_uniforms.cursor_visible = -7;
+            r.custom_shader_uniforms.current_cursor_style = -7;
             r.config.cursor_text = Some(crate::generic::TerminalColor::CellForeground);
             r.config.selection_background = Some(crate::generic::TerminalColor::CellForeground);
             r.config.selection_foreground = Some(crate::generic::TerminalColor::CellBackground);
@@ -8821,6 +8827,15 @@ mod macos_impl {
                 r.custom_shader_uniforms.selection_foreground_color,
                 sentinel
             );
+
+            // Positive reach PAST the three colour blocks: everything the
+            // function writes after them is written. A skipped uniform must
+            // not cost the rest of the update.
+            assert_eq!(
+                r.custom_shader_uniforms.cursor_visible,
+                r.terminal_state.cursor.visible as i32
+            );
+            assert_ne!(r.custom_shader_uniforms.current_cursor_style, -7);
 
             // A `.color` value is still written.
             let red = crate::generic::Color { r: 255, g: 0, b: 0 };

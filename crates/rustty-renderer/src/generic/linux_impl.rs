@@ -5654,6 +5654,11 @@ mod tests {
         r.custom_shader_uniforms.selection_background_color = sentinel;
         r.custom_shader_uniforms.selection_foreground_color = sentinel;
         r.custom_shader_uniforms.foreground_color = sentinel;
+        // Sentinels for the two uniforms written AFTER the three colour
+        // blocks (see the macOS twin): neither is a value the function can
+        // produce, so they pin that it ran to its end.
+        r.custom_shader_uniforms.cursor_visible = -7;
+        r.custom_shader_uniforms.current_cursor_style = -7;
         r.config.cursor_text = Some(TerminalColor::CellForeground);
         r.config.selection_background = Some(TerminalColor::CellForeground);
         r.config.selection_foreground = Some(TerminalColor::CellBackground);
@@ -5682,6 +5687,13 @@ mod tests {
             r.custom_shader_uniforms.selection_foreground_color,
             sentinel
         );
+
+        // Positive reach PAST the three colour blocks (see the macOS twin).
+        assert_eq!(
+            r.custom_shader_uniforms.cursor_visible,
+            r.terminal_state.cursor.visible as i32
+        );
+        assert_ne!(r.custom_shader_uniforms.current_cursor_style, -7);
 
         // A `.color` value is still written.
         let red = Color { r: 255, g: 0, b: 0 };

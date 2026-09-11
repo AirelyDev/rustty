@@ -2254,10 +2254,13 @@ Negative control, VM 2026-09-11: reinstating `std::env::args()` makes the child 
 `library/std/src/env.rs:871` with `called Result::unwrap() on an Err value: "\xFF\xFE"`.
 
 The first commit left `arg_raw.as_bytes()` in the Linux-only branch. The macOS build does not
-compile that branch, and the first Linux build caught it (`63ad6e12`). Two other
-`std::env::args()` calls remain, in developer tools rather than the app:
-`crates/rustty-unicode/examples/dump_tables.rs:29` and
-`crates/rustty-apprt-c/src/bin/translate_probe.rs:20`.
+compile that branch, and the first Linux build caught it (`63ad6e12`). Three other
+`std::env::args()` calls remain in the workspace, all in developer tools rather than the app:
+`crates/rustty-unicode/examples/dump_tables.rs:29`,
+`crates/rustty-apprt-c/src/bin/translate_probe.rs:20` and `xtask/src/main.rs:122` (`xtask` is a
+workspace member, `Cargo.toml:170`). Recounted by task R13-S, 2026-09-11: the earlier "two" missed
+the xtask one. The `.port/phase-*/mirihar-*` Miri harnesses call it too, but they are not workspace
+members.
 
 **state**: CLOSED by task R13-B (`895cba09`, `63ad6e12`).
 
