@@ -685,6 +685,28 @@ pub enum PrintStringError {
     /// The input was not valid UTF-8 (Zig `error.InvalidUtf8` from
     /// `std.unicode.Utf8View.init`).
     InvalidUtf8,
+
+    /// PORT NOTE (parity S134-F2): `testWriteString`'s inferred error set
+    /// includes `PageList.IncreaseCapacityError`, via
+    /// `try self.cursorSetHyperlink()`. That error set is
+    /// `{ OutOfMemory, OutOfSpace }`, and the port flattened `OutOfSpace` into
+    /// `OutOfMemory` — the one distinguishable error the helper could lose.
+    /// `cursorDownOrScroll` and the zero-width `appendGrapheme` are
+    /// `Allocator.Error`-only upstream, so they lose nothing.
+    OutOfSpace,
+}
+
+impl From<crate::pagelist::grow::IncreaseCapacityError> for PrintStringError {
+    fn from(err: crate::pagelist::grow::IncreaseCapacityError) -> PrintStringError {
+        match err {
+            crate::pagelist::grow::IncreaseCapacityError::OutOfMemory => {
+                PrintStringError::OutOfMemory
+            }
+            crate::pagelist::grow::IncreaseCapacityError::OutOfSpace => {
+                PrintStringError::OutOfSpace
+            }
+        }
+    }
 }
 
 impl From<OutOfMemory> for PrintStringError {
@@ -7047,6 +7069,29 @@ pub(crate) fn resize_tw_end(
 
 #[cfg(test)]
 mod tests {
+
+    // PORT NOTE: no reference test. `Screen.testWriteString`'s inferred error
+    // set carries `PageList.IncreaseCapacityError` through
+    // `try self.cursorSetHyperlink()`; the port's `PrintStringError` had no
+    // `OutOfSpace`, so all four of those sites did
+    // `.map_err(|_| OutOfMemory)?` and the one distinguishable error was lost
+    // (parity S134-F2). The four sites now use a bare `?`, which routes through
+    // this conversion — pinned here. Reaching `OutOfSpace` from a real page
+    // needs a page filled to its hyperlink-map limit, which no reference test
+    // constructs either; what IS pinned is that the variant survives the
+    // conversion the `?` uses.
+    #[test]
+    fn print_string_error_preserves_out_of_space() {
+        use crate::pagelist::grow::IncreaseCapacityError;
+        assert_eq!(
+            PrintStringError::OutOfSpace,
+            PrintStringError::from(IncreaseCapacityError::OutOfSpace),
+        );
+        assert_eq!(
+            PrintStringError::OutOfMemory,
+            PrintStringError::from(IncreaseCapacityError::OutOfMemory),
+        );
+    }
     use super::*;
     use allocator_api2::alloc::Global;
 

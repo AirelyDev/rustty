@@ -45,6 +45,42 @@ pub fn noop(level_txt: &str, scope: &str, formatted: &str) {
     let _ = formatted;
 }
 
+/// The message segments `freestanding::log` emits, in order.
+///
+/// PORT NOTE (parity S113-F5): factored out of `freestanding::log` — which is
+/// `cfg(target_arch = "wasm32")` and therefore untestable on the host — so the
+/// assembled bytes and the 2048-byte stack-buffer boundary can be pinned by a
+/// unit test. The reference builds the same three pieces at comptime:
+/// `const prefix = if (scope == .default) ": " else "(" ++ @tagName(scope) ++ "): ";`
+/// `const txt = level_txt ++ prefix ++ format;`
+pub(crate) fn message_parts<'a>(
+    level_txt: &'a str,
+    scope: &'a str,
+    formatted: &'a str,
+) -> [&'a str; 5] {
+    if scope == "default" {
+        [level_txt, ": ", "", "", formatted]
+    } else {
+        [level_txt, "(", scope, "): ", formatted]
+    }
+}
+
+/// Copy `parts` into `buf` if they all fit, returning the written prefix.
+/// `None` is the reference's `bufPrint ... catch` — the point where it falls
+/// back to the heap.
+pub(crate) fn write_parts<'a>(buf: &'a mut [u8], parts: &[&str]) -> Option<&'a [u8]> {
+    let total: usize = parts.iter().map(|p| p.len()).sum();
+    if total > buf.len() {
+        return None;
+    }
+    let mut at = 0usize;
+    for part in parts {
+        buf[at..at + part.len()].copy_from_slice(part.as_bytes());
+        at += part.len();
+    }
+    Some(&buf[..at])
+}
+
 /// Freestanding implementation calls an extern "log" function.
 #[cfg(target_arch = "wasm32")]
 pub mod freestanding {
@@ -65,25 +101,41 @@ pub mod freestanding {
         // Build the string
         // PORT NOTE: `const prefix = if (scope == .default) ": " else "(" ++ @tagName(scope)
         // ++ "): ";` then `const txt = level_txt ++ prefix ++ format;`.
-        let prefix = if scope == "default" {
-            ": ".to_string()
-        } else {
-            format!("({scope}): ")
-        };
-        let txt = format!("{level_txt}{prefix}{formatted}");
+        //
+        // PORT NOTE (parity S113-F5): the reference NEVER allocates unless the
+        // stack buffer overflows, and when the heap fallback fails it `return`s —
+        // the log line is dropped, the process is not killed. That ordering is
+        // the whole point of the comment above: this is the path that logs an
+        // OOM. The port used to `format!` the prefix and the whole line on the
+        // heap FIRST and copy into `buf` afterwards, so under wasm memory
+        // exhaustion it aborted through `handle_alloc_error` instead of dropping
+        // the message, and the stack buffer bought nothing. The segments are now
+        // written directly into `buf`, and the fallback is a FALLIBLE heap
+        // reservation.
+        let parts = super::message_parts(level_txt, scope, formatted);
 
         // Format. We attempt to use a stack-allocated string first and if that
         // fails we'll try to allocate.
-        let bytes = txt.as_bytes();
-        let str: &[u8] = if bytes.len() <= buf.len() {
-            buf[..bytes.len()].copy_from_slice(bytes);
-            &buf[..bytes.len()]
-        } else {
-            bytes
-        };
+        if let Some(str) = super::write_parts(&mut buf, &parts) {
+            // Send it over to the JS side
+            unsafe { js::log(str.as_ptr(), str.len()) };
+            return;
+        }
+
+        // ... catch str: { allocated = true; break :str std.fmt.allocPrint(...) catch return; }
+        let total: usize = parts.iter().map(|p| p.len()).sum();
+        let mut heap: Vec<u8> = Vec::new();
+        if heap.try_reserve_exact(total).is_err() {
+            // catch return — the message is dropped, nothing aborts.
+            return;
+        }
+        for part in parts {
+            heap.extend_from_slice(part.as_bytes());
+        }
 
         // Send it over to the JS side
-        unsafe { js::log(str.as_ptr(), str.len()) };
+        // defer if (allocated) wasm.alloc.free(str); — the Vec frees on drop.
+        unsafe { js::log(heap.as_ptr(), heap.len()) };
     }
 
     // We wrap our externs in this namespace so we can reuse symbols, otherwise
@@ -222,5 +274,47 @@ mod facade_tests {
         install_log_backend();
         install_log_backend();
         log::warn!(target: "task14a_wasm_test", "proving message {}", 1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{message_parts, write_parts};
+
+    // PORT NOTE: no reference test. `freestanding::log` is
+    // `cfg(target_arch = "wasm32")`, so these pin the two pieces that CAN run
+    // on the host: the assembled bytes are byte-identical to the reference's
+    // `level_txt ++ prefix ++ format`, and the 2048-byte stack buffer is a real
+    // boundary rather than decoration — the port used to build the whole line on
+    // the HEAP first and copy into the buffer afterwards, so the buffer bought
+    // nothing and a wasm OOM aborted instead of dropping the line (S113-F5).
+    #[test]
+    fn wasm_log_message_is_assembled_without_the_heap_until_it_overflows() {
+        let parts = message_parts("error", "default", "boom");
+        let mut buf = [0u8; 2048];
+        assert_eq!(
+            Some(b"error: boom".as_slice()),
+            write_parts(&mut buf, &parts),
+        );
+
+        let parts = message_parts("warning", "gtk", "boom");
+        let mut buf = [0u8; 2048];
+        assert_eq!(
+            Some(b"warning(gtk): boom".as_slice()),
+            write_parts(&mut buf, &parts),
+        );
+
+        // Exactly full: "error: " is 7 bytes, so 2041 more fit.
+        let body = "x".repeat(2041);
+        let parts = message_parts("error", "default", &body);
+        let mut buf = [0u8; 2048];
+        let got = write_parts(&mut buf, &parts).expect("2048 bytes must fit");
+        assert_eq!(2048, got.len());
+
+        // One more byte does not: this is where the reference allocates.
+        let body = "x".repeat(2042);
+        let parts = message_parts("error", "default", &body);
+        let mut buf = [0u8; 2048];
+        assert_eq!(None, write_parts(&mut buf, &parts));
     }
 }

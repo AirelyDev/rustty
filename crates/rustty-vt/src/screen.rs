@@ -501,6 +501,33 @@ fn start_hyperlink_tw_check(point: StartHyperlinkFp) -> Result<(), OutOfMemory> 
     START_HYPERLINK_TW.with(|tw| tw.borrow_mut().check(point))
 }
 
+// PORT NOTE (parity S133-F3): the reference exercises `cursorCopy`'s
+// `errdefer self.cursor = old` by making `manualStyleUpdate` fail, which in Zig
+// takes a `std.testing.failing_allocator` at the style-set growth. The port's
+// page memory comes from an owned pool rather than a swappable `Allocator`, so
+// the same stand-in as `grow.rs`'s `GROW_TW` is used: a `cfg(test)` fail point
+// at exactly the `try` the reference's `errdefer` guards. Its error type is
+// `IncreaseCapacityError` so the test can also prove `OutOfSpace` survives —
+// the port used to flatten both variants into `OutOfMemory`.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum CursorCopyFp {
+    ManualStyleUpdate,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CURSOR_COPY_TW: core::cell::RefCell<
+        rustty_util::tripwire::Module<CursorCopyFp, pagelist::grow::IncreaseCapacityError>,
+    > = core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+#[cfg(test)]
+#[inline]
+fn cursor_copy_tw_check(point: CursorCopyFp) -> Result<(), pagelist::grow::IncreaseCapacityError> {
+    CURSOR_COPY_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
 // const resize_tw = tripwire.module(enum {
 //     saved_cursor_pin,
 //     pages,
@@ -976,7 +1003,7 @@ impl Screen {
         alloc: Allocator,
         top: point::Point,
         bot: Option<point::Point>,
-    ) -> Result<Screen, OutOfMemory> {
+    ) -> Result<Screen, pagelist::access::CloneError> {
         // Create a tracked pin remapper for our selection and cursor. Note
         // that we may want to expose this generally in the future but at the
         // time of doing this we don't need to.
@@ -995,11 +1022,17 @@ impl Screen {
             tracked_pins: Some(pagelist::access::TrackedPinsRemap::default()),
         };
 
-        // PORT NOTE: `PageList::clone` returns `CloneError` (OutOfMemory |
-        // CloneFrom). `Screen::clone` returns `OutOfMemory` to match the
-        // reference's inferred error set; the only failure paths reachable here
-        // are allocator failures, so we map any clone error into `OutOfMemory`.
-        let mut pages = self.pages.clone(&mut opts).map_err(|_| OutOfMemory)?;
+        // PORT NOTE (parity S133-F4): `PageList::clone` returns `CloneError`
+        // (OutOfMemory | CloneFrom), and the reference's `clone` returns `!Screen`
+        // whose INFERRED error set is `PageList.clone`'s — which includes
+        // `Page.CloneFromError` (`StyleSetError || HyperlinkError ||
+        // GraphemeError`, e.g. `NeedsRehash`) from `PageList.zig:1173`'s
+        // `try dst_page.cloneFrom(...)`. An earlier note here claimed "the only
+        // failure paths reachable here are allocator failures" and collapsed
+        // everything into `OutOfMemory`; `CloneError::CloneFrom` exists precisely
+        // because `clone_from` can fail with set/rehash errors, so the error set
+        // is propagated unchanged instead.
+        let mut pages = self.pages.clone(&mut opts)?;
         // errdefer pages.deinit();
 
         let pin_remap = opts.tracked_pins.as_ref().unwrap();
@@ -2339,7 +2372,7 @@ impl Screen {
         &mut self,
         other: Cursor,
         opts: CursorCopyOptions,
-    ) -> Result<(), OutOfMemory> {
+    ) -> Result<(), pagelist::grow::IncreaseCapacityError> {
         debug_assert!(other.x < self.pages.cols);
         debug_assert!(other.y < self.pages.rows);
 
@@ -2350,11 +2383,21 @@ impl Screen {
         // other; errdefer self.cursor = old;`. `other` is taken by value
         // (`Cursor` is a plain value type here). We capture the fields of the old
         // cursor we still need (`style_id`, `page_pin`, `x`, `y`) before
-        // overwriting, since `Cursor` is not trivially `Copy` (it owns the heap
-        // hyperlink pointer). The `errdefer` revert is not reachable in the ports
-        // we exercise (the only fallible call below, `manualStyleUpdate`, on
-        // failure degrades internally and the reference's `try` would propagate),
-        // so we propagate the error after restoring observable state.
+        // overwriting.
+        //
+        // PORT NOTE (parity S133-F3): an earlier version of this note
+        // claimed `Cursor` is "not trivially Copy" and that the `errdefer` revert
+        // is "not reachable". Both are wrong. `Cursor` IS `#[derive(Copy)]` (its
+        // `hyperlink` is a raw pointer whose box ownership is tracked
+        // explicitly), and `manual_style_update` returns
+        // `pagelist::grow::IncreaseCapacityError`, which has BOTH an `OutOfMemory`
+        // and an `OutOfSpace` variant — so it really can fail, and on failure the
+        // reference's `errdefer self.cursor = old` puts the WHOLE old cursor
+        // back. Without it `self.cursor` was left half-applied: `other`'s
+        // style/pending_wrap/protected/semantic_content over the old
+        // style_id/pin/x/y. The error was also flattened to `OutOfMemory`,
+        // losing `OutOfSpace`.
+        let old = self.cursor;
         let old_style_id = self.cursor.style_id;
         let old_page_pin = self.cursor.page_pin;
         let old_x = self.cursor.x;
@@ -2385,7 +2428,16 @@ impl Screen {
 
         // Call manual style update in order to clean up our old style, if we have
         // one, and also to load the style from the other cursor, if it had one.
-        self.manual_style_update().map_err(|_| OutOfMemory)?;
+        // try self.manualStyleUpdate();
+        #[cfg(test)]
+        let forced = cursor_copy_tw_check(CursorCopyFp::ManualStyleUpdate);
+        #[cfg(not(test))]
+        let forced: Result<(), pagelist::grow::IncreaseCapacityError> = Ok(());
+        if let Err(err) = forced.and_then(|()| self.manual_style_update()) {
+            // errdefer self.cursor = old;
+            self.cursor = old;
+            return Err(err);
+        }
 
         // Move to the correct location to match the other cursor.
         self.cursor_absolute(other_x, other_y);
@@ -5231,7 +5283,7 @@ impl Screen {
 
                     // If we have a hyperlink, add it to the cell.
                     if self.cursor.hyperlink_id > 0 {
-                        self.cursor_set_hyperlink().map_err(|_| OutOfMemory)?;
+                        self.cursor_set_hyperlink()?;
                     }
                 }
 
@@ -5248,7 +5300,7 @@ impl Screen {
 
                         // If we have a hyperlink, add it to the cell.
                         if self.cursor.hyperlink_id > 0 {
-                            self.cursor_set_hyperlink().map_err(|_| OutOfMemory)?;
+                            self.cursor_set_hyperlink()?;
                         }
 
                         unsafe { (*self.cursor.page_row).set_wrap(true) };
@@ -5269,7 +5321,7 @@ impl Screen {
 
                     // If we have a hyperlink, add it to the cell.
                     if self.cursor.hyperlink_id > 0 {
-                        self.cursor_set_hyperlink().map_err(|_| OutOfMemory)?;
+                        self.cursor_set_hyperlink()?;
                     }
 
                     // Write our tail
@@ -5284,7 +5336,7 @@ impl Screen {
 
                     // If we have a hyperlink, add it to the cell.
                     if self.cursor.hyperlink_id > 0 {
-                        self.cursor_set_hyperlink().map_err(|_| OutOfMemory)?;
+                        self.cursor_set_hyperlink()?;
                     }
 
                     // If we have a ref-counted style, increase twice.
@@ -5364,6 +5416,98 @@ mod tests {
             .unwrap();
         assert!(!s2.cursor.style.flags.bold);
         assert_eq!(0usize, unsafe { (*page).styles.count() });
+
+        s.deinit();
+        s2.deinit();
+    }
+
+    // PORT NOTE: no reference test. `Screen.clone` returns `!Screen` whose
+    // inferred error set is `PageList.clone`'s, which carries
+    // `Page.CloneFromError` (`StyleSetError || HyperlinkError ||
+    // GraphemeError`) out of `PageList.zig:1173`'s `try dst_page.cloneFrom(..)`.
+    // The port collapsed all of it into `OutOfMemory` (parity S133-F4); it now
+    // propagates `pagelist::access::CloneError` unchanged. Reaching a real
+    // `CloneFrom` failure needs a page whose style set cannot be rehashed into
+    // the destination, which no reference test constructs either; what IS
+    // pinned here is that the variant is no longer erased by the signature.
+    #[test]
+    fn screen_clone_error_carries_clone_from() {
+        use crate::page::CloneFromError;
+        use crate::pagelist::access::CloneError;
+
+        // The `?` in `Screen::clone` performs exactly this conversion.
+        let err: CloneError = CloneFromError::StyleSetNeedsRehash.into();
+        assert!(matches!(
+            err,
+            CloneError::CloneFrom(CloneFromError::StyleSetNeedsRehash)
+        ));
+        assert!(!matches!(err, CloneError::OutOfMemory));
+    }
+
+    // PORT NOTE: no reference test. The reference's `errdefer self.cursor = old`
+    // in `cursorCopy` is exercised by a failing allocator inside
+    // `manualStyleUpdate`; the port has no swappable allocator there, so the
+    // `CURSOR_COPY_TW` fail point stands in (same rationale as `grow.rs`'s
+    // `GROW_TW`). Pins BOTH halves of parity S133-F3: the error variant is no
+    // longer flattened to `OutOfMemory`, and the cursor is restored WHOLE
+    // instead of being left half-applied.
+    #[test]
+    fn screen_cursor_copy_restores_the_whole_cursor_on_failure() {
+        use rustty_util::tripwire::ResetMode;
+
+        let opts = || Options {
+            cols: 10,
+            rows: 10,
+            max_scrollback_bytes: Some(0),
+            max_scrollback_lines: None,
+            kitty_image_storage_limit: 0,
+            kitty_image_loading_limits: kitty::graphics_image::Limits::DIRECT,
+        };
+        let mut s = Screen::init(Allocator, opts()).unwrap();
+        let mut s2 = Screen::init(Allocator, opts()).unwrap();
+
+        // Give the two cursors different observable state: `s` is bold at
+        // (0, 0); `s2` is plain at (3, 4).
+        s.set_attribute(crate::sgr::Attribute::Bold).unwrap();
+        s2.cursor_absolute(3, 4);
+        let before_x = s2.cursor.x;
+        let before_y = s2.cursor.y;
+        let before_style = s2.cursor.style;
+        let before_style_id = s2.cursor.style_id;
+        let before_pin = s2.cursor.page_pin;
+        assert!(!s2.cursor.style.flags.bold);
+
+        // Fail the `manualStyleUpdate` the reference's errdefer guards, with
+        // the variant the port used to throw away.
+        CURSOR_COPY_TW.with(|tw| {
+            tw.borrow_mut().errorAlways(
+                CursorCopyFp::ManualStyleUpdate,
+                pagelist::grow::IncreaseCapacityError::OutOfSpace,
+            )
+        });
+        assert_eq!(
+            Err(pagelist::grow::IncreaseCapacityError::OutOfSpace),
+            s2.cursor_copy(s.cursor, CursorCopyOptions { hyperlink: true }),
+        );
+        CURSOR_COPY_TW
+            .with(|tw| tw.borrow_mut().end(ResetMode::Reset))
+            .unwrap();
+
+        // The whole cursor is back, not a half-applied mixture of the two.
+        assert_eq!(before_x, s2.cursor.x);
+        assert_eq!(before_y, s2.cursor.y);
+        assert_eq!(before_style_id, s2.cursor.style_id);
+        assert!(core::ptr::eq(before_pin, s2.cursor.page_pin));
+        assert_eq!(before_style.flags.bold, s2.cursor.style.flags.bold);
+        assert!(!s2.cursor.style.flags.bold);
+
+        // Disarmed, the same call succeeds and DOES apply the other cursor, so
+        // the assertions above are about the failure path.
+        s2.cursor_copy(s.cursor, CursorCopyOptions { hyperlink: true })
+            .unwrap();
+        assert!(s2.cursor.style.flags.bold);
+        assert_eq!(0, s2.cursor.x);
+        assert_eq!(0, s2.cursor.y);
 
         s.deinit();
         s2.deinit();

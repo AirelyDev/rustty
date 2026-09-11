@@ -650,7 +650,17 @@ mod tests {
     // column count whose dynamic storage the allocator cannot provide, and
     // asserts the reference's other guarantee too: `cols` and the existing
     // stops survive the failure.
+    //
+    // MIRI: ignored. Miri does not MODEL allocation failure — it hard-errors the
+    // interpreter with "resource exhaustion: tried to allocate more memory than
+    // available to compiler" instead of letting `try_reserve_exact` return
+    // `Err`, so under Miri this test cannot reach the behaviour it checks. (Note
+    // that `.port/tools/miri-run.sh` reports any non-zero exit as `res=UB`; this
+    // one is not UB.) The `tabstops_resize_alloc_failure_preserves_state` test
+    // above covers the same error path through the tripwire and DOES run under
+    // Miri.
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn tabstops_resize_reports_a_real_allocation_failure_without_the_tripwire() {
         let mut t: Tabstops = Tabstops::init(Global, 80, 8).unwrap();
         let original_cols = t.cols;
