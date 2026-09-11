@@ -551,7 +551,7 @@ impl GlobalShortcuts {
                 // Unsubscribe from the response signal (`:402-406`).
                 drop(this.imp().response_subscription.borrow_mut().take());
 
-                this.responded(method, &signal.parameters);
+                this.responded(method, signal.parameters);
             },
         );
         imp.response_subscription.replace(Some(subscription));
@@ -678,7 +678,7 @@ impl GlobalShortcuts {
                         };
                         // 2nd value in the tuple is the activated shortcut ID
                         // (`:598-601`). See [`activated_shortcut_id`].
-                        let Some(id) = activated_shortcut_id(&signal.parameters) else {
+                        let Some(id) = activated_shortcut_id(signal.parameters) else {
                             return;
                         };
                         // log.debug("activated={s}", .{shortcut_id});

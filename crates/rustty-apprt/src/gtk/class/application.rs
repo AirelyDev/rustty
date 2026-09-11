@@ -3819,8 +3819,8 @@ mod action {
         goto_window_walk(
             &glist,
             direction,
-            |w| w.is_active(),
-            |w| goto_window_maybe(w),
+            gtk4::prelude::GtkWindowExt::is_active,
+            goto_window_maybe,
         )
     }
 
