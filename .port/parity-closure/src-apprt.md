@@ -314,7 +314,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Registry bind version is clamped to the advertised version instead of T.generated_version
   - **Oracle:** `src/apprt/gtk/winproto/wayland/Globals.zig:152-162` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs:276-341`
   - **Audit's suggested fix:** Either accept as a deliberate hardening and record it in the parity ledger, or bind at the generated version to match the reference exactly.
-- [ ] **S61-F2** · CONFIRMED · `ABI` · behavioral-difference
+- [x] **S61-F2** · CONFIRMED · `ABI` · behavioral-difference
   - **What:** onGlobalRemoved clears the blur capability for ext_background_effect; reference only resets output order
   - **Oracle:** `src/apprt/gtk/winproto/wayland/Globals.zig:132-137` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs:375-386`
   - **Audit's suggested fix:** Drop the extra arm (or keep it and record the divergence in the parity ledger).

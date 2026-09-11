@@ -1542,7 +1542,27 @@ here the ledger does not contradict the waiver, it *dates* it.
   a test that is red for a reason nobody can act on trains people to ignore red. **An
   assertion over shared process-global state must be scoped to the state the test itself
   produced.**
-- **state**: **CLOSED by task 15** in both places.
+- **fix round 1 (task 15)**: a THIRD instance was found at
+  `crates/rustty-vt-c/src/terminal.rs:10691`, byte-identical to the two above and latent
+  only because nothing happened to emit into its window (0 failures in 15 runs). Fixed the
+  same way. Four further sites — `mouse_encode.rs`, `key_encode.rs`, `osc.rs`, `sgr.rs` —
+  assert the WHOLE buffer equals an exact expected vector, which has the same exposure;
+  each now filters to its own `LOG_SCOPE` first. Nothing else in the binary emits on those
+  scopes, so no coverage is lost.
+- **UNRESOLVED RESIDUAL, recorded rather than smoothed over**: during the fix round's
+  repetition pass, ONE `cargo test -p rustty-lib -p rustty-apprt-api -p rustty-renderer -p
+  rustty-vt -p rustty-vt-c` run failed with `error: test failed, to rerun pass -p
+  rustty-renderer --lib` and no captured failure detail. It did **not** reproduce in 8
+  further runs of the identical multi-crate invocation, nor in 18 runs of
+  `cargo test -p rustty-renderer` alone. `rustty-renderer`'s `log_capture` module documents
+  a known hole of exactly this shape in its own header — a capture observes only records
+  emitted on the thread that called `start()`, and the crate contains genuinely
+  multi-threaded code (the renderer thread, the CVDisplayLink callback) — and records that
+  `rustty-vt`'s sibling module once failed 6 runs in 8 before admission control. Whether
+  this one-off belongs to that family is UNKNOWN; it is written down here so the finale
+  re-audit meets it as an item rather than as nothing.
+- **state**: **CLOSED by task 15** for the three `rustty-vt-c` instances and the four
+  exact-vector sites. The `rustty-renderer` one-off above is **OPEN as an observation**.
 
 ## N29 — the `checkGhosttyHEnum` ports bound header ↔ a hand-typed literal, and never reached the Rust enums
 
