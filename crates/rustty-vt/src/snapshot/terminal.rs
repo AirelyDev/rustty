@@ -999,6 +999,23 @@ fn decode_payload(
     // the error-arm drops below (the Vecs free on drop).
     let read_string = |reader: &mut dyn io::Reader| -> Result<Vec<u8>, PayloadDecodeError> {
         let len = io::read_int::<u32>(reader)? as usize;
+
+        // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD66).
+        // `terminal.zig:887-895` allocates this `u32` length before comparing
+        // it with anything, so a sub-kilobyte TERMINAL record can ask for a
+        // 4 GiB block per string and surface as out-of-memory rather than as
+        // malformed input. The record always knows its own remaining payload,
+        // so a length the record cannot contain is rejected here with the
+        // `EndOfStream` the read below would return a moment later anyway.
+        // This also removes the port-only cost of zero-filling that length
+        // first (NEW-FINDINGS N54): the reference's `alloc.alloc` never
+        // touches the pages, the port's `resize(len, 0)` writes every byte.
+        if let Some(remaining) = reader.payload_remaining() {
+            if len as u64 > remaining {
+                return Err(PayloadDecodeError::EndOfStream);
+            }
+        }
+
         decode_alloc_check()?;
         let mut bytes: Vec<u8> = Vec::new();
         bytes
@@ -1886,6 +1903,72 @@ mod tests {
 
         decoded.deinit(Allocator);
         tabstops.deinit(Allocator);
+    }
+
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD66; NEW-FINDINGS N54): the pwd
+    // and title lengths are `u32` read straight from the payload. The
+    // reference allocates each one before comparing it with anything, so a
+    // sub-kilobyte record can request 4 GiB and report out-of-memory instead
+    // of malformed input; the port additionally zero-filled that length.
+    // Both are now bounded by the bytes left in the record.
+    #[test]
+    fn terminal_decode_rejects_a_string_length_the_record_cannot_contain() {
+        use crate::snapshot::tw;
+
+        /// One framed TERMINAL record whose pwd length may be a lie.
+        fn framed(pwd_len: u32, pwd: &[u8], title: &[u8]) -> Vec<u8> {
+            let header = test_header();
+            let mut destination = io::AllocatingWriter::new();
+            {
+                let mut stream = record::Writer::init(&mut destination);
+                {
+                    let payload = stream.begin(record::Tag::Terminal);
+                    header.encode(payload).unwrap();
+                    let tabstop_len = (header.columns as usize + 7) / 8;
+                    payload.splat_byte_all(0, tabstop_len).unwrap();
+                    payload.splat_byte_all(0, 256 * 3).unwrap(); // palette
+                    payload.splat_byte_all(0, 32).unwrap(); // override mask
+                    io::write_int::<u32>(payload, pwd_len).unwrap();
+                    payload.write_all(pwd).unwrap();
+                    io::write_int::<u32>(payload, title.len() as u32).unwrap();
+                    payload.write_all(title).unwrap();
+                }
+                stream.finish().unwrap();
+                stream.deinit();
+            }
+            destination.written().to_vec()
+        }
+
+        // A 4 GiB pwd inside a ~1 KiB record is malformed input.
+        //
+        // The error alone is NOT enough to prove the fix: the unbounded code
+        // also ends at `EndOfStream`, after reserving and zero-filling 4 GiB
+        // (measured: ~15s, against ~0.01s here). So the allocation tripwire is
+        // armed to fire on the pwd allocation — the first reach is the
+        // tab-stop allocation, the second would be the pwd — and the test
+        // asserts it was NEVER reached. That is the positive statement that
+        // the length was rejected before anything was allocated or zeroed.
+        let lying = framed(u32::MAX, b"", b"");
+        assert!(lying.len() < 2048);
+        let mut lying_source = io::FixedReader::new(&lying);
+        tw::error_after(tw::SnapshotFp::Alloc, 1);
+        assert_eq!(
+            Err(DecodeError::EndOfStream),
+            decode(&mut lying_source, Allocator).map(|mut t| t.deinit(Allocator)),
+        );
+        assert!(
+            tw::end(rustty_util::tripwire::ResetMode::Reset).is_err(),
+            "the pwd allocation was reached: the declared length was not rejected first",
+        );
+
+        // POSITIVE: a truthful record still decodes, strings intact, so the
+        // bound rejects only lengths the record cannot contain.
+        let honest = framed(3, b"abc", b"ti");
+        let mut honest_source = io::FixedReader::new(&honest);
+        let mut decoded = decode(&mut honest_source, Allocator).unwrap();
+        // `Terminal.pwd` keeps the NUL sentinel; `get_pwd` strips it.
+        assert_eq!(Some(b"abc".as_slice()), decoded.get_pwd());
+        decoded.deinit(Allocator);
     }
 
     // test "TERMINAL payload rejects noncanonical state"

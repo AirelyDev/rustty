@@ -89,6 +89,24 @@ pub trait Reader {
         self.buffered().len()
     }
 
+    /// How many bytes this reader can still supply, when it knows.
+    ///
+    /// `None` means "no bound available", which is the honest answer for a
+    /// source that streams from a callback. A decoder must therefore treat
+    /// `None` as "cannot check" and not as "nothing remains".
+    ///
+    /// PORT NOTE (R13, UPSTREAM-DEFECTS.md UD64): the reference has no such
+    /// accessor because each decode site reaches its own bound directly —
+    /// `payload.bufferedLen()` on the borrowed path and `limited.remaining`
+    /// on the streaming one (`src/terminal/snapshot/record.zig`). The port's
+    /// `record.Reader` flattens both paths into one type behind
+    /// `&mut dyn Reader`, so the same two quantities are projected through
+    /// this one method instead. Only `record::Reader` overrides it; that is
+    /// the only reader whose bound is a record payload.
+    fn payload_remaining(&self) -> Option<u64> {
+        None
+    }
+
     /// `reader.readSliceAll(dest)` — fill `dest` exactly or fail with
     /// `error.EndOfStream` (bytes may have been consumed).
     fn read_slice_all(&mut self, dest: &mut [u8]) -> Result<(), ReadError> {

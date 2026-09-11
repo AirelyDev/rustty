@@ -751,6 +751,83 @@ pub enum CapacityError {
     InvalidDimensions,
 }
 
+/// Upper bound on what `Page::layout` adds on top of the capacity's own
+/// regions: bitmap-allocator metadata, the grapheme and hyperlink hash maps,
+/// per-region alignment, and the final rounding to `page_size_min`. The
+/// multiple covers everything that scales with a declared capacity and the
+/// fixed term covers everything that does not (the rounding, the map headers,
+/// and the set structures). Both are deliberately generous and are PINNED by
+/// `the_page_size_bound_is_an_upper_bound_on_the_real_layout` below, which
+/// sweeps the extremes of every capacity field.
+const LAYOUT_OVERHEAD_MULTIPLE: u64 = 8;
+const LAYOUT_OVERHEAD_FIXED: u64 = 1 << 20;
+
+/// An upper bound on the style set's per-item size, asserted by the same test.
+const STYLE_ITEM_SIZE_BOUND: u64 = 64;
+
+/// The bytes a declared capacity asks for in its own right, before any
+/// allocator or map overhead. Computed in `u64` so it is identical on every
+/// target, including the 32-bit ones (`wasm32`) where `Page::layout`'s own
+/// `usize` arithmetic would wrap.
+fn declared_region_bytes(cap: TerminalPageCapacity) -> u64 {
+    let cols = cap.cols as u64;
+    let rows = cap.rows as u64;
+    rows * (core::mem::size_of::<terminal_page::Row>() as u64)
+        + cols * rows * (core::mem::size_of::<terminal_page::Cell>() as u64)
+        + (cap.styles as u64) * STYLE_ITEM_SIZE_BOUND
+        + (cap.hyperlink_bytes as u64)
+        + (cap.grapheme_bytes as u64)
+        + (cap.string_bytes as u64)
+}
+
+/// Reject a declared PAGE capacity whose native page could not be allocated.
+///
+/// PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD64).
+/// `Header.pageCapacity` (`snapshot/page.zig:560-578`) says it validates
+/// "native allocation requirements" but checks only that `columns` and `rows`
+/// are nonzero. The four capacity fields then flow, unchecked, into
+/// `createPageExt`, where `assert(layout.total_size <= size.max_page_size)`
+/// (`PageList.zig:4566`) is the first thing that looks at them — an assertion
+/// whose own comment says callers are expected to handle the limit
+/// themselves. A single PAGE header with `string_capacity_bytes = 0xFFFFFFFF`
+/// therefore aborts the process (in the port, in every profile, inside an
+/// `extern "C"` entry point where the panic cannot unwind). The CRC is no
+/// barrier: the capacity is used before the payload checksum is verified.
+///
+/// R7/R13 boundary: that assertion is an INVARIANT for the native callers,
+/// whose capacities are internal and provably bounded (`initialCapacity`
+/// proves it at comptime; `increaseCapacity` returns an error above the
+/// limit), so it stays a checked assertion there. What must not happen is
+/// decoded input reaching it. The check belongs here, at the decoder
+/// boundary, and reuses `pageCapacity`'s own existing error.
+///
+/// Both routes into `createPageExt` — the SCREEN pages via
+/// `Builder::allocate_page` and the HISTORY pages via
+/// `PageList::allocate_page` — obtain their capacity from `Decoder::capacity`,
+/// so this one site covers both.
+fn check_native_page_size(cap: TerminalPageCapacity) -> Result<(), CapacityError> {
+    // Bound the layout before computing it. This is what makes the exact
+    // computation below safe on a 32-bit target, where `Page::layout` sums
+    // `usize` and a declared capacity can overflow it (a panic in the port's
+    // checked profiles, and in `release-fast` a wrapped, small `total_size`
+    // that passes the assertion and leaves the page buffer undersized for the
+    // grid decode that follows).
+    let bound = declared_region_bytes(cap)
+        .saturating_mul(LAYOUT_OVERHEAD_MULTIPLE)
+        .saturating_add(LAYOUT_OVERHEAD_FIXED);
+    if bound > crate::size::MAX_PAGE_SIZE as u64 {
+        return Err(CapacityError::InvalidDimensions);
+    }
+
+    // The bound holds, so the real layout fits a `usize` on every target and
+    // its exact total can be compared with the limit the native assertion
+    // enforces.
+    if TerminalPage::layout(cap).total_size as u64 > crate::size::MAX_PAGE_SIZE as u64 {
+        return Err(CapacityError::InvalidDimensions);
+    }
+    Ok(())
+}
+
 /// The fixed logical dimensions, table counts, and allocation hints at the
 /// start of PAGE.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -842,14 +919,16 @@ impl Header {
             return Err(CapacityError::InvalidDimensions);
         }
 
-        Ok(TerminalPageCapacity {
+        let cap = TerminalPageCapacity {
             cols: self.columns,
             rows: self.rows,
             styles: self.style_capacity,
             hyperlink_bytes: self.hyperlink_capacity_bytes,
             grapheme_bytes: self.grapheme_capacity_bytes,
             string_bytes: self.string_capacity_bytes,
-        })
+        };
+        check_native_page_size(cap)?;
+        Ok(cap)
     }
 
     /// The reference comptime `computeLen` (see `LEN`).
@@ -1777,6 +1856,230 @@ mod tests {
                 decode_payload(&mut reader).map(|mut page| page.deinit()),
             );
         }
+    }
+
+    /// Encode just the fixed PAGE header and try to decode a payload from it.
+    fn decode_payload_of(header: Header) -> Result<(), PayloadDecodeError> {
+        let mut encoded = [0u8; Header::LEN];
+        let mut writer = io::FixedWriter::new(&mut encoded);
+        header.encode(&mut writer).unwrap();
+        let buffered = writer.buffered().to_vec();
+        let mut reader = io::FixedReader::new(&buffered);
+        decode_payload(&mut reader).map(|mut page| page.deinit())
+    }
+
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD64): a PAGE header whose declared
+    // capacity would make the native page allocation exceed
+    // `size::MAX_PAGE_SIZE` is rejected as malformed input here, instead of
+    // reaching `assert(layout.total_size <= size.max_page_size)` in
+    // `createPageExt` — which, in the port, aborts the process from inside an
+    // `extern "C"` entry point in every profile.
+    #[test]
+    fn decode_rejects_a_capacity_the_native_page_allocation_cannot_hold() {
+        let base = Header {
+            columns: 1,
+            rows: 1,
+            style_count: 0,
+            hyperlink_count: 0,
+            style_capacity: 0,
+            hyperlink_capacity_bytes: 0,
+            grapheme_capacity_bytes: 0,
+            string_capacity_bytes: 0,
+        };
+
+        // Each of these is a single 20-byte PAGE header. The CRC is never
+        // reached: the capacity is consumed before the payload checksum is
+        // verified, which is exactly why the assertion was reachable.
+        let rejected = [
+            // The gap report's trigger: one oversized string capacity.
+            Header {
+                string_capacity_bytes: u32::MAX,
+                ..base
+            },
+            Header {
+                grapheme_capacity_bytes: u32::MAX,
+                ..base
+            },
+            // 65535 x 65535 cells: ~34 GiB of cells alone, and on a 32-bit
+            // target this is also where `Page::layout`'s `usize` arithmetic
+            // would wrap.
+            Header {
+                columns: u16::MAX,
+                rows: u16::MAX,
+                ..base
+            },
+        ];
+        for header in rejected {
+            assert_eq!(
+                Err(PayloadDecodeError::InvalidDimensions),
+                decode_payload_of(header),
+                "capacity should have been rejected: {header:?}",
+            );
+        }
+
+        // POSITIVE REACH: a capacity a native page really can hold is NOT
+        // rejected. It gets past the capacity check and fails on the grid
+        // that these 20 bytes do not contain. Without this, the assertions
+        // above would also pass if the decoder rejected every header.
+        assert_eq!(
+            Err(PayloadDecodeError::EndOfStream),
+            decode_payload_of(Header {
+                columns: 2,
+                rows: 2,
+                ..base
+            }),
+        );
+    }
+
+    // The constants `check_native_page_size` uses to bound `Page::layout`
+    // before computing it. The gate is what keeps that computation inside a
+    // 32-bit `usize` (wasm32), so the bound must really be an upper bound.
+    #[test]
+    fn the_page_size_bound_is_an_upper_bound_on_the_real_layout() {
+        assert!(
+            core::mem::size_of::<
+                crate::ref_counted_set::Item<
+                    TerminalStyle,
+                    TerminalStyleId,
+                    crate::size::CellCountInt,
+                >,
+            >() as u64
+                <= STYLE_ITEM_SIZE_BOUND,
+        );
+
+        for cols in [1u16, 2, 80, 215, 1000, u16::MAX] {
+            for rows in [1u16, 2, 24, 215, 1000, u16::MAX] {
+                for styles in [0u16, 1, 128, u16::MAX] {
+                    for hyperlink_bytes in [0u16, 64, u16::MAX] {
+                        for grapheme_bytes in [0u32, 512, 8192, 1 << 20, u32::MAX] {
+                            for string_bytes in [0u32, 512, 8192, 1 << 20, u32::MAX] {
+                                let cap = TerminalPageCapacity {
+                                    cols,
+                                    rows,
+                                    styles,
+                                    hyperlink_bytes,
+                                    grapheme_bytes,
+                                    string_bytes,
+                                };
+                                let bound = declared_region_bytes(cap)
+                                    .saturating_mul(LAYOUT_OVERHEAD_MULTIPLE)
+                                    .saturating_add(LAYOUT_OVERHEAD_FIXED);
+                                // `layout` is pure arithmetic and allocates
+                                // nothing, and this test runs on a 64-bit
+                                // host, so every capacity is computable here.
+                                let total = TerminalPage::layout(cap).total_size as u64;
+                                assert!(
+                                    total <= bound,
+                                    "layout {total} exceeds the bound {bound} for {cap:?}",
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // The native standard capacity is comfortably accepted: the gate
+        // rejects only capacities no page could hold.
+        assert_eq!(Ok(()), check_native_page_size(crate::page::std_capacity()));
+    }
+
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD65): a decoded PAGE declares its
+    // own dimensions, so it can hold more cells than the `u16` style refcount
+    // can count. 256 x 256 = 65,536 cells sharing one style overflows it: a
+    // panic in the port's checked profiles (which aborts through `extern "C"`)
+    // and a wrap to zero in `release-fast`, after which a live style reads as
+    // dead. Cells past the ceiling now take this function's own existing
+    // degrade — the default style — and decoding completes.
+    #[test]
+    fn decode_degrades_cells_past_the_style_refcount_ceiling() {
+        use crate::style::Flags;
+
+        const COLS: u16 = 256;
+        const ROWS: u16 = 256;
+
+        let header = Header {
+            columns: COLS,
+            rows: ROWS,
+            style_count: 1,
+            hyperlink_count: 0,
+            // Enough room that the style set really accepts the entry: a
+            // capacity of 2 makes `add` fail, and `decode_payload_body`
+            // degrades a style it cannot install to the default, which would
+            // make this test pass for the wrong reason.
+            style_capacity: 128,
+            hyperlink_capacity_bytes: 0,
+            grapheme_capacity_bytes: 0,
+            string_capacity_bytes: 0,
+        };
+
+        let mut payload = io::AllocatingWriter::new();
+        header.encode(&mut payload).unwrap();
+
+        // One style table entry: encoded ID 1, a bold style.
+        io::write_int::<u16>(&mut payload, 1).unwrap();
+        style::encode(
+            TerminalStyle {
+                flags: Flags {
+                    bold: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            &mut payload,
+        )
+        .unwrap();
+
+        // Every cell of every row carries encoded style ID 1: kind 0
+        // (codepoint) in bits 0-1, the codepoint in bits 2-25, the style ID in
+        // bits 26-41. The row flag byte selects the eight-byte transport.
+        let word: u64 = ((b'A' as u64) << 2) | (1u64 << 26);
+        for _ in 0..ROWS {
+            payload.write_byte(0x30).unwrap();
+            io::write_int::<u16>(&mut payload, COLS).unwrap();
+            for _ in 0..COLS {
+                io::write_int::<u64>(&mut payload, word).unwrap();
+            }
+        }
+        io::write_int::<u32>(&mut payload, 0).unwrap(); // no grapheme suffixes
+
+        let bytes = payload.written().to_vec();
+        let mut reader = io::FixedReader::new(&bytes);
+        // It decodes at all. Before the guard this panicked with "attempt to
+        // add with overflow" inside the reference-counted set.
+        let mut page = decode_payload(&mut reader).unwrap();
+
+        // POSITIVE: the style really was installed and really was applied,
+        // so the test is not passing because styling was skipped wholesale.
+        assert_eq!(1, page.styles.count());
+        let first_style = {
+            let row = page.get_row(0);
+            // SAFETY: in-bounds read of the decoded page's first cell.
+            unsafe { (*(page.get_cells(row) as *const terminal_page::Cell)).style_id() }
+        };
+        assert_ne!(0, first_style);
+
+        // The ceiling was reached, and the cells past it degraded to the
+        // default style instead of overflowing the refcount.
+        let last_style = {
+            let row = page.get_row(ROWS as usize - 1);
+            // SAFETY: in-bounds read of the decoded page's last cell.
+            unsafe {
+                (*(page.get_cells(row) as *const terminal_page::Cell).add(COLS as usize - 1))
+                    .style_id()
+            }
+        };
+        assert_eq!(0, last_style);
+
+        // The surviving references sit at the ceiling (the style table's own
+        // reference is surrendered after the grid, so this is one below it).
+        let refs = unsafe { page.styles.ref_count(page.memory_ptr(), first_style) };
+        assert!(
+            refs >= crate::size::CellCountInt::MAX - 1,
+            "expected a saturated refcount, got {refs}",
+        );
+
+        page.deinit();
     }
 
     // test "decode propagates a style table read failure"

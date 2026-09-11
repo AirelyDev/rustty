@@ -1502,6 +1502,37 @@ fn apply_cell(
     // reference and each decoded cell owns one additional reference.
     if wire.style_id != 0 {
         wire.style_id = style_remap.get(wire.style_id);
+
+        // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD65).
+        // `grid.zig:1259-1265` calls `page.styles.use` once per styled cell,
+        // and that is an unguarded `ref += 1` on a `u16`
+        // (`ref_counted_set.zig:365-379`). A native page cannot reach the
+        // ceiling — `std_capacity` is 215x215 = 46,225 cells and `adjust`
+        // preserves the byte budget — but a decoded PAGE declares its own
+        // `columns` x `rows`, so a 256x256 page whose cells all carry one
+        // style overflows it: a ReleaseSafe panic, and in ReleaseFast a wrap
+        // to zero that makes a live style read as dead, after which the
+        // post-grid release loop and the set's dead-item trimming corrupt the
+        // style table. Saturation is therefore decoder-only.
+        //
+        // The safe handling is this function's OWN existing degrade: an ID it
+        // cannot honour stores the cell with the default style (that is what
+        // the `!= 0` check above already does for an unmapped ID, and what
+        // the hyperlink half below does when `set_hyperlink` fails). It loses
+        // this cell's style and nothing else, and invents no new behaviour.
+        // Rejecting the whole page would also work but would refuse pages
+        // that decode correctly today.
+        //
+        // SAFETY: the remapped ID was assigned by this page's style set.
+        if wire.style_id != 0
+            && unsafe {
+                page.styles
+                    .ref_count_saturated(page.memory_ptr(), wire.style_id)
+            }
+        {
+            wire.style_id = 0;
+        }
+
         if wire.style_id != 0 {
             // SAFETY: the remapped ID was assigned by this page's style set.
             unsafe {

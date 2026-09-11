@@ -186,6 +186,26 @@ pub fn encode(
     Ok(())
 }
 
+/// Reject a declared string length the enclosing record cannot contain.
+///
+/// PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD66). The standalone
+/// hyperlink decoder (`hyperlink.zig:132-158`, reached from `screen.zig:1126`
+/// for the SCREEN cursor hyperlink) allocates each `u32` length before
+/// comparing it with the bytes left in the record, so a tiny record can ask
+/// for two 4 GiB blocks. `decodeCursorHyperlink` then swallows the resulting
+/// out-of-memory as "no cursor hyperlink", so the misreport is silent. The
+/// bound is the record's own remaining payload; `EndOfStream` is the error the
+/// read below would return anyway, and the cursor-hyperlink caller already
+/// treats it exactly as it treats the out-of-memory it used to get.
+fn check_declared_len(reader: &dyn io::Reader, len: usize) -> Result<(), DecodeError> {
+    if let Some(remaining) = reader.payload_remaining() {
+        if len as u64 > remaining {
+            return Err(DecodeError::EndOfStream);
+        }
+    }
+    Ok(())
+}
+
 /// `alloc.alloc(u8, len)` — a fallible zeroed byte buffer, with the crate's
 /// tripwire seam standing in for the reference tests' FailingAllocator.
 fn decode_alloc(len: usize) -> Result<Vec<u8>, DecodeError> {
@@ -214,6 +234,7 @@ pub fn decode(reader: &mut dyn io::Reader) -> Result<terminal_hyperlink::Hyperli
             if uri_len == 0 {
                 return Err(DecodeError::InvalidUri);
             }
+            check_declared_len(reader, uri_len)?;
 
             let mut uri = decode_alloc(uri_len)?;
             // errdefer alloc.free(uri); — the Vec drops on the error path.
@@ -230,6 +251,7 @@ pub fn decode(reader: &mut dyn io::Reader) -> Result<terminal_hyperlink::Hyperli
             if id_len == 0 {
                 return Err(DecodeError::InvalidExplicitId);
             }
+            check_declared_len(reader, id_len)?;
 
             let mut id = decode_alloc(id_len)?;
             // errdefer alloc.free(id);
@@ -239,6 +261,7 @@ pub fn decode(reader: &mut dyn io::Reader) -> Result<terminal_hyperlink::Hyperli
             if uri_len == 0 {
                 return Err(DecodeError::InvalidUri);
             }
+            check_declared_len(reader, uri_len)?;
 
             let mut uri = decode_alloc(uri_len)?;
             // errdefer alloc.free(uri);
@@ -459,6 +482,69 @@ mod tests {
     }
     fn test_explicit_fixture() -> Vec<u8> {
         fixture::parse(include_str!("testdata/hyperlink-explicit-v1.hex"))
+    }
+
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD66; NEW-FINDINGS N54): the
+    // standalone hyperlink decoder, which SCREEN uses for the cursor
+    // hyperlink, allocates its `u32` ID and URI lengths before comparing them
+    // with the bytes left in the record. `decodeCursorHyperlink` then swallows
+    // the resulting out-of-memory as "no cursor hyperlink", so the misreport
+    // is silent. Both lengths are now bounded by the record's own payload.
+    #[test]
+    fn decode_rejects_a_string_length_the_record_cannot_contain() {
+        use crate::snapshot::record;
+        use crate::snapshot::tw;
+
+        /// One framed record whose payload is a single implicit hyperlink.
+        fn framed(uri_len: u32, uri: &[u8]) -> Vec<u8> {
+            let mut destination = io::AllocatingWriter::new();
+            {
+                let mut stream = record::Writer::init(&mut destination);
+                {
+                    let payload = stream.begin(record::Tag::Screen);
+                    payload.write_byte(Kind::Implicit as u8).unwrap();
+                    io::write_int::<u32>(payload, 7).unwrap();
+                    io::write_int::<u32>(payload, uri_len).unwrap();
+                    payload.write_all(uri).unwrap();
+                }
+                stream.finish().unwrap();
+                stream.deinit();
+            }
+            destination.written().to_vec()
+        }
+
+        // A 4 GiB URI declared by a nine-byte payload.
+        //
+        // The error alone is NOT enough to prove the fix: the unbounded code
+        // also ends at `EndOfStream`, after reserving and zero-filling 4 GiB
+        // (measured: ~15s, against ~0.01s here). The allocation tripwire is
+        // therefore armed to fire on the URI allocation, and the test asserts
+        // it was NEVER reached — the positive statement that the length was
+        // rejected before anything was allocated or zeroed.
+        let lying = framed(u32::MAX, b"");
+        let mut lying_source = io::FixedReader::new(&lying);
+        let mut lying_record = record::Reader::init(&mut lying_source).unwrap();
+        tw::error_always(tw::SnapshotFp::Alloc);
+        assert_eq!(
+            Err(DecodeError::EndOfStream),
+            decode(lying_record.payload_reader()).map(|_| ()),
+        );
+        assert!(
+            tw::end(rustty_util::tripwire::ResetMode::Reset).is_err(),
+            "the URI allocation was reached: the declared length was not rejected first",
+        );
+
+        // POSITIVE: a truthful record still decodes.
+        let honest = framed(3, b"abc");
+        let mut honest_source = io::FixedReader::new(&honest);
+        let mut honest_record = record::Reader::init(&mut honest_source).unwrap();
+        let value = decode(honest_record.payload_reader()).unwrap();
+        // `HyperlinkId` implements neither PartialEq nor Debug.
+        match value.id {
+            terminal_hyperlink::HyperlinkId::Implicit(id) => assert_eq!(7u32, id),
+            terminal_hyperlink::HyperlinkId::Explicit(_) => panic!("expected an implicit id"),
+        }
+        assert_eq!(b"abc", value.uri.as_slice());
     }
 
     // test "golden implicit encoding"

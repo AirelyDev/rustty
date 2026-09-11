@@ -87,6 +87,8 @@ impl_id_int!(u8, u16, u32, u64, usize);
 pub trait RefCountIntTrait: Copy + PartialEq + PartialOrd + Eq + Ord {
     const ZERO: Self;
     const ONE: Self;
+    /// `maxInt(RefCountInt)` — the value past which `use` would overflow.
+    const MAX: Self;
     fn add(self, other: Self) -> Self;
     fn sub(self, other: Self) -> Self;
     /// `@intCast` from a usize the caller guarantees fits.
@@ -98,6 +100,7 @@ macro_rules! impl_refcount_int {
         impl RefCountIntTrait for $t {
             const ZERO: Self = 0;
             const ONE: Self = 1;
+            const MAX: Self = <$t>::MAX;
             #[inline] fn add(self, other: Self) -> Self { self + other }
             #[inline] fn sub(self, other: Self) -> Self { self - other }
             #[inline] fn from_usize(v: usize) -> Self { v as $t }
@@ -913,6 +916,22 @@ where
         let items = unsafe { self.items.ptr(base) };
         let item = unsafe { &*items.add(id.to_usize()) };
         item.meta.ref_count
+    }
+
+    /// Whether one more `use` would overflow this item's reference count.
+    ///
+    /// PORT NOTE (R13, UPSTREAM-DEFECTS.md UD65): the reference has no such
+    /// query — `use` is an unguarded `item.meta.ref += 1` over a `u16`
+    /// (`ref_counted_set.zig:365-379`). Nothing on the native write path can
+    /// reach the ceiling, because a page holds far fewer cells than
+    /// `maxInt(u16)` by construction, but a decoded page declares its own
+    /// dimensions. The snapshot grid decoder asks this before taking a
+    /// reference; see `snapshot/grid.rs`.
+    ///
+    /// # Safety: `base` must be the true base of the backing buffer.
+    pub unsafe fn ref_count_saturated<B: IntFromBase + Copy>(&self, base: B, id: Id) -> bool {
+        let current = unsafe { self.ref_count(base, id) };
+        current == RefCount::MAX
     }
 
     /// Get the current number of non-dead items in the set.

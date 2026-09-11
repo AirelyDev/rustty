@@ -531,6 +531,19 @@ impl io::Reader for Reader<'_> {
         Ok(())
     }
 
+    /// The bytes left in this record's declared payload.
+    ///
+    /// Borrowed: the unconsumed part of the borrowed window. Streaming: what
+    /// the payload limit still permits, plus what is already sitting in the
+    /// hashing buffer. These are the reference's `payload.bufferedLen()` and
+    /// `limited.remaining` (see the trait's PORT NOTE).
+    fn payload_remaining(&self) -> Option<u64> {
+        Some(match &self.borrowed {
+            Some(b) => (b.len - b.seek) as u64,
+            None => self.remaining + (self.hend - self.hstart) as u64,
+        })
+    }
+
     fn take_buffered(&mut self, n: usize) -> &[u8] {
         if let Some(b) = self.borrowed.as_mut() {
             debug_assert!(n <= b.len - b.seek);

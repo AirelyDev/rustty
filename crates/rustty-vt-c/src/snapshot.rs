@@ -1359,6 +1359,85 @@ mod tests {
         });
     }
 
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD64): the C ABI is the snapshot
+    // decoder's only production caller, so an embedder decoding snapshot bytes
+    // from a file, a peer or the network is the whole reachability of this
+    // defect. A single PAGE header field is enough: before the fix this
+    // aborted the process at `assert(layout.total_size <= max_page_size)`,
+    // inside an `extern "C"` entry point where the panic cannot unwind. It is
+    // now an ordinary malformed-input result.
+    #[test]
+    fn decoder_rejects_a_page_capacity_that_would_abort_the_library() {
+        with_test_allocator(|alloc| {
+            let (new_result, source) = new_t(alloc, 20, 4);
+            assert_eq!(Result::Success, new_result);
+            test_enable_continuation(source);
+            vtw(source, b"hello");
+
+            let mut encoded_ptr: *mut u8 = std::ptr::null_mut();
+            let mut encoded_len: usize = 0;
+            assert_eq!(Result::Success, unsafe {
+                encode_alloc(source, Some(alloc), &mut encoded_ptr, &mut encoded_len)
+            });
+            // SAFETY: the allocation returned above; copied out and freed here.
+            let mut bytes: Vec<u8> =
+                unsafe { core::slice::from_raw_parts(encoded_ptr, encoded_len) }.to_vec();
+            free_alloc(alloc, encoded_ptr, encoded_len);
+
+            // A control first: these bytes decode cleanly as they stand, so
+            // the rejection below is caused by the patch and nothing else.
+            {
+                let mut decoder: Decoder = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    decoder_new_buf(Some(alloc), &mut decoder, bytes.as_ptr(), bytes.len())
+                });
+                let mut restored: terminal_c::Terminal = std::ptr::null_mut();
+                assert_eq!(Result::Success, unsafe {
+                    decoder_decode(decoder, &mut restored)
+                });
+                unsafe {
+                    terminal_c::free(restored);
+                    decoder_free(decoder);
+                }
+            }
+
+            // Walk the record framing (10-byte envelope, then 10-byte record
+            // headers) and patch the first PAGE record's
+            // `string_capacity_bytes`, at bytes 16..20 of its payload.
+            let mut offset: usize = 10;
+            loop {
+                assert!(offset + 10 <= bytes.len(), "no PAGE record found");
+                let tag = u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap());
+                let payload_len =
+                    u32::from_le_bytes(bytes[offset + 2..offset + 6].try_into().unwrap()) as usize;
+                let payload = offset + 10;
+                if tag == 3 {
+                    bytes[payload + 16..payload + 20].copy_from_slice(&u32::MAX.to_le_bytes());
+                    break;
+                }
+                offset = payload + payload_len;
+            }
+
+            // The record's CRC is now wrong too, which does not matter and is
+            // the point: the capacity is consumed before the payload checksum
+            // is verified, so a bad CRC is no barrier to reaching it.
+            let mut decoder: Decoder = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                decoder_new_buf(Some(alloc), &mut decoder, bytes.as_ptr(), bytes.len())
+            });
+            let mut restored: terminal_c::Terminal = std::ptr::null_mut();
+            assert_eq!(Result::InvalidValue, unsafe {
+                decoder_decode(decoder, &mut restored)
+            });
+            assert!(restored.is_null());
+
+            unsafe {
+                decoder_free(decoder);
+                terminal_c::free(source);
+            }
+        });
+    }
+
     // test "snapshot C API full round trip restores continuation"
     #[test]
     fn snapshot_c_api_full_round_trip_restores_continuation() {
