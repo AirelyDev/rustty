@@ -5228,8 +5228,11 @@ mod tests {
         // Nothing active: anchored at the head.
         assert_eq!(visits(3, None, GotoWindow::Next), [0, 1, 2]);
         assert_eq!(visits(3, None, GotoWindow::Previous), [0, 2, 1]);
-        // Empty list.
+        // Empty list, in BOTH directions: `.previous` is the arm whose wrap-around
+        // dereferences the null list in the reference (UPSTREAM-DEFECTS UD4), and the
+        // one whose slicing would panic here without the empty-list guard.
         assert_eq!(visits(0, None, GotoWindow::Next), Vec::<usize>::new());
+        assert_eq!(visits(0, None, GotoWindow::Previous), Vec::<usize>::new());
 
         // The audit's case (1): one window, nothing active. The reference presents
         // it; the port used to skip the anchor and return false.

@@ -724,7 +724,7 @@ impl Window {
         // `XGetWindowProperty(display, xid, name, offset=0, length=maxInt, delete=0,
         // type, &actual_type, &actual_format, &nitems, &bytes_after, &prop)`
         // (`x11.zig:356-369`).
-        let code = unsafe {
+        let (code, trapped) = self.trap_x_errors(|| unsafe {
             (self.xlib.XGetWindowProperty)(
                 self.display,
                 self.x11_surface.xid(),
@@ -739,9 +739,15 @@ impl Window {
                 &mut bytes_after,
                 &mut prop,
             )
-        };
-        // `if (code != Success) return error.RequestFailed` (`x11.zig:370`).
-        if code != c_int::from(xlib::Success) {
+        });
+        // `if (code != Success) return error.RequestFailed` (`x11.zig:370`). A
+        // trapped X error takes the same path (R13, [`Self::trap_x_errors`]).
+        if code != c_int::from(xlib::Success) || trapped {
+            // Xlib leaves `prop` null on a failed request; free defensively in case a
+            // trapped error ever accompanies a `Success` reply.
+            if !prop.is_null() {
+                unsafe { (self.xlib.XFree)(prop.cast::<c_void>()) };
+            }
             return Err(Error::RequestFailed);
         }
         // `if (actual_type == None) return error.PropertyNotFound` (`x11.zig:372`) —
@@ -781,6 +787,36 @@ impl Window {
         result
     }
 
+    /// Run one Xlib property call inside a GDK X error trap and report whether the
+    /// server rejected it: `(call result, trapped)`.
+    ///
+    /// PORT NOTE: reference defect (R13) — `.port/parity-closure/UPSTREAM-DEFECTS.md`
+    /// UD3. A deliberate divergence (task 20 fix round 2), not an oversight. The
+    /// reference makes `XChangeProperty` / `XDeleteProperty` / `XGetWindowProperty`
+    /// with NO error trap (`x11.zig:346-431`), so an X error on them reaches GDK's
+    /// default handler, which prints "received an X Window System error" and EXITS
+    /// the process with status 1. MEASURED on the VM (GTK 4.22.4, GDK_BACKEND=x11,
+    /// headless sway's Xwayland): a second X client destroys our toplevel (what
+    /// `xdotool windowclose` does), GDK logs "GdkSurface … unexpectedly destroyed"
+    /// and keeps the window realized, and the next config reload runs
+    /// `syncAppearance` into `BadWindow` (request 20, `GetProperty`) and the terminal
+    /// exits. Under R13 each call is bracketed by `gdk_x11_display_error_trap_push`
+    /// / `_pop` — GDK's own scoped trap, never a process-wide `XSetErrorHandler` —
+    /// and a trapped error takes the reference's `error.RequestFailed` path, which
+    /// `resizeEvent` / `syncAppearance` already log.
+    fn trap_x_errors<T>(&self, call: impl FnOnce() -> T) -> (T, bool) {
+        let display = self.x11_surface.display();
+        let x11_display = display.downcast_ref::<gdk4_x11::X11Display>();
+        if let Some(d) = x11_display {
+            d.error_trap_push();
+        }
+        let result = call();
+        // `error_trap_pop` syncs, so an asynchronous error on this request is
+        // reported here rather than to the default handler later.
+        let trapped = x11_display.is_some_and(|d| d.error_trap_pop() != 0);
+        (result, trapped)
+    }
+
     /// PORTS: `x11.zig:381-411` `Window.changeProperty`, concrete over a raw
     /// (format-32) byte buffer. `nelements` is the count of 32-bit-logical items
     /// (i.e. `c_long` words). Returns [`Error::RequestFailed`] when Xlib reports
@@ -795,7 +831,7 @@ impl Window {
         data: *const c_uchar,
         nelements: c_int,
     ) -> Result<(), Error> {
-        let status = unsafe {
+        let (status, trapped) = self.trap_x_errors(|| unsafe {
             (self.xlib.XChangeProperty)(
                 self.display,
                 self.x11_surface.xid(),
@@ -806,19 +842,24 @@ impl Window {
                 data,
                 nelements,
             )
-        };
-        if status == 0 {
+        });
+        // `if (status == 0) return error.RequestFailed` (`x11.zig:421`); a trapped
+        // X error takes the same path (R13, [`Self::trap_x_errors`]).
+        if status == 0 || trapped {
             Err(Error::RequestFailed)
         } else {
             Ok(())
         }
     }
 
-    /// PORTS: `x11.zig:413-420` `Window.deleteProperty`.
+    /// PORTS: `x11.zig:424-431` `Window.deleteProperty`.
     fn delete_property(&self, name: xlib::Atom) -> Result<(), Error> {
-        let status =
-            unsafe { (self.xlib.XDeleteProperty)(self.display, self.x11_surface.xid(), name) };
-        if status == 0 {
+        let (status, trapped) = self.trap_x_errors(|| unsafe {
+            (self.xlib.XDeleteProperty)(self.display, self.x11_surface.xid(), name)
+        });
+        // `if (status == 0) return error.RequestFailed` (`x11.zig:430`); a trapped
+        // X error takes the same path (R13, [`Self::trap_x_errors`]).
+        if status == 0 || trapped {
             Err(Error::RequestFailed)
         } else {
             Ok(())
@@ -926,5 +967,154 @@ mod tests {
             window.blur_region.slices().is_empty(),
             "a successful delete commits"
         );
+    }
+
+    /// M110 / UD3 (R13): an X error on a winproto property call must not exit the
+    /// process. The scenario is the measured one: map one of our windows on X11, let
+    /// a SECOND X client destroy its toplevel (`xdotool windowclose`), pump the loop
+    /// so GDK processes the DestroyNotify, then deliver a config reload, whose
+    /// `syncAppearance` issues property requests against the dead window.
+    ///
+    /// GDK's default X error handler calls `exit(1)`, which no in-process assertion
+    /// can observe, so the scenario runs in a CHILD copy of this test binary and the
+    /// parent asserts the child exited 0, printed its marker, and — the positive half,
+    /// proving the X error really happened and was trapped — logged at least one
+    /// `failed to sync ...` line. Without a display the child fails
+    /// (`init_for_display_test`), so this test fails too.
+    #[test]
+    #[ignore = "requires an X server; run with GDK_BACKEND=x11 DISPLAY=... cargo test -p rustty-apprt --features gtk,x11,wayland --lib x11_error_on_a_destroyed -- --ignored"]
+    fn x11_error_on_a_destroyed_window_does_not_exit_the_process() {
+        const CHILD: &str = "RUSTTY_M110_CHILD";
+        const MARKER: &str = "M110_CHILD_RETURNED trapped_sync_failures=";
+        if std::env::var_os(CHILD).is_some() {
+            let trapped = destroyed_window_config_reload_scenario();
+            println!("{MARKER}{trapped}");
+            return;
+        }
+
+        let name = format!(
+            "{}::x11_error_on_a_destroyed_window_does_not_exit_the_process",
+            module_path!()
+                .split_once("::")
+                .map_or(module_path!(), |(_, rest)| rest)
+        );
+        let out = std::process::Command::new(std::env::current_exe().expect("current_exe"))
+            .args(["--exact", &name, "--ignored", "--nocapture"])
+            .env(CHILD, "1")
+            .env("RUST_BACKTRACE", "0")
+            .output()
+            .expect("spawn child test process");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success(),
+            "the child must survive the X error; status={:?}\nstdout={stdout}\nstderr={stderr}",
+            out.status
+        );
+        let trapped: usize = stdout
+            .lines()
+            .find_map(|l| l.strip_prefix(MARKER))
+            .and_then(|n| n.trim().parse().ok())
+            .unwrap_or_else(|| panic!("child never returned; stdout={stdout}\nstderr={stderr}"));
+        assert!(
+            trapped >= 1,
+            "the config reload must actually hit the dead window (a trapped request \\
+             failure is logged); stdout={stdout}\nstderr={stderr}"
+        );
+    }
+
+    /// The child half of the test above. Returns how many `failed to sync ...` lines
+    /// the reload logged.
+    fn destroyed_window_config_reload_scenario() -> usize {
+        use gtk4::prelude::GtkWindowExt as _;
+
+        crate::gtk::init_for_display_test(
+            "x11_error_on_a_destroyed_window_does_not_exit_the_process",
+        );
+        let _ = libadwaita::init();
+        crate::gtk::register_resources();
+        let display = gdk4::Display::default().expect("a default GDK display");
+        assert!(
+            display.downcast_ref::<gdk4_x11::X11Display>().is_some(),
+            "this test needs the X11 GDK backend (GDK_BACKEND=x11)"
+        );
+
+        let app = crate::gtk::class::application::Application::build_default_for_test();
+        let x11_app = App::init(
+            &display,
+            "io.airely.rustty.test",
+            &CoreConfig::default_config(),
+        )
+        .expect("x11 App::init")
+        .expect("the X11 arm");
+        app.imp()
+            .winproto
+            .replace(crate::gtk::winproto::App::X11(x11_app));
+        let mut cfg = CoreConfig::default_config();
+        cfg.background_blur = BackgroundBlur::True;
+        let config = crate::gtk::class::config::Config::new(&cfg);
+        app.imp().config.replace(Some(config.clone()));
+        let win = crate::gtk::class::window::Window::new(&app, None);
+        win.imp().config.replace(Some(config));
+        win.set_default_size(400, 300);
+        win.present();
+
+        let ctx = glib::MainContext::default();
+        let pump = |n: usize| {
+            for _ in 0..n {
+                ctx.iteration(false);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        };
+        for _ in 0..3000 {
+            if win.is_mapped() {
+                break;
+            }
+            pump(1);
+        }
+        assert!(
+            win.is_mapped(),
+            "the window must map before its X window is destroyed"
+        );
+        assert!(
+            matches!(
+                &*win.imp().winproto.borrow(),
+                crate::gtk::winproto::Window::X11(_)
+            ),
+            "the window must be on the X11 winproto arm"
+        );
+        pump(300);
+
+        // A second X client destroys our toplevel.
+        let xid = win
+            .surface()
+            .expect("surface")
+            .downcast::<gdk4_x11::X11Surface>()
+            .expect("an X11 surface")
+            .xid();
+        let xl = xlib::Xlib::open().expect("libX11");
+        unsafe {
+            let other = (xl.XOpenDisplay)(std::ptr::null());
+            assert!(!other.is_null(), "a second X connection");
+            (xl.XDestroyWindow)(other, xid);
+            (xl.XSync)(other, 0);
+            (xl.XCloseDisplay)(other);
+        }
+        pump(1000);
+
+        // A config reload reaches the window (`notify::config` -> syncAppearance).
+        let cap = crate::log_capture::start();
+        let mut reload = CoreConfig::default_config();
+        reload.background_blur = BackgroundBlur::True;
+        win.set_property("config", crate::gtk::class::config::Config::new(&reload));
+        display.sync();
+        pump(500);
+        let failures = cap
+            .messages()
+            .iter()
+            .filter(|(_, _, msg)| msg.contains("failed to sync"))
+            .count();
+        drop(cap);
+        failures
     }
 }
