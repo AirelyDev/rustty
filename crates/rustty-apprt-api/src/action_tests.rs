@@ -571,6 +571,20 @@ fn ref_all_decls_recursive() {
     let _ = Action::ExportTerminalIO(etio).cval();
     let _ = Action::SetWindowTitle(SetTitle { title: b"title" }).cval();
 
+    // S45-F2: the reference `format`s print `@typeName(@This())`, the qualified
+    // `apprt.action.<Type>`, in front of each payload (`action.zig:645-654,
+    // 754-760, 778-784, 806-817`).
+    assert_eq!(format!("{st}"), "apprt.action.SetTitle{ title }");
+    assert_eq!(format!("{pwd}"), "apprt.action.Pwd{ /tmp }");
+    assert_eq!(
+        format!("{dn}"),
+        "apprt.action.DesktopNotification{ title: t, body: b }"
+    );
+    assert_eq!(
+        format!("{etio}"),
+        "apprt.action.ExportTerminalIO{ contents: 21 bytes }"
+    );
+
     // ConfigChange needs a real Config borrow (exercises the config dep).
     let cfg = rustty_config::Config::default();
     let cc = ConfigChange { config: &cfg };

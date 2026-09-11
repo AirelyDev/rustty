@@ -32,6 +32,14 @@ use rustty_vt::pagelist::grow::{Scrollbar, ScrollbarC};
 use crate::seam::CoreSurfaceHandle;
 use crate::surface::ChildExited;
 
+/// The namespace `@typeName(@This())` prints in front of the payload type names in
+/// this file's `format` functions: `src/apprt/action.zig` is reached from the
+/// reference's module root as `apprt.action`, so e.g. `SetTitle` prints as
+/// `apprt.action.SetTitle{ ... }`. Measured, not inferred: Zig 0.16.0 (the pin's
+/// `minimum_zig_version`) prints exactly `apprt.action.SetTitle` for a struct in
+/// `apprt/action.zig` imported through `apprt.zig` from a `src/main.zig` root.
+pub(crate) const TYPE_NAME_PREFIX: &str = "apprt.action.";
+
 /// The target for an action. This is generally the thing that had focus
 /// while the action was made but the concept of "focus" is not guaranteed
 /// since actions can also be triggered by timers, scripts, etc.
@@ -982,10 +990,16 @@ impl<'a> ExportTerminalIO<'a> {
 impl core::fmt::Display for ExportTerminalIO<'_> {
     // PORT NOTE: reference `format` prints `"{s}{{ contents: {d} bytes }}"` of
     // `@typeName` + `contents.len` (the byte payload itself is never rendered).
+    //
+    // CORRECTION (task 20, S45-F2): this printed the bare `ExportTerminalIO`.
+    // `@typeName(@This())` is the FULLY-QUALIFIED name, `apprt.action.ExportTerminalIO`
+    // — measured with Zig 0.16.0 on a module rooted like the reference's
+    // (`src/main.zig` importing `apprt.zig` importing `apprt/action.zig`). See
+    // [`TYPE_NAME_PREFIX`].
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "ExportTerminalIO{{ contents: {} bytes }}",
+            "{TYPE_NAME_PREFIX}ExportTerminalIO{{ contents: {} bytes }}",
             self.contents.len()
         )
     }
@@ -1098,7 +1112,13 @@ impl core::fmt::Display for SetTitle<'_> {
     // `title`. The byte payload stays `&[u8]`; only this display path renders it
     // via `from_utf8_lossy` (display-only, not a data conversion).
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "SetTitle{{ {} }}", String::from_utf8_lossy(self.title))
+        // CORRECTION (task 20, S45-F2): printed the bare `SetTitle`; see
+        // [`TYPE_NAME_PREFIX`].
+        write!(
+            f,
+            "{TYPE_NAME_PREFIX}SetTitle{{ {} }}",
+            String::from_utf8_lossy(self.title)
+        )
     }
 }
 
@@ -1125,7 +1145,14 @@ impl<'a> Pwd<'a> {
 
 impl core::fmt::Display for Pwd<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "Pwd{{ {} }}", String::from_utf8_lossy(self.pwd))
+        // `try writer.print("{s}{{ {s} }}", .{ @typeName(@This()), value.pwd })`.
+        // CORRECTION (task 20, S45-F2): printed the bare `Pwd`; see
+        // [`TYPE_NAME_PREFIX`].
+        write!(
+            f,
+            "{TYPE_NAME_PREFIX}Pwd{{ {} }}",
+            String::from_utf8_lossy(self.pwd)
+        )
     }
 }
 
@@ -1159,7 +1186,9 @@ impl core::fmt::Display for DesktopNotification<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
-            "DesktopNotification{{ title: {}, body: {} }}",
+            // CORRECTION (task 20, S45-F2): printed the bare `DesktopNotification`;
+            // see [`TYPE_NAME_PREFIX`].
+            "{TYPE_NAME_PREFIX}DesktopNotification{{ title: {}, body: {} }}",
             String::from_utf8_lossy(self.title),
             String::from_utf8_lossy(self.body),
         )
