@@ -249,6 +249,27 @@ claimed. Prove the control fails, then prove it fails *for the stated reason*.
      reference tree itself and goes RED on any log-bearing file that is neither declared nor
      EXCLUDED-with-a-category. **Whenever you build a gate to catch an audit's blind spots,
      derive its universe from the reference, never from the audit.**
+   - **A checker that GUESSES a pairing will manufacture defects, and a manufactured defect
+     that gets DECLARED is permanent.** G-LOGFILE's content check first paired an emission
+     with the oldest unconsumed comment in the block whenever nothing matched exactly; three
+     of its sixteen findings were pairs between messages that had nothing to do with each
+     other, and all three were excused in the declaration file rather than diagnosed. It now
+     assigns exact matches first, then best-similarity above a threshold, and **leaves an
+     emission UNCHECKED rather than falsely accused** when nothing clears the bar. When a
+     check cannot be sure two things correspond, the honest output is silence plus a
+     coverage number — never a guess dressed as a finding.
+   - **State a coverage ratio against the population it is a ratio OF, and say where the
+     blindness is concentrated.** The same check first reported 72% over a denominator that
+     omitted ~150 facade-routed emissions from both halves; the real figure is 69%, three
+     crates have no checkable pair at all, five emit nothing and are outside the ratio
+     entirely, and 30% of the unchecked sites sit in the two files with the largest deficits
+     and the most inline reproduction of reference output. **The highest-risk text was the
+     least checked, and the aggregate hid it.**
+   - **Exclude test code from gate measurements.** A `#[cfg(test)]` helper that names a
+     `log_*` sink, or a test that writes a logging macro to prove one fires, moves every
+     number: one such site turned this gate red and another hid a nine-site file at ten.
+     G-LOGFILE skips `#[cfg(test)]` / `#[test]` spans for emissions, bypassing prints and
+     preserved comments alike.
    - **A count check cannot see a message that is PRESENT but WRONG**, and a count check is
      what most gates are. One funnel emitted half of `"error handling VT action action={}
      err={}"` and reconciled perfectly; the stage that found it then reintroduced the class

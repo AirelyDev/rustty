@@ -163,10 +163,13 @@ FACADE_CALL = re.compile(r"\blog::(?:warn|error|info|debug|trace)!")
 EPRINTLN_LOGFN = re.compile(r"\beprintln!\s*\(\s*" + LOGFN_PREFIX)
 
 
-def primitive_sites(code, nc):
+def primitive_sites(code, nc, skip_tests=True):
     """Offsets of live direct emissions. `code` has strings blanked, `nc` does not."""
     hits = [m.start() for m in FACADE_CALL.finditer(code)]
     hits += [m.start() for m in EPRINTLN_LOGFN.finditer(nc) if code[m.start():m.start() + 9] == "eprintln!"]
+    if skip_tests:
+        spans = test_ranges(code)
+        hits = [h for h in hits if not in_spans(h, spans)]
     return sorted(hits)
 
 
@@ -387,6 +390,56 @@ def _brace_body(src, start):
     return None
 
 
+TEST_ATTR = re.compile(r"#\[\s*(?:cfg\s*\(\s*test\s*\)|test|cfg_attr\s*\(\s*test)")
+
+
+def test_ranges(code):
+    """(start, end) spans of `#[cfg(test)]` / `#[test]` items in a Rust file.
+
+    TEST CODE IS NOT THE PORT. A `#[cfg(test)]` helper that names a `log_*` sink,
+    or a test that writes a logging macro to prove one fires, moves every number
+    here: one such site turned this gate red and another hid a nine-site file at
+    ten. Emissions, facade-bypassing prints and preserved reference comments are
+    all counted over PRODUCTION code only.
+    """
+    spans = []
+    for m in TEST_ATTR.finditer(code):
+        i = m.end()
+        # skip the rest of the attribute, then any further attributes/doc lines
+        depth = 0
+        while i < len(code):
+            c = code[i]
+            if c == "[":
+                depth += 1
+            elif c == "]":
+                if depth == 0:
+                    i += 1
+                    break
+                depth -= 1
+            i += 1
+        body = _brace_body(code, i)
+        if body:
+            spans.append((m.start(), body[1]))
+        else:  # a `#[cfg(test)] use ...;` or similar — nothing to skip
+            continue
+    # merge
+    spans.sort()
+    merged = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def in_spans(pos, spans):
+    for a, b in spans:
+        if a <= pos <= b:
+            return True
+    return False
+
+
 def rust_definitions(src):
     """[(kind, name, decl_start, body_open, body_close)] for log_* macros and fns."""
     defs = []
@@ -484,11 +537,12 @@ def rust_emissions(paths, sources, emitters, defs):
         for pos in primitive_sites(code, nc):
             if not inside(pos):
                 hits.append((path, code.count("\n", 0, pos) + 1, "direct"))
+        tspans = test_ranges(code)
         for name in emitters:
             for m in re.finditer(
                 r"(?<![A-Za-z0-9_.])" + re.escape(name) + r"\s*[!(]", code
             ):
-                if not inside(m.start()):
+                if not inside(m.start()) and not in_spans(m.start(), tspans):
                     hits.append((path, code.count("\n", 0, m.start()) + 1, name))
     return hits
 
@@ -521,9 +575,17 @@ def rust_emissions(paths, sources, emitters, defs):
 # scan, two verdicts.
 ZIG_CALL_IN_COMMENT = re.compile(
     r"(?:std\.log|log|glib_log)\.(warn|err|info|debug)\s*\("
+    # `logUnsupportedOnce("…", .{…}, tag)` is the reference's own dedup wrapper —
+    # it IS a log call, and not recognising it skipped six checkable sites in the
+    # stream parser for the sake of one regex alternative.
+    r"|(?P<once>logUnsupportedOnce)\s*\("
 )
 LOGFN_PREFIX_TEXT = re.compile(r"^(?:warn|debug|info|err|error)\([^)]*\):\s?")
 LEVEL_ALIAS = {"error": "err"}
+# Below this, an emission and a leftover comment are NOT treated as a pair. Tuned
+# so a truncation scores above it against its own comment while two unrelated
+# messages sharing a scope prefix do not; see `pair_messages`.
+PAIR_SIMILARITY = 0.55
 
 
 def normalise_message(text):
@@ -651,7 +713,9 @@ def commented_reference_calls(raw, code):
         while j in bodies and blob.count("(") > blob.count(")") and j - lineno < 8:
             blob += " " + re.sub(r"^[/\s]+", "", bodies[j])
             j += 1
-        found.append((lineno, m.group(1), zig_format_arg(blob)))
+        # `logUnsupportedOnce` is warn-level in the reference.
+        level = m.group(1) or "warn"
+        found.append((lineno, level, zig_format_arg(blob)))
     return found
 
 
@@ -673,44 +737,81 @@ def live_emission_messages(code, nc):
 def pair_messages(raw, code, nc, window=14):
     """[(ref_line, ref_msg, emit_line, emit_msg)] — comment paired to emission.
 
-    Three rules, each of which removed a wall of phantom mismatches when added:
-      * the LEVEL must match. A comment block often holds calls at several levels
-        with only some restored, and pairing a `log.debug` comment with a
-        `log::warn!` two lines down compares two unrelated calls.
-      * an EXACT normalised match among the pending comments wins. Ports restore
-        a block in a different order often enough that positional pairing shifts
-        every later pair.
-      * otherwise the OLDEST pending comment within the window is used, matching
-        the order a block is written and restored in.
+    BLOCK ASSIGNMENT, NOT A QUEUE. The first version popped the oldest pending
+    comment whenever an emission did not match one exactly, and that fabricates
+    pairs: the moment the port adds an emission the reference lacks, or restores
+    a block out of order, a later emission consumes an earlier one's leftover
+    comment and the check reports a "divergence" between two messages that were
+    never a pair. Three of the sixteen declarations this check first produced were
+    phantoms of exactly that kind — and being declared, they were on their way to
+    becoming permanent.
+
+    So: group events into BLOCKS (each event within `window` lines of the last),
+    and inside a block assign in two passes.
+      1. every EXACT normalised match is paired first, in file order. An exact
+         match is by construction the right pairing and must not be stolen by an
+         earlier emission that merely happens to precede it.
+      2. what is left is matched by SIMILARITY, and only above a threshold. Below
+         it the emission is left UNPAIRED — and therefore unchecked rather than
+         falsely accused. A truncation still scores far above the threshold
+         against its own comment (that is the whole point), while two unrelated
+         messages that merely share a scope prefix do not.
     """
+    import difflib
+
     refs = commented_reference_calls(raw, code)
     ems = live_emission_messages(code, nc)
     events = sorted(
-        [(l, "r", (m, lv)) for l, lv, m in refs] + [(l, "e", (m, lv)) for l, lv, m in ems]
+        [(l, 0, (m, lv)) for l, lv, m in refs] + [(l, 1, (m, lv)) for l, lv, m in ems]
     )
-    pending, out = [], []
+    blocks, cur, last = [], [], None
     for line, kind, payload in events:
-        if kind == "r":
-            pending.append((line, payload))
-            continue
-        emsg, elevel = payload
-        pending = [x for x in pending if line - x[0] <= window]
-        same = [x for x in pending if x[1][1] == elevel or elevel is None]
-        if not same:
-            continue
-        pending = [x for x in pending if x not in same] + same
-        base = len(pending) - len(same)
-        hit = next(
-            (
-                base + k
-                for k, (_l, m) in enumerate(same)
-                if m[0] is not None and normalise_message(m[0]) == normalise_message(emsg)
-            ),
-            None,
-        )
-        rline, m = pending.pop(hit if hit is not None else base)
-        out.append((rline, m[0], line, emsg))
-    return out
+        if last is not None and line - last > window:
+            blocks.append(cur)
+            cur = []
+        cur.append((line, kind, payload))
+        last = line
+    if cur:
+        blocks.append(cur)
+
+    out = []
+    for block in blocks:
+        block_refs = [(l, p) for l, k, p in block if k == 0]
+        block_ems = [(l, p) for l, k, p in block if k == 1]
+        used_r, used_e = set(), set()
+        # pass 1 — exact normalised matches, same level
+        for ei, (eline, (emsg, elevel)) in enumerate(block_ems):
+            for ri, (rline, (rmsg, rlevel)) in enumerate(block_refs):
+                if ri in used_r or rline > eline:
+                    continue
+                if rlevel != elevel and elevel is not None:
+                    continue
+                if rmsg is not None and normalise_message(rmsg) == normalise_message(emsg):
+                    used_r.add(ri)
+                    used_e.add(ei)
+                    out.append((rline, rmsg, eline, emsg))
+                    break
+        # pass 2 — best similarity above the threshold
+        for ei, (eline, (emsg, elevel)) in enumerate(block_ems):
+            if ei in used_e or emsg is None:
+                continue
+            best, best_ri = 0.0, None
+            for ri, (rline, (rmsg, rlevel)) in enumerate(block_refs):
+                if ri in used_r or rmsg is None or rline > eline:
+                    continue
+                if rlevel != elevel and elevel is not None:
+                    continue
+                ratio = difflib.SequenceMatcher(
+                    None, normalise_message(rmsg), normalise_message(emsg)
+                ).ratio()
+                if ratio > best:
+                    best, best_ri = ratio, ri
+            if best_ri is not None and best >= PAIR_SIMILARITY:
+                used_r.add(best_ri)
+                out.append(
+                    (block_refs[best_ri][0], block_refs[best_ri][1][0], eline, emsg)
+                )
+    return sorted(out, key=lambda x: x[2])
 
 
 def reference_message_index(zig_walk):
@@ -751,7 +852,11 @@ def is_stranded_comment(rn, ref_index):
       * ELIDED comments (`"… err={}"`, `"... err={}"`) quote a call by shape, not
         by text, and were never meant to be reproducible.
       * SHORT or single-word messages (`"render"`) are paraphrases; a stranded
-        reference call is a real sentence.
+        reference call is at least a short phrase. The threshold is 6, not 14:
+        at 14 it suppressed `exec.rs:4421`'s `"DATA: {}"`, which exists nowhere
+        in the reference live or commented — a genuine stranding hidden by a
+        threshold, and proof that "each filter removes only a legitimately
+        non-verbatim class" is a claim about the common case, not a guarantee.
       * ABBREVIATED comments quote a genuine call's message in part
         (`"cancelled by the user"` for `"open uri request was cancelled by the
         user"`), so a message that is a SUBSTRING of a real reference message is
@@ -762,7 +867,7 @@ def is_stranded_comment(rn, ref_index):
     """
     if not rn or any(e in rn for e in ELIDED):
         return False
-    if len(rn) < 14 or " " not in rn.strip():
+    if len(rn) < 6 or " " not in rn.strip():
         return False
     if rn in ref_index:
         return False
@@ -776,7 +881,7 @@ def is_stranded_comment(rn, ref_index):
     # both — and which is still a whole phrase, so it does not collapse distinct
     # messages together.
     prefix = rn.split("{")[0]
-    if len(prefix) >= 14 and any(known.startswith(prefix) for known in ref_index):
+    if len(prefix) >= 6 and any(known.startswith(prefix) for known in ref_index):
         return False
     return True
 
@@ -1267,12 +1372,14 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
         seen = set()
         mismatches, stale = [], []
         n_paired = n_emissions = 0
+        per_crate = {}
+        per_file_unchecked = {}
         for path in sorted(pool):
             raw = raw_sources.get(path)
             if raw is None:
                 continue
             code, nc = pool[path]
-            n_emissions += len(primitive_sites(code, nc))
+            n_emissions += len(rust_emissions([path], pool, emitters, defs))
             for rline, rmsg, eline, emsg in pair_messages(raw, code, nc):
                 if rmsg is None or emsg is None:
                     continue
@@ -1280,12 +1387,35 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
                 rn, en = normalise_message(rmsg), normalise_message(emsg)
                 if rn != en:
                     mismatches.append((path, eline, rn, en))
+            crate = "/".join(path.split("/")[:2])
+            fe = len(rust_emissions([path], pool, emitters, defs))
+            fp = len([1 for x in pair_messages(raw, code, nc) if x[1] and x[3]])
+            agg = per_crate.setdefault(crate, [0, 0])
+            agg[0] += fe
+            agg[1] += fp
+            if fe - fp > 0:
+                per_file_unchecked[path] = fe - fp
             for rline, _lvl, rmsg in commented_reference_calls(raw, code):
                 if rmsg is None:
                     continue
                 rn = normalise_message(rmsg)
                 if is_stranded_comment(rn, ref_index):
                     stale.append((path, rline, rn))
+
+        blind_crates = [c for c, (e, p) in per_crate.items() if e and not p]
+        # A crate that emits NOTHING is invisible to the content check for a
+        # different reason: it is not in the denominator at all. Naming both kinds
+        # is the difference between "69% checked" and "69% of what emits".
+        silent_crates = [c for c, (e, _p) in per_crate.items() if not e]
+        total_unchecked = max(0, n_emissions - n_paired)
+        top = sorted(per_file_unchecked.items(), key=lambda x: -x[1])[:2]
+        concentrated = []
+        if total_unchecked and top:
+            share = 100 * sum(v for _k, v in top) // total_unchecked
+            concentrated = [
+                f"{share}% of the {total_unchecked} unchecked sites are in "
+                + " and ".join(f"{k} ({v})" for k, v in top)
+            ]
 
         def declared(kind_set, path, rn, en):
             for d in decl:
@@ -1310,11 +1440,29 @@ def verdict(portmap, claims, zig_text, rust_text, facade_sources=None, report=Fa
         no_reason = [d for d in decl if not d["reason"]]
         dead = [d for d in decl if d["lineno"] not in seen]
         out.append(
-            f"           message content: {n_paired} of {n_emissions} emission(s) have a "
-            f"preserved reference comment to check against "
-            f"({100 * n_paired // max(1, n_emissions)}%; the rest are UNCHECKED by this "
-            "pass — it can only compare what the port wrote down)"
+            f"           message content: {n_paired} of {n_emissions} LIVE EMISSION(S) "
+            "(every shape: log::, macro/fn facade, and facade-bypassing print) have a "
+            "preserved reference comment to check against "
+            f"({100 * n_paired // max(1, n_emissions)}%). The rest are UNCHECKED — this "
+            "pass can only compare what the port wrote down."
         )
+        if blind_crates:
+            out.append(
+                f"           message content: {len(blind_crates)} crate(s) have live "
+                "emissions and NOT ONE checkable pair, so the check cannot see them at "
+                "all: " + ", ".join(sorted(blind_crates))
+            )
+        if silent_crates:
+            out.append(
+                f"           message content: {len(silent_crates)} crate(s) emit NOTHING "
+                "at all, so they are outside the ratio entirely, not merely unchecked: "
+                + ", ".join(sorted(silent_crates))
+            )
+        if concentrated:
+            out.append(
+                "           message content: unchecked sites are CONCENTRATED, not "
+                "random — " + "; ".join(concentrated)
+            )
         out.append(
             f"           message content: {len(mismatches)} divergence(s) and "
             f"{len(stale)} stale preserved comment(s), {len(decl)} declared"
@@ -1823,6 +1971,21 @@ def self_test():
                           allowance="1"), 0))
     cases.append(("divergence cap exceeded",
                   run_txt(TXT_OK, [], cap=1), 1))
+    # 10h. THE PHANTOM-PAIR REGRESSION. A block with ONE reference comment and TWO
+    #      emissions — the second is a rustty-only line the reference never had.
+    #      The old oldest-pending fallback handed it the leftover comment and
+    #      reported a divergence between two unrelated messages; three such
+    #      phantoms were declared before this was found. The second emission must
+    #      now be left UNCHECKED, not accused.
+    TXT_EXTRA = (
+        'fn a() {\n    // log.warn("mode: {} err={}", .{ m, err });\n'
+        '    log::warn!(target: S, "mode: {m} err={err:?}");\n'
+        '    log::warn!(target: S, "rustty-only note about something else entirely");\n}\n'
+    )
+    cases.append(
+        ("an extra port-only emission does not steal the block's comment",
+         run_txt(TXT_EXTRA), 0)
+    )
     # 11. a LOG row citing a file with no portmap entry
     cases.append(
         ("undeclared reference file",

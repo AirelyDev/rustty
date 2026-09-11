@@ -573,7 +573,10 @@ fn response_received(inner: &Rc<Inner>, object_path: &str, params: &glib::Varian
         // suffix each of these four carried is gone too: it is not in the
         // reference's message text.
         0 => log::debug!(target: LOG_SCOPE, "open uri successful"),
-        // `1 => log.debug("cancelled by the user")` (`:487-489`).
+        // `1 => log.debug("open uri request was cancelled by the user", .{})`
+        // (`:488-490`). Quoted VERBATIM: an abbreviated reproduction here made
+        // G-LOGFILE's content check pair this emission with the `0 =>` arm's
+        // leftover comment and report a phantom divergence.
         1 => log::debug!(target: LOG_SCOPE, "open uri request was cancelled by the user"),
         // `2 => { log.warn; openUrlFallback }` (`:490-493`).
         2 => {

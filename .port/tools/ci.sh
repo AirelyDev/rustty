@@ -776,9 +776,13 @@ GATE_REGISTRY=(
   # reconciled), so each emission is compared against the reference call
   # preserved as a comment above it, with placeholder contents normalised and
   # spacing left alone. Exceptions are declared in LOG-TEXT-DIVERGENCES.tsv
-  # (30 today, capped and ratcheted); the same scan flags a comment quoting a
-  # call the reference does NOT have (N20). It reaches 72% of emissions — it can
-  # only compare what the port wrote down. Nothing here is
+  # (28 today, capped and ratcheted); the same scan flags a comment quoting a
+  # call the reference does NOT have (N20). It reaches 69% of LIVE EMISSIONS —
+  # it can only compare what the port wrote down — and the run prints which
+  # crates it cannot see at all and how concentrated the unchecked sites are,
+  # because the two files with the most unchecked text are also the two with the
+  # largest deficits. Measurements EXCLUDE #[cfg(test)]/#[test] code: a test that
+  # names a log_* sink was inflating counts. Nothing here is
   # env-settable (R5); an absent or off-pin oracle checkout is 3 BLOCKED, never a
   # vacuous green.
   "G-LOGFILE-SELF|HARD|$PY $GATES/check_log_reconcile.py --self-test"

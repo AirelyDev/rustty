@@ -1096,12 +1096,25 @@ found, and current state.
 > message-content scan (N21) to detect this automatically: every preserved reference comment
 > whose message appears nowhere in the reference at the pin — live OR commented-out — is
 > reported, and must be declared as `stale-comment` in `LOG-TEXT-DIVERGENCES.tsv` or the gate
-> is RED. **20 are declared**, well beyond the three this entry was opened for; a naive
-> "message not in the reference" test reports 101, so three filters remove the classes that
-> are legitimately non-verbatim (elided comments, one-word paraphrases, and messages that are
-> a substring or literal-prefix match of a real reference message). Each declaration is
-> classified from the message alone and is NOT individually traced to the upstream commit
-> that removed it — that tracing is still open work.
+> is RED. **21 are declared**, well beyond the three this entry was opened for.
+>
+> Measured over the 1588 preserved reference comments in mapped port files, in the order the
+> code applies them: **1527** are found in the reference index (1475 live, 52 quoting a call
+> the reference itself keeps commented out), **19** are elided (`"… err={}"`), **16** are
+> short or one-word paraphrases, **1** is a substring of a real message, **6** match a real
+> message on the literal prefix before the first placeholder, and **21** survive as stranded.
+> An earlier version of this note attributed those filters by estimate — elided ~10, short
+> ~5, substring ~24, commented-index 36 — and **not one of those numbers survived
+> measurement**, even though they summed to the right total. The arithmetic was right and
+> the components were invented.
+>
+> The short-message threshold was also a real FALSE NEGATIVE at 14 characters: it suppressed
+> `exec.rs:4421`'s `"DATA: {}"`, a genuine stranding. It is 6 now, which adds exactly that
+> one site. So "each filter removes only a legitimately non-verbatim class" is true of the
+> common case and is not a guarantee.
+>
+> Each declaration is classified from the message alone and is NOT individually traced to the
+> upstream commit that removed it — that tracing is still open work.
 
 - **id**: N20 (next free id checked 2026-09-10 against `NEW-FINDINGS.md`, `ADJUDICATION.md`
   and the plan's `progress.md`: N1-N19 taken, N17/N18/N19 by task-14d-3 the same day.)
@@ -1167,16 +1180,38 @@ found, and current state.
   lines; a one-space-to-zero change is still caught, a three-to-one change is not, and that
   is stated rather than hidden.
 
-- **what it found across the port**: **16 divergences**, every one of them a knowing
-  decision rather than a bug — 7 R2 identity renames (`ghostty` -> `rustty` /
-  `APP_NAME`), 2 error-name literals (the N11 class), 2 format-shape differences with a
-  PORT NOTE at the site, 1 parameterised format string whose rendered line is identical, 1
-  absent payload (N18's `value={any}`), and the rest abbreviated comments. **The class is
-  therefore not widespread — but that is only knowable because something went looking.**
-- **what it CANNOT see**: **735 of 1014 emissions (72%) have a preserved reference comment
-  to compare against; the other 28% have none and are unchecked.** The pass can only compare
-  what the port wrote down. That number is printed on every run rather than left implicit,
-  and raising it is a reason to preserve the reference call at a site, not just its message.
+- **what it found across the port**: **12 divergences**, every one of them a knowing
+  decision rather than a bug — 7 R2 identity renames (`ghostty` -> `rustty` / `APP_NAME`),
+  2 format-shape differences with a PORT NOTE at the site, 1 absent payload (N18's
+  `value={any}`), and 2 more with their reasons at the row. **The class is therefore not
+  widespread — but that is only knowable because something went looking.**
+
+  **CORRECTION (2026-09-11).** This first read *16*, and **three of them were phantoms
+  produced by the checker's own pairing rule**, declared rather than diagnosed. The first
+  `pair_messages` fell back to the oldest pending comment whenever an emission did not match
+  one exactly, so the moment the port adds an emission the reference lacks, or restores a
+  block out of order, a later emission consumes an earlier one's leftover comment and the
+  check reports a divergence between two messages that were never a pair. A declared phantom
+  is worse than an undetected one: it is permanent. Pairing is now BLOCK-SCOPED with a
+  two-pass assignment — every exact match first, then best-similarity above a threshold, and
+  **below the threshold the emission is left unchecked rather than falsely accused**. The
+  three retractions are listed in `LOG-TEXT-DIVERGENCES.tsv`'s history; one of them
+  (`open_uri.rs`) was a byte-exact port whose *comment* was abbreviated, and the comment was
+  made verbatim instead.
+- **what it CANNOT see, stated against the right denominator**: **884 of 1279 LIVE EMISSIONS
+  (69%)** have a preserved reference comment to compare against. The first version of this
+  line said 72%, over a denominator that counted only direct `log::`/print sites and left
+  ~150 facade-routed emissions out of BOTH halves of the ratio. Three further facts print on
+  every run, because the blindness is not random:
+  - **3 crates have live emissions and not one checkable pair** — `rustty-config`,
+    `rustty-util`, `rustty-vt-c` — so the check cannot see them at all;
+  - **5 crates emit nothing**, so they are outside the ratio entirely rather than merely
+    unchecked;
+  - **30% of the 395 unchecked sites sit in two files** — `gtk/class/application.rs` (87)
+    and `gtk/class/surface.rs` (33) — which are also the files with the largest deficits and
+    the inline reproduction of reference output. **The highest-risk text in the port is the
+    least checked**, and that is the argument for preserving the reference call at a site,
+    not merely its message.
 - **how a legitimate divergence is declared**: a row in
   `.port/parity-closure/LOG-TEXT-DIVERGENCES.tsv` — `kind`, `port_file`,
   `reference_message`, `port_message`, `reason` — with `kind` from a closed set
@@ -1196,8 +1231,10 @@ found, and current state.
   and so does deleting the single space in `"error building rowy={y}"`. The first mutation
   I tried caught nothing — because that site has no preserved comment, which is how the 72%
   figure above came to be measured.
-- **state**: **OPEN** as a standing check. All 16 present divergences are declared with
-  reasons; nothing is outstanding except the 28% of emissions the pass cannot reach.
+- **state**: **OPEN** as a standing check. All 12 present divergences are declared with
+  reasons; what is outstanding is the 31% of emissions the pass cannot reach, concentrated
+  as described above, plus the note under N22 that the 1415 reference-site denominator is
+  itself 8 too high.
 
 ---
 
