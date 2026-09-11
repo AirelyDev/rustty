@@ -1937,3 +1937,33 @@ failure mode this file exists to prevent.
 **state**: OPEN. Needs a decision on the `oniguruma` feature default, and — if it stays OFF — a
 recorded justification for shipping with eight notification arms and `%output` dead, sitting
 next to the gate that lints the lane nobody compiles by default.
+
+## N35
+
+**`search::thread::tests::search_thread` is LOAD-DEPENDENT** — a real flake, filed by task-17
+fix round 1 on the task-17 reviewer's measurement.
+
+**Measured by the reviewer, not by me**: clean in 25 isolated runs; **one failure in six** when
+run under contention with a concurrent memory-safety (Miri/ASan) sweep on the same host. It is
+not in task-17's diff and no change of mine touches `search/thread.rs`, so it is not a
+regression from this task — but it does mean **every clean repetition result reported on this
+plan describes the tests the task touched, not the suite**. Three consecutive green
+`cargo test --workspace` runs on an idle machine cannot see this.
+
+Why it matters beyond the flake itself: this is the first evidence on this plan that the
+workspace suite's greenness is a function of machine load. A CI leg that runs the suite beside
+anything else — and the Miri/ASan lanes do exactly that — can go red for reasons that have
+nothing to do with the change under test, which is the fastest known way to teach a team to
+re-run a red build instead of reading it.
+
+`search_thread` drives a real OS thread plus a `Mutex`/condvar handshake with the search
+coordinator, so a scheduling-sensitive assertion (a wait that assumes the worker has made
+progress) is the obvious suspect. Deliberately NOT diagnosed here: naming the assertion needs
+the failure reproduced under load, and guessing at it in this file is how a finding becomes
+folklore.
+
+**state**: OPEN. Needs (1) the failure reproduced under deliberate load and the failing
+assertion named, (2) a decision on whether it is the test or the handshake that is wrong, and
+(3) if the suite is to be trusted under contention, a repetition measurement that is taken
+under load rather than on an idle host.
+
