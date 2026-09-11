@@ -2144,8 +2144,8 @@ impl Surface {
         // dropped at scope end (the reference `defer …free(cwd)`); `dupeZ` → a leaked
         // NUL-terminated `CString` owned by the C host (the reference leaks the GPA
         // `dupeZ` result the same way — this is `newSurfaceOptions`'s inherited-config
-        // contract). An interior-NUL `cwd` (impossible for a real pwd) maps the
-        // `CString::new` failure to `null`, matching the `dupeZ … catch null`.
+        // contract). An interior-NUL `cwd` is REACHABLE (OSC 7 `%00`) — see
+        // `inherited_working_directory_c`.
         let working_directory: *const c_char = 'wd: {
             if !should_inherit_working_directory(context, config) {
                 break 'wd core::ptr::null();
@@ -2157,10 +2157,7 @@ impl Surface {
                 Some(v) => v,
                 None => break 'wd core::ptr::null(),
             };
-            match CString::new(cwd) {
-                Ok(c) => c.into_raw().cast_const(),
-                Err(_) => core::ptr::null(),
-            }
+            inherited_working_directory_c(cwd)
         };
 
         // return .{
@@ -3709,6 +3706,63 @@ pub struct ClipboardConfirm {
 /// == null)` block, which Zig's own tests never exercise. These pin the
 /// behaviour the port lost by initializing the keymap EAGERLY in `App::init`
 /// (S46-F1).
+/// `break :wd self.app.core_app.alloc.dupeZ(u8, cwd) catch null`
+/// (`embedded.zig:1171`), coerced into the `?[*:0]const u8` the host reads.
+///
+/// PORT NOTE (task R13-P, N50): the pwd can hold an interior NUL — a program
+/// that prints `OSC 7` with `%00` in the path plants one, and it reaches here
+/// through `Surface.pwd`. The reference hands the host a pointer into the
+/// `dupeZ` copy, so the host's C string is the bytes BEFORE that NUL (the macOS
+/// app's `String(cString:)`, `SurfaceView.swift:606`); it then passes those
+/// bytes back as `working_directory`, and the new surface starts in that
+/// directory if it exists. This returned `null` instead, which dropped the
+/// override entirely. Cut at the first NUL, so the host sees what it sees in
+/// the reference.
+fn inherited_working_directory_c(cwd: Vec<u8>) -> *const c_char {
+    let end = cwd.iter().position(|&b| b == 0).unwrap_or(cwd.len());
+    match CString::new(&cwd[..end]) {
+        Ok(c) => c.into_raw().cast_const(),
+        // R7: the bytes before the first NUL hold no NUL.
+        Err(_) => core::ptr::null(),
+    }
+}
+
+#[cfg(test)]
+mod inherited_working_directory_tests {
+    use super::*;
+
+    fn take(p: *const c_char) -> Option<Vec<u8>> {
+        if p.is_null() {
+            return None;
+        }
+        // SAFETY: `p` came from `CString::into_raw` just above the call.
+        let owned = unsafe { CString::from_raw(p.cast_mut()) };
+        Some(owned.into_bytes())
+    }
+
+    /// The OSC 7 `%00` pwd: the host gets the same C string the reference's
+    /// `dupeZ` pointer gives it, not a dropped override.
+    #[test]
+    fn an_inherited_pwd_with_a_nul_reaches_the_host_cut_at_the_nul() {
+        let got = take(inherited_working_directory_c(b"/tmp/a\x00b".to_vec()));
+        assert_eq!(Some(b"/tmp/a".to_vec()), got);
+    }
+
+    #[test]
+    fn an_ordinary_pwd_is_unchanged() {
+        let got = take(inherited_working_directory_c(b"/tmp/a".to_vec()));
+        assert_eq!(Some(b"/tmp/a".to_vec()), got);
+    }
+
+    /// A pwd that begins with the NUL gives the host an empty string, which its
+    /// `wd.len > 0` check (`embedded.zig:527`) then skips.
+    #[test]
+    fn a_pwd_that_starts_with_a_nul_is_empty() {
+        let got = take(inherited_working_directory_c(b"\x00b".to_vec()));
+        assert_eq!(Some(Vec::new()), got);
+    }
+}
+
 #[cfg(test)]
 mod keymap_lazy_tests {
     use super::*;
