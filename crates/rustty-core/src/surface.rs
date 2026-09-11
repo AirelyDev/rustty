@@ -278,6 +278,174 @@ use crate::renderer_seam::Renderer;
 pub const MIN_WINDOW_WIDTH_CELLS: u32 = 10;
 pub const MIN_WINDOW_HEIGHT_CELLS: u32 = 4;
 
+/// `recomputeInitialSize`'s pixel computation (`Surface.zig:1866-1886`), checked.
+///
+/// PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD59). The reference
+/// multiplies `@max(window_height, 4) * cell.height` (and the width) in `u32`,
+/// converts `@ceil(px / scale)` with `@intFromFloat`, and adds the padding, all
+/// unchecked. `window-height = 1000000000` overflows the first product: ReleaseSafe
+/// panics, ReleaseFast sends a wrapped size. Returns `None` when any step
+/// overflows or the scaled size is not a `u32`; the caller then takes its
+/// existing skip path.
+pub(crate) fn initial_size_px(
+    window_width: u32,
+    window_height: u32,
+    size: rendererpkg::size::Size,
+    scale: apprt::ContentScale,
+) -> Option<(u32, u32)> {
+    let height = window_height
+        .max(MIN_WINDOW_HEIGHT_CELLS)
+        .checked_mul(size.cell.height)?;
+    let width = window_width
+        .max(MIN_WINDOW_WIDTH_CELLS)
+        .checked_mul(size.cell.width)?;
+    let width_f32: f32 = width as f32;
+    let height_f32: f32 = height as f32;
+    let final_width = u32_from_ceil(width_f32 / scale.x)?
+        .checked_add(size.padding.left)?
+        .checked_add(size.padding.right)?;
+    let final_height = u32_from_ceil(height_f32 / scale.y)?
+        .checked_add(size.padding.top)?
+        .checked_add(size.padding.bottom)?;
+    Some((final_width, final_height))
+}
+
+/// `@as(u32, @intFromFloat(@ceil(v)))`, which traps on NaN or a value outside
+/// `u32` in safety-checked builds; `None` there instead (R13, UD59).
+fn u32_from_ceil(v: f32) -> Option<u32> {
+    let c = v.ceil();
+    // NaN is outside every range, so `contains` rejects it too.
+    if !(0.0..4_294_967_296.0).contains(&c) {
+        return None;
+    }
+    Some(c as u32)
+}
+
+/// The `size_limit` minimums (`Surface.zig:705-706`), checked; `None` when a
+/// product overflows `u32` (R13, UPSTREAM-DEFECTS.md UD59).
+pub(crate) fn size_limit_min(cell_width: u32, cell_height: u32) -> Option<(u32, u32)> {
+    Some((
+        cell_width.checked_mul(MIN_WINDOW_WIDTH_CELLS)?,
+        cell_height.checked_mul(MIN_WINDOW_HEIGHT_CELLS)?,
+    ))
+}
+
+// rustty-only (R13, UPSTREAM-DEFECTS.md UD59): the initial-size and
+// size-limit arithmetic with values that come through the config loader.
+// `Surface::init` cannot run without an apprt, so the tests drive the two
+// helpers `recomputeInitialSize` and `init` call, with the parsed values
+// (`DerivedConfig` copies `window-width` / `window-height` unchanged).
+#[cfg(test)]
+mod r13_window_size_overflow_tests {
+    use super::*;
+
+    fn load(text: &[u8]) -> configpkg::Config {
+        let mut cfg = configpkg::Config::default_config();
+        let mut iter = rustty_args::args::LineIterator::init(text);
+        cfg.load_iter(&mut iter).unwrap();
+        cfg.finalize().unwrap();
+        assert!(cfg._diagnostics.empty(), "unexpected config diagnostics");
+        cfg
+    }
+
+    fn size(cell_width: u32, cell_height: u32, padding: u32) -> rendererpkg::size::Size {
+        rendererpkg::size::Size {
+            screen: rendererpkg::size::ScreenSize {
+                width: 800,
+                height: 600,
+            },
+            cell: rendererpkg::size::CellSize {
+                width: cell_width,
+                height: cell_height,
+            },
+            padding: rendererpkg::size::Padding {
+                top: padding,
+                bottom: padding,
+                right: padding,
+                left: padding,
+            },
+        }
+    }
+
+    const SCALE: apprt::ContentScale = apprt::ContentScale { x: 1.0, y: 1.0 };
+
+    #[test]
+    fn initial_size_px_overflow_takes_the_skip_path() {
+        // Positive control: 80x24 cells of 10x20 px, 2 px padding.
+        let cfg = load(b"window-width = 80\nwindow-height = 24\n");
+        assert_eq!(
+            Some((80 * 10 + 4, 24 * 20 + 4)),
+            initial_size_px(cfg.window_width, cfg.window_height, size(10, 20, 2), SCALE)
+        );
+
+        // The brief's trigger: 1000000000 * 20 overflows the `u32` product.
+        let cfg = load(b"window-width = 80\nwindow-height = 1000000000\n");
+        assert_eq!(
+            1_000_000_000, cfg.window_height,
+            "the value reaches the surface"
+        );
+        assert_eq!(
+            None,
+            initial_size_px(cfg.window_width, cfg.window_height, size(10, 20, 2), SCALE)
+        );
+        let cfg = load(b"window-width = 1000000000\nwindow-height = 24\n");
+        assert_eq!(
+            None,
+            initial_size_px(cfg.window_width, cfg.window_height, size(10, 20, 2), SCALE)
+        );
+
+        // The product fits (214748364 * 20 = 4294967280) but `@floatFromInt` to
+        // f32 rounds it to 2^32, which `@intFromFloat` into `u32` cannot hold.
+        let cfg = load(b"window-width = 80\nwindow-height = 214748364\n");
+        assert_eq!(
+            None,
+            initial_size_px(cfg.window_width, cfg.window_height, size(10, 20, 2), SCALE)
+        );
+
+        // The scaled size fits, and adding the padding overflows. (2147483 * 2000
+        // = 4294966000; f32 steps by 256 there, so it rounds to 4294966016.)
+        let cfg = load(b"window-width = 80\nwindow-height = 2147483\n");
+        assert_eq!(
+            Some((80 * 10 + 4, 4_294_966_016 + 4)),
+            initial_size_px(
+                cfg.window_width,
+                cfg.window_height,
+                size(10, 2000, 2),
+                SCALE
+            )
+        );
+        assert_eq!(
+            None,
+            initial_size_px(
+                cfg.window_width,
+                cfg.window_height,
+                size(10, 2000, 1_000),
+                SCALE
+            )
+        );
+    }
+
+    #[test]
+    fn size_limit_min_overflow_skips_the_action() {
+        // `adjust-cell-width` adds an absolute `i32` to the face's cell width.
+        let cfg = load(b"adjust-cell-width = 500000000\n");
+        let cell_width = cfg
+            .adjust_cell_width
+            .expect("adjust-cell-width parsed")
+            .apply_u32(10);
+        assert_eq!(
+            500_000_010, cell_width,
+            "the modifier reaches the cell size"
+        );
+        assert_eq!(None, size_limit_min(cell_width, 20));
+
+        // Positive control, and the largest cell that fits.
+        assert_eq!(Some((100, 80)), size_limit_min(10, 20));
+        assert_eq!(Some((4_294_967_290, 80)), size_limit_min(u32::MAX / 10, 20));
+        assert_eq!(None, size_limit_min(10, u32::MAX / 4 + 1));
+    }
+}
+
 /// The maximum number of key tables that can be active at any
 /// given time. `activate_key_table` calls after this are ignored.
 // const max_active_key_tables = 8;
@@ -2368,22 +2536,35 @@ where
         //         .max_height = 0,
         //     },
         // );
-        let _ = unsafe {
-            Self::initTry(
-                self_,
-                true,
-                (*rt_app).perform_action(
-                    apprt::Target::Surface(&*self_),
-                    apprt::Action::SizeLimit(SizeLimit {
-                        min_width: size.cell.width * MIN_WINDOW_WIDTH_CELLS,
-                        min_height: size.cell.height * MIN_WINDOW_HEIGHT_CELLS,
-                        // No max:
-                        max_width: 0,
-                        max_height: 0,
-                    }),
-                ),
-            )
-        }?;
+        //
+        // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD59). Both
+        // products are `u32`. `adjust-cell-width` / `adjust-cell-height` add an
+        // `i32` to the cell size (saturating), so a cell wider than
+        // `u32::MAX / 10` (or taller than `u32::MAX / 4`) makes the product
+        // overflow: ReleaseSafe panics, ReleaseFast reports a wrapped minimum.
+        // The arithmetic is config-reachable; whether surface init survives such
+        // a cell up to this line was not measured. The reference offers no error
+        // path here, so the port skips the `size_limit` action when a product
+        // overflows (the most conservative choice: no minimum is imposed) —
+        // `size_limit_min`.
+        if let Some((min_width, min_height)) = size_limit_min(size.cell.width, size.cell.height) {
+            let _ = unsafe {
+                Self::initTry(
+                    self_,
+                    true,
+                    (*rt_app).perform_action(
+                        apprt::Target::Surface(&*self_),
+                        apprt::Action::SizeLimit(SizeLimit {
+                            min_width,
+                            min_height,
+                            // No max:
+                            max_width: 0,
+                            max_height: 0,
+                        }),
+                    ),
+                )
+            }?;
+        }
 
         // Call our size callback which handles all our retina setup
         // Note: this shouldn't be necessary and when we clean up the surface
@@ -4976,31 +5157,36 @@ where
         //     self.config.window_height,
         //     min_window_height_cells,
         // ) * self.size.cell.height;
-        let height = self.config.window_height.max(MIN_WINDOW_HEIGHT_CELLS) * self.size.cell.height;
         // const width = @max(
         //     self.config.window_width,
         //     min_window_width_cells,
         // ) * self.size.cell.width;
-        let width = self.config.window_width.max(MIN_WINDOW_WIDTH_CELLS) * self.size.cell.width;
         // const width_f32: f32 = @floatFromInt(width);
-        let width_f32: f32 = width as f32;
         // const height_f32: f32 = @floatFromInt(height);
-        let height_f32: f32 = height as f32;
-
+        //
         // The final values are affected by content scale and we need to
         // account for the padding so we get the exact correct grid size.
         // const final_width: u32 =
         //     @as(u32, @intFromFloat(@ceil(width_f32 / scale.x))) +
         //     self.size.padding.left +
         //     self.size.padding.right;
-        let final_width: u32 =
-            (width_f32 / scale.x).ceil() as u32 + self.size.padding.left + self.size.padding.right;
         // const final_height: u32 =
         //     @as(u32, @intFromFloat(@ceil(height_f32 / scale.y))) +
         //     self.size.padding.top +
         //     self.size.padding.bottom;
-        let final_height: u32 =
-            (height_f32 / scale.y).ceil() as u32 + self.size.padding.top + self.size.padding.bottom;
+        //
+        // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD59). The
+        // computation above is in `initial_size_px`, checked. On overflow the
+        // port returns here, the function's existing skip path (the one it
+        // takes when either option is unset), so no `initial_size` is sent.
+        let Some((final_width, final_height)) = initial_size_px(
+            self.config.window_width,
+            self.config.window_height,
+            self.size,
+            scale,
+        ) else {
+            return Ok(());
+        };
 
         // _ = self.rt_app.performAction(
         //     .{ .surface = self },

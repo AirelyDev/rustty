@@ -1371,6 +1371,7 @@ dependencies = [
  "allocator-api2",
  "log",
  "rustty-apprt-api",
+ "rustty-args",
  "rustty-config",
  "rustty-crash",
  "rustty-datastruct",

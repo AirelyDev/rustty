@@ -90,3 +90,8 @@ rustty-identity = { workspace = true }
 # `alloc: Allocator` fields/params mirror the termio/vt convention
 # (`allocator_api2::alloc::Global as Allocator`).
 allocator-api2 = { workspace = true }
+
+[dev-dependencies]
+# Task R13-B (UD59): the window-size overflow tests load config text through
+# `Config::load_iter`, which takes rustty-args' `LineIterator`.
+rustty-args = { workspace = true }
