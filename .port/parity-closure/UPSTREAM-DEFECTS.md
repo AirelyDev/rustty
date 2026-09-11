@@ -1029,6 +1029,36 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    Read the range with `std.posix.pread` in a loop instead of mapping it, and treat a short read as `error.InvalidData`. Where POSIX shared memory cannot be read with `pread` (macOS), keep the mapping; macOS does not let the owner shrink the object.
 - upstream status: not reported
 
+### UD62 — a `scroll_page_fractional` keybind, and any extreme scroll offset, crash on the float-to-int cast
+- kind:            crash (safety-checked trap) / undefined behaviour
+- upstream project: ghostty
+- severity:        low (the user must bind an extreme fraction, or an embedder must send an extreme offset)
+- reference:       `src/Surface.zig:5266-5268` (`const rows: f32 = @floatFromInt(self.size.grid().rows); const delta: isize = @intFromFloat(@trunc(fraction * rows));`), and the three gesture casts at `:3520`, `:3529`, `:3543`, at 20abdb50a
+- defect:          `@intFromFloat` is safety-checked and the operand is unbounded. `fraction` comes from `std.fmt.parseFloat(f32, ...)` on a keybind argument (`Binding.zig:1229-1230`) with no range check, and `parseFloat` accepts `1e30`, `inf` and `nan` (measured). The gesture casts take an accumulated pixel offset derived from `xoff`/`yoff`, which a C-ABI embedder supplies as raw `f64` (`ghostty_surface_mouse_scroll`).
+- ReleaseSafe:     panic "integer part of floating point value out of bounds", on the keypress or the scroll event. Measured with Zig 0.16.0 on macOS arm64 (`r13p-reference-probe.zig`: `fractional 1e30`, `gesture 1e300`, `gesture inf`); Debug is identical.
+- ReleaseFast:     no trap; the value saturates to `9223372036854775807` (measured). That is undefined behaviour by the language, and on the gesture path it is arguably worse than the trap: `scrollCallback`'s own consumers loop `for (0..@abs(y.delta))` writing one mouse report or one cursor-key sequence per row (`Surface.zig:3587-3612`), so a saturated delta hangs the surface.
+- reachability:    (a) config: `keybind = ctrl+a=scroll_page_fractional:1e30` (also `inf`, `nan`), then the keypress; (b) a C-ABI embedder passing a non-finite or astronomically large scroll offset. A NaN offset also reaches `assert(@abs(amount) >= 1)` just above the cast, which traps first in a safe build.
+- port handling:   `crates/rustty-core/src/surface.rs` `isize_from_float` reports the values the reference traps on instead of converting them, and each caller takes the handling its own value means. `scroll_page_fractional` saturates (`isize_from_float_saturating`): the fraction means "scroll as far as it goes", and `scroll_viewport` clamps it to the top or the active area. The three gesture casts scroll nothing for such a value — the `.{}` arm the same function already takes for an offset too small to act on — and the guard runs BEFORE the pending-offset store, so a non-finite offset can never leave `pending_scroll_x/y` holding a NaN that poisons every later scroll, and before the two asserts, which hold for every value that gets past it.
+- parity row(s):   no LEDGER row. Inventory: none (M27-M29 are other float casts). The two port tests that pinned the trap (`isize_from_float_nan_traps_in_checked_builds`, `isize_from_float_out_of_range_traps_in_checked_builds`) are REVERSED, as S114-F2's was.
+- test:            `isize_from_float_reports_the_values_the_reference_traps_on` and `isize_from_float_saturating_takes_the_end_in_each_direction` (rustty-core), plus `a_saturated_scroll_delta_is_clamped_by_the_viewport`, which drives the saturated delta into `Terminal::scroll_viewport` and shows it clamps without a panic and without walking one row at a time. Negative control, macOS 2026-09-11: with the range check removed (an unconditional `Some(v as isize)`), `isize_from_float_reports_the_values_the_reference_traps_on` fails. Restored. NOT covered: the gesture call sites themselves, because `Surface::init` needs an apprt; the guard is a unit-level contract there.
+- proposed fix:    Reject the out-of-range fraction where the binding is parsed (as every other out-of-range binding argument is rejected), or clamp with `std.math.lossyCast`. For the gesture casts, use `std.math.lossyCast` or skip the event when the accumulated offset is not finite.
+- upstream status: not reported
+
+### UD63 — a C-ABI Kitty image storage limit above `usize` aborts the library on 32-bit targets
+- kind:            crash (safety-checked trap)
+- upstream project: ghostty
+- severity:        low (32-bit targets only; the embedder must pass a limit above 4 GiB)
+- reference:       `src/terminal/c/terminal.zig:1370-1378` (`const limit: usize = if (value) |v| @intCast(v.*) else 0;`), at 20abdb50a
+- defect:          The option's declared input type is `?*const u64` (`:1246`), so the value is whatever a C caller passes. `@intCast` is a checked narrowing, and on a target where `usize` is 32 bits (wasm32, which is a Kitty-graphics-enabled target) any value above `u32` max has no destination representation.
+- ReleaseSafe:     panic "integer does not fit in destination type", inside a C entry point — the host process aborts. Measured with Zig 0.16.0 at the same cast narrowed to u32 (`r13p-reference-probe.zig`, `limit32 4294967296`); Debug is identical.
+- ReleaseFast:     wraps (4294967296 becomes 0, measured), i.e. the caller silently gets a zero storage limit.
+- reachability:    any embedder of libghostty-vt on a 32-bit target calling `ghostty_terminal_set` with `GHOSTTY_TERMINAL_OPTION_KITTY_IMAGE_STORAGE_LIMIT` and a `uint64_t` above 4 GiB. Not reachable on 64-bit, where the conversion is the identity.
+- port handling:   `crates/rustty-vt-c/src/terminal.rs` converts with `saturating_from_u64`, so a limit larger than the address space becomes `usize::MAX` — "no practical limit", which is what such a request means. The port's previous `usize::try_from(..).unwrap()` was stricter than the reference's own safe builds: it trapped in EVERY profile.
+- parity row(s):   no LEDGER row; codex-vet W33-B07 / W33-B07-32BIT-01, whose "traps (like Zig's safety-checked @intCast)" resolution this reverses under R13. The port test that pinned the trap (`kitty_image_storage_limit_over_usize_traps`) is REVERSED.
+- test:            `saturating_from_u64_takes_the_maximum` (rustty-vt-c), which drives the same helper at u32 width on this 64-bit host, and `kitty_image_storage_limit_over_usize_saturates`, the reversed 32-bit test, which CANNOT BE RUN here — no 32-bit target is installed and none was built. Negative control, macOS 2026-09-11: with the saturating arm replaced by a panic, `saturating_from_u64_takes_the_maximum` fails. Restored.
+- proposed fix:    `std.math.lossyCast(usize, v.*)`, or return `.invalid_value` for a limit the target cannot represent.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.

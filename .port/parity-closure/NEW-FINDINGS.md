@@ -2332,3 +2332,89 @@ range is now read with `pread` (a short read is `InvalidData`), and the macOS pa
 raw pointer. Reference defect: `UPSTREAM-DEFECTS.md` UD61.
 
 **state**: CLOSED by task R13-B (`7f93dbc8`).
+
+## N50 — an OSC 7 path with `%00` aborted the app on the next new tab, split or window
+
+- **id**: N50. R13-G part B, B1 (high) and B2.
+- **found by**: the R13-G part B sweep (read, not run); verified and fixed by task R13-P.
+- **severity**: high. **kind**: port-only panic on external input.
+- **oracle**: `src/termio/Exec.zig:856-857` (`dupeZ`), `:868` (`env.put("PWD", pwd)`), `:981-985` (the
+  `access` check and its `cannot access cwd, ignoring` warning); `src/apprt/embedded.zig:1167-1172`.
+- **rustty**: `crates/rustty-termio/src/exec.rs` (`Subprocess.cwd`, `Subprocess::init`, the two `start`
+  arms, `cstring`), `crates/rustty-apprt/src/embedded.rs` (`inherited_working_directory_c`).
+
+A program that prints `ESC ] 7 ; file://localhost/tmp/a%00b BEL` plants a NUL in the terminal's pwd:
+the port percent-decodes `%00` exactly as `std.Uri` does, `setPwd` stores it, and a new surface
+inherits it as `working-directory` (`app.rs` `new_config`). `Subprocess::init` then built the cwd with
+`cstring`, which `.expect`ed on the interior NUL — and the shipped macOS staticlib is `panic = abort`,
+so the whole app died on the next tab. The same sink was reachable from a raw NUL byte in a config
+`working-directory` value (B2), which the config line reader keeps.
+
+`Subprocess.cwd` now holds the reference's raw bytes, and `start` takes the reference's own failure
+arm: Zig 0.16's `access` converts the path with `pathToPosix`, which answers `error.BadPathName` for a
+path holding a NUL (measured), logs `cannot access cwd, ignoring`, and spawns with no cwd. `PWD` still
+carries the raw bytes, as the reference's does, and the child's environment is cut at the NUL by the
+kernel (measured). Separately, the macOS inherited-config export returned `null` where the reference
+hands the host a pointer into its `dupeZ` copy — the host's C string is the bytes before the NUL — so
+that override was dropped entirely; it now matches.
+
+**state**: CLOSED by task R13-P (`14284153`, `6d6cd3c1`).
+
+## N51 — a NUL byte in `command`, `font-family`, a flatpak `env` value or host passwd output panicked
+
+- **id**: N51. R13-G part B, B3, B4, B5 and B6.
+- **found by**: the R13-G part B sweep (read, not run); verified and fixed by task R13-P.
+- **severity**: low. **kind**: port-only panic on external input.
+- **oracle**: `src/termio/Exec.zig:1847-2010` (`execCommand`'s per-argument `dupeZ`),
+  `src/os/flatpak.zig:360-361`, `src/os/passwd.zig:86-88`, and the fontconfig descriptor path.
+- **rustty**: `crates/rustty-termio/src/exec.rs` (`cstring`), `crates/rustty-font-shaper/src/discovery.rs`
+  (`to_fc_pattern`), `crates/rustty-os/src/flatpak.rs`, `crates/rustty-os/src/passwd.rs`.
+
+Every one of these sites copies a config or host-supplied byte string into a C string. The reference
+copies it with `dupeZ`, keeping the NUL, and hands the pointer to C — `execve` argv, `FcPatternAdd`, a
+GVariant `{ss}` — which reads up to the first NUL. Measured with a Zig 0.16.0 probe: `/bin/sh -c` with
+a NUL in the `-c` argument runs only the text before it, and `$0` loses everything after its own NUL.
+The port panicked at each site instead. All four now cut the value at the first NUL, which is the value
+the reference's consumers actually see. The passwd one is LEDGER S112-F5's third sub-defect; it is
+hardening rather than a fixed crash, since glibc's own C-string formatting cannot emit a NUL into
+`getent passwd` output.
+
+**state**: CLOSED by task R13-P (`14284153`, `f019955e`).
+
+## N52 — a C-ABI scroll event with momentum 7 aborted the library
+
+- **id**: N52. R13-G part B, B7.
+- **found by**: the R13-G part B sweep (which doubted the port's own comment); measured and fixed by
+  task R13-P.
+- **severity**: low. **kind**: port-only panic on external input.
+- **oracle**: `src/apprt/embedded.zig:2128-2139`, `src/input/mouse.zig:62-70,89-100`.
+- **rustty**: `crates/rustty-vt/src/input/mouse.rs` (`ScrollMods::from_int`).
+
+`ghostty_surface_mouse_scroll` takes `scroll_mods` as a `c_int` and `@bitCast`s the low byte into a
+packed struct whose `momentum` field is an exhaustive `enum(u3)`, so bit pattern 7 has no name. The
+port's comment claimed the reference traps on it and reproduced that with `unreachable!()`. It does
+not: measured in Debug, ReleaseSafe and ReleaseFast, `@bitCast` performs no tag check and carries the
+value; only a `switch` on the field traps, and nothing in `src/` switches on `momentum` — the sole
+reader is `scrollCallback`, which reads `precision`. The port now takes the field's own declared
+default for the unnamed value; nothing reads it, so no behaviour depends on the choice.
+
+**state**: CLOSED by task R13-P (`a809a6ae`).
+
+## N53 — a font whose variation-axes read fails leaked its HarfBuzz font
+
+- **id**: N53. R13-G part C, C1.
+- **found by**: the R13-G part C sweep; fixed by task R13-P.
+- **severity**: low. **kind**: port-only leak.
+- **oracle**: `src/font/face/freetype.zig:100-105` (`errdefer hb_font.destroy()`,
+  `errdefer lib.alloc.destroy(ft_mutex)`) covering `:120-126`; `src/font/face/coretext.zig:101`
+  covering `:124`.
+- **rustty**: `crates/rustty-font-shaper/src/face/freetype.rs`, `crates/rustty-font-shaper/src/face/coretext.rs`.
+
+The reference arms an `errdefer` over the HarfBuzz font (and the boxed mutex on FreeType) before the
+Debug-mode variation-axes dump, whose `try result.name(&buf)` and `try face.getMMVar()` can fail on a
+variable font the face opened but whose name table or `fvar` does not read back. The port propagated
+that error with `?` and dropped the half-built `Face`, which has no `Drop`, so both handles leaked. The
+freetype comment claiming "no fallible op follows" was wrong. Both backends now free them on that arm,
+in the reference's reverse-declaration order, leaving the FT face to the caller that owns it.
+
+**state**: CLOSED by task R13-P (`b2ac07ec`).
