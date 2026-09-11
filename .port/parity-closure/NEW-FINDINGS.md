@@ -2421,3 +2421,32 @@ freetype comment claiming "no fallible op follows" was wrong. Both backends now 
 in the reference's reverse-declaration order, leaving the FT face to the caller that owns it.
 
 **state**: CLOSED by task R13-P (`b2ac07ec`).
+
+## N54 — the snapshot decoder zero-filled an attacker-declared string length before reading it
+
+- **id**: N54 (next free id checked 2026-09-11; N53 was the last). R13-G part A, A3.
+- **found by**: the R13-G part A snapshot sweep; fixed by task R13-S.
+- **severity**: low. **kind**: port-only resource defect (worse than the reference).
+- **oracle**: `src/terminal/snapshot/terminal.zig:887-895` and `src/terminal/snapshot/hyperlink.zig:132-158`,
+  where `alloc.alloc(u8, len)` reserves pages without touching them and `readSliceAll` copies only the
+  bytes that exist before `EndOfStream`.
+- **rustty**: `crates/rustty-vt/src/snapshot/terminal.rs` (`read_string`),
+  `crates/rustty-vt/src/snapshot/hyperlink.rs` (`decode_alloc`).
+
+Both sites did `try_reserve_exact(len)` and then `resize(len, 0)`, which WRITES every byte. A TERMINAL
+record of a few hundred bytes declaring `pwd_len = 0xFFFFFFFF` therefore committed and zeroed 4 GiB
+before the read failed, and the SCREEN cursor hyperlink repeated it per screen with its failure
+swallowed. Measured on macOS 2026-09-11: such a record took **15.0 s** to be rejected, against
+**0.01 s** once the length is bounded. The reference's own cost for the same bytes is virtual only,
+which is why this is a port-only entry and the reference half is the latent resource defect UD66.
+
+Fixed by the UD66 bound: the declared length is compared with the record's remaining payload before
+anything is reserved or zeroed, so neither the reservation nor the fill happens. The tests assert this
+positively, through the allocation tripwire, rather than relying on the error value — the unbounded
+code returns the same error, just 4 GiB later.
+
+The third site the sweep listed, `crates/rustty-vt/src/snapshot/continuation.rs` (`decode_alloc`), is
+NOT affected: `continuation::decode` checks the record's own `payload_len` against the caller's
+`max_bytes` before allocating, so its length is already bounded in both trees.
+
+**state**: CLOSED by task R13-S.
