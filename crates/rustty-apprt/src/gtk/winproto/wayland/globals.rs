@@ -64,6 +64,16 @@ use super::vicinae::vicinae_hotkey_manager_v1::VicinaeHotkeyManagerV1;
 /// Carried as the `log::` facade's `target:` (`DECISION-logging.md` §6r4).
 const LOG_SCOPE: &str = "winproto_wayland_globals";
 
+/// `T.generated_version` for every global this file binds. The reference's
+/// zig-wayland scanner is told the version to generate per global, and
+/// `src/build/SharedDeps.zig:824-832` asks for 1 for all of them
+/// (`wl_compositor`, `org_kde_kwin_server_decoration_manager`,
+/// `org_kde_kwin_slide_manager`, `kde_output_order_v1`, `xdg_activation_v1`,
+/// `ext_background_effect_manager_v1`, `vicinae_hotkey_manager_v1`). wayland-rs
+/// has no such knob — `I::interface().version` is the protocol XML's maximum — so
+/// the reference's number is carried here.
+const GENERATED_VERSION: u32 = 1;
+
 /// PORTS: `Globals.zig:29-47` `Tag`. Which advertised global a binding
 /// corresponds to. Used as the key of the binding map, exactly as the reference
 /// does (`Globals.zig:17`), to route the `global_remove` event
@@ -278,11 +288,17 @@ impl Globals {
     }
 
     /// PORTS: `Globals.zig:136-174` (the `.global` arm of `registryListener`). Bind
-    /// a newly-advertised global if rustty knows how to drive it. Binds at
-    /// `min(advertised, generated)` version — the reference binds at
-    /// `T.generated_version` (`Globals.zig:149-153`); we clamp to the advertised
-    /// version too so a compositor advertising a lower version than we support does
-    /// not raise a protocol error.
+    /// a newly-advertised global if rustty knows how to drive it, at
+    /// `T.generated_version` (`Globals.zig:152-156`) — [`GENERATED_VERSION`].
+    ///
+    /// CORRECTION (task 20, S61-F1): this bound at `min(advertised,
+    /// I::interface().version)`, described as clamping the reference's generated
+    /// version "so a compositor advertising a lower version than we support does
+    /// not raise a protocol error". Two things were wrong. The reference never
+    /// looks at the advertised version. And its generated version is not the
+    /// protocol XML's: `src/build/SharedDeps.zig:824-832` generates EVERY one of
+    /// these globals with `scanner.generate(name, 1)`, so the reference binds each
+    /// at version 1, where the port bound e.g. `wl_compositor` at up to 6.
     //
     // PORT NOTE (task-14d-3): `log.debug("matched {}", .{T})` (`Globals.zig:150`)
     // is ONE reference site inside an `inline for` over the tag list, so it
@@ -303,17 +319,16 @@ impl Globals {
         qh: &QueueHandle<Globals>,
         name: u32,
         interface: &str,
-        version: u32,
     ) {
         if interface == WlCompositor::interface().name {
-            let v = version.min(WlCompositor::interface().version);
+            let v = GENERATED_VERSION;
             // log.debug("matched {}", .{T});
             log::debug!(target: LOG_SCOPE, "matched {}", WlCompositor::interface().name);
             let old = self.compositor.take();
             self.compositor = Some(registry.bind::<WlCompositor, (), Globals>(name, v, qh, ()));
             self.record_binding(Tag::Compositor, name, old.map(|p| p.id()));
         } else if interface == XdgActivationV1::interface().name {
-            let v = version.min(XdgActivationV1::interface().version);
+            let v = GENERATED_VERSION;
             // log.debug("matched {}", .{T});
             log::debug!(target: LOG_SCOPE, "matched {}", XdgActivationV1::interface().name);
             let old = self.xdg_activation.take();
@@ -321,7 +336,7 @@ impl Globals {
                 Some(registry.bind::<XdgActivationV1, (), Globals>(name, v, qh, ()));
             self.record_binding(Tag::XdgActivation, name, old.map(|p| p.id()));
         } else if interface == OrgKdeKwinServerDecorationManager::interface().name {
-            let v = version.min(OrgKdeKwinServerDecorationManager::interface().version);
+            let v = GENERATED_VERSION;
             // log.debug("matched {}", .{T});
             log::debug!(target: LOG_SCOPE, "matched {}", OrgKdeKwinServerDecorationManager::interface().name);
             let old = self.kde_decoration_manager.take();
@@ -332,7 +347,7 @@ impl Globals {
             // Emits `default_mode` at bind time (`Globals.zig:115-118`).
             self.needs_roundtrip = true;
         } else if interface == OrgKdeKwinSlideManager::interface().name {
-            let v = version.min(OrgKdeKwinSlideManager::interface().version);
+            let v = GENERATED_VERSION;
             // log.debug("matched {}", .{T});
             log::debug!(target: LOG_SCOPE, "matched {}", OrgKdeKwinSlideManager::interface().name);
             let old = self.kde_slide_manager.take();
@@ -340,7 +355,7 @@ impl Globals {
                 Some(registry.bind::<OrgKdeKwinSlideManager, (), Globals>(name, v, qh, ()));
             self.record_binding(Tag::KdeSlideManager, name, old.map(|p| p.id()));
         } else if interface == KdeOutputOrderV1::interface().name {
-            let v = version.min(KdeOutputOrderV1::interface().version);
+            let v = GENERATED_VERSION;
             // log.debug("matched {}", .{T});
             log::debug!(target: LOG_SCOPE, "matched {}", KdeOutputOrderV1::interface().name);
             let old = self.kde_output_order.take();
@@ -350,7 +365,7 @@ impl Globals {
             // Emits the initial output order at bind time (`Globals.zig:120-123`).
             self.needs_roundtrip = true;
         } else if interface == ExtBackgroundEffectManagerV1::interface().name {
-            let v = version.min(ExtBackgroundEffectManagerV1::interface().version);
+            let v = GENERATED_VERSION;
             // log.debug("matched {}", .{T});
             log::debug!(target: LOG_SCOPE, "matched {}", ExtBackgroundEffectManagerV1::interface().name);
             let old = self.ext_background_effect.take();
@@ -362,7 +377,7 @@ impl Globals {
         } else if interface == VicinaeHotkeyManagerV1::interface().name {
             // PORTS: `Globals.zig:46` — the `vicinae_hotkey_manager` arm of the
             // registry bind. The manager emits no events, so no extra roundtrip.
-            let v = version.min(VicinaeHotkeyManagerV1::interface().version);
+            let v = GENERATED_VERSION;
             // log.debug("matched {}", .{T});
             log::debug!(target: LOG_SCOPE, "matched {}", VicinaeHotkeyManagerV1::interface().name);
             let old = self.vicinae_hotkey_manager.take();
@@ -478,11 +493,13 @@ impl Dispatch<WlRegistry, ()> for Globals {
             wl_registry::Event::Global {
                 name,
                 interface,
-                version,
+                // The advertised version is not consulted: the reference binds at
+                // `T.generated_version` (see `bind_global`'s CORRECTION).
+                version: _,
             } => {
                 // log.debug("found global {s}", .{v.interface});
                 log::debug!(target: LOG_SCOPE, "found global {interface}");
-                state.bind_global(registry, qh, name, &interface, version);
+                state.bind_global(registry, qh, name, &interface);
             }
             wl_registry::Event::GlobalRemove { name } => {
                 state.remove_global(name);
@@ -639,3 +656,39 @@ delegate_noop!(Globals: ignore OrgKdeKwinServerDecoration);
 delegate_noop!(Globals: ignore OrgKdeKwinSlide);
 delegate_noop!(Globals: ignore ExtBackgroundEffectSurfaceV1);
 delegate_noop!(Globals: ignore WlRegion);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// S61-F1: every global is bound at the reference's generated version, 1, not
+    /// at the advertised or protocol-maximum version. Needs a live compositor and
+    /// FAILS without one (a `return` would report a pass that proved nothing); any
+    /// wlroots compositor advertises `wl_compositor` at 6, so an unfixed bind reads
+    /// 6 here. Uses its own `wl_display` connection, so no GTK initialisation.
+    #[test]
+    #[ignore = "requires a Wayland compositor (WAYLAND_DISPLAY), e.g. headless sway"]
+    fn globals_bind_at_the_generated_version() {
+        let conn = Connection::connect_to_env().unwrap_or_else(|err| {
+            panic!(
+                "no Wayland compositor to connect to ({err}); this #[ignore]d test was \
+                 asked for explicitly, so that is a FAILURE — start a headless sway and \
+                 export WAYLAND_DISPLAY"
+            )
+        });
+        let mut queue = conn.new_event_queue::<Globals>();
+        let qh = queue.handle();
+        let registry = conn.display().get_registry(&qh, ());
+        let mut globals = Globals::new(conn.clone(), qh, registry, "io.airely.rustty.test");
+        queue.roundtrip(&mut globals).expect("registry roundtrip");
+
+        let compositor = globals
+            .compositor()
+            .expect("every compositor advertises wl_compositor");
+        assert_eq!(compositor.version(), GENERATED_VERSION);
+        assert_eq!(GENERATED_VERSION, 1);
+        if let Some(activation) = globals.xdg_activation() {
+            assert_eq!(activation.version(), 1);
+        }
+    }
+}
