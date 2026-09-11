@@ -154,8 +154,21 @@ pub fn get() -> Result<Entry, Error> {
                 // Shell and home are the last two entries
                 let trimmed = trim_right(&output, b" \r\n");
                 let mut it = trimmed.rsplit(|&c| c == b':');
-                result.shell = it.next().map(|v| std::ffi::CString::new(v).unwrap());
-                result.home = it.next().map(|v| std::ffi::CString::new(v).unwrap());
+                // PORT NOTE (task R13-P, N51; LEDGER S112-F5's third sub-defect):
+                // the reference `alloc.dupeZ` copies the field with any NUL byte
+                // in it, and every consumer passes the `[:0]` pointer to C (the
+                // shell becomes an `execve` argv entry), which reads up to that
+                // NUL. This was `.unwrap()`, which panicked on host output the
+                // terminal does not control. Reaching it needs a NUL in the host
+                // `getent passwd` output, which glibc's own C-string formatting
+                // cannot produce, so this is a hardening fix, not a fixed crash.
+                let to_first_nul = |v: &[u8]| {
+                    let end = v.iter().position(|&b| b == 0).unwrap_or(v.len());
+                    std::ffi::CString::new(&v[..end])
+                        .expect("the bytes before the first NUL hold no NUL")
+                };
+                result.shell = it.next().map(to_first_nul);
+                result.home = it.next().map(to_first_nul);
                 return Ok(result);
             }
         }

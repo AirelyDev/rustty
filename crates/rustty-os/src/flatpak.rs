@@ -660,8 +660,20 @@ mod host_command {
                         // raw bytes. `CString::new` takes `Into<Vec<u8>>`, so
                         // the byte-slice keys go straight in with no lossy
                         // UTF-8 round trip.
-                        let key = std::ffi::CString::new(k.as_slice()).unwrap();
-                        let value = std::ffi::CString::new(v.as_slice()).unwrap();
+                        //
+                        // PORT NOTE (task R13-P, N51): a config `env = K=V` value
+                        // can hold a NUL byte, and so can the `PWD` this crate's
+                        // caller derives from an OSC 7 path. The reference's
+                        // `dupeZ` keeps it and hands `key.ptr`/`value.ptr` to
+                        // `g_variant_builder_add("{ss}")`, which reads each as a C
+                        // string — the bytes before the NUL. This was `.unwrap()`,
+                        // which panicked.
+                        let k_end = k.iter().position(|&b| b == 0).unwrap_or(k.len());
+                        let v_end = v.iter().position(|&b| b == 0).unwrap_or(v.len());
+                        let key = std::ffi::CString::new(&k[..k_end])
+                            .expect("the bytes before the first NUL hold no NUL");
+                        let value = std::ffi::CString::new(&v[..v_end])
+                            .expect("the bytes before the first NUL hold no NUL");
                         c::g_variant_builder_add(
                             env_builder,
                             cstr(b"{ss}\0"),

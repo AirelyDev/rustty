@@ -662,10 +662,17 @@ impl Descriptor {
         // }
         if let Some(family) = &self.family {
             // The reference `family` is a `[:0]const u8` (a C string); rustty stores
-            // the raw bytes, so NUL-terminate here. Interior NUL violates the field
-            // contract (a fontconfig family/pattern string).
-            let family = CString::new(family.as_slice())
-                .expect("Descriptor::family must not contain an interior NUL");
+            // the raw bytes, so NUL-terminate here.
+            //
+            // PORT NOTE (task R13-P, N51): an interior NUL is REACHABLE — a
+            // `font-family` config value carries one through, since the config
+            // line reader keeps NUL bytes. The reference adds the `[:0]` pointer
+            // to the pattern with `FcPatternAdd`, which reads it as a C string,
+            // so fontconfig matches on the bytes before the NUL. This was an
+            // `.expect`, which panicked.
+            let end = family.iter().position(|&b| b == 0).unwrap_or(family.len());
+            let family =
+                CString::new(&family[..end]).expect("the bytes before the first NUL hold no NUL");
             assert(pat.add(fc::Property::Family, fc::Value::String(&family), false));
         }
 
@@ -673,8 +680,10 @@ impl Descriptor {
         //     assert(pat.add(.style, .{ .string = style }, false));
         // }
         if let Some(style) = &self.style {
-            let style = CString::new(style.as_slice())
-                .expect("Descriptor::style must not contain an interior NUL");
+            // (R13-P, N51 — see the `family` note just above.)
+            let end = style.iter().position(|&b| b == 0).unwrap_or(style.len());
+            let style =
+                CString::new(&style[..end]).expect("the bytes before the first NUL hold no NUL");
             assert(pat.add(fc::Property::Style, fc::Value::String(&style), false));
         }
 
@@ -2766,6 +2775,51 @@ mod tests {
         // `SharedGridSet::Error` composes the discovery error via `From`.
         let _: fn(crate::face::FaceError) -> Error = Error::from;
         let _: fn(crate::collection::Error) -> Error = Error::from;
+    }
+
+    /// Task R13-P (`NEW-FINDINGS.md` N51): a `font-family` / `font-style`
+    /// config value can hold a NUL byte (the config line reader keeps it), and
+    /// `to_fc_pattern` used to `.expect` on it and panic. The reference adds the
+    /// `[:0]` pointer to the pattern, so fontconfig sees the bytes before the
+    /// NUL; the port now stores exactly those bytes, which this reads back out
+    /// of the pattern.
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_arch = "wasm32")))]
+    #[test]
+    fn a_descriptor_family_with_a_nul_reaches_the_pattern_cut_at_the_nul() {
+        let _fc = crate::fc::global_shared();
+
+        let desc = Descriptor {
+            family: Some(b"Fir\x00a Code".to_vec()),
+            style: Some(b"Bo\x00ld".to_vec()),
+            codepoint: 0,
+            size: 0.0,
+            bold: false,
+            italic: false,
+            monospace: false,
+            variations: Vec::new(),
+        };
+
+        let pat_ptr = desc.to_fc_pattern();
+        // SAFETY: `to_fc_pattern` hands back a freshly created pattern this test
+        // owns and destroys below.
+        let pat = unsafe { &mut *pat_ptr };
+
+        assert!(
+            matches!(
+                pat.get(crate::fc::Property::Family, 0),
+                Ok(crate::fc::Value::String(s)) if s.to_bytes() == b"Fir"
+            ),
+            "the family fontconfig sees is the bytes before the NUL"
+        );
+        assert!(
+            matches!(
+                pat.get(crate::fc::Property::Style, 0),
+                Ok(crate::fc::Value::String(s)) if s.to_bytes() == b"Bo"
+            ),
+            "the style fontconfig sees is the bytes before the NUL"
+        );
+
+        pat.destroy();
     }
 
     // test "fontconfig" {
