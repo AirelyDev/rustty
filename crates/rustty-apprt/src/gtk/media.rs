@@ -142,11 +142,21 @@ mod tests {
         let Some(current) = bell_media_file(None, &path_a, false) else {
             return;
         };
+        // const first = current;
+        let first = current.clone();
         assert!(is_for_path(&current, &path_a));
 
         // Same path => identical object (the leak regression is rebuilding here).
-        let current = bell_media_file(Some(current.clone()), &path_a, false).unwrap();
-        assert!(is_for_path(&current, &path_a));
+        let current = bell_media_file(Some(current), &path_a, false).unwrap();
+        // try testing.expectEqual(first, current);
+        //
+        // FIX (S48-F1): this asserted `is_for_path(&current, &path_a)` — path
+        // EQUALITY, which a freshly rebuilt `MediaFile` for the same path also
+        // satisfies, so the test could not catch the regression it documents.
+        // The reference asserts object IDENTITY against the handle captured
+        // before the call. glib wrapper types compare by underlying pointer, so
+        // `assert_eq!` is that same claim.
+        assert_eq!(first, current);
 
         // Changed path => rebuilt object targeting the new path (old one freed).
         let current = bell_media_file(Some(current), &path_b, false).unwrap();
@@ -179,6 +189,11 @@ mod tests {
         // teardown. `bell_media_file`'s own `drop` of a replaced handle is still
         // exercised, on the line above.
         std::mem::forget(current);
+        // `first` aliases the SAME object, and `bell_media_file` already
+        // dropped its own handle to it when the path changed — so dropping
+        // `first` here would be the last unref, i.e. exactly the `GstPlay`
+        // teardown race described above. Leak it for the same reason.
+        std::mem::forget(first);
 
         let _ = std::fs::remove_file(&path_a);
         let _ = std::fs::remove_file(&path_b);

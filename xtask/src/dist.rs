@@ -221,13 +221,33 @@ fn dist_stage(
 /// Build the tarball, extract it, and build it in isolation to prove it is a
 /// self-contained source tree. Returns the tarball path on success.
 pub fn distcheck() -> Result<PathBuf, String> {
+    distcheck_scoped(Scope::Workspace)
+}
+
+/// The `-Demit-lib-vt=true` arm of the reference's check step.
+///
+/// PORTS: `GhosttyDist.zig:126-147, 156-171` (parity S63-F7). The reference's
+/// check step is scoped by artifact: for `emit_lib_vt` it runs
+/// `zig build test-lib-vt -Demit-lib-vt=true` inside the extracted tree — not
+/// the full suite — and then ALSO `cmake -B cmake-build` + `cmake --build`
+/// from that tree, both with `expectExitCode(0)`. `distcheck()` only ever
+/// exercised the Workspace tarball, so the lib-vt tarball — the one published
+/// as `librustty-vt-source.tar.gz` — shipped with neither guarantee.
+pub fn distcheck_lib_vt() -> Result<PathBuf, String> {
+    distcheck_scoped(Scope::LibVt)
+}
+
+fn distcheck_scoped(scope: Scope) -> Result<PathBuf, String> {
     let root = workspace_root();
     let version = workspace_version(&root)?;
-    let name = format!("rustty-{version}");
+    let name = match scope {
+        Scope::Workspace => format!("rustty-{version}"),
+        Scope::LibVt => format!("librustty-vt-{version}"),
+    };
 
-    let tarball = dist()?;
+    let tarball = dist_scoped(scope)?;
 
-    let checkdir = std::env::temp_dir().join(format!("rustty-distcheck-{version}"));
+    let checkdir = std::env::temp_dir().join(format!("rustty-distcheck-{name}"));
     let _ = std::fs::remove_dir_all(&checkdir);
     std::fs::create_dir_all(&checkdir).map_err(|e| format!("create checkdir: {e}"))?;
 
@@ -260,6 +280,16 @@ pub fn distcheck() -> Result<PathBuf, String> {
     if !extracted.join(".cargo/config.toml").is_file() {
         return Err("extracted tree missing .cargo/config.toml source replacement".into());
     }
+    // The lib-vt tarball's whole reason to exist is the C-consumer story, so
+    // the CMake trio must be there before the CMake build below can mean
+    // anything (the reference's `addCheckFile` over `resources`).
+    if scope == Scope::LibVt {
+        for p in ["CMakeLists.txt", "include", "dist/cmake"] {
+            if !extracted.join(p).exists() {
+                return Err(format!("extracted lib-vt tree missing {p}"));
+            }
+        }
+    }
 
     // Run the TEST SUITE from the extracted tree — not just a build (parity
     // S63-F8). The reference's check step is
@@ -289,18 +319,89 @@ pub fn distcheck() -> Result<PathBuf, String> {
     // `cargo build`, so the test passes; in a freshly extracted tarball it is
     // not, and the test fails on its absence. Zig's single `zig build test`
     // builds what its tests need, so this pair is what reproduces it.
-    for (step, args) in [
-        ("build", ["build", "--workspace", "--offline", "--locked"]),
-        ("test", ["test", "--workspace", "--offline", "--locked"]),
-    ] {
+    //
+    // SCOPE: the reference runs `zig build test` for the workspace tarball and
+    // `zig build test-lib-vt -Demit-lib-vt=true` for the lib-vt one. The
+    // lib-vt tree has been SLICED to `rustty-vt-c`'s closure, so
+    // `--workspace` there is already that closure — but naming the two crates
+    // explicitly says which guarantee is being made and fails loudly if the
+    // slice ever stops containing them.
+    let steps: &[(&str, &[&str])] = match scope {
+        Scope::Workspace => &[
+            ("build", &["build", "--workspace", "--offline", "--locked"]),
+            ("test", &["test", "--workspace", "--offline", "--locked"]),
+        ],
+        Scope::LibVt => &[
+            (
+                "build",
+                &[
+                    "build",
+                    "-p",
+                    "rustty-vt",
+                    "-p",
+                    "rustty-vt-c",
+                    "--offline",
+                    "--locked",
+                ],
+            ),
+            (
+                "test",
+                &[
+                    "test",
+                    "-p",
+                    "rustty-vt",
+                    "-p",
+                    "rustty-vt-c",
+                    "--offline",
+                    "--locked",
+                ],
+            ),
+        ],
+    };
+    for (step, args) in steps {
         let status = Command::new("cargo")
             .current_dir(&extracted)
             .env("CARGO_HOME", &cargo_home)
-            .args(args)
+            .args(*args)
             .status()
             .map_err(|e| format!("spawn cargo {step}: {e}"))?;
         if !status.success() {
             return Err(format!("distcheck {step} exited with {status}"));
+        }
+    }
+
+    // For lib-vt, also verify the CMake build works from the tarball:
+    //
+    //   cmake_configure = b.addSystemCommand(&.{ "cmake", "-B" }); ... setCwd(extract_dir)
+    //   cmake_build     = b.addSystemCommand(&.{ "cmake", "--build" });
+    //
+    // both `expectExitCode(0)` (GhosttyDist.zig:156-171). This is what proves
+    // the SHIPPED `CMakeLists.txt` configures and builds from a clean extract,
+    // which nothing in the port checked: `check_dist.sh`'s Debian arm runs a
+    // bare `cargo build` and `grep -n cmake` over it returns nothing.
+    if scope == Scope::LibVt {
+        let build_dir = extracted.join("cmake-build");
+        for (step, args) in [
+            (
+                "configure",
+                vec!["-B".to_string(), "cmake-build".to_string()],
+            ),
+            (
+                "build",
+                vec![
+                    "--build".to_string(),
+                    build_dir.to_string_lossy().into_owned(),
+                ],
+            ),
+        ] {
+            let status = Command::new("cmake")
+                .current_dir(&extracted)
+                .args(&args)
+                .status()
+                .map_err(|e| format!("spawn cmake {step}: {e}"))?;
+            if !status.success() {
+                return Err(format!("distcheck cmake {step} exited with {status}"));
+            }
         }
     }
 
@@ -361,14 +462,26 @@ fn prune_to_lib_vt(root: &Path, tree: &Path) -> Result<(), String> {
         if let Some(list) = pkg["dependencies"].as_array() {
             for d in list {
                 // A `path` field is what makes it an in-workspace dependency;
-                // `kind` null = normal, "build" = build-dep. Dev-deps are
-                // skipped: they pull in test-only crates a source tarball for
-                // C consumers does not need.
+                // `kind` null = normal, "build" = build-dep, "dev" = dev-dep.
+                // ALL THREE are closure edges.
+                //
+                // CORRECTION (S63-F7 / N37): this used to skip dev-deps, with
+                // the comment "they pull in test-only crates a source tarball
+                // for C consumers does not need". That premise is wrong twice.
+                // (1) Cargo cannot even LOAD a workspace whose member declares
+                // a path dev-dependency that is not on disk — it fails with
+                // `failed to load manifest for dependency`, which is how this
+                // was found: `xtask dist-lib-vt` has been BROKEN since
+                // rustty-vt gained its `rustty-synthetic` dev-dependency, and
+                // `xtask dist-lib-vt` is what G-DIST runs at its DEFAULT depth.
+                // (2) The reference's check step for this very tarball is
+                // `zig build test-lib-vt` — it RUNS THE TESTS in the extracted
+                // tree, so the test-only crates are exactly what it needs.
                 if d["path"].is_null() {
                     continue;
                 }
                 match d["kind"].as_str() {
-                    None | Some("build") => {}
+                    None | Some("build") | Some("dev") => {}
                     _ => continue,
                 }
                 if let Some(dn) = d["name"].as_str() {

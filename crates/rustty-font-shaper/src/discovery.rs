@@ -3027,6 +3027,50 @@ mod tests {
         lib.deinit();
     }
 
+    // test "from descriptors no match" (pkg/macos/text/font_collection.zig:117-139)
+    //
+    // PORT NOTE (S36-F5): the reference pins this in its OWN CoreText wrapper —
+    // `createMatchingFontDescriptors` returns NULL when nothing matches and the
+    // wrapper turns that into an EMPTY array, which `from descriptors no match`
+    // asserts with `list.getCount() == 0`. rustty has no `pkg/macos`: the objc2
+    // framework crates are the ratified substitution, so that divergence is
+    // re-implemented HERE, in `copy_matching_descriptors`' `None => return
+    // result` arm. The test therefore lives where the code does, and drives it
+    // through the public `discover()` the wrapper's callers use.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn from_descriptors_no_match() {
+        if crate::options::BACKEND != crate::Backend::Coretext
+            && crate::options::BACKEND != crate::Backend::CoretextFreetype
+        {
+            return;
+        }
+
+        use crate::library::Library;
+
+        let mut lib = Library::init().unwrap();
+        let mut ct = CoreText::init(lib);
+        // const name = try foundation.String.createWithBytes("ThisShouldNeverExist", ...);
+        let mut it = ct
+            .discover(Descriptor {
+                family: Some(b"ThisShouldNeverExist".to_vec()),
+                size: 12.0,
+                ..Descriptor::default()
+            })
+            .unwrap();
+
+        // try testing.expect(list.getCount() == 0);
+        let mut count: usize = 0;
+        while it.next().unwrap().is_some() {
+            count += 1;
+        }
+        assert_eq!(0, count);
+
+        it.deinit();
+        ct.deinit();
+        lib.deinit();
+    }
+
     // test "coretext codepoint" {
     #[cfg(target_os = "macos")]
     #[test]

@@ -103,6 +103,11 @@ SUBCOMMANDS:
                        source-tarball-lib-vt job).
     distcheck          Build the source tarball, extract it, and RUN ITS TEST SUITE to validate
                        self-containment (ghostty's `zig build test` inside the extracted dir)
+    distcheck-lib-vt   The same for the VT-library-only tarball: extract it, build and test
+                       rustty-vt + rustty-vt-c inside it, then `cmake -B cmake-build` +
+                       `cmake --build` from the extracted tree. Port of ghostty's
+                       `zig build test-lib-vt -Demit-lib-vt=true` + CMake check steps
+                       (GhosttyDist.zig:126-147, 156-171).
     release-info [--version <vX.Y.Z>] [--ref <refs/tags/vX.Y.Z>] [--no-workspace-check]
                        Emit the release metadata (version, build, commit, commit_long)
                        the .github/workflows/release-{tag,tip}.yml pipelines consume,
@@ -210,6 +215,16 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("xtask: distcheck failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("distcheck-lib-vt") => match dist::distcheck_lib_vt() {
+            Ok(out) => {
+                println!("distcheck-lib-vt OK: {}", out.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("xtask: distcheck-lib-vt failed: {e}");
                 ExitCode::FAILURE
             }
         },

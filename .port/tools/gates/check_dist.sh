@@ -21,11 +21,15 @@
 #                    additionally `xtask distcheck`, which extracts the tarball,
 #                    BUILDS it and then RUNS ITS TEST SUITE there — the
 #                    reference's check step is `zig build test` inside the
-#                    extracted directory (parity S63-F8). That is a cold
-#                    full-workspace build AND test run, far too slow to put in
-#                    front of every local ci.sh run, so it is opt-in and CI
-#                    turns it on for one leg. When it is off the gate says so
-#                    by name — it never counts as green.
+#                    extracted directory (parity S63-F8) — and
+#                    `xtask distcheck-lib-vt`, the reference's OTHER check-step
+#                    arm: `zig build test-lib-vt -Demit-lib-vt=true` plus a
+#                    `cmake -B cmake-build` + `cmake --build` of the shipped
+#                    CMakeLists.txt from the extracted tree (parity S63-F7).
+#                    That is a cold full-workspace build AND test run, far too
+#                    slow to put in front of every local ci.sh run, so it is
+#                    opt-in and CI turns it on for one leg. When it is off the
+#                    gate says so by name — it never counts as green.
 #
 # Exit contract (`.port/tools/CI.md`): 0 = pass, 1 = red, 3 = BLOCKED.
 set -uo pipefail
@@ -171,7 +175,7 @@ fi
 echo "=== G-DIST 5/5 :: distcheck (extract + test) ==="
 if [ "${RUSTTY_DISTCHECK:-0}" != "1" ]; then
   echo "    skipped distcheck (set RUSTTY_DISTCHECK=1 — it is a cold full-workspace build+test)"
-  echo "G-DIST GREEN (tarball built and shape-checked). Not run: distcheck."
+  echo "G-DIST GREEN (tarball built and shape-checked). Not run: distcheck, distcheck-lib-vt."
   exit 0
 fi
 if ! cargo run -q -p xtask -- distcheck > /dev/null 2>&1; then
@@ -179,5 +183,18 @@ if ! cargo run -q -p xtask -- distcheck > /dev/null 2>&1; then
   red "xtask distcheck failed — the tarball does not build and pass its tests standalone"
 fi
 echo "    ok      distcheck: the extracted tarball builds AND its tests pass"
-echo "G-DIST GREEN (tarball built, shape-checked, and distcheck clean)."
+
+# The lib-vt tarball is a SEPARATE artifact with a separate check step upstream
+# (`zig build test-lib-vt -Demit-lib-vt=true` plus a CMake configure+build from
+# the extracted tree, GhosttyDist.zig:126-147, 156-171). Until parity S63-F7 it
+# had no distcheck of any kind: `distcheck` always built the Workspace tarball.
+if ! command -v cmake > /dev/null 2>&1; then
+  red "distcheck-lib-vt needs cmake (the reference's check step configures and builds the shipped CMakeLists.txt)"
+fi
+if ! cargo run -q -p xtask -- distcheck-lib-vt > /dev/null 2>&1; then
+  cargo run -q -p xtask -- distcheck-lib-vt 2>&1 | tail -30 | sed 's/^/    /'
+  red "xtask distcheck-lib-vt failed — the lib-vt tarball does not build, test and cmake-build standalone"
+fi
+echo "    ok      distcheck-lib-vt: the extracted lib-vt tarball tests AND cmake-builds"
+echo "G-DIST GREEN (tarball built, shape-checked, and both distchecks clean)."
 exit 0
