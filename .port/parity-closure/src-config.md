@@ -23,7 +23,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** RepeatableFontVariation.parseCLI rejects float syntaxes std.fmt.parseFloat accepts (digit separators, hex floats)
   - **Oracle:** `src/config/Config.zig:6437-6447` → **Rustty:** `crates/rustty-config/src/value_types.rs:3229-3233, 6296-6302`
   - **Audit's suggested fix:** Make parse_float_f64 a faithful port of std.fmt.parseFloat: strip well-placed '_' separators (validUnderscores rules) before parsing, and add a hex-float path (0x mantissa with optional 'p' exponent), or port parse_float from Zig std into rustty-zigstd.
-- [ ] **S78-F1** · CONFIRMED · `ALLOC` · missing-error-path
+- [x] **S78-F1** · CONFIRMED · `ALLOC` · missing-error-path
   - **What:** Command.direct formatEntry drops the [4096]u8 fixed-buffer OutOfMemory bound
   - **Oracle:** `src/config/command.zig:182-196` → **Rustty:** `crates/rustty-config/src/command.rs:283-295`
   - **Audit's suggested fix:** Before/while building `buf`, return `Err(FormatError::OutOfMemory)` once `7 + sum(arg.len() + 1)` exceeds 4096 (mirror the bound check used in io.rs:260 and add a boundary test like readable_io_format_entry_fixed_buffer_boundary).
@@ -78,11 +78,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** RepeatableLink.parseCLI returns InvalidValue instead of NotImplemented, changing the diagnostic text
   - **Oracle:** `src/config/Config.zig:8719-8724` → **Rustty:** `crates/rustty-config/src/value_types.rs:5874-5887`
   - **Audit's suggested fix:** Add a NotImplemented (or generic 'unknown error') variant to the args error set, or special-case the link key so the diagnostic reads `unknown error error.NotImplemented`.
-- [ ] **S76-F3** · CONFIRMED · `ALLOC` · missing-error-path
+- [x] **S76-F3** · CONFIRMED · `ALLOC` · missing-error-path
   - **What:** RepeatableCodepointMap.formatEntry drops the 1024-byte fixed buffer bound (OutOfMemory on overlong family)
   - **Oracle:** `src/config/Config.zig:8214-8253` → **Rustty:** `crates/rustty-config/src/value_types.rs:5359-5395`
   - **Audit's suggested fix:** Use the same `buf_print_parts(&mut [0u8;1024], ...)` -> `FormatError::OutOfMemory` path as the clipboard map.
-- [ ] **S76-F4** · CONFIRMED · `ALLOC` · missing-error-path
+- [x] **S76-F4** · CONFIRMED · `ALLOC` · missing-error-path
   - **What:** RepeatableCommand.formatEntry drops the 4096-byte fixed writer bound
   - **Oracle:** `src/config/Config.zig:9002-9033` → **Rustty:** `crates/rustty-config/src/value_types.rs:6104-6157`
   - **Audit's suggested fix:** Bound the accumulated entry at 4096 bytes and return FormatError::OutOfMemory when exceeded.
@@ -94,7 +94,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** MouseScrollMultiplier float parsing uses Rust str::parse::<f64> instead of std.fmt.parseFloat (hex floats and '_' separators rejected)
   - **Oracle:** `src/config/Config.zig:9296-9309` → **Rustty:** `crates/rustty-config/src/value_types.rs:6208-6240, 6264-6284, 6298-6304`
   - **Audit's suggested fix:** Implement a parse_float port that accepts Zig's grammar (optional sign, inf/nan/infinity, hex floats with p-exponent, '_' separators) and share it with rustty-args' float field parsing.
-- [ ] **S77-F1** · CONFIRMED · `ALLOC` · missing-error-path
+- [x] **S77-F1** · CONFIRMED · `ALLOC` · missing-error-path
   - **What:** Theme.formatEntry drops the fixed 4096-byte buffer OutOfMemory bound
   - **Oracle:** `src/config/Config.zig:10093-10108` → **Rustty:** `crates/rustty-config/src/value_types.rs:6852-6875`
   - **Audit's suggested fix:** Return `FormatError::OutOfMemory` when `6 + light.len() + 6 + dark.len() > 4096` before formatting, mirroring the RepeatableStringMap 256-byte guard.

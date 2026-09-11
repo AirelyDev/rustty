@@ -7,7 +7,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Medium (3)
 
-- [ ] **S110-F1** · CONFIRMED · `ALLOC` · missing-error-path
+- [x] **S110-F1** · CONFIRMED · `ALLOC` · missing-error-path
   - **What:** GlobalZigAllocator::alloc panics (aborts across the C ABI) on an over-large len instead of returning null
   - **Oracle:** `src/lib/allocator.zig:235-236 (std.heap.c_allocator backend; malloc failure -> null -> OutOfMemory)` → **Rustty:** `crates/rustty-lib/src/allocator.rs:510-528`
   - **Audit's suggested fix:** Use `Layout::from_size_align(..).ok()` and return `null_mut()` (alloc/remap) or `false` (resize) on Err.

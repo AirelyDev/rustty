@@ -15,7 +15,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** CoreText familyName lacks the `orelse return "unknown"` NULL fallback — objc2 family_name() panics instead
   - **Oracle:** `src/font/DeferredFace.zig:151-159` → **Rustty:** `crates/rustty-font-shaper/src/deferred_face.rs:280-299`
   - **Audit's suggested fix:** Declare a raw `CTFontCopyFamilyName(font: &CTFont) -> *mut CFString` (as done for CTFontCopyDisplayName at deferred_face.rs:240-244), map NULL to `Ok(b"unknown")` copied into `buf`.
-- [ ] **S86-F1** · CONFIRMED · `ALLOC` · missing-error-path
+- [x] **S86-F1** · CONFIRMED · `ALLOC` · missing-error-path
   - **What:** face.name() error is swallowed in collection() instead of propagating
   - **Oracle:** `src/font/SharedGridSet.zig:197-211, 228-242` → **Rustty:** `crates/rustty-font-shaper/src/shared_grid_set.rs:372-386, 406-420`
   - **Audit's suggested fix:** Replace `let _ = face.name(&mut name_buf);` with `let _name = face.name(&mut name_buf)?;` (mapping FaceError into shared_grid_set::Error::Face) at both sites so the error propagates as in the reference.
@@ -166,7 +166,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Shaper::init panics on thread-spawn failure instead of returning an error
   - **Oracle:** `src/font/shaper/coretext.zig:224-229` → **Rustty:** `crates/rustty-font-shaper/src/shaper/coretext.rs:434-438`
   - **Audit's suggested fix:** Map the `io::Error` from `spawn` into the `Error` enum (e.g. `Error::ThreadSpawn`/`OutOfMemory`) and return `Err` from `init`.
-- [ ] **S94-F3** · CONFIRMED · `ALLOC` · missing-error-path
+- [x] **S94-F3** · CONFIRMED · `ALLOC` · missing-error-path
   - **What:** getFont: NULL from CTFontDescriptorCreateWithAttributes / CTFontCreateCopyWithAttributes panics instead of returning OutOfMemory
   - **Oracle:** `src/font/shaper/coretext.zig:602-609` → **Rustty:** `crates/rustty-font-shaper/src/shaper/coretext.rs:1063-1071`
   - **Audit's suggested fix:** Declare the two raw CoreText symbols returning `Option<NonNull<..>>` (as done for `CTTypesetterCreateLine`) and map `None` to `Error::OutOfMemory`.

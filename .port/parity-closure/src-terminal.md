@@ -34,7 +34,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Screen.Options.default uses kitty_image_storage_limit = 0 instead of 320MB (ghostty artifact) / 10MB (lib)
   - **Oracle:** `src/terminal/Screen.zig:273-293` → **Rustty:** `crates/rustty-vt/src/screen.rs:400-423`
   - **Audit's suggested fix:** Set `kitty_image_storage_limit: 320 * 1000 * 1000` (or select by an artifact/`lib` build option matching `build_options.artifact`) in `Options::default()`, and remove the stale vt-12 deferral note.
-- [ ] **S133-F3** · CONFIRMED · `ALLOC` · missing-error-path
+- [x] **S133-F3** · CONFIRMED · `ALLOC` · missing-error-path
   - **What:** cursorCopy does not restore the old cursor when manualStyleUpdate fails; error set collapsed to OutOfMemory
   - **Oracle:** `src/terminal/Screen.zig:1430-1451` → **Rustty:** `crates/rustty-vt/src/screen.rs:2341-2380`
   - **Audit's suggested fix:** Capture `let old = self.cursor;` (Cursor is Copy) before the overwrite and on `Err(e)` from manual_style_update do `self.cursor = old; return Err(e)`; change the return type to `Result<(), IncreaseCapacityError>` (or keep the mapping but document it) so OutOfSpace is not reported as OutOfMemory.
@@ -70,7 +70,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** parse_u21/parse_u32 reject interior '_' digit separators that Zig std.fmt.parseInt accepts
   - **Oracle:** `src/terminal/apc/glyph/request.zig:106, 217, 220-222, 372` → **Rustty:** `crates/rustty-vt/src/apc/glyph/request.rs:1051-1064`
   - **Audit's suggested fix:** In parse_u21/parse_u32, reject leading/trailing '_' then strip interior '_' bytes before from_str_radix (mirroring parseIntWithSign), and add a test such as `r;cp=e0_a0;QQ==` -> get_cp()==Some(0xE0A0).
-- [ ] **S171-F1** · CONFIRMED · `ALLOC` · behavioral-difference
+- [x] **S171-F1** · CONFIRMED · `ALLOC` · behavioral-difference
   - **What:** format_alloc with empty output invokes a zero-length raw alloc callback and can return out_of_memory
   - **Oracle:** `src/terminal/c/formatter.zig:220-240` → **Rustty:** `crates/rustty-vt-c/src/formatter.rs:578-626`
   - **Audit's suggested fix:** In format_alloc, when `buf_vec.is_empty()` skip the allocator entirely and write `*out_ptr = <non-null dangling ptr>` / `*out_len = 0` and return Success (or at minimum use `allocator.alloc_bytes(len)` so the zero-length request short-circuits to the non-null sentinel without invoking the C callback).
@@ -158,7 +158,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** OSC 66 update() rejects '_' digit separators that Zig's std.fmt.parseInt accepts
   - **Oracle:** `src/terminal/osc/parsers/kitty_text_sizing.zig:49-54` → **Rustty:** `crates/rustty-vt/src/osc/parsers/kitty_text_sizing.rs:95-105`
   - **Audit's suggested fix:** Strip/accept '_' digit separators the way Zig's parseInt does before `parse::<u8>()` in `OSC::update` (or share a small `parse_int_zig` helper), so `n=1_2` parses to 12 as in the oracle.
-- [ ] **S206-F1** · CONFIRMED · `ALLOC` · weakened-assertion
+- [x] **S206-F1** · CONFIRMED · `ALLOC` · weakened-assertion
   - **What:** Allocation-failure transactionality test sweeps 8 tripwire indices instead of every decode allocation, and drops the allocation_count > 0 assertion
   - **Oracle:** `src/terminal/snapshot/snapshot.zig:1626-1694` → **Rustty:** `crates/rustty-vt/src/snapshot/codec.rs:2586-2635`
   - **Audit's suggested fix:** Instrument the remaining decode allocation sites (screen/page/pagelist/grapheme paths) with `tw::check(SnapshotFp::Alloc)`, derive the sweep upper bound from a baseline run that counts tripwire hits rather than hardcoding 8, and assert that count is greater than zero, so the sweep covers every decode allocation the way the reference FailingAllocator does.
@@ -193,7 +193,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Parser log.warn diagnostics dropped (invalid intermediates count; CSI colon/mixed separator on non-'m')
   - **Oracle:** `src/terminal/Parser.zig:319-328, 412-424` → **Rustty:** `crates/rustty-vt/src/parser.rs:707-717, 820-838`
   - **Audit's suggested fix:** If/when a log facade is wired into rustty-vt, emit the two warnings at the same points (cold/noinline helper for the CSI one, as the oracle does).
-- [ ] **S133-F4** · CONFIRMED · `ALLOC` · behavioral-difference
+- [x] **S133-F4** · CONFIRMED · `ALLOC` · behavioral-difference
   - **What:** Screen.clone maps PageList CloneFrom errors to OutOfMemory
   - **Oracle:** `src/terminal/Screen.zig:480-498` → **Rustty:** `crates/rustty-vt/src/screen.rs:994-998`
   - **Audit's suggested fix:** Return `pagelist::access::CloneError` (or an enum wrapping it) from `Screen::clone` and propagate with `?` instead of collapsing.
@@ -205,7 +205,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Seven log.err/log.warn diagnostics in the resize/style/hyperlink degrade paths are commented out, not emitted
   - **Oracle:** `src/terminal/Screen.zig:2133, 2172, 2264, 2298, 2529, 2542, 2650` → **Rustty:** `crates/rustty-vt/src/screen.rs:3159, 3210, 3323, 3366, 3639, 3647, 3790`
   - **Audit's suggested fix:** Add a logging seam to rustty-vt (e.g. the `log` facade) and emit the seven messages at the marked sites with the same text.
-- [ ] **S134-F2** · CONFIRMED · `ALLOC` · behavioral-difference
+- [x] **S134-F2** · CONFIRMED · `ALLOC` · behavioral-difference
   - **What:** testWriteString flattens cursorSetHyperlink's OutOfSpace into OutOfMemory
   - **Oracle:** `src/terminal/Screen.zig:3796, 3813, 3826, 3836` → **Rustty:** `crates/rustty-vt/src/screen.rs:5221, 5238, 5259, 5274`
   - **Audit's suggested fix:** Add an `OutOfSpace` variant to `PrintStringError` (or a dedicated `TestWriteStringError`) and propagate `IncreaseCapacityError` unchanged.
@@ -221,7 +221,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Alternate-screen test fixtures use max_scrollback_bytes=10_000 instead of the Screen.Options default 0
   - **Oracle:** `src/terminal/SelectionGesture.zig:1635-1638, 1769-1772, 1826-1829, 2065-2068, 2084-2087` → **Rustty:** `crates/rustty-vt/src/selection_gesture.rs:1916-1919, 2094-2097, 2174-2177, 2493-2496, 2522-2525`
   - **Audit's suggested fix:** Pass `screen_opts(cols, rows, 0)` in the five get_init call sites to mirror the Zig Screen.Options default.
-- [ ] **S141-F3** · CONFIRMED · `ALLOC` · missing-error-path
+- [x] **S141-F3** · CONFIRMED · `ALLOC` · missing-error-path
   - **What:** Tabstops.resize aborts on a real allocation failure instead of returning OutOfMemory and preserving cols
   - **Oracle:** `src/terminal/Tabstops.zig:151-155` → **Rustty:** `crates/rustty-vt/src/tabstops.rs:283-291`
   - **Audit's suggested fix:** Use `try_reserve_exact(dynamic_count - old_len).map_err(|_| OutOfMemory)?` before `resize`, so the error propagates and `cols` stays unchanged.
@@ -277,7 +277,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Randomized tests use different PRNGs (LCG / splitmix64) than std.Random.DefaultPrng (xoshiro256++), and the PORT NOTE misdescribes the replacement
   - **Oracle:** `src/terminal/hash_map.zig:1280-1316, 1567-1617` → **Rustty:** `crates/rustty-vt/src/hash_map.rs:1718-1729, 2044-2070`
   - **Audit's suggested fix:** Either port xoshiro256++ with Zig's DefaultPrng seeding (splitmix64 seed expansion) so the sequence matches, or correct the PORT NOTE to say splitmix64.
-- [ ] **S155-F6** · CONFIRMED · `ALLOC` · missing-error-path
+- [x] **S155-F6** · CONFIRMED · `ALLOC` · missing-error-path
   - **What:** Flattened.init/clone return Result<_, OutOfMemory> but can never yield Err (Vec::push/with_capacity abort on OOM)
   - **Oracle:** `src/terminal/highlight.zig:141-172` → **Rustty:** `crates/rustty-vt/src/highlight.rs:168-214`
   - **Audit's suggested fix:** Use `try_reserve`/`try_reserve_exact` before pushing (mapping TryReserveError to OutOfMemory) as hyperlink.rs's try_dupe_bytes does.
@@ -353,11 +353,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** setopt invalid-value warnings bypass the C log callback and print unconditionally to stderr
   - **Oracle:** `src/terminal/c/key_encode.zig:82-87, 115-120` → **Rustty:** `crates/rustty-vt-c/src/key_encode.rs:171-175, 239-243`
   - **Audit's suggested fix:** Replace both eprintln! calls with `crate::sys::log_fn(sys::StdLevel::Warn, "key_encode", format_args!(...))` as done for key_event in lib.rs.
-- [ ] **S174-F5** · CONFIRMED · `ALLOC` · missing-error-path
+- [x] **S174-F5** · CONFIRMED · `ALLOC` · missing-error-path
   - **What:** terminal_paste mimes-array allocation failure aborts instead of returning out_of_memory
   - **Oracle:** `src/terminal/c/paste.zig:62-67` → **Rustty:** `crates/rustty-vt-c/src/paste.rs:138-147`
   - **Audit's suggested fix:** Use a fallible allocation (try_reserve / Vec::try_with_capacity equivalent) and return Result::OutOfMemory on failure, or record the DG5 exemption explicitly on this line.
-- [ ] **S176-F2** · DISPUTED · `ALLOC` · missing-error-path
+- [x] **S176-F2** · DISPUTED · `ALLOC` · missing-error-path
   - **What:** `search::new` drops the registry-insert out-of-memory path
   - **Oracle:** `src/terminal/c/search.zig:135-145` → **Rustty:** `crates/rustty-vt-c/src/search.rs:389-400`
   - **Audit's suggested fix:** Use a fallible insert (e.g. `try_reserve` before `insert`, or the allocator-aware hashbrown API) so a registry allocation failure destroys the wrapper and returns `Result::OutOfMemory` as the oracle does.

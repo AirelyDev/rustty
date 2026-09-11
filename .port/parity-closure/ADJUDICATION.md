@@ -71,10 +71,34 @@ summaries.
 - Verified: `grep -rln "ResponseRegisterReason\|apc::glyph::response" crates/rustty-vt-c/src` returns no files — this type is not exposed across the C ABI boundary at all, so there is no external/foreign caller that could construct a non-UTF-8 `.Other`/clear reason. Confirmed in `crates/rustty-vt/src/apc/glyph/response.rs` that the only in-tree constructors use ASCII literals (`b"future_reason"` in a test, `b"out_of_memory"` in `execute.rs`). The `expect()` panic is real code but genuinely unreachable from any Ghostty-parity input path.
 - Disposition: state=WAIVED
 
-### S176-F2 — WAIVED (not a defect)
+### S176-F2 — WAIVED (not a defect) [REVISED 2026-09-11 by task 16 — see the revision note below]
 - Refuting lens said: "the registry is a plain `HashSet<*mut SearchWrapper>` ... backed by the Rust global allocator, which aborts on allocation failure by language convention ... this reduces to an unreachable error path."
 - Verified: `crates/rustty-vt-c/src/terminal.rs:237` (`pub searches: HashSet<*mut SearchWrapper>`) and `:1709` (`HashSet::new()`) confirm this is `std::collections::HashSet`, whose growth aborts the process on real allocation failure rather than returning a `Result`. The `debug_assert!(inserted)` preserves the oracle's uniqueness invariant faithfully; only genuine OOM (abort, crate-wide convention) differs from the oracle's `.out_of_memory` return.
 - Disposition: state=WAIVED
+- **REVISION (task 16, 2026-09-11): state=CLOSED — the waiver's premise does not hold.**
+  The refuting lens said the registry "is backed by the Rust global allocator, which aborts
+  on allocation failure **by language convention** ... this reduces to an unreachable error
+  path". The abort is a CHOICE of call, not a language property: `HashSet::try_reserve` is
+  the same growth, fallibly, and is stable. That makes this exactly the N24 pattern — a
+  waiver whose "the port cannot produce this failure" rests on how the port was written
+  rather than on something Rust cannot express. It is also inconsistent with the whole ALLOC
+  class this plan is closing, where `try_reserve`/`try_reserve_exact` is the standard fix
+  (S141-F3, S174-F5, S155-F6, S206-F1 all landed on it).
+
+  The defect is now FIXED, not re-waived: `crates/rustty-vt-c/src/search.rs`'s `new` does
+  `searches.try_reserve(1)` and, on failure, frees the wrapper through the resolved C
+  allocator and returns `.out_of_memory` — the reference's
+  `catch { alloc.destroy(wrapper); return .out_of_memory; }` verbatim. A `REGISTER_TW`
+  tripwire fail point makes the arm reachable and
+  `search_new_releases_the_wrapper_when_registry_growth_fails` asserts both the return value
+  and that the counting C allocator got its bytes back. Closed together with S4-F3, the
+  include-side row for the same code and the same documented
+  `GHOSTTY_OUT_OF_MEMORY`.
+
+  Note for the S190-F2 and S204-F1 waivers below, which cite "the crate-wide OOM=abort
+  convention already established across S163-F1/S174-F3/S176-F2 in this same batch": one of
+  the three legs of that citation has now moved. Those two rows were NOT re-examined by task
+  16 and are left as they stand, but the chain they lean on is weaker than it was.
 
 ### S180-F2 — WAIVED (not a defect)
 - Refuting lens said: "The only delta is the `#[cfg(debug_assertions)]` gate ... the rustty-vt tripwire fail point itself only exists under debug_assertions ... Zig has no release-mode test lane equivalent that this actually loses."

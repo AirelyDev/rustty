@@ -41,7 +41,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Comment cites RUSTTY_FOCUS_EVENT_MAX_VALUE but the header enumerator is RUSTTY_FOCUS_MAX_VALUE
   - **Oracle:** `include/ghostty/vt/focus.h:43` → **Rustty:** `crates/rustty-vt-c/src/focus.rs:48-49`
   - **Audit's suggested fix:** Fix the comment to RUSTTY_FOCUS_MAX_VALUE.
-- [ ] **S4-F3** · DISPUTED · `ALLOC` · missing-error-path
+- [x] **S4-F3** · DISPUTED · `ALLOC` · missing-error-path
   - **What:** search_new terminal-registry insertion has no OUT_OF_MEMORY error path
   - **Oracle:** `include/ghostty/vt/search.h:340-362 (ghostty_search_new: 'GHOSTTY_OUT_OF_MEMORY if allocation fails')` → **Rustty:** `crates/rustty-vt-c/src/search.rs:374-379`
   - **Audit's suggested fix:** Use a fallible insert (try_reserve(1) before insert, or an allocator_api2-backed set) and on failure destroy the wrapper through the caller allocator and return Result::OutOfMemory.

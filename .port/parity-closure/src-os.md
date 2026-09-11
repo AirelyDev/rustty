@@ -78,7 +78,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **Oracle:** `src/renderer/OpenGL.zig:307-309` → **Rustty:** `crates/rustty-renderer/src/opengl/opengl_impl.rs:406-410,499-501`
   - **Audit's suggested fix:** Call `log_err!("Error re-enabling GL_FRAMEBUFFER_SRGB, err={err}")` in the `is_err()` arm.
   - **Disposition (task-14c-3):** CLOSED — both cited rustty anchors are live. The audit's suggested `log_err!` was the eprintln stand-in; this stage routed those macros through the `log` facade first, and these two sites emit `log::error!(target: LOG_SCOPE, ...)` directly. Both arms had discarded the payload with `.is_err()`; they bind it now. Test: `opengl_impl::tests::present_logs_when_the_srgb_re_enable_fails`, whose fixture is real GL — a blit into a surfaceless context's incomplete FBO 0 raises GL_INVALID_FRAMEBUFFER_OPERATION, which the very next `draw::enable` collects. NOTE for the re-audit: `present` returns `Ok` in that case, because `glBlitFramebuffer` is unchecked on BOTH sides (OpenGL.zig:316-327 has no `try`) — the restored `log.err` is the only report the failure ever gets.
-- [ ] **S113-F5** · CONFIRMED · `ALLOC` · behavioral-difference
+- [x] **S113-F5** · CONFIRMED · `ALLOC` · behavioral-difference
   - **What:** wasm log: allocation-failure path returns silently in Zig but the Rust port always heap-formats
   - **Oracle:** `src/os/wasm/log.zig:32-50` → **Rustty:** `crates/rustty-os/src/wasm/log.rs:58-87`
   - **Audit's suggested fix:** Format with `core::fmt::Write` into the stack buffer first (e.g. a fixed-capacity writer) and only fall back to a `try_reserve`-guarded String, returning on failure, to preserve the OOM-tolerant path.
