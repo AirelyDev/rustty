@@ -544,14 +544,42 @@ fn response_received(inner: &Rc<Inner>, object_path: &str, params: &glib::Varian
         return;
     };
 
-    // `params.get("(u@a{sv})", &response, &results)` (`:481`).
+    // var response: u32 = 0;
+    // var results: ?*glib.Variant = null;
+    // defer if (results) |variant| variant.unref();
+    // params.get("(u@a{sv})", &response, &results);
     //
-    // DELIBERATE DIVERGENCE (the same one `global_shortcuts.rs` documents): the
-    // fallback code is 2 ("ended unexpectedly"), not 0. The oracle's `params.get`
-    // leaves `response` at its zero value on a malformed payload, which reads as
-    // 0 = success; treating an unparseable Response as success would report an open
-    // that never happened.
-    let response: u32 = params.child_value(0).get().unwrap_or(2);
+    // CORRECTION (task 20, S59-F3): this used to read
+    // `params.child_value(0).get().unwrap_or(2)` under a note that said "DELIBERATE
+    // DIVERGENCE (the same one `global_shortcuts.rs` documents): the fallback code is
+    // 2 ("ended unexpectedly"), not 0". The divergence did not only change a default:
+    // glib-rs's `child_value` ASSERTS `index < n_children()`, so a `Response` signal
+    // with an empty `()` body — which any bus peer can send, the subscription has no
+    // sender filter (`OpenURI.zig:202-212`) — panicked inside the D-Bus dispatch on
+    // the GTK main loop. The reference's `params.get` is `g_variant_get`, which on a
+    // type mismatch emits a GLib critical and writes nothing, leaving `response` at
+    // 0. The same C call is made here, so both the critical and the zero are the
+    // reference's own.
+    let mut response: u32 = 0;
+    let mut results: *mut glib::ffi::GVariant = std::ptr::null_mut();
+    // SAFETY: `params` is a live `GVariant` for the call. The format string is a
+    // valid NUL-terminated `g_variant_get` format whose two conversions (`u`, `@a{sv}`)
+    // take a `*mut u32` and a `*mut *mut GVariant` respectively, which is what is
+    // passed. On a mismatch GLib writes neither.
+    unsafe {
+        glib::ffi::g_variant_get(
+            glib::translate::ToGlibPtr::<*mut glib::ffi::GVariant>::to_glib_none(params).0,
+            c"(u@a{sv})".as_ptr(),
+            &mut response as *mut u32,
+            &mut results as *mut *mut glib::ffi::GVariant,
+        );
+    }
+    // `defer if (results) |variant| variant.unref()`: `@a{sv}` hands back a new
+    // reference, which this handler does not otherwise use.
+    if !results.is_null() {
+        // SAFETY: `results` is the owned reference `g_variant_get` returned.
+        unsafe { glib::ffi::g_variant_unref(results) };
+    }
 
     {
         let mut observed = inner.observed.get();
@@ -754,6 +782,62 @@ mod tests {
                     log::Level::Debug,
                     "openuri".to_string(),
                     "open uri request was cancelled by the user".to_string(),
+                ),
+            ],
+            messages
+        );
+    }
+
+    /// S59-F3. A `Response` whose body is not `(ua{sv})` must not take the main loop
+    /// down. The reference reads it with `params.get("(u@a{sv})", ..)`
+    /// (`OpenURI.zig:478-481`): `g_variant_get` rejects the mismatched value, writes
+    /// nothing, and `response` keeps its initial 0 — so the handler logs
+    /// `open uri successful` and returns, with no fallback.
+    ///
+    /// Two malformed shapes, because they failed differently before the fix: the
+    /// empty tuple `()` PANICKED in `child_value(0)`, and a wrong-typed first child
+    /// `(sa{sv})` took the port-only `unwrap_or(2)` fallback arm. The positive
+    /// assertion is the full log vector plus `last_response_code`, so a run that
+    /// never reached the switch cannot pass.
+    #[test]
+    fn malformed_response_bodies_read_as_code_zero_without_panicking() {
+        let cap = log_capture::start();
+        let open_uri = OpenUri::new();
+
+        let empty = glib::Variant::tuple_from_iter(std::iter::empty::<glib::Variant>());
+        let wrong_first =
+            glib::Variant::tuple_from_iter(["x".to_variant(), glib::VariantDict::new(None).end()]);
+        for (token, params) in [(0x31usize, empty), (0x32usize, wrong_first)] {
+            open_uri.inner.state.borrow_mut().entries.insert(
+                token,
+                Entry {
+                    start: Instant::now(),
+                    token,
+                    kind: OpenUrlKind::Unknown,
+                    uri: b"https://example.invalid/".to_vec(),
+                    subscription: None,
+                },
+            );
+            let path = super::super::build_request_path("1_1", token);
+            response_received(&open_uri.inner, &path, &params);
+            assert_eq!(open_uri.observed().last_response_code, Some(0));
+        }
+
+        let messages = cap.messages();
+        drop(cap);
+        assert_eq!(open_uri.observed().responses, 2);
+        assert_eq!(open_uri.observed().fallbacks, 0);
+        assert_eq!(
+            vec![
+                (
+                    log::Level::Debug,
+                    "openuri".to_string(),
+                    "open uri successful".to_string(),
+                ),
+                (
+                    log::Level::Debug,
+                    "openuri".to_string(),
+                    "open uri successful".to_string(),
                 ),
             ],
             messages

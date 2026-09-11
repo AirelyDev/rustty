@@ -551,24 +551,43 @@ impl GlobalShortcuts {
                 // Unsubscribe from the response signal (`:402-406`).
                 drop(this.imp().response_subscription.borrow_mut().take());
 
-                // `params.get("(u@a{sv})", &response, &vardict)` (`:411`).
-                let params = signal.parameters;
-                // DELIBERATE DIVERGENCE: the fallback is 2 ("ended unexpectedly"),
-                // not 0. The oracle's `params.get` leaves `response` at its
-                // uninitialized/zero value on a malformed payload, which reads as
-                // 0 = success; treating an unparseable Response as success would
-                // run `on_response` against garbage results. Defaulting to the
-                // portal's own "ended unexpectedly" code is strictly safer and is
-                // intentional, not an oversight.
-                let response: u32 = params.child_value(0).get().unwrap_or(2);
-                let results = params.child_value(1);
+                // var response: u32 = 0;
+                // var vardict: ?*glib.Variant = null;
+                // defer if (vardict) |v| v.unref();
+                // params_.get("(u@a{sv})", &response, &vardict);
+                //
+                // CORRECTION (task 20, S51-F7): this used to read
+                // `params.child_value(0).get().unwrap_or(2)` then
+                // `params.child_value(1)`, under a note that said "DELIBERATE
+                // DIVERGENCE: the fallback is 2 ("ended unexpectedly"), not 0". Both
+                // `child_value` calls ASSERT the index is in range, so a `()` or `(u)`
+                // body panicked before the default could apply. See
+                // [`response_params`].
+                let (response, vardict) = response_params(&signal.parameters);
 
                 match response {
                     // `.{0 => method.onResponse(..)}` (`:414-417`)
                     0 => {
                         // log.debug("request successful", .{});
                         log::debug!(target: LOG_SCOPE, "request successful");
-                        this.on_response(method, &results);
+                        // `method.onResponse(self_cb, vardict.?)`.
+                        //
+                        // PORT NOTE (task 20, DELIBERATE FIDELITY — not an oversight;
+                        // tracked as NEW-FINDINGS N38, a defect in the REFERENCE): a
+                        // malformed body leaves `vardict` null with `response` 0, and
+                        // the reference's `.?` is then safety-checked illegal
+                        // behaviour — a panic in a safe build. It is REACHABLE from
+                        // the session bus: this subscription, like the reference's
+                        // (`global_shortcuts.zig:481-491`), has no sender filter, so
+                        // any same-user peer can emit a `()` `Response` on the request
+                        // path. Ported as the same panic (the S209-F1 precedent for
+                        // Zig safety checks). Do not turn it into a silent skip
+                        // without closing N38 first.
+                        let vardict = vardict.expect(
+                            "global shortcuts Response had code 0 but no a{sv} results \
+                             (the reference's `vardict.?`)",
+                        );
+                        this.on_response(method, &vardict);
                     }
                     // 1 => log.debug("request was cancelled by user", .{}),
                     1 => log::debug!(target: LOG_SCOPE, "request was cancelled by user"),
@@ -825,15 +844,50 @@ pub(crate) fn bind_shortcuts_payload(
     ]))
 }
 
-/// PORTS: `global_shortcuts.zig:286-293` — read `session_handle` out of a
-/// `Response` results vardict.
+/// PORTS: `global_shortcuts.zig:454-457` — `params_.get("(u@a{sv})", &response,
+/// &vardict)` in `callbacks.responded`, returning `(response, vardict)`.
 ///
-/// PORT NOTE: the reference looks the key up as `&s`. Portal implementations
-/// disagree on whether this field is `s` or `o`, so we accept either
-/// (`glib::Variant::str` covers `s`/`o`/`g`).
+/// The reference's `get` is `g_variant_get`, and so is this: on a body that is not
+/// `(ua{sv})` GLib emits a critical and writes neither out-parameter, so `response`
+/// stays at its initial 0 and `vardict` stays null. The `@a{sv}` reference GLib
+/// hands back is owned and is released when the returned `Variant` drops — the
+/// reference's `defer if (vardict) |v| v.unref()`.
+pub(crate) fn response_params(params: &glib::Variant) -> (u32, Option<glib::Variant>) {
+    use glib::translate::{from_glib_full, ToGlibPtr};
+
+    let mut response: u32 = 0;
+    let mut vardict: *mut glib::ffi::GVariant = std::ptr::null_mut();
+    // SAFETY: `params` is a live `GVariant`. The format is a valid `g_variant_get`
+    // format whose conversions (`u`, `@a{sv}`) take a `*mut u32` and a
+    // `*mut *mut GVariant`, which is what is passed.
+    unsafe {
+        glib::ffi::g_variant_get(
+            ToGlibPtr::<*mut glib::ffi::GVariant>::to_glib_none(params).0,
+            c"(u@a{sv})".as_ptr(),
+            &mut response as *mut u32,
+            &mut vardict as *mut *mut glib::ffi::GVariant,
+        );
+    }
+    let vardict = if vardict.is_null() {
+        None
+    } else {
+        // SAFETY: `@a{sv}` returns a new (full) reference.
+        Some(unsafe { from_glib_full(vardict) })
+    };
+    (response, vardict)
+}
+
+/// PORTS: `global_shortcuts.zig:333-338` — `vardict.lookup("session_handle", "&s",
+/// &handle)`.
+///
+/// CORRECTION (task 20, S51-F6): this used to say "Portal implementations disagree on
+/// whether this field is `s` or `o`, so we accept either (`glib::Variant::str` covers
+/// `s`/`o`/`g`)". The reference's `&s` is `g_variant_lookup`, which asks for type `s`
+/// exactly and fails on an `o`; the oracle then warns `session handle not found` and
+/// abandons the session. The lookup is typed `s` here for the same result.
 pub(crate) fn session_handle_from_results(results: &glib::Variant) -> Option<String> {
     let dict = glib::VariantDict::new(Some(results));
-    let value = dict.lookup_value("session_handle", None)?;
+    let value = dict.lookup_value("session_handle", Some(glib::VariantTy::STRING))?;
     value.str().map(str::to_owned)
 }
 
@@ -1111,9 +1165,46 @@ mod tests {
         assert!(bind_shortcuts_payload("not a path", &[], "rustty_1111111").is_none());
     }
 
-    /// PORTS: `global_shortcuts.zig:286-293` — pull `session_handle` out of the
-    /// `Response` results vardict. Portals in the wild type this field as either
-    /// `s` or `o`; both must be accepted.
+    /// S51-F7: the `Response` body is read the way the reference reads it. A
+    /// well-formed `(ua{sv})` yields its code and dict; the malformed shapes that
+    /// used to PANIC in `child_value` (`()`, `(u)`) and the wrong-typed one that
+    /// used to read as 2 (`(sa{sv})`) all yield `(0, None)`, which is
+    /// `g_variant_get`'s untouched out-parameters.
+    #[test]
+    fn global_shortcuts_response_params_follow_g_variant_get() {
+        use gtk4::glib::prelude::ToVariant;
+
+        let dict = gtk4::glib::VariantDict::new(None);
+        dict.insert_value("session_handle", &"/session/a".to_variant());
+        let good = gtk4::glib::Variant::tuple_from_iter([1u32.to_variant(), dict.end()]);
+        let (code, vardict) = response_params(&good);
+        assert_eq!(code, 1);
+        assert_eq!(
+            session_handle_from_results(&vardict.expect("well-formed body has a vardict"))
+                .as_deref(),
+            Some("/session/a")
+        );
+
+        let empty = gtk4::glib::Variant::tuple_from_iter(std::iter::empty::<gtk4::glib::Variant>());
+        let code_only = gtk4::glib::Variant::tuple_from_iter([2u32.to_variant()]);
+        let wrong_first = gtk4::glib::Variant::tuple_from_iter([
+            "x".to_variant(),
+            gtk4::glib::VariantDict::new(None).end(),
+        ]);
+        for (what, body) in [("()", empty), ("(u)", code_only), ("(sa{sv})", wrong_first)] {
+            let (code, vardict) = response_params(&body);
+            assert_eq!(code, 0, "{what}: response keeps its initial 0");
+            assert!(vardict.is_none(), "{what}: vardict stays null");
+        }
+    }
+
+    /// PORTS: `global_shortcuts.zig:333-338` — pull `session_handle` out of the
+    /// `Response` results vardict with `&s`.
+    ///
+    /// CORRECTION (task 20, S51-F6): this test used to assert that an `o`-typed
+    /// handle is ACCEPTED ("Portals in the wild type this field as either `s` or
+    /// `o`; both must be accepted"). The reference's `&s` lookup rejects it, so the
+    /// assertion is inverted.
     #[test]
     fn global_shortcuts_session_handle_from_results() {
         use gtk4::glib::prelude::ToVariant;
@@ -1132,10 +1223,7 @@ mod tests {
                 .unwrap()
                 .to_variant(),
         );
-        assert_eq!(
-            session_handle_from_results(&as_path.end()).as_deref(),
-            Some("/session/b")
-        );
+        assert_eq!(session_handle_from_results(&as_path.end()).as_deref(), None);
 
         let empty = gtk4::glib::VariantDict::new(None);
         assert_eq!(session_handle_from_results(&empty.end()), None);
