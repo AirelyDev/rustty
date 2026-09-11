@@ -652,16 +652,20 @@ mod log_site_tests {
         unsafe { rustty_config_load_file(&mut cfg, path.as_ptr()) };
         let records = log_capture::take();
 
-        assert_eq!(1, records.len(), "expected exactly one record: {records:?}");
         // The level token is `error`, NOT `err`: Zig's `Level.err.asText()` is
         // "error", and `logFn` prefixes with `level_txt`.
-        assert!(
-            records[0].starts_with(
-                "error(config): error loading config from file \
-                 path=/nonexistent/rustty-14e2/does-not-exist.conf err="
-            ),
-            "unexpected record: {}",
-            records[0]
+        //
+        // The rendered tail is DETERMINISTIC — `load_file` returns this crate's
+        // own `FileNotFound` variant, not an `io::Error` carrying the host's
+        // strerror text — so this is an exact comparison on the full record
+        // vector, not a prefix match.
+        assert_eq!(
+            vec![concat!(
+                "error(config): error loading config from file ",
+                "path=/nonexistent/rustty-14e2/does-not-exist.conf err=FileNotFound"
+            )
+            .to_string()],
+            records
         );
     }
 

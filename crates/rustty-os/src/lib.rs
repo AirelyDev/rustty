@@ -45,13 +45,14 @@
 // `rustty_args::args::OsArgIterator`.
 pub mod autorelease;
 
-// TEST-ONLY `log::Log` capture backend for the restored `log.*` sites
-// (task-14e-2, S111-F4/S111-F5). See the module header.
 pub mod cf_release_thread;
 pub mod cgroup;
 pub mod dbus;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod desktop;
+// TEST-ONLY `log::Log` capture backend for the restored `log.*` sites
+// (task-14e-2, S111-F4/S111-F5), plus the two helpers the structural log-site
+// tests share. See the module header.
 #[cfg(test)]
 pub(crate) mod log_capture;
 // PORT NOTE: `os/main.zig:22` `pub const edit = @import("edit.zig");`. Ungated:

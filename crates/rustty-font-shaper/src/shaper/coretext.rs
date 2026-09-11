@@ -561,6 +561,12 @@ impl Shaper {
         // no `Result`, so there is NO failure arm to log from. Emitting here
         // would fire on the success path, where the reference is silent. Do not
         // "restore" this by logging unconditionally.
+        //
+        // CONTINGENT (task-14e-2, NEW-FINDINGS N24): that waiver is dated, not
+        // permanent. The reason there is no arm is the mpsc stand-in itself,
+        // which S94-F1 (CONFIRMED, OPEN) tracks — restore the real
+        // `CFReleaseThread` and `toOwnedSlice`'s failure arm returns with it.
+        // Re-examine this site in the SAME change that closes S94-F1.
         let items = std::mem::take(&mut self.cf_release_pool);
 
         // Send the items. If the send succeeds then we wake up the
@@ -593,6 +599,10 @@ impl Shaper {
             // no distinct notify step and therefore no failure arm. Emitting here
             // would fire on every successful frame end, where the reference is
             // silent.
+            //
+            // CONTINGENT (task-14e-2, NEW-FINDINGS N24): dated, not permanent —
+            // the missing notify step is the mpsc stand-in S94-F1 tracks.
+            // Re-examine in the SAME change that closes S94-F1.
             Ok(()) => {}
             Err(std::sync::mpsc::SendError(cf_release::Msg::Release(items))) => {
                 for r in items.0 {

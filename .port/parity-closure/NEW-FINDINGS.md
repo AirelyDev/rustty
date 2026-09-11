@@ -1337,3 +1337,41 @@ Each has the reference's full sequence preserved as a comment plus a PORT NOTE s
 explicitly not to "restore" it, and the portmap `reason` records the same. Allowance 11 -> 4.
 
 **state**: the four are a standing, documented allowance. Nothing is outstanding.
+
+---
+
+## N24 — a WAIVED row whose "the port cannot produce this failure" rests on a *tracked defect*, not on a language property
+
+**Recorded 2026-09-10 (task-14e-2 fix round 1), confirmed independently by that stage's review.**
+
+`S94-F4` is `WAIVED` on two `src/font/shaper/coretext.zig` sites — `endFrame`'s
+`toOwnedSlice` catch (`:277`) and its separate `wakeup.notify` catch (`:291`) — because the
+port has no failure arm to hang them on. That is true, and it is **not the same kind of claim**
+as the other four waivers of this shape recorded in the same stage:
+
+| waiver | why the port cannot produce the failure | can it ever change? |
+|---|---|---|
+| `CApi.zig:17,22,40,45` | `Box::new` aborts on OOM; `default_config()`/`clone_config()` return a `Config`, not a `Result` | **no** — a language property |
+| `PageCompression.zig:385` | `to_vec()` aborts on OOM | **no** — a language property |
+| **`S94-F4`'s two** | the port replaced the reference's `CFReleaseThread` with an **mpsc stand-in**: `std::mem::take` allocates nothing and returns no `Result`, and an mpsc `send` IS the wakeup, so there is no separate notify step | **yes** — and `S94-F1` (CONFIRMED, OPEN) is the row that tracks undoing it |
+
+So one of the port's own open defects is what makes the other row "not a defect". Restore the
+`CFReleaseThread` and both failure arms return with it.
+
+**Why this is not simply reopened as two OPEN rows.** The arms are not independently fixable —
+they come back with `S94-F1`'s swap or not at all — so a second OPEN row would be a second
+name for one piece of work, on a board that is already RED at 327. What was actually wrong was
+that `WAIVED` read as final. It now reads as **contingent**, in the three tracked places
+`PROCEDURE.md`'s carve-out standard requires: `S94-F4`'s own `owner` cell, the PORT NOTEs at
+both sites in `coretext.rs`, and this entry — so the finale re-audit meets it as an item
+rather than as a footnote inside a waived row.
+
+**The generalisable rule.** A waiver's justification has a *kind*, and the kind decides whether
+the waiver can expire. "Rust's allocator aborts" never expires. "The port does X instead" expires
+the moment someone fixes X — and if nothing records the dependency, the waiver outlives the
+reason for it. **When waiving on "the port cannot produce this failure", say WHY it cannot, and
+if the why is another row, name that row in the `owner` cell.** This is the near neighbour of
+the defect the 14e-1 review caught (a waiver contradicted by an open `missing-error-path` row);
+here the ledger does not contradict the waiver, it *dates* it.
+
+**state**: OPEN as a dependency. Discharged by whoever closes `S94-F1`, in the same change.

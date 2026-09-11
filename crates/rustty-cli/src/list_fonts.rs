@@ -33,9 +33,16 @@ use std::io::Write;
 // PORT NOTE: the reference's scope tag, carried through the `log` facade as
 // `target: LOG_SCOPE` (DECISION-logging.md §6r4).
 const LOG_SCOPE: &str = "list_fonts";
-//   PORT NOTE: no logging facade is wired into this crate; the two `log.err`
-//   calls (on `familyName`/`name` failures) are ported as verbatim comments and
-//   are no-ops, matching the discovery.rs `log.*`-as-comment convention.
+//
+//   CORRECTED (task-14e-2 fix round 1). The note that stood here said "no
+//   logging facade is wired into this crate; the two `log.err` calls (on
+//   `familyName`/`name` failures) are ported as verbatim comments and are
+//   no-ops". Both halves are false as of this stage: `rustty-cli` carries
+//   `log = { workspace = true }`, and both calls are LIVE below (see
+//   `run_discovery`). Left as a correction rather than deleted, because this
+//   stage's own report names exactly this class — a note made false by the
+//   change sitting beside it — in three other files, and this one survived the
+//   same sweep.
 
 // pub const Options = struct {
 #[derive(Default)]
