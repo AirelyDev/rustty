@@ -723,7 +723,7 @@ impl Window {
 
         // `XGetWindowProperty(display, xid, name, offset=0, length=maxInt, delete=0,
         // type, &actual_type, &actual_format, &nitems, &bytes_after, &prop)`
-        // (`x11.zig:356-369`).
+        // (`x11.zig:367-380`).
         let (code, trapped) = self.trap_x_errors(|| unsafe {
             (self.xlib.XGetWindowProperty)(
                 self.display,
@@ -740,7 +740,7 @@ impl Window {
                 &mut prop,
             )
         });
-        // `if (code != Success) return error.RequestFailed` (`x11.zig:370`). A
+        // `if (code != Success) return error.RequestFailed` (`x11.zig:381`). A
         // trapped X error takes the same path (R13, [`Self::trap_x_errors`]).
         if code != c_int::from(xlib::Success) || trapped {
             // Xlib leaves `prop` null on a failed request; free defensively in case a
@@ -799,25 +799,30 @@ impl Window {
     /// headless sway's Xwayland): a second X client destroys our toplevel (what
     /// `xdotool windowclose` does), GDK logs "GdkSurface … unexpectedly destroyed"
     /// and keeps the window realized, and the next config reload runs
-    /// `syncAppearance` into `BadWindow` (request 20, `GetProperty`) and the terminal
-    /// exits. Under R13 each call is bracketed by `gdk_x11_display_error_trap_push`
-    /// / `_pop` — GDK's own scoped trap, never a process-wide `XSetErrorHandler` —
-    /// and a trapped error takes the reference's `error.RequestFailed` path, which
-    /// `resizeEvent` / `syncAppearance` already log.
+    /// `syncAppearance` into `BadWindow` and the terminal exits: request 20
+    /// (`GetProperty`) with blur unchanged, request 19 (`DeleteProperty`) on a reload
+    /// that turns blur off. Under R13 each call is bracketed by
+    /// `gdk_x11_display_error_trap_push` / `_pop` — GDK's own scoped trap, never a
+    /// process-wide `XSetErrorHandler` — held by an [`XErrorTrap`] guard so it is
+    /// popped even if the call panics. A trapped error takes the reference's
+    /// `error.RequestFailed` path, which `resizeEvent` / `syncAppearance` already log.
+    /// For `XChangeProperty`/`XDeleteProperty` the trap is the ONLY failure signal
+    /// (libX11 returns 1 from both unconditionally).
+    ///
+    /// NOT closed by this: after the same external destroy, GDK's OWN requests still
+    /// exit the process — an immediate `maximize` (request 8, `MapWindow`) and a
+    /// hide/show after pumping (request 18) — in a plain GTK 4.22.4 window too
+    /// (`UPSTREAM-DEFECTS.md` UD56, upstream project gtk). The trap functions are
+    /// deprecated since GTK 4.18, along with the rest of GDK's X11 backend API; there is
+    /// no replacement for trapping X errors in GDK 4.
     fn trap_x_errors<T>(&self, call: impl FnOnce() -> T) -> (T, bool) {
         let display = self.x11_surface.display();
-        let x11_display = display.downcast_ref::<gdk4_x11::X11Display>();
-        if let Some(d) = x11_display {
-            d.error_trap_push();
-        }
+        let guard = XErrorTrap::push(display.downcast_ref::<gdk4_x11::X11Display>());
         let result = call();
-        // `error_trap_pop` syncs, so an asynchronous error on this request is
-        // reported here rather than to the default handler later.
-        let trapped = x11_display.is_some_and(|d| d.error_trap_pop() != 0);
-        (result, trapped)
+        (result, guard.pop())
     }
 
-    /// PORTS: `x11.zig:381-411` `Window.changeProperty`, concrete over a raw
+    /// PORTS: `x11.zig:392-422` `Window.changeProperty`, concrete over a raw
     /// (format-32) byte buffer. `nelements` is the count of 32-bit-logical items
     /// (i.e. `c_long` words). Returns [`Error::RequestFailed`] when Xlib reports
     /// failure — note Xlib's status is `0 = failure` here (`x11.zig:407-410`).
@@ -863,6 +868,40 @@ impl Window {
             Err(Error::RequestFailed)
         } else {
             Ok(())
+        }
+    }
+}
+
+/// A pushed GDK X error trap that is always popped.
+///
+/// [`Window::trap_x_errors`] pops it explicitly with `error_trap_pop` (which syncs and
+/// returns the error code). If the traced call ever panicked instead, `Drop` pops it
+/// with `error_trap_pop_ignored`: a trap left pushed would silently swallow every
+/// later X error in the process — worse than the exit it exists to prevent.
+struct XErrorTrap<'a> {
+    display: Option<&'a gdk4_x11::X11Display>,
+}
+
+impl<'a> XErrorTrap<'a> {
+    fn push(display: Option<&'a gdk4_x11::X11Display>) -> Self {
+        if let Some(d) = display {
+            d.error_trap_push();
+        }
+        Self { display }
+    }
+
+    /// Pop the trap: `true` when the server reported an X error inside it.
+    /// `error_trap_pop` syncs, so an asynchronous error on the bracketed request is
+    /// reported here rather than to GDK's default handler later.
+    fn pop(mut self) -> bool {
+        self.display.take().is_some_and(|d| d.error_trap_pop() != 0)
+    }
+}
+
+impl Drop for XErrorTrap<'_> {
+    fn drop(&mut self) {
+        if let Some(d) = self.display.take() {
+            d.error_trap_pop_ignored();
         }
     }
 }
@@ -970,25 +1009,35 @@ mod tests {
     }
 
     /// M110 / UD3 (R13): an X error on a winproto property call must not exit the
-    /// process. The scenario is the measured one: map one of our windows on X11, let
-    /// a SECOND X client destroy its toplevel (`xdotool windowclose`), pump the loop
-    /// so GDK processes the DestroyNotify, then deliver a config reload, whose
-    /// `syncAppearance` issues property requests against the dead window.
+    /// process, and the TRAP RESULT must be what turns it into `RequestFailed`.
+    ///
+    /// The scenario is the measured one: map one of our windows on X11 with blur on,
+    /// let a SECOND X client destroy its toplevel (`xdotool windowclose`), pump the
+    /// loop so GDK processes the DestroyNotify, then deliver two config reloads whose
+    /// `syncAppearance` makes property requests against the dead window:
+    /// - (a) blur OFF: `syncBlur` must DELETE the property;
+    /// - (b) blur ON again, with the cached region first replaced by a sentinel so
+    ///   the region differs: `syncBlur` must CHANGE the property.
+    ///
+    /// `XDeleteProperty`/`XChangeProperty` always return 1, so for both the trap is
+    /// the ONLY failure signal. The child reports whether the window's cached blur
+    /// region survived each write unchanged, which happens only when the trap
+    /// reported the error. The earlier `failed to sync` log line cannot prove that:
+    /// `syncDecorations`' `XGetWindowProperty` produces it from its own reply code.
+    /// Fix round 3 corrected that claim, which this doc used to make.
     ///
     /// GDK's default X error handler calls `exit(1)`, which no in-process assertion
-    /// can observe, so the scenario runs in a CHILD copy of this test binary and the
-    /// parent asserts the child exited 0, printed its marker, and — the positive half,
-    /// proving the X error really happened and was trapped — logged at least one
-    /// `failed to sync ...` line. Without a display the child fails
-    /// (`init_for_display_test`), so this test fails too.
+    /// can observe, so the scenario runs in a CHILD copy of this test binary. The
+    /// parent asserts the child exited 0 and reported both writes as trapped. Without
+    /// a display the child fails (`init_for_display_test`), so this test fails too.
     #[test]
     #[ignore = "requires an X server; run with GDK_BACKEND=x11 DISPLAY=... cargo test -p rustty-apprt --features gtk,x11,wayland --lib x11_error_on_a_destroyed -- --ignored"]
     fn x11_error_on_a_destroyed_window_does_not_exit_the_process() {
         const CHILD: &str = "RUSTTY_M110_CHILD";
-        const MARKER: &str = "M110_CHILD_RETURNED trapped_sync_failures=";
+        const MARKER: &str = "M110_CHILD_RETURNED";
         if std::env::var_os(CHILD).is_some() {
-            let trapped = destroyed_window_config_reload_scenario();
-            println!("{MARKER}{trapped}");
+            let (delete_kept, change_kept) = destroyed_window_config_reload_scenario();
+            println!("{MARKER} delete_trapped={delete_kept} change_trapped={change_kept}");
             return;
         }
 
@@ -1008,24 +1057,24 @@ mod tests {
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
             out.status.success(),
-            "the child must survive the X error; status={:?}\nstdout={stdout}\nstderr={stderr}",
+            "the child must survive the X errors; status={:?}\nstdout={stdout}\nstderr={stderr}",
             out.status
         );
-        let trapped: usize = stdout
+        let line = stdout
             .lines()
-            .find_map(|l| l.strip_prefix(MARKER))
-            .and_then(|n| n.trim().parse().ok())
+            .find(|l| l.starts_with(MARKER))
             .unwrap_or_else(|| panic!("child never returned; stdout={stdout}\nstderr={stderr}"));
-        assert!(
-            trapped >= 1,
-            "the config reload must actually hit the dead window (a trapped request \\
-             failure is logged); stdout={stdout}\nstderr={stderr}"
+        assert_eq!(
+            line,
+            format!("{MARKER} delete_trapped=true change_trapped=true"),
+            "both property writes on the dead window must fail through the trap and \
+             leave the cached region unchanged; stderr={stderr}"
         );
     }
 
-    /// The child half of the test above. Returns how many `failed to sync ...` lines
-    /// the reload logged.
-    fn destroyed_window_config_reload_scenario() -> usize {
+    /// The child half of the test above. Returns whether the cached blur region was
+    /// left unchanged by (a) the DELETE and (b) the CHANGE on the destroyed window.
+    fn destroyed_window_config_reload_scenario() -> (bool, bool) {
         use gtk4::prelude::GtkWindowExt as _;
 
         crate::gtk::init_for_display_test(
@@ -1050,9 +1099,16 @@ mod tests {
         app.imp()
             .winproto
             .replace(crate::gtk::winproto::App::X11(x11_app));
-        let mut cfg = CoreConfig::default_config();
-        cfg.background_blur = BackgroundBlur::True;
-        let config = crate::gtk::class::config::Config::new(&cfg);
+        let config_with_blur = |blur: bool| {
+            let mut cfg = CoreConfig::default_config();
+            cfg.background_blur = if blur {
+                BackgroundBlur::True
+            } else {
+                BackgroundBlur::False
+            };
+            crate::gtk::class::config::Config::new(&cfg)
+        };
+        let config = config_with_blur(true);
         app.imp().config.replace(Some(config.clone()));
         let win = crate::gtk::class::window::Window::new(&app, None);
         win.imp().config.replace(Some(config));
@@ -1076,16 +1132,22 @@ mod tests {
             win.is_mapped(),
             "the window must map before its X window is destroyed"
         );
-        assert!(
-            matches!(
-                &*win.imp().winproto.borrow(),
-                crate::gtk::winproto::Window::X11(_)
-            ),
-            "the window must be on the X11 winproto arm"
-        );
         pump(300);
 
-        // A second X client destroys our toplevel.
+        let cached = || -> Vec<Slice> {
+            match &*win.imp().winproto.borrow() {
+                crate::gtk::winproto::Window::X11(w) => w.blur_region.slices().to_vec(),
+                _ => panic!("the window must be on the X11 winproto arm"),
+            }
+        };
+        let before = cached();
+        assert!(
+            !before.is_empty(),
+            "precondition: blur was applied while the window was alive, so a blur-off \
+             reload must DELETE the property"
+        );
+
+        // A second X client destroys our toplevel; GDK processes the DestroyNotify.
         let xid = win
             .surface()
             .expect("surface")
@@ -1102,19 +1164,27 @@ mod tests {
         }
         pump(1000);
 
-        // A config reload reaches the window (`notify::config` -> syncAppearance).
-        let cap = crate::log_capture::start();
-        let mut reload = CoreConfig::default_config();
-        reload.background_blur = BackgroundBlur::True;
-        win.set_property("config", crate::gtk::class::config::Config::new(&reload));
+        // (a) Blur OFF: `syncBlur` deletes the property on the dead window.
+        win.set_property("config", config_with_blur(false));
         display.sync();
-        pump(500);
-        let failures = cap
-            .messages()
-            .iter()
-            .filter(|(_, _, msg)| msg.contains("failed to sync"))
-            .count();
-        drop(cap);
-        failures
+        pump(200);
+        let delete_kept = cached() == before;
+
+        // (b) Blur ON with a sentinel cache: `syncBlur` changes the property.
+        let sentinel = vec![Slice {
+            x: 1,
+            y: 2,
+            width: 3,
+            height: 4,
+        }];
+        if let crate::gtk::winproto::Window::X11(w) = &mut *win.imp().winproto.borrow_mut() {
+            w.blur_region = BlurRegion::from_slices(sentinel.clone());
+        }
+        win.set_property("config", config_with_blur(true));
+        display.sync();
+        pump(200);
+        let change_kept = cached() == sentinel;
+
+        (delete_kept, change_kept)
     }
 }
