@@ -2178,10 +2178,12 @@ overflowed at about 1,500 levels in a debug build, and the derived `Debug` (used
 termio action log formats a `.windows` action) at about 2,400 in a release build, against
 about 9,200 / 39,000 for the reference on its 16 MiB thread. Under R13 nesting deeper than
 `MAX_DEPTH` (1000) is a `SyntaxError` and `Drop` is iterative. Reference defect:
-`UPSTREAM-DEFECTS.md` UD10. The Linux thread-stack check requested by the brief is pending
-controller approval to use the VM.
+`UPSTREAM-DEFECTS.md` UD10. Linux aarch64 (VM): the port's walkers overflow at nearly the same
+depths (parser about 1,480 debug / 6,270 release; `Debug` about 1,625 / 2,415), the reference at the
+same 9,200 / 39,000, and the three tests pass run individually in debug and release. `MAX_DEPTH`
+was not checked against tmux's source; a legitimate layout nested deeper would be rejected.
 
-**state**: CLOSED by task R13-A (`886fa0c7`), pending the Linux measurement.
+**state**: CLOSED by task R13-A (`886fa0c7`).
 
 ## N43 — the tmux viewer's "active area should be empty" debug assert was reachable
 
