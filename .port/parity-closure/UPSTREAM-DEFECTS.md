@@ -4,6 +4,10 @@ Defects **in the Ghostty reference itself** (pin `20abdb50a`), recorded so fixes
 proposed upstream. Governed by `.port/PORT_RULES.md` **R13**: a defect reachable from real
 input is never ported; the port handles it safely and the defect is recorded here.
 
+Some entries are in a dependency Ghostty pins (libxev, libvaxis, GStreamer, google-highway)
+rather than in Ghostty's own code. Their `upstream project` field names that project, because
+the report goes to its tracker, not Ghostty's.
+
 This is not the parity ledger. `LEDGER.tsv` tracks where the **port** diverges from the
 reference; this file tracks where the **reference** is wrong. A row here usually has a matching
 parity row, cross-referenced both ways.
@@ -21,6 +25,7 @@ instance this plan and earlier phases ported faithfully.
 ```
 ### UD<n> — <one-line title>
 - kind:            crash | ub | leak | deadlock | latent | test-weakness
+- upstream project: ghostty | <dependency>   (the project whose tracker gets the report, e.g. libxev, libvaxis, GStreamer, google-highway)
 - severity:        high | medium | low   (reachability-weighted, see below)
 - reference:       <path>:<lines> at 20abdb50a
 - defect:          what the reference does wrong
@@ -42,6 +47,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 ### UD1 — GlobalShortcuts `Response` handler null-unwraps the results of a malformed body
 - kind:            crash
+- upstream project: ghostty
 - severity:        medium (a same-user session-bus peer watching the bus can trigger it)
 - reference:       src/apprt/gtk/class/global_shortcuts.zig:442-469 (`callbacks.responded`, `.?` at :462), subscription at :481-491, at 20abdb50a
 - defect:          `params_.get("(u@a{sv})", &response, &vardict)` is `g_variant_get`. On a body that is not `(ua{sv})` — `()`, `(u)`, `(sa{sv})` — GLib emits a critical and writes neither out-parameter (measured, GLib 2.88.2: "the GVariant format string '(u@a{sv})' has a type of '(ua{sv})' but the given value has a type of '()'"), so `response` stays 0 and `vardict` stays null. Arm 0 then calls `method.onResponse(self_cb, vardict.?)`.
@@ -56,6 +62,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 ### UD2 — GlobalShortcuts `Activated` handler aborts on a short body and reads an undefined shortcut id on a mistyped one
 - kind:            crash (short body) + ub (wrong-typed second child)
+- upstream project: ghostty
 - severity:        medium (any same-user session-bus peer that knows the session handle)
 - reference:       src/apprt/gtk/class/global_shortcuts.zig:587-606 (`shortcutActivated`), subscribed in `onResponse` at :352-362, at 20abdb50a
 - defect:          `var shortcut_id: [*:0]const u8 = undefined; params.getChild(1, "&s", &shortcut_id);` fails two different ways, depending on the body.
@@ -74,6 +81,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 ### UD3 — X11 winproto property writes run with no X error trap, so a `BadWindow` exits the terminal (and their status checks can never fire)
 - kind:            crash
+- upstream project: ghostty
 - severity:        medium (reachable from another X client on the same display)
 - reference:       src/apprt/gtk/winproto/x11.zig:346-431 (`getWindowProperty` from :346, `changeProperty` :392-422, `deleteProperty` :424-431), reached from `resizeEvent` / `syncAppearance` (:218-235) via `syncBlur` (:243-287) and `syncDecorations` (:289-), at 20abdb50a
 - defect:          Two faults.
@@ -96,6 +104,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 ### UD4 — `gotoWindow(.previous)` dereferences a null toplevel list
 - kind:            crash
+- upstream project: ghostty
 - severity:        low (no verified trigger)
 - reference:       src/apprt/gtk/class/application.zig:2476-2519 (`gotoWindow`), at 20abdb50a; the binding `zig-pkg/gobject-0.3.2-…/src/gtk4/gtk4.zig:59024` `extern fn gtk_window_list_toplevels() *glib.List`
 - defect:          The binding declares the result non-optional, but `gtk_window_list_toplevels` returns NULL when there are no toplevels. `findCustom` on NULL returns NULL, so `starting` is null. The forward loop over the now-null optional does nothing, and in the wrap-around `.previous` arm `var end: *glib.List = glist; while (end.f_next) ...` dereferences it.
@@ -110,6 +119,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 ### UD5 — OpenURI treats a malformed `Response` body as success and never opens the URL
 - kind:            latent
+- upstream project: ghostty
 - severity:        low
 - reference:       src/apprt/gtk/portal/OpenURI.zig:479-499 (`responseReceived`), subscription at :202-212, at 20abdb50a
 - defect:          `params.get("(u@a{sv})", &response, &results)` on a body that is not `(ua{sv})` writes nothing (GLib critical), so `response` stays 0. The switch then logs `open uri successful` and skips `openUrlFallback`, so the URL the user asked to open is silently never opened.
@@ -124,8 +134,8 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 ### UD6 — an oversized tmux control-mode block leaves the viewer alive, so the next attach asserts
 - kind:            crash (ReleaseFast: ub + leak)
-- severity:        high (anything written to the pty; also a real `tmux -CC` re-attach)
 - upstream project: ghostty
+- severity:        high (anything written to the pty; also a real `tmux -CC` re-attach)
 - reference:       src/termio/stream_handler.zig:410 (`assert(self.tmux_viewer == null)` on `.enter`); the missing `.exit` is src/terminal/dcs.zig:114-121 (`put`'s `catch`) with :164-166 (`unhook` of `.ignore` returns null; the `.exit` at :168-170 is only for a live `.tmux` state), fed by src/terminal/tmux/control.zig:71-74 (the 1 MiB `max_bytes` check), at 20abdb50a
 - defect:          When a notification or `%begin` block grows past the control parser's 1 MiB `max_bytes`, `Parser.put` marks itself broken and returns `error.OutOfMemory`. `dcs.Handler.put` catches that, discards the tmux state, sets `.ignore` and returns null. `unhook` of `.ignore` also returns null, so `dcsCommand` never sees `.exit` and never frees `tmux_viewer`. The next `ESC P 1000 p` hits the assert. `control.zig:26-29` documents the limit as "the control mode session will be forcibly exited", which is not what happens.
 - ReleaseSafe:     panic on the assert at the second `ESC P 1000 p`; the terminal process aborts.
@@ -139,8 +149,8 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 ### UD7 — tmux control-mode ids with 20 or more digits hit `catch unreachable`
 - kind:            crash (ReleaseFast: ub)
-- severity:        high (anything written to the pty)
 - upstream project: ghostty
+- severity:        high (anything written to the pty)
 - reference:       src/terminal/tmux/control.zig:238 (`%output`), :269 (`%session-changed`), :309 (`%layout-change`), :347 (`%window-add`), :377 (`%window-renamed`), :408 and :413 (`%window-pane-changed`), :470 (`%client-session-changed`), at 20abdb50a
 - defect:          Each arm matches its id with an unbounded `([0-9]+)` capture and then parses it with `std.fmt.parseInt(usize, ..) catch unreachable`. A capture of 20 or more digits overflows `usize`, so `parseInt` returns `error.Overflow` and the `catch` reaches `unreachable`. The same arms already handle a failed regex match with `log.warn("failed to match notification ...")` and `break :cmd`.
 - ReleaseSafe:     panic ("reached unreachable code"); the terminal process aborts.
@@ -154,8 +164,8 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 ### UD8 — tmux layout pane dimensions are `@intCast` to `u16`, and a zero crashes `Terminal.init`
 - kind:            crash (ReleaseFast: ub)
-- severity:        high (anything written to the pty)
 - upstream project: ghostty
+- severity:        high (anything written to the pty)
 - reference:       src/terminal/tmux/viewer.zig:1160-1161 (`.cols = @intCast(layout.width)`, `.rows = @intCast(layout.height)` in `initLayout`, under a TODO saying the cast is not safe), at 20abdb50a. The zero-dimension traps are src/terminal/page.zig:274 (`&cells_ptr[start]` on an empty cells slice, zero width) and src/terminal/PageList.zig:647 (`page_list.first.?`, zero height). (Candidate C2 spelled the path `Viewer.zig`, which resolves only on a case-insensitive filesystem.)
 - defect:          One root cause, two symptoms, both covered by this entry. The layout's `usize` width and height come from tmux and are narrowed with `@intCast`. Above 65535 the cast itself traps. A zero passes the cast, and `Terminal.init` then traps. Which check fires first was measured on the port's faithful mirror of `Terminal.init`: a zero width trips the cells index in `Page.initBuf`; a zero height (and 0x0) trips `first.?` in `PageList.init`. The `rows - 1` / `cols - 1` in `Terminal.init` (Terminal.zig:336,338) is never reached first.
 - ReleaseSafe:     panic ("integer does not fit in destination type", or the index / null-unwrap panics for zero); the terminal process aborts.
@@ -169,8 +179,8 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 ### UD9 — the "active area should be empty" assert after a pane's history is not guaranteed
 - kind:            crash (safety-checked builds only)
-- severity:        low
 - upstream project: ghostty
+- severity:        low
 - reference:       src/terminal/tmux/viewer.zig:1070-1077 (`receivedPaneHistory`: `if (comptime std.debug.runtime_safety) { ... assert(discarding.count == 0); }`), at 20abdb50a
 - defect:          After writing the history, the viewer does `carriageReturn()` and `rows` × `index()` and asserts the active area is empty. `index()` scrolls only at the bottom margin; below the scroll region it just moves the cursor down. If the pane's scroll region and cursor are already set, text written below the region stays in the active area. `receivedPaneState` (the `list-panes` reply) sets both, and it can arrive before a pane's history: when a second pane is added while the first pane's captures are still queued, the queue holds the first pane's `list-panes` before the second pane's captures, and that reply covers both panes. (History bytes cannot set the region themselves: an ESC ends the DCS.)
 - ReleaseSafe:     panic on the assert (Debug too); the terminal process aborts.
@@ -184,8 +194,8 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 ### UD10 — tmux layout parsing recurses without a depth limit
 - kind:            crash (stack overflow)
-- severity:        medium (anything written to the pty)
 - upstream project: ghostty
+- severity:        medium (anything written to the pty)
 - reference:       src/terminal/tmux/layout.zig:87-230 (`parseNext`; the recursive call is at :180), at 20abdb50a
 - defect:          `parseNext` recurses once per `{` or `[`. The layout string comes from tmux, bounded only by the control parser's 1 MiB limit, so it can nest about 116,000 levels (9 bytes per level: `1x1,0,0{` plus `}`).
 - ReleaseSafe:     stack overflow; the process dies (SIGABRT on macOS).
@@ -199,8 +209,8 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 ### UD11 — a tmux `list-panes` scroll region outside the pane is stored unchecked, and the next line feed crashes
 - kind:            crash (ReleaseFast: ub)
-- severity:        medium (anything written to the pty)
 - upstream project: ghostty
+- severity:        medium (anything written to the pty)
 - reference:       src/terminal/tmux/viewer.zig:1013-1024 (`receivedPaneState`, the `scroll:` block; the assignments are at :1022-1023), at 20abdb50a. The traps are src/terminal/Screen.zig:828 (`cursorDown`: `assert(self.cursor.y + n < self.pages.rows)`) and :1265 (`cursorScrollRegionUp`: `assert(limit >= 1)`).
 - defect:          The `scroll:` block only checks that `scroll_region_upper`/`lower` fit `CellCountInt`, then stores them in `t.scrolling_region`. Nothing checks them against the pane's rows or each other. With a bottom at or past `rows`, `Terminal.index` treats a cursor on the last row as inside the region and not at its bottom, so it calls `cursorDown(1)` and trips the assert. With a one-row region away from the top (`top == bottom != 0`) and the cursor on it, `index` scrolls the region in place with `cursorScrollRegionUp(bottom - top)`, which is 0. The same function already ignores its other out-of-screen geometry: the cursor and the alternate saved cursor `break` out when `>= cols`/`>= rows` (:941-950, :968-982), and a tab stop `>= cols` is skipped (:1033). `setTopAndBottomMargin` (DECSTBM, Terminal.zig:2594-2602) refuses `top >= bottom`.
 - ReleaseSafe:     panic on the assert at the next line feed or line wrap in that pane (or at the viewer's own `index()` loop after a history capture); the terminal process aborts.
@@ -214,8 +224,8 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 
 ### UD12 — coloured pane history ends the tmux control-mode DCS, so the viewer disconnects
 - kind:            latent (functional: lost tmux session)
-- severity:        low
 - upstream project: ghostty
+- severity:        low
 - reference:       src/terminal/tmux/viewer.zig:1317 and :1331 (`capture-pane -p -e …`, the pane history and visible captures), src/terminal/parse_table.zig:71 (the "anywhere" `0x1B => escape` transition, which `dcs_passthrough` does not override), src/terminal/Parser.zig:280 (leaving `dcs_passthrough` emits `dcs_unhook`), at 20abdb50a
 - defect:          Ghostty receives tmux control mode inside the VT parser's DCS state. The viewer asks for pane contents with `capture-pane -p -e`, and `-e` includes SGR escape sequences. tmux writes that reply to a control client raw (tmux `cmd-capture-pane.c:446-447`, confirmed from tmux's source by the task R13-A coordinator). The first ESC in the reply moves the parser from `dcs_passthrough` to `escape`, which unhooks the DCS: the tmux handler emits `.exit` and the viewer is freed. The rest of the tmux output is then parsed as ordinary terminal output in the surface.
 - ReleaseSafe:     no crash; the tmux session ends as soon as any captured pane has coloured content, and later control-mode lines are processed as normal output.
