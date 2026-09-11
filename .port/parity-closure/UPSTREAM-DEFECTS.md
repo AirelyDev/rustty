@@ -237,6 +237,277 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - proposed fix:    Consume tmux control mode outside the VT parser once `ESC P 1000 p` is seen (reading raw lines until `%exit` and ST, as other tmux control-mode clients do), or request captures without `-e` and apply styles another way.
 - upstream status: not reported
 
+### UD13 — GstPlay can finalize on its own play thread when the last `GtkMediaFile` reference drops right after construction
+- kind:            ub (crash inside GStreamer)
+- upstream project: GStreamer (gst-plugins-bad `gst-libs/gst/play`), reached through GTK4's GStreamer media backend; owning component UNVERIFIED (see defect)
+- severity:        low
+- reference:       Ghostty trigger sites at 20abdb50a: src/apprt/gtk/media.zig:64-72 (`bellMediaFile` unrefs the cached `MediaFile` at :71 when the path changes), its production caller src/apprt/gtk/class/application.zig:2167 (`priv.bell_media = media.bellMediaFile(priv.bell_media, path, required)`), dispose at application.zig:1570-1573, and the test's final `current.unref()` at media.zig:161. No GStreamer source was read for this entry.
+- defect:          `GtkMediaFile` (GTK4 GStreamer backend) is backed by `GstPlay`, which runs a `gst_play_main` thread. The rustty port measured that dropping the last reference within microseconds of construction races that thread's startup: the bus message the play thread posts ends up holding the final `GstPlay` reference, so `gst_play_finalize` runs on the play thread and clears a mutex that thread still holds. Two measured signatures (Fedora 44 / aarch64 / GStreamer 1.28.1, 2026-07-31, `.port/phase-3/UPSTREAM_BUGS.md` U1):
+  ```
+  SIGABRT: g_mutex_clear() called on uninitialised or locked mutex
+    g_mutex_clear <- gst_play_finalize <- g_object_unref <- _gst_message_free
+    <- gst_bus_post <- api_bus_post_message <- gst_play_set_uri_internal
+  SIGSEGV: gst_object_ref on a freed object
+    g_type_check_instance_is_fundamentally_a <- g_object_ref <- gst_object_ref
+    <- gst_message_new_custom <- api_bus_post_message <- on_error
+    <- gst_play_pause_internal
+  ```
+  The port's unref-ing test crashed in about 30% of runs; calling `gtk_media_stream_clear()` first narrowed it to 2/60. **UNVERIFIED:** a minimal pure-GTK4 C reproducer (`gtk_media_file_new_for_filename` then immediate `g_object_unref`, on the main thread and on a `GThread`) did not reproduce (0/20 and 0/25, same record), so which component owns the fault (GstPlay, or GTK's GStreamer media backend) is not established. The GTK version in that measurement was not recorded.
+- ReleaseSafe:     SIGABRT or SIGSEGV inside GStreamer; the terminal process dies. Independent of the Zig build mode.
+- ReleaseFast:     same.
+- reachability:    timing. In Ghostty production the last reference drops only when `bell-audio-path` has changed and the bell then rings (the old `MediaFile` is unref'd at media.zig:71), or at application dispose. Both normally happen long after that pipeline started. Production reach is **UNVERIFIED** (no trigger measured outside tests). Ghostty's own test would expose it on every run that gets past its skip, which today is none (UD14).
+- port handling:   faithful in production: `crates/rustty-apprt/src/gtk/media.rs:59-64` drops the replaced handle exactly as media.zig:71 does. Only the port's test leaks its final handles (`media.rs:212` and `:217`, `std::mem::forget`, reasoning inline). No R13 PORT NOTE: the defect is not in the reference's code.
+- parity row(s):   S48-F1 (CLOSED, test only); phase-3 U1; inventory M43.
+- test:            none proving safety (no GTK-level API closes the window). The measurements came from the port's `bell_media_file_reuses_one_per_path` before its `forget` was added.
+- proposed fix:    To GStreamer, once the owning component is confirmed: `GstPlay` must not let a bus message posted from `gst_play_main` hold the last reference to the `GstPlay` object, or `gst_play_finalize` must tolerate running on the play thread (for example, take an extra reference across `api_bus_post_message`). The report needs the two backtraces and a reproducer that actually reproduces; the C reproducer above did not, so reduction is the first step. No Ghostty-side change is proposed while production reach is unproven.
+- upstream status: not reported (search GStreamer GitLab for GstPlay finalize-on-play-thread reports first)
+
+### UD14 — `bellMediaFile reuses one MediaFile per path` always skips: its paths never exist
+- kind:            test-weakness (plus a wrong comment)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/apprt/gtk/media.zig:136-162 (test; comment at :144, paths at :145-146, skips at :148 and :157), `fromFilename` at :12-23, at 20abdb50a
+- defect:          The test comment says "The files need not exist: MediaFile only records the path until played", and the test uses `/tmp/ghostty-bell-test-a.oga` and `-b.oga` without creating them. `bellMediaFile` calls `fromFilename`, which first runs `std.Io.Dir.accessAbsolute(..., .{ .read = true })` and returns null when that fails (:14-21). So wherever those files are absent, `bellMediaFile(null, path_a, false) orelse return error.SkipZigTest` (:148) returns `SkipZigTest` before any assertion, and none of the reuse assertions (:150, :153-154, :158-159) runs. The commit that added the test (`0708f932a`) says it "Runs in the existing test-gtk CI job"; that job (`.github/workflows/test.yml:1552-1590`) runs `zig build -Dapp-runtime=gtk … test` and creates no such files.
+  - **Change it fails to catch** (by reading): make `bellMediaFile` rebuild every time, for example by deleting `if (isForPath(media_file, path)) return media_file;` at :70. That is the per-bell pipeline leak the test was added to guard (`0b6d91e53`, `0708f932a`). The test still reports skipped, not failed.
+  - **UNVERIFIED:** whether Ghostty's test build analyses `media.zig`'s tests at all. `media.zig` is imported only as a private `const media` in `class/application.zig:48`, and `src/apprt/gtk.zig:12-17` uses non-recursive `refAllDecls`. Either way the assertions do not run in CI.
+- ReleaseSafe:     no product effect; the regression guard is inert.
+- ReleaseFast:     same.
+- reachability:    none (test code).
+- port handling:   the port runs the test for real: it creates both files (`crates/rustty-apprt/src/gtk/media.rs:150-155`), turns the skip into a loud failure (`:157-165`), and is `#[ignore]`d because gtk4-rs needs a display (`:132`). Running it is how UD13 was found.
+- parity row(s):   S48-F1 (context); inventory M45.
+- test:            n/a (record only).
+- proposed fix:    Create the two files in a `std.testing.tmpDir` and pass their absolute paths; delete the "files need not exist" sentence; replace `orelse return error.SkipZigTest` with a hard failure once the files exist. When enabling it, avoid dropping the last `MediaFile` reference immediately after construction because of UD13. If the test cannot run without a display, gate on that explicitly rather than on file existence.
+- upstream status: not reported
+
+### UD15 — PageList reset test cannot fail when either `nodeIsValid` guard is removed
+- kind:            test-weakness
+- upstream project: ghostty
+- severity:        low
+- reference:       src/terminal/PageList.zig:18921-18967 (`test "PageList reset invalidates stale untracked refs even if node memory is reused"`; comment :18958-18960, assertion :18963); `nodeIsValid` at :5701-5716 with the epoch guard at :5708 and the serial comparison at :5712; `reset` sets the epoch at :955, at 20abdb50a
+- defect:          The test forces node-address reuse across resets and asserts `!s.nodeIsValid(old_node, old_serial)` where `old_node == new_node` (:18961-18963). Its comment says reset rejects "the stale generation before inspecting its pointer", which is the epoch guard's job (:5708). But `old_serial` is rejected twice:
+  1. `serial < self.page_serial_epoch` at :5708 returns false; and
+  2. if that line is removed, the list scan finds `node == target` and returns `node.serial == serial` at :5712, which is false because the reset node has a fresh serial (the test itself asserts `new_serial >= s.page_serial_epoch` at :18965).
+  - **Changes it fails to catch** (by reading): delete :5708 (green; `nodeIsValid` silently becomes an O(n) scan for pre-reset refs), or make :5712 `return true` (green, because :5708 still rejects). It goes red only when both are broken. The rustty port measured exactly this on its line-for-line translation (LEDGER S131-F1: "breaking either one alone leaves it green").
+  - Since reset always re-serials nodes, the epoch guard is behaviourally a shortcut, so no pure `nodeIsValid` result can distinguish its removal; the comment claims more than a black-box test can show.
+- ReleaseSafe:     no product effect.
+- ReleaseFast:     same.
+- reachability:    none (test code).
+- port handling:   faithful: `crates/rustty-vt/src/pagelist/tests.rs:1728` (`pagelist_reset_invalidates_stale_untracked_refs_even_if_node_memory_is_reused`).
+- parity row(s):   S131-F1 (CLOSED, unchanged); inventory M46.
+- test:            n/a (record only).
+- proposed fix:    Test each guard on its own: (a) call `nodeIsValid` on a node still in the list with a serial below the epoch, so only :5708 can reject; (b) a non-reset test in which a destroyed node's address is reused by a new node, so only :5712 can reject. (`:8742` does not cover (b): it asserts the replacement has a different address, so the scan simply misses. Whether another existing test covers (b) was not checked.) Or reword the comment so it does not claim to test the epoch shortcut.
+- upstream status: not reported
+
+### UD16 — `checkGhosttyHEnum` never notices a header enumerator that has no Zig field
+- kind:            test-weakness (enhancement; the doc comment scopes the check one way)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/lib/enum.zig:105-163 (`checkGhosttyHEnum`; doc :105-107, field loop :126-146, final set check :149-162); callers src/apprt/action.zig:26,433,514,530,541,557,592,602,612,623,663,672,681,692,959,989,1065, src/apprt/ipc.zig:28,182, src/renderer.zig:52, src/terminal/mouse.zig:96, src/terminal/osc.zig:246; header include/ghostty.h, at 20abdb50a
+- defect:          The function iterates `@typeInfo(T).@"enum".fields` and, for each Zig field, compares its value with `@field(c, PREFIX ++ UPPER(name))` from the translated `ghostty.h`; a missing header value leaves the field in `set` and fails at :149. It never enumerates the header side, so a `GHOSTTY_<PREFIX>_*` enumerator with no Zig field is never examined.
+  - **Changes it fails to catch** (by reading): (1) delete the last variant of a checked enum while leaving its `GHOSTTY_…` enumerator in `ghostty.h`: every remaining field still matches, so the test stays green and the header advertises a value libghostty never produces. (2) append `GHOSTTY_IPC_ACTION_FOO` to `ghostty_ipc_action_tag_e` in the header with no Zig field: green, although a C caller can now pass a value the exhaustive `ipc.Action.Key` cannot represent. (An insertion in the middle is caught, because it shifts later values.)
+  - The doc comment says "for every key in enum T", so upstream may consider this by design.
+- ReleaseSafe:     no product effect by itself; a stale or extra header enumerator ships unnoticed.
+- ReleaseFast:     same.
+- reachability:    none (test code).
+- port handling:   faithful one-directional check: `crates/rustty-lib/src/enum.rs:162` (`check_ghostty_henum`), callers such as `crates/rustty-apprt-api/src/action_tests.rs`. The port's own variant of this blind spot (hand-typed key lists) is NEW-FINDINGS N36.
+- parity row(s):   NEW-FINDINGS N26, N36 (unchanged); inventory M47.
+- test:            n/a (record only).
+- proposed fix:    After the field loop, iterate `@typeInfo(c).@"struct".decls` and fail on any decl that starts with `prefix` and matched no field. A plain prefix scan is not enough, because prefixes overlap in the header: `GHOSTTY_ACTION_` also matches `GHOSTTY_ACTION_OPEN_URL_KIND_*`, `GHOSTTY_ACTION_CLOSE_TAB_MODE_*` and `GHOSTTY_ACTION_OPEN_CONFIG_*`, and `GHOSTTY_MOUSE_` (used for `MouseVisibility`, action.zig:681) also matches `GHOSTTY_MOUSE_SHAPE_*`, the mouse buttons (`GHOSTTY_MOUSE_LEFT`, include/ghostty.h:135) and `GHOSTTY_MOUSE_MOMENTUM_*` (:149-155). So either pass an explicit list of excluded sub-prefixes, or give each C enum a `_COUNT`/`_MAX` sentinel and compare it with `enum_fields.len`.
+- upstream status: not reported
+
+### UD17 — snapshot decode allocation-failure test cannot see a site that swallows OOM
+- kind:            test-weakness
+- upstream project: ghostty
+- severity:        low
+- reference:       src/terminal/snapshot/snapshot.zig:1637-1697 (`test "complete snapshot decode allocation failures are transactional"`, `saw_out_of_memory` check at :1676); Zig 0.16 `std/testing/FailingAllocator.zig:58-78` (`alloc`); the heap-OOM-degrading site src/terminal/snapshot/screen.zig:1117-1140 (`decodeCursorHyperlink`, `error.OutOfMemory` at :1133), at 20abdb50a
+- defect:          For each `fail_index` below the baseline allocation count, the test accepts either `error.OutOfMemory` or a successful decode, and only requires that some index produced OOM. Two properties make a swallowed failure invisible:
+  1. `FailingAllocator` is sticky: once `alloc_index == fail_index` it returns null for that and every later allocation, because `alloc_index` only advances on success (`FailingAllocator.zig:65-76`). If a decode site catches its OOM and continues, the next allocation fails too and a later site propagates `OutOfMemory`, so that index still counts as OOM.
+  2. When no later allocation exists, the decode returns successfully and the test deinits the result without comparing it to the baseline.
+  - **Change it fails to catch** (by reading): turn a propagating allocation into a silent degrade, for example make `grid.StyleRemap.init(alloc) catch return error.OutOfMemory` (snapshot/page.zig:374) fall back to an empty remap. The decoded terminal loses its styles under OOM, and the test stays green.
+  - The reference does contain one deliberate heap-allocator degrade (`decodeCursorHyperlink` maps `error.OutOfMemory` to "no cursor hyperlink", screen.zig:1133), so "every index must be OOM" is not the right assertion either. The rustty port measured the "still reached but stops propagating" blind spot on its own translation (LEDGER S206-F1); on the reference it is by reading, **UNVERIFIED** (not run).
+- ReleaseSafe:     no product effect; OOM data-loss regressions in the decoder would pass CI.
+- ReleaseFast:     same.
+- reachability:    none (test code).
+- port handling:   faithful acceptance of `Ok`, with the limit documented at `crates/rustty-vt/src/snapshot/codec.rs:2629-2640` (that note's cited reason was corrected in task R13-R: the reference's own swallowing site is `decodeCursorHyperlink`, not `decodePageString`, which allocates from the page string allocator the `FailingAllocator` never sees).
+- parity row(s):   S206-F1 (CLOSED, unchanged); inventory M48.
+- test:            n/a (record only).
+- proposed fix:    Use a one-shot failure (fail exactly allocation `i` and let later ones succeed, via a small wrapper allocator), and on success re-encode the decoded terminal and compare with the baseline bytes. Allow a mismatch only for an explicit list of documented degradations (today the cursor hyperlink). That catches both a masked swallow and a silent data loss.
+- upstream status: not reported
+
+### UD18 — Config clone tests cannot catch a field that `clone` stops copying
+- kind:            test-weakness
+- upstream project: ghostty
+- severity:        low
+- reference:       src/config/Config.zig:5120-5127 (`cloneEmpty` starts from `default()`), :5133-5171 (`clone`, field loop :5143-5150); tests `clone default` :10596, `clone preserves conditional state` :10613, `clone can then change conditional state` :10632, `clone preserves conditional set` :10706, `changed` :10750, at 20abdb50a
+- defect:          `clone` begins with `cloneEmpty`, which calls `default()`, then overwrites each field with a deep copy. Every source config in these tests is `Config.default(alloc)` plus, at most, a light/dark theme (`clone can then change conditional state`) or `--theme`/`--window-theme` (`clone preserves conditional set`). So for any field those fixtures leave at its default, a `clone` that skips the field produces a destination equal to the source anyway, and `changeIterator`/`changed` report no difference.
+  - **Change it fails to catch** (by reading): add `if (comptime std.mem.eql(u8, field.name, "keybind")) continue;` inside the loop at :5143. The clone keeps the default keybinds instead of the source's, and all five tests stay green. The same holds for most fields: the only field observed on a clone with a non-default value is `background` (`cfg_clone.background` in `clone can then change conditional state`). Also green by reading: replacing the deep copy with a shallow `@field(result, name) = @field(self, name)`, since each test deinits the clone before the source.
+  - The rustty port measured the fixture problem on its translation (LEDGER S77-F2); on the reference it is by reading.
+- ReleaseSafe:     no product effect; a clone regression would ship. `clone` feeds `changeConditionalState` (light/dark theme switching).
+- ReleaseFast:     same.
+- reachability:    none (test code).
+- port handling:   faithful: `crates/rustty-config/src/config_struct.rs:11738` (`clone_default`) through `:11799` (`changed`) and the conditional-state tests after it.
+- parity row(s):   S77-F2 (CLOSED, unchanged); inventory M49.
+- test:            n/a (record only).
+- proposed fix:    Add a clone test whose source sets a non-default value for each category of field, at least `keybind` (for example `--keybind=ctrl+a=new_window`), a repeatable string, a `RepeatablePath` and an optional, then assert `source.changeIterator(&dest).next() == null` and, for the keybind, that `dest.keybind.set` contains the custom trigger.
+- upstream status: not reported
+
+### UD19 — ReadThread drops the child's final output when `POLLHUP` arrives with `POLLIN`
+- kind:            latent (functional: lost output)
+- upstream project: ghostty
+- severity:        medium (if the loss is confirmed at the pin; see reachability)
+- reference:       src/termio/Exec.zig:1716-1731 (outer `poll`, quit check, then `if (pollfds[0].revents & posix.POLL.HUP != 0) { …; return; }` at :1727-1730) in `ReadThread.threadMainPosix` (:1411); contrast the bridge-poll arm at :1657-1662, at 20abdb50a
+- defect:          After the gather stage drains the pty to `WouldBlock` and publishes the batch, the thread blocks in `poll(pollfds[0..2], -1)`. When it wakes it returns as soon as `POLLHUP` is set, without checking `POLLIN` and without a final read. If the child writes and then exits while the thread is parked in that poll, `revents` can carry both, and the buffered bytes are never read. The same function's bridge poll gets this right ("HUP without IN means no more data is coming", :1657-1662, which stops gathering only when `POLLIN` is clear).
+  - Measured on the rustty port (Linux, before the two-stage pipeline): `revents == 0x11` (`POLLIN|POLLHUP`), and at the HUP return the pty still held the unread `"RUSTTY_OK\r\n"` (`.port/phase-2/DEFERRALS.md:7149-7215`). macOS was not affected: a dying child surfaced as `read() == 0`, which the loop handles (the reference's comment at :1693-1695 says so).
+  - **UNVERIFIED at the pin: the loss has not been re-measured on the current two-stage pipeline code. Needs a Linux VM run before filing** (for example a `/bin/sh -c 'printf done'` child, repeated, checking whether `done` reaches the terminal). The code path above is confirmed by reading.
+- ReleaseSafe:     no crash; the last output of a short-lived command can be missing from the terminal.
+- ReleaseFast:     same.
+- reachability:    ordinary use on Linux: a command that prints and exits immediately (`ghostty -e …`, or a shell's final output at exit), most visible with `wait-after-command`. Timing-dependent: only when the output lands while the reader is parked in the outer poll.
+- port handling:   faithful ("PRESERVED REFERENCE QUIRK"): `crates/rustty-termio/src/exec.rs:5088-5092`. The port's live-shell test sidesteps it with a trailing `sleep 1` (`crates/rustty-termio/tests/live_shell.rs:297-332`).
+- parity row(s):   none (phase-2 DEFERRALS reclassified entry; `.port/phase-3/DEFERRAL_REAUDIT.md:255`); inventory M14.
+- test:            n/a (record only).
+- proposed fix:    On wake, if `POLLIN` is set, loop back into the gather stage before honouring `POLLHUP`; return only when `POLLHUP` is set and `POLLIN` is clear (or a read returns 0 or EIO), mirroring the bridge-poll arm.
+- upstream status: not reported (blocked on the Linux measurement above)
+
+### UD20 — custom-shader uniforms `iSelectionForegroundColor` and `iSelectionBackgroundColor` are swapped
+- kind:            latent (functional: wrong colours)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/renderer/shaders/shadertoy_prefix.glsl:29-30 (`iSelectionForegroundColor` then `iSelectionBackgroundColor`) vs src/renderer/shadertoy.zig:40-41 (`selection_background_color` then `selection_foreground_color`); written at src/renderer/generic.zig:2275-2293 and uploaded as raw bytes by `state.uniforms.sync(&.{self.custom_shader_uniforms})` (:1892); documented at src/config/Config.zig:3163-3165, at 20abdb50a
+- defect:          The `Globals` std140 block and the Zig `extern struct` are laid out member by member and uploaded byte for byte, so each GLSL name receives whatever Zig field sits at its offset. The last two members are declared in opposite orders: `iSelectionForegroundColor` occupies the slot Zig fills with `selection_background_color`, and `iSelectionBackgroundColor` occupies `selection_foreground_color`. A shader reading `iSelectionForegroundColor` gets the `selection-background` colour, and vice versa. The Metal path compiles the same GLSL prefix to MSL (shadertoy.zig:139,150) and the uniforms are written by the shared generic renderer, so both renderers are affected. Introduced with the uniforms in `8d2eb280d` ("custom shaders: add colorscheme information to shader uniforms"). By reading; not rendered.
+- ReleaseSafe:     no crash; the two selection colours are exchanged in custom shaders. Visible whenever either option is set: a set colour appears under the other name, and the name the user expects reads the zero default (both slots start `@splat(0)`, generic.zig:776-777).
+- ReleaseFast:     same.
+- reachability:    config: `custom-shader` plus `selection-foreground` and/or `selection-background`, with a shader that reads either uniform.
+- port handling:   faithful, byte-identical on both sides: `crates/rustty-renderer/src/shaders/shadertoy_prefix.glsl:29-30` and `crates/rustty-renderer/src/shadertoy.rs:158-159`, with a PORT NOTE at the Rust fields (added in task R13-R).
+- parity row(s):   none; inventory M44.
+- test:            n/a (record only).
+- proposed fix:    Swap lines 29 and 30 of `shadertoy_prefix.glsl` so the GLSL order matches `shadertoy.zig` and the documentation order. User shaders bind by name, so no user shader changes. A test pairing each GLSL `Globals` member with the Zig field at the same offset would stop a recurrence.
+- upstream status: not reported
+
+### UD21 — sentry `cacheDir` on macOS inverts the `XDG_CACHE_HOME` check its comment describes
+- kind:            latent (functional)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/crash/sentry.zig:188-207 (`cacheDir`; comment :189-191, condition :192-199), at 20abdb50a; introduced by `15c50c1db` ("crash: do not use global state"), an ancestor of the pin
+- defect:          The comment says: prefer `NSCachesDirectory` on macOS, "But if XDG env vars are set we will respect them." The code does the opposite. If `XDG_CACHE_HOME` is unset it `break :macos`es to `internal_os.xdg.cache(… "ghostty/sentry")`; if it is set and non-empty it returns `internal_os.macos.cacheDir(alloc, "sentry")`. Before `15c50c1db` the block read `if (global.environ().containsUnemptyConstant("XDG_CACHE_HOME")) break :macos;` followed by the `NSCachesDirectory` return, which matched the comment (confirmed in `git show 15c50c1db`).
+- ReleaseSafe:     no crash. On macOS the Sentry database (`sentry_options_set_database_path_n`, :164-168) lands in the XDG cache for users who did not set `XDG_CACHE_HOME`, and in `~/Library/Caches` for users who did. Crash reports are written by the custom transport to `crash.defaultDir` (`xdg.state … "ghostty/crash"`, sentry.zig:122, crash/dir.zig:7-10), so only the database location changes.
+- ReleaseFast:     same.
+- reachability:    environment (macOS builds with Sentry enabled).
+- port handling:   diverges (escalation ruling P4-E35): `crates/rustty-crash/src/sentry.rs:450-484` implements the comment-consistent, pre-`15c50c1db` behaviour, with an UPSTREAM BUG note quoting the reference.
+- parity row(s):   none in LEDGER; phase-4 P4-U1 / assessment P4-E35; inventory M65.
+- test:            n/a (record only).
+- proposed fix:    Restore the intended condition: `const xdg = environ_map.get("XDG_CACHE_HOME"); if (xdg == null or xdg.?.len == 0) return try internal_os.macos.cacheDir(alloc, "sentry");`, then fall through to `xdg.cache`.
+- upstream status: not reported
+
+### UD22 — `+list-colors --plain` (and piped) output is truncated: the buffered stdout writer is never flushed
+- kind:            latent (functional: lost output)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/cli/list_colors.zig:53-74 (plain branch: `var buffer: [4096]u8`, `stdout.writer(global.io(), &buffer)`, prints in a loop, then `return 0` with no flush), at 20abdb50a
+- defect:          The plain branch writes one line per X11 colour through a 4096-byte `std.Io.File.Writer` and never calls `flush()`. Bytes reach stdout only when the buffer fills, so whatever is still buffered at `return 0` (less than 4096 bytes) is discarded. Every other buffered CLI in `src/cli` flushes (`version.zig:78`, `list_keybinds.zig:85`, `list_fonts.zig:168`, `explain_config.zig:112`, `list_themes.zig:200`). The map comes from `src/terminal/res/rgb.txt` (782 lines) and each output line is at least 14 bytes, so the listing spans several buffers and its tail is lost. By reading; the exact number of missing lines is **UNVERIFIED** (not run).
+- ReleaseSafe:     no crash; the end of the colour list is missing.
+- ReleaseFast:     same.
+- reachability:    CLI: `ghostty +list-colors --plain`, or any `+list-colors` whose stdout is not a tty.
+- port handling:   diverges: `crates/rustty-cli/src/list_colors.rs:140-167` flushes a `BufWriter` (PORT NOTE at :145-148). Whether that divergence is right under R1 is the open question in S68-F3; R13 does not decide it.
+- parity row(s):   S68-F3 (OPEN, an R1 question); inventory M66.
+- test:            n/a (record only).
+- proposed fix:    Add `try writer.flush();` after the loop.
+- upstream status: not reported
+
+### UD23 — `+list-themes` never flushes its buffered stderr, so its two error messages are never shown
+- kind:            latent (functional: lost diagnostics)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/cli/list_themes.zig:106-202 (`run`): buffered stderr at :124-126, "Could not find the Ghostty resources directory…" at :128-130, "No themes found…" plus `return 1` at :173-176; only `stdout.flush()` at :200, at 20abdb50a
+- defect:          `run` creates a 4096-byte buffered stderr writer and prints to it in two places, but no path flushes it. Both messages are far shorter than the buffer, so neither reaches the terminal. In particular a user with no installed themes sees `+list-themes` exit with status 1 and no output. (`std.debug.print` at :148, used for directory-open errors, is unbuffered and unaffected.) Minor companion: the `arena` created at :116 is never deinited, which is harmless at process exit.
+- ReleaseSafe:     no crash; the diagnostics are silently dropped.
+- ReleaseFast:     same.
+- reachability:    CLI: a broken install (no resources directory, or no themes).
+- port handling:   diverges: `crates/rustty-cli/src/list_themes.rs:291` and `:369-375` flush stderr. As with UD22, R13 does not decide the divergence.
+- parity row(s):   S69-F4 (OPEN, an R1 question); inventory M67.
+- test:            n/a (record only).
+- proposed fix:    `defer stderr.flush() catch {};` right after creating the writer (or explicit flushes after each print and before `return 1`).
+- upstream status: not reported
+
+### UD24 — Metal `Texture` reports 128 bytes per pixel for 128-bit pixel formats
+- kind:            latent
+- upstream project: ghostty
+- severity:        low
+- reference:       src/renderer/metal/Texture.zig:120-202 (`bppOf`), `.rgba32uint, .rgba32sint, .rgba32float => 128` at :196-200; consumers `init` :73,78 and `replaceRegion` :114 (`bytesPerRow = bpp * width`), at 20abdb50a
+- defect:          `bppOf` returns bytes per pixel (8-bit formats → 1, 16 → 2, 32 → 4, 64 → 8), but the "128-bit pixel formats" arm returns 128 instead of 16. For those formats `Texture.init` would assert `data.len == width * height * 128` on correctly sized data, and `replaceRegion` would pass a `bytesPerRow` eight times too large, making Metal read past the supplied buffer.
+- ReleaseSafe:     none today. If a 128-bit format were used: an assertion failure in `init`, or an out-of-bounds read by Metal in `replaceRegion`.
+- ReleaseFast:     same, with the assertion compiled out.
+- reachability:    none known: Ghostty creates Metal textures only with `r8unorm[_srgb]`, `rgba8unorm[_srgb]` and `bgra8unorm[_srgb]` (`textureOptions` Metal.zig:292-295, `imageTextureOptions` :339-341, `initAtlasTexture` :372-374), plus `bgra8unorm[_srgb]` render targets (:242-245) backed by `32BGRA` IOSurfaces (metal/Target.zig:57).
+- port handling:   faithful ("Reproduced verbatim, NOT corrected"): `crates/rustty-renderer/src/metal/texture.rs:230-234`.
+- parity row(s):   none; inventory M71.
+- test:            n/a (record only).
+- proposed fix:    Change `=> 128` to `=> 16` at :200.
+- upstream status: not reported
+
+### UD25 — OpenGL `Buffer.len` is an element count after `init` but a byte count after `initFill`
+- kind:            latent
+- upstream project: ghostty
+- severity:        low
+- reference:       src/renderer/opengl/buffer.zig:28-30 (doc: "the number of `T`s, not the size in bytes"), `init` `.len = len` at :46, `initFill` `.len = data.len * @sizeOf(T)` at :62; `sync` :76-91 and `syncFromArrayLists` :96-124 treat `len` as a count; the Metal twin src/renderer/metal/buffer.zig:62 stores `.len = data.len`, at 20abdb50a
+- defect:          `initFill` overstates `len` by a factor of `@sizeOf(T)`. A later `sync` with `count < data.len <= count * @sizeOf(T)` elements would skip the reallocation (`data.len > self.len` is false) and call `glBufferSubData` past the end of the buffer's storage, which GL rejects with `GL_INVALID_VALUE`, surfaced by `setSubData`'s `getError` as `error.InvalidValue`; the contents stay stale.
+- ReleaseSafe:     none today; if reached, a failed upload returned as `error.InvalidValue`.
+- ReleaseFast:     same.
+- reachability:    none known: the only renderer `initFill` caller (src/renderer/image.zig:139-167) builds a one-element vertex buffer, draws it and deinits it without syncing.
+- port handling:   faithful ("FAITHFULNESS QUIRK (R1)"): `crates/rustty-renderer/src/opengl/buffer.rs:82` and `:178-180`.
+- parity row(s):   none; inventory M72.
+- test:            n/a (record only).
+- proposed fix:    Set `.len = data.len` in `initFill`, matching the field doc and the Metal implementation.
+- upstream status: not reported
+
+### UD26 — GTK `postFork` reads `linux_cgroup_hard_fail` from the pre-exec info in one arm
+- kind:            latent (unobservable)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/apprt/gtk/post_fork.zig:91-99 (`if (cmd.rt_pre_exec_info.linux_cgroup_hard_fail)` at :93); every other read in `postFork` uses `cmd.rt_post_fork_info` (:40-50, :66, :81); both infos are built from the same config at src/Surface.zig:669-670, at 20abdb50a
+- defect:          In the scope-transition timeout arm, `postFork` consults `rt_pre_exec_info` instead of `rt_post_fork_info`. Both structs copy `cfg.@"linux-cgroup-hard-fail"` (pre_exec.zig:21, post_fork.zig:27) from the same `Config` at the same time, so the values are always equal today. It is a copy-paste slip that would become a real bug if the two infos were ever derived differently.
+- ReleaseSafe:     none.
+- ReleaseFast:     none.
+- reachability:    none.
+- port handling:   collapsed to a single `info` with a PORT NOTE: `crates/rustty-apprt/src/gtk/post_fork.rs:190-198`.
+- parity row(s):   none; inventory M73.
+- test:            n/a.
+- proposed fix:    Read `cmd.rt_post_fork_info.linux_cgroup_hard_fail` at :93.
+- upstream status: not reported
+
+### UD27 — inspector key mapping: keypad Page Down sends Page Up, and keypad Begin sends Tab
+- kind:            latent (functional, inspector)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/input/key.zig:543 (`imguiKey`), `.numpad_page_down => cimgui.c.ImGuiKey_PageUp` at :654, `.numpad_begin => cimgui.c.ImGuiKey_NamedKey_BEGIN` at :659, orphaned comment at :647-648; consumers src/apprt/gtk/class/imgui_widget.zig:180, src/apprt/embedded.zig:1447; GTK producers src/apprt/gtk/key.zig:634,639 (`KEY_KP_Page_Down`, `KEY_KP_Begin`); pinned dear imgui (`pkg/dcimgui/build.zig.zon:16-20`) `imgui.h:1613-1615`, at 20abdb50a
+- defect:          Three mistakes in the numpad block of `imguiKey`:
+  1. `.numpad_page_down` maps to `ImGuiKey_PageUp` (the line above maps `.numpad_page_up` to the same value), so keypad Page Down in the inspector acts as Page Up.
+  2. `.numpad_begin` maps to `ImGuiKey_NamedKey_BEGIN`, which is the start-of-range sentinel, not a key. In the pinned imgui, `ImGuiKey_NamedKey_BEGIN = 512` and `ImGuiKey_Tab = 512` ("== ImGuiKey_NamedKey_BEGIN"), so keypad Begin (KP5 with NumLock off) reaches imgui as Tab and moves keyboard focus.
+  3. The comment at :647-648 ("We map KP_SEPARATOR to Comma…") has no arm under it; `.numpad_separator` is in the unmapped list at :690.
+  By reading; not exercised in the inspector.
+- ReleaseSafe:     no crash; wrong key events in the inspector UI.
+- ReleaseFast:     same.
+- reachability:    keyboard in the inspector: on GTK, keypad navigation keys with NumLock off produce these keyvals. macOS reachability not checked.
+- port handling:   faithful at both copies: `crates/rustty-vt/src/input/key.rs:970,975` and `crates/rustty-apprt/src/embedded.rs:3159,3164`.
+- parity row(s):   none; inventory M74.
+- test:            n/a (record only).
+- proposed fix:    Map `.numpad_page_down => ImGuiKey_PageDown`. Map `.numpad_begin` to `null` (imgui has no Begin key) or to `ImGuiKey_Keypad5`. Either restore `.numpad_separator => ImGuiKey_Comma` under the comment or delete the comment. A test that `imguiKey` is injective over mapped keys, except intentional aliases such as `numpad_left`/`arrow_left`, would catch (1).
+- upstream status: not reported
+
+### UD28 — terminal `hash_map.removeByPtrContext` assumes a zero-sized key lives at index 0
+- kind:            latent (dead in product)
+- upstream project: ghostty
+- severity:        low
+- reference:       src/terminal/hash_map.zig:901-912 (`removeByPtrContext`; `else 0` at :909, comment :902-905), `removeByIndexContext` :841-873, `AutoContext.hash` :72-116; test `HashMap removeByPtr 0 sized key` at :1744-1766 (uses `AutoHashMapUnmanaged(i32, u64, …)`), at 20abdb50a
+- defect:          For `@sizeOf(K) == 0` the index is hard-coded to 0 on the theory that the single item "must be at index 0". This map uses linear probing with backward-shift deletion, so the single entry lives at its home slot `hash(key) & (capacity - 1)`. `removeByIndexContext(0)` then clears slot 0, decrements `size`, and leaves the real entry's metadata in place, so the count and the table disagree from then on. The test named for this case uses an `i32` key, so the zero-sized branch is never analysed.
+  - The home slot is not 0 (by reading Zig 0.16 std): `std.meta.hasUniqueRepresentation(void)` is false (`meta.zig:961-963`, `else => false`), so `AutoContext(void).hash` takes the `Wyhash.init(0)` + `std.hash.autoHash` path, and `autoHash` returns without hashing anything for `.void` (`hash/auto_hash.zig:89`). The result is Wyhash of empty input, `0x409638ee2bde459` (std's own expected value, `hash/wyhash.zig:210`), which is slot 9 at capacity 16. (The port had computed the same value, `crates/rustty-vt/src/hash_map.rs:1131`.)
+- ReleaseSafe:     none today. With a zero-sized key: `count()` reports 0 while the entry is still present, and a later remove of that entry underflows `size` (a safety panic).
+- ReleaseFast:     same, with a silent wrap instead of the panic.
+- reachability:    none in the product: the terminal map's users key on non-zero-sized types (the grapheme and hyperlink maps in `page.zig`).
+- port handling:   diverges (scans for the one used slot): `crates/rustty-vt/src/hash_map.rs:1119-1150`, PORT NOTE W24-B03-ZST-01.
+- parity row(s):   S155-F3 (WAIVED, unchanged); inventory M76.
+- test:            n/a (record only).
+- proposed fix:    For zero-sized `K`, find the entry's index by scanning `metadata` for the one used slot (or probe from `hash(key) & mask`), and change the "0 sized key" test to use `void` as the key type so it exercises the branch it is named for.
+- upstream status: not reported
+
 ## Candidates pending verification
 
 Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do not cite as fact.
@@ -250,7 +521,4 @@ Assembled from this plan's progress notes on 2026-09-11. **Not verified** — do
 | C7 | `src/renderer/Thread.zig:672` `cursorTimerCallback` | log message says "render callback" — copy-pasted from the render callback | latent | kept verbatim (R1) | task 14d-1 review |
 | C8 | `src/renderer/OpenGL.zig:316-327` `present` | `BlitFramebuffer` unchecked; its GL error surfaces later inside the SRGB re-enable, misattributed | latent | faithful; restored log is the only report | task 14c-3 |
 | C9 | `src/font/shaper/coretext.zig`, `harfbuzz.zig` `debugPositions` | dead private functions, only callers commented out | latent | N22 dead-site ratchet | task 14e-2 |
-| C10 | `src/terminal/PageList.zig` reset test (~`:18963`) | the `!nodeIsValid` assertion is defended by two guards, so breaking either alone stays green | test-weakness | ported verbatim (S131-F1) | task 17 |
 | C11 | `src/font/face/coretext.zig:1023-1036`; `src/terminal/StringMap` tests | assertions cannot distinguish the fixture under test | test-weakness | ported verbatim (S90-F5, S140-F1) | task 17 |
-| C12 | `src/lib/enum.zig:126` `checkGhosttyHEnum` | iterates only the enum's fields, so a header enumerator the enum lacks is never caught | test-weakness | faithful (N36) | task 19 review |
-| C13 | `src/apprt/gtk/media.zig` `bellMediaFile` | a GstPlay teardown race required `mem::forget` in the port's test; whether production code races is unknown | crash? | test-only workaround (S48-F1) | task 19 |

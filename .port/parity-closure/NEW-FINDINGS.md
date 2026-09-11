@@ -1467,6 +1467,8 @@ here the ledger does not contradict the waiver, it *dates* it.
   `*_probe_can_fail` self-test that perturbs the header text three ways (dropped, renamed,
   revalued enumerator) and asserts the check goes red. The real header was also perturbed
   live once (`RUSTTY_ACTION_NEW_TAB = 9`) to prove the unmodified test fails.
+- **upstream record**: the reference's own one-directional check (a header enumerator with no
+  Zig field is never examined) is `UPSTREAM-DEFECTS.md` UD16 (task R13-R).
 
 ## N27 — the vt enum-discriminant checker pairs header and Rust POSITIONALLY, so a header reorder is invisible
 
@@ -2038,6 +2040,9 @@ unrealistic).
 **state**: CLOSED by task 19 at all five sites. Recorded here rather than reopening `S45-F1`,
 whose own claim — "the C values are looked up in the enum itself" — was true, was fixed, and is
 not this.
+
+**upstream record**: the reference-side blind spot of `checkGhosttyHEnum` is
+`UPSTREAM-DEFECTS.md` UD16 (task R13-R).
 
 ## N37 — `xtask dist-lib-vt` has been BROKEN since task 17, and G-DIST runs it at its DEFAULT depth
 
