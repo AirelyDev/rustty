@@ -5398,15 +5398,26 @@ impl RepeatableCodepointMap {
             // } else {
             //     try formatter.formatEntry([]const u8, std.fmt.bufPrint(&buf, "U+{X:0>4}-U+{X:0>4}={s}", .{ range[0], range[1], descriptor.family orelse "" }) catch ...);
             // }
-            let mut s: Vec<u8> = Vec::new();
-            if range[0] == range[1] {
-                s.extend_from_slice(format!("U+{:04X}=", range[0]).as_bytes());
-                s.extend_from_slice(family);
+            // PORT NOTE (fidelity): each entry is serialized through the
+            // reference's FIXED `var buf: [1024]u8`, so a `descriptor.family`
+            // long enough to push the rendered entry past 1024 bytes makes
+            // `bufPrint` fail with `error.NoSpaceLeft`, which the reference
+            // catches and returns as `error.OutOfMemory` — the whole config
+            // dump fails. A growable `Vec` here silently accepted those
+            // overlong entries; the fixed scratch reproduces the reference
+            // bound exactly, matching the sibling
+            // `RepeatableClipboardCodepointMap::format_entry` treatment
+            // (boundary: 1017 family bytes for a 4-hex-digit single codepoint,
+            // 1010 for the range form).
+            let mut buf = [0u8; 1024];
+            let prefix = if range[0] == range[1] {
+                format!("U+{:04X}=", range[0])
             } else {
-                s.extend_from_slice(format!("U+{:04X}-U+{:04X}=", range[0], range[1]).as_bytes());
-                s.extend_from_slice(family);
-            }
-            format_entry_string(name, &s, writer)?;
+                format!("U+{:04X}-U+{:04X}=", range[0], range[1])
+            };
+            let s = buf_print_parts(&mut buf, &[prefix.as_bytes(), family])
+                .ok_or(FormatError::OutOfMemory)?;
+            format_entry_string(name, s, writer)?;
         }
         Ok(())
     }
@@ -6179,9 +6190,15 @@ impl RepeatableCommand {
     // PORT NOTE: the reference builds each entry's bytes into a 4096-byte fixed
     // buffer (`std.Io.Writer.fixed`), then hands `writer.buffered()` to
     // `formatter.formatEntry([]const u8, ...)`. The Rust port accumulates each
-    // entry into an owned `Vec<u8>` (no fixed cap; the observable bytes are
-    // identical) and emits it via `format_entry_string`. `std.zig.fmtString` ->
-    // `zig_string_escape`; `{f}` on the action -> `Command.action.format`.
+    // entry into an owned `Vec<u8>` and emits it via `format_entry_string`;
+    // `std.zig.fmtString` -> `zig_string_escape`; `{f}` on the action ->
+    // `Command.action.format`.
+    //
+    // The fixed buffer's BOUND is observable and is reproduced: every reference
+    // `writer.print(...) catch return error.OutOfMemory` fails as soon as the
+    // entry passes 4096 bytes, so the whole config dump fails on an overlong
+    // title/description/action. `fixed_writer_cap` below is checked after each
+    // `print`, at exactly the points the reference can fail (parity S76-F4).
     pub fn format_entry<W: Writer>(
         &self,
         name: &[u8],
@@ -6204,6 +6221,7 @@ impl RepeatableCommand {
             buf.extend_from_slice(b"title:\"");
             rustty_args::args::zig_string_escape(&mut buf, &item.title);
             buf.push(b'"');
+            fixed_writer_cap(&buf, 4096)?;
 
             // if (item.description.len > 0) {
             if !item.description.is_empty() {
@@ -6211,6 +6229,7 @@ impl RepeatableCommand {
                 buf.extend_from_slice(b",description:\"");
                 rustty_args::args::zig_string_escape(&mut buf, &item.description);
                 buf.push(b'"');
+                fixed_writer_cap(&buf, 4096)?;
             }
 
             // writer.print(",action:\"{f}\"", .{item.action}) catch return error.OutOfMemory;
@@ -6223,6 +6242,7 @@ impl RepeatableCommand {
                 buf.extend_from_slice(action_buf.written());
             }
             buf.push(b'"');
+            fixed_writer_cap(&buf, 4096)?;
 
             // try formatter.formatEntry([]const u8, writer.buffered());
             format_entry_string(name, &buf, writer)?;
@@ -6230,6 +6250,17 @@ impl RepeatableCommand {
 
         Ok(())
     }
+}
+
+/// PORTS: the failure edge of `std.Io.Writer.fixed(&buf)` when the reference
+/// accumulates an entry with `writer.print(...) catch return error.OutOfMemory`.
+/// The port builds the same bytes into a `Vec` and calls this at each point the
+/// reference's writer can overflow, so the observable bound is identical.
+fn fixed_writer_cap<E>(buf: &[u8], cap: usize) -> Result<(), FormatError<E>> {
+    if buf.len() > cap {
+        return Err(FormatError::OutOfMemory);
+    }
+    Ok(())
 }
 
 impl FormatEntry for RepeatableCommand {
@@ -7484,14 +7515,21 @@ impl Theme {
             return format_entry_string(name, &self.light, writer);
         }
 
-        // const str = std.fmt.bufPrint(&buf, "light:{s},dark:{s}", .{ self.light, self.dark }) catch ...;
+        // const str = std.fmt.bufPrint(&buf, "light:{s},dark:{s}", .{ self.light, self.dark }) catch return error.OutOfMemory;
         // try formatter.formatEntry([]const u8, str);
-        let mut s: Vec<u8> = Vec::new();
-        s.extend_from_slice(b"light:");
-        s.extend_from_slice(&self.light);
-        s.extend_from_slice(b",dark:");
-        s.extend_from_slice(&self.dark);
-        format_entry_string(name, &s, writer)
+        //
+        // PORT NOTE (fidelity): the pair is rendered through the reference's
+        // FIXED `var buf: [4096]u8`, so `bufPrint` fails with
+        // `error.NoSpaceLeft` — caught and returned as `error.OutOfMemory` —
+        // once `light:<light>,dark:<dark>` passes 4096 bytes, failing the whole
+        // config dump. `parseCLI` bounds neither component, so the case is
+        // reachable; a growable `Vec` silently accepted it (parity S77-F1).
+        // The equal-value early return above uses no buffer, matching the
+        // reference.
+        let mut buf = [0u8; 4096];
+        let s = buf_print_parts(&mut buf, &[b"light:", &self.light, b",dark:", &self.dark])
+            .ok_or(FormatError::OutOfMemory)?;
+        format_entry_string(name, s, writer)
     }
 }
 
@@ -9054,6 +9092,67 @@ mod tests {
         assert_eq!(b"a = U+0001-U+0005=Verdana\n".as_slice(), buf.written());
     }
 
+    // PORT NOTE: no reference test. The reference serializes each entry through
+    // `var buf: [1024]u8`, so `bufPrint` fails (`NoSpaceLeft` ->
+    // `error.OutOfMemory`) once the rendered entry passes 1024 bytes. The
+    // boundary is 1017 family bytes for the single-codepoint form ("U+XXXX=" is
+    // 7 bytes) and 1010 for the range form ("U+XXXX-U+XXXX=" is 14). A growable
+    // buffer accepted overlong entries the reference rejects (parity S76-F3).
+    #[test]
+    fn repeatable_codepoint_map_format_config_fixed_buffer_bound() {
+        // 1017 bytes: the largest single-codepoint entry that fits.
+        {
+            let mut input: Vec<u8> = b"U+2500=".to_vec();
+            input.resize(input.len() + 1017, b'x');
+            let mut list = RepeatableCodepointMap::default();
+            list.parse_cli(Some(&input)).unwrap();
+
+            let mut buf = AllocatingWriter::init();
+            let mut f = entry_formatter(b"a", &mut buf);
+            f.format_entry(&list).unwrap();
+
+            let mut want: Vec<u8> = b"a = U+2500=".to_vec();
+            want.resize(want.len() + 1017, b'x');
+            want.push(b'\n');
+            assert_eq!(want.as_slice(), buf.written());
+        }
+
+        // 1018 bytes: one past the reference's buffer.
+        {
+            let mut input: Vec<u8> = b"U+2500=".to_vec();
+            input.resize(input.len() + 1018, b'x');
+            let mut list = RepeatableCodepointMap::default();
+            list.parse_cli(Some(&input)).unwrap();
+
+            let mut buf = AllocatingWriter::init();
+            let mut f = entry_formatter(b"a", &mut buf);
+            assert_eq!(Err(FormatError::OutOfMemory), f.format_entry(&list));
+        }
+
+        // Range form: "U+XXXX-U+XXXX=" is 14 bytes, so 1010 fits and 1011 does not.
+        {
+            let mut input: Vec<u8> = b"U+2500-U+2501=".to_vec();
+            input.resize(input.len() + 1010, b'x');
+            let mut list = RepeatableCodepointMap::default();
+            list.parse_cli(Some(&input)).unwrap();
+
+            let mut buf = AllocatingWriter::init();
+            let mut f = entry_formatter(b"a", &mut buf);
+            f.format_entry(&list).unwrap();
+            assert_eq!(1024 + 4 + 1, buf.written().len());
+        }
+        {
+            let mut input: Vec<u8> = b"U+2500-U+2501=".to_vec();
+            input.resize(input.len() + 1011, b'x');
+            let mut list = RepeatableCodepointMap::default();
+            list.parse_cli(Some(&input)).unwrap();
+
+            let mut buf = AllocatingWriter::init();
+            let mut f = entry_formatter(b"a", &mut buf);
+            assert_eq!(Err(FormatError::OutOfMemory), f.format_entry(&list));
+        }
+    }
+
     // test "formatConfig multiple"
     #[test]
     fn repeatable_codepoint_map_format_config_multiple() {
@@ -9746,6 +9845,53 @@ mod tests {
         assert_eq!(Err(Error::InvalidValue), v.parse_cli(Some(b"dark:foo")));
     }
 
+    // PORT NOTE: no reference test. `Theme.formatEntry` renders the light/dark
+    // pair through `var buf: [4096]u8`, so `bufPrint` fails (`NoSpaceLeft` ->
+    // `error.OutOfMemory`) once `light:<light>,dark:<dark>` passes 4096 bytes.
+    // `parseCLI` bounds neither component, so the case is reachable; the port
+    // used a growable `Vec` and always succeeded (parity S77-F1). The prefix
+    // `light:` (6) + `,dark:` (6) is 12 bytes, so two 2042-byte values fit
+    // (4096) and 2043/2042 does not (4097).
+    #[test]
+    fn theme_format_config_fixed_buffer_bound() {
+        // Equal light/dark takes the early return, which uses NO buffer in the
+        // reference: an arbitrarily long value formats fine.
+        {
+            let light = vec![b'x'; 9000];
+            let v = Theme {
+                dark: light.clone(),
+                light,
+            };
+            let mut buf = AllocatingWriter::init();
+            v.format_entry(b"a", &mut buf).unwrap();
+            assert_eq!(4 + 9000 + 1, buf.written().len());
+        }
+
+        // Exactly 4096 bytes of rendered entry.
+        {
+            let v = Theme {
+                light: vec![b'x'; 2042],
+                dark: vec![b'y'; 2042],
+            };
+            let mut buf = AllocatingWriter::init();
+            v.format_entry(b"a", &mut buf).unwrap();
+            assert_eq!(4 + 4096 + 1, buf.written().len());
+        }
+
+        // One byte past it.
+        {
+            let v = Theme {
+                light: vec![b'x'; 2043],
+                dark: vec![b'y'; 2042],
+            };
+            let mut buf = AllocatingWriter::init();
+            assert_eq!(
+                Err(FormatError::OutOfMemory),
+                v.format_entry(b"a", &mut buf),
+            );
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Duration
     // -----------------------------------------------------------------------
@@ -10306,6 +10452,36 @@ mod tests {
             b"a = title:\"Bobr\",action:\"text:Bober\"\n".as_slice(),
             buf.written()
         );
+    }
+
+    // PORT NOTE: no reference test. The reference renders each entry through
+    // `std.Io.Writer.fixed(&buf /* [4096]u8 */)`, so every `print` returns
+    // `error.OutOfMemory` once the entry passes 4096 bytes and the whole config
+    // dump fails. The port accumulated into an unbounded `Vec` and always
+    // succeeded (parity S76-F4). Entry shape for a plain title and a
+    // `text:z` action: `title:"` (7) + title + `"` (1) + `,action:"` (9) +
+    // `text:z` (6) + `"` (1) = title + 24, so 4072 title bytes fit and 4073 do
+    // not.
+    #[test]
+    fn repeatable_command_format_config_fixed_buffer_bound() {
+        for (title_len, want_ok) in [(4072usize, true), (4073usize, false)] {
+            let mut input: Vec<u8> = b"title:".to_vec();
+            input.resize(input.len() + title_len, b'x');
+            input.extend_from_slice(b", action:text:z");
+
+            let mut list = RepeatableCommand::default();
+            list.parse_cli(Some(&input)).unwrap();
+
+            let mut buf = AllocatingWriter::init();
+            let got = list.format_entry(b"a", &mut buf);
+            if want_ok {
+                got.unwrap();
+                // "a = " + entry + "\n"
+                assert_eq!(4 + (title_len + 24) + 1, buf.written().len());
+            } else {
+                assert_eq!(Err(FormatError::OutOfMemory), got);
+            }
+        }
     }
 
     // test "RepeatableCommand formatConfig multiple items"

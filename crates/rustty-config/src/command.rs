@@ -308,11 +308,24 @@ impl FormatEntry for Command {
                 // then trims the trailing space (`written.len - 1`). We build the
                 // joined bytes the same way (each arg + a space), then drop the
                 // final space, and pass the result through the string-slice arm.
+                //
+                // PORT NOTE (fidelity): the buffer is FIXED, and every
+                // `writeAll`/`writeByte` that overflows it is caught as `return
+                // error.OutOfMemory`, so a direct command whose
+                // `direct:` + args + separating spaces exceeds 4096 bytes fails
+                // the whole config dump. The bound is on the UNTRIMMED bytes —
+                // the trailing space is written into the buffer and only trimmed
+                // at output. The growable Vec is scratch; the fixed capacity is
+                // enforced below, matching the sibling `io.rs:260` and
+                // `path.rs` treatments (parity S78-F1).
                 let mut buf: Vec<u8> = Vec::new();
                 buf.extend_from_slice(b"direct:");
                 for arg in v {
                     buf.extend_from_slice(arg);
                     buf.push(b' ');
+                    if buf.len() > 4096 {
+                        return Err(FormatError::OutOfMemory);
+                    }
                 }
 
                 let written = &buf[0..buf.len() - 1];
@@ -845,6 +858,46 @@ mod tests {
         f.format_entry(&v).unwrap();
         // try std.testing.expectEqualSlices(u8, "a = direct:echo hello\n", buf.written());
         assert_eq!(b"a = direct:echo hello\n".as_slice(), buf.written());
+    }
+
+    // rustty-only test (parity fix S78-F1): the reference formats a `.direct`
+    // command through a FIXED `[4096]u8` writer, and every `writeAll`/
+    // `writeByte` that overflows it is `catch return error.OutOfMemory`. The
+    // bound applies to the UNTRIMMED bytes: `direct:` (7) + each arg + one
+    // trailing space per arg, with only the last space trimmed at output. So a
+    // single arg of 4088 bytes fills the buffer exactly (7 + 4088 + 1 == 4096)
+    // and 4089 overflows it. The port built an unbounded `Vec` and always
+    // succeeded.
+    #[test]
+    fn command_format_config_direct_fixed_buffer_boundary() {
+        use rustty_cfg_fmt::FormatError;
+
+        // 7 + 4088 + 1 == 4096: fits.
+        {
+            let mut buf = AllocatingWriter::init();
+            let v = Command::Direct(vec![vec![b'x'; 4088]]);
+            let mut f = entry_formatter(b"a", &mut buf);
+            f.format_entry(&v).unwrap();
+            // "a = " + "direct:" + 4088 + "\n" (the trailing space is trimmed)
+            assert_eq!(4 + 7 + 4088 + 1, buf.written().len());
+        }
+
+        // One byte more overflows it.
+        {
+            let mut buf = AllocatingWriter::init();
+            let v = Command::Direct(vec![vec![b'x'; 4089]]);
+            let mut f = entry_formatter(b"a", &mut buf);
+            assert_eq!(Err(FormatError::OutOfMemory), f.format_entry(&v));
+        }
+
+        // The bound is cumulative across args, not per-arg.
+        {
+            let mut buf = AllocatingWriter::init();
+            let v = Command::Direct(vec![vec![b'x'; 2044], vec![b'y'; 2044]]);
+            let mut f = entry_formatter(b"a", &mut buf);
+            // 7 + (2044 + 1) + (2044 + 1) == 4097.
+            assert_eq!(Err(FormatError::OutOfMemory), f.format_entry(&v));
+        }
     }
 
     // test {
