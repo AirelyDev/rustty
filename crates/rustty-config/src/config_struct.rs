@@ -6721,7 +6721,7 @@ impl Config {
                 for arg_raw in args {
                     // const arg = std.mem.sliceTo(arg_raw, 0);
                     // const copy = try arena_alloc.dupeZ(u8, arg);
-                    let copy = arg_raw.as_bytes().to_vec();
+                    let copy = arg_raw.to_vec();
                     // try self._replay_steps.append(arena_alloc, .{ .arg = copy });
                     self._replay_steps.push(ReplayStep::Arg(copy.clone()));
                     // try builder.append(arena_alloc, copy);
