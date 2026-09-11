@@ -120,9 +120,20 @@ impl Shape {
 #[cfg(test)]
 mod shape_tests {
     use crate::options as build_options;
+    use rustty_lib::c_header::{header_decls as parse_header_decls, parse_header_enum};
     use rustty_lib::r#enum::{check_ghostty_henum, enum_type, EnumType};
     use rustty_lib::target::Target;
     use std::collections::HashMap;
+
+    /// The `@hasDecl`/`@field` stand-in: the header's declarations as a lookup.
+    ///
+    /// PORT NOTE (S45-F1): the header parser this used to carry inline now
+    /// lives in `rustty_lib::c_header`, shared with every other
+    /// `checkGhosttyHEnum` port, all of which were synthesizing their C side
+    /// from the descriptor under test.
+    fn header_decls(src: &str) -> HashMap<String, i64> {
+        parse_header_decls(src, HEADER_ENUM)
+    }
 
     /// The checked-in public C header, embedded at compile time.
     ///
@@ -130,7 +141,7 @@ mod shape_tests {
     /// `const c = @import("ghostty.h")` — it reflects over the REAL generated
     /// header. Rust has no `@import` for a C header, so the test reads the
     /// checked-in header's text and parses the enum block out of it (see
-    /// [`parse_header_enum`]). The point is the same: the C declarations the
+    /// [`rustty_lib::c_header::parse_header_enum`]). The point is the same: the C declarations the
     /// check compares against must come from the header, never from the
     /// descriptor under test.
     const HEADER_SRC: &str = include_str!(concat!(
@@ -140,93 +151,6 @@ mod shape_tests {
 
     /// The header's enum tag for `Shape` (`terminal.MouseShape`).
     const HEADER_ENUM: &str = "rustty_action_mouse_shape_e";
-
-    /// Strip `//` and `/* */` comments from a C fragment.
-    fn strip_c_comments(src: &str) -> String {
-        let b = src.as_bytes();
-        let mut out = String::with_capacity(src.len());
-        let mut i = 0;
-        while i < b.len() {
-            if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'/' {
-                while i < b.len() && b[i] != b'\n' {
-                    i += 1;
-                }
-            } else if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'*' {
-                i += 2;
-                while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
-                    i += 1;
-                }
-                i = (i + 2).min(b.len());
-                out.push(' ');
-            } else {
-                out.push(b[i] as char);
-                i += 1;
-            }
-        }
-        out
-    }
-
-    /// Parse `typedef enum { ... } <enum_name>;` out of C header text into its
-    /// declared `(name, value)` pairs, in declaration order. Enumerators may be
-    /// bare (value = previous + 1, starting at 0) or `NAME = <int>`; anything
-    /// else is an error rather than a silent skip, so header drift can never
-    /// quietly disappear from the check.
-    fn parse_header_enum(src: &str, enum_name: &str) -> Result<Vec<(String, i64)>, String> {
-        let close = format!("}} {};", enum_name);
-        let close_at = src
-            .find(&close)
-            .ok_or_else(|| format!("enum `{}` not found in header", enum_name))?;
-        let head = &src[..close_at];
-        let open_pat = "typedef enum {";
-        let open_at = head
-            .rfind(open_pat)
-            .ok_or_else(|| format!("no `{}` opening for `{}`", open_pat, enum_name))?;
-        let body = strip_c_comments(&head[open_at + open_pat.len()..]);
-        if body.contains('}') || body.contains('{') {
-            return Err(format!("unbalanced braces in enum `{}`", enum_name));
-        }
-
-        let mut out: Vec<(String, i64)> = Vec::new();
-        let mut next: i64 = 0;
-        for raw in body.split(',') {
-            let entry = raw.trim();
-            if entry.is_empty() {
-                continue;
-            }
-            let (name, value) = match entry.split_once('=') {
-                Some((n, v)) => {
-                    let v = v.trim();
-                    let parsed = match v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")) {
-                        Some(hex) => i64::from_str_radix(hex, 16),
-                        None => v.parse::<i64>(),
-                    }
-                    .map_err(|_| format!("unparseable value `{}` in enum `{}`", v, enum_name))?;
-                    (n.trim(), parsed)
-                }
-                None => (entry, next),
-            };
-            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-                return Err(format!(
-                    "unparseable enumerator `{}` in enum `{}`",
-                    entry, enum_name
-                ));
-            }
-            next = value + 1;
-            out.push((name.to_string(), value));
-        }
-        if out.is_empty() {
-            return Err(format!("enum `{}` declares no enumerators", enum_name));
-        }
-        Ok(out)
-    }
-
-    /// The `@hasDecl`/`@field` stand-in: the header's declarations as a lookup.
-    fn header_decls(src: &str) -> HashMap<String, i64> {
-        parse_header_enum(src, HEADER_ENUM)
-            .unwrap()
-            .into_iter()
-            .collect()
-    }
 
     /// PORT NOTE: models the reference `enum(c_int)` `Shape` as a [`EnumType`]
     /// (C target) so the `checkGhosttyHEnum` test can reflect over its keys and

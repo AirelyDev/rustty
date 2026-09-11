@@ -7,7 +7,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
 
 ## Medium (16)
 
-- [ ] **S45-F1** · CONFIRMED · `ABI` · weakened-assertion
+- [x] **S45-F1** · CONFIRMED · `ABI` · weakened-assertion
   - **What:** checkGhosttyHEnum ports are tautological: the 'header' side is synthesized from the Rust enum itself, not read from rustty-embed.h
   - **Oracle:** `src/apprt/action.zig:25-27, 432-434, 513-515, 529-531, 540-542, 556-558, 591-593, 601-603, 611-613, 622-624, 662-664, 671-673, 680-682, 691-693, 958-960, 988-990, 1064-1066` → **Rustty:** `crates/rustty-apprt-api/src/action_tests.rs:15-35 (run_henum) and every ghostty_h_* test 41-283`
   - **Audit's suggested fix:** Have the test (or a build.rs/xtask gate) parse include/rustty-embed.h and feed the parsed `RUSTTY_<PREFIX><KEY> = value` map into `check_ghostty_henum`'s closure, or add hard-coded header-mirroring `const _: () = assert!(Enum::Variant as c_int == N)` pins for the 15 remaining enums in abi_layout.rs the way ActionKey/TargetKey are pinned.

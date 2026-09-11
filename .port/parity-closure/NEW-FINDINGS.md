@@ -1432,3 +1432,65 @@ here the ledger does not contradict the waiver, it *dates* it.
   surfaced as a finding in round 8 at the coordinator's instruction, because it had been left
   visible only as a raised number.
 - **state**: **OPEN.**
+
+## N26 — the `checkGhosttyHEnum` tautology is four crates wide, not one file
+
+- **id**: N26 (next free id checked 2026-09-10 against `NEW-FINDINGS.md` headings and a
+  workspace grep for `\bN[0-9]+\b`: N1-N25 taken.)
+- **severity**: medium (four more C-enum-sync tests that could not fail; same class as
+  `S45-F1`, which cites only `src/apprt/action.zig`)
+- **kind**: weakened-assertion / verification instrument
+- **oracle**: `src/renderer.zig:52`, `src/apprt/ipc.zig:28,182`, `src/terminal/osc.zig:246`
+  (each a `lib.checkGhosttyHEnum(T, "GHOSTTY_…_")` call).
+- **rustty**: `crates/rustty-renderer/src/lib.rs` (`health_tests`),
+  `crates/rustty-apprt-api/src/ipc.rs` (`tests`),
+  `crates/rustty-vt/src/osc/mod.rs` (`tests`).
+- **description**: `S45-F1` records that `run_henum` in `action_tests.rs` synthesized the "C
+  header" side of `check_ghostty_henum` from the very descriptor under test, so all 17
+  `ghostty_h_*` tests compared the enum to itself. The audit scoped the row to
+  `src/apprt/action.zig`. Enumerating the port's **five** `check_ghostty_henum` call sites
+  showed four of the five had the identical defect — the three files above plus
+  `action_tests.rs` — **21 tests total**. Only `crates/rustty-vt/src/mouse.rs` read the real
+  header, and it was the only site with a `*_probe_can_fail` self-test.
+- **how found**: task 15, by grepping every caller of `check_ghostty_henum` rather than only
+  the file the row cites. This is blind spot 3 (the anchors locate a region, they do not
+  enumerate the work) applied across FILES rather than within one.
+- **state**: **CLOSED** in the same commit as `S45-F1`. All five callers now parse the named
+  enum block out of `include/rustty-embed.h` via the new shared
+  `rustty_lib::c_header` module, and each of the four fixed files carries a
+  `*_probe_can_fail` self-test that perturbs the header text three ways (dropped, renamed,
+  revalued enumerator) and asserts the check goes red. The real header was also perturbed
+  live once (`RUSTTY_ACTION_NEW_TAB = 9`) to prove the unmodified test fails.
+
+## N27 — the vt enum-discriminant checker pairs header and Rust POSITIONALLY, so a header reorder is invisible
+
+- **id**: N27
+- **severity**: low-medium (a real gate, binding on values, blind to one drift class)
+- **kind**: gate blind spot
+- **rustty**: `.port/tools/check-vt-enum-discriminants.mjs:282-289`.
+- **description**: the checker emits
+  `_Static_assert((int)<header enumerator i> == <rust variant i's discriminant>)` by INDEX.
+  It is genuinely independent — clang evaluates the header's own enumerators — and it does
+  catch a value skew and a count skew. But because the pairing is positional and never
+  compares the two NAMES, transposing two enumerators in the header is invisible: each
+  assert is re-aimed at the enumerator that now occupies that slot, and both still hold.
+  That is precisely the drift `checkGhosttyHEnum` catches, because the reference pairs by
+  NAME (`<prefix><KEY>` uppercased).
+- **why it is positional today**: the header's enumerator names and the Rust variant names
+  differ in shape, so a name pairing needs the same `<prefix><UPPER_SNAKE>` derivation
+  `check_ghostty_henum` uses. The mapping doc-line convention the checker already relies on
+  (`C: Rustty…`) does not carry a prefix.
+- **what closing it looks like**: derive the expected header enumerator name from the Rust
+  variant name plus a per-enum prefix (declared beside the existing `PREFIX_OK` table), and
+  FAIL when the positional partner's name does not match the derived one. Add a self-test arm
+  that transposes two enumerators in a fixture header and asserts RED — without that arm the
+  fix is unproven.
+- **how found**: task 15, auditing every ABI gate for the `S45-F1` tautology at the
+  controller's instruction. No other gate synthesised its expectations: `check_abi_schema.sh`
+  validates the built dylib's emitted manifest against a hand-written JSON Schema and runs a
+  negative control every invocation; `check_embed_h_abi.sh` clang-probes the real header;
+  `check_rustty_h_abi.sh` diffs the product umbrella against the pinned oracle header;
+  `check_rustty_vt_headers.sh` and `check-vt-struct-layouts.mjs` compile the real headers;
+  `check_closed_enum_abi.sh` enforces a structural rule over Rust source and has no
+  "expected" side to synthesise.
+- **state**: **OPEN.**

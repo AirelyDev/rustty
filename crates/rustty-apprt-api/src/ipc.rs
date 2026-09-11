@@ -363,8 +363,61 @@ impl<'a> Action<'a> {
 #[cfg(test)]
 mod tests {
     use super::{ActionKey, TargetKey};
+    use rustty_lib::c_header::header_decls;
     use rustty_lib::r#enum::{check_ghostty_henum, enum_type};
     use rustty_lib::target::Target as EnumTarget;
+
+    /// The checked-in public C header, embedded at compile time.
+    ///
+    /// PORT NOTE: the reference `lib.checkGhosttyHEnum` does
+    /// `const c = @import("ghostty.h")` — it reflects over the REAL generated
+    /// header. Rust has no `@import` for a C header, so these tests parse the
+    /// named enum block out of the checked-in header's text. The C declarations
+    /// come from the header, never from the descriptor under test (S45-F1).
+    const HEADER_SRC: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../include/rustty-embed.h"
+    ));
+
+    fn run_henum_src(
+        src: &str,
+        header_enum: &str,
+        prefix: &str,
+        keys: &[&str],
+    ) -> Result<(), String> {
+        let opts: Vec<Option<&str>> = keys.iter().map(|k| Some(*k)).collect();
+        let t = enum_type(EnumTarget::C, &opts);
+        let decls = header_decls(src, header_enum);
+        check_ghostty_henum(&t, prefix, |name| decls.get(name).copied())
+    }
+
+    /// Self-check that the two probes below can actually FAIL — i.e. that they
+    /// read the header and not the descriptor.
+    ///
+    /// PORT NOTE: no reference analogue; the oracle gets this for free because
+    /// `@import("ghostty.h")` is the real header.
+    #[test]
+    fn ghostty_h_probe_can_fail() {
+        let keys = ["class", "detect"];
+        let run =
+            |src: &str| run_henum_src(src, "rustty_ipc_target_tag_e", "RUSTTY_IPC_TARGET_", &keys);
+        run(HEADER_SRC).unwrap();
+
+        let dropped = HEADER_SRC.replace("  RUSTTY_IPC_TARGET_DETECT,\n", "");
+        assert_ne!(dropped, HEADER_SRC);
+        assert!(run(&dropped).is_err(), "dropped enumerator must fail");
+
+        let renamed = HEADER_SRC.replace("RUSTTY_IPC_TARGET_DETECT", "RUSTTY_IPC_TARGET_DETECTS");
+        assert_ne!(renamed, HEADER_SRC);
+        assert!(run(&renamed).is_err(), "renamed enumerator must fail");
+
+        let revalued = HEADER_SRC.replace(
+            "  RUSTTY_IPC_TARGET_CLASS,\n",
+            "  RUSTTY_IPC_TARGET_CLASS = 7,\n",
+        );
+        assert_ne!(revalued, HEADER_SRC);
+        assert!(run(&revalued).is_err(), "revalued enumerator must fail");
+    }
 
     // test "ghostty.h Target.Key" {
     //     try lib.checkGhosttyHEnum(Key, "GHOSTTY_IPC_TARGET_");
@@ -372,18 +425,12 @@ mod tests {
     #[test]
     fn ghostty_h_target_key() {
         let _ = (TargetKey::Class, TargetKey::Detect);
-        let t = enum_type(EnumTarget::C, &[Some("class"), Some("detect")]);
-        let fields = t.fields.clone();
-        check_ghostty_henum(&t, "RUSTTY_IPC_TARGET_", |name| {
-            fields.iter().find_map(|(n, v)| {
-                let expected = format!("RUSTTY_IPC_TARGET_{}", n.to_ascii_uppercase());
-                if expected == name {
-                    Some(*v as i64)
-                } else {
-                    None
-                }
-            })
-        })
+        run_henum_src(
+            HEADER_SRC,
+            "rustty_ipc_target_tag_e",
+            "RUSTTY_IPC_TARGET_",
+            &["class", "detect"],
+        )
         .unwrap();
     }
 
@@ -397,25 +444,12 @@ mod tests {
             ActionKey::NewTab,
             ActionKey::ToggleQuickTerminal,
         );
-        let t = enum_type(
-            EnumTarget::C,
-            &[
-                Some("new_window"),
-                Some("new_tab"),
-                Some("toggle_quick_terminal"),
-            ],
-        );
-        let fields = t.fields.clone();
-        check_ghostty_henum(&t, "RUSTTY_IPC_ACTION_", |name| {
-            fields.iter().find_map(|(n, v)| {
-                let expected = format!("RUSTTY_IPC_ACTION_{}", n.to_ascii_uppercase());
-                if expected == name {
-                    Some(*v as i64)
-                } else {
-                    None
-                }
-            })
-        })
+        run_henum_src(
+            HEADER_SRC,
+            "rustty_ipc_action_tag_e",
+            "RUSTTY_IPC_ACTION_",
+            &["new_window", "new_tab", "toggle_quick_terminal"],
+        )
         .unwrap();
     }
 }

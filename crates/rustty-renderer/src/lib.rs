@@ -264,8 +264,60 @@ pub enum Health {
 #[cfg(test)]
 mod health_tests {
     use super::Health;
+    use rustty_lib::c_header::header_decls;
     use rustty_lib::r#enum::{check_ghostty_henum, enum_type, EnumType};
     use rustty_lib::target::Target;
+
+    /// The checked-in public C header, embedded at compile time.
+    ///
+    /// PORT NOTE: the reference `lib.checkGhosttyHEnum` does
+    /// `const c = @import("ghostty.h")` — it reflects over the REAL generated
+    /// header. Rust has no `@import` for a C header, so this test parses the
+    /// named enum block out of the checked-in header's text. The C declarations
+    /// come from the header, never from the descriptor under test (S45-F1).
+    const HEADER_SRC: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../include/rustty-embed.h"
+    ));
+
+    /// The header's enum tag for `renderer.Health`.
+    const HEADER_ENUM: &str = "rustty_action_renderer_health_e";
+
+    fn run(src: &str) -> Result<(), String> {
+        let t = health_enum_descriptor();
+        let decls = header_decls(src, HEADER_ENUM);
+        check_ghostty_henum(&t, "RUSTTY_RENDERER_HEALTH_", |name| {
+            decls.get(name).copied()
+        })
+    }
+
+    /// Self-check that the probe below can actually FAIL — i.e. that it reads
+    /// the header and not the descriptor.
+    ///
+    /// PORT NOTE: no reference analogue; the oracle gets this for free because
+    /// `@import("ghostty.h")` is the real header.
+    #[test]
+    fn ghostty_h_health_probe_can_fail() {
+        run(HEADER_SRC).unwrap();
+
+        let dropped = HEADER_SRC.replace("  RUSTTY_RENDERER_HEALTH_UNHEALTHY,\n", "");
+        assert_ne!(dropped, HEADER_SRC);
+        assert!(run(&dropped).is_err(), "dropped enumerator must fail");
+
+        let renamed = HEADER_SRC.replace(
+            "RUSTTY_RENDERER_HEALTH_UNHEALTHY",
+            "RUSTTY_RENDERER_HEALTH_UNHEALTHIER",
+        );
+        assert_ne!(renamed, HEADER_SRC);
+        assert!(run(&renamed).is_err(), "renamed enumerator must fail");
+
+        let revalued = HEADER_SRC.replace(
+            "  RUSTTY_RENDERER_HEALTH_HEALTHY,\n",
+            "  RUSTTY_RENDERER_HEALTH_HEALTHY = 7,\n",
+        );
+        assert_ne!(revalued, HEADER_SRC);
+        assert!(run(&revalued).is_err(), "revalued enumerator must fail");
+    }
 
     /// PORT NOTE: models the reference `enum(c_int)` `Health` as an [`EnumType`]
     /// (C target) so the `checkGhosttyHEnum` test can reflect over its keys and
@@ -284,22 +336,9 @@ mod health_tests {
     #[test]
     fn ghostty_h_health() {
         // PORT NOTE: `try lib.checkGhosttyHEnum(Health, "GHOSTTY_RENDERER_HEALTH_");`,
-        // retargeted to `RUSTTY_RENDERER_HEALTH_` per R2. The
-        // `rustty_renderer_health_e` C enum declares every `Health` key with the
-        // same sequential `c_int` value as the enum field, so the lookup closure
-        // returns each field's own backing int.
-        let t = health_enum_descriptor();
-        let fields = t.fields.clone();
-        check_ghostty_henum(&t, "RUSTTY_RENDERER_HEALTH_", |name| {
-            fields.iter().find_map(|(n, v)| {
-                let expected = format!("RUSTTY_RENDERER_HEALTH_{}", n.to_ascii_uppercase());
-                if expected == name {
-                    Some(*v as i64)
-                } else {
-                    None
-                }
-            })
-        })
-        .unwrap();
+        // retargeted to `RUSTTY_RENDERER_HEALTH_` per R2. The declarations come
+        // from `rustty-embed.h`'s `rustty_action_renderer_health_e` block,
+        // exactly as the reference's come from the generated header.
+        run(HEADER_SRC).unwrap();
     }
 }

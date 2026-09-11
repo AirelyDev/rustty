@@ -25,6 +25,10 @@
 
 pub mod allocator;
 pub mod c_abi;
+/// PORT NOTE: no reference counterpart — port support for
+/// [`r#enum::check_ghostty_henum`], which in the reference reads the real
+/// generated `ghostty.h` via `@import`. See the module docs.
+pub mod c_header;
 pub mod crc32c;
 pub mod r#enum;
 pub mod packed;

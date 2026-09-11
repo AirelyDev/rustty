@@ -7,32 +7,75 @@
 //! commented out by `// TODO: check non-exhaustive enums`) are preserved as
 //! commented-out code at their type sites in `action.rs`, NOT counted toward G1.
 
+use rustty_lib::c_header::header_decls;
 use rustty_lib::r#enum::{check_ghostty_henum, enum_type};
 use rustty_lib::target::Target as EnumTarget;
 
 use crate::action::*;
 
+/// The checked-in public C header, embedded at compile time.
+///
+/// PORT NOTE: the reference `lib.checkGhosttyHEnum` does
+/// `const c = @import("ghostty.h")` — it reflects over the REAL generated
+/// header. Rust has no `@import` for a C header, so these tests read the
+/// checked-in header's text and parse the named enum block out of it
+/// (`rustty_lib::c_header`). The point is the same: the C declarations the
+/// check compares against come from the header, never from the descriptor
+/// under test.
+const HEADER_SRC: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../include/rustty-embed.h"
+));
+
 /// PORT NOTE: the shared `checkGhosttyHEnum` driver. Models the reference
 /// `enum(c_int)` as an [`rustty_lib::r#enum::EnumType`] (C target) built from the
 /// snake_case field names in declaration order, then reflects over it exactly
-/// like `lib.checkGhosttyHEnum`: the `rustty.h` C enum is modeled as declaring
-/// each key with its own sequential `c_int` value (prefix retargeted
-/// `GHOSTTY_` -> `RUSTTY_` per R2).
-fn run_henum(prefix: &str, keys: &[&str]) {
+/// like `lib.checkGhosttyHEnum`: the C declarations come from `rustty-embed.h`'s
+/// `header_enum` block (prefix retargeted `GHOSTTY_` -> `RUSTTY_` per R2).
+///
+/// FIX (S45-F1): the `c` closure previously returned each field's own value out
+/// of the descriptor being checked, so all 17 tests below compared the enum to
+/// itself and could not fail. `run_henum_src` is the same driver parameterised
+/// on the header TEXT so the `*_probe_can_fail` self-tests can perturb it.
+fn run_henum(header_enum: &str, prefix: &str, keys: &[&str]) {
+    run_henum_src(HEADER_SRC, header_enum, prefix, keys).unwrap();
+}
+
+fn run_henum_src(src: &str, header_enum: &str, prefix: &str, keys: &[&str]) -> Result<(), String> {
     let opts: Vec<Option<&str>> = keys.iter().map(|k| Some(*k)).collect();
     let t = enum_type(EnumTarget::C, &opts);
-    let fields = t.fields.clone();
-    check_ghostty_henum(&t, prefix, |name| {
-        fields.iter().find_map(|(n, v)| {
-            let expected = format!("{}{}", prefix, n.to_ascii_uppercase());
-            if expected == name {
-                Some(*v as i64)
-            } else {
-                None
-            }
-        })
-    })
-    .unwrap();
+    let decls = header_decls(src, header_enum);
+    check_ghostty_henum(&t, prefix, |name| decls.get(name).copied())
+}
+
+/// Self-check that the probe above can actually FAIL — i.e. that it reads the
+/// header and not the descriptor. Each mutation is one of the drifts
+/// `checkGhosttyHEnum` exists to catch.
+///
+/// PORT NOTE: no reference analogue; the oracle gets this for free because
+/// `@import("ghostty.h")` is the real header.
+#[test]
+fn ghostty_h_probe_can_fail() {
+    let keys = ["app", "surface"];
+    let run = |src: &str| run_henum_src(src, "rustty_target_tag_e", "RUSTTY_TARGET_", &keys);
+
+    // Baseline: the real header passes.
+    run(HEADER_SRC).unwrap();
+
+    // A dropped declaration leaves an enum value unmatched.
+    let dropped = HEADER_SRC.replace("  RUSTTY_TARGET_SURFACE,\n", "");
+    assert_ne!(dropped, HEADER_SRC);
+    assert!(run(&dropped).is_err(), "dropped enumerator must fail");
+
+    // A renamed declaration is equally a drop, from the check's view.
+    let renamed = HEADER_SRC.replace("RUSTTY_TARGET_SURFACE", "RUSTTY_TARGET_SURFACES");
+    assert_ne!(renamed, HEADER_SRC);
+    assert!(run(&renamed).is_err(), "renamed enumerator must fail");
+
+    // A revalued declaration mismatches the field's backing int.
+    let revalued = HEADER_SRC.replace("  RUSTTY_TARGET_APP,\n", "  RUSTTY_TARGET_APP = 7,\n");
+    assert_ne!(revalued, HEADER_SRC);
+    assert!(run(&revalued).is_err(), "revalued enumerator must fail");
 }
 
 // test "ghostty.h Target.Key" {
@@ -41,7 +84,7 @@ fn run_henum(prefix: &str, keys: &[&str]) {
 #[test]
 fn ghostty_h_target_key() {
     let _ = (TargetKey::App, TargetKey::Surface);
-    run_henum("RUSTTY_TARGET_", &["app", "surface"]);
+    run_henum("rustty_target_tag_e", "RUSTTY_TARGET_", &["app", "surface"]);
 }
 
 // test "ghostty.h Action.Key" {
@@ -51,6 +94,7 @@ fn ghostty_h_target_key() {
 fn ghostty_h_action_key() {
     let _ = ActionKey::Quit;
     run_henum(
+        "rustty_action_tag_e",
         "RUSTTY_ACTION_",
         &[
             "quit",
@@ -132,7 +176,11 @@ fn ghostty_h_action_key() {
 #[test]
 fn ghostty_h_split_direction() {
     let _ = SplitDirection::Right;
-    run_henum("RUSTTY_SPLIT_DIRECTION_", &["right", "down", "left", "up"]);
+    run_henum(
+        "rustty_action_split_direction_e",
+        "RUSTTY_SPLIT_DIRECTION_",
+        &["right", "down", "left", "up"],
+    );
 }
 
 // test "ghostty.h GotoSplit" {
@@ -142,6 +190,7 @@ fn ghostty_h_split_direction() {
 fn ghostty_h_goto_split() {
     let _ = GotoSplit::Previous;
     run_henum(
+        "rustty_action_goto_split_e",
         "RUSTTY_GOTO_SPLIT_",
         &["previous", "next", "up", "left", "down", "right"],
     );
@@ -153,7 +202,11 @@ fn ghostty_h_goto_split() {
 #[test]
 fn ghostty_h_goto_window() {
     let _ = GotoWindow::Previous;
-    run_henum("RUSTTY_GOTO_WINDOW_", &["previous", "next"]);
+    run_henum(
+        "rustty_action_goto_window_e",
+        "RUSTTY_GOTO_WINDOW_",
+        &["previous", "next"],
+    );
 }
 
 // test "ghostty.h ResizeSplit.Direction" {
@@ -162,7 +215,11 @@ fn ghostty_h_goto_window() {
 #[test]
 fn ghostty_h_resize_split_direction() {
     let _ = ResizeSplitDirection::Up;
-    run_henum("RUSTTY_RESIZE_SPLIT_", &["up", "down", "left", "right"]);
+    run_henum(
+        "rustty_action_resize_split_direction_e",
+        "RUSTTY_RESIZE_SPLIT_",
+        &["up", "down", "left", "right"],
+    );
 }
 
 // test "ghostty.h Fullscreen" {
@@ -172,6 +229,7 @@ fn ghostty_h_resize_split_direction() {
 fn ghostty_h_fullscreen() {
     let _ = Fullscreen::Native;
     run_henum(
+        "rustty_action_fullscreen_e",
         "RUSTTY_FULLSCREEN_",
         &[
             "native",
@@ -188,7 +246,11 @@ fn ghostty_h_fullscreen() {
 #[test]
 fn ghostty_h_float_window() {
     let _ = FloatWindow::On;
-    run_henum("RUSTTY_FLOAT_WINDOW_", &["on", "off", "toggle"]);
+    run_henum(
+        "rustty_action_float_window_e",
+        "RUSTTY_FLOAT_WINDOW_",
+        &["on", "off", "toggle"],
+    );
 }
 
 // test "ghostty.h SecureInput" {
@@ -197,7 +259,11 @@ fn ghostty_h_float_window() {
 #[test]
 fn ghostty_h_secure_input() {
     let _ = SecureInput::On;
-    run_henum("RUSTTY_SECURE_INPUT_", &["on", "off", "toggle"]);
+    run_henum(
+        "rustty_action_secure_input_e",
+        "RUSTTY_SECURE_INPUT_",
+        &["on", "off", "toggle"],
+    );
 }
 
 // test "ghostty.h Inspector" {
@@ -206,7 +272,11 @@ fn ghostty_h_secure_input() {
 #[test]
 fn ghostty_h_inspector() {
     let _ = Inspector::Toggle;
-    run_henum("RUSTTY_INSPECTOR_", &["toggle", "show", "hide"]);
+    run_henum(
+        "rustty_action_inspector_e",
+        "RUSTTY_INSPECTOR_",
+        &["toggle", "show", "hide"],
+    );
 }
 
 // test "ghostty.h QuitTimer" {
@@ -215,7 +285,11 @@ fn ghostty_h_inspector() {
 #[test]
 fn ghostty_h_quit_timer() {
     let _ = QuitTimer::Start;
-    run_henum("RUSTTY_QUIT_TIMER_", &["start", "stop"]);
+    run_henum(
+        "rustty_action_quit_timer_e",
+        "RUSTTY_QUIT_TIMER_",
+        &["start", "stop"],
+    );
 }
 
 // test "ghostty.h Readonly" {
@@ -224,7 +298,11 @@ fn ghostty_h_quit_timer() {
 #[test]
 fn ghostty_h_readonly() {
     let _ = Readonly::Off;
-    run_henum("RUSTTY_READONLY_", &["off", "on"]);
+    run_henum(
+        "rustty_action_readonly_e",
+        "RUSTTY_READONLY_",
+        &["off", "on"],
+    );
 }
 
 // test "ghostty.h MouseVisibility" {
@@ -233,7 +311,11 @@ fn ghostty_h_readonly() {
 #[test]
 fn ghostty_h_mouse_visibility() {
     let _ = MouseVisibility::Visible;
-    run_henum("RUSTTY_MOUSE_", &["visible", "hidden"]);
+    run_henum(
+        "rustty_action_mouse_visibility_e",
+        "RUSTTY_MOUSE_",
+        &["visible", "hidden"],
+    );
 }
 
 // test "ghostty.h PromptTitle" {
@@ -242,7 +324,11 @@ fn ghostty_h_mouse_visibility() {
 #[test]
 fn ghostty_h_prompt_title() {
     let _ = PromptTitle::Surface;
-    run_henum("RUSTTY_PROMPT_TITLE_", &["surface", "tab", "window"]);
+    run_henum(
+        "rustty_action_prompt_title_e",
+        "RUSTTY_PROMPT_TITLE_",
+        &["surface", "tab", "window"],
+    );
 }
 
 // test "ghostty.h OpenUrl.Kind" {
@@ -252,6 +338,7 @@ fn ghostty_h_prompt_title() {
 fn ghostty_h_open_url_kind() {
     let _ = OpenUrlKind::Unknown;
     run_henum(
+        "rustty_action_open_url_kind_e",
         "RUSTTY_ACTION_OPEN_URL_KIND_",
         &["unknown", "text", "html", "osc8"],
     );
@@ -263,7 +350,11 @@ fn ghostty_h_open_url_kind() {
 #[test]
 fn ghostty_h_close_tab_mode() {
     let _ = CloseTabMode::This;
-    run_henum("RUSTTY_ACTION_CLOSE_TAB_MODE_", &["this", "other", "right"]);
+    run_henum(
+        "rustty_action_close_tab_mode_e",
+        "RUSTTY_ACTION_CLOSE_TAB_MODE_",
+        &["this", "other", "right"],
+    );
 }
 
 // test "ghostty.h OpenConfig" {
@@ -272,7 +363,11 @@ fn ghostty_h_close_tab_mode() {
 #[test]
 fn ghostty_h_open_config() {
     let _ = OpenConfig::OsOpen;
-    run_henum("RUSTTY_ACTION_OPEN_CONFIG_", &["os_open", "new_window"]);
+    run_henum(
+        "rustty_action_open_config_e",
+        "RUSTTY_ACTION_OPEN_CONFIG_",
+        &["os_open", "new_window"],
+    );
 }
 
 // test {
