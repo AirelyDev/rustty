@@ -125,11 +125,22 @@ mod tests {
     /// ring. Asserts the reuse contract directly; needs no display and no
     /// playback (`MediaFile` is lazy), only that the path comparison drives reuse.
     #[test]
+    #[ignore = "requires a display; run via GDK_BACKEND=broadway (with broadwayd) or xvfb-run -a cargo test -p rustty-apprt --features gtk,x11,wayland bell_media_file -- --ignored"]
     fn bell_media_file_reuses_one_per_path() {
         // GTK must be initialized for `MediaFile` construction.
-        if gtk4::init().is_err() {
-            return;
-        }
+        //
+        // FIX (task 19 fix round 1): this was `if gtk4::init().is_err() {
+        // return; }`, the quiet guard task-14d-3 moved nine tests off. On the
+        // headless Linux lane `gtk4::init()` fails, so the test asserted
+        // NOTHING and reported `1 passed` — including with the same-path reuse
+        // branch disabled (reviewer-measured). The S48-F1 identity assertion
+        // below was only ever proven under `GDK_BACKEND=broadway`. A missing
+        // display is now a loud FAILURE of an explicitly requested test.
+        //
+        // PORT NOTE: the reference says this "needs no display"; that is true of
+        // Zig's GObject bindings, not of gtk4-rs, whose `MediaFile`
+        // constructors assert `gtk4::init()` has succeeded.
+        crate::gtk::init_for_display_test("bell_media_file_reuses_one_per_path");
 
         // The files need not exist for reuse, but `from_filename` checks
         // accessibility, so create two real temp files.
@@ -139,8 +150,14 @@ mod tests {
         std::fs::write(&path_a, b"").unwrap();
         std::fs::write(&path_b, b"").unwrap();
 
+        // var current = bellMediaFile(null, path_a, false) orelse return error.SkipZigTest;
+        //
+        // PORT NOTE: Rust has no SkipZigTest, and a bare `return` would report
+        // `1 passed` for a run that asserted nothing — the same vacuity as the
+        // guard above. With a display bound and both files created above, a
+        // `None` here is a broken environment for an explicitly requested test.
         let Some(current) = bell_media_file(None, &path_a, false) else {
-            return;
+            panic!("bell_media_file(None, path_a) returned None: MediaFile construction failed, so the reuse contract was not tested");
         };
         // const first = current;
         let first = current.clone();

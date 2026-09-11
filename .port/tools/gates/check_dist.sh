@@ -189,7 +189,7 @@ echo "    ok      distcheck: the extracted tarball builds AND its tests pass"
 # the extracted tree, GhosttyDist.zig:126-147, 156-171). Until parity S63-F7 it
 # had no distcheck of any kind: `distcheck` always built the Workspace tarball.
 if ! command -v cmake > /dev/null 2>&1; then
-  red "distcheck-lib-vt needs cmake (the reference's check step configures and builds the shipped CMakeLists.txt)"
+  blocked "cmake not installed (distcheck-lib-vt configures and builds the shipped CMakeLists.txt, as the reference's check step does)"
 fi
 if ! cargo run -q -p xtask -- distcheck-lib-vt > /dev/null 2>&1; then
   cargo run -q -p xtask -- distcheck-lib-vt 2>&1 | tail -30 | sed 's/^/    /'
