@@ -508,8 +508,16 @@ extern "C" fn zig_allocator_free(
 pub struct GlobalZigAllocator;
 
 impl GlobalZigAllocator {
-    fn layout(len: usize, alignment: Alignment) -> std::alloc::Layout {
-        std::alloc::Layout::from_size_align(len, alignment.to_byte_units()).unwrap()
+    /// PORT NOTE (parity S110-F1): this MUST NOT panic. The reference backend is
+    /// `std.heap.c_allocator`, which returns `null` for any request it cannot
+    /// satisfy; the C API surfaces that as `GHOSTTY_OUT_OF_MEMORY`. Rust's
+    /// `Layout::from_size_align` errors when `len` rounded up to `alignment`
+    /// exceeds `isize::MAX`, so an `.unwrap()` here turned a C caller asking for
+    /// e.g. `SIZE_MAX` bytes into a panic inside an `extern "C"` callback — an
+    /// abort across the C ABI where the reference returns null. `None` is the
+    /// port's `null`.
+    fn layout(len: usize, alignment: Alignment) -> Option<std::alloc::Layout> {
+        std::alloc::Layout::from_size_align(len, alignment.to_byte_units()).ok()
     }
 }
 
@@ -523,7 +531,11 @@ impl ZigAllocator for GlobalZigAllocator {
             // address), not the alignment value itself.
             return zero_len_sentinel(alignment);
         }
-        let layout = Self::layout(len, alignment);
+        // `std.heap.c_allocator` returns null for a request it cannot satisfy;
+        // an unrepresentable layout is exactly such a request.
+        let Some(layout) = Self::layout(len, alignment) else {
+            return core::ptr::null_mut();
+        };
         unsafe { std::alloc::alloc(layout) }
     }
 
@@ -537,7 +549,14 @@ impl ZigAllocator for GlobalZigAllocator {
         if memory.len == 0 {
             return self.alloc(new_len, alignment, _ra);
         }
-        let old_layout = Self::layout(memory.len, alignment);
+        let Some(old_layout) = Self::layout(memory.len, alignment) else {
+            return core::ptr::null_mut();
+        };
+        // `realloc`'s contract requires the NEW size to be representable too;
+        // an unrepresentable growth is a failed remap, i.e. null.
+        if Self::layout(new_len, alignment).is_none() {
+            return core::ptr::null_mut();
+        }
         unsafe { std::alloc::realloc(memory.ptr, old_layout, new_len) }
     }
 
@@ -545,7 +564,12 @@ impl ZigAllocator for GlobalZigAllocator {
         if memory.len == 0 {
             return;
         }
-        let layout = Self::layout(memory.len, alignment);
+        // Unreachable in practice: `alloc`/`remap` return null for any layout
+        // this rejects, so no live allocation can carry one. Returning rather
+        // than unwrapping keeps the whole vtable panic-free across the C ABI.
+        let Some(layout) = Self::layout(memory.len, alignment) else {
+            return;
+        };
         unsafe { std::alloc::dealloc(memory.ptr, layout) }
     }
 }
@@ -680,6 +704,48 @@ mod tests {
         let mem = ZigSlice::new(ptr, str_len);
         assert_eq!(10, mem.len);
         alloc.free(mem, Alignment(0), 0);
+    }
+
+    // PORT NOTE (parity S110-F1 proving test, Rust-only — the reference has no
+    // unit test here): the reference backend (`std.heap.c_allocator`) returns
+    // NULL for an allocation it cannot satisfy, and the C API turns that into
+    // `GHOSTTY_OUT_OF_MEMORY`. The port built the `Layout` with `.unwrap()`, so
+    // a request whose size rounded up to the alignment exceeds `isize::MAX`
+    // panicked INSIDE an `extern "C"` callback — an abort across the C ABI,
+    // where the reference degrades. Exercised through the exported C vtable,
+    // which is the path the row cites.
+    #[test]
+    fn c_vtable_alloc_returns_null_for_an_unrepresentable_request() {
+        // (`super::` because this module has a test FUNCTION of the same name.)
+        let c_alloc = super::c_allocator();
+        let vtable = unsafe { &*c_alloc.vtable };
+
+        // `Layout::from_size_align` rejects anything whose size rounded up to
+        // the alignment passes `isize::MAX`; `usize::MAX` does at every
+        // alignment, and `isize::MAX` does at any alignment above 1.
+        for (len, alignment) in [
+            (usize::MAX, 0u8),
+            (usize::MAX, 3u8),
+            (isize::MAX as usize, 3u8),
+        ] {
+            let got = (vtable.alloc)(c_alloc.ctx, len, alignment, 0);
+            assert!(
+                got.is_null(),
+                "alloc(len={len}, alignment={alignment}) must be null, not a panic",
+            );
+        }
+
+        // A representable request still works, so the guard above is not simply
+        // rejecting everything.
+        let ptr = (vtable.alloc)(c_alloc.ctx, 16, 3, 0);
+        assert!(!ptr.is_null());
+        (vtable.free)(c_alloc.ctx, ptr, 16, 3, 0);
+
+        // `remap` degrades the same way rather than panicking.
+        let ptr = (vtable.alloc)(c_alloc.ctx, 16, 0, 0);
+        assert!(!ptr.is_null());
+        assert!((vtable.remap)(c_alloc.ctx, ptr, 16, 0, usize::MAX, 0).is_null());
+        (vtable.free)(c_alloc.ctx, ptr, 16, 0, 0);
     }
 
     // PORT NOTE (W36-B06 proving test, Rust-only — the reference has no unit

@@ -395,11 +395,44 @@ pub unsafe fn new(
     //     return .out_of_memory;
     // };
     // PORT NOTE: `putNoClobber` asserts the key is absent (a fresh heap ptr is
-    // always unique); `HashSet::insert` returns `true` for new keys. The
-    // reference's `catch` arm is the map's own allocation failing — a Rust
-    // `HashSet` grows through the global allocator and aborts on OOM, so that
-    // arm has no reachable analog (same as `tracked_grid_refs` in
-    // `terminal_c::grid_ref_track`).
+    // always unique); `HashSet::insert` returns `true` for new keys.
+    //
+    // PORT NOTE (parity S4-F3 / S176-F2): the reference's `catch` arm is the
+    // map's OWN allocation failing, and `search.h:340-362` documents
+    // `GHOSTTY_OUT_OF_MEMORY` for it. A bare `HashSet::insert` aborts on
+    // allocation failure, which made that documented return unreachable AND
+    // leaked the wrapper on the path the reference frees it. `try_reserve` is
+    // the fallible half of the same growth, so the error path is real: it frees
+    // the wrapper and returns `.out_of_memory` exactly as the reference does.
+    // (This is a CHOICE the port had, not a Rust language limitation — which is
+    // why the earlier "the port cannot produce this failure" reading of the
+    // sibling row does not hold.)
+    // SAFETY: `searches` is a sibling field of the live terminal wrapper.
+    let wrapper_ptr = wrapper;
+    #[cfg(test)]
+    let reserved = register_tw_check().and_then(|()| unsafe {
+        (*terminal_wrapper)
+            .searches
+            .try_reserve(1)
+            .map_err(|_| RegistryFull)
+    });
+    #[cfg(not(test))]
+    let reserved = unsafe { (*terminal_wrapper).searches.try_reserve(1) };
+    if reserved.is_err() {
+        // alloc.destroy(wrapper);
+        // PORT NOTE: the `free` pattern — `alloc` was moved into the wrapper by
+        // the `ptr::write` above, so the value is read back out before the
+        // storage is returned through it, then dropped. Nothing else owns
+        // anything yet (`search` is `None`), so this is the whole teardown.
+        // SAFETY: `wrapper` was just created by `create_raw` with this resolved
+        // allocator and has not been handed out; after the read the storage is
+        // treated as uninitialized and freed exactly once.
+        let wrapper = unsafe { std::ptr::read(wrapper) };
+        unsafe { rustty_lib::allocator::destroy_raw(&*wrapper.alloc, wrapper_ptr) };
+        drop(wrapper);
+        // return .out_of_memory;
+        return Result::OutOfMemory;
+    }
     // SAFETY: `searches` is a sibling field of the live terminal wrapper.
     let inserted = unsafe { (*terminal_wrapper).searches.insert(wrapper) };
     debug_assert!(inserted);
@@ -409,6 +442,38 @@ pub unsafe fn new(
     unsafe { *out_search = wrapper };
     // return .success;
     Result::Success
+}
+
+// PORT NOTE: tripwire fail-point standing in for the reference tests'
+// `std.testing.FailingAllocator` at the ONE allocation `new` performs after the
+// wrapper exists: the terminal's search registry growing
+// (`terminal_wrapper.searches.putNoClobber(gpa, wrapper, {})`). It is the only
+// way to exercise the reference's `catch { alloc.destroy(wrapper); return
+// .out_of_memory; }` arm, which `search.h:340-362` documents as
+// `GHOSTTY_OUT_OF_MEMORY` (parity S4-F3 / S176-F2). The crate's established
+// seam; see `rustty-vt`'s `stream_continuation.rs` `TRACKER_TW` PORT NOTE.
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum RegisterFp {
+    Reserve,
+}
+
+/// The tripwire's error value (Zig `Allocator.Error`).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RegistryFull;
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static REGISTER_TW: core::cell::RefCell<
+        rustty_util::tripwire::Module<RegisterFp, RegistryFull>,
+    > = core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+#[cfg(test)]
+#[inline]
+fn register_tw_check() -> core::result::Result<(), RegistryFull> {
+    REGISTER_TW.with(|tw| tw.borrow_mut().check(RegisterFp::Reserve))
 }
 
 // pub fn free(search_: Search) callconv(lib.calling_conv) void {
@@ -1206,6 +1271,62 @@ mod tests {
     fn needle_bytes(s: &LibString) -> &[u8] {
         // SAFETY: a `.needle` read yields the search-owned needle bytes.
         unsafe { std::slice::from_raw_parts(s.ptr, s.len) }
+    }
+
+    // PORT NOTE: no reference test (the reference's arm is only reachable under
+    // `testing.FailingAllocator`, which it does not use here). This is the
+    // rustty proving test for parity S4-F3 / S176-F2: `search.h:340-362`
+    // documents `GHOSTTY_OUT_OF_MEMORY` when `ghostty_search_new` cannot
+    // register the search, and the reference's
+    // `catch { alloc.destroy(wrapper); return .out_of_memory; }` both FREES the
+    // wrapper and returns it. The port used an infallible `HashSet::insert`, so
+    // the documented return was unreachable and the wrapper would have leaked on
+    // that path. Both halves are asserted: the return value AND that the C
+    // allocator got its bytes back.
+    #[test]
+    fn search_new_releases_the_wrapper_when_registry_growth_fails() {
+        use rustty_util::tripwire::ResetMode;
+
+        let stats = crate::test_util::CountingCAllocator::new();
+        let calloc = stats.c_allocator();
+
+        let terminal = unsafe { test_terminal(&calloc) };
+        let live_before = stats.live_bytes.get();
+        let frees_before = stats.free_calls.get();
+
+        REGISTER_TW.with(|tw| {
+            tw.borrow_mut()
+                .errorAlways(RegisterFp::Reserve, RegistryFull)
+        });
+
+        let mut search: Search = std::ptr::null_mut();
+        assert_eq!(Result::OutOfMemory, unsafe {
+            new(Some(&calloc), &mut search, terminal)
+        });
+        assert!(search.is_null());
+
+        REGISTER_TW
+            .with(|tw| tw.borrow_mut().end(ResetMode::Reset))
+            .unwrap();
+
+        // The wrapper was allocated through the CALLER allocator and handed
+        // back to it: no bytes outstanding beyond what the terminal holds, and
+        // at least one free happened (positively proving the destroy arm ran,
+        // rather than only that nothing leaked).
+        assert!(stats.free_calls.get() > frees_before);
+        assert_eq!(live_before, stats.live_bytes.get());
+
+        // The same call succeeds with the fail point disarmed, so the assertion
+        // above is about the failure path and not about `new` being broken.
+        let mut ok_search: Search = std::ptr::null_mut();
+        assert_eq!(Result::Success, unsafe {
+            new(Some(&calloc), &mut ok_search, terminal)
+        });
+        assert!(!ok_search.is_null());
+        unsafe { free(ok_search) };
+
+        unsafe { terminal_c::free(terminal) };
+        assert_eq!(0, stats.live_bytes.get());
     }
 
     // test "search lifecycle and run to complete"

@@ -280,11 +280,26 @@ impl<A: Allocator> Tabstops<A> {
         // moves the `Box` back into a `Vec` over the same allocator `A`,
         // grows it with `resize(dynamic_count, 0)` (realloc + the reference's
         // tail-only `@memset`), and re-boxes it.
+        //
+        // PORT NOTE (parity S141-F3): the growth is FALLIBLE. `Vec::resize`
+        // aborts through `handle_alloc_error`, so outside the `#[cfg(test)]`
+        // tripwire above nothing could ever reach this function's declared
+        // `OutOfMemory` — `Terminal::init`/`resize` could not observe it. The
+        // reference's `try alloc.realloc(...)` propagates AND leaves both
+        // `dynamic_stops` and `cols` unchanged (its own test at
+        // `Tabstops.zig:281-297` asserts exactly that), so the failure arm
+        // below puts the untouched storage back before returning: a failed
+        // `try_reserve_exact` leaves the `Vec` and its contents intact.
         let old = core::mem::replace(
             &mut self.dynamic_stops,
             allocator_api2::vec::Vec::new_in(alloc).into_boxed_slice(),
         );
         let mut new_vec: allocator_api2::vec::Vec<Unit, A> = old.into_vec();
+        let additional = dynamic_count - new_vec.len();
+        if new_vec.try_reserve_exact(additional).is_err() {
+            self.dynamic_stops = new_vec.into_boxed_slice();
+            return Err(OutOfMemory);
+        }
         new_vec.resize(dynamic_count, 0);
         self.dynamic_stops = new_vec.into_boxed_slice();
         self.cols = cols;
@@ -621,6 +636,42 @@ mod tests {
         // cols should be unchanged after failed resize
         // try testing.expectEqual(original_cols, t.cols);
         assert_eq!(original_cols, t.cols);
+
+        t.deinit(Global);
+    }
+
+    // PORT NOTE: no reference test — the reference needs none, because
+    // `try alloc.realloc(...)` is genuinely fallible there. The port grew the
+    // dynamic storage with `Vec::resize`, which aborts through
+    // `handle_alloc_error`, so the ONLY way `resize` could return
+    // `OutOfMemory` was the `#[cfg(test)]` tripwire above: in a production
+    // build `Terminal::init`/`resize` could never observe it (parity S141-F3).
+    // This test reaches the real path with NO tripwire armed, by asking for a
+    // column count whose dynamic storage the allocator cannot provide, and
+    // asserts the reference's other guarantee too: `cols` and the existing
+    // stops survive the failure.
+    #[test]
+    fn tabstops_resize_reports_a_real_allocation_failure_without_the_tripwire() {
+        let mut t: Tabstops = Tabstops::init(Global, 80, 8).unwrap();
+        let original_cols = t.cols;
+        let original_capacity = t.capacity();
+        // A stop in the preallocated region, to prove the table survives.
+        t.set(16);
+        assert!(t.get(16));
+
+        // `dynamic_count * size_of::<Unit>()` here is ~2.3 exabytes: the
+        // allocator fails, it does not abort.
+        let result = t.resize(Global, usize::MAX);
+        assert_eq!(Err(OutOfMemory), result);
+
+        assert_eq!(original_cols, t.cols);
+        assert_eq!(original_capacity, t.capacity());
+        assert!(t.get(16));
+
+        // A resize the allocator CAN satisfy still works, so the failure above
+        // is about the size and not about `resize` being broken.
+        t.resize(Global, PREALLOC_COLUMNS * 2).unwrap();
+        assert_eq!(PREALLOC_COLUMNS * 2, t.cols);
 
         t.deinit(Global);
     }

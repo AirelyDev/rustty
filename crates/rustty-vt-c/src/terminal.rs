@@ -2271,8 +2271,14 @@ pub unsafe fn continuation_alloc(
     // `format_alloc` precedent) so the ownership contract is identical.
     let allocator = rustty_lib::allocator::default(alloc_);
     let len = bytes.len();
-    let dst = allocator.alloc(len, rustty_lib::allocator::Alignment::from_byte_units(1), 0);
-    if dst.is_null() && len != 0 {
+    // PORT NOTE (parity S171-F1's class, found outside that row's anchors): the
+    // TYPED helper `alloc_bytes`, not the RAW `alloc`. `toOwnedSlice` on empty
+    // output returns the writer's own empty buffer without calling any
+    // allocator callback, so the reference never hands a C embedder a zero-size
+    // request; `alloc_bytes` short-circuits it the same way, and `rustty_free`
+    // already short-circuits the matching zero-length free.
+    let dst = allocator.alloc_bytes(len);
+    if dst.is_null() {
         return Result::OutOfMemory;
     }
     if len != 0 {

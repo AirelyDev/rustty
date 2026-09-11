@@ -21,7 +21,7 @@ use crate::result::Result;
 use crate::selection::{CSelection, Format};
 use crate::terminal as terminal_c;
 use crate::writer::{CountingWriter, FixedWriter};
-use rustty_lib::allocator::{Alignment, Allocator as CAllocator};
+use rustty_lib::allocator::Allocator as CAllocator;
 use rustty_vt::formatter as formatterpkg;
 use rustty_vt::terminal::Terminal as ZigTerminal;
 use std::mem::size_of;
@@ -608,13 +608,24 @@ pub unsafe fn format_alloc(
 
     // const buf = aw.toOwnedSlice() catch return .out_of_memory;
     // out_ptr.* = buf.ptr; out_len.* = buf.len;
+    //
+    // PORT NOTE (parity S171-F1): use the TYPED helper `alloc_bytes`, not the
+    // RAW `alloc`. `aw.toOwnedSlice()` on empty output returns
+    // `a.writer.buffer[0..0]` without calling any allocator callback at all, so
+    // the reference never hands a C embedder a zero-size request — and an
+    // embedder returning NULL for one (legal) turned the reference's `.success`
+    // with `out_len = 0` into `.out_of_memory` here. `alloc_bytes` is the
+    // crate's documented zero-length short-circuit (`rustty-lib`
+    // `allocator.rs`, W36-B06) and reproduces `toOwnedSlice` exactly. Empty
+    // output IS reachable: a plain trimmed format of a blank screen.
     let len = buf_vec.len();
-    let dst = allocator.alloc(len, Alignment::from_byte_units(1), 0);
+    let dst = allocator.alloc_bytes(len);
     if dst.is_null() {
         return Result::OutOfMemory;
     }
     // SAFETY: `dst` is `len` freshly-allocated bytes; `buf_vec` holds `len`
-    // initialized bytes.
+    // initialized bytes. `copy_nonoverlapping` with `len == 0` is a no-op on
+    // the non-null sentinel `alloc_bytes` returns.
     unsafe { std::ptr::copy_nonoverlapping(buf_vec.as_ptr(), dst, len) };
     // SAFETY: `out_ptr`/`out_len` are writable (caller contract).
     unsafe {
@@ -958,6 +969,56 @@ mod tests {
             false,
             make_screen(false, false, false, false, false, false),
         )
+    }
+
+    // PORT NOTE: no reference test. `format_alloc` reproduces
+    // `aw.toOwnedSlice()`, which on EMPTY output returns the writer's own
+    // `buffer[0..0]` without touching the allocator at all. The port called the
+    // RAW vtable `alloc` with `len == 0`, so a custom C allocator saw a
+    // zero-size request the reference never makes — and an allocator returning
+    // NULL for one (legal, and what this crate's own `CountingCAllocator`
+    // does) turned the reference's `.success, out_len = 0` into
+    // `.out_of_memory` (parity S171-F1). An empty format is reachable: a
+    // trimmed plain format of a blank screen.
+    #[test]
+    fn format_alloc_empty_output_never_reaches_the_c_allocator() {
+        let stats = crate::test_util::CountingCAllocator::new();
+        let calloc = stats.c_allocator();
+
+        // Nothing written: a trimmed plain format of a blank screen is empty.
+        let (t_new_result, t, f_new_result, f) =
+            setup_plain(&calloc, b"", plain_extra(), Format::Plain, std::ptr::null());
+        assert_eq!(Result::Success, t_new_result);
+        assert_eq!(Result::Success, f_new_result);
+
+        // Positively establish that the output really is empty, so the
+        // assertions below are about the zero-length path.
+        let mut probe = [0u8; 64];
+        let mut written: usize = 99;
+        assert_eq!(Result::Success, unsafe {
+            format_buf(f, probe.as_mut_ptr(), probe.len(), &mut written)
+        });
+        assert_eq!(0, written);
+
+        let allocs_before = stats.alloc_calls.get();
+        let mut out_ptr: *mut u8 = std::ptr::null_mut();
+        let mut out_len: usize = 99;
+        assert_eq!(Result::Success, unsafe {
+            format_alloc(f, Some(&calloc), &mut out_ptr, &mut out_len)
+        });
+        assert_eq!(0, out_len);
+        assert!(!out_ptr.is_null());
+        // The C allocator was never asked for a zero-size block.
+        assert_eq!(allocs_before, stats.alloc_calls.get());
+
+        // The matching free is also a no-op on the callback.
+        let frees_before = stats.free_calls.get();
+        unsafe { crate::allocator::free(Some(&calloc), out_ptr, out_len) };
+        assert_eq!(frees_before, stats.free_calls.get());
+
+        unsafe { free(f) };
+        unsafe { terminal_c::free(t) };
+        assert_eq!(0, stats.live_bytes.get());
     }
 
     // test "format plain" {

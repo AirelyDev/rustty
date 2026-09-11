@@ -124,32 +124,58 @@ pub unsafe fn terminal_paste(
     }
 
     // const c_mimes: []const lib.String = if (req.mimes) |ptr| ptr[0..req.mimes_len] else &.{};
-    // SAFETY: `mimes`/`mimes_len` describe readable C memory when non-null
-    // (caller contract).
-    let c_mimes: &[LibString] = if req.mimes.is_null() {
-        &[]
+    //
+    // PORT NOTE: kept as (ptr, len) and turned into a `&[LibString]` only where
+    // the elements are actually read, below. Zig's `ptr[0..len]` on a many-item
+    // pointer imposes no validity requirement, but Rust's
+    // `slice::from_raw_parts` requires the whole range to be one live
+    // allocation — so forming it here would make the reference's own "the
+    // length alone is absurd" case UB instead of an error return.
+    let c_mimes_ptr = req.mimes;
+    let c_mimes_len = if c_mimes_ptr.is_null() {
+        0
     } else {
-        unsafe { std::slice::from_raw_parts(req.mimes, req.mimes_len) }
+        req.mimes_len
     };
 
     // Only a paste with something to read needs a reader.
     // if (c_mimes.len > 0 and !req.reader.valid()) return .invalid_value;
-    if !c_mimes.is_empty() && !req.reader.valid() {
+    if c_mimes_len > 0 && !req.reader.valid() {
         return Result::InvalidValue;
     }
 
     // A paste carries a handful of representations, so keep the common
     // case allocation-free.
     // PERF(port): `std.heap.stackFallback(256, wrapper.terminal.gpa())` — the
-    // stack-first allocation is ported as a plain `Vec` (whose OOM aborts,
-    // DG5, so the reference's `catch return .out_of_memory` arm on the
-    // allocation is unreachable here; the paste call's own OutOfMemory arm
-    // below is carried).
+    // stack-first allocation is ported as a plain `Vec`.
+    //
+    // PORT NOTE (parity S174-F5): the reference's
+    // `alloc.alloc([]const u8, c_mimes.len) catch return .out_of_memory` IS an
+    // observable C return, and `mimes_len` is caller-supplied. A `collect()`
+    // aborts instead, so the documented `RUSTTY_OUT_OF_MEMORY` was unreachable
+    // — and unlike most of the DG5 class this one does not need real memory
+    // pressure to reach: an absurd `mimes_len` alone fails the reservation.
+    // `try_reserve_exact` is that fallible allocation; it runs BEFORE the
+    // elements are read, matching the reference's allocate-then-fill order.
+    let mut mimes: Vec<&[u8]> = Vec::new();
+    if mimes.try_reserve_exact(c_mimes_len).is_err() {
+        return Result::OutOfMemory;
+    }
+    // SAFETY: `mimes`/`mimes_len` describe readable C memory when non-null
+    // (caller contract); the reservation above has already rejected a length
+    // no allocation could describe.
+    let c_mimes: &[LibString] = if c_mimes_ptr.is_null() {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(c_mimes_ptr, c_mimes_len) }
+    };
+    // for (mimes, c_mimes) |*mime, c_mime| mime.* = c_mime.ptr[0..c_mime.len];
     // SAFETY: each `LibString` names readable C memory for the call duration.
-    let mimes: Vec<&[u8]> = c_mimes
-        .iter()
-        .map(|c_mime| unsafe { std::slice::from_raw_parts(c_mime.ptr, c_mime.len) })
-        .collect();
+    mimes.extend(
+        c_mimes
+            .iter()
+            .map(|c_mime| unsafe { std::slice::from_raw_parts(c_mime.ptr, c_mime.len) }),
+    );
 
     // .source = switch (req.source) {
     //     .clipboard => .{ .clipboard = req.location },
@@ -779,6 +805,55 @@ mod tests {
 
     fn vtw(t: Terminal, bytes: &[u8]) {
         unsafe { terminal_c::vt_write(t, bytes.as_ptr(), bytes.len()) };
+    }
+
+    // PORT NOTE: no reference test. The reference's mimes array comes from
+    // `alloc.alloc([]const u8, c_mimes.len) catch return .out_of_memory`, an
+    // observable `RUSTTY_OUT_OF_MEMORY` for a C caller; the port collected into
+    // a `Vec`, which aborts, making that return unreachable (parity S174-F5).
+    // `mimes_len` is caller-supplied, so the failure does not need real memory
+    // pressure — a length no allocation could ever describe is enough, and that
+    // is what this asserts. The pointer is never dereferenced on this path (the
+    // slice is formed only after the reservation succeeds), so the absurd
+    // length is not a caller-contract violation.
+    #[test]
+    fn terminal_paste_rejects_an_undescribable_mimes_length() {
+        let _guard = PASTE_TEST_LOCK.lock().unwrap();
+        use capture as s;
+        with_test_allocator(|alloc| {
+            let mut t: Terminal = std::ptr::null_mut();
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::new(alloc as *const CAllocator, &mut t, 80, 24)
+            });
+            assert_eq!(Result::Success, unsafe {
+                terminal_c::set(
+                    t,
+                    terminal_c::Option_::WritePty,
+                    s::write_pty as *const c_void,
+                )
+            });
+
+            let mut contents = s::Contents::init(&[(b"text/plain", b"hello")]);
+            let mut written: bool = true;
+
+            // The same request with a sane length succeeds, so the failure
+            // below is about the length and not about the fixture.
+            let ok_req = contents.request();
+            assert_eq!(Result::Success, unsafe {
+                terminal_paste(t, &ok_req, &mut written)
+            });
+
+            let mut req = contents.request();
+            req.mimes_len = usize::MAX / std::mem::size_of::<&[u8]>();
+            written = true;
+            assert_eq!(Result::OutOfMemory, unsafe {
+                terminal_paste(t, &req, &mut written)
+            });
+            // Nothing was written to the pty on the failure path.
+            assert!(written);
+
+            unsafe { terminal_c::free(t) };
+        });
     }
 
     // test "terminal_paste null handling"
