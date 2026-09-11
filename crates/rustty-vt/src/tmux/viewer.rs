@@ -1791,10 +1791,14 @@ impl Viewer {
         // keeps the history text in the active area and the reference's
         // `runtime_safety` assert panics. Both replies come from tmux, and a
         // second pane appearing while the first pane's captures are queued
-        // puts that reply first. ReleaseFast has no check and continues with a
-        // non-empty active area, which the pane's `capture-pane` visible
-        // reply then erases (`eraseDisplay(.complete)`). The port does what
-        // ReleaseFast does: no check. Test:
+        // puts that reply first. ReleaseFast has no check and continues, and
+        // the history is damaged, not merely left behind: with the cursor stuck
+        // on the last row below the region, `index()` never scrolls, so each
+        // history line overwrites the previous one on that row and the
+        // scrollback the capture was meant to fill is garbled or lost. The
+        // pane's `capture-pane` visible reply then erases the active area
+        // (`eraseDisplay(.complete)`). The port does what ReleaseFast does: no
+        // check. Test:
         // `pane_history_below_the_scroll_region_does_not_trip_the_empty_active_area_check`.
         Ok(())
     }
@@ -3796,16 +3800,29 @@ mod tests {
         s.deinit();
     }
 
-    /// R13 (M111). Pane 7 (80x24) gets a `list-panes` reply putting its cursor
-    /// on row 23 with the scroll region `upper`..`lower`, then `%output` long
-    /// enough to wrap. Returns pane 7's scroll region afterwards and whether its
-    /// active area holds the output.
+    /// R13 (M111). Pane 7 (80x24) gets one `list-panes` reply per entry of
+    /// `regions`, each putting its cursor on row 23 with that scroll region,
+    /// then `%output` long enough to wrap. A second reply is obtained the way
+    /// tmux produces one: a `%layout-change` adds pane 8, whose captures are
+    /// followed by another `list-panes` covering both panes. Returns pane 7's
+    /// scroll region afterwards and whether its active area holds the output.
     #[cfg(feature = "oniguruma")]
-    fn pane_state_scroll_region_then_wrapping_output(
-        upper: usize,
-        lower: usize,
-    ) -> (u16, u16, bool) {
+    fn pane_state_regions_then_wrapping_output(regions: &[(usize, usize)]) -> (u16, u16, bool) {
         use crate::tmux::test_host;
+        assert!(matches!(regions.len(), 1 | 2));
+        let pane7 = |(upper, lower): (usize, usize)| {
+            format!(
+                "%7;0;23;1;;;;1;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;{upper};{lower};8"
+            )
+        };
+        let pane7_region = |s: &mut test_host::HostStream| {
+            let pane = s.handler.viewer().panes.get_ptr(&7).unwrap();
+            (
+                pane.terminal.scrolling_region.top,
+                pane.terminal.scrolling_region.bottom,
+            )
+        };
+
         let mut s = test_host::stream();
         test_host::attach(&mut s);
         let line = test_host::list_windows_line(0, 80, 24, b"80x24,0,0,7");
@@ -3813,10 +3830,29 @@ mod tests {
         for n in 4..8 {
             s.next_slice(&test_host::block(n, b""));
         }
-        let state = format!(
-            "%7;0;23;1;;;;1;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;{upper};{lower};8"
-        );
-        s.next_slice(&test_host::block(8, state.as_bytes()));
+        s.next_slice(&test_host::block(8, pane7(regions[0]).as_bytes()));
+
+        if let Some(&second) = regions.get(1) {
+            let layout = test_host::with_checksum(b"80x24,0,0{40x24,0,0,7,39x24,41,0,8}");
+            let mut change = b"%layout-change @0 ".to_vec();
+            change.extend_from_slice(&layout);
+            change.push(b' ');
+            change.extend_from_slice(&layout);
+            change.extend_from_slice(b" *\n");
+            s.next_slice(&change);
+            assert!(s.handler.viewer().panes.contains(&8));
+            for n in 9..13 {
+                s.next_slice(&test_host::block(n, b""));
+            }
+            let state = pane7(second)
+                + "\n%8;0;0;1;;;;0;4294967295;4294967295;0;1;0;0;0;0;0;0;0;0;0;;;0;23;8";
+            s.next_slice(&test_host::block(13, state.as_bytes()));
+            assert!(
+                s.handler.viewer().command_queue.is_empty(),
+                "the second list-panes reply was consumed"
+            );
+        }
+
         assert_eq!(
             23,
             unsafe {
@@ -3839,11 +3875,7 @@ mod tests {
         output.push(b'\n');
         s.next_slice(&output);
         assert_eq!(State::CommandQueue, s.handler.viewer().state);
-        let pane = s.handler.viewer().panes.get_ptr(&7).unwrap();
-        let region = (
-            pane.terminal.scrolling_region.top,
-            pane.terminal.scrolling_region.bottom,
-        );
+        let region = pane7_region(&mut s);
         let active = pane_dump(s.handler.viewer(), 7, crate::point::Tag::Active);
         s.deinit();
         (region.0, region.1, active.contains("xxxxxxxxxx"))
@@ -3852,21 +3884,36 @@ mod tests {
     #[cfg(feature = "oniguruma")]
     #[test]
     fn pane_state_scroll_region_outside_the_pane_is_ignored() {
-        // Positive control: an in-range region is applied, and the wrapping
-        // output scrolls inside it.
+        // Positive controls: in-range regions are applied. The cursor on row 23
+        // is below 0..10, so there the wrap overwrites row 23 instead of
+        // scrolling; 5..23 puts the bottom on the pane's last row, the largest
+        // bottom the guard accepts.
         assert_eq!(
             (0, 10, true),
-            pane_state_scroll_region_then_wrapping_output(0, 10)
+            pane_state_regions_then_wrapping_output(&[(0, 10)])
+        );
+        assert_eq!(
+            (5, 23, true),
+            pane_state_regions_then_wrapping_output(&[(5, 23)])
         );
         // Below the pane (the reviewer's crash, and the off-by-one at `rows`),
         // a one-row region away from the top (which `Terminal::index` cannot
         // scroll), and an inverted region: ignored, as the reply's other bad
-        // geometry is. The pane keeps its full-screen region.
+        // geometry is. From a fresh pane that leaves the full-screen region.
         for (upper, lower) in [(0, 100), (0, 24), (23, 23), (5, 5), (10, 5)] {
             assert_eq!(
                 (0, 23, true),
-                pane_state_scroll_region_then_wrapping_output(upper, lower),
+                pane_state_regions_then_wrapping_output(&[(upper, lower)]),
                 "{upper};{lower}"
+            );
+        }
+        // Ignoring keeps whatever region the pane already had: after an applied
+        // 5..20, a bad region leaves 5..20 (neither a reset to 0..23 nor a clamp).
+        for bad in [(0, 100), (0, 24), (23, 23), (10, 5)] {
+            assert_eq!(
+                (5, 20, true),
+                pane_state_regions_then_wrapping_output(&[(5, 20), bad]),
+                "5;20 then {bad:?}"
             );
         }
     }

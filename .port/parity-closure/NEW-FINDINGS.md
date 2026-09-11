@@ -2203,7 +2203,7 @@ limit was not checked against tmux's source.)
 - **found by**: the R13 inventory (M21, code T1-9); trigger established by task R13-A.
 - **severity**: low. **kind**: extra-check (reference defect, R13).
 - **oracle**: `src/terminal/tmux/viewer.zig:1070-1077`.
-- **rustty**: `crates/rustty-vt/src/tmux/viewer.rs:1768` (`received_pane_history`).
+- **rustty**: `crates/rustty-vt/src/tmux/viewer.rs:1787` (`received_pane_history`).
 
 The port ran the check under `debug_assertions`. It panics when a pane's `list-panes` state (scroll
 region, cursor below it) is applied before its history, which happens when a second pane is added
