@@ -331,6 +331,47 @@ the divergence is decided explicitly per site, never inherited silently:
   proof, and (for oracle-differential tests) proof the test fails against the
   pre-fix/oracle side.
 
+## R13 — Reference defects are not ported (BINDING, user ruling 2026-09-11)
+
+Fidelity is owed to what the reference is **for**, not to its bugs. Where the reference has
+a **defect reachable from real input** — a crash (a null unwrap such as `x.?`, an
+`@intCast`/bounds/overflow trap, a `catch unreachable`, an `unreachable` branch), undefined
+behaviour, a leak, or a deadlock that malformed, external, or otherwise realistic input can
+trigger — the port does **not** reproduce it:
+
+1. **Port the evident intent, handled safely.** Take the error or degraded path the
+   reference's own surrounding code implies (a failed response, an error return, a skipped
+   element, a logged warning it already has). Do not invent new user-visible behaviour or
+   new message text; where the reference offers nothing to reuse, choose the most
+   conservative safe handling and say so.
+2. **Prove it.** A test drives the triggering input and proves the port does not crash,
+   leak, or hang, with a negative control: reinstate the reference's behaviour and confirm
+   the test fails.
+3. **Mark it at the site.** A `PORT NOTE: reference defect (R13)` stating the reference's
+   behaviour, the reachability, the safe handling chosen, and the `UPSTREAM-DEFECTS.md` id.
+4. **Record it for upstream.** An entry in `.port/parity-closure/UPSTREAM-DEFECTS.md` with the
+   reference location, the consequence in ReleaseSafe and ReleaseFast, who can trigger it, how
+   the port handles it, and a proposed upstream fix — so fixes can be proposed to Ghostty.
+
+**The boundary with R7.** R7 still governs **invariant** checks: an `unreachable`, `@intCast`,
+or assert on a condition the reference guarantees by construction ports as a checked
+assertion, because it never fires and porting it preserves the invariant. R13 applies when the
+condition is **not** guaranteed — when input from outside the function's control (a peer
+process, a file, the VT stream, the config, the network, the kernel) can violate it. When
+unsure, trace where the input comes from before deciding; "the reference also traps" is not
+by itself a reason to trap.
+
+**Non-crash reference defects** found along the way — a latent compile error in unused code,
+a copy-paste error in a message, dead code with commented callers, an unchecked call whose
+error surfaces somewhere misleading, a reference test too weak to fail — are also recorded in
+`UPSTREAM-DEFECTS.md` (as `kind: latent` or `kind: test-weakness`) so they are proposable. Those
+do not change port behaviour unless R1 says the port must diverge; message text and test
+assertions otherwise stay faithful.
+
+Precedent this rule reverses: parity-closure S51-F7 was briefly ruled "port the panic"; the
+user overruled it. S209-F1 (tmux layout `@intCast` panicking on tmux-supplied dimensions) was
+ported as a panic by task 15 and is re-addressed under this rule.
+
 ## Pre-port tier checklist (binding, 2026-07-10)
 
 Per-tier PRE-PORT GATE for the remaining tiers (gtk ~23k LOC, swift-app glue,

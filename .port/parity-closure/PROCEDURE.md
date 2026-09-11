@@ -163,6 +163,20 @@ And when you correct one: **mark it as a CORRECTION and quote what it used to sa
 evidence of what was believed is worth keeping, and a silent rewrite destroys the only record
 of how the drift happened. Every correction on this plan has followed that convention.
 
+## Reference defects: R13 (user ruling, 2026-09-11)
+
+Before porting any trap, unwrap, `unreachable`, leak-shaped ownership, or lock-taking call on a
+failure path, ask: **can real input reach this?** If yes, `.port/PORT_RULES.md` R13 applies —
+do not port the defect; handle it safely per the reference's evident intent, prove it with a
+test and a negative control, mark the site `PORT NOTE: reference defect (R13)`, and add an entry
+to `.port/parity-closure/UPSTREAM-DEFECTS.md`. Invariant checks on conditions the reference
+guarantees by construction still port as checked assertions under R7.
+
+Also record, as `latent` or `test-weakness`, any non-crash reference defect you meet: dead or
+uncompilable-but-unused code, copy-pasted messages, errors that surface in the wrong place,
+reference tests too weak to fail. Those keep the port faithful unless R1 says otherwise; the
+point is that they become proposable upstream rather than lost in a task report.
+
 ## Constraints that bind every row
 
 - **R1 full fidelity** — comments, tests assertion-for-assertion, error paths.
