@@ -1,3 +1,12 @@
+> **SUPERSEDED — 2026-09-11, user ruling, `.port/PORT_RULES.md` R13.**
+> The policy this file states — reproduce the reference's defects faithfully and do not fix
+> them locally — is **no longer in force**. A reference defect that real input can reach is now
+> handled safely in the port and recorded in `.port/parity-closure/UPSTREAM-DEFECTS.md` for an
+> upstream fix proposal. The entries below are kept as historical record and are being
+> re-verified and folded into that file; any entry describing a *faithfully ported* crash, UB,
+> leak or deadlock is now work to re-address, not a closed decision. **Do not follow this file's
+> "do not fix locally" instruction.**
+
 # Bugs that are FAITHFULLY PORTED — report upstream, do not fix locally
 
 A full-fidelity port reproduces the reference's defects along with its behaviour.
