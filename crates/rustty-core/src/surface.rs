@@ -396,10 +396,12 @@ mod r13_window_size_overflow_tests {
 
         // The product fits (214748364 * 20 = 4294967280) but `@floatFromInt` to
         // f32 rounds it to 2^32, which `@intFromFloat` into `u32` cannot hold.
+        // No padding here, so a saturating conversion (4294967295) is not
+        // caught by the padding addition instead.
         let cfg = load(b"window-width = 80\nwindow-height = 214748364\n");
         assert_eq!(
             None,
-            initial_size_px(cfg.window_width, cfg.window_height, size(10, 20, 2), SCALE)
+            initial_size_px(cfg.window_width, cfg.window_height, size(10, 20, 0), SCALE)
         );
 
         // The scaled size fits, and adding the padding overflows. (2147483 * 2000
