@@ -2082,8 +2082,11 @@ Found by task 20 while fixing S51-F7. No row claims it.
 `signal.parameters.child_value(1)`. glib-rs's `child_value` ASSERTS `index < n_children()`, so a
 `(o)` body — which passes the subscription's `MATCH_ARG0_PATH` filter when it carries the session
 handle, and which any process on the session bus can send because the sender is null — panicked
-inside the D-Bus dispatch on the GTK main loop. The reference is no better here: it reads an
-undefined pointer (`UPSTREAM-DEFECTS.md` UD2), so there is no reference behaviour to port.
+inside the D-Bus dispatch on the GTK main loop. The reference is no better here
+(`UPSTREAM-DEFECTS.md` UD2): the same `(o)` body makes GLib abort in `g_variant_get_child`, and a
+wrong-typed `(oo)` body leaves `shortcut_id` undefined and reads it. There is no reference
+behaviour to port. (Fix round 1: this said only that the reference "reads an undefined
+pointer", which is the `(oo)` case alone.)
 
 Under R13 the port now reads the child only if it exists and is type `s`
 (`activated_shortcut_id`), and returns otherwise. Test:
