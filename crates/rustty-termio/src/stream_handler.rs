@@ -3873,13 +3873,13 @@ impl rustty_os::string_encoding::Writer for VecWriter {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use allocator_api2::alloc::Global;
 
     // A no-op `AppMailbox` double: the mode-12 guard returns before any mailbox
     // is touched, so accepting every push is enough.
-    struct NullMailbox;
+    pub(crate) struct NullMailbox;
 
     impl AppMailbox for NullMailbox {
         type Surface = ();
@@ -3897,7 +3897,9 @@ mod tests {
         }
     }
 
-    fn terminal_opts(default_cursor_blink: Option<bool>) -> rustty_vt::terminal::Options {
+    pub(crate) fn terminal_opts(
+        default_cursor_blink: Option<bool>,
+    ) -> rustty_vt::terminal::Options {
         rustty_vt::terminal::Options {
             cols: 10,
             rows: 3,
@@ -3920,7 +3922,7 @@ mod tests {
     // A minimal StreamHandler over a caller-owned Terminal. Every field the
     // mode-12 guard does not read is null / empty: the guard returns before the
     // renderer state, mailboxes or size are touched.
-    fn handler_for(
+    pub(crate) fn handler_for(
         terminal: *mut Terminal,
         termio_mailbox: *mut Mailbox,
         renderer_state: *mut State,

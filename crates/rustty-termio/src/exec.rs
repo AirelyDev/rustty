@@ -282,7 +282,7 @@ impl Exec {
         //     log.warn("error setting initial pwd err={}", .{err});
         // };
         if let Some(cwd) = &self.subprocess.cwd {
-            if let Err(err) = term.set_pwd(cwd.to_bytes()) {
+            if let Err(err) = term.set_pwd(cwd) {
                 // log.warn("error setting initial pwd err={}", .{err});
                 log::warn!(target: LOG_SCOPE, "error setting initial pwd err={err:?}");
             }
@@ -1948,7 +1948,13 @@ pub struct Subprocess {
     // (PORT NOTE: the arena collapses into the owned fields below — crash-tier
     // precedent.)
     // cwd: ?[:0]const u8,
-    pub cwd: Option<CString>,
+    //
+    // PORT NOTE (task R13-P, N50): raw bytes, not `CString`. The reference's
+    // `dupeZ` copy keeps every byte of the configured or inherited directory,
+    // an interior NUL included (OSC 7 decodes `%00` into one). `start` asks
+    // `access` about those bytes and takes its `cannot access cwd, ignoring`
+    // arm, the same arm Zig's `pathToPosix` `error.BadPathName` takes.
+    pub cwd: Option<Vec<u8>>,
     // env: ?EnvMap,
     pub env: Option<EnvMap>,
     // args: []const [:0]const u8,
@@ -2586,7 +2592,13 @@ impl Subprocess {
         //     try alloc.dupeZ(u8, cwd)
         // else
         //     null;
-        let cwd: Option<CString> = cfg.working_directory.as_deref().map(cstring);
+        //
+        // PORT NOTE (task R13-P, N50): the bytes are copied as they are. This was
+        // `.map(cstring)`, which panicked on an interior NUL (an OSC 7 `%00`
+        // inherited by the next new tab, or a NUL in `working-directory`), and
+        // the macOS staticlib aborts on a panic. `start` decides what to do with
+        // such a path, exactly where the reference does.
+        let cwd: Option<Vec<u8>> = cfg.working_directory.clone();
 
         // Propagate the current working directory (CWD) to the shell, enabling
         // the shell to display the current directory name rather than the
@@ -2597,7 +2609,7 @@ impl Subprocess {
         // https://github.com/ghostty-org/ghostty/discussions/7769
         // if (cwd) |pwd| try env.put("PWD", pwd);
         if let Some(pwd) = &cwd {
-            env.put(b"PWD", pwd.to_bytes());
+            env.put(b"PWD", pwd);
         }
 
         // return .{
@@ -2937,7 +2949,7 @@ impl Subprocess {
             // `std::path::Path::exists` over the same raw path bytes (R3: the same
             // question, asked through the platform's own API).
             let cwd: Option<&[u8]> = if let Some(proposed) = &self.cwd {
-                let bytes = proposed.to_bytes();
+                let bytes = proposed.as_slice();
                 let ok = std::str::from_utf8(bytes)
                     .map(|s| std::path::Path::new(s).exists())
                     .unwrap_or(false);
@@ -3174,7 +3186,9 @@ impl Subprocess {
                     let dev_null = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDWR) };
                     let mut cmd = rustty_os::flatpak::FlatpakHostCommand::default();
                     cmd.argv = vec!["/bin/sh".to_string(), "-c".to_string(), ":".to_string()];
-                    cmd.cwd = Some(proposed.clone());
+                    // (`.cwd = proposed` reaches D-Bus as the `[*:0]` pointer, so
+                    // the host sees the bytes up to the first NUL — `cstring`.)
+                    cmd.cwd = Some(cstring(proposed));
                     cmd.stdin = dev_null;
                     cmd.stdout = dev_null;
                     cmd.stderr = dev_null;
@@ -3200,7 +3214,7 @@ impl Subprocess {
                     }
                     Some(if spawned {
                         // break :cwd proposed;
-                        Some(proposed.to_bytes())
+                        Some(proposed.as_slice())
                     } else {
                         // log.warn("cannot spawn command at cwd, ignoring: {}", .{err});
                         None
@@ -3217,10 +3231,29 @@ impl Subprocess {
                 //     log.warn("cannot access cwd, ignoring: {}", .{err});
                 //     break :cwd null;
                 // }
+                //
+                // PORT NOTE (task R13-P, N50): Zig's `access` converts the path with
+                // `pathToPosix`, which returns `error.BadPathName` for a path holding
+                // a NUL byte, before any syscall (`std/Io/Threaded.zig:4062,14267`
+                // in Zig 0.16.0). That error takes this same `catch` arm: the
+                // warning, then no cwd. The payload names the Zig error, since
+                // there is no errno to read back.
+                let proposed_z = CString::new(proposed.as_slice());
                 if let Some(v) = flatpak_cwd {
                     v
-                } else if unsafe { libc::access(proposed.as_ptr(), libc::F_OK) } == 0 {
-                    Some(proposed.to_bytes())
+                } else if proposed_z.is_err() {
+                    // log.warn("cannot access cwd, ignoring: {}", .{err});
+                    log::warn!(
+                        target: LOG_SCOPE,
+                        "cannot access cwd, ignoring: {}",
+                        "error.BadPathName"
+                    );
+                    None
+                } else if proposed_z
+                    .as_ref()
+                    .is_ok_and(|p| unsafe { libc::access(p.as_ptr(), libc::F_OK) } == 0)
+                {
+                    Some(proposed.as_slice())
                 } else {
                     // log.warn("cannot access cwd, ignoring: {}", .{err});
                     log::warn!(
@@ -3265,7 +3298,10 @@ impl Subprocess {
                         .iter()
                         .map(|a| String::from_utf8_lossy(a.to_bytes()).into_owned())
                         .collect();
-                    fcmd.cwd = cwd.map(|c| std::ffi::CString::new(c).unwrap());
+                    // (was `CString::new(c).unwrap()`: unreachable while `cwd` was a
+                    // `CString`, reachable once it holds the reference's raw bytes;
+                    // the flatpak test spawn above can accept a NUL path.)
+                    fcmd.cwd = cwd.map(cstring);
                     fcmd.env = self.env.clone();
                     fcmd.stdin = slave;
                     fcmd.stdout = slave;
@@ -5745,9 +5781,18 @@ fn dirname(path: &[u8]) -> Option<&[u8]> {
 
 /// PORT NOTE (Zig-std shim): the `[:0]const u8` sentinel model — an owned
 /// NUL-terminated copy of the byte slice (Command.zig `&CStr` convention).
-/// Interior NULs cannot occur in the reference's `[:0]`-typed sources.
+///
+/// PORT NOTE (task R13-P, N51): interior NULs DO occur. The reference's `dupeZ`
+/// copies a config `command` / `initial-command` value (or a flatpak cwd) with
+/// its NUL bytes, and every consumer of the copy hands the pointer to C
+/// (`execve` argv, `CreateProcessW`, a D-Bus `ay`), which reads up to the first
+/// NUL. Measured with Zig 0.16.0 (`r13p-reference-probe.zig`): `/bin/sh -c
+/// "printf …\0; echo AFTER-NUL"` with `$0` = `"zero\0tail"` prints `zero|` and
+/// never `AFTER-NUL`. So the copy is cut at the first NUL. This was an
+/// `.expect`, which panicked, and the macOS staticlib aborts on a panic.
 fn cstring(bytes: &[u8]) -> CString {
-    CString::new(bytes).expect("[:0]const u8 payload cannot contain interior NUL")
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    CString::new(&bytes[..end]).expect("the bytes before the first NUL hold no NUL")
 }
 
 /// Convert raw path bytes to an `OsStr` (termio_impl precedent).
@@ -6456,6 +6501,274 @@ mod tests {
 
         // deinit is safe post-stop.
         subprocess.deinit();
+    }
+
+    // ---- task R13-P: NUL bytes in the cwd and in the argv (N50, N51) --------
+    //
+    // `Subprocess::init` used to build the cwd with `cstring`, which `.expect`ed
+    // on an interior NUL. A program that prints `OSC 7` with `%00` in the path
+    // plants one in the terminal's pwd, the next new tab/split/window inherits
+    // it as `working-directory`, and the panic aborted the macOS app. The
+    // reference keeps the bytes, asks `access` about them, and takes its
+    // `cannot access cwd, ignoring` arm (Zig 0.16 `pathToPosix` answers
+    // `error.BadPathName`; measured with `r13p-reference-probe.zig`).
+
+    /// Spawns `exit 0` with `working_directory` set to `wd`, and reports the
+    /// `cannot access cwd` warnings `start` logged on this thread, the `PWD` it
+    /// put in the child environment, and the pwd `initTerminal` set on a fresh
+    /// terminal. Drives the real `Exec::init` -> `initTerminal` -> `start`
+    /// fork/exec path; only `new_config` itself is out of reach from here,
+    /// because it needs a core `App` with an apprt.
+    #[cfg(target_os = "macos")]
+    fn spawn_with_working_directory(
+        wd: Vec<u8>,
+    ) -> (Vec<String>, Option<Vec<u8>>, Option<Vec<u8>>) {
+        use allocator_api2::alloc::Global;
+
+        let cfg = Config {
+            command: Some(configpkg::command::Command::Shell(b"exit 0".to_vec())),
+            env: EnvMap::new(),
+            env_override: configpkg::RepeatableStringMap::default(),
+            shell_integration: configpkg::value_types::ShellIntegration::Detect,
+            shell_integration_features: configpkg::value_types::ShellIntegrationFeatures::default(),
+            cursor_blink: None,
+            working_directory: Some(wd),
+            resources_dir: None,
+            term: b"xterm-256color".to_vec(),
+            rt_pre_exec_info: RtPreExecInfo::default(),
+            rt_post_fork_info: RtPostForkInfo::default(),
+        };
+
+        // Before the fix this panicked (`.expect` on the interior NUL).
+        let mut exec = Exec::init(Global, cfg).expect("Exec::init");
+
+        // `if (cwd) |pwd| try env.put("PWD", pwd)` — the reference stores the
+        // bytes, and the child's envp is cut at the NUL by the kernel (measured).
+        let env_pwd = exec
+            .subprocess
+            .env
+            .as_ref()
+            .and_then(|e| e.get(b"PWD".as_slice()).cloned());
+
+        // `if (self.subprocess.cwd) |cwd| term.setPwd(cwd)`.
+        let mut term = rustty_vt::terminal::Terminal::init(
+            Global,
+            crate::stream_handler::tests::terminal_opts(None),
+        )
+        .expect("Terminal::init");
+        exec.initTerminal(&mut term);
+        let term_pwd = term.get_pwd().map(<[u8]>::to_vec);
+        term.deinit(Global);
+
+        let cap = crate::log_capture::start();
+        let fds = exec.subprocess.start(Global).expect("Subprocess::start");
+        let warnings: Vec<String> = cap
+            .messages()
+            .into_iter()
+            .filter(|(level, target, message)| {
+                *level == log::Level::Warn
+                    && target == LOG_SCOPE
+                    && message.starts_with("cannot access cwd")
+            })
+            .map(|(_, _, message)| message)
+            .collect();
+        drop(cap);
+
+        // Drain the pty master while the child is reaped (the KAT's [T8] note).
+        let master_fd = fds.read;
+        let drainer = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            let mut buf = [0u8; 4096];
+            while std::time::Instant::now() < deadline {
+                // SAFETY: `master_fd` is the live pty master; `poll` writes only
+                // `revents`, and `read` writes at most `buf.len()` bytes.
+                let mut pfd = libc::pollfd {
+                    fd: master_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let pr = unsafe { libc::poll(&mut pfd, 1, 100) };
+                if pr < 0 {
+                    if std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                        continue;
+                    }
+                    break;
+                }
+                if pr == 0 {
+                    continue;
+                }
+                let n = unsafe { libc::read(master_fd, buf.as_mut_ptr().cast(), buf.len()) };
+                if n <= 0 {
+                    if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+                    {
+                        continue;
+                    }
+                    break;
+                }
+            }
+        });
+
+        exec.subprocess.stop();
+        drainer.join().expect("drainer join");
+        // SAFETY: the master fd is ours and is closed exactly once.
+        unsafe { libc::close(fds.read) };
+        exec.subprocess.deinit();
+
+        (warnings, env_pwd, term_pwd)
+    }
+
+    /// B1. `OSC 7` with `%00` -> the terminal pwd -> the new surface's
+    /// `working-directory` -> `Exec`. The port used to panic in `Exec::init`.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn osc7_percent_00_pwd_is_ignored_as_a_cwd_instead_of_panicking() {
+        use allocator_api2::alloc::Global;
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        // A REAL directory at the prefix before the NUL: a port that silently cut
+        // the path there would start the child in it and log no warning.
+        let root = std::env::temp_dir().join(format!("rustty-r13p-b1-{}", std::process::id()));
+        let prefix = root.join("a");
+        std::fs::create_dir_all(&prefix).expect("create the prefix directory");
+        let prefix_bytes = prefix.as_os_str().as_bytes().to_vec();
+
+        // The VT stream half: `ESC ] 7 ; file://localhost/<prefix>%00b BEL`.
+        let mut term = rustty_vt::terminal::Terminal::init(
+            Global,
+            crate::stream_handler::tests::terminal_opts(None),
+        )
+        .expect("Terminal::init");
+        let h = crate::stream_handler::tests::handler_for(
+            &raw mut term,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        let mut s = rustty_vt::stream::Stream::init(rustty_vt::stream::Options::with_handler(h));
+        let mut seq = b"\x1b]7;file://localhost".to_vec();
+        seq.extend_from_slice(&prefix_bytes);
+        seq.extend_from_slice(b"%00b\x07");
+        s.next_slice(&seq);
+        s.handler.renderer_wakeup.deinit();
+
+        let mut expected = prefix_bytes.clone();
+        expected.extend_from_slice(b"\x00b");
+        let pwd = term.get_pwd().map(<[u8]>::to_vec);
+        assert_eq!(
+            Some(expected.clone()),
+            pwd,
+            "OSC 7 percent-decodes %00 into the pwd, NUL and all"
+        );
+        term.deinit(Global);
+
+        // `app.newConfig`: `copy.@"working-directory" = .{ .path = pwd }`, then
+        // `Surface.init`: `if (config.@"working-directory") |wd| wd.value()`.
+        let wd = configpkg::value_types::WorkingDirectory::Path(pwd.unwrap());
+        let wd_bytes = wd.value().map(<[u8]>::to_vec).expect("a .path value");
+
+        let (warnings, env_pwd, term_pwd) = spawn_with_working_directory(wd_bytes);
+        assert_eq!(
+            vec!["cannot access cwd, ignoring: error.BadPathName".to_string()],
+            warnings,
+            "start takes the reference's `cannot access cwd` arm and spawns with no cwd"
+        );
+        assert_eq!(Some(expected.clone()), env_pwd, "PWD keeps the raw bytes");
+        assert_eq!(
+            Some(expected),
+            term_pwd,
+            "initTerminal seeds the new terminal with the same bytes"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// B2. The same sink, reached from a `working-directory` config line whose
+    /// value holds a raw NUL byte. The config line reader keeps it.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn config_working_directory_with_a_nul_is_ignored_as_a_cwd() {
+        let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+        let mut cfg = configpkg::Config::default_config();
+        let mut iter = rustty_args::args::LineIterator::init(b"working-directory = /tmp\x00x\n");
+        cfg.load_iter(&mut iter).expect("load_iter");
+        let wd = cfg
+            .working_directory
+            .as_ref()
+            .and_then(|w| w.value())
+            .map(<[u8]>::to_vec);
+        assert_eq!(
+            Some(b"/tmp\x00x".to_vec()),
+            wd,
+            "the config parser keeps the NUL byte"
+        );
+
+        let (warnings, env_pwd, _) = spawn_with_working_directory(wd.unwrap());
+        assert_eq!(
+            vec!["cannot access cwd, ignoring: error.BadPathName".to_string()],
+            warnings
+        );
+        assert_eq!(Some(b"/tmp\x00x".to_vec()), env_pwd);
+    }
+
+    /// B3. A NUL in `command` / `initial-command`. The reference copies the
+    /// value with `dupeZ` and `execve` reads argv up to the first NUL
+    /// (measured), so the port cuts it there instead of panicking.
+    #[test]
+    fn exec_command_cuts_a_nul_argument_where_execve_reads_it() {
+        struct TestPasswd;
+        impl PasswdPkg for TestPasswd {
+            type Error = std::convert::Infallible;
+            fn get() -> Result<PasswdEntry, Self::Error> {
+                Ok(PasswdEntry {
+                    name: Some(c"testuser".to_owned()),
+                    shell: None,
+                    home: None,
+                })
+            }
+        }
+
+        // Through the config parser, which keeps the NUL in both forms.
+        let mut cfg = configpkg::Config::default_config();
+        let mut iter = rustty_args::args::LineIterator::init(
+            b"command = direct:/bin/echo a\x00b\ninitial-command = echo hi\x00; echo AFTER\n",
+        );
+        cfg.load_iter(&mut iter).expect("load_iter");
+        let direct = cfg.command.clone().expect("command");
+        let shell = cfg.initial_command.clone().expect("initial-command");
+        match &direct {
+            configpkg::command::Command::Direct(v) => assert_eq!(
+                vec![b"/bin/echo".to_vec(), b"a\x00b".to_vec()],
+                *v,
+                "the config parser keeps the NUL byte"
+            ),
+            configpkg::command::Command::Shell(_) => panic!("expected a direct command"),
+        }
+
+        let direct_args = execCommand::<TestPasswd>(&direct).expect("execCommand direct");
+        let shell_args = execCommand::<TestPasswd>(&shell).expect("execCommand shell");
+        let direct_last: Vec<&[u8]> = direct_args
+            .iter()
+            .rev()
+            .take(2)
+            .map(|c| c.to_bytes())
+            .collect();
+        assert_eq!(
+            vec![b"a".as_slice(), b"/bin/echo".as_slice()],
+            direct_last,
+            "argv is cut at the NUL, as execve reads it"
+        );
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        assert_eq!(
+            b"exec -l echo hi".as_slice(),
+            shell_args.last().expect("a shell arg").to_bytes()
+        );
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        assert_eq!(
+            b"echo hi".as_slice(),
+            shell_args.last().expect("a shell arg").to_bytes()
+        );
     }
 
     /// The counter the KAT's stand-in `postFork` bumps. Global because the hook
