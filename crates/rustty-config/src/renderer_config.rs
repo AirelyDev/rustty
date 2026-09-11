@@ -268,4 +268,48 @@ mod tests {
         assert_eq!(feats[0].as_slice(), b"liga\x00junk" as &[u8]);
         assert_eq!(feats[1].as_slice(), b"dlig" as &[u8]);
     }
+
+    /// R13 (`UPSTREAM-DEFECTS.md` UD57): the documented cell-relative values of
+    /// `cursor-text`, `selection-background` and `selection-foreground`, and the
+    /// two compatibility keys that set them, reach the renderer as
+    /// `CellForeground` / `CellBackground`. That is the input the reference's
+    /// custom-shader uniform update crashes on; the renderer side is
+    /// `update_custom_shader_uniforms_from_state_cell_relative_colors` in
+    /// `rustty-renderer`.
+    #[test]
+    fn cell_relative_cursor_and_selection_colors_reach_the_renderer() {
+        let load = |text: &[u8]| {
+            let mut c = Config::default();
+            let mut iter = rustty_args::args::LineIterator::init(text);
+            c.load_iter(&mut iter).unwrap();
+            assert!(c._diagnostics.empty(), "unexpected config diagnostics");
+            c
+        };
+
+        let c = load(
+            b"cursor-text = cell-foreground\n\
+              selection-background = cell-foreground\n\
+              selection-foreground = cell-background\n",
+        );
+        assert_eq!(Some(RTerminalColor::CellForeground), c.cursor_text());
+        assert_eq!(
+            Some(RTerminalColor::CellForeground),
+            c.selection_background()
+        );
+        assert_eq!(
+            Some(RTerminalColor::CellBackground),
+            c.selection_foreground()
+        );
+
+        let c = load(b"cursor-invert-fg-bg = true\nselection-invert-fg-bg = true\n");
+        assert_eq!(Some(RTerminalColor::CellBackground), c.cursor_text());
+        assert_eq!(
+            Some(RTerminalColor::CellForeground),
+            c.selection_background()
+        );
+        assert_eq!(
+            Some(RTerminalColor::CellBackground),
+            c.selection_foreground()
+        );
+    }
 }

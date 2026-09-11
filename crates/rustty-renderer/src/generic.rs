@@ -5654,55 +5654,47 @@ mod macos_impl {
 
             // Cursor text color
             //
-            // PORT NOTE (§E.3/RISK-1): the reference reads `cursor_text.color.r` on a
-            // `?TerminalColor` — a raw Zig union `.color` field access that is
-            // SAFETY-CHECKED as a TAG-ASSERT (panics on the `cell-foreground`/
-            // `cell-background` specials). A plain `if let Some(TerminalColor::Color(c))`
-            // would SILENTLY SKIP the specials (a third behavior matching neither the
-            // reference panic nor the 3b special-resolution path), so the faithful port
-            // destructures the `Option`, then TAG-ASSERTs with `_ => unreachable!()`.
-            if let Some(cursor_text) = self.config.cursor_text {
-                match cursor_text {
-                    TerminalColor::Color(c) => {
-                        uniforms.cursor_text = [
-                            c.r as f32 / 255.0,
-                            c.g as f32 / 255.0,
-                            c.b as f32 / 255.0,
-                            1.0,
-                        ];
-                    }
-                    _ => unreachable!(),
-                }
+            // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD57), for this
+            // uniform and the two selection uniforms below. The reference reads
+            // `.color.r/g/b` on a `?TerminalColor`, a union whose other tags are
+            // `cell-foreground` and `cell-background`. Those are documented values
+            // of `cursor-text`, `selection-foreground` and `selection-background`,
+            // and the `cursor-invert-fg-bg` / `selection-invert-fg-bg`
+            // compatibility keys set them. With any `custom-shader`, the access
+            // panics in ReleaseSafe and is undefined behaviour in ReleaseFast. A
+            // cell-relative value names no single colour for a whole-surface
+            // uniform (the reference's own `TerminalColor.toTerminalRGB` returns
+            // null for it), and the cell-path resolution needs a cell. So the port
+            // writes each uniform only for a `.color` value and otherwise leaves
+            // it unchanged, which is what the reference does when the option is
+            // unset. The platform twin is `generic/linux_impl.rs`.
+            if let Some(TerminalColor::Color(c)) = self.config.cursor_text {
+                uniforms.cursor_text = [
+                    c.r as f32 / 255.0,
+                    c.g as f32 / 255.0,
+                    c.b as f32 / 255.0,
+                    1.0,
+                ];
             }
 
             // Selection background color
-            if let Some(selection_bg) = self.config.selection_background {
-                match selection_bg {
-                    TerminalColor::Color(c) => {
-                        uniforms.selection_background_color = [
-                            c.r as f32 / 255.0,
-                            c.g as f32 / 255.0,
-                            c.b as f32 / 255.0,
-                            1.0,
-                        ];
-                    }
-                    _ => unreachable!(),
-                }
+            if let Some(TerminalColor::Color(c)) = self.config.selection_background {
+                uniforms.selection_background_color = [
+                    c.r as f32 / 255.0,
+                    c.g as f32 / 255.0,
+                    c.b as f32 / 255.0,
+                    1.0,
+                ];
             }
 
             // Selection foreground color
-            if let Some(selection_fg) = self.config.selection_foreground {
-                match selection_fg {
-                    TerminalColor::Color(c) => {
-                        uniforms.selection_foreground_color = [
-                            c.r as f32 / 255.0,
-                            c.g as f32 / 255.0,
-                            c.b as f32 / 255.0,
-                            1.0,
-                        ];
-                    }
-                    _ => unreachable!(),
-                }
+            if let Some(TerminalColor::Color(c)) = self.config.selection_foreground {
+                uniforms.selection_foreground_color = [
+                    c.r as f32 / 255.0,
+                    c.g as f32 / 255.0,
+                    c.b as f32 / 255.0,
+                    1.0,
+                ];
             }
 
             // Cursor visibility
@@ -8783,6 +8775,72 @@ mod macos_impl {
         }
 
         // §F.2(3) — direct: `cell_size`.
+        // rustty-only (R13, UPSTREAM-DEFECTS.md UD57): `cursor-text`,
+        // `selection-background` and `selection-foreground` set to
+        // `cell-foreground` / `cell-background` leave their custom-shader
+        // uniforms unchanged (the reference panics); a `.color` still writes.
+        // The OpenGL twin is in `generic/linux_impl.rs`.
+        #[test]
+        fn update_custom_shader_uniforms_from_state_cell_relative_colors() {
+            let mut r = match test_renderer(10, 3) {
+                Some(r) => r,
+                None => return,
+            };
+            r.has_custom_shaders = true;
+
+            let sentinel = [0.25, 0.5, 0.75, 1.0];
+            r.custom_shader_uniforms.cursor_text = sentinel;
+            r.custom_shader_uniforms.selection_background_color = sentinel;
+            r.custom_shader_uniforms.selection_foreground_color = sentinel;
+            r.custom_shader_uniforms.foreground_color = sentinel;
+            r.config.cursor_text = Some(crate::generic::TerminalColor::CellForeground);
+            r.config.selection_background = Some(crate::generic::TerminalColor::CellForeground);
+            r.config.selection_foreground = Some(crate::generic::TerminalColor::CellBackground);
+
+            let mut t = Terminal::init(Global, opts(10, 3)).unwrap();
+            r.terminal_state.update(Global, &mut t).unwrap(); // dirty = Full
+            r.update_custom_shader_uniforms_from_state();
+
+            // Positive reach: the update ran past its early returns.
+            let fg = r.terminal_state.colors.foreground;
+            assert_eq!(
+                r.custom_shader_uniforms.foreground_color,
+                [
+                    fg.r as f32 / 255.0,
+                    fg.g as f32 / 255.0,
+                    fg.b as f32 / 255.0,
+                    1.0
+                ]
+            );
+            assert_eq!(r.custom_shader_uniforms.cursor_text, sentinel);
+            assert_eq!(
+                r.custom_shader_uniforms.selection_background_color,
+                sentinel
+            );
+            assert_eq!(
+                r.custom_shader_uniforms.selection_foreground_color,
+                sentinel
+            );
+
+            // A `.color` value is still written.
+            let red = crate::generic::Color { r: 255, g: 0, b: 0 };
+            r.config.cursor_text = Some(crate::generic::TerminalColor::Color(red));
+            r.config.selection_background = Some(crate::generic::TerminalColor::Color(red));
+            r.config.selection_foreground = Some(crate::generic::TerminalColor::Color(red));
+            r.update_custom_shader_uniforms_from_state();
+            assert_eq!(r.custom_shader_uniforms.cursor_text, [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(
+                r.custom_shader_uniforms.selection_background_color,
+                [1.0, 0.0, 0.0, 1.0]
+            );
+            assert_eq!(
+                r.custom_shader_uniforms.selection_foreground_color,
+                [1.0, 0.0, 0.0, 1.0]
+            );
+
+            t.deinit(Global);
+        }
+
         #[test]
         fn update_font_grid_uniforms_cell_size() {
             let mut r = match test_renderer(10, 3) {

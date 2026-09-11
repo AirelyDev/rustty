@@ -4124,54 +4124,43 @@ impl Renderer {
 
         // Cursor text color
         //
-        // PORT NOTE (macos_impl §E.3/RISK-1): the reference reads `cursor_text.color.r`
-        // on a `?TerminalColor` — a raw Zig union `.color` field access that is
-        // SAFETY-CHECKED as a TAG-ASSERT (panics on the `cell-foreground`/
-        // `cell-background` specials). A plain `if let Some(TerminalColor::Color(c))`
-        // would SILENTLY SKIP the specials, so the faithful port destructures the
-        // `Option`, then TAG-ASSERTs with `_ => unreachable!()`.
-        if let Some(cursor_text) = self.config.cursor_text {
-            match cursor_text {
-                TerminalColor::Color(c) => {
-                    uniforms.cursor_text = [
-                        c.r as f32 / 255.0,
-                        c.g as f32 / 255.0,
-                        c.b as f32 / 255.0,
-                        1.0,
-                    ];
-                }
-                _ => unreachable!(),
-            }
+        // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD57), for this
+        // uniform and the two selection uniforms below. The reference reads
+        // `.color.r/g/b` on a `?TerminalColor` whose other tags,
+        // `cell-foreground` and `cell-background`, are documented values of these
+        // options; with any `custom-shader` it panics in ReleaseSafe. A
+        // cell-relative value names no single colour for a whole-surface uniform,
+        // so the port writes each uniform only for a `.color` value and otherwise
+        // leaves it unchanged, as the reference does when the option is unset.
+        // The full rationale is at the twin site in `generic.rs`
+        // (`update_custom_shader_uniforms_from_state`).
+        if let Some(TerminalColor::Color(c)) = self.config.cursor_text {
+            uniforms.cursor_text = [
+                c.r as f32 / 255.0,
+                c.g as f32 / 255.0,
+                c.b as f32 / 255.0,
+                1.0,
+            ];
         }
 
         // Selection background color
-        if let Some(selection_bg) = self.config.selection_background {
-            match selection_bg {
-                TerminalColor::Color(c) => {
-                    uniforms.selection_background_color = [
-                        c.r as f32 / 255.0,
-                        c.g as f32 / 255.0,
-                        c.b as f32 / 255.0,
-                        1.0,
-                    ];
-                }
-                _ => unreachable!(),
-            }
+        if let Some(TerminalColor::Color(c)) = self.config.selection_background {
+            uniforms.selection_background_color = [
+                c.r as f32 / 255.0,
+                c.g as f32 / 255.0,
+                c.b as f32 / 255.0,
+                1.0,
+            ];
         }
 
         // Selection foreground color
-        if let Some(selection_fg) = self.config.selection_foreground {
-            match selection_fg {
-                TerminalColor::Color(c) => {
-                    uniforms.selection_foreground_color = [
-                        c.r as f32 / 255.0,
-                        c.g as f32 / 255.0,
-                        c.b as f32 / 255.0,
-                        1.0,
-                    ];
-                }
-                _ => unreachable!(),
-            }
+        if let Some(TerminalColor::Color(c)) = self.config.selection_foreground {
+            uniforms.selection_foreground_color = [
+                c.r as f32 / 255.0,
+                c.g as f32 / 255.0,
+                c.b as f32 / 255.0,
+                1.0,
+            ];
         }
 
         // Cursor visibility
@@ -5644,6 +5633,74 @@ mod tests {
             surface_mailbox: SurfaceMailbox::DETACHED,
         };
         Some(Renderer::init(Global, opts).expect("Renderer::init (GL probed above)"))
+    }
+
+    // rustty-only (R13, UPSTREAM-DEFECTS.md UD57): the OpenGL twin of
+    // `macos_impl`'s `update_custom_shader_uniforms_from_state_cell_relative_colors`.
+    // Cell-relative `cursor-text` / `selection-*` values leave their uniforms
+    // unchanged (the reference panics); a `.color` still writes.
+    #[test]
+    fn update_custom_shader_uniforms_from_state_cell_relative_colors() {
+        let _guard = test_support::gl_lock();
+
+        let mut r = match golden_renderer(10, 3) {
+            Some(r) => r,
+            None => return, // GL-context skip
+        };
+        r.has_custom_shaders = true;
+
+        let sentinel = [0.25, 0.5, 0.75, 1.0];
+        r.custom_shader_uniforms.cursor_text = sentinel;
+        r.custom_shader_uniforms.selection_background_color = sentinel;
+        r.custom_shader_uniforms.selection_foreground_color = sentinel;
+        r.custom_shader_uniforms.foreground_color = sentinel;
+        r.config.cursor_text = Some(TerminalColor::CellForeground);
+        r.config.selection_background = Some(TerminalColor::CellForeground);
+        r.config.selection_foreground = Some(TerminalColor::CellBackground);
+
+        let mut t = Terminal::init(Global, term_opts(10, 3)).unwrap();
+        r.terminal_state.update(Global, &mut t).unwrap(); // dirty = Full
+        r.update_custom_shader_uniforms_from_state();
+
+        // Positive reach: the update ran past its early returns.
+        let fg = r.terminal_state.colors.foreground;
+        assert_eq!(
+            r.custom_shader_uniforms.foreground_color,
+            [
+                fg.r as f32 / 255.0,
+                fg.g as f32 / 255.0,
+                fg.b as f32 / 255.0,
+                1.0
+            ]
+        );
+        assert_eq!(r.custom_shader_uniforms.cursor_text, sentinel);
+        assert_eq!(
+            r.custom_shader_uniforms.selection_background_color,
+            sentinel
+        );
+        assert_eq!(
+            r.custom_shader_uniforms.selection_foreground_color,
+            sentinel
+        );
+
+        // A `.color` value is still written.
+        let red = Color { r: 255, g: 0, b: 0 };
+        r.config.cursor_text = Some(TerminalColor::Color(red));
+        r.config.selection_background = Some(TerminalColor::Color(red));
+        r.config.selection_foreground = Some(TerminalColor::Color(red));
+        r.update_custom_shader_uniforms_from_state();
+        assert_eq!(r.custom_shader_uniforms.cursor_text, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(
+            r.custom_shader_uniforms.selection_background_color,
+            [1.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            r.custom_shader_uniforms.selection_foreground_color,
+            [1.0, 0.0, 0.0, 1.0]
+        );
+
+        t.deinit(Global);
+        r.deinit();
     }
 
     // F-014 PROVING TESTS (the OpenGL twin of
