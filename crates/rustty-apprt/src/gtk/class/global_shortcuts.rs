@@ -551,53 +551,7 @@ impl GlobalShortcuts {
                 // Unsubscribe from the response signal (`:402-406`).
                 drop(this.imp().response_subscription.borrow_mut().take());
 
-                // var response: u32 = 0;
-                // var vardict: ?*glib.Variant = null;
-                // defer if (vardict) |v| v.unref();
-                // params_.get("(u@a{sv})", &response, &vardict);
-                //
-                // CORRECTION (task 20, S51-F7): this used to read
-                // `params.child_value(0).get().unwrap_or(2)` then
-                // `params.child_value(1)`, under a note that said "DELIBERATE
-                // DIVERGENCE: the fallback is 2 ("ended unexpectedly"), not 0". Both
-                // `child_value` calls ASSERT the index is in range, so a `()` or `(u)`
-                // body panicked before the default could apply. See
-                // [`response_params`].
-                let (response, vardict) = response_params(&signal.parameters);
-
-                match response {
-                    // `.{0 => method.onResponse(..)}` (`:414-417`)
-                    0 => {
-                        // log.debug("request successful", .{});
-                        log::debug!(target: LOG_SCOPE, "request successful");
-                        // `method.onResponse(self_cb, vardict.?)`.
-                        //
-                        // PORT NOTE (task 20, DELIBERATE FIDELITY — not an oversight;
-                        // tracked as NEW-FINDINGS N38, a defect in the REFERENCE): a
-                        // malformed body leaves `vardict` null with `response` 0, and
-                        // the reference's `.?` is then safety-checked illegal
-                        // behaviour — a panic in a safe build. It is REACHABLE from
-                        // the session bus: this subscription, like the reference's
-                        // (`global_shortcuts.zig:481-491`), has no sender filter, so
-                        // any same-user peer can emit a `()` `Response` on the request
-                        // path. Ported as the same panic (the S209-F1 precedent for
-                        // Zig safety checks). Do not turn it into a silent skip
-                        // without closing N38 first.
-                        let vardict = vardict.expect(
-                            "global shortcuts Response had code 0 but no a{sv} results \
-                             (the reference's `vardict.?`)",
-                        );
-                        this.on_response(method, &vardict);
-                    }
-                    // 1 => log.debug("request was cancelled by user", .{}),
-                    1 => log::debug!(target: LOG_SCOPE, "request was cancelled by user"),
-                    // 2 => log.warn("request ended unexpectedly", .{}),
-                    2 => log::warn!(target: LOG_SCOPE, "request ended unexpectedly"),
-                    // else => log.warn("unrecognized response code={}", .{response}),
-                    other => {
-                        log::warn!(target: LOG_SCOPE, "unrecognized response code={other}");
-                    }
-                }
+                this.responded(method, &signal.parameters);
             },
         );
         imp.response_subscription.replace(Some(subscription));
@@ -635,6 +589,52 @@ impl GlobalShortcuts {
                 }
             },
         );
+    }
+
+    /// PORTS: `global_shortcuts.zig:442-469` `callbacks.responded`, after its
+    /// unsubscribe: read the `Response` body and dispatch on the code. A separate
+    /// method (the reference's is a nested callback) so a malformed body can be
+    /// driven without a portal.
+    fn responded(&self, method: Method, params: &glib::Variant) {
+        // var response: u32 = 0;
+        // var vardict: ?*glib.Variant = null;
+        // defer if (vardict) |v| v.unref();
+        // params_.get("(u@a{sv})", &response, &vardict);
+        //
+        // CORRECTION (task 20, S51-F7): this used to read
+        // `params.child_value(0).get().unwrap_or(2)` then
+        // `params.child_value(1)`, under a note that said "DELIBERATE
+        // DIVERGENCE: the fallback is 2 ("ended unexpectedly"), not 0". Both
+        // `child_value` calls ASSERT the index is in range, so a `()` or `(u)`
+        // body panicked before the default could apply. See
+        // [`response_params`].
+        let (response, vardict) = response_params(params);
+
+        // PORT NOTE: reference defect (R13) — `.port/parity-closure/UPSTREAM-DEFECTS.md`
+        // UD1. A deliberate divergence (task 20, S51-F7), not an oversight: a body that is
+        // not `(ua{sv})` leaves `response` 0 and `vardict` null, and the reference then
+        // runs `method.onResponse(self_cb, vardict.?)` — a panic in a safe build, undefined
+        // behaviour in ReleaseFast. It is reachable from ANY session-bus peer: this
+        // subscription, like the reference's (`:481-491`), has a null sender. Under R13 the
+        // port does not reproduce it: code 0 without a vardict takes the `2` arm — the
+        // failed response it evidently is, with the reference's own "ended unexpectedly"
+        // warning — and `onResponse` is not called.
+        match (response, vardict) {
+            // `.{0 => method.onResponse(..)}` (`:462-465`)
+            (0, Some(vardict)) => {
+                // log.debug("request successful", .{});
+                log::debug!(target: LOG_SCOPE, "request successful");
+                self.on_response(method, &vardict);
+            }
+            // 1 => log.debug("request was cancelled by user", .{}),
+            (1, _) => log::debug!(target: LOG_SCOPE, "request was cancelled by user"),
+            // 2 => log.warn("request ended unexpectedly", .{}),
+            (2, _) | (0, None) => log::warn!(target: LOG_SCOPE, "request ended unexpectedly"),
+            // else => log.warn("unrecognized response code={}", .{response}),
+            (other, _) => {
+                log::warn!(target: LOG_SCOPE, "unrecognized response code={other}");
+            }
+        }
     }
 
     /// PORTS: `global_shortcuts.zig:283-325` `Method.onResponse` — what to do once
@@ -676,10 +676,9 @@ impl GlobalShortcuts {
                         let Some(this) = weak.upgrade() else {
                             return;
                         };
-                        // 2nd value in the tuple is the activated shortcut id
-                        // (`:552-555`).
-                        let Some(id) = signal.parameters.child_value(1).str().map(str::to_owned)
-                        else {
+                        // 2nd value in the tuple is the activated shortcut ID
+                        // (`:598-601`). See [`activated_shortcut_id`].
+                        let Some(id) = activated_shortcut_id(&signal.parameters) else {
                             return;
                         };
                         // log.debug("activated={s}", .{shortcut_id});
@@ -842,6 +841,26 @@ pub(crate) fn bind_shortcuts_payload(
         "".to_variant(),
         options.end(),
     ]))
+}
+
+/// PORTS: `global_shortcuts.zig:598-601` —
+/// `var shortcut_id: [*:0]const u8 = undefined; params.getChild(1, "&s", &shortcut_id);`
+/// in `shortcutActivated`: the second child of the `Activated` body, typed `s`.
+///
+/// PORT NOTE: reference defect (R13) — `.port/parity-closure/UPSTREAM-DEFECTS.md` UD2. A
+/// deliberate divergence (task 20), not an oversight: on a body with no second child, or a
+/// non-`s` one, `g_variant_get_child` writes nothing and the reference goes on to log and
+/// look up an UNDEFINED pointer. The subscription matches only `arg0` against the session
+/// handle and has a null sender, so a `(o)` body from any session-bus peer reaches it. The
+/// port used to PANIC there instead (`child_value(1)` asserts the index). Under R13 this
+/// returns `None` and the handler does nothing, which is what the reference evidently
+/// intends for an activation that names no shortcut.
+pub(crate) fn activated_shortcut_id(params: &glib::Variant) -> Option<String> {
+    let child = params.try_child_value(1)?;
+    if !child.is_type(glib::VariantTy::STRING) {
+        return None;
+    }
+    child.str().map(str::to_owned)
 }
 
 /// PORTS: `global_shortcuts.zig:454-457` — `params_.get("(u@a{sv})", &response,
@@ -1196,6 +1215,61 @@ mod tests {
             assert_eq!(code, 0, "{what}: response keeps its initial 0");
             assert!(vardict.is_none(), "{what}: vardict stays null");
         }
+    }
+
+    /// The `Activated` sibling of the `Response` defect (`UPSTREAM-DEFECTS.md` UD2): a body
+    /// without a string second child yields no shortcut id instead of panicking. `(os)` is
+    /// the well-formed positive half; `(o)`, `()` and an `(oo)` whose id is an object path
+    /// all yield `None` (`&s` asks for type `s` exactly).
+    #[test]
+    fn global_shortcuts_activated_shortcut_id_is_safe_on_malformed_bodies() {
+        use gtk4::glib::prelude::ToVariant;
+        use gtk4::glib::variant::ObjectPath;
+
+        let handle = ObjectPath::try_from("/session/a").unwrap().to_variant();
+        let good = gtk4::glib::Variant::tuple_from_iter([handle.clone(), "LOGO+q".to_variant()]);
+        assert_eq!(activated_shortcut_id(&good).as_deref(), Some("LOGO+q"));
+
+        let short = gtk4::glib::Variant::tuple_from_iter([handle.clone()]);
+        let empty = gtk4::glib::Variant::tuple_from_iter(std::iter::empty::<gtk4::glib::Variant>());
+        let as_path = gtk4::glib::Variant::tuple_from_iter([handle.clone(), handle]);
+        for body in [short, empty, as_path] {
+            assert_eq!(activated_shortcut_id(&body), None, "{}", body.print(true));
+        }
+    }
+
+    /// S51-F7 and the reference defect it met (`UPSTREAM-DEFECTS.md` UD1): a code-0
+    /// `Response` whose body is not `(ua{sv})` must not panic. The reference unwraps the
+    /// null vardict (`vardict.?`); the port handles it as a failed response with the
+    /// reference's own "request ended unexpectedly" warning and never calls `onResponse`.
+    /// The well-formed body first is the positive half: it reaches `onResponse` (its
+    /// `session_handle=` debug line) through the same method.
+    #[test]
+    fn global_shortcuts_malformed_response_does_not_panic() {
+        use gtk4::glib::prelude::ToVariant;
+
+        let cap = crate::log_capture::start();
+        let gs = GlobalShortcuts::new();
+
+        let dict = gtk4::glib::VariantDict::new(None);
+        dict.insert_value("session_handle", &"/session/a".to_variant());
+        let good = gtk4::glib::Variant::tuple_from_iter([0u32.to_variant(), dict.end()]);
+        gs.responded(Method::CreateSession, &good);
+
+        let empty = gtk4::glib::Variant::tuple_from_iter(std::iter::empty::<gtk4::glib::Variant>());
+        gs.responded(Method::CreateSession, &empty);
+
+        let messages = cap.messages();
+        drop(cap);
+        let rec = |level, msg: &str| (level, LOG_SCOPE.to_string(), msg.to_string());
+        assert_eq!(
+            messages,
+            vec![
+                rec(log::Level::Debug, "request successful"),
+                rec(log::Level::Debug, "session_handle=/session/a"),
+                rec(log::Level::Warn, "request ended unexpectedly"),
+            ]
+        );
     }
 
     /// PORTS: `global_shortcuts.zig:333-338` — pull `session_handle` out of the
