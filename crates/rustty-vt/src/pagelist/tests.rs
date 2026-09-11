@@ -7429,9 +7429,13 @@ fn pagelist_max_lines_applies_to_resize_and_clone() {
     };
     let mut cloned = s.clone(&mut opts).unwrap();
 
-    assert_eq!(s.limits.lines.explicit, cloned.limits.lines.explicit);
-    assert_eq!(s.limits.lines.min, cloned.limits.lines.min);
-    assert_eq!(s.limits.max(Key::Lines), cloned.limits.max(Key::Lines));
+    // try testing.expectEqual(s.limits, cloned.limits);
+    //
+    // FIX (S127-F1): three line-only asserts stood here, so `bytes.explicit` and
+    // `bytes.min` were never compared and a `clone` that dropped or recomputed
+    // the BYTE limit passed. `Limits` derives `PartialEq`, so the reference's
+    // whole-struct equality is directly expressible.
+    assert_eq!(s.limits, cloned.limits);
 
     cloned.grow_rows(2 * cloned.limits.max(Key::Lines)).unwrap();
     assert!(

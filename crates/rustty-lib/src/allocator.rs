@@ -690,11 +690,16 @@ mod tests {
     fn c_allocator() {
         // PORT NOTE: The reference skips this test without libc
         // (`return error.SkipZigTest`). rustty always has the global allocator
-        // backing `c_allocator`, so the test runs. We build the backend on the
-        // stack so its pointer stays stable for the Allocator's lifetime.
-        let backend = GlobalZigAllocator;
-        let backend_ref = ZigAllocatorRef::new(&backend);
-        let c_alloc = Allocator::from_zig(&backend_ref);
+        // backing `c_allocator`, so the test runs.
+        //
+        // FIX (S110-F3): this used to build a fresh
+        // `GlobalZigAllocator`/`ZigAllocatorRef`/`Allocator::from_zig` on the
+        // stack, so it never called `c_allocator()` and the process-static
+        // `C_ALLOCATOR_REF`/`SyncAllocatorRef` path had no test in the crate.
+        // The reference is `const alloc = c_allocator.zig();` — it round-trips
+        // the module-level value. (`super::` because this test FUNCTION shadows
+        // the glob-imported fn of the same name.)
+        let c_alloc = super::c_allocator();
 
         let alloc = c_alloc.zig();
         let ptr = alloc.alloc_bytes(10);

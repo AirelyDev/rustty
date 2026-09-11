@@ -61,7 +61,9 @@ mod tests {
 
     #[test]
     fn osc_52_get_set_clipboard() {
-        let mut p: Parser = Parser::init(None);
+        let backend = rustty_lib::allocator::GlobalZigAllocator;
+        let alloc = rustty_lib::allocator::ZigAllocatorRef::new(&backend);
+        let mut p: Parser = Parser::init(Some(alloc));
 
         let input = "52;s;?";
         for ch in input.bytes() {
@@ -129,11 +131,20 @@ mod tests {
 
     #[test]
     fn osc_52_get_set_clipboard_with_allocator() {
-        // PORT NOTE: `var p: Parser = .init(testing.allocator)` — OSC 52 captures
-        // via the allocating backing when an allocator is present. The Rustty
-        // `Capture` allocating backing is a growable `Vec`; no Zig allocator is
-        // threaded for the test (the captured bytes are identical either way).
-        let mut p: Parser = Parser::init(None);
+        // PORT NOTE: `var p: Parser = .init(testing.allocator)`. OSC 52 asks for
+        // `captureTrailing(.allocating)`, so this test exists to exercise the
+        // ALLOCATING backing.
+        //
+        // FIX (S194-F2): this used to be `Parser::init(None)`, and
+        // `capture_trailing(Allocating)` falls back to `Fixed` when
+        // `self.alloc.is_none()` — so the test was byte-for-byte the
+        // non-allocator test above it and covered none of the path it names.
+        // The PORT NOTE that stood here said "no Zig allocator is threaded for
+        // the test (the captured bytes are identical either way)"; the bytes
+        // are, the code path is not.
+        let backend = rustty_lib::allocator::GlobalZigAllocator;
+        let alloc = rustty_lib::allocator::ZigAllocatorRef::new(&backend);
+        let mut p: Parser = Parser::init(Some(alloc));
 
         let input = "52;s;?";
         for ch in input.bytes() {

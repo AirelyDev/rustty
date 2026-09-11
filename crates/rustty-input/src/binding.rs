@@ -6280,7 +6280,11 @@ mod tests {
         // Chain can't be part of a sequence
         {
             let mut p = Parser::init(b"a>chain=ignore").unwrap();
-            let _ = p.next();
+            // PORT NOTE: `_ = try p.next();` — the leader element must PARSE.
+            // `let _ = p.next()` discarded an `Err`, so the block passed even
+            // when the leader itself failed to parse and the `InvalidFormat`
+            // below came from the wrong element (S102-F1).
+            p.next().unwrap();
             assert_eq!(Err(Error::InvalidFormat), p.next());
         }
     }

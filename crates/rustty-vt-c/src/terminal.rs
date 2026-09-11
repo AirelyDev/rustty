@@ -5238,6 +5238,20 @@ mod tests {
                 },
             )
         };
+        // scroll_viewport(null, .{ .tag = .row, .value = .{ .row = 1 } });
+        //
+        // FIX (S180-F1): the second call was dropped. It is the one whose union
+        // payload is READ, so it is the call that exercises the null guard for a
+        // tag the implementation must decode.
+        unsafe {
+            scroll_viewport(
+                std::ptr::null_mut(),
+                ScrollViewportC {
+                    tag: ScrollViewportTag::Row as c_int,
+                    value: ScrollViewportCValue { row: 1 },
+                },
+            )
+        };
     }
 
     // PROVING TEST (W35-B07): no reference analog. The reference switches
