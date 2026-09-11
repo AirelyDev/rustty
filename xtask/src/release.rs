@@ -297,10 +297,25 @@ mod tests {
     }
 
     /// The build info really is derivable from this checkout (the step the
-    /// oracle runs on every release). Shells to git, which the repo always has.
+    /// oracle runs on every release). Shells to git.
+    ///
+    /// PORT NOTE (parity S63-F8): "which the repo always has" was true of the
+    /// repo and false of the SOURCE TARBALL, which ships no `.git` — and
+    /// `xtask distcheck` now runs the extracted tree's test suite, as the
+    /// reference's check step does. Unlike the GL/Metal/corpus skips this one
+    /// needs no strict-mode switch to stay honest: the precondition is "we are
+    /// in a git checkout", which a repo checkout cannot fail, so the skip is
+    /// structurally unreachable exactly where it would matter.
     #[test]
     fn build_info_reads_this_checkout() {
         let root = workspace_root();
+        if !root.join(".git").exists() {
+            eprintln!(
+                "no .git at {} (source tarball); skipping build_info_reads_this_checkout",
+                root.display()
+            );
+            return;
+        }
         let info = build_info(&root).expect("build info");
         assert!(
             info.build.bytes().all(|b| b.is_ascii_digit()),
