@@ -6519,7 +6519,7 @@ mod tests {
     /// terminal. Drives the real `Exec::init` -> `initTerminal` -> `start`
     /// fork/exec path; only `new_config` itself is out of reach from here,
     /// because it needs a core `App` with an apprt.
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     fn spawn_with_working_directory(
         wd: Vec<u8>,
     ) -> (Vec<String>, Option<Vec<u8>>, Option<Vec<u8>>) {
@@ -6620,7 +6620,7 @@ mod tests {
     /// B1. `OSC 7` with `%00` -> the terminal pwd -> the new surface's
     /// `working-directory` -> `Exec`. The port used to panic in `Exec::init`.
     #[test]
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     fn osc7_percent_00_pwd_is_ignored_as_a_cwd_instead_of_panicking() {
         use allocator_api2::alloc::Global;
         use std::os::unix::ffi::OsStrExt as _;
@@ -6686,7 +6686,7 @@ mod tests {
     /// B2. The same sink, reached from a `working-directory` config line whose
     /// value holds a raw NUL byte. The config line reader keeps it.
     #[test]
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     fn config_working_directory_with_a_nul_is_ignored_as_a_cwd() {
         let _serial = FORK_KAT_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
 
