@@ -7124,6 +7124,179 @@ mod tests {
         t.deinit(Global);
     }
 
+    // ---- rustty-only (R13, UPSTREAM-DEFECTS.md UD61, and the port's P6) ----
+    //
+    // Kitty `t=s` (POSIX shared memory) transmissions through the VT stream. The
+    // test plays the peer: it creates and fills the object, keeps its own
+    // read-write descriptor, and can shrink the object while the terminal loads it.
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    struct PeerShm {
+        fd: libc::c_int,
+        name: std::ffi::CString,
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    impl PeerShm {
+        fn create(tag: &str, len: usize, fill: impl Fn(usize) -> u8) -> PeerShm {
+            // macOS limits shared-memory names to 31 bytes.
+            let name =
+                std::ffi::CString::new(format!("/r13b-{}-{tag}", std::process::id())).unwrap();
+            // SAFETY: `name` is a valid NUL-terminated string.
+            unsafe { libc::shm_unlink(name.as_ptr()) };
+            // SAFETY: as above.
+            let fd = unsafe {
+                libc::shm_open(
+                    name.as_ptr(),
+                    libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
+                    0o600,
+                )
+            };
+            assert!(fd >= 0, "shm_open: {}", std::io::Error::last_os_error());
+            // SAFETY: `fd` is open read-write.
+            assert_eq!(0, unsafe { libc::ftruncate(fd, len as libc::off_t) });
+            // SAFETY: `fd` is open read-write and `len` bytes long.
+            let map = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    len,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    fd,
+                    0,
+                )
+            };
+            assert_ne!(
+                libc::MAP_FAILED,
+                map,
+                "mmap: {}",
+                std::io::Error::last_os_error()
+            );
+            for i in 0..len {
+                // SAFETY: `i < len`, inside the writable mapping.
+                unsafe { *(map as *mut u8).add(i) = fill(i) };
+            }
+            // SAFETY: `map`/`len` come from the mmap above.
+            unsafe { libc::munmap(map, len) };
+            PeerShm { fd, name }
+        }
+
+        /// `ESC _ G a=t,t=s,f=24,s=2,v=2,i=<id>,O=<offset>,S=<size>;<name> ESC \`
+        fn transmit(&self, id: u32, offset: usize, size: usize) -> Vec<u8> {
+            use crate::snapshot::io::Writer as _;
+            let mut aw = crate::snapshot::io::AllocatingWriter::new();
+            aw.write_all(
+                format!("\x1b_Ga=t,t=s,f=24,s=2,v=2,i={id},O={offset},S={size};").as_bytes(),
+            )
+            .unwrap();
+            crate::kitty::clipboard_response::b64_encode_writer(&mut aw, self.name.as_bytes())
+                .unwrap();
+            aw.write_all(b"\x1b\\").unwrap();
+            aw.written().to_vec()
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    impl Drop for PeerShm {
+        fn drop(&mut self) {
+            // SAFETY: `fd` and `name` come from `create`.
+            unsafe {
+                libc::close(self.fd);
+                libc::shm_unlink(self.name.as_ptr());
+            }
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn shm_opts() -> Options {
+        let mut o = opts(10, 10);
+        o.kitty_image_loading_limits = kitty::graphics_image::Limits {
+            file: false,
+            temporary_file: kitty::graphics_image::TemporaryFileLimit::Disabled,
+            shared_memory: true,
+        };
+        o
+    }
+
+    /// The load reads exactly `O`..`O+S` of the object (`pread` on Linux, the
+    /// raw-pointer copy out of the mapping on macOS, where `pread` answers
+    /// ESPIPE).
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn kitty_graphics_shared_memory_copies_the_requested_range() {
+        if !crate::options::KITTY_GRAPHICS {
+            return;
+        }
+        let shm = PeerShm::create("range", 4096, |i| (i % 251) as u8);
+        let mut t = Terminal::init(Global, shm_opts()).unwrap();
+
+        cap_reset();
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(cap_write_pty);
+            s.next_slice(&shm.transmit(7, 5, 12));
+        }
+        assert_eq!(cap_take().unwrap().as_slice(), b"\x1b_Gi=7;OK\x1b\\");
+
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        let img = storage.image_by_id(7).expect("image 7 must be stored");
+        let expected: Vec<u8> = (5..17).map(|i| (i % 251) as u8).collect();
+        match &img.data {
+            kitty::graphics_image::Data::Complete(d) => assert_eq!(&expected, d),
+            other => panic!("unexpected image data: {other:?}"),
+        }
+
+        t.deinit(Global);
+    }
+
+    /// The reference's SIGBUS: the peer shrinks the object between the terminal's
+    /// `fstat` and its copy. The load now fails with `EINVAL: invalid data` and
+    /// the terminal survives. Linux only: macOS refuses to shrink a POSIX
+    /// shared-memory object (`ftruncate` returns EINVAL, measured).
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn kitty_graphics_shared_memory_truncated_after_fstat_is_invalid_data() {
+        if !crate::options::KITTY_GRAPHICS {
+            return;
+        }
+        let shm = PeerShm::create("trunc", 4096, |i| (i % 251) as u8);
+        let peer_fd = shm.fd;
+        let truncated = std::rc::Rc::new(std::cell::Cell::new(false));
+        let flag = truncated.clone();
+        kitty::graphics_image::LoadingImage::test_after_fstat_hook(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                // SAFETY: `peer_fd` is the peer's open read-write descriptor.
+                assert_eq!(0, unsafe { libc::ftruncate(peer_fd, 0) });
+                flag.set(true);
+            }));
+        });
+
+        let mut t = Terminal::init(Global, shm_opts()).unwrap();
+        cap_reset();
+        {
+            let mut s = t.vt_stream();
+            s.handler.effects.write_pty = Some(cap_write_pty);
+            s.next_slice(&shm.transmit(7, 5, 12));
+        }
+        kitty::graphics_image::LoadingImage::test_after_fstat_hook(|hook| {
+            *hook.borrow_mut() = None;
+        });
+
+        // Positive reach: the truncation ran inside the load, after the fstat.
+        assert!(
+            truncated.get(),
+            "the peer truncation must run between fstat and the read"
+        );
+        assert_eq!(
+            cap_take().unwrap().as_slice(),
+            b"\x1b_Gi=7;EINVAL: invalid data\x1b\\"
+        );
+        let storage = unsafe { &(*t.screens.active).kitty_images };
+        assert!(storage.image_by_id(7).is_none());
+
+        t.deinit(Global);
+    }
+
     // test "continuation reconstructs standard stream without duplicate effects"
     #[test]
     fn continuation_reconstructs_standard_stream_without_duplicate_effects() {

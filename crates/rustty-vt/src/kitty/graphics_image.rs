@@ -212,6 +212,17 @@ impl Limits {
     };
 }
 
+/// The result of `LoadingImage::pread_range` (R13, UD61).
+#[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
+enum PreadOutcome {
+    /// All requested bytes were read.
+    Read,
+    /// The descriptor cannot be read with `pread`; map it instead.
+    Unsupported,
+    /// A short read (the object shrank) or a read error.
+    Failed,
+}
+
 /// PORT NOTE: the reference nests `const SharedMemoryRange = struct { start:
 /// usize, end: usize };` inside `LoadingImage`; hoisted to module level because
 /// Rust has no nested type namespacing on structs.
@@ -461,6 +472,46 @@ impl LoadingImage {
         // it doesn't overflow.
         let range = self.sharedMemoryRange(t, stat_size)?;
 
+        #[cfg(test)]
+        Self::test_after_fstat_hook(|hook| {
+            if let Some(f) = hook.borrow_mut().as_mut() {
+                f();
+            }
+        });
+
+        // PORT NOTE: reference defect (R13, UPSTREAM-DEFECTS.md UD61), plus the
+        // port's own P6. The reference maps `stat_size` bytes `MAP_SHARED` and
+        // copies `map[range.start..range.end]`. The object belongs to the peer
+        // that sent `t=s`. If that peer shrinks it with `ftruncate` after the
+        // `fstat` above, the first touch of a page past the new end raises SIGBUS
+        // and the terminal dies (measured on Linux; a signal, so every build mode).
+        // Separately, the port formed a `&[u8]` over memory the peer can write
+        // while it is borrowed, which is undefined behaviour in Rust even with no
+        // truncation.
+        //
+        // The port reads the range with `pread`, which reports a truncated
+        // object as a short read. A short read or a read error fails the load
+        // with `InvalidData`, the error every other shared-memory failure here
+        // returns; no message is logged, because the reference has none for
+        // this case. Where `pread` cannot read a shared-memory object (macOS
+        // answers ESPIPE, measured; macOS also refuses to shrink one, measured,
+        // so the SIGBUS cannot happen there), the port keeps the reference's
+        // mapping but copies out of it through a raw pointer, never a reference.
+        assert(self.data.is_empty());
+        match Self::pread_range(
+            guard.fd,
+            range.start,
+            range.end - range.start,
+            &mut self.data,
+        ) {
+            PreadOutcome::Read => return Ok(()),
+            PreadOutcome::Failed => {
+                self.data.clear();
+                return Err(Error::InvalidData);
+            }
+            PreadOutcome::Unsupported => {}
+        }
+
         // PORT NOTE: `std.posix.mmap(null, stat_size, PROT.READ,
         // MAP{ .TYPE = .SHARED }, fd, 0)`.
         // SAFETY: guard.fd is open and readable; stat_size > 0.
@@ -501,12 +552,80 @@ impl LoadingImage {
             ptr: map_ptr,
             len: stat_size,
         };
-        // SAFETY: the mapping is stat_size bytes, readable.
-        let map: &[u8] = unsafe { std::slice::from_raw_parts(map_ptr as *const u8, stat_size) };
-
-        assert(self.data.is_empty());
-        self.data.extend_from_slice(&map[range.start..range.end]);
+        // P6: no `&[u8]` over the peer-writable mapping; copy through a raw
+        // pointer. `sharedMemoryRange` guarantees `range.end <= stat_size`.
+        let len = range.end - range.start;
+        self.data.reserve_exact(len);
+        // SAFETY: the mapping is `stat_size` readable bytes and
+        // `range.start + len == range.end <= stat_size`; `self.data` is empty
+        // with at least `len` bytes of capacity, and the two do not overlap.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                (map_ptr as *const u8).add(range.start),
+                self.data.as_mut_ptr(),
+                len,
+            );
+            self.data.set_len(len);
+        }
         Ok(())
+    }
+
+    /// Reads `len` bytes at `start` from `fd` into the empty `dst` with
+    /// `pread` (R13, UD61). `Failed` covers a short read, which is how a
+    /// truncated object shows up, and any read error. `Unsupported` means the
+    /// descriptor cannot be read this way at all (macOS POSIX shared memory
+    /// answers ESPIPE), so the caller falls back to mapping it.
+    #[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
+    fn pread_range(
+        fd: std::os::raw::c_int,
+        start: usize,
+        len: usize,
+        dst: &mut Vec<u8>,
+    ) -> PreadOutcome {
+        dst.reserve_exact(len);
+        let mut done: usize = 0;
+        while done < len {
+            let Ok(offset) = libc::off_t::try_from(start + done) else {
+                return PreadOutcome::Failed;
+            };
+            // SAFETY: `dst` has at least `len` bytes of capacity and
+            // `done < len`, so `len - done` bytes from `done` are writable.
+            let n =
+                unsafe { libc::pread(fd, dst.as_mut_ptr().add(done).cast(), len - done, offset) };
+            if n < 0 {
+                match std::io::Error::last_os_error().raw_os_error() {
+                    Some(libc::EINTR) => continue,
+                    Some(libc::ESPIPE | libc::ENXIO | libc::ENODEV | libc::EOPNOTSUPP)
+                        if done == 0 =>
+                    {
+                        return PreadOutcome::Unsupported;
+                    }
+                    _ => return PreadOutcome::Failed,
+                }
+            }
+            if n == 0 {
+                // End of file before `len` bytes: the object shrank.
+                return PreadOutcome::Failed;
+            }
+            done += n as usize;
+        }
+        // SAFETY: `pread` initialised the first `len` bytes.
+        unsafe { dst.set_len(len) };
+        PreadOutcome::Read
+    }
+
+    /// Test seam for UD61: runs `f` on the hook invoked between the `fstat`
+    /// and the read in `readSharedMemoryPosix`, where the reference's
+    /// truncation window is. Test builds only.
+    #[cfg(all(test, not(any(windows, target_os = "android", target_arch = "wasm32"))))]
+    pub(crate) fn test_after_fstat_hook<R>(
+        f: impl FnOnce(&std::cell::RefCell<Option<Box<dyn FnMut()>>>) -> R,
+    ) -> R {
+        thread_local! {
+            static HOOK: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+                const { std::cell::RefCell::new(None) };
+        }
+        HOOK.with(f)
     }
 
     /// Returns the byte range to copy from a shared memory object.
