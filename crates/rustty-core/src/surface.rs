@@ -8159,12 +8159,25 @@ where
                 let amount = poff / cell_size;
                 // assert(@abs(amount) >= 1);
                 debug_assert!(amount.abs() >= 1.0);
-                // self.mouse.pending_scroll_y = poff - (amount * cell_size);
-                self.mouse.pending_scroll_y = poff - (amount * cell_size);
-
                 // Round towards zero.
                 // const delta: isize = @intFromFloat(@trunc(amount));
-                let delta: isize = isize_from_float(amount.trunc());
+                //
+                // PORT NOTE (R13, UD62): an amount with no `isize` representation
+                // (a non-finite or astronomically large offset from the OS or a
+                // C-ABI embedder) is not scrolled at all — the `.{}` arm this
+                // function already takes for an offset too small to act on. It is
+                // taken BEFORE the pending store, so `pending_scroll_y` can never
+                // hold a NaN that poisons every later scroll, and BEFORE the
+                // asserts below, which hold for every value that gets past here.
+                // Saturating would be worse than the crash it replaces: the
+                // callers below loop `0..delta` writing one report per row.
+                let Some(delta) = isize_from_float(amount.trunc()) else {
+                    break 'y ScrollAmount::default();
+                };
+                // assert(@abs(amount) >= 1);
+                debug_assert!(amount.abs() >= 1.0);
+                // self.mouse.pending_scroll_y = poff - (amount * cell_size);
+                self.mouse.pending_scroll_y = poff - (amount * cell_size);
                 // assert(@abs(delta) >= 1);
                 debug_assert!(delta.unsigned_abs() >= 1);
 
@@ -8182,7 +8195,11 @@ where
                 // if (!scroll_mods.precision) {
                 if !scroll_mods.precision {
                     // const x_delta_isize: isize = @intFromFloat(@round(xoff));
-                    let x_delta_isize: isize = isize_from_float(xoff.round());
+                    //
+                    // (R13, UD62 — see the y calculation's note.)
+                    let Some(x_delta_isize) = isize_from_float(xoff.round()) else {
+                        break 'x ScrollAmount::default();
+                    };
                     // break :x .{ .delta = x_delta_isize };
                     break 'x ScrollAmount {
                         delta: x_delta_isize,
@@ -8205,10 +8222,14 @@ where
                 let amount = poff / cell_size;
                 // assert(@abs(amount) >= 1);
                 debug_assert!(amount.abs() >= 1.0);
+                // const delta: isize = @intFromFloat(@trunc(amount));
+                //
+                // (R13, UD62 — see the y calculation's note.)
+                let Some(delta) = isize_from_float(amount.trunc()) else {
+                    break 'x ScrollAmount::default();
+                };
                 // self.mouse.pending_scroll_x = poff - (amount * cell_size);
                 self.mouse.pending_scroll_x = poff - (amount * cell_size);
-                // const delta: isize = @intFromFloat(@trunc(amount));
-                let delta: isize = isize_from_float(amount.trunc());
                 // assert(@abs(delta) >= 1);
                 debug_assert!(delta.unsigned_abs() >= 1);
                 // break :x .{ .delta = delta };
@@ -12045,7 +12066,12 @@ where
                 // const delta: isize = @intFromFloat(@trunc(fraction * rows));
                 // (f32 site: `f64::from` is exact, so the f64 helper checks the
                 // identical value.)
-                let delta: isize = isize_from_float(f64::from((fraction * rows).trunc()));
+                //
+                // PORT NOTE (R13, UD62): a fraction the `isize` cannot hold means
+                // "scroll to the end", which `scroll_viewport` clamps to the top
+                // or the active area; the reference traps instead.
+                let delta: isize =
+                    isize_from_float_saturating(f64::from((fraction * rows).trunc()));
                 // self.queueIo(.{
                 //     .scroll_viewport = .{ .delta = delta },
                 // }, .unlocked);
@@ -14562,23 +14588,43 @@ fn clipboardTextContent<'a>(contents: &[terminal::clipboard::Content<'a>]) -> Op
 /// RUST CONTRACT (differs from the Zig builtin it replaces): Zig
 /// `@intFromFloat` is safety-checked — Debug/ReleaseSafe TRAP when the value
 /// has no in-range integer representation (including NaN); ReleaseFast is UB.
-/// A bare Rust `as` cast instead SATURATES (NaN -> 0), silently bending the
-/// gesture math on out-of-range input. This helper restores the checked
-/// builds' trap via `debug_assert!` (active in dev + `release-safe`, the DG4
-/// parity lanes; PORT_RULES.md "DG2/DG4") while unchecked release builds keep
-/// the saturating `as` result — defined behavior, strictly safer than the
-/// reference's ReleaseFast UB (VALIDATION_REPORT §3d).
+///
+/// PORT NOTE: reference defect (R13), `UPSTREAM-DEFECTS.md` UD62. The trap is
+/// reachable from ordinary input, so it is NOT ported: `keybind =
+/// …=scroll_page_fractional:1e30` panics the reference on the keypress, and a
+/// C-ABI embedder's scroll offset reaches the three gesture casts. Measured
+/// with Zig 0.16.0 (`r13p-reference-probe.zig`): Debug and ReleaseSafe panic
+/// "integer part of floating point value out of bounds", ReleaseFast yields
+/// `9223372036854775807`; `std.fmt.parseFloat` accepts `1e30`, `inf` and `nan`,
+/// so the config can carry every one of them.
+///
+/// This returns `None` where the reference traps, and each caller takes the
+/// handling its own value means — see the call sites.
 #[inline]
-fn isize_from_float(v: f64) -> isize {
+fn isize_from_float(v: f64) -> Option<isize> {
     // `@intFromFloat` converts the INTEGER PART (truncation toward zero) and
     // safety-checks that it fits the destination. `-(isize::MIN as f64)` is
-    // exactly 2^63; NaN/inf fail both comparisons and trap here too.
+    // exactly 2^63; NaN/inf fail both comparisons, as they do in the reference.
     let t = v.trunc();
-    debug_assert!(
-        t >= isize::MIN as f64 && t < -(isize::MIN as f64),
-        "@intFromFloat: value {v} has no isize representation"
-    );
-    v as isize
+    if t >= isize::MIN as f64 && t < -(isize::MIN as f64) {
+        Some(t as isize)
+    } else {
+        None
+    }
+}
+
+/// `isize_from_float` for a value whose out-of-range case MEANS "as far as it
+/// goes": the viewport clamps the result anyway. NaN has no direction, so it
+/// scrolls nothing. This is also what the reference's ReleaseFast produces
+/// (measured), without its undefined behaviour.
+#[inline]
+fn isize_from_float_saturating(v: f64) -> isize {
+    match isize_from_float(v) {
+        Some(v) => v,
+        None if v.is_nan() => 0,
+        None if v > 0.0 => isize::MAX,
+        None => isize::MIN,
+    }
 }
 
 // The amount to scroll. This structure is always normalized so that
@@ -15230,36 +15276,96 @@ mod renderer_config_tests {
     }
 }
 
-// rustty-only tests: lock the `isize_from_float` gesture-cast helper's contract
-// (VALIDATION_REPORT §3d — `@intFromFloat` trap vs `as` saturate). In-range
-// gesture deltas convert exactly; under debug-assertions (dev + `release-safe`,
-// the DG4 parity lanes) an out-of-range or NaN input panics exactly where the
-// Zig builtin traps.
+// rustty-only tests: lock the `isize_from_float` cast helper's contract.
+//
+// Task R13-P (`UPSTREAM-DEFECTS.md` UD62) REVERSED the two tests that used to
+// live here, which pinned the reference's trap (a `debug_assert!` copy of
+// `@intFromFloat`'s safety check). The trap is reachable from a `keybind` value
+// and from a C-ABI embedder's scroll offset, so under R13 the port does not
+// reproduce it.
 #[cfg(test)]
 mod isize_from_float_tests {
-    use super::isize_from_float;
+    use super::{isize_from_float, isize_from_float_saturating};
 
     #[test]
     fn isize_from_float_in_range_is_exact() {
-        assert_eq!(isize_from_float(3.0), 3);
-        assert_eq!(isize_from_float(-2.0), -2);
+        assert_eq!(isize_from_float(3.0), Some(3));
+        assert_eq!(isize_from_float(-2.0), Some(-2));
         // `@intFromFloat` converts the integer part (truncation toward zero).
-        assert_eq!(isize_from_float(0.9), 0);
-        assert_eq!(isize_from_float(-1.9), -1);
+        assert_eq!(isize_from_float(0.9), Some(0));
+        assert_eq!(isize_from_float(-1.9), Some(-1));
     }
 
-    #[cfg(debug_assertions)]
+    /// The values the reference traps on (measured in Debug and ReleaseSafe)
+    /// are exactly the values that have no `isize`, and the gesture call sites
+    /// scroll nothing for them instead of crashing or looping to `isize::MAX`.
     #[test]
-    #[should_panic(expected = "@intFromFloat")]
-    fn isize_from_float_nan_traps_in_checked_builds() {
-        let _ = isize_from_float(f64::NAN);
+    fn isize_from_float_reports_the_values_the_reference_traps_on() {
+        assert_eq!(isize_from_float(f64::NAN), None);
+        assert_eq!(isize_from_float(f64::INFINITY), None);
+        assert_eq!(isize_from_float(f64::NEG_INFINITY), None);
+        assert_eq!(isize_from_float(1e300), None);
+        assert_eq!(isize_from_float(-1e300), None);
+        // The boundary: 2^63 has no `isize`, the largest f64 below it does.
+        assert_eq!(isize_from_float(-(isize::MIN as f64)), None);
+        assert_eq!(isize_from_float(isize::MIN as f64), Some(isize::MIN));
     }
 
-    #[cfg(debug_assertions)]
+    /// `scroll_page_fractional`'s arm: `keybind = …=scroll_page_fractional:1e30`
+    /// means "scroll as far as it goes", and the viewport clamps it (the
+    /// companion test below drives the clamp).
     #[test]
-    #[should_panic(expected = "@intFromFloat")]
-    fn isize_from_float_out_of_range_traps_in_checked_builds() {
-        let _ = isize_from_float(1e300);
+    fn isize_from_float_saturating_takes_the_end_in_each_direction() {
+        assert_eq!(isize_from_float_saturating(12.0), 12);
+        assert_eq!(isize_from_float_saturating(1e300), isize::MAX);
+        assert_eq!(isize_from_float_saturating(f64::INFINITY), isize::MAX);
+        assert_eq!(isize_from_float_saturating(-1e300), isize::MIN);
+        assert_eq!(isize_from_float_saturating(f64::NEG_INFINITY), isize::MIN);
+        // A NaN fraction has no direction, so it scrolls nothing.
+        assert_eq!(isize_from_float_saturating(f64::NAN), 0);
+    }
+}
+
+/// The other half of `scroll_page_fractional`'s handling: the saturated delta
+/// this surface queues is safe at its destination. `scroll_viewport` takes the
+/// magnitude with `unsigned_abs` (so `isize::MIN` is exact) and clamps to the
+/// top or the active area, without a panic and without walking one row at a
+/// time.
+#[cfg(test)]
+mod scroll_page_fractional_saturation_tests {
+    use super::*;
+
+    #[test]
+    fn a_saturated_scroll_delta_is_clamped_by_the_viewport() {
+        let mut term = terminal::terminal::Terminal::init(
+            Allocator,
+            terminal::terminal::Options {
+                cols: 10,
+                rows: 4,
+                max_scrollback_bytes: Some(10_000),
+                max_scrollback_lines: None,
+                colors: rustty_vt::terminal::Colors::default(),
+                default_modes: rustty_vt::modes::ModePacked::default(),
+                default_cursor_style: rustty_vt::screen::CursorStyle::Block,
+                default_cursor_blink: Some(false),
+                kitty_image_storage_limit: 0,
+                kitty_image_loading_limits: rustty_vt::kitty::graphics_image::Limits::DIRECT,
+            },
+        )
+        .expect("Terminal::init");
+
+        // Some scrollback to scroll through.
+        for _ in 0..20 {
+            term.print(u32::from('x')).unwrap();
+            term.index().unwrap();
+        }
+
+        // `scroll_page_fractional:-1e30` -> isize::MIN; `:1e30` -> isize::MAX.
+        term.scroll_viewport(terminal::terminal::ScrollViewport::Delta(isize::MIN));
+        term.scroll_viewport(terminal::terminal::ScrollViewport::Delta(isize::MAX));
+        term.scroll_viewport(terminal::terminal::ScrollViewport::Delta(0));
+
+        term.deinit(Allocator);
     }
 }
 
