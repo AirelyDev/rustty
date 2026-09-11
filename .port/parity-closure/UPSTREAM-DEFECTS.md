@@ -51,7 +51,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - port handling:   code 0 with no results vardict takes the reference's own `2` arm (`log.warn("request ended unexpectedly")`) and `onResponse` is not called — `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs:613` (PORT NOTE in `GlobalShortcuts::responded`). The body is still read with the same `g_variant_get` call (`response_params`).
 - parity row(s):   S51-F7 (LEDGER); task 20 briefly ported the panic in `dae5118b` and reversed it in `d9de0339` under R13.
 - test:            `global_shortcuts_malformed_response_does_not_panic` (drives a well-formed `(ua{sv})` to `onResponse`, then `()`, asserting the full log vector). Negative control, VM 2026-09-11: reinstating `vardict.expect(..)` on arm 0 turns it RED with the panic at the unwrap. `global_shortcuts_response_params_follow_g_variant_get` pins the `(0, null)` reading of `()`, `(u)` and `(sa{sv})`.
-- proposed fix:    In `responded`, treat a null `vardict` on code 0 as a failed response (`orelse { log.warn(...); return; }`) instead of `vardict.?`, and pass the portal's bus name (`org.freedesktop.portal.Desktop`) as the `signalSubscribe` sender so other peers cannot reach the handler at all. The sender filter is only spoof-proof on GLib 2.80.1 or later: earlier GDBus matched a well-known sender name in a way another connection could impersonate (CVE-2024-34397). The null-vardict check is the part that fixes the crash on every GLib.
+- proposed fix:    In `responded`, treat a null `vardict` on code 0 as a failed response (`orelse { log.warn(...); return; }`) instead of `vardict.?`, and pass the portal's bus name (`org.freedesktop.portal.Desktop`) as the `signalSubscribe` sender so other peers cannot reach the handler at all. The sender filter is only spoof-proof on GLib 2.78.5 (the 2.78 backport) or 2.80.1 and later: earlier GDBus matched a well-known sender name in a way another connection could impersonate (CVE-2024-34397). (Fix round 2: this said 2.80.1 only.) The null-vardict check is the part that fixes the crash on every GLib.
 - upstream status: not reported
 
 ### UD2 — GlobalShortcuts `Activated` handler aborts on a short body and reads an undefined shortcut id on a mistyped one
@@ -62,27 +62,36 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
   - **No second child** (`(o)`, `()`): `g_variant_get_child` reaches GLib's fatal error "Attempt to access item 1 in a container with only 1 items" and the process aborts. Measured by the task-20 reviewer on GLib 2.88.2, both on a directly built variant and after a real D-Bus message round-trip.
   - **Second child of the wrong type** (`(oo)`): GLib emits a critical and writes nothing. The handler then runs `log.debug("activated={s}", .{shortcut_id})` and `map.get(std.mem.span(shortcut_id))` on the undefined pointer.
   (Fix round 1: this entry first said the no-second-child case also "writes nothing".)
-- ReleaseSafe:     short body — abort (exit 134) inside GLib. Wrong-typed child — reads uninitialised memory (Zig does not check `undefined`); in practice a segfault or a garbage lookup.
-- ReleaseFast:     short body — the same GLib abort, since it does not depend on the Zig build mode. Wrong-typed child — undefined behaviour.
+- ReleaseSafe:     short body — abort (exit 134) inside GLib. Wrong-typed child — a DETERMINISTIC segfault: Zig fills `undefined` with `0xaa` bytes in Debug and ReleaseSafe (the task-20 reviewer measured `shortcut_id == 0xaaaaaaaaaaaaaaaa` on zig 0.16.0, the pin's minimum), and `std.mem.span` dereferences it. `log.debug("activated={s}")` is compiled out outside Debug (`main_ghostty.zig:208-211`, `.log_level = .info`), so in release builds the `map.get(std.mem.span(shortcut_id))` read is the one that faults; in Debug the log line faults first.
+- ReleaseFast:     short body — the same GLib abort, since it does not depend on the Zig build mode. Wrong-typed child — undefined behaviour: `undefined` is not filled, so `std.mem.span` reads whatever the stack slot held.
+  (Fix round 2: ReleaseSafe first said "reads uninitialised memory ... in practice a segfault or a garbage lookup".)
 - reachability:    peer process, same user. The `Activated` subscription passes a NULL sender and matches only `arg0` as a path against the session handle, so an `(o)` or `(oo)` body carrying that handle reaches it. The session handle is not secret to a bus monitor, and the subscription lives as long as the session.
 - port handling:   `activated_shortcut_id` reads child 1 only if it exists and is type `s`; otherwise the handler returns without logging or looking anything up — `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs:850`. Before task 20 the port PANICKED here (glib-rs `child_value(1)` asserts the index).
 - parity row(s):   none — found by task 20 while fixing S51-F7; NEW-FINDINGS N38 records the unclaimed port site.
 - test:            `global_shortcuts_activated_shortcut_id_is_safe_on_malformed_bodies` (`(os)` yields the id; `(o)`, `()` and `(oo)` yield none). Negative control, VM 2026-09-11: restoring `params.child_value(1).str()` turns it RED with glib's index assertion (`variant.rs:314`).
-- proposed fix:    Check `params.nChildren() >= 2` and the child's type (or initialise `shortcut_id` to null and use a checked `get`) before using it, and filter the subscription's sender to the portal's bus name (spoof-proof only on GLib 2.80.1+, see UD1). Simpler alternative, suggested by the task-20 reviewer: check the whole body with `params.isOfType("(osta{sv})")` (the documented `Activated` signature) and return early otherwise, before reading any child.
+- proposed fix:    Check `params.nChildren() >= 2` and the child's type (or initialise `shortcut_id` to null and use a checked `get`) before using it, and filter the subscription's sender to the portal's bus name (spoof-proof only on GLib 2.78.5 or 2.80.1+, see UD1). Simpler alternative, suggested by the task-20 reviewer: check the whole body against the documented `Activated` signature before reading any child — in the zig-gobject binding `isOfType` takes a `*const glib.VariantType` and returns `c_int` (`glib2.zig:14474-14475`), so: `const ty = glib.VariantType.new("(osta{sv})"); defer ty.free(); if (params.isOfType(ty) == 0) return;` (in C, `if (!g_variant_is_of_type (params, G_VARIANT_TYPE ("(osta{sv})"))) return;`). (Fix round 2: the Zig here first read `params.isOfType("(osta{sv})")`, which does not compile against the binding.)
 - upstream status: not reported
 
-### UD3 — X11 `changeProperty`/`deleteProperty` check a status libX11 never returns
-- kind:            latent
-- severity:        low
-- reference:       src/apprt/gtk/winproto/x11.zig:392-431 (`changeProperty` `if (status == 0) return error.RequestFailed` at :421, `deleteProperty` at :430), at 20abdb50a
-- defect:          Both wrappers treat an `XChangeProperty`/`XDeleteProperty` return of 0 as `error.RequestFailed`, and `syncBlur` (`:243-287`) relies on that to keep its cached `blur_region` when a write fails. libX11 cannot return 0 from either call. The task-20 reviewer disassembled libX11 1.8.13 on the VM: each function has a single return path preceded by `mov w0, #1`. A real failure (for example `BadWindow`) arrives asynchronously through the error handler. Measured by task 20 with a C probe under headless sway's Xwayland: both calls on a bogus window returned 1, and two `BadWindow` errors (requests 18 and 19) arrived later. So the failure branch, and the cache-preserving logic behind it, is dead code. A failed write still updates the cache.
-- ReleaseSafe:     no crash. After an asynchronous X error the cache disagrees with the server until the region changes.
+### UD3 — X11 winproto property writes run with no X error trap, so a `BadWindow` exits the terminal (and their status checks can never fire)
+- kind:            crash
+- severity:        medium (reachable from another X client on the same display)
+- reference:       src/apprt/gtk/winproto/x11.zig:346-431 (`getWindowProperty` from :346, `changeProperty` :392-422, `deleteProperty` :424-431), reached from `resizeEvent` / `syncAppearance` (:218-235) via `syncBlur` (:243-287) and `syncDecorations` (:289-), at 20abdb50a
+- defect:          Two faults.
+  - **No error trap.** `XChangeProperty`, `XDeleteProperty` and `XGetWindowProperty` are called with no `gdk_x11_display_error_trap_push`/`_pop`, so an X error on them reaches GDK's default X error handler. That handler prints "The program '…' received an X Window System error … BadWindow" and calls `exit(1)`.
+  - **A dead status check.** `if (status == 0) return error.RequestFailed` can never fire: libX11 1.8.13's `XChangeProperty`/`XDeleteProperty` have a single return path after `mov w0, #1` (task-20 reviewer's disassembly), and a real failure arrives asynchronously. The cache-preserving logic in `syncBlur` behind that check is therefore dead too.
+  (Fix rounds 1–2: this entry was first `latent`, and said a failed request was "no crash; the cache disagrees with the server". That was wrong. The reviewer's GTK 4.22.4 probe showed an untrapped `BadWindow` exits the process with status 1, and the same call inside the GDK trap returns error 3 and survives.)
+- ReleaseSafe:     the process exits with status 1 inside GDK's error handler (not a Zig safety check, so every build mode).
 - ReleaseFast:     same.
-- reachability:    none for the status branch. The cache/server mismatch needs an X request to fail, for example against a window destroyed concurrently.
-- port handling:   faithful (R1, a non-crash defect). `crates/rustty-apprt/src/gtk/winproto/x11.rs` `sync_blur` keeps the reference's `?` before `self.blur_region = region`, which is S60-F1, fixed in `7862eab7`. The test `sync_blur_keeps_the_cached_region_when_the_property_write_fails` swaps in a stub `XDeleteProperty` that returns 0, through the public function-pointer fields of x11-dl's `Xlib`, because libX11's own function cannot fail this way.
-- parity row(s):   S60-F1 (and S60-F6).
-- test:            as above, under GDK_BACKEND=x11 + Xwayland. Negative control, VM 2026-09-11: committing the cache before the fallible delete turns it RED.
-- proposed fix:    Detect X request failure the way Xlib reports it: install a scoped error handler (or use `XSync` plus an error-trapping handler around the property writes) and only commit `blur_region` when no error was reported. Drop the `status == 0` checks, which cannot fire.
+- reachability:    MEASURED by task 20 on the VM (GTK 4.22.4, GDK_BACKEND=x11, headless sway's Xwayland), one scenario per process, with blur enabled:
+  1. A second X client destroys our mapped toplevel (`XDestroyWindow`, as `xdotool windowclose` does), and the GTK loop is pumped for 1000 iterations: SURVIVES. GDK logs "GdkSurface 0x… unexpectedly destroyed" and keeps the window realized and mapped; nothing issues a winproto request.
+  2. The same destroy, then `syncAppearance` directly: EXITS 1, `BadWindow … request_code 20` (`GetProperty`, from `syncDecorations`).
+  3. GTK's own `gtk_window_destroy`, then `syncAppearance`: EXITS 1, `request_code 19` (`DeleteProperty`, from `syncBlur`). No natural in-app sequence was found that calls `syncAppearance` on a window after GTK destroyed it, so this is exposure, not a verified trigger.
+  4. The external destroy, then `maximize`: EXITS 1, `request_code 8` (`MapWindow`). That is GDK's own request, so the trap below cannot fix this path; any GTK app is exposed to it.
+  5. The external destroy, pump, then a CONFIG RELOAD delivered to the window (`notify::config` → `syncAppearance`): EXITS 1, `request_code 20`. This is the realistic trigger: another client on the display closes the window, and the user later reloads the config.
+- port handling:   `crates/rustty-apprt/src/gtk/winproto/x11.rs` `Window::trap_x_errors` (R13 PORT NOTE) brackets each of the three calls with `gdk_x11_display_error_trap_push`/`_pop` (gdk4-x11's `X11Display::error_trap_push`/`error_trap_pop`, GDK's own scoped trap, never a process-wide `XSetErrorHandler`). A trapped error takes the reference's `error.RequestFailed` path, which `resizeEvent`/`syncAppearance` already log as `failed to sync blur=`/`failed to sync decorations=`. The dead `status == 0` checks stay, faithfully (S60-F1).
+- parity row(s):   S60-F1, S60-F6; inventory item M110.
+- test:            `x11_error_on_a_destroyed_window_does_not_exit_the_process` runs scenario 5 in a child copy of the test binary and asserts the child exits 0 and logged at least one trapped `failed to sync` line. On the VM under Xwayland it passes 3/3; with no display it FAILS. Negative control (trap disabled): the child exits with status 1 after GDK's "BadWindow" message, and the test is RED. `sync_blur_keeps_the_cached_region_when_the_property_write_fails` still covers the status path with a stub `XDeleteProperty`.
+- proposed fix:    Wrap the property calls in `gdk_x11_display_error_trap_push (display)` / `if (gdk_x11_display_error_trap_pop (display) != 0) return error.RequestFailed;` (zig-gobject `gdkx114.zig:205-213`: `gdk_x11.X11Display.errorTrapPush` / `errorTrapPop` on the window's display). Replace the `status == 0` checks, which cannot fire, with that trap result, so `syncBlur`'s commit-on-success works as intended.
 - upstream status: not reported
 
 ### UD4 — `gotoWindow(.previous)` dereferences a null toplevel list
@@ -95,14 +104,14 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - reachability:    UNVERIFIED. `goto_window` is a surface-targeted action, and a registered surface lives inside a toplevel, so the list is not empty in normal operation. The only conceivable trigger is a race in which the last window is torn down between the action being queued and performed.
 - port handling:   `crates/rustty-apprt/src/gtk/class/application.rs` `goto_window_walk` returns `false` on an empty list (task 20, S50-F1). Treated as an invariant rather than an R13 site because no trigger is verified.
 - parity row(s):   S50-F1.
-- test:            `goto_window_walk_matches_the_reference_list_walk` covers the empty list (display-free).
+- test:            `goto_window_walk_matches_the_reference_list_walk` covers the empty list in both directions (display-free); the `.previous` case — the one that crashes in the reference — was added in fix round 2, whose line first overstated coverage when only `.next` was tested. Negative control: removing the empty-list guard in `goto_window_walk` panics on the `.previous` slice.
 - proposed fix:    Type `listToplevels` as returning `?*glib.List` in the bindings, and `orelse return false` in `gotoWindow`.
 - upstream status: not reported
 
 ### UD5 — OpenURI treats a malformed `Response` body as success and never opens the URL
 - kind:            latent
 - severity:        low
-- reference:       src/apprt/gtk/portal/OpenURI.zig:478-499 (`responseReceived`), subscription at :202-212, at 20abdb50a
+- reference:       src/apprt/gtk/portal/OpenURI.zig:479-499 (`responseReceived`), subscription at :202-212, at 20abdb50a
 - defect:          `params.get("(u@a{sv})", &response, &results)` on a body that is not `(ua{sv})` writes nothing (GLib critical), so `response` stays 0. The switch then logs `open uri successful` and skips `openUrlFallback`, so the URL the user asked to open is silently never opened.
 - ReleaseSafe:     no crash; a lost URL open.
 - ReleaseFast:     same.
@@ -110,7 +119,7 @@ crash that needs a corrupted config file, which outranks one that needs kernel m
 - port handling:   faithful (R1, a non-crash defect). `crates/rustty-apprt/src/gtk/portal/open_uri.rs` `response_received` makes the same `g_variant_get` call and reads code 0, which also removed the port's former PANIC on `()` (S59-F3).
 - parity row(s):   S59-F3.
 - test:            `malformed_response_bodies_read_as_code_zero_without_panicking` pins the faithful behaviour (code 0, no fallback, `open uri successful`).
-- proposed fix:    Check `params.isOfType("(ua{sv})")` first, and on a mismatch take the `2` ("ended unexpectedly") path so `openUrlFallback` still opens the URL; filter the subscription to the portal's bus name (GLib 2.80.1+, see UD1).
+- proposed fix:    Check the body's type first — `const ty = glib.VariantType.new("(ua{sv})"); defer ty.free(); if (params.isOfType(ty) == 0) { ... }` (C: `g_variant_is_of_type (params, G_VARIANT_TYPE ("(ua{sv})"))`) — and on a mismatch take the `2` ("ended unexpectedly") path so `openUrlFallback` still opens the URL; filter the subscription to the portal's bus name (spoof-proof on GLib 2.78.5 or 2.80.1+, see UD1). (Fix round 2: the Zig first read `params.isOfType("(ua{sv})")`, which does not compile against the binding, and the GLib floor said 2.80.1 only.)
 - upstream status: not reported
 
 ### UD6 — an oversized tmux control-mode block leaves the viewer alive, so the next attach asserts
