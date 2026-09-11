@@ -848,13 +848,21 @@ pub(crate) fn bind_shortcuts_payload(
 /// in `shortcutActivated`: the second child of the `Activated` body, typed `s`.
 ///
 /// PORT NOTE: reference defect (R13) — `.port/parity-closure/UPSTREAM-DEFECTS.md` UD2. A
-/// deliberate divergence (task 20), not an oversight: on a body with no second child, or a
-/// non-`s` one, `g_variant_get_child` writes nothing and the reference goes on to log and
-/// look up an UNDEFINED pointer. The subscription matches only `arg0` against the session
-/// handle and has a null sender, so a `(o)` body from any session-bus peer reaches it. The
-/// port used to PANIC there instead (`child_value(1)` asserts the index). Under R13 this
-/// returns `None` and the handler does nothing, which is what the reference evidently
-/// intends for an activation that names no shortcut.
+/// deliberate divergence (task 20), not an oversight. The reference fails two ways:
+/// - a body with NO second child (`(o)`, `()`): `g_variant_get_child` hits GLib's fatal
+///   "Attempt to access item 1 in a container with only 1 items" and the process ABORTS
+///   (exit 134, every build mode — measured by the task-20 reviewer on GLib 2.88.2);
+/// - a second child of the wrong type (`(oo)`): GLib writes nothing and the reference goes
+///   on to log and look up the UNDEFINED `shortcut_id` pointer.
+///
+/// The subscription matches only `arg0` against the session handle and has a null sender,
+/// so such a body from a session-bus peer reaches it. The port used to PANIC on the first
+/// shape (`child_value(1)` asserts the index). Under R13 this returns `None` and the
+/// handler does nothing, which is what the reference evidently intends for an activation
+/// that names no shortcut.
+///
+/// CORRECTION (task 20 fix round 1): this note first said that on a body with no second
+/// child `g_variant_get_child` "writes nothing" — true only of the wrong-typed shape.
 pub(crate) fn activated_shortcut_id(params: &glib::Variant) -> Option<String> {
     let child = params.try_child_value(1)?;
     if !child.is_type(glib::VariantTy::STRING) {

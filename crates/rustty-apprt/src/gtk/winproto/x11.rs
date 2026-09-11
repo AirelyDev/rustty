@@ -837,3 +837,94 @@ fn background_blur_enabled(v: BackgroundBlur) -> bool {
         BackgroundBlur::Radius(r) => r > 0,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::gtk::winproto::blur_region::Slice;
+    use gtk4::subclass::prelude::ObjectSubclassIsExt as _;
+
+    /// An `XDeleteProperty` that reports failure. libX11's real one can never do
+    /// this (it returns 1 unconditionally), which is exactly why the reference's
+    /// status check needs a stub to be exercised at all.
+    unsafe extern "C" fn failing_delete_property(
+        _display: *mut xlib::Display,
+        _window: c_ulong,
+        _property: c_ulong,
+    ) -> c_int {
+        0
+    }
+
+    /// S60-F1: `syncBlur` commits its new region to the cache only after the
+    /// property write succeeded (`x11.zig:271-286`, `try` before
+    /// `self.blur_region = region`). The window's cache is seeded non-empty and blur
+    /// is off, so the sync must DELETE the property. With a failing
+    /// `XDeleteProperty` the sync errors and the cache keeps the old region, so the
+    /// next sync retries; with libX11's own function (the positive half, proving the
+    /// delete path is the one being driven) it succeeds and the cache empties.
+    ///
+    /// Needs a live X server: run under `GDK_BACKEND=x11` with `DISPLAY` set (the
+    /// VM uses headless sway's Xwayland). FAILS rather than returning without one.
+    #[test]
+    #[ignore = "requires an X server; run with GDK_BACKEND=x11 DISPLAY=... cargo test -p rustty-apprt --features gtk,x11,wayland --lib sync_blur_keeps -- --ignored"]
+    fn sync_blur_keeps_the_cached_region_when_the_property_write_fails() {
+        crate::gtk::init_for_display_test(
+            "sync_blur_keeps_the_cached_region_when_the_property_write_fails",
+        );
+        let _ = libadwaita::init();
+        crate::gtk::register_resources();
+
+        let display = gdk4::Display::default().expect("a default GDK display");
+        assert!(
+            display.downcast_ref::<gdk4_x11::X11Display>().is_some(),
+            "this test needs the X11 GDK backend (GDK_BACKEND=x11)"
+        );
+        let app = crate::gtk::class::application::Application::build_default_for_test();
+        let win = crate::gtk::class::window::Window::new(&app, None);
+        win.imp()
+            .config
+            .replace(Some(crate::gtk::class::config::Config::new(
+                &CoreConfig::default_config(),
+            )));
+        WidgetExt::realize(&win);
+
+        let x11_app = App::init(
+            &display,
+            "io.airely.rustty.test",
+            &CoreConfig::default_config(),
+        )
+        .expect("x11 App::init")
+        .expect("the X11 arm");
+        let mut window = Window::init(&x11_app, &win).expect("x11 Window::init");
+        assert!(!background_blur_enabled(
+            win.get_config().expect("config").get().background_blur
+        ));
+
+        let seeded = || {
+            BlurRegion::from_slices(vec![Slice {
+                x: 0,
+                y: 0,
+                width: 10,
+                height: 10,
+            }])
+        };
+        window.blur_region = seeded();
+
+        let mut failing = xlib::Xlib::open().expect("libX11");
+        failing.XDeleteProperty = failing_delete_property;
+        window.xlib = Rc::new(failing);
+        assert!(matches!(window.sync_blur(), Err(Error::RequestFailed)));
+        assert!(
+            window.blur_region.eql(&seeded()),
+            "a failed write must leave the cached region untouched"
+        );
+
+        window.xlib = x11_app.xlib.clone();
+        assert!(window.sync_blur().is_ok());
+        assert!(
+            window.blur_region.slices().is_empty(),
+            "a successful delete commits"
+        );
+    }
+}

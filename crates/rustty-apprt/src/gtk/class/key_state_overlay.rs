@@ -129,12 +129,19 @@ mod imp {
         ///
         /// CORRECTION (task 20, S52-F3): this notified only `has-tables`, relying
         /// on GObject's automatic post-`set_property` notify for `tables` ("auto-
-        /// fires via the property machinery"). That automatic notify is queued
-        /// AFTER the explicit one, so handlers saw `has-tables` first. The reference
-        /// notifies both explicitly (`:155-156`); inside `g_object_set_property`'s
-        /// freeze the automatic `tables` notify then de-duplicates against the
-        /// queued one, exactly as it does for the reference's own accessor (which,
-        /// like this pspec, is not `EXPLICIT_NOTIFY`).
+        /// fires via the property machinery"). The reference notifies both
+        /// explicitly (`:155-156`); inside `g_object_set_property`'s freeze the
+        /// automatic `tables` notify then de-duplicates against the queued one,
+        /// exactly as it does for the reference's own accessor (which, like this
+        /// pspec, is not `EXPLICIT_NOTIFY`). Measured on GLib 2.88.2, whose frozen
+        /// queue dispatches in REVERSE: through `g_object_set_property` the OLD
+        /// setter delivered `tables, has-tables` and this one (the reference's
+        /// calls) delivers `has-tables, tables`. So the old port and the reference
+        /// disagreed, but not in the direction the audit reported.
+        ///
+        /// CORRECTION (task 20 fix round 1): this note first said the automatic
+        /// notify "is queued AFTER the explicit one, so handlers saw `has-tables`
+        /// first" — backwards for this GLib, and contradicting the test's own doc.
         pub(super) fn set_tables(&self, value: Option<StringList>) {
             self.tables.replace(value);
             self.obj().notify("tables");

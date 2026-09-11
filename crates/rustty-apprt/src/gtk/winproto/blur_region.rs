@@ -55,6 +55,13 @@ impl BlurRegion {
         Self { slices: Vec::new() }
     }
 
+    /// TEST-ONLY: a region with the given slices, so a test can seed a window's
+    /// cached region without computing one from a sized, mapped surface.
+    #[cfg(test)]
+    pub(crate) fn from_slices(slices: Vec<Slice>) -> Self {
+        Self { slices }
+    }
+
     /// PORTS: `BlurRegion.zig:31-34` `deinit`. rustty has no allocator to thread,
     /// so this just clears the `Vec`.
     pub fn clear(&mut self) {
