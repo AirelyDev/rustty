@@ -2073,3 +2073,30 @@ comment is replaced by a CORRECTION quoting it. `xtask dist-lib-vt` and the new
 **state**: CLOSED by task 19. Recorded because the *class* is open: a gate step whose failure
 nobody observes. Worth asking, at the finale, which G-* steps have actually run since they were
 written.
+
+## N38 — an unclaimed port panic in the GlobalShortcuts `Activated` handler, reachable from any session-bus peer
+
+Found by task 20 while fixing S51-F7. No row claims it.
+
+`global_shortcuts.rs`'s `Activated` subscription read the shortcut id with
+`signal.parameters.child_value(1)`. glib-rs's `child_value` ASSERTS `index < n_children()`, so a
+`(o)` body — which passes the subscription's `MATCH_ARG0_PATH` filter when it carries the session
+handle, and which any process on the session bus can send because the sender is null — panicked
+inside the D-Bus dispatch on the GTK main loop. The reference is no better here: it reads an
+undefined pointer (`UPSTREAM-DEFECTS.md` UD2), so there is no reference behaviour to port.
+
+Under R13 the port now reads the child only if it exists and is type `s`
+(`activated_shortcut_id`), and returns otherwise. Test:
+`global_shortcuts_activated_shortcut_id_is_safe_on_malformed_bodies`; negative control (restore
+`child_value(1)`) RED with glib's `variant.rs:314` index assertion, measured on the VM.
+
+The same class, both sites claimed or recorded: the `Response` half is S51-F7 + UD1, and
+OpenURI's `responseReceived` (S59-F3) was the same `child_value(0)` panic, removed by porting the
+reference's `params.get` exactly.
+
+CORRECTION (task 20, before commit): this entry was first drafted as "the REFERENCE panics ... the
+port keeps the panic on purpose", recording a controller ruling to port `vardict.?` as a panic. The
+user overruled that ruling the same day (R13); the reference defects moved to
+`UPSTREAM-DEFECTS.md` UD1/UD2 and this entry now records only the port-side site.
+
+**state**: CLOSED by task 20 (`d9de0339`).

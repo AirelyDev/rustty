@@ -15,7 +15,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** App.keymap is eagerly initialized in App::init instead of lazily on first keyboardLayout()
   - **Oracle:** `src/apprt/embedded.zig:140-171, 229-266` → **Rustty:** `crates/rustty-apprt/src/embedded.rs:157-158, 346-387, 473-513`
   - **Audit's suggested fix:** Make `keymap: Option<Keymap>`; init to None; terminate deinits if Some; reloadKeymap reloads only if Some; keyboardLayout lazily inits (on Err: return Layout::Unknown), matching embedded.zig:229-266. Drop KeymapError from App::init / AppNewError.
-- [ ] **S46-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S46-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** KeyEvent.core does not zero an unshifted_codepoint that does not fit in u21
   - **Oracle:** `src/apprt/embedded.zig:116-119` → **Rustty:** `crates/rustty-apprt/src/embedded.rs:308-315`
   - **Audit's suggested fix:** `let unshifted_codepoint = if self.unshifted_codepoint <= 0x1F_FFFF { self.unshifted_codepoint } else { 0 };`
@@ -27,35 +27,35 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** bellMediaFile reuse test asserts path equality instead of object identity
   - **Oracle:** `src/apprt/gtk/media.zig:148-154` → **Rustty:** `crates/rustty-apprt/src/gtk/media.rs:142-149`
   - **Audit's suggested fix:** Keep `let first = current.clone();` before the same-path call and `assert_eq!(first, current);` (glib object handles compare by pointer), matching media.zig:154.
-- [ ] **S49-F1** · CONFIRMED · `INDIV` · different-constant
+- [x] **S49-F1** · CONFIRMED · `INDIV` · different-constant
   - **What:** SIGUSR2 hardcoded to 12; wrong signal number on FreeBSD (a gated target)
   - **Oracle:** `src/apprt/gtk/class/application.zig:1465-1473` → **Rustty:** `crates/rustty-apprt/src/gtk/class/application.rs:1708-1712, 779-803`
   - **Audit's suggested fix:** Use `libc::SIGUSR2` (or a `#[cfg(target_os = "freebsd")] const SIGUSR2 = 31;` / `#[cfg(target_os = "linux")] const SIGUSR2 = 12;` pair) so the value follows the target.
-- [ ] **S50-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S50-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** gotoWindow: start node is skipped / found differently from the reference
   - **Oracle:** `src/apprt/gtk/class/application.zig:2067-2101` → **Rustty:** `crates/rustty-apprt/src/gtk/class/application.rs:3725-3757`
   - **Audit's suggested fix:** Keep the full toplevel list (all gtk.Window), find `start` via is_active over that list (default 0), and include the start node in the first pass (letting goto_window_maybe reject it only when active); then wrap exactly as the reference does, stopping before revisiting `start`.
-- [ ] **S52-F1** · CONFIRMED · `INDIV` · different-constant
+- [x] **S52-F1** · CONFIRMED · `INDIV` · different-constant
   - **What:** ResizeOverlay GObject property registered as `label-text` instead of `label`
   - **Oracle:** `src/apprt/gtk/class/resize_overlay.zig:78-91, 349-355` → **Rustty:** `crates/rustty-apprt/src/gtk/class/resize_overlay.rs:62-65, 210-212`
   - **Audit's suggested fix:** Add `name = "label"` to the `#[property(...)]` attribute on `label_text` (keep the field name to avoid clashing with the `label` TemplateChild), and keep `set_label()` delegating to the generated setter.
-- [ ] **S54-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S54-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** setParent inherits pwd from the core terminal instead of the parent widget's `pwd` property
   - **Oracle:** `src/apprt/gtk/class/surface.zig:806-815` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:1318-1328`
   - **Audit's suggested fix:** Read the parent widget's `pwd` property (via `parent.rt_surface` -> widget backref -> `imp().pwd.borrow().clone()`) instead of `CoreSurface::pwd`, and keep raw bytes (or at least `from_utf8_lossy`) rather than dropping non-UTF-8 values.
-- [ ] **S55-F1** · CONFIRMED · `INDIV` · missing-function
+- [x] **S55-F1** · CONFIRMED · `INDIV` · missing-function
   - **What:** filterSnapPaths (snap env sanitising in defaultTermioEnv) not ported
   - **Oracle:** `src/apprt/gtk/class/surface.zig:1625-1630, 1648-1720` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:2521-2526, 2526-2584`
   - **Audit's suggested fix:** Port filterSnapPaths as a `fn filter_snap_paths(env: &mut EnvMap)` gated on `rustty_build_config::snap()` and `env.get(b"SNAP").is_some()`, with the same key skip-list, SNAP_ removal, and colon-split prefix filtering (join with ':' or remove when empty), applying updates then removals in that order; add a unit test over a synthetic EnvMap.
-- [ ] **S55-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S55-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** setBellRinging's change-gated notify and freeze/thaw are lost: bell-ringing notifies on every write
   - **Oracle:** `src/apprt/gtk/class/surface.zig:2296-2314` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:1624-1648, 2896-2905, 3296`
   - **Audit's suggested fix:** Give `bell-ringing` a custom setter (`#[property(get, set = Self::set_bell_ringing_prop)]` or an inherent `set_bell_ringing` that wraps in `freeze_notify()`/`thaw_notify()`, returns early when the Cell already holds the value, and only then sets + `notify_bell_ringing()`); route ring_bell through the same helper so the freeze/thaw covers the signal/action fan-out.
-- [ ] **S57-F1** · CONFIRMED · `INDIV` · missing-function
+- [x] **S57-F1** · CONFIRMED · `INDIV` · missing-function
   - **What:** TitleDialog has no dispose override calling dispose_template
   - **Oracle:** `src/apprt/gtk/class/title_dialog.zig:151-161, 210` → **Rustty:** `crates/rustty-apprt/src/gtk/class/title_dialog.rs:101-112`
   - **Audit's suggested fix:** Add `fn dispose(&self) { self.dispose_template(); }` to `impl ObjectImpl for imp::TitleDialog` (parent dispose is chained by gtk-rs), mirroring tab.rs:134-140.
-- [ ] **S58-F1** · CONFIRMED · `INDIV` · missing-branch
+- [x] **S58-F1** · CONFIRMED · `INDIV` · missing-branch
   - **What:** About dialog drops the `website` and `issue-url` properties
   - **Oracle:** `src/apprt/gtk/class/window.zig:1790-1832` → **Rustty:** `crates/rustty-apprt/src/gtk/class/window.rs:2174-2209`
   - **Audit's suggested fix:** Add WEBSITE and ISSUE_URL constants to rustty_identity (per profile) and pass `.website(..)` / `.issue_url(..)` to the AboutDialog builder.
@@ -63,18 +63,18 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** IPC CLI arguments are converted with String::from_utf8_lossy instead of sent as raw bytes
   - **Oracle:** `src/apprt/gtk/ipc/new_window.zig:49-56 (and new_tab.zig:54-61)` → **Rustty:** `crates/rustty-apprt/src/gtk/app.rs:257-262, 297-302`
   - **Audit's suggested fix:** Keep bytes: build the `as` array with glib::Variant::from_bytes / from_bytes_with_type on the raw bytes (as the oracle does) so invalid UTF-8 fails at the D-Bus layer exactly like the oracle, or at minimum return IPCFailed with the oracle's stderr message when an argument is not valid UTF-8 rather than silently mangling it.
-- [ ] **S59-F3** · CONFIRMED · `INDIV` · missing-error-path
+- [x] **S59-F3** · CONFIRMED · `INDIV` · missing-error-path
   - **What:** A Response signal with an empty tuple body panics the GTK main loop (oracle logs and continues)
   - **Oracle:** `src/apprt/gtk/portal/OpenURI.zig:478-482 (responseReceived params.get)` → **Rustty:** `crates/rustty-apprt/src/gtk/portal/open_uri.rs:495`
   - **Audit's suggested fix:** Guard with `if params.n_children() == 0 { ... treat as 2/log ... }` (or use `params.try_child_value(0)`) before reading the response code.
-- [ ] **S60-F1** · CONFIRMED · `INDIV` · missing-error-path
+- [x] **S60-F1** · CONFIRMED · `INDIV` · missing-error-path
   - **What:** X11 syncBlur commits the new blur_region cache even when XChangeProperty/XDeleteProperty fail
   - **Oracle:** `src/apprt/gtk/winproto/x11.zig:243-287` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/x11.rs:562-607`
   - **Audit's suggested fix:** Make sync_blur return Result (or track success); only assign `self.blur_region = region` when the property write/delete succeeded, and log `err(gtk-x11): failed to sync blur={err}` on failure as the oracle's resizeEvent/syncAppearance do.
 
 ## Low (66)
 
-- [ ] **S45-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S45-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Display formatters drop the fully-qualified type-name prefix used by the reference `format`
   - **Oracle:** `src/apprt/action.zig:645-654, 754-760, 778-784, 806-817` → **Rustty:** `crates/rustty-apprt-api/src/action.rs:982-991, 1096-1103, 1126-1130, 1158-1167`
   - **Audit's suggested fix:** Emit the qualified name (e.g. `apprt.action.SetTitle`) in the four Display impls if log-text parity is required; otherwise document the deliberate divergence.
@@ -82,11 +82,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** SearchTotal/SearchSelected cval: `@intCast` (checked) became `as isize` (wrapping)
   - **Oracle:** `src/apprt/action.zig:1034-1038, 1049-1053` → **Rustty:** `crates/rustty-apprt-api/src/action.rs:1479-1487, 1502-1510`
   - **Audit's suggested fix:** Use `isize::try_from(t).expect(...)` (or `.unwrap()`) to mirror the checked-cast semantics.
-- [ ] **S46-F3** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S46-F3** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** rustty_app_set_color_scheme / rustty_surface_set_color_scheme emit a stderr diagnostic on an invalid scheme; oracle is silent
   - **Oracle:** `src/apprt/embedded.zig:1788, 1992` → **Rustty:** `crates/rustty-apprt-c/src/lib.rs:785-791, 1675-1681`
   - **Audit's suggested fix:** Drop the eprintln! in both arms (silent `return`), mirroring the mouse_pressure fix.
-- [ ] **S46-F4** · CONFIRMED · `INDIV` · stub-or-unimplemented
+- [x] **S46-F4** · CONFIRMED · `INDIV` · stub-or-unimplemented
   - **What:** Inspector Metal backend is gated on target_os=macos while the oracle (and the rustty CAPI exports) gate on isDarwin (macOS+iOS); iOS path hits an unimplemented!() stub
   - **Oracle:** `src/apprt/embedded.zig:1004-1010, 1035-1050, 1052-1092, 2233-2250` → **Rustty:** `crates/rustty-apprt/src/embedded.rs:2188-2200, 2364-2378, 2576-2586`
   - **Audit's suggested fix:** Gate dcimgui-sys' Metal backend and these three fns on `any(target_os = "macos", target_os = "ios")` (or gate the three CAPI exports on macos only) so the cfg sets agree and no unimplemented!() body is reachable.
@@ -146,7 +146,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** globalShortcutTrigger emits a rustty-only success log line
   - **Oracle:** `src/apprt/gtk/class/application.zig:1745-1749` → **Rustty:** `crates/rustty-apprt/src/gtk/class/application.rs:2967-2985`
   - **Audit's suggested fix:** Drop the success log or gate it behind the same debug-log predicate the rest of the file uses, if stderr parity matters.
-- [ ] **S50-F5** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S50-F5** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** actionOpenConfig performs synchronously instead of via the core mailbox
   - **Oracle:** `src/apprt/gtk/class/application.zig:2115-2151` → **Rustty:** `crates/rustty-apprt/src/gtk/class/application.rs:2013-2023`
   - **Audit's suggested fix:** Optional: push `Message::OpenConfig(target)` on the core mailbox through a bound thunk (as present_surface_thunk does) to keep the tick-deferred ordering.
@@ -162,11 +162,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** diagnosticsBuffer: no 4095-byte truncation / skip-on-overflow of a single diagnostic
   - **Oracle:** `src/apprt/gtk/class/config.zig:110-134` → **Rustty:** `crates/rustty-apprt/src/gtk/class/config.rs:96-115`
   - **Audit's suggested fix:** Either keep as a recorded divergence (strictly more informative) or cap at 4095 bytes and skip+warn to match.
-- [ ] **S51-F6** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S51-F6** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** session_handle lookup accepts D-Bus type `o` as well as `s`
   - **Oracle:** `src/apprt/gtk/class/global_shortcuts.zig:286-293` → **Rustty:** `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs:776-782`
   - **Audit's suggested fix:** Keep (superset) or restrict to `VariantTy::STRING` to match exactly.
-- [ ] **S51-F7** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S51-F7** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Response signal: unparseable response code defaults to 2 instead of 0
   - **Oracle:** `src/apprt/gtk/class/global_shortcuts.zig:408-421` → **Rustty:** `crates/rustty-apprt/src/gtk/class/global_shortcuts.rs:508-522`
   - **Audit's suggested fix:** None; the rustty choice is safer. Record only.
@@ -182,7 +182,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** `debug` pspec default value is `false` instead of `build_config.is_debug`
   - **Oracle:** `src/apprt/gtk/class/inspector_window.zig:47-64` → **Rustty:** `crates/rustty-apprt/src/gtk/class/inspector_window.rs:58-62, 164-168`
   - **Audit's suggested fix:** Add `default = cfg!(debug_assertions)` to the property attribute.
-- [ ] **S52-F3** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S52-F3** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** setTables/setSequence notify emission order reversed (`has-*` before `tables`/`sequence`)
   - **Oracle:** `src/apprt/gtk/class/key_state_overlay.zig:145-171` → **Rustty:** `crates/rustty-apprt/src/gtk/class/key_state_overlay.rs:129-138`
   - **Audit's suggested fix:** Call `self.obj().notify("tables")` before `notify("has-tables")` in the custom setter (optionally with explicit_notify to avoid a double emission), same for `sequence`.
@@ -190,11 +190,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** closureMatchLabel never returns null on formatting overflow
   - **Oracle:** `src/apprt/gtk/class/search_overlay.zig:304-318` → **Rustty:** `crates/rustty-apprt/src/gtk/class/search_overlay.rs:359-372`
   - **Audit's suggested fix:** None needed in practice; could mirror by returning None when the formatted length exceeds 31 bytes.
-- [ ] **S54-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S54-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** commandFinished bell path always emits notify::bell-ringing (no state-change dedup, no freeze/thaw)
   - **Oracle:** `src/apprt/gtk/class/surface.zig:1165 (with setBellRinging 2296-2315)` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:2043-2046, 1624-1648`
   - **Audit's suggested fix:** Give `bell-ringing` a custom setter (`#[property(get, set = Self::set_bell_ringing_dedup)]`) that returns early when unchanged, and wrap `ring_bell` in `freeze_notify()`.
-- [ ] **S54-F3** · CONFIRMED · `INDIV` · different-constant
+- [x] **S54-F3** · CONFIRMED · `INDIV` · different-constant
   - **What:** GObject property/signal type and default mismatches: mouse-shape (i32 vs MouseShape enum GType, default 0 vs .text), focused pspec default, clipboard-write param type
   - **Oracle:** `src/apprt/gtk/class/surface.zig:222-240, 154-170, 480-492` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface.rs:249-259, 224-225, 596-606`
   - **Audit's suggested fix:** Register `MouseShape` and `Clipboard` as glib enums (`#[derive(glib::Enum)]`) in the apprt layer and use them as the property/signal types; align the `focused` and `mouse-shape` pspec defaults with the oracle.
@@ -238,7 +238,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** SurfaceChildExited.setData(null) emits notify::data in rustty but not in the oracle
   - **Oracle:** `src/apprt/gtk/class/surface_child_exited.zig:76-91` → **Rustty:** `crates/rustty-apprt/src/gtk/class/surface_child_exited.rs:174-181`
   - **Audit's suggested fix:** In set_child_exited_data, write the imp field directly and only call `self.notify("data")` when the payload is Some.
-- [ ] **S57-F2** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S57-F2** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** action_close checks the mode string before the tab view, changing which warning is logged
   - **Oracle:** `src/apprt/gtk/class/tab.zig:396-433` → **Rustty:** `crates/rustty-apprt/src/gtk/class/tab.rs:386-409`
   - **Audit's suggested fix:** Move the `get_tab_view()` early-return above the `args.str()` check so the warning ordering matches the reference.
@@ -250,11 +250,11 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Legacy `gtk.showAboutDialog` arm (adw < 1.5) not ported
   - **Oracle:** `src/apprt/gtk/class/window.zig:1799-1832` → **Rustty:** `crates/rustty-apprt/src/gtk/class/window.rs:2174-2209`
   - **Audit's suggested fix:** None required if AD-3 stands; otherwise gate on adw_version::at_least(1,5,0) and add a gtk::AboutDialog fallback with the same properties.
-- [ ] **S58-F3** · CONFIRMED · `INDIV` · missing-error-path
+- [x] **S58-F3** · CONFIRMED · `INDIV` · missing-error-path
   - **What:** Tab close-confirmation handlers use a captured TabView instead of re-resolving it via ancestor; the 'non-existent page' warn path is gone
   - **Oracle:** `src/apprt/gtk/class/window.zig:1604-1631` → **Rustty:** `crates/rustty-apprt/src/gtk/class/window.rs:1849-1884`
   - **Audit's suggested fix:** In both closures, resolve `ext::ancestor::<adw::TabView>(&page.child())`, warn and return on None, then call close_page_finish on the resolved view.
-- [ ] **S58-F4** · CONFIRMED · `INDIV` · different-constant
+- [x] **S58-F4** · CONFIRMED · `INDIV` · different-constant
   - **What:** GParamSpec metadata differs: `quick-terminal` default true→false, `titlebar-style` registered as i32 instead of a GEnum
   - **Oracle:** `src/apprt/gtk/class/window.zig:101-151` → **Rustty:** `crates/rustty-apprt/src/gtk/class/window.rs:115-147`
   - **Audit's suggested fix:** Add `default = true` to the quick-terminal property attribute; register GtkTitlebarStyle as a glib::Enum (`#[derive(glib::Enum)]`) and type the property with it.
@@ -310,7 +310,7 @@ A row is CLOSED only when its fix has a test that fails without it (or a written
   - **What:** Stale PORT NOTE in noop.rs claims eventMods/initQuickTerminal are not yet ported
   - **Oracle:** `src/apprt/gtk/winproto/noop.zig:27-38` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/noop.rs:104-110`
   - **Audit's suggested fix:** Delete the stale PORT NOTE.
-- [ ] **S61-F1** · CONFIRMED · `INDIV` · behavioral-difference
+- [x] **S61-F1** · CONFIRMED · `INDIV` · behavioral-difference
   - **What:** Registry bind version is clamped to the advertised version instead of T.generated_version
   - **Oracle:** `src/apprt/gtk/winproto/wayland/Globals.zig:152-162` → **Rustty:** `crates/rustty-apprt/src/gtk/winproto/wayland/globals.rs:276-341`
   - **Audit's suggested fix:** Either accept as a deliberate hardening and record it in the parity ledger, or bind at the generated version to match the reference exactly.
