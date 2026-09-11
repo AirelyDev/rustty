@@ -34,6 +34,32 @@ use rustty_render_types::term_size as size;
 // `page.rs`, which is private to that module.)
 const KITTY_GRAPHICS: bool = true;
 
+// PORT NOTE (fail injection): the reference reaches
+// `resizeWithoutReflowGrowCols`' `Allocator.Error` with
+// `std.testing.failing_allocator`; the port's page memory comes from an owned
+// pool, so — exactly as `grow.rs`'s `GROW_TW` documents for `grow()` — a
+// port-local `cfg(test)` tripwire stands in for the one allocation this
+// function can fail on (`create_page`).
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum ResizeFp {
+    /// The `try self.createPage(...)` inside `resizeWithoutReflowGrowCols`.
+    GrowColsCreatePage,
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static RESIZE_TW: core::cell::RefCell<
+        rustty_util::tripwire::Module<ResizeFp, super::OutOfMemory>,
+    > = core::cell::RefCell::new(rustty_util::tripwire::module());
+}
+
+#[cfg(test)]
+#[inline]
+fn resize_tw_check(point: ResizeFp) -> Result<(), super::OutOfMemory> {
+    RESIZE_TW.with(|tw| tw.borrow_mut().check(point))
+}
+
 // PORT NOTE: `kitty.graphics.unicode.placeholder` is U+10EEEE. The kitty module
 // surface is ported by a different sub-batch; we inline the constant here (the
 // only use is the codepoint comparison below). (Mirrors the same const in
@@ -661,6 +687,13 @@ impl PageList {
                         // call this method multiple times.
                         self.cols = old_cols;
                         if let Err(e) = self.resize_without_reflow_grow_cols(cols, chunk) {
+                            // defer assert(self.total_rows == old_total_rows);
+                            //
+                            // The reference's `defer` fires on EVERY exit from
+                            // this block, including this error return — a
+                            // column change without reflow must not change the
+                            // row count even when it fails part way through.
+                            assert!(self.total_rows == old_total_rows);
                             // errdefer self.limits = old_limits;
                             self.limits = old_limits;
                             return Err(e);
@@ -991,7 +1024,15 @@ impl PageList {
         // We need to loop because our col growth may force us
         // to split pages.
         while copied < unsafe { (*page).size.rows } {
-            let new_node = match self.create_page(super::CreatePage::new(cap)) {
+            // The fail point stands in for `createPage` itself failing, so it
+            // must feed the SAME error arm (which replays the reference's two
+            // `errdefer` unwinds) rather than returning early.
+            #[cfg(test)]
+            let created = resize_tw_check(ResizeFp::GrowColsCreatePage)
+                .and_then(|()| self.create_page(super::CreatePage::new(cap)));
+            #[cfg(not(test))]
+            let created = self.create_page(super::CreatePage::new(cap));
+            let new_node = match created {
                 Ok(n) => n,
                 Err(e) => {
                     // errdefer (replayed): delete any of the nodes we added,

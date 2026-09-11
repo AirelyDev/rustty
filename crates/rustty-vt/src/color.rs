@@ -2045,8 +2045,18 @@ mod tests {
             }),
             RGB::parse(b" Forest Green ")
         );
+        assert_eq!(
+            Ok(RGB {
+                r: 34,
+                g: 139,
+                b: 34
+            }),
+            RGB::parse(b"\tForestGreen\t")
+        );
 
         // Invalid format
+        assert_eq!(Err(InvalidFormat), RGB::parse(b""));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"  "));
         assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb;"));
         assert_eq!(Err(InvalidFormat), RGB::parse(b"rgb:"));
         assert_eq!(Err(InvalidFormat), RGB::parse(b":a/a/a"));
@@ -2062,6 +2072,9 @@ mod tests {
         assert_eq!(Err(InvalidFormat), RGB::parse(b"#ffff"));
         assert_eq!(Err(InvalidFormat), RGB::parse(b"#fffff"));
         assert_eq!(Err(InvalidFormat), RGB::parse(b"#gggggg"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"#12345"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"12345"));
+        assert_eq!(Err(InvalidFormat), RGB::parse(b"nosuchcolor"));
     }
 
     /// PORT NOTE: no reference test — these pin the `fromIntensity`/`fromHex`

@@ -1041,6 +1041,7 @@ impl RenderState {
                 || self.row_data[y].serial != node_serial
                 || !core::ptr::eq(self.row_data[y + take - 1].pin.node, node)
                 || self.row_data[y + take - 1].pin.y != chunk.start + take as size::CellCountInt - 1
+                || self.row_data[y + take - 1].serial != node_serial
             {
                 for (i, py) in (chunk.start..chunk.start + take as size::CellCountInt).enumerate() {
                     let row = &mut self.row_data[y + i];
@@ -2685,6 +2686,41 @@ mod tests {
         }
 
         hl.deinit();
+        state.deinit(alloc);
+        t.deinit(alloc);
+    }
+
+    /// PORT NOTE: NOT a reference test. The reference's pin/serial skip test
+    /// (`render.zig:599-615`) is a seven-disjunct condition whose seventh term is
+    /// `row_serials[y + take - 1] != node_serial`; nothing in either tree
+    /// exercised that term, so a port dropping it stayed green. This pins it:
+    /// with only the LAST row of a chunk holding a stale serial, the chunk's
+    /// pins and serials must still be rewritten.
+    #[test]
+    fn stale_trailing_serial_forces_the_chunk_rewrite() {
+        let alloc = Global;
+        let mut t = Terminal::init(alloc, opts(10, 3)).unwrap();
+
+        let mut state: RenderState = RenderState::empty();
+        state.update(alloc, &mut t).unwrap();
+
+        // One node covers all three viewport rows, so the chunk is y=0, take=3.
+        let node = state.row_data[0].pin.node;
+        let live_serial = unsafe { (*node).serial };
+        assert!(core::ptr::eq(state.row_data[2].pin.node, node));
+        assert_eq!(live_serial, state.row_data[0].serial);
+        assert_eq!(live_serial, state.row_data[2].serial);
+
+        // Leave the first row's node/y/serial and the last row's node/y intact —
+        // i.e. every disjunct but the seventh is satisfied — and stale only the
+        // LAST row's serial.
+        state.row_data[2].serial = live_serial ^ 1;
+
+        // Nothing changed, so this update does not redraw and takes the skip
+        // test. The stale serial must force the rewrite anyway.
+        state.update(alloc, &mut t).unwrap();
+        assert_eq!(live_serial, state.row_data[2].serial);
+
         state.deinit(alloc);
         t.deinit(alloc);
     }

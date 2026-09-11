@@ -1725,19 +1725,48 @@ fn pagelist_only_reset_advances_the_serial_epoch() {
 fn pagelist_reset_invalidates_stale_untracked_refs_even_if_node_memory_is_reused() {
     let mut s = PageList::init(Options::new(80, 24)).unwrap();
 
-    let old_serial = unsafe { (*s.pages.first).serial };
-    assert!(old_serial >= s.page_serial_epoch);
-    assert!(old_serial < s.page_serial);
+    // var stale_nodes: [page_preheat * 4]*List.Node = undefined;
+    // var stale_serials: [stale_nodes.len]u64 = undefined;
+    let mut stale_nodes: [*mut super::Node; super::PAGE_PREHEAT * 4] =
+        [core::ptr::null_mut(); super::PAGE_PREHEAT * 4];
+    let mut stale_serials: [u64; super::PAGE_PREHEAT * 4] = [0; super::PAGE_PREHEAT * 4];
+    let mut stale_len: usize = 0;
+    let mut reused: Option<(*mut super::Node, u64)> = None;
 
-    s.reset();
+    // Reset until the node pool hands the same ADDRESS back out, which is the
+    // case the serial epoch exists to reject.
+    while stale_len < stale_nodes.len() && reused.is_none() {
+        let old_node = s.pages.first;
+        let old_serial = unsafe { (*old_node).serial };
+        assert!(old_serial >= s.page_serial_epoch);
+        assert!(old_serial < s.page_serial);
+        stale_nodes[stale_len] = old_node;
+        stale_serials[stale_len] = old_serial;
+        stale_len += 1;
 
-    // The important safety property is that stale serials are rejected before
-    // the node pointer is inspected. Reset rebuilds the page list from the
-    // pools, so old untracked refs may contain node pointers that are no
-    // longer safe to dereference.
+        s.reset();
+
+        let new_node = s.pages.first;
+        for i in 0..stale_len {
+            if core::ptr::eq(stale_nodes[i], new_node) {
+                reused = Some((stale_nodes[i], stale_serials[i]));
+                break;
+            }
+        }
+    }
+
+    assert!(reused.is_some());
+    let (old_node, old_serial) = reused.unwrap();
+    let new_node = s.pages.first;
+    let new_serial = unsafe { (*new_node).serial };
+
+    // Reset advances the epoch before rebuilding from the node pool. Reject
+    // the stale generation before inspecting its pointer, even when that exact
+    // address now belongs to a new live generation.
+    assert!(core::ptr::eq(old_node, new_node));
     assert!(old_serial < s.page_serial_epoch);
-
-    let new_serial = unsafe { (*s.pages.first).serial };
+    assert!(!s.node_is_valid(old_node, old_serial));
+    assert!(s.node_is_valid(new_node, new_serial));
     assert!(new_serial >= s.page_serial_epoch);
     assert!(new_serial < s.page_serial);
 
@@ -2643,6 +2672,15 @@ fn pagelist_cold_compression_continues_after_an_incompressible_page() {
     assert_eq!(1, memory.compressed_pages);
     assert!(!unsafe { super::Node::is_compressed(first) });
     assert!(unsafe { super::Node::is_compressed(second) });
+    // try testing.expectEqual(second.metadata().memory.len,
+    //     memory.decommitted_raw_bytes);
+    //
+    // Exactly the second page's mapping was decommitted — nothing more (the
+    // incompressible first page must still be resident) and nothing less.
+    assert_eq!(
+        unsafe { (*super::Node::metadata(second)).memory_len() },
+        memory.decommitted_raw_bytes
+    );
     assert!(
         memory.encoded_bytes < memory.decommitted_raw_bytes,
         "the compressed page must be smaller than the mapping it replaced"
@@ -12058,6 +12096,46 @@ fn pagelist_resize_no_reflow_more_rows_adds_blank_rows_if_cursor_at_bottom() {
     }
 
     s.untrack_pin(p);
+    s.deinit();
+}
+
+// PORT-LOCAL test (parity S123-F2): the reference has no `test {}` block for
+// this either. `resizeWithoutReflow`'s cols branch opens with
+// `const old_total_rows = self.total_rows; defer assert(self.total_rows ==
+// old_total_rows);` (PageList.zig:2802-2803) — a `defer`, so it fires on EVERY
+// exit from that block including the error return out of
+// `resizeWithoutReflowGrowCols`. The port evaluated it only on the success
+// path. This drives the error exit and asserts the same two invariants the
+// reference's `defer` + `errdefer` guarantee there.
+#[test]
+fn pagelist_resize_no_reflow_grow_cols_oom_preserves_total_rows_and_limits() {
+    use super::resize::{ResizeFp, RESIZE_TW};
+    use rustty_util::tripwire::ResetMode;
+
+    let mut s = PageList::init(Options::new(80, 24)).unwrap();
+    let rows_before = s.total_rows();
+    let cols_before = s.cols;
+    let old_limits = s.limits;
+
+    // 80 -> 120 has no spare capacity in the existing page, so the grow takes
+    // the slow path and must allocate.
+    RESIZE_TW.with(|tw| {
+        tw.borrow_mut()
+            .errorAlways(ResizeFp::GrowColsCreatePage, OutOfMemory)
+    });
+    assert_eq!(
+        Err(OutOfMemory),
+        s.resize_without_reflow(Resize {
+            cols: Some(120),
+            reflow: false,
+            ..Default::default()
+        })
+    );
+    RESIZE_TW.with(|tw| tw.borrow_mut().end(ResetMode::Reset).unwrap());
+
+    assert_eq!(rows_before, s.total_rows());
+    assert_eq!(cols_before, s.cols);
+    assert_eq!(old_limits, s.limits);
     s.deinit();
 }
 

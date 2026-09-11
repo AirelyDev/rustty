@@ -2796,10 +2796,40 @@ impl Screen {
             }
         }
 
-        // PORT NOTE: the reference has a kitty-graphics block here that clears
-        // the `kitty_virtual_placeholder` row flag. The kitty graphics feature
-        // operates over the deferred `ImageStorage`; the placeholder-clearing
-        // logic is row-local and lands with the kitty co-port (vt-12).
+        // if (comptime build_options.kitty_graphics) {
+        //     if (row.kitty_virtual_placeholder and
+        //         cells.len == page.size.cols)
+        //     {
+        //         for (cells) |c| {
+        //             if (c.codepoint() == kitty.graphics.unicode.placeholder) {
+        //                 break;
+        //             }
+        //         } else row.kitty_virtual_placeholder = false;
+        //     }
+        // }
+        //
+        // PORT NOTE: the Zig `for ... else` clears the flag only when the loop
+        // ran to completion, i.e. when NO surviving cell still carries the
+        // placeholder codepoint. The cells are read through the raw
+        // `cells_base` for the same Stacked-Borrows reason as the style loop
+        // above.
+        if crate::options::KITTY_GRAPHICS
+            && unsafe { (*row).kitty_virtual_placeholder() }
+            && cells_len == unsafe { (*page).size.cols } as usize
+        {
+            let mut found = false;
+            for i in 0..cells_len {
+                if unsafe { (*cells_base.add(i)).codepoint() }
+                    == crate::kitty::graphics_unicode::PLACEHOLDER
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                unsafe { (*row).set_kitty_virtual_placeholder(false) };
+            }
+        }
 
         let blank = self.blank_cell();
         // Reconstruct a local `&mut [Cell]` ONLY for the brief fill; it is

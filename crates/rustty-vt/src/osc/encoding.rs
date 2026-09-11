@@ -46,8 +46,25 @@ mod tests {
         assert!(!is_safe_utf8("No linebreaks\nallowed".as_bytes()));
         assert!(!is_safe_utf8("\x07no bells".as_bytes()));
         assert!(!is_safe_utf8("\x1b]9;no OSCs\x1b\\\x1b[m".as_bytes()));
-        assert!(!is_safe_utf8(
-            "\u{9f}8-bit escapes are clever, but no".as_bytes()
-        ));
+        // PORT NOTE: the reference's `"\x9f8-bit escapes..."` is a Zig string
+        // literal, i.e. the RAW BYTE 0x9F, which is not well-formed UTF-8 — so
+        // this case exercises the `Utf8View.init` rejection branch, NOT the
+        // 0x80...0x9f codepoint arm. A Rust `"\u{9f}"` would encode as C2 9F
+        // (valid UTF-8) and take the other branch, so the bytes are spelled out
+        // with a byte-string literal to keep the reference's coverage.
+        assert!(!is_safe_utf8(b"\x9f8-bit escapes are clever, but no"));
+    }
+
+    /// PORT NOTE: NOT a reference test. The reference's own `isSafeUtf8` test
+    /// never reaches the `0x7f` or `0x80...0x9f` codepoint arms (its 8-bit-escape
+    /// case is invalid UTF-8 and returns at the `Utf8View.init` check), so these
+    /// pin the two arms that would otherwise be uncovered.
+    #[test]
+    fn is_safe_utf8_del_and_c1_codepoints() {
+        assert!(!is_safe_utf8("del\u{7f}here".as_bytes()));
+        assert!(!is_safe_utf8("c1\u{80}here".as_bytes()));
+        assert!(!is_safe_utf8("c1\u{9f}here".as_bytes()));
+        // U+00A0 is just past the C1 range and is safe.
+        assert!(is_safe_utf8("nbsp\u{a0}here".as_bytes()));
     }
 }
