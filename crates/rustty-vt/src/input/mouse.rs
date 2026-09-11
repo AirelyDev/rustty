@@ -199,11 +199,22 @@ impl ScrollMods {
     pub fn from_int(v: u8) -> ScrollMods {
         ScrollMods {
             precision: (v & 0b0000_0001) != 0,
-            // The `u3` `Momentum` field only names values 0..=6; a valid `ScrollMods`
-            // (from `int()` or a real platform scroll event) never sets the seventh
-            // (`7`) representation. The reference `@bitCast` to the exhaustive
-            // `enum(u3)` treats that value as illegal behavior (ReleaseSafe trap /
-            // ReleaseFast UB), so the Rust-safe analog traps here too.
+            // The `u3` `Momentum` field only names values 0..=6; the seventh (`7`)
+            // representation reaches here from a C-ABI embedder, which passes
+            // `scroll_mods` as a `c_int` (`ghostty_surface_mouse_scroll`).
+            //
+            // PORT NOTE (task R13-P, N52): the port's earlier comment said the
+            // reference traps on this value. It does NOT. Measured with Zig
+            // 0.16.0 (`r13p-reference-probe.zig`, all three modes): `@bitCast` of
+            // `0b0000_1110` performs no tag check and yields a `ScrollMods` whose
+            // `momentum` holds 7; only a `switch` on the field traps ("switch on
+            // corrupt value"), and the reference never switches on `momentum` —
+            // `scrollCallback` reads `precision` only, and no other site in
+            // `src/` reads the field at all. So the `unreachable!()` here was a
+            // port-only panic, inside an `extern "C"` entry point, on caller
+            // input. The field's own declared default (`momentum: Momentum =
+            // .none`, `input/mouse.zig:97`) stands in for the value Rust cannot
+            // represent; nothing reads it, so no behaviour depends on the choice.
             momentum: match (v >> 1) & 0b0000_0111 {
                 0 => Momentum::None,
                 1 => Momentum::Began,
@@ -212,9 +223,39 @@ impl ScrollMods {
                 4 => Momentum::Ended,
                 5 => Momentum::Cancelled,
                 6 => Momentum::MayBegin,
-                _ => unreachable!("invalid ScrollMods momentum bit pattern"),
+                _ => Momentum::None,
             },
         }
+    }
+}
+
+/// task R13-P (N52): momentum `7` arrives from a C-ABI embedder
+/// (`ghostty_surface_mouse_scroll` takes a `c_int`). The reference carries the
+/// value without trapping (measured, all three modes); the port used to
+/// `unreachable!()`, which aborts the staticlib.
+#[cfg(test)]
+#[test]
+fn scroll_mods_from_int_accepts_the_unnamed_momentum() {
+    // 0b1110: momentum bits == 7, precision clear.
+    let m = ScrollMods::from_int(0b0000_1110);
+    assert!(!m.precision);
+    assert!(matches!(m.momentum, Momentum::None));
+
+    // Every bit set: momentum 7 with precision, plus the reference's `_padding`.
+    let m = ScrollMods::from_int(0xFF);
+    assert!(m.precision);
+    assert!(matches!(m.momentum, Momentum::None));
+
+    // The named values still round-trip.
+    for (bits, expected) in [
+        (0b0000_0000u8, Momentum::None),
+        (0b0000_0010, Momentum::Began),
+        (0b0000_1100, Momentum::MayBegin),
+    ] {
+        assert_eq!(
+            core::mem::discriminant(&expected),
+            core::mem::discriminant(&ScrollMods::from_int(bits).momentum)
+        );
     }
 }
 
